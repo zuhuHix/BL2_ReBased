@@ -1,0 +1,9057 @@
+{
+ "Core.upk::Object": [
+  284,
+  42,
+  6
+ ],
+ "Core.upk::Commandlet": [
+  0,
+  1,
+  1
+ ],
+ "Core.upk::DistributionFloat": [
+  1,
+  0,
+  0
+ ],
+ "Core.upk::DistributionVector": [
+  1,
+  0,
+  0
+ ],
+ "Core.upk::HelpCommandlet": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::Actor": [
+  166,
+  146,
+  82
+ ],
+ "Engine.upk::OnlineAuthInterfaceBaseImpl": [
+  0,
+  54,
+  0
+ ],
+ "Engine.upk::AccessControl": [
+  0,
+  41,
+  1
+ ],
+ "Engine.upk::ActorComponent": [
+  17,
+  1,
+  0
+ ],
+ "Engine.upk::ActorFactory": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::PrimitiveComponent": [
+  47,
+  6,
+  0
+ ],
+ "Engine.upk::Controller": [
+  45,
+  106,
+  48
+ ],
+ "Engine.upk::Dead": [
+  0,
+  22,
+  4
+ ],
+ "Engine.upk::RoundEnded": [
+  0,
+  36,
+  5
+ ],
+ "Engine.upk::CylinderComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::Camera": [
+  11,
+  20,
+  2
+ ],
+ "Engine.upk::SequenceObject": [
+  2,
+  3,
+  3
+ ],
+ "Engine.upk::SequenceOp": [
+  12,
+  6,
+  3
+ ],
+ "Engine.upk::SeqAct_ControlMovieTexture": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::MeshComponent": [
+  6,
+  9,
+  0
+ ],
+ "Engine.upk::SkeletalMeshComponent": [
+  127,
+  13,
+  2
+ ],
+ "Engine.upk::LocalMessage": [
+  0,
+  8,
+  0
+ ],
+ "Engine.upk::PlayerController": [
+  73,
+  372,
+  82
+ ],
+ "Engine.upk::PlayerWalking": [
+  0,
+  8,
+  3
+ ],
+ "Engine.upk::PlayerClimbing": [
+  0,
+  8,
+  3
+ ],
+ "Engine.upk::PlayerDriving": [
+  0,
+  8,
+  2
+ ],
+ "Engine.upk::PlayerSwimming": [
+  0,
+  9,
+  4
+ ],
+ "Engine.upk::PlayerFlying": [
+  0,
+  5,
+  1
+ ],
+ "Engine.upk::BaseSpectating": [
+  0,
+  8,
+  2
+ ],
+ "Engine.upk::Spectating": [
+  0,
+  9,
+  2
+ ],
+ "Engine.upk::PlayerWaiting": [
+  0,
+  17,
+  2
+ ],
+ "Engine.upk::WaitingForPawn": [
+  0,
+  11,
+  4
+ ],
+ "Engine.upk::Admin": [
+  0,
+  12,
+  1
+ ],
+ "Engine.upk::ReachSpec": [
+  3,
+  1,
+  0
+ ],
+ "Engine.upk::AIController": [
+  1,
+  7,
+  2
+ ],
+ "Engine.upk::ScriptedMove": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::ScriptedRouteMove": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::NavigationPoint": [
+  12,
+  13,
+  6
+ ],
+ "Engine.upk::Pylon": [
+  2,
+  4,
+  2
+ ],
+ "Engine.upk::AISwitchablePylon": [
+  0,
+  3,
+  2
+ ],
+ "Engine.upk::AkComponent": [
+  3,
+  2,
+  0
+ ],
+ "Engine.upk::Volume": [
+  2,
+  6,
+  4
+ ],
+ "Engine.upk::AssociatedTouch": [
+  0,
+  3,
+  3
+ ],
+ "Engine.upk::AudioComponent": [
+  11,
+  3,
+  1
+ ],
+ "Engine.upk::AnimSequence": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNode": [
+  5,
+  3,
+  3
+ ],
+ "Engine.upk::AnimNodeBlendBase": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNode_MultiBlendPerBone": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeBlend": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeAdditiveBlending": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeAimOffset": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeBlendList": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeBlendMultiBone": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeBlendPerBone": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeCrossfader": [
+  4,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeSequence": [
+  14,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodePlayCustomAnim": [
+  3,
+  4,
+  0
+ ],
+ "Engine.upk::AnimNodeSequenceBlendByAim": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeSlot": [
+  11,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNodeSynch": [
+  6,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNotify": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::AnimNotify_Scripted": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::GBXDefinition": [
+  3,
+  2,
+  0
+ ],
+ "Engine.upk::PawnAllegiance": [
+  12,
+  0,
+  0
+ ],
+ "Engine.upk::ITargetable": [
+  34,
+  4,
+  1
+ ],
+ "Engine.upk::AnimNotify_PawnMaterialParam": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::AnimNotify_PlayFaceFXAnim": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::AnimNotify_Trails": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::AnimNotify_ViewShake": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::AnimTree": [
+  11,
+  0,
+  0
+ ],
+ "Engine.upk::LightEnvironmentComponent": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::DynamicLightEnvironmentComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ApexDestructibleActor": [
+  3,
+  5,
+  4
+ ],
+ "Engine.upk::AttributeContextResolver": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::AttributeDefinitionBase": [
+  8,
+  0,
+  0
+ ],
+ "Engine.upk::AttributeDefinition": [
+  4,
+  0,
+  0
+ ],
+ "Engine.upk::AttributeDefinitionMultiContext": [
+  5,
+  0,
+  0
+ ],
+ "Engine.upk::AttributeEffect": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::AttributeExpression": [
+  4,
+  0,
+  0
+ ],
+ "Engine.upk::AttributeInitializationDefinition": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::AudioDevice": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::Ladder": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::AutoTestManager": [
+  11,
+  18,
+  4
+ ],
+ "Engine.upk::UIScaleformMemoryStressTest": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::TravelTheWorld": [
+  0,
+  5,
+  0
+ ],
+ "Engine.upk::BalancedActorAttributeContextResolver": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::BaseBalanceDefinition": [
+  6,
+  0,
+  0
+ ],
+ "Engine.upk::BehaviorBase": [
+  8,
+  9,
+  2
+ ],
+ "Engine.upk::Behavior_ChangeAllegiance": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeBoneVisibility": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeCollision": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeCollisionSize": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::ICounterBehavior": [
+  0,
+  3,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeCounter": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeParticleSystemActiveState": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeScale": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeSpin": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ChangeVisibility": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ClientConsoleCommand": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ConsoleCommand": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_CustomAnimation": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_Destroy": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_FollowAllegiance": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::IKilledBehavior": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_Kill": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_PlaySound": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_RandomlyRunBehaviors": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_RemoteEvent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::Behavior_RunBehaviorCollection": [
+  0,
+  3,
+  0
+ ],
+ "Engine.upk::Behavior_SetMaterialParameters": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_SetParticleSystemParameters": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_SetPhysics": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_SetSkelControlActive": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Behavior_ToggleVisibility": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::StaticMeshComponent": [
+  5,
+  0,
+  0
+ ],
+ "Engine.upk::BlockingMeshComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::BlockingMeshReplicatedActor": [
+  0,
+  4,
+  2
+ ],
+ "Engine.upk::BlockingVolume": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::BroadcastHandler": [
+  0,
+  8,
+  2
+ ],
+ "Engine.upk::CameraActor": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::CameraAnimInst": [
+  7,
+  0,
+  0
+ ],
+ "Engine.upk::CameraModifier": [
+  3,
+  7,
+  1
+ ],
+ "Engine.upk::CameraModifier_CameraShake": [
+  2,
+  6,
+  0
+ ],
+ "Engine.upk::Surface": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::Texture2D": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::Canvas": [
+  21,
+  15,
+  1
+ ],
+ "Engine.upk::CheatManager": [
+  11,
+  6,
+  0
+ ],
+ "Engine.upk::ColorScaleVolume": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::ComponentLifetimeManagerComponent": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::UIRoot": [
+  5,
+  7,
+  0
+ ],
+ "Engine.upk::Interaction": [
+  1,
+  10,
+  2
+ ],
+ "Engine.upk::Console": [
+  3,
+  15,
+  2
+ ],
+ "Engine.upk::Typing": [
+  0,
+  5,
+  3
+ ],
+ "Engine.upk::Open": [
+  0,
+  4,
+  2
+ ],
+ "Engine.upk::CoverGroup": [
+  3,
+  1,
+  0
+ ],
+ "Engine.upk::CoverLink": [
+  23,
+  17,
+  9
+ ],
+ "Engine.upk::CoverReplicator": [
+  0,
+  20,
+  0
+ ],
+ "Engine.upk::DamageAdjuster": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::DamagePipeline": [
+  18,
+  0,
+  0
+ ],
+ "Engine.upk::DamageType": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::DamageTypeDefinition": [
+  5,
+  7,
+  0
+ ],
+ "Engine.upk::DataStoreClient": [
+  5,
+  4,
+  1
+ ],
+ "Engine.upk::DebugCameraController": [
+  4,
+  9,
+  1
+ ],
+ "Engine.upk::HUD": [
+  6,
+  18,
+  9
+ ],
+ "Engine.upk::DebugCameraHUD": [
+  0,
+  3,
+  2
+ ],
+ "Engine.upk::Input": [
+  2,
+  1,
+  0
+ ],
+ "Engine.upk::PlayerInput": [
+  4,
+  17,
+  1
+ ],
+ "Engine.upk::DebugCameraInput": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::DecalComponent": [
+  4,
+  0,
+  0
+ ],
+ "Engine.upk::DecalManager": [
+  4,
+  6,
+  2
+ ],
+ "Engine.upk::MaterialInterface": [
+  10,
+  8,
+  0
+ ],
+ "Engine.upk::PhysicsVolume": [
+  2,
+  18,
+  8
+ ],
+ "Engine.upk::DefaultPhysicsVolume": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::Light": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::LightComponent": [
+  6,
+  7,
+  0
+ ],
+ "Engine.upk::DirectionalLightComponent": [
+  0,
+  4,
+  0
+ ],
+ "Engine.upk::DominantDirectionalLightComponent": [
+  0,
+  4,
+  0
+ ],
+ "Engine.upk::PointLightComponent": [
+  1,
+  4,
+  0
+ ],
+ "Engine.upk::SpotLightComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::DoorMarker": [
+  0,
+  6,
+  3
+ ],
+ "Engine.upk::DownloadableContentEnumerator": [
+  4,
+  5,
+  0
+ ],
+ "Engine.upk::DownloadableContentOfferEnumerator": [
+  3,
+  3,
+  0
+ ],
+ "Engine.upk::DownloadableContentManager": [
+  34,
+  15,
+  2
+ ],
+ "Engine.upk::DroppedPickup": [
+  8,
+  18,
+  6
+ ],
+ "Engine.upk::Pickup": [
+  0,
+  15,
+  8
+ ],
+ "Engine.upk::FadeOut": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::DynamicBlockingVolume": [
+  0,
+  3,
+  1
+ ],
+ "Engine.upk::DynamicPhysicsVolume": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::DynamicPylon": [
+  2,
+  3,
+  2
+ ],
+ "Engine.upk::DynamicSMActor": [
+  0,
+  9,
+  4
+ ],
+ "Engine.upk::TriggerVolume": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::DynamicTriggerVolume": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::ParticleSystemComponent": [
+  46,
+  10,
+  0
+ ],
+ "Engine.upk::Emitter": [
+  1,
+  17,
+  2
+ ],
+ "Engine.upk::EmitterCameraLensEffectBase": [
+  1,
+  5,
+  0
+ ],
+ "Engine.upk::EmitterPool": [
+  12,
+  1,
+  0
+ ],
+ "Engine.upk::EmitterSpawnable": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::Engine": [
+  28,
+  0,
+  0
+ ],
+ "Engine.upk::EnvironmentVolume": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ExponentialHeightFogComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ExponentialHeightFog": [
+  0,
+  3,
+  2
+ ],
+ "Engine.upk::ExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ExpressionEvaluatorDefinition": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ExpressionTree": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::FacebookIntegration": [
+  6,
+  9,
+  0
+ ],
+ "Engine.upk::FaceFXAsset": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::FailedConnect": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::FileWriter": [
+  3,
+  1,
+  1
+ ],
+ "Engine.upk::FileLog": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::FluidInfluenceActor": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::FluidSurfaceComponent": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::FluidSurfaceActor": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::FogVolumeDensityComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::FogVolumeDensityInfo": [
+  0,
+  6,
+  2
+ ],
+ "Engine.upk::Font": [
+  5,
+  0,
+  0
+ ],
+ "Engine.upk::ForceFeedbackManager": [
+  1,
+  3,
+  1
+ ],
+ "Engine.upk::ForceFeedbackWaveform": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::ForceFieldShape": [
+  0,
+  5,
+  5
+ ],
+ "Engine.upk::ForceFieldShapeBox": [
+  0,
+  6,
+  6
+ ],
+ "Engine.upk::ForceFieldShapeCapsule": [
+  0,
+  7,
+  7
+ ],
+ "Engine.upk::ForceFieldShapeSphere": [
+  0,
+  6,
+  6
+ ],
+ "Engine.upk::GameEngine": [
+  7,
+  0,
+  0
+ ],
+ "Engine.upk::GameInfo": [
+  15,
+  158,
+  30
+ ],
+ "Engine.upk::PendingMatch": [
+  0,
+  9,
+  1
+ ],
+ "Engine.upk::GameMessage": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::GameplayEvents": [
+  0,
+  3,
+  1
+ ],
+ "Engine.upk::GameplayEventsHandler": [
+  1,
+  5,
+  2
+ ],
+ "Engine.upk::GameplayEventsReader": [
+  13,
+  2,
+  2
+ ],
+ "Engine.upk::GameplayEventsWriter": [
+  28,
+  6,
+  2
+ ],
+ "Engine.upk::GameReplicationInfo": [
+  2,
+  14,
+  5
+ ],
+ "Engine.upk::GameReplicationInfoAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::UISceneClient": [
+  3,
+  1,
+  1
+ ],
+ "Engine.upk::WorldInfo": [
+  56,
+  8,
+  3
+ ],
+ "Engine.upk::GameUISceneClient": [
+  3,
+  6,
+  1
+ ],
+ "Engine.upk::GameViewportClient": [
+  12,
+  36,
+  13
+ ],
+ "Engine.upk::GBXNavMesh": [
+  4,
+  2,
+  2
+ ],
+ "Engine.upk::GBXNavMeshPathFinder": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::GearboxEngineGlobals": [
+  21,
+  2,
+  1
+ ],
+ "Engine.upk::GenericParamListStatEntry": [
+  9,
+  0,
+  0
+ ],
+ "Engine.upk::PathGoalEvaluator": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::Goal_AtActor": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::Goal_Null": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::ResourcePool": [
+  18,
+  13,
+  4
+ ],
+ "Engine.upk::HeightFogComponent": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::HeightFog": [
+  0,
+  3,
+  2
+ ],
+ "Engine.upk::TeleporterDestination": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::HybridNavigationArea": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::IAnimBehavior": [
+  5,
+  6,
+  0
+ ],
+ "Engine.upk::IAppearanceBehavior": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::IAttributeSlotEffectProvider": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::IBalancedActor": [
+  8,
+  0,
+  0
+ ],
+ "Engine.upk::IBasicBehavior": [
+  0,
+  4,
+  0
+ ],
+ "Engine.upk::IBodyCompositionInstance": [
+  6,
+  0,
+  0
+ ],
+ "Engine.upk::IChangeBehaviorSetStateBehavior": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::IChangeCollisionBehavior": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::IConsoleCommandBehavior": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::IDamageBehavior": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::IDamageCauser": [
+  7,
+  0,
+  0
+ ],
+ "Engine.upk::IDestroyBehavior": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::IDialogBox": [
+  0,
+  16,
+  16
+ ],
+ "Engine.upk::IFaceFXActor": [
+  1,
+  2,
+  2
+ ],
+ "Engine.upk::IMaterialBehavior": [
+  0,
+  5,
+  0
+ ],
+ "Engine.upk::ImpactDefinition": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::InGameAdManager": [
+  4,
+  7,
+  0
+ ],
+ "Engine.upk::IniLocPatcher": [
+  2,
+  8,
+  0
+ ],
+ "Engine.upk::InstanceDataHelper": [
+  16,
+  1,
+  0
+ ],
+ "Engine.upk::InteractiveFoliageActor": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::Interface_NavigationHandle": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::Interface_NavMeshPathSwitch": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::Interface_Speaker": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::InterpActor": [
+  0,
+  18,
+  9
+ ],
+ "Engine.upk::Inventory": [
+  0,
+  19,
+  4
+ ],
+ "Engine.upk::InventoryManager": [
+  2,
+  35,
+  5
+ ],
+ "Engine.upk::IParameterBehavior": [
+  0,
+  8,
+  0
+ ],
+ "Engine.upk::IParticleSystemBehavior": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::IPhysicsBehavior": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::IPickupable": [
+  5,
+  5,
+  0
+ ],
+ "Engine.upk::IResourcePoolProvider": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::IScaleBehavior": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::ISoundBehavior": [
+  0,
+  4,
+  0
+ ],
+ "Engine.upk::ISpawnActor": [
+  1,
+  1,
+  0
+ ],
+ "Engine.upk::ISpecialOcclusionProvider": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::IWorldBody": [
+  11,
+  0,
+  0
+ ],
+ "Engine.upk::JsonObject": [
+  6,
+  6,
+  0
+ ],
+ "Engine.upk::KActor": [
+  2,
+  12,
+  7
+ ],
+ "Engine.upk::KActorFromStatic": [
+  3,
+  8,
+  5
+ ],
+ "Engine.upk::Initializing": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::KActorSpawnable": [
+  1,
+  4,
+  2
+ ],
+ "Engine.upk::KActorPizazz": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::KAsset": [
+  0,
+  8,
+  3
+ ],
+ "Engine.upk::LadderVolume": [
+  0,
+  5,
+  4
+ ],
+ "Engine.upk::LensFlareComponent": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::LensFlareSource": [
+  1,
+  8,
+  2
+ ],
+ "Engine.upk::LevelStreamingVolume": [
+  0,
+  3,
+  0
+ ],
+ "Engine.upk::LiftCenter": [
+  0,
+  4,
+  3
+ ],
+ "Engine.upk::LiftExit": [
+  0,
+  3,
+  1
+ ],
+ "Engine.upk::Player": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::LocalPlayer": [
+  16,
+  16,
+  7
+ ],
+ "Engine.upk::ManufacturerDefinition": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::MaterialInstance": [
+  8,
+  0,
+  0
+ ],
+ "Engine.upk::MaterialInstanceConstant": [
+  6,
+  8,
+  0
+ ],
+ "Engine.upk::MaterialInstanceTimeVarying": [
+  12,
+  0,
+  0
+ ],
+ "Engine.upk::MatineeActor": [
+  1,
+  2,
+  1
+ ],
+ "Engine.upk::Pawn": [
+  126,
+  187,
+  57
+ ],
+ "Engine.upk::Dying": [
+  0,
+  18,
+  7
+ ],
+ "Engine.upk::MorphNodeMultiPose": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::MorphNodePose": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::MorphNodeWeight": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::MorphTargetSet": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::MultiFont": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::Mutator": [
+  0,
+  26,
+  2
+ ],
+ "Engine.upk::NavigationHandle": [
+  44,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshPathGoalEvaluator": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::NavMeshGoal_At": [
+  3,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshGoal_ClosestActorInList": [
+  1,
+  2,
+  1
+ ],
+ "Engine.upk::NavMeshGoal_Filter": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::NavMeshGoal_GenericFilterContainer": [
+  1,
+  3,
+  0
+ ],
+ "Engine.upk::NavMeshGoal_Null": [
+  1,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshGoal_PolyEncompassesAI": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshGoal_Random": [
+  1,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshGoal_WithinDistanceEnvelope": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshGoalFilter_MinPathDistance": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshGoalFilter_NotNearOtherAI": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshGoalFilter_OutOfViewFrom": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshGoalFilter_OutSideOfDotProductWedge": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshGoalFilter_PolyEncompassesAI": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshObstacle": [
+  2,
+  6,
+  1
+ ],
+ "Engine.upk::NavMeshPathConstraint": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::NavMeshPath_AlongLine": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshPath_EnforceTwoWayEdges": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshPath_MinDistBetweenSpecsOfType": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshPath_SameCoverLink": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshPath_Toward": [
+  2,
+  1,
+  0
+ ],
+ "Engine.upk::NavMeshPath_WithinDistanceEnvelope": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NavMeshPath_WithinTraversalDist": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::NxForceField": [
+  1,
+  1,
+  0
+ ],
+ "Engine.upk::NxCylindricalForceFieldCapsule": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::NxForceFieldComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::NxForceFieldGeneric": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::NxForceFieldRadial": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::NxForceFieldSpawnable": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::NxForceFieldTornado": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::NxGenericForceFieldBox": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::NxGenericForceFieldBrush": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::OnlineAccountInterface": [
+  0,
+  8,
+  0
+ ],
+ "Engine.upk::OnlineAuthInterface": [
+  0,
+  50,
+  0
+ ],
+ "Engine.upk::OnlineCommunityContentInterface": [
+  0,
+  25,
+  0
+ ],
+ "Engine.upk::OnlineContentInterface": [
+  0,
+  61,
+  0
+ ],
+ "Engine.upk::OnlineEventsInterface": [
+  0,
+  3,
+  0
+ ],
+ "Engine.upk::OnlineGameInterface": [
+  0,
+  79,
+  0
+ ],
+ "Engine.upk::OnlineGameSettings": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::OnlineMatchmakingStats": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::OnlineNewsInterface": [
+  0,
+  5,
+  0
+ ],
+ "Engine.upk::OnlinePartyChatInterface": [
+  0,
+  18,
+  0
+ ],
+ "Engine.upk::OnlinePlayerInterface": [
+  0,
+  115,
+  0
+ ],
+ "Engine.upk::OnlinePlayerInterfaceEx": [
+  0,
+  61,
+  0
+ ],
+ "Engine.upk::OnlinePlayerStorage": [
+  34,
+  0,
+  0
+ ],
+ "Engine.upk::UIDataProvider": [
+  2,
+  13,
+  9
+ ],
+ "Engine.upk::UIPropertyDataProvider": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::UIResourceDataProvider": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::OnlineProfileSettings": [
+  6,
+  1,
+  1
+ ],
+ "Engine.upk::OnlineRecentPlayersList": [
+  0,
+  15,
+  0
+ ],
+ "Engine.upk::OnlineStats": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::OnlineStatsInterface": [
+  0,
+  22,
+  0
+ ],
+ "Engine.upk::OnlineStatsRead": [
+  8,
+  1,
+  1
+ ],
+ "Engine.upk::OnlineStatsWrite": [
+  8,
+  1,
+  0
+ ],
+ "Engine.upk::OnlineSuppliedUIInterface": [
+  0,
+  5,
+  0
+ ],
+ "Engine.upk::OnlineSystemInterface": [
+  0,
+  24,
+  0
+ ],
+ "Engine.upk::OnlineTitleFileInterface": [
+  0,
+  12,
+  0
+ ],
+ "Engine.upk::OnlineVoiceInterface": [
+  0,
+  26,
+  0
+ ],
+ "Engine.upk::OwnerAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::ParticleEmitter": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ParticleEventManager": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::ParticleModuleEventGeneratorDecal": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::ParticleModuleEventSendToGame": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::ParticleModuleForceFieldBase": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::ParticleSystem": [
+  7,
+  0,
+  0
+ ],
+ "Engine.upk::PathConstraint": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::Path_AlongLine": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::Path_AvoidInEscapableNodes": [
+  1,
+  2,
+  0
+ ],
+ "Engine.upk::Path_MinDistBetweenSpecsOfType": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::Path_TowardGoal": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::Path_TowardPoint": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::Path_WithinDistanceEnvelope": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::Path_WithinTraversalDist": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::PathNode": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::PathNode_Dynamic": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::PathTargetPoint": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::PhysicalMaterial": [
+  1,
+  2,
+  0
+ ],
+ "Engine.upk::PhysicsAsset": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::PhysicsAssetInstance": [
+  19,
+  0,
+  0
+ ],
+ "Engine.upk::PickupableMeshActor": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::PickupFactory": [
+  0,
+  22,
+  5
+ ],
+ "Engine.upk::WaitingForMatch": [
+  0,
+  3,
+  1
+ ],
+ "Engine.upk::Sleeping": [
+  0,
+  5,
+  2
+ ],
+ "Engine.upk::Disabled": [
+  0,
+  6,
+  3
+ ],
+ "Engine.upk::PlayerReplicationInfo": [
+  2,
+  21,
+  5
+ ],
+ "Engine.upk::PlayerStart": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::PointLightToggleable": [
+  0,
+  3,
+  0
+ ],
+ "Engine.upk::PortalMarker": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::SceneCaptureActor": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::SceneCaptureComponent": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::SceneCapturePortalComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::PortalTeleporter": [
+  4,
+  1,
+  0
+ ],
+ "Engine.upk::PostProcessChain": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::PostProcessVolume": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::PotentialClimbWatcher": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::Sequence": [
+  3,
+  1,
+  0
+ ],
+ "Engine.upk::PrefabSequence": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::Projectile": [
+  2,
+  18,
+  7
+ ],
+ "Engine.upk::ProjectileAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::RadialBlurComponent": [
+  5,
+  3,
+  0
+ ],
+ "Engine.upk::RB_BodyInstance": [
+  19,
+  0,
+  0
+ ],
+ "Engine.upk::RB_ConstraintInstance": [
+  18,
+  0,
+  0
+ ],
+ "Engine.upk::RB_ConstraintActor": [
+  3,
+  3,
+  0
+ ],
+ "Engine.upk::RB_CylindricalForceActor": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::RB_Handle": [
+  7,
+  0,
+  0
+ ],
+ "Engine.upk::RB_LineImpulseActor": [
+  1,
+  2,
+  1
+ ],
+ "Engine.upk::RB_RadialForceActor": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::RB_RadialImpulseComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::RB_RadialImpulseActor": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::RB_Spring": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::RB_Thruster": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::ResourcePoolManager": [
+  13,
+  3,
+  1
+ ],
+ "Engine.upk::ReverbVolumeToggleable": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Route": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::SavedMove": [
+  0,
+  12,
+  0
+ ],
+ "Engine.upk::SceneCapture2DComponent": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::SceneCapture2DHitMaskComponent": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::Scout": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::TextureRenderTarget2D": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::ScriptedTexture": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::SeqAct_ActivateRemoteEvent": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_Latent": [
+  1,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_ActorFactory": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_AIMoveToActor": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::SeqAct_ApplyBehavior": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_AttachToActor": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_CameraFade": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_CameraLookAt": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_ChangeCollision": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_ConsoleCommand": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::SeqAct_ConvertToString": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_Delay": [
+  1,
+  1,
+  0
+ ],
+ "Engine.upk::SeqAct_DrawText": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_GetLocationAndRotation": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_GetVelocity": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_HeadTrackingControl": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::SeqAct_Interp": [
+  4,
+  2,
+  1
+ ],
+ "Engine.upk::SeqAct_Log": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_MITV_Activate": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::SeqAct_ModifyHealth": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_ParticleEventGenerator": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_PlayCameraAnim": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_PlaySound": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_PrepareMapChange": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::SeqAct_ProjectileFactory": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_RandomSwitch": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetCameraTarget": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetFloat": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetInt": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetLocation": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetObject": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetSoundMode": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::SeqAct_SetString": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetVector": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_SetVelocity": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_StreamInTextures": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_Teleport": [
+  0,
+  5,
+  1
+ ],
+ "Engine.upk::SeqAct_ToggleHUD": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_Trace": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_UpdatePhysBonesFromAnim": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqAct_WaitForLevelsVisible": [
+  1,
+  1,
+  1
+ ],
+ "Engine.upk::SeqCond_CompareBool": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqCond_GetServerType": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqCond_IsBenchmarking": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqCond_IsLoggedIn": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqCond_IsPIE": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqCond_SwitchBase": [
+  0,
+  4,
+  4
+ ],
+ "Engine.upk::SeqCond_SwitchClass": [
+  0,
+  4,
+  4
+ ],
+ "Engine.upk::SeqCond_SwitchObject": [
+  0,
+  4,
+  4
+ ],
+ "Engine.upk::SequenceEvent": [
+  1,
+  3,
+  2
+ ],
+ "Engine.upk::SeqEvent_LevelLoaded": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqEvent_LOS": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqEvent_Mover": [
+  0,
+  5,
+  1
+ ],
+ "Engine.upk::SeqEvent_ParticleEvent": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqEvent_RemoteEvent": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SeqEvent_TakeDamage": [
+  0,
+  6,
+  3
+ ],
+ "Engine.upk::SeqEvent_Touch": [
+  2,
+  3,
+  2
+ ],
+ "Engine.upk::SeqVar_Object": [
+  1,
+  1,
+  0
+ ],
+ "Engine.upk::SeqVar_ObjectList": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::SeqVar_Player": [
+  1,
+  1,
+  0
+ ],
+ "Engine.upk::SkelControlBase": [
+  3,
+  1,
+  1
+ ],
+ "Engine.upk::SkelControlLookAt": [
+  4,
+  0,
+  0
+ ],
+ "Engine.upk::SkeletalMeshActor": [
+  4,
+  29,
+  20
+ ],
+ "Engine.upk::SkeletalMeshActorBasedOnExtremeContent": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::SkeletalMeshActorMAT": [
+  5,
+  8,
+  6
+ ],
+ "Engine.upk::SkyLightComponent": [
+  0,
+  6,
+  0
+ ],
+ "Engine.upk::SoundCue": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::SoundNodeWave": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::SphereComponent": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::SplineActor": [
+  14,
+  2,
+  0
+ ],
+ "Engine.upk::SplineComponent": [
+  5,
+  0,
+  0
+ ],
+ "Engine.upk::SplineLoftActor": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::SpotLightToggleable": [
+  0,
+  3,
+  0
+ ],
+ "Engine.upk::SpriteComponent": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::StaticMeshActorBasedOnExtremeContent": [
+  0,
+  2,
+  1
+ ],
+ "Engine.upk::TranslatorTag": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::StringsTag": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::Vehicle": [
+  10,
+  51,
+  10
+ ],
+ "Engine.upk::SVehicle": [
+  8,
+  20,
+  5
+ ],
+ "Engine.upk::TargetableList": [
+  6,
+  0,
+  0
+ ],
+ "Engine.upk::TeamInfo": [
+  1,
+  5,
+  2
+ ],
+ "Engine.upk::Teleporter": [
+  1,
+  5,
+  5
+ ],
+ "Engine.upk::Terrain": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::TerrainLayerSetup": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::Texture2DComposite": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::Texture2DDynamic": [
+  2,
+  0,
+  0
+ ],
+ "Engine.upk::TextureFlipBook": [
+  4,
+  0,
+  0
+ ],
+ "Engine.upk::TextureMovie": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::TranslationContext": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::Trigger": [
+  1,
+  8,
+  2
+ ],
+ "Engine.upk::Trigger_LOS": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::TriggeredPath": [
+  0,
+  3,
+  2
+ ],
+ "Engine.upk::TriggerStreamingLevel": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::UICharacterSummary": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::UIDataProvider_MenuItem": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::UIDataProvider_OnlinePlayerDataBase": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::UIDataProvider_OnlineFriendMessages": [
+  0,
+  7,
+  2
+ ],
+ "Engine.upk::UIDataProvider_OnlineFriends": [
+  0,
+  5,
+  3
+ ],
+ "Engine.upk::UIDataProvider_OnlinePartyChatList": [
+  0,
+  4,
+  3
+ ],
+ "Engine.upk::UIDataProvider_OnlinePlayerStorage": [
+  0,
+  16,
+  2
+ ],
+ "Engine.upk::UIDataProvider_OnlineProfileSettings": [
+  0,
+  6,
+  0
+ ],
+ "Engine.upk::UIDataProvider_PlayerAchievements": [
+  2,
+  9,
+  2
+ ],
+ "Engine.upk::UIDynamicDataProvider": [
+  2,
+  5,
+  3
+ ],
+ "Engine.upk::UIDataProvider_Settings": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::UIDataStore": [
+  1,
+  8,
+  5
+ ],
+ "Engine.upk::UIDataStore_DynamicResource": [
+  8,
+  2,
+  2
+ ],
+ "Engine.upk::UIDataStore_GameResource": [
+  7,
+  0,
+  0
+ ],
+ "Engine.upk::UIDataStore_GameState": [
+  0,
+  2,
+  0
+ ],
+ "Engine.upk::UIDataStore_InputAlias": [
+  8,
+  0,
+  0
+ ],
+ "Engine.upk::UIDataStore_MenuItems": [
+  3,
+  3,
+  2
+ ],
+ "Engine.upk::UIDataStore_OnlineGameSearch": [
+  1,
+  15,
+  10
+ ],
+ "Engine.upk::UIDataStore_OnlineGameSettings": [
+  1,
+  9,
+  9
+ ],
+ "Engine.upk::UIDataStore_OnlinePlayerData": [
+  1,
+  8,
+  4
+ ],
+ "Engine.upk::UIDataStore_OnlineStats": [
+  1,
+  5,
+  3
+ ],
+ "Engine.upk::UIDataStore_Registry": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::UIDataStore_StringAliasMap": [
+  3,
+  0,
+  0
+ ],
+ "Engine.upk::UIDataStoreSubscriber": [
+  6,
+  0,
+  0
+ ],
+ "Engine.upk::UIDataStorePublisher": [
+  1,
+  0,
+  0
+ ],
+ "Engine.upk::UIDynamicFieldProvider": [
+  19,
+  0,
+  0
+ ],
+ "Engine.upk::UIGameInfoSummary": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::UIInteraction": [
+  4,
+  14,
+  5
+ ],
+ "Engine.upk::UIManager": [
+  2,
+  3,
+  1
+ ],
+ "Engine.upk::UIResourceCombinationProvider": [
+  0,
+  13,
+  10
+ ],
+ "Engine.upk::UISoundTheme": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::UIWeaponSummary": [
+  0,
+  1,
+  1
+ ],
+ "Engine.upk::VehicleAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "Engine.upk::VolumeTimer": [
+  0,
+  2,
+  2
+ ],
+ "Engine.upk::WaterVolume": [
+  0,
+  4,
+  2
+ ],
+ "Engine.upk::WillowInventoryDefinition": [
+  4,
+  2,
+  0
+ ],
+ "Engine.upk::WillowInventory": [
+  50,
+  60,
+  18
+ ],
+ "Engine.upk::Weapon": [
+  11,
+  76,
+  5
+ ],
+ "Engine.upk::Inactive": [
+  0,
+  5,
+  1
+ ],
+ "Engine.upk::Active": [
+  0,
+  5,
+  1
+ ],
+ "Engine.upk::WeaponFiring": [
+  0,
+  4,
+  3
+ ],
+ "Engine.upk::WeaponEquipping": [
+  0,
+  4,
+  2
+ ],
+ "Engine.upk::WeaponPuttingDown": [
+  0,
+  5,
+  2
+ ],
+ "Engine.upk::PendingClientWeaponSet": [
+  0,
+  3,
+  2
+ ],
+ "Engine.upk::WillowInventoryPartDefinition": [
+  5,
+  0,
+  0
+ ],
+ "Engine.upk::WorldSoundManager": [
+  9,
+  0,
+  0
+ ],
+ "Engine.upk::IInstanceData": [
+  0,
+  7,
+  3
+ ],
+ "Engine.upk::OnlineGameSearch": [
+  1,
+  1,
+  0
+ ],
+ "Engine.upk::OnlineSubsystem": [
+  12,
+  22,
+  17
+ ],
+ "Engine.upk::Settings": [
+  57,
+  0,
+  0
+ ],
+ "Engine.upk::CameraShake": [
+  0,
+  2,
+  0
+ ],
+ "GameFramework.upk::GamePlayerController": [
+  6,
+  8,
+  1
+ ],
+ "GameFramework.upk::GameStateObject": [
+  2,
+  0,
+  0
+ ],
+ "GameFramework.upk::GameStatsAggregator": [
+  4,
+  0,
+  0
+ ],
+ "GameFramework.upk::NavMeshGoal_OutOfViewFrom": [
+  1,
+  2,
+  0
+ ],
+ "GameFramework.upk::NavMeshPath_BiasAgainstPolysWithinDistanceOfLocations": [
+  0,
+  2,
+  0
+ ],
+ "GameFramework.upk::PlayerCollectorGame": [
+  0,
+  2,
+  2
+ ],
+ "GearboxFramework.upk::AIComponent": [
+  48,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::ActionSequence": [
+  20,
+  10,
+  10
+ ],
+ "GearboxFramework.upk::Action_FaceThreat": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxGlobals": [
+  26,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::Action_PawnMovementBase": [
+  4,
+  6,
+  6
+ ],
+ "GearboxFramework.upk::ActionSequenceList": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::ActionSequenceRandom": [
+  2,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::ActorAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::BehaviorProviderDefinition": [
+  5,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AIComponentAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::AICostExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AIDebugCamera": [
+  14,
+  10,
+  0
+ ],
+ "GearboxFramework.upk::AIDefinition": [
+  21,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AIFactoryBase": [
+  17,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AIResourceExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxEditorNode": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AllegianceExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AnimNodeSpecialMoveBlend": [
+  8,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::AttributeExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_AIHold": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_AIPriority": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_AITargeting": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_CallFunction": [
+  1,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_ChangeAnyBehaviorSequenceState": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_ChangeLocalBehaviorSequenceState": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_ChangeRemoteBehaviorSequenceState": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_ChangeTimer": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_CompareBool": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_CompareValues": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_CustomEvent": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_Delay": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_Gate": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_GetFloatParam": [
+  0,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_GetObjectParam": [
+  0,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_GetVectorParam": [
+  0,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_InterpolateFloatOverTime": [
+  0,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_IsSequenceEnabled": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_Metronome": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_ModifyTimer": [
+  0,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_PostAkEvent": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SendGbxMessage": [
+  0,
+  3,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SetFlag": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SetFloatParam": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SetObjectParam": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SetVectorParam": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SpecialMove": [
+  0,
+  3,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_SpecialMoveStop": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_StartAkAmbientSound": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_StopAkAmbientSound": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_StopDialog": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_ToggleDialog": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::Behavior_TriggerDialogEvent": [
+  1,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::BehaviorHelpers": [
+  5,
+  4,
+  0
+ ],
+ "GearboxFramework.upk::BehaviorKernel": [
+  28,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxCameraModifier": [
+  0,
+  13,
+  0
+ ],
+ "GearboxFramework.upk::CameraModifierCrossfade": [
+  0,
+  6,
+  1
+ ],
+ "GearboxFramework.upk::InterfaceGearboxCamera": [
+  0,
+  3,
+  1
+ ],
+ "GearboxFramework.upk::CameraModifierLookAt": [
+  0,
+  14,
+  0
+ ],
+ "GearboxFramework.upk::CompoundExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::ExposureUtilityBase": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::FiringBehaviorManager": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::FiringZoneCollectionDefinition": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::FlagDefinition": [
+  4,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::FlagExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GBXActorList": [
+  10,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GbxMessage": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GbxMessageManager": [
+  4,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GBXObjectList": [
+  5,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SparkTypes": [
+  1,
+  5,
+  0
+ ],
+ "GearboxFramework.upk::GearboxAccountActions": [
+  1,
+  25,
+  1
+ ],
+ "GearboxFramework.upk::GearboxAccountData": [
+  5,
+  21,
+  1
+ ],
+ "GearboxFramework.upk::GearboxAIController": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::ForcedMove": [
+  0,
+  3,
+  0
+ ],
+ "GearboxFramework.upk::ForcedRouteMove": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxAIFactory": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxAIMoveNode": [
+  7,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::SpecialMoveDefinition": [
+  3,
+  6,
+  6
+ ],
+ "GearboxFramework.upk::GearboxAnimDefinition": [
+  8,
+  11,
+  7
+ ],
+ "GearboxFramework.upk::GearboxCameraBasic": [
+  0,
+  6,
+  2
+ ],
+ "GearboxFramework.upk::GearboxCoverStateManager": [
+  48,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogNode": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogAction": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxDialogAct_Chance": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogAct_Compare": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogAct_ObjectParameterSwitch": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogAct_Talk": [
+  1,
+  2,
+  2
+ ],
+ "GearboxFramework.upk::GearboxDialogAct_Trigger": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogComponent": [
+  7,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogActor": [
+  9,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxDialogEventData": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogGroup": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogInterface": [
+  8,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxDialogManager": [
+  12,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::GearboxDialogVariable": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxEngine": [
+  4,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxGFxMovie": [
+  27,
+  21,
+  6
+ ],
+ "GearboxFramework.upk::GearboxEULAGFxMovie": [
+  0,
+  12,
+  2
+ ],
+ "GearboxFramework.upk::GFxActorMoviePool": [
+  1,
+  3,
+  0
+ ],
+ "GearboxFramework.upk::GFxMovieDefinition": [
+  3,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::GearboxEULAGFxObject": [
+  0,
+  5,
+  0
+ ],
+ "GearboxFramework.upk::GearboxGameInfo": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxLocationRequest": [
+  5,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxMind": [
+  32,
+  10,
+  4
+ ],
+ "GearboxFramework.upk::GearboxNavigationHandle": [
+  17,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SpecialMoveComponent": [
+  25,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxPawn": [
+  19,
+  13,
+  8
+ ],
+ "GearboxFramework.upk::GearboxPlayerController": [
+  18,
+  66,
+  9
+ ],
+ "GearboxFramework.upk::GearboxPlayerInput": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxProcess": [
+  8,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GearboxRenderTextureManager": [
+  8,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::RuleEngine": [
+  17,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::GearboxRuleEngine": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GearboxSkeletalMeshComponent": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GestaltSkeletalMeshDefinition": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GFxMovie_StateParent": [
+  0,
+  2,
+  1
+ ],
+ "GearboxFramework.upk::GFxMovieDrawStyle": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::GFxMovieDrawStyleHUD": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GFxMovieDrawStyleInstanceData": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GFxMovieDrawStyleMesh": [
+  0,
+  2,
+  1
+ ],
+ "GearboxFramework.upk::GFxMovieDrawStyleSplitscreen": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::GFxMovieManager": [
+  7,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::GFxMovieStatePlayerAware": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::IAIInterface": [
+  8,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::IBehaviorConsumer": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::IBehaviorProvider": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::ICustomEvent": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::IGbxMessageListener": [
+  6,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::IGFxActorMovie": [
+  3,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::IPopulationSpawnPoint": [
+  0,
+  4,
+  0
+ ],
+ "GearboxFramework.upk::IRuleEngineOwner": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::IStreamingDataEvent": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::KnowledgeRecord": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::LeviathanService": [
+  3,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::MindTargetInfo": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PawnMoveLocationRequest": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PhysicsStateExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PopulationAspect": [
+  0,
+  7,
+  7
+ ],
+ "GearboxFramework.upk::PopulationDefinition": [
+  3,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PopulationEncounter": [
+  2,
+  3,
+  2
+ ],
+ "GearboxFramework.upk::PopulationFactory": [
+  5,
+  8,
+  8
+ ],
+ "GearboxFramework.upk::PopulationFactoryGeneric": [
+  0,
+  2,
+  2
+ ],
+ "GearboxFramework.upk::PopulationFactoryPopulationDefinition": [
+  3,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PopulationMaster": [
+  27,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PopulationMasterAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::PopulationOpportunity": [
+  14,
+  8,
+  4
+ ],
+ "GearboxFramework.upk::PopulationOpportunityArea": [
+  4,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::PopulationOpportunityCloner": [
+  4,
+  1,
+  0
+ ],
+ "GearboxFramework.upk::PopulationOpportunityCombat": [
+  11,
+  6,
+  2
+ ],
+ "GearboxFramework.upk::PopulationOpportunityPoint": [
+  8,
+  4,
+  0
+ ],
+ "GearboxFramework.upk::PopulationPoint": [
+  4,
+  6,
+  0
+ ],
+ "GearboxFramework.upk::PopUpDebugBarGraph": [
+  5,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::RegionDefinition": [
+  3,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::RuleEngineLoadBalanceManager": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SeqAct_AllPlayersInVolume": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SeqEvent_EncounterWaveComplete": [
+  1,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SeqEvent_PopulatedActor": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::SeqEvent_PopulatedPoint": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::SparkInitializationProcess": [
+  8,
+  13,
+  3
+ ],
+ "GearboxFramework.upk::SparkInterfaceImpl": [
+  20,
+  37,
+  8
+ ],
+ "GearboxFramework.upk::SparkNews": [
+  0,
+  8,
+  0
+ ],
+ "GearboxFramework.upk::SparkServiceConfiguration": [
+  7,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SpecialMoveExpressionList": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::SpecialMoveInterface": [
+  6,
+  4,
+  4
+ ],
+ "GearboxFramework.upk::SpecialMoveRandom": [
+  2,
+  0,
+  0
+ ],
+ "GearboxFramework.upk::TargetIterator": [
+  0,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::WireTerminal": [
+  1,
+  1,
+  1
+ ],
+ "GearboxFramework.upk::SparkInterface": [
+  10,
+  33,
+  5
+ ],
+ "GearboxFramework.upk::GFxMovieState": [
+  4,
+  2,
+  0
+ ],
+ "GearboxFramework.upk::ITimerBehavior": [
+  0,
+  3,
+  0
+ ],
+ "GearboxFramework.upk::Rule": [
+  2,
+  1,
+  0
+ ],
+ "WillowGame.upk::AchievementUtility": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::StanceTypeDefinition": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowActionSequencePawn": [
+  11,
+  15,
+  5
+ ],
+ "WillowGame.upk::Action_AimAtScanRange": [
+  0,
+  3,
+  2
+ ],
+ "WillowGame.upk::Action_AimAtThreat": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::WillowDamageTypeDefinition": [
+  8,
+  5,
+  1
+ ],
+ "WillowGame.upk::BodyClassDefinition": [
+  7,
+  5,
+  0
+ ],
+ "WillowGame.upk::Action_Burrow": [
+  0,
+  6,
+  1
+ ],
+ "WillowGame.upk::Burrow": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Unburrow": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::AttackLocation": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_Range": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_LineOfSight": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Action_GenericAttack": [
+  1,
+  25,
+  6
+ ],
+ "WillowGame.upk::MoveToTarget": [
+  0,
+  5,
+  3
+ ],
+ "WillowGame.upk::HoldStill": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::Action_AnimAttack": [
+  0,
+  11,
+  4
+ ],
+ "WillowGame.upk::RotateToTarget": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Attack": [
+  0,
+  18,
+  3
+ ],
+ "WillowGame.upk::Action_AttackLoop": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Action_BikeMove": [
+  0,
+  12,
+  3
+ ],
+ "WillowGame.upk::MoveToPoint": [
+  0,
+  4,
+  2
+ ],
+ "WillowGame.upk::Action_FollowPath": [
+  0,
+  18,
+  1
+ ],
+ "WillowGame.upk::FollowMoveNodes": [
+  0,
+  11,
+  6
+ ],
+ "WillowGame.upk::Action_BunkerBoss_Flight": [
+  0,
+  7,
+  3
+ ],
+ "WillowGame.upk::GotoPerch": [
+  0,
+  3,
+  2
+ ],
+ "WillowGame.upk::ArrivedAtPerch": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::MoveToDistance": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::CircleAtDistance": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::Behavior_AICloak": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Action_Idle": [
+  0,
+  7,
+  3
+ ],
+ "WillowGame.upk::AttackLocation_Direct": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Action_ChargeTarget": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::Action_CombatPerch": [
+  0,
+  4,
+  4
+ ],
+ "WillowGame.upk::DoPerch": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::Action_CoverAttack": [
+  6,
+  13,
+  6
+ ],
+ "WillowGame.upk::MoveToCover": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Action_DeathTrap": [
+  0,
+  16,
+  4
+ ],
+ "WillowGame.upk::DeathTrap": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Initial": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::Moving": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::Stopped": [
+  0,
+  5,
+  1
+ ],
+ "WillowGame.upk::Action_Drive_Pursuit": [
+  0,
+  9,
+  3
+ ],
+ "WillowGame.upk::Braking": [
+  0,
+  6,
+  4
+ ],
+ "WillowGame.upk::Action_Drive_AlongsideTarget": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Action_Drive_AvoidWall": [
+  0,
+  5,
+  2
+ ],
+ "WillowGame.upk::Action_Drive_BackUpAndAdjust": [
+  0,
+  3,
+  3
+ ],
+ "WillowGame.upk::Action_Drive_GoBackToCombatArea": [
+  0,
+  4,
+  3
+ ],
+ "WillowGame.upk::Action_Drive_Pursuit_TargetOnFoot": [
+  0,
+  5,
+  3
+ ],
+ "WillowGame.upk::Action_DriveVehicle": [
+  0,
+  7,
+  3
+ ],
+ "WillowGame.upk::Action_FinalBoss": [
+  0,
+  3,
+  3
+ ],
+ "WillowGame.upk::Action_FinalBossFly": [
+  0,
+  3,
+  3
+ ],
+ "WillowGame.upk::Action_FlyAnimAttack": [
+  0,
+  12,
+  5
+ ],
+ "WillowGame.upk::Action_GoToScriptedDestination": [
+  0,
+  19,
+  5
+ ],
+ "WillowGame.upk::ScriptedMove": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::FollowActor": [
+  0,
+  6,
+  3
+ ],
+ "WillowGame.upk::FollowActorFormation": [
+  0,
+  4,
+  2
+ ],
+ "WillowGame.upk::LookAtPlayer": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Action_GrabPickup": [
+  0,
+  9,
+  4
+ ],
+ "WillowGame.upk::MoveToPickup": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::PickupItem": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::Action_LeapAtTarget": [
+  0,
+  7,
+  2
+ ],
+ "WillowGame.upk::Action_MortarAttack": [
+  0,
+  5,
+  1
+ ],
+ "WillowGame.upk::Action_MoveToFormation": [
+  0,
+  14,
+  4
+ ],
+ "WillowGame.upk::MoveToFormation": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::RotateToFormation": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::Action_MoveToVehicle": [
+  0,
+  8,
+  5
+ ],
+ "WillowGame.upk::Action_Patrol": [
+  0,
+  12,
+  3
+ ],
+ "WillowGame.upk::PatrolRandom": [
+  0,
+  5,
+  2
+ ],
+ "WillowGame.upk::PatrolWait": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::RunHome": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::PatrolPerch": [
+  0,
+  4,
+  3
+ ],
+ "WillowGame.upk::TryToHide": [
+  0,
+  3,
+  2
+ ],
+ "WillowGame.upk::Action_PlayCustomAnimation": [
+  0,
+  3,
+  3
+ ],
+ "WillowGame.upk::Action_ScriptedNPC": [
+  0,
+  15,
+  1
+ ],
+ "WillowGame.upk::ScriptedHold": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IdleNPC": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AISetFlight": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Action_SetFlight": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::Land": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Action_ShootThreatWhenInView": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::Action_SweepAttack": [
+  0,
+  4,
+  3
+ ],
+ "WillowGame.upk::Sweep": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Action_SwoopAttack": [
+  0,
+  9,
+  5
+ ],
+ "WillowGame.upk::MoveFurther": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::MoveCloser": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::Action_VehicleTurret": [
+  0,
+  4,
+  4
+ ],
+ "WillowGame.upk::ActionSkill": [
+  14,
+  54,
+  18
+ ],
+ "WillowGame.upk::ActionSkillStateExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowBaseStats": [
+  14,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowPlayerStats": [
+  11,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowCharacterClassDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::InteractiveObjectDefinition": [
+  19,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowRadarManager": [
+  4,
+  1,
+  1
+ ],
+ "WillowGame.upk::AIClassDefinition": [
+  15,
+  0,
+  0
+ ],
+ "WillowGame.upk::AIDebugDummyBase": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::AIPawnBalanceDefinition": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::AmmoPanelGFxObject": [
+  0,
+  8,
+  0
+ ],
+ "WillowGame.upk::AmmoResourcePool": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::AnemoneInfectionState": [
+  6,
+  27,
+  0
+ ],
+ "WillowGame.upk::Infected": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::Healing": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::NotInfected": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::AnimNotify_UseBehavior": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ItemDefinition": [
+  7,
+  3,
+  1
+ ],
+ "WillowGame.upk::EquipableItemDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::ArtifactDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ItemPartDefinition": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::EquipableItemPartDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::InputContextSelectorBase": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::DefaultInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::AssassinInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::AssetLibraryManager": [
+  7,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_Height": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_MaxDistance": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_Move": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_ParentDistance": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttackLocation_Side": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttributePresentationDefinition": [
+  25,
+  0,
+  0
+ ],
+ "WillowGame.upk::AttributePresentationListDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::BaseInventoryPanelGFxObject": [
+  0,
+  21,
+  0
+ ],
+ "WillowGame.upk::BadassPanelGFxObject": [
+  1,
+  26,
+  0
+ ],
+ "WillowGame.upk::BadassRewardDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPhysicalMaterialProperty": [
+  8,
+  7,
+  1
+ ],
+ "WillowGame.upk::GlobalsDefinition": [
+  10,
+  2,
+  1
+ ],
+ "WillowGame.upk::BalanceModifierDefinition": [
+  12,
+  0,
+  0
+ ],
+ "WillowGame.upk::TravelStationDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowLeviathanService": [
+  39,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowTradeManager": [
+  2,
+  66,
+  4
+ ],
+ "WillowGame.upk::WillowHUD": [
+  29,
+  48,
+  11
+ ],
+ "WillowGame.upk::Startup": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowProfileSettings": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSaveGameManager": [
+  41,
+  8,
+  0
+ ],
+ "WillowGame.upk::BodyWeaponHoldDefinition": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::StatusEffectsComponent": [
+  24,
+  22,
+  5
+ ],
+ "WillowGame.upk::PlayerEventProviderDefinition": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::GearLikenessMeshComponent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IUsable": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::IShop": [
+  2,
+  12,
+  1
+ ],
+ "WillowGame.upk::WillowPawn": [
+  246,
+  267,
+  61
+ ],
+ "WillowGame.upk::Dying": [
+  1,
+  14,
+  2
+ ],
+ "WillowGame.upk::injured": [
+  0,
+  39,
+  14
+ ],
+ "WillowGame.upk::InjuredClient": [
+  0,
+  21,
+  8
+ ],
+ "WillowGame.upk::MostlyDead": [
+  0,
+  15,
+  5
+ ],
+ "WillowGame.upk::MostlyDeadClient": [
+  0,
+  15,
+  5
+ ],
+ "WillowGame.upk::ExperienceResourcePool": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowGFxUIManagerDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::PlayerClassDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPlayerController": [
+  298,
+  1298,
+  178
+ ],
+ "WillowGame.upk::PlayerWaiting": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::PlayerLobby": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::PlayerQuickLook": [
+  0,
+  5,
+  1
+ ],
+ "WillowGame.upk::PlayerWalking": [
+  0,
+  9,
+  1
+ ],
+ "WillowGame.upk::PlayerDriving": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Skill": [
+  14,
+  14,
+  5
+ ],
+ "WillowGame.upk::WillowGFxMovie": [
+  11,
+  28,
+  5
+ ],
+ "WillowGame.upk::WillowGFxMovie3D": [
+  26,
+  8,
+  4
+ ],
+ "WillowGame.upk::WillowGFxThirdPersonMovie": [
+  5,
+  13,
+  5
+ ],
+ "WillowGame.upk::DeferredDataProviderGFxObject": [
+  1,
+  5,
+  1
+ ],
+ "WillowGame.upk::GFxTextListContainer": [
+  18,
+  14,
+  0
+ ],
+ "WillowGame.upk::InventoryDataProviderGFxObject": [
+  6,
+  1,
+  0
+ ],
+ "WillowGame.upk::InventoryListPanelGFxObject": [
+  7,
+  39,
+  1
+ ],
+ "WillowGame.upk::WillowInventoryGFxMovie": [
+  1,
+  12,
+  2
+ ],
+ "WillowGame.upk::TwoPanelInterfaceGFxMovie": [
+  0,
+  31,
+  2
+ ],
+ "WillowGame.upk::BankGFxMovie": [
+  0,
+  11,
+  2
+ ],
+ "WillowGame.upk::BaseTopLevelPanelGFxObject": [
+  0,
+  36,
+  0
+ ],
+ "WillowGame.upk::Behavior_ActivateInstancedMissionBehaviorSequence": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_ActivateListenerSkill": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ActivateMission": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_ActivateSkill": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AddInstanceData": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AddInstanceDataFromBehaviorContext": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AddInventoryToStorage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AddMissionDirectives": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_AddMissionTime": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_AddObjectInstanceData": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AdjustCameraAnimByEyeHeight": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AdvanceObjectiveSet": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_AIChangeInventory": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AIFollow": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AILevelUp": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AIPatsy": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AIProvoke": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AIResetProvocation": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AISetItemTossTarget": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AISetWeaponFireRotation": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AISpawn": [
+  1,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AITakeMoney": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AIThrowProjectileAtTarget": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::Behavior_AssignBoolVariable": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AssignFloatVariable": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AssignIntVariable": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AssignObjectVariable": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AssignVectorVariable": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AttachActor": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AttachAOEStatusEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AttachItems": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AttemptItemCallout": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AttemptStatusEffect": [
+  7,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_AttributeEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_AwardExperienceForMyDeath": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_BeginLifting": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_BoolMath": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_BroadcastEcho": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CauseDamage": [
+  7,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CauseTinnitus": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeBehaviorSetState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeCanTarget": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeDenAllegiance": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeDialogName": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeEnvironmentTag": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeInstanceDataSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeSkillBehaviorSequenceState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeUsability": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ChangeWeaponVisibility": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_Charm": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CheckMapChangeConditions": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::Behavior_ClearObjective": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_ClearStatusEffects": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CombatPerch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CombatPerchThrow": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_CompareFloat": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CompareInt": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CompareObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CompleteMission": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_Conditional": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ConvertInstanceDataIntoPhysicsActor": [
+  1,
+  3,
+  0
+ ],
+ "WillowGame.upk::Behavior_CoordinatedEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_Crane": [
+  0,
+  6,
+  0
+ ],
+ "WillowGame.upk::Behavior_CreateImpactEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_CreateWeatherSystem": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DamageArea": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DamageClassSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DamageSourceSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DamageSurfaceTypeSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DeactivateSkill": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DebugMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DecrementObjective": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_DestroyBeams": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DestroyBeamsForSource": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DestroyWeatherSystem": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DetachActor": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::Behavior_DisableFallingDamage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DiscoverLevelChallengeObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DropItems": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_DropProjectile": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_DuplicateInstanceData": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_EnterVehicle": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_Explode": [
+  8,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_FailMission": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_FinishLifting": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_FireBeam": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_FireCustomSkillEvent": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_FireShot": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_ForceDownState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ForceInjured": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_GetClosestPlayer": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_GetItemPrice": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_GetPlayerStat": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_GetVelocity": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_GFxMoviePlay": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_GFxMovieRegister": [
+  2,
+  3,
+  0
+ ],
+ "WillowGame.upk::Behavior_GFxMovieSetState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_GFxMovieStop": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_GiveChallengeToPlayer": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_GiveInjuredPlayerSecondWind": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_HasMissions": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_HeadLookHold": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_IncrementOverpowerLevel": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_IncrementPlayerStat": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SimpleMath": [
+  1,
+  1,
+  1
+ ],
+ "WillowGame.upk::Behavior_IntMath": [
+  1,
+  1,
+  1
+ ],
+ "WillowGame.upk::Behavior_IntSwitchRange": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_IsCensoredMode": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_IsObjectPlayer": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_IsObjectVehicle": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_LeaderCommand": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_LocalCustomEvent": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_MakeVector": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::Behavior_MatchTransform": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_MeleeAttack": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_MissionCustomEvent": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_MissionRemoteEvent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_NetworkRoleSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_NotifyThoughtLockStatus": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Behavior_ObjectClassSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_OpinionSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_OverrideWeaponCrosshair": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PawnLeap": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_PhaseLockHold": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PhysXLevel": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PlayAIMissionContextDialog": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PlayAnimation": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PlayHardFlinch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PlayMultipleExplosionsSound": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PostAkEventGetRTPC": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_PostProcessChain": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PostProcessChain_LostShield": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PostProcessOverlay": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_PursueNodeType": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_QueryDayNightCycle": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_QueuePersonalEcho": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RadarIcon": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RandomBranch": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_RandomlySelectBehaviors": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ReCalculateResourcePoolValues": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RefillResourcePool": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RefillWeapon": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RegisterFastTravelDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RegisterTargetable": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ReloadComplete": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RemoteCustomEvent": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RemoveInstanceData": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RemoveInventoryFromStorage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ResetActionSkillCooldown": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ResetHitRegionHealth": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ReviveInjuredPlayer": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_RotatePawn": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ScreenParticle": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SelectPhaselockTarget": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SendMessageToPlayers": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetAIFlag": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetAkRTPCValue": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetAlternateVertexWeight": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetAnemoneInfectionState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetAnimSwitchNode": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetAnimTree": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetBeingHealed": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetChallengeCompleted": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetCleanupParameters": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Behavior_SetCompassIcon": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetDeathDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetDemigodMode": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetDiscardRootMotion": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetDualWieldBlendState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetElevatorButtonGlowing": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetExtraImpactEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetExtraMuzzleEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetGodMode": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetHardAttach": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetInfoBarVisibility": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetJackVoiceModulatorState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetLookAtSpeed": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetMaterialScalarFade": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetMaterialScalarFadeForGoreDeath": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetMorphNodeWeight": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetNumBankSlots": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetPawnThrottleData": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetShieldColor": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetShieldDamageResistanceType": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetShieldTriggeredState": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetSkelControlLookAtActor": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetSkelControlSingleBoneData": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowSkelControl_TurretConstrained": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetSkelControlTurretConstrainedValues": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetSkillDefinitionForInjuredStrings": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetStance": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetTimeOfDay": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetUsabilityByMissionDirectives": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetUsabilityCost": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetUsableIcon": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SetVehicleSimObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ShowGenericReviveMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_ShowMissionInterface": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_ShowPullThePinNotification": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_ShowSelfAsTarget": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SimpleAnimPlay": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SimpleAnimStop": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SkillCustomEvent": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnActor": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnDecal": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnFirstPersonParticleSystem": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnFromPopulationSystem": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnFromVehicleSpawnStation": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnItems": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnLoot": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnLootAroundPoint": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnLootAtPoints": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnParticleSystem": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnParticleSystemAtWorldLocation": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnPerch": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnProjectile": [
+  2,
+  6,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnProjectileFromImpact": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_SpawnTemporalField": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_StartDeathRagdoll": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_StartMissionTimer": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_StatusEffectSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_StopMeleeAttack": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_StopMissionTimer": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_Switch": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_ToggleNPCAlly": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ToggleObstacle": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_ToggleTelescopeOverlay": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::Behavior_Transform": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UnlockAvatarAward": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UnlockAvatarAwardForAllPlayers": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UnlockCustomization": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UnlockCustomizationFromRewardPool": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UpdateCollision": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::Behavior_UpdateMissionObjective": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UpgradeSkill": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_UseObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_VectorMath": [
+  1,
+  1,
+  1
+ ],
+ "WillowGame.upk::Behavior_VectorToLocalSpace": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::Behavior_VoGScreenParticle": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_WeaponBoneControl": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_WeaponGlowEffect": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_WeaponsRestriction": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_WeaponThrow": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::Behavior_WeaponVisibleAmmoState": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::BehaviorAliasLookupDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::BehaviorSequenceEnableByMission": [
+  6,
+  0,
+  0
+ ],
+ "WillowGame.upk::BehaviorVolume": [
+  10,
+  23,
+  12
+ ],
+ "WillowGame.upk::BehaviorVolumeDefinition": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::BlackMarketDefinition": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::BlackMarketUpgradeDefinition": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::BlackMarketUpgradeManager": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::BodyClassDeathDefinition": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::BodyHitRegionDefinition": [
+  11,
+  0,
+  0
+ ],
+ "WillowGame.upk::BuzzaxeActionSkill": [
+  0,
+  34,
+  4
+ ],
+ "WillowGame.upk::WeaponTypeDefinition": [
+  12,
+  1,
+  0
+ ],
+ "WillowGame.upk::VehicleHandlingDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::CellsNavigator": [
+  2,
+  4,
+  1
+ ],
+ "WillowGame.upk::ChallengeDefinition": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::ChallengeFeedbackMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ChallengeManager": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::ChallengesPanelGFxObject": [
+  6,
+  18,
+  0
+ ],
+ "WillowGame.upk::ChallengesScreenGFxObject": [
+  1,
+  16,
+  0
+ ],
+ "WillowGame.upk::CharacterCustomizationInfoCardGFxObject": [
+  0,
+  10,
+  0
+ ],
+ "WillowGame.upk::CharacterCustomizationMenuGFxObject": [
+  0,
+  8,
+  0
+ ],
+ "WillowGame.upk::CharacterSelectionCustomizationListGFxObject": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::CharacterSelectionGFxObject": [
+  0,
+  14,
+  0
+ ],
+ "WillowGame.upk::CharacterSelectionReduxGFxMovie": [
+  2,
+  76,
+  3
+ ],
+ "WillowGame.upk::ChassisDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::InventoryBalanceDefinition": [
+  7,
+  0,
+  0
+ ],
+ "WillowGame.upk::ClassModBalanceDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::ClassModDefinition": [
+  1,
+  3,
+  0
+ ],
+ "WillowGame.upk::CombatMusicManager": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::ConfirmCharacterLobbyGFxMovie": [
+  0,
+  21,
+  2
+ ],
+ "WillowGame.upk::CreditsDataProviderGFxObject": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::CreditsGFxObject": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::CurrentProficiencySkillAttributeContextResolver": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::CustomizationData": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::CustomizationData_Head": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::CustomizationData_Skin": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::CustomizationDefinition": [
+  8,
+  3,
+  3
+ ],
+ "WillowGame.upk::CustomizationGFxMovie": [
+  1,
+  44,
+  2
+ ],
+ "WillowGame.upk::WillowGFxDialogBox": [
+  1,
+  55,
+  2
+ ],
+ "WillowGame.upk::DamageOverTimeManager": [
+  1,
+  1,
+  1
+ ],
+ "WillowGame.upk::DeathtrapActionSkill": [
+  0,
+  17,
+  2
+ ],
+ "WillowGame.upk::DefinitionGlobalsDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowCoverComponent": [
+  3,
+  10,
+  2
+ ],
+ "WillowGame.upk::Enter": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::Idle": [
+  0,
+  4,
+  1
+ ],
+ "WillowGame.upk::Exit": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::FireEnter": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::FireIdle": [
+  0,
+  5,
+  2
+ ],
+ "WillowGame.upk::FireExit": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::WillowAIPawn": [
+  121,
+  110,
+  27
+ ],
+ "WillowGame.upk::Staggered": [
+  0,
+  11,
+  1
+ ],
+ "WillowGame.upk::DeployableTurretActor": [
+  6,
+  4,
+  2
+ ],
+ "WillowGame.upk::DesignerAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::DesignerAttributeContextResolverByName": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::DeveloperPerksDefinition": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::DevelopmentDownloadableContentEnumerator": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::DialogNameTagExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadableContentDefinition": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadableCharacterDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadableCustomizationSetDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadableExpansionDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadableItemSetDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadablePackageDefinition": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::DownloadableVehicleDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MovementComponent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::DrunkenBaseComponent": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::DualWieldActionSkill": [
+  0,
+  20,
+  3
+ ],
+ "WillowGame.upk::EchoVersionGFxMovie": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::EffectCollectionDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::EndOfGameGFxMovie": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::ValueGFxObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::EridiumValueGFxObject": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::EventFilter_OnTouch": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::ExecuteActionSkill": [
+  0,
+  71,
+  7
+ ],
+ "WillowGame.upk::ExecuteActionSkillActive": [
+  0,
+  5,
+  2
+ ],
+ "WillowGame.upk::ExecuteActionSkillExecuting": [
+  0,
+  4,
+  2
+ ],
+ "WillowGame.upk::PlayerBlockingVolume": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ExecuteBlockingVolume": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ExperienceFeedbackMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::ExplosionCollectionDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::ExplosionDefinition": [
+  3,
+  5,
+  1
+ ],
+ "WillowGame.upk::WaypointComponent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionDirectiveWaypointComponent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::FastTravelSignGFxMovie": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowInteractiveObject": [
+  134,
+  93,
+  27
+ ],
+ "WillowGame.upk::TravelStation": [
+  6,
+  15,
+  11
+ ],
+ "WillowGame.upk::FastTravelStation": [
+  2,
+  3,
+  1
+ ],
+ "WillowGame.upk::FastTravelStationDiscoveryMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::FastTravelStationGFxMovie": [
+  3,
+  24,
+  4
+ ],
+ "WillowGame.upk::FastTravelStationGFxObject": [
+  0,
+  11,
+  0
+ ],
+ "WillowGame.upk::FastTravelStationLocationMissionsGFxObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::FastTravelStationMapLocationsGFxObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::FastTravelStationsLookup": [
+  12,
+  0,
+  0
+ ],
+ "WillowGame.upk::FiringModeDefinition": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::FixedMarker": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::FlyerBlockingVolume": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::FractalViewWanderingDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowGameReplicationInfo": [
+  14,
+  44,
+  1
+ ],
+ "WillowGame.upk::WillowGameInfo": [
+  36,
+  89,
+  9
+ ],
+ "WillowGame.upk::FrontendGFxMovie": [
+  0,
+  192,
+  3
+ ],
+ "WillowGame.upk::FrontendMenuGFxObject": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::FrontEndPlayerListGFxObject": [
+  0,
+  58,
+  0
+ ],
+ "WillowGame.upk::GearboxAccountGFxMovie": [
+  4,
+  83,
+  1
+ ],
+ "WillowGame.upk::GearboxAccountGFxObject": [
+  0,
+  32,
+  0
+ ],
+ "WillowGame.upk::GFxMovieMissionStatus": [
+  0,
+  4,
+  2
+ ],
+ "WillowGame.upk::GFxTextListContent": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::GlobalAttributeValueResolver": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::GraveyardGFxObject": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::GrenadeModDefinition": [
+  7,
+  1,
+  0
+ ],
+ "WillowGame.upk::GrenadeModPartDefinition": [
+  7,
+  0,
+  0
+ ],
+ "WillowGame.upk::HashDisplayGFxMovie": [
+  4,
+  23,
+  2
+ ],
+ "WillowGame.upk::HealthBarGFxObject": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::HealthStateExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::HitRegionHelper": [
+  13,
+  1,
+  0
+ ],
+ "WillowGame.upk::HUDScaleGuideGFxMovie": [
+  0,
+  4,
+  2
+ ],
+ "WillowGame.upk::HUDWidget_Base": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::HUDWidget_Challenges": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::HUDWidget_Crosshairs": [
+  7,
+  0,
+  0
+ ],
+ "WillowGame.upk::HUDWidget_Minimap": [
+  6,
+  2,
+  2
+ ],
+ "WillowGame.upk::HUDWidget_Missions": [
+  13,
+  0,
+  0
+ ],
+ "WillowGame.upk::HUDWidget_Trading": [
+  7,
+  0,
+  0
+ ],
+ "WillowGame.upk::HUDWidget_WorldSpace": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::IAnimProvider": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IAttachableActor": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::IBehaviorAliasProvider": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IBodyPawn": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::IChallengeRecipient": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IChangeUsabilityBehavior": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::IControllerLocator": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::ICustomizable": [
+  6,
+  0,
+  0
+ ],
+ "WillowGame.upk::IDamageable": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::IDamageSurface": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::IDesignerAttributeProvider": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::IDlcLicensableObject": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IDrunkenProjectile": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IDynamicObstacle": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::IExtraImpactEffects": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::IFireShotBehavior": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IFocusable": [
+  3,
+  2,
+  0
+ ],
+ "WillowGame.upk::IGearLikenessConsumer": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::IGFxMenuScreenTickable": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IHealable": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::IHitRegionConsumer": [
+  8,
+  1,
+  0
+ ],
+ "WillowGame.upk::IHitRegionInfoProvider": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IItemCardable": [
+  1,
+  14,
+  0
+ ],
+ "WillowGame.upk::ILevelChallengeObject": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::ILiftBehavior": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::ILightProjectileManagerOwner": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ILootable": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::IMapDisplayInfo": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::IMaterialFadeBehavior": [
+  1,
+  1,
+  0
+ ],
+ "WillowGame.upk::IMeleeAttacker": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::IMissionObjective": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::IMultitypeScrollingList": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowLocalMessage": [
+  2,
+  1,
+  0
+ ],
+ "WillowGame.upk::InjuredFeedbackMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::INPCBehavior": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::InputBindingsClipGFxObject": [
+  0,
+  9,
+  0
+ ],
+ "WillowGame.upk::InputContextDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::InRangeOfInjuredPlayerExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::InstanceDataContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::InstancedDesignerAttribute": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::InteractionProxy": [
+  3,
+  10,
+  4
+ ],
+ "WillowGame.upk::InteractiveObjectBalanceDefinition": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::InterpTrackBehaviors": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::InterpTrackInstBehaviors": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::InventoryAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::InventoryDefinitionAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IPlayerBehavior": [
+  0,
+  18,
+  0
+ ],
+ "WillowGame.upk::IPlayerListOwner": [
+  0,
+  13,
+  1
+ ],
+ "WillowGame.upk::IPlayerMaster": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IPlayerObserver": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::IProjectileBehavior": [
+  6,
+  10,
+  0
+ ],
+ "WillowGame.upk::IProjectileReflector": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::IProtectionTimer": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::IPursuitBehavior": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IRBCollisionListener": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IResourcePoolOwner": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::ISeeTargetable": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::ISkillBehavior": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::ISkillTreeListener": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::IStatusEffectTarget": [
+  9,
+  1,
+  0
+ ],
+ "WillowGame.upk::IStorageDevice": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ItemCardGFxObject": [
+  3,
+  19,
+  2
+ ],
+ "WillowGame.upk::ItemInspectionGFxMovie": [
+  12,
+  11,
+  4
+ ],
+ "WillowGame.upk::ItemOfTheDayPanelGFxObject": [
+  1,
+  20,
+  0
+ ],
+ "WillowGame.upk::ItemPickupGFxMovie": [
+  9,
+  4,
+  2
+ ],
+ "WillowGame.upk::ItemPool": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::ItemPoolListDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::ITinnitusTarget": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::ITwoPanelInterface": [
+  0,
+  20,
+  0
+ ],
+ "WillowGame.upk::IUISubMenuNavigation": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::IWeaponBoneController": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::IWeaponThrow": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::IWeatherBehavior": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::IWillowScrollingListDataProvider": [
+  0,
+  12,
+  0
+ ],
+ "WillowGame.upk::IWillowStorable": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::LANServerBrowserGFxMovie": [
+  1,
+  26,
+  1
+ ],
+ "WillowGame.upk::LANServerBrowserGFxObject": [
+  0,
+  9,
+  0
+ ],
+ "WillowGame.upk::LatentRewardGFxMovie": [
+  0,
+  12,
+  2
+ ],
+ "WillowGame.upk::LcdHelper": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::LevelDependencyList": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::LevelTransitionSignGFxMovie": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::LevelTransitionWaypointComponent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::LevelTravelStation": [
+  1,
+  5,
+  2
+ ],
+ "WillowGame.upk::LiftActionSkill": [
+  0,
+  65,
+  6
+ ],
+ "WillowGame.upk::LoadCharacterLobbyGFxObject": [
+  0,
+  8,
+  0
+ ],
+ "WillowGame.upk::LobbyGFxMovie": [
+  0,
+  10,
+  2
+ ],
+ "WillowGame.upk::LocalInventoryRefreshMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::LocalItemMessage": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::LocalMapChangeMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::LocalTrainingDefinitionMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::LocalTrainingMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::LocalWeaponMessage": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::LockoutDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::LookingAtInjuredPlayerExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MarketingUnlockInventoryDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::MarketplaceGFxMovie": [
+  0,
+  35,
+  2
+ ],
+ "WillowGame.upk::MatchmakingLobbyCharacterInfoGFxObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::MatchmakingLobbyGFxMovie": [
+  0,
+  14,
+  2
+ ],
+ "WillowGame.upk::MatchmakingLobbyResultsGFxObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::MechromancerInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::MeleeDefinition": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::MercenaryInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::MissionDefinition": [
+  24,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionDirectivesDefinition": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::MissionFeedbackMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::UsableItemDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionItemDefinition": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::UsableItemPartDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionObjectiveDefinition": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionObjectiveSetDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionObjectiveSetBranchingDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionObjectiveSetCollectionDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionObjectiveWaypointComponent": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::MissionPopulationAspect": [
+  0,
+  18,
+  13
+ ],
+ "WillowGame.upk::MissionRewardGFxObject": [
+  0,
+  26,
+  0
+ ],
+ "WillowGame.upk::MissionTracker": [
+  81,
+  44,
+  6
+ ],
+ "WillowGame.upk::MontageGFxObject": [
+  2,
+  10,
+  1
+ ],
+ "WillowGame.upk::ScrollingListGFxObject": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::MultitypeScrollingListGFxObject": [
+  1,
+  6,
+  0
+ ],
+ "WillowGame.upk::NetworkOptionsGFxMovie": [
+  0,
+  7,
+  2
+ ],
+ "WillowGame.upk::NetworkOptionsGFxObject": [
+  0,
+  9,
+  0
+ ],
+ "WillowGame.upk::NPCLoadBalancer": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::NumberWeaponsEquippedExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::OnlineMessageGFxMovie": [
+  0,
+  15,
+  2
+ ],
+ "WillowGame.upk::OpenedChestMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::OptionsGFxMovie": [
+  0,
+  16,
+  3
+ ],
+ "WillowGame.upk::OptionsGFxObject": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::PauseGFxMovie": [
+  0,
+  27,
+  2
+ ],
+ "WillowGame.upk::PawnInteractionProxy": [
+  1,
+  3,
+  1
+ ],
+ "WillowGame.upk::PawnRelevanceUtilityFixedCost": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::PCContextMenuObject": [
+  0,
+  13,
+  0
+ ],
+ "WillowGame.upk::WillowAIMoveNode": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::Perch": [
+  8,
+  14,
+  4
+ ],
+ "WillowGame.upk::PerchDefinition": [
+  11,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimDefinition": [
+  0,
+  6,
+  5
+ ],
+ "WillowGame.upk::SpecialMove_PhaseLock": [
+  0,
+  4,
+  4
+ ],
+ "WillowGame.upk::PhysicsJumpNode": [
+  11,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerActionExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_CameraAnim": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_DropItems": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_ForceFeedback": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_Melee": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_PlayEchoCall": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_RegisterFastTravelStation": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_Reload": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_SetCurrentProjectile": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_SpawnCurrentProjectile": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_SpawnTeleporter": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_ThrowGrenade": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_ToggleMeleeWeapon": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_ToggleRevive": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_UnlockAchievement": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_UnlockAchievementForAllPlayers": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerBehavior_ViewShake": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::PlayerClassCountAttributeValueResolver": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::PlayerClassIdentifierDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::PlayerDetailsGFxMovie": [
+  0,
+  6,
+  2
+ ],
+ "WillowGame.upk::PlayerDetailsGFxObject": [
+  0,
+  14,
+  0
+ ],
+ "WillowGame.upk::PlayerInteractionClient": [
+  0,
+  4,
+  1
+ ],
+ "WillowGame.upk::PlayerInteractionManager": [
+  1,
+  5,
+  0
+ ],
+ "WillowGame.upk::PlayerInteractionServer": [
+  1,
+  10,
+  1
+ ],
+ "WillowGame.upk::PlayerKillVolume": [
+  0,
+  3,
+  1
+ ],
+ "WillowGame.upk::PlayerNameIdentifierDefinition": [
+  0,
+  3,
+  3
+ ],
+ "WillowGame.upk::PlayerSkillTree": [
+  20,
+  0,
+  0
+ ],
+ "WillowGame.upk::PlayerStandIn": [
+  14,
+  13,
+  3
+ ],
+ "WillowGame.upk::PlayerStatsNotifier": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::PopulationFactoryWillowAIPawn": [
+  1,
+  14,
+  9
+ ],
+ "WillowGame.upk::PopulationFactoryBalancedAIPawn": [
+  4,
+  7,
+  5
+ ],
+ "WillowGame.upk::PopulationFactoryInteractiveObject": [
+  2,
+  8,
+  6
+ ],
+ "WillowGame.upk::PopulationFactoryBlackMarket": [
+  0,
+  3,
+  2
+ ],
+ "WillowGame.upk::PopulationFactoryVendingMachine": [
+  0,
+  3,
+  2
+ ],
+ "WillowGame.upk::PopulationFactoryWillowInventory": [
+  0,
+  4,
+  3
+ ],
+ "WillowGame.upk::PopulationFactoryWillowProjectile": [
+  1,
+  4,
+  3
+ ],
+ "WillowGame.upk::PopulationFactoryWillowVehicle": [
+  1,
+  8,
+  5
+ ],
+ "WillowGame.upk::WillowAIDenComponent": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::PopulationOpportunityDen": [
+  23,
+  15,
+  1
+ ],
+ "WillowGame.upk::PopulationOpportunityDen_Dynamic": [
+  3,
+  1,
+  1
+ ],
+ "WillowGame.upk::PostureStateExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_Attach": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_Bounce": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_Detonate": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_FindHomingTarget": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_LevelOff": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_SetDamageTypeDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_SetExplosionDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_SetHomingTarget": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_SetProximity": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_SetSpeed": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_SetStickyGrenade": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileBehavior_TagPayloadType": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ProjectileDefinition": [
+  28,
+  0,
+  0
+ ],
+ "WillowGame.upk::ProximityActor": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::PS3InvitesPopupGFxObject": [
+  0,
+  9,
+  0
+ ],
+ "WillowGame.upk::PsychoInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::QuestAcceptGFxMovie": [
+  1,
+  60,
+  3
+ ],
+ "WillowGame.upk::RagdollRemovalPopulationAspect": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::ReceivedAmmoMessage": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::ReceivedCreditsMessage": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::ReceivedItemMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ReceivedWeaponMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::RecentDropList": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::ResurrectTravelStation": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::ScorpioActionSkill": [
+  1,
+  15,
+  1
+ ],
+ "WillowGame.upk::SeqAct_AllPlayersInMesh": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::SeqAct_DiscardInventory": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SeqAct_ExecuteSkill": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SeqAct_GetInstanceData": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SeqAct_IsInVolume": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::SeqAct_PrimaryPlayerBusyDelay": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SeqAct_UnlockAchievement": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SeqEvent_TakeHitRegionDamage": [
+  3,
+  1,
+  0
+ ],
+ "WillowGame.upk::SequenceEventEnableByMission": [
+  6,
+  0,
+  0
+ ],
+ "WillowGame.upk::ShieldBarGFxObject": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::ShieldDefinition": [
+  6,
+  3,
+  0
+ ],
+ "WillowGame.upk::SimpleVolume": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SirenInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SkillEffectManager": [
+  11,
+  4,
+  2
+ ],
+ "WillowGame.upk::SkillExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::SkillPointsFeedbackMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SkillTreeGFxObject": [
+  16,
+  43,
+  3
+ ],
+ "WillowGame.upk::SoldierInputContextSelector": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SpecialMove_Cloak": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::SpecialMove_Cover": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SpecialMove_Cringe": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SpecialMove_WeaponAction": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SpecialMove_FirstAndThirdPersonAnimation": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::SpecialMove_FirstPerson": [
+  0,
+  6,
+  1
+ ],
+ "WillowGame.upk::SpecialMove_FirstPersonDualWieldAction": [
+  1,
+  11,
+  1
+ ],
+ "WillowGame.upk::SpecialMove_FirstPersonOffHand": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::SpecialMove_PerchRandomLoop": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::SpecialMove_PhysicsJump": [
+  3,
+  9,
+  5
+ ],
+ "WillowGame.upk::SpecialMove_Spawned": [
+  0,
+  4,
+  4
+ ],
+ "WillowGame.upk::SpecialMove_Vehicle": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::SplitscreenHelper": [
+  0,
+  9,
+  0
+ ],
+ "WillowGame.upk::StanceExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::StashGFxMovie": [
+  0,
+  13,
+  2
+ ],
+ "WillowGame.upk::StationTeleporterDestination": [
+  2,
+  1,
+  1
+ ],
+ "WillowGame.upk::StatusEffectChanceModifierResolver": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::StatusEffectExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::StatusEffectProxyActor": [
+  10,
+  3,
+  1
+ ],
+ "WillowGame.upk::WillowEmitter": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::StatusEffectReplicatedEmitter": [
+  0,
+  13,
+  6
+ ],
+ "WillowGame.upk::StatusMenuEquippedPanelGFxObject": [
+  0,
+  48,
+  0
+ ],
+ "WillowGame.upk::StatusMenuExGFxMovie": [
+  6,
+  190,
+  11
+ ],
+ "WillowGame.upk::StatusMenuInventoryPanelGFxObject": [
+  0,
+  69,
+  1
+ ],
+ "WillowGame.upk::StatusMenuMapGFxObject": [
+  14,
+  17,
+  2
+ ],
+ "WillowGame.upk::TeleporterFeedbackMessage": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::TemporalField": [
+  3,
+  6,
+  4
+ ],
+ "WillowGame.upk::TextChatGFxMovie": [
+  1,
+  10,
+  2
+ ],
+ "WillowGame.upk::TextMarkupDictionary": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::TradingGFxMovie": [
+  2,
+  28,
+  7
+ ],
+ "WillowGame.upk::TradingOffersPanelGFxObject": [
+  0,
+  32,
+  0
+ ],
+ "WillowGame.upk::TradingPanelGFxObject": [
+  0,
+  35,
+  0
+ ],
+ "WillowGame.upk::TurnDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::TwoPanelInterfaceGFxObject": [
+  1,
+  60,
+  0
+ ],
+ "WillowGame.upk::UBMGameOverGFxMovie": [
+  0,
+  5,
+  1
+ ],
+ "WillowGame.upk::UBMGameOverGFxObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::UBMGraveyardSaveData": [
+  0,
+  6,
+  0
+ ],
+ "WillowGame.upk::UpsellGFxMovie": [
+  0,
+  15,
+  2
+ ],
+ "WillowGame.upk::UpsellGFxMovieDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::UpsellGFxNotificationObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::UpsellGFxObject": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::UpsellNotificationGFxMovie": [
+  0,
+  8,
+  2
+ ],
+ "WillowGame.upk::UpsellNotificationGFxMovieDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::UsableCustomizationItemDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::VehicleBalanceDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::VehicleBlockingVolume": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::VehicleChoiceInfoCardGFxObject": [
+  0,
+  15,
+  0
+ ],
+ "WillowGame.upk::VehicleSpawnStationTerminal": [
+  0,
+  8,
+  2
+ ],
+ "WillowGame.upk::VehicleChoiceModuleGFxObject": [
+  0,
+  6,
+  0
+ ],
+ "WillowGame.upk::VehicleClassDefinition": [
+  26,
+  4,
+  0
+ ],
+ "WillowGame.upk::VSSUIDefinition": [
+  2,
+  1,
+  0
+ ],
+ "WillowGame.upk::VehicleFamilyDefinition": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::VehicleFamilySelectorGFxObject": [
+  0,
+  6,
+  0
+ ],
+ "WillowGame.upk::VehicleLifetimeManager": [
+  12,
+  1,
+  1
+ ],
+ "WillowGame.upk::VehiclePassengerExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::VehicleSeatSwap_PlayerInteractionClient": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::VehicleSeatSwap_PlayerInteractionServer": [
+  1,
+  4,
+  0
+ ],
+ "WillowGame.upk::VehicleSpawnStationGFxMovie": [
+  11,
+  51,
+  13
+ ],
+ "WillowGame.upk::VehicleSpawnStationPlatform": [
+  2,
+  7,
+  0
+ ],
+ "WillowGame.upk::VehicleStandIn": [
+  12,
+  4,
+  2
+ ],
+ "WillowGame.upk::VendingMachineExGFxMovie": [
+  1,
+  77,
+  3
+ ],
+ "WillowGame.upk::VendingMachineFeedbackGFxObject": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::WeaponActionAvailableExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WeaponEquippedExpressionEvaluator": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WeaponPartDefinition": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::WeaponProficiencyFeedbackMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WeaponScopeGFxMovie": [
+  0,
+  13,
+  2
+ ],
+ "WillowGame.upk::WeaponShotDebug": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowAccessControl": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowAIBlackboardComponent": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAICranePawn": [
+  0,
+  7,
+  0
+ ],
+ "WillowGame.upk::WillowAIDebugCamera": [
+  6,
+  4,
+  0
+ ],
+ "WillowGame.upk::WillowAIDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNode_AddCameraBone": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNode_Audio": [
+  0,
+  3,
+  2
+ ],
+ "WillowGame.upk::WillowAnimNode_MovementTransition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNode_Prism": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNode_Simple": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNode_WeaponRecoil": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNodeAimOffset": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNodeAimOffset_BoundaryTurret": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNodeBlendSwitch": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNodeFeatherBlend": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNodeSequence": [
+  2,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowAnimNodeSequenceAdditiveBlend": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAnimNodeSlot": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowItem": [
+  39,
+  57,
+  17
+ ],
+ "WillowGame.upk::WillowEquipAbleItem": [
+  4,
+  7,
+  0
+ ],
+ "WillowGame.upk::WillowArtifact": [
+  3,
+  3,
+  1
+ ],
+ "WillowGame.upk::WillowAutoAimStrategyDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAutoAimStrategy": [
+  3,
+  4,
+  1
+ ],
+ "WillowGame.upk::WillowAutoTestManager": [
+  0,
+  18,
+  1
+ ],
+ "WillowGame.upk::UIScaleformMemoryStressTest": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::AutomatedSmokeTest": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::TravelTheWorld": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowBoundaryTurret": [
+  1,
+  6,
+  5
+ ],
+ "WillowGame.upk::WillowWeapon": [
+  121,
+  244,
+  32
+ ],
+ "WillowGame.upk::WeaponPuttingDown": [
+  0,
+  6,
+  1
+ ],
+ "WillowGame.upk::Inactive": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::WeaponFiring": [
+  0,
+  8,
+  2
+ ],
+ "WillowGame.upk::WeaponEquipping": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WeaponReloading": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::Active": [
+  0,
+  10,
+  1
+ ],
+ "WillowGame.upk::WeaponBusy": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowBuzzaxeWeapon": [
+  3,
+  17,
+  4
+ ],
+ "WillowGame.upk::WillowClanDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowClassMod": [
+  5,
+  4,
+  2
+ ],
+ "WillowGame.upk::WillowNavMeshPathFinder": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowNavigationHandle": [
+  31,
+  0,
+  0
+ ],
+ "WillowGame.upk::Typing": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowCoopGameInfo": [
+  3,
+  19,
+  6
+ ],
+ "WillowGame.upk::WillowCustomizationManager": [
+  10,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowDamageArea": [
+  8,
+  3,
+  2
+ ],
+ "WillowGame.upk::WillowDamagePipeline": [
+  11,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowDamageType": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowDamageSource": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowDialogAct_MissionSwitch": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowDialogAct_RandomBranch": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowDialogAct_Talk": [
+  1,
+  2,
+  2
+ ],
+ "WillowGame.upk::WillowDialogEchoActor": [
+  9,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowDialogGlobalsDefinition": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowDialogManager": [
+  4,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowDialogNameTag": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowDownloadableContentManager": [
+  26,
+  7,
+  0
+ ],
+ "WillowGame.upk::WillowDynamicNavMeshConnectionPoint": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowDynamicPathBlockingVolume": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowEffectCoordinator": [
+  7,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowElevator": [
+  0,
+  8,
+  2
+ ],
+ "WillowGame.upk::WillowElevatorButton": [
+  1,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowReplicatedEmitter": [
+  0,
+  19,
+  2
+ ],
+ "WillowGame.upk::WillowEmit_HitEffect": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::WillowExperiencePipeline": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowImpactDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowForcedReachSpec": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowGameEngine": [
+  2,
+  5,
+  4
+ ],
+ "WillowGame.upk::WillowGameMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowGameViewportClient": [
+  8,
+  34,
+  11
+ ],
+ "WillowGame.upk::WillowGFxClikWidget": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowGFxColiseumOverlayDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowGFxColiseumOverlayMovie": [
+  0,
+  54,
+  2
+ ],
+ "WillowGame.upk::WillowGFxEditDialog": [
+  0,
+  14,
+  2
+ ],
+ "WillowGame.upk::WillowGFxLobbyLoadCharacter": [
+  0,
+  42,
+  2
+ ],
+ "WillowGame.upk::WillowGFxLobbyTools": [
+  0,
+  28,
+  0
+ ],
+ "WillowGame.upk::WillowGFxMenuHelperSaveGame": [
+  2,
+  29,
+  0
+ ],
+ "WillowGame.upk::WillowGFxMovieCredits": [
+  9,
+  13,
+  5
+ ],
+ "WillowGame.upk::WillowGFxMoviePressStart": [
+  3,
+  38,
+  3
+ ],
+ "WillowGame.upk::WillowGFxTrainingDialogBox": [
+  0,
+  7,
+  1
+ ],
+ "WillowGame.upk::WillowGFxUIManager": [
+  6,
+  15,
+  1
+ ],
+ "WillowGame.upk::WillowGlobals": [
+  51,
+  7,
+  0
+ ],
+ "WillowGame.upk::WillowGrenadeMod": [
+  13,
+  11,
+  3
+ ],
+ "WillowGame.upk::WillowHUDGFxMovie": [
+  98,
+  29,
+  14
+ ],
+ "WillowGame.upk::WillowPlayerReplicationInfo": [
+  8,
+  32,
+  7
+ ],
+ "WillowGame.upk::WillowInteractiveObjectAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowInteractiveSwitch": [
+  0,
+  6,
+  1
+ ],
+ "WillowGame.upk::AssociatedVolumes": [
+  0,
+  9,
+  2
+ ],
+ "WillowGame.upk::WillowInventoryManager": [
+  19,
+  91,
+  8
+ ],
+ "WillowGame.upk::WillowInventoryManagerAttributeContextResolver": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowInventoryStorage": [
+  1,
+  23,
+  0
+ ],
+ "WillowGame.upk::WillowProjectile": [
+  95,
+  99,
+  25
+ ],
+ "WillowGame.upk::WaitingForVelocity": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowLockWarningMessage": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowMind": [
+  47,
+  54,
+  15
+ ],
+ "WillowGame.upk::WillowMindTargetInfo": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowUsableItem": [
+  2,
+  12,
+  2
+ ],
+ "WillowGame.upk::WillowMissionItem": [
+  3,
+  6,
+  0
+ ],
+ "WillowGame.upk::WillowMissionPickupSpawner": [
+  0,
+  9,
+  7
+ ],
+ "WillowGame.upk::WillowMissionPickupFailsafe": [
+  0,
+  7,
+  0
+ ],
+ "WillowGame.upk::WillowObstacleUtility": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowOnlineGameSearch_DataStore": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowOnlineGameSettings": [
+  0,
+  11,
+  0
+ ],
+ "WillowGame.upk::WillowOnlineGameSettings_DataStore": [
+  2,
+  2,
+  1
+ ],
+ "WillowGame.upk::WillowPauseTicker": [
+  3,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPendingLevelPlayerController": [
+  0,
+  7,
+  2
+ ],
+ "WillowGame.upk::WillowPersonalTeleporter": [
+  1,
+  18,
+  7
+ ],
+ "WillowGame.upk::WillowPickup": [
+  17,
+  59,
+  17
+ ],
+ "WillowGame.upk::Pickup": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowPickupMessage": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowPlayerCamera": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowPlayerInput": [
+  10,
+  26,
+  1
+ ],
+ "WillowGame.upk::WillowPlayerPawn": [
+  65,
+  151,
+  24
+ ],
+ "WillowGame.upk::AwaitingRespawn": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::ClientAwaitingRespawn": [
+  0,
+  2,
+  2
+ ],
+ "WillowGame.upk::WillowPlayerPawnDataManager": [
+  16,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPointLight": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPopulationEncounter": [
+  0,
+  9,
+  0
+ ],
+ "WillowGame.upk::WillowPopulationMaster": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPopulationPoint": [
+  18,
+  12,
+  7
+ ],
+ "WillowGame.upk::WillowPopulationPointDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowPropObject": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowPursuitGrid": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowRegionDefinition": [
+  5,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowReplicatedAmbientSound": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowSavedMove": [
+  1,
+  4,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingList": [
+  0,
+  28,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderBase": [
+  0,
+  13,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderOptionsBase": [
+  0,
+  15,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderApplyRequiredOption": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderAudioOptions": [
+  0,
+  10,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderDLC": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderExtras": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderFrontEnd": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderGameOptions": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderGamepadOptions": [
+  0,
+  19,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderKeyboardMouseOptions": [
+  0,
+  27,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderLobby": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderMapList": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderMatchmaking": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderNetworkOptions": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderPause": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderResolutionOptions": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderSocial": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderTopLevelOptions": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderVideoOptions": [
+  0,
+  11,
+  0
+ ],
+ "WillowGame.upk::WillowScrollingListDataProviderWindowModeOptions": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowSeqAct_AIScriptedAnim": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowSeqAct_BossBar": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_CleanUpPlayerVehicles": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ClientFlagGet": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ClientFlagSet": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_CloseColiseumOverlay": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumAllDead": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumAwardCertificate": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumNotify": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumRoundAnnounce": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumRuleAnnounce": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumStartTimer": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_ColiseumVictory": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_DayNightCycle": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSeqAct_InterpMenu": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSeqAct_KillPawnBasedOnAllegiance": [
+  0,
+  4,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_NotifyDesignerAttribute": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_OpenColiseumOverlay": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_PrepareMapChangeFromDefinition": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSeqAct_ResurrectPlayer": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_SetInteractionProxyState": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqAct_UpdateColiseumRuleOverlay": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowSeqCond_SwitchByPlatform": [
+  0,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowShield": [
+  6,
+  10,
+  4
+ ],
+ "WillowGame.upk::WillowSkelControl_RotateFlapFromFiring": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSkelControl_RotateWeaponBoneFromFiring": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSkelControlLerpSingleBone": [
+  8,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSpectatorPoint": [
+  0,
+  2,
+  1
+ ],
+ "WillowGame.upk::WillowStaggerAnimNodeBlend": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowSystemSettings": [
+  2,
+  10,
+  0
+ ],
+ "WillowGame.upk::WillowTeleporter": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowTrigger": [
+  0,
+  4,
+  0
+ ],
+ "WillowGame.upk::WillowTurretWeapon": [
+  1,
+  14,
+  1
+ ],
+ "WillowGame.upk::WillowUIDataStore_StringAliasMap": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowUIInteraction": [
+  41,
+  10,
+  5
+ ],
+ "WillowGame.upk::WillowUsableCustomizationItem": [
+  3,
+  6,
+  1
+ ],
+ "WillowGame.upk::WillowVehicleBase": [
+  13,
+  32,
+  1
+ ],
+ "WillowGame.upk::WillowVehicle": [
+  156,
+  222,
+  45
+ ],
+ "WillowGame.upk::DyingVehicle": [
+  0,
+  7,
+  2
+ ],
+ "WillowGame.upk::WillowVehicle_ChopperVehicle": [
+  0,
+  8,
+  1
+ ],
+ "WillowGame.upk::AutoLanding": [
+  0,
+  2,
+  0
+ ],
+ "WillowGame.upk::WillowVehicle_FlyingVehicle": [
+  4,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowVehicle_Tank": [
+  1,
+  1,
+  1
+ ],
+ "WillowGame.upk::WillowVehicleSimCar": [
+  2,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowVehicle_WheeledVehicle": [
+  1,
+  8,
+  0
+ ],
+ "WillowGame.upk::WillowVehicleCombatArea": [
+  3,
+  2,
+  2
+ ],
+ "WillowGame.upk::WillowVehicleFactory": [
+  0,
+  11,
+  2
+ ],
+ "WillowGame.upk::WillowVehicleWeapon": [
+  10,
+  37,
+  4
+ ],
+ "WillowGame.upk::WillowVendingMachineBase": [
+  2,
+  16,
+  2
+ ],
+ "WillowGame.upk::WillowVendingMachine": [
+  2,
+  11,
+  3
+ ],
+ "WillowGame.upk::WillowVendingMachineBlackMarket": [
+  2,
+  9,
+  0
+ ],
+ "WillowGame.upk::WillowVendingMachineDefinition": [
+  1,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowVersusDuelArena": [
+  0,
+  5,
+  2
+ ],
+ "WillowGame.upk::WillowVersusDuelBehavior": [
+  0,
+  1,
+  0
+ ],
+ "WillowGame.upk::WillowVersusDuelInfo": [
+  1,
+  46,
+  4
+ ],
+ "WillowGame.upk::WillowVersusDuelMessage": [
+  0,
+  3,
+  0
+ ],
+ "WillowGame.upk::WillowWaypoint": [
+  0,
+  10,
+  7
+ ],
+ "WillowGame.upk::WillowWeaponPawn": [
+  14,
+  44,
+  6
+ ],
+ "WillowGame.upk::WillowWorldSoundManager": [
+  4,
+  0,
+  0
+ ],
+ "WillowGame.upk::WorldBody": [
+  14,
+  2,
+  0
+ ],
+ "WillowGame.upk::WorldDiscoveryArea": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::IMissionDirector": [
+  3,
+  11,
+  4
+ ],
+ "WillowGame.upk::InventoryCardGFx": [
+  10,
+  0,
+  0
+ ],
+ "WillowGame.upk::SkillDefinition": [
+  44,
+  0,
+  0
+ ],
+ "WillowGame.upk::WillowAIComponent": [
+  45,
+  4,
+  0
+ ],
+ "WillowGame.upk::IScreenParticle": [
+  0,
+  5,
+  0
+ ],
+ "WillowGame.upk::IUpdatePostProcessOverride": [
+  0,
+  8,
+  0
+ ],
+ "WillowGame.upk::WillowLightProjectileManager": [
+  13,
+  3,
+  3
+ ],
+ "WillowGame.upk::IMission": [
+  0,
+  6,
+  6
+ ],
+ "GFxUI.upk::SwfMovie": [
+  1,
+  0,
+  0
+ ],
+ "GFxUI.upk::GFxAction_CloseMovie": [
+  0,
+  1,
+  1
+ ],
+ "GFxUI.upk::GFxAction_GetVariable": [
+  0,
+  1,
+  1
+ ],
+ "GFxUI.upk::GFxMoviePlayer": [
+  69,
+  21,
+  12
+ ],
+ "GFxUI.upk::GFxAction_Invoke": [
+  0,
+  1,
+  1
+ ],
+ "GFxUI.upk::GFxAction_OpenMovie": [
+  0,
+  1,
+  1
+ ],
+ "GFxUI.upk::GFxAction_SetVariable": [
+  0,
+  1,
+  1
+ ],
+ "GFxUI.upk::GFxObject": [
+  68,
+  5,
+  2
+ ],
+ "GFxUI.upk::GFxClikWidget": [
+  0,
+  7,
+  0
+ ],
+ "GFxUI.upk::GFxDataStoreSubscriber": [
+  8,
+  0,
+  0
+ ],
+ "GFxUI.upk::GFxFSCmdHandler": [
+  0,
+  1,
+  1
+ ],
+ "GFxUI.upk::GFxFSCmdHandler_Kismet": [
+  1,
+  0,
+  0
+ ],
+ "GFxUI.upk::GFxInteraction": [
+  6,
+  0,
+  0
+ ],
+ "GFxUI.upk::GFxManager": [
+  1,
+  3,
+  3
+ ],
+ "IpDrv.upk::WebApplication": [
+  0,
+  6,
+  0
+ ],
+ "IpDrv.upk::HelloWeb": [
+  0,
+  2,
+  1
+ ],
+ "IpDrv.upk::ImageServer": [
+  0,
+  1,
+  1
+ ],
+ "IpDrv.upk::InternetLink": [
+  7,
+  2,
+  2
+ ],
+ "IpDrv.upk::MeshBeacon": [
+  1,
+  0,
+  0
+ ],
+ "IpDrv.upk::MeshBeaconClient": [
+  4,
+  5,
+  0
+ ],
+ "IpDrv.upk::MeshBeaconHost": [
+  11,
+  7,
+  0
+ ],
+ "IpDrv.upk::OnlineAuthInterfaceImpl": [
+  8,
+  22,
+  0
+ ],
+ "IpDrv.upk::OnlineEventsInterfaceMcp": [
+  4,
+  0,
+  0
+ ],
+ "IpDrv.upk::OnlineGameInterfaceImpl": [
+  12,
+  67,
+  0
+ ],
+ "IpDrv.upk::OnlineNewsInterfaceMcp": [
+  1,
+  4,
+  0
+ ],
+ "IpDrv.upk::OnlinePlaylistManager": [
+  5,
+  22,
+  1
+ ],
+ "IpDrv.upk::OnlineSubsystemCommonImpl": [
+  1,
+  2,
+  1
+ ],
+ "IpDrv.upk::OnlineTitleFileDownloadMcp": [
+  4,
+  8,
+  0
+ ],
+ "IpDrv.upk::PartyBeacon": [
+  1,
+  1,
+  0
+ ],
+ "IpDrv.upk::PartyBeaconClient": [
+  4,
+  5,
+  0
+ ],
+ "IpDrv.upk::PartyBeaconHost": [
+  12,
+  9,
+  3
+ ],
+ "IpDrv.upk::TcpLink": [
+  9,
+  6,
+  6
+ ],
+ "IpDrv.upk::UIDataStore_OnlinePlaylists": [
+  6,
+  3,
+  2
+ ],
+ "IpDrv.upk::WebConnection": [
+  0,
+  13,
+  4
+ ],
+ "IpDrv.upk::WebRequest": [
+  11,
+  3,
+  0
+ ],
+ "IpDrv.upk::WebResponse": [
+  8,
+  13,
+  2
+ ],
+ "IpDrv.upk::WebServer": [
+  0,
+  5,
+  3
+ ],
+ "OnlineSubsystemSteamworks.upk::OnlineAuthInterfaceSteamworks": [
+  12,
+  0,
+  0
+ ],
+ "OnlineSubsystemSteamworks.upk::OnlineGameInterfaceSteamworks": [
+  9,
+  10,
+  0
+ ],
+ "OnlineSubsystemSteamworks.upk::OnlineSubsystemSteamworks": [
+  135,
+  224,
+  2
+ ],
+ "AkAudio.upk::IAkEnvironmentalEffectProvider": [
+  1,
+  0,
+  0
+ ],
+ "AkAudio.upk::ISpecialOcclusionAccumulator": [
+  2,
+  0,
+  0
+ ],
+ "AkAudio.upk::WwiseSoundGroup": [
+  5,
+  0,
+  0
+ ],
+ "AkAudio.upk::WwiseSoundVolume": [
+  6,
+  0,
+  0
+ ]
+}
