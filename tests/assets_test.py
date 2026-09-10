@@ -33,6 +33,13 @@ def texture(block, five=False, flags=0, declared=None):
     native = bytes(16) + words(1, flags, len(block) if declared is None else declared, len(stored), 17)
     if not flags & 1: native += stored
     return words(0) + props + fname('None') + native + words(4, 4)
+def texture_mips(blocks):
+    props = tag('Format', 'ByteProperty', fname('PF_DXT1'), fname('EPixelFormat'))
+    props += tag('TextureFileCacheName', 'NameProperty', fname('TestCache'))
+    native = bytes(16) + words(len(blocks))
+    for block in blocks:
+        native += words(0, len(block), len(block), 0) + block + words(4, 4)
+    return words(0) + props + fname('None') + native
 def png_pixels(path):
     data = path.read_bytes()
     assert data[:8] == b'\x89PNG\r\n\x1a\n'
@@ -64,10 +71,11 @@ def mesh(bad_index=False, full=False):
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
     source, output = root/'asset.upk', root/'out.png'
-    def run(cls, payload, mode='--texture'):
+    def run(cls, payload, mode='--texture', extra=()):
         source.write_bytes(package(cls,payload))
         args = [reader,str(source),mode,'1','--property-offset','4','--output',str(output)]
         if mode == '--texture': args += ['--tfc',str(root)]
+        args += list(extra)
         return subprocess.run(args,capture_output=True,text=True)
     red = struct.pack('<HHI',0xf800,0,0)
     for flags in [0,16,1,17]:
@@ -86,6 +94,16 @@ with tempfile.TemporaryDirectory() as folder:
         assert run('Texture2D',invalid).returncode != 0
     (root/'TestCache.tfc').write_bytes(bytes(18))
     assert run('Texture2D',texture(red,flags=1)).returncode != 0
+    green = struct.pack('<HHI',0x07e0,0,0)
+    result = run('Texture2D',texture_mips([red, green]))
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report['serialized_mips'] == 2 and report['resident_mips'] == 2
+    result = run('Texture2D',texture_mips([red, green]),extra=('--mip','1','--all-mips',str(root/'mips')))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['mip'] == 1
+    assert (root/'mips/mip_00.png').is_file() and (root/'mips/mip_01.png').is_file()
+    assert png_pixels(output) == bytes([0,255,0,255])*16
     for full in [False,True]:
         result = run('StaticMesh',mesh(full=full),'--mesh')
         assert result.returncode == 0, result.stderr
@@ -95,4 +113,22 @@ with tempfile.TemporaryDirectory() as folder:
     assert run('StaticMesh',mesh(True),'--mesh').returncode != 0
     for end in range(0,len(mesh()),7):
         assert run('StaticMesh',mesh()[:end],'--mesh').returncode != 0
+    def mesh_variant(index_width=4, lod_count=2):
+        native = bytes(28+4+24) + words(6,0,8,0,18,0,0,0,lod_count)
+        for lod in range(lod_count):
+            native += words(0,0,0,0,1)
+            native += words(0,0,0,1,0,1,0,2,0,0) + b'\0'
+            native += words(12,3,12,3) + struct.pack('<9f',0,0,0,100+lod,0,0,0,100+lod,0)
+            native += words(1,12,3,0,12,3)
+            for u,v in [(0,0),(1,0),(0,1)]:
+                native += bytes([255,128,128,255,128,128,255,255]) + struct.pack('<2e',u,v)
+            native += words(0,0,3,index_width,3)
+            native += struct.pack('<3I',0,1,2) if index_width == 4 else struct.pack('<3H',0,1,2)
+        return words(0) + fname('None') + native
+    result = run('StaticMesh',mesh_variant(),'--mesh',extra=('--lod','1'))
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report['lods'] == 2 and report['selected_lod'] == 1
+    assert report['lod_summaries'][1]['index_width'] == 4
+    assert 'v 101 0 0\n' in output.read_text()
 print('DXT1/5 pixels, PNG CRC/zlib, streamed/compressed bulk, mesh buffers and corrupt inputs passed.')

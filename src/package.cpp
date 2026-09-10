@@ -1,325 +1,571 @@
-// Independent table reader based on the layout recorded in research/native_count.py.
-// Local research tool, not a runtime loader.
-#include "container.hpp"
-#include <cstdint>
-#include <fstream>
-#include <iostream>
-#include <iterator>
-#include <stdexcept>
-#include <string>
-#include <vector>
-#include <bit>
-#include <cmath>
-#include <iomanip>
-#include <sstream>
-#include <unordered_set>
-#include <limits>
+#include "package.hpp"
+
 #include <algorithm>
-#include <map>
+#include <bit>
+#include <cctype>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <iterator>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_set>
 
-void utf8(std::string& out, uint32_t c) {
-    if (c < 0x80) out += char(c);
-    else if (c < 0x800) { out += char(0xc0 | (c >> 6)); out += char(0x80 | (c & 63)); }
-    else if (c < 0x10000) { out += char(0xe0 | (c >> 12)); out += char(0x80 | ((c >> 6) & 63)); out += char(0x80 | (c & 63)); }
-    else { out += char(0xf0 | (c >> 18)); out += char(0x80 | ((c >> 12) & 63)); out += char(0x80 | ((c >> 6) & 63)); out += char(0x80 | (c & 63)); }
+namespace {
+std::string folded(std::string_view value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const unsigned char character : value)
+        result.push_back(static_cast<char>(std::tolower(character)));
+    return result;
 }
+
+bool hasPackageExtension(const std::filesystem::path& path) {
+    const auto extension = folded(path.extension().string());
+    return extension == ".upk" || extension == ".umap" || extension == ".u";
+}
+}
+
+void utf8(std::string& out, uint32_t codepoint) {
+    if (codepoint < 0x80) out += char(codepoint);
+    else if (codepoint < 0x800) {
+        out += char(0xc0 | (codepoint >> 6));
+        out += char(0x80 | (codepoint & 63));
+    } else if (codepoint < 0x10000) {
+        out += char(0xe0 | (codepoint >> 12));
+        out += char(0x80 | ((codepoint >> 6) & 63));
+        out += char(0x80 | (codepoint & 63));
+    } else {
+        out += char(0xf0 | (codepoint >> 18));
+        out += char(0x80 | ((codepoint >> 12) & 63));
+        out += char(0x80 | ((codepoint >> 6) & 63));
+        out += char(0x80 | (codepoint & 63));
+    }
+}
+
 std::string quote(const std::string& value) {
-    std::ostringstream out; out << '"';
-    for (unsigned char c : value) {
-        if (c == '"' || c == '\\') out << '\\' << char(c);
-        else if (c < 32) out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else out << char(c);
+    std::ostringstream out;
+    out << '"';
+    for (const unsigned char character : value) {
+        if (character == '"' || character == '\\') out << '\\' << char(character);
+        else if (character < 32)
+            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(character);
+        else out << char(character);
     }
-    out << '"'; return out.str();
+    out << '"';
+    return out.str();
 }
-struct Object { int32_t cls = 0, super = 0, outer = 0, archetype = 0; std::string name; int32_t size = 0, offset = 0; };
 
-struct Reader {
-    std::vector<unsigned char> data;
-    size_t pos = 0;
-    size_t limit = std::numeric_limits<size_t>::max();
-    void require(size_t n) const {
-        const auto end = std::min(data.size(), limit);
-        if (pos > end || n > end - pos)
-            throw std::runtime_error("truncated package");
-    }
-    void skip(size_t n) { require(n); pos += n; }
-    uint32_t u32() {
-        require(4);
-        uint32_t v = 0;
-        for (unsigned i = 0; i < 4; ++i) v |= uint32_t(data[pos++]) << (8 * i);
-        return v;
-    }
-    int32_t i32() { return static_cast<int32_t>(u32()); }
-    std::string string() {
-        const int64_t n = i32();
-        const size_t bytes = static_cast<size_t>(n < 0 ? -n * 2 : n);
-        require(bytes);
-        if (bytes && (data[pos + bytes - 1] != 0 || (n < 0 && data[pos + bytes - 2] != 0)))
-            throw std::runtime_error("unterminated FString");
-        std::string result;
-        for (size_t i = 0; i + (n < 0 ? 2 : 1) < bytes; i += n < 0 ? 2 : 1) {
-            uint32_t c = data[pos + i];
-            if (n < 0) {
-                c |= uint32_t(data[pos + i + 1]) << 8;
-                if (c >= 0xd800 && c <= 0xdbff) {
-                    if (i + 4 >= bytes) throw std::runtime_error("invalid UTF-16 surrogate");
-                    const uint32_t low = data[pos + i + 2] | (uint32_t(data[pos + i + 3]) << 8);
-                    if (low < 0xdc00 || low > 0xdfff) throw std::runtime_error("invalid UTF-16 surrogate");
-                    c = 0x10000 + ((c - 0xd800) << 10) + low - 0xdc00; i += 2;
-                } else if (c >= 0xdc00 && c <= 0xdfff) throw std::runtime_error("invalid UTF-16 surrogate");
+const Bytes& Reader::bytes() const {
+    if (!storage) throw std::runtime_error("reader has no package data");
+    return *storage;
+}
+
+unsigned char Reader::byte(size_t at) const {
+    const auto end = std::min(bytes().size(), limit);
+    if (at >= end) throw std::runtime_error("truncated package");
+    return bytes()[at];
+}
+
+void Reader::require(size_t count) const {
+    const auto end = std::min(bytes().size(), limit);
+    if (pos > end || count > end - pos)
+        throw std::runtime_error("truncated package");
+}
+
+void Reader::skip(size_t count) {
+    require(count);
+    pos += count;
+}
+
+uint32_t Reader::u32() {
+    require(4);
+    uint32_t value = 0;
+    for (unsigned i = 0; i < 4; ++i) value |= uint32_t(bytes()[pos++]) << (8 * i);
+    return value;
+}
+
+int32_t Reader::i32() { return static_cast<int32_t>(u32()); }
+
+std::string Reader::string() {
+    const int64_t length = i32();
+    const uint64_t characters = length < 0 ? uint64_t(-length) : uint64_t(length);
+    if (characters > std::numeric_limits<size_t>::max() / (length < 0 ? 2u : 1u))
+        throw std::runtime_error("FString is too large");
+    const auto byteCount = size_t(characters * (length < 0 ? 2u : 1u));
+    require(byteCount);
+    if (length < 0 && byteCount < 2)
+        throw std::runtime_error("unterminated FString");
+    if (byteCount && (bytes()[pos + byteCount - 1] != 0 ||
+                      (length < 0 && bytes()[pos + byteCount - 2] != 0)))
+        throw std::runtime_error("unterminated FString");
+
+    std::string result;
+    for (size_t i = 0; i + (length < 0 ? 2u : 1u) < byteCount; i += length < 0 ? 2u : 1u) {
+        uint32_t codepoint = bytes()[pos + i];
+        if (length < 0) {
+            codepoint |= uint32_t(bytes()[pos + i + 1]) << 8;
+            if (codepoint >= 0xd800 && codepoint <= 0xdbff) {
+                if (i + 4 >= byteCount)
+                    throw std::runtime_error("invalid UTF-16 surrogate");
+                const uint32_t low = bytes()[pos + i + 2] | (uint32_t(bytes()[pos + i + 3]) << 8);
+                if (low < 0xdc00 || low > 0xdfff)
+                    throw std::runtime_error("invalid UTF-16 surrogate");
+                codepoint = 0x10000 + ((codepoint - 0xd800) << 10) + low - 0xdc00;
+                i += 2;
+            } else if (codepoint >= 0xdc00 && codepoint <= 0xdfff) {
+                throw std::runtime_error("invalid UTF-16 surrogate");
             }
-            utf8(result, c);
         }
-        skip(bytes); return result;
+        utf8(result, codepoint);
     }
-    void table(int32_t count, int32_t offset, size_t minimum) {
-        if (count < 0 || offset < 0 || size_t(offset) > data.size() ||
-            size_t(count) > (data.size() - size_t(offset)) / minimum)
-            throw std::runtime_error("invalid table bounds");
-        pos = size_t(offset);
-    }
-    std::pair<int32_t, int32_t> name(int32_t count) {
-        auto index = i32(); auto number = i32();
-        if (index < 0 || index >= count || number < 0) throw std::runtime_error("invalid FName");
-        return {index, number};
-    }
-    int32_t reference(int32_t imports, int32_t exports) {
-        const int64_t value = i32();
-        if (value < -int64_t(imports) || value > exports) throw std::runtime_error("invalid object reference");
-        return static_cast<int32_t>(value);
-    }
-};
+    skip(byteCount);
+    return result;
+}
 
-struct Package {
-    std::vector<std::string> names;
-    std::vector<Object> imports, exports;
-    std::string name(Reader& r) const {
-        const auto [index, number] = r.name(static_cast<int32_t>(names.size()));
-        return names[index] + (number ? "_" + std::to_string(number - 1) : "");
+void Reader::table(int32_t count, int32_t offset, size_t minimum) {
+    if (count < 0 || offset < 0 || size_t(offset) > bytes().size() ||
+        size_t(count) > (bytes().size() - size_t(offset)) / minimum)
+        throw std::runtime_error("invalid table bounds");
+    pos = size_t(offset);
+}
+
+std::pair<int32_t, int32_t> Reader::name(int32_t count) {
+    const auto index = i32();
+    const auto number = i32();
+    if (index < 0 || index >= count || number < 0)
+        throw std::runtime_error("invalid FName");
+    return {index, number};
+}
+
+int32_t Reader::reference(int32_t imports, int32_t exports) {
+    const int64_t value = i32();
+    if (value < -int64_t(imports) || value > exports)
+        throw std::runtime_error("invalid object reference");
+    return static_cast<int32_t>(value);
+}
+
+std::shared_ptr<Package> Package::load(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) throw std::runtime_error("cannot open input package");
+    Bytes raw{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+
+    auto package = std::make_shared<Package>();
+    package->sourcePath = std::filesystem::absolute(path).lexically_normal();
+    package->packageName = path.stem().string();
+    package->data = decode_package(std::move(raw));
+    Reader reader(package->data);
+
+    if (reader.u32() != 0x9e2a83c1)
+        throw std::runtime_error("invalid package magic");
+    if (reader.u32() != (832u | (46u << 16)))
+        throw std::runtime_error("requires decompressed BL2 version 832/46");
+    const auto header = reader.i32();
+    if (header < 0 || size_t(header) > package->data.size())
+        throw std::runtime_error("invalid header size");
+    reader.string();
+    reader.skip(4);
+    const auto names = reader.i32(), nameOffset = reader.i32();
+    const auto exports = reader.i32(), exportOffset = reader.i32();
+    const auto imports = reader.i32(), importOffset = reader.i32();
+
+    reader.table(names, nameOffset, 12);
+    package->names.reserve(size_t(names));
+    for (int32_t i = 0; i < names; ++i) {
+        package->names.push_back(reader.string());
+        reader.skip(8);
     }
-    const Object& object(int32_t index) const {
-        if (!index || int64_t(index) < -int64_t(imports.size()) || int64_t(index) > int64_t(exports.size()))
-            throw std::runtime_error("invalid object reference");
-        return index < 0 ? imports[size_t(-int64_t(index) - 1)] : exports[size_t(index - 1)];
+
+    reader.table(imports, importOffset, 28);
+    package->imports.reserve(size_t(imports));
+    for (int32_t i = 0; i < imports; ++i) {
+        Object object;
+        object.classPackage = package->name(reader);
+        object.className = package->name(reader);
+        object.outer = reader.reference(imports, exports);
+        object.name = package->name(reader);
+        package->imports.push_back(std::move(object));
     }
-    std::string path(int32_t index) const {
-        std::vector<std::string> parts; std::unordered_set<int32_t> seen;
-        while (index) {
-            if (!seen.insert(index).second || parts.size() >= 256) throw std::runtime_error("cyclic or excessively deep object outer chain");
-            const auto& o = object(index); parts.push_back(o.name); index = o.outer;
+
+    reader.table(exports, exportOffset, 68);
+    package->exports.reserve(size_t(exports));
+    for (int32_t i = 0; i < exports; ++i) {
+        Object object;
+        object.cls = reader.reference(imports, exports);
+        object.super = reader.reference(imports, exports);
+        object.outer = reader.reference(imports, exports);
+        object.name = package->name(reader);
+        object.archetype = reader.reference(imports, exports);
+        reader.skip(8);
+        object.size = reader.i32();
+        object.offset = reader.i32();
+        if (object.size < 0 || object.offset < 0 || size_t(object.offset) > package->data.size() ||
+            size_t(object.size) > package->data.size() - size_t(object.offset))
+            throw std::runtime_error("invalid export payload bounds");
+        reader.skip(4);
+        const auto net = reader.i32();
+        if (net < 0 || size_t(net) > package->data.size() / 4)
+            throw std::runtime_error("invalid net object count");
+        reader.skip(size_t(net) * 4);
+        reader.skip(20);
+        package->exports.push_back(std::move(object));
+    }
+    return package;
+}
+
+Reader Package::reader() const { return Reader(data); }
+
+std::string Package::name(Reader& reader) const {
+    const auto [index, number] = reader.name(static_cast<int32_t>(names.size()));
+    return names[size_t(index)] + (number ? "_" + std::to_string(number - 1) : "");
+}
+
+const Object& Package::object(int32_t index) const {
+    if (!index || int64_t(index) < -int64_t(imports.size()) || int64_t(index) > int64_t(exports.size()))
+        throw std::runtime_error("invalid object reference");
+    return index < 0 ? imports[size_t(-int64_t(index) - 1)] : exports[size_t(index - 1)];
+}
+
+std::string Package::path(int32_t index) const {
+    std::vector<std::string> parts;
+    std::unordered_set<int32_t> seen;
+    while (index) {
+        if (!seen.insert(index).second || parts.size() >= 256)
+            throw std::runtime_error("cyclic or excessively deep object outer chain");
+        const auto& current = object(index);
+        parts.push_back(current.name);
+        index = current.outer;
+    }
+    std::string result;
+    for (auto i = parts.rbegin(); i != parts.rend(); ++i) {
+        if (!result.empty()) result += '.';
+        result += *i;
+    }
+    return result;
+}
+
+int32_t Package::findExport(std::string_view objectPath) const {
+    std::string wanted(objectPath);
+    const auto packagePrefix = packageName + ".";
+    if (folded(wanted).starts_with(folded(packagePrefix)))
+        wanted.erase(0, packagePrefix.size());
+    for (int32_t index = 1; index <= int32_t(exports.size()); ++index)
+        if (folded(path(index)) == folded(wanted)) return index;
+    return 0;
+}
+
+std::string Package::floating(Reader& reader) {
+    const auto value = std::bit_cast<float>(reader.u32());
+    if (!std::isfinite(value)) throw std::runtime_error("non-finite struct/array float");
+    std::ostringstream out;
+    out << std::setprecision(9) << value;
+    return out.str();
+}
+
+std::string Package::structure(Reader& reader, const std::string& type, unsigned depth) const {
+    if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
+    std::vector<std::string> fields;
+    bool integers = false;
+    bool bytes = false;
+    if (type == "Vector") fields = {"X", "Y", "Z"};
+    else if (type == "Vector2D") fields = {"X", "Y"};
+    else if (type == "Rotator") { fields = {"Pitch", "Yaw", "Roll"}; integers = true; }
+    else if (type == "Guid") { fields = {"A", "B", "C", "D"}; integers = true; }
+    else if (type == "LinearColor") fields = {"R", "G", "B", "A"};
+    else if (type == "Color") { fields = {"B", "G", "R", "A"}; bytes = true; }
+    else if (type == "Quat") fields = {"X", "Y", "Z", "W"};
+    else return tags(reader, reader.pos, depth);
+
+    std::ostringstream out;
+    out << '{';
+    for (size_t i = 0; i < fields.size(); ++i) {
+        if (i) out << ',';
+        out << quote(fields[i]) << ':';
+        if (bytes) {
+            reader.require(1);
+            out << unsigned(reader.bytes()[reader.pos++]);
+        } else if (integers) out << reader.i32();
+        else out << floating(reader);
+    }
+    out << '}';
+    return out.str();
+}
+
+std::string Package::tags(Reader& reader, size_t base, unsigned depth) const {
+    if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
+    const auto streamEnd = reader.limit;
+    std::ostringstream out;
+    out << '[';
+    bool first = true;
+    while (true) {
+        const auto tagOffset = reader.pos - base;
+        const auto propertyName = name(reader);
+        if (propertyName == "None") break;
+        const auto type = name(reader);
+        const auto size = reader.i32();
+        const auto arrayIndex = reader.i32();
+        if (size < 0 || arrayIndex < 0)
+            throw std::runtime_error("negative property size/index");
+        std::string detail;
+        int boolean = -1;
+        if (type == "StructProperty" || type == "ByteProperty") detail = name(reader);
+        if (type == "BoolProperty") {
+            reader.require(1);
+            boolean = reader.bytes()[reader.pos++];
+            if (boolean > 1) throw std::runtime_error("invalid property boolean");
         }
-        std::string result;
-        for (auto i = parts.rbegin(); i != parts.rend(); ++i) { if (!result.empty()) result += '.'; result += *i; }
-        return result;
-    }
-    std::map<std::string, std::string> arrayTypes;
-    static std::string floating(Reader& r) {
-        const auto value = std::bit_cast<float>(r.u32());
-        if (!std::isfinite(value)) throw std::runtime_error("non-finite struct/array float");
-        std::ostringstream out; out << std::setprecision(9) << value; return out.str();
-    }
-    std::string structure(Reader& r, const std::string& type, unsigned depth) const {
-        if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
-        std::vector<std::string> fields;
-        bool integers = false, bytes = false;
-        if (type == "Vector") fields = {"X", "Y", "Z"};
-        else if (type == "Vector2D") fields = {"X", "Y"};
-        else if (type == "Rotator") { fields = {"Pitch", "Yaw", "Roll"}; integers = true; }
-        else if (type == "Guid") { fields = {"A", "B", "C", "D"}; integers = true; }
-        else if (type == "LinearColor") fields = {"R", "G", "B", "A"};
-        else if (type == "Color") { fields = {"B", "G", "R", "A"}; bytes = true; }
-        else if (type == "Quat") fields = {"X", "Y", "Z", "W"};
-        else return tags(r, r.pos, depth);
-        std::ostringstream out; out << '{';
-        for (size_t i = 0; i < fields.size(); ++i) {
-            if (i) out << ','; out << quote(fields[i]) << ':';
-            if (bytes) { r.require(1); out << unsigned(r.data[r.pos++]); }
-            else if (integers) out << r.i32(); else out << floating(r);
-        }
-        out << '}'; return out.str();
-    }
-    std::string tags(Reader& r, size_t base, unsigned depth) const {
-        if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
-        const auto streamEnd = r.limit;
-        std::ostringstream out; out << '[';
-        bool first = true;
-        while (true) {
-            const auto tagOffset = r.pos - base;
-            const auto propertyName = name(r);
-            if (propertyName == "None") break;
-            const auto type = name(r); const auto size = r.i32(), arrayIndex = r.i32();
-            if (size < 0 || arrayIndex < 0) throw std::runtime_error("negative property size/index");
-            std::string detail; int boolean = -1;
-            if (type == "StructProperty" || type == "ByteProperty") detail = name(r);
-            if (type == "BoolProperty") { r.require(1); boolean = r.data[r.pos++]; if (boolean > 1) throw std::runtime_error("invalid property boolean"); }
-            r.require(size_t(size)); const auto end = r.pos + size_t(size); r.limit = end;
-            if (!first) out << ','; first = false;
-            out << "{\"name\":" << quote(propertyName) << ",\"type\":" << quote(type)
-                << ",\"array_index\":" << arrayIndex << ",\"offset\":" << tagOffset << ",\"size\":" << size;
-            if (!detail.empty()) out << ",\"type_name\":" << quote(detail);
-            bool supported = true;
-            out << ",\"value\":";
-            if (type == "IntProperty") out << r.i32();
-            else if (type == "FloatProperty") {
-                const float value = std::bit_cast<float>(r.u32());
-                if (!std::isfinite(value)) throw std::runtime_error("non-finite property float");
-                out << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
-            } else if (type == "BoolProperty") out << (boolean ? "true" : "false");
-            else if (type == "NameProperty") out << quote(name(r));
-            else if (type == "StrProperty") out << quote(r.string());
-            else if (type == "ObjectProperty" || type == "ClassProperty" || type == "ComponentProperty") {
-                const auto reference = r.i32();
-                out << "{\"index\":" << reference << ",\"path\":" << (reference ? quote(path(reference)) : "null") << '}';
-            } else if (type == "ByteProperty" && detail == "None") { r.require(1); out << unsigned(r.data[r.pos++]); }
-            else if (type == "ByteProperty") out << quote(name(r));
-            else if (type == "StructProperty") {
-                out << structure(r, detail, depth + 1);
-            } else if (type == "ArrayProperty") {
-                const auto length = r.i32();
-                if (length < 0 || length > 1000000) throw std::runtime_error("invalid property array count");
-                auto spec = arrayTypes.find(propertyName);
-                if (spec == arrayTypes.end() && length) { supported = false; out << "null"; r.pos = end; }
-                else {
-                    out << '[';
-                    for (int32_t i = 0; i < length; ++i) {
-                        if (i) out << ',';
-                        const auto& inner = spec->second;
-                        if (inner == "IntProperty") out << r.i32();
-                        else if (inner == "FloatProperty") out << floating(r);
-                        else if (inner == "NameProperty") out << quote(name(r));
-                        else if (inner == "StrProperty") out << quote(r.string());
-                        else if (inner == "ObjectProperty") { auto ref = r.i32(); out << "{\"index\":" << ref << ",\"path\":" << (ref ? quote(path(ref)) : "null") << '}'; }
-                        else if (inner == "ByteProperty") { r.require(1); out << unsigned(r.data[r.pos++]); }
-                        else if (inner.starts_with("StructProperty:")) out << structure(r, inner.substr(15), depth + 1);
-                        else throw std::runtime_error("unsupported array schema type");
-                    }
-                    out << ']';
+        reader.require(size_t(size));
+        const auto end = reader.pos + size_t(size);
+        reader.limit = end;
+        if (!first) out << ',';
+        first = false;
+        out << "{\"name\":" << quote(propertyName) << ",\"type\":" << quote(type)
+            << ",\"array_index\":" << arrayIndex << ",\"offset\":" << tagOffset
+            << ",\"size\":" << size;
+        if (!detail.empty()) out << ",\"type_name\":" << quote(detail);
+        bool supported = true;
+        out << ",\"value\":";
+        if (type == "IntProperty") out << reader.i32();
+        else if (type == "FloatProperty") {
+            const auto value = std::bit_cast<float>(reader.u32());
+            if (!std::isfinite(value)) throw std::runtime_error("non-finite property float");
+            out << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
+        } else if (type == "BoolProperty") out << (boolean ? "true" : "false");
+        else if (type == "NameProperty") out << quote(name(reader));
+        else if (type == "StrProperty") out << quote(reader.string());
+        else if (type == "ObjectProperty" || type == "ClassProperty" || type == "ComponentProperty") {
+            const auto reference = reader.i32();
+            out << "{\"index\":" << reference << ",\"path\":"
+                << (reference ? quote(path(reference)) : "null") << '}';
+        } else if (type == "ByteProperty" && detail == "None") {
+            reader.require(1);
+            out << unsigned(reader.bytes()[reader.pos++]);
+        } else if (type == "ByteProperty") out << quote(name(reader));
+        else if (type == "StructProperty") out << structure(reader, detail, depth + 1);
+        else if (type == "ArrayProperty") {
+            const auto length = reader.i32();
+            if (length < 0 || length > 1000000)
+                throw std::runtime_error("invalid property array count");
+            const auto spec = arrayTypes.find(propertyName);
+            if (spec == arrayTypes.end() && length) {
+                supported = false;
+                out << "null";
+                reader.pos = end;
+            } else {
+                out << '[';
+                for (int32_t i = 0; i < length; ++i) {
+                    if (i) out << ',';
+                    const auto& inner = spec->second;
+                    if (inner == "IntProperty") out << reader.i32();
+                    else if (inner == "FloatProperty") out << floating(reader);
+                    else if (inner == "NameProperty") out << quote(name(reader));
+                    else if (inner == "StrProperty") out << quote(reader.string());
+                    else if (inner == "ObjectProperty") {
+                        const auto reference = reader.i32();
+                        out << "{\"index\":" << reference << ",\"path\":"
+                            << (reference ? quote(path(reference)) : "null") << '}';
+                    } else if (inner == "ByteProperty") {
+                        reader.require(1);
+                        out << unsigned(reader.bytes()[reader.pos++]);
+                    } else if (inner.starts_with("StructProperty:")) {
+                        out << structure(reader, inner.substr(15), depth + 1);
+                    } else throw std::runtime_error("unsupported array schema type");
                 }
-                out << ",\"element_count\":" << length;
-                if (spec != arrayTypes.end()) out << ",\"element_type\":" << quote(spec->second);
-            } else { supported = false; out << "null"; r.skip(size_t(size)); }
-            if (r.pos != end) throw std::runtime_error("property size does not match decoded value");
-            out << ",\"status\":" << quote(supported ? "decoded" : "unsupported") << '}';
-            r.limit = streamEnd;
-        }
-        out << ']'; return out.str();
-    }
-    std::string properties(Reader& r, int32_t index, size_t start) const {
-        if (index <= 0) throw std::runtime_error("properties requires a positive export index");
-        const auto& o = object(index);
-        if (start > size_t(o.size)) throw std::runtime_error("property offset exceeds export size");
-        r.pos = size_t(o.offset) + start; r.limit = size_t(o.offset) + size_t(o.size);
-        const auto objectEnd = r.limit;
-        std::ostringstream out;
-        out << "{\"index\":" << index << ",\"path\":" << quote(path(index)) << ",\"property_offset\":" << start << ",\"properties\":";
-        out << tags(r, size_t(o.offset), 0);
-        out << ",\"consumed_bytes\":" << r.pos - size_t(o.offset) - start
-            << ",\"trailing_bytes\":" << objectEnd - r.pos << '}';
-        return out.str();
-    }
-};
-
-#include "assets.hpp"
-
-int main(int argc, char** argv) {
-    try {
-        const std::string mode = argc >= 3 ? argv[2] : "";
-        if (!(argc == 2 || (argc == 3 && (mode == "--exports" || mode == "--census")) || (argc == 4 && mode == "--verify-decoded") ||
-              ((argc == 6 || argc == 8) && mode == "--properties" && std::string(argv[4]) == "--property-offset") ||
-              ((argc == 8 && mode == "--mesh") || (argc == 10 && mode == "--texture"))))
-            throw std::runtime_error("usage: ow-package <package> [--exports | --census | --verify-decoded <file> | --properties <index> --property-offset <bytes> [--array-schema <file>] | --mesh <index> --property-offset <bytes> --output <obj> | --texture <index> --property-offset <bytes> --output <png> --tfc <directory>]");
-        std::ifstream file(argv[1], std::ios::binary);
-        if (!file) throw std::runtime_error("cannot open input");
-        Reader r{decode_package({std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()})};
-        if (mode == "--verify-decoded") {
-            std::ifstream reference(argv[3], std::ios::binary);
-            if (!reference) throw std::runtime_error("cannot open decoded reference");
-            const std::vector<unsigned char> expected{std::istreambuf_iterator<char>(reference), std::istreambuf_iterator<char>()};
-            if (r.data != expected) throw std::runtime_error("decoded bytes differ from reference");
-        }
-        if (r.u32() != 0x9e2a83c1) throw std::runtime_error("invalid package magic");
-        if (r.u32() != (832u | (46u << 16))) throw std::runtime_error("requires decompressed BL2 version 832/46");
-        const auto header = r.i32();
-        if (header < 0 || size_t(header) > r.data.size()) throw std::runtime_error("invalid header size");
-        r.string(); r.skip(4);
-        const auto names = r.i32(), nameOffset = r.i32();
-        const auto exports = r.i32(), exportOffset = r.i32();
-        const auto imports = r.i32(), importOffset = r.i32();
-        Package package;
-        r.table(names, nameOffset, 12);
-        for (int32_t i = 0; i < names; ++i) { package.names.push_back(r.string()); r.skip(8); }
-        r.table(imports, importOffset, 28);
-        for (int32_t i = 0; i < imports; ++i) {
-            package.name(r); package.name(r);
-            Object o; o.outer = r.reference(imports, exports); o.name = package.name(r); package.imports.push_back(o);
-        }
-        r.table(exports, exportOffset, 68);
-        for (int32_t i = 0; i < exports; ++i) {
-            Object o;
-            o.cls = r.reference(imports, exports); o.super = r.reference(imports, exports); o.outer = r.reference(imports, exports);
-            o.name = package.name(r); o.archetype = r.reference(imports, exports); r.skip(8);
-            const auto size = r.i32(), offset = r.i32();
-            if (size < 0 || offset < 0 || size_t(offset) > r.data.size() || size_t(size) > r.data.size() - size_t(offset))
-                throw std::runtime_error("invalid export payload bounds");
-            r.skip(4);
-            const auto net = r.i32();
-            if (net < 0 || size_t(net) > r.data.size() / 4) throw std::runtime_error("invalid net object count");
-            r.skip(size_t(net) * 4); r.skip(20);
-            o.size = size; o.offset = offset; package.exports.push_back(o);
-        }
-        if (mode == "--census") {
-            std::map<std::string, size_t> counts;
-            for (const auto& o : package.exports) ++counts[o.cls ? package.path(o.cls) : "Class"];
-            std::cout << "{\"exports\":" << exports << ",\"classes\":{";
-            bool first = true;
-            for (const auto& [name, count] : counts) {
-                if (!first) std::cout << ','; first = false;
-                std::cout << quote(name) << ':' << count;
+                out << ']';
             }
-            std::cout << "}}\n"; return 0;
+            out << ",\"element_count\":" << length;
+            if (spec != arrayTypes.end()) out << ",\"element_type\":" << quote(spec->second);
+        } else {
+            supported = false;
+            out << "null";
+            reader.skip(size_t(size));
         }
-        if (mode == "--exports") {
-            std::ostringstream out; out << '[';
-            for (int32_t i = 1; i <= exports; ++i) {
-                const auto& o = package.object(i);
-                if (i > 1) out << ',';
-                out << "{\"index\":" << i << ",\"name\":" << quote(o.name) << ",\"path\":" << quote(package.path(i))
-                    << ",\"class\":" << quote(o.cls ? package.path(o.cls) : "Class") << ",\"class_index\":" << o.cls
-                    << ",\"outer_index\":" << o.outer << ",\"super_index\":" << o.super << ",\"archetype_index\":" << o.archetype
-                    << ",\"size\":" << o.size << ",\"offset\":" << o.offset << '}';
-            }
-            std::cout << out.str() << "]\n"; return 0;
+        if (reader.pos != end)
+            throw std::runtime_error("property size does not match decoded value");
+        out << ",\"status\":" << quote(supported ? "decoded" : "unsupported") << '}';
+        reader.limit = streamEnd;
+    }
+    out << ']';
+    return out.str();
+}
+
+std::string Package::properties(Reader& reader, int32_t index, size_t start) const {
+    if (index <= 0) throw std::runtime_error("properties requires a positive export index");
+    const auto& current = object(index);
+    if (start > size_t(current.size))
+        throw std::runtime_error("property offset exceeds export size");
+    reader.pos = size_t(current.offset) + start;
+    reader.limit = size_t(current.offset) + size_t(current.size);
+    const auto objectEnd = reader.limit;
+    std::ostringstream out;
+    out << "{\"index\":" << index << ",\"path\":" << quote(path(index))
+        << ",\"property_offset\":" << start << ",\"properties\":";
+    out << tags(reader, size_t(current.offset), 0);
+    out << ",\"consumed_bytes\":" << reader.pos - size_t(current.offset) - start
+        << ",\"trailing_bytes\":" << objectEnd - reader.pos << '}';
+    return out.str();
+}
+
+std::string ResolvedObject::path() const {
+    if (!package) return {};
+    return index ? package->path(index) : package->packageName;
+}
+
+PackageStore::PackageStore(std::filesystem::path cookedRoot)
+    : cookedRoot_(std::filesystem::absolute(std::move(cookedRoot)).lexically_normal()) {
+    scan();
+}
+
+std::string PackageStore::key(std::string_view value) { return folded(value); }
+
+void PackageStore::scan() {
+    if (!std::filesystem::is_directory(cookedRoot_))
+        throw std::runtime_error("cooked package root is not a directory");
+    indexedPaths_.clear();
+    pathsByName_.clear();
+    loaded_.clear();
+    globalMatches_.clear();
+    globalRootMatches_.clear();
+    globalMisses_.clear();
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator iterator(
+        cookedRoot_, std::filesystem::directory_options::skip_permission_denied, error);
+    const std::filesystem::recursive_directory_iterator end;
+    while (iterator != end) {
+        if (!error && iterator->is_regular_file(error) && hasPackageExtension(iterator->path())) {
+            const auto path = iterator->path().lexically_normal();
+            indexedPaths_.push_back(path);
+            pathsByName_[key(path.stem().string())].push_back(path);
         }
-        if (mode == "--properties" || mode == "--mesh" || mode == "--texture") {
-            auto number = [](const std::string& value) {
-                if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos) throw std::runtime_error("expected unsigned decimal argument");
-                size_t used = 0; const auto n = std::stoull(value, &used);
-                if (used != value.size() || n > uint64_t(INT32_MAX)) throw std::runtime_error("numeric argument out of range");
-                return static_cast<int32_t>(n);
-            };
-            if (std::string(argv[4]) != "--property-offset") throw std::runtime_error("expected --property-offset");
-            if (mode != "--properties" && std::string(argv[6]) != "--output") throw std::runtime_error("expected --output");
-            if (mode == "--texture" && std::string(argv[8]) != "--tfc") throw std::runtime_error("expected --tfc");
-            if (mode == "--properties" && argc == 8) {
-                if (std::string(argv[6]) != "--array-schema") throw std::runtime_error("expected --array-schema");
-                std::ifstream schema(argv[7]); if (!schema) throw std::runtime_error("cannot open array schema");
-                std::string line;
-                while (std::getline(schema, line)) {
-                    if (!line.empty() && line.back() == '\r') line.pop_back();
-                    if (line.empty() || line[0] == '#') continue;
-                    const auto equal = line.find('=');
-                    if (equal == std::string::npos || equal == 0 || equal + 1 == line.size()) throw std::runtime_error("invalid array schema line");
-                    if (!package.arrayTypes.emplace(line.substr(0,equal),line.substr(equal+1)).second) throw std::runtime_error("duplicate array schema key");
+        error.clear();
+        iterator.increment(error);
+    }
+    std::sort(indexedPaths_.begin(), indexedPaths_.end());
+    for (auto& [name, paths] : pathsByName_)
+        std::sort(paths.begin(), paths.end());
+}
+
+std::filesystem::path PackageStore::choosePath(const std::string& packageName) const {
+    const auto found = pathsByName_.find(key(packageName));
+    if (found == pathsByName_.end())
+        throw std::runtime_error("package not found: " + packageName);
+    if (found->second.size() != 1)
+        throw std::runtime_error("ambiguous package name: " + packageName);
+    return found->second.front();
+}
+
+std::shared_ptr<const Package> PackageStore::loadPackage(const std::string& packageName) {
+    return loadPath(choosePath(packageName));
+}
+
+std::shared_ptr<const Package> PackageStore::loadPath(const std::filesystem::path& path) {
+    const auto normalized = std::filesystem::absolute(path).lexically_normal();
+    const auto cacheKey = key(normalized.generic_string());
+    const auto found = loaded_.find(cacheKey);
+    if (found != loaded_.end()) return found->second;
+    auto package = Package::load(normalized);
+    loaded_.emplace(cacheKey, package);
+    return package;
+}
+
+ResolvedObject PackageStore::resolve(const std::shared_ptr<const Package>& source, int32_t reference) {
+    if (!source) throw std::runtime_error("cannot resolve from a null package");
+    if (reference == 0) return {};
+    if (reference > 0) {
+        source->object(reference);
+        return {source, reference};
+    }
+    return resolveLoaded(source, reference);
+}
+
+ResolvedObject PackageStore::resolve(const Package& source, int32_t reference) {
+    if (source.sourcePath.empty())
+        throw std::runtime_error("package has no source path for cross-package resolution");
+    return resolve(loadPath(source.sourcePath), reference);
+}
+
+ResolvedObject PackageStore::resolveLoaded(const std::shared_ptr<const Package>& source, int32_t reference) {
+    const auto& initial = source->object(reference);
+    (void)initial;
+    int32_t rootReference = reference;
+    bool nestedInLocalExport = false;
+    std::unordered_set<int32_t> seen;
+    while (true) {
+        if (!seen.insert(rootReference).second)
+            throw std::runtime_error("cyclic import outer chain");
+        const auto& current = source->object(rootReference);
+        if (!current.outer) break;
+        if (current.outer > 0) {
+            nestedInLocalExport = true;
+            break;
+        }
+        rootReference = current.outer;
+    }
+
+    const auto& root = source->object(rootReference);
+    const auto globalPath = source->path(reference);
+    std::string packageName = root.name;
+    if (nestedInLocalExport) {
+        const auto separator = globalPath.find('.');
+        if (separator == std::string::npos)
+            throw std::runtime_error("local import has no package-qualified path");
+        packageName = globalPath.substr(0, separator);
+    }
+    const auto rootPrefix = packageName + ".";
+    std::string objectPath = globalPath;
+    if (folded(objectPath).starts_with(folded(rootPrefix)))
+        objectPath.erase(0, rootPrefix.size());
+    std::shared_ptr<const Package> target;
+    int32_t targetIndex = 0;
+    if (pathsByName_.contains(key(packageName))) {
+        target = loadPackage(packageName);
+        targetIndex = target->findExport(objectPath);
+    }
+    // Some cooked imports are rooted at a package object name that is not the
+    // disk filename. Fall back to the global object path across the indexed
+    // tree rather than silently treating that reference as local.
+    const auto globalKey = key(globalPath);
+    const auto cachedMatch = globalMatches_.find(globalKey);
+    if (!targetIndex && cachedMatch != globalMatches_.end()) {
+        target = loadPath(cachedMatch->second.first);
+        targetIndex = cachedMatch->second.second;
+    }
+    const auto cachedRoot = globalRootMatches_.find(key(packageName));
+    if (!targetIndex && cachedRoot != globalRootMatches_.end()) {
+        target = loadPath(cachedRoot->second);
+        targetIndex = target->findExport(objectPath);
+        if (!targetIndex) targetIndex = target->findExport(globalPath);
+    }
+    if (!targetIndex && !globalMisses_.contains(globalKey)) {
+        for (const auto& candidate : indexedPaths_) {
+            try {
+                // The global-path fallback is deliberately uncached for
+                // non-matches; a package tree can contain hundreds of files.
+                auto candidatePackage = Package::load(candidate);
+                const auto candidateIndex = candidatePackage->findExport(globalPath);
+                if (candidateIndex) {
+                    target = std::move(candidatePackage);
+                    targetIndex = candidateIndex;
+                    globalMatches_[globalKey] = {candidate, candidateIndex};
+                    globalRootMatches_[key(packageName)] = candidate;
+                    break;
                 }
+            } catch (const std::exception&) {
+                // A sidecar or otherwise non-package file is not a candidate.
             }
-            if (mode == "--mesh") std::cout << assets::mesh(package,r,number(argv[3]),size_t(number(argv[5])),argv[7]) << '\n';
-            else if (mode == "--texture") std::cout << assets::texture(package,r,number(argv[3]),size_t(number(argv[5])),argv[7],argv[9]) << '\n';
-            else std::cout << package.properties(r, number(argv[3]), size_t(number(argv[5]))) << '\n'; return 0;
         }
-        std::cout << "{\"version\":832,\"licensee\":46,\"names\":" << names
-                  << ",\"imports\":" << imports << ",\"exports\":" << exports << "}\n";
-    } catch (const std::exception& e) {
-        std::cerr << "ow-package: " << e.what() << '\n'; return 1;
+        if (!targetIndex) globalMisses_.insert(globalKey);
     }
+    if (!targetIndex)
+        throw std::runtime_error("import target not found: " + packageName + "." + objectPath);
+    return {std::move(target), targetIndex};
+}
+
+ResolvedObject PackageStore::resolvePath(const std::string& packageName, const std::string& objectPath) {
+    auto package = loadPackage(packageName);
+    const auto index = package->findExport(objectPath);
+    if (!index)
+        throw std::runtime_error("object not found: " + packageName + "." + objectPath);
+    return {std::move(package), index};
 }

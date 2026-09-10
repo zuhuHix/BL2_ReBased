@@ -4,22 +4,26 @@ An AI-assisted Borderlands 2 engine reimplementation experiment. The intended
 runtime reads the player's own installed game. No game assets or Gearbox code
 are distributed here. **There is no playable engine or renderer yet.**
 
-## Current state (Phase 0, steps 3–7 of 8)
+## Current state (Phase 1, importer foundation)
 
 A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages:
 
 - name/import/export tables, fully and partially LZO-compressed containers;
-- object records with package-local outer paths (`--exports`);
+- object records with package-local outer paths (`--exports`, `--imports`);
+- a reusable `PackageStore` that indexes installed `.upk`, `.umap` and `.u`
+  files lazily and resolves negative imports across packages (`--resolve`);
 - a per-class export count for one package (`--census`), driven over a whole
   installation by `tools/census.py`;
 - tagged properties (`--properties`): scalars, object references, nested
   structs, common fixed-layout structs, and arrays whose element type is
   supplied by a schema file;
-- one `Texture2D` to PNG (`--texture`, DXT1/DXT5, inline or TFC-streamed mips);
-- one `StaticMesh` to OBJ (`--mesh`, LOD 0, 16-bit indices, one UV set kept).
+- resident `Texture2D` mips to PNG (`--texture`, DXT1/DXT5, inline or
+  TFC-streamed, with `--mip` and `--all-mips`);
+- all render LODs of a `StaticMesh` in memory and a selected LOD to OBJ
+  (`--mesh`, 16/32-bit indices, all UV sets retained by the importer).
 
-Cross-package object loading, class/default inheritance, map loading, and the
-host-engine render are not implemented. Python is used for tests and as an
+Class/default inheritance, map loading, material translation and the runtime
+host-engine renderer are not implemented. Python is used for tests and as an
 independent execution path for comparison; the executable itself does not
 require Python. The LZO decoder is the vendored MIT-licensed lzokay; see
 [THIRD_PARTY.md](THIRD_PARTY.md).
@@ -73,11 +77,13 @@ Local checks on 2026-09-10, Release build, all against the installed game:
   and 100,601 `AnimSequence`. These count serialized copies, not unique
   assets, and have not yet been cross-checked against umodel's view.
 - `tools/prepare_probe.py` extracts `Env_Ash.Mesh.Ash_Road01` (473 vertices,
-  784 triangles) and `Prop_Roads.Textures.MetalRoadConcrete_Dif` (1024×1024
-  DXT1, streamed from `Textures.tfc`) from `Ash_P.upk`, and confirms through
+  784 triangles, 2 UV sets) and `Prop_Roads.Textures.MetalRoadConcrete_Dif`
+  (1024×1024 DXT1, streamed from `Textures.tfc`, 11 resident mips) from
+  `Ash_P.upk`, and confirms through
   the material's `TextureParameterValues` that the texture is that mesh's
-  `p_Diffuse`. The PNG has been viewed and is the road texture. The OBJ has
-  not yet been opened in Blender or rendered anywhere.
+  `p_Diffuse`.
+- The UE5.8.2 host probe rendered this mesh and texture in
+  `/Game/Phase0/Phase0`; the first Phase 0 screenshot is user-verified.
 
 These checks establish agreement with the research reader and a visually
 plausible texture, not independent proof of every format field or gameplay
@@ -93,8 +99,9 @@ $partDefault = $objects | Where-Object name -eq "Default__WeaponPartDefinition"
 ```
 
 Export indices are one-based; negative references identify imports, and zero
-means null. Paths describe the current package's outer chain; they do not prove
-that an imported object exists in another package.
+means null. `--resolve <reference> --cooked <directory>` follows an import to
+the owning package and export path. Paths from `--properties` still describe
+the current package's outer chain; resolution is an explicit separate step.
 
 The property offset is relative to the export payload and must be supplied.
 Offset 4 has been observed for class defaults, material instances, weapon
@@ -119,8 +126,9 @@ class's reflection data instead of a hand-written schema is future work.
 
 Local check on 2026-09-10: `GD_Gladiolus_Weapons.AssaultRifle.AR_Barrel_Jakobs_Sawbar`
 decodes all 13 top-level tags with the probe schema, consuming 1,551 bytes and
-leaving zero trailing bytes. Its values have not yet been compared against
-BLCMM, so Phase 0 step 5's external check is still open.
+leaving zero trailing bytes. The decoded names and values match the BLCMM
+Object Explorer dump, with one generated-subobject presentation discrepancy
+recorded in `DECISIONS.md`.
 
 ## Census and asset extraction
 
@@ -135,22 +143,21 @@ if any package fails to read and lists the error per package. The probe
 writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
 hashes of the package and outputs.
 
-Texture extraction picks the largest resident mip and supports only
-`PF_DXT1`/`PF_DXT5`. Mesh extraction handles a single LOD with 16-bit indices
-and rejects anything else explicitly rather than guessing. Both are spikes for
-the Phase 0 gate, not general exporters.
+Texture extraction decodes every available resident mip and supports only
+`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
+explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
+all UV sets; OBJ output intentionally writes one selected LOD and its first UV
+set. Source mesh data, collision hulls and skeletal meshes remain future work.
 
-## Host engine probe (not yet run)
+## Host engine probe (Phase 0 complete)
 
 `host/ue5/OpenWillow/` is a minimal UE5 C++ project whose module refuses to
 start without `OPENWILLOW_BL2` pointing at an installed game.
 `tools/run_ue_probe.ps1 -Engine <UE5 root> -Game <BL2 root>` builds it and
 launches the editor with `host/ue5/import_probe.py`, which imports the probe
 OBJ and PNG, wires the texture into a material, and places the mesh, a camera
-and lights in `/Game/Phase0/Phase0`. This has not been executed: UE5 is not
-installed on the development machine yet, so the Phase 0 gate (a screenshot
-of the mesh and texture rendered in the host engine) remains open and the
-host-engine decision is still provisional.
+and lights in `/Game/Phase0/Phase0`. This editor import remains a diagnostic
+spike, not the eventual runtime loader.
 
-Next: install UE5, run the probe, capture the gate screenshot, then cross-check
-the census against umodel and a weapon part against BLCMM.
+Next: add Material v1 and load one persistent map plus its sublevels using the
+new package and asset APIs.
