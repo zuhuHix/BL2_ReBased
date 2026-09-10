@@ -7,9 +7,11 @@ are distributed here. **There is no playable engine or renderer yet.**
 ## First working slice
 
 A standalone x64 C++20 tool reads version 832/46 package name/import/export
-tables and prints their counts as JSON. An optional miniLZO research build reads
-fully compressed code packages directly. It does not yet retain an object graph,
-read properties, handle partially compressed packages, or load maps.
+tables and prints their counts as JSON. It retains object records, resolves
+package-local outer paths, and inspects explicitly located tagged properties.
+An optional miniLZO research build reads fully compressed code packages directly.
+Cross-package object loading, complex property payloads, partially compressed
+packages and map loading remain unimplemented.
 Python is used for tests and an independent execution path for comparison;
 the enabled executable itself does not require Python.
 
@@ -55,5 +57,41 @@ License selection is pending a provenance review; no project-wide open-source
 license is granted yet. See [DECISIONS.md](DECISIONS.md) and
 [OPENWILLOW_ENGINE_PLAN.md](OPENWILLOW_ENGINE_PLAN.md).
 
-Next slice: retain names and object records, then decode tagged properties and
-expand coverage beyond the nine code packages toward the asset census.
+## Inspect object records and properties
+
+```powershell
+$willowPackage = "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/WillowGame.upk"
+$objects = & ./build/Release/ow-package.exe $willowPackage --exports | ConvertFrom-Json
+$partDefault = $objects | Where-Object name -eq "Default__WeaponPartDefinition"
+& ./build/Release/ow-package.exe $willowPackage --properties $partDefault.index --property-offset 4
+```
+
+Export indices are one-based; negative references identify imports, and zero
+means null. Paths describe the current package's outer chain; they do not prove
+that an imported object exists in another package.
+
+The property offset is relative to the export payload and must be supplied.
+Offset 4 was observed for this particular class default object (CDO). It is not
+a universal object-prefix rule. Wrong offsets, missing terminators, malformed
+values and payload overruns fail with an error and no partial JSON result.
+
+Supported values: int, finite float, bool, name, string, byte/enum, and object,
+class or component references. Structs, arrays and unknown types retain their
+tag metadata with `status: "unsupported"` and `value: null`. Their payload is
+skipped using its declared size. The report includes consumed and trailing
+bytes; native object data can follow the property terminator.
+
+Local check on 2026-09-10: `Default__WeaponPartDefinition` parses 11 top-level
+tags, consuming 856 bytes after the four-byte prefix, with zero trailing bytes.
+Observed scalars include `ShellCasingSocket = EjectPort` and
+`ZoomedFOVLerpPct` approximately `0.35`. This is a class default, not a particular
+gun part. Compare those fields against BLCMM or in-game SDK inspection before
+calling the property behavior externally verified.
+
+All nine code packages also pass comparison of each export's name, class,
+outer, super, payload size and offset against the Python research reader.
+Synthetic tests cover decoded values, Unicode, numbered names, null/import
+references, outer cycles, malformed tags, and export-local bounds.
+
+Next: decode struct/array values using type information, validate an actual
+WeaponPartDefinition instance against BLCMM, and expand to content packages.

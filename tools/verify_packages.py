@@ -26,4 +26,15 @@ with tempfile.TemporaryDirectory(prefix='openwillow-') as folder:
         expected = dict(version=version, licensee=licensee, names=len(names), imports=len(imports), exports=len(exports))
         if actual != expected:
             raise RuntimeError(f'{package}: {actual} != {expected}')
-        print(f'{package}: {len(data)} bytes, {len(exports)} exports; every decoded byte and table count matches', flush=True)
+        listing = subprocess.run([str(args.reader.resolve()), str(args.cooked / (package + '.upk')), '--exports'],
+                                 check=True, capture_output=True, text=True, encoding='utf-8')
+        records = json.loads(listing.stdout)
+        if len(records) != len(exports):
+            raise RuntimeError(f'{package}: export record count differs')
+        for index, (record, original) in enumerate(zip(records, exports), 1):
+            expected_record = dict(index=index, name=original['name'], class_index=original['class'],
+                                   outer_index=original['outer'], super_index=original['super'],
+                                   size=original['size'], offset=original['off'])
+            if any(record[key] != value for key, value in expected_record.items()):
+                raise RuntimeError(f'{package}: export {index} differs')
+        print(f'{package}: {len(data)} bytes, {len(exports)} exports; decoded bytes, counts and export fields match', flush=True)
