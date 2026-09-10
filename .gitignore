@@ -2,3 +2,10 @@
 /local/
 __pycache__/
 *.pyc
+/host/ue5/OpenWillow/Binaries/
+/host/ue5/OpenWillow/Intermediate/
+/host/ue5/OpenWillow/Saved/
+/host/ue5/OpenWillow/DerivedDataCache/
+/host/ue5/OpenWillow/Content/
+/host/ue5/OpenWillow/.vs/
+*.sln

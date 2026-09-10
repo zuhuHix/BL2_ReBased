@@ -6,6 +6,8 @@ import subprocess
 import sys
 import tempfile
 
+sys.argv[1] = str(pathlib.Path(sys.argv[1]).resolve())
+
 def pack(*values):
     return struct.pack('<' + 'I' * len(values), *values)
 
@@ -49,6 +51,22 @@ with tempfile.TemporaryDirectory() as folder:
         struct.pack_into('<I', bad, offset, value)
         assert run(container(bad) if compressed else bad).returncode != 0, offset
     if compressed:
+        # Partial package compression: logical offsets differ from disk offsets.
+        partial_header = bytearray(pack(0x9E2A83C1, 832 | (46 << 16), 128, 0, 0x02000000,
+                                       1, 128, 1, 173, 1, 145))
+        partial_header += bytes(20 + 16) + pack(1, 1, 1, 0, 0, 0, 2, 1)
+        assert len(partial_header) == 112
+        partial_payload = name + imp + exp
+        partial_payload = bytearray(partial_payload)
+        struct.pack_into('<I', partial_payload, 45 + 36, 241)
+        stream = container(partial_payload)
+        partial_header += pack(128, len(partial_payload), 144, len(stream)) + bytes(16)
+        partial = partial_header + stream
+        assert run(partial).returncode == 0, run(partial).stderr
+        for offset, value in [(104, 1), (108, 999), (112, 0), (116, 999), (120, 4), (124, 999)]:
+            bad = bytearray(partial); struct.pack_into('<I', bad, offset, value)
+            assert run(bad).returncode != 0, offset
+        assert run(partial + b'extra').returncode != 0
         for padding in [4096 - len(valid), 8192 - len(valid), 9000]:
             result = run(container(valid + bytes(padding), block=4096))
             assert result.returncode == 0, result.stderr
