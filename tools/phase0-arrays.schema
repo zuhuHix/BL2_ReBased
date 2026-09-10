@@ -1,0 +1,8 @@
+# Explicit inner types for the Phase 0 material and weapon-part probes.
+# Array tags do not serialize their element type. These are scoped to these
+# probes, not a substitute for resolving UProperty metadata in Phase 1/2.
+TextureParameterValues=StructProperty:TextureParameterValue
+ReferencedTextureGuids=StructProperty:Guid
+TitleList=ObjectProperty
+WeaponAttributeEffects=StructProperty:WeaponAttributeEffect
+AttributeSlotUpgrades=StructProperty:AttributeSlotUpgrade

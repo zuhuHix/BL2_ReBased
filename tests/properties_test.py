@@ -66,9 +66,26 @@ with tempfile.TemporaryDirectory() as folder:
     props = data['properties']
     assert [p['value'] for p in props] == [-42, 1.25, True, 'Wide😀_2',
         {'index': -1, 'path': 'Root'}, {'index': 0, 'path': None},
-        'hello😀"\n', 127, 'Choice', None, None, None, 99]
-    assert [p['status'] for p in props[9:12]] == ['unsupported'] * 3
+        'hello😀"\n', 127, 'Choice', {'X': 0, 'Y': 0, 'Z': 0}, None, None, 99]
+    assert [p['status'] for p in props[9:12]] == ['decoded', 'unsupported', 'unsupported']
     assert props[-1]['array_index'] == 3 and props[-1]['name'] == 'Quoted"\\\n'
+    schema = Path(folder) / 'arrays.schema'
+    schema.write_text('Test=IntProperty\n')
+    array_options = (*options, '--array-schema', str(schema))
+    result = run(ints(0) + tag('ArrayProperty', ints(2, 11, -22)) + fname('None'), *array_options)
+    assert json.loads(result.stdout)['properties'][0]['value'] == [11, -22], result.stderr
+    assert run(ints(0) + tag('ArrayProperty', ints(3, 11, 22)) + fname('None'), *array_options).returncode != 0
+    assert run(ints(0) + tag('ArrayProperty', ints(-1)) + fname('None'), *options).returncode != 0
+    nested = tag('StructProperty', tag('IntProperty', ints(81)) + fname('None'), fname('Root'))
+    result = run(ints(0) + nested + fname('None'), *options)
+    assert json.loads(result.stdout)['properties'][0]['value'][0]['value'] == 81, result.stderr
+    schema.write_text('Test=StructProperty:Root\n')
+    result = run(ints(0) + tag('ArrayProperty', ints(2) + (fields[0] + fname('None')) * 2) + fname('None'), *array_options)
+    assert [v[0]['value'] for v in json.loads(result.stdout)['properties'][0]['value']] == [-42, -42], result.stderr
+    too_deep = fname('None')
+    for _ in range(34):
+        too_deep = tag('StructProperty', too_deep, fname('Root')) + fname('None')
+    assert run(ints(0) + too_deep, *options).returncode != 0
     listing = json.loads(run(payload, '--exports', outer=-1, child_name='Wide😀').stdout)
     assert listing[0]['path'] == 'Root.Wide😀_1'
     assert listing[0]['class'] == 'Root'

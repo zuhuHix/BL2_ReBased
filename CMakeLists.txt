@@ -26,4 +26,5 @@ add_test(NAME package-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR
 add_test(NAME properties-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/properties_test.py $<TARGET_FILE:ow-package>)
 if(OPENWILLOW_LZO)
   add_test(NAME container-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/package_test.py $<TARGET_FILE:ow-package> --compressed)
+  add_test(NAME assets-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/assets_test.py $<TARGET_FILE:ow-package>)
 endif()

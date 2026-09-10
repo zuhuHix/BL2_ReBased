@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <limits>
 #include <algorithm>
+#include <map>
 
 void utf8(std::string& out, uint32_t c) {
     if (c < 0x80) out += char(c);
@@ -112,17 +113,39 @@ struct Package {
         for (auto i = parts.rbegin(); i != parts.rend(); ++i) { if (!result.empty()) result += '.'; result += *i; }
         return result;
     }
-    std::string properties(Reader& r, int32_t index, size_t start) const {
-        if (index <= 0) throw std::runtime_error("properties requires a positive export index");
-        const auto& o = object(index);
-        if (start > size_t(o.size)) throw std::runtime_error("property offset exceeds export size");
-        r.pos = size_t(o.offset) + start; r.limit = size_t(o.offset) + size_t(o.size);
-        const auto objectEnd = r.limit;
-        std::ostringstream out;
-        out << "{\"index\":" << index << ",\"path\":" << quote(path(index)) << ",\"property_offset\":" << start << ",\"properties\":[";
+    std::map<std::string, std::string> arrayTypes;
+    static std::string floating(Reader& r) {
+        const auto value = std::bit_cast<float>(r.u32());
+        if (!std::isfinite(value)) throw std::runtime_error("non-finite struct/array float");
+        std::ostringstream out; out << std::setprecision(9) << value; return out.str();
+    }
+    std::string structure(Reader& r, const std::string& type, unsigned depth) const {
+        if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
+        std::vector<std::string> fields;
+        bool integers = false, bytes = false;
+        if (type == "Vector") fields = {"X", "Y", "Z"};
+        else if (type == "Vector2D") fields = {"X", "Y"};
+        else if (type == "Rotator") { fields = {"Pitch", "Yaw", "Roll"}; integers = true; }
+        else if (type == "Guid") { fields = {"A", "B", "C", "D"}; integers = true; }
+        else if (type == "LinearColor") fields = {"R", "G", "B", "A"};
+        else if (type == "Color") { fields = {"B", "G", "R", "A"}; bytes = true; }
+        else if (type == "Quat") fields = {"X", "Y", "Z", "W"};
+        else return tags(r, r.pos, depth);
+        std::ostringstream out; out << '{';
+        for (size_t i = 0; i < fields.size(); ++i) {
+            if (i) out << ','; out << quote(fields[i]) << ':';
+            if (bytes) { r.require(1); out << unsigned(r.data[r.pos++]); }
+            else if (integers) out << r.i32(); else out << floating(r);
+        }
+        out << '}'; return out.str();
+    }
+    std::string tags(Reader& r, size_t base, unsigned depth) const {
+        if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
+        const auto streamEnd = r.limit;
+        std::ostringstream out; out << '[';
         bool first = true;
         while (true) {
-            const auto tagOffset = r.pos - size_t(o.offset);
+            const auto tagOffset = r.pos - base;
             const auto propertyName = name(r);
             if (propertyName == "None") break;
             const auto type = name(r); const auto size = r.i32(), arrayIndex = r.i32();
@@ -150,23 +173,62 @@ struct Package {
                 out << "{\"index\":" << reference << ",\"path\":" << (reference ? quote(path(reference)) : "null") << '}';
             } else if (type == "ByteProperty" && detail == "None") { r.require(1); out << unsigned(r.data[r.pos++]); }
             else if (type == "ByteProperty") out << quote(name(r));
-            else { supported = false; out << "null"; r.skip(size_t(size)); }
+            else if (type == "StructProperty") {
+                out << structure(r, detail, depth + 1);
+            } else if (type == "ArrayProperty") {
+                const auto length = r.i32();
+                if (length < 0 || length > 1000000) throw std::runtime_error("invalid property array count");
+                auto spec = arrayTypes.find(propertyName);
+                if (spec == arrayTypes.end() && length) { supported = false; out << "null"; r.pos = end; }
+                else {
+                    out << '[';
+                    for (int32_t i = 0; i < length; ++i) {
+                        if (i) out << ',';
+                        const auto& inner = spec->second;
+                        if (inner == "IntProperty") out << r.i32();
+                        else if (inner == "FloatProperty") out << floating(r);
+                        else if (inner == "NameProperty") out << quote(name(r));
+                        else if (inner == "StrProperty") out << quote(r.string());
+                        else if (inner == "ObjectProperty") { auto ref = r.i32(); out << "{\"index\":" << ref << ",\"path\":" << (ref ? quote(path(ref)) : "null") << '}'; }
+                        else if (inner == "ByteProperty") { r.require(1); out << unsigned(r.data[r.pos++]); }
+                        else if (inner.starts_with("StructProperty:")) out << structure(r, inner.substr(15), depth + 1);
+                        else throw std::runtime_error("unsupported array schema type");
+                    }
+                    out << ']';
+                }
+                out << ",\"element_count\":" << length;
+                if (spec != arrayTypes.end()) out << ",\"element_type\":" << quote(spec->second);
+            } else { supported = false; out << "null"; r.skip(size_t(size)); }
             if (r.pos != end) throw std::runtime_error("property size does not match decoded value");
             out << ",\"status\":" << quote(supported ? "decoded" : "unsupported") << '}';
-            r.limit = objectEnd;
+            r.limit = streamEnd;
         }
-        out << "],\"consumed_bytes\":" << r.pos - size_t(o.offset) - start
+        out << ']'; return out.str();
+    }
+    std::string properties(Reader& r, int32_t index, size_t start) const {
+        if (index <= 0) throw std::runtime_error("properties requires a positive export index");
+        const auto& o = object(index);
+        if (start > size_t(o.size)) throw std::runtime_error("property offset exceeds export size");
+        r.pos = size_t(o.offset) + start; r.limit = size_t(o.offset) + size_t(o.size);
+        const auto objectEnd = r.limit;
+        std::ostringstream out;
+        out << "{\"index\":" << index << ",\"path\":" << quote(path(index)) << ",\"property_offset\":" << start << ",\"properties\":";
+        out << tags(r, size_t(o.offset), 0);
+        out << ",\"consumed_bytes\":" << r.pos - size_t(o.offset) - start
             << ",\"trailing_bytes\":" << objectEnd - r.pos << '}';
         return out.str();
     }
 };
 
+#include "assets.hpp"
+
 int main(int argc, char** argv) {
     try {
         const std::string mode = argc >= 3 ? argv[2] : "";
-        if (!(argc == 2 || (argc == 3 && mode == "--exports") || (argc == 4 && mode == "--verify-decoded") ||
-              (argc == 6 && mode == "--properties" && std::string(argv[4]) == "--property-offset")))
-            throw std::runtime_error("usage: ow-package <package> [--exports | --verify-decoded <file> | --properties <index> --property-offset <bytes>]");
+        if (!(argc == 2 || (argc == 3 && (mode == "--exports" || mode == "--census")) || (argc == 4 && mode == "--verify-decoded") ||
+              ((argc == 6 || argc == 8) && mode == "--properties" && std::string(argv[4]) == "--property-offset") ||
+              ((argc == 8 && mode == "--mesh") || (argc == 10 && mode == "--texture"))))
+            throw std::runtime_error("usage: ow-package <package> [--exports | --census | --verify-decoded <file> | --properties <index> --property-offset <bytes> [--array-schema <file>] | --mesh <index> --property-offset <bytes> --output <obj> | --texture <index> --property-offset <bytes> --output <png> --tfc <directory>]");
         std::ifstream file(argv[1], std::ios::binary);
         if (!file) throw std::runtime_error("cannot open input");
         Reader r{decode_package({std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()})};
@@ -206,6 +268,17 @@ int main(int argc, char** argv) {
             r.skip(size_t(net) * 4); r.skip(20);
             o.size = size; o.offset = offset; package.exports.push_back(o);
         }
+        if (mode == "--census") {
+            std::map<std::string, size_t> counts;
+            for (const auto& o : package.exports) ++counts[o.cls ? package.path(o.cls) : "Class"];
+            std::cout << "{\"exports\":" << exports << ",\"classes\":{";
+            bool first = true;
+            for (const auto& [name, count] : counts) {
+                if (!first) std::cout << ','; first = false;
+                std::cout << quote(name) << ':' << count;
+            }
+            std::cout << "}}\n"; return 0;
+        }
         if (mode == "--exports") {
             std::ostringstream out; out << '[';
             for (int32_t i = 1; i <= exports; ++i) {
@@ -218,14 +291,31 @@ int main(int argc, char** argv) {
             }
             std::cout << out.str() << "]\n"; return 0;
         }
-        if (mode == "--properties") {
+        if (mode == "--properties" || mode == "--mesh" || mode == "--texture") {
             auto number = [](const std::string& value) {
                 if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos) throw std::runtime_error("expected unsigned decimal argument");
                 size_t used = 0; const auto n = std::stoull(value, &used);
                 if (used != value.size() || n > uint64_t(INT32_MAX)) throw std::runtime_error("numeric argument out of range");
                 return static_cast<int32_t>(n);
             };
-            std::cout << package.properties(r, number(argv[3]), size_t(number(argv[5]))) << '\n'; return 0;
+            if (std::string(argv[4]) != "--property-offset") throw std::runtime_error("expected --property-offset");
+            if (mode != "--properties" && std::string(argv[6]) != "--output") throw std::runtime_error("expected --output");
+            if (mode == "--texture" && std::string(argv[8]) != "--tfc") throw std::runtime_error("expected --tfc");
+            if (mode == "--properties" && argc == 8) {
+                if (std::string(argv[6]) != "--array-schema") throw std::runtime_error("expected --array-schema");
+                std::ifstream schema(argv[7]); if (!schema) throw std::runtime_error("cannot open array schema");
+                std::string line;
+                while (std::getline(schema, line)) {
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    if (line.empty() || line[0] == '#') continue;
+                    const auto equal = line.find('=');
+                    if (equal == std::string::npos || equal == 0 || equal + 1 == line.size()) throw std::runtime_error("invalid array schema line");
+                    if (!package.arrayTypes.emplace(line.substr(0,equal),line.substr(equal+1)).second) throw std::runtime_error("duplicate array schema key");
+                }
+            }
+            if (mode == "--mesh") std::cout << assets::mesh(package,r,number(argv[3]),size_t(number(argv[5])),argv[7]) << '\n';
+            else if (mode == "--texture") std::cout << assets::texture(package,r,number(argv[3]),size_t(number(argv[5])),argv[7],argv[9]) << '\n';
+            else std::cout << package.properties(r, number(argv[3]), size_t(number(argv[5]))) << '\n'; return 0;
         }
         std::cout << "{\"version\":832,\"licensee\":46,\"names\":" << names
                   << ",\"imports\":" << imports << ",\"exports\":" << exports << "}\n";
