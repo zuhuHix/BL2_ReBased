@@ -1,31 +1,52 @@
 # Dependency provenance
 
-## Optional research decoder: miniLZO 2.10
+## LZO decoder: lzokay (vendored)
 
-- Author: Markus Franz Xaver Johannes Oberhumer, copyright 1996-2017.
-- Primary source: https://www.oberhumer.com/opensource/lzo/
-- Archive: https://www.oberhumer.com/opensource/lzo/download/minilzo-2.10.tar.gz
-- SHA-256: `eb4ce543aad19533c83550746e0e9d7bcf716b35a42429e3ba17d60fa0f3e47a`
-- License: GPL-2.0-or-later, confirmed in the archive's `minilzo.h` and `COPYING`
-  on 2026-09-10. The full upstream archive, including notices and COPYING, is
-  fetched into the ignored build directory; upstream sources are not modified.
-- API used: `lzo_init`, `lzo1x_decompress_safe`. The bounded decoder rejects
-  malformed streams and reports input/output errors to the container reader.
+- Author: Jack Andersen, copyright 2018.
+- Source: https://github.com/jackoalan/lzokay
+- Vendored files: `third_party/lzokay/lzokay.cpp`, `lzokay.hpp`, `LICENSE`.
+  Compared byte-for-byte against upstream `master` at commit
+  `db2df1fcbebc2ed06c10f727f72567d40f06a2be` on 2026-09-10; no local edits.
+  SHA-256 of the vendored copies:
+  `lzokay.cpp` `2f4ab24a24a65766f05e2aa60361c624d1a1b80e73164d2248300e0701d91e91`,
+  `lzokay.hpp` `0a6165e6726f27c1abfc1b1bb0613b1a839f4285d5cd6108d62d63cc713645c7`.
+- License: MIT, per the vendored `LICENSE` file.
+- API used: `lzokay::decompress` with an explicit output capacity. The decoder
+  reports input/output overruns as error results; the container reader treats
+  any non-success result or short output as a malformed block.
 
-Enable explicitly with `-DOPENWILLOW_RESEARCH_LZO=ON`. The default build has no
-miniLZO dependency and rejects compressed inputs with an actionable message.
-The enabled executable links GPL code. Calling it a research build does not
-exempt distribution from that license. There is no release/installation target;
-resolve the combined work's license and host-engine compatibility before release.
-This dependency is not a decision to link miniLZO into a future host engine.
+Controlled by `OPENWILLOW_LZO` (default ON). `-DOPENWILLOW_LZO=OFF` builds a
+decoder-free reader that accepts only decompressed packages and rejects
+compressed inputs with an actionable message; the container, assets and
+compressed-package tests are then skipped. lzokay is a clean-room LZO1X
+implementation and is not a derivative of the GPL LZO library.
+
+## Superseded: miniLZO 2.10 (removed)
+
+The reader previously fetched Oberhumer's miniLZO 2.10 (GPL-2.0-or-later,
+archive SHA-256 `eb4ce543aad19533c83550746e0e9d7bcf716b35a42429e3ba17d60fa0f3e47a`)
+behind `OPENWILLOW_RESEARCH_LZO`. That option, the FetchContent download and
+the GPL dependency are gone. The switch was made because lzokay decodes all
+installed code packages byte-for-byte identically and removes the GPL
+question from every enabled build. No miniLZO code was translated into
+this repository.
+
+## Format references (read, not copied)
+
+Static mesh, `Texture2D` and bulk-data layouts in `src/assets.hpp` were
+worked out against UE Viewer (umodel) sources by Konstantin Nosov,
+https://github.com/gildor2/UEViewer (MIT), read locally as a format
+reference (`UnMesh3.cpp`, `UnTexture3.cpp`, `UnPackage3.cpp`). No functions
+were copied or translated; the C++ here is an independent implementation of
+the serialization order those files document. If UE Viewer code is ever
+copied in, its MIT notice must be added alongside lzokay's.
 
 ## Existing Python research decoder
 
 `research/native_count.py` describes its decompressor as a faithful minilzo port.
 The precise upstream version and authorship history of that translation remain
 unknown. Treat its provenance as unresolved; it is only a local comparison
-oracle. The native decoder uses the pinned original upstream implementation
-instead of translating that Python code.
+oracle and is never linked into the C++ reader.
 
 The container/table layouts are recorded in the existing workspace research.
-No game binaries, leaked source, or third-party UE3 source were used for this change.
+No game binaries, leaked source, or third-party UE3 source were used.
