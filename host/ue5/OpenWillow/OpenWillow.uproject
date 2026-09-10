@@ -1,0 +1,10 @@
+{
+  "FileVersion": 3,
+  "Category": "Research",
+  "Description": "OpenWillow Phase 0 local asset probe. Requires an installed Borderlands 2.",
+  "Modules": [{"Name": "OpenWillow", "Type": "Runtime", "LoadingPhase": "Default"}],
+  "Plugins": [
+    {"Name": "PythonScriptPlugin", "Enabled": true},
+    {"Name": "EditorScriptingUtilities", "Enabled": true}
+  ]
+}
