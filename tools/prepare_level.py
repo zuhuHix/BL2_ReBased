@@ -116,6 +116,28 @@ def material_index(records, path):
     return matches[0]
 
 
+def cooked_texture_references(payload, data):
+    """Read the observed 832/46 Material resource prefix, never scan offsets.
+
+    Only empty compile-error/dependency arrays are supported. The remaining
+    resource/shader bytes are deliberately opaque. See DECISIONS.md.
+    """
+    offset = data['property_offset'] + data['consumed_bytes']
+    if offset < 0 or offset > len(payload) or len(payload) - offset != data['trailing_bytes']:
+        raise ValueError('Cooked material payload/property boundary mismatch')
+    tail = memoryview(payload)[offset:]
+    if len(tail) < 36:
+        raise ValueError('Truncated cooked material resource prefix')
+    if struct.unpack_from('<2i', tail) != (0, 0):
+        raise ValueError('Unsupported cooked material error/dependency arrays')
+    # Two empty arrays, resource int, GUID, resource int, texture-array count.
+    count = struct.unpack_from('<i', tail, 32)[0]
+    if count < 0 or count > (len(tail) - 36) // 4:
+        raise ValueError('Invalid cooked material texture count')
+    refs = list(struct.unpack_from(f'<{count}i', tail, 36))
+    return refs, len(tail) - 36 - count * 4
+
+
 class Scene:
     def __init__(self, reader, game, output):
         self.reader, self.game, self.output = reader.resolve(), game.resolve(), output.resolve()
@@ -225,6 +247,26 @@ class Scene:
                 for item in opacity if isinstance(item, dict))
         return metadata
 
+    def cooked_material_textures(self, key, stack=()):
+        if key in stack or len(stack) >= 32:
+            raise ValueError('Material parent cycle/depth limit')
+        record = self.load(key[0])[key[1]]
+        if record['class'].rsplit('.', 1)[-1] != 'Material':
+            parent = self.resolve(key[0], props(record).get('Parent', 0))
+            return self.cooked_material_textures(parent, (*stack, key)) if parent else None
+        refs, opaque = cooked_texture_references(
+            bytes(self.call(key[0], '--payload', key[1])), record['data'])
+        textures = []
+        for ref in refs:
+            texture = self.resolve(key[0], ref)
+            if texture is None:
+                continue
+            target = self.load(texture[0]).get(texture[1])
+            if target is None or target['class'].rsplit('.', 1)[-1] not in ('Texture2D', 'TextureCube'):
+                raise ValueError('Cooked material reference is not a supported texture')
+            textures.append(texture)
+        return key, textures, opaque
+
     def texture(self, key, channel):
         if key is None:
             return None
@@ -251,6 +293,26 @@ class Scene:
                     parameters['p_diffuse'] = inferred
                     material['diffuse_inference'] = self.identity(inferred)
                     self.issue(material['source'], 'Approximation: sole unnamed _Dif texture used as diffuse; cooked graph and tint not reconstructed')
+                if not any(channel_for_parameter(p) == 'diffuse' for p in parameters):
+                    try:
+                        cooked = self.cooked_material_textures(key)
+                        if cooked is not None:
+                            base, textures, opaque = cooked
+                            material['cooked_texture_resource'] = {
+                                'source': self.identity(base),
+                                'textures': [self.identity(t) for t in textures],
+                                'opaque_tail_bytes': opaque}
+                            candidates = {t for t in textures
+                                          if self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D'
+                                          and re.search(r'_dif(?:_\d+)?$', self.identity(t), re.IGNORECASE)}
+                            if len(candidates) == 1:
+                                inferred = next(iter(candidates))
+                                parameters['p_diffuse'] = inferred
+                                material['diffuse_inference'] = self.identity(inferred)
+                                material['diffuse_inference_method'] = 'sole_cooked_resource_dif_texture'
+                                self.issue(material['source'], 'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed')
+                    except ValueError as error:
+                        self.issue(material['source'], error)
                 for parameter, texture in parameters.items():
                     channel = channel_for_parameter(parameter)
                     if not channel or texture is None:

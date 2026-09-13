@@ -23,6 +23,67 @@ def record(**kwargs):
 
 
 class SceneTests(unittest.TestCase):
+    def test_cooked_resource_bounds_and_opaque_tail(self):
+        prefix = struct.pack('<3i16s2i', 0, 0, 1, bytes(16), 1, 2)
+        payload = bytes(12) + prefix + struct.pack('<2i', 7, -3) + b'opaque'
+        data = dict(property_offset=4, consumed_bytes=8, trailing_bytes=len(payload)-12)
+        self.assertEqual(m.cooked_texture_references(payload, data), ([7, -3], 6))
+        for length in range(12, 56):
+            truncated = payload[:length]
+            with self.assertRaises(ValueError):
+                m.cooked_texture_references(truncated, dict(data, trailing_bytes=length-12))
+        for offset, value in ((12, 1), (16, 1), (44, -1), (44, 1000000)):
+            corrupt = bytearray(payload)
+            struct.pack_into('<i', corrupt, offset, value)
+            with self.assertRaises(ValueError):
+                m.cooked_texture_references(corrupt, data)
+        with self.assertRaises(ValueError):
+            m.cooked_texture_references(payload, dict(data, consumed_bytes=9))
+
+    def test_cooked_diffuse_guard_and_provenance(self):
+        scene = object.__new__(m.Scene)
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.identity = lambda key: {1: 'Map:Material', 2: 'Map:Building_Dif', 3: 'Map:Other_Dif'}[key[1]]
+        scene.material_metadata = lambda key: {}
+        scene.texture = lambda key, channel: 'decoded.png'
+        scene.load = lambda package: {2: {'class': 'Engine.Texture2D'}, 3: {'class': 'Engine.Texture2D'}}
+        scene.material_parameters = lambda key: {}
+        scene.cooked_material_textures = lambda key: (key, [('Map', 2)], 32)
+        scene.material(('Map', 1))
+        self.assertEqual(scene.materials['1']['channels'], {'diffuse': 'decoded.png'})
+        self.assertEqual(scene.materials['1']['diffuse_inference_method'], 'sole_cooked_resource_dif_texture')
+        scene.materials.clear()
+        scene.cooked_material_textures = lambda key: (key, [('Map', 2), ('Map', 3)], 32)
+        scene.material(('Map', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        scene.materials.clear()
+        scene.material_parameters = lambda key: {'p_diffuse': None}
+        scene.cooked_material_textures = lambda key: self.fail('Explicit null must suppress inference')
+        scene.material(('Map', 1))
+        self.assertNotIn('diffuse_inference', scene.materials['1'])
+
+    def test_cooked_resource_references_and_parent_validation(self):
+        scene = object.__new__(m.Scene)
+        payload = struct.pack('<3i16s3i', 0, 0, 1, bytes(16), 1, 1, 3)
+        rows = {1: {**record(), 'class': 'Engine.Material'},
+                2: {**record(Parent={'index': 1}), 'class': 'Engine.MaterialInstanceConstant'},
+                3: {'class': 'Engine.TextureCube'}}
+        rows[1]['data'].update(property_offset=0, consumed_bytes=0, trailing_bytes=len(payload))
+        scene.load = lambda package: rows
+        scene.call = lambda *args: list(payload)
+        scene.resolve = lambda package, ref: (package, ref['index'] if isinstance(ref, dict) else ref) if ref else None
+        self.assertEqual(scene.cooked_material_textures(('Map', 2)), (('Map', 1), [('Map', 3)], 0))
+        rows[3]['class'] = 'Engine.StaticMesh'
+        with self.assertRaisesRegex(ValueError, 'not a supported texture'):
+            scene.cooked_material_textures(('Map', 2))
+        del rows[3]
+        with self.assertRaisesRegex(ValueError, 'not a supported texture'):
+            scene.cooked_material_textures(('Map', 2))
+        rows[2] = {**record(Parent={'index': 2}), 'class': 'Engine.MaterialInstanceConstant'}
+        with self.assertRaisesRegex(ValueError, 'cycle'):
+            scene.cooked_material_textures(('Map', 2))
+
     def test_material_identity_filters_class_and_accepts_package_local_classes(self):
         rows = {1: {'path': 'Shared.Name', 'class': 'Engine.Texture2D'},
                 2: {'path': 'Shared.Name', 'class': 'Material'}}
