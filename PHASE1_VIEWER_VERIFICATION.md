@@ -1,5 +1,9 @@
 # Phase 1 viewer continuation — 2026-09-12
 
+Follow-up: the user approved cooked-material serialization work on 2026-09-13.
+See [Cooked-material verification](COOKED_MATERIAL_VERIFICATION.md) for the
+bounded resource reader, reduced fallback counts and current verification.
+
 ## Verified
 
 - UE5.8 OpenWillowEditor build passed with the pawn/view fix and runtime test.
