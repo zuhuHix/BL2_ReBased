@@ -1,0 +1,320 @@
+﻿"""Import a prepared Material v1 scene into the UE5 host (editor Python)."""
+import json
+import os
+import sys
+from pathlib import Path
+import unreal
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scene_geometry import actor_label, host_obj
+
+root = Path(os.environ['OPENWILLOW_SCENE']).resolve()
+if not (Path(os.environ['OPENWILLOW_BL2']) / 'Binaries/Win32/Borderlands2.exe').is_file():
+    raise RuntimeError('An installed Borderlands 2 is required')
+scene = json.loads((root / 'scene.json').read_text(encoding='utf-8'))
+(root / 'ue-import.json').unlink(missing_ok=True)
+if scene['schema'] != 1 or scene['dynamic_policy'] != 'frozen':
+    raise RuntimeError('Unsupported scene schema/policy')
+destination = '/Game/OpenWillow/' + scene['map']
+tools = unreal.AssetToolsHelpers.get_asset_tools()
+mel = unreal.MaterialEditingLibrary
+
+
+def imported(filename, expected):
+    task = unreal.AssetImportTask()
+    task.filename = str(root / filename)
+    task.destination_path = destination + '/Assets'
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    if filename.endswith('.obj'):
+        converted = root / 'ue-obj' / Path(filename).name
+        converted.parent.mkdir(exist_ok=True)
+        converted.write_text(host_obj((root / filename).read_text()))
+        task.filename = str(converted)
+        options = unreal.FbxImportUI()
+        options.import_mesh = True
+        options.import_materials = False
+        options.import_textures = False
+        options.import_as_skeletal = False
+        options.mesh_type_to_import = unreal.FBXImportType.FBXIT_STATIC_MESH
+        data = options.static_mesh_import_data
+        data.set_editor_property('combine_meshes', True)
+        # Units stay centimeters. OBJ handedness is adapted above because
+        # the Interchange OBJ importer reflects Y independently of this flag.
+        data.set_editor_property('convert_scene', False)
+        data.set_editor_property('convert_scene_unit', False)
+        options.set_editor_property('static_mesh_import_data', data)
+        task.options = options
+    tools.import_asset_tasks([task])
+    objects = [o for o in task.get_objects() if isinstance(o, expected)]
+    if len(objects) != 1:
+        raise RuntimeError(f'Expected one {expected} from {filename}: {objects}')
+    return objects[0]
+
+
+materials = {}
+textures = {}
+for name, definition in scene['materials'].items():
+    material_path = destination + '/Assets/M_' + name
+    material = unreal.load_asset(material_path) if unreal.EditorAssetLibrary.does_asset_exist(material_path) else None
+    if material is None:
+        material = tools.create_asset('M_' + name, destination + '/Assets', unreal.Material, unreal.MaterialFactoryNew())
+    mel.delete_all_material_expressions(material)
+    blend_modes = {
+        'BLEND_Opaque': unreal.BlendMode.BLEND_OPAQUE,
+        'BLEND_Masked': unreal.BlendMode.BLEND_MASKED,
+        'BLEND_Translucent': unreal.BlendMode.BLEND_TRANSLUCENT,
+        'BLEND_Additive': unreal.BlendMode.BLEND_ADDITIVE,
+        'BLEND_Modulate': unreal.BlendMode.BLEND_MODULATE,
+        'BLEND_AlphaComposite': getattr(unreal.BlendMode, 'BLEND_ALPHA_COMPOSITE', unreal.BlendMode.BLEND_TRANSLUCENT),
+        'BLEND_AlphaHoldout': getattr(unreal.BlendMode, 'BLEND_ALPHA_HOLDOUT', unreal.BlendMode.BLEND_TRANSLUCENT),
+    }
+    shading_models = {
+        'MLM_Unlit': unreal.MaterialShadingModel.MSM_UNLIT,
+        'MLM_DefaultLit': unreal.MaterialShadingModel.MSM_DEFAULT_LIT,
+    }
+    blend_name = definition.get('blend_mode', 'BLEND_Opaque')
+    material.set_editor_property('blend_mode', blend_modes.get(blend_name, unreal.BlendMode.BLEND_OPAQUE))
+    material.set_editor_property('shading_model', shading_models.get(
+        definition.get('lighting_model', 'MLM_DefaultLit'), unreal.MaterialShadingModel.MSM_DEFAULT_LIT))
+    try:
+        material.set_editor_property('two_sided', bool(definition.get('two_sided', False)))
+    except Exception:
+        pass
+    if not definition['channels'].get('diffuse'):
+        fallback = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+        fallback.set_editor_property('constant', unreal.LinearColor(0.5, 0.5, 0.5, 1))
+        mel.connect_material_property(fallback, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    outputs = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR,
+               'normal': unreal.MaterialProperty.MP_NORMAL,
+               'specular': unreal.MaterialProperty.MP_SPECULAR,
+               'emissive': unreal.MaterialProperty.MP_EMISSIVE_COLOR}
+    diffuse_sample = None
+    emissive_sample = None
+    for channel, filename in definition['channels'].items():
+        if filename is None:
+            continue
+        texture = textures.get(filename)
+        if texture is None:
+            texture = imported(filename, unreal.Texture2D)
+            textures[filename] = texture
+        texture.set_editor_property('srgb', channel in ('diffuse', 'emissive'))
+        texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP
+                                    if channel == 'normal' else unreal.TextureCompressionSettings.TC_DEFAULT)
+        sample = mel.create_material_expression(material, unreal.MaterialExpressionTextureSample)
+        sample.set_editor_property('texture', texture)
+        sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if channel == 'normal'
+                                   else unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if channel in ('diffuse', 'emissive')
+                                   else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+        if channel == 'diffuse':
+            diffuse_sample = sample
+        if channel == 'emissive':
+            emissive_sample = sample
+        output_node, output_pin = sample, 'R' if channel == 'specular' else 'RGB'
+        if channel == 'emissive':
+            # V1 uses alpha as an emissive mask. In particular the observed
+            # white/zero-alpha default must not make ordinary surfaces glow.
+            output_node = mel.create_material_expression(material, unreal.MaterialExpressionMultiply)
+            mel.connect_material_expressions(sample, 'RGB', output_node, 'A')
+            mel.connect_material_expressions(sample, 'A', output_node, 'B')
+            output_pin = ''
+        if not mel.connect_material_property(output_node, output_pin, outputs[channel]):
+            raise RuntimeError(f'Cannot connect {channel}')
+        unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    if blend_name != 'BLEND_Opaque':
+        opacity_node = diffuse_sample or emissive_sample
+        opacity_property = (unreal.MaterialProperty.MP_OPACITY_MASK
+                            if blend_name == 'BLEND_Masked'
+                            else unreal.MaterialProperty.MP_OPACITY)
+        if opacity_node is not None:
+            mel.connect_material_property(opacity_node, 'A', opacity_property)
+        else:
+            # Unsupported translucent/masked graphs must not become opaque
+            # blockers. Their full UE3 opacity graph is outside Material v1.
+            opacity = mel.create_material_expression(material, unreal.MaterialExpressionConstant)
+            opacity.set_editor_property('r', 0.0)
+            mel.connect_material_property(opacity, '', opacity_property)
+    # UE3 specular RGB is approximated by its red channel; roughness is a v1 constant.
+    roughness = mel.create_material_expression(material, unreal.MaterialExpressionConstant)
+    roughness.set_editor_property('r', 0.65)
+    mel.connect_material_property(roughness, '', unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material)
+    materials[name] = material
+
+meshes = {}
+for name, definition in scene['meshes'].items():
+    for section in definition['sections']:
+        mesh = imported(section['file'], unreal.StaticMesh)
+        if section['material']:
+            mesh.set_material(0, materials[section['material']])
+        unreal.EditorAssetLibrary.save_loaded_asset(mesh)
+        meshes[name, section['slot']] = mesh
+
+level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+map_path = destination + '/' + scene['map']
+if unreal.EditorAssetLibrary.does_asset_exist(map_path):
+    if not level.load_level(map_path):
+        raise RuntimeError('Cannot load generated map')
+    for actor in actors.get_all_level_actors():
+        if actor.get_actor_label().startswith('OpenWillow_'):
+            actors.destroy_actor(actor)
+else:
+    if not level.new_level(map_path):
+        raise RuntimeError('Cannot create generated map')
+
+
+def pose(value):
+    pitch, yaw, roll = value['rotation']
+    return unreal.Transform(location=unreal.Vector(*value['location']),
+                            rotation=unreal.Rotator(pitch=pitch, yaw=yaw, roll=roll), scale=unreal.Vector(*value['scale']))
+
+
+def placement(value):
+    if 'matrix' in value:
+        m = value['matrix']
+        rotation = unreal.MathLibrary.make_rotation_from_axes(unreal.Vector(*m[0:3]),
+                   unreal.Vector(*m[4:7]), unreal.Vector(*m[8:11]))
+        return unreal.Transform(location=unreal.Vector(*m[12:15]), rotation=rotation,
+                                scale=unreal.Vector(*value['scale']))
+    return unreal.MathLibrary.compose_transforms(pose(value['component']), pose(value['actor']))
+
+
+count = 0
+scene_bounds_min = unreal.Vector(float('inf'), float('inf'), float('inf'))
+scene_bounds_max = unreal.Vector(float('-inf'), float('-inf'), float('-inf'))
+for instance in scene['actors']:
+    transform = placement(instance['transform'])
+    for section in scene['meshes'][instance['mesh']]['sections']:
+        actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector())
+        actor.set_actor_label(actor_label(instance['level'], instance['source'], section['slot']))
+        actor.set_editor_property('tags', [unreal.Name(instance['source'])])
+        actor.set_folder_path(instance['level'])
+        component = actor.static_mesh_component
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        component.set_static_mesh(meshes[instance['mesh'], section['slot']])
+        actor.set_actor_transform(transform, False, False)
+        overrides = instance['materials']
+        if section['slot'] < len(overrides) and overrides[section['slot']]:
+            component.set_material(0, materials[overrides[section['slot']]])
+        component.set_simulate_physics(False)
+        component.set_mobility(unreal.ComponentMobility.STATIC)
+        origin, extent = actor.get_actor_bounds(False)
+        scene_bounds_min = unreal.Vector(min(scene_bounds_min.x, origin.x - extent.x),
+                                         min(scene_bounds_min.y, origin.y - extent.y),
+                                         min(scene_bounds_min.z, origin.z - extent.z))
+        scene_bounds_max = unreal.Vector(max(scene_bounds_max.x, origin.x + extent.x),
+                                         max(scene_bounds_max.y, origin.y + extent.y),
+                                         max(scene_bounds_max.z, origin.z + extent.z))
+        count += 1
+
+camera_pose = scene['camera'] or {'location': [0, 0, 1000], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]}
+position = unreal.Vector(*camera_pose['location'])
+pitch, yaw, roll = camera_pose['rotation']
+rotation = unreal.Rotator(pitch=pitch, yaw=yaw, roll=roll)
+start = actors.spawn_actor_from_class(unreal.PlayerStart, position, rotation)
+start.set_actor_label('OpenWillow_PlayerStart')
+start.set_editor_property('tags', [unreal.Name('OpenWillow_PlayerStart')])
+
+# Keep a deterministic starting pose in the map. Runtime game mode code copies
+# this pose to the possessed spectator pawn after spawning it.
+inspection_camera = actors.spawn_actor_from_class(unreal.CameraActor, position, rotation)
+inspection_camera.set_actor_label('OpenWillow_InspectionCamera')
+inspection_camera.set_editor_property('tags', [unreal.Name('OpenWillow_InspectionCamera')])
+inspection_camera.set_folder_path('Inspection')
+camera_component = inspection_camera.get_component_by_class(unreal.CameraComponent)
+if camera_component:
+    camera_component.set_editor_property('field_of_view', 75.0)
+unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).set_level_viewport_camera_info(position, rotation)
+world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+world.get_world_settings().set_editor_property('default_game_mode', unreal.load_class(None, '/Script/OpenWillow.OpenWillowGameMode'))
+# Material v1 uses an explicit inspection rig until UE3 lightmaps are loaded:
+# warm sun, cool ambient fill, one reflection capture and automatic exposure.
+# Some UE3 sky/environment placements carry intentionally huge scales. Their
+# bounds are useful for geometry validation but are not a useful light origin;
+# keep the rig at the imported start camera so the local scene is illuminated.
+scene_extent = (scene_bounds_max - scene_bounds_min) * 0.5
+lighting_center = position
+sun = actors.spawn_actor_from_class(unreal.DirectionalLight, lighting_center,
+                                    unreal.Rotator(pitch=-45, yaw=-35, roll=0))
+sun.set_actor_label('OpenWillow_Sun')
+sun.set_folder_path('Lighting')
+sun_component = sun.get_component_by_class(unreal.DirectionalLightComponent)
+sun_component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
+sun_component.set_editor_property('intensity', 1.0)
+sun_component.set_light_color(unreal.LinearColor(1.0, 0.94, 0.82, 1.0))
+sun_component.set_editor_property('light_source_angle', 0.5357)
+sun_component.set_editor_property('dynamic_shadow_distance_movable_light',
+                                   min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 2.0, 50000.0))
+sun_component.set_editor_property('dynamic_shadow_cascades', 4)
+
+sky = actors.spawn_actor_from_class(unreal.SkyLight, lighting_center)
+sky.set_actor_label('OpenWillow_SkyFill')
+sky.set_folder_path('Lighting')
+sky_component = sky.get_component_by_class(unreal.SkyLightComponent)
+sky_component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
+# A captured-scene skylight is black in this generated map because there is no
+# sky atmosphere or world background yet. Use UE's neutral gray light cube so
+# Lit mode has ambient fill before native UE3 sky/light actors are translated.
+sky_component.set_editor_property('source_type', unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP)
+sky_component.set_editor_property('cubemap', unreal.load_asset('/Engine/EngineResources/GrayLightTextureCube'))
+sky_component.set_real_time_capture(False)
+sky_component.set_editor_property('lower_hemisphere_is_black', False)
+sky_component.set_editor_property('lower_hemisphere_color', unreal.LinearColor(0.08, 0.10, 0.14, 1.0))
+sky_component.set_intensity(0.5)
+sky_component.set_light_color(unreal.LinearColor(0.72, 0.82, 1.0, 1.0))
+
+capture_radius = min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 1.15, 16384.0)
+capture = actors.spawn_actor_from_class(unreal.SphereReflectionCapture, lighting_center)
+capture.set_actor_label('OpenWillow_ReflectionCapture')
+capture.set_folder_path('Lighting')
+capture_component = capture.get_component_by_class(unreal.SphereReflectionCaptureComponent)
+capture_component.set_editor_property('influence_radius', max(capture_radius, 1000.0))
+try:
+    # Runtime capture avoids requiring a baked light build for this inspection
+    # map. It captures once when the world first renders.
+    capture_component.set_editor_property('runtime_capture', True)
+except Exception:
+    # Older UE5 minor versions keep this as a project-level setting.
+    pass
+
+post = actors.spawn_actor_from_class(unreal.PostProcessVolume, lighting_center)
+post.set_actor_label('OpenWillow_Exposure')
+post.set_folder_path('Lighting')
+post.set_editor_property('unbound', True)
+post.set_editor_property('priority', 100.0)
+post.set_editor_property('blend_weight', 1.0)
+post_settings = post.get_editor_property('settings')
+for property_name, value in (
+        # Leave exposure automatic: the imported map has large sparse areas
+        # and a fixed manual override turns the Lit preview black at this
+        # scale. AO remains a small, deterministic inspection aid.
+        ('override_ambient_occlusion_intensity', True), ('ambient_occlusion_intensity', 0.35),
+        ('override_ambient_occlusion_radius', True), ('ambient_occlusion_radius', 200.0)):
+    try:
+        post_settings.set_editor_property(property_name, value)
+    except Exception:
+        # Older UE5 minor releases exposed the override bit with a `b_`
+        # prefix; retain that fallback while preferring the UE5.8 spelling.
+        if property_name.startswith('override_'):
+            try:
+                post_settings.set_editor_property('b_' + property_name, value)
+            except Exception:
+                pass
+post.set_editor_property('settings', post_settings)
+try:
+    sky_component.recapture_sky()
+except Exception:
+    # Null-RHI commandlets cannot render a capture. The editor will recapture
+    # it when the map is opened.
+    pass
+level.save_current_level()
+unreal.EditorAssetLibrary.save_directory(destination)
+(root / 'ue-import.json').write_text(json.dumps({'imported': True, 'map': map_path, 'section_actors': count,
+    'source_placements': len(scene['actors']), 'issues': len(scene['issues']),
+    'lighting': {'sun_intensity': 1.0, 'sky_intensity': 0.5,
+                 'reflection_capture_radius': max(capture_radius, 1000.0),
+                 'exposure': 'auto', 'ambient_occlusion': 0.35},
+    'visual_validation': 'pending'}, indent=2))
+unreal.log(f'OpenWillow: imported {count} mesh sections with lighting rig. Play: WASD + mouse, E/Q vertical flight.')
