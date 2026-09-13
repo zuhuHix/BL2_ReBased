@@ -4,10 +4,9 @@ Thanks for looking. Read the [Legal](README.md#legal) section of the README
 and [docs/LEGAL.md](docs/LEGAL.md) first — the clean-room rules are
 non-negotiable and every pull request certifies compliance with them.
 
-**License note.** The project license is not yet chosen. Until it is,
-external *code* contributions are not merged (see
-[docs/LEGAL.md](docs/LEGAL.md#license-status)). Verification reports, format
-findings, bug reports and documentation fixes are welcome now.
+**License.** The project is [MIT](LICENSE). By opening a pull request you
+agree your contribution is licensed under the same terms (inbound = outbound;
+see [docs/LEGAL.md](docs/LEGAL.md#license)). There is no CLA.
 
 ## Ways to help
 

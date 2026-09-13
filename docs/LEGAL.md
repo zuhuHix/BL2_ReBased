@@ -94,21 +94,26 @@ issues for comparison — that is the plan's verification method. Attaching
 package files, extracted textures, meshes, dumps or logs that embed raw asset
 bytes is not; such attachments will be removed.
 
-## License status
+## License
 
-A project-wide open-source license has **not yet been selected.** Until it
-is, all rights in the original code and documents are reserved by the author.
-The repository is public for transparency and so that the work can be
-verified; it is not yet licensed for reuse. The candidates under
-consideration are MIT and GPL-3. The choice is gated on a provenance review
-of the Python research decompressor described in
-[THIRD_PARTY.md](../THIRD_PARTY.md). Vendored third-party code retains its own
-license (lzokay: MIT, in `third_party/lzokay/LICENSE`).
+The original code and documents in this repository are licensed under the
+[MIT License](../LICENSE). The license covers only that original work: it
+does not cover, and the repository does not contain, any Borderlands 2 game
+data, Gearbox Software code, or Epic Games engine code. Vendored third-party
+code retains its own license (lzokay: MIT, in `third_party/lzokay/LICENSE`).
+The reasoning for MIT over GPL-3 — chiefly that GPL code cannot be distributed
+as a binary linked against Unreal Engine — is recorded in
+[DECISIONS.md](../DECISIONS.md).
 
-Because contributions cannot be relicensed after the fact without every
-contributor's consent, **external code contributions are not merged until the
-license is chosen.** Issue reports, verification results and format findings
-are welcome now and are not subject to this restriction.
+**Contributions are accepted under the same MIT terms** (inbound = outbound).
+By opening a pull request you agree that your contribution is licensed under
+the MIT License as it appears in `LICENSE`. There is no separate contributor
+license agreement.
+
+The MIT License disclaims all warranty and liability. It governs what others
+may do with this code; it does not itself limit any claim a rights holder
+might make. The project's protection against such claims is the clean-room
+policy above.
 
 ## Contact for rights holders
 

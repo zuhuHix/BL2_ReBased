@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml)
 ![Status: pre-alpha, Phase 1 of 6](https://img.shields.io/badge/status-pre--alpha%20%C2%B7%20Phase%201%20of%206-orange)
-![License: pending](https://img.shields.io/badge/license-pending-lightgrey)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > **Read this first.** There is nothing to play yet. OpenWillow currently reads
 > every package in a Borderlands 2 install and loads two maps as frozen,
@@ -247,9 +247,9 @@ contributions right now are, in order:
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request: it
 covers the clean-room certification every contributor makes, the sensitive
-areas of the code, and the check-and-report format. Note that until the
-project license is chosen, external *code* contributions cannot be merged;
-findings and reports are welcome now.
+areas of the code, and the check-and-report format. Questions and ideas go in
+[Discussions](https://github.com/zuhuHix/BL2_ReEngine/discussions); bugs,
+findings and reports go in Issues.
 
 ## FAQ
 
@@ -317,12 +317,11 @@ The non-negotiable rules every contributor and every AI assistant works under:
    donations, if ever accepted, go to engine development.
 6. **Disclose AI assistance and keep verification claims honest.**
 
-**License: not yet selected.** Until a project-wide license is granted, all
-rights are reserved by the author; the code is public for transparency, not
-yet for reuse. The candidates are MIT and GPL-3, and the choice is gated on a
-provenance review recorded in [THIRD_PARTY.md](THIRD_PARTY.md) and
-[DECISIONS.md](DECISIONS.md). Vendored third-party code keeps its own license
-(lzokay: MIT).
+**License: [MIT](LICENSE).** It covers the original code and documents here
+and nothing else — no game data, no Gearbox code, no engine code. MIT was
+chosen over GPL-3 because GPL code cannot ship as a binary linked against
+Unreal Engine; the reasoning is in [DECISIONS.md](DECISIONS.md). Vendored
+third-party code keeps its own license (lzokay: MIT).
 
 The full policy, including the contributor certification and the takedown
 contact, is in [docs/LEGAL.md](docs/LEGAL.md).

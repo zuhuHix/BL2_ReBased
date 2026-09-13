@@ -16,8 +16,8 @@ sensitive, say what you intend to change, and wait for confirmation:
 - Struct/array property decoding, texture (`Texture2D`) and mesh
   (`StaticMesh`) serialization — the version 832/46 layout has no public spec;
   do not invent offsets from memory. Label guesses `UNVERIFIED`.
-- `CMakeLists.txt`, `THIRD_PARTY.md`, any `LICENSE` file — dependency and
-  license/provenance decisions. Never copy code from GPL tools (Legendary
+- `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE` — dependency and
+  license/provenance decisions. The project license is MIT (2026-09-13). Never copy code from GPL tools (Legendary
   Explorer, umodel, etc.) without the user deciding on licensing first.
 - The host-engine choice (docs/OPENWILLOW_ENGINE_PLAN.md §2.1) is made (UE5) and
   is not reopened by an AI assistant.

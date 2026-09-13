@@ -40,8 +40,6 @@ well-bounded ones are marked *good first task*.
 - [ ] Cross-check the census against umodel's view of the same packages.
 - [ ] Array element types from class reflection instead of hand-written
       schemas (needs cross-package class loading; touches Phase 2).
-- [ ] **Choose the project license** (blocked on the provenance review of the
-      research Python decompressor; see [THIRD_PARTY.md](THIRD_PARTY.md)).
 
 ---
 
@@ -52,7 +50,7 @@ well-bounded ones are marked *good first task*.
 Goal: a repo, a build, a package loader, and a decided host engine.
 
 - [x] Repo, README, `CONTRIBUTING.md`, issue tracker
-- [ ] License chosen — **pending** provenance review
+- [x] License chosen: MIT (2026-09-13; reasoning in [DECISIONS.md](DECISIONS.md))
 - [x] Dev environment: Visual Studio 2022, CMake, Python, Git
 - [x] Package loader ported to C++ from `research/native_count.py`: LZO1X via
       vendored lzokay (MIT), chunk container, partial-compression chunk

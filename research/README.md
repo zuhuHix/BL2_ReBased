@@ -26,10 +26,9 @@ percentages from it.
 | `native_count.py` | Pure-Python UE3 package reader for version 832: LZO1X decompressor, compressed-chunk container, name/import/export tables, `UFunction` flag census. Parsed every code package with zero errors and matched Gearbox's own `.uncompressed_size` values byte-for-byte. It is the seed of the C++ reader and remains its independent comparison oracle (`tools/verify_packages.py`). |
 | `native_by_class.json` | Per-class `[native, script, event]` function counts for the nine code packages — the numbers behind the 20,119 / 12,978 / 7,141 split. |
 
-**Provenance caveat.** `native_count.py` describes its decompressor as a
-faithful port of miniLZO's `lzo1x_decompress`. miniLZO is GPL-2.0-or-later,
-and the exact upstream version and authorship of that translation are not
-recorded. It is never linked into the C++ reader (which uses the MIT lzokay)
-and is used only as a local comparison oracle. Its status is tracked in
-[`THIRD_PARTY.md`](../THIRD_PARTY.md) and is the open item gating the
-project-wide license choice.
+**Provenance.** The LZO1X decompressor in `native_count.py` is an
+independent implementation written from the public instruction-format
+description; an earlier miniLZO-derived version was removed on 2026-09-13
+(record in [`THIRD_PARTY.md`](../THIRD_PARTY.md)). It is never linked into
+the C++ reader, which uses the vendored MIT lzokay, and serves only as a
+local comparison oracle.

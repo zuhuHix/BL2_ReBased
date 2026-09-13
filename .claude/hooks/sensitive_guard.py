@@ -15,8 +15,8 @@ SENSITIVE = {
     "src/container.hpp": "container interface",
     "CMakeLists.txt": "build + GPL dependency wiring",
     "THIRD_PARTY.md": "provenance and license record",
-    "LICENSE*": "project license selection is pending a provenance review",
-    "COPYING*": "project license selection is pending a provenance review",
+    "LICENSE*": "project license is MIT; changing it is a maintainer decision",
+    "COPYING*": "project license is MIT; changing it is a maintainer decision",
 }
 # Files that must never be written into the repo.
 FORBIDDEN = ["*.upk", "*.tfc", "*.pck", "*.bik", "*.umap", "*.uncompressed_size",
