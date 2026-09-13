@@ -1,0 +1,7 @@
+TextureParameterValues=StructProperty:TextureParameterValue
+ScalarParameterValues=StructProperty:ScalarParameterValue
+VectorParameterValues=StructProperty:VectorParameterValue
+Materials=ObjectProperty
+StreamingLevels=ObjectProperty
+Expressions=ObjectProperty
+StaticMeshComponents=ObjectProperty

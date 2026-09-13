@@ -53,4 +53,18 @@ with tempfile.TemporaryDirectory() as folder:
     missing = subprocess.run([reader, str(source), '--resolve', '-2', '--cooked', str(root / 'missing')],
                              capture_output=True, text=True, encoding='utf-8')
     assert missing.returncode != 0 and not missing.stdout
+    schema = root / 'scene.schema'
+    schema.write_text('Materials=ObjectProperty\n')
+    scene = subprocess.run([reader, str(root / 'B.upk'), '--scene-records', str(schema)],
+                           capture_output=True, text=True, encoding='utf-8')
+    assert scene.returncode == 0, scene.stderr
+    records = json.loads(scene.stdout)
+    assert len(records) == 1 and records[0]['path'] == 'Target'
+    payload = subprocess.run([reader, str(root / 'B.upk'), '--payload', '1'],
+                             capture_output=True, text=True, encoding='utf-8')
+    assert payload.returncode == 0 and json.loads(payload.stdout) == []
+    for bad_index in ('0', '-1', '2'):
+        bad = subprocess.run([reader, str(root / 'B.upk'), '--payload', bad_index],
+                             capture_output=True, text=True, encoding='utf-8')
+        assert bad.returncode != 0 and not bad.stdout
 print('lazy package indexing and cross-package import resolution passed.')
