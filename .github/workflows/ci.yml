@@ -43,7 +43,8 @@ jobs:
         run: python tests/level_test.py
 
       - name: Reader refuses to run without arguments
-        shell: pwsh
+        shell: bash
         run: |
-          & ./build/Release/ow-package.exe
-          if ($LASTEXITCODE -eq 0) { throw "expected a non-zero exit with no arguments" }
+          if ./build/Release/ow-package.exe; then
+            echo "expected a non-zero exit with no arguments"; exit 1
+          fi
