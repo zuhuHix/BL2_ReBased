@@ -1,0 +1,56 @@
+name: Format finding
+description: Share an observation about version 832 / licensee 46 package serialization, with provenance.
+title: "[format] "
+labels: ["format-research"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A finding with provenance is usable; one without is a rumour. Please say exactly how you know.
+        **Clean-room rule:** findings derived from leaked source code or from disassembling the executable cannot be used and will be closed. Observations from running the game, from public documentation, and from reading public reference implementations (with their license named) are welcome.
+  - type: input
+    id: subject
+    attributes:
+      label: Object class / structure
+      placeholder: e.g. StaticMeshCollectionActor native tail, Texture2D mip bulk header, Material resource prefix
+    validations:
+      required: true
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding
+      description: Offsets, sizes, field order, flags, invariants. Be precise about what is observed versus inferred.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: How you observed it
+      description: Which package/object, which tool (ow-package, umodel, UE Explorer, unrealsdk, hex editor), what counts or byte totals confirmed it. No raw asset bytes.
+    validations:
+      required: true
+  - type: dropdown
+    id: provenance
+    attributes:
+      label: Provenance
+      options:
+        - My own observation of the installed game
+        - Public documentation (link below)
+        - Public reference implementation, read not copied (name + license below)
+        - Community knowledge (link below)
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source link / reference name and license
+      placeholder: e.g. UE Viewer UnMesh3.cpp (MIT), https://...
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Rules
+      options:
+        - label: This finding does not derive from leaked source code or decompiled executable code.
+          required: true
+        - label: This issue contains no game files or raw asset bytes.
+          required: true

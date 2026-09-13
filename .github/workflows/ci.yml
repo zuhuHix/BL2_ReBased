@@ -1,0 +1,48 @@
+name: CI
+
+# Builds the package reader and runs every synthetic test suite. Nothing here
+# touches a Borderlands 2 installation: the differential check against real
+# packages (tools/verify_packages.py) is a local, human-run step and is
+# reported in pull requests, not in CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Windows / MSVC / LZO=${{ matrix.lzo }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lzo: ["ON", "OFF"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DOPENWILLOW_LZO=${{ matrix.lzo }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Synthetic CTest suites
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Scene preparation unit tests
+        run: python tests/level_test.py
+
+      - name: Reader refuses to run without arguments
+        shell: pwsh
+        run: |
+          & ./build/Release/ow-package.exe
+          if ($LASTEXITCODE -eq 0) { throw "expected a non-zero exit with no arguments" }

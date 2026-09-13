@@ -1,0 +1,59 @@
+name: Verification report
+description: Report the result of running OpenWillow's tools or viewer against your own copy of Borderlands 2.
+title: "[verify] "
+labels: ["verification"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — checks against real installs are the project's primary correctness method.
+        **Do not attach game files, extracted textures/meshes, dumps, or logs containing raw asset bytes.** Screenshots are fine.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What did you run?
+      options:
+        - tools/verify_packages.py (nine code packages, differential check)
+        - tools/census.py (full-install census)
+        - tools/prepare_probe.py (mesh + texture probe)
+        - tools/prepare_level.py + UE5 import (map viewer)
+        - Visual comparison against the original game
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: OpenWillow commit
+      placeholder: e.g. 2def180
+    validations:
+      required: true
+  - type: textarea
+    id: install
+    attributes:
+      label: Your installation
+      description: Platform, DLC owned, UHD texture pack, game version if known, OS, Unreal Engine version if used.
+      placeholder: |
+        Steam, all DLC incl. Commander Lilith, UHD pack installed, Windows 11, UE 5.8.2
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result
+      description: Paste the tool output (counts, byte totals, pass/fail lines). For map checks, name the map and the viewpoint.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: mismatch
+    attributes:
+      label: What differs from the real game or from the documented numbers?
+      description: Missing geometry, mirrored textures, wrong colours, different export counts, crashes. Attach OpenWillow and original-game screenshots from the same spot if visual.
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Rules
+      options:
+        - label: This report contains no game files, extracted assets, or raw asset bytes.
+          required: true

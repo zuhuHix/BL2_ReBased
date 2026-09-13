@@ -1,246 +1,344 @@
 # OpenWillow
 
-An AI-assisted Borderlands 2 engine reimplementation experiment. The intended
-runtime reads the player's own installed game. No game assets or Gearbox code
-are distributed here. **The UE5 editor host can inspect imported assets and a
-frozen map; there is no playable BL2 reimplementation yet.**
+**A clean-room engine reimplementation for Borderlands 2 that runs the game from your own installed copy.**
 
-## Current state (Phase 1, importer foundation)
+[![CI](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml)
+![Status: pre-alpha, Phase 1 of 6](https://img.shields.io/badge/status-pre--alpha%20%C2%B7%20Phase%201%20of%206-orange)
+![License: pending](https://img.shields.io/badge/license-pending-lightgrey)
 
-A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages:
+> **Read this first.** There is nothing to play yet. OpenWillow currently reads
+> every package in a Borderlands 2 install and loads two maps as frozen,
+> approximately-textured geometry inside the Unreal Engine 5 editor. No
+> gameplay, no script execution, no characters. This repository is public so
+> the work is visible from the start, not because it is usable.
+>
+> OpenWillow is not affiliated with, endorsed by, or supported by Gearbox
+> Software, 2K, or Take-Two Interactive. It ships **no game files** and
+> contains **no Gearbox code**. You need your own legitimately purchased copy
+> of Borderlands 2 for any of it to do anything. See [Legal](#legal).
 
-- name/import/export tables, fully and partially LZO-compressed containers;
-- object records with package-local outer paths (`--exports`, `--imports`);
-- a reusable `PackageStore` that indexes installed `.upk`, `.umap` and `.u`
-  files lazily and resolves negative imports across packages (`--resolve`);
-- a per-class export count for one package (`--census`), driven over a whole
-  installation by `tools/census.py`;
-- tagged properties (`--properties`): scalars, object references, nested
-  structs, common fixed-layout structs, and arrays whose element type is
-  supplied by a schema file;
-- resident `Texture2D` mips to PNG (`--texture`, DXT1/DXT5, inline or
-  TFC-streamed, with `--mip` and `--all-mips`);
-- all render LODs of a `StaticMesh` in memory and a selected LOD to OBJ
-  (`--mesh`, 16/32-bit indices, all UV sets retained by the importer).
+---
 
-General class/default inheritance and runtime package streaming are not
-implemented. An offline first-map loader and Material v1 feed the UE5 editor
-host (see below). Python is used for scene preparation, tests and as an
-independent execution path for comparison; the executable itself does not
-require Python. The LZO decoder is the vendored MIT-licensed lzokay; see
-[THIRD_PARTY.md](THIRD_PARTY.md).
+## What this is
 
-Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3.
+Borderlands 2 is a 2012 game on a 32-bit, Direct3D 9 build of Unreal Engine 3.
+Its editor was stripped before shipping, its engine source has never been
+public, and its multiplayer runs through a backend the community cannot
+touch. Everything people have wanted for a decade that mods *can't* deliver —
+working co-op, 64-bit, a modern renderer, new maps — is blocked by that
+executable.
+
+OpenWillow replaces the executable, not the game. It is a new engine that:
+
+1. **reads Gearbox's own data files** (packages, textures, meshes, levels,
+   UnrealScript bytecode) straight from the player's install, exactly as they
+   shipped;
+2. **runs the game's own gameplay code** — 64.5% of Borderlands 2's logic is
+   UnrealScript bytecode inside those files, which a script VM can execute
+   unchanged;
+3. **rebuilds only the native C++ layer** that lived inside `Borderlands2.exe`,
+   on top of a modern host engine (Unreal Engine 5).
+
+This is the [OpenMW](https://openmw.org/) / [OpenRCT2](https://openrct2.org/) /
+[Ship of Harkinian](https://www.shipofharkinian.com/) model applied to a UE3
+game. It is **not** a remake (no assets are re-authored), **not** a remaster
+(nothing is redistributed), and **not** a mod (it does not patch the original
+executable).
+
+The name: "Willow" is the internal codename of Gearbox's UE3 branch —
+`WillowGame`, `WillowEngine.ini`, `WillowPawn`.
+
+## What it would unlock
+
+Every item below is on the "blocked by the executable" list in our
+[feasibility research](docs/BL2_REMASTER_ANALYSIS.md#45-what-is-genuinely-blocked):
+
+| Unlock | Why it matters |
+|---|---|
+| **Co-op that you control** | Broken multiplayer is the #1 complaint in Borderlands 2's negative Steam reviews (24.6% mention co-op; 14.3% call it broken outright). A new engine owns its netcode. |
+| **64-bit** | Removes the ~4 GB address ceiling behind most "out of video memory" crashes and the Ultra HD texture pack problems. |
+| **Modern renderer** | Native ultrawide, unlocked resolution and framerate, optional modern lighting. |
+| **New maps** | No BL2 level editor was ever released. A UE5 host gets one for free the day levels load. |
+| **Preservation** | The game keeps working when the backend doesn't. |
+| **Mod continuity** | BLCMM text mods are `set Object Property Value` on an object graph the VM will have. A decade of mods should carry over. |
+| **The Pre-Sequel and standalone Dragon Keep** | Same engine branch. |
+| Split-screen, 8-player, VR, platform freedom | The daydream list — reachable once the engine exists. |
+
+## Where we are (2026-09-13)
+
+The project started on 2026-09-09. Progress so far, with what each result
+does and does not prove:
+
+| Milestone | Status | Evidence |
+|---|---|---|
+| **Phase 0 — Foundation** | ✅ Gated 2026-09-10 | Package reader reads **2,008 of 2,008** packages in a full install (base + DLC): 4,751,329 serialized exports. Nine code packages decode **byte-for-byte identical** to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
+| **Phase 1 — World viewer** | 🔄 In progress | `Ash_P` (5,059 placements) and `Sanctuary_P` (4,430 placements, 9 sublevels) load as frozen scenes in the UE5 editor with a four-channel material approximation, an inspection lighting rig and a free-flight camera. Saved scenes reopen with zero verification errors. **Not done:** 80 more maps, sky (black), terrain/BSP, skeletal meshes, lightmaps, real material graphs, walking collision, performance. |
+| Phase 2 — UnrealScript VM | ⬜ | — |
+| Phase 3 — Stock UE3 natives | ⬜ | — |
+| Phase 4 — Gearbox natives | ⬜ | — |
+| Phase 5 — Campaign completable | ⬜ | — |
+| Phase 6 — Co-op, DLC, mods, editor | ⬜ | — |
+
+Every number above comes from a dated verification record:
+[Phase 0 decisions](DECISIONS.md),
+[Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md),
+[Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md),
+[cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md).
+Automated checks are always reported separately from in-game or visual
+checks, and anything we could not verify is labelled `UNVERIFIED` in the code
+and docs. Screenshots of loaded maps are game-derived and stay out of the
+repository; contributors with a copy of the game can reproduce them with the
+commands in [docs/TOOLING.md](docs/TOOLING.md).
+
+The live task list is in [ROADMAP.md](ROADMAP.md).
+
+## How long will this take?
+
+Honestly: **years.** The plan's estimates, for one person working near
+full-time with an AI assistant, are ranges rather than promises — no project
+of this shape has been completed AI-first before, and the estimates will be
+revised as real data comes in.
+
+| Milestone | What you can show | Estimate (full-time + AI) | Part-time |
+|---|---|---|---|
+| Phase 0 | A mesh and a texture from BL2 inside the host engine | 3–6 weeks — *actual: about a day* | 2–3 months |
+| **M1** | Walk all 82 maps in a modern 64-bit renderer — **first public release** | 2–4 months | 6–12 months |
+| M2 | Gearbox's own script running in our VM | +3–6 months | +12 months |
+| M3a | A generic UE3 pawn moves and animates correctly | +6–12 months | +2 years |
+| M3b | A Vault Hunter shoots real guns; enemies fight back | +12–24 months | +3–4 years |
+| M4 | Campaign completable with real save files | +12–24 months | +3 years |
+| M5 | Co-op, DLC, TPS, mod compatibility, editor | ongoing | ongoing |
+| **Cumulative to M4** | | **~3–5 years** | **~8–10 years** |
+
+Phase 0 finished far ahead of its estimate, but it was mostly porting an
+existing Python reader. The mountain is Phase 4: **3,803 undocumented
+Gearbox-specific native functions** across 443 classes, each of which has to
+be reverse-engineered by observing the running game. The plan puts that at
+60% of total effort and most of the calendar time. Don't extrapolate from
+Phase 0.
+
+The plan also states **kill criteria** — conditions under which we stop and
+say so publicly — in [the engine plan, §9](docs/OPENWILLOW_ENGINE_PLAN.md#9-kill-criteria--be-honest-with-yourself).
+
+## How we're building it
+
+**The numbers it rests on.** Measured directly from the installed game:
+20,119 functions across the nine code packages. 12,978 (64.5%) are
+UnrealScript bytecode and will run in the VM as-is. 7,141 (35.5%) were native
+C++ and must be rebuilt — of which 286 are trivial builtins, 609 are
+online/save/DLC plumbing we replace rather than replicate, 512 bridge the
+Scaleform UI, 1,914 are stock UE3 natives whose contracts are public, and
+3,803 are Gearbox's own. Full breakdown in
+[the engine plan, §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth--the-numbers-this-plan-rests-on).
+
+**Architecture.** Three layers. The script VM and the asset pipeline are
+engine-agnostic C++; the native layer is where the host engine shows up.
+
+```
+                 ┌──────────────────────────────────────────────────────┐
+                 │  HOST ENGINE (UE5: renderer, physics, audio, UI)     │
+                 └───────────────▲──────────────────────▲───────────────┘
+                                 │                      │
+   ┌─────────────────────────────┴───┐    ┌─────────────┴──────────────────┐
+   │  NATIVE LAYER (C++)             │    │  ASSET PIPELINE  ◄── Phase 1   │
+   │  the 7,141 rebuilt functions    │    │  package loader (UPK/TFC)  ✅  │
+   │  Actor/Pawn/Controller, traces, │    │  textures, static meshes   ✅  │
+   │  movement, animation, particles,│    │  materials (approximation) 🔄  │
+   │  AI, stat core, weapons, UI     │    │  levels (actors+transforms)🔄  │
+   └─────────────────────────────▲───┘    │  skeletal, anim, lightmaps,    │
+                                 │        │  Kismet, Wwise, Bink, SWF  ⬜  │
+   ┌─────────────────────────────┴───┐    └────────────────────────────────┘
+   │  UNREALSCRIPT VM  ◄── Phase 2   │
+   │  UObject model, bytecode        │
+   │  interpreter, states, latents,  │
+   │  native dispatch table          │
+   └─────────────────────────────────┘
+        runs the 12,978 inherited functions unchanged
+```
+
+**Clean room, strictly.** We work from file formats and observed behaviour.
+No leaked source, no decompiled executable code, ever. Public reference
+implementations (UE Viewer, UDK headers) are read for serialization *order*
+and never copied; every reference and its license is recorded in
+[THIRD_PARTY.md](THIRD_PARTY.md). The full rules are in [Legal](#legal).
+
+**Three sources of truth.** Every rebuilt native needs a definition of
+"correct": (A) **UDK**, a free running UE3, for the 1,914 stock natives;
+(B) **the original game, instrumented** with [unrealsdk](https://github.com/bl-sdk),
+for the 3,803 Gearbox natives — hook a function, log its inputs and outputs
+during play, and implement until our engine reproduces the log; (C)
+**community documentation** (BLCM wiki, bl2.parts, Lootlemon) for stat math.
+A native without a golden file is a guess, and guesses are labelled.
+
+**Evidence first.** Every change ends in a check that can be performed against
+the real game, and the check is written down. Synthetic tests run in CI;
+differential checks run against a real install; visual checks are done by a
+human. [DECISIONS.md](DECISIONS.md) records every architectural choice, what
+was verified, and what wasn't.
+
+**AI-assisted, human-verified.** OpenWillow is developed by one person working
+with an AI coding assistant ([Claude Code](https://claude.com/claude-code)).
+The AI writes most of the code; the human owns every verification against the
+real game, every architectural decision, and every license and provenance
+call. Guard hooks in [`.claude/`](.claude/) force a confirmation before the
+AI can touch bounds-checking code, dependency wiring or license files. We say
+this plainly because the evidence trail is what makes it trustworthy, and the
+evidence trail is public.
+
+**Host engine.** Unreal Engine 5. UE3's material graphs, AnimTrees, Cascade,
+Matinee and Kismet all have direct UE5 descendants to translate *into*, which
+matters enormously for a reimplementation. The plan required this decision by
+the Phase 0 gate and rules out switching later; all Phase 1 work targets
+UE 5.8. Reasoning and the alternative considered (Godot) are in
+[the engine plan, §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision--decide-by-end-of-phase-0-never-after).
+
+## The plan in one screen
+
+| Phase | Goal | Gate |
+|---|---|---|
+| **0 · Foundation** | C++ package loader, full-install census, property reader, one texture and one mesh in the host engine | ✅ Census exists; a real mesh and texture render in UE5 |
+| **1 · World viewer (M1)** | Import every static mesh, texture and level; approximate materials; walk any map | 82/82 maps load and are walkable → **first public release** |
+| **2 · UnrealScript VM (M2)** | UObject model, bytecode interpreter, states, latents, delegates; every missing native is a logged stub | Pure-script `Behavior_*` chains execute with results matching UDK |
+| **3 · Stock natives (M3a)** | The 1,914 documented UE3 natives: Actor, Pawn, collision, animation, particles | A generic UE3 pawn walks, jumps and falls on a BL2 map as it does in UDK |
+| **4 · Willow natives (M3b)** | The 3,803 Gearbox natives via the golden-file loop: stat core → pawn → controller → weapons → items → AI → interactives → vehicles → UI → audio | Spawn, fight, loot a gun, equip it, use a skill, die, respawn — on one map |
+| **5 · Campaign (M4)** | Kismet, Matinee, missions, saves (Gibbed format), Scaleform UI, all 82 maps populated | Claptrap to the Warrior, single player, real save file |
+| **6 · Beyond (M5)** | Own co-op netcode, DLC, The Pre-Sequel, mod compatibility, editor, modern lighting | ongoing |
+
+Full step lists, dependency order and verification method per phase:
+[ROADMAP.md](ROADMAP.md) (tracker) and
+[docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) (rationale).
+
+## Try it
+
+You need: Windows, CMake, Visual Studio 2022 C++ build tools, Python 3, and
+an installed Borderlands 2. Unreal Engine 5.8 is only needed for the map
+viewer.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-python tools/verify_packages.py --reader build/Release/ow-package.exe
+ctest --test-dir build -C Release --output-on-failure          # synthetic, no game needed
+python tools/verify_packages.py --reader build/Release/ow-package.exe   # needs the game
 & ./build/Release/ow-package.exe "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/Core.upk"
 ```
 
-For a decoder-free build add `-DOPENWILLOW_LZO=OFF`; that build accepts only
-decompressed packages and skips the container, asset and compressed tests.
-For a different install, add `--cooked "D:/path/Borderlands 2/WillowGame/CookedPCConsole"`
-to the verification command. It only reads installed packages; temporary
-decompressed files are removed when the check exits.
+Then, to inspect properties, run the full-install census, extract a texture or
+mesh, or prepare and open a map in the UE5 viewer, see
+[docs/TOOLING.md](docs/TOOLING.md). Everything the tools produce lands under
+`local/`, which is git-ignored — extracted assets never enter the tree.
 
-## Project rules
+## How to help
 
-- Never distribute game files, asset dumps, or proprietary code. Fixtures must be synthetic.
-- Do not use leaked source or transcribe decompiled executable code.
-- Use observed behavior and documented formats; record reference provenance.
-- Check licenses before incorporating reference implementations.
-- The intended runtime requires the original installed game.
-- No paid builds or premium features; any donations support engine development.
-- Disclose AI assistance and keep verification evidence honest.
+You don't need to write C++ to move this project. The most valuable
+contributions right now are, in order:
 
-License selection is pending a provenance review; no project-wide open-source
-license is granted yet. See [DECISIONS.md](DECISIONS.md) and
-[OPENWILLOW_ENGINE_PLAN.md](OPENWILLOW_ENGINE_PLAN.md).
+1. **Verification with your own copy.** Run the census and the differential
+   check on your install (different DLC sets, Epic vs Steam, with/without the
+   UHD pack) and report the numbers. Load a map, compare a viewpoint against
+   the real game, and report what's wrong. Use the *Verification report* issue
+   template.
+2. **Format findings.** If you know something about version 832/46
+   serialization — a property offset, a struct layout, a bulk-data quirk —
+   file a *Format finding* with how you observed it and where it came from.
+   Provenance matters as much as the finding.
+3. **Code.** Current open work is listed in [ROADMAP.md](ROADMAP.md#now--next),
+   including small, well-bounded items (e.g. `PF_A8R8G8B8` texture decoding,
+   which is what's blocking the sky).
 
-## Verification status
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request: it
+covers the clean-room certification every contributor makes, the sensitive
+areas of the code, and the check-and-report format. Note that until the
+project license is chosen, external *code* contributions cannot be merged;
+findings and reports are welcome now.
 
-Local checks on 2026-09-10, Release build, all against the installed game:
+## FAQ
 
-- Five synthetic CTest suites pass (package tables, properties, runtime,
-  container, assets). They cover truncation, block totals, corrupt LZO streams, partial
-  compression tables, malformed tags, nesting limits, DXT pixel decoding, PNG
-  CRC/zlib framing, TFC bounds, and mesh buffer bounds.
-- All nine code packages decode byte-for-byte identically to the Python
-  research reader and match on every export's name, class, outer, super,
-  payload size and offset. Core yields 234,397 bytes and 1,621 exports;
-  WillowGame yields 56,443 exports.
-- `tools/census.py` reads 2,008 of 2,008 packages found under the install
-  (base game plus 1,096 DLC packages; two UHD texture sidecar files are
-  identified and skipped) for 4,751,329 serialized exports, including 77,958
-  `Texture2D`, 40,090 `StaticMesh`, 3,911 `SkeletalMesh`, 35,098 `Material`
-  and 100,601 `AnimSequence`. These count serialized copies, not unique
-  assets, and have not yet been cross-checked against umodel's view.
-- `tools/prepare_probe.py` extracts `Env_Ash.Mesh.Ash_Road01` (473 vertices,
-  784 triangles, 2 UV sets) and `Prop_Roads.Textures.MetalRoadConcrete_Dif`
-  (1024×1024 DXT1, streamed from `Textures.tfc`, 11 resident mips) from
-  `Ash_P.upk`, and confirms through
-  the material's `TextureParameterValues` that the texture is that mesh's
-  `p_Diffuse`.
-- The UE5.8.2 host probe rendered this mesh and texture in
-  `/Game/Phase0/Phase0`; the first Phase 0 screenshot is user-verified.
+**Can I play Borderlands 2 in this?** No. See [Where we are](#where-we-are-2026-09-13).
+The first thing you'll be able to do is walk through maps (M1). Shooting is
+M3b, the full campaign is M4.
 
-These checks establish agreement with the research reader and a visually
-plausible texture, not independent proof of every format field or gameplay
-compatibility.
+**Is this legal?** We believe so, on the same basis as OpenMW, OpenRCT2,
+Daggerfall Unity and Ship of Harkinian: the engine is original code, reads
+files from a copy you bought, and redistributes none of them. We do not use
+leaked source or decompiled code, we will never sell anything, and we require
+the original game. Details in [Legal](#legal).
 
-## Inspect object records and properties
+**Why not just mod the game?** We did the research first:
+[docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md). Mods can
+deliver roughly 80% of what players ask for — and there is a full
+[overhaul-mod design](docs/DESIGN_OVERHAUL_MOD.md) in this repo as the
+fallback plan. But the two things people want most, working co-op and a
+modern engine, live inside the executable and are unreachable by modding.
 
-```powershell
-$willowPackage = "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/WillowGame.upk"
-$objects = & ./build/Release/ow-package.exe $willowPackage --exports | ConvertFrom-Json
-$partDefault = $objects | Where-Object name -eq "Default__WeaponPartDefinition"
-& ./build/Release/ow-package.exe $willowPackage --properties $partDefault.index --property-offset 4
-```
+**Why UE5 and not a custom engine or Godot?** See
+[How we're building it](#how-were-building-it). Short version: UE3's systems
+have direct UE5 descendants, and translating into them is a much smaller
+problem than inventing replacements.
 
-Export indices are one-based; negative references identify imports, and zero
-means null. `--resolve <reference> --cooked <directory>` follows an import to
-the owning package and export path. Paths from `--properties` still describe
-the current package's outer chain; resolution is an explicit separate step.
+**Will my mods and saves work?** That's the intent. Text mods edit the same
+object graph the VM will hold, so they should work from the day the VM runs
+gameplay (M4). Save files use the open Gibbed format and reading them is a
+Phase 5 task. SDK mods will need a compatibility layer, later.
 
-The property offset is relative to the export payload and must be supplied.
-Offset 4 has been observed for class defaults, material instances, weapon
-parts, textures and static meshes so far. It is not a universal object-prefix
-rule and the four bytes' meaning is UNVERIFIED. Wrong offsets, missing
-terminators, malformed values and payload overruns fail with an error and no
-partial JSON result.
+**Isn't "AI-written engine" a red flag?** It's a fair concern, which is why
+every claim here comes with the check that supports it, why the synthetic
+tests run publicly in CI, why nothing merges without a human running it
+against the real game, and why the human reads the code. Judge the evidence
+trail, not the tool.
 
-Supported values: int, finite float, bool, name, string, byte/enum, object,
-class and component references, and structs. `Vector`, `Vector2D`, `Rotator`,
-`Guid`, `LinearColor`, `Color` and `Quat` decode as fixed fields; other struct
-types decode as a nested tagged stream. Nesting is capped at 32 levels.
+**Why "Phase 0 in a day" but "years" overall?** Because Phase 0 was porting
+a working Python reader to C++ — the thing AI is best at. Phase 4 is
+reverse-engineering 3,803 undocumented functions from a running game, one
+golden file at a time. Different work entirely.
 
-Array tags do not serialize their element type, so arrays need
-`--array-schema <file>` with `PropertyName=ElementType` lines
-(`tools/phase0-arrays.schema` covers the material and weapon-part probes).
-Element types may be `IntProperty`, `FloatProperty`, `NameProperty`,
-`StrProperty`, `ObjectProperty`, `ByteProperty` or `StructProperty:<Type>`.
-Arrays without a schema entry keep their tag metadata with
-`status: "unsupported"` and `value: null`. Resolving element types from the
-class's reflection data instead of a hand-written schema is future work.
+## Legal
 
-Local check on 2026-09-10: `GD_Gladiolus_Weapons.AssaultRifle.AR_Barrel_Jakobs_Sawbar`
-decodes all 13 top-level tags with the probe schema, consuming 1,551 bytes and
-leaving zero trailing bytes. The decoded names and values match the BLCMM
-Object Explorer dump, with one generated-subobject presentation discrepancy
-recorded in `DECISIONS.md`.
+OpenWillow is an independent, non-commercial, fan-made project. Borderlands,
+Borderlands 2, Gearbox and related marks are trademarks of their respective
+owners. This project is not affiliated with, endorsed by, sponsored by, or
+supported by Gearbox Software, 2K Games, or Take-Two Interactive.
 
-## Census and asset extraction
+The non-negotiable rules every contributor and every AI assistant works under:
 
-```powershell
-$game = "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2"
-python tools/census.py --reader build/Release/ow-package.exe --game $game --output local/census.json
-python tools/prepare_probe.py --reader build/Release/ow-package.exe --game $game
-```
+1. **Never distribute game files.** No packages, textures, sounds, decompressed
+   dumps, or extracted assets — not in the repository, not in releases, not in
+   issues. Test fixtures are synthetic. A hook refuses to write `.upk`, `.tfc`,
+   `.pck`, `.bik`, `.umap`, `.gfx` and `.swf` files into the tree.
+2. **Never use leaked source or decompiled code.** Not Unreal Engine 3's, not
+   Gearbox's. Clean room only: file formats, public documentation, and the
+   observed behaviour of a running game.
+3. **Record provenance.** Every reference implementation consulted and every
+   dependency is listed with its license in [THIRD_PARTY.md](THIRD_PARTY.md).
+   Referencing a *format* is always fine; copying *code* depends on the license
+   and is a human decision.
+4. **The original game is required.** The engine refuses to start without an
+   installed copy.
+5. **No money.** No paid builds, no premium features, no monetization. Any
+   donations, if ever accepted, go to engine development.
+6. **Disclose AI assistance and keep verification claims honest.**
 
-Both write only under `local/`, which is ignored. The census exits non-zero
-if any package fails to read and lists the error per package. The probe
-writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
-hashes of the package and outputs.
+**License: not yet selected.** Until a project-wide license is granted, all
+rights are reserved by the author; the code is public for transparency, not
+yet for reuse. The candidates are MIT and GPL-3, and the choice is gated on a
+provenance review recorded in [THIRD_PARTY.md](THIRD_PARTY.md) and
+[DECISIONS.md](DECISIONS.md). Vendored third-party code keeps its own license
+(lzokay: MIT).
 
-Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
-explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
-all UV sets; OBJ output intentionally writes one selected LOD and its first UV
-set. Source mesh data, collision hulls and skeletal meshes remain future work.
+The full policy, including the contributor certification and the takedown
+contact, is in [docs/LEGAL.md](docs/LEGAL.md).
 
-## Host engine probe (Phase 0 complete)
+## Documents
 
-`host/ue5/OpenWillow/` is a minimal UE5 C++ project whose module refuses to
-start without `OPENWILLOW_BL2` pointing at an installed game.
-`tools/run_ue_probe.ps1 -Engine <UE5 root> -Game <BL2 root>` builds it and
-launches the editor with `host/ue5/import_probe.py`, which imports the probe
-OBJ and PNG, wires the texture into a material, and places the mesh, a camera
-and lights in `/Game/Phase0/Phase0`. This editor import remains a diagnostic
-spike, not the eventual runtime loader.
-
-The next slice below adds Material v1 and one persistent map with its sublevels
-using the package and asset APIs.
-
-## Material v1 and first map loader
-
-```powershell
-python tools/prepare_level.py --reader build/Release/ow-package.exe --game $game --map Ash_P
-python tests/level_test.py
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game
-```
-
-The preparer follows `Ash_P`'s serialized sublevel references, extracts reusable
-LOD0 mesh sections and four-channel materials, and writes `local/ash/scene.json`.
-The UE5 importer creates `/Game/OpenWillow/Ash_P/Ash_P` with sublevel folders,
-collection and ordinary actor transforms, section material overrides and a
-spectator camera. Play controls: WASD/mouse, Q/E down/up. `_Dynamic` placements
-remain static; there is no physics or script execution. Use `-ImportOnly` for a
-headless editor import; that does not validate rendering or camera gestures.
-
-Material v1 supports named diffuse/normal/specular/emissive texture parameters,
-parent inheritance and named base-material defaults. It uses opaque lit shading,
-linear normal/specular maps, sRGB diffuse/emissive, specular red, emissive RGB
-masked by alpha, and constant roughness 0.65. This approximates UE3 shading. Unsupported assets, graphs and
-interactive component owners are listed in `scene.json` under `issues`.
-Terrain/BSP, skeletal meshes, lightmaps and full material graphs are not loaded.
-
-The imported map uses a reproducible inspection lighting rig: a warm movable
-directional sun at intensity 1.0, a cool movable skylight at intensity 0.5
-using UE's neutral gray light cubemap, a runtime sphere reflection capture centered at the start camera, automatic
-exposure, and a 0.35 ambient-occlusion post-process override. The rig is
-anchored at the start camera because UE3 sky/environment placements can carry
-intentionally huge scales.
-UE3 lightmaps and native light actors are not translated yet, so this rig is for
-geometry and material checks; its visual match to Borderlands 2 remains open.
-
-`--scene-records tools/level-arrays.schema` is bulk CLI metadata for this slice;
-`--payload <positive export index>` exposes bounded bytes for observed collection
-tails. The Ash-specific prefixes and native collection layout remain subject to
-independent visual/in-game validation; see DECISIONS.md.
-
-`-ImportOnly` also reopens and verifies the saved scene: placement counts,
-collection transforms, material overrides, imported section bounds against
-source OBJ vertices, and material graph/color-space settings. To exercise all
-four channels independently of game data, run `python tests/prepare_ue_smoke.py`
-then pass `-Scene local/material-smoke -ImportOnly` to the launcher. `-SkipBuild`
-uses an already compiled host. All fixture data is synthetic.
-
-The first Ash import contains 5,059 placements / 5,235 mesh sections and passes
-saved-scene verification. A fresh UE5.8 Lit editor frame and a separate game
-window now confirm the textured start-camera view; wider-map visual coverage
-and camera gestures remain open. See [verification evidence and remaining limits](MATERIAL_LEVEL_V1_VERIFICATION.md).
-
-### Continue Phase 1: Sanctuary and the free-flight viewer
-
-The viewer now uses the possessed spectator pawn as its camera after restart.
-Its collision is disabled for free flight; this does not implement walking or
-UE3 collision parity. Open an already imported scene without another import:
-
-```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild
-```
-
-Preparation defaults to a separate `local/<map-name>` directory, so preparing
-`Sanctuary_P` no longer writes the Ash manifest by default. To iterate on material
-translation without extracting meshes again:
-
-```powershell
-python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ImportOnly -SkipBuild
-./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary
-```
-
-Use `--reuse-textures` only with the same unchanged game installation. The refresh
-preserves placement data and resolves materials by both path and class. A single
-unnamed sample with an explicit `_Dif` texture name can supply approximate diffuse
-color when there is no named diffuse parameter; this is recorded as an inference,
-not reconstruction of stripped graphs or material tint.
-
-The runtime test checks pawn movement and camera following and captures three
-settled views in `Saved/Screenshots/WindowsEditor`. It supplies engine movement
-input, not physical keyboard/mouse gestures. The test process uses a 1 FPS startup
-threshold to allow correctness inspection on slow maps; this is not a performance
-pass. See [Phase 1 viewer verification](PHASE1_VIEWER_VERIFICATION.md).
+| | |
+|---|---|
+| [ROADMAP.md](ROADMAP.md) | Phase-by-phase tracker: what's done, what's next, what's blocked |
+| [DECISIONS.md](DECISIONS.md) | Dated log of every architectural and parsing decision and its evidence |
+| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, estimates, kill criteria |
+| [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
+| [docs/DESIGN_OVERHAUL_MOD.md](docs/DESIGN_OVERHAUL_MOD.md) | The fallback: an in-engine overhaul mod design, if the engine route fails |
+| [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
+| [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |
+| [docs/LEGAL.md](docs/LEGAL.md) | Clean-room policy, non-affiliation, contributor certification |
+| [THIRD_PARTY.md](THIRD_PARTY.md) | Dependency and reference provenance |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute, and the sensitive areas |
+| [research/](research/README.md) | The community-demand corpus and the original Python package reader |

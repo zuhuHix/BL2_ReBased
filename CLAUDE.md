@@ -1,8 +1,9 @@
 # OpenWillow — working notes for AI assistants
 
-Read README.md "Project rules" first. They are non-negotiable: no game files or
-asset dumps in the repo, no leaked/decompiled source, record provenance and
-licenses, disclose AI assistance, keep verification claims honest.
+Read the "Legal" section of README.md and docs/LEGAL.md first. The rules are
+non-negotiable: no game files or asset dumps in the repo, no leaked/decompiled
+source, record provenance and licenses, disclose AI assistance, keep
+verification claims honest.
 
 ## Sensitive areas — stop and warn before editing
 
@@ -18,7 +19,8 @@ sensitive, say what you intend to change, and wait for confirmation:
 - `CMakeLists.txt`, `THIRD_PARTY.md`, any `LICENSE` file — dependency and
   license/provenance decisions. Never copy code from GPL tools (Legendary
   Explorer, umodel, etc.) without the user deciding on licensing first.
-- The host-engine choice (plan §2.1) is a user decision, not a code task.
+- The host-engine choice (docs/OPENWILLOW_ENGINE_PLAN.md §2.1) is made (UE5) and
+  is not reopened by an AI assistant.
 
 A `PreToolUse` hook in `.claude/settings.json` enforces a confirmation prompt
 on those files and blocks writes of `.upk/.tfc/.pck/.bik` files.
@@ -27,7 +29,8 @@ on those files and blocks writes of `.upk/.tfc/.pck/.bik` files.
 
 Export census over packages, synthetic tests using the existing `package()` /
 `tag()` fixture helpers in `tests/`, CLI/JSON output flags, documentation,
-`tools/verify_packages.py`.
+`tools/verify_packages.py`. Keep README.md, ROADMAP.md and docs/TOOLING.md in
+agreement with DECISIONS.md and the verification records under docs/verification/.
 
 ## Every change
 

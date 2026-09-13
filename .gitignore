@@ -9,3 +9,6 @@ __pycache__/
 /host/ue5/OpenWillow/Content/
 /host/ue5/OpenWillow/.vs/
 *.sln
+
+# Local Claude settings
+.claude/settings.local.json

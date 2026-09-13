@@ -54,7 +54,7 @@ for pat in FORBIDDEN:
     if fnmatch.fnmatch(base, pat):
         out("deny",
             f"Refusing to write '{rel}': game/asset files must never enter the repo "
-            "(README project rules). Fixtures must be synthetic.",
+            "(docs/LEGAL.md). Fixtures must be synthetic.",
             f"BLOCKED: attempted to write game asset file {rel}")
 
 for pat, why in SENSITIVE.items():
