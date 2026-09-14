@@ -98,9 +98,10 @@ The PR template asks for:
 
 `main` always builds; CI runs the synthetic suites on every PR.
 
-## AI assistants
+## AI coding tools
 
-Most of this codebase is written with an AI coding assistant, and that is
-disclosed everywhere. If you use one too, the same rules apply to it:
-[CLAUDE.md](CLAUDE.md) is the working brief and a pre-write hook enforces
-the sensitive-area prompts. Read what it writes.
+This is a solo project and AI coding tools are part of its workflow; the
+project rules require saying so. If you use them too, the same rules apply to
+their output: [CLAUDE.md](CLAUDE.md) is the working brief, a pre-write hook
+enforces the sensitive-area prompts, and you are responsible for what you
+submit. Read what it writes.
