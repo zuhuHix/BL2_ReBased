@@ -84,8 +84,8 @@ flowchart LR
 
 | Phase | In plain words | What you'll be able to do | Time (est.) | Status |
 |:--|:--|:--|:--|:--|
-| **0 · Read the files** | Teach the new engine to open every Borderlands 2 file | Nothing yet — it's the proof the idea works | 3–6 weeks | <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> Done — in a day |
-| **1 · See the maps** | Rebuild every map, texture and object inside UE5 | Fly around all 82 maps in a modern engine. Museum tour — no enemies, no guns | 2–4 months | <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> **Now** — 2 of 82 maps |
+| **0 · Read the files** | Teach the new engine to open every Borderlands 2 file | Nothing yet — it's the proof the idea works | 3–6 weeks | <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> Done in a week |
+| **1 · See the maps** | Rebuild every map, texture and object inside UE5 | Fly around all 82 maps in a modern engine. Museum tour — no enemies, no guns | 2–4 months | <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> **Now** 3 of 82 maps |
 | **2 · Run the game's brain** | Make Borderlands 2's own game logic execute. 64% of the game's code is data in the files; we run it as-is | Nothing visible — this is the invisible layer that runs missions, skills and guns | +3–6 months | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
 | **3 · Make a body move** | Walking, jumping, falling, animation, collision | A test character moves around a real map the way it should | +6–12 months | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
 | **4 · Guns, skills, enemies** | The hard part: rebuild ~3,800 pieces of Gearbox's code by watching the real game and matching it | Spawn, fight, loot a gun, use a skill, die, respawn. **The first thing that feels like Borderlands** | +1–2 years | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
