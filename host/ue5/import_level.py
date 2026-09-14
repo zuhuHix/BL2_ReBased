@@ -82,8 +82,11 @@ for name, definition in scene['materials'].items():
     except Exception:
         pass
     if not definition['channels'].get('diffuse'):
+        # A recorded constant comes from an unconnected UE3 DiffuseColor input
+        # (see prepare_level.unconnected_diffuse_constant); otherwise neutral.
+        color = definition.get('constant_diffuse') or [0.5, 0.5, 0.5]
         fallback = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
-        fallback.set_editor_property('constant', unreal.LinearColor(0.5, 0.5, 0.5, 1))
+        fallback.set_editor_property('constant', unreal.LinearColor(color[0], color[1], color[2], 1))
         mel.connect_material_property(fallback, '', unreal.MaterialProperty.MP_BASE_COLOR)
     outputs = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR,
                'normal': unreal.MaterialProperty.MP_NORMAL,
@@ -179,11 +182,16 @@ def pose(value):
                             rotation=unreal.Rotator(pitch=pitch, yaw=yaw, roll=roll), scale=unreal.Vector(*value['scale']))
 
 
+def collection_rotation(value):
+    m = value['matrix']
+    return unreal.MathLibrary.make_rotation_from_axes(unreal.Vector(*m[0:3]),
+               unreal.Vector(*m[4:7]), unreal.Vector(*m[8:11]))
+
+
 def placement(value):
     if 'matrix' in value:
         m = value['matrix']
-        rotation = unreal.MathLibrary.make_rotation_from_axes(unreal.Vector(*m[0:3]),
-                   unreal.Vector(*m[4:7]), unreal.Vector(*m[8:11]))
+        rotation = collection_rotation(value)
         return unreal.Transform(location=unreal.Vector(*m[12:15]), rotation=rotation,
                                 scale=unreal.Vector(*value['scale']))
     return unreal.MathLibrary.compose_transforms(pose(value['component']), pose(value['actor']))
@@ -203,6 +211,11 @@ for instance in scene['actors']:
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         component.set_static_mesh(meshes[instance['mesh'], section['slot']])
         actor.set_actor_transform(transform, False, False)
+        if 'matrix' in instance['transform']:
+            # SetActorTransform round-trips through a quaternion and snaps very
+            # near-vertical pitch to 90 degrees. Preserve the matrix-derived
+            # Euler rotation on the unattached root for saving and reopening.
+            component.set_editor_property('relative_rotation', collection_rotation(instance['transform']))
         overrides = instance['materials']
         if section['slot'] < len(overrides) and overrides[section['slot']]:
             component.set_material(0, materials[overrides[section['slot']]])

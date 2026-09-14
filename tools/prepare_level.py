@@ -12,6 +12,7 @@ from pathlib import Path
 import struct
 import subprocess
 from collision_geometry import hulls as collision_hulls
+from installed_content import PACKAGE_SUFFIXES, cache_directory, content_files
 
 
 def values(tags):
@@ -108,6 +109,62 @@ def unnamed_diffuse_candidate(parameters, identity):
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
+DIFFUSE_SUFFIX = re.compile(r'_diff?(?:_\d+)?$', re.IGNORECASE)
+# Cooked-resource texture names that are not plausible diffuse sources: normal
+# maps, packed composite/specular/emissive channels, masks, gray noise tiles.
+AUXILIARY_TEXTURE = re.compile(
+    r'(_n|_nm|_nrm|normal|_gray|_grey|_hs|_spec|_emis|_emissive|_alpha|_mask|_comp|_lm|noise|_cube)(?:_\d+)?$',
+    re.IGNORECASE)
+
+
+def cooked_diffuse_candidate(textures, identity, texture_class, blend_mode='BLEND_Opaque'):
+    """Pick a diffuse texture from a cooked material's texture list.
+
+    A unique *_Dif/_Diff Texture2D wins. Otherwise, for opaque and masked
+    materials only, a unique Texture2D whose name does not mark it as an
+    auxiliary channel is used; a translucent material's diffuse alpha would
+    become its opacity, and a guessed opacity is worse than the invisible
+    fallback. Both are recorded as approximations; the graph, UV mapping and
+    tint remain unreconstructed.
+    """
+    planar = [t for t in textures if texture_class(t) == 'Texture2D']
+    named = {t for t in planar if DIFFUSE_SUFFIX.search(identity(t))}
+    if len(named) == 1:
+        return next(iter(named)), 'sole_cooked_resource_dif_texture'
+    if named or blend_mode not in ('BLEND_Opaque', 'BLEND_Masked'):
+        return None, None
+    plain = {t for t in planar if not AUXILIARY_TEXTURE.search(identity(t))}
+    if len(plain) == 1:
+        return next(iter(plain)), 'sole_cooked_resource_texture'
+    return None, None
+
+
+def unconnected_diffuse_constant(material_props):
+    """Return the constant colour of a Material whose DiffuseColor input was
+    never connected, or None when that cannot be established.
+
+    Cooked 832/46 materials strip their expression graphs, so the input's
+    Expression reference is always null. The observed distinction is the Mask
+    flags: an input that had an expression keeps Mask/MaskR/G/B, an input that
+    never had one carries neither. UE3 then evaluates the input as its
+    Constant, which defaults to black. Observed on Master_Black; not a general
+    format guarantee.
+    """
+    entries = material_props.get('DiffuseColor')
+    if not isinstance(entries, list):
+        return None
+    fields = {e.get('name'): e.get('value') for e in entries if isinstance(e, dict)}
+    expression = fields.get('Expression')
+    if isinstance(expression, dict) and expression.get('index'):
+        return None
+    if any(fields.get(mask) for mask in ('Mask', 'MaskR', 'MaskG', 'MaskB', 'MaskA')):
+        return None
+    constant = fields.get('Constant')
+    if isinstance(constant, dict):
+        return [float(constant.get(c, 0)) for c in ('R', 'G', 'B')]
+    return [0.0, 0.0, 0.0]
+
+
 def material_index(records, path):
     matches = [index for index, record in records.items() if record['path'] == path
                and record['class'].rsplit('.', 1)[-1] in
@@ -140,16 +197,21 @@ def cooked_texture_references(payload, data):
 
 
 class Scene:
-    def __init__(self, reader, game, output):
+    def __init__(self, reader, game, output, include_dlc=False):
         self.reader, self.game, self.output = reader.resolve(), game.resolve(), output.resolve()
         self.cooked = self.game / 'WillowGame/CookedPCConsole'
+        self.include_dlc = include_dlc
+        self.package_root = self.game if include_dlc else self.cooked
         self.schema = Path(__file__).with_name('level-arrays.schema')
         self.packages = {}
-        for path in sorted(self.cooked.rglob('*')):
-            if path.suffix.lower() in ('.upk', '.umap', '.u'):
+        self.texture_caches = {}
+        for path in content_files(self.game, include_dlc):
+            if path.suffix.lower() in PACKAGE_SUFFIXES:
                 self.packages.setdefault(path.stem.casefold(), []).append(path)
+            elif path.suffix.lower() == '.tfc':
+                self.texture_caches.setdefault(path.name.casefold(), []).append(path)
         self.records, self.materials, self.meshes, self.textures = {}, {}, {}, {}
-        self.resolved = {}
+        self.resolved, self.imports = {}, {}
         self.issues = []
         self.output.mkdir(parents=True, exist_ok=True)
 
@@ -180,13 +242,26 @@ class Scene:
         if (package, index) in self.resolved:
             return self.resolved[package, index]
         path = ref.get('path') if isinstance(ref, dict) else None
+        if package not in self.imports:
+            self.imports[package] = {r['index']: r for r in self.call(package, '--imports')}
+        metadata = self.imports[package].get(index, {})
+        path = path or metadata.get('path')
+        expected_class = metadata.get('class_name')
         if path:
             for loaded, records in self.records.items():
-                match = next((r for r in records.values() if r['path'].casefold() == path.casefold()), None)
+                match = next((r for r in records.values() if r['path'].casefold() == path.casefold()
+                              and (not expected_class or r['class'].rsplit('.', 1)[-1] == expected_class)), None)
                 if match:
                     self.resolved[package, index] = loaded, match['index']
                     return loaded, match['index']
-        r = self.call(package, '--resolve', index, '--cooked', self.cooked)
+        # Shared base resources retain the established lookup order in DLC
+        # mode. Only an absent target expands the search to the full install.
+        try:
+            r = self.call(package, '--resolve', index, '--cooked', self.cooked)
+        except ValueError as error:
+            if not self.include_dlc or 'not found:' not in str(error):
+                raise
+            r = self.call(package, '--resolve', index, '--cooked', self.package_root)
         self.resolved[package, index] = r['resolved_package'], r['resolved_index']
         return self.resolved[package, index]
 
@@ -274,8 +349,14 @@ class Scene:
         cache_key = (*key, channel)
         if cache_key not in self.textures:
             filename = self.filename(key, '_' + channel + '.png')
+            tfc_root = self.cooked
+            if self.include_dlc:
+                cache = props(self.load(key[0])[key[1]]).get('TextureFileCacheName', 'None')
+                cache_file = cache if cache.lower().endswith('.tfc') else cache + '.tfc'
+                tfc_root = cache_directory(self.texture_caches.get(cache_file.casefold(), []),
+                                           self.package(key[0]), self.cooked)
             self.call(key[0], '--texture', key[1], '--property-offset', 4,
-                      '--output', self.output / filename, '--tfc', self.cooked)
+                      '--output', self.output / filename, '--tfc', tfc_root)
             self.textures[cache_key] = filename
         return self.textures[cache_key]
 
@@ -303,15 +384,22 @@ class Scene:
                                 'source': self.identity(base),
                                 'textures': [self.identity(t) for t in textures],
                                 'opaque_tail_bytes': opaque}
-                            candidates = {t for t in textures
-                                          if self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D'
-                                          and re.search(r'_dif(?:_\d+)?$', self.identity(t), re.IGNORECASE)}
-                            if len(candidates) == 1:
-                                inferred = next(iter(candidates))
+                            inferred, method = cooked_diffuse_candidate(
+                                textures, self.identity,
+                                lambda t: self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1],
+                                material.get('blend_mode', 'BLEND_Opaque'))
+                            if inferred is not None:
                                 parameters['p_diffuse'] = inferred
                                 material['diffuse_inference'] = self.identity(inferred)
-                                material['diffuse_inference_method'] = 'sole_cooked_resource_dif_texture'
-                                self.issue(material['source'], 'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed')
+                                material['diffuse_inference_method'] = method
+                                self.issue(material['source'], 'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed'
+                                           if method == 'sole_cooked_resource_dif_texture' else
+                                           'Approximation: sole non-auxiliary cooked resource texture used as diffuse; graph, UV mapping and tint not reconstructed')
+                            elif not textures and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque':
+                                constant = unconnected_diffuse_constant(props(self.load(base[0])[base[1]]))
+                                if constant is not None:
+                                    material['constant_diffuse'] = constant
+                                    self.issue(material['source'], 'Approximation: unconnected DiffuseColor input rendered as its constant; no cooked textures')
                     except ValueError as error:
                         self.issue(material['source'], error)
                 for parameter, texture in parameters.items():
@@ -337,7 +425,7 @@ class Scene:
                         self.issue(material['source'] + ':' + channel, error)
                 material.pop('_channel_priority', None)
                 material.pop('_channel_stub', None)
-                if not any(material['channels'].values()):
+                if not any(material['channels'].values()) and 'constant_diffuse' not in material:
                     self.issue(material['source'], 'No supported named Material v1 texture parameters; neutral fallback')
             except ValueError as error:
                 self.issue(material['source'], error)
@@ -443,6 +531,7 @@ class Scene:
         if not actors:
             raise ValueError('No static mesh placements loaded')
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
+                  'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
                   'collision_policy': 'observed_convex_and_box_v1'}
@@ -460,6 +549,7 @@ def main():
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('--map', default='Ash_P')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--include-dlc', action='store_true', help='Index installed DLC packages and named texture caches')
     args = parser.parse_args()
     if not (args.game / 'Binaries/Win32/Borderlands2.exe').is_file():
         parser.error('An installed Borderlands 2 is required')
@@ -469,7 +559,7 @@ def main():
         parser.error('Map names must contain only ASCII letters, digits and underscores')
     if args.output is None:
         args.output = Path('local') / args.map[:-2].lower()
-    Scene(args.reader, args.game, args.output).build(args.map)
+    Scene(args.reader, args.game, args.output, include_dlc=args.include_dlc).build(args.map)
 
 
 if __name__ == '__main__':

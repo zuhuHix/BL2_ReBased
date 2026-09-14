@@ -201,6 +201,15 @@ four channels independently of game data, run `python tests/prepare_ue_smoke.py`
 then pass `-Scene local/material-smoke -ImportOnly` to the launcher. `-SkipBuild`
 uses an already compiled host. All fixture data is synthetic.
 
+Imports also run `host/ue5/verify_uv.py` in a fresh editor process. It checks
+saved LOD0 UV0 bindings at every imported vertex instance against the OBJ,
+including the inverse OBJ V conversion, and verifies oriented triangle
+topology against the original game index order. Results are written to
+`ue-uv-verify.json`. This checks the export/import path, not material-graph UV
+operations or the original game's appearance. `python tests/prepare_uv_smoke.py`
+creates a separate `local/uv-smoke` square: red top-left, green top-right,
+blue bottom-left and yellow bottom-right when viewed from its saved camera.
+
 The first Ash import contains 5,059 placements / 5,235 mesh sections and passes
 saved-scene verification. A fresh UE5.8 Lit editor frame and a separate game
 window confirm the textured start-camera view; wider-map visual coverage and
@@ -229,6 +238,19 @@ python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $
 
 Use `--reuse-textures` only with the same unchanged game installation. The
 refresh preserves placement data and resolves materials by both path and class.
+
+On a machine without a discrete GPU, add `-LowEnd` to `run_ue_level.ps1`. It
+starts the editor or standalone viewer with DX11/SM5 (no Nanite, no virtual
+shadow maps), the lowest scalability groups, FXAA, 66% screen percentage and a
+960x540 window. The first launch recompiles shaders for SM5 and is slow; later
+launches reuse the cache. The switch changes rendering only; imported content
+and saved scenes are identical with or without it. The observed frame rate on
+any given machine is not recorded here; check it with `stat unit` in the
+console.
+
+```powershell
+./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -LowEnd
+```
 A single unnamed sample with an explicit `_Dif` texture name can supply
 approximate diffuse color when there is no named diffuse parameter; this is
 recorded as an inference, not reconstruction of stripped graphs or material
@@ -242,6 +264,41 @@ input, not physical keyboard/mouse gestures. The test process uses a 1 FPS
 startup threshold to allow correctness inspection on slow maps; this is not a
 performance pass. See
 [Phase 1 viewer verification](verification/PHASE1_VIEWER_VERIFICATION.md).
+
+The runtime test also logs a `Viewer diagnostic` record: 90 engine frame-time
+samples during movement (mean and p95 milliseconds), current process physical
+memory and peak process physical memory. These are short correctness-run
+diagnostics, affected by startup, window state and shader work; they are not
+a controlled renderer benchmark or GPU-memory measurement.
+
+### Selecting an installed map
+
+`tools/viewer.py` lists persistent packages in the base-game cooked directory.
+This is a command-line selector; an in-game map menu remains future work.
+Package discovery does not imply successful preparation or rendering. Add
+`--include-dlc` to discovery and preparation to include the install's `DLC`
+directory. The current install has 37 base-game and 45 DLC persistent maps.
+
+```powershell
+python tools/viewer.py --game $game --list
+python tools/viewer.py --game $game --include-dlc --list
+python tools/viewer.py --game $game --map SouthpawFactory_P --action prepare
+python tools/viewer.py --game $game --map SouthpawFactory_P --action import --engine 'C:/Program Files/Epic Games/UE_5.8'
+python tools/viewer.py --game $game --map SouthpawFactory_P --action view --engine 'C:/Program Files/Epic Games/UE_5.8' --skip-build
+```
+
+Omit `--map` for an interactive numbered selection. Use `--list --json` for
+machine-readable discovery. Names are matched case-insensitively; duplicate
+package names fail explicitly. Preparation writes to this checkout's
+`local/<map-name>/`; import and view require a matching prepared manifest.
+Import performs the existing saved-scene verification, while view requires an
+already imported map. `--skip-build` requires this checkout's compiled host.
+
+DLC preparation indexes packages across the install and locates the named
+texture cache. A cache alongside the source package wins; otherwise the cache
+name must be unique. Ambiguous cache names fail explicitly. The manifest records
+`package_scope`, which material refresh reuses. Base-only preparation retains
+the existing base-game search root. DLC discovery alone is not DLC compatibility.
 
 ## Where things are
 

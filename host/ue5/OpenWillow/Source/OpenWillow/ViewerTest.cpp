@@ -7,6 +7,8 @@
 #include "GameFramework/Pawn.h"
 #include "Camera/PlayerCameraManager.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/PlatformMemory.h"
+#include "Misc/App.h"
 #include "Misc/Paths.h"
 #include "UnrealClient.h"
 
@@ -51,11 +53,21 @@ public:
         else if (Stage == 1)
         {
             if (Now - StageStarted < 3) return false;
+            FrameTimes.Add(FApp::GetDeltaTime() * 1000.0);
             Pawn->AddMovementInput(FVector::ForwardVector, 1.0f, true);
             if (++MovementFrames < 90) return false;
             const double Distance = FVector::Dist(Origin, Pawn->GetActorLocation());
             Test->TestTrue(TEXT("Movement input changes pawn position"), Distance > 10);
             Test->AddInfo(FString::Printf(TEXT("Pawn displacement: %.2f cm"), Distance));
+            FrameTimes.Sort();
+            double TotalMilliseconds = 0;
+            for (double FrameTime : FrameTimes) TotalMilliseconds += FrameTime;
+            const FPlatformMemoryStats Memory = FPlatformMemory::GetStats();
+            Test->AddInfo(FString::Printf(
+                TEXT("Viewer diagnostic: map=%s samples=%d mean_frame_ms=%.2f p95_frame_ms=%.2f process_memory_mb=%.1f peak_process_memory_mb=%.1f"),
+                *World->GetMapName(), FrameTimes.Num(), TotalMilliseconds / FrameTimes.Num(),
+                FrameTimes[FMath::CeilToInt(FrameTimes.Num() * .95) - 1],
+                Memory.UsedPhysical / (1024.0 * 1024.0), Memory.PeakUsedPhysical / (1024.0 * 1024.0)));
             Player->SetControlRotation(FRotator(-15, InitialRotation.Yaw + 45, 0));
             Stage = 2;
             StageStarted = Now;
@@ -105,6 +117,8 @@ private:
     double StageStarted = 0;
     int32 Stage = 0;
     int32 MovementFrames = 0;
+    // A short sample during the existing correctness run, not a benchmark.
+    TArray<double> FrameTimes;
     FVector Origin;
     FRotator InitialRotation;
 };
