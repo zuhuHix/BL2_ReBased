@@ -20,18 +20,22 @@ well-bounded ones are marked *good first task*.
 
 - [ ] Decode `PF_A8R8G8B8` textures: the sky transition texture in Ash uses
       it, which is why the sky is black. *Good first task.*
-- [ ] Check UV orientation: the Sanctuary shop sign appears mirrored in the
-      viewer. Determine whether it's OBJ handedness, UV V-flip or the source.
+- [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
+      winding twice, exposing back faces. Corrected isolated sign renders
+      readable; saved UV and winding checks now guard the import path.
 - [ ] Sky rendering: translate the skybox sublevel.
-- [ ] Material fallbacks: 30 Ash and 67 Sanctuary materials still lack a
-      diffuse channel after cooked-resource inference (2026-09-13). Next is
-      reading more of the cooked material resource; every extension needs
-      explicit approval because the layout is unspecified.
+- [ ] Material fallbacks: 46 Sanctuary materials still lack a diffuse
+      channel after two more inference rules (2026-09-14); 13 of those are
+      opaque (54 placed sections), mostly multi-layer snow/glacier materials.
+      Ash and Southpaw counts not yet re-measured. Next is reading more of the
+      cooked material resource; every extension needs explicit approval
+      because the layout is unspecified.
 - [ ] Terrain / BSP geometry.
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
 - [ ] Walking collision (currently free-flight with collision disabled).
-- [ ] Map selector and the third map.
+- [ ] In-game map selector and broader coverage. A command-line base-game map
+      selector and third-map loading checks are available (2026-09-14).
 - [ ] Performance: Sanctuary ran at ~8–9 FPS during automation startup on the
       development machine. Not yet profiled.
 - [ ] Matched-viewpoint screenshots against the original game: the plan's
@@ -129,8 +133,10 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
   - [x] Free-flight spectator pawn, saved start pose and FOV; automated
         movement/camera test passes on Ash and Sanctuary
   - [ ] Placeholder character controller with collision
-- [ ] Map coverage: **2 / 82** (`Ash_P`, `Sanctuary_P`)
-  - [ ] Map selector
+- [ ] Map coverage: **3 / 82** (`Ash_P`, `Sanctuary_P`, `SouthpawFactory_P`)
+  - [x] Command-line base-game map selector (`tools/viewer.py`)
+  - [x] Optional DLC package discovery (82 installed map names total)
+  - [ ] In-game map selector
   - [ ] Loading times and memory profile
 - [ ] Verification: side-by-side screenshots against the real game per map
       (not yet started; needs matched viewpoints)
@@ -140,7 +146,8 @@ if no map loads by month 6, stop and reassess.
 
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
-· [Cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md).
+· [Cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md)
+· [Map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md).
 
 ---
 

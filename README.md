@@ -20,7 +20,7 @@ Same game. New machine. Nothing of Gearbox's ships with it.
 </div>
 
 > [!IMPORTANT]
-> **Early days: nothing to play yet.** BL2_ReBased already reads every file in a Borderlands 2 install and renders two real maps inside Unreal Engine 5, as frozen scenery you can fly through. No guns, no enemies, no story yet. We went public early so you can watch it grow, not because it's ready.
+> **There is nothing to play yet.** Right now BL2_ReBased can read game packages and show three maps as frozen scenery inside Unreal Engine 5. No guns, no enemies, no story. We went public early so you can watch it grow, not because it's ready.
 >
 > BL2_ReBased is a fan project. It is **not** affiliated with Gearbox, 2K or Take-Two. It contains **no game files** and **no Gearbox code**, and it only works with **your own purchased copy** of Borderlands 2.
 
@@ -106,12 +106,12 @@ The detailed, checkbox-level tracker is [ROADMAP.md](ROADMAP.md).
 
 - <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> The new engine reads **all 2,008 files** in a full Borderlands 2 install (base game + every DLC). Every one, no errors
 - <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> It can pull out textures and 3D models, and they look right
-- <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> Two maps, **Ash** (the Eridium Blight area) and **Sanctuary**, load as frozen scenes in Unreal Engine 5 with their real textures
+- <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> Three maps, **Ash** (the Eridium Blight area), **Sanctuary** and **Southpaw Factory**, load as frozen scenes in Unreal Engine 5 with their real textures; missing geometry and fallback materials remain
 - <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> You can fly through them with a free camera
-- <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> Rough edges we know about: black sky, some untextured surfaces, nothing moves, no collision, low framerate
-- <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> 80 maps to go before Phase 1's gate
+- <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> The sky is black, some surfaces are white, nothing moves, walking is a first placeholder slice, and it runs slowly
+- <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> 79 maps still to load; walking and visual checks remain part of Phase 1's gate
 
-**Next up:** the sky (one missing texture format), mirrored-texture fix, terrain, walking collision, a map selector, then map number three. The full list is in [ROADMAP.md](ROADMAP.md#now--next), and the small ones are tagged *good first task*.
+**Next up:** getting Sanctuary to look right: the remaining white surfaces, the sky (one missing texture format), missing geometry, then terrain and better collision. The full list is in [ROADMAP.md](ROADMAP.md#now--next), and the small ones are tagged *good first task*.
 
 <details>
 <summary><b>Show me the numbers behind those checkmarks</b></summary>
@@ -123,9 +123,9 @@ Every claim above comes from a dated verification record. Automated checks are a
 | Milestone | Evidence |
 |---|---|
 | Phase 0 gated 2026-09-10 | Reader reads 2,008 / 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
-| Phase 1 in progress | `Ash_P` (5,059 placements) and `Sanctuary_P` (4,430 placements, 9 sublevels) load as frozen scenes with a four-channel material approximation, an inspection lighting rig and a free-flight camera. Saved scenes reopen with zero verification errors. Not done: sky, terrain/BSP, skeletal meshes, lightmaps, real material graphs, walking collision, performance (~8–9 FPS on Sanctuary), 80 more maps. |
+| Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps. Not done: sky, terrain/BSP, skeletal meshes, lightmaps, real material graphs, walking collision, performance, 79 more maps. |
 
-Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md).
+Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md).
 
 Screenshots of loaded maps are game-derived, so they stay out of the repository. Anyone with the game can reproduce them with the commands in [docs/TOOLING.md](docs/TOOLING.md).
 

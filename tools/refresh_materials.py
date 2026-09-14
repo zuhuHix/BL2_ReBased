@@ -19,7 +19,8 @@ def main():
     manifest = json.loads(filename.read_text(encoding='utf-8'))
     if manifest['schema'] != 1 or manifest['dynamic_policy'] != 'frozen':
         parser.error('Unsupported scene schema/policy')
-    scene = Scene(args.reader, args.game, args.scene)
+    scene = Scene(args.reader, args.game, args.scene,
+                  include_dlc=manifest.get('package_scope') == 'base_and_dlc')
     if args.reuse_textures:
         decode = scene.texture
 
