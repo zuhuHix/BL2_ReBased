@@ -135,7 +135,7 @@ Screenshots of loaded maps are game-derived, so they stay out of the repository.
 
 We believe so, and we work hard to keep it that way. The rules are the same ones OpenMW, OpenRCT2 and Ship of Harkinian have lived by for years:
 
-1. **We never share game files.** Not a texture, not a sound, not a screenshot of game content. Nothing of Gearbox's ever enters this repository.
+1. **We never share game files.** Not a texture, not a sound, not a screenshot of game content. Nothing extracted from the game ever enters this repository. (The banner is official promotional artwork, used to identify the game only; it will be removed on request from the rights holder.)
 2. **We never use leaked or decompiled code.** We work from file formats and by watching what the real game does. That's it.
 3. **You need the real game.** The engine refuses to start without it, and it never modifies your install.
 4. **Nobody makes money.** No paid builds, no "premium" anything. Ever.
@@ -301,5 +301,5 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 ---
 
 <div align="center">
-<sub>BL2_ReBased is an independent fan project. Borderlands and related marks are trademarks of their respective owners. Not affiliated with, endorsed by or supported by Gearbox Software, 2K Games or Take-Two Interactive. Formerly "OpenWillow".</sub>
+<sub>BL2_ReBased is an independent fan project. Borderlands and related marks are trademarks of their respective owners. Not affiliated with, endorsed by or supported by Gearbox Software, 2K Games or Take-Two Interactive. Promotional artwork is used for identification only. Formerly "OpenWillow".</sub>
 </div>

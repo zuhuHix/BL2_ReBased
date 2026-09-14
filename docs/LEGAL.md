@@ -38,6 +38,11 @@ descriptively.
   screenshots of loaded game content. All such outputs are written to
   git-ignored directories (`local/`, UE `Saved/`) on the contributor's
   machine only.
+
+The README banner is official Borderlands 2 promotional artwork. It is not a
+game file and is used solely to identify the game the engine is built for. It
+will be removed promptly at the request of the rights holder (see
+[Contact for rights holders](#contact-for-rights-holders)).
 - Any Gearbox, 2K, Take-Two or Epic Games source code, leaked or otherwise.
 - Any code transcribed from disassembling or decompiling `Borderlands2.exe`
   or any other shipped binary.
