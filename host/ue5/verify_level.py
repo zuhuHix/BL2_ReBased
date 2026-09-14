@@ -120,6 +120,13 @@ for name, definition in scene['materials'].items():
             assert isinstance(node, unreal.MaterialExpressionMultiply)
             node = mel.get_inputs_for_material_expression(material, node)[0]
         assert isinstance(node, unreal.MaterialExpressionTextureSample)
+        uv = definition.get('channel_uv', {}).get(channel)
+        if uv is not None:
+            inputs = [item for item in mel.get_inputs_for_material_expression(material, node) if item is not None]
+            assert len(inputs) == 1 and isinstance(inputs[0], unreal.MaterialExpressionTextureCoordinate)
+            coordinates = inputs[0]
+            assert coordinates.get_editor_property('coordinate_index') == uv['index']
+            close([coordinates.get_editor_property('u_tiling'), coordinates.get_editor_property('v_tiling')], uv['scale'], 1e-6)
         texture = node.get_editor_property('texture')
         assert texture.get_name() == Path(filename).stem
         assert texture.get_editor_property('srgb') == (channel in ('diffuse', 'emissive'))

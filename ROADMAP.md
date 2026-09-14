@@ -24,18 +24,23 @@ well-bounded ones are marked *good first task*.
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
 - [ ] Sky rendering: translate the skybox sublevel.
-- [ ] Material fallbacks: 46 Sanctuary materials still lack a diffuse
-      channel after two more inference rules (2026-09-14); 13 of those are
-      opaque (54 placed sections), mostly multi-layer snow/glacier materials.
-      Ash and Southpaw counts not yet re-measured. Next is reading more of the
-      cooked material resource; every extension needs explicit approval
-      because the layout is unspecified.
+- [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
+      including 14 opaque definitions (43 placed sections). Of those, 11 have
+      no supported channels (21 sections). Two glacier materials (33 sections)
+      have an explicit primary-layer approximation with instance tiling; snow
+      blend, reflection/glow and static UV selection remain unresolved. See the
+      [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and
+      [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
+      Ash and Southpaw counts not yet re-measured. Any new binary-layout
+      interpretation remains subject to the sensitive-area policy.
 - [ ] Terrain / BSP geometry.
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
-- [ ] Walking collision beyond the Sanctuary placeholder slice: Ash and
-      Southpaw scenes not refreshed; sphere/capsule/PhysX shapes, blocking
-      volumes and terrain unsupported (2026-09-14).
+- [ ] Complete walking collision: initial Sanctuary convex/box collision and
+      placeholder walking are verified; full routes and stairs remain open.
+      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes,
+      blocking volumes and terrain remain unsupported. See
+      [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] Broader map coverage. Command-line and in-game selectors exist; the
       in-game list only offers already imported scenes (2026-09-14).
 - [ ] Performance: Sanctuary profiled at 12–15 FPS on an Intel Iris Xe
