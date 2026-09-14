@@ -42,6 +42,12 @@ well-bounded ones are marked *good first task*.
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
 - [ ] Terrain / BSP geometry.
+- [ ] Sanctuary visual defects observed in the editor fly-through (2026-09-14,
+      not yet diagnosed): the ground floor renders wrong, some sidewalk
+      sections show up green (likely a missing-diffuse fallback or wrong
+      section material), and a large stray cube sits near the town entrance
+      that is not in the original map (possibly an imported blocking/trigger
+      volume or an unsupported component rendered as a placeholder).
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and
