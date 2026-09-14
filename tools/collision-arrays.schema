@@ -1,0 +1,9 @@
+ConvexElems=StructProperty:KConvexElem
+BoxElems=StructProperty:KBoxElem
+SphereElems=StructProperty:KSphereElem
+SphylElems=StructProperty:KSphylElem
+VertexData=StructProperty:Vector
+FaceTriData=IntProperty
+EdgeDirections=StructProperty:Vector
+FaceNormalDirections=StructProperty:Vector
+FacePlaneData=StructProperty:Plane

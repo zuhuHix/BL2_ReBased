@@ -1,5 +1,8 @@
 ﻿#include "OpenWillowGameMode.h"
 #include "Camera/CameraActor.h"
+#include "OpenWillowWalker.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "EngineUtils.h"
@@ -10,7 +13,8 @@
 
 AOpenWillowGameMode::AOpenWillowGameMode()
 {
-    DefaultPawnClass = ASpectatorPawn::StaticClass();
+    DefaultPawnClass = FParse::Param(FCommandLine::Get(), TEXT("owwalk"))
+        ? AOpenWillowWalker::StaticClass() : ASpectatorPawn::StaticClass();
 }
 
 AActor* AOpenWillowGameMode::ChoosePlayerStart_Implementation(AController* Player)
@@ -36,6 +40,13 @@ void AOpenWillowGameMode::RestartPlayer(AController* NewPlayer)
     APawn* Pawn = Player ? Player->GetPawn() : nullptr;
     if (!Pawn)
     {
+        return;
+    }
+
+    if (Cast<AOpenWillowWalker>(Pawn))
+    {
+        Player->SetViewTarget(Pawn);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow walking pawn activated at %s"), *Pawn->GetActorLocation().ToString());
         return;
     }
 

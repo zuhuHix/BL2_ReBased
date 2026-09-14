@@ -148,6 +148,14 @@ for name, definition in scene['meshes'].items():
         mesh = imported(section['file'], unreal.StaticMesh)
         if section['material']:
             mesh.set_material(0, materials[section['material']])
+        hulls = []
+        if section is definition['sections'][0]:
+            for item in definition.get('collision', {}).get('hulls', []):
+                hull = unreal.OpenWillowHull()
+                hull.vertices = [unreal.Vector(*v) for v in item['vertices']]
+                hulls.append(hull)
+        if not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
+            raise RuntimeError('Invalid collision hulls for ' + name)
         unreal.EditorAssetLibrary.save_loaded_asset(mesh)
         meshes[name, section['slot']] = mesh
 
@@ -199,6 +207,11 @@ for instance in scene['actors']:
         if section['slot'] < len(overrides) and overrides[section['slot']]:
             component.set_material(0, materials[overrides[section['slot']]])
         component.set_simulate_physics(False)
+        component.set_collision_profile_name('BlockAll')
+        component.set_collision_enabled(unreal.CollisionEnabled.QUERY_AND_PHYSICS
+            if instance.get('collision_enabled', False) and section is scene['meshes'][instance['mesh']]['sections'][0]
+            and bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))
+            else unreal.CollisionEnabled.NO_COLLISION)
         component.set_mobility(unreal.ComponentMobility.STATIC)
         origin, extent = actor.get_actor_bounds(False)
         scene_bounds_min = unreal.Vector(min(scene_bounds_min.x, origin.x - extent.x),

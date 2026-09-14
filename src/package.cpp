@@ -265,6 +265,23 @@ std::string Package::floating(Reader& reader) {
 
 std::string Package::structure(Reader& reader, const std::string& type, unsigned depth) const {
     if (depth > 32) throw std::runtime_error("property nesting exceeds 32");
+    if (type == "Box") {
+        const auto minimum = structure(reader, "Vector", depth + 1);
+        const auto maximum = structure(reader, "Vector", depth + 1);
+        reader.require(1);
+        const auto valid = reader.bytes()[reader.pos++];
+        if (valid > 1) throw std::runtime_error("invalid Box validity byte");
+        return "{\"Min\":" + minimum + ",\"Max\":" + maximum +
+            ",\"IsValid\":" + std::to_string(valid) + "}";
+    }
+    if (type == "Matrix") {
+        std::string result = "{";
+        for (const auto* axis : {"XPlane", "YPlane", "ZPlane", "WPlane"}) {
+            if (result.size() > 1) result += ',';
+            result += quote(axis) + ':' + structure(reader, "Plane", depth + 1);
+        }
+        return result + '}';
+    }
     std::vector<std::string> fields;
     bool integers = false;
     bool bytes = false;
@@ -275,7 +292,14 @@ std::string Package::structure(Reader& reader, const std::string& type, unsigned
     else if (type == "LinearColor") fields = {"R", "G", "B", "A"};
     else if (type == "Color") { fields = {"B", "G", "R", "A"}; bytes = true; }
     else if (type == "Quat") fields = {"X", "Y", "Z", "W"};
-    else return tags(reader, reader.pos, depth);
+    // Observed 832/46 tagged Plane (and Matrix row) serialization is W,X,Y,Z.
+    else if (type == "Plane") fields = {"W", "X", "Y", "Z"};
+    else {
+        try { return tags(reader, reader.pos, depth); }
+        catch (const std::exception& error) {
+            throw std::runtime_error("struct " + type + ": " + error.what());
+        }
+    }
 
     std::ostringstream out;
     out << '{';
