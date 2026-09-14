@@ -74,6 +74,7 @@ struct MeshLod {
 
 struct MeshAsset {
     std::string path;
+    int32_t bodySetup = 0;
     std::vector<MeshLod> lods;
 };
 

@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 import struct
 import subprocess
+from collision_geometry import hulls as collision_hulls
 
 
 def values(tags):
@@ -368,7 +369,19 @@ class Scene:
                 (self.output / file).write_text(''.join(header + group))
                 sections.append({'slot': i, 'file': file,
                                  'material': self.material(self.resolve(key[0], section['material_index']))})
-            self.meshes[name] = {'source': self.identity(key), 'sections': sections}
+            collision = {'status': 'absent', 'hulls': []}
+            body = self.resolve(key[0], data.get('body_setup', 0))
+            if body:
+                try:
+                    record = self.load(body[0])[body[1]]
+                    if record['class'] != 'Engine.RB_BodySetup' or 'error' in record:
+                        raise ValueError('Invalid collision body record')
+                    collision = {'status': 'supported', 'source': self.identity(body),
+                                 'hulls': collision_hulls(record['data']['properties'])}
+                except (ValueError, KeyError) as error:
+                    collision = {'status': 'unsupported', 'hulls': [], 'reason': str(error)}
+                    self.issue(self.identity(key) + ':collision', error)
+            self.meshes[name] = {'source': self.identity(key), 'sections': sections, 'collision': collision}
         return name
 
     def build(self, persistent):
@@ -423,14 +436,16 @@ class Scene:
                         pose = {'actor': transform(props(owner)), 'component': transform(p, True)}
                     overrides = [self.material(self.resolve(level, ref)) for ref in p.get('Materials', [])]
                     actors.append({'source': record['path'], 'level': level, 'mesh': self.mesh(key),
-                                   'transform': pose, 'materials': overrides, 'static': True})
+                                   'transform': pose, 'materials': overrides, 'static': True,
+                                   'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True)})
                 except ValueError as error:
                     self.issue(level + ':' + record['path'], error)
         if not actors:
             raise ValueError('No static mesh placements loaded')
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
-                  'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending'}
+                  'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
+                  'collision_policy': 'observed_convex_and_box_v1'}
         temporary = self.output / 'scene.json.tmp'
         temporary.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
         temporary.replace(self.output / 'scene.json')
