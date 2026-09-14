@@ -9,7 +9,7 @@ namespace {
 
 void usage() {
     throw std::runtime_error(
-        "usage: ow-package <package> [--exports | --imports | --census | --scene-records <schema> | --payload <index> | --verify-decoded <file> | "
+        "usage: ow-package <package> [--exports | --imports | --census | --scene-records <schema> | --payload <index> | --payloads <index>... | --verify-decoded <file> | "
         "--resolve <reference> --cooked <directory> | --properties <index> "
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
@@ -100,6 +100,33 @@ int main(int argc, char** argv) {
         }
 
         const auto package = Package::load(sourcePath);
+        if (mode == "--payloads") {
+            if (argc < 4) usage();
+            std::vector<int32_t> indices;
+            // Validate the whole request before emitting any output.
+            for (int arg = 3; arg < argc; ++arg) {
+                const auto index = signedNumber(argv[arg]);
+                if (index <= 0) throw std::runtime_error("payload requires a positive export index");
+                const auto& object = package->object(index);
+                auto reader = package->reader();
+                reader.pos = object.offset;
+                reader.require(object.size);
+                indices.push_back(index);
+            }
+            std::cout << '[';
+            for (size_t n = 0; n < indices.size(); ++n) {
+                if (n) std::cout << ',';
+                const auto& object = package->object(indices[n]);
+                std::cout << "{\"index\":" << indices[n] << ",\"payload\":[";
+                for (int32_t i = 0; i < object.size; ++i) {
+                    if (i) std::cout << ',';
+                    std::cout << unsigned(package->data[object.offset + i]);
+                }
+                std::cout << "]}";
+            }
+            std::cout << "]\n";
+            return 0;
+        }
         if (mode == "--payload") {
             if (argc != 4) usage();
             const auto index = signedNumber(argv[3]);

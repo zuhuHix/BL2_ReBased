@@ -140,6 +140,9 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         no named parameter exists *Caveat:* recorded as inference; graph
         connectivity, tint and masks `UNVERIFIED`
   - [ ] v2: node-graph translation, cel-shade edge, ink lines
+        Native resource-tail structure now matches 335 observed Ash/Sanctuary
+        materials in diagnostic tooling; field semantics and graphs remain
+        `UNVERIFIED`. See [resource census](docs/verification/MATERIAL_RESOURCE_CENSUS.md).
 - [ ] Level loader
   - [x] Persistent map + serialized sublevel references (`_P`, `_Px`,
         `_Light`, `_Audio`, `_Combat`, `_Dynamic`, `_FX`)

@@ -321,6 +321,25 @@ cache. `--extract` writes the meshes as OBJ and the textures as PNG under
 Kismet streaming state or lighting. See the
 [sky census record](verification/SKY_CENSUS.md).
 
+To investigate the remaining cooked Material resource bytes before extending
+serialization support:
+
+```powershell
+python tools/material_resource_census.py --reader build/Release/ow-package.exe --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2" --package Sanctuary_P --package Ash_P
+python tests/material_resource_test.py
+```
+
+The report in `local/material-resources/material_resources.json` contains
+validated prefix boundaries, raw texture indices, opaque-tail sizes, hashes
+and unsigned words, and surviving expression-slot counts. Words have no
+assigned shader semantics. Absent expression arrays remain distinct from
+explicitly empty or stripped arrays. Unsupported prefixes are recorded as
+errors and cause a nonzero exit status. The observed tail layout requires
+exact consumption of six words, a count, 16-byte records and a final word;
+unrecognized layouts also cause a nonzero exit status without discarding
+the raw observations. The report directory must be under
+this checkout's ignored `local/`; these reports must never be committed.
+
 ### First collision and walking slice
 
 Prepared scenes now include observed RB_BodySetup convex and box hulls. The
