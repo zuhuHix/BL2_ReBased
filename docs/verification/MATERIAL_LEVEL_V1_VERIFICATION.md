@@ -78,5 +78,5 @@ the start-camera view only; wider-map shader appearance, winding/UV acceptance,
 performance and free-flight controls still need interactive validation. Headless
 success remains separate from visual or in-game proof.
 
-See README.md for preparation, import and fixture commands. The launcher
+See [docs/TOOLING.md](../TOOLING.md) for preparation, import and fixture commands. The launcher
 `tools/run_ue_level.ps1 -ImportOnly` imports and runs saved-scene verification.

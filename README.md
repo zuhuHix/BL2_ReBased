@@ -1,246 +1,301 @@
-# OpenWillow
+<div align="center">
 
-An AI-assisted Borderlands 2 engine reimplementation experiment. The intended
-runtime reads the player's own installed game. No game assets or Gearbox code
-are distributed here. **The UE5 editor host can inspect imported assets and a
-frozen map; there is no playable BL2 reimplementation yet.**
+<img src=".github/assets/banner.svg" alt="BL2_ReBased — Borderlands 2, re-based onto a modern engine" width="100%">
 
-## Current state (Phase 1, importer foundation)
+<br>
 
-A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages:
+[![CI](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![Phase](https://img.shields.io/badge/phase-1%20of%206%20%C2%B7%20world%20viewer-orange)
+![Maps](https://img.shields.io/badge/maps%20loading-2%20%2F%2082-yellow)
+![Playable](https://img.shields.io/badge/playable-not%20yet-lightgrey)
+[![Discussions](https://img.shields.io/badge/chat-discussions-8250df)](https://github.com/zuhuHix/BL2_ReEngine/discussions)
 
-- name/import/export tables, fully and partially LZO-compressed containers;
-- object records with package-local outer paths (`--exports`, `--imports`);
-- a reusable `PackageStore` that indexes installed `.upk`, `.umap` and `.u`
-  files lazily and resolves negative imports across packages (`--resolve`);
-- a per-class export count for one package (`--census`), driven over a whole
-  installation by `tools/census.py`;
-- tagged properties (`--properties`): scalars, object references, nested
-  structs, common fixed-layout structs, and arrays whose element type is
-  supplied by a schema file;
-- resident `Texture2D` mips to PNG (`--texture`, DXT1/DXT5, inline or
-  TFC-streamed, with `--mip` and `--all-mips`);
-- all render LODs of a `StaticMesh` in memory and a selected LOD to OBJ
-  (`--mesh`, 16/32-bit indices, all UV sets retained by the importer).
+**A new engine that runs Borderlands 2 from the copy you already own — so it can finally have working co-op, 64-bit, modern graphics and new maps.**
 
-General class/default inheritance and runtime package streaming are not
-implemented. An offline first-map loader and Material v1 feed the UE5 editor
-host (see below). Python is used for scene preparation, tests and as an
-independent execution path for comparison; the executable itself does not
-require Python. The LZO decoder is the vendored MIT-licensed lzokay; see
-[THIRD_PARTY.md](THIRD_PARTY.md).
+[The 60-second version](#the-60-second-version) · [What you'd get](#what-youd-get) · [Roadmap](#roadmap) · [Where we are](#where-we-are-today) · [Is this legal?](#is-this-legal) · [How to help](#how-to-help) · [For developers](#for-developers)
 
-Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3.
+</div>
+
+> [!IMPORTANT]
+> **There is nothing to play yet.** Right now BL2_ReBased can read every file in a Borderlands 2 install and show two maps as frozen scenery inside Unreal Engine 5. No guns, no enemies, no story. We went public early so you can watch it grow — not because it's ready.
+>
+> BL2_ReBased is a fan project. It is **not** affiliated with Gearbox, 2K or Take-Two. It contains **no game files** and **no Gearbox code**, and it only works with **your own purchased copy** of Borderlands 2.
+
+---
+
+## The 60-second version
+
+Think of Borderlands 2 as two things:
+
+| | What it is | State in 2026 |
+|---|---|---|
+| 🎒 **The stuff** | Maps, guns, characters, sounds, the story, the skill trees — all files sitting in your game folder | Brilliant. People still love it 14 years later. |
+| ⚙️ **The machine** | `Borderlands2.exe` — the 2012 program that loads the stuff and turns it into a game | Old, 32-bit, locked. Nobody outside Gearbox can change it. |
+
+Every big problem players complain about lives in **the machine**: multiplayer breaking, "out of memory" crashes, no ultrawide, no new maps, no level editor. Mods can change the *stuff*, but they can't touch the *machine* — and the machine is where the #1 complaint (broken co-op) lives.
+
+**BL2_ReBased builds a new machine.** It reads the original stuff straight from your game folder, exactly as it shipped, and runs it on a modern engine (Unreal Engine 5). We copy nothing, we ship nothing of Gearbox's, and we never touch your original game.
+
+This is the same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those projects work, and they've been around for years. Nobody has done it for a game like Borderlands 2 — that's the whole challenge.
+
+<details>
+<summary><b>Why can't mods just fix this?</b></summary>
+
+<br>
+
+We researched this properly before starting — 3,300 Steam reviews, 250 forum threads, and a forensic look at the installed game. Short version: mods can deliver about 80% of what players ask for (balance, quality of life, new guns, sharper textures). But the remaining 20% is exactly the stuff people want *most*, and it's physically inside the executable:
+
+- **Co-op** runs through a backend mods can't replace
+- **64-bit** needs the engine recompiled — only Gearbox can do that
+- **Modern graphics** are blocked by the 2012 DirectX 9 renderer baked into the exe
+- **New maps** need an editor that was stripped out before the game shipped
+
+Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md). There's even a complete design for the mod route as a fallback: [docs/DESIGN_OVERHAUL_MOD.md](docs/DESIGN_OVERHAUL_MOD.md).
+
+</details>
+
+## What you'd get
+
+When it's done — and "done" is years away, see the roadmap — this is what a new machine makes possible:
+
+| | |
+|---|---|
+| 🤝 **Co-op that works** | Our own multiplayer. No SHiFT, no forced account linking, no "hardlock on the title screen." |
+| 🧠 **64-bit** | The ~4 GB memory wall behind most crashes and the Ultra HD pack problems — gone. |
+| 🖥️ **Modern graphics** | Real ultrawide, any resolution, unlocked framerate, optional modern lighting. |
+| 🗺️ **New maps** | Borderlands 2 never got a level editor. Unreal Engine 5 comes with one. |
+| 🧩 **Your mods still work** | Text mods (BLCMM) edit the same data we load. The plan is for them to just carry over. |
+| 💾 **Your saves still work** | Real save files, same characters. |
+| 🔒 **It can't be taken away** | If the servers go, the game keeps working. |
+| 🌙 **The Pre-Sequel too** | Same engine underneath, so it comes along later. |
+
+## Roadmap
+
+Six phases. Each one ends with a **gate** — a thing you can see or do — so it's always clear whether we're actually moving.
+
+```mermaid
+flowchart LR
+    P0[Phase 0<br>Read the files]:::done --> P1[Phase 1<br>See the maps]:::now --> P2[Phase 2<br>Run the game's brain]:::todo --> P3[Phase 3<br>Make a body move]:::todo --> P4[Phase 4<br>Guns, skills, enemies]:::todo --> P5[Phase 5<br>The whole campaign]:::todo --> P6[Phase 6<br>Co-op, DLC, editor]:::todo
+    classDef done fill:#2ea043,stroke:#2ea043,color:#fff
+    classDef now fill:#f5a623,stroke:#f5a623,color:#111
+    classDef todo fill:#30363d,stroke:#484f58,color:#c9d1d9
+```
+
+| Phase | In plain words | What you'll be able to do | Time (est.) | Status |
+|:--|:--|:--|:--|:--|
+| **0 · Read the files** | Teach the new engine to open every Borderlands 2 file | Nothing yet — it's the proof the idea works | 3–6 weeks | ✅ Done in a day |
+| **1 · See the maps** | Rebuild every map, texture and object inside UE5 | Fly around all 82 maps in a modern engine. Museum tour — no enemies, no guns | 2–4 months | 🔄 **Now** — 2 of 82 maps |
+| **2 · Run the game's brain** | Make Borderlands 2's own game logic execute. 64% of the game's code is data in the files; we run it as-is | Nothing visible — this is the invisible layer that runs missions, skills and guns | +3–6 months | ⬜ |
+| **3 · Make a body move** | Walking, jumping, falling, animation, collision | A test character moves around a real map the way it should | +6–12 months | ⬜ |
+| **4 · Guns, skills, enemies** | The hard part: rebuild ~3,800 pieces of Gearbox's code by watching the real game and matching it | Spawn, fight, loot a gun, use a skill, die, respawn. **The first thing that feels like Borderlands** | +1–2 years | ⬜ |
+| **5 · The whole campaign** | Missions, cutscenes, menus, saves, every map populated | Play Claptrap to the Warrior with your real save file | +1–2 years | ⬜ |
+| **6 · Beyond** | Our own co-op, DLC, The Pre-Sequel, mods, level editor | Everything on the wish list | ongoing | ⬜ |
+
+**Total to a finished campaign: roughly 3–5 years** for one person working near full-time with AI assistance. That's an honest range, not a promise — and Phase 0 taking a day instead of weeks does *not* mean the rest will go 30× faster. Phase 0 was porting code that already existed; Phase 4 is reverse-engineering thousands of undocumented functions one at a time.
+
+We also wrote down [when we'd give up](docs/OPENWILLOW_ENGINE_PLAN.md#9-kill-criteria--be-honest-with-yourself), so you never have to guess if the project is dead.
+
+The detailed, checkbox-level tracker is [ROADMAP.md](ROADMAP.md).
+
+## Where we are today
+
+*Updated 2026-09-13. Project started 2026-09-09.*
+
+- ✅ The new engine reads **all 2,008 files** in a full Borderlands 2 install (base game + every DLC) — every one, no errors
+- ✅ It can pull out textures and 3D models, and they look right
+- ✅ Two maps — **Ash** (the Eridium Blight area) and **Sanctuary** — load as frozen scenes in Unreal Engine 5 with their real textures
+- ✅ You can fly through them with a free camera
+- ❌ The sky is black, some surfaces are white, nothing moves, there's no collision, and it runs slowly
+- ❌ 80 maps to go before Phase 1's gate
+
+<details>
+<summary><b>Show me the numbers behind those checkmarks</b></summary>
+
+<br>
+
+Every claim above comes from a dated verification record. Automated checks are always reported separately from "a human looked at it," and anything we couldn't verify is labelled `UNVERIFIED` in the code and docs.
+
+| Milestone | Evidence |
+|---|---|
+| Phase 0 gated 2026-09-10 | Reader reads 2,008 / 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
+| Phase 1 in progress | `Ash_P` (5,059 placements) and `Sanctuary_P` (4,430 placements, 9 sublevels) load as frozen scenes with a four-channel material approximation, an inspection lighting rig and a free-flight camera. Saved scenes reopen with zero verification errors. Not done: sky, terrain/BSP, skeletal meshes, lightmaps, real material graphs, walking collision, performance (~8–9 FPS on Sanctuary), 80 more maps. |
+
+Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md).
+
+Screenshots of loaded maps are game-derived, so they stay out of the repository. Anyone with the game can reproduce them with the commands in [docs/TOOLING.md](docs/TOOLING.md).
+
+</details>
+
+## Is this legal?
+
+We believe so, and we work hard to keep it that way. The rules — the same ones OpenMW, OpenRCT2 and Ship of Harkinian have lived by for years:
+
+1. 🚫 **We never share game files.** Not a texture, not a sound, not a screenshot of game content. Nothing of Gearbox's ever enters this repository.
+2. 🔍 **We never use leaked or decompiled code.** We work from file formats and by watching what the real game does. That's it.
+3. 🎮 **You need the real game.** The engine refuses to start without it, and it never modifies your install.
+4. 💸 **Nobody makes money.** No paid builds, no "premium" anything. Ever.
+5. 🤖 **We say how it's built.** Most of the code is written with an AI assistant. One person checks every result against the real game.
+
+Full policy, in plain language: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE) — it covers our code and nothing else.
+
+## How to help
+
+You don't need to code.
+
+- 💬 **Talk** — questions, ideas, "will it do X?" → [Discussions](https://github.com/zuhuHix/BL2_ReEngine/discussions)
+- 🧪 **Test with your copy** — different DLC, Epic vs Steam, with/without the UHD pack: run our tools and tell us the numbers, or load a map and tell us what looks wrong → [Verification report](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=verification_report.yml)
+- 🔬 **Know the file formats?** → [Format finding](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=format_finding.yml)
+- 💻 **Code** — open items are in [ROADMAP.md](ROADMAP.md#now--next); read [CONTRIBUTING.md](CONTRIBUTING.md) first
+- ⭐ **Star and watch** the repo so you see the Phase 1 release
+
+<details>
+<summary><b>FAQ</b></summary>
+
+<br>
+
+**Can I play Borderlands 2 in this?**
+No. The first thing you'll be able to do is fly around the maps (Phase 1). Shooting things is Phase 4. The full campaign is Phase 5.
+
+**Is this a remaster? A remake?**
+Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. We keep the original stuff untouched and replace only the *machine* that runs it.
+
+**Will my mods work?**
+That's the plan. Text mods edit the same game data we load, so they should carry over once gameplay runs (Phase 4–5). SDK mods will need a compatibility layer later.
+
+**Will my saves work?**
+Yes — reading real save files is a Phase 5 task. The save format is already documented by the community.
+
+**Why Unreal Engine 5?**
+Borderlands 2 is Unreal Engine *3*. UE3's systems (materials, animation, particles, cutscenes, scripting) all have direct descendants in UE5, so we translate into them instead of inventing replacements. That's a much smaller problem.
+
+**"AI-written engine" sounds like a red flag.**
+Fair. That's why every claim comes with the check that supports it, the tests run publicly, nothing merges without a human running it against the real game, and the human reads the code. Judge the evidence trail, not the tool.
+
+**Why "ReBased"?**
+Because that's literally what it is: Borderlands 2, re-based onto a new engine. (The code still uses the working title *OpenWillow* in identifiers like `ow-package` — "Willow" is Gearbox's internal name for the BL2 engine.)
+
+**What if it fails?**
+We wrote down the conditions under which we stop, [in the plan](docs/OPENWILLOW_ENGINE_PLAN.md#9-kill-criteria--be-honest-with-yourself). If it fails, the repo says so, and the research and tools stay useful to the modding community.
+
+</details>
+
+---
+
+## For developers
+
+Everything below is the technical layer. Click to expand.
+
+<details>
+<summary><b>How it works — architecture</b></summary>
+
+<br>
+
+Measured directly from the installed game: 20,119 functions across the nine code packages. **12,978 (64.5%) are UnrealScript bytecode** and will run in our VM as-is. **7,141 (35.5%) were native C++** inside `Borderlands2.exe` and must be rebuilt — of which 286 are trivial builtins, 609 are online/save/DLC plumbing we replace rather than replicate, 512 bridge the Scaleform UI, 1,914 are stock UE3 natives whose contracts are public via UDK, and **3,803 are Gearbox's own, undocumented**. Full breakdown: [engine plan §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth--the-numbers-this-plan-rests-on).
+
+Three layers. The script VM and the asset pipeline are engine-agnostic C++; the native layer is where the host engine shows up.
+
+```
+                 ┌──────────────────────────────────────────────────────┐
+                 │  HOST ENGINE (UE5: renderer, physics, audio, UI)     │
+                 └───────────────▲──────────────────────▲───────────────┘
+                                 │                      │
+   ┌─────────────────────────────┴───┐    ┌─────────────┴──────────────────┐
+   │  NATIVE LAYER (C++)             │    │  ASSET PIPELINE  ◄── Phase 1   │
+   │  the 7,141 rebuilt functions    │    │  package loader (UPK/TFC)  ✅  │
+   │  Actor/Pawn/Controller, traces, │    │  textures, static meshes   ✅  │
+   │  movement, animation, particles,│    │  materials (approximation) 🔄  │
+   │  AI, stat core, weapons, UI     │    │  levels (actors+transforms)🔄  │
+   └─────────────────────────────▲───┘    │  skeletal, anim, lightmaps,    │
+                                 │        │  Kismet, Wwise, Bink, SWF  ⬜  │
+   ┌─────────────────────────────┴───┐    └────────────────────────────────┘
+   │  UNREALSCRIPT VM  ◄── Phase 2   │
+   │  UObject model, bytecode        │
+   │  interpreter, states, latents,  │
+   │  native dispatch table          │
+   └─────────────────────────────────┘
+        runs the 12,978 inherited functions unchanged
+```
+
+**Host engine: Unreal Engine 5.** UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*. The plan required this decision by the Phase 0 gate and rules out switching later; all Phase 1 work targets UE 5.8. Reasoning and the alternative considered (Godot): [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision--decide-by-end-of-phase-0-never-after).
+
+</details>
+
+<details>
+<summary><b>How we build it — methodology</b></summary>
+
+<br>
+
+**Clean room, strictly.** File formats and observed behaviour only. No leaked source, no decompiled executable code. Public reference implementations (UE Viewer, UDK headers) are read for serialization *order* and never copied; every reference and its license is in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+**Three sources of truth.** Every rebuilt native needs a definition of "correct": (A) **UDK**, a free running UE3, for the 1,914 stock natives; (B) **the original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) — hook a function, log its inputs and outputs during play, implement until our engine reproduces the log; (C) **community documentation** (BLCM wiki, bl2.parts, Lootlemon) for stat math. A native without a golden file is a guess, and guesses are labelled `UNVERIFIED`.
+
+**Evidence first.** Every change ends in a check that can be performed against the real game, and the check is written down. Synthetic tests run in CI; differential checks run against a real install; visual checks are done by a human. [DECISIONS.md](DECISIONS.md) records every architectural choice, what was verified, and what wasn't.
+
+**AI-assisted, human-verified.** Developed by one person with [Claude Code](https://claude.com/claude-code). The AI writes most of the code; the human owns every verification against the real game, every architectural decision, and every license and provenance call. Guard hooks in [`.claude/`](.claude/) force a confirmation before the AI can touch bounds-checking code, dependency wiring or license files.
+
+</details>
+
+<details>
+<summary><b>Build and run it</b></summary>
+
+<br>
+
+You need: Windows, CMake, Visual Studio 2022 C++ build tools, Python 3, and an installed Borderlands 2. Unreal Engine 5.8 is only needed for the map viewer.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-python tools/verify_packages.py --reader build/Release/ow-package.exe
+ctest --test-dir build -C Release --output-on-failure          # synthetic tests, no game needed
+python tools/verify_packages.py --reader build/Release/ow-package.exe   # needs the game
 & ./build/Release/ow-package.exe "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/Core.upk"
 ```
 
-For a decoder-free build add `-DOPENWILLOW_LZO=OFF`; that build accepts only
-decompressed packages and skips the container, asset and compressed tests.
-For a different install, add `--cooked "D:/path/Borderlands 2/WillowGame/CookedPCConsole"`
-to the verification command. It only reads installed packages; temporary
-decompressed files are removed when the check exits.
+Inspecting properties, running the full-install census, extracting a texture or mesh, preparing and opening a map in the UE5 viewer: [docs/TOOLING.md](docs/TOOLING.md). Everything the tools produce lands under `local/`, which is git-ignored — extracted assets never enter the tree.
 
-## Project rules
+The code keeps the working-title prefixes from before the rename: the reader is `ow-package`, the CMake option is `OPENWILLOW_LZO`, the UE host reads `OPENWILLOW_BL2`.
 
-- Never distribute game files, asset dumps, or proprietary code. Fixtures must be synthetic.
-- Do not use leaked source or transcribe decompiled executable code.
-- Use observed behavior and documented formats; record reference provenance.
-- Check licenses before incorporating reference implementations.
-- The intended runtime requires the original installed game.
-- No paid builds or premium features; any donations support engine development.
-- Disclose AI assistance and keep verification evidence honest.
+</details>
 
-License selection is pending a provenance review; no project-wide open-source
-license is granted yet. See [DECISIONS.md](DECISIONS.md) and
-[OPENWILLOW_ENGINE_PLAN.md](OPENWILLOW_ENGINE_PLAN.md).
+<details>
+<summary><b>What's implemented right now</b></summary>
 
-## Verification status
+<br>
 
-Local checks on 2026-09-10, Release build, all against the installed game:
+A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/import/export tables; fully and partially LZO-compressed containers; object records with outer paths; a `PackageStore` that indexes an install lazily and resolves imports across packages; per-class export census; tagged properties (scalars, object refs, nested and fixed-layout structs, arrays via a schema file); resident `Texture2D` mips to PNG (DXT1/DXT5, inline or TFC-streamed); all render LODs of a `StaticMesh` and one LOD to OBJ; bulk scene metadata and bounded payload bytes for the level preparer.
 
-- Five synthetic CTest suites pass (package tables, properties, runtime,
-  container, assets). They cover truncation, block totals, corrupt LZO streams, partial
-  compression tables, malformed tags, nesting limits, DXT pixel decoding, PNG
-  CRC/zlib framing, TFC bounds, and mesh buffer bounds.
-- All nine code packages decode byte-for-byte identically to the Python
-  research reader and match on every export's name, class, outer, super,
-  payload size and offset. Core yields 234,397 bytes and 1,621 exports;
-  WillowGame yields 56,443 exports.
-- `tools/census.py` reads 2,008 of 2,008 packages found under the install
-  (base game plus 1,096 DLC packages; two UHD texture sidecar files are
-  identified and skipped) for 4,751,329 serialized exports, including 77,958
-  `Texture2D`, 40,090 `StaticMesh`, 3,911 `SkeletalMesh`, 35,098 `Material`
-  and 100,601 `AnimSequence`. These count serialized copies, not unique
-  assets, and have not yet been cross-checked against umodel's view.
-- `tools/prepare_probe.py` extracts `Env_Ash.Mesh.Ash_Road01` (473 vertices,
-  784 triangles, 2 UV sets) and `Prop_Roads.Textures.MetalRoadConcrete_Dif`
-  (1024×1024 DXT1, streamed from `Textures.tfc`, 11 resident mips) from
-  `Ash_P.upk`, and confirms through
-  the material's `TextureParameterValues` that the texture is that mesh's
-  `p_Diffuse`.
-- The UE5.8.2 host probe rendered this mesh and texture in
-  `/Game/Phase0/Phase0`; the first Phase 0 screenshot is user-verified.
+`tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest. `host/ue5/` is a minimal UE5 C++ project plus editor-Python importer/verifier that builds the scene, an inspection lighting rig and a free-flight spectator pawn, then reopens the saved scene and verifies it.
 
-These checks establish agreement with the research reader and a visually
-plausible texture, not independent proof of every format field or gameplay
-compatibility.
+Not implemented: class/default inheritance, runtime package streaming, non-DXT pixel formats, terrain/BSP, skeletal meshes, lightmaps, material graph translation, collision, any gameplay.
 
-## Inspect object records and properties
+Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 
-```powershell
-$willowPackage = "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/WillowGame.upk"
-$objects = & ./build/Release/ow-package.exe $willowPackage --exports | ConvertFrom-Json
-$partDefault = $objects | Where-Object name -eq "Default__WeaponPartDefinition"
-& ./build/Release/ow-package.exe $willowPackage --properties $partDefault.index --property-offset 4
-```
+</details>
 
-Export indices are one-based; negative references identify imports, and zero
-means null. `--resolve <reference> --cooked <directory>` follows an import to
-the owning package and export path. Paths from `--properties` still describe
-the current package's outer chain; resolution is an explicit separate step.
+<details>
+<summary><b>All the documents</b></summary>
 
-The property offset is relative to the export payload and must be supplied.
-Offset 4 has been observed for class defaults, material instances, weapon
-parts, textures and static meshes so far. It is not a universal object-prefix
-rule and the four bytes' meaning is UNVERIFIED. Wrong offsets, missing
-terminators, malformed values and payload overruns fail with an error and no
-partial JSON result.
+<br>
 
-Supported values: int, finite float, bool, name, string, byte/enum, object,
-class and component references, and structs. `Vector`, `Vector2D`, `Rotator`,
-`Guid`, `LinearColor`, `Color` and `Quat` decode as fixed fields; other struct
-types decode as a nested tagged stream. Nesting is capped at 32 levels.
+| | |
+|---|---|
+| [ROADMAP.md](ROADMAP.md) | Checkbox-level tracker: done, next, blocked |
+| [DECISIONS.md](DECISIONS.md) | Dated log of every architectural and parsing decision and its evidence |
+| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, estimates, kill criteria |
+| [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
+| [docs/DESIGN_OVERHAUL_MOD.md](docs/DESIGN_OVERHAUL_MOD.md) | The fallback: an in-engine overhaul mod design, if the engine route fails |
+| [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
+| [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |
+| [docs/LEGAL.md](docs/LEGAL.md) | Clean-room policy, non-affiliation, contributor certification, license |
+| [THIRD_PARTY.md](THIRD_PARTY.md) | Dependency and reference provenance |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute, and the sensitive areas |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1 |
+| [research/](research/README.md) | The community-demand corpus and the original Python package reader |
 
-Array tags do not serialize their element type, so arrays need
-`--array-schema <file>` with `PropertyName=ElementType` lines
-(`tools/phase0-arrays.schema` covers the material and weapon-part probes).
-Element types may be `IntProperty`, `FloatProperty`, `NameProperty`,
-`StrProperty`, `ObjectProperty`, `ByteProperty` or `StructProperty:<Type>`.
-Arrays without a schema entry keep their tag metadata with
-`status: "unsupported"` and `value: null`. Resolving element types from the
-class's reflection data instead of a hand-written schema is future work.
+</details>
 
-Local check on 2026-09-10: `GD_Gladiolus_Weapons.AssaultRifle.AR_Barrel_Jakobs_Sawbar`
-decodes all 13 top-level tags with the probe schema, consuming 1,551 bytes and
-leaving zero trailing bytes. The decoded names and values match the BLCMM
-Object Explorer dump, with one generated-subobject presentation discrepancy
-recorded in `DECISIONS.md`.
+---
 
-## Census and asset extraction
-
-```powershell
-$game = "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2"
-python tools/census.py --reader build/Release/ow-package.exe --game $game --output local/census.json
-python tools/prepare_probe.py --reader build/Release/ow-package.exe --game $game
-```
-
-Both write only under `local/`, which is ignored. The census exits non-zero
-if any package fails to read and lists the error per package. The probe
-writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
-hashes of the package and outputs.
-
-Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
-explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
-all UV sets; OBJ output intentionally writes one selected LOD and its first UV
-set. Source mesh data, collision hulls and skeletal meshes remain future work.
-
-## Host engine probe (Phase 0 complete)
-
-`host/ue5/OpenWillow/` is a minimal UE5 C++ project whose module refuses to
-start without `OPENWILLOW_BL2` pointing at an installed game.
-`tools/run_ue_probe.ps1 -Engine <UE5 root> -Game <BL2 root>` builds it and
-launches the editor with `host/ue5/import_probe.py`, which imports the probe
-OBJ and PNG, wires the texture into a material, and places the mesh, a camera
-and lights in `/Game/Phase0/Phase0`. This editor import remains a diagnostic
-spike, not the eventual runtime loader.
-
-The next slice below adds Material v1 and one persistent map with its sublevels
-using the package and asset APIs.
-
-## Material v1 and first map loader
-
-```powershell
-python tools/prepare_level.py --reader build/Release/ow-package.exe --game $game --map Ash_P
-python tests/level_test.py
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game
-```
-
-The preparer follows `Ash_P`'s serialized sublevel references, extracts reusable
-LOD0 mesh sections and four-channel materials, and writes `local/ash/scene.json`.
-The UE5 importer creates `/Game/OpenWillow/Ash_P/Ash_P` with sublevel folders,
-collection and ordinary actor transforms, section material overrides and a
-spectator camera. Play controls: WASD/mouse, Q/E down/up. `_Dynamic` placements
-remain static; there is no physics or script execution. Use `-ImportOnly` for a
-headless editor import; that does not validate rendering or camera gestures.
-
-Material v1 supports named diffuse/normal/specular/emissive texture parameters,
-parent inheritance and named base-material defaults. It uses opaque lit shading,
-linear normal/specular maps, sRGB diffuse/emissive, specular red, emissive RGB
-masked by alpha, and constant roughness 0.65. This approximates UE3 shading. Unsupported assets, graphs and
-interactive component owners are listed in `scene.json` under `issues`.
-Terrain/BSP, skeletal meshes, lightmaps and full material graphs are not loaded.
-
-The imported map uses a reproducible inspection lighting rig: a warm movable
-directional sun at intensity 1.0, a cool movable skylight at intensity 0.5
-using UE's neutral gray light cubemap, a runtime sphere reflection capture centered at the start camera, automatic
-exposure, and a 0.35 ambient-occlusion post-process override. The rig is
-anchored at the start camera because UE3 sky/environment placements can carry
-intentionally huge scales.
-UE3 lightmaps and native light actors are not translated yet, so this rig is for
-geometry and material checks; its visual match to Borderlands 2 remains open.
-
-`--scene-records tools/level-arrays.schema` is bulk CLI metadata for this slice;
-`--payload <positive export index>` exposes bounded bytes for observed collection
-tails. The Ash-specific prefixes and native collection layout remain subject to
-independent visual/in-game validation; see DECISIONS.md.
-
-`-ImportOnly` also reopens and verifies the saved scene: placement counts,
-collection transforms, material overrides, imported section bounds against
-source OBJ vertices, and material graph/color-space settings. To exercise all
-four channels independently of game data, run `python tests/prepare_ue_smoke.py`
-then pass `-Scene local/material-smoke -ImportOnly` to the launcher. `-SkipBuild`
-uses an already compiled host. All fixture data is synthetic.
-
-The first Ash import contains 5,059 placements / 5,235 mesh sections and passes
-saved-scene verification. A fresh UE5.8 Lit editor frame and a separate game
-window now confirm the textured start-camera view; wider-map visual coverage
-and camera gestures remain open. See [verification evidence and remaining limits](MATERIAL_LEVEL_V1_VERIFICATION.md).
-
-### Continue Phase 1: Sanctuary and the free-flight viewer
-
-The viewer now uses the possessed spectator pawn as its camera after restart.
-Its collision is disabled for free flight; this does not implement walking or
-UE3 collision parity. Open an already imported scene without another import:
-
-```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild
-```
-
-Preparation defaults to a separate `local/<map-name>` directory, so preparing
-`Sanctuary_P` no longer writes the Ash manifest by default. To iterate on material
-translation without extracting meshes again:
-
-```powershell
-python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ImportOnly -SkipBuild
-./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary
-```
-
-Use `--reuse-textures` only with the same unchanged game installation. The refresh
-preserves placement data and resolves materials by both path and class. A single
-unnamed sample with an explicit `_Dif` texture name can supply approximate diffuse
-color when there is no named diffuse parameter; this is recorded as an inference,
-not reconstruction of stripped graphs or material tint.
-
-The runtime test checks pawn movement and camera following and captures three
-settled views in `Saved/Screenshots/WindowsEditor`. It supplies engine movement
-input, not physical keyboard/mouse gestures. The test process uses a 1 FPS startup
-threshold to allow correctness inspection on slow maps; this is not a performance
-pass. See [Phase 1 viewer verification](PHASE1_VIEWER_VERIFICATION.md).
+<div align="center">
+<sub>BL2_ReBased is an independent fan project. Borderlands and related marks are trademarks of their respective owners. Not affiliated with, endorsed by or supported by Gearbox Software, 2K Games or Take-Two Interactive. Formerly "OpenWillow".</sub>
+</div>

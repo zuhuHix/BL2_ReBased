@@ -47,7 +47,7 @@ from the installed game. No prior UE import report counts as current proof.
 
 The new resource reader found SancBuild1e_Dif in Mat_SancBuild1e's native
 texture list. Master_Black's list is empty; its appearance remains unresolved.
-The resource tail is not a recovered shader graph. See DECISIONS.md for scope
+The resource tail is not a recovered shader graph. See [DECISIONS.md](../../DECISIONS.md) for scope
 and external format-reference provenance.
 
 Ash's three unsupported diffuse candidates all refer to the same 256x256

@@ -1,0 +1,51 @@
+name: Bug report
+description: Something crashed, failed, or produced wrong output.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reminder: there is no playable game yet. Bugs here are about the package reader, the tools and the UE5 viewer.
+        **Do not attach game files, extracted assets, or dumps containing raw asset bytes.**
+  - type: input
+    id: commit
+    attributes:
+      label: BL2_ReBased commit
+      placeholder: e.g. 2def180
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: powershell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual (error text, exit code, wrong values)
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, compiler, Python version, game platform (Steam/Epic), DLC and UHD pack, UE version if relevant.
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Rules
+      options:
+        - label: This report contains no game files, extracted assets, or raw asset bytes.
+          required: true

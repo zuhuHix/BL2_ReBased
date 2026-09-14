@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="BL2_ReBased — Borderlands 2, re-based onto a new engine">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14161c"/>
+      <stop offset="1" stop-color="#1f2330"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f5a623"/>
+      <stop offset="1" stop-color="#ff6a3d"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+    <clipPath id="round"><rect width="1200" height="320" rx="20"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#round)">
+    <rect width="1200" height="320" fill="url(#bg)"/>
+    <rect width="1200" height="320" fill="url(#grid)"/>
+    <!-- diagonal light sweep -->
+    <polygon points="760,0 1200,0 1200,320 560,320" fill="#ffffff" fill-opacity="0.025"/>
+    <!-- accent bar -->
+    <rect x="0" y="0" width="8" height="320" fill="url(#accent)"/>
+  </g>
+
+  <!-- title block -->
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif">
+    <text x="64" y="118" font-size="20" letter-spacing="6" fill="#f5a623" font-weight="600">COMMUNITY ENGINE PROJECT</text>
+    <text x="62" y="192" font-size="76" font-weight="800" fill="#ffffff" letter-spacing="-1">BL2_ReBased</text>
+    <text x="64" y="236" font-size="24" fill="#c9ced8">Borderlands 2, re-based onto a modern engine. Your files, a new machine.</text>
+    <text x="64" y="272" font-size="16" fill="#8b93a3">Clean-room · MIT licensed · needs your own copy of the game · not affiliated with Gearbox / 2K / Take-Two</text>
+  </g>
+
+  <!-- right-side phase meter -->
+  <g transform="translate(900,86)" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif">
+    <text x="0" y="0" font-size="13" letter-spacing="3" fill="#8b93a3" font-weight="600">ROADMAP</text>
+    <g transform="translate(0,18)">
+      <rect x="0"   y="0" width="36" height="10" rx="3" fill="#f5a623"/>
+      <rect x="42"  y="0" width="36" height="10" rx="3" fill="#f5a623" fill-opacity="0.45"/>
+      <rect x="84"  y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
+      <rect x="126" y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
+      <rect x="168" y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
+      <rect x="210" y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
+    </g>
+    <text x="0" y="52" font-size="14" fill="#c9ced8">Phase 1 of 6 · World viewer</text>
+    <text x="0" y="74" font-size="14" fill="#8b93a3">2 of 82 maps load · nothing playable yet</text>
+  </g>
+</svg>
