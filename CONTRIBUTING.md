@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. Read the [Legal](README.md#legal) section of the README
+Thanks for looking. Read the [Is this legal?](README.md#is-this-legal) section of the README
 and [docs/LEGAL.md](docs/LEGAL.md) first — the clean-room rules are
 non-negotiable and every pull request certifies compliance with them.
 

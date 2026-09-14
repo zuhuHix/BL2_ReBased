@@ -1,6 +1,6 @@
-# OpenWillow — working notes for AI assistants
+# BL2_ReBased (code prefix OpenWillow/ow) — working notes for AI assistants
 
-Read the "Legal" section of README.md and docs/LEGAL.md first. The rules are
+Read the "Is this legal?" section of README.md and docs/LEGAL.md first. The rules are
 non-negotiable: no game files or asset dumps in the repo, no leaked/decompiled
 source, record provenance and licenses, disclose AI assistance, keep
 verification claims honest.

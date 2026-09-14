@@ -1,17 +1,20 @@
 # Legal policy and clean-room rules
 
-This page states, in one place, what OpenWillow is and is not, what the
+This page states, in one place, what BL2_ReBased is and is not, what the
 repository contains, and the rules every contributor and every AI assistant
 works under. It is project policy, not legal advice.
 
 ## Non-affiliation
 
-OpenWillow is an independent, non-commercial, fan-made engine project.
+BL2_ReBased (formerly "OpenWillow") is an independent, non-commercial,
+fan-made engine project.
 Borderlands, Borderlands 2, Gearbox, and related names and marks are
-trademarks of their respective owners. OpenWillow is not affiliated with,
+trademarks of their respective owners. BL2_ReBased is not affiliated with,
 endorsed by, sponsored by, or supported by Gearbox Software, 2K Games, or
-Take-Two Interactive. The name "OpenWillow" refers to the engine branch's
-internal codename and is used descriptively.
+Take-Two Interactive. "BL2" is used descriptively to identify the game the
+engine is built for. Code identifiers keep the working-title prefix
+`OpenWillow`/`ow`; "Willow" is the engine branch's internal codename, used
+descriptively.
 
 ## What this repository contains
 
@@ -89,7 +92,7 @@ By opening a pull request you certify that:
 
 ## Issues and reports
 
-Screenshots of the OpenWillow viewer or of the original game are welcome in
+Screenshots of the BL2_ReBased viewer or of the original game are welcome in
 issues for comparison — that is the plan's verification method. Attaching
 package files, extracted textures, meshes, dumps or logs that embed raw asset
 bytes is not; such attachments will be removed.

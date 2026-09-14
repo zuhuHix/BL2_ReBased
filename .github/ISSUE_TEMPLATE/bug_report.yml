@@ -11,7 +11,7 @@ body:
   - type: input
     id: commit
     attributes:
-      label: OpenWillow commit
+      label: BL2_ReBased commit
       placeholder: e.g. 2def180
     validations:
       required: true

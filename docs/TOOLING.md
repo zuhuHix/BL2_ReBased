@@ -1,7 +1,7 @@
 # Tooling reference
 
-The working detail behind the [README](../README.md): how to build, what each
-tool does, what has been checked, and what each check does and does not prove.
+The working detail behind the BL2_ReBased [README](../README.md): how to
+build, what each tool does, what has been checked, and what each check does and does not prove.
 Everything here reads the player's own installed game and writes only under
 the ignored `local/` directory.
 

@@ -1,4 +1,4 @@
-# Research corpus
+# Research corpus — BL2_ReBased
 
 The data behind [`docs/BL2_REMASTER_ANALYSIS.md`](../docs/BL2_REMASTER_ANALYSIS.md)
 and the measurements in [`docs/OPENWILLOW_ENGINE_PLAN.md`](../docs/OPENWILLOW_ENGINE_PLAN.md).

@@ -1,5 +1,5 @@
 name: Verification report
-description: Report the result of running OpenWillow's tools or viewer against your own copy of Borderlands 2.
+description: Report the result of running BL2_ReBased's tools or viewer against your own copy of Borderlands 2.
 title: "[verify] "
 labels: ["verification"]
 body:
@@ -24,7 +24,7 @@ body:
   - type: input
     id: commit
     attributes:
-      label: OpenWillow commit
+      label: BL2_ReBased commit
       placeholder: e.g. 2def180
     validations:
       required: true
@@ -49,7 +49,7 @@ body:
     id: mismatch
     attributes:
       label: What differs from the real game or from the documented numbers?
-      description: Missing geometry, mirrored textures, wrong colours, different export counts, crashes. Attach OpenWillow and original-game screenshots from the same spot if visual.
+      description: Missing geometry, mirrored textures, wrong colours, different export counts, crashes. Attach BL2_ReBased and original-game screenshots from the same spot if visual.
   - type: checkboxes
     id: rules
     attributes:
