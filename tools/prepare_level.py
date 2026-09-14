@@ -323,6 +323,64 @@ class Scene:
                 for item in opacity if isinstance(item, dict))
         return metadata
 
+    def glacier_primary_surface(self, key, base, textures):
+        """Explicit primary-layer approximation, never a recovered snow shader.
+
+        Restricted to the two inspected Sanctuary family members and the exact
+        resource texture set. UV0 is an approximation: native static permutation
+        data and the stripped blend graph are not interpreted by this policy.
+        """
+        base_path = 'Prop_Glacier.Materials.Mat_Glacier'
+        if self.identity(base).split(':', 1)[1] != base_path:
+            return None
+        if self.identity(key).split(':', 1)[1] not in (
+                base_path, 'Prop_Glacier.Materials.Mati_Glacier2x'):
+            return None
+        expected = {'Prop_Glacier.Textures.GlacierFront_Dif',
+                    'Prop_Glacier.Textures.GlacierFront_Nrm',
+                    'Prop_Terrain.Textures.Snow_Dif',
+                    'Prop_Skybox.MoveMe.R2Tex_SnowTempCubeStaticNegY'}
+        by_path = {self.identity(t).split(':', 1)[1]: t for t in textures}
+        if len(textures) != 4 or set(by_path) != expected:
+            return None
+        if any(self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] != 'Texture2D'
+               for t in textures):
+            return None
+        name = 'p_texscalar_rgmain_basnow'
+        scale = None
+        for ref in props(self.load(base[0])[base[1]]).get('Expressions', []):
+            expression = self.resolve(base[0], ref)
+            if expression is None:
+                continue
+            row = self.load(expression[0])[expression[1]]
+            p = props(row)
+            if p.get('ParameterName', '').casefold() == name:
+                if row['class'].rsplit('.', 1)[-1] != 'MaterialExpressionVectorParameter' or scale is not None:
+                    raise ValueError('Ambiguous glacier primary-layer scale')
+                scale = p.get('DefaultValue')
+        chain, current = [], key
+        while current != base:
+            if current in chain or len(chain) >= 32:
+                raise ValueError('Glacier parent cycle/depth limit')
+            chain.append(current)
+            current = self.resolve(current[0], props(self.load(current[0])[current[1]]).get('Parent', 0))
+            if current is None:
+                raise ValueError('Glacier parent does not reach inspected base')
+        for instance in reversed(chain):
+            overrides = [values(e).get('ParameterValue') for e in
+                         props(self.load(instance[0])[instance[1]]).get('VectorParameterValues', [])
+                         if values(e).get('ParameterName', '').casefold() == name]
+            if len(overrides) > 1:
+                raise ValueError('Duplicate glacier scale override')
+            if overrides:
+                scale = overrides[0]
+        if not isinstance(scale, dict) or not all(
+                isinstance(scale.get(c), (int, float)) and math.isfinite(scale[c]) for c in 'RGBA'):
+            raise ValueError('Missing or invalid glacier primary-layer scale')
+        return {'diffuse': by_path['Prop_Glacier.Textures.GlacierFront_Dif'],
+                'normal': by_path['Prop_Glacier.Textures.GlacierFront_Nrm'],
+                'scale': [float(scale[c]) for c in 'RGBA']}
+
     def cooked_material_textures(self, key, stack=()):
         if key in stack or len(stack) >= 32:
             raise ValueError('Material parent cycle/depth limit')
@@ -388,6 +446,27 @@ class Scene:
                                 textures, self.identity,
                                 lambda t: self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1],
                                 material.get('blend_mode', 'BLEND_Opaque'))
+                            glacier = (self.glacier_primary_surface(key, base, textures)
+                                       if inferred is None and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
+                                       else None)
+                            if glacier is not None:
+                                parameters['p_diffuse'] = glacier['diffuse']
+                                glacier_channels = ['diffuse']
+                                # Preserve any explicit normal parameter, including a null override.
+                                if not any(channel_for_parameter(p) == 'normal' for p in parameters):
+                                    parameters['p_normal'] = glacier['normal']
+                                    glacier_channels.append('normal')
+                                material['surface_approximation'] = {
+                                    'method': 'glacier_primary_layer_v1',
+                                    'status': 'partial_unverified',
+                                    'source_scale_parameter': 'P_TexScalar_RGMain_BASnow',
+                                    'source_scale': glacier['scale'],
+                                    'omitted': ['snow_blend', 'reflection', 'glow'],
+                                    'uv_selection': 'UV0 approximation; static permutation not decoded'}
+                                material['channel_uv'] = {
+                                    channel: {'index': 0, 'scale': glacier['scale'][:2]}
+                                    for channel in glacier_channels}
+                                self.issue(material['source'], 'Approximation: glacier primary diffuse/normal layer with retained tiling on UV0; snow blend, reflection, glow and static UV selection unverified')
                             if inferred is not None:
                                 parameters['p_diffuse'] = inferred
                                 material['diffuse_inference'] = self.identity(inferred)

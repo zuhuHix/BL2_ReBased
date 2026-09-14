@@ -282,6 +282,11 @@ This report separates absent diffuse, no supported channels, and unassigned
 slots. It follows actor overrides and does not change the scene or choose
 replacement textures. See the [Sanctuary material baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
 
+The audit also counts `surface_approximation` recipes separately. The two
+inspected glacier materials use a partial primary diffuse/normal layer with
+retained instance tiling on UV0; snow blend, glow and reflection remain open.
+See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
+
 ### First collision and walking slice
 
 Prepared scenes now include observed RB_BodySetup convex and box hulls. The

@@ -33,6 +33,10 @@ class MaterialAuditTest(unittest.TestCase):
         report = audit(scene)
         self.assertEqual(report['counts']['opaque_missing_diffuse_placed_sections'], 1)
         self.assertEqual(report['counts']['opaque_no_channels_placed_sections'], 0)
+        scene['materials']['base']['surface_approximation'] = {'status': 'partial_unverified'}
+        report = audit(scene)
+        self.assertEqual(report['counts']['partial_surface_approximation_placed_sections'], 1)
+        self.assertEqual(report['partial_surfaces'][0]['source'], 'base')
 
 
 if __name__ == '__main__':

@@ -18,8 +18,15 @@ def audit(scene):
             uses[material].append({'level': actor['level'], 'component': actor['source'],
                                    'mesh': mesh['source'], 'slot': slot})
     gaps = []
+    partial_surfaces = []
     counts = Counter()
     for name, material in scene['materials'].items():
+        if 'surface_approximation' in material:
+            partial_surfaces.append({'source': material['source'],
+                                     'placed_sections': len(uses[name]),
+                                     'approximation': material['surface_approximation']})
+            counts['partial_surface_approximations'] += 1
+            counts['partial_surface_approximation_placed_sections'] += len(uses[name])
         if material['channels'].get('diffuse'):
             counts['textured_diffuse'] += 1
             continue
@@ -50,6 +57,7 @@ def audit(scene):
             'placed_sections': sum(map(len, uses.values())), 'counts': dict(counts),
             'unassigned_placed_sections': len(uses[None]),
             'unassigned_placements': uses[None], 'gaps': gaps,
+            'partial_surfaces': partial_surfaces,
             'note': 'Counts describe manifest coverage, not visual fidelity or shader reconstruction.'}
 
 
@@ -63,7 +71,7 @@ def main():
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({k: v for k, v in report.items()
-                      if k not in ('gaps', 'unassigned_placements')}, indent=2))
+                      if k not in ('gaps', 'unassigned_placements', 'partial_surfaces')}, indent=2))
     for gap in report['gaps']:
         if gap['blend_mode'] == 'BLEND_Opaque':
             print(f"{gap['placed_sections']:4} sections | {gap['source']} | channels={','.join(gap['channels']) or 'none'}")

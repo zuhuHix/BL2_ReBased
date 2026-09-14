@@ -109,6 +109,15 @@ for name, definition in scene['materials'].items():
         sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if channel == 'normal'
                                    else unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if channel in ('diffuse', 'emissive')
                                    else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+        uv = definition.get('channel_uv', {}).get(channel)
+        if uv is not None:
+            coordinates = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate)
+            coordinates.set_editor_property('coordinate_index', uv['index'])
+            coordinates.set_editor_property('u_tiling', uv['scale'][0])
+            coordinates.set_editor_property('v_tiling', uv['scale'][1])
+            if not mel.connect_material_expressions(coordinates, '', sample, 'UVs'):
+                raise RuntimeError('Cannot connect material UV coordinates: ' +
+                                   str(mel.get_material_expression_input_names(sample)))
         if channel == 'diffuse':
             diffuse_sample = sample
         if channel == 'emissive':

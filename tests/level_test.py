@@ -25,6 +25,62 @@ def record(**kwargs):
 
 
 class SceneTests(unittest.TestCase):
+    def test_glacier_primary_layer_is_scoped_and_preserves_instance_scale(self):
+        scene = object.__new__(m.Scene)
+        base = 'Prop_Glacier.Materials.Mat_Glacier'
+        paths = {1: base, 2: 'Prop_Glacier.Materials.Mati_Glacier2x', 3: base + '.Scale',
+                 4: 'Prop_Glacier.Textures.GlacierFront_Dif',
+                 5: 'Prop_Glacier.Textures.GlacierFront_Nrm',
+                 6: 'Prop_Terrain.Textures.Snow_Dif',
+                 7: 'Prop_Skybox.MoveMe.R2Tex_SnowTempCubeStaticNegY'}
+        rows = {1: record(Expressions=[{'index': 3}]),
+                2: record(Parent={'index': 1}, VectorParameterValues=[tags(
+                    ParameterName='P_TexScalar_RGMain_BASnow',
+                    ParameterValue=dict(R=3, G=3, B=2, A=3))]),
+                3: {**record(ParameterName='P_TexScalar_RGMain_BASnow',
+                              DefaultValue=dict(R=1, G=1, B=2, A=2)),
+                    'class': 'Engine.MaterialExpressionVectorParameter'}}
+        rows.update({i: {'class': 'Engine.Texture2D'} for i in range(4, 8)})
+        scene.load = lambda package: rows
+        scene.identity = lambda key: 'Synthetic:' + paths[key[1]]
+        scene.resolve = lambda package, ref: (package, ref['index']) if ref else None
+        textures = [('Synthetic', i) for i in range(4, 8)]
+        recipe = lambda i, ts=textures: scene.glacier_primary_surface(('Synthetic', i), ('Synthetic', 1), ts)
+        self.assertEqual(recipe(1)['scale'], [1, 1, 2, 2])
+        self.assertEqual(recipe(2)['scale'], [3, 3, 2, 3])
+        self.assertEqual(recipe(2)['normal'], ('Synthetic', 5))
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: {}
+        scene.cooked_material_textures = lambda key: (('Synthetic', 1), textures, 32)
+        scene.texture = lambda key, channel: str(key[1]) + '_' + channel + '.png'
+        scene.material(('Synthetic', 2))
+        self.assertEqual(scene.materials['2']['channels'], {'diffuse': '4_diffuse.png', 'normal': '5_normal.png'})
+        self.assertEqual(scene.materials['2']['channel_uv']['diffuse']['scale'], [3, 3])
+        self.assertEqual(scene.materials['2']['surface_approximation']['status'], 'partial_unverified')
+        scene.materials.clear()
+        scene.material_parameters = lambda key: {'p_diffuse': None}
+        scene.material(('Synthetic', 2))
+        self.assertNotIn('surface_approximation', scene.materials['2'])
+        scene.materials.clear()
+        scene.material_parameters = lambda key: {'p_normal': None}
+        scene.material(('Synthetic', 2))
+        self.assertNotIn('normal', scene.materials['2']['channels'])
+        self.assertNotIn('normal', scene.materials['2']['channel_uv'])
+        self.assertIsNone(recipe(2, textures[:-1]))
+        self.assertIsNone(recipe(2, textures + [textures[0]]))
+        rows[4]['class'] = 'Engine.TextureCube'
+        self.assertIsNone(recipe(2))
+        rows[4]['class'] = 'Engine.Texture2D'
+        paths[2] = 'Prop_Glacier.Materials.UninspectedInstance'
+        self.assertIsNone(recipe(2))
+        paths[2] = 'Prop_Glacier.Materials.Mati_Glacier2x'
+        rows[2] = record(Parent={'index': 1}, VectorParameterValues=[tags(
+            ParameterName='P_TexScalar_RGMain_BASnow', ParameterValue=dict(R=float('nan'), G=1, B=1, A=1))])
+        with self.assertRaisesRegex(ValueError, 'invalid'):
+            recipe(2)
+
     def test_cooked_resource_bounds_and_opaque_tail(self):
         prefix = struct.pack('<3i16s2i', 0, 0, 1, bytes(16), 1, 2)
         payload = bytes(12) + prefix + struct.pack('<2i', 7, -3) + b'opaque'

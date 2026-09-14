@@ -24,12 +24,13 @@ well-bounded ones are marked *good first task*.
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
 - [ ] Sky rendering: translate the skybox sublevel.
-- [ ] Material fallbacks: fresh Sanctuary audit (2026-09-14) finds 49 materials
-      lacking diffuse, including 16 opaque definitions (76 placed sections).
-      Of those, 13 have no supported channels at all (54 sections), mostly
-      multi-layer snow/glacier materials. The glacier textures decode; blend
-      semantics and UV selection remain unresolved. See the
-      [material baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
+- [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
+      including 14 opaque definitions (43 placed sections). Of those, 11 have
+      no supported channels (21 sections). Two glacier materials (33 sections)
+      have an explicit primary-layer approximation with instance tiling; snow
+      blend, reflection/glow and static UV selection remain unresolved. See the
+      [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and
+      [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
 - [ ] Terrain / BSP geometry.
