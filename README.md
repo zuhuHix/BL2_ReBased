@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/banner.png" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
+<img src=".github/assets/banner.svg" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
 
 <br>
 
