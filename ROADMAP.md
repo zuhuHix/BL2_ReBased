@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-13
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-14
 
 ---
 
@@ -33,11 +33,15 @@ well-bounded ones are marked *good first task*.
 - [ ] Terrain / BSP geometry.
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
-- [ ] Walking collision (currently free-flight with collision disabled).
-- [ ] In-game map selector and broader coverage. A command-line base-game map
-      selector and third-map loading checks are available (2026-09-14).
-- [ ] Performance: Sanctuary ran at ~8–9 FPS during automation startup on the
-      development machine. Not yet profiled.
+- [ ] Walking collision beyond the Sanctuary placeholder slice: Ash and
+      Southpaw scenes not refreshed; sphere/capsule/PhysX shapes, blocking
+      volumes and terrain unsupported (2026-09-14).
+- [ ] Broader map coverage. Command-line and in-game selectors exist; the
+      in-game list only offers already imported scenes (2026-09-14).
+- [ ] Performance: Sanctuary profiled at 12–15 FPS on an Intel Iris Xe
+      laptop, GPU-bound with ~72% of the frame in TSR; `-LowEnd` reaches the
+      60 FPS cap. Candidate anti-aliasing change recorded, not applied. See
+      [performance record](docs/verification/PERFORMANCE.md).
 - [ ] Matched-viewpoint screenshots against the original game: the plan's
       per-map verification method. Needs someone with the game and both
       builds open.
@@ -100,7 +104,9 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
       APIs instead of CLI-only spikes)
 - [ ] Static mesh importer for all meshes
   - [x] All render LODs, all UV sets, section material references
-  - [ ] Collision hulls from `RB_BodySetup`
+  - [x] Collision hulls from `RB_BodySetup` (box and convex) *Caveat:*
+        sphere, capsule and cooked PhysX shapes unsupported; refreshed on
+        Sanctuary only
   - [ ] Source mesh data
 - [ ] Texture importer with TFC streaming
   - [x] `Textures.tfc`, DXT1/DXT5
@@ -132,12 +138,16 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 - [ ] Camera and movement
   - [x] Free-flight spectator pawn, saved start pose and FOV; automated
         movement/camera test passes on Ash and Sanctuary
-  - [ ] Placeholder character controller with collision
+  - [x] Placeholder character controller with collision (opt-in `-Walk`)
+        *Caveat:* UE5 movement defaults, verified at the Sanctuary start only
 - [ ] Map coverage: **3 / 82** (`Ash_P`, `Sanctuary_P`, `SouthpawFactory_P`)
   - [x] Command-line base-game map selector (`tools/viewer.py`)
   - [x] Optional DLC package discovery (82 installed map names total)
-  - [ ] In-game map selector
-  - [ ] Loading times and memory profile
+  - [x] In-game map selector (Tab list, digit keys; imported scenes only)
+        *Caveat:* automated level switch verified, physical key press not
+  - [ ] Loading times and memory profile *Caveat:* one settled frame-time
+        and process-memory sample on Sanctuary recorded; no load-time
+        measurement
 - [ ] Verification: side-by-side screenshots against the real game per map
       (not yet started; needs matched viewpoints)
 
@@ -147,7 +157,10 @@ if no map loads by month 6, stop and reassess.
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
 · [Cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md)
-· [Map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md).
+· [Map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md)
+· [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md)
+· [Collision and walking](COLLISION_WALKING_VERIFICATION.md)
+· [Performance / in-game selector](docs/verification/PERFORMANCE.md).
 
 ---
 
