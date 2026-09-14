@@ -6,8 +6,8 @@ records where each step actually stands, with the verification record that
 backs it. Checkbox states are conservative: a step is checked only when its
 verification is written down.
 
-Legend: ✅ done and verified · 🔄 in progress · ⬜ not started · ⚠️ done with a
-recorded caveat.
+Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
+Items marked *Caveat:* are done with a recorded limitation.
 
 **Project start:** 2026-09-09 · **Phase 0 gate:** 2026-09-10 · **Now:** Phase 1
 
@@ -43,7 +43,7 @@ well-bounded ones are marked *good first task*.
 
 ---
 
-## Phase 0 — Foundation and spikes ✅
+## Phase 0 — Foundation and spikes <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: 3–6 weeks. Actual: gated 2026-09-10, the day after the project started.*
 
@@ -58,17 +58,17 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       Python reader on all nine code packages.
 - [x] Census over every package in the install: 2,008 / 2,008 packages read,
       4,751,329 serialized exports; two UHD sidecar files identified and
-      skipped. ⚠️ Counts serialized copies, not unique assets; umodel
+      skipped. *Caveat:* Counts serialized copies, not unique assets; umodel
       cross-check pending.
 - [x] Tagged-property reader: scalars, object/class/component refs, fixed
       structs (`Vector`, `Rotator`, `Guid`, `LinearColor`, `Color`, `Quat`,
       `Vector2D`), nested structs, arrays via explicit element-type schema.
-      ⚠️ Array element types are not serialized in 832/46; reflection-driven
-      typing is future work. ⚠️ The property-start offset must be supplied;
+      *Caveat:* Array element types are not serialized in 832/46; reflection-driven
+      typing is future work. *Caveat:* The property-start offset must be supplied;
       the observed 4-byte prefix is `UNVERIFIED` as a rule.
 - [x] Property dump of a real `WeaponPartDefinition`
       (`AR_Barrel_Jakobs_Sawbar`) compared against BLCMM: all 13 tags match,
-      zero trailing bytes in three installed copies. ⚠️ One
+      zero trailing bytes in three installed copies. *Caveat:* One
       generated-subobject presentation discrepancy recorded in
       [DECISIONS.md](DECISIONS.md).
 - [x] Texture spike: `Texture2D` to PNG — DXT1/DXT5, inline, TFC-streamed and
@@ -79,13 +79,13 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       the probe mesh and its verified diffuse texture render in UE 5.8.2.
       First screenshot user-verified.
 
-**Gate ✅** — the census exists; one mesh and one texture from BL2 render in
+**Gate passed** — the census exists; one mesh and one texture from BL2 render in
 the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 2026-09-10.
 
 ---
 
-## Phase 1 — World viewer (M1) 🔄
+## Phase 1 — World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: 2–4 months full-time. Started 2026-09-10.*
 
@@ -105,9 +105,9 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 - [ ] Material translation
   - [x] v1: named diffuse/normal/specular/emissive parameters, parent
         inheritance, base-material defaults; opaque lit; fixed roughness
-        ⚠️ an approximation of UE3 shading, not graph translation
+        *Caveat:* an approximation of UE3 shading, not graph translation
   - [x] Diffuse inference from cooked Material resource texture lists when
-        no named parameter exists ⚠️ recorded as inference; graph
+        no named parameter exists *Caveat:* recorded as inference; graph
         connectivity, tint and masks `UNVERIFIED`
   - [ ] v2: node-graph translation, cel-shade edge, ink lines
 - [ ] Level loader
@@ -115,7 +115,7 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         `_Light`, `_Audio`, `_Combat`, `_Dynamic`, `_FX`)
   - [x] `StaticMeshActor`, `InterpActor`, `StaticMeshCollectionActor`
         transforms (collection tails: observed 84-byte layout, Ash and
-        Sanctuary) ⚠️ observed layout, not a general format guarantee
+        Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
   - [ ] Skybox
   - [ ] Terrain / BSP
@@ -144,7 +144,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 2 — UnrealScript VM (M2) ⬜
+## Phase 2 — UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +3–6 months.* Goal: Gearbox's own gameplay code executing.
 
@@ -167,7 +167,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 3 — Stock UE3 natives (M3a) ⬜
+## Phase 3 — Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +6–12 months.* Goal: the 1,914 documented UE3 natives. Ground
 truth: UDK.
@@ -188,7 +188,7 @@ collision, matching UDK-derived golden tests.
 
 ---
 
-## Phase 4 — Willow natives (M3b) ⬜ — the mountain
+## Phase 4 — Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt=""> — the mountain
 
 *Estimate: +12–24 months.* Goal: a Vault Hunter walks, shoots real guns, uses
 real skills, and enemies fight back. Ground truth: the original game
@@ -221,7 +221,7 @@ use a skill, die, respawn.
 
 ---
 
-## Phase 5 — Campaign completable (M4) ⬜
+## Phase 5 — Campaign completable (M4) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +12–24 months.*
 
@@ -237,7 +237,7 @@ use a skill, die, respawn.
 
 ---
 
-## Phase 6 — Parity and beyond (M5) ⬜
+## Phase 6 — Parity and beyond (M5) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 - [ ] Co-op netcode — our own
 - [ ] DLC coverage; The Pre-Sequel; standalone Dragon Keep

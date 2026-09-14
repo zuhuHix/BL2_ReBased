@@ -30,8 +30,8 @@ Think of Borderlands 2 as two things:
 
 | | What it is | State in 2026 |
 |---|---|---|
-| 🎒 **The stuff** | Maps, guns, characters, sounds, the story, the skill trees — all files sitting in your game folder | Brilliant. People still love it 14 years later. |
-| ⚙️ **The machine** | `Borderlands2.exe` — the 2012 program that loads the stuff and turns it into a game | Old, 32-bit, locked. Nobody outside Gearbox can change it. |
+| <img src=".github/assets/icons/files.svg" width="20" align="absmiddle" alt=""> **The stuff** | Maps, guns, characters, sounds, the story, the skill trees — all files sitting in your game folder | Brilliant. People still love it 14 years later. |
+| <img src=".github/assets/icons/gear.svg" width="20" align="absmiddle" alt=""> **The machine** | `Borderlands2.exe` — the 2012 program that loads the stuff and turns it into a game | Old, 32-bit, locked. Nobody outside Gearbox can change it. |
 
 Every big problem players complain about lives in **the machine**: multiplayer breaking, "out of memory" crashes, no ultrawide, no new maps, no level editor. Mods can change the *stuff*, but they can't touch the *machine* — and the machine is where the #1 complaint (broken co-op) lives.
 
@@ -61,14 +61,14 @@ When it's done — and "done" is years away, see the roadmap — this is what a 
 
 | | |
 |---|---|
-| 🤝 **Co-op that works** | Our own multiplayer. No SHiFT, no forced account linking, no "hardlock on the title screen." |
-| 🧠 **64-bit** | The ~4 GB memory wall behind most crashes and the Ultra HD pack problems — gone. |
-| 🖥️ **Modern graphics** | Real ultrawide, any resolution, unlocked framerate, optional modern lighting. |
-| 🗺️ **New maps** | Borderlands 2 never got a level editor. Unreal Engine 5 comes with one. |
-| 🧩 **Your mods still work** | Text mods (BLCMM) edit the same data we load. The plan is for them to just carry over. |
-| 💾 **Your saves still work** | Real save files, same characters. |
-| 🔒 **It can't be taken away** | If the servers go, the game keeps working. |
-| 🌙 **The Pre-Sequel too** | Same engine underneath, so it comes along later. |
+| <img src=".github/assets/icons/coop.svg" width="20" align="absmiddle" alt=""> **Co-op that works** | Our own multiplayer. No SHiFT, no forced account linking, no "hardlock on the title screen." |
+| <img src=".github/assets/icons/chip.svg" width="20" align="absmiddle" alt=""> **64-bit** | The ~4 GB memory wall behind most crashes and the Ultra HD pack problems — gone. |
+| <img src=".github/assets/icons/display.svg" width="20" align="absmiddle" alt=""> **Modern graphics** | Real ultrawide, any resolution, unlocked framerate, optional modern lighting. |
+| <img src=".github/assets/icons/map.svg" width="20" align="absmiddle" alt=""> **New maps** | Borderlands 2 never got a level editor. Unreal Engine 5 comes with one. |
+| <img src=".github/assets/icons/puzzle.svg" width="20" align="absmiddle" alt=""> **Your mods still work** | Text mods (BLCMM) edit the same data we load. The plan is for them to just carry over. |
+| <img src=".github/assets/icons/save.svg" width="20" align="absmiddle" alt=""> **Your saves still work** | Real save files, same characters. |
+| <img src=".github/assets/icons/shield.svg" width="20" align="absmiddle" alt=""> **It can't be taken away** | If the servers go, the game keeps working. |
+| <img src=".github/assets/icons/moon.svg" width="20" align="absmiddle" alt=""> **The Pre-Sequel too** | Same engine underneath, so it comes along later. |
 
 ## Roadmap
 
@@ -84,13 +84,13 @@ flowchart LR
 
 | Phase | In plain words | What you'll be able to do | Time (est.) | Status |
 |:--|:--|:--|:--|:--|
-| **0 · Read the files** | Teach the new engine to open every Borderlands 2 file | Nothing yet — it's the proof the idea works | 3–6 weeks | ✅ Done in a day |
-| **1 · See the maps** | Rebuild every map, texture and object inside UE5 | Fly around all 82 maps in a modern engine. Museum tour — no enemies, no guns | 2–4 months | 🔄 **Now** — 2 of 82 maps |
-| **2 · Run the game's brain** | Make Borderlands 2's own game logic execute. 64% of the game's code is data in the files; we run it as-is | Nothing visible — this is the invisible layer that runs missions, skills and guns | +3–6 months | ⬜ |
-| **3 · Make a body move** | Walking, jumping, falling, animation, collision | A test character moves around a real map the way it should | +6–12 months | ⬜ |
-| **4 · Guns, skills, enemies** | The hard part: rebuild ~3,800 pieces of Gearbox's code by watching the real game and matching it | Spawn, fight, loot a gun, use a skill, die, respawn. **The first thing that feels like Borderlands** | +1–2 years | ⬜ |
-| **5 · The whole campaign** | Missions, cutscenes, menus, saves, every map populated | Play Claptrap to the Warrior with your real save file | +1–2 years | ⬜ |
-| **6 · Beyond** | Our own co-op, DLC, The Pre-Sequel, mods, level editor | Everything on the wish list | ongoing | ⬜ |
+| **0 · Read the files** | Teach the new engine to open every Borderlands 2 file | Nothing yet — it's the proof the idea works | 3–6 weeks | <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> Done — in a day |
+| **1 · See the maps** | Rebuild every map, texture and object inside UE5 | Fly around all 82 maps in a modern engine. Museum tour — no enemies, no guns | 2–4 months | <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> **Now** — 2 of 82 maps |
+| **2 · Run the game's brain** | Make Borderlands 2's own game logic execute. 64% of the game's code is data in the files; we run it as-is | Nothing visible — this is the invisible layer that runs missions, skills and guns | +3–6 months | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
+| **3 · Make a body move** | Walking, jumping, falling, animation, collision | A test character moves around a real map the way it should | +6–12 months | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
+| **4 · Guns, skills, enemies** | The hard part: rebuild ~3,800 pieces of Gearbox's code by watching the real game and matching it | Spawn, fight, loot a gun, use a skill, die, respawn. **The first thing that feels like Borderlands** | +1–2 years | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
+| **5 · The whole campaign** | Missions, cutscenes, menus, saves, every map populated | Play Claptrap to the Warrior with your real save file | +1–2 years | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
+| **6 · Beyond** | Our own co-op, DLC, The Pre-Sequel, mods, level editor | Everything on the wish list | ongoing | <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> |
 
 **Total to a finished campaign: roughly 3–5 years** for one person working near full-time with AI assistance. That's an honest range, not a promise — and Phase 0 taking a day instead of weeks does *not* mean the rest will go 30× faster. Phase 0 was porting code that already existed; Phase 4 is reverse-engineering thousands of undocumented functions one at a time.
 
@@ -102,12 +102,12 @@ The detailed, checkbox-level tracker is [ROADMAP.md](ROADMAP.md).
 
 *Updated 2026-09-13. Project started 2026-09-09.*
 
-- ✅ The new engine reads **all 2,008 files** in a full Borderlands 2 install (base game + every DLC) — every one, no errors
-- ✅ It can pull out textures and 3D models, and they look right
-- ✅ Two maps — **Ash** (the Eridium Blight area) and **Sanctuary** — load as frozen scenes in Unreal Engine 5 with their real textures
-- ✅ You can fly through them with a free camera
-- ❌ The sky is black, some surfaces are white, nothing moves, there's no collision, and it runs slowly
-- ❌ 80 maps to go before Phase 1's gate
+- <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> The new engine reads **all 2,008 files** in a full Borderlands 2 install (base game + every DLC) — every one, no errors
+- <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> It can pull out textures and 3D models, and they look right
+- <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> Two maps — **Ash** (the Eridium Blight area) and **Sanctuary** — load as frozen scenes in Unreal Engine 5 with their real textures
+- <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> You can fly through them with a free camera
+- <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> The sky is black, some surfaces are white, nothing moves, there's no collision, and it runs slowly
+- <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> 80 maps to go before Phase 1's gate
 
 <details>
 <summary><b>Show me the numbers behind those checkmarks</b></summary>
@@ -131,11 +131,11 @@ Screenshots of loaded maps are game-derived, so they stay out of the repository.
 
 We believe so, and we work hard to keep it that way. The rules — the same ones OpenMW, OpenRCT2 and Ship of Harkinian have lived by for years:
 
-1. 🚫 **We never share game files.** Not a texture, not a sound, not a screenshot of game content. Nothing of Gearbox's ever enters this repository.
-2. 🔍 **We never use leaked or decompiled code.** We work from file formats and by watching what the real game does. That's it.
-3. 🎮 **You need the real game.** The engine refuses to start without it, and it never modifies your install.
-4. 💸 **Nobody makes money.** No paid builds, no "premium" anything. Ever.
-5. 🤖 **We say how it's built.** Most of the code is written with an AI assistant. One person checks every result against the real game.
+1. **We never share game files.** Not a texture, not a sound, not a screenshot of game content. Nothing of Gearbox's ever enters this repository.
+2. **We never use leaked or decompiled code.** We work from file formats and by watching what the real game does. That's it.
+3. **You need the real game.** The engine refuses to start without it, and it never modifies your install.
+4. **Nobody makes money.** No paid builds, no "premium" anything. Ever.
+5. **We say how it's built.** Solo developer, AI-assisted tooling, and every result is checked by hand against the real game before it counts.
 
 Full policy, in plain language: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE) — it covers our code and nothing else.
 
@@ -143,11 +143,11 @@ Full policy, in plain language: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](L
 
 You don't need to code.
 
-- 💬 **Talk** — questions, ideas, "will it do X?" → [Discussions](https://github.com/zuhuHix/BL2_ReEngine/discussions)
-- 🧪 **Test with your copy** — different DLC, Epic vs Steam, with/without the UHD pack: run our tools and tell us the numbers, or load a map and tell us what looks wrong → [Verification report](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=verification_report.yml)
-- 🔬 **Know the file formats?** → [Format finding](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=format_finding.yml)
-- 💻 **Code** — open items are in [ROADMAP.md](ROADMAP.md#now--next); read [CONTRIBUTING.md](CONTRIBUTING.md) first
-- ⭐ **Star and watch** the repo so you see the Phase 1 release
+- <img src=".github/assets/icons/chat.svg" width="20" align="absmiddle" alt=""> **Talk** — questions, ideas, "will it do X?" → [Discussions](https://github.com/zuhuHix/BL2_ReEngine/discussions)
+- <img src=".github/assets/icons/flask.svg" width="20" align="absmiddle" alt=""> **Test with your copy** — different DLC, Epic vs Steam, with/without the UHD pack: run our tools and tell us the numbers, or load a map and tell us what looks wrong → [Verification report](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=verification_report.yml)
+- <img src=".github/assets/icons/search.svg" width="20" align="absmiddle" alt=""> **Know the file formats?** → [Format finding](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=format_finding.yml)
+- <img src=".github/assets/icons/code.svg" width="20" align="absmiddle" alt=""> **Code** — open items are in [ROADMAP.md](ROADMAP.md#now--next); read [CONTRIBUTING.md](CONTRIBUTING.md) first
+- <img src=".github/assets/icons/star.svg" width="20" align="absmiddle" alt=""> **Star and watch** the repo so you see the Phase 1 release
 
 <details>
 <summary><b>FAQ</b></summary>
@@ -169,8 +169,8 @@ Yes — reading real save files is a Phase 5 task. The save format is already do
 **Why Unreal Engine 5?**
 Borderlands 2 is Unreal Engine *3*. UE3's systems (materials, animation, particles, cutscenes, scripting) all have direct descendants in UE5, so we translate into them instead of inventing replacements. That's a much smaller problem.
 
-**"AI-written engine" sounds like a red flag.**
-Fair. That's why every claim comes with the check that supports it, the tests run publicly, nothing merges without a human running it against the real game, and the human reads the code. Judge the evidence trail, not the tool.
+**Who's making this?**
+One person. I use AI coding tools as part of the workflow — the way you'd use a debugger or a code generator — and I say so because the project's own rules require it. What matters is that nothing counts until it's been run against the real game and the result is written down. Judge the evidence trail.
 
 **Why "ReBased"?**
 Because that's literally what it is: Borderlands 2, re-based onto a new engine. (The code still uses the working title *OpenWillow* in identifiers like `ow-package` — "Willow" is Gearbox's internal name for the BL2 engine.)
@@ -202,12 +202,12 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
                                  │                      │
    ┌─────────────────────────────┴───┐    ┌─────────────┴──────────────────┐
    │  NATIVE LAYER (C++)             │    │  ASSET PIPELINE  ◄── Phase 1   │
-   │  the 7,141 rebuilt functions    │    │  package loader (UPK/TFC)  ✅  │
-   │  Actor/Pawn/Controller, traces, │    │  textures, static meshes   ✅  │
-   │  movement, animation, particles,│    │  materials (approximation) 🔄  │
-   │  AI, stat core, weapons, UI     │    │  levels (actors+transforms)🔄  │
+   │  the 7,141 rebuilt functions    │    │  package loader (UPK/TFC)  [done] │
+   │  Actor/Pawn/Controller, traces, │    │  textures, static meshes   [done] │
+   │  movement, animation, particles,│    │  materials (approximation) [wip]  │
+   │  AI, stat core, weapons, UI     │    │  levels (actors+transforms)[wip]  │
    └─────────────────────────────▲───┘    │  skeletal, anim, lightmaps,    │
-                                 │        │  Kismet, Wwise, Bink, SWF  ⬜  │
+                                 │        │  Kismet, Wwise, Bink, SWF  [todo] │
    ┌─────────────────────────────┴───┐    └────────────────────────────────┘
    │  UNREALSCRIPT VM  ◄── Phase 2   │
    │  UObject model, bytecode        │
@@ -232,7 +232,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
 
 **Evidence first.** Every change ends in a check that can be performed against the real game, and the check is written down. Synthetic tests run in CI; differential checks run against a real install; visual checks are done by a human. [DECISIONS.md](DECISIONS.md) records every architectural choice, what was verified, and what wasn't.
 
-**AI-assisted, human-verified.** Developed by one person with [Claude Code](https://claude.com/claude-code). The AI writes most of the code; the human owns every verification against the real game, every architectural decision, and every license and provenance call. Guard hooks in [`.claude/`](.claude/) force a confirmation before the AI can touch bounds-checking code, dependency wiring or license files.
+**Solo developer, AI-assisted.** One person owns every architectural decision, every verification against the real game, and every license and provenance call. AI coding tools are part of the workflow, under a written brief ([CLAUDE.md](CLAUDE.md)) and guard hooks in [`.claude/`](.claude/) that require a confirmation before anything touches bounds-checking code, dependency wiring or license files.
 
 </details>
 

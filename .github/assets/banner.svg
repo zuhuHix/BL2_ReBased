@@ -1,48 +1,95 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="BL2_ReBased — Borderlands 2, re-based onto a new engine">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="440" viewBox="0 0 1400 440" role="img" aria-label="BL2_ReBased — an original cel-shaded desert landscape with the project name">
+  <!-- Original illustration in a cel-shaded, ink-outlined style. Contains no game assets. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#14161c"/>
-      <stop offset="1" stop-color="#1f2330"/>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#2b1a3d"/>
+      <stop offset="0.45" stop-color="#8a3a4a"/>
+      <stop offset="0.8"  stop-color="#e9873a"/>
+      <stop offset="1"    stop-color="#f7c25a"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#f5a623"/>
-      <stop offset="1" stop-color="#ff6a3d"/>
+    <linearGradient id="dark" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0"   stop-color="#0f0d14" stop-opacity="0.96"/>
+      <stop offset="0.72" stop-color="#0f0d14" stop-opacity="0.82"/>
+      <stop offset="1"   stop-color="#0f0d14" stop-opacity="0"/>
     </linearGradient>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    <pattern id="halftone" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(25)">
+      <circle cx="4" cy="4" r="1.6" fill="#000" fill-opacity="0.16"/>
     </pattern>
-    <clipPath id="round"><rect width="1200" height="320" rx="20"/></clipPath>
+    <pattern id="scan" width="1400" height="4" patternUnits="userSpaceOnUse">
+      <rect width="1400" height="1" fill="#000" fill-opacity="0.06"/>
+    </pattern>
+    <clipPath id="frame"><rect width="1400" height="440" rx="22"/></clipPath>
   </defs>
 
-  <g clip-path="url(#round)">
-    <rect width="1200" height="320" fill="url(#bg)"/>
-    <rect width="1200" height="320" fill="url(#grid)"/>
-    <!-- diagonal light sweep -->
-    <polygon points="760,0 1200,0 1200,320 560,320" fill="#ffffff" fill-opacity="0.025"/>
+  <g clip-path="url(#frame)" stroke-linejoin="round">
+    <!-- sky -->
+    <rect width="1400" height="440" fill="url(#sky)"/>
+    <!-- sun rays -->
+    <g transform="translate(1010,235)" stroke="#ffe08a" stroke-opacity="0.18" stroke-width="26">
+      <line x1="0" y1="0" x2="520" y2="-260"/><line x1="0" y1="0" x2="600" y2="-90"/><line x1="0" y1="0" x2="620" y2="120"/>
+      <line x1="0" y1="0" x2="-560" y2="-300"/><line x1="0" y1="0" x2="-640" y2="-60"/><line x1="0" y1="0" x2="200" y2="-420"/><line x1="0" y1="0" x2="-260" y2="-410"/>
+    </g>
+    <!-- sun -->
+    <circle cx="1010" cy="235" r="112" fill="#ffd66b" stroke="#1a1218" stroke-width="7"/>
+    <circle cx="1010" cy="235" r="112" fill="url(#halftone)"/>
+    <circle cx="1010" cy="235" r="82" fill="#fff0b8" fill-opacity="0.75"/>
+
+    <!-- far mesas -->
+    <path d="M-20 300 L120 300 L150 232 L260 232 L295 300 L470 300 L500 262 L560 262 L590 300 L700 300 L740 216 L900 216 L930 300 L1400 300 L1400 440 L-20 440 Z" fill="#7a3550" stroke="#1a1218" stroke-width="7"/>
+    <path d="M1080 300 L1110 250 L1230 250 L1262 300 Z" fill="#7a3550" stroke="#1a1218" stroke-width="7"/>
+
+    <!-- mid mesas -->
+    <path d="M-20 340 L210 340 L250 268 L330 268 L370 340 L620 340 L650 300 L820 300 L850 340 L1030 340 L1060 285 L1150 285 L1180 340 L1400 340 L1400 440 L-20 440 Z" fill="#b8532f" stroke="#1a1218" stroke-width="7"/>
+    <path d="M-20 340 L210 340 L250 268 L330 268 L370 340 L620 340 L650 300 L820 300 L850 340 L1030 340 L1060 285 L1150 285 L1180 340 L1400 340 L1400 440 L-20 440 Z" fill="url(#halftone)"/>
+    <!-- mesa shading (cel shadow side) -->
+    <path d="M330 268 L370 340 L330 340 L296 268 Z" fill="#1a1218" fill-opacity="0.35"/>
+    <path d="M820 300 L850 340 L800 340 L770 300 Z" fill="#1a1218" fill-opacity="0.35"/>
+    <path d="M1150 285 L1180 340 L1130 340 L1100 285 Z" fill="#1a1218" fill-opacity="0.35"/>
+
+    <!-- rock arch -->
+    <path d="M1240 340 L1240 262 Q1300 200 1360 262 L1360 340 L1330 340 L1330 276 Q1300 236 1270 276 L1270 340 Z" fill="#8f3f2a" stroke="#1a1218" stroke-width="7"/>
+
+    <!-- ground -->
+    <path d="M-20 372 L1400 372 L1400 440 L-20 440 Z" fill="#e0783a" stroke="#1a1218" stroke-width="7"/>
+    <path d="M-20 372 L1400 372 L1400 440 L-20 440 Z" fill="url(#halftone)"/>
+    <!-- road -->
+    <path d="M520 440 L660 372 L760 372 L980 440 Z" fill="#5a2a2a" stroke="#1a1218" stroke-width="7"/>
+    <path d="M700 380 L706 440" stroke="#ffd66b" stroke-width="5" stroke-dasharray="14 12"/>
+
+    <!-- dead tree -->
+    <g stroke="#1a1218" stroke-width="7" stroke-linecap="round" fill="none">
+      <path d="M1150 372 L1150 300 M1150 322 L1120 292 M1150 312 L1182 282 M1120 292 L1108 270 M1182 282 L1196 262"/>
+    </g>
+    <!-- cactus -->
+    <g stroke="#1a1218" stroke-width="6" fill="#3f7a4e">
+      <rect x="392" y="318" width="20" height="56" rx="10"/>
+      <rect x="370" y="330" width="16" height="30" rx="8"/><rect x="370" y="352" width="30" height="12" rx="6"/>
+      <rect x="418" y="322" width="16" height="30" rx="8"/><rect x="404" y="344" width="30" height="12" rx="6"/>
+    </g>
+
+    <!-- birds -->
+    <g stroke="#1a1218" stroke-width="4" fill="none" stroke-linecap="round">
+      <path d="M760 120 q10 -12 20 0 q10 -12 20 0"/><path d="M810 96 q8 -10 16 0 q8 -10 16 0"/><path d="M730 150 q7 -9 14 0 q7 -9 14 0"/>
+    </g>
+
+    <!-- scanlines + vignette -->
+    <rect width="1400" height="440" fill="url(#scan)"/>
+    <!-- left title panel -->
+    <rect width="1400" height="440" fill="url(#dark)"/>
     <!-- accent bar -->
-    <rect x="0" y="0" width="8" height="320" fill="url(#accent)"/>
+    <rect x="0" y="0" width="10" height="440" fill="#ffb02e"/>
   </g>
 
   <!-- title block -->
-  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif">
-    <text x="64" y="118" font-size="20" letter-spacing="6" fill="#f5a623" font-weight="600">COMMUNITY ENGINE PROJECT</text>
-    <text x="62" y="192" font-size="76" font-weight="800" fill="#ffffff" letter-spacing="-1">BL2_ReBased</text>
-    <text x="64" y="236" font-size="24" fill="#c9ced8">Borderlands 2, re-based onto a modern engine. Your files, a new machine.</text>
-    <text x="64" y="272" font-size="16" fill="#8b93a3">Clean-room · MIT licensed · needs your own copy of the game · not affiliated with Gearbox / 2K / Take-Two</text>
+  <g font-family="Impact, 'Arial Black', 'Segoe UI Black', Inter, sans-serif">
+    <text x="70" y="122" font-size="18" letter-spacing="7" fill="#ffb02e" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-weight="700">COMMUNITY ENGINE PROJECT</text>
+    <text x="66" y="222" font-size="104" fill="#1a1218" stroke="#1a1218" stroke-width="14" stroke-linejoin="round">BL2_ReBased</text>
+    <text x="66" y="222" font-size="104" fill="#fff4d6">BL2_ReBased</text>
   </g>
-
-  <!-- right-side phase meter -->
-  <g transform="translate(900,86)" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif">
-    <text x="0" y="0" font-size="13" letter-spacing="3" fill="#8b93a3" font-weight="600">ROADMAP</text>
-    <g transform="translate(0,18)">
-      <rect x="0"   y="0" width="36" height="10" rx="3" fill="#f5a623"/>
-      <rect x="42"  y="0" width="36" height="10" rx="3" fill="#f5a623" fill-opacity="0.45"/>
-      <rect x="84"  y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
-      <rect x="126" y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
-      <rect x="168" y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
-      <rect x="210" y="0" width="36" height="10" rx="3" fill="#ffffff" fill-opacity="0.12"/>
-    </g>
-    <text x="0" y="52" font-size="14" fill="#c9ced8">Phase 1 of 6 · World viewer</text>
-    <text x="0" y="74" font-size="14" fill="#8b93a3">2 of 82 maps load · nothing playable yet</text>
+  <g font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif">
+    <text x="70" y="270" font-size="26" fill="#ffe7c2" font-weight="600">Borderlands 2, re-based onto a modern engine.</text>
+    <text x="70" y="304" font-size="20" fill="#e0c9b0">Your files. A new machine. Working co-op, 64-bit, modern graphics, new maps.</text>
+    <text x="70" y="372" font-size="15" fill="#b9a690">Clean-room · MIT · needs your own copy of the game · fan project, not affiliated with Gearbox / 2K / Take-Two</text>
+    <text x="70" y="398" font-size="15" fill="#b9a690">Phase 1 of 6 · 2 of 82 maps load · nothing playable yet</text>
   </g>
 </svg>
