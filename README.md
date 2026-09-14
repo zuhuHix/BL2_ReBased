@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src=".github/assets/banner.png" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
+<img src=".github/assets/banner.svg" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
 
 <br>
 
 [![CI](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Phase](https://img.shields.io/badge/phase-1%20of%206%20%C2%B7%20world%20viewer-orange)
-![Maps](https://img.shields.io/badge/maps%20loading-2%20%2F%2082-yellow)
+![Maps](https://img.shields.io/badge/maps%20loading-3%20%2F%2082-yellow)
 ![Playable](https://img.shields.io/badge/playable-not%20yet-lightgrey)
 [![Discussions](https://img.shields.io/badge/chat-discussions-8250df)](https://github.com/zuhuHix/BL2_ReEngine/discussions)
 
@@ -102,7 +102,7 @@ The detailed, checkbox-level tracker is [ROADMAP.md](ROADMAP.md).
 
 ## Where we are today
 
-*Updated 2026-09-13.*
+*Updated 2026-09-14.*
 
 - <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> The new engine reads **all 2,008 files** in a full Borderlands 2 install (base game + every DLC). Every one, no errors
 - <img src=".github/assets/icons/done.svg" width="20" align="absmiddle" alt=""> It can pull out textures and 3D models, and they look right
@@ -300,133 +300,6 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 
 ---
 
-## Census and asset extraction
-
-```powershell
-$game = "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2"
-python tools/census.py --reader build/Release/ow-package.exe --game $game --output local/census.json
-python tools/prepare_probe.py --reader build/Release/ow-package.exe --game $game
-```
-
-Both write only under `local/`, which is ignored. The census exits non-zero
-if any package fails to read and lists the error per package. The probe
-writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
-hashes of the package and outputs.
-
-Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
-explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
-all UV sets; OBJ output intentionally writes one selected LOD and its first UV
-set. Source mesh data and skeletal meshes remain future work. Tagged convex/box
-collision is available in the first walking slice described below.
-
-## Host engine probe (Phase 0 complete)
-
-`host/ue5/OpenWillow/` is a minimal UE5 C++ project whose module refuses to
-start without `OPENWILLOW_BL2` pointing at an installed game.
-`tools/run_ue_probe.ps1 -Engine <UE5 root> -Game <BL2 root>` builds it and
-launches the editor with `host/ue5/import_probe.py`, which imports the probe
-OBJ and PNG, wires the texture into a material, and places the mesh, a camera
-and lights in `/Game/Phase0/Phase0`. This editor import remains a diagnostic
-spike, not the eventual runtime loader.
-
-The next slice below adds Material v1 and one persistent map with its sublevels
-using the package and asset APIs.
-
-## Material v1 and first map loader
-
-```powershell
-python tools/prepare_level.py --reader build/Release/ow-package.exe --game $game --map Ash_P
-python tests/level_test.py
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game
-```
-
-The preparer follows `Ash_P`'s serialized sublevel references, extracts reusable
-LOD0 mesh sections and four-channel materials, and writes `local/ash/scene.json`.
-The UE5 importer creates `/Game/OpenWillow/Ash_P/Ash_P` with sublevel folders,
-collection and ordinary actor transforms, section material overrides and a
-spectator camera. Play controls: WASD/mouse, Q/E down/up. `_Dynamic` placements
-remain static; there is no physics or script execution. Use `-ImportOnly` for a
-headless editor import; that does not validate rendering or camera gestures.
-
-Material v1 supports named diffuse/normal/specular/emissive texture parameters,
-parent inheritance and named base-material defaults. It uses opaque lit shading,
-linear normal/specular maps, sRGB diffuse/emissive, specular red, emissive RGB
-masked by alpha, and constant roughness 0.65. This approximates UE3 shading. Unsupported assets, graphs and
-interactive component owners are listed in `scene.json` under `issues`.
-Terrain/BSP, skeletal meshes, lightmaps and full material graphs are not loaded.
-
-The imported map uses a reproducible inspection lighting rig: a warm movable
-directional sun at intensity 1.0, a cool movable skylight at intensity 0.5
-using UE's neutral gray light cubemap, a runtime sphere reflection capture centered at the start camera, automatic
-exposure, and a 0.35 ambient-occlusion post-process override. The rig is
-anchored at the start camera because UE3 sky/environment placements can carry
-intentionally huge scales.
-UE3 lightmaps and native light actors are not translated yet, so this rig is for
-geometry and material checks; its visual match to Borderlands 2 remains open.
-
-`--scene-records tools/level-arrays.schema` is bulk CLI metadata for this slice;
-`--payload <positive export index>` exposes bounded bytes for observed collection
-tails. The Ash-specific prefixes and native collection layout remain subject to
-independent visual/in-game validation; see DECISIONS.md.
-
-`-ImportOnly` also reopens and verifies the saved scene: placement counts,
-collection transforms, material overrides, imported section bounds against
-source OBJ vertices, and material graph/color-space settings. To exercise all
-four channels independently of game data, run `python tests/prepare_ue_smoke.py`
-then pass `-Scene local/material-smoke -ImportOnly` to the launcher. `-SkipBuild`
-uses an already compiled host. All fixture data is synthetic.
-
-The first Ash import contains 5,059 placements / 5,235 mesh sections and passes
-saved-scene verification. A fresh UE5.8 Lit editor frame and a separate game
-window now confirm the textured start-camera view; wider-map visual coverage
-and camera gestures remain open. See [verification evidence and remaining limits](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md).
-
-### Continue Phase 1: Sanctuary and the free-flight viewer
-
-The viewer now uses the possessed spectator pawn as its camera after restart.
-Its collision is disabled for free flight; this does not implement walking or
-UE3 collision parity. Open an already imported scene without another import:
-
-```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild
-```
-
-Preparation defaults to a separate `local/<map-name>` directory, so preparing
-`Sanctuary_P` no longer writes the Ash manifest by default. To iterate on material
-translation without extracting meshes again:
-
-```powershell
-python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ImportOnly -SkipBuild
-./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary
-```
-
-Use `--reuse-textures` only with the same unchanged game installation. The refresh
-preserves placement data and resolves materials by both path and class. A single
-unnamed sample with an explicit `_Dif` texture name can supply approximate diffuse
-color when there is no named diffuse parameter; this is recorded as an inference,
-not reconstruction of stripped graphs or material tint.
-
-The runtime test checks pawn movement and camera following and captures three
-settled views in `Saved/Screenshots/WindowsEditor`. It supplies engine movement
-input, not physical keyboard/mouse gestures. The test process uses a 1 FPS startup
-threshold to allow correctness inspection on slow maps; this is not a performance
-pass. See [Phase 1 viewer verification](docs/verification/PHASE1_VIEWER_VERIFICATION.md).
-
-### First collision and walking slice
-
-Prepared scenes now include observed RB_BodySetup convex and box hulls. The
-collision refresh/import and walking regression have been verified on Sanctuary.
-For a scene already imported with collision, launch the placeholder character:
-
-```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -Walk
-```
-
-Use WASD and mouse, with Space to jump. Omit `-Walk` for the free-flight viewer.
-This uses UE5 movement defaults tuned for inspection; it does not reproduce BL2
-movement physics. See [collision preparation, checks and limits](COLLISION_WALKING_VERIFICATION.md).
 <div align="center">
 <sub>BL2_ReBased is an independent fan project. Borderlands and related marks are trademarks of their respective owners. Not affiliated with, endorsed by or supported by Gearbox Software, 2K Games or Take-Two Interactive. Promotional artwork is used for identification only. Formerly "OpenWillow".</sub>
 </div>

@@ -113,7 +113,8 @@ Texture extraction decodes every available resident mip and supports only
 `PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
 explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
 all UV sets; OBJ output intentionally writes one selected LOD and its first UV
-set. Source mesh data, collision hulls and skeletal meshes remain future work.
+set. Source mesh data and skeletal meshes remain future work; tagged convex/box
+collision hulls are covered in the walking slice below.
 
 ## Verification status of the reader
 
@@ -270,6 +271,20 @@ samples during movement (mean and p95 milliseconds), current process physical
 memory and peak process physical memory. These are short correctness-run
 diagnostics, affected by startup, window state and shader work; they are not
 a controlled renderer benchmark or GPU-memory measurement.
+
+### First collision and walking slice
+
+Prepared scenes now include observed RB_BodySetup convex and box hulls. The
+collision refresh/import and walking regression have been verified on Sanctuary.
+For a scene already imported with collision, launch the placeholder character:
+
+```powershell
+./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -Walk
+```
+
+Use WASD and mouse, with Space to jump. Omit `-Walk` for the free-flight viewer.
+This uses UE5 movement defaults tuned for inspection; it does not reproduce BL2
+movement physics. See [collision preparation, checks and limits](../COLLISION_WALKING_VERIFICATION.md).
 
 ### Selecting an installed map
 
