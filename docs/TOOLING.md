@@ -275,7 +275,8 @@ memory and peak process physical memory. These are short correctness-run
 diagnostics, affected by startup, window state and shader work; they are not
 a controlled renderer benchmark or GPU-memory measurement.
 
-To list remaining diffuse gaps and their effective placed section uses:
+To list remaining diffuse gaps, their effective placed section uses, and the
+recorded repair buckets:
 
 ```powershell
 python tools/audit_scene_materials.py --scene local/sanctuary --output local/sanctuary/material-audit.json
@@ -283,12 +284,24 @@ python tools/audit_scene_materials.py --scene local/sanctuary --output local/san
 
 This report separates absent diffuse, no supported channels, and unassigned
 slots. It follows actor overrides and does not change the scene or choose
-replacement textures. See the [Sanctuary material baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
+replacement textures. `gap_status_counts` distinguishes partial channels,
+cooked-resource candidates and no-supported-channel fallbacks; `issue_counts`
+groups unsupported component owners, invalid color streams, collision gaps and
+approximations. Add `--all-gaps` when masked/translucent gaps should be printed
+alongside the default opaque priority list. See the [Sanctuary material
+baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
 
 The audit also counts `surface_approximation` recipes separately. The two
 inspected glacier materials use a partial primary diffuse/normal layer with
 retained instance tiling on UV0; snow blend, glow and reflection remain open.
 See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
+
+The generated UE5 inspection map now also receives a temporary
+`OpenWillow_SkyAtmosphere` actor, with the imported sun registered as its
+atmosphere light. This supplies a visible non-black background while native
+`_Skybox` translation and the `PF_A8R8G8B8` texture path remain open. The actor
+is explicitly labelled in `ue-import.json` and `ue-verify.json` as
+`temporary_sky_fallback`; it is not visual-parity evidence.
 
 ### First collision and walking slice
 

@@ -19,11 +19,14 @@ The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 
 - [ ] Decode `PF_A8R8G8B8` textures: the sky transition texture in Ash uses
-      it, which is why the sky is black. *Good first task.*
+      it. Imported scenes now have a temporary UE5 atmosphere fallback, but
+      this format is still required for the native sky path. *Good first task.*
 - [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
-- [ ] Sky rendering: translate the skybox sublevel.
+- [ ] Sky rendering: translate the skybox sublevel. The host currently adds a
+      labelled `OpenWillow_SkyAtmosphere` fallback for non-black inspection
+      views; this is not native sky parity.
 - [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
       including 14 opaque definitions (43 placed sections). Of those, 11 have
       no supported channels (21 sections). Two glacier materials (33 sections)

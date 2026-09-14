@@ -283,6 +283,22 @@ sun_component.set_editor_property('light_source_angle', 0.5357)
 sun_component.set_editor_property('dynamic_shadow_distance_movable_light',
                                    min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 2.0, 50000.0))
 sun_component.set_editor_property('dynamic_shadow_cascades', 4)
+# The temporary UE5 atmosphere needs an explicit atmosphere light. This is a
+# host-only fallback; it does not claim to be Sanctuary's native sky setup.
+try:
+    sun_component.set_atmosphere_sun_light(True)
+except Exception:
+    try:
+        sun_component.set_editor_property('atmosphere_sun_light', True)
+    except Exception:
+        pass
+try:
+    sun_component.set_atmosphere_sun_light_index(0)
+except Exception:
+    try:
+        sun_component.set_editor_property('atmosphere_sun_light_index', 0)
+    except Exception:
+        pass
 
 sky = actors.spawn_actor_from_class(unreal.SkyLight, lighting_center)
 sky.set_actor_label('OpenWillow_SkyFill')
@@ -299,6 +315,32 @@ sky_component.set_editor_property('lower_hemisphere_is_black', False)
 sky_component.set_editor_property('lower_hemisphere_color', unreal.LinearColor(0.08, 0.10, 0.14, 1.0))
 sky_component.set_intensity(0.5)
 sky_component.set_light_color(unreal.LinearColor(0.72, 0.82, 1.0, 1.0))
+
+# A native UE3 skybox is not translated yet. Keep the inspection map from
+# rendering an empty black background while that work remains open. The
+# atmosphere is deliberately labelled and reported as temporary so visual
+# checks cannot mistake it for recovered Sanctuary sky data.
+sky_atmosphere = actors.spawn_actor_from_class(unreal.SkyAtmosphere, lighting_center)
+sky_atmosphere.set_actor_label('OpenWillow_SkyAtmosphere')
+sky_atmosphere.set_folder_path('Lighting')
+sky_atmosphere_component = sky_atmosphere.get_component_by_class(unreal.SkyAtmosphereComponent)
+if sky_atmosphere_component is None:
+    raise RuntimeError('UE5 SkyAtmosphere actor has no SkyAtmosphereComponent')
+for property_name, value in (
+        ('rayleigh_scattering_scale', 0.55),
+        ('mie_scattering_scale', 0.35),
+        ('mie_absorption_scale', 0.08),
+        ('mie_anisotropy', 0.78),
+        ('multi_scattering_factor', 0.8),
+        ('sky_luminance_factor', unreal.LinearColor(0.72, 0.80, 1.0, 1.0)),
+        ('sky_and_aerial_perspective_luminance_factor', unreal.LinearColor(0.72, 0.80, 1.0, 1.0)),
+        ('height_fog_contribution', 0.25)):
+    try:
+        sky_atmosphere_component.set_editor_property(property_name, value)
+    except Exception:
+        # Keep the fallback portable across UE5 minor versions where an
+        # atmosphere tuning property may not be exposed to editor Python.
+        pass
 
 capture_radius = min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 1.15, 16384.0)
 capture = actors.spawn_actor_from_class(unreal.SphereReflectionCapture, lighting_center)
@@ -350,6 +392,7 @@ unreal.EditorAssetLibrary.save_directory(destination)
     'source_placements': len(scene['actors']), 'issues': len(scene['issues']),
     'lighting': {'sun_intensity': 1.0, 'sky_intensity': 0.5,
                  'reflection_capture_radius': max(capture_radius, 1000.0),
-                 'exposure': 'auto', 'ambient_occlusion': 0.35},
+                 'exposure': 'auto', 'ambient_occlusion': 0.35,
+                 'temporary_sky_fallback': 'UE5_SkyAtmosphere'},
     'visual_validation': 'pending'}, indent=2))
-unreal.log(f'OpenWillow: imported {count} mesh sections with lighting rig. Play: WASD + mouse, E/Q vertical flight.')
+unreal.log(f'OpenWillow: imported {count} mesh sections with lighting rig and temporary UE5 sky fallback. Play: WASD + mouse, E/Q vertical flight.')
