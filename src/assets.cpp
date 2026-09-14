@@ -492,6 +492,7 @@ MeshAsset readMesh(const Package& package, int32_t index, size_t propertyOffset)
     MeshAsset asset;
     asset.path = package.path(index);
     asset.lods.reserve(lodCount);
+    asset.bodySetup = body;
     for (size_t i = 0; i < lodCount; ++i)
         asset.lods.push_back(readLod(package, reader));
     return asset;
@@ -540,6 +541,7 @@ std::string mesh(const Package& package, int32_t index, size_t propertyOffset,
     std::ostringstream report;
     report << "{\"path\":" << quote(asset.path)
            << ",\"lods\":" << asset.lods.size()
+           << ",\"body_setup\":" << asset.bodySetup
            << ",\"selected_lod\":" << selectedLod
            << ",\"vertices\":" << selected.vertices.size()
            << ",\"triangles\":" << selected.indices.size() / 3

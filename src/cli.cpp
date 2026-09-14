@@ -129,6 +129,7 @@ int main(int argc, char** argv) {
                 std::cout << "{\"index\":" << i << ",\"path\":" << quote(package->path(i))
                           << ",\"class\":" << quote(cls) << ",\"outer\":" << object.outer;
                 if (cls.find("StaticMesh") != std::string::npos ||
+                    cls == "Engine.RB_BodySetup" ||
                     cls.find("InterpActor") != std::string::npos ||
                     cls.find("StaticMeshComponent") != std::string::npos ||
                     cls.find("LevelStreaming") != std::string::npos ||

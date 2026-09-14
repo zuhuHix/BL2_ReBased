@@ -13,7 +13,7 @@ def ints(*values):
 names = ['None', 'Root', 'Child', 'Class', 'IntProperty', 'FloatProperty',
          'BoolProperty', 'NameProperty', 'ObjectProperty', 'StrProperty',
          'ByteProperty', 'StructProperty', 'ArrayProperty', 'Test', 'Enum',
-         'Choice', 'Vector', 'UnknownProperty', 'Wide😀', 'Quoted"\\\n']
+         'Choice', 'Vector', 'UnknownProperty', 'Wide😀', 'Quoted"\\\n', 'Plane', 'Matrix', 'Box']
 def fname(name, number=0):
     return ints(names.index(name), number)
 
@@ -57,6 +57,24 @@ with tempfile.TemporaryDirectory() as folder:
         path.write_bytes(package(payload, **kwargs))
         return subprocess.run([reader, str(path), *options], capture_output=True, text=True, encoding='utf-8')
     options = ('--properties', '1', '--property-offset', '4')
+    fixed = {
+        'Plane': (struct.pack('<4f', 7, 2, 3, 5), {'W': 7, 'X': 2, 'Y': 3, 'Z': 5}),
+        'Box': (struct.pack('<6fB', -3, -2, -1, 4, 5, 6, 1),
+                {'Min': {'X': -3, 'Y': -2, 'Z': -1}, 'Max': {'X': 4, 'Y': 5, 'Z': 6}, 'IsValid': 1}),
+        'Matrix': (struct.pack('<16f', 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 1, 11, 22, 33),
+                   {'XPlane': {'W': 0, 'X': 0, 'Y': 1, 'Z': 0},
+                    'YPlane': {'W': 0, 'X': -1, 'Y': 0, 'Z': 0},
+                    'ZPlane': {'W': 0, 'X': 0, 'Y': 0, 'Z': 1},
+                    'WPlane': {'W': 1, 'X': 11, 'Y': 22, 'Z': 33}}),
+    }
+    for kind, (raw, expected) in fixed.items():
+        result = run(ints(0) + tag('StructProperty', raw, fname(kind)) + fname('None'), *options)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)['properties'][0]['value'] == expected
+        for end in range(len(raw)):
+            assert run(ints(0) + tag('StructProperty', raw[:end], fname(kind)) + fname('None'), *options).returncode != 0
+    invalid_box = fixed['Box'][0][:-1] + b'\x02'
+    assert run(ints(0) + tag('StructProperty', invalid_box, fname('Box')) + fname('None'), *options).returncode != 0
     payload = ints(123) + b''.join(fields) + fname('None') + b'tail'
     result = run(payload, *options)
     assert result.returncode == 0, result.stderr
