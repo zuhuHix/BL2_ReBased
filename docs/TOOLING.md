@@ -110,7 +110,7 @@ writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
 hashes of the package and outputs.
 
 Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
+`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`; payload-at-end mips and other pixel formats still fail
 explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
 all UV sets; OBJ output intentionally writes one selected LOD and its first UV
 set. Source mesh data and skeletal meshes remain future work; tagged convex/box
@@ -299,7 +299,8 @@ See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
 The generated UE5 inspection map now also receives a temporary
 `OpenWillow_SkyAtmosphere` actor, with the imported sun registered as its
 atmosphere light. This supplies a visible non-black background while native
-`_Skybox` translation and the `PF_A8R8G8B8` texture path remain open. The actor
+`_Skybox` translation remains open; `PF_A8R8G8B8` texture extraction is now
+verified (see [record](verification/A8R8G8B8_TEXTURE.md)). The actor
 is explicitly labelled in `ue-import.json` and `ue-verify.json` as
 `temporary_sky_fallback`; it is not visual-parity evidence.
 

@@ -18,9 +18,9 @@ Items marked *Caveat:* are done with a recorded limitation.
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 
-- [ ] Decode `PF_A8R8G8B8` textures: the sky transition texture in Ash uses
-      it. Imported scenes now have a temporary UE5 atmosphere fallback, but
-      this format is still required for the native sky path. *Good first task.*
+- [x] Decode `PF_A8R8G8B8` textures: synthetic pixel/bulk tests pass and the
+      real 256x256 Ash sky transition texture extracts successfully. Native sky
+      shading remains open. See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
 - [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
@@ -118,7 +118,8 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
   - [ ] Source mesh data
 - [ ] Texture importer with TFC streaming
   - [x] `Textures.tfc`, DXT1/DXT5
-  - [ ] `PF_A8R8G8B8` and other pixel formats
+  - [x] `PF_A8R8G8B8` (automated extraction verified)
+  - [ ] Other pixel formats
   - [ ] `CharTextures.tfc`, `Lighting.tfc`; UHD pack optional
 - [ ] Material translation
   - [x] v1: named diffuse/normal/specular/emissive parameters, parent

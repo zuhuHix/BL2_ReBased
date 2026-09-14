@@ -119,11 +119,24 @@ void png(const std::filesystem::path& path, uint32_t width, uint32_t height, con
     write(path, result);
 }
 
-Bytes dxt(const Bytes& data, uint32_t width, uint32_t height, bool dxt5) {
-    const size_t blockBytes = dxt5 ? 16 : 8;
+void textureDimensions(uint32_t width, uint32_t height) {
     check(width && height && width <= 16384 && height <= 16384 &&
               uint64_t(width) * height <= 64u * 1024 * 1024,
           "invalid texture dimensions or exceeds 256 MiB decoded limit");
+}
+
+Bytes argb(Bytes data, uint32_t width, uint32_t height) {
+    textureDimensions(width, height);
+    check(data.size() == size_t(width) * height * 4, "A8R8G8B8 mip byte count mismatch");
+    // Little-endian A8R8G8B8 stores B,G,R,A; PNG expects R,G,B,A.
+    for (size_t at = 0; at < data.size(); at += 4)
+        std::swap(data[at], data[at + 2]);
+    return data;
+}
+
+Bytes dxt(const Bytes& data, uint32_t width, uint32_t height, bool dxt5) {
+    const size_t blockBytes = dxt5 ? 16 : 8;
+    textureDimensions(width, height);
     check(data.size() == size_t((width + 3) / 4) * ((height + 3) / 4) * blockBytes,
           "DXT mip byte count mismatch");
     Bytes pixels(size_t(width) * height * 4);
@@ -370,8 +383,8 @@ TextureAsset readTexture(const Package& package, int32_t index, size_t propertyO
     const auto nativeAt = reader.pos;
     const auto objectEnd = reader.limit;
     const auto [format, cache] = textureProperties(package, reader, index, propertyOffset, objectEnd);
-    check(format == "PF_DXT1" || format == "PF_DXT5",
-          "texture importer supports PF_DXT1/PF_DXT5");
+    check(format == "PF_DXT1" || format == "PF_DXT5" || format == "PF_A8R8G8B8",
+          "texture importer supports PF_DXT1/PF_DXT5/PF_A8R8G8B8");
 
     reader.pos = nativeAt;
     reader.limit = objectEnd;
@@ -427,7 +440,9 @@ TextureAsset readTexture(const Package& package, int32_t index, size_t propertyO
         mip.offset = record.offset;
         mip.width = record.width;
         mip.height = record.height;
-        mip.rgba = dxt(payload, record.width, record.height, format == "PF_DXT5");
+        mip.rgba = format == "PF_A8R8G8B8"
+                       ? argb(std::move(payload), record.width, record.height)
+                       : dxt(payload, record.width, record.height, format == "PF_DXT5");
         check(mip.rgba.size() <= 512u * 1024 * 1024 &&
                   totalDecoded <= 512u * 1024 * 1024 - mip.rgba.size(),
               "texture mip decoded data exceeds importer limit");
