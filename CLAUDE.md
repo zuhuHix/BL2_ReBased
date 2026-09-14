@@ -1,22 +1,22 @@
-# BL2_ReBased (code prefix OpenWillow/ow) — working notes for AI assistants
+# BL2_ReBased (code prefix OpenWillow/ow): working notes for AI assistants
 
 Read the "Is this legal?" section of README.md and docs/LEGAL.md first. The rules are
 non-negotiable: no game files or asset dumps in the repo, no leaked/decompiled
 source, record provenance and licenses, disclose AI assistance, keep
 verification claims honest.
 
-## Sensitive areas — stop and warn before editing
+## Sensitive areas: stop and warn before editing
 
 Before changing any of these, tell the user explicitly that the area is
 sensitive, say what you intend to change, and wait for confirmation:
 
-- `src/package.cpp` — the `Reader` struct, `require()`, `limit`, size and
+- `src/package.cpp`: the `Reader` struct, `require()`, `limit`, size and
   terminator checks. Never loosen a bounds check to "make it work".
-- `src/container.cpp` / `src/container.hpp` — LZO container validation.
+- `src/container.cpp` / `src/container.hpp`: LZO container validation.
 - Struct/array property decoding, texture (`Texture2D`) and mesh
-  (`StaticMesh`) serialization — the version 832/46 layout has no public spec;
+  (`StaticMesh`) serialization: the version 832/46 layout has no public spec;
   do not invent offsets from memory. Label guesses `UNVERIFIED`.
-- `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE` — dependency and
+- `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE`: dependency and
   license/provenance decisions. The project license is MIT (2026-09-13). Never copy code from GPL tools (Legendary
   Explorer, umodel, etc.) without the user deciding on licensing first.
 - The host-engine choice (docs/OPENWILLOW_ENGINE_PLAN.md §2.1) is made (UE5) and

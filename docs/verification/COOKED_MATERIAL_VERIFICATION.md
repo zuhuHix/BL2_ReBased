@@ -1,4 +1,4 @@
-# Cooked-material continuation - 2026-09-13
+# Cooked-material continuation (2026-09-13)
 
 The user approved cooked-material serialization work and continuing into the
 next validation step. This checkout is `t3code-df92eae1`.

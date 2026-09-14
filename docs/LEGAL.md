@@ -58,8 +58,8 @@ is no plan, ever, to make the engine work without the original game.
 2. **Never use, read, or accept leaked source code.** Not Unreal Engine 3's,
    not Gearbox's. If it is offered, the answer is no, in writing.
 3. **No decompiled executable code.** Observing the behaviour of the running
-   game — including hooking its functions with tools such as unrealsdk and
-   logging inputs and outputs — is how we build golden files. Disassembling the
+   game, including hooking its functions with tools such as unrealsdk and
+   logging inputs and outputs, is how we build golden files. Disassembling the
    executable and transcribing what it does is not permitted.
 4. **Formats may be referenced; code may not be copied without a decision.**
    Reading a public reference implementation (UE Viewer, Legendary Explorer,
@@ -93,7 +93,7 @@ By opening a pull request you certify that:
 ## Issues and reports
 
 Screenshots of the BL2_ReBased viewer or of the original game are welcome in
-issues for comparison — that is the plan's verification method. Attaching
+issues for comparison; that is the plan's verification method. Attaching
 package files, extracted textures, meshes, dumps or logs that embed raw asset
 bytes is not; such attachments will be removed.
 
@@ -104,8 +104,8 @@ The original code and documents in this repository are licensed under the
 does not cover, and the repository does not contain, any Borderlands 2 game
 data, Gearbox Software code, or Epic Games engine code. Vendored third-party
 code retains its own license (lzokay: MIT, in `third_party/lzokay/LICENSE`).
-The reasoning for MIT over GPL-3 — chiefly that GPL code cannot be distributed
-as a binary linked against Unreal Engine — is recorded in
+The reasoning for MIT over GPL-3 (chiefly that GPL code cannot be distributed
+as a binary linked against Unreal Engine) is recorded in
 [DECISIONS.md](../DECISIONS.md).
 
 **Contributions are accepted under the same MIT terms** (inbound = outbound).
