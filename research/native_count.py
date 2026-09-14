@@ -3,7 +3,8 @@ native_count.py — measure native vs script functions in Borderlands 2 code pac
 
 Reads fully-compressed UE3 packages straight off disk:
   1. unwraps the UE3 compressed-chunk container
-  2. LZO1X-decompresses each block (pure Python, no deps)
+  2. LZO1X-decompresses each block (pure Python, no deps; independent
+     implementation, provenance in THIRD_PARTY.md)
   3. parses the package name/import/export tables (package version 832)
   4. finds every UFunction export and reads its FunctionFlags from the END of
      the object (robust to licensee-specific fields at the front)
@@ -16,93 +17,127 @@ import struct, sys, os, math, collections, time
 GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2\WillowGame\CookedPCConsole"
 
 # ---------------------------------------------------------------- LZO1X decompress
+class LzoError(ValueError):
+    pass
+
+
 def lzo1x_decompress(src, dst_len):
-    """Faithful port of minilzo's lzo1x_decompress (goto-based) using explicit states."""
-    out = bytearray(dst_len + 8)
-    ip = 0; op = 0
+    """Decode one LZO1X stream into exactly dst_len bytes.
 
-    def copy_match(mpos, length):
+    Independent implementation of the LZO1X instruction format, written from
+    the public format description and checked against lzokay (MIT, Jack
+    Andersen) for instruction semantics. No code from any LZO implementation
+    is copied or translated. The stream is a sequence of instructions; the
+    first byte is special, and how a low opcode (< 16) is interpreted depends
+    on how many literals the previous instruction ended with (`state`).
+    Every read and write is bounds-checked and raises LzoError.
+    """
+    src = memoryview(src)
+    n_in = len(src)
+    out = bytearray(dst_len)
+    ip = 0
+    op = 0
+
+    def take():
+        nonlocal ip
+        if ip >= n_in:
+            raise LzoError("input overrun")
+        v = src[ip]
+        ip += 1
+        return v
+
+    def literals(count):
+        nonlocal ip, op
+        if ip + count > n_in:
+            raise LzoError("input overrun in literal run")
+        if op + count > dst_len:
+            raise LzoError("output overrun in literal run")
+        out[op:op + count] = src[ip:ip + count]
+        ip += count
+        op += count
+
+    def match(distance, length):
         nonlocal op
-        if op - mpos >= length:
-            out[op:op+length] = out[mpos:mpos+length]; op += length
+        if distance <= 0 or distance > op:
+            raise LzoError("match distance outside decoded output")
+        if op + length > dst_len:
+            raise LzoError("output overrun in match")
+        start = op - distance
+        if distance >= length:
+            out[op:op + length] = out[start:start + length]
+            op += length
         else:
-            for _ in range(length):
-                out[op] = out[mpos]; op += 1; mpos += 1
+            for _ in range(length):  # overlapping copy repeats the pattern
+                out[op] = out[op - distance]
+                op += 1
 
-    # --- prologue
-    if src[ip] > 17:
-        t = src[ip] - 17; ip += 1
-        if t < 4:
-            state = "match_next"
-        else:
-            out[op:op+t] = src[ip:ip+t]; op += t; ip += t
-            state = "first_literal_run"
+    def extended(base, first_zero_byte_value):
+        # Run-length extension: each 0x00 adds 255, the terminating byte adds itself.
+        length = base
+        while True:
+            b = take()
+            if b != 0:
+                return length + first_zero_byte_value + b
+            length += 255
+
+    # First byte: 18..255 means (byte - 17) literals precede the first instruction.
+    first = take()
+    if first > 17:
+        count = first - 17
+        literals(count)
+        state = count if count < 4 else 4
     else:
-        state = "begin"
+        ip -= 1
+        state = 0
 
     while True:
-        if state == "begin":
-            t = src[ip]; ip += 1
-            if t >= 16:
-                state = "match"; continue
-            if t == 0:
-                while src[ip] == 0:
-                    t += 255; ip += 1
-                t += 15 + src[ip]; ip += 1
-            t += 3
-            out[op:op+t] = src[ip:ip+t]; op += t; ip += t
-            state = "first_literal_run"; continue
-
-        if state == "first_literal_run":
-            t = src[ip]; ip += 1
-            if t >= 16:
-                state = "match"; continue
-            mpos = op - (1 + 0x0800) - (t >> 2) - (src[ip] << 2); ip += 1
-            copy_match(mpos, 3)
-            state = "match_done"; continue
-
-        if state == "match":
-            if t >= 64:
-                mpos = op - 1 - ((t >> 2) & 7) - (src[ip] << 3); ip += 1
-                t = (t >> 5) - 1
-                copy_match(mpos, t + 2)
-            elif t >= 32:
-                t &= 31
-                if t == 0:
-                    while src[ip] == 0:
-                        t += 255; ip += 1
-                    t += 31 + src[ip]; ip += 1
-                mpos = op - 1 - ((src[ip] >> 2) + (src[ip+1] << 6)); ip += 2
-                copy_match(mpos, t + 2)
-            elif t >= 16:
-                mpos = op - ((t & 8) << 11)
-                t &= 7
-                if t == 0:
-                    while src[ip] == 0:
-                        t += 255; ip += 1
-                    t += 7 + src[ip]; ip += 1
-                mpos -= (src[ip] >> 2) + (src[ip+1] << 6); ip += 2
-                if mpos == op:
-                    break  # EOF marker
-                mpos -= 0x4000
-                copy_match(mpos, t + 2)
+        t = take()
+        if t < 16:
+            if state == 0:
+                # Literal run of (t + 3) bytes; t == 0 selects the extended form.
+                count = extended(3, 15) if t == 0 else t + 3
+                literals(count)
+                state = 4
+                continue
+            h = take()
+            if state == 4:
+                # After a long literal run: 3-byte match, distance 2049..3072.
+                match((h << 2) + (t >> 2) + 2049, 3)
             else:
-                mpos = op - 1 - (t >> 2) - (src[ip] << 2); ip += 1
-                copy_match(mpos, 2)
-            state = "match_done"; continue
+                # After 1..3 literals: 2-byte match, distance 1..1024.
+                match((h << 2) + (t >> 2) + 1, 2)
+            trailing = t & 3
+        elif t >= 64:
+            # 1-byte header + 1 distance byte: length 3..8, distance 1..2048.
+            h = take()
+            match((h << 3) + ((t >> 2) & 7) + 1, (t >> 5) + 1)
+            trailing = t & 3
+        elif t >= 32:
+            # Length in low 5 bits (extended when zero), then 16-bit LE distance word.
+            length = extended(2, 31) if (t & 31) == 0 else (t & 31) + 2
+            lo = take(); hi = take()
+            word = lo | (hi << 8)
+            match((word >> 2) + 1, length)
+            trailing = word & 3
+        else:
+            # 16..31: long distance. Bit 3 adds 16384; low 3 bits are the length (extended when zero).
+            high = (t & 8) << 11
+            length = extended(2, 7) if (t & 7) == 0 else (t & 7) + 2
+            lo = take(); hi = take()
+            word = lo | (hi << 8)
+            distance = high + (word >> 2)
+            if distance == 0:
+                break  # end-of-stream marker
+            match(distance + 16384, length)
+            trailing = word & 3
+        literals(trailing)
+        state = trailing
 
-        if state == "match_done":
-            t = src[ip-2] & 3
-            if t == 0:
-                state = "begin"; continue
-            state = "match_next"; continue
-
-        if state == "match_next":
-            out[op:op+t] = src[ip:ip+t]; op += t; ip += t
-            t = src[ip]; ip += 1
-            state = "match"; continue
-
-    return bytes(out[:op])
+    if ip != n_in:
+        raise LzoError(f"{n_in - ip} trailing input bytes after end marker")
+    if op != dst_len:
+        raise LzoError(f"decoded {op} bytes, expected {dst_len}")
+    return bytes(out)
 
 # ---------------------------------------------------------------- container
 def unwrap_fully_compressed(path):

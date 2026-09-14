@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/zuhuHix/BL2_ReEngine/discussions
+    about: Anything that is not a bug, a format finding or a verification result.
+  - name: Roadmap and open tasks
+    url: https://github.com/zuhuHix/BL2_ReEngine/blob/main/ROADMAP.md
+    about: What's done, what's next, and which items are good first tasks.
+  - name: Legal policy and clean-room rules
+    url: https://github.com/zuhuHix/BL2_ReEngine/blob/main/docs/LEGAL.md
+    about: Read before sharing format findings or attaching anything to an issue.

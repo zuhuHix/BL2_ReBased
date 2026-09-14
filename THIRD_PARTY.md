@@ -41,12 +41,20 @@ were copied or translated; the C++ here is an independent implementation of
 the serialization order those files document. If UE Viewer code is ever
 copied in, its MIT notice must be added alongside lzokay's.
 
-## Existing Python research decoder
+## Python research decoder (resolved 2026-09-13)
 
-`research/native_count.py` describes its decompressor as a faithful minilzo port.
-The precise upstream version and authorship history of that translation remain
-unknown. Treat its provenance as unresolved; it is only a local comparison
-oracle and is never linked into the C++ reader.
+`research/native_count.py` originally carried an LZO1X decompressor that
+described itself as a faithful port of miniLZO (GPL-2.0-or-later) with no
+recorded upstream version. That function was removed on 2026-09-13 and
+replaced by an independent implementation written from the public LZO1X
+instruction-format description, with lzokay (MIT) consulted for instruction
+semantics only; no code from miniLZO, LZO, or lzokay was copied or translated
+into it. The replacement was verified byte-for-byte against the C++ lzokay
+path on all nine installed code packages and reproduces the recorded function
+census exactly (20,119 functions; 7,141 native; 12,978 script; 2,453 events).
+It remains a local comparison oracle and is never linked into the C++ reader.
+The earlier function survives only in git history, which is noted here so the
+provenance record is complete.
 
 The container/table layouts are recorded in the existing workspace research.
 No game binaries, leaked source, or third-party UE3 source were used.

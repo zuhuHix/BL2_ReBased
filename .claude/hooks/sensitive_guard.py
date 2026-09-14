@@ -15,8 +15,8 @@ SENSITIVE = {
     "src/container.hpp": "container interface",
     "CMakeLists.txt": "build + GPL dependency wiring",
     "THIRD_PARTY.md": "provenance and license record",
-    "LICENSE*": "project license selection is pending a provenance review",
-    "COPYING*": "project license selection is pending a provenance review",
+    "LICENSE*": "project license is MIT; changing it is a maintainer decision",
+    "COPYING*": "project license is MIT; changing it is a maintainer decision",
 }
 # Files that must never be written into the repo.
 FORBIDDEN = ["*.upk", "*.tfc", "*.pck", "*.bik", "*.umap", "*.uncompressed_size",
@@ -54,7 +54,7 @@ for pat in FORBIDDEN:
     if fnmatch.fnmatch(base, pat):
         out("deny",
             f"Refusing to write '{rel}': game/asset files must never enter the repo "
-            "(README project rules). Fixtures must be synthetic.",
+            "(docs/LEGAL.md). Fixtures must be synthetic.",
             f"BLOCKED: attempted to write game asset file {rel}")
 
 for pat, why in SENSITIVE.items():
