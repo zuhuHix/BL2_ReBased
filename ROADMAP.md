@@ -18,12 +18,20 @@ Items marked *Caveat:* are done with a recorded limitation.
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 
-- [ ] Decode `PF_A8R8G8B8` textures: the sky transition texture in Ash uses
-      it, which is why the sky is black. *Good first task.*
+- [x] Decode `PF_A8R8G8B8` textures: synthetic pixel/bulk tests pass and the
+      real 256x256 Ash sky transition texture extracts successfully. Native sky
+      shading remains open. See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
 - [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
-- [ ] Sky rendering: translate the skybox sublevel.
+- [ ] Sky rendering: the native sky is located, not yet translated. In both
+      Sanctuary and Ash the dome is `Prop_Skybox.Meshes.Sky_Dome` (Sanctuary:
+      `_Light` sublevel; Ash: persistent level) with an unlit
+      `Mat_SkyTimeOfDay_Master` instance
+      whose diffuse already resolves to the decoded `Sky_TransitionBL2Default_Dif`;
+      the time-of-day, cloud and mask inputs are not interpreted. The host
+      still adds a labelled `OpenWillow_SkyAtmosphere` fallback; this is not
+      native sky parity. See the [sky census](docs/verification/SKY_CENSUS.md).
 - [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
       including 14 opaque definitions (43 placed sections). Of those, 11 have
       no supported channels (21 sections). Two glacier materials (33 sections)
@@ -34,6 +42,12 @@ well-bounded ones are marked *good first task*.
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
 - [ ] Terrain / BSP geometry.
+- [ ] Sanctuary visual defects observed in the editor fly-through (2026-09-14,
+      not yet diagnosed): the ground floor renders wrong, some sidewalk
+      sections show up green (likely a missing-diffuse fallback or wrong
+      section material), and a large stray cube sits near the town entrance
+      that is not in the original map (possibly an imported blocking/trigger
+      volume or an unsupported component rendered as a placeholder).
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and
@@ -115,7 +129,8 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
   - [ ] Source mesh data
 - [ ] Texture importer with TFC streaming
   - [x] `Textures.tfc`, DXT1/DXT5
-  - [ ] `PF_A8R8G8B8` and other pixel formats
+  - [x] `PF_A8R8G8B8` (automated extraction verified)
+  - [ ] Other pixel formats
   - [ ] `CharTextures.tfc`, `Lighting.tfc`; UHD pack optional
 - [ ] Material translation
   - [x] v1: named diffuse/normal/specular/emissive parameters, parent
@@ -132,7 +147,8 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         transforms (collection tails: observed 84-byte layout, Ash and
         Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
-  - [ ] Skybox
+  - [~] Skybox: dome mesh, placement and material chain located by
+        `tools/sky_census.py`; not translated in the host
   - [ ] Terrain / BSP
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting

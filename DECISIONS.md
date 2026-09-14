@@ -1,5 +1,64 @@
 # Decisions and evidence
 
+## 2026-09-14: Sky census locates the native dome without a new policy
+
+The user asked for the native skybox to be located using only already-decoded
+data before any material-parameter parsing. AI-assisted `tools/sky_census.py`
+reuses `Scene` from `prepare_level.py` (level traversal factored into
+`Scene.levels`), the existing `--scene-records`, `--properties` (Texture2D at
+the established offset 4), `--payload`, `--mesh` and `--texture` modes, and the
+existing cooked-resource reader. No serialization offset, bounds check or
+material policy changed; the census only restates what the Material v1 diffuse
+rule would select and why.
+
+Findings on the installed game, manifest evidence only:
+
+- Neither `Sanctuary_P` nor `Ash_P` streams a `_Skybox` package. The dome is
+  `Prop_Skybox.Meshes.Sky_Dome` (265 vertices, 480 triangles, two UV sets)
+  placed by a `StaticMeshCollectionActor` (Sanctuary: `_Light` sublevel,
+  scale 5000x5000x6000; Ash: persistent level, scale 1000). Its material instance (`Mati_Sky_Dynamic_INST`
+  in Sanctuary, `Mati_AshSkyTempSunset` in Ash) inherits from the unlit
+  `Common_Materials.Sky.Mat_SkyTimeOfDay_Master`, whose named samplers are
+  `Transition_Track` (`Sky_TransitionBL2Default_Dif`, PF_A8R8G8B8 256x256),
+  `clouds` (`Clouds_01`) and `Masks` (`Sky_Multi`/`Sky_Multi2`), with scalars
+  such as `Time_of_Day` and `sky_brightness`. The existing policy already
+  selects the transition texture as diffuse; the decoder gap closed today was
+  the blocker, not the placement.
+- Sanctuary's second sky layer, `Prop_Skybox.Meshes.SanctuarySky` in
+  `Sanctuary_Outer`, is an `InterpActor` whose three overrides are the
+  `*_Teleported` story-state materials with several `_Dif` textures each; the
+  policy correctly refuses to pick one. Its mesh defaults resolve to
+  `SanctuarySkybox_Diff` (DXT1 2048x2048) uniquely. Which layer is active is a
+  Kismet streaming question this project does not interpret.
+
+Not done and not claimed: how the master combines its inputs, the meaning of
+`Time_of_Day`, the second `Sky_Dome` placement with a concrete material and
+negative Z scale, any host import, and any in-game comparison. See
+[verification](docs/verification/SKY_CENSUS.md).
+
+## 2026-09-14: Bounded PF_A8R8G8B8 texture decoding
+
+The user explicitly requested this format addition. AI-assisted implementation
+adds little-endian BGRA-to-RGBA conversion after the existing bulk decoding,
+without changing Texture2D serialization offsets or bulk flags. Alpha and row
+order are preserved; no premultiplication or color-space conversion is applied.
+The shared dimension guard retains the DXT limits (16384 per axis, 256 MiB per
+mip); exact width * height * 4 bytes are required before channel conversion.
+Existing decoded bulk-size and aggregate mip limits remain in force.
+
+Format reference: Microsoft's public
+[D3DFORMAT documentation](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dformat)
+defines A8R8G8B8 channel significance and memory byte order. No reference
+implementation code, dependency or game-derived data was added.
+
+All five CTest suites and nine installed code-package comparisons pass.
+Ash_P export 21482, Prop_Skybox.Textures.Sky_TransitionBL2Default_Dif,
+extracts as 256x256 with one resident mip. Synthetic tests verify exact pixels,
+alpha, inline/TFC and LZO paths, small mips and corrupt-input rejection.
+Native sky shading and in-game visual parity remain UNVERIFIED.
+See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
+
+
 ## 2026-09-14: Glacier primary-layer approximation
 
 The inspected `Mat_Glacier` and `Mati_Glacier2x` now have an explicit, narrowly

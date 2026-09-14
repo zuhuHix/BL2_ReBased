@@ -110,7 +110,7 @@ writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
 hashes of the package and outputs.
 
 Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
+`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`; payload-at-end mips and other pixel formats still fail
 explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
 all UV sets; OBJ output intentionally writes one selected LOD and its first UV
 set. Source mesh data and skeletal meshes remain future work; tagged convex/box
@@ -275,7 +275,8 @@ memory and peak process physical memory. These are short correctness-run
 diagnostics, affected by startup, window state and shader work; they are not
 a controlled renderer benchmark or GPU-memory measurement.
 
-To list remaining diffuse gaps and their effective placed section uses:
+To list remaining diffuse gaps, their effective placed section uses, and the
+recorded repair buckets:
 
 ```powershell
 python tools/audit_scene_materials.py --scene local/sanctuary --output local/sanctuary/material-audit.json
@@ -283,12 +284,42 @@ python tools/audit_scene_materials.py --scene local/sanctuary --output local/san
 
 This report separates absent diffuse, no supported channels, and unassigned
 slots. It follows actor overrides and does not change the scene or choose
-replacement textures. See the [Sanctuary material baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
+replacement textures. `gap_status_counts` distinguishes partial channels,
+cooked-resource candidates and no-supported-channel fallbacks; `issue_counts`
+groups unsupported component owners, invalid color streams, collision gaps and
+approximations. Add `--all-gaps` when masked/translucent gaps should be printed
+alongside the default opaque priority list. See the [Sanctuary material
+baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
 
 The audit also counts `surface_approximation` recipes separately. The two
 inspected glacier materials use a partial primary diffuse/normal layer with
 retained instance tiling on UV0; snow blend, glow and reflection remain open.
 See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
+
+The generated UE5 inspection map now also receives a temporary
+`OpenWillow_SkyAtmosphere` actor, with the imported sun registered as its
+atmosphere light. This supplies a visible non-black background while native
+`_Skybox` translation remains open; `PF_A8R8G8B8` texture extraction is now
+verified (see [record](verification/A8R8G8B8_TEXTURE.md)). The actor
+is explicitly labelled in `ue-import.json` and `ue-verify.json` as
+`temporary_sky_fallback`; it is not visual-parity evidence.
+
+To locate a map's native sky placements and explain why each one does or does
+not get a diffuse under the current policy:
+
+```powershell
+python tools/sky_census.py --reader build/Release/ow-package.exe --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2" --map Sanctuary_P --extract
+```
+
+The census walks the persistent map and its streamed sublevels, lists every
+placed sky-named `StaticMesh` (under `Prop_Skybox` or with `sky` in the object
+name) with its owner and observed transform, the effective material per
+section, each material's parent chain, all named sampler/scalar/vector
+parameters, the cooked texture list and each `Texture2D`'s format, size and
+cache. `--extract` writes the meshes as OBJ and the textures as PNG under
+`local/sky/<map>/`. It changes no policy and interprets no stripped graph,
+Kismet streaming state or lighting. See the
+[sky census record](verification/SKY_CENSUS.md).
 
 ### First collision and walking slice
 

@@ -22,8 +22,10 @@ assert len(placed) == expected_count, (len(placed), expected_count)
 
 lighting = {a.get_actor_label(): a for a in actors if a.get_actor_label().startswith('OpenWillow_')
             and a.get_actor_label() in ('OpenWillow_Sun', 'OpenWillow_SkyFill',
+                                        'OpenWillow_SkyAtmosphere',
                                         'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure')}
 assert set(lighting) == {'OpenWillow_Sun', 'OpenWillow_SkyFill',
+                         'OpenWillow_SkyAtmosphere',
                          'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure'}
 sun_component = lighting['OpenWillow_Sun'].get_component_by_class(unreal.DirectionalLightComponent)
 assert sun_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
@@ -33,6 +35,9 @@ assert sky_component.get_editor_property('mobility') == unreal.ComponentMobility
 assert sky_component.get_editor_property('source_type') == unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP
 assert sky_component.get_editor_property('cubemap').get_path_name() == '/Engine/EngineResources/GrayLightTextureCube.GrayLightTextureCube'
 assert abs(sky_component.get_editor_property('intensity') - 0.5) < .01
+atmosphere_component = lighting['OpenWillow_SkyAtmosphere'].get_component_by_class(
+    unreal.SkyAtmosphereComponent)
+assert atmosphere_component is not None
 capture_component = lighting['OpenWillow_ReflectionCapture'].get_component_by_class(
     unreal.SphereReflectionCaptureComponent)
 assert capture_component.get_editor_property('influence_radius') >= 1000.0
@@ -141,6 +146,7 @@ if scene['map'] == 'MaterialV1Smoke':
     close(xyz(ordinary.get_actor_scale3d()), [2, 3, 4])
 report = {'verified_section_actors': len(placed), 'verified_channels': sorted(verified_channels),
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
+          'temporary_sky_fallback': 'UE5_SkyAtmosphere',
           'visual_validation': 'pending'}
 (root / 'ue-verify.json').write_text(json.dumps(report, indent=2))
 unreal.log('OpenWillow saved-scene verification: ' + json.dumps(report))
