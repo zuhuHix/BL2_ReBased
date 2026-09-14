@@ -1,4 +1,4 @@
-﻿# Material v1 / Ash first-map verification — 2026-09-11
+﻿# Material v1 / Ash first-map verification (2026-09-11)
 
 This is an offline UE5 editor import of a frozen scene, not gameplay or runtime
 UPK streaming. All extracted assets, generated UE packages and detailed logs

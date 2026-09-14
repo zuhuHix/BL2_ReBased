@@ -1,4 +1,4 @@
-# Roadmap — BL2_ReBased
+# BL2_ReBased roadmap
 
 The live tracker. Phases, steps, gates and estimates come from
 [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md); this file
@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Project start:** 2026-09-09 · **Phase 0 gate:** 2026-09-10 · **Now:** Phase 1
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-13
 
 ---
 
@@ -18,14 +18,14 @@ Items marked *Caveat:* are done with a recorded limitation.
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 
-- [ ] Decode `PF_A8R8G8B8` textures — the sky transition texture in Ash uses
+- [ ] Decode `PF_A8R8G8B8` textures: the sky transition texture in Ash uses
       it, which is why the sky is black. *Good first task.*
 - [ ] Check UV orientation: the Sanctuary shop sign appears mirrored in the
       viewer. Determine whether it's OBJ handedness, UV V-flip or the source.
 - [ ] Sky rendering: translate the skybox sublevel.
 - [ ] Material fallbacks: 30 Ash and 67 Sanctuary materials still lack a
       diffuse channel after cooked-resource inference (2026-09-13). Next is
-      reading more of the cooked material resource — every extension needs
+      reading more of the cooked material resource; every extension needs
       explicit approval because the layout is unspecified.
 - [ ] Terrain / BSP geometry.
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
@@ -34,7 +34,7 @@ well-bounded ones are marked *good first task*.
 - [ ] Map selector and the third map.
 - [ ] Performance: Sanctuary ran at ~8–9 FPS during automation startup on the
       development machine. Not yet profiled.
-- [ ] Matched-viewpoint screenshots against the original game — the plan's
+- [ ] Matched-viewpoint screenshots against the original game: the plan's
       per-map verification method. Needs someone with the game and both
       builds open.
 - [ ] Cross-check the census against umodel's view of the same packages.
@@ -43,9 +43,9 @@ well-bounded ones are marked *good first task*.
 
 ---
 
-## Phase 0 — Foundation and spikes <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
+## Phase 0: Foundation and spikes <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: 3–6 weeks. Actual: gated 2026-09-10, the day after the project started.*
+*Estimate: 3–6 weeks. Gated 2026-09-10, ahead of estimate; most of the reader already existed as a Python prototype.*
 
 Goal: a repo, a build, a package loader, and a decided host engine.
 
@@ -71,7 +71,7 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       zero trailing bytes in three installed copies. *Caveat:* One
       generated-subobject presentation discrepancy recorded in
       [DECISIONS.md](DECISIONS.md).
-- [x] Texture spike: `Texture2D` to PNG — DXT1/DXT5, inline, TFC-streamed and
+- [x] Texture spike: `Texture2D` to PNG, DXT1/DXT5, inline, TFC-streamed and
       LZO-compressed bulk, every resident mip. Viewed; it is the texture.
 - [x] Static mesh spike: all render LODs, 16/32-bit indices, all UV sets; one
       LOD to OBJ.
@@ -79,13 +79,13 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       the probe mesh and its verified diffuse texture render in UE 5.8.2.
       First screenshot user-verified.
 
-**Gate passed** — the census exists; one mesh and one texture from BL2 render in
+**Gate passed.** The census exists; one mesh and one texture from BL2 render in
 the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 2026-09-10.
 
 ---
 
-## Phase 1 — World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+## Phase 1: World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: 2–4 months full-time. Started 2026-09-10.*
 
@@ -122,7 +122,7 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting
   - [x] Inspection rig: movable sun, neutral skylight, reflection capture,
-        auto exposure, AO — for geometry/material checks only
+        auto exposure, AO. For geometry/material checks only
   - [ ] Modern: dynamic GI
   - [ ] Fidelity: parse SM3 lightmaps from `Lighting.tfc`
 - [ ] Camera and movement
@@ -144,7 +144,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 2 — UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 2: UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +3–6 months.* Goal: Gearbox's own gameplay code executing.
 
@@ -167,7 +167,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 3 — Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 3: Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +6–12 months.* Goal: the 1,914 documented UE3 natives. Ground
 truth: UDK.
@@ -188,13 +188,13 @@ collision, matching UDK-derived golden tests.
 
 ---
 
-## Phase 4 — Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt=""> — the mountain
+## Phase 4: Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">: the mountain
 
 *Estimate: +12–24 months.* Goal: a Vault Hunter walks, shoots real guns, uses
 real skills, and enemies fight back. Ground truth: the original game
 instrumented with unrealsdk, plus community documentation.
 
-Method — the golden-file loop: hook a native in the real game, log every
+Method: the golden-file loop. Hook a native in the real game, log every
 call's inputs and outputs during play, implement until our engine reproduces
 the log, extend the log on mismatch.
 
@@ -216,12 +216,12 @@ Priority order:
       (41) via an SWF VM; debug HUD until then
 - [ ] Wwise audio (17 + `AkAudio`), Bink video
 
-**Gate:** a full loop on one map — spawn, fight enemies, loot a gun, equip it,
+**Gate:** a full loop on one map: spawn, fight enemies, loot a gun, equip it,
 use a skill, die, respawn.
 
 ---
 
-## Phase 5 — Campaign completable (M4) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 5: Campaign completable (M4) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +12–24 months.*
 
@@ -237,9 +237,9 @@ use a skill, die, respawn.
 
 ---
 
-## Phase 6 — Parity and beyond (M5) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 6: Parity and beyond (M5) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-- [ ] Co-op netcode — our own
+- [ ] Co-op netcode (our own)
 - [ ] DLC coverage; The Pre-Sequel; standalone Dragon Keep
 - [ ] Mod compatibility: BLCMM text mods natively; SDK-mod layer later
 - [ ] Editor for new maps; modern lighting toggle; VR; 8-player
@@ -252,6 +252,6 @@ Stated up front so nobody has to guess whether the project is alive:
 
 - Phase 0 not gated in 3 months → tooling loop isn't working. *(Passed.)*
 - M1 cannot load a single map by month 6 → the loop isn't holding; fall back
-  to the [mod plan](docs/DESIGN_OVERHAUL_MOD.md). *(Two maps load at week 1.)*
+  to the [mod plan](docs/DESIGN_OVERHAUL_MOD.md). *(Two maps already load.)*
 - Nobody but the author has contributed by M2 → fine, but plan M3 only.
 - The author stops reading the code → pause and fix that.

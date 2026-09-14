@@ -31,7 +31,7 @@ decompressed packages and skips the container, asset and compressed tests. The
 LZO decoder is the vendored MIT-licensed lzokay; see
 [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-## `ow-package` — the package reader
+## `ow-package`: the package reader
 
 A standalone x64 C++20 tool that reads version 832/46 packages:
 

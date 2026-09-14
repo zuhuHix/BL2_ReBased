@@ -1,4 +1,4 @@
-# Collision and walking slice — 2026-09-14
+# Collision and walking slice (2026-09-14)
 
 Checkout: t3code-9935cb53. This is an opt-in placeholder walking mode for the
 frozen map viewer. It is not UE3 movement parity or completed M1.

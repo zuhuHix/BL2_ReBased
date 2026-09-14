@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for looking. Read the [Is this legal?](README.md#is-this-legal) section of the README
-and [docs/LEGAL.md](docs/LEGAL.md) first — the clean-room rules are
+and [docs/LEGAL.md](docs/LEGAL.md) first. The clean-room rules are
 non-negotiable and every pull request certifies compliance with them.
 
 **License.** The project is [MIT](LICENSE). By opening a pull request you
@@ -13,7 +13,7 @@ see [docs/LEGAL.md](docs/LEGAL.md#license)). There is no CLA.
 ### 1. Verify with your own copy of the game
 
 This is the most valuable thing a non-programmer can do, and it is the
-project's primary correctness method. Build the reader (README, *Try it*) and:
+project's primary correctness method. Build the reader (README, *Build and run it*) and:
 
 - Run `python tools/verify_packages.py --reader build/Release/ow-package.exe`
   and `python tools/census.py ...` against your install. Report the totals,
@@ -29,8 +29,8 @@ extracted assets; screenshots are fine.
 
 ### 2. Contribute format findings
 
-If you know something about version 832 / licensee 46 serialization — an
-object prefix, a struct layout, a bulk-data quirk, a native-tail size — open
+If you know something about version 832 / licensee 46 serialization (an
+object prefix, a struct layout, a bulk-data quirk, a native-tail size), open
 a **Format finding**. State how you observed it (which tool, which object,
 which counts) and where it came from (your own observation, a public document,
 a reference implementation and its license). A finding with provenance is
@@ -40,7 +40,7 @@ usable; one without is a rumour.
 
 Open items are listed in [ROADMAP.md](ROADMAP.md#now--next). Before starting
 anything larger than a bounded task, open an issue so the approach can be
-agreed — especially for anything that touches the sensitive areas below.
+agreed. This matters most for anything that touches the sensitive areas below.
 
 ## Working rules
 
@@ -69,13 +69,13 @@ agreed — especially for anything that touches the sensitive areas below.
 
 Changes here need explicit discussion first and a DECISIONS.md entry:
 
-- `src/package.cpp` — the `Reader` struct, `require()`, `limit`, size and
+- `src/package.cpp`: the `Reader` struct, `require()`, `limit`, size and
   terminator checks. Never loosen a bounds check to make something work.
-- `src/container.cpp` / `.hpp` — LZO container validation.
+- `src/container.cpp` / `.hpp`: LZO container validation.
 - Struct/array property decoding, `Texture2D` and `StaticMesh` serialization,
-  the cooked `Material` resource reader — the 832/46 layout has no public
+  the cooked `Material` resource reader: the 832/46 layout has no public
   spec; do not invent offsets.
-- `CMakeLists.txt`, `THIRD_PARTY.md`, any `LICENSE` file — dependency and
+- `CMakeLists.txt`, `THIRD_PARTY.md`, any `LICENSE` file: dependency and
   license decisions are the maintainer's.
 - The host-engine choice is made and is not reopened.
 
