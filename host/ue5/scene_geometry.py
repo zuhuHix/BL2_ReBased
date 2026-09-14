@@ -8,16 +8,16 @@ def actor_label(level, source, slot):
 
 
 def host_obj(text):
-    # Our source OBJ stores UE left-handed centimeters. Reflect into the OBJ
-    # importer's right-handed convention; reflect normals and reverse winding
-    # together so the host conversion returns the source orientation.
+    # Our source OBJ stores UE left-handed centimeters and original UE index
+    # order (face cross products oppose the stored outward normals). Reflect
+    # positions/normals into OBJ space, retaining that index order. UE's OBJ
+    # importer performs the remaining winding conversion. Reversing here too
+    # exposes back faces: signs read mirrored and outward surfaces disappear.
     result = []
     for line in text.splitlines():
         fields = line.split()
         if fields and fields[0] in ('v', 'vn'):
             fields[2] = format(-float(fields[2]), '.9g')
             line = ' '.join(fields)
-        elif fields and fields[0] == 'f':
-            line = 'f ' + ' '.join(reversed(fields[1:]))
         result.append(line)
     return '\n'.join(result) + '\n'

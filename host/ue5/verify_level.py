@@ -129,8 +129,9 @@ for name, definition in scene['materials'].items():
 
 if scene['map'] == 'MaterialV1Smoke':
     assert verified_channels == set(channels)
-    close(xyz(next(iter(placed.values())).get_actor_location()), [100, 210, 300])
-    close(xyz(next(iter(placed.values())).get_actor_scale3d()), [2, 3, 4])
+    ordinary = placed[actor_label('Synthetic_P', 'Synthetic.Mesh', 0)]
+    close(xyz(ordinary.get_actor_location()), [100, 210, 300])
+    close(xyz(ordinary.get_actor_scale3d()), [2, 3, 4])
 report = {'verified_section_actors': len(placed), 'verified_channels': sorted(verified_channels),
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
           'visual_validation': 'pending'}

@@ -378,3 +378,89 @@ code packages; `research/native_count.py` reproduces 20,119 / 7,141 / 12,978
 / 2,453. The oracle is now less independent of lzokay than the miniLZO port
 was, but the miniLZO-versus-lzokay byte-for-byte agreement was already
 recorded on 2026-09-10 and stands as the cross-lineage check.
+
+## 2026-09-14: Base-game selector and near-vertical host rotations
+
+Added a command-line selector over the preparer's base-game package scope.
+Installed package names are discoverable without pretending every map loads;
+ambiguous names and mismatched saved manifests are rejected. DLC support and
+an in-game selection menu remain separate work.
+
+Southpaw Factory exposed a host-only rotation loss: assigning a transform
+through UE5's actor API snapped a near-vertical collection pitch to 90 degrees.
+The matrix-derived Euler rotation is now assigned to the unattached root
+component after the actor transform. A synthetic near-vertical placement with
+negative scale passes fresh-process saved-scene verification with the existing
+axis tolerances. No serialization layout or bounds checks changed.
+
+Verification and current limitations are recorded in
+[map selector verification](docs/verification/MAP_SELECTOR_VERIFICATION.md).
+
+## 2026-09-14: Preserve game winding through the OBJ host adapter
+
+The mirrored Scooter sign was traced to an extra triangle reversal in
+`host/ue5/scene_geometry.py`. The extracted sign's 656 face cross products all
+oppose its stored outward vertex normals; the former synthetic fixture used
+the opposite convention. Reflecting Y positions/normals while retaining game
+index order yields the correct OBJ handedness and UE face visibility. The
+isolated sign now renders readable with unchanged texture coordinates.
+
+Synthetic fixtures now use the game's winding convention. Saved UV validation
+also compares oriented triangle topology; the pre-fix Southpaw scene fails this
+new check, while the corrected isolated sign passes. See
+[UV/winding verification](docs/verification/UV_WINDING_VERIFICATION.md).
+
+## 2026-09-14: Optional DLC content scope and shared-resource lookup
+
+`--include-dlc` opts preparation and map discovery into installed DLC packages;
+base-only behavior remains available. The local install exposes 82 persistent
+map names. Named texture caches use a source-package-local file when duplicated,
+otherwise require uniqueness. The reader still decides whether an absent cache
+is needed by streamed mips; inline mip decoding is not rejected preemptively.
+No texture serialization layout changed.
+
+Numeric import references now use the existing CLI import table to check loaded
+objects by path and class before an expensive global search. In DLC mode,
+unresolved references try the base cooked root before the whole install; only
+an absent-target error broadens that search. Validation/ambiguity errors remain
+fatal. The current-install reference to `Common_Textures.Stub.StubGray_Gray`
+resolves from `WillowGame`, demonstrating why the base-first order matters.
+Synthetic tests cover loaded-path class matching, cache reuse, absent-target
+fallback and propagation of validation errors. DLC map rendering is pending.
+
+## 2026-09-14: Two more diffuse inference rules and a low-end render switch
+
+Grouping Sanctuary's 64 neutral materials showed that only 31 opaque ones
+(157 of 4,768 placed sections) actually rendered as gray; the translucent rest
+were already invisible through the zero-opacity path. Two policy rules now
+resolve most of the visible ones without reading any new cooked-resource bytes:
+
+- **Sole non-auxiliary texture.** When the cooked texture list has no unique
+  `*_Dif`/`*_Diff` Texture2D but exactly one Texture2D whose name does not end
+  in a normal/composite/specular/emissive/mask/gray/noise suffix, that texture
+  is used as diffuse. Applies to opaque and masked materials only; a translucent
+  material's diffuse alpha becomes its opacity, and a guessed opacity is worse
+  than the invisible fallback. Recorded as `sole_cooked_resource_texture`.
+- **Unconnected DiffuseColor input.** An opaque Material with zero cooked
+  textures and a `DiffuseColor` input carrying no `Mask*` flags is rendered as
+  the input's `Constant` (default black). Cooked graphs strip the expression
+  reference in every case; the mask flags are the observed distinction between
+  a stripped connection (`Mask=1`, e.g. `Hanging_Monitor_Arm_Mat`) and an input
+  that never had one (`Master_Black`). Observed on one material; not a format
+  guarantee. Recorded as `constant_diffuse` on the material.
+
+Sanctuary result after `refresh_materials.py --reuse-textures`: no-diffuse
+materials 64 -> 46, opaque ones 31 -> 13 (157 -> 54 placed sections);
+`Master_Black` (53 sections) becomes black. The remaining opaque set is mostly
+multi-layer snow/glacier/skybox materials with several `_Dif` candidates, which
+this project does not resolve by picking one. The `Numerals` stencil and the sky
+transition texture are non-DXT and stay blocked on the texture importer.
+
+Automated checks: `ctest` 5/5, `verify_packages.py` all match, `level_test.py`
+14/14 with new synthetic cases for both rules. Not done: a UE5 import and
+viewer run with the refreshed manifest; the in-game appearance of the newly
+inferred textures is unverified.
+
+`tools/run_ue_level.ps1 -LowEnd` starts UE with DX11/SM5, lowest scalability
+groups, FXAA and a reduced window for machines without a discrete GPU. Runtime
+only; imported content and saved scenes are unaffected. No frame rate recorded.

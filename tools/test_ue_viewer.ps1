@@ -34,7 +34,7 @@ try {
     }
     $result = Select-String -LiteralPath $log -SimpleMatch "Test Completed. Result={Success} Name={$testName}"
     if (!$result -or $process.ExitCode -ne 0) { throw "Viewer test failed; see $log" }
-    Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Requested screenshot:|Test Completed.' | ForEach-Object { $_.Line }
+    Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Viewer diagnostic:|Requested screenshot:|Test Completed.' | ForEach-Object { $_.Line }
     Write-Output "Log: $log"
 } finally {
     if (!$process.HasExited) { Stop-Process -Id $process.Id }
