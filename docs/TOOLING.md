@@ -304,6 +304,23 @@ verified (see [record](verification/A8R8G8B8_TEXTURE.md)). The actor
 is explicitly labelled in `ue-import.json` and `ue-verify.json` as
 `temporary_sky_fallback`; it is not visual-parity evidence.
 
+To locate a map's native sky placements and explain why each one does or does
+not get a diffuse under the current policy:
+
+```powershell
+python tools/sky_census.py --reader build/Release/ow-package.exe --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2" --map Sanctuary_P --extract
+```
+
+The census walks the persistent map and its streamed sublevels, lists every
+placed sky-named `StaticMesh` (under `Prop_Skybox` or with `sky` in the object
+name) with its owner and observed transform, the effective material per
+section, each material's parent chain, all named sampler/scalar/vector
+parameters, the cooked texture list and each `Texture2D`'s format, size and
+cache. `--extract` writes the meshes as OBJ and the textures as PNG under
+`local/sky/<map>/`. It changes no policy and interprets no stripped graph,
+Kismet streaming state or lighting. See the
+[sky census record](verification/SKY_CENSUS.md).
+
 ### First collision and walking slice
 
 Prepared scenes now include observed RB_BodySetup convex and box hulls. The

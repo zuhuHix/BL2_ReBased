@@ -551,8 +551,8 @@ class Scene:
             self.meshes[name] = {'source': self.identity(key), 'sections': sections, 'collision': collision}
         return name
 
-    def build(self, persistent):
-        self.load('Startup')
+    def levels(self, persistent):
+        """Persistent level plus every streamed sublevel it names, in load order."""
         levels, pending, seen = [], [persistent], set()
         while pending:
             name = pending.pop(0)
@@ -568,6 +568,11 @@ class Scene:
                     if sublevel and sublevel != 'None':
                         self.package(sublevel)  # missing dependencies are fatal
                         pending.append(sublevel)
+        return levels
+
+    def build(self, persistent):
+        self.load('Startup')
+        levels = self.levels(persistent)
         actors, camera = [], None
         for level in levels:
             print(f'Preparing {level}', flush=True)

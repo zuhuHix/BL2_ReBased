@@ -24,9 +24,14 @@ well-bounded ones are marked *good first task*.
 - [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
-- [ ] Sky rendering: translate the skybox sublevel. The host currently adds a
-      labelled `OpenWillow_SkyAtmosphere` fallback for non-black inspection
-      views; this is not native sky parity.
+- [ ] Sky rendering: the native sky is located, not yet translated. In both
+      Sanctuary and Ash the dome is `Prop_Skybox.Meshes.Sky_Dome` (Sanctuary:
+      `_Light` sublevel; Ash: persistent level) with an unlit
+      `Mat_SkyTimeOfDay_Master` instance
+      whose diffuse already resolves to the decoded `Sky_TransitionBL2Default_Dif`;
+      the time-of-day, cloud and mask inputs are not interpreted. The host
+      still adds a labelled `OpenWillow_SkyAtmosphere` fallback; this is not
+      native sky parity. See the [sky census](docs/verification/SKY_CENSUS.md).
 - [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
       including 14 opaque definitions (43 placed sections). Of those, 11 have
       no supported channels (21 sections). Two glacier materials (33 sections)
@@ -136,7 +141,8 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         transforms (collection tails: observed 84-byte layout, Ash and
         Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
-  - [ ] Skybox
+  - [~] Skybox: dome mesh, placement and material chain located by
+        `tools/sky_census.py`; not translated in the host
   - [ ] Terrain / BSP
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting
