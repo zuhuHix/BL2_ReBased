@@ -24,16 +24,21 @@ well-bounded ones are marked *good first task*.
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
 - [ ] Sky rendering: translate the skybox sublevel.
-- [ ] Material fallbacks: 46 Sanctuary materials still lack a diffuse
-      channel after two more inference rules (2026-09-14); 13 of those are
-      opaque (54 placed sections), mostly multi-layer snow/glacier materials.
-      Ash and Southpaw counts not yet re-measured. Next is reading more of the
-      cooked material resource; every extension needs explicit approval
-      because the layout is unspecified.
+- [ ] Material fallbacks: fresh Sanctuary audit (2026-09-14) finds 49 materials
+      lacking diffuse, including 16 opaque definitions (76 placed sections).
+      Of those, 13 have no supported channels at all (54 sections), mostly
+      multi-layer snow/glacier materials. The glacier textures decode; blend
+      semantics and UV selection remain unresolved. See the
+      [material baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
+      Ash and Southpaw counts not yet re-measured. Any new binary-layout
+      interpretation remains subject to the sensitive-area policy.
 - [ ] Terrain / BSP geometry.
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
-- [ ] Walking collision (currently free-flight with collision disabled).
+- [ ] Complete walking collision: initial Sanctuary convex/box collision and
+      placeholder walking are verified; full routes, stairs, blocking volumes
+      and other collision shapes remain open. See
+      [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] In-game map selector and broader coverage. A command-line base-game map
       selector and third-map loading checks are available (2026-09-14).
 - [ ] Performance: Sanctuary ran at ~8–9 FPS during automation startup on the

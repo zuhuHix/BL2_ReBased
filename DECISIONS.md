@@ -449,12 +449,18 @@ resolve most of the visible ones without reading any new cooked-resource bytes:
   that never had one (`Master_Black`). Observed on one material; not a format
   guarantee. Recorded as `constant_diffuse` on the material.
 
-Sanctuary result after `refresh_materials.py --reuse-textures`: no-diffuse
+Sanctuary result after `refresh_materials.py --reuse-textures`: no-supported-channel
 materials 64 -> 46, opaque ones 31 -> 13 (157 -> 54 placed sections);
 `Master_Black` (53 sections) becomes black. The remaining opaque set is mostly
 multi-layer snow/glacier/skybox materials with several `_Dif` candidates, which
 this project does not resolve by picking one. The `Numerals` stencil and the sky
 transition texture are non-DXT and stay blocked on the texture importer.
+
+Counting clarification from the fresh 2026-09-14
+[Sanctuary audit](docs/verification/SANCTUARY_MATERIAL_BASELINE.md): 46 is the
+number with no supported channels, not all missing diffuse. Including
+normal-only icicles and emissive-only spire instances gives 49 missing diffuse,
+16 opaque definitions and 76 placed opaque sections. No material policy changed.
 
 Automated checks: `ctest` 5/5, `verify_packages.py` all match, `level_test.py`
 14/14 with new synthetic cases for both rules. Not done: a UE5 import and

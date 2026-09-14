@@ -272,6 +272,16 @@ memory and peak process physical memory. These are short correctness-run
 diagnostics, affected by startup, window state and shader work; they are not
 a controlled renderer benchmark or GPU-memory measurement.
 
+To list remaining diffuse gaps and their effective placed section uses:
+
+```powershell
+python tools/audit_scene_materials.py --scene local/sanctuary --output local/sanctuary/material-audit.json
+```
+
+This report separates absent diffuse, no supported channels, and unassigned
+slots. It follows actor overrides and does not change the scene or choose
+replacement textures. See the [Sanctuary material baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
+
 ### First collision and walking slice
 
 Prepared scenes now include observed RB_BodySetup convex and box hulls. The
