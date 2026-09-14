@@ -245,9 +245,12 @@ starts the editor or standalone viewer with DX11/SM5 (no Nanite, no virtual
 shadow maps), the lowest scalability groups, FXAA, 66% screen percentage and a
 960x540 window. The first launch recompiles shaders for SM5 and is slow; later
 launches reuse the cache. The switch changes rendering only; imported content
-and saved scenes are identical with or without it. The observed frame rate on
-any given machine is not recorded here; check it with `stat unit` in the
-console.
+and saved scenes are identical with or without it. A recorded sample on an
+Intel Iris Xe laptop is in [performance](verification/PERFORMANCE.md):
+12–15 FPS on the default path (GPU-bound, mostly TSR) and the 60 FPS cap with
+`-LowEnd`. To repeat it, `test_ue_viewer.ps1 -Profile` (optionally
+`-LowEnd`) runs `OpenWillow.Profile`, which logs `stat unit`-style thread
+times and a `ProfileGPU` breakdown; other machines will differ.
 
 ```powershell
 ./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -LowEnd
@@ -304,7 +307,12 @@ movement physics. See [collision preparation, checks and limits](../COLLISION_WA
 ### Selecting an installed map
 
 `tools/viewer.py` lists persistent packages in the base-game cooked directory.
-This is a command-line selector; an in-game map menu remains future work.
+Inside the running viewer, Tab shows an on-screen list of prepared scenes
+(`local/*/scene.json`) and imported maps (`Content/OpenWillow/<Map>/`); the
+digit keys open an imported one, and entries without a saved map are marked
+"not imported". `OWMapList` and `OWMapOpen <n>` do the same from the console.
+The list never prepares or imports; `test_ue_viewer.ps1 -Selector` runs the
+automated level-switch check.
 Package discovery does not imply successful preparation or rendering. Add
 `--include-dlc` to discovery and preparation to include the install's `DLC`
 directory. The current install has 37 base-game and 45 DLC persistent maps.
@@ -337,7 +345,7 @@ the existing base-game search root. DLC discovery alone is not DLC compatibility
 | `src/` | `ow-core` library (package reader, LZO container, asset importers) and the `ow-package` CLI |
 | `tests/` | Synthetic CTest suites and scene-preparation unit tests; no game data |
 | `tools/` | Census, probe/level preparation, material refresh, UE launch scripts, array schemas |
-| `host/ue5/` | Minimal UE5 C++ project, editor-Python importer/verifier, viewer automation test |
+| `host/ue5/` | Minimal UE5 C++ project, editor-Python importer/verifier, in-game map selector, viewer/walking/selector/profile automation tests |
 | `third_party/lzokay/` | Vendored MIT LZO1X decoder (provenance in `THIRD_PARTY.md`) |
 | `research/` | Community-demand corpus, analysis scripts and the original Python package reader used as a comparison oracle |
 | `docs/` | Plan, research, verification records; this file |
