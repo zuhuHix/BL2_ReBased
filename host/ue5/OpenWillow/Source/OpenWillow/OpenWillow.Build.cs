@@ -6,5 +6,6 @@ public class OpenWillow : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+        PrivateDependencyModuleNames.AddRange(new string[] { "InputCore", "Json", "RenderCore", "RHI" });
     }
 }
