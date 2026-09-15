@@ -10,5 +10,8 @@ __pycache__/
 /host/ue5/OpenWillow/.vs/
 *.sln
 
+# Local UE 5.8 project and generated assets
+/host/ue5/OpenWillow 5.8/
+
 # Local Claude settings
 .claude/settings.local.json

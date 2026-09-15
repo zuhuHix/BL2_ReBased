@@ -43,3 +43,23 @@ bool UOpenWillowCollision::SetHulls(UStaticMesh* Mesh, const TArray<FOpenWillowH
     Mesh->MarkPackageDirty();
     return true;
 }
+
+bool UOpenWillowCollision::SetTriangleCollision(UStaticMesh* Mesh)
+{
+    if (!Mesh || Mesh->GetNumSourceModels() < 1 || Mesh->GetNumTriangles(0) < 1) return false;
+    Mesh->CreateBodySetup();
+    UBodySetup* Body = Mesh->GetBodySetup();
+    Body->Modify();
+    Body->RemoveSimpleCollision();
+    Body->CollisionTraceFlag = CTF_UseComplexAsSimple;
+    Body->InvalidatePhysicsData();
+    Body->CreatePhysicsMeshes();
+    Mesh->MarkPackageDirty();
+    return Body->AggGeom.GetElementCount() == 0 && Body->CollisionTraceFlag == CTF_UseComplexAsSimple;
+}
+
+bool UOpenWillowCollision::HasTriangleCollision(UStaticMesh* Mesh)
+{
+    UBodySetup* Body = Mesh ? Mesh->GetBodySetup() : nullptr;
+    return Body && Body->CollisionTraceFlag == CTF_UseComplexAsSimple && Body->AggGeom.GetElementCount() == 0;
+}

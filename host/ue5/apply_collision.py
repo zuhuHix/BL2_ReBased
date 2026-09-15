@@ -25,6 +25,7 @@ for instance in scene['actors']:
         actor = by_label[label]
         component = actor.static_mesh_component
         mesh = component.static_mesh
+        triangle = definition['collision'].get('status') == 'triangle_mesh'
         if mesh.get_path_name() not in prepared:
             hulls = []
             if i == 0:
@@ -32,11 +33,14 @@ for instance in scene['actors']:
                     hull = unreal.OpenWillowHull()
                     hull.vertices = [unreal.Vector(*v) for v in h['vertices']]
                     hulls.append(hull)
-            if not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
+            if triangle and i == 0:
+                if hulls or not unreal.OpenWillowCollision.set_triangle_collision(mesh):
+                    raise RuntimeError('Triangle collision cooking failed: ' + label)
+            elif not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
                 raise RuntimeError('Collision cooking failed: ' + label)
             prepared.add(mesh.get_path_name())
             changed.append(mesh)
-        active = i == 0 and instance['collision_enabled'] and bool(definition['collision']['hulls'])
+        active = i == 0 and instance['collision_enabled'] and (bool(definition['collision']['hulls']) or triangle)
         component.set_collision_profile_name('BlockAll')
         component.set_collision_enabled(unreal.CollisionEnabled.QUERY_AND_PHYSICS if active else unreal.CollisionEnabled.NO_COLLISION)
         enabled += int(active)
