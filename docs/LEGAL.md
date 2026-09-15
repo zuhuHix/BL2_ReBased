@@ -81,8 +81,7 @@ is no plan, ever, to make the engine work without the original game.
    checks are reported separately from in-game checks. Behaviour that has
    not been verified against the real game is labelled `UNVERIFIED`.
 
-These are the rules that OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and
-Ship of Harkinian have operated under. We follow the precedent deliberately.
+None of this is invented for this project. OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian have all operated under the same rules for years, and that precedent is followed on purpose, not by accident.
 
 ## Contributor certification
 
