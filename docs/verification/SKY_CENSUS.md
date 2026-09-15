@@ -1,9 +1,10 @@
-# Native sky census (2026-09-14)
+# Native sky census (2026-09-14; historical discovery record)
 
 Checkout: `t3code-6bf0ae5d`. AI-assisted `tools/sky_census.py`; installed
 Steam base game; outputs under ignored `local/sky/`. This locates the sky and
-records its material chain from decoded manifest data. It is not a host
-import, a shader reconstruction or an in-game comparison.
+records its material chain from decoded manifest data. It predates the bounded
+Sanctuary import documented in `NATIVE_SKYBOX_VERIFICATION.md`; it remains a
+discovery record, not a shader reconstruction or an in-game comparison.
 
 ## What changed
 
@@ -73,8 +74,10 @@ errors, including the A8R8G8B8 transition texture through the census path.
 
 ## Not verified
 
-The host has not imported the dome; the atmosphere fallback is still in place.
-No screenshot exists. The relationship between `Time_of_Day` and the
-transition track is a guess and is not recorded as fact. The second `Sky_Dome`
-placement with a concrete material and negative Z scale is reported, not
-explained. Nothing here is visual-parity evidence.
+At the time of this census the host had not imported the dome and no screenshot
+existed. The subsequent bounded Sanctuary import is documented in
+`NATIVE_SKYBOX_VERIFICATION.md`; it does not change the limits of this census.
+The relationship between `Time_of_Day` and the transition track is a guess and
+is not recorded as fact. The second `Sky_Dome` placement with a concrete
+material and negative Z scale is reported, not explained. Nothing here is
+visual-parity evidence.

@@ -558,3 +558,68 @@ inferred textures is unverified.
 `tools/run_ue_level.ps1 -LowEnd` starts UE with DX11/SM5, lowest scalability
 groups, FXAA and a reduced window for machines without a discrete GPU. Runtime
 only; imported content and saved scenes are unaffected. No frame rate recorded.
+
+## 2026-09-14: diagnostic cooked Material tail structure
+
+The user authorized work on the next high-complexity tasks. Added an
+independent diagnostic decoder for the directly observed native tail:
+six words, bounded count, 16-byte records and final word, with exact
+consumption required. All field semantics remain UNVERIFIED. This does not
+change scene material selection or reconstruct stripped graphs. Existing
+property, package and container validation is unchanged. Bulk CLI payload
+extraction reuses existing export bounds checks and validates every requested
+index before output. No dependency or license changes; no external code
+copied. See docs/verification/MATERIAL_RESOURCE_CENSUS.md for evidence and limits.
+
+## 2026-09-14: bounded native Sky_Dome import
+
+The user authorized the next Sanctuary visitability slice. Scene preparation
+marks only `Prop_Skybox.Meshes.Sky_Dome` placements whose effective material is
+Unlit. The observed Sanctuary placement with a floor-material override is not
+marked as native sky. UE5 imports the accepted dome as a static visual shell,
+with no collision or shadow casting, and records `partial_unverified` graph
+status. The temporary UE5 atmosphere remains in the map for unresolved sky
+layers. This does not interpret Kismet state, outer sky meshes, time-of-day,
+cloud/mask graph connections or visual parity. See
+docs/verification/NATIVE_SKYBOX_VERIFICATION.md.
+
+## 2026-09-14: hide observed blocking helpers and render the dome interior
+
+The Sanctuary source contains four `Common_Meshes.Blocking.Blocking_Cube`
+placements with no effective material. They are collision helpers, not visible
+level geometry; the host keeps their observed collision and hides only their
+rendering. The native Sky_Dome faces are outward-oriented while the inspection
+camera is inside the shell, so the accepted Unlit sky material is marked
+two-sided by the bounded host policy. This does not infer the missing dynamic
+sky graph or alter unrelated unassigned slots.
+
+The artifact pass extends the same render-only policy to all five observed
+`Common_Meshes.Blocking.Blocking_Cube` placements, all 94
+`Common_Meshes.CollisionCube` placements, and the four `Mat_CloudLayer_Light`
+`Blocking_Plane` placements. It also hides the exact `Sanctuary_P`
+`InterpActor_34.StaticMeshComponent_20` `Prop_Garbage.Meshes.BoxLrg` placement
+that blocked the start view. Source collision remains enabled where the
+serialized mesh has a recovered collision hull; the policy does not claim
+complete collision parity.
+
+## 2026-09-14: visible color for Unlit Material v1
+
+Recovered diffuse or fallback color is also connected to Emissive Color for
+Unlit materials when no explicit emissive texture exists. UE Unlit ignores
+Base Color for visible shading. Explicit emissive keeps its existing masked
+policy and takes precedence independent of channel order. The actual
+Sanctuary sky instance uses this fallback path. No native graph or UV mapping
+is inferred. See docs/verification/UNLIT_COLOR.md for evidence and limitations.
+
+## 2026-09-15: bounded blue shell for the UE5 inspection sky
+
+The recovered Sanctuary scene still rendered a brown or black upper field when
+the temporary atmosphere was the only host fallback. The importer now adds a
+centred, two-sided, reverse-culled UE5 sphere with a host-created Unlit blue
+constant material, no collision, and no shadow casting. It is labelled
+`OpenWillow_SkyFallback`, checked by the saved-scene verifier, and paired with
+the existing `OpenWillow_SkyAtmosphere` actor. This keeps the inspection view
+readable without claiming recovery of the native sky graph, cloud layers,
+time-of-day controls, or lighting parity. The broad lower white regions remain
+the separately observed `IcePlate` geometry and were not reclassified as sky.
+See docs/verification/SKY_FALLBACK_VERIFICATION.md.

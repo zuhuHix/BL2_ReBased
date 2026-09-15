@@ -44,6 +44,16 @@ with tempfile.TemporaryDirectory() as folder:
     result = run(fixture)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == dict(version=832, licensee=46, names=1, imports=1, exports=1)
+    # Bulk payload requests preserve bytes/order and reject the entire request.
+    with_payload = bytearray(valid + b'\x00\xff\x17')
+    struct.pack_into('<I', with_payload, 125, 3)
+    path.write_bytes(container(with_payload) if compressed else with_payload)
+    bulk = subprocess.run([sys.argv[1], str(path), '--payloads', '1', '1'], capture_output=True, text=True)
+    assert bulk.returncode == 0, bulk.stderr
+    assert json.loads(bulk.stdout) == [dict(index=1, payload=[0, 255, 23])] * 2
+    for args in [[], ['0'], ['-1'], ['1', '2'], ['1', 'bad']]:
+        bad_request = subprocess.run([sys.argv[1], str(path), '--payloads', *args], capture_output=True, text=True)
+        assert bad_request.returncode != 0 and not bad_request.stdout, args
     for end in range(len(fixture)):
         assert run(fixture[:end]).returncode != 0, end
     for offset, value in [(0, 0), (4, 0), (20, 0xFFFFFFFF), (24, 999999), (65, 9), (93, 2), (125, 999999), (137, 0xFFFFFFFF)]:

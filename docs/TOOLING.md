@@ -296,13 +296,15 @@ inspected glacier materials use a partial primary diffuse/normal layer with
 retained instance tiling on UV0; snow blend, glow and reflection remain open.
 See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
 
-The generated UE5 inspection map now also receives a temporary
-`OpenWillow_SkyAtmosphere` actor, with the imported sun registered as its
-atmosphere light. This supplies a visible non-black background while native
-`_Skybox` translation remains open; `PF_A8R8G8B8` texture extraction is now
-verified (see [record](verification/A8R8G8B8_TEXTURE.md)). The actor
-is explicitly labelled in `ue-import.json` and `ue-verify.json` as
-`temporary_sky_fallback`; it is not visual-parity evidence.
+  The generated UE5 inspection map now also receives a temporary
+  `OpenWillow_SkyAtmosphere` actor, with the imported sun registered as its
+  atmosphere light, plus a centred two-sided blue `OpenWillow_SkyFallback`
+  shell for a readable inspection background. This supplies a visible
+  non-black background while native `_Skybox` translation remains open;
+  `PF_A8R8G8B8` texture extraction is now verified (see
+  [record](verification/A8R8G8B8_TEXTURE.md)). Both actors are explicitly
+  labelled in `ue-import.json` and `ue-verify.json` as
+  `temporary_sky_fallback`; they are not visual-parity evidence.
 
 To locate a map's native sky placements and explain why each one does or does
 not get a diffuse under the current policy:
@@ -320,6 +322,47 @@ cache. `--extract` writes the meshes as OBJ and the textures as PNG under
 `local/sky/<map>/`. It changes no policy and interprets no stripped graph,
 Kismet streaming state or lighting. See the
 [sky census record](verification/SKY_CENSUS.md).
+
+The normal scene preparation now carries the observed native
+`Prop_Skybox.Meshes.Sky_Dome` placement into `scene.json` when its effective
+material is Unlit. Its outward-facing source shell is imported two-sided under
+`NativeSkybox/`, assigns
+the recovered Material v1 approximation, disables collision and shadow
+casting, and retains the UE5 atmosphere as a temporary fallback for unresolved
+sky layers. A second Sanctuary `Sky_Dome` placement with a floor-material
+override is deliberately left as ordinary geometry. See the
+[native skybox verification record](verification/NATIVE_SKYBOX_VERIFICATION.md).
+
+Observed blocking helpers are retained for source collision where recovered and
+hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
+94 `Common_Meshes.CollisionCube` placements, and four cloud `Blocking_Plane`
+placements. The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
+placement that blocked the start view is also hidden. This is a bounded visual
+artifact policy, not complete collision or material parity.
+
+Unlit Material v1 colors now feed Emissive Color when no explicit emissive
+texture exists. The saved-scene verifier reports `verified_unlit_materials`.
+See the [Unlit color verification](verification/UNLIT_COLOR.md) for scope
+and the synthetic regression fixture.
+
+To investigate the remaining cooked Material resource bytes before extending
+serialization support:
+
+```powershell
+python tools/material_resource_census.py --reader build/Release/ow-package.exe --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2" --package Sanctuary_P --package Ash_P
+python tests/material_resource_test.py
+```
+
+The report in `local/material-resources/material_resources.json` contains
+validated prefix boundaries, raw texture indices, opaque-tail sizes, hashes
+and unsigned words, and surviving expression-slot counts. Words have no
+assigned shader semantics. Absent expression arrays remain distinct from
+explicitly empty or stripped arrays. Unsupported prefixes are recorded as
+errors and cause a nonzero exit status. The observed tail layout requires
+exact consumption of six words, a count, 16-byte records and a final word;
+unrecognized layouts also cause a nonzero exit status without discarding
+the raw observations. The report directory must be under
+this checkout's ignored `local/`; these reports must never be committed.
 
 ### First collision and walking slice
 
