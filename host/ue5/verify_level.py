@@ -86,6 +86,7 @@ def close(actual, expected, tolerance=.05):
 # serialized data; no reuse of the importer's placement function.
 verified_native_skybox = 0
 verified_hidden_visual = 0
+verified_neutral_fallback = 0
 for source in scene['actors']:
     for section in scene['meshes'][source['mesh']]['sections']:
         label = actor_label(source['level'], source['source'], section['slot'])
@@ -104,6 +105,11 @@ for source in scene['actors']:
         material = override[section['slot']] if section['slot'] < len(override) and override[section['slot']] else section['material']
         if material:
             assert component.get_material(0).get_name() == 'M_' + material
+        else:
+            # Unresolved preparer materials must carry the labeled host
+            # neutral fallback, never UE's default WorldGridMaterial.
+            assert component.get_material(0).get_name() == 'M_OpenWillowNeutralFallback'
+            verified_neutral_fallback += 1
         if source.get('native_skybox'):
             if section is scene['meshes'][source['mesh']]['sections'][0]:
                 verified_native_skybox += 1
@@ -204,6 +210,7 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_materials': verified_unlit_materials,
           'verified_native_skybox_placements': verified_native_skybox,
           'verified_hidden_visual_placements': verified_hidden_visual,
+          'verified_neutral_fallback_sections': verified_neutral_fallback,
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
           'temporary_sky_fallback': 'UE5_SkyAtmosphere+OpenWillow_SkyFallback',
           'visual_validation': 'pending'}

@@ -447,3 +447,26 @@ downward-trace diagnostics. A displaced or occluded endpoint does not directly
 verify the original hole location; the summary counts are endpoint assertions.
 See
 [the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
+
+## Sanctuary root BSP polygons
+
+`tools/prepare_bsp.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+adds the persistent-level root `Model`/`ModelComponent` polygons of a frozen
+Sanctuary scene as ordinary mesh sections: one section per component material
+element, native material assignments, a labeled 128 cm world-planar UV
+approximation, and (with `--collision`) host triangle collision. Every node,
+vertex-pool point, surface plane and component membership must cross-check
+before any file is written; volume-owned Models are rejected structurally.
+Native texture coordinates, lightmaps and collision flags are retained only as
+opaque hashes and remain `UNVERIFIED`. The script is scoped to `Sanctuary_P`
+plus `Sanctuary_Land` and also writes `bsp-runtime.json`;
+`test_ue_viewer.ps1 -Bsp` then runs `OpenWillow.BspWalking`, which stands on
+and walks 200 cm along an unobstructed upward-facing polygon of each model.
+`python tests/bsp_test.py` covers the decoder on synthetic fixtures. See
+[the BSP record](verification/SANCTUARY_BSP_POLYGONS.md).
+
+Sections whose preparer could not choose a material (currently two terrains
+labeled `neutral_constant`) import with the lit gray
+`M_OpenWillowNeutralFallback` host material and are counted in
+`ue-import.json` / `ue-verify.json` as `neutral_fallback_sections`. Before
+this they fell through to UE's default `WorldGridMaterial` checkerboard.

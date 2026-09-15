@@ -25,7 +25,7 @@ for instance in scene['actors']:
         if mesh.get_path_name() not in checked:
             expected = definition['collision']['hulls'] if i == 0 else []
             actual = unreal.OpenWillowCollision.get_hulls(mesh)
-            if unreal.OpenWillowCollision.has_triangle_collision(mesh) != (triangle and i == 0):
+            if unreal.OpenWillowCollision.has_triangle_collision(mesh) != triangle:
                 raise RuntimeError('Saved triangle collision mismatch: ' + label)
             if len(actual) != len(expected):
                 raise RuntimeError('Saved hull count mismatch: ' + label)
@@ -36,7 +36,7 @@ for instance in scene['actors']:
                     if max(abs(x-y) for x, y in zip((v.x,v.y,v.z), point)) > .001:
                         raise RuntimeError('Saved collision vertex mismatch: ' + label)
             checked.add(mesh.get_path_name())
-        active = i == 0 and instance['collision_enabled'] and (bool(definition['collision']['hulls']) or triangle)
+        active = instance['collision_enabled'] and (triangle or (i == 0 and bool(definition['collision']['hulls'])))
         wanted = unreal.CollisionEnabled.QUERY_AND_PHYSICS if active else unreal.CollisionEnabled.NO_COLLISION
         if component.get_collision_enabled() != wanted:
             raise RuntimeError('Saved collision switch mismatch: ' + label)
