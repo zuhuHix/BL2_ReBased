@@ -177,8 +177,8 @@ for name, definition in scene['meshes'].items():
                 hull = unreal.OpenWillowHull()
                 hull.vertices = [unreal.Vector(*v) for v in item['vertices']]
                 hulls.append(hull)
-        if collision.get('status') == 'triangle_mesh' and section is definition['sections'][0]:
-            # Terrain floors: corroborated cell triangles are the collision surface.
+        if collision.get('status') == 'triangle_mesh':
+            # Each terrain/BSP section carries its own collision triangles.
             if hulls or not unreal.OpenWillowCollision.set_triangle_collision(mesh):
                 raise RuntimeError('Invalid triangle collision for ' + name)
         elif not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
@@ -250,9 +250,10 @@ for instance in scene['actors']:
         component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION
             if is_native_skybox else
             unreal.CollisionEnabled.QUERY_AND_PHYSICS
-            if instance.get('collision_enabled', False) and section is scene['meshes'][instance['mesh']]['sections'][0]
-            and (bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))
-                 or scene['meshes'][instance['mesh']].get('collision', {}).get('status') == 'triangle_mesh')
+            if instance.get('collision_enabled', False)
+            and (scene['meshes'][instance['mesh']].get('collision', {}).get('status') == 'triangle_mesh'
+                 or (section is scene['meshes'][instance['mesh']]['sections'][0]
+                     and bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))))
             else unreal.CollisionEnabled.NO_COLLISION)
         if is_native_skybox:
             # The dome is a visual shell. It must not block the player or cast
