@@ -15,17 +15,19 @@ base = '/Game/OpenWillow/' + scene['map']
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level(base + '/' + scene['map'])
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
+lighting_labels = {'OpenWillow_Sun', 'OpenWillow_SkyFill', 'OpenWillow_SkyAtmosphere',
+                   'OpenWillow_SkyFallback', 'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure'}
 placed = {a.get_actor_label(): a for a in actors if isinstance(a, unreal.StaticMeshActor)
-          and a.get_actor_label().startswith('OpenWillow_')}
+          and a.get_actor_label().startswith('OpenWillow_')
+          and a.get_actor_label() not in lighting_labels}
 expected_count = sum(len(scene['meshes'][a['mesh']]['sections']) for a in scene['actors'])
 assert len(placed) == expected_count, (len(placed), expected_count)
 
 lighting = {a.get_actor_label(): a for a in actors if a.get_actor_label().startswith('OpenWillow_')
-            and a.get_actor_label() in ('OpenWillow_Sun', 'OpenWillow_SkyFill',
-                                        'OpenWillow_SkyAtmosphere',
-                                        'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure')}
+            and a.get_actor_label() in lighting_labels}
 assert set(lighting) == {'OpenWillow_Sun', 'OpenWillow_SkyFill',
                          'OpenWillow_SkyAtmosphere',
+                         'OpenWillow_SkyFallback',
                          'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure'}
 sun_component = lighting['OpenWillow_Sun'].get_component_by_class(unreal.DirectionalLightComponent)
 assert sun_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
@@ -38,6 +40,16 @@ assert abs(sky_component.get_editor_property('intensity') - 0.5) < .01
 atmosphere_component = lighting['OpenWillow_SkyAtmosphere'].get_component_by_class(
     unreal.SkyAtmosphereComponent)
 assert atmosphere_component is not None
+sky_fallback_component = lighting['OpenWillow_SkyFallback'].static_mesh_component
+assert sky_fallback_component.get_editor_property('static_mesh').get_path_name() == (
+    '/Engine/BasicShapes/Sphere.Sphere')
+assert sky_fallback_component.get_material(0).get_name() == 'M_OpenWillowSkyFallback'
+assert sky_fallback_component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
+assert sky_fallback_component.get_editor_property('reverse_culling')
+try:
+    assert not sky_fallback_component.get_editor_property('cast_shadow')
+except Exception:
+    pass
 capture_component = lighting['OpenWillow_ReflectionCapture'].get_component_by_class(
     unreal.SphereReflectionCaptureComponent)
 assert capture_component.get_editor_property('influence_radius') >= 1000.0
@@ -72,6 +84,8 @@ def close(actual, expected, tolerance=.05):
 
 # Independently compare collection world translation and axis lengths to the
 # serialized data; no reuse of the importer's placement function.
+verified_native_skybox = 0
+verified_hidden_visual = 0
 for source in scene['actors']:
     for section in scene['meshes'][source['mesh']]['sections']:
         label = actor_label(source['level'], source['source'], section['slot'])
@@ -90,6 +104,33 @@ for source in scene['actors']:
         material = override[section['slot']] if section['slot'] < len(override) and override[section['slot']] else section['material']
         if material:
             assert component.get_material(0).get_name() == 'M_' + material
+        if source.get('native_skybox'):
+            if section is scene['meshes'][source['mesh']]['sections'][0]:
+                verified_native_skybox += 1
+            assert source.get('native_skybox_source', '').endswith('Prop_Skybox.Meshes.Sky_Dome')
+            assert component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
+            assert not component.get_editor_property('cast_shadow')
+        if source.get('hidden_visual'):
+            if section is scene['meshes'][source['mesh']]['sections'][0]:
+                verified_hidden_visual += 1
+            hidden_source = scene['meshes'][source['mesh']]['source']
+            assert hidden_source.endswith((
+                'Common_Meshes.Blocking.Blocking_Cube',
+                'Common_Meshes.CollisionCube',
+                'Common_Meshes.Blocking.Blocking_Plane',
+                'Common_Meshes.BasePlane_256x128',
+                'Prop_Garbage.Meshes.BoxLrg'))
+            if hidden_source.endswith('Prop_Garbage.Meshes.BoxLrg'):
+                assert source['source'].endswith(
+                    'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20')
+            assert not component.get_editor_property('visible')
+            definition = scene['meshes'][source['mesh']]
+            expected_collision = (unreal.CollisionEnabled.QUERY_AND_PHYSICS
+                                  if source.get('collision_enabled', False)
+                                  and section is definition['sections'][0]
+                                  and bool(definition.get('collision', {}).get('hulls', []))
+                                  else unreal.CollisionEnabled.NO_COLLISION)
+            assert component.get_collision_enabled() == expected_collision
 
 # Check each imported section's geometry bounds against the OBJ's referenced
 # vertices. This catches silent OBJ axis/unit conversion by the host importer.
@@ -115,8 +156,22 @@ mel = unreal.MaterialEditingLibrary
 channels = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR, 'normal': unreal.MaterialProperty.MP_NORMAL,
             'specular': unreal.MaterialProperty.MP_SPECULAR, 'emissive': unreal.MaterialProperty.MP_EMISSIVE_COLOR}
 verified_channels = set()
+verified_unlit_materials = []
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
+    if definition.get('lighting_model') == 'MLM_Unlit':
+        assert material.get_editor_property('shading_model') == unreal.MaterialShadingModel.MSM_UNLIT
+        visible = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        assert visible is not None, 'Unlit material has no visible color: ' + name
+        if not definition['channels'].get('emissive'):
+            if definition['channels'].get('diffuse'):
+                assert isinstance(visible, unreal.MaterialExpressionTextureSample)
+                assert visible.get_editor_property('texture').get_name() == Path(definition['channels']['diffuse']).stem
+            else:
+                assert isinstance(visible, unreal.MaterialExpressionConstant3Vector)
+                value = visible.get_editor_property('constant')
+                close([value.r, value.g, value.b], definition.get('constant_diffuse') or [0.5, 0.5, 0.5], 1e-6)
+        verified_unlit_materials.append(name)
     for channel, filename in definition['channels'].items():
         if not filename:
             continue
@@ -145,8 +200,11 @@ if scene['map'] == 'MaterialV1Smoke':
     close(xyz(ordinary.get_actor_location()), [100, 210, 300])
     close(xyz(ordinary.get_actor_scale3d()), [2, 3, 4])
 report = {'verified_section_actors': len(placed), 'verified_channels': sorted(verified_channels),
+          'verified_unlit_materials': verified_unlit_materials,
+          'verified_native_skybox_placements': verified_native_skybox,
+          'verified_hidden_visual_placements': verified_hidden_visual,
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
-          'temporary_sky_fallback': 'UE5_SkyAtmosphere',
+          'temporary_sky_fallback': 'UE5_SkyAtmosphere+OpenWillow_SkyFallback',
           'visual_validation': 'pending'}
 (root / 'ue-verify.json').write_text(json.dumps(report, indent=2))
 unreal.log('OpenWillow saved-scene verification: ' + json.dumps(report))

@@ -36,6 +36,18 @@ scene = {'schema': 1, 'map': 'MaterialV1Smoke', 'dynamic_policy': 'frozen',
          'actors': [{'source': 'Synthetic.Mesh', 'level': 'Synthetic_P', 'mesh': 'Triangle', 'materials': [],
                      'transform': {'actor': {'location': [100, 200, 300], 'rotation': [0, 90, 0], 'scale': [2, 3, 4]},
                                    'component': {'location': [5, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]}}}]}
+# Exercise Unlit color routing with a texture, constant, neutral fallback,
+# null emissive entry, and explicit emissive taking precedence in either order.
+for name, definition in {
+    'UnlitTexture': {'channels': {'diffuse': 'diffuse.png'}},
+    'UnlitNullEmissive': {'channels': {'diffuse': 'diffuse.png', 'emissive': None}},
+    'UnlitConstant': {'channels': {}, 'constant_diffuse': [0.2, 0.4, 0.6]},
+    'UnlitNeutral': {'channels': {}},
+    'UnlitEmissiveFirst': {'channels': {'emissive': 'emissive.png', 'diffuse': 'diffuse.png'}},
+    'UnlitEmissiveLast': {'channels': {'diffuse': 'diffuse.png', 'emissive': 'emissive.png'}},
+}.items():
+    scene['materials'][name] = dict(definition, source='Synthetic.' + name, lighting_model='MLM_Unlit')
+
 # A synthetic near-vertical collection catches quaternion-to-Euler snapping
 # in the host's SetActorTransform path. The saved verifier compares all axes.
 angle = math.radians(89.96)

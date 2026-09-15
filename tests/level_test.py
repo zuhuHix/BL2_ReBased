@@ -317,7 +317,8 @@ class SceneTests(unittest.TestCase):
                     2: {'class': 'Engine.InterpActor', **record(Location={'X': 100})},
                     3: {'class': 'Engine.StaticMeshComponent', 'index': 3, 'outer': 2,
                         'path': 'TheWorld.PersistentLevel.InterpActor_0.Mesh',
-                        **record(StaticMesh={'index': 4})}}}
+                        **record(StaticMesh={'index': 4})},
+                    4: {'class': 'Engine.StaticMesh', 'path': 'Synthetic.Mesh'}}}
 
             def load(self, name):
                 return self.data[name]
@@ -330,6 +331,7 @@ class SceneTests(unittest.TestCase):
                 return package, ref['index']
 
             def mesh(self, key):
+                self.meshes['synthetic_mesh'] = {'sections': [{'slot': 0, 'material': None}]}
                 return 'synthetic_mesh'
 
         with tempfile.TemporaryDirectory() as folder:
@@ -342,6 +344,42 @@ class SceneTests(unittest.TestCase):
             scene.data['A_P'][1] = {'class': 'Engine.LevelStreamingKismet', **record(PackageName='Missing')}
             with self.assertRaisesRegex(ValueError, 'Missing'):
                 scene.build('A_P')
+
+    def test_native_skybox_policy_is_exact_mesh_only(self):
+        self.assertTrue(m.native_skybox_mesh('Prop_Skybox:Prop_Skybox.Meshes.Sky_Dome'))
+        self.assertFalse(m.native_skybox_mesh('Prop_Skybox:Prop_Skybox.Meshes.SanctuarySky'))
+        self.assertFalse(m.native_skybox_mesh('Prop_Skybox:Prop_Skybox.Meshes.Sky_Dome_LOD1'))
+        self.assertFalse(m.native_skybox_mesh('Common_Materials.Sky.Mat_SkyTimeOfDay_Master'))
+        materials = {'sky': {'lighting_model': 'MLM_Unlit'},
+                     'floor': {'lighting_model': 'MLM_DefaultLit'}}
+        self.assertTrue(m.native_skybox_placement(
+            'Prop_Skybox:Prop_Skybox.Meshes.Sky_Dome', ['sky'], materials))
+        self.assertFalse(m.native_skybox_placement(
+            'Prop_Skybox:Prop_Skybox.Meshes.Sky_Dome', ['floor'], materials))
+        self.assertFalse(m.native_skybox_placement(
+            'Prop_Skybox:Prop_Skybox.Meshes.Sky_Dome', [], materials))
+        self.assertTrue(m.hidden_visual_mesh(
+            'Sanctuary_Dynamic:Common_Meshes.Blocking.Blocking_Cube'))
+        self.assertFalse(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Cube_Other'))
+        self.assertFalse(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Cube_Other', ['textured']))
+        self.assertTrue(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Cube', ['textured']))
+        self.assertTrue(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.CollisionCube', ['collision']))
+        materials = {'cloud': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'},
+                     'other': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_Other'}}
+        self.assertTrue(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane', ['cloud'], materials))
+        self.assertFalse(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane', ['other'], materials))
+        self.assertTrue(m.hidden_visual_mesh(
+            'Sanctuary_P:Prop_Garbage.Meshes.BoxLrg', [], {},
+            'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'))
+        self.assertFalse(m.hidden_visual_mesh(
+            'Sanctuary_P:Prop_Garbage.Meshes.BoxLrg', [], {},
+            'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20'))
 
 
 if __name__ == '__main__':

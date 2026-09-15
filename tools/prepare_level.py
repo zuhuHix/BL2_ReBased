@@ -66,6 +66,72 @@ CHANNELS = {'p_diffuse': 'diffuse', 'diffuse': 'diffuse',
             'p_normal': 'normal', 'normal': 'normal',
             'p_specular': 'specular', 'specular': 'specular',
             'p_emissive': 'emissive', 'emissive': 'emissive'}
+
+# Native sky import is intentionally limited to the observed dome mesh. Other
+# sky-named meshes retain ordinary Material v1 handling until their activation
+# and material chains are understood.
+NATIVE_SKYBOX_MESH = 'Prop_Skybox.Meshes.Sky_Dome'
+HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
+HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
+HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
+HIDDEN_CLOUD_MATERIAL = 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'
+HIDDEN_TRANSITION_MESH = 'Common_Meshes.BasePlane_256x128'
+HIDDEN_TRANSITION_MATERIAL = 'Common_Materials.Environment.WorldTransition'
+HIDDEN_FOREGROUND_SOURCE = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
+# This optimized Sanctuary material is an HLS master: its Color and Luminosity
+# texture parameters are combined by a stripped static permutation resource.
+# Feeding the luminosity atlas directly to Base Color produces the observed
+# neon green/magenta walkways.  The ordinary same-package instance has a
+# recoverable diffuse atlas with the compatible material family and is a
+# bounded visual fallback until that HLS graph is decoded.
+REGULAR_DIFFUSE_FALLBACKS = {
+    'Sanctuary_P:Prop_SancBuildings.Optimization.Mati_SancBuild4a':
+        'Sanctuary_P:Prop_SancBuildings.Material.Mati_SancBuild4a',
+}
+
+
+def native_skybox_mesh(identity):
+    """Return whether an object identity is the observed native sky dome."""
+    return identity.rsplit(':', 1)[-1] == NATIVE_SKYBOX_MESH
+
+
+def native_skybox_placement(identity, effective_materials, materials):
+    """Accept only the dome with entirely Unlit effective materials."""
+    return (native_skybox_mesh(identity) and bool(effective_materials)
+            and all(materials.get(name, {}).get('lighting_model') == 'MLM_Unlit'
+                    for name in effective_materials))
+
+
+def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None):
+    """Return whether an observed helper has no recoverable host-side visual."""
+    mesh = identity.rsplit(':', 1)[-1]
+    if source == HIDDEN_FOREGROUND_SOURCE:
+        # This exact observed BoxLrg placement is a developer blocking volume
+        # directly in the Sanctuary start view, despite carrying a prop mesh.
+        return True
+    if mesh == HIDDEN_COLLISION_MESH:
+        # CollisionCube is source collision geometry, not a renderable prop.
+        return True
+    if mesh == HIDDEN_VISUAL_MESH:
+        # Blocking_Cube is an observed placement helper even when an
+        # unreliable diffuse override was attached to it.
+        return True
+    if mesh == HIDDEN_CLOUD_MESH and effective_materials and materials:
+        # The cloud material is translucent in UE3 but its opacity graph is not
+        # recovered; drawing its diffuse alone produces the observed yellow /
+        # black blocking planes. Hide only the exact observed cloud instance.
+        return all(materials.get(name, {}).get('source') == HIDDEN_CLOUD_MATERIAL
+                   for name in effective_materials)
+    if mesh == HIDDEN_TRANSITION_MESH and effective_materials and materials:
+        # WorldTransition is a translucent loading/boundary plane. Its graph
+        # is not recovered; feeding the undecoded material into a host mesh
+        # renders the white void seen below the Sanctuary platforms. Hide only
+        # this exact helper mesh/material pair and keep its source collision
+        # state independent.
+        return all((materials.get(name, {}).get('source') or '').rsplit(':', 1)[-1]
+                   == HIDDEN_TRANSITION_MATERIAL
+                   for name in effective_materials)
+    return False
 ALIASES = {
     'p_dif': 'diffuse', 'dif': 'diffuse', 'ad_diff': 'diffuse',
     'tex_diff': 'diffuse', 'diff_texture': 'diffuse',
@@ -428,12 +494,35 @@ class Scene:
             try:
                 material.update(self.material_metadata(key))
                 parameters = self.material_parameters(key)
+                regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
+                if regular_fallback is not None:
+                    package, path = regular_fallback.split(':', 1)
+                    if package != key[0]:
+                        raise ValueError('Regular diffuse fallback package mismatch')
+                    regular_index = material_index(self.load(package), path)
+                    regular_name = self.material((package, regular_index))
+                    regular = self.materials[regular_name]
+                    diffuse = regular.get('channels', {}).get('diffuse')
+                    if not diffuse:
+                        raise ValueError('Regular diffuse fallback has no diffuse channel')
+                    material['channels']['diffuse'] = diffuse
+                    material['diffuse_inference'] = regular['source']
+                    material['diffuse_inference_method'] = 'same_package_regular_diffuse_fallback_v1'
+                    material['surface_approximation'] = {
+                        'method': 'same_package_regular_diffuse_fallback_v1',
+                        'status': 'partial_unverified',
+                        'source_material': regular['source'],
+                        'omitted': ['HLS Color/Luminosity combine',
+                                    'static permutation', 'modulation']}
+                    self.issue(material['source'],
+                               'Approximation: HLS Color/Luminosity graph replaced by same-package regular diffuse; static permutation and modulation not reconstructed')
+                    parameters = {}
                 inferred = unnamed_diffuse_candidate(parameters, self.identity)
                 if inferred is not None:
                     parameters['p_diffuse'] = inferred
                     material['diffuse_inference'] = self.identity(inferred)
                     self.issue(material['source'], 'Approximation: sole unnamed _Dif texture used as diffuse; cooked graph and tint not reconstructed')
-                if not any(channel_for_parameter(p) == 'diffuse' for p in parameters):
+                if not regular_fallback and not any(channel_for_parameter(p) == 'diffuse' for p in parameters):
                     try:
                         cooked = self.cooked_material_textures(key)
                         if cooked is not None:
@@ -607,9 +696,29 @@ class Scene:
                             continue
                         pose = {'actor': transform(props(owner)), 'component': transform(p, True)}
                     overrides = [self.material(self.resolve(level, ref)) for ref in p.get('Materials', [])]
-                    actors.append({'source': record['path'], 'level': level, 'mesh': self.mesh(key),
+                    mesh_identity = self.identity(key)
+                    mesh_name = self.mesh(key)
+                    effective_materials = [overrides[i] if i < len(overrides) and overrides[i]
+                                           else section['material']
+                                           for i, section in enumerate(self.meshes[mesh_name]['sections'])]
+                    is_native_skybox = native_skybox_placement(
+                        mesh_identity, effective_materials, self.materials)
+                    if is_native_skybox:
+                        # The observed dome's faces point outward while the
+                        # player camera is inside it. Preserve the source mesh
+                        # and use the narrow host-side two-sided policy needed
+                        # for an interior visual shell.
+                        for material_name in effective_materials:
+                            if material_name in self.materials:
+                                self.materials[material_name]['two_sided'] = True
+                    actors.append({'source': record['path'], 'level': level, 'mesh': mesh_name,
                                    'transform': pose, 'materials': overrides, 'static': True,
-                                   'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True)})
+                                   'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
+                                   'native_skybox': is_native_skybox,
+                                   'native_skybox_source': mesh_identity if is_native_skybox else None,
+                                   'hidden_visual': hidden_visual_mesh(
+                                       mesh_identity, effective_materials, self.materials,
+                                       record['path'])})
                 except ValueError as error:
                     self.issue(level + ':' + record['path'], error)
         if not actors:

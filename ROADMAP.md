@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-14
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-15
 
 ---
 
@@ -24,14 +24,14 @@ well-bounded ones are marked *good first task*.
 - [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
-- [ ] Sky rendering: the native sky is located, not yet translated. In both
-      Sanctuary and Ash the dome is `Prop_Skybox.Meshes.Sky_Dome` (Sanctuary:
-      `_Light` sublevel; Ash: persistent level) with an unlit
-      `Mat_SkyTimeOfDay_Master` instance
-      whose diffuse already resolves to the decoded `Sky_TransitionBL2Default_Dif`;
-      the time-of-day, cloud and mask inputs are not interpreted. The host
-      still adds a labelled `OpenWillow_SkyAtmosphere` fallback; this is not
-      native sky parity. See the [sky census](docs/verification/SKY_CENSUS.md).
+- [~] Sky rendering: the bounded Sanctuary slice now imports the accepted
+      `Prop_Skybox.Meshes.Sky_Dome` placement with its Unlit material and
+      recovered `Sky_TransitionBL2Default_Dif` routed through the host
+      Emissive policy. The blue shell and `OpenWillow_SkyAtmosphere` remain
+      temporary fallbacks; Ash coverage, outer layers, time-of-day/cloud/mask
+      graph connections, Kismet activation and visual parity remain open. See
+      the [native skybox record](docs/verification/NATIVE_SKYBOX_VERIFICATION.md)
+      and [sky census](docs/verification/SKY_CENSUS.md).
 - [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
       including 14 opaque definitions (43 placed sections). Of those, 11 have
       no supported channels (21 sections). Two glacier materials (33 sections)
@@ -42,12 +42,13 @@ well-bounded ones are marked *good first task*.
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
 - [ ] Terrain / BSP geometry.
-- [ ] Sanctuary visual defects observed in the editor fly-through (2026-09-14,
-      not yet diagnosed): the ground floor renders wrong, some sidewalk
-      sections show up green (likely a missing-diffuse fallback or wrong
-      section material), and a large stray cube sits near the town entrance
-      that is not in the original map (possibly an imported blocking/trigger
-      volume or an unsupported component rendered as a placeholder).
+- [~] Sanctuary visual defects observed in the editor fly-through: the native
+      dome now uses a two-sided interior policy, and the four known
+      `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
+      cloud planes, and the observed start-view blocking box are hidden from
+      rendering while source collision is retained where recovered. Ground-floor
+      material/green sidewalk defects and matched original screenshots remain
+      open.
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and
@@ -150,8 +151,10 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         transforms (collection tails: observed 84-byte layout, Ash and
         Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
-  - [~] Skybox: dome mesh, placement and material chain located by
-        `tools/sky_census.py`; not translated in the host
+    - [~] Skybox: observed `Sky_Dome` placement and Unlit material now import
+          through the bounded native-sky v1 path, with a blue host shell keeping
+          the inspection background readable; outer layers, time-of-day graph,
+          Kismet activation and visual parity remain open
   - [ ] Terrain / BSP
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting
