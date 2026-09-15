@@ -2,7 +2,19 @@
 import argparse
 import json
 from pathlib import Path
-from prepare_level import Scene, material_index
+from prepare_level import Scene, material_index, native_skybox_placement
+
+
+def restore_sky_policy(manifest):
+    """Reapply the placement-derived interior policy after replacing materials."""
+    for actor in manifest['actors']:
+        mesh = manifest['meshes'][actor['mesh']]
+        effective = [actor['materials'][s['slot']]
+                     if s['slot'] < len(actor['materials']) and actor['materials'][s['slot']]
+                     else s['material'] for s in mesh['sections']]
+        if native_skybox_placement(mesh['source'], effective, manifest['materials']):
+            for name in effective:
+                manifest['materials'][name]['two_sided'] = True
 
 
 def main():
@@ -41,6 +53,7 @@ def main():
         if number % 25 == 0:
             print(f'Refreshed {number}/{len(manifest["materials"])} materials', flush=True)
     manifest['materials'] = scene.materials
+    restore_sky_policy(manifest)
     manifest['issues'] = [issue for issue in manifest['issues']
                           if not any(issue['object'] == source or issue['object'].startswith(source + ':')
                                      for source in sources)] + scene.issues

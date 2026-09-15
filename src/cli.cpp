@@ -9,7 +9,7 @@ namespace {
 
 void usage() {
     throw std::runtime_error(
-        "usage: ow-package <package> [--exports | --imports | --census | --scene-records <schema> | --payload <index> | --payloads <index>... | --verify-decoded <file> | "
+        "usage: ow-package <package> [--exports | --imports | --census | --scene-records <schema> | --terrain-records <schema> | --payload <index> | --payloads <index>... | --verify-decoded <file> | "
         "--resolve <reference> --cooked <directory> | --properties <index> "
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
@@ -145,8 +145,9 @@ int main(int argc, char** argv) {
         }
         // Bulk metadata for scene preparation, without repeatedly decompressing a map.
         // Individual unsupported objects remain explicit in the output.
-        if (mode == "--scene-records") {
+        if (mode == "--scene-records" || mode == "--terrain-records") {
             if (argc != 4) usage();
+            const bool terrain = mode == "--terrain-records";
             loadSchema(*package, argv[3]);
             std::cout << '[';
             for (int32_t i = 1; i <= int32_t(package->exports.size()); ++i) {
@@ -155,20 +156,26 @@ int main(int argc, char** argv) {
                 const auto cls = object.cls ? package->path(object.cls) : "Class";
                 std::cout << "{\"index\":" << i << ",\"path\":" << quote(package->path(i))
                           << ",\"class\":" << quote(cls) << ",\"outer\":" << object.outer;
-                if (cls.find("StaticMesh") != std::string::npos ||
+                const bool terrainClass = cls == "Engine.Terrain" || cls == "Engine.TerrainComponent" ||
+                    cls == "Engine.TerrainLayerSetup" || cls == "Engine.TerrainMaterial" ||
+                    cls == "Engine.TerrainWeightMapTexture" || cls == "Engine.Model" ||
+                    cls == "Engine.ModelComponent" || cls == "Engine.Polys" || cls == "Engine.BrushComponent";
+                // TerrainLayerSetup.Materials is a struct array, unlike static-mesh
+                // Materials object references. Never apply their schemas together.
+                if (terrain ? terrainClass : (cls.find("StaticMesh") != std::string::npos ||
                     cls == "Engine.RB_BodySetup" ||
                     cls.find("InterpActor") != std::string::npos ||
                     cls.find("StaticMeshComponent") != std::string::npos ||
                     cls.find("LevelStreaming") != std::string::npos ||
                     cls.find("Material") != std::string::npos ||
                     cls.find("PlayerStart") != std::string::npos ||
-                    cls == "Engine.World") {
+                    cls == "Engine.World")) {
                     try {
                         auto reader = package->reader();
                         // Observed Ash object prefixes, not a universal UObject layout.
                         // Native prefix semantics remain UNVERIFIED; no retry/offset scan.
                         const size_t prefix = cls.find("CollectionActor") != std::string::npos ? 4 : cls.find("Component") != std::string::npos ? 8 :
-                            (cls.find("Actor") != std::string::npos || cls.find("PlayerStart") != std::string::npos ? 26 : 4);
+                            (cls.find("Actor") != std::string::npos || cls.find("PlayerStart") != std::string::npos || cls == "Engine.Terrain" ? 26 : 4);
                         const auto props = package->properties(reader, i, prefix);
                         std::cout << ",\"data\":" << props;
                     } catch (const std::exception& error) {

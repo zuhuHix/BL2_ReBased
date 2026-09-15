@@ -159,6 +159,7 @@ verified_channels = set()
 verified_unlit_materials = []
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
+    assert material.get_editor_property('two_sided') == bool(definition.get('two_sided', False)), name
     if definition.get('lighting_model') == 'MLM_Unlit':
         assert material.get_editor_property('shading_model') == unreal.MaterialShadingModel.MSM_UNLIT
         visible = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)

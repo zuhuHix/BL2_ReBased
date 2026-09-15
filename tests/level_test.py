@@ -25,6 +25,118 @@ def record(**kwargs):
 
 
 class SceneTests(unittest.TestCase):
+    def test_material_refresh_restores_only_unlit_dome_interior(self):
+        from refresh_materials import restore_sky_policy
+        manifest = {'actors': [{'mesh': 'dome', 'materials': ['sky']},
+                               {'mesh': 'dome', 'materials': ['floor']}],
+                    'meshes': {'dome': {'source': 'Map:' + m.NATIVE_SKYBOX_MESH,
+                                        'sections': [{'slot': 0, 'material': 'floor'}]}},
+                    'materials': {'sky': {'lighting_model': 'MLM_Unlit'},
+                                  'floor': {'lighting_model': 'MLM_DefaultLit'}}}
+        restore_sky_policy(manifest)
+        self.assertTrue(manifest['materials']['sky']['two_sided'])
+        self.assertNotIn('two_sided', manifest['materials']['floor'])
+
+    def test_hls_fallback_validates_parent_atlas_and_keeps_normal(self):
+        scene = object.__new__(m.Scene)
+        paths = {1: 'Prop_SancBuildings.Optimization.Mati_SancBuild4a',
+                 2: 'Prop_SancBuildings.Material.Mati_SancBuild4a',
+                 3: 'Prop_SancBuildings.Optimization.Sanc_HLS_Master',
+                 4: 'Prop_SancBuildings.Textures.SancBuild4a_Dif', 5: 'Normal', 6: 'Other_Dif'}
+        rows = {i: {'path': path, 'index': i,
+                    'class': 'Engine.MaterialInstanceConstant' if i < 4 else 'Engine.Texture2D',
+                    **record()} for i, path in paths.items()}
+        rows[1].update(record(Parent={'index': 3}))
+        scene.load = lambda package: rows
+        scene.resolve = lambda package, ref: (package, ref['index']) if ref else None
+        scene.identity = lambda key: key[0] + ':' + paths[key[1]]
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.texture = lambda key, channel: scene.filename(key, '_' + channel + '.png')
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: ({'p_normal': ('Sanctuary_P', 5),
+                                                 'materialexpressiontexturesampleparameter2d_7': ('Sanctuary_P', 6)} if key[1] == 1
+                                                else {'p_diffuse': ('Sanctuary_P', 4)})
+        scene.materials, scene.issues = {}, []
+        scene.material(('Sanctuary_P', 1))
+        self.assertEqual(scene.materials['1']['channels'],
+                         {'diffuse': '4_diffuse.png', 'normal': '5_normal.png'})
+        scene.materials.clear()
+        paths[3] = 'UnexpectedParent'
+        scene.material(('Sanctuary_P', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        self.assertIn('inspected HLS parent', scene.issues[-1]['error'])
+        paths[3] = 'Prop_SancBuildings.Optimization.Sanc_HLS_Master'
+        scene.materials = {'2': {'source': 'Sanctuary_P:' + paths[2],
+                                 'channels': {'diffuse': 'unexpected.png'}}}
+        scene.material(('Sanctuary_P', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        self.assertIn('inspected concrete atlas', scene.issues[-1]['error'])
+
+    def test_frozen_lake_color_is_scoped_and_requires_resource(self):
+        scene = object.__new__(m.Scene)
+        paths = {1: 'Prop_Glacier.Materials.Mat_FrozenLake',
+                 2: 'Prop_Glacier.Textures.FrozenLake', 3: 'Prop_Terrain.Textures.Snow_Dif',
+                 4: 'Prop_Skybox.MoveMe.Ice_Nrm'}
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.identity = lambda key: key[0] + ':' + paths[key[1]]
+        scene.load = lambda package: {i: {'class': 'Engine.Texture2D'} for i in (2, 3, 4)}
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: {}
+        scene.texture = lambda key, channel: str(key[1]) + '.png'
+        scene.cooked_material_textures = lambda key: (key, [(key[0], i) for i in (2, 3, 4)], 48)
+        scene.material(('Sanctuary_Land', 1))
+        self.assertEqual(scene.materials['1']['channels']['diffuse'], '2.png')
+        self.assertEqual(scene.materials['1']['channels']['normal'], '4.png')
+        self.assertEqual(scene.materials['1']['surface_approximation']['status'], 'partial_unverified')
+        scene.materials.clear()
+        scene.material(('Other', 1))
+        self.assertEqual(scene.materials['1']['channels']['diffuse'], '3.png')
+        scene.materials.clear()
+        scene.cooked_material_textures = lambda key: (key, [(key[0], 3)], 48)
+        scene.material(('Sanctuary_Land', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        self.assertIn('requires the inspected ice texture', scene.issues[-2]['error'])
+
+    def test_ice_road_color_is_scoped_and_omits_stripped_normal(self):
+        scene = object.__new__(m.Scene)
+        paths = {1: 'Env_Sanctuary.Materials.Mat_IceRoadSanctuary',
+                 2: 'Env_Ice.Textures.BrokenRoad_Dif', 3: 'Prop_Terrain.Textures.Snow_Dif',
+                 4: 'Prop_Terrain.Textures.GrasslandsRock_Dif', 5: 'Env_Ice.Textures.BrokenRoad_Alpha'}
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.identity = lambda key: key[0] + ':' + paths[key[1]]
+        scene.load = lambda package: {i: {'class': 'Engine.Texture2D'} for i in (2, 3, 4, 5)}
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: {'p_Normal': None}
+        scene.texture = lambda key, channel: str(key[1]) + '.png'
+        scene.cooked_material_textures = lambda key: (key, [(key[0], i) for i in (2, 3, 4, 5)], 112)
+        scene.material(('Sanctuary_Land', 1))
+        self.assertEqual(scene.materials['1']['channels'], {'diffuse': '2.png'})
+        approximation = scene.materials['1']['surface_approximation']
+        self.assertEqual(approximation['method'], 'ice_road_color_fallback_v1')
+        self.assertNotIn('normal_texture', approximation)
+        self.assertIn('road color', scene.issues[-1]['error'])
+        scene.materials.clear()
+        scene.material(('Other', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        scene.materials.clear()
+        scene.cooked_material_textures = lambda key: (key, [(key[0], i) for i in (3, 4, 5)], 112)
+        scene.material(('Sanctuary_Land', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        self.assertIn('requires the inspected road texture', scene.issues[-2]['error'])
+
+    def test_transition_helpers_do_not_hide_ice_or_ordinary_planes(self):
+        materials = {'transition': {'source': 'Sanctuary_Land:' + m.HIDDEN_TRANSITION_MATERIAL},
+                     'ice': {'source': 'Sanctuary_Land:Prop_Glacier.Materials.Mat_FrozenLake'}}
+        plane = 'Sanctuary_Land:' + m.HIDDEN_TRANSITION_MESH
+        self.assertTrue(m.hidden_visual_mesh(plane, ['transition'], materials))
+        self.assertFalse(m.hidden_visual_mesh(plane, ['transition', 'ice'], materials))
+        self.assertFalse(m.hidden_visual_mesh(plane, [], materials))
+        self.assertFalse(m.hidden_visual_mesh(plane, ['missing'], materials))
+        self.assertFalse(m.hidden_visual_mesh('Sanctuary_Land:Prop_Glacier.Meshes.IcePlate',
+                                            ['transition'], materials))
+
     def test_glacier_primary_layer_is_scoped_and_preserves_instance_scale(self):
         scene = object.__new__(m.Scene)
         base = 'Prop_Glacier.Materials.Mat_Glacier'

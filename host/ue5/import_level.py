@@ -171,12 +171,17 @@ for name, definition in scene['meshes'].items():
         if section['material']:
             mesh.set_material(0, materials[section['material']])
         hulls = []
+        collision = definition.get('collision', {})
         if section is definition['sections'][0]:
-            for item in definition.get('collision', {}).get('hulls', []):
+            for item in collision.get('hulls', []):
                 hull = unreal.OpenWillowHull()
                 hull.vertices = [unreal.Vector(*v) for v in item['vertices']]
                 hulls.append(hull)
-        if not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
+        if collision.get('status') == 'triangle_mesh' and section is definition['sections'][0]:
+            # Terrain floors: corroborated cell triangles are the collision surface.
+            if hulls or not unreal.OpenWillowCollision.set_triangle_collision(mesh):
+                raise RuntimeError('Invalid triangle collision for ' + name)
+        elif not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
             raise RuntimeError('Invalid collision hulls for ' + name)
         unreal.EditorAssetLibrary.save_loaded_asset(mesh)
         meshes[name, section['slot']] = mesh
@@ -246,7 +251,8 @@ for instance in scene['actors']:
             if is_native_skybox else
             unreal.CollisionEnabled.QUERY_AND_PHYSICS
             if instance.get('collision_enabled', False) and section is scene['meshes'][instance['mesh']]['sections'][0]
-            and bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))
+            and (bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))
+                 or scene['meshes'][instance['mesh']].get('collision', {}).get('status') == 'triangle_mesh')
             else unreal.CollisionEnabled.NO_COLLISION)
         if is_native_skybox:
             # The dome is a visual shell. It must not block the player or cast
@@ -456,6 +462,7 @@ except Exception:
     # Null-RHI commandlets cannot render a capture. The editor will recapture
     # it when the map is opened.
     pass
+terrain_placements = sum(1 for item in scene['actors'] if item.get('terrain'))
 native_skybox_placements = sum(1 for item in scene['actors'] if item.get('native_skybox'))
 hidden_visual_placements = sum(1 for item in scene['actors'] if item.get('hidden_visual'))
 level.save_current_level()
@@ -475,6 +482,10 @@ unreal.EditorAssetLibrary.save_directory(destination)
                       'materials': ['Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'],
                       'sources': ['TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'],
                       'policy': 'hide_unrecovered_visual_preserve_source_collision'},
+    'terrain': {'placements': terrain_placements,
+                'policy': scene.get('terrain_policy'),
+                'collision': 'triangle_mesh_complex_as_simple' if any(
+                    m.get('collision', {}).get('status') == 'triangle_mesh' for m in scene['meshes'].values()) else 'none'},
     'lighting': {'sun_intensity': 1.0, 'sky_intensity': 0.5,
                  'reflection_capture_radius': max(capture_radius, 1000.0),
                  'exposure': 'auto', 'ambient_occlusion': 0.35,

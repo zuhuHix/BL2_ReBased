@@ -32,29 +32,35 @@ well-bounded ones are marked *good first task*.
       graph connections, Kismet activation and visual parity remain open. See
       the [native skybox record](docs/verification/NATIVE_SKYBOX_VERIFICATION.md)
       and [sky census](docs/verification/SKY_CENSUS.md).
-- [ ] Material fallbacks: Sanctuary now has 47 materials lacking diffuse,
-      including 14 opaque definitions (43 placed sections). Of those, 11 have
-      no supported channels (21 sections). Two glacier materials (33 sections)
+- [ ] Material fallbacks: Sanctuary now has 44 materials lacking diffuse,
+      including 12 opaque definitions (42 placed sections). Of those, nine have
+      no supported channels (20 sections). Two glacier materials (33 sections)
       have an explicit primary-layer approximation with instance tiling; snow
       blend, reflection/glow and static UV selection remain unresolved. See the
       [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and
       [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
-- [ ] Terrain / BSP geometry.
+- [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
+      meshes with corroborated topology and host triangle collision. Native
+      blending, BSP floor recovery and original-game alignment remain open.
+      Hole runtime assertions include occluded/displaced probes; see the
+      [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 - [~] Sanctuary visual defects observed in the editor fly-through: the native
       dome now uses a two-sided interior policy, and the four known
       `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
       cloud planes, and the observed start-view blocking box are hidden from
       rendering while source collision is retained where recovered. Ground-floor
-      material/green sidewalk defects and matched original screenshots remain
-      open.
+      materials now have scoped FrozenLake and regular-concrete/HLS fallbacks;
+      native layer blending, HLS UV mapping and matched original screenshots
+      remain open. See the [artifact pass](docs/verification/SANCTUARY_ARTIFACT_PASS.md).
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and
       placeholder walking are verified; full routes and stairs remain open.
-      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes,
-      blocking volumes and terrain remain unsupported. See
+      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes
+      and blocking volumes remain unsupported; terrain uses triangle collision
+      verified by `OpenWillow.TerrainWalking` on Sanctuary only. See
       [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] Broader map coverage. Command-line and in-game selectors exist; the
       in-game list only offers already imported scenes (2026-09-14).

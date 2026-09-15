@@ -111,7 +111,7 @@ The detailed, checkbox-level tracker is [ROADMAP.md](ROADMAP.md).
 - <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> Sanctuary now imports one bounded native `Sky_Dome` visual shell with the recovered transition texture, alongside temporary UE5 atmosphere/blue-shell fallbacks. The native sky graph, some white/green surfaces, walking and visual parity remain open, and it runs slowly
 - <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> 79 maps still to load; walking and visual checks remain part of Phase 1's gate
 
-**Next up:** getting Sanctuary to look right: the remaining white/green surfaces and missing geometry, then terrain and better collision. Native sky parity and the full list are tracked in [ROADMAP.md](ROADMAP.md#now--next), and the small ones are tagged *good first task*.
+**Next up:** getting Sanctuary to look right: the remaining white/green surfaces, BSP floors, terrain blending and better collision coverage. Terrain topology and host collision are imported, with occluded/displaced runtime probes documented in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md). Native sky parity and the full list are tracked in [ROADMAP.md](ROADMAP.md#now--next), and the small ones are tagged *good first task*.
 
 <details>
 <summary><b>Show me the numbers behind those checkmarks</b></summary>
@@ -123,7 +123,7 @@ Every claim above comes from a dated verification record. Automated checks are a
 | Milestone | Evidence |
 |---|---|
 | Phase 0 gated 2026-09-10 | Reader reads 2,008 / 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
-| Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a bounded Sanctuary `Sky_Dome` visual import, temporary sky fallbacks and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`); an in-game Tab list switches between imported scenes. Walking is an opt-in placeholder verified on Sanctuary only. Sanctuary runs at 12–15 FPS on an integrated-GPU laptop, GPU-bound in TSR. Not done: native skybox shading/parity, terrain/BSP, skeletal meshes, lightmaps, real material graphs, full collision, 79 more maps. |
+| Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a bounded Sanctuary `Sky_Dome` visual import, temporary sky fallbacks and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`); an in-game Tab list switches between imported scenes. Walking is an opt-in placeholder verified on Sanctuary only. Sanctuary runs at 12–15 FPS on an integrated-GPU laptop, GPU-bound in TSR. Sanctuary terrain floors are imported with corroborated topology and walkable triangle collision. Not done: native skybox shading/parity, terrain layer blending, BSP, skeletal meshes, lightmaps, real material graphs, full collision, 79 more maps. |
 
 Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md) · [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md) · [collision and walking](COLLISION_WALKING_VERIFICATION.md) · [performance / in-game selector](docs/verification/PERFORMANCE.md).
 
@@ -271,7 +271,7 @@ A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/i
 
 `tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest. `host/ue5/` is a minimal UE5 C++ project plus editor-Python importer/verifier that builds the scene, an inspection lighting rig and a free-flight spectator pawn, then reopens the saved scene and verifies it.
 
-Not implemented: class/default inheritance, runtime package streaming, other pixel formats, terrain/BSP, skeletal meshes, lightmaps, material graph translation, full UE3 collision parity, any gameplay.
+Not implemented: class/default inheritance, runtime package streaming, other pixel formats, terrain layer blending, BSP, skeletal meshes, lightmaps, material graph translation, full UE3 collision parity, any gameplay.
 
 Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 

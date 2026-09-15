@@ -110,7 +110,7 @@ writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
 hashes of the package and outputs.
 
 Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`; payload-at-end mips and other pixel formats still fail
+`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`/`PF_G8`; payload-at-end mips and other pixel formats still fail
 explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
 all UV sets; OBJ output intentionally writes one selected LOD and its first UV
 set. Source mesh data and skeletal meshes remain future work; tagged convex/box
@@ -424,3 +424,26 @@ the existing base-game search root. DLC discovery alone is not DLC compatibility
 | `research/` | Community-demand corpus, analysis scripts and the original Python package reader used as a comparison oracle |
 | `docs/` | Plan, research, verification records; this file |
 | `local/` | Ignored. Every game-derived output lands here |
+
+## Sanctuary artifact trace
+
+`tools/audit_sanctuary_artifacts.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --output local/artifact-pass.json`
+records IcePlate, WorldTransition and HLS effective placements plus source
+properties and omitted terrain/BSP class counts. Use it after material refresh;
+counts do not establish which missing floors terrain/BSP will fill. See
+[the verification record](verification/SANCTUARY_ARTIFACT_PASS.md).
+
+## Terrain floors
+
+`tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+rewrites a prepared scene with one static mesh per TerrainComponent whose
+vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
+material approximation, and (with `--collision`) triangle-mesh collision. It
+also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
+`OpenWillow.TerrainWalking`, which stands on each terrain, drops into a
+flagged hole cell and walks one component seam. Full viewer logs now include
+`Terrain hole path:` records for every probe frame, with movement, floor and
+downward-trace diagnostics. A displaced or occluded endpoint does not directly
+verify the original hole location; the summary counts are endpoint assertions.
+See
+[the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).

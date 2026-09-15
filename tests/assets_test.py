@@ -1,4 +1,4 @@
-"""Synthetic DXT/ARGB, PNG, bulk/TFC and static-mesh serialization tests."""
+"""Synthetic DXT/ARGB/G8, PNG, bulk/TFC and static-mesh serialization tests."""
 import binascii
 import json
 from pathlib import Path
@@ -10,7 +10,8 @@ import zlib
 
 reader = str(Path(sys.argv[1]).resolve())
 names = ['None', 'Texture2D', 'StaticMesh', 'Class', 'Probe', 'Format', 'ByteProperty',
-         'EPixelFormat', 'PF_DXT1', 'PF_DXT5', 'TextureFileCacheName', 'NameProperty', 'TestCache', 'PF_A8R8G8B8', 'PF_G8']
+         'EPixelFormat', 'PF_DXT1', 'PF_DXT5', 'TextureFileCacheName', 'NameProperty', 'TestCache', 'PF_A8R8G8B8', 'PF_G8',
+         'TerrainWeightMapTexture', 'PF_Unknown']
 def words(*v): return struct.pack('<' + 'I' * len(v), *v)
 def fname(s): return words(names.index(s), 0)
 def tag(name, kind, value, extra=b''):
@@ -110,7 +111,7 @@ with tempfile.TemporaryDirectory() as folder:
         (argb(width=16384, height=16384), 'invalid texture dimensions'),
         (argb(width=0xffffffff, height=0xffffffff), 'invalid texture dimensions'),
         (argb(flags=2), 'unsupported texture bulk codec/flags'),
-        (texture(bgra, fmt='PF_G8'), 'texture importer supports')]:
+        (texture(bgra, fmt='PF_Unknown'), 'texture importer supports')]:
         result = run('Texture2D', payload)
         assert result.returncode != 0 and error in result.stderr, result.stderr
     assert run('Texture2D', argb()[:-1]).returncode != 0
@@ -123,6 +124,39 @@ with tempfile.TemporaryDirectory() as folder:
     assert png_pixels(output, 1, 1) == rgba[:4]
     assert png_pixels(root/'argb_mips/mip_00.png', 3, 2) == rgba
     assert png_pixels(root/'argb_mips/mip_01.png', 1, 1) == rgba[:4]
+    gray = bytes([0, 37, 128, 255])
+    gray_rgba = b''.join(bytes([value, value, value, 255]) for value in gray)
+    def g8(block=gray, **kwargs):
+        return texture(block, fmt='PF_G8', width=kwargs.pop('width', 2),
+                       height=kwargs.pop('height', 2), **kwargs)
+    for cls in ['Texture2D', 'TerrainWeightMapTexture']:
+        for flags in [0, 16, 1, 17]:
+            (root/'TestCache.tfc').write_bytes(bytes(17)+(literal(gray) if flags & 16 else gray))
+            result = run(cls, g8(flags=flags))
+            assert result.returncode == 0, result.stderr
+            assert json.loads(result.stdout)['format'] == 'PF_G8'
+            assert png_pixels(output, 2, 2) == gray_rgba
+        for payload, error in [
+            (g8(gray[:-1]), 'G8 mip byte count mismatch'),
+            (g8(gray+b'X'), 'G8 mip byte count mismatch'),
+            (g8(declared=5), 'texture bulk decoded size mismatch'),
+            (g8(width=0), 'invalid texture mip dimensions'),
+            (g8(width=16385), 'invalid texture dimensions'),
+            (g8(width=16384, height=16384), 'invalid texture dimensions'),
+            (g8(flags=2), 'unsupported texture bulk codec/flags')]:
+            result = run(cls, payload)
+            assert result.returncode != 0 and error in result.stderr, result.stderr
+        for end in range(len(g8())):
+            assert run(cls, g8()[:end]).returncode != 0
+        (root/'TestCache.tfc').write_bytes(bytes(18))
+        assert run(cls, g8(flags=1)).returncode != 0
+        result = run(cls, texture_mips([gray, gray[-1:]], 'PF_G8', [(2,2),(1,1)]),
+                     extra=('--mip','1','--all-mips',str(root/'g8_mips')))
+        assert result.returncode == 0, result.stderr
+        assert png_pixels(output, 1, 1) == gray_rgba[-4:]
+        assert png_pixels(root/'g8_mips/mip_00.png', 2, 2) == gray_rgba
+    result = run('TerrainWeightMapTexture', argb())
+    assert result.returncode != 0 and 'supports PF_G8 only' in result.stderr
     transparent = struct.pack('<HHI',0,0xffff,0xffffffff)
     assert run('Texture2D',texture(transparent)).returncode == 0
     assert png_pixels(output) == bytes(64)
@@ -170,4 +204,4 @@ with tempfile.TemporaryDirectory() as folder:
     assert report['lods'] == 2 and report['selected_lod'] == 1
     assert report['lod_summaries'][1]['index_width'] == 4
     assert 'v 101 0 0\n' in output.read_text()
-print('A8R8G8B8 and DXT1/5 pixels, PNG CRC/zlib, streamed/compressed bulk, mesh buffers and corrupt inputs passed.')
+print('A8R8G8B8, G8 and DXT1/5 pixels, PNG CRC/zlib, streamed/compressed bulk, mesh buffers and corrupt inputs passed.')

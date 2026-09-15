@@ -623,3 +623,99 @@ readable without claiming recovery of the native sky graph, cloud layers,
 time-of-day controls, or lighting parity. The broad lower white regions remain
 the separately observed `IcePlate` geometry and were not reclassified as sky.
 See docs/verification/SKY_FALLBACK_VERIFICATION.md.
+
+## 2026-09-15: distinguish lower ice geometry from visual helpers
+
+The Sanctuary artifact pass retains all four IcePlate placements and their
+recovered collision. WorldTransition remains a narrowly hidden translucent
+helper pair; it does not explain the separate omitted terrain/BSP geometry.
+Mat_FrozenLake now uses its inspected FrozenLake resource as an explicit UV0
+color approximation instead of the generic Snow_Dif selection. Native snow,
+noise, reflection, normal, glow and UV modulation remain unverified.
+Mat_IceRoadSanctuary, the single SanctuaryRoad_01 placement at the town gate,
+follows the same rule with its inspected BrokenRoad_Dif resource; its cooked
+list carries three `_Dif` overlays, so the sole-`_Dif` heuristic had left the
+road white. Its p_Normal expression survives with a stripped texture and no
+normal exists in the cooked list, so no normal is approximated. Both inspected
+color fallbacks share one scoped table; the unplaced Env_Ice Mat_IceRoad is
+untouched.
+
+The existing HLS regular-diffuse fallback now requires the inspected direct
+parent and concrete atlas, records texture/UV provenance, and retains other
+supported channels. Material refresh reapplies the placement-derived native
+dome interior policy. No binary layout or bounds checks changed. AI-assisted
+source inspection and validation are recorded in
+`docs/verification/SANCTUARY_ARTIFACT_PASS.md`.
+
+## 2026-09-15: scoped terrain properties and grayscale weightmaps
+
+The user's continued terrain work authorizes a bounded new reader route.
+`--terrain-records` uses the observed Terrain actor prefix (26), component
+prefix (8), and resource prefix (4), without offset scanning. Its class scope
+is separate from `--scene-records`: TerrainLayerSetup.Materials is a struct
+array and must not share the mesh Materials object-reference schema.
+Individual unsupported objects retain explicit errors.
+
+PF_G8 decoding now requires exactly width*height bytes and expands each value
+to opaque grayscale RGBA. TerrainWeightMapTexture is accepted only for PF_G8;
+existing dimensions, mip, TFC, LZO and allocation guards remain unchanged.
+Synthetic pixel/bounds tests and the five installed Terrain_10 24x28 weightmaps
+pass. This proves grayscale extraction, not layer assignment/blending parity.
+No terrain triangle/hole semantics or root BSP render buffers are inferred
+from this decoder extension.
+
+## 2026-09-15: bounded terrain component geometry and triangle collision
+
+`tools/terrain_decode.py` now walks the remainder of each TerrainComponent
+payload after the decoded bounds tree, in Python, without touching the C++
+reader: a `(2, N)` u16 record array with an opaque 14-byte stride, an opaque
+72-byte block that must end in `(1, own export index)`, an `(8, V)` array of
+`<BBHhh>` vertices, two retained words, and a `(2, M)` u16 triangle strip. Every
+count is bounded by the payload and by the terrain grid; vertex X/Y/height must
+equal the terrain samples; the strip's decoded cells must equal exactly the
+non-hole cells with the flag-bit-1 diagonal, and the bounds-tree leaves must
+tile the same cells. Any disagreement rejects the component (no scanning, no
+retry). The 14-byte records, the 72-byte block, the two int16 vertex words and
+the two retained words are kept as opaque data with hashes; their meaning is
+**UNVERIFIED**.
+
+What this corroborates: for all 15 installed Sanctuary components the strip
+and the leaf tree independently omit the same flag-bit-0 cells and the strip
+parity reproduces flag-bit-1 diagonals, so hole and diagonal bits are used as
+topology. What it does not establish: the native face orientation for flipped
+cells (emitted geometrically, host-visible from above, **UNVERIFIED**), the
+meaning of the retained words, and any renderer behaviour.
+
+The Terrain actor tail is additionally probed for `u32 count == len(Layers)`
+followed by `count * (u32 vertex_count, bytes)`; 6/8 terrains match. These
+arrays are exposed only as a labeled visual approximation
+(`terrain_dominant_alpha_layer_v1`: the layer with the largest mean alpha,
+indexed by AlphaMapIndex); they do not reproduce the PF_G8 weightmaps and the
+native blend is **UNVERIFIED**. Terrains without them use a neutral constant.
+
+`tools/prepare_terrain.py` emits one static mesh per component and, with
+`--collision`, marks it `triangle_mesh` (host complex-as-simple, never mixed
+with hulls). The saved scene reopened with zero verification errors and the
+new `OpenWillow.TerrainWalking` runtime test stood on all 8 terrains, found no
+floor in 8 flagged hole cells and crossed the one walkable seam; this is host
+behaviour on the decoded topology, not original-game parity. No `src/`
+bounds check or layout changed.
+
+## 2026-09-15: explain terrain probe drift without changing acceptance criteria
+
+Codex added per-frame host hole-probe diagnostics (position, velocity, input,
+floor and downward trace) without changing pass criteria or parsing behavior.
+The Land Terrain_3 probe begins inside StaticMeshActor_SMC_1281, moves about
+9.4 m laterally with zero horizontal velocity on its first frame, then slides
+along that mesh and lands on neighbouring TerrainComponent_5, 11.5 m away.
+This supports penetration correction followed by sliding; internal solver
+steps remain uninstrumented. A passing displaced endpoint must not be treated
+as runtime verification of the original hole location. Native strip/tree
+topology corroboration is independent of this test limitation.
+
+Local-only BSP record and terrain alpha/weightmap diagnostics did not meet
+the evidence threshold for new rendering behavior. Candidate BSP normals
+match but point association fails; alpha comparisons find only constant-zero
+matches. Keep BSP unimplemented and terrain blending explicitly approximate.
+Original-game matched views remain outstanding. Detailed evidence and host
+runtime results are in the two Sanctuary verification records.
