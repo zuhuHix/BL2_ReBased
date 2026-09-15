@@ -1,8 +1,7 @@
 # OpenWillow: Borderlands 2 engine reimplementation plan
 
 Working title ("Willow" is Gearbox's internal name for the BL2 engine branch). Companion to
-`BL2_REMASTER_ANALYSIS.md` (research) and `DESIGN_OVERHAUL_MOD.md` (the mod; §11–§12 there hold the measurements
-this plan is built on).
+`BL2_REMASTER_ANALYSIS.md`, the research this plan is built on.
 
 **What this is:** a new engine that runs Borderlands 2 from the player's own, legitimately purchased install.
 It reads Gearbox's files. It ships none of them. It contains no Gearbox code.
@@ -11,15 +10,16 @@ It reads Gearbox's files. It ships none of them. It contains no Gearbox code.
 ultrawide, split-screen, *your own co-op netcode* (the #1 complaint), platform freedom, preservation, plus The
 Pre-Sequel and standalone Dragon Keep, which run on the same engine branch.
 
-**Who this is written for:** one obsessed person who does not (yet) program, working with an AI as the engineer.
-Every step therefore ends in something you can *check against the real game*. That check is your job and your
-superpower. Code that can't be checked against reality doesn't get merged.
+**Who this is written for:** someone directing an AI-heavy build without (yet) being a professional programmer.
+That's exactly why every step ends in something you can *check against the real game* yourself. That check is the
+actual job here, and it's not a lesser one: code that can't be checked against reality doesn't get merged, no matter
+who or what wrote it.
 
 ---
 
 ## 0. Ground truth: the numbers this plan rests on
 
-All measured directly from the installed game (see analysis §4 and design doc §12).
+All measured directly from the installed game (see analysis §4).
 
 | Fact | Value |
 |---|---|
@@ -62,7 +62,7 @@ Gearbox's own `.uncompressed_size` files byte-for-byte. That is the seed of the 
    always fine; copying *code* depends on the license.
 7. **Credit and transparency.** State plainly that the project is AI-assisted. It's a strength, not a secret.
 
-Precedents that survived on exactly these rules: OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic, Ship of Harkinian.
+This list isn't original. It's how OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian all stayed alive long enough to finish, so it's how this one runs too.
 
 ---
 
@@ -366,8 +366,8 @@ duration matches," "Bee shield amp matches." Golden files for numbers; your hand
 ## 9. Kill criteria: be honest with yourself
 
 - Phase 0 not gated in **3 months** → the environment/tooling loop isn't working; fix that before anything else.
-- M1 cannot load a single map by **month 6** → the loop isn't holding for this project. Fall back to the mod plan
-  (`DESIGN_OVERHAUL_MOD.md`), which the same skills now serve, and reopen this later.
+- M1 cannot load a single map by **month 6** → the loop isn't holding for this project. Stop, reassess honestly,
+  and don't keep pushing on hope alone.
 - Nobody but you has contributed by **M2** → still fine, but stop planning M5 and plan M3 only.
 - You stop reading the code → the project has become something you can't maintain. Pause and fix that.
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/banner.svg" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
+<img src=".github/assets/banner.png" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
 
 <br>
 
@@ -37,7 +37,7 @@ Think of Borderlands 2 as two things:
 
 Every big problem players complain about lives in **the machine**: multiplayer breaking, "out of memory" crashes, no ultrawide, no new maps, no level editor. Mods can change the *stuff*, but they can't touch the *machine*, and the machine is where the #1 complaint (broken co-op) lives.
 
-**BL2_ReBased builds a new machine.** It reads the original stuff straight from your game folder, exactly as it shipped, and runs it on a modern engine (Unreal Engine 5). We copy nothing, we ship nothing of Gearbox's, and we never touch your original game.
+So BL2_ReBased builds a new one. It reads the original stuff straight from your game folder, exactly as it shipped, and runs it on a modern engine (Unreal Engine 5). We copy nothing, ship nothing of Gearbox's, and never touch your original install.
 
 This is the same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those projects work, and they've been around for years. Nobody has done it for a game like Borderlands 2. That's the whole challenge.
 
@@ -53,7 +53,7 @@ We researched this properly before starting: 3,300 Steam reviews, 250 forum thre
 - **Modern graphics** are blocked by the 2012 DirectX 9 renderer baked into the exe
 - **New maps** need an editor that was stripped out before the game shipped
 
-Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md). There's even a complete design for the mod route as a fallback: [docs/DESIGN_OVERHAUL_MOD.md](docs/DESIGN_OVERHAUL_MOD.md).
+Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md).
 
 </details>
 
@@ -152,6 +152,7 @@ You don't need to code. The single most useful thing anyone can do is run the to
 - <img src=".github/assets/icons/search.svg" width="20" align="absmiddle" alt=""> **Know the file formats?** → [Format finding](https://github.com/zuhuHix/BL2_ReEngine/issues/new?template=format_finding.yml)
 - <img src=".github/assets/icons/code.svg" width="20" align="absmiddle" alt=""> **Code.** Open items are in [ROADMAP.md](ROADMAP.md#now--next); read [CONTRIBUTING.md](CONTRIBUTING.md) first
 - <img src=".github/assets/icons/star.svg" width="20" align="absmiddle" alt=""> **Star and watch** the repo. The Phase 1 release (fly through all 82 maps) is the first thing worth downloading, and watching is how you'll hear about it
+- **Chip in.** This is a solo project paid for out of pocket (tooling, the AI plans that speed up grunt work, eventually the UE5 marketplace assets). [Buy Me a Coffee](https://buymeacoffee.com/zuhu) if you want to help with that. Per the rules above, it only ever goes toward building the engine — never a paid build, never early access.
 
 <details>
 <summary><b>FAQ</b></summary>
@@ -174,7 +175,7 @@ Yes. Reading real save files is a Phase 5 task. The save format is already docum
 Borderlands 2 is Unreal Engine *3*. UE3's systems (materials, animation, particles, cutscenes, scripting) all have direct descendants in UE5, so we translate into them instead of inventing replacements. That's a much smaller problem.
 
 **Who's making this?**
-One person. I use AI coding tools as part of the workflow, the way you'd use a debugger or a code generator, and I say so because the project's own rules require it. What matters is that nothing counts until it's been run against the real game and the result is written down. Judge the evidence trail.
+One person, and I say plainly how: ChatGPT (I call the two setups I run Astra and Luna) does the grunt work — decoding formats, chasing down the smaller one-off tasks. Claude keeps the project organized, and when I've burned through the usage on my €20/month plan, it's also who writes code as a last resort. None of that is a secret and none of it changes the actual rule: nothing counts until it's been run against the real game and the result is written down. Judge the evidence trail, not the tool list. If you want to help cover that €20/month (or just support the hours going into this), there's a [Buy Me a Coffee](https://buymeacoffee.com/zuhu) — completely optional.
 
 **Why "ReBased"?**
 Because that's literally what it is: Borderlands 2, re-based onto a new engine. (The code still uses the working title *OpenWillow* in identifiers like `ow-package`; "Willow" is Gearbox's internal name for the BL2 engine.)
@@ -221,7 +222,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
         runs the 12,978 inherited functions unchanged
 ```
 
-**Host engine: Unreal Engine 5.** UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*. The plan required this decision by the Phase 0 gate and rules out switching later; all Phase 1 work targets UE 5.8. Reasoning and the alternative considered (Godot): [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision--decide-by-end-of-phase-0-never-after).
+The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate — the plan rules out switching later. UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*, which is the whole reason it won out; all Phase 1 work targets UE 5.8. Full reasoning, and the alternative we considered (Godot), is in [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision--decide-by-end-of-phase-0-never-after).
 
 </details>
 
@@ -230,13 +231,13 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
 
 <br>
 
-**Clean room, strictly.** File formats and observed behaviour only. No leaked source, no decompiled executable code. Public reference implementations (UE Viewer, UDK headers) are read for serialization *order* and never copied; every reference and its license is in [THIRD_PARTY.md](THIRD_PARTY.md).
+Clean room, strictly: file formats and observed behaviour, nothing else. No leaked source, no decompiled executable code. When a public reference implementation (UE Viewer, UDK headers) helps pin down a serialization *order*, we read it — never copy from it — and log the source and its license in [THIRD_PARTY.md](THIRD_PARTY.md).
 
-**Three sources of truth.** Every rebuilt native needs a definition of "correct": (A) **UDK**, a free running UE3, for the 1,914 stock natives; (B) **the original game, instrumented** with [unrealsdk](https://github.com/bl-sdk): hook a function, log its inputs and outputs during play, implement until our engine reproduces the log; (C) **community documentation** (BLCM wiki, bl2.parts, Lootlemon) for stat math. A native without a golden file is a guess, and guesses are labelled `UNVERIFIED`.
+Every rebuilt native function needs a definition of "correct," and there are exactly three we'll accept. **UDK**, a free running copy of UE3, covers the 1,914 stock natives. **The original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) covers the rest: hook a function, log what goes in and out during real play, then implement until our engine reproduces that log. **Community documentation** (the BLCM wiki, bl2.parts, Lootlemon) fills in stat math the other two don't reach. No golden file behind it, no claim of correctness — anything without one stays labelled `UNVERIFIED` until it earns that label removed.
 
-**Evidence first.** Every change ends in a check that can be performed against the real game, and the check is written down. Synthetic tests run in CI; differential checks run against a real install; visual checks are done by a human. [DECISIONS.md](DECISIONS.md) records every architectural choice, what was verified, and what wasn't.
+That standard isn't just for natives. Every change in this repo ends in a check run against the real game, and the check gets written down: synthetic tests in CI, differential checks against a real install, visual checks by an actual person looking at the screen. [DECISIONS.md](DECISIONS.md) is the record of all of it — every architectural choice, what got verified, and what didn't.
 
-**Solo developer, AI-assisted.** One person owns every architectural decision, every verification against the real game, and every license and provenance call. AI coding tools are part of the workflow, under a written brief ([CLAUDE.md](CLAUDE.md)) and guard hooks in [`.claude/`](.claude/) that require a confirmation before anything touches bounds-checking code, dependency wiring or license files.
+It's a one-person project, and I'm not quiet about the tooling. I own every architectural call, every verification and every license or provenance decision myself, but day to day, ChatGPT (I call the two setups I run Astra and Luna) handles format decoding and the smaller one-off tasks, and Claude handles keeping the project organized plus last-resort coding once I've burned through a month's usage on my plan. Both operate under a written brief ([CLAUDE.md](CLAUDE.md)) and guard hooks in [`.claude/`](.claude/) that require my confirmation before anything touches bounds-checking code, dependency wiring or license files.
 
 </details>
 
@@ -287,7 +288,6 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 | [DECISIONS.md](DECISIONS.md) | Dated log of every architectural and parsing decision and its evidence |
 | [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, estimates, kill criteria |
 | [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
-| [docs/DESIGN_OVERHAUL_MOD.md](docs/DESIGN_OVERHAUL_MOD.md) | The fallback: an in-engine overhaul mod design, if the engine route fails |
 | [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
 | [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |
 | [docs/LEGAL.md](docs/LEGAL.md) | Clean-room policy, non-affiliation, contributor certification, license |
