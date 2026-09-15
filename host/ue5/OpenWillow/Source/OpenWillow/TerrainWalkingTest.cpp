@@ -90,10 +90,12 @@ public:
             {
                 Teleport(Pawn, Point(P->GetObjectField(TEXT("hole")), TEXT("point")));
                 Step = 2; StageTime = Time;
+                LogHolePath(World, Pawn, Source, 0);
             }
             else Step = 3;
             return false;
         }
+        if (Step == 2) LogHolePath(World, Pawn, Source, Time - StageTime);
         if (Step == 2 && Time - StageTime > 2.5)
         {
             const TSharedPtr<FJsonObject> Hole = P->GetObjectField(TEXT("hole"));
@@ -103,8 +105,8 @@ public:
             ++HoleTotal; HolePassed += !RestsOnTerrainAtHole;
             HoleOnOther += Move->IsMovingOnGround() && !OnTerrain;
             Test->TestFalse(*FString::Printf(TEXT("%s: flagged hole cell carries no terrain floor"), *Source), RestsOnTerrainAtHole);
-            // Lateral drift from the drop point shows the pawn slid onto or was
-            // pushed against neighbouring geometry; the path itself is not recorded.
+            // Report displacement separately; the per-frame path records contact
+            // and movement evidence without assigning a cause from distance alone.
             Test->AddInfo(FString::Printf(TEXT("%s hole: falling=%d hit=%s pawn=%s drift=%.0f"), *Source, Move->IsFalling(), *Hit,
                 *Pawn->GetActorLocation().ToString(), FVector::Dist2D(Pawn->GetActorLocation(), Point(Hole, TEXT("point")))));
             Step = 3; return false;
@@ -146,6 +148,24 @@ public:
         return false;
     }
 private:
+    void LogHolePath(UWorld* World, AOpenWillowWalker* Pawn, const FString& Source, double Elapsed)
+    {
+        auto* Move = Pawn->GetCharacterMovement();
+        FHitResult Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(OpenWillowTerrainPath), true, Pawn);
+        const FVector Position = Pawn->GetActorLocation();
+        World->LineTraceSingleByChannel(Hit, Position, Position - FVector(0, 0, 2000), ECC_Visibility, Params);
+        const auto Label = [](const AActor* Actor) -> FString
+        {
+            return !Actor ? TEXT("none") : Actor->Tags.Num() > 0 ? Actor->Tags[0].ToString() : Actor->GetName();
+        };
+        const FHitResult& Floor = Move->CurrentFloor.HitResult;
+        Test->AddInfo(FString::Printf(TEXT("Terrain hole path: %s t=%.4f dt=%.4f pawn=%s velocity=%s input=%s mode=%d floor=%s floor_normal=%s floor_penetrating=%d trace=%s trace_point=%s trace_normal=%s trace_penetrating=%d"),
+            *Source, Elapsed, World->GetDeltaSeconds(), *Position.ToString(), *Move->Velocity.ToString(),
+            *Pawn->GetLastMovementInputVector().ToString(), static_cast<int>(Move->MovementMode),
+            *Label(Floor.GetActor()), *Floor.ImpactNormal.ToString(), Floor.bStartPenetrating,
+            *Label(Hit.GetActor()), *Hit.ImpactPoint.ToString(), *Hit.ImpactNormal.ToString(), Hit.bStartPenetrating));
+    }
     bool Load()
     {
         const FString Root = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_SCENE"));

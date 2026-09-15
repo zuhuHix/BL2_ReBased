@@ -111,7 +111,7 @@ The detailed, checkbox-level tracker is [ROADMAP.md](ROADMAP.md).
 - <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> Sanctuary now imports one bounded native `Sky_Dome` visual shell with the recovered transition texture, alongside temporary UE5 atmosphere/blue-shell fallbacks. The native sky graph, some white/green surfaces, walking and visual parity remain open, and it runs slowly
 - <img src=".github/assets/icons/missing.svg" width="20" align="absmiddle" alt=""> 79 maps still to load; walking and visual checks remain part of Phase 1's gate
 
-**Next up:** getting Sanctuary to look right: the remaining white/green surfaces and missing geometry, then terrain and better collision. Native sky parity and the full list are tracked in [ROADMAP.md](ROADMAP.md#now--next), and the small ones are tagged *good first task*.
+**Next up:** getting Sanctuary to look right: the remaining white/green surfaces, BSP floors, terrain blending and better collision coverage. Terrain topology and host collision are imported, with occluded/displaced runtime probes documented in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md). Native sky parity and the full list are tracked in [ROADMAP.md](ROADMAP.md#now--next), and the small ones are tagged *good first task*.
 
 <details>
 <summary><b>Show me the numbers behind those checkmarks</b></summary>

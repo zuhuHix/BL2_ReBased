@@ -141,3 +141,40 @@ the terrain meshes present and 11,616 cm pawn movement. That run overlapped
 the CTest suite on the same machine, so the frame time is not comparable
 with the earlier 49.82 ms figure; a terrain performance cost is neither
 shown nor excluded.
+
+## Continuation (2026-09-15, Codex)
+
+- **A, matched original views: blocked by available controls.** This session
+  has no native desktop-control API to operate Borderlands 2. No original
+  capture or parity claim was produced. Fresh host captures
+  `Sanctuary_P_{start,moved,overview}00003.png` remain under UE Saved. The
+  start image was visually inspected: the broad street-floor gap persists,
+  with dark sky and overhead geometry artifacts also visible. Source objects
+  for those overhead artifacts were not identified in this continuation.
+- **B, BSP: advanced, stopped before implementation.** Corrected candidate
+  record starts (18720/1332) yield 107/12 matching vector/plane normals, but
+  the candidate point association fails 94/107 and 12/12 plane checks.
+  Native topology remains **UNVERIFIED**; no floor or reader route was added.
+- **C, blending: negative result within the tested mapping.** Of 99
+  alpha-array/weightmap pairs across six terrains, no nonconstant array
+  matches any fitting integer crop exactly. Two zero arrays match one zero
+  texture. This does not resolve filtering/composition or AlphaMapIndex
+  semantics; the existing dominant-layer approximation stays.
+- **D, hole drift: host cause diagnosed.** Per-frame traces show Land
+  Terrain_3's drop starts inside StaticMeshActor_SMC_1281, undergoes roughly
+  9.4 m lateral correction with zero horizontal velocity, then slides to
+  neighbouring TerrainComponent_5. Total drift is 11.5 m. The unchanged
+  hole assertion passes at its endpoint; it is not direct runtime proof at
+  the original hole location. See the
+  [detailed diagnostic record](SANCTUARY_TERRAIN_BSP_HANDOFF.md#follow-up-diagnostics-2026-09-15-codex).
+
+Validation: UE5 Development build succeeded; CTest 5/5, nine installed package
+comparisons and Python terrain/geometry/probe/level suites (6/7/2/21) passed.
+Separately, host `OpenWillow.TerrainWalking` passed with the existing
+8/8 stand, 8/8 hole endpoint and 1/1 seam counts (five hole endpoints on other
+geometry; two seams skipped). Host `OpenWillow.Viewer` passed with 90 samples,
+50.85 ms mean / 55.16 ms p95 and 5282.08 cm movement. That viewer run did not
+overlap CTest; one sample run does not isolate terrain's performance cost.
+Logs: `local/sanctuary/viewer-4d9dca0662e14a4a8eec885561a08b2a.log` (terrain)
+and `viewer-12d59ec7962f480bbb5060e8028a1ce6.log` (viewer). These are host
+runtime results, not original-game checks. No parsing behavior changed.

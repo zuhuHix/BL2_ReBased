@@ -441,5 +441,9 @@ vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
 material approximation, and (with `--collision`) triangle-mesh collision. It
 also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
 `OpenWillow.TerrainWalking`, which stands on each terrain, drops into a
-flagged hole cell and walks one component seam. See
+flagged hole cell and walks one component seam. Full viewer logs now include
+`Terrain hole path:` records for every probe frame, with movement, floor and
+downward-trace diagnostics. A displaced or occluded endpoint does not directly
+verify the original hole location; the summary counts are endpoint assertions.
+See
 [the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).

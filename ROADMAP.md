@@ -41,9 +41,11 @@ well-bounded ones are marked *good first task*.
       [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
-- [ ] Terrain / BSP geometry: Sanctuary's source census contains eight Terrain
-      actors, 15 TerrainComponents and 24 ModelComponents. Missing-floor
-      coverage remains unverified until geometry is recovered.
+- [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
+      meshes with corroborated topology and host triangle collision. Native
+      blending, BSP floor recovery and original-game alignment remain open.
+      Hole runtime assertions include occluded/displaced probes; see the
+      [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 - [~] Sanctuary visual defects observed in the editor fly-through: the native
       dome now uses a two-sided interior policy, and the four known
       `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four

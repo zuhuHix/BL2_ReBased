@@ -3,7 +3,8 @@
 AI-assisted, original diagnostics against the user's installed packages in
 checkout `t3code-85ec0714`. No external implementation, decompiled executable,
 or recovered engine source was consulted. Game-derived diagnostics remain in
-ignored `local/`. This is a bounded prefix reader, not a completed floor importer.
+ignored `local/`. The initial prefix diagnostic now feeds a bounded terrain
+floor importer; root BSP recovery remains incomplete.
 
 ## Implemented scope
 
@@ -228,3 +229,66 @@ of 3584 exceeds 360). No field meaning is asserted, no floor is emitted, and
 volume-owned Models remain rejected structurally by `bsp_scope`. The remaining
 bytes and the render-buffer layout are **UNVERIFIED**; a visible BSP floor
 would need the same five gates as terrain.
+
+## Follow-up diagnostics (2026-09-15, Codex)
+
+### Hole-probe displacement
+
+`TerrainWalkingTest.cpp` now records every hole-probe frame, including the
+initial teleport: position, velocity, last movement input, movement mode,
+current floor and a downward trace with source identity, normal and penetration
+state. These are diagnostics only; pass criteria are unchanged.
+
+The rebuilt host reproduced Land Terrain_3's displacement in
+`local/sanctuary/viewer-4d9dca0662e14a4a8eec885561a08b2a.log`:
+
+- At t=0, the pawn is at (-15936, -29504, 2012), with zero input/velocity.
+  The trace starts penetrating `StaticMeshActor_SMC_1281` in
+  `StaticMeshCollectionActor_33`.
+- At t=0.0466 s, it has moved to (-16441.151, -28709.026, 2347.919),
+  approximately 942 cm sideways, while horizontal velocity is still zero.
+  The trace still starts penetrating the same mesh. This supports initial
+  collision penetration correction, rather than ordinary walking input.
+- Subsequent frames follow that mesh's slope, normal approximately
+  (-0.505, 0.794, 0.338), with increasing downhill velocity and zero input.
+  At t=2.511 s it rests on TerrainComponent_5 at
+  (-16553.121, -28532.815, 2015.481), 1151 cm from the drop point.
+
+Thus the observed host path is initial penetration correction followed by
+sliding on unrelated geometry and landing on neighbouring terrain. The exact
+internal movement-solver corrections were not instrumented. The existing
+8/8 hole endpoint assertions still pass, but this displaced probe does **not**
+directly verify the original hole location at runtime. The decoded native
+strip/tree evidence for omitted hole cells is separate and unchanged.
+Host summary: stand=8/8, occluded_stands=0, hole=8/8, hole_on_other=5,
+seam=1/1, skipped_seams=2. This is not original-game verification.
+
+### Root Model record alignment
+
+The local diagnostic `local/check_bsp_records.py` advances the rejected
+record hypothesis without adding a reader route. After the three bulk arrays,
+both Models contain their own export index and a count: 2921/107 and 443/12.
+The candidate 60-byte records therefore begin at native-tail offsets 18720
+and 1332, respectively, four bytes before the earlier Model_3 hypothesis.
+For 107/107 and 12/12 records, a candidate vector reference matches the
+record's plane normal within 0.001. However, the candidate point association
+fails the plane equation by more than 0.1 world units in 94/107 and 12/12
+records. This rejects that association; it does not establish topology,
+transforms, material assignments or render buffers. No BSP floor is emitted.
+Evidence: `local/bsp-record-followup.json`. Remaining field meanings and
+native topology are **UNVERIFIED**.
+
+### Terrain alpha/weightmap comparison
+
+`local/check_layer_correspondence.py` compares each decoded alpha array to
+each owned PF_G8 weightmap at every integer crop offset that fits the terrain
+vertex grid. Across the six terrains with alpha arrays, 99 array/texture pairs
+were checked. Only two pairs match exactly: two constant-zero Terrain_10
+arrays match the same zero texture. No nonconstant exact match was found.
+The other two terrains still lack a decoded alpha-array sequence. Evidence:
+`local/terrain-weightmaps/layer-correspondence.json`.
+
+This rules out direct equality under the tested crop mapping, not resampling,
+filtering, reordered axes or native composition. AlphaMapIndex and setup
+identities alone do not establish those operations. Blending remains
+**UNVERIFIED**; `terrain_dominant_alpha_layer_v1` is unchanged.
