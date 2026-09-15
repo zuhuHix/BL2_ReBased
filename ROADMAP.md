@@ -298,7 +298,8 @@ use a skill, die, respawn.
 Stated up front so nobody has to guess whether the project is alive:
 
 - Phase 0 not gated in 3 months → tooling loop isn't working. *(Passed.)*
-- M1 cannot load a single map by month 6 → the loop isn't holding; fall back
-  to the [mod plan](docs/DESIGN_OVERHAUL_MOD.md). *(Three maps already load.)*
+- M1 cannot load a single map by month 6 → the loop isn't holding for this
+  approach; stop and reassess honestly rather than push on hope. *(Three maps
+  already load.)*
 - Nobody but the author has contributed by M2 → fine, but plan M3 only.
 - The author stops reading the code → pause and fix that.
