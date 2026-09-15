@@ -88,6 +88,27 @@ REGULAR_DIFFUSE_FALLBACKS = {
     'Sanctuary_P:Prop_SancBuildings.Optimization.Mati_SancBuild4a':
         'Sanctuary_P:Prop_SancBuildings.Material.Mati_SancBuild4a',
 }
+# Inspected opaque materials whose stripped graphs defeat the generic _Dif
+# heuristic: their cooked lists carry several _Dif overlays, so the sole-_Dif
+# rule either picks a blend layer or gives up. Each entry names the texture
+# that carries the surface's own color, and a native normal only when one
+# survives in the cooked list. Membership never recovers the layered graph.
+INSPECTED_COLOR_FALLBACKS = {
+    'Sanctuary_Land:Prop_Glacier.Materials.Mat_FrozenLake': {
+        'method': 'frozen_lake_color_fallback_v1', 'label': 'Frozen-lake', 'noun': 'ice',
+        'color': 'Sanctuary_Land:Prop_Glacier.Textures.FrozenLake',
+        'normal': 'Sanctuary_Land:Prop_Skybox.MoveMe.Ice_Nrm',
+        'omitted': ['vertex-painted snow/noise blend', 'reflection',
+                    'native normal graph', 'glow', 'UV modulation'],
+        'issue': 'Approximation: inspected FrozenLake texture used as ice color; layered graph and UV modulation not reconstructed'},
+    'Sanctuary_Land:Env_Sanctuary.Materials.Mat_IceRoadSanctuary': {
+        'method': 'ice_road_color_fallback_v1', 'label': 'Ice-road', 'noun': 'road',
+        'color': 'Sanctuary_Land:Env_Ice.Textures.BrokenRoad_Dif',
+        'normal': None,
+        'omitted': ['BrokenRoad_Alpha snow/rock layer blend', 'noise and splatter overlays',
+                    'stripped p_Normal texture', 'UV modulation'],
+        'issue': 'Approximation: inspected BrokenRoad_Dif texture used as road color; snow/rock layer blend and stripped normal not reconstructed'},
+}
 
 
 def native_skybox_mesh(identity):
@@ -125,7 +146,8 @@ def hidden_visual_mesh(identity, effective_materials=None, materials=None, sourc
     if mesh == HIDDEN_TRANSITION_MESH and effective_materials and materials:
         # WorldTransition is a translucent loading/boundary plane. Its graph
         # is not recovered; feeding the undecoded material into a host mesh
-        # renders the white void seen below the Sanctuary platforms. Hide only
+        # renders an opaque helper plane. The separate lower IcePlate surfaces
+        # are legitimate geometry, not these transition helpers. Hide only
         # this exact helper mesh/material pair and keep its source collision
         # state independent.
         return all((materials.get(name, {}).get('source') or '').rsplit(':', 1)[-1]
@@ -496,6 +518,9 @@ class Scene:
                 parameters = self.material_parameters(key)
                 regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
                 if regular_fallback is not None:
+                    parent = self.resolve(key[0], props(self.load(key[0])[key[1]]).get('Parent', 0))
+                    if parent is None or self.identity(parent) != 'Sanctuary_P:Prop_SancBuildings.Optimization.Sanc_HLS_Master':
+                        raise ValueError('Regular diffuse fallback requires the inspected HLS parent')
                     package, path = regular_fallback.split(':', 1)
                     if package != key[0]:
                         raise ValueError('Regular diffuse fallback package mismatch')
@@ -505,6 +530,14 @@ class Scene:
                     diffuse = regular.get('channels', {}).get('diffuse')
                     if not diffuse:
                         raise ValueError('Regular diffuse fallback has no diffuse channel')
+                    candidates = [i for i, row in self.load(key[0]).items()
+                                  if row['path'] == 'Prop_SancBuildings.Textures.SancBuild4a_Dif'
+                                  and row['class'].rsplit('.', 1)[-1] == 'Texture2D']
+                    if len(candidates) != 1:
+                        raise ValueError('Regular diffuse fallback requires a unique concrete atlas')
+                    expected = (key[0], candidates[0])
+                    if diffuse != self.filename(expected, '_diffuse.png'):
+                        raise ValueError('Regular diffuse fallback requires the inspected concrete atlas')
                     material['channels']['diffuse'] = diffuse
                     material['diffuse_inference'] = regular['source']
                     material['diffuse_inference_method'] = 'same_package_regular_diffuse_fallback_v1'
@@ -512,12 +545,16 @@ class Scene:
                         'method': 'same_package_regular_diffuse_fallback_v1',
                         'status': 'partial_unverified',
                         'source_material': regular['source'],
+                        'source_texture': self.identity(expected),
+                        'uv_selection': 'UV0 unchanged; regular atlas approximation',
                         'omitted': ['HLS Color/Luminosity combine',
                                     'static permutation', 'modulation']}
                     self.issue(material['source'],
                                'Approximation: HLS Color/Luminosity graph replaced by same-package regular diffuse; static permutation and modulation not reconstructed')
-                    parameters = {}
-                inferred = unnamed_diffuse_candidate(parameters, self.identity)
+                    # Only replace diffuse; retain any supported explicit channels.
+                    parameters = {p: t for p, t in parameters.items()
+                                  if channel_for_parameter(p) != 'diffuse'}
+                inferred = None if regular_fallback else unnamed_diffuse_candidate(parameters, self.identity)
                 if inferred is not None:
                     parameters['p_diffuse'] = inferred
                     material['diffuse_inference'] = self.identity(inferred)
@@ -535,6 +572,27 @@ class Scene:
                                 textures, self.identity,
                                 lambda t: self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1],
                                 material.get('blend_mode', 'BLEND_Opaque'))
+                            fallback = (INSPECTED_COLOR_FALLBACKS.get(self.identity(base))
+                                        if key == base and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
+                                        else None)
+                            if fallback is not None:
+                                def inspected(identity, kind):
+                                    found = [t for t in textures if self.identity(t) == identity
+                                             and self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D']
+                                    if len(found) != 1:
+                                        raise ValueError(f"{fallback['label']} fallback requires the inspected {fallback['noun']} {kind}")
+                                    return found[0]
+                                inferred, method = inspected(fallback['color'], 'texture'), fallback['method']
+                                normal = inspected(fallback['normal'], 'normal') if fallback['normal'] else None
+                                if normal is not None and not any(channel_for_parameter(p) == 'normal' for p in parameters):
+                                    parameters['p_normal'] = normal
+                                material['surface_approximation'] = {
+                                    'method': method, 'status': 'partial_unverified',
+                                    'source_texture': self.identity(inferred),
+                                    'uv_selection': 'UV0 unchanged; native UV modulation unverified',
+                                    'omitted': fallback['omitted']}
+                                if normal is not None:
+                                    material['surface_approximation']['normal_texture'] = self.identity(normal)
                             glacier = (self.glacier_primary_surface(key, base, textures)
                                        if inferred is None and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
                                        else None)
@@ -560,7 +618,9 @@ class Scene:
                                 parameters['p_diffuse'] = inferred
                                 material['diffuse_inference'] = self.identity(inferred)
                                 material['diffuse_inference_method'] = method
-                                self.issue(material['source'], 'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed'
+                                self.issue(material['source'], fallback['issue']
+                                           if fallback is not None and method == fallback['method'] else
+                                           'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed'
                                            if method == 'sole_cooked_resource_dif_texture' else
                                            'Approximation: sole non-auxiliary cooked resource texture used as diffuse; graph, UV mapping and tint not reconstructed')
                             elif not textures and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque':

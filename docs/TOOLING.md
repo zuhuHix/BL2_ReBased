@@ -424,3 +424,11 @@ the existing base-game search root. DLC discovery alone is not DLC compatibility
 | `research/` | Community-demand corpus, analysis scripts and the original Python package reader used as a comparison oracle |
 | `docs/` | Plan, research, verification records; this file |
 | `local/` | Ignored. Every game-derived output lands here |
+
+## Sanctuary artifact trace
+
+`tools/audit_sanctuary_artifacts.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --output local/artifact-pass.json`
+records IcePlate, WorldTransition and HLS effective placements plus source
+properties and omitted terrain/BSP class counts. Use it after material refresh;
+counts do not establish which missing floors terrain/BSP will fill. See
+[the verification record](verification/SANCTUARY_ARTIFACT_PASS.md).
