@@ -75,5 +75,15 @@ class counts. It does not infer terrain/BSP geometry from class names.
   per patch; 21x52 patches) by an unverified NumPatches x DrawScale3D extent
   estimate. PersistentLevel.Model_3 BSP may also contribute floors there; both
   formats remain undecoded.
-- UE5 render and saved-scene verification results are recorded below after
-  import. Original-game matched views remain outstanding.
+- UE5 reopened all 4,768 section actors; final material verification (including
+  normal texture binding and two-sided state) passed with zero errors/warnings.
+  Collision verification covered 495 mesh sections and 3,116 enabled components;
+  UV verification covered 512,418 corners / 170,806 triangles.
+- Final viewer run passed with 90 samples, 49.82 ms mean / 53.44 ms p95 and
+  5,172.27 cm pawn movement. `Sanctuary_P_start00001.png` shows blue/teal lower
+  ice, with substantial street-level floor gaps still present. This is a
+  runtime material check, not original-game parity or a completed walking route.
+  Other white areas and floating/opaque artifacts remain in the scene.
+- Screenshots are in `host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor/`;
+  import/reopen logs, `artifact-pass.json` and the final viewer log are under
+  `local/`. Original-game matched views remain outstanding.

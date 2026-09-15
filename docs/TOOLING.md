@@ -110,7 +110,7 @@ writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
 hashes of the package and outputs.
 
 Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`; payload-at-end mips and other pixel formats still fail
+`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`/`PF_G8`; payload-at-end mips and other pixel formats still fail
 explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
 all UV sets; OBJ output intentionally writes one selected LOD and its first UV
 set. Source mesh data and skeletal meshes remain future work; tagged convex/box

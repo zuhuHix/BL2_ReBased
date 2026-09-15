@@ -134,6 +134,17 @@ Bytes argb(Bytes data, uint32_t width, uint32_t height) {
     return data;
 }
 
+Bytes grayscale(const Bytes& data, uint32_t width, uint32_t height) {
+    textureDimensions(width, height);
+    check(data.size() == size_t(width) * height, "G8 mip byte count mismatch");
+    Bytes pixels(data.size() * 4);
+    for (size_t i = 0; i < data.size(); ++i) {
+        pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = data[i];
+        pixels[i * 4 + 3] = 255;
+    }
+    return pixels;
+}
+
 Bytes dxt(const Bytes& data, uint32_t width, uint32_t height, bool dxt5) {
     const size_t blockBytes = dxt5 ? 16 : 8;
     textureDimensions(width, height);
@@ -376,15 +387,18 @@ Bytes TfcStore::read(const std::string& cacheName, uint32_t offset, uint32_t sto
 TextureAsset readTexture(const Package& package, int32_t index, size_t propertyOffset,
                          const std::filesystem::path& tfcRoot) {
     const auto& object = package.object(index);
-    check(object.cls && package.object(object.cls).name == "Texture2D",
-          "export is not Texture2D");
+    const auto className = object.cls ? package.object(object.cls).name : std::string{};
+    check(className == "Texture2D" || className == "TerrainWeightMapTexture",
+          "export is not Texture2D or TerrainWeightMapTexture");
     Reader reader = package.reader();
     package.properties(reader, index, propertyOffset);
     const auto nativeAt = reader.pos;
     const auto objectEnd = reader.limit;
     const auto [format, cache] = textureProperties(package, reader, index, propertyOffset, objectEnd);
-    check(format == "PF_DXT1" || format == "PF_DXT5" || format == "PF_A8R8G8B8",
-          "texture importer supports PF_DXT1/PF_DXT5/PF_A8R8G8B8");
+    check(format == "PF_DXT1" || format == "PF_DXT5" || format == "PF_A8R8G8B8" || format == "PF_G8",
+          "texture importer supports PF_DXT1/PF_DXT5/PF_A8R8G8B8/PF_G8");
+    check(className != "TerrainWeightMapTexture" || format == "PF_G8",
+          "TerrainWeightMapTexture importer supports PF_G8 only");
 
     reader.pos = nativeAt;
     reader.limit = objectEnd;
@@ -440,9 +454,12 @@ TextureAsset readTexture(const Package& package, int32_t index, size_t propertyO
         mip.offset = record.offset;
         mip.width = record.width;
         mip.height = record.height;
-        mip.rgba = format == "PF_A8R8G8B8"
-                       ? argb(std::move(payload), record.width, record.height)
-                       : dxt(payload, record.width, record.height, format == "PF_DXT5");
+        if (format == "PF_G8")
+            mip.rgba = grayscale(payload, record.width, record.height);
+        else if (format == "PF_A8R8G8B8")
+            mip.rgba = argb(std::move(payload), record.width, record.height);
+        else
+            mip.rgba = dxt(payload, record.width, record.height, format == "PF_DXT5");
         check(mip.rgba.size() <= 512u * 1024 * 1024 &&
                   totalDecoded <= 512u * 1024 * 1024 - mip.rgba.size(),
               "texture mip decoded data exceeds importer limit");
