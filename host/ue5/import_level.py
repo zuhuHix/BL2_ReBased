@@ -164,12 +164,38 @@ for name, definition in scene['materials'].items():
     unreal.EditorAssetLibrary.save_loaded_asset(material)
     materials[name] = material
 
+# Sections whose preparer recorded no material (for example terrain whose
+# alpha maps did not decode, labeled 'neutral_constant') must not fall through
+# to UE's WorldGridMaterial checkerboard. Bind an explicit lit neutral gray so
+# the inspection view stays readable and the gap stays labeled, not hidden.
+neutral_fallback_path = destination + '/Assets/M_OpenWillowNeutralFallback'
+neutral_fallback = (unreal.load_asset(neutral_fallback_path)
+                    if unreal.EditorAssetLibrary.does_asset_exist(neutral_fallback_path)
+                    else tools.create_asset('M_OpenWillowNeutralFallback', destination + '/Assets',
+                                            unreal.Material, unreal.MaterialFactoryNew()))
+mel.delete_all_material_expressions(neutral_fallback)
+neutral_fallback.set_editor_property('blend_mode', unreal.BlendMode.BLEND_OPAQUE)
+neutral_fallback.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+neutral_color = mel.create_material_expression(neutral_fallback, unreal.MaterialExpressionConstant3Vector)
+neutral_color.set_editor_property('constant', unreal.LinearColor(0.5, 0.5, 0.5, 1.0))
+neutral_roughness = mel.create_material_expression(neutral_fallback, unreal.MaterialExpressionConstant)
+neutral_roughness.set_editor_property('r', 0.65)
+if not (mel.connect_material_property(neutral_color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+        and mel.connect_material_property(neutral_roughness, '', unreal.MaterialProperty.MP_ROUGHNESS)):
+    raise RuntimeError('Cannot connect neutral fallback material')
+mel.recompile_material(neutral_fallback)
+unreal.EditorAssetLibrary.save_loaded_asset(neutral_fallback)
+neutral_fallback_sections = 0
+
 meshes = {}
 for name, definition in scene['meshes'].items():
     for section in definition['sections']:
         mesh = imported(section['file'], unreal.StaticMesh)
         if section['material']:
             mesh.set_material(0, materials[section['material']])
+        else:
+            mesh.set_material(0, neutral_fallback)
+            neutral_fallback_sections += 1
         hulls = []
         collision = definition.get('collision', {})
         if section is definition['sections'][0]:
@@ -470,6 +496,7 @@ level.save_current_level()
 unreal.EditorAssetLibrary.save_directory(destination)
 (root / 'ue-import.json').write_text(json.dumps({'imported': True, 'map': map_path, 'section_actors': count,
     'source_placements': len(scene['actors']), 'issues': len(scene['issues']),
+    'neutral_fallback_sections': neutral_fallback_sections,
     'native_skybox': {'placements': native_skybox_placements,
                       'mesh': 'Prop_Skybox.Meshes.Sky_Dome',
                       'policy': 'observed_sky_dome_material_v1',

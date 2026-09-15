@@ -42,10 +42,14 @@ well-bounded ones are marked *good first task*.
       Ash and Southpaw counts not yet re-measured. Any new binary-layout
       interpretation remains subject to the sensitive-area policy.
 - [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
-      meshes with corroborated topology and host triangle collision. Native
-      blending, BSP floor recovery and original-game alignment remain open.
-      Hole runtime assertions include occluded/displaced probes; see the
-      [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
+      meshes with corroborated topology and host triangle collision, and the
+      two persistent-level root Models emit 228 cross-checked polygons (571
+      triangles, 105 sections) with native materials, placeholder planar UVs
+      and opt-in triangle collision. Native terrain blending, BSP UVs /
+      lightmaps / collision flags, other maps and original-game alignment
+      remain open. Hole runtime assertions include occluded/displaced probes;
+      see the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md)
+      and the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md).
 - [~] Sanctuary visual defects observed in the editor fly-through: the native
       dome now uses a two-sided interior policy, and the four known
       `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
@@ -161,7 +165,8 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
           through the bounded native-sky v1 path, with a blue host shell keeping
           the inspection background readable; outer layers, time-of-day graph,
           Kismet activation and visual parity remain open
-  - [ ] Terrain / BSP
+  - [~] Terrain / BSP *Caveat:* Sanctuary only; single-layer terrain and
+        planar-UV BSP approximations, both labeled `UNVERIFIED`
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting
   - [x] Inspection rig: movable sun, neutral skylight, reflection capture,
