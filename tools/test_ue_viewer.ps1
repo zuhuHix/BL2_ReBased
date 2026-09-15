@@ -57,7 +57,7 @@ try {
     }
     $result = Select-String -LiteralPath $log -SimpleMatch "Test Completed. Result={Success} Name={$testName}"
     if (!$result -or $process.ExitCode -ne 0) { throw "Viewer test failed; see $log" }
-    Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Viewer diagnostic:|Requested screenshot:|Map selector|Profile (start|turned) view|Terrain (probes|runtime summary)|Terrain_[0-9]+ (stand|hole|seam):|Test Completed.' | ForEach-Object { $_.Line }
+    Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Viewer diagnostic:|Requested screenshot:|Map selector|Profile (start|turned) view|Terrain (probes|runtime summary)|Terrain_[0-9]+ (stand(\[[0-9]+\])?|hole|seam):|covered by other geometry|Test Completed.' | ForEach-Object { $_.Line }
     Write-Output "Log: $log"
 } finally {
     if (!$process.HasExited) { Stop-Process -Id $process.Id }

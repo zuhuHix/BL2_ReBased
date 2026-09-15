@@ -102,6 +102,66 @@ be reported as native floor recovery. Before production floor output:
 5. Enable collision only after topology is supported; verify standing, walking,
    edges/holes and crossing component seams in runtime, separately from tests.
 
+## Gate status (2026-09-15)
+
+All five gates were exercised on the installed packages; the evidence is
+recorded here so that later readers can tell what is corroborated from what is
+inferred.
+
+1. **Hole/diagonal bits: corroborated from native data.** Each component's
+   remaining tail (after the decoded bounds tree) was walked with bounded
+   counts: `(2, N)` u16 records with an opaque 14-byte stride, an opaque
+   72-byte block ending in `(1, own export index)`, `(8, V)` vertices of
+   `<BBHhh>` (grid X, Y, height sample, two retained int16), two retained
+   words, then a `(2, M)` u16 triangle strip with degenerate restarts. For all
+   15 components the vertex X/Y/height values equal the terrain samples, the
+   strip decodes to exactly the non-hole cells (flag bit 0 clear) with the
+   diagonal chosen by flag bit 1, and the bounds-tree leaves tile the same
+   cells. Two independent native structures therefore agree with the bit
+   reading. The 14-byte records, the 72-byte block and the retained words are
+   kept opaque with hashes; meaning **UNVERIFIED**.
+2. **Subgrids/transforms/coverage/winding: validated structurally.** Component
+   sections tile each terrain's patch grid exactly; actor location/yaw/scale
+   place the vertices; the emitted OBJ bounds match the host mesh bounds.
+   Winding is chosen geometrically (visible from above, as the terrain probe
+   did). The native strip's parity orientation differs for flipped cells, so
+   native face orientation stays **UNVERIFIED**.
+3. **Identities preserved, approximation labeled.** Layer names, setups,
+   TerrainMaterials, MappingScale/LocalToMapping and the PF_G8 weightmap paths
+   are retained in the scene's `terrain` block. The visible material is a
+   labeled approximation (`terrain_dominant_alpha_layer_v1`, largest mean
+   per-vertex alpha by AlphaMapIndex where the actor-tail alpha arrays decode
+   exactly; otherwise `neutral_constant`). Those arrays do not reproduce the
+   weightmaps; native blending is **UNVERIFIED**. Chosen layers: Terrain_0
+   Rocky (Mat_PatchySnow, no channels), Terrain_10/3/6/7 SandTransition
+   (Mat_DesertRockTransition, sole cooked `_Dif`), Terrain_2 and Land
+   Terrain_3 neutral, Land Terrain_8 solid (Mat_SolidSnow, no channels).
+4. **Saved-scene reopen: passed.** 4,783 section actors reopened; collision
+   verification 510 sections / 3,131 enabled / 15 triangle-mesh; UV
+   verification 510 sections, 543,588 corners, 181,196 triangles; zero
+   errors. Visible alignment was checked only against the host's own mesh
+   bounds, not against the original game.
+5. **Runtime, separately from tests: passed on the host.** With
+   `prepare_terrain.py --collision` the 15 component meshes use host
+   complex-as-simple triangle collision (no hulls). `test_ue_viewer.ps1
+   -Terrain` runs `OpenWillow.TerrainWalking` from `terrain-runtime.json`
+   (two consecutive runs, same result):
+   `stand=8/8 occluded_stands=0 hole=8/8 hole_on_other=5 seam=1/1
+   skipped_seams=2`. Terrain_2's first stand candidate was covered by a
+   building floor (`StaticMeshActor_SMC_117`, 6 m above the cell); the
+   second candidate stood on `TerrainComponent_12`. Five hole probes came to
+   rest on unrelated static meshes above the hole cell, which only shows the
+   terrain carried nothing there; two fell freely; the Land Terrain_3 probe
+   ended 11.5 m from its drop point on `TerrainComponent_5`, 65 cm above the
+   hole cell's highest corner. Its path was not recorded, so the cause of that
+   drift (sliding along neighbouring slopes or other geometry) is
+   **UNVERIFIED**. Seams on Terrain_0 (45 m) and Land Terrain_8 (6 m) were
+   skipped as unwalkable by height; Land Terrain_3's seam was crossed from
+   component 4 to 6.
+
+None of this is original-game parity: the reference is the decoded topology,
+and the host's own collision confirms it behaves as decoded.
+
 ## Rejection contract and tests
 
 Reject wrong property prefix, invalid consumption or payload extent mismatch,
@@ -121,8 +181,20 @@ python tests/terrain_test.py
 python tools/terrain_decode.py --reader build/Release/ow-package.exe --game "$env:OPENWILLOW_BL2" --output local/terrain-diagnostic
 ```
 
-Current results: 6 synthetic tests pass; both installed packages produce zero
-diagnostic errors, with 8 terrain prefixes and 15 component prefixes decoded.
+```powershell
+python tests/terrain_geometry_test.py
+python tools/prepare_terrain.py --reader build/Release/ow-package.exe --game "$env:OPENWILLOW_BL2" --scene local/sanctuary --collision
+./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $env:OPENWILLOW_BL2 -Scene local/sanctuary -Terrain
+```
+
+`terrain_geometry_test.py` (7 tests) covers the synthetic vertex/strip walk:
+self-reference, record count, vertex height, covered hole, wrong diagonal,
+missing cell and cell-spanning index rejections, truncation at every byte,
+leaf-coverage rejections, OBJ winding/UV, spread runtime stand candidates and the axis-aligned mapping scale.
+
+Current results: 6 + 7 synthetic tests pass; both installed packages produce
+zero diagnostic errors, with 8 terrain prefixes, 15 component prefixes and
+15 component geometries (5,195 cells, 10,390 triangles, none rejected) decoded.
 Output: `local/terrain-diagnostic/terrain_diagnostics.json`. Earlier explicit
 property diagnostics: `local/terrain-research/`, reproduced by the ignored
 `local/terrain_research.py` and `local/terrain_tails.py` scripts. Full repository
@@ -142,3 +214,17 @@ The root Polys' 12-byte tails do not establish surviving editable polygons.
 Investigate cooked root Model render buffers separately, preserving material
 assignments and rejecting volume ownership structurally. No BSP native reader
 or visual/collision recovery is implemented by this diagnostic.
+
+### Root Model findings (2026-09-15, local only)
+
+Sanctuary_P Model_3's 148,216-byte tail was inspected under ignored `local/`
+without adding a reader route: 28 zero bytes, then bulk arrays of 12 x 43 unit
+vectors, 12 x 360 points (x -4864..7008, y -6960..4864, z -528..4288, which
+brackets the start area and the street-level gap in
+`Sanctuary_P_start00002.png`), 64 x 216 nodes (a 4-float plane and 12 words),
+then 60-byte-period records at offset 18724 whose fields failed internal
+consistency checks (vector indices stay below 43, but a presumed point index
+of 3584 exceeds 360). No field meaning is asserted, no floor is emitted, and
+volume-owned Models remain rejected structurally by `bsp_scope`. The remaining
+bytes and the render-buffer layout are **UNVERIFIED**; a visible BSP floor
+would need the same five gates as terrain.

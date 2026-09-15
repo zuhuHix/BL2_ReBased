@@ -47,27 +47,44 @@ public:
         {
             Pawn->SetActorLocation(Origin, false, nullptr, ETeleportType::TeleportPhysics);
             Move->StopMovementImmediately();
-            Test->AddInfo(FString::Printf(TEXT("Terrain runtime summary: stand=%d/%d hole=%d/%d seam=%d/%d skipped_seams=%d"),
-                StandPassed, StandTotal, HolePassed, HoleTotal, SeamPassed, SeamTotal, SeamSkipped));
+            Test->AddInfo(FString::Printf(TEXT("Terrain runtime summary: stand=%d/%d occluded_stands=%d hole=%d/%d hole_on_other=%d seam=%d/%d skipped_seams=%d"),
+                StandPassed, StandTotal, StandOccluded, HolePassed, HoleTotal, HoleOnOther, SeamPassed, SeamTotal, SeamSkipped));
             return true;
         }
         const TSharedPtr<FJsonObject>& P = Probes[Probe];
         const FString Source = P->GetStringField(TEXT("source"));
         if (Step == 0)
         {
-            Teleport(Pawn, Point(P->GetObjectField(TEXT("stand")), TEXT("point")));
+            Stands.Reset();
+            if (P->HasTypedField<EJson::Array>(TEXT("stands")))
+                for (const auto& Value : P->GetArrayField(TEXT("stands"))) Stands.Add(Value->AsObject());
+            if (Stands.IsEmpty()) Stands.Add(P->GetObjectField(TEXT("stand")));
+            Candidate = 0;
+            Teleport(Pawn, Point(Stands[0], TEXT("point")));
             Step = 1; StageTime = Time; return false;
         }
         if (Step == 1 && Time - StageTime > 2.5)
         {
-            const TSharedPtr<FJsonObject> Stand = P->GetObjectField(TEXT("stand"));
+            const TSharedPtr<FJsonObject> Stand = Stands[Candidate];
             FString Hit; FVector Where;
             const bool OnTerrain = TraceDown(World, Pawn->GetActorLocation(), Hit, Where);
             const bool Grounded = Move->IsMovingOnGround();
-            const bool Rests = Grounded && OnTerrain && WithinSurface(Stand, Pawn->GetActorLocation().Z - 88);
-            ++StandTotal; StandPassed += Rests;
-            Test->TestTrue(*FString::Printf(TEXT("%s: pawn stands on the imported terrain floor"), *Source), Rests);
-            Test->AddInfo(FString::Printf(TEXT("%s stand: grounded=%d hit=%s pawn=%s"), *Source, Grounded, *Hit, *Pawn->GetActorLocation().ToString()));
+            const double FeetZ = Pawn->GetActorLocation().Z - 88;
+            const bool Rests = Grounded && OnTerrain && WithinSurface(Stand, FeetZ);
+            // Other imported geometry (building floors, props) may carry the pawn
+            // above this cell; that neither confirms nor refutes the terrain floor.
+            const bool Occluded = !Rests && Grounded && !OnTerrain && FeetZ > Stand->GetArrayField(TEXT("surface"))[1]->AsNumber() + 40;
+            Test->AddInfo(FString::Printf(TEXT("%s stand[%d]: grounded=%d hit=%s pawn=%s%s"), *Source, Candidate, Grounded, *Hit,
+                *Pawn->GetActorLocation().ToString(), Occluded ? TEXT(" (occluded by other geometry)") : TEXT("")));
+            if (Occluded && Candidate + 1 < Stands.Num())
+            {
+                ++Candidate;
+                Teleport(Pawn, Point(Stands[Candidate], TEXT("point")));
+                StageTime = Time; return false;
+            }
+            ++StandTotal; StandPassed += Rests; StandOccluded += Occluded;
+            if (!Occluded) Test->TestTrue(*FString::Printf(TEXT("%s: pawn stands on the imported terrain floor"), *Source), Rests);
+            else Test->AddWarning(FString::Printf(TEXT("%s: every stand candidate is covered by other geometry; floor unverified at runtime"), *Source));
             if (Probe == 0) FScreenshotRequest::RequestScreenshot(TEXT("OpenWillowTerrainStand.png"), false, false);
             if (P->HasTypedField<EJson::Object>(TEXT("hole")))
             {
@@ -84,8 +101,12 @@ public:
             const bool OnTerrain = TraceDown(World, Pawn->GetActorLocation(), Hit, Where);
             const bool RestsOnTerrainAtHole = Move->IsMovingOnGround() && OnTerrain && WithinSurface(Hole, Pawn->GetActorLocation().Z - 88);
             ++HoleTotal; HolePassed += !RestsOnTerrainAtHole;
+            HoleOnOther += Move->IsMovingOnGround() && !OnTerrain;
             Test->TestFalse(*FString::Printf(TEXT("%s: flagged hole cell carries no terrain floor"), *Source), RestsOnTerrainAtHole);
-            Test->AddInfo(FString::Printf(TEXT("%s hole: falling=%d hit=%s pawn=%s"), *Source, Move->IsFalling(), *Hit, *Pawn->GetActorLocation().ToString()));
+            // Lateral drift from the drop point shows the pawn slid onto or was
+            // pushed against neighbouring geometry; the path itself is not recorded.
+            Test->AddInfo(FString::Printf(TEXT("%s hole: falling=%d hit=%s pawn=%s drift=%.0f"), *Source, Move->IsFalling(), *Hit,
+                *Pawn->GetActorLocation().ToString(), FVector::Dist2D(Pawn->GetActorLocation(), Point(Hole, TEXT("point")))));
             Step = 3; return false;
         }
         if (Step == 3)
@@ -179,8 +200,10 @@ private:
     void NextProbe() { ++Probe; Step = 0; }
     FAutomationTestBase* Test;
     double Started, StageTime = 0;
-    int Stage = 0, Probe = 0, Step = 0;
-    int StandPassed = 0, StandTotal = 0, HolePassed = 0, HoleTotal = 0, SeamPassed = 0, SeamTotal = 0, SeamSkipped = 0;
+    int Stage = 0, Probe = 0, Step = 0, Candidate = 0;
+    int StandPassed = 0, StandTotal = 0, StandOccluded = 0, HolePassed = 0, HoleTotal = 0, HoleOnOther = 0;
+    int SeamPassed = 0, SeamTotal = 0, SeamSkipped = 0;
+    TArray<TSharedPtr<FJsonObject>> Stands;
     FVector Origin, SeamEnd;
     FString SeamStartHit;
     TArray<TSharedPtr<FJsonObject>> Probes;

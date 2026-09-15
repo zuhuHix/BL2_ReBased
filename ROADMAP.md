@@ -56,8 +56,9 @@ well-bounded ones are marked *good first task*.
       (4 in Sanctuary).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and
       placeholder walking are verified; full routes and stairs remain open.
-      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes,
-      blocking volumes and terrain remain unsupported. See
+      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes
+      and blocking volumes remain unsupported; terrain uses triangle collision
+      verified by `OpenWillow.TerrainWalking` on Sanctuary only. See
       [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] Broader map coverage. Command-line and in-game selectors exist; the
       in-game list only offers already imported scenes (2026-09-14).

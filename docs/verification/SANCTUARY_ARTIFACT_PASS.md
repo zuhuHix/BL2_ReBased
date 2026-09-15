@@ -87,3 +87,57 @@ class counts. It does not infer terrain/BSP geometry from class names.
 - Screenshots are in `host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor/`;
   import/reopen logs, `artifact-pass.json` and the final viewer log are under
   `local/`. Original-game matched views remain outstanding.
+
+## Follow-up (2026-09-15): terrain floors, BSP, HLS, parity, gaps
+
+Status of the five open items after the terrain pass recorded in
+[SANCTUARY_TERRAIN_BSP_HANDOFF.md](SANCTUARY_TERRAIN_BSP_HANDOFF.md#gate-status-2026-09-15).
+
+1. **Terrain floor topology: completed through all five gates on the host.**
+   Hole/diagonal bits are corroborated by two independent native structures
+   (component index strip and bounds-tree leaves) for 15/15 components; the
+   scene now carries 15 terrain component meshes (5,195 cells) with labeled
+   material approximations and triangle collision. Reopen verification passed
+   with zero errors; the runtime walking test stood on 8/8 terrains, found no
+   terrain floor in 8/8 flagged hole cells and crossed 1/1 walkable seam (two
+   runs). Native face orientation for flipped cells, layer blending and the
+   retained tail words remain **UNVERIFIED**; nothing here is original-game
+   parity.
+2. **Root BSP Model/Polys tails: investigated, not emitted.** Model_3's bulk
+   arrays (43 vectors, 360 points bracketing the start area, 216 nodes) were
+   read under `local/`; the trailing record layout failed internal checks, so
+   no floor exists and no reader route was added. Volume-owned Models stay
+   structurally rejected. See the handoff record's root Model findings.
+3. **Native HLS-to-RGB: not derivable from the data; fallback kept.** The
+   surviving Sanc_HLS_Master expressions are parameters only: Color
+   (SancBuilding_Roofs_HS), Luminosity (SancBuilding_Roofs_L), Mask
+   (SancBuilding_Masks), Diffuse_Modulation (1, .5, .4, 1), Color/Mask/
+   Luminosity UV scale-and-offset vectors, a StaticSwitch `Use_Modulation`
+   with null A/B inputs and two StaticComponentMask records that the package
+   truncates. No combine formula survives, so none was invented; the
+   validated regular-concrete atlas fallback stays.
+4. **Original-game matched-view screenshots: not done.** This session cannot
+   drive the original game; the comparison still needs someone with both
+   builds open (ROADMAP "Matched-viewpoint screenshots").
+5. **Street-level floor gaps: rechecked, unchanged by terrain.**
+   `Sanctuary_P_start00002.png` (after the terrain import) shows the same
+   gap in front of the start camera as `Sanctuary_P_start00001.png`. The
+   camera (655, -6349, 2900) lies just outside Terrain_2's 22-column grid
+   and Terrain_2's nearby samples sit at Z 500..2730, below street level;
+   Terrain_7 begins 4.6 km north at Z 3175+. So no imported terrain covers
+   that spot, and Model_3's point cloud (z up to 4288 over x -4864..7008,
+   y -6960..4864) remains the only candidate, **UNVERIFIED** until BSP is
+   decoded and gated. No further material fallback was added. The 00002
+   capture shows flatter, lower-detail surfaces than 00001; the run rebuilt
+   DDC textures at load, so this is read as capture timing, not a scene
+   change, and was not re-verified.
+
+Automated checks for this follow-up (host build 2026-09-15): CTest 5/5;
+`verify_packages.py` matched all nine code packages; `terrain_test.py` 6,
+`terrain_geometry_test.py` 7, `terrain_probe_test.py` 2 and `level_test.py`
+21 tests passed. In-game: `OpenWillow.TerrainWalking` and `OpenWillow.Viewer`
+passed; the viewer reported 90 samples, 136.88 ms mean / 181.48 ms p95 with
+the terrain meshes present and 11,616 cm pawn movement. That run overlapped
+the CTest suite on the same machine, so the frame time is not comparable
+with the earlier 49.82 ms figure; a terrain performance cost is neither
+shown nor excluded.

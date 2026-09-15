@@ -432,3 +432,14 @@ records IcePlate, WorldTransition and HLS effective placements plus source
 properties and omitted terrain/BSP class counts. Use it after material refresh;
 counts do not establish which missing floors terrain/BSP will fill. See
 [the verification record](verification/SANCTUARY_ARTIFACT_PASS.md).
+
+## Terrain floors
+
+`tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+rewrites a prepared scene with one static mesh per TerrainComponent whose
+vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
+material approximation, and (with `--collision`) triangle-mesh collision. It
+also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
+`OpenWillow.TerrainWalking`, which stands on each terrain, drops into a
+flagged hole cell and walks one component seam. See
+[the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).

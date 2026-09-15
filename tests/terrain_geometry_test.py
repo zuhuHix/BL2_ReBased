@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from terrain_decode import (OPAQUE_BLOCK_BYTES, OPAQUE_RECORD_STRIDE, decode_component_geometry,
                             strip_triangles, validate_leaf_coverage)
-from prepare_terrain import cell_faces, component_obj, mapping_scale
+from prepare_terrain import cell_faces, component_obj, mapping_scale, runtime_probes
 
 INDEX = 77
 # 3 x 3 patches (4 x 4 samples); cell (1,1) is a hole, cell (2,0) is flipped.
@@ -129,6 +129,30 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(cell_faces(2, 0, True, 4, 0, 0), ((2, 6, 3), (3, 6, 7)))
         with self.assertRaises(ValueError):
             component_obj(terrain(), geometry['section'], [[3, 0, False]], [1, 1])
+
+    def test_runtime_probe_candidates(self):
+        # 12 x 12 patches split into two components; a hole block at (5..6, 5..6).
+        w = 13
+        flat = {'width': w, 'height': w, 'heights': [32768] * (w * w), 'flags': [0] * (w * w)}
+        for y in (5, 6):
+            for x in (5, 6):
+                flat['flags'][y * w + x] = 1
+        cells = [(x, y) for y in range(12) for x in range(12) if not flat['flags'][y * w + x] & 1]
+        components = [{'section': [0, 0, 6, 12], 'cells': [[x, y, False] for x, y in cells if x < 6]},
+                      {'section': [6, 0, 6, 12], 'cells': [[x, y, False] for x, y in cells if x >= 6]}]
+        pose = {'location': [100, 200, 300], 'rotation': [0, 0, 0], 'scale': [128, 128, 256]}
+        probes = runtime_probes(flat, pose, 'T', components)
+        self.assertEqual(probes['stand'], probes['stands'][0])
+        self.assertEqual(len(probes['stands']), 6)
+        chosen = [tuple(s['cell']) for s in probes['stands']]
+        for i, a in enumerate(chosen):
+            self.assertNotIn(a, [(5, 5), (5, 6), (6, 5), (6, 6)])
+            for b in chosen[i + 1:]:
+                self.assertGreaterEqual(max(abs(a[0] - b[0]), abs(a[1] - b[1])), 4)
+        self.assertIn(tuple(probes['hole']['cell']), [(5, 5), (5, 6), (6, 5), (6, 6)])
+        self.assertEqual(probes['stand']['surface'], [300.0, 300.0])
+        self.assertEqual(probes['stand']['point'][2], 450.0)
+        self.assertEqual(probes['seam']['cells'][0][0] + 1, probes['seam']['cells'][1][0])
 
     def test_mapping_scale(self):
         diagonal = {'LocalToMapping': {'XPlane': {'X': .25, 'Y': 0, 'Z': 0, 'W': 0},

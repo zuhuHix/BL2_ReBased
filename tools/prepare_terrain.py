@@ -126,16 +126,24 @@ def runtime_probes(terrain, pose, path, components):
     def neighbours(x, y):
         return [(x + dx, y + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
 
-    def interior(candidates, member):
-        # Prefer cells whose four neighbours share their state, then flat cells.
+    def interior(candidates, member, count=1):
+        # Prefer cells whose four neighbours share their state, then flat cells;
+        # further picks stay several cells apart so other geometry covering one
+        # spot does not hide the whole floor from the runtime check.
         def rank(c):
             corners = corner_heights(terrain, *c)
             return -sum(member(n) for n in neighbours(*c)), max(corners) - min(corners)
-        ranked = sorted(candidates, key=rank)
-        return ranked[0] if ranked else None
+        chosen = []
+        for c in sorted(candidates, key=rank):
+            if all(max(abs(c[0] - o[0]), abs(c[1] - o[1])) >= 4 for o in chosen):
+                chosen.append(c)
+            if len(chosen) == count:
+                break
+        return chosen
 
-    stand = interior(list(cells), lambda c: c in cells)
+    stands = interior(list(cells), lambda c: c in cells, count=6)
     hole = interior([h for h in holes if any(n in cells for n in neighbours(*h))], lambda c: c not in cells)
+    hole = hole[0] if hole else None
     seam = None
     sections = [g['section'] for g in components]
 
@@ -159,7 +167,8 @@ def runtime_probes(terrain, pose, path, components):
                 break
         if seam:
             break
-    return {'source': path, 'cells': len(cells), 'holes': len(holes), 'stand': probe(*stand),
+    return {'source': path, 'cells': len(cells), 'holes': len(holes), 'stand': probe(*stands[0]),
+            'stands': [probe(*c) for c in stands],
             'hole': probe(*hole) if hole else None, 'seam': seam}
 
 
