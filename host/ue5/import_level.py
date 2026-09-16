@@ -81,9 +81,13 @@ for name, definition in scene['materials'].items():
         material.set_editor_property('two_sided', bool(definition.get('two_sided', False)))
     except Exception:
         pass
+    fallback = None
     if not definition['channels'].get('diffuse'):
+        # A recorded constant comes from an unconnected UE3 DiffuseColor input
+        # (see prepare_level.unconnected_diffuse_constant); otherwise neutral.
+        color = definition.get('constant_diffuse') or [0.5, 0.5, 0.5]
         fallback = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
-        fallback.set_editor_property('constant', unreal.LinearColor(0.5, 0.5, 0.5, 1))
+        fallback.set_editor_property('constant', unreal.LinearColor(color[0], color[1], color[2], 1))
         mel.connect_material_property(fallback, '', unreal.MaterialProperty.MP_BASE_COLOR)
     outputs = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR,
                'normal': unreal.MaterialProperty.MP_NORMAL,
@@ -106,6 +110,15 @@ for name, definition in scene['materials'].items():
         sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if channel == 'normal'
                                    else unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if channel in ('diffuse', 'emissive')
                                    else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+        uv = definition.get('channel_uv', {}).get(channel)
+        if uv is not None:
+            coordinates = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate)
+            coordinates.set_editor_property('coordinate_index', uv['index'])
+            coordinates.set_editor_property('u_tiling', uv['scale'][0])
+            coordinates.set_editor_property('v_tiling', uv['scale'][1])
+            if not mel.connect_material_expressions(coordinates, '', sample, 'UVs'):
+                raise RuntimeError('Cannot connect material UV coordinates: ' +
+                                   str(mel.get_material_expression_input_names(sample)))
         if channel == 'diffuse':
             diffuse_sample = sample
         if channel == 'emissive':
@@ -121,6 +134,15 @@ for name, definition in scene['materials'].items():
         if not mel.connect_material_property(output_node, output_pin, outputs[channel]):
             raise RuntimeError(f'Cannot connect {channel}')
         unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    # Unlit uses Emissive Color for visible color. Retain the recovered diffuse
+    # (or constant fallback) there when no explicit emissive channel exists.
+    # This is Material v1 host policy, not reconstruction of the UE3 sky graph.
+    if definition.get('lighting_model') == 'MLM_Unlit' and emissive_sample is None:
+        color_node = diffuse_sample if diffuse_sample is not None else fallback
+        color_pin = 'RGB' if diffuse_sample is not None else ''
+        if color_node is None or not mel.connect_material_property(
+                color_node, color_pin, unreal.MaterialProperty.MP_EMISSIVE_COLOR):
+            raise RuntimeError('Cannot connect unlit visible color: ' + name)
     if blend_name != 'BLEND_Opaque':
         opacity_node = diffuse_sample or emissive_sample
         opacity_property = (unreal.MaterialProperty.MP_OPACITY_MASK
@@ -142,12 +164,51 @@ for name, definition in scene['materials'].items():
     unreal.EditorAssetLibrary.save_loaded_asset(material)
     materials[name] = material
 
+# Sections whose preparer recorded no material (for example terrain whose
+# alpha maps did not decode, labeled 'neutral_constant') must not fall through
+# to UE's WorldGridMaterial checkerboard. Bind an explicit lit neutral gray so
+# the inspection view stays readable and the gap stays labeled, not hidden.
+neutral_fallback_path = destination + '/Assets/M_OpenWillowNeutralFallback'
+neutral_fallback = (unreal.load_asset(neutral_fallback_path)
+                    if unreal.EditorAssetLibrary.does_asset_exist(neutral_fallback_path)
+                    else tools.create_asset('M_OpenWillowNeutralFallback', destination + '/Assets',
+                                            unreal.Material, unreal.MaterialFactoryNew()))
+mel.delete_all_material_expressions(neutral_fallback)
+neutral_fallback.set_editor_property('blend_mode', unreal.BlendMode.BLEND_OPAQUE)
+neutral_fallback.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+neutral_color = mel.create_material_expression(neutral_fallback, unreal.MaterialExpressionConstant3Vector)
+neutral_color.set_editor_property('constant', unreal.LinearColor(0.5, 0.5, 0.5, 1.0))
+neutral_roughness = mel.create_material_expression(neutral_fallback, unreal.MaterialExpressionConstant)
+neutral_roughness.set_editor_property('r', 0.65)
+if not (mel.connect_material_property(neutral_color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+        and mel.connect_material_property(neutral_roughness, '', unreal.MaterialProperty.MP_ROUGHNESS)):
+    raise RuntimeError('Cannot connect neutral fallback material')
+mel.recompile_material(neutral_fallback)
+unreal.EditorAssetLibrary.save_loaded_asset(neutral_fallback)
+neutral_fallback_sections = 0
+
 meshes = {}
 for name, definition in scene['meshes'].items():
     for section in definition['sections']:
         mesh = imported(section['file'], unreal.StaticMesh)
         if section['material']:
             mesh.set_material(0, materials[section['material']])
+        else:
+            mesh.set_material(0, neutral_fallback)
+            neutral_fallback_sections += 1
+        hulls = []
+        collision = definition.get('collision', {})
+        if section is definition['sections'][0]:
+            for item in collision.get('hulls', []):
+                hull = unreal.OpenWillowHull()
+                hull.vertices = [unreal.Vector(*v) for v in item['vertices']]
+                hulls.append(hull)
+        if collision.get('status') == 'triangle_mesh':
+            # Each terrain/BSP section carries its own collision triangles.
+            if hulls or not unreal.OpenWillowCollision.set_triangle_collision(mesh):
+                raise RuntimeError('Invalid triangle collision for ' + name)
+        elif not unreal.OpenWillowCollision.set_hulls(mesh, hulls):
+            raise RuntimeError('Invalid collision hulls for ' + name)
         unreal.EditorAssetLibrary.save_loaded_asset(mesh)
         meshes[name, section['slot']] = mesh
 
@@ -171,34 +232,91 @@ def pose(value):
                             rotation=unreal.Rotator(pitch=pitch, yaw=yaw, roll=roll), scale=unreal.Vector(*value['scale']))
 
 
+def collection_rotation(value):
+    m = value['matrix']
+    return unreal.MathLibrary.make_rotation_from_axes(unreal.Vector(*m[0:3]),
+               unreal.Vector(*m[4:7]), unreal.Vector(*m[8:11]))
+
+
 def placement(value):
     if 'matrix' in value:
         m = value['matrix']
-        rotation = unreal.MathLibrary.make_rotation_from_axes(unreal.Vector(*m[0:3]),
-                   unreal.Vector(*m[4:7]), unreal.Vector(*m[8:11]))
+        rotation = collection_rotation(value)
         return unreal.Transform(location=unreal.Vector(*m[12:15]), rotation=rotation,
                                 scale=unreal.Vector(*value['scale']))
     return unreal.MathLibrary.compose_transforms(pose(value['component']), pose(value['actor']))
 
 
 count = 0
+unsupported_translucent_sections = 0
 scene_bounds_min = unreal.Vector(float('inf'), float('inf'), float('inf'))
 scene_bounds_max = unreal.Vector(float('-inf'), float('-inf'), float('-inf'))
 for instance in scene['actors']:
     transform = placement(instance['transform'])
+    is_native_skybox = bool(instance.get('native_skybox'))
+    hidden_visual = bool(instance.get('hidden_visual'))
     for section in scene['meshes'][instance['mesh']]['sections']:
         actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector())
         actor.set_actor_label(actor_label(instance['level'], instance['source'], section['slot']))
         actor.set_editor_property('tags', [unreal.Name(instance['source'])])
-        actor.set_folder_path(instance['level'])
+        actor.set_folder_path(('NativeSkybox/' if is_native_skybox else '') + instance['level'])
         component = actor.static_mesh_component
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         component.set_static_mesh(meshes[instance['mesh'], section['slot']])
         actor.set_actor_transform(transform, False, False)
+        if 'matrix' in instance['transform']:
+            # SetActorTransform round-trips through a quaternion and snaps very
+            # near-vertical pitch to 90 degrees. Preserve the matrix-derived
+            # Euler rotation on the unattached root for saving and reopening.
+            component.set_editor_property('relative_rotation', collection_rotation(instance['transform']))
         overrides = instance['materials']
+        material_id = (overrides[section['slot']]
+                       if section['slot'] < len(overrides) and overrides[section['slot']]
+                       else section['material'])
         if section['slot'] < len(overrides) and overrides[section['slot']]:
             component.set_material(0, materials[overrides[section['slot']]])
         component.set_simulate_physics(False)
+        component.set_collision_profile_name('BlockAll')
+        component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION
+            if is_native_skybox else
+            unreal.CollisionEnabled.QUERY_AND_PHYSICS
+            if instance.get('collision_enabled', False)
+            and (scene['meshes'][instance['mesh']].get('collision', {}).get('status') == 'triangle_mesh'
+                 or (section is scene['meshes'][instance['mesh']]['sections'][0]
+                     and bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))))
+            else unreal.CollisionEnabled.NO_COLLISION)
+        if is_native_skybox:
+            # The dome is a visual shell. It must not block the player or cast
+            # a giant shadow over Sanctuary; its source collision is absent.
+            try:
+                component.set_editor_property('cast_shadow', False)
+            except Exception:
+                pass
+        material_definition = scene['materials'].get(material_id) if material_id else None
+        unsupported_translucent = bool(material_definition and
+            material_definition.get('blend_mode', 'BLEND_Opaque') != 'BLEND_Opaque' and
+            not any(material_definition.get('channels', {}).values()) and
+            'constant_diffuse' not in material_definition and
+            'surface_approximation' not in material_definition)
+        if hidden_visual or unsupported_translucent:
+            tags = [unreal.Name(instance['source'])]
+            if hidden_visual:
+                tags.append(unreal.Name('OpenWillow_HiddenVisual'))
+            if unsupported_translucent:
+                tags.append(unreal.Name('OpenWillow_UnsupportedTranslucent'))
+            actor.set_editor_property('tags', tags)
+        if hidden_visual or unsupported_translucent:
+            # These observed helper assets have no recoverable host-side
+            # visual. Keep source collision state, but do not draw the helper.
+            # The same rule covers unsupported translucent decals/effects: a
+            # neutral fallback must not become a bright floating rectangle.
+            component.set_visibility(False)
+            try:
+                actor.set_actor_hidden_in_game(True)
+            except Exception:
+                pass
+            if unsupported_translucent and not hidden_visual:
+                unsupported_translucent_sections += 1
         component.set_mobility(unreal.ComponentMobility.STATIC)
         origin, extent = actor.get_actor_bounds(False)
         scene_bounds_min = unreal.Vector(min(scene_bounds_min.x, origin.x - extent.x),
@@ -248,6 +366,22 @@ sun_component.set_editor_property('light_source_angle', 0.5357)
 sun_component.set_editor_property('dynamic_shadow_distance_movable_light',
                                    min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 2.0, 50000.0))
 sun_component.set_editor_property('dynamic_shadow_cascades', 4)
+# The temporary UE5 atmosphere needs an explicit atmosphere light. This is a
+# host-only fallback; it does not claim to be Sanctuary's native sky setup.
+try:
+    sun_component.set_atmosphere_sun_light(True)
+except Exception:
+    try:
+        sun_component.set_editor_property('atmosphere_sun_light', True)
+    except Exception:
+        pass
+try:
+    sun_component.set_atmosphere_sun_light_index(0)
+except Exception:
+    try:
+        sun_component.set_editor_property('atmosphere_sun_light_index', 0)
+    except Exception:
+        pass
 
 sky = actors.spawn_actor_from_class(unreal.SkyLight, lighting_center)
 sky.set_actor_label('OpenWillow_SkyFill')
@@ -264,6 +398,73 @@ sky_component.set_editor_property('lower_hemisphere_is_black', False)
 sky_component.set_editor_property('lower_hemisphere_color', unreal.LinearColor(0.08, 0.10, 0.14, 1.0))
 sky_component.set_intensity(0.5)
 sky_component.set_light_color(unreal.LinearColor(0.72, 0.82, 1.0, 1.0))
+
+# The UE3 sky graph is still unresolved and the temporary atmosphere can
+# collapse to a brown/black field when its sun direction is outside the
+# recovered setup. Keep that atmosphere for ambient lighting, but add a
+# deterministic visual shell so unfilled parts of the inspection view remain
+# a cool blue. This is a host fallback, not a native Sanctuary sky claim.
+sky_fallback_path = destination + '/Assets/M_OpenWillowSkyFallback'
+sky_fallback_material = (unreal.load_asset(sky_fallback_path)
+                          if unreal.EditorAssetLibrary.does_asset_exist(sky_fallback_path)
+                          else tools.create_asset('M_OpenWillowSkyFallback', destination + '/Assets',
+                                                  unreal.Material, unreal.MaterialFactoryNew()))
+mel.delete_all_material_expressions(sky_fallback_material)
+sky_fallback_material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_OPAQUE)
+sky_fallback_material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+sky_fallback_material.set_editor_property('two_sided', True)
+sky_color = mel.create_material_expression(
+    sky_fallback_material, unreal.MaterialExpressionConstant3Vector)
+sky_color.set_editor_property('constant', unreal.LinearColor(0.018, 0.055, 0.20, 1.0))
+if not mel.connect_material_property(sky_color, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR):
+    raise RuntimeError('Cannot connect sky fallback color')
+mel.recompile_material(sky_fallback_material)
+unreal.EditorAssetLibrary.save_loaded_asset(sky_fallback_material)
+sky_fallback = actors.spawn_actor_from_class(unreal.StaticMeshActor, lighting_center)
+sky_fallback.set_actor_label('OpenWillow_SkyFallback')
+sky_fallback.set_folder_path('Lighting')
+sky_fallback_component = sky_fallback.static_mesh_component
+sky_fallback_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Sphere.Sphere'))
+sky_fallback_component.set_material(0, sky_fallback_material)
+sky_fallback_component.set_collision_profile_name('NoCollision')
+sky_fallback_component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
+try:
+    # The camera is inside the source sphere; reverse culling keeps the
+    # two-sided shell visible on UE5's saved static mesh component.
+    sky_fallback_component.set_editor_property('reverse_culling', True)
+except Exception as error:
+    raise RuntimeError('Sky fallback requires reverse culling support') from error
+try:
+    sky_fallback_component.set_editor_property('cast_shadow', False)
+except Exception:
+    pass
+sky_fallback.set_actor_scale3d(unreal.Vector(10000.0, 10000.0, 10000.0))
+sky_fallback_component.set_mobility(unreal.ComponentMobility.STATIC)
+
+# The observed native dome is imported above with its Material v1 approximation.
+# Keep the atmosphere as a temporary fill for maps or sky layers whose native
+# graph/activation state remains unresolved.
+sky_atmosphere = actors.spawn_actor_from_class(unreal.SkyAtmosphere, lighting_center)
+sky_atmosphere.set_actor_label('OpenWillow_SkyAtmosphere')
+sky_atmosphere.set_folder_path('Lighting')
+sky_atmosphere_component = sky_atmosphere.get_component_by_class(unreal.SkyAtmosphereComponent)
+if sky_atmosphere_component is None:
+    raise RuntimeError('UE5 SkyAtmosphere actor has no SkyAtmosphereComponent')
+for property_name, value in (
+        ('rayleigh_scattering_scale', 0.55),
+        ('mie_scattering_scale', 0.35),
+        ('mie_absorption_scale', 0.08),
+        ('mie_anisotropy', 0.78),
+        ('multi_scattering_factor', 0.8),
+        ('sky_luminance_factor', unreal.LinearColor(0.72, 0.80, 1.0, 1.0)),
+        ('sky_and_aerial_perspective_luminance_factor', unreal.LinearColor(0.72, 0.80, 1.0, 1.0)),
+        ('height_fog_contribution', 0.25)):
+    try:
+        sky_atmosphere_component.set_editor_property(property_name, value)
+    except Exception:
+        # Keep the fallback portable across UE5 minor versions where an
+        # atmosphere tuning property may not be exposed to editor Python.
+        pass
 
 capture_radius = min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 1.15, 16384.0)
 capture = actors.spawn_actor_from_class(unreal.SphereReflectionCapture, lighting_center)
@@ -309,12 +510,36 @@ except Exception:
     # Null-RHI commandlets cannot render a capture. The editor will recapture
     # it when the map is opened.
     pass
+terrain_placements = sum(1 for item in scene['actors'] if item.get('terrain'))
+native_skybox_placements = sum(1 for item in scene['actors'] if item.get('native_skybox'))
+hidden_visual_placements = sum(1 for item in scene['actors'] if item.get('hidden_visual'))
 level.save_current_level()
 unreal.EditorAssetLibrary.save_directory(destination)
 (root / 'ue-import.json').write_text(json.dumps({'imported': True, 'map': map_path, 'section_actors': count,
     'source_placements': len(scene['actors']), 'issues': len(scene['issues']),
+    'neutral_fallback_sections': neutral_fallback_sections,
+    'native_skybox': {'placements': native_skybox_placements,
+                      'mesh': 'Prop_Skybox.Meshes.Sky_Dome',
+                      'policy': 'observed_sky_dome_material_v1',
+                      'graph_status': 'partial_unverified',
+                      'two_sided_interior_policy': True},
+    'hidden_visual': {'placements': hidden_visual_placements,
+                      'meshes': ['Common_Meshes.Blocking.Blocking_Cube',
+                                 'Common_Meshes.CollisionCube',
+                                 'Common_Meshes.Blocking.Blocking_Plane',
+                                 'Prop_Garbage.Meshes.BoxLrg'],
+                      'materials': ['Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'],
+                      'sources': ['TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'],
+                      'policy': 'hide_unrecovered_visual_preserve_source_collision'},
+    'unsupported_translucent': {'sections': unsupported_translucent_sections,
+                                'policy': 'hide_no_channel_non_opaque_preserve_source_collision'},
+    'terrain': {'placements': terrain_placements,
+                'policy': scene.get('terrain_policy'),
+                'collision': 'triangle_mesh_complex_as_simple' if any(
+                    m.get('collision', {}).get('status') == 'triangle_mesh' for m in scene['meshes'].values()) else 'none'},
     'lighting': {'sun_intensity': 1.0, 'sky_intensity': 0.5,
                  'reflection_capture_radius': max(capture_radius, 1000.0),
-                 'exposure': 'auto', 'ambient_occlusion': 0.35},
+                 'exposure': 'auto', 'ambient_occlusion': 0.35,
+                 'temporary_sky_fallback': 'UE5_SkyAtmosphere+OpenWillow_SkyFallback'},
     'visual_validation': 'pending'}, indent=2))
-unreal.log(f'OpenWillow: imported {count} mesh sections with lighting rig. Play: WASD + mouse, E/Q vertical flight.')
+unreal.log(f'OpenWillow: imported {count} mesh sections, including {native_skybox_placements} native skybox placements and {hidden_visual_placements} hidden collision helpers, with lighting rig and temporary UE5 sky fallback. Play: WASD + mouse, E/Q vertical flight.')

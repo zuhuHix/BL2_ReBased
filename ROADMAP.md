@@ -1,4 +1,4 @@
-# Roadmap — BL2_ReBased
+# BL2_ReBased roadmap
 
 The live tracker. Phases, steps, gates and estimates come from
 [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md); this file
@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Project start:** 2026-09-09 · **Phase 0 gate:** 2026-09-10 · **Now:** Phase 1
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-15
 
 ---
 
@@ -18,23 +18,61 @@ Items marked *Caveat:* are done with a recorded limitation.
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 
-- [ ] Decode `PF_A8R8G8B8` textures — the sky transition texture in Ash uses
-      it, which is why the sky is black. *Good first task.*
-- [ ] Check UV orientation: the Sanctuary shop sign appears mirrored in the
-      viewer. Determine whether it's OBJ handedness, UV V-flip or the source.
-- [ ] Sky rendering: translate the skybox sublevel.
-- [ ] Material fallbacks: 30 Ash and 67 Sanctuary materials still lack a
-      diffuse channel after cooked-resource inference (2026-09-13). Next is
-      reading more of the cooked material resource — every extension needs
-      explicit approval because the layout is unspecified.
-- [ ] Terrain / BSP geometry.
+- [x] Decode `PF_A8R8G8B8` textures: synthetic pixel/bulk tests pass and the
+      real 256x256 Ash sky transition texture extracts successfully. Native sky
+      shading remains open. See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
+- [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
+      winding twice, exposing back faces. Corrected isolated sign renders
+      readable; saved UV and winding checks now guard the import path.
+- [~] Sky rendering: the bounded Sanctuary slice now imports the accepted
+      `Prop_Skybox.Meshes.Sky_Dome` placement with its Unlit material and
+      recovered `Sky_TransitionBL2Default_Dif` routed through the host
+      Emissive policy. The blue shell and `OpenWillow_SkyAtmosphere` remain
+      temporary fallbacks; Ash coverage, outer layers, time-of-day/cloud/mask
+      graph connections, Kismet activation and visual parity remain open. See
+      the [native skybox record](docs/verification/NATIVE_SKYBOX_VERIFICATION.md)
+      and [sky census](docs/verification/SKY_CENSUS.md).
+- [ ] Material fallbacks: Sanctuary now has 44 materials lacking diffuse,
+      including 12 opaque definitions (42 placed sections). Of those, nine have
+      no supported channels (20 sections). Two glacier materials (33 sections)
+      have an explicit primary-layer approximation with instance tiling; snow
+      blend, reflection/glow and static UV selection remain unresolved. See the
+      [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and
+      [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
+      Ash and Southpaw counts not yet re-measured. Any new binary-layout
+      interpretation remains subject to the sensitive-area policy.
+- [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
+      meshes with corroborated topology and host triangle collision, and the
+      two persistent-level root Models emit 228 cross-checked polygons (571
+      triangles, 105 sections) with native materials, placeholder planar UVs
+      and opt-in triangle collision. Native terrain blending, BSP UVs /
+      lightmaps / collision flags, other maps and original-game alignment
+      remain open. Hole runtime assertions include occluded/displaced probes;
+      see the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md)
+      and the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md).
+- [~] Sanctuary visual defects observed in the editor fly-through: the native
+      dome now uses a two-sided interior policy, and the four known
+      `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
+      cloud planes, and the observed start-view blocking box are hidden from
+      rendering while source collision is retained where recovered. Ground-floor
+      materials now have scoped FrozenLake and regular-concrete/HLS fallbacks;
+      native layer blending, HLS UV mapping and matched original screenshots
+      remain open. See the [artifact pass](docs/verification/SANCTUARY_ARTIFACT_PASS.md).
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
-- [ ] Walking collision (currently free-flight with collision disabled).
-- [ ] Map selector and the third map.
-- [ ] Performance: Sanctuary ran at ~8–9 FPS during automation startup on the
-      development machine. Not yet profiled.
-- [ ] Matched-viewpoint screenshots against the original game — the plan's
+- [ ] Complete walking collision: initial Sanctuary convex/box collision and
+      placeholder walking are verified; full routes and stairs remain open.
+      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes
+      and blocking volumes remain unsupported; terrain uses triangle collision
+      verified by `OpenWillow.TerrainWalking` on Sanctuary only. See
+      [walking verification](COLLISION_WALKING_VERIFICATION.md).
+- [ ] Broader map coverage. Command-line and in-game selectors exist; the
+      in-game list only offers already imported scenes (2026-09-14).
+- [ ] Performance: Sanctuary profiled at 12–15 FPS on an Intel Iris Xe
+      laptop, GPU-bound with ~72% of the frame in TSR; `-LowEnd` reaches the
+      60 FPS cap. Candidate anti-aliasing change recorded, not applied. See
+      [performance record](docs/verification/PERFORMANCE.md).
+- [ ] Matched-viewpoint screenshots against the original game: the plan's
       per-map verification method. Needs someone with the game and both
       builds open.
 - [ ] Cross-check the census against umodel's view of the same packages.
@@ -43,9 +81,9 @@ well-bounded ones are marked *good first task*.
 
 ---
 
-## Phase 0 — Foundation and spikes <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
+## Phase 0: Foundation and spikes <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: 3–6 weeks. Actual: gated 2026-09-10, the day after the project started.*
+*Estimate: 3–6 weeks. Gated 2026-09-10, ahead of estimate; most of the reader already existed as a Python prototype.*
 
 Goal: a repo, a build, a package loader, and a decided host engine.
 
@@ -71,7 +109,7 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       zero trailing bytes in three installed copies. *Caveat:* One
       generated-subobject presentation discrepancy recorded in
       [DECISIONS.md](DECISIONS.md).
-- [x] Texture spike: `Texture2D` to PNG — DXT1/DXT5, inline, TFC-streamed and
+- [x] Texture spike: `Texture2D` to PNG, DXT1/DXT5, inline, TFC-streamed and
       LZO-compressed bulk, every resident mip. Viewed; it is the texture.
 - [x] Static mesh spike: all render LODs, 16/32-bit indices, all UV sets; one
       LOD to OBJ.
@@ -79,13 +117,13 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       the probe mesh and its verified diffuse texture render in UE 5.8.2.
       First screenshot user-verified.
 
-**Gate passed** — the census exists; one mesh and one texture from BL2 render in
+**Gate passed.** The census exists; one mesh and one texture from BL2 render in
 the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 2026-09-10.
 
 ---
 
-## Phase 1 — World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+## Phase 1: World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: 2–4 months full-time. Started 2026-09-10.*
 
@@ -96,11 +134,14 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
       APIs instead of CLI-only spikes)
 - [ ] Static mesh importer for all meshes
   - [x] All render LODs, all UV sets, section material references
-  - [ ] Collision hulls from `RB_BodySetup`
+  - [x] Collision hulls from `RB_BodySetup` (box and convex) *Caveat:*
+        sphere, capsule and cooked PhysX shapes unsupported; refreshed on
+        Sanctuary only
   - [ ] Source mesh data
 - [ ] Texture importer with TFC streaming
   - [x] `Textures.tfc`, DXT1/DXT5
-  - [ ] `PF_A8R8G8B8` and other pixel formats
+  - [x] `PF_A8R8G8B8` (automated extraction verified)
+  - [ ] Other pixel formats
   - [ ] `CharTextures.tfc`, `Lighting.tfc`; UHD pack optional
 - [ ] Material translation
   - [x] v1: named diffuse/normal/specular/emissive parameters, parent
@@ -110,6 +151,9 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         no named parameter exists *Caveat:* recorded as inference; graph
         connectivity, tint and masks `UNVERIFIED`
   - [ ] v2: node-graph translation, cel-shade edge, ink lines
+        Native resource-tail structure now matches 335 observed Ash/Sanctuary
+        materials in diagnostic tooling; field semantics and graphs remain
+        `UNVERIFIED`. See [resource census](docs/verification/MATERIAL_RESOURCE_CENSUS.md).
 - [ ] Level loader
   - [x] Persistent map + serialized sublevel references (`_P`, `_Px`,
         `_Light`, `_Audio`, `_Combat`, `_Dynamic`, `_FX`)
@@ -117,21 +161,31 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         transforms (collection tails: observed 84-byte layout, Ash and
         Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
-  - [ ] Skybox
-  - [ ] Terrain / BSP
+    - [~] Skybox: observed `Sky_Dome` placement and Unlit material now import
+          through the bounded native-sky v1 path, with a blue host shell keeping
+          the inspection background readable; outer layers, time-of-day graph,
+          Kismet activation and visual parity remain open
+  - [~] Terrain / BSP *Caveat:* Sanctuary only; single-layer terrain and
+        planar-UV BSP approximations, both labeled `UNVERIFIED`
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting
   - [x] Inspection rig: movable sun, neutral skylight, reflection capture,
-        auto exposure, AO — for geometry/material checks only
+        auto exposure, AO. For geometry/material checks only
   - [ ] Modern: dynamic GI
   - [ ] Fidelity: parse SM3 lightmaps from `Lighting.tfc`
 - [ ] Camera and movement
   - [x] Free-flight spectator pawn, saved start pose and FOV; automated
         movement/camera test passes on Ash and Sanctuary
-  - [ ] Placeholder character controller with collision
-- [ ] Map coverage: **2 / 82** (`Ash_P`, `Sanctuary_P`)
-  - [ ] Map selector
-  - [ ] Loading times and memory profile
+  - [x] Placeholder character controller with collision (opt-in `-Walk`)
+        *Caveat:* UE5 movement defaults, verified at the Sanctuary start only
+- [ ] Map coverage: **3 / 82** (`Ash_P`, `Sanctuary_P`, `SouthpawFactory_P`)
+  - [x] Command-line base-game map selector (`tools/viewer.py`)
+  - [x] Optional DLC package discovery (82 installed map names total)
+  - [x] In-game map selector (Tab list, digit keys; imported scenes only)
+        *Caveat:* automated level switch verified, physical key press not
+  - [ ] Loading times and memory profile *Caveat:* one settled frame-time
+        and process-memory sample on Sanctuary recorded; no load-time
+        measurement
 - [ ] Verification: side-by-side screenshots against the real game per map
       (not yet started; needs matched viewpoints)
 
@@ -140,11 +194,15 @@ if no map loads by month 6, stop and reassess.
 
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
-· [Cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md).
+· [Cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md)
+· [Map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md)
+· [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md)
+· [Collision and walking](COLLISION_WALKING_VERIFICATION.md)
+· [Performance / in-game selector](docs/verification/PERFORMANCE.md).
 
 ---
 
-## Phase 2 — UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 2: UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +3–6 months.* Goal: Gearbox's own gameplay code executing.
 
@@ -167,7 +225,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 3 — Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 3: Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +6–12 months.* Goal: the 1,914 documented UE3 natives. Ground
 truth: UDK.
@@ -188,13 +246,13 @@ collision, matching UDK-derived golden tests.
 
 ---
 
-## Phase 4 — Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt=""> — the mountain
+## Phase 4: Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">: the mountain
 
 *Estimate: +12–24 months.* Goal: a Vault Hunter walks, shoots real guns, uses
 real skills, and enemies fight back. Ground truth: the original game
 instrumented with unrealsdk, plus community documentation.
 
-Method — the golden-file loop: hook a native in the real game, log every
+Method: the golden-file loop. Hook a native in the real game, log every
 call's inputs and outputs during play, implement until our engine reproduces
 the log, extend the log on mismatch.
 
@@ -216,12 +274,12 @@ Priority order:
       (41) via an SWF VM; debug HUD until then
 - [ ] Wwise audio (17 + `AkAudio`), Bink video
 
-**Gate:** a full loop on one map — spawn, fight enemies, loot a gun, equip it,
+**Gate:** a full loop on one map: spawn, fight enemies, loot a gun, equip it,
 use a skill, die, respawn.
 
 ---
 
-## Phase 5 — Campaign completable (M4) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 5: Campaign completable (M4) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: +12–24 months.*
 
@@ -237,9 +295,9 @@ use a skill, die, respawn.
 
 ---
 
-## Phase 6 — Parity and beyond (M5) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 6: Parity and beyond (M5) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-- [ ] Co-op netcode — our own
+- [ ] Co-op netcode (our own)
 - [ ] DLC coverage; The Pre-Sequel; standalone Dragon Keep
 - [ ] Mod compatibility: BLCMM text mods natively; SDK-mod layer later
 - [ ] Editor for new maps; modern lighting toggle; VR; 8-player
@@ -251,7 +309,8 @@ use a skill, die, respawn.
 Stated up front so nobody has to guess whether the project is alive:
 
 - Phase 0 not gated in 3 months → tooling loop isn't working. *(Passed.)*
-- M1 cannot load a single map by month 6 → the loop isn't holding; fall back
-  to the [mod plan](docs/DESIGN_OVERHAUL_MOD.md). *(Two maps load at week 1.)*
+- M1 cannot load a single map by month 6 → the loop isn't holding for this
+  approach; stop and reassess honestly rather than push on hope. *(Three maps
+  already load.)*
 - Nobody but the author has contributed by M2 → fine, but plan M3 only.
 - The author stops reading the code → pause and fix that.

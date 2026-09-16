@@ -31,7 +31,7 @@ decompressed packages and skips the container, asset and compressed tests. The
 LZO decoder is the vendored MIT-licensed lzokay; see
 [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-## `ow-package` — the package reader
+## `ow-package`: the package reader
 
 A standalone x64 C++20 tool that reads version 832/46 packages:
 
@@ -110,10 +110,11 @@ writes `mesh.obj`, `texture.png` and a `probe.json` manifest with SHA-256
 hashes of the package and outputs.
 
 Texture extraction decodes every available resident mip and supports only
-`PF_DXT1`/`PF_DXT5`; payload-at-end mips and other pixel formats still fail
+`PF_DXT1`/`PF_DXT5`/`PF_A8R8G8B8`/`PF_G8`; payload-at-end mips and other pixel formats still fail
 explicitly. Mesh extraction reads every render LOD, 16- or 32-bit indices and
 all UV sets; OBJ output intentionally writes one selected LOD and its first UV
-set. Source mesh data, collision hulls and skeletal meshes remain future work.
+set. Source mesh data and skeletal meshes remain future work; tagged convex/box
+collision hulls are covered in the walking slice below.
 
 ## Verification status of the reader
 
@@ -201,6 +202,15 @@ four channels independently of game data, run `python tests/prepare_ue_smoke.py`
 then pass `-Scene local/material-smoke -ImportOnly` to the launcher. `-SkipBuild`
 uses an already compiled host. All fixture data is synthetic.
 
+Imports also run `host/ue5/verify_uv.py` in a fresh editor process. It checks
+saved LOD0 UV0 bindings at every imported vertex instance against the OBJ,
+including the inverse OBJ V conversion, and verifies oriented triangle
+topology against the original game index order. Results are written to
+`ue-uv-verify.json`. This checks the export/import path, not material-graph UV
+operations or the original game's appearance. `python tests/prepare_uv_smoke.py`
+creates a separate `local/uv-smoke` square: red top-left, green top-right,
+blue bottom-left and yellow bottom-right when viewed from its saved camera.
+
 The first Ash import contains 5,059 placements / 5,235 mesh sections and passes
 saved-scene verification. A fresh UE5.8 Lit editor frame and a separate game
 window confirm the textured start-camera view; wider-map visual coverage and
@@ -229,6 +239,32 @@ python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $
 
 Use `--reuse-textures` only with the same unchanged game installation. The
 refresh preserves placement data and resolves materials by both path and class.
+
+On a machine without a discrete GPU, add `-LowEnd` to `run_ue_level.ps1`. It
+starts the editor or standalone viewer with DX11/SM5 (no Nanite, no virtual
+shadow maps), the lowest scalability groups, FXAA, 66% screen percentage and a
+960x540 window. The first launch recompiles shaders for SM5 and is slow; later
+launches reuse the cache. The switch changes rendering only; imported content
+and saved scenes are identical with or without it. A recorded sample on an
+Intel Iris Xe laptop is in [performance](verification/PERFORMANCE.md):
+12–15 FPS on the default path (GPU-bound, mostly TSR) and the 60 FPS cap with
+`-LowEnd`. To repeat it, `test_ue_viewer.ps1 -Profile` (optionally
+`-LowEnd`) runs `OpenWillow.Profile`, which logs `stat unit`-style thread
+times and a `ProfileGPU` breakdown; other machines will differ.
+
+For a controlled anti-aliasing comparison, the profile harness accepts
+`-AA FXAA`, `-AA TAA` or `-AA TSR`; the switch only injects
+`r.AntiAliasingMethod` for that profile run and does not change the project
+default. On the current Sanctuary scene and Intel Iris Xe, the latest
+300-sample run measured FXAA at 20.0/24.2 ms (mean/p95) from the start view and
+19.1/20.5 ms after turning, while the comparison TAA run measured 25.9/30.3 ms
+and 21.1/23.8 ms. FXAA is the
+sensible integrated-GPU setting for this inspection workload; the project
+default remains unchanged until visual parity and quality are settled.
+
+```powershell
+./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -LowEnd
+```
 A single unnamed sample with an explicit `_Dif` texture name can supply
 approximate diffuse color when there is no named diffuse parameter; this is
 recorded as an inference, not reconstruction of stripped graphs or material
@@ -243,6 +279,151 @@ startup threshold to allow correctness inspection on slow maps; this is not a
 performance pass. See
 [Phase 1 viewer verification](verification/PHASE1_VIEWER_VERIFICATION.md).
 
+The runtime test also logs a `Viewer diagnostic` record: 90 engine frame-time
+samples during movement (mean and p95 milliseconds), current process physical
+memory and peak process physical memory. These are short correctness-run
+diagnostics, affected by startup, window state and shader work; they are not
+a controlled renderer benchmark or GPU-memory measurement.
+
+To list remaining diffuse gaps, their effective placed section uses, and the
+recorded repair buckets:
+
+```powershell
+python tools/audit_scene_materials.py --scene local/sanctuary --output local/sanctuary/material-audit.json
+```
+
+This report separates absent diffuse, no supported channels, and unassigned
+slots. It follows actor overrides and does not change the scene or choose
+replacement textures. `gap_status_counts` distinguishes partial channels,
+cooked-resource candidates and no-supported-channel fallbacks; `issue_counts`
+groups unsupported component owners, invalid color streams, collision gaps and
+approximations. Add `--all-gaps` when masked/translucent gaps should be printed
+alongside the default opaque priority list. See the [Sanctuary material
+baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
+
+The audit also counts `surface_approximation` recipes separately. The two
+inspected glacier materials use a partial primary diffuse/normal layer with
+retained instance tiling on UV0; snow blend, glow and reflection remain open.
+See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
+
+  The generated UE5 inspection map now also receives a temporary
+  `OpenWillow_SkyAtmosphere` actor, with the imported sun registered as its
+  atmosphere light, plus a centred two-sided blue `OpenWillow_SkyFallback`
+  shell for a readable inspection background. This supplies a visible
+  non-black background while native `_Skybox` translation remains open;
+  `PF_A8R8G8B8` texture extraction is now verified (see
+  [record](verification/A8R8G8B8_TEXTURE.md)). Both actors are explicitly
+  labelled in `ue-import.json` and `ue-verify.json` as
+  `temporary_sky_fallback`; they are not visual-parity evidence.
+
+To locate a map's native sky placements and explain why each one does or does
+not get a diffuse under the current policy:
+
+```powershell
+python tools/sky_census.py --reader build/Release/ow-package.exe --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2" --map Sanctuary_P --extract
+```
+
+The census walks the persistent map and its streamed sublevels, lists every
+placed sky-named `StaticMesh` (under `Prop_Skybox` or with `sky` in the object
+name) with its owner and observed transform, the effective material per
+section, each material's parent chain, all named sampler/scalar/vector
+parameters, the cooked texture list and each `Texture2D`'s format, size and
+cache. `--extract` writes the meshes as OBJ and the textures as PNG under
+`local/sky/<map>/`. It changes no policy and interprets no stripped graph,
+Kismet streaming state or lighting. See the
+[sky census record](verification/SKY_CENSUS.md).
+
+The normal scene preparation now carries the observed native
+`Prop_Skybox.Meshes.Sky_Dome` placement into `scene.json` when its effective
+material is Unlit. Its outward-facing source shell is imported two-sided under
+`NativeSkybox/`, assigns
+the recovered Material v1 approximation, disables collision and shadow
+casting, and retains the UE5 atmosphere as a temporary fallback for unresolved
+sky layers. A second Sanctuary `Sky_Dome` placement with a floor-material
+override is deliberately left as ordinary geometry. See the
+[native skybox verification record](verification/NATIVE_SKYBOX_VERIFICATION.md).
+
+Observed blocking helpers are retained for source collision where recovered and
+hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
+94 `Common_Meshes.CollisionCube` placements, and four cloud `Blocking_Plane`
+placements. The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
+placement that blocked the start view is also hidden. This is a bounded visual
+artifact policy, not complete collision or material parity. These placements
+carry explicit `OpenWillow_HiddenVisual` tags and the standalone game mode
+reasserts the visibility policy after restart while leaving collision enabled.
+
+Unlit Material v1 colors now feed Emissive Color when no explicit emissive
+texture exists. The saved-scene verifier reports `verified_unlit_materials`.
+See the [Unlit color verification](verification/UNLIT_COLOR.md) for scope
+and the synthetic regression fixture.
+
+To investigate the remaining cooked Material resource bytes before extending
+serialization support:
+
+```powershell
+python tools/material_resource_census.py --reader build/Release/ow-package.exe --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2" --package Sanctuary_P --package Ash_P
+python tests/material_resource_test.py
+```
+
+The report in `local/material-resources/material_resources.json` contains
+validated prefix boundaries, raw texture indices, opaque-tail sizes, hashes
+and unsigned words, and surviving expression-slot counts. Words have no
+assigned shader semantics. Absent expression arrays remain distinct from
+explicitly empty or stripped arrays. Unsupported prefixes are recorded as
+errors and cause a nonzero exit status. The observed tail layout requires
+exact consumption of six words, a count, 16-byte records and a final word;
+unrecognized layouts also cause a nonzero exit status without discarding
+the raw observations. The report directory must be under
+this checkout's ignored `local/`; these reports must never be committed.
+
+### First collision and walking slice
+
+Prepared scenes now include observed RB_BodySetup convex and box hulls. The
+collision refresh/import and walking regression have been verified on Sanctuary.
+For a scene already imported with collision, launch the placeholder character:
+
+```powershell
+./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -Walk
+```
+
+Use WASD and mouse, with Space to jump. Omit `-Walk` for the free-flight viewer.
+This uses UE5 movement defaults tuned for inspection; it does not reproduce BL2
+movement physics. See [collision preparation, checks and limits](../COLLISION_WALKING_VERIFICATION.md).
+
+### Selecting an installed map
+
+`tools/viewer.py` lists persistent packages in the base-game cooked directory.
+Inside the running viewer, Tab shows an on-screen list of prepared scenes
+(`local/*/scene.json`) and imported maps (`Content/OpenWillow/<Map>/`); the
+digit keys open an imported one, and entries without a saved map are marked
+"not imported". `OWMapList` and `OWMapOpen <n>` do the same from the console.
+The list never prepares or imports; `test_ue_viewer.ps1 -Selector` runs the
+automated level-switch check.
+Package discovery does not imply successful preparation or rendering. Add
+`--include-dlc` to discovery and preparation to include the install's `DLC`
+directory. The current install has 37 base-game and 45 DLC persistent maps.
+
+```powershell
+python tools/viewer.py --game $game --list
+python tools/viewer.py --game $game --include-dlc --list
+python tools/viewer.py --game $game --map SouthpawFactory_P --action prepare
+python tools/viewer.py --game $game --map SouthpawFactory_P --action import --engine 'C:/Program Files/Epic Games/UE_5.8'
+python tools/viewer.py --game $game --map SouthpawFactory_P --action view --engine 'C:/Program Files/Epic Games/UE_5.8' --skip-build
+```
+
+Omit `--map` for an interactive numbered selection. Use `--list --json` for
+machine-readable discovery. Names are matched case-insensitively; duplicate
+package names fail explicitly. Preparation writes to this checkout's
+`local/<map-name>/`; import and view require a matching prepared manifest.
+Import performs the existing saved-scene verification, while view requires an
+already imported map. `--skip-build` requires this checkout's compiled host.
+
+DLC preparation indexes packages across the install and locates the named
+texture cache. A cache alongside the source package wins; otherwise the cache
+name must be unique. Ambiguous cache names fail explicitly. The manifest records
+`package_scope`, which material refresh reuses. Base-only preparation retains
+the existing base-game search root. DLC discovery alone is not DLC compatibility.
+
 ## Where things are
 
 | Path | What |
@@ -250,8 +431,58 @@ performance pass. See
 | `src/` | `ow-core` library (package reader, LZO container, asset importers) and the `ow-package` CLI |
 | `tests/` | Synthetic CTest suites and scene-preparation unit tests; no game data |
 | `tools/` | Census, probe/level preparation, material refresh, UE launch scripts, array schemas |
-| `host/ue5/` | Minimal UE5 C++ project, editor-Python importer/verifier, viewer automation test |
+| `host/ue5/` | Minimal UE5 C++ project, editor-Python importer/verifier, in-game map selector, viewer/walking/selector/profile automation tests |
 | `third_party/lzokay/` | Vendored MIT LZO1X decoder (provenance in `THIRD_PARTY.md`) |
 | `research/` | Community-demand corpus, analysis scripts and the original Python package reader used as a comparison oracle |
 | `docs/` | Plan, research, verification records; this file |
 | `local/` | Ignored. Every game-derived output lands here |
+
+## Sanctuary artifact trace
+
+`tools/audit_sanctuary_artifacts.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --output local/artifact-pass.json`
+records IcePlate, WorldTransition and HLS effective placements plus source
+properties and omitted terrain/BSP class counts. Use it after material refresh;
+counts do not establish which missing floors terrain/BSP will fill. See
+[the verification record](verification/SANCTUARY_ARTIFACT_PASS.md).
+
+## Terrain floors
+
+`tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+rewrites a prepared scene with one static mesh per TerrainComponent whose
+vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
+material approximation, and (with `--collision`) triangle-mesh collision. It
+also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
+`OpenWillow.TerrainWalking`, which stands on each terrain, drops into a
+flagged hole cell and walks one component seam. Full viewer logs now include
+`Terrain hole path:` records for every probe frame, with movement, floor and
+downward-trace diagnostics. A displaced or occluded endpoint does not directly
+verify the original hole location; the summary counts are endpoint assertions.
+The current fresh run reports `stand=8/8`, `route=4/4`, `hole=4/4` with one
+hole endpoint on other geometry, and `seam=1/1` with two height-skipped seams.
+See
+[the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
+
+## Sanctuary root BSP polygons
+
+`tools/prepare_bsp.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+adds the persistent-level root `Model`/`ModelComponent` polygons of a frozen
+Sanctuary scene as ordinary mesh sections: one section per component material
+element, native material assignments, a labeled 128 cm world-planar UV
+approximation, and (with `--collision`) host triangle collision. Every node,
+vertex-pool point, surface plane and component membership must cross-check
+before any file is written; volume-owned Models are rejected structurally.
+Native texture coordinates, lightmaps and collision flags are retained only as
+opaque hashes and remain `UNVERIFIED`. The script is scoped to `Sanctuary_P`
+plus `Sanctuary_Land` and also writes `bsp-runtime.json`;
+`test_ue_viewer.ps1 -Bsp` then runs `OpenWillow.BspWalking`, which stands on
+and walks 200 cm along an unobstructed upward-facing polygon of each model.
+The current fresh run reports `stood_and_walked=2/2` with no rejected
+candidates. This is a host runtime check, not original-game BSP parity.
+`python tests/bsp_test.py` covers the decoder on synthetic fixtures. See
+[the BSP record](verification/SANCTUARY_BSP_POLYGONS.md).
+
+Sections whose preparer could not choose a material (currently two terrains
+labeled `neutral_constant`) import with the lit gray
+`M_OpenWillowNeutralFallback` host material and are counted in
+`ue-import.json` / `ue-verify.json` as `neutral_fallback_sections`. Before
+this they fell through to UE's default `WorldGridMaterial` checkerboard.

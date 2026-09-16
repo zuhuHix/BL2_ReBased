@@ -38,6 +38,11 @@ descriptively.
   screenshots of loaded game content. All such outputs are written to
   git-ignored directories (`local/`, UE `Saved/`) on the contributor's
   machine only.
+
+The README banner is official Borderlands 2 promotional artwork. It is not a
+game file and is used solely to identify the game the engine is built for. It
+will be removed promptly at the request of the rights holder (see
+[Contact for rights holders](#contact-for-rights-holders)).
 - Any Gearbox, 2K, Take-Two or Epic Games source code, leaked or otherwise.
 - Any code transcribed from disassembling or decompiling `Borderlands2.exe`
   or any other shipped binary.
@@ -58,8 +63,8 @@ is no plan, ever, to make the engine work without the original game.
 2. **Never use, read, or accept leaked source code.** Not Unreal Engine 3's,
    not Gearbox's. If it is offered, the answer is no, in writing.
 3. **No decompiled executable code.** Observing the behaviour of the running
-   game — including hooking its functions with tools such as unrealsdk and
-   logging inputs and outputs — is how we build golden files. Disassembling the
+   game, including hooking its functions with tools such as unrealsdk and
+   logging inputs and outputs, is how we build golden files. Disassembling the
    executable and transcribing what it does is not permitted.
 4. **Formats may be referenced; code may not be copied without a decision.**
    Reading a public reference implementation (UE Viewer, Legendary Explorer,
@@ -76,8 +81,7 @@ is no plan, ever, to make the engine work without the original game.
    checks are reported separately from in-game checks. Behaviour that has
    not been verified against the real game is labelled `UNVERIFIED`.
 
-These are the rules that OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and
-Ship of Harkinian have operated under. We follow the precedent deliberately.
+None of this is invented for this project. OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian have all operated under the same rules for years, and that precedent is followed on purpose, not by accident.
 
 ## Contributor certification
 
@@ -93,7 +97,7 @@ By opening a pull request you certify that:
 ## Issues and reports
 
 Screenshots of the BL2_ReBased viewer or of the original game are welcome in
-issues for comparison — that is the plan's verification method. Attaching
+issues for comparison; that is the plan's verification method. Attaching
 package files, extracted textures, meshes, dumps or logs that embed raw asset
 bytes is not; such attachments will be removed.
 
@@ -104,8 +108,8 @@ The original code and documents in this repository are licensed under the
 does not cover, and the repository does not contain, any Borderlands 2 game
 data, Gearbox Software code, or Epic Games engine code. Vendored third-party
 code retains its own license (lzokay: MIT, in `third_party/lzokay/LICENSE`).
-The reasoning for MIT over GPL-3 — chiefly that GPL code cannot be distributed
-as a binary linked against Unreal Engine — is recorded in
+The reasoning for MIT over GPL-3 (chiefly that GPL code cannot be distributed
+as a binary linked against Unreal Engine) is recorded in
 [DECISIONS.md](../DECISIONS.md).
 
 **Contributions are accepted under the same MIT terms** (inbound = outbound).

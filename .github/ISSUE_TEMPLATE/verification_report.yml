@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks — checks against real installs are the project's primary correctness method.
+        Thanks. Checks against real installs are the project's primary correctness method.
         **Do not attach game files, extracted textures/meshes, dumps, or logs containing raw asset bytes.** Screenshots are fine.
   - type: dropdown
     id: kind

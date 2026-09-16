@@ -13,7 +13,8 @@ def ints(*values):
 names = ['None', 'Root', 'Child', 'Class', 'IntProperty', 'FloatProperty',
          'BoolProperty', 'NameProperty', 'ObjectProperty', 'StrProperty',
          'ByteProperty', 'StructProperty', 'ArrayProperty', 'Test', 'Enum',
-         'Choice', 'Vector', 'UnknownProperty', 'Wide😀', 'Quoted"\\\n']
+         'Choice', 'Vector', 'UnknownProperty', 'Wide😀', 'Quoted"\\\n', 'Plane', 'Matrix', 'Box',
+         'Engine', 'Terrain', 'TerrainComponent', 'TerrainLayerSetup', 'StaticMeshComponent']
 def fname(name, number=0):
     return ints(names.index(name), number)
 
@@ -24,16 +25,19 @@ def fstring(value):
     data = (value + '\0').encode('utf-16le')
     return ints(-len(data) // 2) + data
 
-def package(payload, outer=0, child_name='Child'):
+def package(payload, outer=0, child_name='Child', engine_class=None):
     nt = b''.join(fstring(name) + bytes(8) for name in names)
     io = 48 + len(nt)
     imports = fname('Root') + fname('Class') + ints(0) + fname('Root')
+    if engine_class:
+        imports = (fname('Root') + fname('Class') + ints(0) + fname('Engine') +
+                   fname('Engine') + fname('Class') + ints(-1) + fname(engine_class))
     eo = io + len(imports)
     po = eo + 68
-    export = ints(-1, 0, outer) + fname(child_name, 2) + ints(0) + bytes(8)
+    export = ints(-2 if engine_class else -1, 0, outer) + fname(child_name, 2) + ints(0) + bytes(8)
     export += ints(len(payload), po, 0, 0) + bytes(20)
     header = struct.pack('<II', 0x9e2a83c1, 832 | (46 << 16))
-    header += ints(48, 0, 0, len(names), 48, 1, eo, 1, io, 0)
+    header += ints(48, 0, 0, len(names), 48, 1, eo, 2 if engine_class else 1, io, 0)
     return header + nt + imports + export + payload
 
 fields = [
@@ -57,6 +61,24 @@ with tempfile.TemporaryDirectory() as folder:
         path.write_bytes(package(payload, **kwargs))
         return subprocess.run([reader, str(path), *options], capture_output=True, text=True, encoding='utf-8')
     options = ('--properties', '1', '--property-offset', '4')
+    fixed = {
+        'Plane': (struct.pack('<4f', 7, 2, 3, 5), {'W': 7, 'X': 2, 'Y': 3, 'Z': 5}),
+        'Box': (struct.pack('<6fB', -3, -2, -1, 4, 5, 6, 1),
+                {'Min': {'X': -3, 'Y': -2, 'Z': -1}, 'Max': {'X': 4, 'Y': 5, 'Z': 6}, 'IsValid': 1}),
+        'Matrix': (struct.pack('<16f', 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 1, 11, 22, 33),
+                   {'XPlane': {'W': 0, 'X': 0, 'Y': 1, 'Z': 0},
+                    'YPlane': {'W': 0, 'X': -1, 'Y': 0, 'Z': 0},
+                    'ZPlane': {'W': 0, 'X': 0, 'Y': 0, 'Z': 1},
+                    'WPlane': {'W': 1, 'X': 11, 'Y': 22, 'Z': 33}}),
+    }
+    for kind, (raw, expected) in fixed.items():
+        result = run(ints(0) + tag('StructProperty', raw, fname(kind)) + fname('None'), *options)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)['properties'][0]['value'] == expected
+        for end in range(len(raw)):
+            assert run(ints(0) + tag('StructProperty', raw[:end], fname(kind)) + fname('None'), *options).returncode != 0
+    invalid_box = fixed['Box'][0][:-1] + b'\x02'
+    assert run(ints(0) + tag('StructProperty', invalid_box, fname('Box')) + fname('None'), *options).returncode != 0
     payload = ints(123) + b''.join(fields) + fname('None') + b'tail'
     result = run(payload, *options)
     assert result.returncode == 0, result.stderr
@@ -110,4 +132,16 @@ with tempfile.TemporaryDirectory() as folder:
     for offset in ['0', '999999', '-1', '4x']:
         assert run(payload, '--properties', '1', '--property-offset', offset).returncode != 0
     assert run(payload, '--properties', '0', '--property-offset', '4').returncode != 0
+    schema.write_text('Test=StructProperty:Root\n')
+    for cls, prefix in [('Terrain', 26), ('TerrainComponent', 8), ('TerrainLayerSetup', 4)]:
+        terrain_payload = bytes(prefix) + tag('ArrayProperty', ints(1) + fields[0] + fname('None')) + fname('None')
+        result = run(terrain_payload, '--terrain-records', str(schema), engine_class=cls)
+        row = json.loads(result.stdout)[0]
+        assert row['data']['property_offset'] == prefix, result.stderr
+        assert row['data']['properties'][0]['value'][0][0]['value'] == -42
+        bad = run(bytes(prefix) + fields[0][:-1], '--terrain-records', str(schema), engine_class=cls)
+        assert 'error' in json.loads(bad.stdout)[0]
+    # A terrain struct-array schema must never decode ordinary mesh arrays.
+    result = run(bytes(8) + fname('None'), '--terrain-records', str(schema), engine_class='StaticMeshComponent')
+    assert 'data' not in json.loads(result.stdout)[0]
 print('Property values, unsupported fields, Unicode, references, cycles and bounds passed.')

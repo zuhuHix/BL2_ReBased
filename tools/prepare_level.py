@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 import struct
 import subprocess
+from collision_geometry import hulls as collision_hulls
+from installed_content import PACKAGE_SUFFIXES, cache_directory, content_files
 
 
 def values(tags):
@@ -64,6 +66,94 @@ CHANNELS = {'p_diffuse': 'diffuse', 'diffuse': 'diffuse',
             'p_normal': 'normal', 'normal': 'normal',
             'p_specular': 'specular', 'specular': 'specular',
             'p_emissive': 'emissive', 'emissive': 'emissive'}
+
+# Native sky import is intentionally limited to the observed dome mesh. Other
+# sky-named meshes retain ordinary Material v1 handling until their activation
+# and material chains are understood.
+NATIVE_SKYBOX_MESH = 'Prop_Skybox.Meshes.Sky_Dome'
+HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
+HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
+HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
+HIDDEN_CLOUD_MATERIAL = 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'
+HIDDEN_TRANSITION_MESH = 'Common_Meshes.BasePlane_256x128'
+HIDDEN_TRANSITION_MATERIAL = 'Common_Materials.Environment.WorldTransition'
+HIDDEN_FOREGROUND_SOURCE = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
+# This optimized Sanctuary material is an HLS master: its Color and Luminosity
+# texture parameters are combined by a stripped static permutation resource.
+# Feeding the luminosity atlas directly to Base Color produces the observed
+# neon green/magenta walkways.  The ordinary same-package instance has a
+# recoverable diffuse atlas with the compatible material family and is a
+# bounded visual fallback until that HLS graph is decoded.
+REGULAR_DIFFUSE_FALLBACKS = {
+    'Sanctuary_P:Prop_SancBuildings.Optimization.Mati_SancBuild4a':
+        'Sanctuary_P:Prop_SancBuildings.Material.Mati_SancBuild4a',
+}
+# Inspected opaque materials whose stripped graphs defeat the generic _Dif
+# heuristic: their cooked lists carry several _Dif overlays, so the sole-_Dif
+# rule either picks a blend layer or gives up. Each entry names the texture
+# that carries the surface's own color, and a native normal only when one
+# survives in the cooked list. Membership never recovers the layered graph.
+INSPECTED_COLOR_FALLBACKS = {
+    'Sanctuary_Land:Prop_Glacier.Materials.Mat_FrozenLake': {
+        'method': 'frozen_lake_color_fallback_v1', 'label': 'Frozen-lake', 'noun': 'ice',
+        'color': 'Sanctuary_Land:Prop_Glacier.Textures.FrozenLake',
+        'normal': 'Sanctuary_Land:Prop_Skybox.MoveMe.Ice_Nrm',
+        'omitted': ['vertex-painted snow/noise blend', 'reflection',
+                    'native normal graph', 'glow', 'UV modulation'],
+        'issue': 'Approximation: inspected FrozenLake texture used as ice color; layered graph and UV modulation not reconstructed'},
+    'Sanctuary_Land:Env_Sanctuary.Materials.Mat_IceRoadSanctuary': {
+        'method': 'ice_road_color_fallback_v1', 'label': 'Ice-road', 'noun': 'road',
+        'color': 'Sanctuary_Land:Env_Ice.Textures.BrokenRoad_Dif',
+        'normal': None,
+        'omitted': ['BrokenRoad_Alpha snow/rock layer blend', 'noise and splatter overlays',
+                    'stripped p_Normal texture', 'UV modulation'],
+        'issue': 'Approximation: inspected BrokenRoad_Dif texture used as road color; snow/rock layer blend and stripped normal not reconstructed'},
+}
+
+
+def native_skybox_mesh(identity):
+    """Return whether an object identity is the observed native sky dome."""
+    return identity.rsplit(':', 1)[-1] == NATIVE_SKYBOX_MESH
+
+
+def native_skybox_placement(identity, effective_materials, materials):
+    """Accept only the dome with entirely Unlit effective materials."""
+    return (native_skybox_mesh(identity) and bool(effective_materials)
+            and all(materials.get(name, {}).get('lighting_model') == 'MLM_Unlit'
+                    for name in effective_materials))
+
+
+def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None):
+    """Return whether an observed helper has no recoverable host-side visual."""
+    mesh = identity.rsplit(':', 1)[-1]
+    if source == HIDDEN_FOREGROUND_SOURCE:
+        # This exact observed BoxLrg placement is a developer blocking volume
+        # directly in the Sanctuary start view, despite carrying a prop mesh.
+        return True
+    if mesh == HIDDEN_COLLISION_MESH:
+        # CollisionCube is source collision geometry, not a renderable prop.
+        return True
+    if mesh == HIDDEN_VISUAL_MESH:
+        # Blocking_Cube is an observed placement helper even when an
+        # unreliable diffuse override was attached to it.
+        return True
+    if mesh == HIDDEN_CLOUD_MESH and effective_materials and materials:
+        # The cloud material is translucent in UE3 but its opacity graph is not
+        # recovered; drawing its diffuse alone produces the observed yellow /
+        # black blocking planes. Hide only the exact observed cloud instance.
+        return all(materials.get(name, {}).get('source') == HIDDEN_CLOUD_MATERIAL
+                   for name in effective_materials)
+    if mesh == HIDDEN_TRANSITION_MESH and effective_materials and materials:
+        # WorldTransition is a translucent loading/boundary plane. Its graph
+        # is not recovered; feeding the undecoded material into a host mesh
+        # renders an opaque helper plane. The separate lower IcePlate surfaces
+        # are legitimate geometry, not these transition helpers. Hide only
+        # this exact helper mesh/material pair and keep its source collision
+        # state independent.
+        return all((materials.get(name, {}).get('source') or '').rsplit(':', 1)[-1]
+                   == HIDDEN_TRANSITION_MATERIAL
+                   for name in effective_materials)
+    return False
 ALIASES = {
     'p_dif': 'diffuse', 'dif': 'diffuse', 'ad_diff': 'diffuse',
     'tex_diff': 'diffuse', 'diff_texture': 'diffuse',
@@ -107,6 +197,62 @@ def unnamed_diffuse_candidate(parameters, identity):
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
+DIFFUSE_SUFFIX = re.compile(r'_diff?(?:_\d+)?$', re.IGNORECASE)
+# Cooked-resource texture names that are not plausible diffuse sources: normal
+# maps, packed composite/specular/emissive channels, masks, gray noise tiles.
+AUXILIARY_TEXTURE = re.compile(
+    r'(_n|_nm|_nrm|normal|_gray|_grey|_hs|_spec|_emis|_emissive|_alpha|_mask|_comp|_lm|noise|_cube)(?:_\d+)?$',
+    re.IGNORECASE)
+
+
+def cooked_diffuse_candidate(textures, identity, texture_class, blend_mode='BLEND_Opaque'):
+    """Pick a diffuse texture from a cooked material's texture list.
+
+    A unique *_Dif/_Diff Texture2D wins. Otherwise, for opaque and masked
+    materials only, a unique Texture2D whose name does not mark it as an
+    auxiliary channel is used; a translucent material's diffuse alpha would
+    become its opacity, and a guessed opacity is worse than the invisible
+    fallback. Both are recorded as approximations; the graph, UV mapping and
+    tint remain unreconstructed.
+    """
+    planar = [t for t in textures if texture_class(t) == 'Texture2D']
+    named = {t for t in planar if DIFFUSE_SUFFIX.search(identity(t))}
+    if len(named) == 1:
+        return next(iter(named)), 'sole_cooked_resource_dif_texture'
+    if named or blend_mode not in ('BLEND_Opaque', 'BLEND_Masked'):
+        return None, None
+    plain = {t for t in planar if not AUXILIARY_TEXTURE.search(identity(t))}
+    if len(plain) == 1:
+        return next(iter(plain)), 'sole_cooked_resource_texture'
+    return None, None
+
+
+def unconnected_diffuse_constant(material_props):
+    """Return the constant colour of a Material whose DiffuseColor input was
+    never connected, or None when that cannot be established.
+
+    Cooked 832/46 materials strip their expression graphs, so the input's
+    Expression reference is always null. The observed distinction is the Mask
+    flags: an input that had an expression keeps Mask/MaskR/G/B, an input that
+    never had one carries neither. UE3 then evaluates the input as its
+    Constant, which defaults to black. Observed on Master_Black; not a general
+    format guarantee.
+    """
+    entries = material_props.get('DiffuseColor')
+    if not isinstance(entries, list):
+        return None
+    fields = {e.get('name'): e.get('value') for e in entries if isinstance(e, dict)}
+    expression = fields.get('Expression')
+    if isinstance(expression, dict) and expression.get('index'):
+        return None
+    if any(fields.get(mask) for mask in ('Mask', 'MaskR', 'MaskG', 'MaskB', 'MaskA')):
+        return None
+    constant = fields.get('Constant')
+    if isinstance(constant, dict):
+        return [float(constant.get(c, 0)) for c in ('R', 'G', 'B')]
+    return [0.0, 0.0, 0.0]
+
+
 def material_index(records, path):
     matches = [index for index, record in records.items() if record['path'] == path
                and record['class'].rsplit('.', 1)[-1] in
@@ -139,16 +285,21 @@ def cooked_texture_references(payload, data):
 
 
 class Scene:
-    def __init__(self, reader, game, output):
+    def __init__(self, reader, game, output, include_dlc=False):
         self.reader, self.game, self.output = reader.resolve(), game.resolve(), output.resolve()
         self.cooked = self.game / 'WillowGame/CookedPCConsole'
+        self.include_dlc = include_dlc
+        self.package_root = self.game if include_dlc else self.cooked
         self.schema = Path(__file__).with_name('level-arrays.schema')
         self.packages = {}
-        for path in sorted(self.cooked.rglob('*')):
-            if path.suffix.lower() in ('.upk', '.umap', '.u'):
+        self.texture_caches = {}
+        for path in content_files(self.game, include_dlc):
+            if path.suffix.lower() in PACKAGE_SUFFIXES:
                 self.packages.setdefault(path.stem.casefold(), []).append(path)
+            elif path.suffix.lower() == '.tfc':
+                self.texture_caches.setdefault(path.name.casefold(), []).append(path)
         self.records, self.materials, self.meshes, self.textures = {}, {}, {}, {}
-        self.resolved = {}
+        self.resolved, self.imports = {}, {}
         self.issues = []
         self.output.mkdir(parents=True, exist_ok=True)
 
@@ -179,13 +330,26 @@ class Scene:
         if (package, index) in self.resolved:
             return self.resolved[package, index]
         path = ref.get('path') if isinstance(ref, dict) else None
+        if package not in self.imports:
+            self.imports[package] = {r['index']: r for r in self.call(package, '--imports')}
+        metadata = self.imports[package].get(index, {})
+        path = path or metadata.get('path')
+        expected_class = metadata.get('class_name')
         if path:
             for loaded, records in self.records.items():
-                match = next((r for r in records.values() if r['path'].casefold() == path.casefold()), None)
+                match = next((r for r in records.values() if r['path'].casefold() == path.casefold()
+                              and (not expected_class or r['class'].rsplit('.', 1)[-1] == expected_class)), None)
                 if match:
                     self.resolved[package, index] = loaded, match['index']
                     return loaded, match['index']
-        r = self.call(package, '--resolve', index, '--cooked', self.cooked)
+        # Shared base resources retain the established lookup order in DLC
+        # mode. Only an absent target expands the search to the full install.
+        try:
+            r = self.call(package, '--resolve', index, '--cooked', self.cooked)
+        except ValueError as error:
+            if not self.include_dlc or 'not found:' not in str(error):
+                raise
+            r = self.call(package, '--resolve', index, '--cooked', self.package_root)
         self.resolved[package, index] = r['resolved_package'], r['resolved_index']
         return self.resolved[package, index]
 
@@ -247,6 +411,64 @@ class Scene:
                 for item in opacity if isinstance(item, dict))
         return metadata
 
+    def glacier_primary_surface(self, key, base, textures):
+        """Explicit primary-layer approximation, never a recovered snow shader.
+
+        Restricted to the two inspected Sanctuary family members and the exact
+        resource texture set. UV0 is an approximation: native static permutation
+        data and the stripped blend graph are not interpreted by this policy.
+        """
+        base_path = 'Prop_Glacier.Materials.Mat_Glacier'
+        if self.identity(base).split(':', 1)[1] != base_path:
+            return None
+        if self.identity(key).split(':', 1)[1] not in (
+                base_path, 'Prop_Glacier.Materials.Mati_Glacier2x'):
+            return None
+        expected = {'Prop_Glacier.Textures.GlacierFront_Dif',
+                    'Prop_Glacier.Textures.GlacierFront_Nrm',
+                    'Prop_Terrain.Textures.Snow_Dif',
+                    'Prop_Skybox.MoveMe.R2Tex_SnowTempCubeStaticNegY'}
+        by_path = {self.identity(t).split(':', 1)[1]: t for t in textures}
+        if len(textures) != 4 or set(by_path) != expected:
+            return None
+        if any(self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] != 'Texture2D'
+               for t in textures):
+            return None
+        name = 'p_texscalar_rgmain_basnow'
+        scale = None
+        for ref in props(self.load(base[0])[base[1]]).get('Expressions', []):
+            expression = self.resolve(base[0], ref)
+            if expression is None:
+                continue
+            row = self.load(expression[0])[expression[1]]
+            p = props(row)
+            if p.get('ParameterName', '').casefold() == name:
+                if row['class'].rsplit('.', 1)[-1] != 'MaterialExpressionVectorParameter' or scale is not None:
+                    raise ValueError('Ambiguous glacier primary-layer scale')
+                scale = p.get('DefaultValue')
+        chain, current = [], key
+        while current != base:
+            if current in chain or len(chain) >= 32:
+                raise ValueError('Glacier parent cycle/depth limit')
+            chain.append(current)
+            current = self.resolve(current[0], props(self.load(current[0])[current[1]]).get('Parent', 0))
+            if current is None:
+                raise ValueError('Glacier parent does not reach inspected base')
+        for instance in reversed(chain):
+            overrides = [values(e).get('ParameterValue') for e in
+                         props(self.load(instance[0])[instance[1]]).get('VectorParameterValues', [])
+                         if values(e).get('ParameterName', '').casefold() == name]
+            if len(overrides) > 1:
+                raise ValueError('Duplicate glacier scale override')
+            if overrides:
+                scale = overrides[0]
+        if not isinstance(scale, dict) or not all(
+                isinstance(scale.get(c), (int, float)) and math.isfinite(scale[c]) for c in 'RGBA'):
+            raise ValueError('Missing or invalid glacier primary-layer scale')
+        return {'diffuse': by_path['Prop_Glacier.Textures.GlacierFront_Dif'],
+                'normal': by_path['Prop_Glacier.Textures.GlacierFront_Nrm'],
+                'scale': [float(scale[c]) for c in 'RGBA']}
+
     def cooked_material_textures(self, key, stack=()):
         if key in stack or len(stack) >= 32:
             raise ValueError('Material parent cycle/depth limit')
@@ -273,8 +495,14 @@ class Scene:
         cache_key = (*key, channel)
         if cache_key not in self.textures:
             filename = self.filename(key, '_' + channel + '.png')
+            tfc_root = self.cooked
+            if self.include_dlc:
+                cache = props(self.load(key[0])[key[1]]).get('TextureFileCacheName', 'None')
+                cache_file = cache if cache.lower().endswith('.tfc') else cache + '.tfc'
+                tfc_root = cache_directory(self.texture_caches.get(cache_file.casefold(), []),
+                                           self.package(key[0]), self.cooked)
             self.call(key[0], '--texture', key[1], '--property-offset', 4,
-                      '--output', self.output / filename, '--tfc', self.cooked)
+                      '--output', self.output / filename, '--tfc', tfc_root)
             self.textures[cache_key] = filename
         return self.textures[cache_key]
 
@@ -288,12 +516,50 @@ class Scene:
             try:
                 material.update(self.material_metadata(key))
                 parameters = self.material_parameters(key)
-                inferred = unnamed_diffuse_candidate(parameters, self.identity)
+                regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
+                if regular_fallback is not None:
+                    parent = self.resolve(key[0], props(self.load(key[0])[key[1]]).get('Parent', 0))
+                    if parent is None or self.identity(parent) != 'Sanctuary_P:Prop_SancBuildings.Optimization.Sanc_HLS_Master':
+                        raise ValueError('Regular diffuse fallback requires the inspected HLS parent')
+                    package, path = regular_fallback.split(':', 1)
+                    if package != key[0]:
+                        raise ValueError('Regular diffuse fallback package mismatch')
+                    regular_index = material_index(self.load(package), path)
+                    regular_name = self.material((package, regular_index))
+                    regular = self.materials[regular_name]
+                    diffuse = regular.get('channels', {}).get('diffuse')
+                    if not diffuse:
+                        raise ValueError('Regular diffuse fallback has no diffuse channel')
+                    candidates = [i for i, row in self.load(key[0]).items()
+                                  if row['path'] == 'Prop_SancBuildings.Textures.SancBuild4a_Dif'
+                                  and row['class'].rsplit('.', 1)[-1] == 'Texture2D']
+                    if len(candidates) != 1:
+                        raise ValueError('Regular diffuse fallback requires a unique concrete atlas')
+                    expected = (key[0], candidates[0])
+                    if diffuse != self.filename(expected, '_diffuse.png'):
+                        raise ValueError('Regular diffuse fallback requires the inspected concrete atlas')
+                    material['channels']['diffuse'] = diffuse
+                    material['diffuse_inference'] = regular['source']
+                    material['diffuse_inference_method'] = 'same_package_regular_diffuse_fallback_v1'
+                    material['surface_approximation'] = {
+                        'method': 'same_package_regular_diffuse_fallback_v1',
+                        'status': 'partial_unverified',
+                        'source_material': regular['source'],
+                        'source_texture': self.identity(expected),
+                        'uv_selection': 'UV0 unchanged; regular atlas approximation',
+                        'omitted': ['HLS Color/Luminosity combine',
+                                    'static permutation', 'modulation']}
+                    self.issue(material['source'],
+                               'Approximation: HLS Color/Luminosity graph replaced by same-package regular diffuse; static permutation and modulation not reconstructed')
+                    # Only replace diffuse; retain any supported explicit channels.
+                    parameters = {p: t for p, t in parameters.items()
+                                  if channel_for_parameter(p) != 'diffuse'}
+                inferred = None if regular_fallback else unnamed_diffuse_candidate(parameters, self.identity)
                 if inferred is not None:
                     parameters['p_diffuse'] = inferred
                     material['diffuse_inference'] = self.identity(inferred)
                     self.issue(material['source'], 'Approximation: sole unnamed _Dif texture used as diffuse; cooked graph and tint not reconstructed')
-                if not any(channel_for_parameter(p) == 'diffuse' for p in parameters):
+                if not regular_fallback and not any(channel_for_parameter(p) == 'diffuse' for p in parameters):
                     try:
                         cooked = self.cooked_material_textures(key)
                         if cooked is not None:
@@ -302,15 +568,66 @@ class Scene:
                                 'source': self.identity(base),
                                 'textures': [self.identity(t) for t in textures],
                                 'opaque_tail_bytes': opaque}
-                            candidates = {t for t in textures
-                                          if self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D'
-                                          and re.search(r'_dif(?:_\d+)?$', self.identity(t), re.IGNORECASE)}
-                            if len(candidates) == 1:
-                                inferred = next(iter(candidates))
+                            inferred, method = cooked_diffuse_candidate(
+                                textures, self.identity,
+                                lambda t: self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1],
+                                material.get('blend_mode', 'BLEND_Opaque'))
+                            fallback = (INSPECTED_COLOR_FALLBACKS.get(self.identity(base))
+                                        if key == base and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
+                                        else None)
+                            if fallback is not None:
+                                def inspected(identity, kind):
+                                    found = [t for t in textures if self.identity(t) == identity
+                                             and self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D']
+                                    if len(found) != 1:
+                                        raise ValueError(f"{fallback['label']} fallback requires the inspected {fallback['noun']} {kind}")
+                                    return found[0]
+                                inferred, method = inspected(fallback['color'], 'texture'), fallback['method']
+                                normal = inspected(fallback['normal'], 'normal') if fallback['normal'] else None
+                                if normal is not None and not any(channel_for_parameter(p) == 'normal' for p in parameters):
+                                    parameters['p_normal'] = normal
+                                material['surface_approximation'] = {
+                                    'method': method, 'status': 'partial_unverified',
+                                    'source_texture': self.identity(inferred),
+                                    'uv_selection': 'UV0 unchanged; native UV modulation unverified',
+                                    'omitted': fallback['omitted']}
+                                if normal is not None:
+                                    material['surface_approximation']['normal_texture'] = self.identity(normal)
+                            glacier = (self.glacier_primary_surface(key, base, textures)
+                                       if inferred is None and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
+                                       else None)
+                            if glacier is not None:
+                                parameters['p_diffuse'] = glacier['diffuse']
+                                glacier_channels = ['diffuse']
+                                # Preserve any explicit normal parameter, including a null override.
+                                if not any(channel_for_parameter(p) == 'normal' for p in parameters):
+                                    parameters['p_normal'] = glacier['normal']
+                                    glacier_channels.append('normal')
+                                material['surface_approximation'] = {
+                                    'method': 'glacier_primary_layer_v1',
+                                    'status': 'partial_unverified',
+                                    'source_scale_parameter': 'P_TexScalar_RGMain_BASnow',
+                                    'source_scale': glacier['scale'],
+                                    'omitted': ['snow_blend', 'reflection', 'glow'],
+                                    'uv_selection': 'UV0 approximation; static permutation not decoded'}
+                                material['channel_uv'] = {
+                                    channel: {'index': 0, 'scale': glacier['scale'][:2]}
+                                    for channel in glacier_channels}
+                                self.issue(material['source'], 'Approximation: glacier primary diffuse/normal layer with retained tiling on UV0; snow blend, reflection, glow and static UV selection unverified')
+                            if inferred is not None:
                                 parameters['p_diffuse'] = inferred
                                 material['diffuse_inference'] = self.identity(inferred)
-                                material['diffuse_inference_method'] = 'sole_cooked_resource_dif_texture'
-                                self.issue(material['source'], 'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed')
+                                material['diffuse_inference_method'] = method
+                                self.issue(material['source'], fallback['issue']
+                                           if fallback is not None and method == fallback['method'] else
+                                           'Approximation: sole cooked resource _Dif texture used as diffuse; graph, UV mapping and tint not reconstructed'
+                                           if method == 'sole_cooked_resource_dif_texture' else
+                                           'Approximation: sole non-auxiliary cooked resource texture used as diffuse; graph, UV mapping and tint not reconstructed')
+                            elif not textures and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque':
+                                constant = unconnected_diffuse_constant(props(self.load(base[0])[base[1]]))
+                                if constant is not None:
+                                    material['constant_diffuse'] = constant
+                                    self.issue(material['source'], 'Approximation: unconnected DiffuseColor input rendered as its constant; no cooked textures')
                     except ValueError as error:
                         self.issue(material['source'], error)
                 for parameter, texture in parameters.items():
@@ -336,7 +653,7 @@ class Scene:
                         self.issue(material['source'] + ':' + channel, error)
                 material.pop('_channel_priority', None)
                 material.pop('_channel_stub', None)
-                if not any(material['channels'].values()):
+                if not any(material['channels'].values()) and 'constant_diffuse' not in material:
                     self.issue(material['source'], 'No supported named Material v1 texture parameters; neutral fallback')
             except ValueError as error:
                 self.issue(material['source'], error)
@@ -368,11 +685,23 @@ class Scene:
                 (self.output / file).write_text(''.join(header + group))
                 sections.append({'slot': i, 'file': file,
                                  'material': self.material(self.resolve(key[0], section['material_index']))})
-            self.meshes[name] = {'source': self.identity(key), 'sections': sections}
+            collision = {'status': 'absent', 'hulls': []}
+            body = self.resolve(key[0], data.get('body_setup', 0))
+            if body:
+                try:
+                    record = self.load(body[0])[body[1]]
+                    if record['class'] != 'Engine.RB_BodySetup' or 'error' in record:
+                        raise ValueError('Invalid collision body record')
+                    collision = {'status': 'supported', 'source': self.identity(body),
+                                 'hulls': collision_hulls(record['data']['properties'])}
+                except (ValueError, KeyError) as error:
+                    collision = {'status': 'unsupported', 'hulls': [], 'reason': str(error)}
+                    self.issue(self.identity(key) + ':collision', error)
+            self.meshes[name] = {'source': self.identity(key), 'sections': sections, 'collision': collision}
         return name
 
-    def build(self, persistent):
-        self.load('Startup')
+    def levels(self, persistent):
+        """Persistent level plus every streamed sublevel it names, in load order."""
         levels, pending, seen = [], [persistent], set()
         while pending:
             name = pending.pop(0)
@@ -388,6 +717,11 @@ class Scene:
                     if sublevel and sublevel != 'None':
                         self.package(sublevel)  # missing dependencies are fatal
                         pending.append(sublevel)
+        return levels
+
+    def build(self, persistent):
+        self.load('Startup')
+        levels = self.levels(persistent)
         actors, camera = [], None
         for level in levels:
             print(f'Preparing {level}', flush=True)
@@ -422,15 +756,38 @@ class Scene:
                             continue
                         pose = {'actor': transform(props(owner)), 'component': transform(p, True)}
                     overrides = [self.material(self.resolve(level, ref)) for ref in p.get('Materials', [])]
-                    actors.append({'source': record['path'], 'level': level, 'mesh': self.mesh(key),
-                                   'transform': pose, 'materials': overrides, 'static': True})
+                    mesh_identity = self.identity(key)
+                    mesh_name = self.mesh(key)
+                    effective_materials = [overrides[i] if i < len(overrides) and overrides[i]
+                                           else section['material']
+                                           for i, section in enumerate(self.meshes[mesh_name]['sections'])]
+                    is_native_skybox = native_skybox_placement(
+                        mesh_identity, effective_materials, self.materials)
+                    if is_native_skybox:
+                        # The observed dome's faces point outward while the
+                        # player camera is inside it. Preserve the source mesh
+                        # and use the narrow host-side two-sided policy needed
+                        # for an interior visual shell.
+                        for material_name in effective_materials:
+                            if material_name in self.materials:
+                                self.materials[material_name]['two_sided'] = True
+                    actors.append({'source': record['path'], 'level': level, 'mesh': mesh_name,
+                                   'transform': pose, 'materials': overrides, 'static': True,
+                                   'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
+                                   'native_skybox': is_native_skybox,
+                                   'native_skybox_source': mesh_identity if is_native_skybox else None,
+                                   'hidden_visual': hidden_visual_mesh(
+                                       mesh_identity, effective_materials, self.materials,
+                                       record['path'])})
                 except ValueError as error:
                     self.issue(level + ':' + record['path'], error)
         if not actors:
             raise ValueError('No static mesh placements loaded')
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
+                  'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
-                  'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending'}
+                  'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
+                  'collision_policy': 'observed_convex_and_box_v1'}
         temporary = self.output / 'scene.json.tmp'
         temporary.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
         temporary.replace(self.output / 'scene.json')
@@ -445,6 +802,7 @@ def main():
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('--map', default='Ash_P')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--include-dlc', action='store_true', help='Index installed DLC packages and named texture caches')
     args = parser.parse_args()
     if not (args.game / 'Binaries/Win32/Borderlands2.exe').is_file():
         parser.error('An installed Borderlands 2 is required')
@@ -454,7 +812,7 @@ def main():
         parser.error('Map names must contain only ASCII letters, digits and underscores')
     if args.output is None:
         args.output = Path('local') / args.map[:-2].lower()
-    Scene(args.reader, args.game, args.output).build(args.map)
+    Scene(args.reader, args.game, args.output, include_dlc=args.include_dlc).build(args.map)
 
 
 if __name__ == '__main__':

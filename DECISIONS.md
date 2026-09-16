@@ -1,5 +1,127 @@
 # Decisions and evidence
 
+## 2026-09-14: Sky census locates the native dome without a new policy
+
+The user asked for the native skybox to be located using only already-decoded
+data before any material-parameter parsing. AI-assisted `tools/sky_census.py`
+reuses `Scene` from `prepare_level.py` (level traversal factored into
+`Scene.levels`), the existing `--scene-records`, `--properties` (Texture2D at
+the established offset 4), `--payload`, `--mesh` and `--texture` modes, and the
+existing cooked-resource reader. No serialization offset, bounds check or
+material policy changed; the census only restates what the Material v1 diffuse
+rule would select and why.
+
+Findings on the installed game, manifest evidence only:
+
+- Neither `Sanctuary_P` nor `Ash_P` streams a `_Skybox` package. The dome is
+  `Prop_Skybox.Meshes.Sky_Dome` (265 vertices, 480 triangles, two UV sets)
+  placed by a `StaticMeshCollectionActor` (Sanctuary: `_Light` sublevel,
+  scale 5000x5000x6000; Ash: persistent level, scale 1000). Its material instance (`Mati_Sky_Dynamic_INST`
+  in Sanctuary, `Mati_AshSkyTempSunset` in Ash) inherits from the unlit
+  `Common_Materials.Sky.Mat_SkyTimeOfDay_Master`, whose named samplers are
+  `Transition_Track` (`Sky_TransitionBL2Default_Dif`, PF_A8R8G8B8 256x256),
+  `clouds` (`Clouds_01`) and `Masks` (`Sky_Multi`/`Sky_Multi2`), with scalars
+  such as `Time_of_Day` and `sky_brightness`. The existing policy already
+  selects the transition texture as diffuse; the decoder gap closed today was
+  the blocker, not the placement.
+- Sanctuary's second sky layer, `Prop_Skybox.Meshes.SanctuarySky` in
+  `Sanctuary_Outer`, is an `InterpActor` whose three overrides are the
+  `*_Teleported` story-state materials with several `_Dif` textures each; the
+  policy correctly refuses to pick one. Its mesh defaults resolve to
+  `SanctuarySkybox_Diff` (DXT1 2048x2048) uniquely. Which layer is active is a
+  Kismet streaming question this project does not interpret.
+
+Not done and not claimed: how the master combines its inputs, the meaning of
+`Time_of_Day`, the second `Sky_Dome` placement with a concrete material and
+negative Z scale, any host import, and any in-game comparison. See
+[verification](docs/verification/SKY_CENSUS.md).
+
+## 2026-09-14: Bounded PF_A8R8G8B8 texture decoding
+
+The user explicitly requested this format addition. AI-assisted implementation
+adds little-endian BGRA-to-RGBA conversion after the existing bulk decoding,
+without changing Texture2D serialization offsets or bulk flags. Alpha and row
+order are preserved; no premultiplication or color-space conversion is applied.
+The shared dimension guard retains the DXT limits (16384 per axis, 256 MiB per
+mip); exact width * height * 4 bytes are required before channel conversion.
+Existing decoded bulk-size and aggregate mip limits remain in force.
+
+Format reference: Microsoft's public
+[D3DFORMAT documentation](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dformat)
+defines A8R8G8B8 channel significance and memory byte order. No reference
+implementation code, dependency or game-derived data was added.
+
+All five CTest suites and nine installed code-package comparisons pass.
+Ash_P export 21482, Prop_Skybox.Textures.Sky_TransitionBL2Default_Dif,
+extracts as 256x256 with one resident mip. Synthetic tests verify exact pixels,
+alpha, inline/TFC and LZO paths, small mips and corrupt-input rejection.
+Native sky shading and in-game visual parity remain UNVERIFIED.
+See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
+
+
+## 2026-09-14: Glacier primary-layer approximation
+
+The inspected `Mat_Glacier` and `Mati_Glacier2x` now have an explicit, narrowly
+scoped Material v1 recipe. It requires the exact four-texture resource set,
+Texture2D classes, and a finite retained `P_TexScalar_RGMain_BASnow` vector.
+It binds GlacierFront_Dif and GlacierFront_Nrm and applies the vector's RG
+tiling to UV0. The base uses (1,1); the inspected instance overrides (3,3).
+Explicit diffuse parameters, including null, prevent this fallback. Existing
+normal parameters are preserved. Unknown family members and changed/ambiguous
+texture sets are not covered.
+
+This is **not reconstruction of the original layered shader**. UV0 and the
+primary-layer interpretation are recorded assumptions; native static
+permutation data is not decoded. Snow blending, reflection and glow are
+omitted. PNG alpha is fully opaque in both diffuse sources, so it does not
+provide a snow blend mask. Both affected source meshes have two UV sets;
+the current OBJ path still carries only UV0. No native binary-layout parser,
+offset, or bounds check changed.
+
+The manifest records `surface_approximation` and per-channel `channel_uv`;
+the audit reports partial surfaces separately from missing diffuse. Thirty-three
+placed sections receive this partial recipe. Remaining opaque diffuse gaps:
+14 definitions / 43 sections; fully untextured opaque gaps: 11 / 21. These
+counts do not mean the original glacier appearance is complete.
+
+Host import creates TextureCoordinate nodes, and saved-scene verification
+checks their channel and tiling. See the
+[glacier verification record](docs/verification/GLACIER_PRIMARY_LAYER.md).
+
+## 2026-09-14: First source collision and placeholder walking slice
+
+User explicitly approved collision-parser changes after the sensitive-area rule
+was disclosed. The mesh reader now exposes the body reference it already reads;
+the scene reader includes Engine.RB_BodySetup tagged properties. Reader limits,
+container checks and property-size checks are unchanged.
+
+Installed Ash_P body exports 11404 and 11405 provided initial box and convex
+observations. Tagged Box is two XYZ float vectors and one validity byte (25
+bytes); tagged Plane stores W,X,Y,Z, and Matrix has four such rows (64 bytes).
+Identity boxes and asymmetric rotated/translated synthetic fixtures distinguish
+this from XYZW. The observation is limited to BL2 832/46, not general UE3 parity.
+
+Convex VertexData is retained in local centimeters; source FaceTriData and
+ElemBox are checked when present. Box TM and dimensions produce eight corners.
+Malformed, nonfinite, degenerate and unsupported geometry is rejected. Sphere,
+capsule, cooked PhysX blobs, per-poly flags and general class inheritance remain
+unsupported. Empty/absent body geometry receives no invented collision.
+
+UE5 cooks these hulls using its installed FKConvexElem/UBodySetup API. Reference:
+https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Engine/FKConvexElem
+and the locally installed UE5.8 headers. No third-party implementation was copied,
+no new dependency was added, and no game data is tracked. Full hulls attach only
+to the first visual section to prevent duplicate collision for material sections.
+Components with explicitly false BlockActors or CollideActors are disabled;
+absent flags currently default to enabled, an inspection approximation without
+CDO inheritance or original-game collision-channel parity.
+
+The opt-in -owwalk controller uses UE5 CharacterMovement with a 34 cm radius,
+88 cm capsule half-height, 450 cm/s walk speed, 420 cm/s jump velocity, 35 cm
+steps and a 45 degree floor angle. These are placeholder values. Default free
+flight remains available. See COLLISION_WALKING_VERIFICATION.md for test evidence
+and the deliberately bounded Sanctuary acceptance claim.
+
 ## 2026-09-10: Phase 1 importer foundation
 
 The Phase 0 command-line spikes are now split behind reusable C++ APIs. The
@@ -344,3 +466,293 @@ code packages; `research/native_count.py` reproduces 20,119 / 7,141 / 12,978
 / 2,453. The oracle is now less independent of lzokay than the miniLZO port
 was, but the miniLZO-versus-lzokay byte-for-byte agreement was already
 recorded on 2026-09-10 and stands as the cross-lineage check.
+
+## 2026-09-14: Base-game selector and near-vertical host rotations
+
+Added a command-line selector over the preparer's base-game package scope.
+Installed package names are discoverable without pretending every map loads;
+ambiguous names and mismatched saved manifests are rejected. DLC support and
+an in-game selection menu remain separate work.
+
+Southpaw Factory exposed a host-only rotation loss: assigning a transform
+through UE5's actor API snapped a near-vertical collection pitch to 90 degrees.
+The matrix-derived Euler rotation is now assigned to the unattached root
+component after the actor transform. A synthetic near-vertical placement with
+negative scale passes fresh-process saved-scene verification with the existing
+axis tolerances. No serialization layout or bounds checks changed.
+
+Verification and current limitations are recorded in
+[map selector verification](docs/verification/MAP_SELECTOR_VERIFICATION.md).
+
+## 2026-09-14: Preserve game winding through the OBJ host adapter
+
+The mirrored Scooter sign was traced to an extra triangle reversal in
+`host/ue5/scene_geometry.py`. The extracted sign's 656 face cross products all
+oppose its stored outward vertex normals; the former synthetic fixture used
+the opposite convention. Reflecting Y positions/normals while retaining game
+index order yields the correct OBJ handedness and UE face visibility. The
+isolated sign now renders readable with unchanged texture coordinates.
+
+Synthetic fixtures now use the game's winding convention. Saved UV validation
+also compares oriented triangle topology; the pre-fix Southpaw scene fails this
+new check, while the corrected isolated sign passes. See
+[UV/winding verification](docs/verification/UV_WINDING_VERIFICATION.md).
+
+## 2026-09-14: Optional DLC content scope and shared-resource lookup
+
+`--include-dlc` opts preparation and map discovery into installed DLC packages;
+base-only behavior remains available. The local install exposes 82 persistent
+map names. Named texture caches use a source-package-local file when duplicated,
+otherwise require uniqueness. The reader still decides whether an absent cache
+is needed by streamed mips; inline mip decoding is not rejected preemptively.
+No texture serialization layout changed.
+
+Numeric import references now use the existing CLI import table to check loaded
+objects by path and class before an expensive global search. In DLC mode,
+unresolved references try the base cooked root before the whole install; only
+an absent-target error broadens that search. Validation/ambiguity errors remain
+fatal. The current-install reference to `Common_Textures.Stub.StubGray_Gray`
+resolves from `WillowGame`, demonstrating why the base-first order matters.
+Synthetic tests cover loaded-path class matching, cache reuse, absent-target
+fallback and propagation of validation errors. DLC map rendering is pending.
+
+## 2026-09-14: Two more diffuse inference rules and a low-end render switch
+
+Grouping Sanctuary's 64 neutral materials showed that only 31 opaque ones
+(157 of 4,768 placed sections) actually rendered as gray; the translucent rest
+were already invisible through the zero-opacity path. Two policy rules now
+resolve most of the visible ones without reading any new cooked-resource bytes:
+
+- **Sole non-auxiliary texture.** When the cooked texture list has no unique
+  `*_Dif`/`*_Diff` Texture2D but exactly one Texture2D whose name does not end
+  in a normal/composite/specular/emissive/mask/gray/noise suffix, that texture
+  is used as diffuse. Applies to opaque and masked materials only; a translucent
+  material's diffuse alpha becomes its opacity, and a guessed opacity is worse
+  than the invisible fallback. Recorded as `sole_cooked_resource_texture`.
+- **Unconnected DiffuseColor input.** An opaque Material with zero cooked
+  textures and a `DiffuseColor` input carrying no `Mask*` flags is rendered as
+  the input's `Constant` (default black). Cooked graphs strip the expression
+  reference in every case; the mask flags are the observed distinction between
+  a stripped connection (`Mask=1`, e.g. `Hanging_Monitor_Arm_Mat`) and an input
+  that never had one (`Master_Black`). Observed on one material; not a format
+  guarantee. Recorded as `constant_diffuse` on the material.
+
+Sanctuary result after `refresh_materials.py --reuse-textures`: no-supported-channel
+materials 64 -> 46, opaque ones 31 -> 13 (157 -> 54 placed sections);
+`Master_Black` (53 sections) becomes black. The remaining opaque set is mostly
+multi-layer snow/glacier/skybox materials with several `_Dif` candidates, which
+this project does not resolve by picking one. The `Numerals` stencil and the sky
+transition texture are non-DXT and stay blocked on the texture importer.
+
+Counting clarification from the fresh 2026-09-14
+[Sanctuary audit](docs/verification/SANCTUARY_MATERIAL_BASELINE.md): 46 is the
+number with no supported channels, not all missing diffuse. Including
+normal-only icicles and emissive-only spire instances gives 49 missing diffuse,
+16 opaque definitions and 76 placed opaque sections. No material policy changed.
+
+Automated checks: `ctest` 5/5, `verify_packages.py` all match, `level_test.py`
+14/14 with new synthetic cases for both rules. Not done: a UE5 import and
+viewer run with the refreshed manifest; the in-game appearance of the newly
+inferred textures is unverified.
+
+`tools/run_ue_level.ps1 -LowEnd` starts UE with DX11/SM5, lowest scalability
+groups, FXAA and a reduced window for machines without a discrete GPU. Runtime
+only; imported content and saved scenes are unaffected. No frame rate recorded.
+
+## 2026-09-14: diagnostic cooked Material tail structure
+
+The user authorized work on the next high-complexity tasks. Added an
+independent diagnostic decoder for the directly observed native tail:
+six words, bounded count, 16-byte records and final word, with exact
+consumption required. All field semantics remain UNVERIFIED. This does not
+change scene material selection or reconstruct stripped graphs. Existing
+property, package and container validation is unchanged. Bulk CLI payload
+extraction reuses existing export bounds checks and validates every requested
+index before output. No dependency or license changes; no external code
+copied. See docs/verification/MATERIAL_RESOURCE_CENSUS.md for evidence and limits.
+
+## 2026-09-14: bounded native Sky_Dome import
+
+The user authorized the next Sanctuary visitability slice. Scene preparation
+marks only `Prop_Skybox.Meshes.Sky_Dome` placements whose effective material is
+Unlit. The observed Sanctuary placement with a floor-material override is not
+marked as native sky. UE5 imports the accepted dome as a static visual shell,
+with no collision or shadow casting, and records `partial_unverified` graph
+status. The temporary UE5 atmosphere remains in the map for unresolved sky
+layers. This does not interpret Kismet state, outer sky meshes, time-of-day,
+cloud/mask graph connections or visual parity. See
+docs/verification/NATIVE_SKYBOX_VERIFICATION.md.
+
+## 2026-09-14: hide observed blocking helpers and render the dome interior
+
+The Sanctuary source contains four `Common_Meshes.Blocking.Blocking_Cube`
+placements with no effective material. They are collision helpers, not visible
+level geometry; the host keeps their observed collision and hides only their
+rendering. The native Sky_Dome faces are outward-oriented while the inspection
+camera is inside the shell, so the accepted Unlit sky material is marked
+two-sided by the bounded host policy. This does not infer the missing dynamic
+sky graph or alter unrelated unassigned slots.
+
+The artifact pass extends the same render-only policy to all five observed
+`Common_Meshes.Blocking.Blocking_Cube` placements, all 94
+`Common_Meshes.CollisionCube` placements, and the four `Mat_CloudLayer_Light`
+`Blocking_Plane` placements. It also hides the exact `Sanctuary_P`
+`InterpActor_34.StaticMeshComponent_20` `Prop_Garbage.Meshes.BoxLrg` placement
+that blocked the start view. Source collision remains enabled where the
+serialized mesh has a recovered collision hull; the policy does not claim
+complete collision parity.
+
+## 2026-09-14: visible color for Unlit Material v1
+
+Recovered diffuse or fallback color is also connected to Emissive Color for
+Unlit materials when no explicit emissive texture exists. UE Unlit ignores
+Base Color for visible shading. Explicit emissive keeps its existing masked
+policy and takes precedence independent of channel order. The actual
+Sanctuary sky instance uses this fallback path. No native graph or UV mapping
+is inferred. See docs/verification/UNLIT_COLOR.md for evidence and limitations.
+
+## 2026-09-15: bounded blue shell for the UE5 inspection sky
+
+The recovered Sanctuary scene still rendered a brown or black upper field when
+the temporary atmosphere was the only host fallback. The importer now adds a
+centred, two-sided, reverse-culled UE5 sphere with a host-created Unlit blue
+constant material, no collision, and no shadow casting. It is labelled
+`OpenWillow_SkyFallback`, checked by the saved-scene verifier, and paired with
+the existing `OpenWillow_SkyAtmosphere` actor. This keeps the inspection view
+readable without claiming recovery of the native sky graph, cloud layers,
+time-of-day controls, or lighting parity. The broad lower white regions remain
+the separately observed `IcePlate` geometry and were not reclassified as sky.
+See docs/verification/SKY_FALLBACK_VERIFICATION.md.
+
+## 2026-09-15: distinguish lower ice geometry from visual helpers
+
+The Sanctuary artifact pass retains all four IcePlate placements and their
+recovered collision. WorldTransition remains a narrowly hidden translucent
+helper pair; it does not explain the separate omitted terrain/BSP geometry.
+Mat_FrozenLake now uses its inspected FrozenLake resource as an explicit UV0
+color approximation instead of the generic Snow_Dif selection. Native snow,
+noise, reflection, normal, glow and UV modulation remain unverified.
+Mat_IceRoadSanctuary, the single SanctuaryRoad_01 placement at the town gate,
+follows the same rule with its inspected BrokenRoad_Dif resource; its cooked
+list carries three `_Dif` overlays, so the sole-`_Dif` heuristic had left the
+road white. Its p_Normal expression survives with a stripped texture and no
+normal exists in the cooked list, so no normal is approximated. Both inspected
+color fallbacks share one scoped table; the unplaced Env_Ice Mat_IceRoad is
+untouched.
+
+The existing HLS regular-diffuse fallback now requires the inspected direct
+parent and concrete atlas, records texture/UV provenance, and retains other
+supported channels. Material refresh reapplies the placement-derived native
+dome interior policy. No binary layout or bounds checks changed. AI-assisted
+source inspection and validation are recorded in
+`docs/verification/SANCTUARY_ARTIFACT_PASS.md`.
+
+## 2026-09-15: scoped terrain properties and grayscale weightmaps
+
+The user's continued terrain work authorizes a bounded new reader route.
+`--terrain-records` uses the observed Terrain actor prefix (26), component
+prefix (8), and resource prefix (4), without offset scanning. Its class scope
+is separate from `--scene-records`: TerrainLayerSetup.Materials is a struct
+array and must not share the mesh Materials object-reference schema.
+Individual unsupported objects retain explicit errors.
+
+PF_G8 decoding now requires exactly width*height bytes and expands each value
+to opaque grayscale RGBA. TerrainWeightMapTexture is accepted only for PF_G8;
+existing dimensions, mip, TFC, LZO and allocation guards remain unchanged.
+Synthetic pixel/bounds tests and the five installed Terrain_10 24x28 weightmaps
+pass. This proves grayscale extraction, not layer assignment/blending parity.
+No terrain triangle/hole semantics or root BSP render buffers are inferred
+from this decoder extension.
+
+## 2026-09-15: bounded terrain component geometry and triangle collision
+
+`tools/terrain_decode.py` now walks the remainder of each TerrainComponent
+payload after the decoded bounds tree, in Python, without touching the C++
+reader: a `(2, N)` u16 record array with an opaque 14-byte stride, an opaque
+72-byte block that must end in `(1, own export index)`, an `(8, V)` array of
+`<BBHhh>` vertices, two retained words, and a `(2, M)` u16 triangle strip. Every
+count is bounded by the payload and by the terrain grid; vertex X/Y/height must
+equal the terrain samples; the strip's decoded cells must equal exactly the
+non-hole cells with the flag-bit-1 diagonal, and the bounds-tree leaves must
+tile the same cells. Any disagreement rejects the component (no scanning, no
+retry). The 14-byte records, the 72-byte block, the two int16 vertex words and
+the two retained words are kept as opaque data with hashes; their meaning is
+**UNVERIFIED**.
+
+What this corroborates: for all 15 installed Sanctuary components the strip
+and the leaf tree independently omit the same flag-bit-0 cells and the strip
+parity reproduces flag-bit-1 diagonals, so hole and diagonal bits are used as
+topology. What it does not establish: the native face orientation for flipped
+cells (emitted geometrically, host-visible from above, **UNVERIFIED**), the
+meaning of the retained words, and any renderer behaviour.
+
+The Terrain actor tail is additionally probed for `u32 count == len(Layers)`
+followed by `count * (u32 vertex_count, bytes)`; 6/8 terrains match. These
+arrays are exposed only as a labeled visual approximation
+(`terrain_dominant_alpha_layer_v1`: the layer with the largest mean alpha,
+indexed by AlphaMapIndex); they do not reproduce the PF_G8 weightmaps and the
+native blend is **UNVERIFIED**. Terrains without them use a neutral constant.
+
+`tools/prepare_terrain.py` emits one static mesh per component and, with
+`--collision`, marks it `triangle_mesh` (host complex-as-simple, never mixed
+with hulls). The saved scene reopened with zero verification errors and the
+new `OpenWillow.TerrainWalking` runtime test stood on all 8 terrains, found no
+floor in 8 flagged hole cells and crossed the one walkable seam; this is host
+behaviour on the decoded topology, not original-game parity. No `src/`
+bounds check or layout changed.
+
+## 2026-09-15: explain terrain probe drift without changing acceptance criteria
+
+Codex added per-frame host hole-probe diagnostics (position, velocity, input,
+floor and downward trace) without changing pass criteria or parsing behavior.
+The Land Terrain_3 probe begins inside StaticMeshActor_SMC_1281, moves about
+9.4 m laterally with zero horizontal velocity on its first frame, then slides
+along that mesh and lands on neighbouring TerrainComponent_5, 11.5 m away.
+This supports penetration correction followed by sliding; internal solver
+steps remain uninstrumented. A passing displaced endpoint must not be treated
+as runtime verification of the original hole location. Native strip/tree
+topology corroboration is independent of this test limitation.
+
+Local-only BSP record and terrain alpha/weightmap diagnostics did not meet
+the evidence threshold for new rendering behavior. Candidate BSP normals
+match but point association fails; alpha comparisons find only constant-zero
+matches. Keep BSP unimplemented and terrain blending explicitly approximate.
+Original-game matched views remain outstanding. Detailed evidence and host
+runtime results are in the two Sanctuary verification records.
+
+## 2026-09-15: Sanctuary root BSP polygons as a labeled approximation
+
+This supersedes the "keep BSP unimplemented" conclusion above for the two
+persistent-level root Models of Sanctuary only. `tools/bsp_decode.py`
+consumes the root `Model` native tail as 28 zero bytes, bulk vector, point
+and 64-byte node arrays, a self-reference, 60-byte surface and 24-byte vertex
+records, and each root `ModelComponent` as material elements with node
+membership lists. A polygon is accepted only when its node plane, its
+surface plane and its surface normal vector agree, all of its points lie on
+that plane within 0.02 cm, it is convex and consistently ordered, and its
+component and element memberships back-reference each other and cover every
+node exactly once. Unlike the earlier rejected hypothesis, polygon points
+come from the node and vertex arrays; the point-like fields of the 60-byte
+records are left opaque. Both Sanctuary Models pass every gate (228
+polygons, 571 triangles, 24 components, 105 sections).
+
+`tools/prepare_bsp.py` adds those polygons to a frozen Sanctuary scene with
+native material assignments, a 128 cm world-planar UV placeholder and opt-in
+host triangle collision. Surface texture-axis fields, element lighting
+blocks, the 42,068-byte Model remainder and native `PolyFlags` are retained
+as digests and remain `UNVERIFIED`; volume-owned Models are still rejected
+structurally; other maps are refused. `OpenWillow.BspWalking` stands on and
+walks an unobstructed upward-facing polygon per Model; that is host behaviour
+on the recovered geometry, not original-game parity, and no matched view has
+been produced. No `src/` bounds check or layout changed.
+
+Inspecting the import showed the outdoor start-area floor as UE's default
+`WorldGridMaterial` checkerboard. The cause was not BSP: sections the
+preparers leave with `material: None` (two terrains labeled
+`neutral_constant`, ten static-mesh sections whose native material never
+resolved) were skipped by the importer. `import_level.py` now binds a lit
+0.5 gray `M_OpenWillowNeutralFallback` to those sections and
+`verify_level.py` asserts it (15 mesh sections, 20 placements on Sanctuary).
+This makes the gap visible as a labeled flat gray instead of a misleading
+pattern; it does not resolve the terrain alpha decode or the missing
+materials. Record: docs/verification/SANCTUARY_BSP_POLYGONS.md.
