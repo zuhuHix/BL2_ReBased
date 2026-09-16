@@ -178,3 +178,22 @@ overlap CTest; one sample run does not isolate terrain's performance cost.
 Logs: `local/sanctuary/viewer-4d9dca0662e14a4a8eec885561a08b2a.log` (terrain)
 and `viewer-12d59ec7962f480bbb5060e8028a1ce6.log` (viewer). These are host
 runtime results, not original-game checks. No parsing behavior changed.
+
+## Refresh (2026-09-16)
+
+The current terrain/BSP import reopened 4,888 section actors from 4,469 source
+placements. The saved report verifies one native sky dome, 106 hidden visual
+placements, 75 unsupported translucent sections, 20 neutral fallback sections,
+615 mesh sections with collision (120 triangle components), and 545,301 UV
+corners / 181,767 triangles. Fresh host walking checks passed terrain
+`stand=8/8`, `route=4/4`, `hole=4/4`, `seam=1/1` (one hole endpoint on other
+geometry; two seams skipped) and BSP `stood_and_walked=2/2`.
+
+The standalone restart now reasserts the importer’s hidden-helper and
+unsupported-translucent policy from explicit actor tags while retaining source
+collision. This removes the known cloud/checkerboard helper class from the
+host view, but the white rectangle below the start-area structure remains; a
+runtime trace identifies the translucent water candidate as already hidden, so
+no further visual actor was suppressed speculatively. Broad street-level voids,
+white terrain/material gaps, native BSP topology, native material graphs and
+original-game matched views remain open.

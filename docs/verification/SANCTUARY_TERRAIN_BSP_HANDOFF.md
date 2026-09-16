@@ -292,3 +292,30 @@ This rules out direct equality under the tested crop mapping, not resampling,
 filtering, reordered axes or native composition. AlphaMapIndex and setup
 identities alone do not establish those operations. Blending remains
 **UNVERIFIED**; `terrain_dominant_alpha_layer_v1` is unchanged.
+
+## Runtime refresh (2026-09-16)
+
+The current prepared/imported Sanctuary scene was rebuilt with terrain and
+root-BSP geometry present. Reopen verification passed for 4,888 section actors
+from 4,469 source placements, including 15 terrain components, one native sky
+dome, 106 explicitly hidden visual placements and 75 unsupported translucent
+sections. Collision verification reports 615 mesh sections, 3,236 enabled
+components and 120 triangle components; UV verification reports 545,301
+corners and 181,767 triangles with matching source winding.
+
+Fresh standalone host checks passed:
+
+- `OpenWillow.TerrainWalking`: `stand=8/8`, `route=4/4`, `hole=4/4`,
+  `hole_on_other=1`, `seam=1/1`, `skipped_seams=2`.
+- `OpenWillow.BspWalking`: `stood_and_walked=2/2`,
+  `rejected_candidates=0`.
+
+The helper policy now carries `OpenWillow_HiddenVisual` and
+`OpenWillow_UnsupportedTranslucent` tags and reasserts visibility at standalone
+restart while retaining the saved collision state. The visible start view is
+cleaner of the known helper/checkerboard class, but a white rectangular
+placement, broad street-level voids and other white terrain/material gaps still
+remain. The remaining rectangle was not assigned to the hidden translucent
+water actor by the runtime trace, so no additional actor was hidden by guess.
+These are host visual findings; original-game comparison and native material
+parity remain open.

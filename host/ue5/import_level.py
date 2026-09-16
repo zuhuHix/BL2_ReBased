@@ -248,6 +248,7 @@ def placement(value):
 
 
 count = 0
+unsupported_translucent_sections = 0
 scene_bounds_min = unreal.Vector(float('inf'), float('inf'), float('inf'))
 scene_bounds_max = unreal.Vector(float('-inf'), float('-inf'), float('-inf'))
 for instance in scene['actors']:
@@ -269,6 +270,9 @@ for instance in scene['actors']:
             # Euler rotation on the unattached root for saving and reopening.
             component.set_editor_property('relative_rotation', collection_rotation(instance['transform']))
         overrides = instance['materials']
+        material_id = (overrides[section['slot']]
+                       if section['slot'] < len(overrides) and overrides[section['slot']]
+                       else section['material'])
         if section['slot'] < len(overrides) and overrides[section['slot']]:
             component.set_material(0, materials[overrides[section['slot']]])
         component.set_simulate_physics(False)
@@ -288,14 +292,31 @@ for instance in scene['actors']:
                 component.set_editor_property('cast_shadow', False)
             except Exception:
                 pass
-        if hidden_visual:
+        material_definition = scene['materials'].get(material_id) if material_id else None
+        unsupported_translucent = bool(material_definition and
+            material_definition.get('blend_mode', 'BLEND_Opaque') != 'BLEND_Opaque' and
+            not any(material_definition.get('channels', {}).values()) and
+            'constant_diffuse' not in material_definition and
+            'surface_approximation' not in material_definition)
+        if hidden_visual or unsupported_translucent:
+            tags = [unreal.Name(instance['source'])]
+            if hidden_visual:
+                tags.append(unreal.Name('OpenWillow_HiddenVisual'))
+            if unsupported_translucent:
+                tags.append(unreal.Name('OpenWillow_UnsupportedTranslucent'))
+            actor.set_editor_property('tags', tags)
+        if hidden_visual or unsupported_translucent:
             # These observed helper assets have no recoverable host-side
             # visual. Keep source collision state, but do not draw the helper.
+            # The same rule covers unsupported translucent decals/effects: a
+            # neutral fallback must not become a bright floating rectangle.
             component.set_visibility(False)
             try:
                 actor.set_actor_hidden_in_game(True)
             except Exception:
                 pass
+            if unsupported_translucent and not hidden_visual:
+                unsupported_translucent_sections += 1
         component.set_mobility(unreal.ComponentMobility.STATIC)
         origin, extent = actor.get_actor_bounds(False)
         scene_bounds_min = unreal.Vector(min(scene_bounds_min.x, origin.x - extent.x),
@@ -510,6 +531,8 @@ unreal.EditorAssetLibrary.save_directory(destination)
                       'materials': ['Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'],
                       'sources': ['TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'],
                       'policy': 'hide_unrecovered_visual_preserve_source_collision'},
+    'unsupported_translucent': {'sections': unsupported_translucent_sections,
+                                'policy': 'hide_no_channel_non_opaque_preserve_source_collision'},
     'terrain': {'placements': terrain_placements,
                 'policy': scene.get('terrain_policy'),
                 'collision': 'triangle_mesh_complex_as_simple' if any(

@@ -87,6 +87,22 @@ The frame sits on the 60 FPS cap, so the true headroom is not measured; the
 0.7 ms, post-processing 1.2 ms) plus 4.9 ms of buffer uploads and 3.1 ms in
 `EndDrawingViewport`, which on D3D11 includes the present wait.
 
+## AA comparison on the current inspection scene (2026-09-16)
+
+The profile harness now accepts `-AA FXAA`, `-AA TAA` and `-AA TSR`, injecting
+only `r.AntiAliasingMethod` for that run. On the current Sanctuary import at
+1280x720, 300-sample profiles on the same Intel Iris Xe laptop measured:
+
+| Method | start frame ms | turned frame ms | assessment |
+|---|---:|---:|---|
+| FXAA | 20.0 / 24.2 | 19.1 / 20.5 | best integrated-GPU headroom |
+| TAA | 25.9 / 30.3 | 21.1 / 23.8 | quality/performance compromise |
+
+Values are mean / p95. These are renderer profiles, not image-quality parity
+proof. FXAA is the sensible setting for this inspection workload on the
+available integrated GPU, but the project default is intentionally unchanged
+until visual parity and quality are settled.
+
 ## Reading
 
 - The ~8-9 FPS startup figure in ROADMAP.md is consistent with this scene:
@@ -98,14 +114,14 @@ The frame sits on the 60 FPS cap, so the true headroom is not measured; the
   FXAA, lower resolution and lowest scalability; it does not isolate which of
   those changes matters most.
 
-## Candidate fix, not applied
+## Decision
 
 Switching the default path's anti-aliasing from TSR to FXAA or TAA
-(`r.AntiAliasingMethod 1` or `2`), or lowering `sg.AntiAliasingQuality`,
-would remove most of the measured GPU time on integrated graphics. That is a
-project rendering-settings decision (`DefaultEngine.ini` or the launch
-script), so it is recorded here for review rather than changed in this pass.
-A discrete-GPU measurement would show whether TSR is affordable there.
+(`r.AntiAliasingMethod 1` or `2`) would remove most of the measured GPU time on
+integrated graphics. The harness comparison supports FXAA as the current
+inspection recommendation, but this pass does not change the project default;
+that remains a renderer-quality decision pending visual parity. A discrete-GPU
+measurement would show whether TSR is affordable there.
 
 ## In-game map selector
 

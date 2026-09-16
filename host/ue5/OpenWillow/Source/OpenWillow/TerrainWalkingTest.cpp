@@ -16,7 +16,8 @@
 // Runtime check of imported terrain floors, separate from the saved-asset
 // verification scripts. It reads terrain-runtime.json from the prepared scene:
 // for every terrain, stand on a corroborated cell, confirm a flagged hole cell
-// does not carry this floor, and walk across a component seam when one exists.
+// does not carry this floor, walk a short segment on the same terrain when the
+// probe candidates are close enough, and cross a component seam when one exists.
 // Passing shows the host collision behaves as the decoded topology predicts;
 // it does not establish original-game parity.
 class FOpenWillowTerrainCheck : public IAutomationLatentCommand
@@ -47,8 +48,9 @@ public:
         {
             Pawn->SetActorLocation(Origin, false, nullptr, ETeleportType::TeleportPhysics);
             Move->StopMovementImmediately();
-            Test->AddInfo(FString::Printf(TEXT("Terrain runtime summary: stand=%d/%d occluded_stands=%d hole=%d/%d hole_on_other=%d seam=%d/%d skipped_seams=%d"),
-                StandPassed, StandTotal, StandOccluded, HolePassed, HoleTotal, HoleOnOther, SeamPassed, SeamTotal, SeamSkipped));
+            Test->AddInfo(FString::Printf(TEXT("Terrain runtime summary: stand=%d/%d occluded_stands=%d route=%d/%d skipped_routes=%d hole=%d/%d hole_on_other=%d seam=%d/%d skipped_seams=%d"),
+                StandPassed, StandTotal, StandOccluded, RoutePassed, RouteTotal, RouteSkipped,
+                HolePassed, HoleTotal, HoleOnOther, SeamPassed, SeamTotal, SeamSkipped));
             return true;
         }
         const TSharedPtr<FJsonObject>& P = Probes[Probe];
@@ -86,6 +88,32 @@ public:
             if (!Occluded) Test->TestTrue(*FString::Printf(TEXT("%s: pawn stands on the imported terrain floor"), *Source), Rests);
             else Test->AddWarning(FString::Printf(TEXT("%s: every stand candidate is covered by other geometry; floor unverified at runtime"), *Source));
             if (Probe == 0) FScreenshotRequest::RequestScreenshot(TEXT("OpenWillowTerrainStand.png"), false, false);
+            if (Rests)
+            {
+                int RouteCandidate = -1;
+                float RouteDistance = TNumericLimits<float>::Max();
+                const FVector RouteStart = Pawn->GetActorLocation();
+                for (int Index = 0; Index < Stands.Num(); ++Index)
+                {
+                    if (Index == Candidate) continue;
+                    const float Distance = FVector::Dist2D(RouteStart, Point(Stands[Index], TEXT("point")));
+                    if (Distance > 100 && Distance < RouteDistance)
+                    {
+                        RouteCandidate = Index;
+                        RouteDistance = Distance;
+                    }
+                }
+                if (RouteCandidate >= 0 && RouteDistance <= 1400)
+                {
+                    RouteEnd = Point(Stands[RouteCandidate], TEXT("point"));
+                    RouteDirection = RouteEnd - RouteStart;
+                    RouteDirection.Z = 0;
+                    RouteStartLocation = RouteStart;
+                    Step = 6; StageTime = Time;
+                    return false;
+                }
+                ++RouteSkipped;
+            }
             if (P->HasTypedField<EJson::Object>(TEXT("hole")))
             {
                 Teleport(Pawn, Point(P->GetObjectField(TEXT("hole")), TEXT("point")));
@@ -144,6 +172,21 @@ public:
             Test->TestTrue(*FString::Printf(TEXT("%s: pawn walks across a component seam"), *Source), Crossed);
             Test->AddInfo(FString::Printf(TEXT("%s seam: from=%s to=%s grounded=%d pawn=%s"), *Source, *SeamStartHit, *Hit, Move->IsMovingOnGround(), *Pawn->GetActorLocation().ToString()));
             NextProbe(); return false;
+        }
+        if (Step == 6)
+        {
+            Pawn->AddMovementInput(RouteDirection.GetSafeNormal(), 1, true);
+            if (Time - StageTime < 2.5 && FVector::Dist2D(Pawn->GetActorLocation(), RouteEnd) > 80) return false;
+            FString Hit; FVector Where;
+            const bool OnTerrain = TraceDown(World, Pawn->GetActorLocation(), Hit, Where);
+            const float Distance = FVector::Dist2D(Pawn->GetActorLocation(), RouteStartLocation);
+            const bool Walked = Move->IsMovingOnGround() && OnTerrain && Distance > 100;
+            ++RouteTotal; RoutePassed += Walked;
+            Test->TestTrue(*FString::Printf(TEXT("%s: pawn walks on the imported terrain floor"), *Source), Walked);
+            Test->AddInfo(FString::Printf(TEXT("%s route: grounded=%d hit=%s moved=%.0f target_distance=%.0f pawn=%s"),
+                *Source, Move->IsMovingOnGround(), *Hit, Distance,
+                FVector::Dist2D(Pawn->GetActorLocation(), RouteEnd), *Pawn->GetActorLocation().ToString()));
+            Step = 3; return false;
         }
         return false;
     }
@@ -221,10 +264,12 @@ private:
     FAutomationTestBase* Test;
     double Started, StageTime = 0;
     int Stage = 0, Probe = 0, Step = 0, Candidate = 0;
-    int StandPassed = 0, StandTotal = 0, StandOccluded = 0, HolePassed = 0, HoleTotal = 0, HoleOnOther = 0;
+    int StandPassed = 0, StandTotal = 0, StandOccluded = 0;
+    int RoutePassed = 0, RouteTotal = 0, RouteSkipped = 0;
+    int HolePassed = 0, HoleTotal = 0, HoleOnOther = 0;
     int SeamPassed = 0, SeamTotal = 0, SeamSkipped = 0;
     TArray<TSharedPtr<FJsonObject>> Stands;
-    FVector Origin, SeamEnd;
+    FVector Origin, RouteEnd, RouteDirection, RouteStartLocation, SeamEnd;
     FString SeamStartHit;
     TArray<TSharedPtr<FJsonObject>> Probes;
 };

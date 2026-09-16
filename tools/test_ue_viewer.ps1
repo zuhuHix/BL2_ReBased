@@ -7,10 +7,13 @@ param(
     [switch]$Bsp,
     [switch]$Selector,
     [switch]$Profile,
+    [ValidateSet('Default', 'FXAA', 'TAA', 'TSR')][string]$AA = 'Default',
     [switch]$LowEnd
 )
 $ErrorActionPreference = 'Stop'
 if (@($Walk, $Terrain, $Bsp, $Selector, $Profile | Where-Object { $_ }).Count -gt 1) { throw 'Choose one of -Walk, -Terrain, -Bsp, -Selector or -Profile' }
+if ($AA -ne 'Default' -and !$Profile) { throw '-AA requires -Profile' }
+if ($AA -ne 'Default' -and $LowEnd) { throw '-AA cannot be combined with -LowEnd' }
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
@@ -32,6 +35,8 @@ $testName = if ($Walk) { 'Walking' } elseif ($Terrain) { 'TerrainWalking' } else
 # profile test can sample both render routes. Keep the two lists identical.
 $resolution = @('-ResX=1280', '-ResY=720')
 $execCmds = "Automation RunTests OpenWillow.$testName"
+$aaMethods = @{ FXAA = 1; TAA = 2; TSR = 3 }
+if ($AA -ne 'Default') { $execCmds = "r.AntiAliasingMethod $($aaMethods[$AA]),$execCmds" }
 $lowEndArgs = @()
 if ($LowEnd) {
     $resolution = @('-ResX=960', '-ResY=540')

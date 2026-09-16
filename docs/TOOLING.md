@@ -252,6 +252,16 @@ Intel Iris Xe laptop is in [performance](verification/PERFORMANCE.md):
 `-LowEnd`) runs `OpenWillow.Profile`, which logs `stat unit`-style thread
 times and a `ProfileGPU` breakdown; other machines will differ.
 
+For a controlled anti-aliasing comparison, the profile harness accepts
+`-AA FXAA`, `-AA TAA` or `-AA TSR`; the switch only injects
+`r.AntiAliasingMethod` for that profile run and does not change the project
+default. On the current Sanctuary scene and Intel Iris Xe, the latest
+300-sample run measured FXAA at 20.0/24.2 ms (mean/p95) from the start view and
+19.1/20.5 ms after turning, while the comparison TAA run measured 25.9/30.3 ms
+and 21.1/23.8 ms. FXAA is the
+sensible integrated-GPU setting for this inspection workload; the project
+default remains unchanged until visual parity and quality are settled.
+
 ```powershell
 ./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -LowEnd
 ```
@@ -338,7 +348,9 @@ hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
 94 `Common_Meshes.CollisionCube` placements, and four cloud `Blocking_Plane`
 placements. The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
 placement that blocked the start view is also hidden. This is a bounded visual
-artifact policy, not complete collision or material parity.
+artifact policy, not complete collision or material parity. These placements
+carry explicit `OpenWillow_HiddenVisual` tags and the standalone game mode
+reasserts the visibility policy after restart while leaving collision enabled.
 
 Unlit Material v1 colors now feed Emissive Color when no explicit emissive
 texture exists. The saved-scene verifier reports `verified_unlit_materials`.
@@ -445,6 +457,8 @@ flagged hole cell and walks one component seam. Full viewer logs now include
 `Terrain hole path:` records for every probe frame, with movement, floor and
 downward-trace diagnostics. A displaced or occluded endpoint does not directly
 verify the original hole location; the summary counts are endpoint assertions.
+The current fresh run reports `stand=8/8`, `route=4/4`, `hole=4/4` with one
+hole endpoint on other geometry, and `seam=1/1` with two height-skipped seams.
 See
 [the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
@@ -462,6 +476,8 @@ opaque hashes and remain `UNVERIFIED`. The script is scoped to `Sanctuary_P`
 plus `Sanctuary_Land` and also writes `bsp-runtime.json`;
 `test_ue_viewer.ps1 -Bsp` then runs `OpenWillow.BspWalking`, which stands on
 and walks 200 cm along an unobstructed upward-facing polygon of each model.
+The current fresh run reports `stood_and_walked=2/2` with no rejected
+candidates. This is a host runtime check, not original-game BSP parity.
 `python tests/bsp_test.py` covers the decoder on synthetic fixtures. See
 [the BSP record](verification/SANCTUARY_BSP_POLYGONS.md).
 

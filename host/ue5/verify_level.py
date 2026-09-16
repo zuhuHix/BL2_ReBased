@@ -86,6 +86,7 @@ def close(actual, expected, tolerance=.05):
 # serialized data; no reuse of the importer's placement function.
 verified_native_skybox = 0
 verified_hidden_visual = 0
+verified_unsupported_translucent = 0
 verified_neutral_fallback = 0
 for source in scene['actors']:
     for section in scene['meshes'][source['mesh']]['sections']:
@@ -110,6 +111,17 @@ for source in scene['actors']:
             # neutral fallback, never UE's default WorldGridMaterial.
             assert component.get_material(0).get_name() == 'M_OpenWillowNeutralFallback'
             verified_neutral_fallback += 1
+        material_definition = scene['materials'].get(material) if material else None
+        unsupported_translucent = bool(material_definition and
+            material_definition.get('blend_mode', 'BLEND_Opaque') != 'BLEND_Opaque' and
+            not any(material_definition.get('channels', {}).values()) and
+            'constant_diffuse' not in material_definition and
+            'surface_approximation' not in material_definition)
+        if unsupported_translucent:
+            assert actor.actor_has_tag('OpenWillow_UnsupportedTranslucent')
+        if unsupported_translucent and not source.get('hidden_visual'):
+            assert not component.get_editor_property('visible')
+            verified_unsupported_translucent += 1
         if source.get('native_skybox'):
             if section is scene['meshes'][source['mesh']]['sections'][0]:
                 verified_native_skybox += 1
@@ -117,6 +129,7 @@ for source in scene['actors']:
             assert component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
             assert not component.get_editor_property('cast_shadow')
         if source.get('hidden_visual'):
+            assert actor.actor_has_tag('OpenWillow_HiddenVisual')
             if section is scene['meshes'][source['mesh']]['sections'][0]:
                 verified_hidden_visual += 1
             hidden_source = scene['meshes'][source['mesh']]['source']
@@ -210,6 +223,7 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_materials': verified_unlit_materials,
           'verified_native_skybox_placements': verified_native_skybox,
           'verified_hidden_visual_placements': verified_hidden_visual,
+          'verified_unsupported_translucent_sections': verified_unsupported_translucent,
           'verified_neutral_fallback_sections': verified_neutral_fallback,
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
           'temporary_sky_fallback': 'UE5_SkyAtmosphere+OpenWillow_SkyFallback',

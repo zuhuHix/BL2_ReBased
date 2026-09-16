@@ -6,6 +6,7 @@
 #include "Misc/Parse.h"
 #include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
+#include "Components/PrimitiveComponent.h"
 #include "EngineUtils.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
@@ -38,6 +39,32 @@ AActor* AOpenWillowGameMode::ChoosePlayerStart_Implementation(AController* Playe
 void AOpenWillowGameMode::RestartPlayer(AController* NewPlayer)
 {
     Super::RestartPlayer(NewPlayer);
+    UWorld* World = GetWorld();
+    if (World)
+    {
+        // Some UE5 standalone paths re-register a component after the saved
+        // editor visibility flag was applied. Re-assert the importer policy at
+        // runtime for hidden helpers and unsupported translucent effects;
+        // collision stays intact.
+        for (TActorIterator<AActor> It(World); It; ++It)
+        {
+            if (!It->ActorHasTag(TEXT("OpenWillow_HiddenVisual")) &&
+                !It->ActorHasTag(TEXT("OpenWillow_UnsupportedTranslucent")))
+            {
+                continue;
+            }
+            It->SetActorHiddenInGame(true);
+            TArray<UPrimitiveComponent*> Components;
+            It->GetComponents<UPrimitiveComponent>(Components);
+            for (UPrimitiveComponent* Component : Components)
+            {
+                if (Component)
+                {
+                    Component->SetVisibility(false, true);
+                }
+            }
+        }
+    }
     APlayerController* Player = Cast<APlayerController>(NewPlayer);
     APawn* Pawn = Player ? Player->GetPawn() : nullptr;
     if (!Pawn)
@@ -56,7 +83,6 @@ void AOpenWillowGameMode::RestartPlayer(AController* NewPlayer)
     // geometry must not trap its camera; walking collision is a separate gate.
     Pawn->SetActorEnableCollision(false);
 
-    UWorld* World = GetWorld();
     if (!World)
     {
         return;
