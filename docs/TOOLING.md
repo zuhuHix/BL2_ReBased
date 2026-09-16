@@ -435,6 +435,17 @@ counts do not establish which missing floors terrain/BSP will fill. See
 
 ## Terrain floors
 
+For a complete Sanctuary preparation, use:
+
+```powershell
+python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctuary-geometry
+```
+
+This runs static-mesh preparation, terrain preparation, then BSP preparation
+with triangle collision, stopping on a failed stage. It is scoped to Sanctuary.
+Import the resulting scene normally. Native terrain blending, BSP UVs and
+collision flags retain the limitations below.
+
 `tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
 rewrites a prepared scene with one static mesh per TerrainComponent whose
 vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
@@ -444,7 +455,8 @@ also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
 flagged hole cell and walks one component seam. Full viewer logs now include
 `Terrain hole path:` records for every probe frame, with movement, floor and
 downward-trace diagnostics. A displaced or occluded endpoint does not directly
-verify the original hole location; the summary counts are endpoint assertions.
+verify the original hole location. The runtime summary distinguishes direct
+original-point traces from endpoint assertions, obstruction and displacement.
 See
 [the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
@@ -470,3 +482,19 @@ labeled `neutral_constant`) import with the lit gray
 `M_OpenWillowNeutralFallback` host material and are counted in
 `ue-import.json` / `ue-verify.json` as `neutral_fallback_sections`. Before
 this they fell through to UE's default `WorldGridMaterial` checkerboard.
+
+## Repeatable inspection viewpoints
+
+Create `local/sanctuary/inspection-views.json` with a `views` array containing
+1 to 12 objects. Each object requires `location` (world centimeters),
+`rotation` (pitch, yaw, roll in degrees), and `fov` (10 to 150 degrees).
+For example, a synthetic viewpoint is
+`{"location":[0,0,1000],"rotation":[-20,45,0],"fov":75}`.
+
+Run `tools/test_ue_viewer.ps1 -Engine $engine -Game $game -Scene local/sanctuary -Inspect`.
+The host waits eight seconds at each viewpoint, asserts camera position,
+rotation and FOV, and requests numbered PNGs under the project's ignored
+`Saved/Screenshots/WindowsEditor/` directory. Inspect the resulting files;
+the camera assertions alone do not verify appearance or original-game parity.
+The saved map and its starting pose are not changed. `-Inspect` is exclusive
+with the walking, terrain, BSP, selector and profile test modes.

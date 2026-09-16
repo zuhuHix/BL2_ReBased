@@ -15,10 +15,11 @@
 
 // Runtime check of imported terrain floors, separate from the saved-asset
 // verification scripts. It reads terrain-runtime.json from the prepared scene:
-// for every terrain, stand on a corroborated cell, confirm a flagged hole cell
-// does not carry this floor, and walk across a component seam when one exists.
-// Passing shows the host collision behaves as the decoded topology predicts;
-// it does not establish original-game parity.
+// for every terrain, stand on a corroborated cell, trace a flagged hole at its
+// recorded point, and walk across a component seam when one exists. A clear
+// original-point trace is direct host evidence; displacement and obstruction
+// are reported separately. Passing shows the host collision behaves as the
+// decoded topology predicts; it does not establish original-game parity.
 class FOpenWillowTerrainCheck : public IAutomationLatentCommand
 {
 public:
@@ -47,8 +48,10 @@ public:
         {
             Pawn->SetActorLocation(Origin, false, nullptr, ETeleportType::TeleportPhysics);
             Move->StopMovementImmediately();
-            Test->AddInfo(FString::Printf(TEXT("Terrain runtime summary: stand=%d/%d occluded_stands=%d hole=%d/%d hole_on_other=%d seam=%d/%d skipped_seams=%d"),
-                StandPassed, StandTotal, StandOccluded, HolePassed, HoleTotal, HoleOnOther, SeamPassed, SeamTotal, SeamSkipped));
+            Test->AddInfo(FString::Printf(TEXT("Terrain runtime summary: stand=%d/%d occluded_stands=%d hole_direct=%d/%d hole_endpoint_assertion=%d/%d hole_endpoint_on_other=%d hole_original_obstructed=%d hole_original_terrain=%d hole_original_penetrating=%d hole_endpoint_displaced=%d seam=%d/%d skipped_seams=%d"),
+                StandPassed, StandTotal, StandOccluded, HoleDirectPassed, HoleTotal, HoleEndpointAssertionPassed, HoleTotal,
+                HoleEndpointOnOther, HoleOriginalObstructed, HoleOriginalTerrain, HoleOriginalPenetrating, HoleEndpointDisplaced,
+                SeamPassed, SeamTotal, SeamSkipped));
             return true;
         }
         const TSharedPtr<FJsonObject>& P = Probes[Probe];
@@ -99,16 +102,51 @@ public:
         if (Step == 2 && Time - StageTime > 2.5)
         {
             const TSharedPtr<FJsonObject> Hole = P->GetObjectField(TEXT("hole"));
+            const FVector OriginalPoint = Point(Hole, TEXT("point"));
             FString Hit; FVector Where;
             const bool OnTerrain = TraceDown(World, Pawn->GetActorLocation(), Hit, Where);
             const bool RestsOnTerrainAtHole = Move->IsMovingOnGround() && OnTerrain && WithinSurface(Hole, Pawn->GetActorLocation().Z - 88);
-            ++HoleTotal; HolePassed += !RestsOnTerrainAtHole;
-            HoleOnOther += Move->IsMovingOnGround() && !OnTerrain;
-            Test->TestFalse(*FString::Printf(TEXT("%s: flagged hole cell carries no terrain floor"), *Source), RestsOnTerrainAtHole);
-            // Report displacement separately; the per-frame path records contact
-            // and movement evidence without assigning a cause from distance alone.
-            Test->AddInfo(FString::Printf(TEXT("%s hole: falling=%d hit=%s pawn=%s drift=%.0f"), *Source, Move->IsFalling(), *Hit,
-                *Pawn->GetActorLocation().ToString(), FVector::Dist2D(Pawn->GetActorLocation(), Point(Hole, TEXT("point")))));
+            const float EndpointDrift = FVector::Dist2D(Pawn->GetActorLocation(), OriginalPoint);
+            const bool EndpointDisplaced = EndpointDrift > 80;
+
+            // The endpoint can be displaced by penetration correction, sliding or
+            // unrelated geometry. Trace only the recorded point's surface band so
+            // that an endpoint assertion cannot become direct hole evidence and a
+            // lower floor cannot block this hole check.
+            const auto& Surface = Hole->GetArrayField(TEXT("surface"));
+            const FVector OriginalTraceStart(OriginalPoint.X, OriginalPoint.Y, Surface[1]->AsNumber() + 20);
+            const FVector OriginalTraceEnd(OriginalPoint.X, OriginalPoint.Y, Surface[0]->AsNumber() - 20);
+            const bool OriginalTracePawnIgnored = Pawn != nullptr;
+            FHitResult OriginalHit;
+            const bool OriginalTraceHit = TraceSegment(World, OriginalTraceStart, OriginalTraceEnd,
+                OriginalTracePawnIgnored ? Pawn : nullptr, OriginalHit);
+            const bool OriginalTerrainHit = OriginalTraceHit && IsTerrainActor(OriginalHit.GetActor());
+            const bool OriginalObstructed = OriginalTraceHit && !OriginalTerrainHit;
+            const bool DirectHoleEvidence = !OriginalTraceHit;
+            const FString OriginalState = OriginalTerrainHit ? TEXT("terrain") : OriginalObstructed ? TEXT("obstructed") : TEXT("clear");
+
+            ++HoleTotal;
+            HoleDirectPassed += DirectHoleEvidence;
+            HoleEndpointAssertionPassed += !RestsOnTerrainAtHole;
+            HoleEndpointOnOther += Move->IsMovingOnGround() && !OnTerrain;
+            HoleOriginalObstructed += OriginalObstructed;
+            HoleOriginalTerrain += OriginalTerrainHit;
+            HoleOriginalPenetrating += OriginalTraceHit && OriginalHit.bStartPenetrating;
+            HoleEndpointDisplaced += EndpointDisplaced;
+
+            Test->TestFalse(*FString::Printf(TEXT("%s: hole original point must not hit imported terrain"), *Source), OriginalTerrainHit);
+            Test->TestFalse(*FString::Printf(TEXT("%s: hole endpoint must not rest on terrain at the recorded surface"), *Source), RestsOnTerrainAtHole);
+            if (OriginalObstructed)
+                Test->AddWarning(FString::Printf(TEXT("%s: original hole point is obstructed by %s; direct hole evidence is unavailable"),
+                    *Source, *ActorLabel(OriginalHit.GetActor())));
+
+            // Report endpoint movement separately from the original-point trace.
+            Test->AddInfo(FString::Printf(TEXT("%s hole: endpoint_falling=%d endpoint_hit=%s endpoint_pawn=%s endpoint_drift=%.0f endpoint_displaced=%d endpoint_assertion=%d endpoint_on_other=%d original_point=%s original_band_start=%s original_band_end=%s original_state=%s original_trace_hit=%d original_trace=%s original_trace_point=%s original_trace_normal=%s original_trace_penetrating=%d original_trace_pawn_ignored=%d"),
+                *Source, Move->IsFalling(), *Hit, *Pawn->GetActorLocation().ToString(), EndpointDrift, EndpointDisplaced,
+                !RestsOnTerrainAtHole, Move->IsMovingOnGround() && !OnTerrain, *OriginalPoint.ToString(),
+                *OriginalTraceStart.ToString(), *OriginalTraceEnd.ToString(), *OriginalState,
+                OriginalTraceHit, *ActorLabel(OriginalHit.GetActor()), *OriginalHit.ImpactPoint.ToString(),
+                *OriginalHit.ImpactNormal.ToString(), OriginalHit.bStartPenetrating, OriginalTracePawnIgnored));
             Step = 3; return false;
         }
         if (Step == 3)
@@ -155,16 +193,12 @@ private:
         FCollisionQueryParams Params(SCENE_QUERY_STAT(OpenWillowTerrainPath), true, Pawn);
         const FVector Position = Pawn->GetActorLocation();
         World->LineTraceSingleByChannel(Hit, Position, Position - FVector(0, 0, 2000), ECC_Visibility, Params);
-        const auto Label = [](const AActor* Actor) -> FString
-        {
-            return !Actor ? TEXT("none") : Actor->Tags.Num() > 0 ? Actor->Tags[0].ToString() : Actor->GetName();
-        };
         const FHitResult& Floor = Move->CurrentFloor.HitResult;
         Test->AddInfo(FString::Printf(TEXT("Terrain hole path: %s t=%.4f dt=%.4f pawn=%s velocity=%s input=%s mode=%d floor=%s floor_normal=%s floor_penetrating=%d trace=%s trace_point=%s trace_normal=%s trace_penetrating=%d"),
             *Source, Elapsed, World->GetDeltaSeconds(), *Position.ToString(), *Move->Velocity.ToString(),
             *Pawn->GetLastMovementInputVector().ToString(), static_cast<int>(Move->MovementMode),
-            *Label(Floor.GetActor()), *Floor.ImpactNormal.ToString(), Floor.bStartPenetrating,
-            *Label(Hit.GetActor()), *Hit.ImpactPoint.ToString(), *Hit.ImpactNormal.ToString(), Hit.bStartPenetrating));
+            *ActorLabel(Floor.GetActor()), *Floor.ImpactNormal.ToString(), Floor.bStartPenetrating,
+            *ActorLabel(Hit.GetActor()), *Hit.ImpactPoint.ToString(), *Hit.ImpactNormal.ToString(), Hit.bStartPenetrating));
     }
     bool Load()
     {
@@ -199,6 +233,20 @@ private:
         // Capsule feet may sit up to the step height above a sloped cell.
         return FeetZ > Range[0]->AsNumber() - 20 && FeetZ < Range[1]->AsNumber() + 40;
     }
+    static FString ActorLabel(const AActor* Actor)
+    {
+        return !Actor ? TEXT("none") : Actor->Tags.Num() > 0 ? Actor->Tags[0].ToString() : Actor->GetName();
+    }
+    static bool IsTerrainActor(const AActor* Actor)
+    {
+        return Actor && Actor->Tags.Num() > 0 && Actor->Tags[0].ToString().Contains(TEXT("TerrainComponent"));
+    }
+    static bool TraceSegment(UWorld* World, const FVector& Start, const FVector& End, const AActor* Ignore, FHitResult& Hit)
+    {
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(OpenWillowTerrainOriginalHole), true);
+        if (Ignore) Params.AddIgnoredActor(Ignore);
+        return World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params);
+    }
     void Teleport(AOpenWillowWalker* Pawn, const FVector& Location)
     {
         Pawn->SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
@@ -214,14 +262,16 @@ private:
         Where = Hit.ImpactPoint;
         const AActor* Actor = Hit.GetActor();
         // Imported actors carry their source object path as the first tag.
-        Label = !Actor ? TEXT("unknown") : Actor->Tags.Num() > 0 ? Actor->Tags[0].ToString() : Actor->GetName();
-        return Actor && Actor->Tags.Num() > 0 && Actor->Tags[0].ToString().Contains(TEXT("TerrainComponent"));
+        Label = !Actor ? TEXT("unknown") : ActorLabel(Actor);
+        return IsTerrainActor(Actor);
     }
     void NextProbe() { ++Probe; Step = 0; }
     FAutomationTestBase* Test;
     double Started, StageTime = 0;
     int Stage = 0, Probe = 0, Step = 0, Candidate = 0;
-    int StandPassed = 0, StandTotal = 0, StandOccluded = 0, HolePassed = 0, HoleTotal = 0, HoleOnOther = 0;
+    int StandPassed = 0, StandTotal = 0, StandOccluded = 0;
+    int HoleDirectPassed = 0, HoleEndpointAssertionPassed = 0, HoleTotal = 0;
+    int HoleEndpointOnOther = 0, HoleOriginalObstructed = 0, HoleOriginalTerrain = 0, HoleOriginalPenetrating = 0, HoleEndpointDisplaced = 0;
     int SeamPassed = 0, SeamTotal = 0, SeamSkipped = 0;
     TArray<TSharedPtr<FJsonObject>> Stands;
     FVector Origin, SeamEnd;
