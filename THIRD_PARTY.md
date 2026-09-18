@@ -41,6 +41,25 @@ were copied or translated; the C++ here is an independent implementation of
 the serialization order those files document. If UE Viewer code is ever
 copied in, its MIT notice must be added alongside lzokay's.
 
+## Oracles (run, not copied)
+
+UE Viewer (umodel) is additionally *run* as a comparison oracle against the
+user's installed game: `-list` for export tables and `-export -gltf -png` for
+meshes and textures. Its output tree is read and compared with ours by
+`tools/crosscheck_umodel.py` and `tools/crosscheck_umodel_assets.py`. No code
+is copied or translated, the reader does not link or depend on it, and it is a
+developer tool rather than a build or runtime dependency. This is a different
+relationship from the format reference above and is recorded separately so the
+distinction stays explicit.
+
+OpenBLCMM (https://github.com/BLCM/OpenBLCMM, GPL-3.0) ships the output of the
+game's own `obj dump` console command: an SQLite index into per-class dump
+files packed in a data jar. `tools/blcmm_dumps.py` reads that data from the
+user's installed copy as an observed-game-behaviour reference, and
+`tools/crosscheck_blcmm_dumps.py` compares it with our decode. No OpenBLCMM
+code was read, copied or translated, and no dump text is redistributed: it is
+game-derived data and stays under ignored `local/`, like every other extract.
+
 ## Python research decoder (resolved 2026-09-13)
 
 `research/native_count.py` originally carried an LZO1X decompressor that
