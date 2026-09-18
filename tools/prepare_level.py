@@ -58,6 +58,21 @@ def collection_transforms(payload, data, count):
     return result
 
 
+def collection_scale(p, cooked):
+    """A collection entry's scale, preferring the component's own Scale3D/Scale.
+
+    The cooked per-entry tail carries a copy of the component's scale, and for
+    2036 of the 2037 Sanctuary_P collection components that declare one the two
+    agree exactly. The exception is StaticMeshActor_SMC_1802, whose component
+    property says Scale3D=(0.97,1,1) while the tail says (1,1,1); the running
+    game applies the 0.97 (its object dump reports a _LocalToWorld determinant
+    of 0.97), so the property is treated as authoritative where it exists.
+    """
+    if 'Scale3D' not in p and 'Scale' not in p:
+        return cooked
+    return [v * p.get('Scale', 1) for v in vector(p.get('Scale3D', {}), 1)]
+
+
 # UE3 material graphs use a small set of exact names for the ordinary
 # channels, but environment masters also use stable aliases. Keep this
 # allow-list narrow: treating every mask/noise/cubemap parameter as albedo
@@ -749,6 +764,8 @@ class Scene:
                     if not key:
                         continue
                     pose = placements.get(record['index'])
+                    if pose is not None:
+                        pose = dict(pose, scale=collection_scale(p, pose['scale']))
                     if pose is None:
                         owner = records.get(record['outer'])
                         if not owner or owner['class'] not in ('Engine.StaticMeshActor', 'Engine.InterpActor'):

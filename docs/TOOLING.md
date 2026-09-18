@@ -498,3 +498,88 @@ rotation and FOV, and requests numbered PNGs under the project's ignored
 the camera assertions alone do not verify appearance or original-game parity.
 The saved map and its starting pose are not changed. `-Inspect` is exclusive
 with the walking, terrain, BSP, selector and profile test modes.
+
+## Independent oracles: umodel and the game's own object dumps
+
+Two external oracles are run against the existing decode. Neither is copied
+from; both stay on the user's machine and write only to ignored `local/`.
+See THIRD_PARTY.md for provenance and docs/LEGAL.md for the rules.
+
+### umodel
+
+umodel (UE Viewer, MIT) is a second reader of the same bytes. Point
+`--umodel` at `umodel.exe`; the Borderlands game tag is `border`.
+
+```powershell
+python tools/crosscheck_umodel.py --umodel $umodel --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --dlc --output local/umodel/crosscheck-all.json
+```
+
+compares umodel's `-list` with our `--exports` per package: index, serial
+offset, serial size, class short name and object name. Name differences caused
+by umodel's own normalization (`__name_N__` for names holding a control or
+non-ASCII byte, and one trimmed trailing space) are reported in a separate
+`name_normalized` bucket and do not fail the run; any other name difference
+does. Drop `--dlc` for the 914 base packages only.
+
+Exporting assets for the second tool uses umodel directly:
+
+```
+umodel.exe -game=border -export -gltf -png -nolightmap -uncook -groups `
+  -path=<CookedPCConsole> -out=local/umodel <Package>
+```
+
+```powershell
+python tools/crosscheck_umodel_assets.py --scene local/sanctuary/scene.json `
+  --umodel-exports local/umodel --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --output local/umodel/crosscheck-assets.json
+```
+
+compares each scene mesh with the matching `<Level>/<Outer>/<Group>/<Name>.gltf`
+on section count, triangles, referenced vertex count, positions and UVs, and
+each decoded PNG with umodel's. The glTF-to-UE axis mapping is chosen by search
+over all 48 permutation/sign combinations and reported in the output rather
+than assumed, as is the UV V flip. A maximum per-channel texture difference of
+1 is reported as `agree_within_1`: that is DXT decoder rounding, not a decode
+disagreement. Meshes umodel does not export (terrain, BSP) are
+`oracle_missing`. `tests/crosscheck_umodel_test.py` and
+`tests/crosscheck_umodel_assets_test.py` cover both on synthetic fixtures.
+
+### OpenBLCMM object dumps
+
+OpenBLCMM ships the output of the game's own `obj dump` console command: an
+SQLite index (`%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/data.db`) into
+per-class dump files packed in `blcmm_data_BL2-*.jar`. Unlike umodel this is
+not a second decoder — it is what the running engine reported, so it is an
+oracle for observed behaviour.
+
+`python tools/blcmm_dumps.py "<object name>" [--raw]` prints one object.
+Level objects are named `Sanctuary_P.TheWorld:PersistentLevel.Terrain_2`, with
+a colon after `TheWorld`.
+
+```powershell
+python tools/crosscheck_blcmm_dumps.py --scene local/sanctuary/scene.json `
+  --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 `
+  --output local/blcmm/crosscheck.json
+```
+
+compares four things: `TerrainComponent` section base/size and `Bounds` (our
+vertices mapped through the reported `_LocalToWorld`, allowing for the constant
+one-unit bounds expansion and for the section base the component matrix already
+carries); `ModelComponent` node count, element count and owning `Model`; actor
+placement against `_LocalToWorld`; and material texture picks against the
+effective `TextureParameterValues` through the `Parent` chain.
+
+`--reader`/`--game` are needed only for the material comparison, which resolves
+texture PNG file names back to the texture objects they came from.
+`InterpActor` placements that differ are reported as `mover`, not as
+disagreements: a dump shows where a matinee-driven actor had moved to, not its
+cooked placement. Channels with no corresponding parameter are
+`unparameterised` and are likewise not disagreements — the oracle is simply
+silent on them. Unrecognised texture parameter names are listed rather than
+mapped to a channel by guesswork.
+`tests/blcmm_dumps_test.py` and `tests/crosscheck_blcmm_dumps_test.py` cover
+the parser and the comparisons on synthetic dump text.
+
+Results for both: [umodel record](verification/UMODEL_CROSSCHECK.md),
+[dump record](verification/BLCMM_DUMP_CROSSCHECK.md).

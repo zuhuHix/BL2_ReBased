@@ -75,7 +75,13 @@ well-bounded ones are marked *good first task*.
 - [ ] Matched-viewpoint screenshots against the original game: the plan's
       per-map verification method. Needs someone with the game and both
       builds open.
-- [ ] Cross-check the census against umodel's view of the same packages.
+- [x] Cross-check the census against umodel's view of the same packages:
+      4,750,427 exports over 2006 base and DLC packages, no offset, size or
+      class disagreement; the 7 name-only differences are umodel-side
+      normalization. Sanctuary meshes, textures and material picks were also
+      compared with umodel exports and with the game's own object dumps. See
+      [umodel record](docs/verification/UMODEL_CROSSCHECK.md) and
+      [dump record](docs/verification/BLCMM_DUMP_CROSSCHECK.md).
 - [ ] Array element types from class reflection instead of hand-written
       schemas (needs cross-package class loading; touches Phase 2).
 

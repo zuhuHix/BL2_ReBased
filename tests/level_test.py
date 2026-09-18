@@ -402,6 +402,15 @@ class SceneTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.collection_transforms(corrupt, data, 1)
 
+    def test_collection_scale_prefers_the_component_property(self):
+        cooked = [1, 1, 1]
+        # No scale properties on the component: the cooked per-entry tail stands.
+        self.assertIs(m.collection_scale({}, cooked), cooked)
+        # A component that declares its own scale overrides a stale tail copy.
+        self.assertEqual(m.collection_scale({'Scale3D': {'X': 0.97}}, cooked), [0.97, 1, 1])
+        self.assertEqual(m.collection_scale({'Scale': 2}, cooked), [2, 2, 2])
+        self.assertEqual(m.collection_scale({'Scale3D': {'X': 2, 'Y': 3, 'Z': 4}, 'Scale': 0.5}, cooked), [1, 1.5, 2])
+
     def test_parent_defaults_child_override_and_explicit_null(self):
         scene = object.__new__(m.Scene)
         records = {1: record(Expressions=[{'index': 3}]),
