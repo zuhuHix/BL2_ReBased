@@ -66,8 +66,10 @@ our recovered node set and section count; `ModelComponent_16` reports 22 and 16.
 The limitation is in the dump format, not in the comparison: the property system
 prints `Nodes(N)=` and `Elements(N)=` with empty values, so the arrays give their
 length and nothing else, and a `Model` dump carries no geometry. Node contents,
-BSP UVs, `PolyFlags` and lighting are therefore not testable this way and stay
-`UNVERIFIED`.
+BSP UVs, `PolyFlags` and lighting are therefore not testable this way. The
+texture-axis fields were later checked against the editor's Polys exports
+instead ([BSP_TEXTURE_AXES.md](BSP_TEXTURE_AXES.md)); the texel scale,
+`PolyFlags` and lighting stay `UNVERIFIED`.
 
 ## Actor placement: 4209 exact, 35 movers, 1 disagreement (fixed)
 

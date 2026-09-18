@@ -443,8 +443,8 @@ python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctua
 
 This runs static-mesh preparation, terrain preparation, then BSP preparation
 with triangle collision, stopping on a failed stage. It is scoped to Sanctuary.
-Import the resulting scene normally. Native terrain blending, BSP UVs and
-collision flags retain the limitations below.
+Import the resulting scene normally. Native terrain blending, the BSP texel
+scale and collision flags retain the limitations below.
 
 `tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
 rewrites a prepared scene with one static mesh per TerrainComponent whose
@@ -465,12 +465,17 @@ See
 `tools/prepare_bsp.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
 adds the persistent-level root `Model`/`ModelComponent` polygons of a frozen
 Sanctuary scene as ordinary mesh sections: one section per component material
-element, native material assignments, a labeled 128 cm world-planar UV
-approximation, and (with `--collision`) host triangle collision. Every node,
-vertex-pool point, surface plane and component membership must cross-check
-before any file is written; volume-owned Models are rejected structurally.
-Native texture coordinates, lightmaps and collision flags are retained only as
-opaque hashes and remain `UNVERIFIED`. The script is scoped to `Sanctuary_P`
+element, native material assignments, texture coordinates projected onto each
+surface's own base point and texture axes (`--uv surface_axes`, the default;
+`--uv planar` keeps the earlier 128 cm world-planar placeholder), and (with
+`--collision`) host triangle collision. Every node, vertex-pool point, surface
+plane and component membership must cross-check before any file is written;
+volume-owned Models are rejected structurally. The axis field roles are
+confirmed against the editor's Polys exports (below); the divisor that turns
+projected distances into repeats is not in the package, so `--texel-scale`
+(default 128) is recorded in the manifest as `UNVERIFIED`. Lightmaps and
+collision flags are retained only as opaque hashes and remain `UNVERIFIED`.
+The script is scoped to `Sanctuary_P`
 plus `Sanctuary_Land` and also writes `bsp-runtime.json`;
 `test_ue_viewer.ps1 -Bsp` then runs `OpenWillow.BspWalking`, which stands on
 and walks 200 cm along an unobstructed upward-facing polygon of each model.
@@ -583,3 +588,23 @@ the parser and the comparisons on synthetic dump text.
 
 Results for both: [umodel record](verification/UMODEL_CROSSCHECK.md),
 [dump record](verification/BLCMM_DUMP_CROSSCHECK.md).
+
+## BSP texture axes against the editor's Polys exports
+
+Neither oracle above sees BSP surfaces, but cooked volume-owned Models keep an
+editor `Polys` export whose FPoly records carry explicit `Base`, `TextureU`
+and `TextureV` vectors.
+
+```powershell
+python tools/crosscheck_bsp_polys.py --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --output local/bsp/polys-all.json
+```
+
+dereferences each surface record's base-point and texture-axis indices through
+our reader and compares them with the FPoly on the same plane, across every
+non-`_SF` package (`--packages` narrows it). It exits non-zero on a `differ`,
+an out-of-range reference or a parse error; `no_unique_poly` (stale editor
+vertex lists, duplicate coplanar polys) is reported, not counted. The report
+also carries negative controls for the other int slots.
+`tests/crosscheck_bsp_polys_test.py` covers it on synthetic fixtures. Results:
+[texture-axis record](verification/BSP_TEXTURE_AXES.md).

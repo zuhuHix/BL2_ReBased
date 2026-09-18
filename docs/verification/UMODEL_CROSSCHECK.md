@@ -89,7 +89,8 @@ both.
 
 Neither tool says anything about rendering. Shader graphs, terrain blending,
 lightmaps, BSP UVs, `PolyFlags`, sky behaviour and in-game visual parity are all
-outside this pass.
+outside this pass. (BSP texture axes were later checked against a different
+source, the editor's Polys exports: [BSP_TEXTURE_AXES.md](BSP_TEXTURE_AXES.md).)
 
 ## Reproduction
 

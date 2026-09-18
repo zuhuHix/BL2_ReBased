@@ -44,12 +44,15 @@ well-bounded ones are marked *good first task*.
 - [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
       meshes with corroborated topology and host triangle collision, and the
       two persistent-level root Models emit 228 cross-checked polygons (571
-      triangles, 105 sections) with native materials, placeholder planar UVs
-      and opt-in triangle collision. Native terrain blending, BSP UVs /
-      lightmaps / collision flags, other maps and original-game alignment
-      remain open. Hole runtime assertions include occluded/displaced probes;
-      see the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md)
-      and the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md).
+      triangles, 105 sections) with native materials, native texture axes
+      (field roles confirmed against 15,393 editor FPoly records, 0 differ;
+      texel scale still `UNVERIFIED`) and opt-in triangle collision. Native
+      terrain blending, the BSP texel scale, lightmaps / collision flags,
+      other maps and original-game alignment remain open. Hole runtime
+      assertions include occluded/displaced probes; see the
+      [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md),
+      the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md) and the
+      [texture-axis record](docs/verification/BSP_TEXTURE_AXES.md).
 - [~] Sanctuary visual defects observed in the editor fly-through: the native
       dome now uses a two-sided interior policy, and the four known
       `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
