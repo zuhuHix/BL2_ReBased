@@ -32,6 +32,50 @@ Export census over packages, synthetic tests using the existing `package()` /
 `tools/verify_packages.py`. Keep README.md, ROADMAP.md and docs/TOOLING.md in
 agreement with DECISIONS.md and the verification records under docs/verification/.
 
+## Development priority: prove the vertical slice first
+
+Porting all 82 maps is the *easy* part of this project. The hard, unproven
+part is Phases 2-4 (script VM, stock UE3 natives, Gearbox's undocumented
+natives). Porting 80 maps only to discover in Phase 2-4 that the approach
+doesn't hold would waste most of the project's calendar time. So, adopted
+2026-09-18 from outside feedback (see DECISIONS.md), the current priority
+order is:
+
+1. Finish **Sanctuary** to visual/walkable parity (Phase 1). It's already
+   the most complete map; don't start over on a different one.
+2. Get **Maya** (chosen 2026-09-18) working end-to-end: movement, a few
+   weapons, animations, her action skill (Phaselock). Her skill trees
+   (Motion, Harmony, Cataclysm) are the target for Phase 4's skill-tree work.
+3. Prove core engine/gameplay integration (Phase 2's VM, Phase 3's stock UE3
+   natives) scoped to what Sanctuary + that one character actually need. Not
+   the full native surface, not every `AnimNode` type.
+4. One hand-picked simple mission and a handful of guns, end-to-end: spawn,
+   fight, loot, equip, use a skill, complete the mission, die, respawn. That's
+   Phase 4's gate in ROADMAP.md.
+
+Only after that slice is proven does broad map coverage (the remaining ~79
+maps) and additional Vault Hunters become the priority again; that work is
+in Phase 5/6 of ROADMAP.md. If asked to "port map N" or "add character X"
+before the slice gate is met, say so and confirm with the user first instead
+of just doing it; it's a priority-order question, not a technical blocker.
+
+## AI is a tool, not the developer
+
+zuhu is a solo, largely self-taught developer directing an AI-heavy build.
+Outside feedback (2026-09-18, see DECISIONS.md) set the working norm:
+
+- Don't hand an error message straight back to an AI assistant for a fix.
+  Read the error, check the relevant docs/Stack Overflow/GitHub issues first;
+  bring in AI once genuinely stuck. This is how zuhu learns the codebase well
+  enough to keep directing it.
+- Generated code should be something zuhu can explain, not just accept. Prefer
+  smaller, explainable diffs over large ones.
+- AI can generate a lot of technical debt very quickly. When in doubt, favor
+  the simpler, more obviously correct implementation over the clever one.
+
+This doesn't relax any other rule in this file: sensitive areas are still
+sensitive, and everything still needs a check against the real game.
+
 ## Every change
 
 - Run `ctest --test-dir build -C Release --output-on-failure` and
