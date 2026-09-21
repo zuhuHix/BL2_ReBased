@@ -939,8 +939,13 @@ tower sits off-centre and above the town's own; the actor transform matches
 the game dump and the vertices match umodel, and the sublevel's Kismet shows
 why: `SeqAct_Interp_0` (`SanctuaryLiftoff`) binds the hull to a
 `RelativeToInitial` move track that jumps it 1.7 km south and lifts it
-100–150 m before hiding it at 36 s. The placed transform is a parking pose for
-a cutscene prop, so the mismatch is left as-is and recorded. Second, two
+100–150 m before hiding it at 36 s. The placed transform may be a parking pose
+for a cutscene prop, but its in-game position remains unverified; the mismatch
+is left as-is and recorded. Status for
+`StaticMeshComponent_393` / `InterpActor_29` is **decode verified, in-game
+position unverified, observed off in editor**. The first-key import is an
+opt-in experiment recorded in the verification note; the serialized placement
+remains the default and no correction is committed. Second, two
 `Blocking_Plane` placements on the horizon carried
 `Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01`, a sibling of the
 already-hidden `Mat_CloudLayer_Light`, and tiled a dust sprite as yellow/black

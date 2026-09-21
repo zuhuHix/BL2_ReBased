@@ -242,6 +242,18 @@ refresh preserves placement data and resolves materials by both path and class.
 `--outer-shell` is the opt-in hull policy described under the sky notes below;
 omit it to keep the placed `_Teleported` overrides.
 
+For the narrow Sanctuary hull placement experiment, rebuild the manifest with
+
+```powershell
+python tools/viewer.py --game $game --map Sanctuary_P --action prepare --outer-shell --matinee-first-key
+```
+
+(add `--sanctuary-geometry` when preserving the recovered terrain/BSP). This changes only
+`InterpActor_29.StaticMeshComponent_393` to the observed first Matinee key;
+the default serialized placement remains unchanged. See the
+[hull placement note](verification/NATIVE_SKY_APPROXIMATION.md#matinee-first-key-placement-experiment)
+for the explicit status and limitations.
+
 On a machine without a discrete GPU, add `-LowEnd` to `run_ue_level.ps1`. It
 starts the editor or standalone viewer with DX11/SM5 (no Nanite, no virtual
 shadow maps), the lowest scalability groups, FXAA, 66% screen percentage and a

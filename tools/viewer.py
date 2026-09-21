@@ -37,13 +37,22 @@ def select(records, name):
 
 def validate_options(args, selected_map=None):
     if not args.sanctuary_geometry:
-        return
-    if args.action != 'prepare':
-        raise ValueError('--sanctuary-geometry requires --action prepare')
-    if args.list:
-        raise ValueError('--sanctuary-geometry requires a selected map, not --list')
-    if selected_map is not None and selected_map.casefold() != SANCTUARY_MAP.casefold():
-        raise ValueError('--sanctuary-geometry is only supported for Sanctuary_P')
+        if not args.matinee_first_key:
+            return
+    if args.sanctuary_geometry:
+        if args.action != 'prepare':
+            raise ValueError('--sanctuary-geometry requires --action prepare')
+        if args.list:
+            raise ValueError('--sanctuary-geometry requires a selected map, not --list')
+        if selected_map is not None and selected_map.casefold() != SANCTUARY_MAP.casefold():
+            raise ValueError('--sanctuary-geometry is only supported for Sanctuary_P')
+    if args.matinee_first_key:
+        if args.action != 'prepare':
+            raise ValueError('--matinee-first-key requires --action prepare')
+        if args.list:
+            raise ValueError('--matinee-first-key requires a selected map, not --list')
+        if selected_map is not None and selected_map.casefold() != SANCTUARY_MAP.casefold():
+            raise ValueError('--matinee-first-key is only supported for Sanctuary_P')
 
 
 def reject_plain_sanctuary_rebuild(scene, name, sanctuary_geometry):
@@ -69,6 +78,8 @@ def preparation_commands(args, name, scene):
         level.append('--include-dlc')
     if args.outer_shell:
         level.append('--outer-shell')
+    if args.matinee_first_key:
+        level.append('--matinee-first-key')
     commands = [level]
     if args.sanctuary_geometry:
         commands.extend([
@@ -97,6 +108,8 @@ def main():
                         help='Also prepare Sanctuary terrain and BSP with triangle collision')
     parser.add_argument('--outer-shell', action='store_true',
                         help='Prepare the outer hull meshes with mesh-default materials (labeled approximation)')
+    parser.add_argument('--matinee-first-key', action='store_true',
+                        help='Experimentally place the Sanctuary hull at its observed first Matinee key')
     args = parser.parse_args()
     try:
         if args.json and not args.list:

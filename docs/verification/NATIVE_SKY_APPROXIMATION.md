@@ -120,14 +120,30 @@ This substitutes the pre-teleport look for the placed phase-in material. It
 does not decide whether the running game shows the `_Outer` hull or the
 `_Land` mountains at any story state; both sublevels load together here.
 
+### Matinee first-key placement experiment
+
+The cheap placement test is opt-in and deliberately narrow. On `Sanctuary_P`,
+`prepare_level.py --matinee-first-key` matches only
+`TheWorld.PersistentLevel.InterpActor_29.StaticMeshComponent_393`, adds the
+observed first `RelativeToInitial` translation `(16551, -171794, -164)` to
+the serialized actor location, and sets the actor rotation to yaw `78.75°`.
+The resulting pose is
+approximately `(17052, -171572, -288)`, yaw `78.75°`. The same option is
+available through `viewer.py --action prepare --matinee-first-key`; it writes
+`matinee_first_key_policy` and `matinee_first_key_applied` into `scene.json`.
+It is a visual comparison aid, not a `SeqAct_Interp` or Kismet decoder, and
+the default serialized placement is unchanged.
+
 ### What the hull is (editor inspection, 2026-09-21)
 
-In the editor the hull's central tower sits visibly off-centre and above the
-town's own tower. That is not a decode offset: the actor transform agrees
-with the game's object dump (translation delta 0.0) and all 10,003 vertices
-agree with umodel at 1 cm ([dump record](BLCMM_DUMP_CROSSCHECK.md),
-[umodel record](UMODEL_CROSSCHECK.md)). Reading the sublevel's Kismet with
-our own reader explains it:
+Status for `StaticMeshComponent_393` / `InterpActor_29`: **decode verified,
+in-game position unverified, observed off in editor.** In the editor the
+hull's central tower sits visibly off-centre and above the town's own tower.
+The serialized actor transform agrees with the game's object dump (translation
+delta 0.0) and all 10,003 vertices agree with umodel at 1 cm
+([dump record](BLCMM_DUMP_CROSSCHECK.md), [umodel record](UMODEL_CROSSCHECK.md)).
+Reading the sublevel's Kismet with our own reader gives a plausible placement
+explanation, but does not establish which pose the original game displays:
 
 - `Sanctuary_Outer` contains one Matinee, `SeqAct_Interp_0`, commented
   `SanctuaryLiftoff`, with 84 groups. Its `Sanctuary` group is bound to
@@ -142,12 +158,15 @@ our own reader explains it:
 - `Sanctuary_Outer` and `Sanctuary_Land` are both `LevelStreamingKismet` in
   `Sanctuary_P`; `Sanctuary_Px` is the only always-loaded sublevel.
 
-So the hull is the liftoff-cutscene prop. Its placed transform is a parking
-pose coincident with the town; the cutscene moves it 1.7 km south and lifts
-it 100–150 m before hiding it. Nothing in the package draws it at its placed
-position in the ground state. The opt-in import shows the parked prop as-is,
-and the off-centre tower is that parked pose, not an error to correct.
-Decoding the Kismet decides which sublevel is active remains open.
+So the hull is associated with a liftoff-cutscene prop, and its serialized
+transform may be a parking pose coincident with the town; the observed first
+key would move it about 1.7 km south and lift it 100–150 m before hiding it.
+That interpretation is not an in-game position proof. The normal import keeps
+the serialized placement. The opt-in `--matinee-first-key` experiment instead
+adds the observed first key to this one component, producing approximately
+`(17052, -171572, -288)` at yaw `78.75°` so the editor result can be compared
+directly. Full `SeqAct_Interp` start-position decoding and Kismet triggering
+remain open; no placement correction is committed by this experiment.
 
 ## Automated evidence
 

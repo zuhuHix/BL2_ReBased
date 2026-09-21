@@ -86,6 +86,19 @@ class ViewerTests(unittest.TestCase):
                 self.assertEqual(commands[0][-1], '--outer-shell')
                 self.assertTrue(all('--outer-shell' not in command for command in commands[1:]))
 
+    def test_matinee_first_key_opt_in_is_passed_to_level_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            records = [{'map': 'Sanctuary_P', 'selectable': True}]
+            with patch.object(viewer, 'ROOT', root), patch.object(viewer, 'catalog', return_value=records), \
+                    patch.object(viewer.sys, 'argv', ['viewer', '--game', folder, '--map', 'Sanctuary_P',
+                                                    '--action', 'prepare', '--matinee-first-key']), \
+                    patch.object(viewer.subprocess, 'run') as run:
+                viewer.main()
+                command = run.call_args.args[0]
+                self.assertEqual(command[-1], '--matinee-first-key')
+                self.assertEqual(Path(command[1]).name, 'prepare_level.py')
+
     def test_sanctuary_geometry_preparation_runs_in_order_with_collision(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

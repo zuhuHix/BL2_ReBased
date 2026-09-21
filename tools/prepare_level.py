@@ -114,6 +114,31 @@ OUTER_SHELL_OVERRIDE_SUFFIX = '_Teleported'
 HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
 HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
 HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
+
+# Cheap, opt-in Matinee placement experiment for the Sanctuary hull. This is
+# intentionally a source-path match, not a general SeqAct_Interp decoder.
+MATINEE_FIRST_KEY_COMPONENT = (
+    'TheWorld.PersistentLevel.InterpActor_29.StaticMeshComponent_393')
+MATINEE_FIRST_KEY_TRANSLATION = [16551, -171794, -164]
+MATINEE_FIRST_KEY_ROTATION = [0, 78.75, 0]
+
+
+def apply_matinee_first_key_pose(source, pose):
+    """Apply the observed first RelativeToInitial key to one hull pose.
+
+    The serialized actor pose remains the source of the base transform. The
+    translation and yaw are only an opt-in visual experiment; this function
+    does not claim to decode SeqAct_Interp start-position or Kismet state.
+    """
+    if source != MATINEE_FIRST_KEY_COMPONENT:
+        return pose, False
+    if 'matrix' in pose or 'actor' not in pose:
+        raise ValueError('Matinee first-key target is not an actor/component pose')
+    actor = dict(pose['actor'])
+    actor['location'] = [a + offset for a, offset in
+                         zip(actor['location'], MATINEE_FIRST_KEY_TRANSLATION)]
+    actor['rotation'] = list(MATINEE_FIRST_KEY_ROTATION)
+    return dict(pose, actor=actor), True
 # Both observed cloud-layer instances: `_Light` in Sanctuary_P (four planes)
 # and `_01` in Sanctuary_Light (two planes on the horizon, whose sole cooked
 # texture is a dust sprite that tiled as yellow/black stripes).
@@ -377,11 +402,13 @@ def cooked_texture_references(payload, data):
 
 
 class Scene:
-    def __init__(self, reader, game, output, include_dlc=False, outer_shell=False):
+    def __init__(self, reader, game, output, include_dlc=False, outer_shell=False,
+                 matinee_first_key=False):
         self.reader, self.game, self.output = reader.resolve(), game.resolve(), output.resolve()
         self.cooked = self.game / 'WillowGame/CookedPCConsole'
         self.include_dlc = include_dlc
         self.outer_shell = outer_shell
+        self.matinee_first_key = matinee_first_key
         self.package_root = self.game if include_dlc else self.cooked
         self.schema = Path(__file__).with_name('level-arrays.schema')
         self.packages = {}
@@ -920,6 +947,8 @@ class Scene:
         self.load('Startup')
         levels = self.levels(persistent)
         actors, camera = [], None
+        matinee_first_key_applied = 0
+        matinee_first_key = getattr(self, 'matinee_first_key', False)
         for level in levels:
             print(f'Preparing {level}', flush=True)
             records = self.load(level)
@@ -954,6 +983,9 @@ class Scene:
                             self.issue(level + ':' + record['path'], 'Unsupported component owner')
                             continue
                         pose = {'actor': transform(props(owner)), 'component': transform(p, True)}
+                    if matinee_first_key:
+                        pose, applied = apply_matinee_first_key_pose(record['path'], pose)
+                        matinee_first_key_applied += int(applied)
                     overrides = [self.material(self.resolve(level, ref)) for ref in p.get('Materials', [])]
                     mesh_identity = self.identity(key)
                     mesh_name = self.mesh(key)
@@ -985,11 +1017,19 @@ class Scene:
                     self.issue(level + ':' + record['path'], error)
         if not actors:
             raise ValueError('No static mesh placements loaded')
+        if matinee_first_key and matinee_first_key_applied != 1:
+            raise ValueError('Matinee first-key experiment expected exactly one '
+                             f'{MATINEE_FIRST_KEY_COMPONENT}, found '
+                             f'{matinee_first_key_applied}')
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
                   'collision_policy': 'observed_convex_and_box_v1',
+                  'matinee_first_key_policy': (
+                      'relative_to_initial_first_key_experiment_v1'
+                      if matinee_first_key else 'serialized_placement'),
+                  'matinee_first_key_applied': matinee_first_key_applied,
                   'outer_shell_policy': ('mesh_default_for_teleported_overrides_v1'
                                          if getattr(self, 'outer_shell', False) else 'placed_overrides')}
         temporary = self.output / 'scene.json.tmp'
@@ -1010,17 +1050,23 @@ def main():
     parser.add_argument('--outer-shell', action='store_true',
                         help='Render the observed outer hull meshes with their mesh-default materials '
                              'instead of the unrecoverable masked _Teleported overrides')
+    parser.add_argument('--matinee-first-key', action='store_true',
+                        help='Experimentally place Sanctuary InterpActor_29 at its observed '
+                             'RelativeToInitial first move key')
     args = parser.parse_args()
     if not (args.game / 'Binaries/Win32/Borderlands2.exe').is_file():
         parser.error('An installed Borderlands 2 is required')
     if not args.map.endswith('_P'):
         parser.error('Start with a persistent _P package')
+    if args.matinee_first_key and args.map.casefold() != 'sanctuary_p':
+        parser.error('--matinee-first-key is only supported for Sanctuary_P')
     if not args.map.replace('_', '').isascii() or not args.map.replace('_', '').isalnum():
         parser.error('Map names must contain only ASCII letters, digits and underscores')
     if args.output is None:
         args.output = Path('local') / args.map[:-2].lower()
     Scene(args.reader, args.game, args.output, include_dlc=args.include_dlc,
-          outer_shell=args.outer_shell).build(args.map)
+          outer_shell=args.outer_shell,
+          matinee_first_key=args.matinee_first_key).build(args.map)
 
 
 if __name__ == '__main__':

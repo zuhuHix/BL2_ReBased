@@ -327,6 +327,19 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(t, {'location': [25, 0, 0], 'rotation': [0, 90, -180], 'scale': [-6, 8, 10]})
         self.assertEqual(m.transform({}, True)['scale'], [1, 1, 1])
 
+    def test_matinee_first_key_experiment_offsets_only_the_hull(self):
+        pose = {'actor': {'location': [501, 222, -124], 'rotation': [0, 90, 0],
+                          'scale': [1, 1, 1]},
+                'component': m.transform({}, True)}
+        shifted, applied = m.apply_matinee_first_key_pose(
+            m.MATINEE_FIRST_KEY_COMPONENT, pose)
+        self.assertTrue(applied)
+        self.assertEqual(shifted['actor']['location'], [17052, -171572, -288])
+        self.assertEqual(shifted['actor']['rotation'], [0, 78.75, 0])
+        unchanged, applied = m.apply_matinee_first_key_pose('Other.Component', pose)
+        self.assertFalse(applied)
+        self.assertIs(unchanged, pose)
+
     def test_game_winding_becomes_outward_obj_face(self):
         # UE game index order opposes the stored outward normal. After the
         # handedness adapter, standard OBJ cross products must agree with it.
