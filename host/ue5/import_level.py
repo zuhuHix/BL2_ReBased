@@ -54,6 +54,99 @@ def imported(filename, expected):
 
 materials = {}
 textures = {}
+
+
+def sky_texture(item, srgb):
+    """Import one recorded sky input texture once, as color or linear data."""
+    texture = textures.get(item['file'])
+    if texture is None:
+        texture = imported(item['file'], unreal.Texture2D)
+        textures[item['file']] = texture
+    texture.set_editor_property('srgb', srgb)
+    texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    return texture
+
+
+def connect(material, source, source_pin, target, target_pin):
+    if not mel.connect_material_expressions(source, source_pin, target, target_pin):
+        raise RuntimeError(f'Cannot connect sky graph {source_pin!r} -> {target_pin!r}: ' + material.get_name())
+
+
+def build_sky_approximation(material, name, sky):
+    """Host graph for `sky_time_of_day_strip_v1`; see NATIVE_SKY_APPROXIMATION.md.
+
+    The preparer recorded the instance's named inputs; the master graph that
+    combined them is stripped. This graph is the recorded approximation:
+    visible = lerp(strip(column_u, dome V) * sky_brightness,
+                   strip(column_u, horizon_row) * sky_brightness * cloud_brightness,
+                   saturate(clouds.R * cloud_cap_opacity)).
+    Every relationship here is UNVERIFIED against the original shader.
+    """
+    if sky.get('method') != 'sky_time_of_day_strip_v1':
+        raise RuntimeError('Unsupported sky approximation method: ' + str(sky.get('method')))
+    # The dome sits 20,000 km from the camera; without this flag the host
+    # atmosphere's aerial perspective fogs it to a brown field. UE's sky flag
+    # exempts Unlit opaque materials from fog and aerial perspective.
+    try:
+        material.set_editor_property('is_sky', True)
+    except Exception as error:
+        raise RuntimeError('Sky approximation requires the material Is Sky flag') from error
+    scalars = sky['scalars']
+    strip = sky_texture(sky['textures']['transition_track'], True)
+    clouds = sky_texture(sky['textures']['clouds'], False)
+    new = lambda cls: mel.create_material_expression(material, cls)
+    dome_uv = new(unreal.MaterialExpressionTextureCoordinate)
+    dome_uv.set_editor_property('coordinate_index', 0)
+    dome_v = new(unreal.MaterialExpressionComponentMask)
+    dome_v.set_editor_property('r', False)
+    dome_v.set_editor_property('g', True)
+    connect(material, dome_uv, '', dome_v, '')
+    column = new(unreal.MaterialExpressionConstant)
+    column.set_editor_property('r', float(sky['time_axis']['column_u']))
+    strip_uv = new(unreal.MaterialExpressionAppendVector)
+    connect(material, column, '', strip_uv, 'A')
+    connect(material, dome_v, '', strip_uv, 'B')
+    gradient = new(unreal.MaterialExpressionTextureSample)
+    gradient.set_editor_property('texture', strip)
+    gradient.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+    connect(material, strip_uv, '', gradient, 'UVs')
+    brightness = new(unreal.MaterialExpressionConstant)
+    brightness.set_editor_property('r', float(scalars['sky_brightness']))
+    sky_color = new(unreal.MaterialExpressionMultiply)
+    connect(material, gradient, 'RGB', sky_color, 'A')
+    connect(material, brightness, '', sky_color, 'B')
+    horizon_uv = new(unreal.MaterialExpressionConstant2Vector)
+    horizon_uv.set_editor_property('r', float(sky['time_axis']['column_u']))
+    horizon_uv.set_editor_property('g', float(sky['horizon_row_v']))
+    horizon = new(unreal.MaterialExpressionTextureSample)
+    horizon.set_editor_property('texture', strip)
+    horizon.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+    connect(material, horizon_uv, '', horizon, 'UVs')
+    cloud_brightness = new(unreal.MaterialExpressionConstant)
+    cloud_brightness.set_editor_property('r', float(scalars['sky_brightness'] * scalars['cloud_brightness']))
+    cloud_color = new(unreal.MaterialExpressionMultiply)
+    connect(material, horizon, 'RGB', cloud_color, 'A')
+    connect(material, cloud_brightness, '', cloud_color, 'B')
+    coverage_sample = new(unreal.MaterialExpressionTextureSample)
+    coverage_sample.set_editor_property('texture', clouds)
+    coverage_sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+    connect(material, dome_uv, '', coverage_sample, 'UVs')
+    opacity = new(unreal.MaterialExpressionConstant)
+    opacity.set_editor_property('r', float(scalars['cloud_cap_opacity']))
+    coverage = new(unreal.MaterialExpressionMultiply)
+    connect(material, coverage_sample, sky['cloud_channel'], coverage, 'A')
+    connect(material, opacity, '', coverage, 'B')
+    saturated = new(unreal.MaterialExpressionSaturate)
+    connect(material, coverage, '', saturated, '')
+    visible = new(unreal.MaterialExpressionLinearInterpolate)
+    connect(material, sky_color, '', visible, 'A')
+    connect(material, cloud_color, '', visible, 'B')
+    connect(material, saturated, '', visible, 'Alpha')
+    if not mel.connect_material_property(visible, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR):
+        raise RuntimeError('Cannot connect sky approximation visible color: ' + name)
+
+
 for name, definition in scene['materials'].items():
     material_path = destination + '/Assets/M_' + name
     material = unreal.load_asset(material_path) if unreal.EditorAssetLibrary.does_asset_exist(material_path) else None
@@ -137,7 +230,12 @@ for name, definition in scene['materials'].items():
     # Unlit uses Emissive Color for visible color. Retain the recovered diffuse
     # (or constant fallback) there when no explicit emissive channel exists.
     # This is Material v1 host policy, not reconstruction of the UE3 sky graph.
-    if definition.get('lighting_model') == 'MLM_Unlit' and emissive_sample is None:
+    sky = definition.get('sky_approximation')
+    if definition.get('lighting_model') == 'MLM_Unlit' and sky is not None:
+        # The preparer's diffuse inference stays on Base Color as the
+        # recorded fallback; the visible Unlit color is the sky approximation.
+        build_sky_approximation(material, name, sky)
+    elif definition.get('lighting_model') == 'MLM_Unlit' and emissive_sample is None:
         color_node = diffuse_sample if diffuse_sample is not None else fallback
         color_pin = 'RGB' if diffuse_sample is not None else ''
         if color_node is None or not mel.connect_material_property(
@@ -253,12 +351,14 @@ scene_bounds_max = unreal.Vector(float('-inf'), float('-inf'), float('-inf'))
 for instance in scene['actors']:
     transform = placement(instance['transform'])
     is_native_skybox = bool(instance.get('native_skybox'))
+    is_outer_shell = bool(instance.get('outer_shell'))
     hidden_visual = bool(instance.get('hidden_visual'))
     for section in scene['meshes'][instance['mesh']]['sections']:
         actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector())
         actor.set_actor_label(actor_label(instance['level'], instance['source'], section['slot']))
         actor.set_editor_property('tags', [unreal.Name(instance['source'])])
-        actor.set_folder_path(('NativeSkybox/' if is_native_skybox else '') + instance['level'])
+        actor.set_folder_path(('NativeSkybox/' if is_native_skybox else 'OuterShell/' if is_outer_shell else '')
+                              + instance['level'])
         component = actor.static_mesh_component
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         component.set_static_mesh(meshes[instance['mesh'], section['slot']])
@@ -281,9 +381,10 @@ for instance in scene['actors']:
                  or (section is scene['meshes'][instance['mesh']]['sections'][0]
                      and bool(scene['meshes'][instance['mesh']].get('collision', {}).get('hulls', []))))
             else unreal.CollisionEnabled.NO_COLLISION)
-        if is_native_skybox:
+        if is_native_skybox or is_outer_shell:
             # The dome is a visual shell. It must not block the player or cast
             # a giant shadow over Sanctuary; its source collision is absent.
+            # The outer hull's source component records CastShadow=False.
             try:
                 component.set_editor_property('cast_shadow', False)
             except Exception:
@@ -383,6 +484,14 @@ sky_component.set_light_color(unreal.LinearColor(0.72, 0.82, 1.0, 1.0))
 # recovered setup. Keep that atmosphere for ambient lighting, but add a
 # deterministic visual shell so unfilled parts of the inspection view remain
 # a cool blue. This is a host fallback, not a native Sanctuary sky claim.
+# The shell sits inside the native dome and would hide it, so it is only
+# spawned when no accepted dome placement carries a sky approximation.
+native_sky_approximated = any(
+    instance.get('native_skybox') and any(
+        material and scene['materials'].get(material, {}).get('sky_approximation')
+        for material in (instance['materials'] or [
+            section['material'] for section in scene['meshes'][instance['mesh']]['sections']]))
+    for instance in scene['actors'])
 sky_fallback_path = destination + '/Assets/M_OpenWillowSkyFallback'
 sky_fallback_material = (unreal.load_asset(sky_fallback_path)
                           if unreal.EditorAssetLibrary.does_asset_exist(sky_fallback_path)
@@ -399,26 +508,27 @@ if not mel.connect_material_property(sky_color, '', unreal.MaterialProperty.MP_E
     raise RuntimeError('Cannot connect sky fallback color')
 mel.recompile_material(sky_fallback_material)
 unreal.EditorAssetLibrary.save_loaded_asset(sky_fallback_material)
-sky_fallback = actors.spawn_actor_from_class(unreal.StaticMeshActor, lighting_center)
-sky_fallback.set_actor_label('OpenWillow_SkyFallback')
-sky_fallback.set_folder_path('Lighting')
-sky_fallback_component = sky_fallback.static_mesh_component
-sky_fallback_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Sphere.Sphere'))
-sky_fallback_component.set_material(0, sky_fallback_material)
-sky_fallback_component.set_collision_profile_name('NoCollision')
-sky_fallback_component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
-try:
-    # The camera is inside the source sphere; reverse culling keeps the
-    # two-sided shell visible on UE5's saved static mesh component.
-    sky_fallback_component.set_editor_property('reverse_culling', True)
-except Exception as error:
-    raise RuntimeError('Sky fallback requires reverse culling support') from error
-try:
-    sky_fallback_component.set_editor_property('cast_shadow', False)
-except Exception:
-    pass
-sky_fallback.set_actor_scale3d(unreal.Vector(10000.0, 10000.0, 10000.0))
-sky_fallback_component.set_mobility(unreal.ComponentMobility.STATIC)
+if not native_sky_approximated:
+    sky_fallback = actors.spawn_actor_from_class(unreal.StaticMeshActor, lighting_center)
+    sky_fallback.set_actor_label('OpenWillow_SkyFallback')
+    sky_fallback.set_folder_path('Lighting')
+    sky_fallback_component = sky_fallback.static_mesh_component
+    sky_fallback_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Sphere.Sphere'))
+    sky_fallback_component.set_material(0, sky_fallback_material)
+    sky_fallback_component.set_collision_profile_name('NoCollision')
+    sky_fallback_component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
+    try:
+        # The camera is inside the source sphere; reverse culling keeps the
+        # two-sided shell visible on UE5's saved static mesh component.
+        sky_fallback_component.set_editor_property('reverse_culling', True)
+    except Exception as error:
+        raise RuntimeError('Sky fallback requires reverse culling support') from error
+    try:
+        sky_fallback_component.set_editor_property('cast_shadow', False)
+    except Exception:
+        pass
+    sky_fallback.set_actor_scale3d(unreal.Vector(10000.0, 10000.0, 10000.0))
+    sky_fallback_component.set_mobility(unreal.ComponentMobility.STATIC)
 
 # The observed native dome is imported above with its Material v1 approximation.
 # Keep the atmosphere as a temporary fill for maps or sky layers whose native
@@ -491,6 +601,9 @@ except Exception:
     pass
 terrain_placements = sum(1 for item in scene['actors'] if item.get('terrain'))
 native_skybox_placements = sum(1 for item in scene['actors'] if item.get('native_skybox'))
+outer_shell_placements = sum(1 for item in scene['actors'] if item.get('outer_shell'))
+outer_shell_replaced = sum(len(item.get('outer_shell_replaced', [])) for item in scene['actors'])
+sky_approximations = [m['source'] for m in scene['materials'].values() if m.get('sky_approximation')]
 hidden_visual_placements = sum(1 for item in scene['actors'] if item.get('hidden_visual'))
 level.save_current_level()
 unreal.EditorAssetLibrary.save_directory(destination)
@@ -499,15 +612,22 @@ unreal.EditorAssetLibrary.save_directory(destination)
     'neutral_fallback_sections': neutral_fallback_sections,
     'native_skybox': {'placements': native_skybox_placements,
                       'mesh': 'Prop_Skybox.Meshes.Sky_Dome',
-                      'policy': 'observed_sky_dome_material_v1',
+                      'policy': ('sky_time_of_day_strip_v1' if native_sky_approximated
+                                 else 'observed_sky_dome_material_v1'),
+                      'sky_approximation_materials': sky_approximations,
                       'graph_status': 'partial_unverified',
-                      'two_sided_interior_policy': True},
+                      'two_sided_interior_policy': True,
+                      'host_sky_shell_spawned': not native_sky_approximated},
+    'outer_shell': {'placements': outer_shell_placements,
+                    'replaced_overrides': outer_shell_replaced,
+                    'policy': scene.get('outer_shell_policy', 'placed_overrides')},
     'hidden_visual': {'placements': hidden_visual_placements,
                       'meshes': ['Common_Meshes.Blocking.Blocking_Cube',
                                  'Common_Meshes.CollisionCube',
                                  'Common_Meshes.Blocking.Blocking_Plane',
                                  'Prop_Garbage.Meshes.BoxLrg'],
-                      'materials': ['Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'],
+                      'materials': ['Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light',
+                                    'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'],
                       'sources': ['TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'],
                       'policy': 'hide_unrecovered_visual_preserve_source_collision'},
     'terrain': {'placements': terrain_placements,
@@ -517,6 +637,7 @@ unreal.EditorAssetLibrary.save_directory(destination)
     'lighting': {'sun_intensity': 1.0, 'sky_intensity': 0.5,
                  'reflection_capture_radius': max(capture_radius, 1000.0),
                  'exposure': 'auto', 'ambient_occlusion': 0.35,
-                 'temporary_sky_fallback': 'UE5_SkyAtmosphere+OpenWillow_SkyFallback'},
+                 'temporary_sky_fallback': ('UE5_SkyAtmosphere' if native_sky_approximated
+                                            else 'UE5_SkyAtmosphere+OpenWillow_SkyFallback')},
     'visual_validation': 'pending'}, indent=2))
 unreal.log(f'OpenWillow: imported {count} mesh sections, including {native_skybox_placements} native skybox placements and {hidden_visual_placements} hidden collision helpers, with lighting rig and temporary UE5 sky fallback. Play: WASD + mouse, E/Q vertical flight.')

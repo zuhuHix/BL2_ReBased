@@ -310,13 +310,27 @@ Preparation defaults to a separate `local/<map-name>` directory, so preparing
 translation without extracting meshes again:
 
 ```powershell
-python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures
+python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures --outer-shell
 ./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ImportOnly -SkipBuild
 ./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary
 ```
 
 Use `--reuse-textures` only with the same unchanged game installation. The
 refresh preserves placement data and resolves materials by both path and class.
+`--outer-shell` is the opt-in hull policy described under the sky notes below;
+omit it to keep the placed `_Teleported` overrides.
+
+For the narrow Sanctuary hull placement experiment, rebuild the manifest with
+
+```powershell
+python tools/viewer.py --game $game --map Sanctuary_P --action prepare --outer-shell --matinee-first-key
+```
+
+(add `--sanctuary-geometry` when preserving the recovered terrain/BSP). This changes only
+`InterpActor_29.StaticMeshComponent_393` to the observed first Matinee key;
+the default serialized placement remains unchanged. See the
+[hull placement note](verification/NATIVE_SKY_APPROXIMATION.md#matinee-first-key-placement-experiment)
+for the explicit status and limitations.
 
 On a machine without a discrete GPU, add `-LowEnd` to `run_ue_level.ps1`. It
 starts the editor or standalone viewer with DX11/SM5 (no Nanite, no virtual
@@ -411,10 +425,35 @@ sky layers. A second Sanctuary `Sky_Dome` placement with a floor-material
 override is deliberately left as ordinary geometry. See the
 [native skybox verification record](verification/NATIVE_SKYBOX_VERIFICATION.md).
 
+When the dome's effective material descends from
+`Common_Materials.Sky.Mat_SkyTimeOfDay_Master`, the preparer also writes a
+`sky_approximation` record from the named inputs that survive along the
+instance chain (transition strip, cloud and mask textures, `Time_of_Day`,
+brightness and opacity scalars). The importer builds one fixed graph from it:
+the `Time_of_Day` column of the transition strip over dome V, blended toward
+the strip's horizon row where `Clouds_01.R` is dense. The stripped master
+graph is not decoded; the column reading (`/256`) is recorded as
+`UNVERIFIED`, and the sun spot, masks, cloud motion and time-of-day animation
+are listed as omitted. When such a dome is accepted, the blue
+`OpenWillow_SkyFallback` sphere (which sits inside the dome) is not spawned;
+the UE5 atmosphere stays. The verifier walks the saved graph back from
+Emissive and reports `verified_sky_approximation_materials`.
+
+The `Sanctuary_Outer` hull (`Prop_Skybox.Meshes.SanctuarySky` and its two
+antennas) is placed with masked `_Teleported` overrides that Material v1
+cannot recover, so it imports invisible by default. `--outer-shell` (on
+`viewer.py --action prepare`, `prepare_level.py` and `refresh_materials.py`)
+drops only those overrides whose mesh-default material resolved a diffuse,
+records each replacement in the actor's `outer_shell_replaced` list, and
+imports the actors under `OuterShell/` without shadow casting. Which of
+`_Outer` and `_Land` the running game shows is Kismet state and is not
+interpreted. See the
+[sky approximation record](verification/NATIVE_SKY_APPROXIMATION.md).
+
 Observed blocking helpers are retained for source collision where recovered and
 hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
-94 `Common_Meshes.CollisionCube` placements, and four cloud `Blocking_Plane`
-placements. The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
+94 `Common_Meshes.CollisionCube` placements, and six cloud `Blocking_Plane`
+placements (four `Mat_CloudLayer_Light`, two `Mat_CloudLayer_01`). The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
 placement that blocked the start view is also hidden. This is a bounded visual
 artifact policy, not complete collision or material parity.
 
@@ -513,6 +552,17 @@ counts do not establish which missing floors terrain/BSP will fill. See
 
 ## Terrain floors
 
+For a complete Sanctuary preparation, use:
+
+```powershell
+python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctuary-geometry --outer-shell
+```
+
+This runs static-mesh preparation, terrain preparation, then BSP preparation
+with triangle collision, stopping on a failed stage. It is scoped to Sanctuary.
+Import the resulting scene normally. Native terrain blending, the BSP texel
+scale and collision flags retain the limitations below.
+
 `tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
 rewrites a prepared scene with one static mesh per TerrainComponent whose
 vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
@@ -522,7 +572,8 @@ also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
 flagged hole cell and walks one component seam. Full viewer logs now include
 `Terrain hole path:` records for every probe frame, with movement, floor and
 downward-trace diagnostics. A displaced or occluded endpoint does not directly
-verify the original hole location; the summary counts are endpoint assertions.
+verify the original hole location. The runtime summary distinguishes direct
+original-point traces from endpoint assertions, obstruction and displacement.
 See
 [the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
@@ -531,12 +582,17 @@ See
 `tools/prepare_bsp.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
 adds the persistent-level root `Model`/`ModelComponent` polygons of a frozen
 Sanctuary scene as ordinary mesh sections: one section per component material
-element, native material assignments, a labeled 128 cm world-planar UV
-approximation, and (with `--collision`) host triangle collision. Every node,
-vertex-pool point, surface plane and component membership must cross-check
-before any file is written; volume-owned Models are rejected structurally.
-Native texture coordinates, lightmaps and collision flags are retained only as
-opaque hashes and remain `UNVERIFIED`. The script is scoped to `Sanctuary_P`
+element, native material assignments, texture coordinates projected onto each
+surface's own base point and texture axes (`--uv surface_axes`, the default;
+`--uv planar` keeps the earlier 128 cm world-planar placeholder), and (with
+`--collision`) host triangle collision. Every node, vertex-pool point, surface
+plane and component membership must cross-check before any file is written;
+volume-owned Models are rejected structurally. The axis field roles are
+confirmed against the editor's Polys exports (below); the divisor that turns
+projected distances into repeats is not in the package, so `--texel-scale`
+(default 128) is recorded in the manifest as `UNVERIFIED`. Lightmaps and
+collision flags are retained only as opaque hashes and remain `UNVERIFIED`.
+The script is scoped to `Sanctuary_P`
 plus `Sanctuary_Land` and also writes `bsp-runtime.json`;
 `test_ue_viewer.ps1 -Bsp` then runs `OpenWillow.BspWalking`, which stands on
 and walks 200 cm along an unobstructed upward-facing polygon of each model.
@@ -548,3 +604,124 @@ labeled `neutral_constant`) import with the lit gray
 `M_OpenWillowNeutralFallback` host material and are counted in
 `ue-import.json` / `ue-verify.json` as `neutral_fallback_sections`. Before
 this they fell through to UE's default `WorldGridMaterial` checkerboard.
+
+## Repeatable inspection viewpoints
+
+Create `local/sanctuary/inspection-views.json` with a `views` array containing
+1 to 12 objects. Each object requires `location` (world centimeters),
+`rotation` (pitch, yaw, roll in degrees), and `fov` (10 to 150 degrees).
+For example, a synthetic viewpoint is
+`{"location":[0,0,1000],"rotation":[-20,45,0],"fov":75}`.
+
+Run `tools/test_ue_viewer.ps1 -Engine $engine -Game $game -Scene local/sanctuary -Inspect`.
+The host waits eight seconds at each viewpoint, asserts camera position,
+rotation and FOV, and requests numbered PNGs under the project's ignored
+`Saved/Screenshots/WindowsEditor/` directory. Inspect the resulting files;
+the camera assertions alone do not verify appearance or original-game parity.
+The saved map and its starting pose are not changed. `-Inspect` is exclusive
+with the walking, terrain, BSP, selector and profile test modes.
+
+## Independent oracles: umodel and the game's own object dumps
+
+Two external oracles are run against the existing decode. Neither is copied
+from; both stay on the user's machine and write only to ignored `local/`.
+See THIRD_PARTY.md for provenance and docs/LEGAL.md for the rules.
+
+### umodel
+
+umodel (UE Viewer, MIT) is a second reader of the same bytes. Point
+`--umodel` at `umodel.exe`; the Borderlands game tag is `border`.
+
+```powershell
+python tools/crosscheck_umodel.py --umodel $umodel --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --dlc --output local/umodel/crosscheck-all.json
+```
+
+compares umodel's `-list` with our `--exports` per package: index, serial
+offset, serial size, class short name and object name. Name differences caused
+by umodel's own normalization (`__name_N__` for names holding a control or
+non-ASCII byte, and one trimmed trailing space) are reported in a separate
+`name_normalized` bucket and do not fail the run; any other name difference
+does. Drop `--dlc` for the 914 base packages only.
+
+Exporting assets for the second tool uses umodel directly:
+
+```
+umodel.exe -game=border -export -gltf -png -nolightmap -uncook -groups `
+  -path=<CookedPCConsole> -out=local/umodel <Package>
+```
+
+```powershell
+python tools/crosscheck_umodel_assets.py --scene local/sanctuary/scene.json `
+  --umodel-exports local/umodel --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --output local/umodel/crosscheck-assets.json
+```
+
+compares each scene mesh with the matching `<Level>/<Outer>/<Group>/<Name>.gltf`
+on section count, triangles, referenced vertex count, positions and UVs, and
+each decoded PNG with umodel's. The glTF-to-UE axis mapping is chosen by search
+over all 48 permutation/sign combinations and reported in the output rather
+than assumed, as is the UV V flip. A maximum per-channel texture difference of
+1 is reported as `agree_within_1`: that is DXT decoder rounding, not a decode
+disagreement. Meshes umodel does not export (terrain, BSP) are
+`oracle_missing`. `tests/crosscheck_umodel_test.py` and
+`tests/crosscheck_umodel_assets_test.py` cover both on synthetic fixtures.
+
+### OpenBLCMM object dumps
+
+OpenBLCMM ships the output of the game's own `obj dump` console command: an
+SQLite index (`%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/data.db`) into
+per-class dump files packed in `blcmm_data_BL2-*.jar`. Unlike umodel this is
+not a second decoder — it is what the running engine reported, so it is an
+oracle for observed behaviour.
+
+`python tools/blcmm_dumps.py "<object name>" [--raw]` prints one object.
+Level objects are named `Sanctuary_P.TheWorld:PersistentLevel.Terrain_2`, with
+a colon after `TheWorld`.
+
+```powershell
+python tools/crosscheck_blcmm_dumps.py --scene local/sanctuary/scene.json `
+  --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 `
+  --output local/blcmm/crosscheck.json
+```
+
+compares four things: `TerrainComponent` section base/size and `Bounds` (our
+vertices mapped through the reported `_LocalToWorld`, allowing for the constant
+one-unit bounds expansion and for the section base the component matrix already
+carries); `ModelComponent` node count, element count and owning `Model`; actor
+placement against `_LocalToWorld`; and material texture picks against the
+effective `TextureParameterValues` through the `Parent` chain.
+
+`--reader`/`--game` are needed only for the material comparison, which resolves
+texture PNG file names back to the texture objects they came from.
+`InterpActor` placements that differ are reported as `mover`, not as
+disagreements: a dump shows where a matinee-driven actor had moved to, not its
+cooked placement. Channels with no corresponding parameter are
+`unparameterised` and are likewise not disagreements — the oracle is simply
+silent on them. Unrecognised texture parameter names are listed rather than
+mapped to a channel by guesswork.
+`tests/blcmm_dumps_test.py` and `tests/crosscheck_blcmm_dumps_test.py` cover
+the parser and the comparisons on synthetic dump text.
+
+Results for both: [umodel record](verification/UMODEL_CROSSCHECK.md),
+[dump record](verification/BLCMM_DUMP_CROSSCHECK.md).
+
+## BSP texture axes against the editor's Polys exports
+
+Neither oracle above sees BSP surfaces, but cooked volume-owned Models keep an
+editor `Polys` export whose FPoly records carry explicit `Base`, `TextureU`
+and `TextureV` vectors.
+
+```powershell
+python tools/crosscheck_bsp_polys.py --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --output local/bsp/polys-all.json
+```
+
+dereferences each surface record's base-point and texture-axis indices through
+our reader and compares them with the FPoly on the same plane, across every
+non-`_SF` package (`--packages` narrows it). It exits non-zero on a `differ`,
+an out-of-range reference or a parse error; `no_unique_poly` (stale editor
+vertex lists, duplicate coplanar polys) is reported, not counted. The report
+also carries negative controls for the other int slots.
+`tests/crosscheck_bsp_polys_test.py` covers it on synthetic fixtures. Results:
+[texture-axis record](verification/BSP_TEXTURE_AXES.md).

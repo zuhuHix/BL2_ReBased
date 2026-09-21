@@ -8,6 +8,7 @@ import sys
 from installed_content import PACKAGE_SUFFIXES, content_files
 
 ROOT = Path(__file__).resolve().parents[1]
+SANCTUARY_MAP = 'Sanctuary_P'
 
 
 def catalog(game, include_dlc=False):
@@ -34,6 +35,64 @@ def select(records, name):
     return matches[0]['map']
 
 
+def validate_options(args, selected_map=None):
+    if not args.sanctuary_geometry:
+        if not args.matinee_first_key:
+            return
+    if args.sanctuary_geometry:
+        if args.action != 'prepare':
+            raise ValueError('--sanctuary-geometry requires --action prepare')
+        if args.list:
+            raise ValueError('--sanctuary-geometry requires a selected map, not --list')
+        if selected_map is not None and selected_map.casefold() != SANCTUARY_MAP.casefold():
+            raise ValueError('--sanctuary-geometry is only supported for Sanctuary_P')
+    if args.matinee_first_key:
+        if args.action != 'prepare':
+            raise ValueError('--matinee-first-key requires --action prepare')
+        if args.list:
+            raise ValueError('--matinee-first-key requires a selected map, not --list')
+        if selected_map is not None and selected_map.casefold() != SANCTUARY_MAP.casefold():
+            raise ValueError('--matinee-first-key is only supported for Sanctuary_P')
+
+
+def reject_plain_sanctuary_rebuild(scene, name, sanctuary_geometry):
+    if sanctuary_geometry or name.casefold() != SANCTUARY_MAP.casefold():
+        return
+    manifest = scene / 'scene.json'
+    if not manifest.is_file():
+        return
+    data = json.loads(manifest.read_text(encoding='utf-8'))
+    if 'terrain_policy' in data or 'bsp_policy' in data:
+        raise ValueError(
+            'Existing Sanctuary scene contains recovered terrain or BSP; '
+            'rerun with --sanctuary-geometry to preserve it')
+
+
+def preparation_commands(args, name, scene):
+    game = str(args.game.resolve())
+    reader = str(args.reader.resolve())
+    level = [sys.executable, str(ROOT / 'tools/prepare_level.py'),
+             '--game', game, '--reader', reader, '--map', name,
+             '--output', str(scene)]
+    if args.include_dlc:
+        level.append('--include-dlc')
+    if args.outer_shell:
+        level.append('--outer-shell')
+    if args.matinee_first_key:
+        level.append('--matinee-first-key')
+    commands = [level]
+    if args.sanctuary_geometry:
+        commands.extend([
+            [sys.executable, str(ROOT / 'tools/prepare_terrain.py'),
+             '--game', game, '--reader', reader, '--scene', str(scene),
+             '--collision'],
+            [sys.executable, str(ROOT / 'tools/prepare_bsp.py'),
+             '--game', game, '--reader', reader, '--scene', str(scene),
+             '--collision'],
+        ])
+    return commands
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game', type=Path, required=True)
@@ -45,10 +104,17 @@ def main():
     parser.add_argument('--engine', type=Path)
     parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--include-dlc', action='store_true', help='Include installed DLC maps and texture caches')
+    parser.add_argument('--sanctuary-geometry', action='store_true',
+                        help='Also prepare Sanctuary terrain and BSP with triangle collision')
+    parser.add_argument('--outer-shell', action='store_true',
+                        help='Prepare the outer hull meshes with mesh-default materials (labeled approximation)')
+    parser.add_argument('--matinee-first-key', action='store_true',
+                        help='Experimentally place the Sanctuary hull at its observed first Matinee key')
     args = parser.parse_args()
     try:
         if args.json and not args.list:
             raise ValueError('--json requires --list')
+        validate_options(args)
         records = catalog(args.game.resolve(), args.include_dlc)
         if args.list:
             if args.json:
@@ -75,12 +141,12 @@ def main():
             else:
                 name = choice
         name = select(records, name)
+        validate_options(args, name)
         scene = ROOT / 'local' / name[:-2].lower()
         if args.action == 'prepare':
-            subprocess.run([sys.executable, str(ROOT / 'tools/prepare_level.py'),
-                            '--game', str(args.game.resolve()), '--reader', str(args.reader.resolve()),
-                            '--map', name, '--output', str(scene),
-                            *(['--include-dlc'] if args.include_dlc else [])], check=True, cwd=ROOT)
+            reject_plain_sanctuary_rebuild(scene, name, args.sanctuary_geometry)
+            for command in preparation_commands(args, name, scene):
+                subprocess.run(command, check=True, cwd=ROOT)
         else:
             if not args.engine:
                 raise ValueError('--engine is required for import and view')

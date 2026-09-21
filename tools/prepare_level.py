@@ -58,6 +58,21 @@ def collection_transforms(payload, data, count):
     return result
 
 
+def collection_scale(p, cooked):
+    """A collection entry's scale, preferring the component's own Scale3D/Scale.
+
+    The cooked per-entry tail carries a copy of the component's scale, and for
+    2036 of the 2037 Sanctuary_P collection components that declare one the two
+    agree exactly. The exception is StaticMeshActor_SMC_1802, whose component
+    property says Scale3D=(0.97,1,1) while the tail says (1,1,1); the running
+    game applies the 0.97 (its object dump reports a _LocalToWorld determinant
+    of 0.97), so the property is treated as authoritative where it exists.
+    """
+    if 'Scale3D' not in p and 'Scale' not in p:
+        return cooked
+    return [v * p.get('Scale', 1) for v in vector(p.get('Scale3D', {}), 1)]
+
+
 # UE3 material graphs use a small set of exact names for the ordinary
 # channels, but environment masters also use stable aliases. Keep this
 # allow-list narrow: treating every mask/noise/cubemap parameter as albedo
@@ -71,10 +86,64 @@ CHANNELS = {'p_diffuse': 'diffuse', 'diffuse': 'diffuse',
 # sky-named meshes retain ordinary Material v1 handling until their activation
 # and material chains are understood.
 NATIVE_SKYBOX_MESH = 'Prop_Skybox.Meshes.Sky_Dome'
+# The dome's master graph is stripped from the cooked package. Only its named
+# inputs survive; the host combines them under a recorded approximation
+# (docs/verification/NATIVE_SKY_APPROXIMATION.md). Every mapping here is a
+# guess labeled UNVERIFIED, not a decoded graph.
+NATIVE_SKY_MASTER = 'Common_Materials.Sky.Mat_SkyTimeOfDay_Master'
+SKY_SAMPLERS = {'transition_track': 'transition_track', 'clouds': 'clouds', 'masks': 'masks'}
+SKY_SCALARS = {'time_of_day': 'time_of_day', 'sky_brightness': 'sky_brightness',
+               'sun_spot_brightness': 'sun_spot_brightness',
+               'cloud_cap_opacity': 'cloud_cap_opacity', 'p_couldbrightness': 'cloud_brightness'}
+SKY_VECTORS = {'horizion_track_color_multiplier': 'horizon_track_color_multiplier'}
+# Column lookup divisor for Time_of_Day on the 256-wide transition strip. The
+# alternative reading (degrees, /360) lands in a sun column and produces dusk
+# hues; the observed value 170 read as a pixel column gives the blue daytime
+# gradient. Neither is decoded from the graph.
+SKY_TIME_AXIS = 256.0
+SKY_HORIZON_ROW = 0.95
+# The `_Outer` city hull and its antennas. Their placed overrides are the
+# masked `_Teleported` phase-in variants whose graphs Material v1 cannot
+# recover, so they import invisible. Opt-in, the placement falls back to the
+# mesh-default materials, which resolve a diffuse. Which of `_Land` and
+# `_Outer` the running game shows is Kismet state and is not interpreted.
+OUTER_SHELL_MESHES = {'Prop_Skybox.Meshes.SanctuarySky',
+                      'FX_ENV_Sanctuary.Meshes.SanctuarySkybox_Antenna1',
+                      'FX_ENV_Sanctuary.Meshes.SanctuarySkybox_Antenna2'}
+OUTER_SHELL_OVERRIDE_SUFFIX = '_Teleported'
 HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
 HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
 HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
-HIDDEN_CLOUD_MATERIAL = 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'
+
+# Cheap, opt-in Matinee placement experiment for the Sanctuary hull. This is
+# intentionally a source-path match, not a general SeqAct_Interp decoder.
+MATINEE_FIRST_KEY_COMPONENT = (
+    'TheWorld.PersistentLevel.InterpActor_29.StaticMeshComponent_393')
+MATINEE_FIRST_KEY_TRANSLATION = [16551, -171794, -164]
+MATINEE_FIRST_KEY_ROTATION = [0, 78.75, 0]
+
+
+def apply_matinee_first_key_pose(source, pose):
+    """Apply the observed first RelativeToInitial key to one hull pose.
+
+    The serialized actor pose remains the source of the base transform. The
+    translation and yaw are only an opt-in visual experiment; this function
+    does not claim to decode SeqAct_Interp start-position or Kismet state.
+    """
+    if source != MATINEE_FIRST_KEY_COMPONENT:
+        return pose, False
+    if 'matrix' in pose or 'actor' not in pose:
+        raise ValueError('Matinee first-key target is not an actor/component pose')
+    actor = dict(pose['actor'])
+    actor['location'] = [a + offset for a, offset in
+                         zip(actor['location'], MATINEE_FIRST_KEY_TRANSLATION)]
+    actor['rotation'] = list(MATINEE_FIRST_KEY_ROTATION)
+    return dict(pose, actor=actor), True
+# Both observed cloud-layer instances: `_Light` in Sanctuary_P (four planes)
+# and `_01` in Sanctuary_Light (two planes on the horizon, whose sole cooked
+# texture is a dust sprite that tiled as yellow/black stripes).
+HIDDEN_CLOUD_MATERIALS = {'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light',
+                          'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'}
 HIDDEN_TRANSITION_MESH = 'Common_Meshes.BasePlane_256x128'
 HIDDEN_TRANSITION_MATERIAL = 'Common_Materials.Environment.WorldTransition'
 HIDDEN_FOREGROUND_SOURCE = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
@@ -123,6 +192,54 @@ def native_skybox_placement(identity, effective_materials, materials):
                     for name in effective_materials))
 
 
+def outer_shell_mesh(identity):
+    """Return whether an object identity is one of the observed outer hull meshes."""
+    return identity.rsplit(':', 1)[-1] in OUTER_SHELL_MESHES
+
+
+def outer_shell_overrides(overrides, sections, materials):
+    """Drop only `_Teleported` overrides whose mesh default recovered a diffuse.
+
+    Returns the adjusted override list and a record of every replacement.
+    Any other override, and any slot whose default has no diffuse, is kept as
+    placed so the policy cannot turn an unrelated material into hull plating.
+    """
+    kept, replaced = list(overrides), []
+    defaults = {section['slot']: section['material'] for section in sections}
+    for slot, name in enumerate(overrides):
+        if not name:
+            continue
+        source = materials.get(name, {}).get('source', '')
+        if not source.rsplit('.', 1)[-1].endswith(OUTER_SHELL_OVERRIDE_SUFFIX):
+            continue
+        default = defaults.get(slot)
+        if not default or not materials.get(default, {}).get('channels', {}).get('diffuse'):
+            continue
+        kept[slot] = None
+        replaced.append({'slot': slot, 'override': source,
+                         'default': materials[default]['source']})
+    return kept, replaced
+
+
+def apply_outer_shell_policy(actor, mesh_identity, sections, materials, enabled):
+    """Set an actor's outer-shell fields from its placed overrides.
+
+    `outer_shell_source_materials` always keeps the placed overrides so the
+    policy can be re-applied or withdrawn by a later refresh.
+    """
+    if not outer_shell_mesh(mesh_identity):
+        return
+    placed = actor.get('outer_shell_source_materials', actor['materials'])
+    actor['outer_shell_source_materials'] = list(placed)
+    actor['outer_shell'] = bool(enabled)
+    if enabled:
+        actor['materials'], actor['outer_shell_replaced'] = outer_shell_overrides(
+            placed, sections, materials)
+    else:
+        actor['materials'] = list(placed)
+        actor.pop('outer_shell_replaced', None)
+
+
 def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None):
     """Return whether an observed helper has no recoverable host-side visual."""
     mesh = identity.rsplit(':', 1)[-1]
@@ -140,8 +257,8 @@ def hidden_visual_mesh(identity, effective_materials=None, materials=None, sourc
     if mesh == HIDDEN_CLOUD_MESH and effective_materials and materials:
         # The cloud material is translucent in UE3 but its opacity graph is not
         # recovered; drawing its diffuse alone produces the observed yellow /
-        # black blocking planes. Hide only the exact observed cloud instance.
-        return all(materials.get(name, {}).get('source') == HIDDEN_CLOUD_MATERIAL
+        # black blocking planes. Hide only the exact observed cloud instances.
+        return all(materials.get(name, {}).get('source') in HIDDEN_CLOUD_MATERIALS
                    for name in effective_materials)
     if mesh == HIDDEN_TRANSITION_MESH and effective_materials and materials:
         # WorldTransition is a translucent loading/boundary plane. Its graph
@@ -289,10 +406,13 @@ def cooked_texture_references(payload, data):
 
 
 class Scene:
-    def __init__(self, reader, game, output, include_dlc=False):
+    def __init__(self, reader, game, output, include_dlc=False, outer_shell=False,
+                 matinee_first_key=False):
         self.reader, self.game, self.output = reader.resolve(), game.resolve(), output.resolve()
         self.cooked = self.game / 'WillowGame/CookedPCConsole'
         self.include_dlc = include_dlc
+        self.outer_shell = outer_shell
+        self.matinee_first_key = matinee_first_key
         self.package_root = self.game if include_dlc else self.cooked
         self.schema = Path(__file__).with_name('level-arrays.schema')
         self.packages = {}
@@ -390,6 +510,98 @@ class Scene:
             if channel_for_parameter(name) or re.fullmatch(r'materialexpressiontexturesampleparameter2d_\d+', name):
                 parameters[name] = self.resolve(key[0], e.get('ParameterValue', 0))
         return parameters
+
+    def named_chain_parameters(self, key):
+        """Every named sampler/scalar/vector input along a material chain.
+
+        Unlike the Material v1 channel allow-list this keeps all names, with
+        instance overrides applied over base defaults. Returns the base
+        material key with the three parameter maps (names casefolded).
+        """
+        chain, current = [], key
+        while current is not None:
+            if current in chain or len(chain) >= 32:
+                raise ValueError('Material parent cycle/depth limit')
+            chain.append(current)
+            current = self.resolve(current[0], props(self.load(current[0])[current[1]]).get('Parent', 0))
+        samplers, scalars, vectors = {}, {}, {}
+        for item in reversed(chain):
+            p = props(self.load(item[0])[item[1]])
+            for ref in p.get('Expressions', []):
+                expr = self.resolve(item[0], ref)
+                if not expr:
+                    continue
+                record = self.load(expr[0])[expr[1]]
+                cls = record.get('class', '').rsplit('.', 1)[-1]
+                if 'Parameter' not in cls or 'error' in record:
+                    continue
+                e = props(record)
+                name = e.get('ParameterName', '').casefold()
+                if not name:
+                    continue
+                if 'TextureSampleParameter' in cls:
+                    samplers[name] = self.resolve(expr[0], e.get('Texture', 0))
+                elif cls == 'MaterialExpressionScalarParameter':
+                    scalars[name] = e.get('DefaultValue')
+                elif cls == 'MaterialExpressionVectorParameter':
+                    vectors[name] = e.get('DefaultValue')
+            for entry in p.get('TextureParameterValues', []):
+                e = values(entry)
+                samplers[e.get('ParameterName', '').casefold()] = self.resolve(item[0], e.get('ParameterValue', 0))
+            for entry in p.get('ScalarParameterValues', []):
+                e = values(entry)
+                scalars[e.get('ParameterName', '').casefold()] = e.get('ParameterValue')
+            for entry in p.get('VectorParameterValues', []):
+                e = values(entry)
+                vectors[e.get('ParameterName', '').casefold()] = e.get('ParameterValue')
+        return chain[-1], samplers, scalars, vectors
+
+    def native_sky_approximation(self, key):
+        """Named inputs of the observed time-of-day sky master, or None.
+
+        The cooked master graph is stripped; only parameter names and the
+        instance values survive. The returned record tells the host which
+        textures and constants to combine and states the assumptions. It is
+        an approximation policy, not a reconstruction of the UE3 sky graph.
+        """
+        base, samplers, scalars, vectors = self.named_chain_parameters(key)
+        if self.identity(base).split(':', 1)[1] != NATIVE_SKY_MASTER:
+            return None
+        textures = {}
+        for parameter, role in SKY_SAMPLERS.items():
+            texture = samplers.get(parameter)
+            if texture is None:
+                raise ValueError(f'Sky master input {parameter} is missing')
+            if self.load(texture[0])[texture[1]]['class'].rsplit('.', 1)[-1] != 'Texture2D':
+                raise ValueError(f'Sky master input {parameter} is not a Texture2D')
+            textures[role] = {'source': self.identity(texture),
+                              'file': self.texture(texture, 'sky_' + role)}
+        constants = {}
+        for parameter, role in SKY_SCALARS.items():
+            value = scalars.get(parameter)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError(f'Sky master scalar {parameter} is missing or invalid')
+            constants[role] = float(value)
+        colors = {}
+        for parameter, role in SKY_VECTORS.items():
+            value = vectors.get(parameter)
+            if not isinstance(value, dict) or not all(
+                    isinstance(value.get(c), (int, float)) and math.isfinite(value[c]) for c in 'RGBA'):
+                raise ValueError(f'Sky master vector {parameter} is missing or invalid')
+            colors[role] = [float(value[c]) for c in 'RGBA']
+        if not 0 <= constants['time_of_day'] < SKY_TIME_AXIS:
+            raise ValueError('Time_of_Day is outside the transition strip')
+        return {'method': 'sky_time_of_day_strip_v1', 'status': 'partial_unverified',
+                'master': self.identity(base), 'textures': textures,
+                'scalars': constants, 'vectors': colors,
+                'time_axis': {'divisor': SKY_TIME_AXIS,
+                              'column_u': constants['time_of_day'] / SKY_TIME_AXIS,
+                              'note': 'UNVERIFIED: Time_of_Day read as a strip pixel column'},
+                'horizon_row_v': SKY_HORIZON_ROW,
+                'cloud_channel': 'R',
+                'omitted': ['sun spot (Sun_spot_brightness)', 'Masks (stars, cap gradient)',
+                            'Horizion_track_color_multiplier', 'cloud channels G/B',
+                            'cloud motion', 'time-of-day animation', 'Kismet control']}
 
     def material_metadata(self, key, stack=()):
         """Carry safe UE3 blend/shading flags without importing full graphs."""
@@ -520,6 +732,18 @@ class Scene:
             try:
                 material.update(self.material_metadata(key))
                 parameters = self.material_parameters(key)
+                if material.get('lighting_model') == 'MLM_Unlit':
+                    # The ordinary diffuse inference below still runs and
+                    # stays as the host's fallback when this record is absent.
+                    try:
+                        sky = self.native_sky_approximation(key)
+                    except ValueError as error:
+                        sky = None
+                        self.issue(material['source'] + ':sky', error)
+                    if sky is not None:
+                        material['sky_approximation'] = sky
+                        self.issue(material['source'],
+                                   'Approximation: Time_of_Day column of the transition strip over dome V with a horizon-tinted cloud layer; sky master graph not reconstructed')
                 regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
                 if regular_fallback is not None:
                     parent = self.resolve(key[0], props(self.load(key[0])[key[1]]).get('Parent', 0))
@@ -735,6 +959,8 @@ class Scene:
         self.load('Startup')
         levels = self.levels(persistent)
         actors, camera = [], None
+        matinee_first_key_applied = 0
+        matinee_first_key = getattr(self, 'matinee_first_key', False)
         for level in levels:
             print(f'Preparing {level}', flush=True)
             records = self.load(level)
@@ -761,12 +987,17 @@ class Scene:
                     if not key:
                         continue
                     pose = placements.get(record['index'])
+                    if pose is not None:
+                        pose = dict(pose, scale=collection_scale(p, pose['scale']))
                     if pose is None:
                         owner = records.get(record['outer'])
                         if not owner or owner['class'] not in ('Engine.StaticMeshActor', 'Engine.InterpActor'):
                             self.issue(level + ':' + record['path'], 'Unsupported component owner')
                             continue
                         pose = {'actor': transform(props(owner)), 'component': transform(p, True)}
+                    if matinee_first_key:
+                        pose, applied = apply_matinee_first_key_pose(record['path'], pose)
+                        matinee_first_key_applied += int(applied)
                     overrides = [self.material(self.resolve(level, ref)) for ref in p.get('Materials', [])]
                     mesh_identity = self.identity(key)
                     mesh_name = self.mesh(key)
@@ -783,23 +1014,36 @@ class Scene:
                         for material_name in effective_materials:
                             if material_name in self.materials:
                                 self.materials[material_name]['two_sided'] = True
-                    actors.append({'source': record['path'], 'level': level, 'mesh': mesh_name,
-                                   'transform': pose, 'materials': overrides, 'static': True,
-                                   'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
-                                   'native_skybox': is_native_skybox,
-                                   'native_skybox_source': mesh_identity if is_native_skybox else None,
-                                   'hidden_visual': hidden_visual_mesh(
-                                       mesh_identity, effective_materials, self.materials,
-                                       record['path'])})
+                    actor = {'source': record['path'], 'level': level, 'mesh': mesh_name,
+                             'transform': pose, 'materials': overrides, 'static': True,
+                             'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
+                             'native_skybox': is_native_skybox,
+                             'native_skybox_source': mesh_identity if is_native_skybox else None,
+                             'hidden_visual': hidden_visual_mesh(
+                                 mesh_identity, effective_materials, self.materials,
+                                 record['path'])}
+                    apply_outer_shell_policy(actor, mesh_identity, self.meshes[mesh_name]['sections'],
+                                             self.materials, getattr(self, 'outer_shell', False))
+                    actors.append(actor)
                 except ValueError as error:
                     self.issue(level + ':' + record['path'], error)
         if not actors:
             raise ValueError('No static mesh placements loaded')
+        if matinee_first_key and matinee_first_key_applied != 1:
+            raise ValueError('Matinee first-key experiment expected exactly one '
+                             f'{MATINEE_FIRST_KEY_COMPONENT}, found '
+                             f'{matinee_first_key_applied}')
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
-                  'collision_policy': 'observed_convex_and_box_v1'}
+                  'collision_policy': 'observed_convex_and_box_v1',
+                  'matinee_first_key_policy': (
+                      'relative_to_initial_first_key_experiment_v1'
+                      if matinee_first_key else 'serialized_placement'),
+                  'matinee_first_key_applied': matinee_first_key_applied,
+                  'outer_shell_policy': ('mesh_default_for_teleported_overrides_v1'
+                                         if getattr(self, 'outer_shell', False) else 'placed_overrides')}
         temporary = self.output / 'scene.json.tmp'
         temporary.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
         temporary.replace(self.output / 'scene.json')
@@ -815,16 +1059,26 @@ def main():
     parser.add_argument('--map', default='Ash_P')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--include-dlc', action='store_true', help='Index installed DLC packages and named texture caches')
+    parser.add_argument('--outer-shell', action='store_true',
+                        help='Render the observed outer hull meshes with their mesh-default materials '
+                             'instead of the unrecoverable masked _Teleported overrides')
+    parser.add_argument('--matinee-first-key', action='store_true',
+                        help='Experimentally place Sanctuary InterpActor_29 at its observed '
+                             'RelativeToInitial first move key')
     args = parser.parse_args()
     if not (args.game / 'Binaries/Win32/Borderlands2.exe').is_file():
         parser.error('An installed Borderlands 2 is required')
     if not args.map.endswith('_P'):
         parser.error('Start with a persistent _P package')
+    if args.matinee_first_key and args.map.casefold() != 'sanctuary_p':
+        parser.error('--matinee-first-key is only supported for Sanctuary_P')
     if not args.map.replace('_', '').isascii() or not args.map.replace('_', '').isalnum():
         parser.error('Map names must contain only ASCII letters, digits and underscores')
     if args.output is None:
         args.output = Path('local') / args.map[:-2].lower()
-    Scene(args.reader, args.game, args.output, include_dlc=args.include_dlc).build(args.map)
+    Scene(args.reader, args.game, args.output, include_dlc=args.include_dlc,
+          outer_shell=args.outer_shell,
+          matinee_first_key=args.matinee_first_key).build(args.map)
 
 
 if __name__ == '__main__':

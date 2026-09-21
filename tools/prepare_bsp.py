@@ -1,8 +1,11 @@
 """Add corroborated Sanctuary root BSP polygons to an existing frozen scene.
 
-Materials retain native assignments. UVs use a labeled 128 cm planar projection;
-native texture coordinates, lighting and collision flags remain UNVERIFIED.
-Collision is an opt-in host triangle approximation on the recovered surfaces.
+Materials retain native assignments. UVs project each point onto the surface's
+own texture axes from its base point (policy `surface_axes`), divided by a
+texel scale that no available oracle can confirm and that stays UNVERIFIED;
+`--uv planar` keeps the earlier 128 cm world-planar placeholder. Lighting and
+collision flags remain UNVERIFIED. Collision is an opt-in host triangle
+approximation on the recovered surfaces.
 """
 import argparse
 import json
@@ -13,17 +16,39 @@ from bsp_decode import (decode_model, decode_component, validate_coverage,
                         require_root, dot, sub, cross)
 from prepare_level import Scene, transform
 
+UV_POLICIES = ('surface_axes', 'planar')
+# World units per texture repeat for unit-length axes. Every oracle we have
+# (umodel, the game's object dumps) is silent on this constant; only a matched
+# in-game view can confirm it. See DECISIONS.md, 2026-09-18 texture axes.
+TEXEL_SCALE = 128.0
 
-def section_obj(polygons):
+
+def surface_uv(p, point, texel_scale=TEXEL_SCALE):
+    """((P - Base) . TextureU, (P - Base) . TextureV) / texel scale."""
+    d = sub(point, p['base'])
+    return dot(d, p['texture_u']) / texel_scale, dot(d, p['texture_v']) / texel_scale
+
+
+def planar_uv(p, point):
+    """The earlier placeholder: the two non-dominant world axes over 128 cm."""
+    normal = p['plane'][:3]
+    dominant = max(range(3), key=lambda i: abs(normal[i]))
+    axes = [i for i in range(3) if i != dominant]
+    return point[axes[0]] / 128, point[axes[1]] / 128
+
+
+def section_obj(polygons, uv='surface_axes', texel_scale=TEXEL_SCALE):
+    if uv not in UV_POLICIES:
+        raise ValueError('Unknown BSP UV policy')
     lines, faces, offset = [], [], 0
     for p in polygons:
         normal = p['plane'][:3]
-        dominant = max(range(3), key=lambda i: abs(normal[i]))
-        axes = [i for i in range(3) if i != dominant]
         for v in p['points']:
             lines.append('v ' + ' '.join(format(x, '.9g') for x in v))
         for v in p['points']:
-            lines.append(f'vt {v[axes[0]] / 128:.9g} {1-v[axes[1]] / 128:.9g}')
+            s, t = surface_uv(p, v, texel_scale) if uv == 'surface_axes' else planar_uv(p, v)
+            # Same V convention as the static-mesh OBJ writer in src/assets.cpp.
+            lines.append(f'vt {s:.9g} {1-t:.9g}')
         for _ in p['points']:
             lines.append('vn ' + ' '.join(format(x, '.9g') for x in normal))
         # Match host_obj's left-handed face convention. Polygon ordering above
@@ -66,7 +91,17 @@ def main():
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('--scene', type=Path, required=True)
     parser.add_argument('--collision', action='store_true')
+    parser.add_argument('--uv', choices=UV_POLICIES, default='surface_axes',
+                        help='surface_axes: native base point and texture axes; planar: 128 cm world placeholder')
+    parser.add_argument('--texel-scale', type=float, default=TEXEL_SCALE,
+                        help='world units per texture repeat for unit axes (UNVERIFIED default %(default)s)')
     args = parser.parse_args()
+    if not args.texel_scale > 0:
+        parser.error('--texel-scale must be positive')
+    uv_policy = ({'policy': 'bsp_surface_axes_v1', 'texel_scale': args.texel_scale,
+                  'texel_scale_status': 'UNVERIFIED', 'axes_status': 'corroborated by Polys cross-check'}
+                 if args.uv == 'surface_axes' else
+                 {'policy': 'planar_world_128cm_approximation'})
     if not (args.game/'Binaries/Win32/Borderlands2.exe').is_file():
         parser.error('An installed Borderlands 2 is required')
     filename = args.scene/'scene.json'
@@ -123,7 +158,7 @@ def main():
                 material = scene.material(key)
                 if material is None: raise ValueError('BSP material reference did not resolve')
                 polygons = [model['polygons'][i] for i in element['nodes']]
-                obj,n = section_obj(polygons)
+                obj,n = section_obj(polygons, args.uv, args.texel_scale)
                 file = name+f'_s{slot}.obj'
                 (args.scene/file).write_text(obj,encoding='utf-8')
                 sections.append({'slot':slot,'file':file,'material':material,
@@ -136,7 +171,7 @@ def main():
                                          'policy':'bsp_polygon_triangle_host_approximation_v1'},
                             'bsp':{'model':level+':'+model['path'],'nodes':comp['nodes'],
                                    'topology':'node_vertex_pool_planes_and_component_membership_v1',
-                                   'uv_policy':'planar_world_128cm_approximation',
+                                   'uv_policy':uv_policy,
                                    'lighting':'UNVERIFIED; host inspection lighting',
                                    'native_collision_flags':'UNVERIFIED',
                                    'opaque_model_remainder':model['opaque_remainder'],
@@ -148,7 +183,9 @@ def main():
             summary['components']+=1
             summary['polygons']+=len(comp['nodes'])
         issues.append({'object':level+':'+model['path'],'bsp':True,
-                       'error':'Approximation: planar 128cm UVs, host lighting and opt-in triangle collision; native UVs/lightmaps/collision flags UNVERIFIED'})
+                       'error':('Approximation: planar 128cm UVs, ' if args.uv == 'planar' else
+                                'Native texture axes with an UNVERIFIED texel scale, ')
+                               + 'host lighting and opt-in triangle collision; lightmaps/collision flags UNVERIFIED'})
     manifest.update(actors=actors,meshes=meshes,materials=scene.materials,
                     issues=issues+[dict(i,bsp=True) for i in scene.issues],
                     bsp_policy={**summary,'collision':bool(args.collision),'scope':'Sanctuary root Models'},

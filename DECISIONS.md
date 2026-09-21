@@ -828,6 +828,155 @@ This makes the gap visible as a labeled flat gray instead of a misleading
 pattern; it does not resolve the terrain alpha decode or the missing
 materials. Record: docs/verification/SANCTUARY_BSP_POLYGONS.md.
 
+## 2026-09-18: two independent oracles, and a stale cooked collection scale
+
+Two oracles were run against the existing decode, with nothing copied from
+either. umodel (UE Viewer, MIT) is a second reader of the same bytes.
+OpenBLCMM's Borderlands 2 dumps are the output of the game's own `obj dump`
+console command, so they report what the running engine concluded rather than
+what another decoder reads. Both stay on the user's machine; reports go to
+ignored `local/`.
+
+`tools/crosscheck_umodel.py` compared umodel's `-list` with our `--exports` on
+2006 packages (base plus DLC): 4,750,427 exports, no offset, size or class
+disagreement. The 7 name-only differences in 5 packages are umodel-side
+normalization — it rewrites names containing a control or non-ASCII byte to
+`__name_N__` and trims one trailing space, while our reader keeps the raw
+bytes — and are bucketed separately so the exit status reflects byte-range
+agreement. `tools/crosscheck_umodel_assets.py` compared a prepared Sanctuary
+scene with umodel's glTF/PNG exports: 421 of 462 meshes agree on sections,
+triangles, vertex counts, positions and UVs with none disagreeing (41 have no
+umodel counterpart), and 275 of 288 textures agree, 271 of them within the
+maximum per-channel difference of 1 that DXT decoder rounding produces. The
+glTF axis mapping and the UV V flip were recovered by search over the data,
+not assumed.
+
+`tools/crosscheck_blcmm_dumps.py` compared the same scene with the game's
+dumps. All 15 `TerrainComponent`s agree on section base and size, and mapping
+our decoded vertices through the reported `_LocalToWorld` reproduces the
+reported `Bounds` to 0.003 cm on origin and to the constant one-unit extent
+expansion — corroborating the height convention and cell scale against the
+engine. All 24 `ModelComponent`s agree on node count, element count and owning
+`Model`; the dumps print empty `Nodes(N)=`/`Elements(N)=` values, so contents,
+BSP UVs and `PolyFlags` remain untestable and `UNVERIFIED`. 4209 actor
+placements reproduce the engine's `_LocalToWorld` within 1e-3 on rotation and
+0.05 cm on translation, which confirms the rotator decode; 35 `InterpActor`
+placements are reported as movers rather than disagreements, because a dump
+shows where a matinee-driven actor had moved to. 353 material texture picks
+match the parameters the game reports and none are contradicted, but 348
+channels — concentrated in emissive (197) and normal (149) — have no
+corresponding parameter, so the oracle is silent on them; 16 parameter names
+are listed as unrecognised rather than guessed at.
+
+That pass found one real defect. Our placement of
+`Sanctuary_P … StaticMeshCollectionActor_10.StaticMeshActor_SMC_1802` was
+unscaled while the engine reports an X row scaled by 0.97. The component export
+carries `Scale3D=(0.97,1,1)` as an ordinary property; the collection actor's
+cooked per-entry tail records `(1,1,1)`. Of the 3153 collection children in
+`Sanctuary_P`, 2037 declare their own `Scale3D`/`Scale` and the tail agrees with
+the property in 2036, so the tail is a cache that is stale in exactly this case.
+`prepare_level.py` now prefers the component's own property where it exists and
+falls back to the tail otherwise (`collection_scale`). No `src/` layout, bounds
+check or terminator check changed in this pass; the only parsing behaviour
+change is which of two already-decoded scale sources wins.
+
+Records: docs/verification/UMODEL_CROSSCHECK.md and
+docs/verification/BLCMM_DUMP_CROSSCHECK.md.
+
+## 2026-09-18: BSP surface texture axes decoded; texel scale left UNVERIFIED
+
+This narrows the "surface texture-axis fields ... remain UNVERIFIED" line of
+the 2026-09-15 BSP entry. `tools/bsp_decode.py` now reads three ints of the
+60-byte surface record it already unpacked: `s[2]` as the texture base point
+index and `s[4]`, `s[5]` as the texture U/V vector indices, each range-checked
+against the pools (an out-of-range value rejects the Model, as every other
+reference does). No bounds check, array framing or offset changed; the
+identification is of fields that were already inside validated bytes.
+
+Two kinds of evidence, both from the installed game through our own reader,
+support the roles. First, in-data invariants on the 119 surfaces the Sanctuary
+root Models use: `s[4]` is perpendicular to the surface normal on all 119,
+`s[5]` on 115 (the four exceptions are 45-degree slopes carrying the
+world-axis default `TU = ±X, TV = -Z`), the two axes are mutually
+perpendicular throughout, and no other int slot behaves like an index. Second,
+volume-owned Models keep an editor `Polys` export whose FPoly records store
+`Base`/`TextureU`/`TextureV` as explicit vectors; `tools/crosscheck_bsp_polys.py`
+matches each surface to the FPoly on its plane and finds 15,393 agree, 0
+differ across 2392 Models in 161 packages, with negative controls showing no
+other slot reproduces those vectors. 892 surfaces have no unique coplanar
+FPoly (stale editor vertex lists, stale or reversed normals, duplicate polys)
+and are reported, not counted.
+
+One planned invariant was dropped on evidence before implementation: the base
+point is *not* on the surface plane for most surfaces (volume brushes keep it
+in brush space), and the projection formula does not need it to be.
+
+`tools/prepare_bsp.py` now defaults to `--uv surface_axes`:
+`((P - Base) . Axis) / texel_scale`, written with the same V flip as the
+static-mesh OBJ writer. The divisor is the part no oracle can see — umodel
+exports no BSP and the object dumps print empty node arrays — so
+`texel_scale = 128` is a prior matching the earlier placeholder's density,
+recorded in the manifest as `texel_scale_status: UNVERIFIED`, adjustable with
+`--texel-scale`, and waiting on a matched in-game view of a tiled BSP surface.
+`--uv planar` keeps the previous placeholder. `PolyFlags`, `iBrushPoly`, the
+shadow-map scale, lighting channels and the Model remainder stay opaque.
+Record: docs/verification/BSP_TEXTURE_AXES.md.
+
+## 2026-09-21: sky approximation from the dome's named inputs, and an opt-in outer hull
+
+The accepted `Sky_Dome` placement previously painted the raw
+`Sky_TransitionBL2Default_Dif` strip across the dome with UV0: every
+time-of-day column wrapped once around the azimuth. The master graph
+`Mat_SkyTimeOfDay_Master` is stripped from the cooked package, so this entry
+does not decode it. Instead `prepare_level.py` reads the named inputs that
+survive along the instance chain (`Transition_Track`, `clouds`, `Masks`,
+`Time_of_Day`, `sky_brightness`, `Sun_spot_brightness`, `cloud_cap_opacity`,
+`p_CouldBrightness`, `Horizion_track_color_multiplier`) into a
+`sky_approximation` record, and the UE5 importer builds one fixed graph from
+them: visible = lerp(strip(column, dome V) × sky_brightness,
+strip(column, 0.95) × sky_brightness × cloud_brightness,
+saturate(clouds.R × cloud_cap_opacity)). Method name
+`sky_time_of_day_strip_v1`, status `partial_unverified`.
+
+Two readings of `Time_of_Day = 170` were compared on the extracted strip:
+as a pixel column (/256) it selects the blue daytime gradient; as degrees
+(/360) it lands in a sun column and gives dusk hues. The pixel-column reading
+is used and recorded as `UNVERIFIED` in the manifest; nothing in the package
+says which the original shader does. The sun spot, `Masks` (stars and cap
+gradient), the horizon color multiplier, cloud channels G/B, cloud motion,
+time-of-day animation and Kismet control are listed as omitted. The ordinary
+diffuse inference stays on Base Color as the fallback, and the host's blue
+`OpenWillow_SkyFallback` sphere, which sits inside the dome and hid it, is
+now only spawned when no accepted dome carries this record.
+
+Separately, the `Sanctuary_Outer` hull (`Prop_Skybox.Meshes.SanctuarySky` and
+its two antennas) is placed with masked `_Teleported` phase-in overrides whose
+graphs Material v1 cannot recover, so it imported invisible. With the new
+opt-in `--outer-shell` flag the preparer drops only those `_Teleported`
+overrides whose mesh-default material resolved a diffuse and records each
+replacement; every other override is kept. This is a substitution, not the
+placed material, and whether the running game shows `_Outer` or `_Land` is
+Kismet state that is still not interpreted. Default behaviour is unchanged.
+Record: docs/verification/NATIVE_SKY_APPROXIMATION.md.
+
+The editor fly-through after this slice added two facts. First, the hull's
+tower sits off-centre and above the town's own; the actor transform matches
+the game dump and the vertices match umodel, and the sublevel's Kismet shows
+why: `SeqAct_Interp_0` (`SanctuaryLiftoff`) binds the hull to a
+`RelativeToInitial` move track that jumps it 1.7 km south and lifts it
+100–150 m before hiding it at 36 s. The placed transform may be a parking pose
+for a cutscene prop, but its in-game position remains unverified; the mismatch
+is left as-is and recorded. Status for
+`StaticMeshComponent_393` / `InterpActor_29` is **decode verified, in-game
+position unverified, observed off in editor**. The first-key import is an
+opt-in experiment recorded in the verification note; the serialized placement
+remains the default and no correction is committed. Second, two
+`Blocking_Plane` placements on the horizon carried
+`Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01`, a sibling of the
+already-hidden `Mat_CloudLayer_Light`, and tiled a dust sprite as yellow/black
+stripes; the hide rule now names both instances and `refresh_materials.py`
+re-evaluates it.
+
 ## 2026-09-16: External extraction is an accelerator, not a replacement
 
 The project will evaluate mature community exporters before expanding every

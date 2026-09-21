@@ -13,9 +13,11 @@ def bulk(stride,rows): return pack('II',stride,len(rows))+b''.join(rows)
 def fixture():
     points=[(0.,0.,0.),(400.,0.,0.),(400.,400.,0.),(0.,400.,0.)]
     plane=(0.,0.,1.,0.)
-    tail=bytes(28)+bulk(12,[pack('3f',0,0,1)])+bulk(12,[pack('3f',*p) for p in points])
+    # vectors: normal, texture U (+X), texture V (-Y); the surface's base is point 1.
+    tail=bytes(28)+bulk(12,[pack('3f',0,0,1),pack('3f',1,0,0),pack('3f',0,-1,0)])
+    tail+=bulk(12,[pack('3f',*p) for p in points])
     tail+=bulk(64,[pack('4f12i',*plane,0,0,0,0,0,-1,-1,-1,-1,4<<16,-1,-1)])
-    tail+=pack('II',2,1)+pack('8i4f3i',7,0,0,0,0,0,0,0,*plane,0,0,0)
+    tail+=pack('II',2,1)+pack('8i4f3i',7,0,1,0,1,2,0,0,*plane,0,0,0)
     tail+=bulk(24,[pack('2i4f',i,-1,0,0,0,0) for i in range(4)])
     model=bytes(12)+tail
     ct=pack('III',2,1,1)+pack('IiiiHII',0,3,7,1,0,0,0)+pack('HIH',0,1,0)
@@ -65,6 +67,25 @@ class BspTests(unittest.TestCase):
         with self.assertRaises(ValueError):validate_coverage(m,[component,component])
         r[3]['data']['trailing_bytes']+=1
         with self.assertRaises(ValueError):decode_component(c+b'X',r[3],r,m)
+
+    def test_surface_axes_and_uv_policies(self):
+        b,c,r=fixture();m=decode_model(b,r[2],r);p=m['polygons'][0]
+        self.assertEqual((p['base'],p['texture_u'],p['texture_v']),((400.,0.,0.),(1.,0.,0.),(0.,-1.,0.)))
+        obj,_=section_obj(m['polygons'])  # default: surface axes over 128 units, V flipped for OBJ
+        self.assertIn('vt -3.125 1\n',obj);self.assertIn('vt 0 4.125\n',obj)
+        obj,_=section_obj(m['polygons'],'surface_axes',400.)
+        self.assertIn('vt -1 1\n',obj);self.assertIn('vt 0 2\n',obj)
+        obj,_=section_obj(m['polygons'],'planar')
+        self.assertIn('vt 3.125 -2.125\n',obj)
+        with self.assertRaises(ValueError):section_obj(m['polygons'],'guess')
+
+    def test_texture_reference_range(self):
+        b,c,r=fixture()
+        surface=b.index(pack('8i4f3i',7,0,1,0,1,2,0,0,0,0,1,0,0,0,0))
+        for slot,limit in ((2,4),(4,3),(5,3)):  # 4 points, 3 vectors
+            for value in (-1,limit,limit+1):
+                changed=bytearray(b);struct.pack_into('<i',changed,surface+4*slot,value)
+                with self.assertRaisesRegex(ValueError,'texture reference'):decode_model(bytes(changed),r[2],r)
 
     def test_polygon_rejections_and_collinearity(self):
         plane=(0,0,1,0)

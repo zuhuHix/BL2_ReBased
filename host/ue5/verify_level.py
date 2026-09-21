@@ -25,10 +25,19 @@ assert len(placed) == expected_count, (len(placed), expected_count)
 
 lighting = {a.get_actor_label(): a for a in actors if a.get_actor_label().startswith('OpenWillow_')
             and a.get_actor_label() in lighting_labels}
+# Same rule as the importer: the host's blue shell is only spawned when no
+# accepted dome placement carries a sky approximation, because it would
+# otherwise hide the native dome from the inspection camera.
+native_sky_approximated = any(
+    instance.get('native_skybox') and any(
+        material and scene['materials'].get(material, {}).get('sky_approximation')
+        for material in (instance['materials'] or [
+            section['material'] for section in scene['meshes'][instance['mesh']]['sections']]))
+    for instance in scene['actors'])
 assert set(lighting) == {'OpenWillow_Sun', 'OpenWillow_SkyFill',
                          'OpenWillow_SkyAtmosphere',
-                         'OpenWillow_SkyFallback',
-                         'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure'}
+                         'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure'} | (
+    set() if native_sky_approximated else {'OpenWillow_SkyFallback'})
 sun_component = lighting['OpenWillow_Sun'].get_component_by_class(unreal.DirectionalLightComponent)
 assert sun_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
 assert abs(sun_component.get_editor_property('intensity') - 1.0) < .01
@@ -40,16 +49,17 @@ assert abs(sky_component.get_editor_property('intensity') - 0.5) < .01
 atmosphere_component = lighting['OpenWillow_SkyAtmosphere'].get_component_by_class(
     unreal.SkyAtmosphereComponent)
 assert atmosphere_component is not None
-sky_fallback_component = lighting['OpenWillow_SkyFallback'].static_mesh_component
-assert sky_fallback_component.get_editor_property('static_mesh').get_path_name() == (
-    '/Engine/BasicShapes/Sphere.Sphere')
-assert sky_fallback_component.get_material(0).get_name() == 'M_OpenWillowSkyFallback'
-assert sky_fallback_component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
-assert sky_fallback_component.get_editor_property('reverse_culling')
-try:
-    assert not sky_fallback_component.get_editor_property('cast_shadow')
-except Exception:
-    pass
+if not native_sky_approximated:
+    sky_fallback_component = lighting['OpenWillow_SkyFallback'].static_mesh_component
+    assert sky_fallback_component.get_editor_property('static_mesh').get_path_name() == (
+        '/Engine/BasicShapes/Sphere.Sphere')
+    assert sky_fallback_component.get_material(0).get_name() == 'M_OpenWillowSkyFallback'
+    assert sky_fallback_component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
+    assert sky_fallback_component.get_editor_property('reverse_culling')
+    try:
+        assert not sky_fallback_component.get_editor_property('cast_shadow')
+    except Exception:
+        pass
 capture_component = lighting['OpenWillow_ReflectionCapture'].get_component_by_class(
     unreal.SphereReflectionCaptureComponent)
 assert capture_component.get_editor_property('influence_radius') >= 1000.0
@@ -85,6 +95,8 @@ def close(actual, expected, tolerance=.05):
 # Independently compare collection world translation and axis lengths to the
 # serialized data; no reuse of the importer's placement function.
 verified_native_skybox = 0
+verified_outer_shell = 0
+verified_outer_shell_replacements = 0
 verified_hidden_visual = 0
 verified_neutral_fallback = 0
 for source in scene['actors']:
@@ -116,6 +128,28 @@ for source in scene['actors']:
             assert source.get('native_skybox_source', '').endswith('Prop_Skybox.Meshes.Sky_Dome')
             assert component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
             assert not component.get_editor_property('cast_shadow')
+        if source.get('outer_shell'):
+            if section is scene['meshes'][source['mesh']]['sections'][0]:
+                verified_outer_shell += 1
+            assert scene['meshes'][source['mesh']]['source'].endswith((
+                'Prop_Skybox.Meshes.SanctuarySky',
+                'FX_ENV_Sanctuary.Meshes.SanctuarySkybox_Antenna1',
+                'FX_ENV_Sanctuary.Meshes.SanctuarySkybox_Antenna2'))
+            assert not component.get_editor_property('cast_shadow')
+            placed_overrides = source.get('outer_shell_source_materials', [])
+            for replacement in source.get('outer_shell_replaced', []):
+                if replacement['slot'] != section['slot']:
+                    continue
+                # A replaced slot must be bound to the mesh default, and the
+                # placed override it displaced must be a _Teleported variant.
+                assert override[section['slot']] is None
+                assert component.get_material(0).get_name() == 'M_' + section['material']
+                assert placed_overrides[section['slot']] and scene['materials'][
+                    placed_overrides[section['slot']]]['source'] == replacement['override']
+                assert replacement['override'].rsplit('.', 1)[-1].endswith('_Teleported')
+                assert scene['materials'][section['material']]['source'] == replacement['default']
+                assert scene['materials'][section['material']]['channels'].get('diffuse')
+                verified_outer_shell_replacements += 1
         if source.get('hidden_visual'):
             if section is scene['meshes'][source['mesh']]['sections'][0]:
                 verified_hidden_visual += 1
@@ -163,6 +197,62 @@ channels = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR, 'normal': unreal.M
             'specular': unreal.MaterialProperty.MP_SPECULAR, 'emissive': unreal.MaterialProperty.MP_EMISSIVE_COLOR}
 verified_channels = set()
 verified_unlit_materials = []
+verified_sky_approximations = []
+
+
+def verify_sky_approximation(material, name, sky):
+    """Walk the saved graph back from Emissive and compare it to the record."""
+    def inputs(node):
+        return mel.get_inputs_for_material_expression(material, node)
+
+    assert sky['method'] == 'sky_time_of_day_strip_v1', name
+    assert material.get_editor_property('is_sky'), name
+    visible = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    assert isinstance(visible, unreal.MaterialExpressionLinearInterpolate), name
+    sky_color, cloud_color, alpha = inputs(visible)
+    assert isinstance(sky_color, unreal.MaterialExpressionMultiply)
+    gradient, brightness = inputs(sky_color)
+    assert isinstance(gradient, unreal.MaterialExpressionTextureSample)
+    assert gradient.get_editor_property('texture').get_name() == Path(sky['textures']['transition_track']['file']).stem
+    assert gradient.get_editor_property('texture').get_editor_property('srgb')
+    assert isinstance(brightness, unreal.MaterialExpressionConstant)
+    close([brightness.get_editor_property('r')], [sky['scalars']['sky_brightness']], 1e-6)
+    strip_uv = [item for item in inputs(gradient) if item is not None]
+    assert len(strip_uv) == 1 and isinstance(strip_uv[0], unreal.MaterialExpressionAppendVector)
+    column, dome_v = inputs(strip_uv[0])
+    assert isinstance(column, unreal.MaterialExpressionConstant)
+    close([column.get_editor_property('r')], [sky['time_axis']['column_u']], 1e-6)
+    close([sky['time_axis']['column_u'] * sky['time_axis']['divisor']], [sky['scalars']['time_of_day']], 1e-3)
+    assert isinstance(dome_v, unreal.MaterialExpressionComponentMask)
+    assert not dome_v.get_editor_property('r') and dome_v.get_editor_property('g')
+    assert not dome_v.get_editor_property('b') and not dome_v.get_editor_property('a')
+    dome_uv = inputs(dome_v)[0]
+    assert isinstance(dome_uv, unreal.MaterialExpressionTextureCoordinate)
+    assert dome_uv.get_editor_property('coordinate_index') == 0
+    assert isinstance(cloud_color, unreal.MaterialExpressionMultiply)
+    horizon, cloud_brightness = inputs(cloud_color)
+    assert isinstance(horizon, unreal.MaterialExpressionTextureSample)
+    assert horizon.get_editor_property('texture') == gradient.get_editor_property('texture')
+    horizon_uv = [item for item in inputs(horizon) if item is not None]
+    assert len(horizon_uv) == 1 and isinstance(horizon_uv[0], unreal.MaterialExpressionConstant2Vector)
+    close([horizon_uv[0].get_editor_property('r'), horizon_uv[0].get_editor_property('g')],
+          [sky['time_axis']['column_u'], sky['horizon_row_v']], 1e-6)
+    assert isinstance(cloud_brightness, unreal.MaterialExpressionConstant)
+    close([cloud_brightness.get_editor_property('r')],
+          [sky['scalars']['sky_brightness'] * sky['scalars']['cloud_brightness']], 1e-6)
+    assert isinstance(alpha, unreal.MaterialExpressionSaturate)
+    coverage = inputs(alpha)[0]
+    assert isinstance(coverage, unreal.MaterialExpressionMultiply)
+    coverage_sample, opacity = inputs(coverage)
+    assert isinstance(coverage_sample, unreal.MaterialExpressionTextureSample)
+    assert coverage_sample.get_editor_property('texture').get_name() == Path(sky['textures']['clouds']['file']).stem
+    assert not coverage_sample.get_editor_property('texture').get_editor_property('srgb')
+    coverage_uv = [item for item in inputs(coverage_sample) if item is not None]
+    assert len(coverage_uv) == 1 and coverage_uv[0] == dome_uv
+    assert isinstance(opacity, unreal.MaterialExpressionConstant)
+    close([opacity.get_editor_property('r')], [sky['scalars']['cloud_cap_opacity']], 1e-6)
+
+
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
     assert material.get_editor_property('two_sided') == bool(definition.get('two_sided', False)), name
@@ -170,7 +260,10 @@ for name, definition in scene['materials'].items():
         assert material.get_editor_property('shading_model') == unreal.MaterialShadingModel.MSM_UNLIT
         visible = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
         assert visible is not None, 'Unlit material has no visible color: ' + name
-        if not definition['channels'].get('emissive'):
+        if definition.get('sky_approximation'):
+            verify_sky_approximation(material, name, definition['sky_approximation'])
+            verified_sky_approximations.append(name)
+        elif not definition['channels'].get('emissive'):
             if definition['channels'].get('diffuse'):
                 assert isinstance(visible, unreal.MaterialExpressionTextureSample)
                 assert visible.get_editor_property('texture').get_name() == Path(definition['channels']['diffuse']).stem
@@ -209,10 +302,17 @@ if scene['map'] == 'MaterialV1Smoke':
 report = {'verified_section_actors': len(placed), 'verified_channels': sorted(verified_channels),
           'verified_unlit_materials': verified_unlit_materials,
           'verified_native_skybox_placements': verified_native_skybox,
+          'verified_sky_approximation_materials': verified_sky_approximations,
+          'verified_outer_shell_placements': verified_outer_shell,
+          'verified_outer_shell_replacements': verified_outer_shell_replacements,
+          'expected_outer_shell_replacements': sum(
+              len(a.get('outer_shell_replaced', [])) for a in scene['actors']),
           'verified_hidden_visual_placements': verified_hidden_visual,
           'verified_neutral_fallback_sections': verified_neutral_fallback,
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
-          'temporary_sky_fallback': 'UE5_SkyAtmosphere+OpenWillow_SkyFallback',
+          'temporary_sky_fallback': ('UE5_SkyAtmosphere' if native_sky_approximated
+                                     else 'UE5_SkyAtmosphere+OpenWillow_SkyFallback'),
           'visual_validation': 'pending'}
+assert report['verified_outer_shell_replacements'] == report['expected_outer_shell_replacements']
 (root / 'ue-verify.json').write_text(json.dumps(report, indent=2))
 unreal.log('OpenWillow saved-scene verification: ' + json.dumps(report))

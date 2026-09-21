@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-18
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-21
 
 ---
 
@@ -42,12 +42,19 @@ well-bounded ones are marked *good first task*.
 - [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
       winding twice, exposing back faces. Corrected isolated sign renders
       readable; saved UV and winding checks now guard the import path.
-- [~] Sky rendering: the bounded Sanctuary slice now imports the accepted
-      `Prop_Skybox.Meshes.Sky_Dome` placement with its Unlit material and
-      recovered `Sky_TransitionBL2Default_Dif` routed through the host
-      Emissive policy. The blue shell and `OpenWillow_SkyAtmosphere` remain
-      temporary fallbacks; Ash coverage, outer layers, time-of-day/cloud/mask
-      graph connections, Kismet activation and visual parity remain open. See
+- [~] Sky rendering: the accepted Sanctuary `Sky_Dome` now renders a
+      daytime gradient with cloud bands built from the instance's own named
+      inputs (`Time_of_Day` column of the transition strip over dome V,
+      horizon-tinted `Clouds_01.R`), and the blue host shell that hid the
+      dome is no longer spawned there. The stripped master graph is not
+      decoded: the column reading and the cloud combine are `UNVERIFIED`,
+      and the sun spot, masks, cloud motion and time-of-day animation are
+      omitted. The `_Outer` city hull imports opt-in (`--outer-shell`) with
+      its mesh-default materials in place of the unrecoverable `_Teleported`
+      overrides. `OpenWillow_SkyAtmosphere` remains for ambient light; Ash
+      coverage, Kismet activation (`_Land` vs `_Outer`) and visual parity
+      remain open. See the
+      [sky approximation record](docs/verification/NATIVE_SKY_APPROXIMATION.md),
       the [native skybox record](docs/verification/NATIVE_SKYBOX_VERIFICATION.md)
       and [sky census](docs/verification/SKY_CENSUS.md).
 - [ ] Material fallbacks: Sanctuary now has 44 materials lacking diffuse,
@@ -62,12 +69,15 @@ well-bounded ones are marked *good first task*.
 - [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
       meshes with corroborated topology and host triangle collision, and the
       two persistent-level root Models emit 228 cross-checked polygons (571
-      triangles, 105 sections) with native materials, placeholder planar UVs
-      and opt-in triangle collision. Native terrain blending, BSP UVs /
-      lightmaps / collision flags, other maps and original-game alignment
-      remain open. Hole runtime assertions include occluded/displaced probes;
-      see the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md)
-      and the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md).
+      triangles, 105 sections) with native materials, native texture axes
+      (field roles confirmed against 15,393 editor FPoly records, 0 differ;
+      texel scale still `UNVERIFIED`) and opt-in triangle collision. Native
+      terrain blending, the BSP texel scale, lightmaps / collision flags,
+      other maps and original-game alignment remain open. Hole runtime
+      assertions include occluded/displaced probes; see the
+      [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md),
+      the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md) and the
+      [texture-axis record](docs/verification/BSP_TEXTURE_AXES.md).
 - [~] Sanctuary visual defects observed in the editor fly-through: the native
       dome now uses a two-sided interior policy, and the four known
       `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
@@ -95,7 +105,13 @@ well-bounded ones are marked *good first task*.
 - [ ] Matched-viewpoint screenshots against the original game: the plan's
       per-map verification method. Needs someone with the game and both
       builds open.
-- [ ] Cross-check the census against umodel's view of the same packages.
+- [x] Cross-check the census against umodel's view of the same packages:
+      4,750,427 exports over 2006 base and DLC packages, no offset, size or
+      class disagreement; the 7 name-only differences are umodel-side
+      normalization. Sanctuary meshes, textures and material picks were also
+      compared with umodel exports and with the game's own object dumps. See
+      [umodel record](docs/verification/UMODEL_CROSSCHECK.md) and
+      [dump record](docs/verification/BLCMM_DUMP_CROSSCHECK.md).
 - [ ] Array element types from class reflection instead of hand-written
       schemas (needs cross-package class loading; touches Phase 2).
 
@@ -226,10 +242,11 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         transforms (collection tails: observed 84-byte layout, Ash and
         Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
-    - [~] Skybox: observed `Sky_Dome` placement and Unlit material now import
-          through the bounded native-sky v1 path, with a blue host shell keeping
-          the inspection background readable; outer layers, time-of-day graph,
-          Kismet activation and visual parity remain open
+    - [~] Skybox: observed `Sky_Dome` placement renders a labeled
+          approximation from its named inputs (gradient column, cloud layer);
+          `_Outer` hull opt-in with mesh-default materials; master graph,
+          time-of-day animation, Kismet activation and visual parity remain
+          open
   - [~] Terrain / BSP *Caveat:* Sanctuary only; single-layer terrain and
         planar-UV BSP approximations, both labeled `UNVERIFIED`
   - [ ] Runtime streaming (all sublevels currently load at once)

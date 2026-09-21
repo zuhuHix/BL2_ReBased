@@ -54,9 +54,11 @@ existing Material v1 path (`Mati_SancBuild1a`, `Mati_SancWall01`,
 
 ## Approximations, labeled
 
-- UVs: world-planar projection on the polygon's dominant axis, 128 cm per
-  tile. The surface records contain candidate texture-axis fields but they
-  are not decoded; native BSP texture coordinates are `UNVERIFIED`.
+- UVs: at the time of this record, a world-planar projection on the
+  polygon's dominant axis, 128 cm per tile. Superseded on 2026-09-18: the
+  surface records' base-point and texture-axis fields are now decoded and
+  confirmed against editor Polys exports, and the projection uses them; the
+  texel scale remains `UNVERIFIED`. See [BSP_TEXTURE_AXES.md](BSP_TEXTURE_AXES.md).
 - Lighting: host inspection rig only; element lighting blocks are hashed,
   not interpreted.
 - Collision: opt-in host triangle collision on every recovered polygon.
@@ -127,5 +129,6 @@ fallback change; the saved-map verifier confirms its material binding only.
 ## Not verified
 
 - Original-game matched views of any BSP surface.
-- Native UVs, lightmaps, `PolyFlags` and the opaque Model remainder.
+- The BSP texel scale (axes since decoded, see above), lightmaps,
+  `PolyFlags` and the opaque Model remainder.
 - Any map other than Sanctuary; `prepare_bsp.py` refuses other maps.

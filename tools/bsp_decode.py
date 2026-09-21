@@ -2,7 +2,8 @@
 
 Original implementation from installed-package observations. Model nodes,
 vertex-pool point references, surface planes and component membership must
-agree. Unused native fields are retained as opaque hashes, never guessed.
+agree. Surface fields other than material, normal and the three texture-axis
+references are retained as opaque hashes, never guessed.
 """
 import hashlib
 import math
@@ -106,16 +107,17 @@ def polygon_triangles(points, plane):
     return triangles
 
 
-def decode_model(payload, record, records):
-    require_root(record, records, 'Engine.Model')
-    start = native_offset(payload, record['data'], 4)
-    c = Cursor(payload, start)
-    if c.take(28) != bytes(28):
-        raise ValueError('Unsupported root Model prefix')
+def read_arrays(c, index):
+    """The native pools every Model carries, in serialized order.
+
+    Returns vectors, points, nodes, surfaces, vertices and the raw surface and
+    vertex record bytes. Nothing here is interpreted beyond the array framing
+    and the self reference.
+    """
     vectors = [struct.unpack('<3f', b) for b in c.array(12, True)]
     points = [struct.unpack('<3f', b) for b in c.array(12, True)]
     nodes = [struct.unpack('<4f12i', b) for b in c.array(64, True)]
-    if c.read('i')[0] != record['index']:
+    if c.read('i')[0] != index:
         raise ValueError('Model self reference mismatch')
     surface_bytes = c.array(60)
     surfaces = [struct.unpack('<8i4f3i', b) for b in surface_bytes]
@@ -123,6 +125,50 @@ def decode_model(payload, record, records):
     vertices = [struct.unpack('<2i4f', b) for b in vertex_bytes]
     for v in vectors + points:
         finite(v)
+    return vectors, points, nodes, surfaces, vertices, surface_bytes, vertex_bytes
+
+
+def surface_axes(s, vectors, points):
+    """Texture base point and U/V axis vectors referenced by a surface record.
+
+    Record ints s[2], s[4] and s[5] index the point pool and the vector pool.
+    The roles were tested against the data rather than assumed: the axis in
+    s[4] is perpendicular to the surface normal on every used Sanctuary
+    surface, s[5] on all but four 45-degree slopes carrying a world-axis
+    default, the two axes are mutually perpendicular throughout, and
+    volume-owned Models keep an editor Polys export whose explicit
+    Base/TextureU/TextureV vectors equal these three fields
+    (tools/crosscheck_bsp_polys.py, docs/verification/BSP_TEXTURE_AXES.md).
+    The base point is deliberately not required to lie on the plane: volume
+    brushes store it in brush space, and (P - Base) . Axis is insensitive to
+    a normal offset whenever the axis is in-plane.
+    """
+    base, u, v = s[2], s[4], s[5]
+    if not 0 <= base < len(points) or not 0 <= u < len(vectors) or not 0 <= v < len(vectors):
+        raise ValueError('Invalid BSP surface texture reference')
+    return {'base': points[base], 'texture_u': vectors[u], 'texture_v': vectors[v]}
+
+
+def read_surfaces(payload, record):
+    """Vector, point, node and surface pools of any Model, for cross-checks only.
+
+    The 28-byte prefix (zero on root Models, non-zero on volume-owned ones) is
+    skipped unread; no ownership or polygon validation is performed, so this
+    must not feed scene output. decode_model remains the only producer.
+    """
+    c = Cursor(payload, native_offset(payload, record['data'], 4))
+    c.take(28)
+    vectors, points, nodes, surfaces, *_ = read_arrays(c, record['index'])
+    return vectors, points, nodes, surfaces
+
+
+def decode_model(payload, record, records):
+    require_root(record, records, 'Engine.Model')
+    start = native_offset(payload, record['data'], 4)
+    c = Cursor(payload, start)
+    if c.take(28) != bytes(28):
+        raise ValueError('Unsupported root Model prefix')
+    vectors, points, nodes, surfaces, vertices, surface_bytes, vertex_bytes = read_arrays(c, record['index'])
     polygons = []
     for i, n in enumerate(nodes):
         first, surface = n[4:6]
@@ -146,7 +192,8 @@ def decode_model(payload, record, records):
             raise ValueError('BSP node and surface planes disagree')
         polygons.append({'node': i, 'surface': surface, 'material': s[0],
                          'component': n[7] & 65535, 'component_node': (n[7] >> 16) & 65535,
-                         'points': polygon, 'plane': n[:4], 'triangles': triangles})
+                         'points': polygon, 'plane': n[:4], 'triangles': triangles,
+                         **surface_axes(s, vectors, points)})
     return {'index': record['index'], 'path': record['path'], 'polygons': polygons,
             'opaque_remainder': digest(payload[c.offset:]),
             'opaque_surface_records': digest(b''.join(surface_bytes)),
