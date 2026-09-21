@@ -67,6 +67,8 @@ def preparation_commands(args, name, scene):
              '--output', str(scene)]
     if args.include_dlc:
         level.append('--include-dlc')
+    if args.outer_shell:
+        level.append('--outer-shell')
     commands = [level]
     if args.sanctuary_geometry:
         commands.extend([
@@ -93,6 +95,8 @@ def main():
     parser.add_argument('--include-dlc', action='store_true', help='Include installed DLC maps and texture caches')
     parser.add_argument('--sanctuary-geometry', action='store_true',
                         help='Also prepare Sanctuary terrain and BSP with triangle collision')
+    parser.add_argument('--outer-shell', action='store_true',
+                        help='Prepare the outer hull meshes with mesh-default materials (labeled approximation)')
     args = parser.parse_args()
     try:
         if args.json and not args.list:

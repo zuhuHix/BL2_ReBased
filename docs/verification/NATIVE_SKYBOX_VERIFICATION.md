@@ -1,5 +1,10 @@
 # Native Sky_Dome import, 2026-09-15
 
+*2026-09-21: the dome material now uses the recorded sky approximation and the
+blue host shell is no longer spawned on Sanctuary; see
+[NATIVE_SKY_APPROXIMATION.md](NATIVE_SKY_APPROXIMATION.md). The import
+policy and limits below otherwise still apply.*
+
 AI-assisted implementation in `t3code-dc91995f`. This is a bounded Sanctuary
 skybox import slice. It does not recover the complete UE3 sky graph.
 

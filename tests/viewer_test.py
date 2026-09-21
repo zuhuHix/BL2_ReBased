@@ -69,6 +69,22 @@ class ViewerTests(unittest.TestCase):
                 viewer.main()
                 self.assertEqual(run.call_count, 1)
                 self.assertEqual(Path(run.call_args.args[0][1]).name, 'prepare_level.py')
+                self.assertNotIn('--outer-shell', run.call_args.args[0])
+
+    def test_outer_shell_opt_in_is_passed_to_the_level_preparation_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            records = [{'map': 'Sanctuary_P', 'selectable': True}]
+            with patch.object(viewer, 'ROOT', root), patch.object(viewer, 'catalog', return_value=records), \
+                    patch.object(viewer.sys, 'argv', ['viewer', '--game', folder, '--map', 'Sanctuary_P',
+                                                    '--action', 'prepare', '--outer-shell',
+                                                    '--sanctuary-geometry']), \
+                    patch.object(viewer.subprocess, 'run') as run:
+                viewer.main()
+                commands = [entry.args[0] for entry in run.call_args_list]
+                self.assertEqual(len(commands), 3)
+                self.assertEqual(commands[0][-1], '--outer-shell')
+                self.assertTrue(all('--outer-shell' not in command for command in commands[1:]))
 
     def test_sanctuary_geometry_preparation_runs_in_order_with_collision(self):
         with tempfile.TemporaryDirectory() as folder:

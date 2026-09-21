@@ -466,6 +466,128 @@ class SceneTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Missing'):
                 scene.build('A_P')
 
+    def sky_scene(self, records):
+        scene = object.__new__(m.Scene)
+        scene.load = lambda package: records
+        scene.resolve = lambda package, ref: (package, ref['index']) if isinstance(ref, dict) and ref['index'] else None
+        scene.identity = lambda key: 'Map:' + records[key[1]]['path']
+        scene.texture = lambda key, channel: f'{key[1]}_{channel}.png'
+        return scene
+
+    def sky_records(self):
+        def expression(cls, **kwargs):
+            return {**record(**kwargs), 'class': 'Engine.MaterialExpression' + cls}
+        return {
+            1: {'path': m.NATIVE_SKY_MASTER, 'class': 'Engine.Material',
+                **record(LightingModel='MLM_Unlit', Expressions=[{'index': 10 + i} for i in range(9)])},
+            2: {'path': 'Prop_Skybox.Materials.Mati_Sky_Dynamic_INST', 'class': 'Engine.MaterialInstanceConstant',
+                **record(Parent={'index': 1},
+                         TextureParameterValues=[tags(ParameterName='Masks', ParameterValue={'index': 23})],
+                         ScalarParameterValues=[tags(ParameterName='Time_of_Day', ParameterValue=170)],
+                         VectorParameterValues=[tags(ParameterName='Horizion_track_color_multiplier',
+                                                     ParameterValue={'R': 0.2, 'G': 0.2, 'B': 0.2, 'A': 1})])},
+            10: expression('TextureSampleParameter2D', ParameterName='Transition_Track', Texture={'index': 20}),
+            11: expression('TextureSampleParameter2D', ParameterName='clouds', Texture={'index': 21}),
+            12: expression('TextureSampleParameter2D', ParameterName='Masks', Texture={'index': 22}),
+            13: expression('ScalarParameter', ParameterName='Time_of_Day', DefaultValue=0),
+            14: expression('ScalarParameter', ParameterName='sky_brightness', DefaultValue=1),
+            15: expression('ScalarParameter', ParameterName='Sun_spot_brightness', DefaultValue=6),
+            16: expression('ScalarParameter', ParameterName='cloud_cap_opacity', DefaultValue=1),
+            17: expression('ScalarParameter', ParameterName='p_CouldBrightness', DefaultValue=1),
+            18: expression('VectorParameter', ParameterName='Horizion_track_color_multiplier',
+                           DefaultValue={'R': 1, 'G': 1, 'B': 1, 'A': 1}),
+            20: {'path': 'Prop_Skybox.Textures.Sky_TransitionBL2Default_Dif', 'class': 'Engine.Texture2D'},
+            21: {'path': 'Prop_Skybox.Textures.Clouds_01', 'class': 'Engine.Texture2D'},
+            22: {'path': 'Prop_Skybox.Textures.Sky_Multi', 'class': 'Engine.Texture2D'},
+            23: {'path': 'Prop_Skybox.Textures.Sky_Multi2', 'class': 'Engine.Texture2D'},
+            24: {'path': 'Prop_Skybox.Textures.Cube', 'class': 'Engine.TextureCube'}}
+
+    def test_sky_approximation_reads_instance_over_master_and_records_assumptions(self):
+        records = self.sky_records()
+        scene = self.sky_scene(records)
+        sky = scene.native_sky_approximation(('Map', 2))
+        self.assertEqual(sky['method'], 'sky_time_of_day_strip_v1')
+        self.assertEqual(sky['status'], 'partial_unverified')
+        self.assertEqual(sky['master'], 'Map:' + m.NATIVE_SKY_MASTER)
+        # Instance overrides win over master defaults, master defaults fill the rest.
+        self.assertEqual(sky['textures']['masks']['source'], 'Map:Prop_Skybox.Textures.Sky_Multi2')
+        self.assertEqual(sky['textures']['transition_track']['file'], '20_sky_transition_track.png')
+        self.assertEqual(sky['textures']['clouds']['file'], '21_sky_clouds.png')
+        self.assertEqual(sky['scalars'], {'time_of_day': 170.0, 'sky_brightness': 1.0,
+                                          'sun_spot_brightness': 6.0, 'cloud_cap_opacity': 1.0,
+                                          'cloud_brightness': 1.0})
+        self.assertEqual(sky['vectors']['horizon_track_color_multiplier'], [0.2, 0.2, 0.2, 1.0])
+        self.assertAlmostEqual(sky['time_axis']['column_u'], 170 / 256)
+        self.assertIn('UNVERIFIED', sky['time_axis']['note'])
+        self.assertIn('time-of-day animation', sky['omitted'])
+        # Only the observed master qualifies.
+        records[1]['path'] = 'Common_Materials.Sky.Mat_OtherSky'
+        self.assertIsNone(scene.native_sky_approximation(('Map', 2)))
+
+    def test_sky_approximation_rejects_incomplete_or_invalid_inputs(self):
+        records = self.sky_records()
+        scene = self.sky_scene(records)
+        records[2]['data']['properties'] = tags(Parent={'index': 1},
+                                                TextureParameterValues=[tags(ParameterName='Masks', ParameterValue={'index': 24})])
+        with self.assertRaisesRegex(ValueError, 'masks is not a Texture2D'):
+            scene.native_sky_approximation(('Map', 2))
+        records = self.sky_records()
+        scene = self.sky_scene(records)
+        records[2]['data']['properties'] = tags(Parent={'index': 1},
+                                                ScalarParameterValues=[tags(ParameterName='Time_of_Day', ParameterValue=300)])
+        with self.assertRaisesRegex(ValueError, 'outside the transition strip'):
+            scene.native_sky_approximation(('Map', 2))
+        records = self.sky_records()
+        scene = self.sky_scene(records)
+        del records[14]
+        records[1]['data']['properties'] = tags(LightingModel='MLM_Unlit',
+                                                Expressions=[{'index': i} for i in (10, 11, 12, 13, 15, 16, 17, 18)])
+        with self.assertRaisesRegex(ValueError, 'sky_brightness is missing'):
+            scene.native_sky_approximation(('Map', 2))
+        records = self.sky_records()
+        scene = self.sky_scene(records)
+        records[1]['data']['properties'] = tags(Parent={'index': 2})
+        with self.assertRaisesRegex(ValueError, 'cycle'):
+            scene.native_sky_approximation(('Map', 2))
+
+    def test_outer_shell_policy_replaces_only_teleported_overrides_with_diffuse_defaults(self):
+        materials = {'tele': {'source': 'Outer:FX.Mat_Sanctuary_Teleported', 'channels': {}},
+                     'drill_tele': {'source': 'Outer:FX.Mat_Sanctuary_Drill_Teleported', 'channels': {}},
+                     'rock_tele': {'source': 'Outer:FX.Mat_Sanctuary_Rock_Teleported', 'channels': {}},
+                     'other': {'source': 'Outer:FX.Mat_Sanctuary_Other', 'channels': {}},
+                     'hull': {'source': 'Outer:Prop_Skybox.Materials.Mat_SancSkyNew', 'channels': {'diffuse': 'a.png'}},
+                     'drill': {'source': 'Outer:Prop_Skybox.Materials.Mat_SancDrillNew', 'channels': {'diffuse': 'b.png'}},
+                     'bare': {'source': 'Outer:Prop_Glacier.Materials.Mati_GlacierRocks2X', 'channels': {}}}
+        sections = [{'slot': 0, 'material': 'hull'}, {'slot': 1, 'material': 'drill'},
+                    {'slot': 2, 'material': 'bare'}, {'slot': 3, 'material': 'hull'}]
+        kept, replaced = m.outer_shell_overrides(['tele', 'drill_tele', 'rock_tele', 'other'], sections, materials)
+        # Slot 2's default has no diffuse; slot 3 is not a phase-in override.
+        self.assertEqual(kept, [None, None, 'rock_tele', 'other'])
+        self.assertEqual([r['slot'] for r in replaced], [0, 1])
+        self.assertEqual(replaced[0], {'slot': 0, 'override': 'Outer:FX.Mat_Sanctuary_Teleported',
+                                       'default': 'Outer:Prop_Skybox.Materials.Mat_SancSkyNew'})
+        self.assertTrue(m.outer_shell_mesh('Sanctuary_Outer:Prop_Skybox.Meshes.SanctuarySky'))
+        self.assertFalse(m.outer_shell_mesh('Sanctuary_Outer:Prop_Skybox.Meshes.SanctuarySky_LOD'))
+        self.assertFalse(m.outer_shell_mesh('Sanctuary_Light:Prop_Skybox.Meshes.Sky_Dome'))
+        hull = 'Sanctuary_Outer:Prop_Skybox.Meshes.SanctuarySky'
+        actor = {'materials': ['tele', 'drill_tele']}
+        m.apply_outer_shell_policy(actor, hull, sections, materials, False)
+        self.assertEqual(actor['materials'], ['tele', 'drill_tele'])
+        self.assertFalse(actor['outer_shell'])
+        m.apply_outer_shell_policy(actor, hull, sections, materials, True)
+        self.assertEqual(actor['materials'], [None, None])
+        self.assertTrue(actor['outer_shell'])
+        self.assertEqual(len(actor['outer_shell_replaced']), 2)
+        # Re-applying is stable and withdrawing restores the placed overrides.
+        m.apply_outer_shell_policy(actor, hull, sections, materials, True)
+        self.assertEqual(len(actor['outer_shell_replaced']), 2)
+        m.apply_outer_shell_policy(actor, hull, sections, materials, False)
+        self.assertEqual(actor['materials'], ['tele', 'drill_tele'])
+        self.assertNotIn('outer_shell_replaced', actor)
+        ordinary = {'materials': ['tele']}
+        m.apply_outer_shell_policy(ordinary, 'Map:Other.Mesh', sections, materials, True)
+        self.assertEqual(ordinary, {'materials': ['tele']})
+
     def test_native_skybox_policy_is_exact_mesh_only(self):
         self.assertTrue(m.native_skybox_mesh('Prop_Skybox:Prop_Skybox.Meshes.Sky_Dome'))
         self.assertFalse(m.native_skybox_mesh('Prop_Skybox:Prop_Skybox.Meshes.SanctuarySky'))

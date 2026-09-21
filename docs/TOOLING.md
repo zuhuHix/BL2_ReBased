@@ -232,13 +232,15 @@ Preparation defaults to a separate `local/<map-name>` directory, so preparing
 translation without extracting meshes again:
 
 ```powershell
-python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures
+python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures --outer-shell
 ./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ImportOnly -SkipBuild
 ./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary
 ```
 
 Use `--reuse-textures` only with the same unchanged game installation. The
 refresh preserves placement data and resolves materials by both path and class.
+`--outer-shell` is the opt-in hull policy described under the sky notes below;
+omit it to keep the placed `_Teleported` overrides.
 
 On a machine without a discrete GPU, add `-LowEnd` to `run_ue_level.ps1`. It
 starts the editor or standalone viewer with DX11/SM5 (no Nanite, no virtual
@@ -332,6 +334,31 @@ casting, and retains the UE5 atmosphere as a temporary fallback for unresolved
 sky layers. A second Sanctuary `Sky_Dome` placement with a floor-material
 override is deliberately left as ordinary geometry. See the
 [native skybox verification record](verification/NATIVE_SKYBOX_VERIFICATION.md).
+
+When the dome's effective material descends from
+`Common_Materials.Sky.Mat_SkyTimeOfDay_Master`, the preparer also writes a
+`sky_approximation` record from the named inputs that survive along the
+instance chain (transition strip, cloud and mask textures, `Time_of_Day`,
+brightness and opacity scalars). The importer builds one fixed graph from it:
+the `Time_of_Day` column of the transition strip over dome V, blended toward
+the strip's horizon row where `Clouds_01.R` is dense. The stripped master
+graph is not decoded; the column reading (`/256`) is recorded as
+`UNVERIFIED`, and the sun spot, masks, cloud motion and time-of-day animation
+are listed as omitted. When such a dome is accepted, the blue
+`OpenWillow_SkyFallback` sphere (which sits inside the dome) is not spawned;
+the UE5 atmosphere stays. The verifier walks the saved graph back from
+Emissive and reports `verified_sky_approximation_materials`.
+
+The `Sanctuary_Outer` hull (`Prop_Skybox.Meshes.SanctuarySky` and its two
+antennas) is placed with masked `_Teleported` overrides that Material v1
+cannot recover, so it imports invisible by default. `--outer-shell` (on
+`viewer.py --action prepare`, `prepare_level.py` and `refresh_materials.py`)
+drops only those overrides whose mesh-default material resolved a diffuse,
+records each replacement in the actor's `outer_shell_replaced` list, and
+imports the actors under `OuterShell/` without shadow casting. Which of
+`_Outer` and `_Land` the running game shows is Kismet state and is not
+interpreted. See the
+[sky approximation record](verification/NATIVE_SKY_APPROXIMATION.md).
 
 Observed blocking helpers are retained for source collision where recovered and
 hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
@@ -438,7 +465,7 @@ counts do not establish which missing floors terrain/BSP will fill. See
 For a complete Sanctuary preparation, use:
 
 ```powershell
-python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctuary-geometry
+python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctuary-geometry --outer-shell
 ```
 
 This runs static-mesh preparation, terrain preparation, then BSP preparation
