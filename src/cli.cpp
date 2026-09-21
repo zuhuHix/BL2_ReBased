@@ -1,4 +1,5 @@
 #include "assets.hpp"
+#include "natives.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -14,7 +15,7 @@ void usage() {
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
-        "[--all-mips <directory>]]");
+        "[--all-mips <directory>]] | --native <name> [--native-args <args>] | --native-selftest");
 }
 
 int32_t signedNumber(const std::string& value) {
@@ -80,6 +81,31 @@ std::string resolvedJson(const Package& source, int32_t reference, const Resolve
 int main(int argc, char** argv) {
     try {
         if (argc < 2) usage();
+        // VM stub-dispatch modes need no package file.
+        if (std::string(argv[1]) == "--native-selftest") {
+            if (argc != 2) usage();
+            std::cout << nativeSelfTest() << '\n';
+            return 0;
+        }
+        if (std::string(argv[1]) == "--native") {
+            if (argc < 3 || argc > 5) usage();
+            const std::string name = argv[2];
+            std::string args;
+            if (argc > 3) {
+                int cursor = 3;
+                if (std::string(argv[cursor]) != "--native-args") usage();
+                args = nextValue(cursor, argc, argv, "--native-args");
+                if (cursor + 1 != argc) usage();
+            }
+            if (name.empty()) usage();
+            // The table ships empty (Core builtins are a later slice), so
+            // every name currently resolves to its UNIMPLEMENTED stub log.
+            const NativeRegistry registry;
+            const std::string log = registry.invoke(name, args);
+            std::cout << "{\"name\":" << quote(name) << ",\"status\":\"unimplemented\""
+                      << ",\"log\":" << quote(log) << "}\n";
+            return 0;
+        }
         const std::filesystem::path sourcePath = argv[1];
         const std::string mode = argc >= 3 ? argv[2] : "";
 
