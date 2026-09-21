@@ -933,3 +933,17 @@ replacement; every other override is kept. This is a substitution, not the
 placed material, and whether the running game shows `_Outer` or `_Land` is
 Kismet state that is still not interpreted. Default behaviour is unchanged.
 Record: docs/verification/NATIVE_SKY_APPROXIMATION.md.
+
+The editor fly-through after this slice added two facts. First, the hull's
+tower sits off-centre and above the town's own; the actor transform matches
+the game dump and the vertices match umodel, and the sublevel's Kismet shows
+why: `SeqAct_Interp_0` (`SanctuaryLiftoff`) binds the hull to a
+`RelativeToInitial` move track that jumps it 1.7 km south and lifts it
+100–150 m before hiding it at 36 s. The placed transform is a parking pose for
+a cutscene prop, so the mismatch is left as-is and recorded. Second, two
+`Blocking_Plane` placements on the horizon carried
+`Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01`, a sibling of the
+already-hidden `Mat_CloudLayer_Light`, and tiled a dust sprite as yellow/black
+stripes; the hide rule now names both instances and `refresh_materials.py`
+re-evaluates it.
+

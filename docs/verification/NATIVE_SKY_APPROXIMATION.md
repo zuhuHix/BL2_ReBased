@@ -120,6 +120,35 @@ This substitutes the pre-teleport look for the placed phase-in material. It
 does not decide whether the running game shows the `_Outer` hull or the
 `_Land` mountains at any story state; both sublevels load together here.
 
+### What the hull is (editor inspection, 2026-09-21)
+
+In the editor the hull's central tower sits visibly off-centre and above the
+town's own tower. That is not a decode offset: the actor transform agrees
+with the game's object dump (translation delta 0.0) and all 10,003 vertices
+agree with umodel at 1 cm ([dump record](BLCMM_DUMP_CROSSCHECK.md),
+[umodel record](UMODEL_CROSSCHECK.md)). Reading the sublevel's Kismet with
+our own reader explains it:
+
+- `Sanctuary_Outer` contains one Matinee, `SeqAct_Interp_0`, commented
+  `SanctuaryLiftoff`, with 84 groups. Its `Sanctuary` group is bound to
+  `InterpActor_29` (the hull) through `SeqVar_Object_5`; `Antenna_01` and
+  `Antenna_02` bind `InterpActor_23` and `_25`.
+- The `Sanctuary` group's `InterpTrackMove_0` is `IMF_RelativeToInitial`
+  with position keys at 0.5 s (+16551, −171794, −164), 3.4 s (+16569,
+  −171780, +396), 16.8 s (+16551, −171794, +9955) and 39.9 s (+7441,
+  −179740, +14684), and yaw keys 78.75° → 84.4° → 95°. Its visibility track
+  shows the actor at 0 s and hides it at 36.0 s; the antennas hide at 10.3 s
+  and 27.6 s.
+- `Sanctuary_Outer` and `Sanctuary_Land` are both `LevelStreamingKismet` in
+  `Sanctuary_P`; `Sanctuary_Px` is the only always-loaded sublevel.
+
+So the hull is the liftoff-cutscene prop. Its placed transform is a parking
+pose coincident with the town; the cutscene moves it 1.7 km south and lifts
+it 100–150 m before hiding it. Nothing in the package draws it at its placed
+position in the ground state. The opt-in import shows the parked prop as-is,
+and the off-centre tower is that parked pose, not an error to correct.
+Decoding the Kismet decides which sublevel is active remains open.
+
 ## Automated evidence
 
 - `python tests/level_test.py`: 25 tests OK, including the new sky-record
@@ -187,10 +216,21 @@ project's ignored `Saved/Screenshots/WindowsEditor/`; the first pass
 (`_1000001`, `_1100001`) after the hull viewpoints were adjusted. The first
 capture without `Is Sky` (`_0400000`) shows the brown field described above.
 
-Observed but out of scope: view 8 shows a yellow/black rectangular plane on
-the horizon behind the town. It is not one of the four hidden
-`Mat_CloudLayer_Light` planes (those are checked hidden) and was not
-investigated here.
+View 8 showed a yellow/black rectangular plane on the horizon behind the
+town, and the editor fly-through found a second one. Both are
+`Common_Meshes.Blocking.Blocking_Plane` placements in `Sanctuary_Light`
+(`StaticMeshActor_SMC_0`, `_SMC_6`) with
+`Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01`, a sibling of the
+`Mat_CloudLayer_Light` instance the artifact pass already hides. Its sole
+cooked texture is `Basic_Dust_Dif`, a dust sprite, which the diffuse
+inference tiled across the plane. The hide rule now covers both cloud-layer
+instances (`HIDDEN_CLOUD_MATERIALS`); `refresh_materials.py` re-evaluates
+the rule so the fix does not need a full rebuild. The refreshed Sanctuary
+manifest hides 108 helpers (106 before); the re-import passed scene,
+collision and UV verification again (4,888 section actors, 108 hidden, 0
+errors) and the recaptured view 8 (`_0800003`) shows the horizon without the
+stripes. The one remaining `Blocking_Plane` placement carries
+`Mati_BankFloor` and is left visible.
 
 ## What this does and does not claim
 

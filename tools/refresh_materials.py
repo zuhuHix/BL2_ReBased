@@ -2,7 +2,8 @@
 import argparse
 import json
 from pathlib import Path
-from prepare_level import Scene, apply_outer_shell_policy, material_index, native_skybox_placement
+from prepare_level import (Scene, apply_outer_shell_policy, hidden_visual_mesh, material_index,
+                           native_skybox_placement)
 
 
 def restore_sky_policy(manifest):
@@ -15,6 +16,17 @@ def restore_sky_policy(manifest):
         if native_skybox_placement(mesh['source'], effective, manifest['materials']):
             for name in effective:
                 manifest['materials'][name]['two_sided'] = True
+
+
+def restore_hidden_visual_policy(manifest):
+    """Re-evaluate the render-only hide rule against the refreshed materials."""
+    for actor in manifest['actors']:
+        mesh = manifest['meshes'][actor['mesh']]
+        effective = [actor['materials'][s['slot']]
+                     if s['slot'] < len(actor['materials']) and actor['materials'][s['slot']]
+                     else s['material'] for s in mesh['sections']]
+        actor['hidden_visual'] = hidden_visual_mesh(
+            mesh['source'], effective, manifest['materials'], actor['source'])
 
 
 def restore_outer_shell_policy(manifest, enabled):
@@ -67,6 +79,7 @@ def main():
     manifest['materials'] = scene.materials
     restore_sky_policy(manifest)
     restore_outer_shell_policy(manifest, args.outer_shell)
+    restore_hidden_visual_policy(manifest)
     manifest['issues'] = [issue for issue in manifest['issues']
                           if not any(issue['object'] == source or issue['object'].startswith(source + ':')
                                      for source in sources)] + scene.issues
@@ -77,7 +90,8 @@ def main():
     print(json.dumps({'materials': len(scene.materials), 'issues': len(manifest['issues']),
                       'inferred_diffuse': sum('diffuse_inference' in m for m in scene.materials.values()),
                       'sky_approximations': sum('sky_approximation' in m for m in scene.materials.values()),
-                      'outer_shell_replaced': sum(len(a.get('outer_shell_replaced', [])) for a in manifest['actors'])}))
+                      'outer_shell_replaced': sum(len(a.get('outer_shell_replaced', [])) for a in manifest['actors']),
+                      'hidden_visual': sum(1 for a in manifest['actors'] if a.get('hidden_visual'))}))
 
 
 if __name__ == '__main__':

@@ -362,8 +362,8 @@ interpreted. See the
 
 Observed blocking helpers are retained for source collision where recovered and
 hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
-94 `Common_Meshes.CollisionCube` placements, and four cloud `Blocking_Plane`
-placements. The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
+94 `Common_Meshes.CollisionCube` placements, and six cloud `Blocking_Plane`
+placements (four `Mat_CloudLayer_Light`, two `Mat_CloudLayer_01`). The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
 placement that blocked the start view is also hidden. This is a bounded visual
 artifact policy, not complete collision or material parity.
 

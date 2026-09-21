@@ -612,11 +612,24 @@ class SceneTests(unittest.TestCase):
         self.assertTrue(m.hidden_visual_mesh(
             'Sanctuary_P:Common_Meshes.CollisionCube', ['collision']))
         materials = {'cloud': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'},
+                     'cloud01': {'source': 'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'},
                      'other': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_Other'}}
         self.assertTrue(m.hidden_visual_mesh(
             'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane', ['cloud'], materials))
+        self.assertTrue(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane', ['cloud01'], materials))
         self.assertFalse(m.hidden_visual_mesh(
             'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane', ['other'], materials))
+        self.assertFalse(m.hidden_visual_mesh(
+            'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane', ['cloud', 'other'], materials))
+        from refresh_materials import restore_hidden_visual_policy
+        manifest = {'actors': [{'source': 'A', 'mesh': 'plane', 'materials': ['cloud01'], 'hidden_visual': False},
+                               {'source': 'B', 'mesh': 'plane', 'materials': ['other'], 'hidden_visual': True}],
+                    'meshes': {'plane': {'source': 'Sanctuary_P:Common_Meshes.Blocking.Blocking_Plane',
+                                         'sections': [{'slot': 0, 'material': 'other'}]}},
+                    'materials': materials}
+        restore_hidden_visual_policy(manifest)
+        self.assertEqual([a['hidden_visual'] for a in manifest['actors']], [True, False])
         self.assertTrue(m.hidden_visual_mesh(
             'Sanctuary_P:Prop_Garbage.Meshes.BoxLrg', [], {},
             'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'))

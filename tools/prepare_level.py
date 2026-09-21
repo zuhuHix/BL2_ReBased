@@ -114,7 +114,11 @@ OUTER_SHELL_OVERRIDE_SUFFIX = '_Teleported'
 HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
 HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
 HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
-HIDDEN_CLOUD_MATERIAL = 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'
+# Both observed cloud-layer instances: `_Light` in Sanctuary_P (four planes)
+# and `_01` in Sanctuary_Light (two planes on the horizon, whose sole cooked
+# texture is a dust sprite that tiled as yellow/black stripes).
+HIDDEN_CLOUD_MATERIALS = {'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light',
+                          'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'}
 HIDDEN_TRANSITION_MESH = 'Common_Meshes.BasePlane_256x128'
 HIDDEN_TRANSITION_MATERIAL = 'Common_Materials.Environment.WorldTransition'
 HIDDEN_FOREGROUND_SOURCE = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
@@ -228,8 +232,8 @@ def hidden_visual_mesh(identity, effective_materials=None, materials=None, sourc
     if mesh == HIDDEN_CLOUD_MESH and effective_materials and materials:
         # The cloud material is translucent in UE3 but its opacity graph is not
         # recovered; drawing its diffuse alone produces the observed yellow /
-        # black blocking planes. Hide only the exact observed cloud instance.
-        return all(materials.get(name, {}).get('source') == HIDDEN_CLOUD_MATERIAL
+        # black blocking planes. Hide only the exact observed cloud instances.
+        return all(materials.get(name, {}).get('source') in HIDDEN_CLOUD_MATERIALS
                    for name in effective_materials)
     if mesh == HIDDEN_TRANSITION_MESH and effective_materials and materials:
         # WorldTransition is a translucent loading/boundary plane. Its graph
