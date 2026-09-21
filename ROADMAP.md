@@ -9,7 +9,25 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-15
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-18
+
+---
+
+## Priority: the vertical slice
+
+Porting all 82 maps is the *easier* part of this project; the harder, unproven
+part is Phases 2-4 (script VM, stock UE3 natives, Gearbox's undocumented
+natives). Rather than finish map breadth first and find out later that a later
+phase doesn't hold, the phases below are scoped to prove the hard parts on one
+map and one character first. Adopted 2026-09-18 from outside feedback; see
+[DECISIONS.md](DECISIONS.md).
+
+Current slice target: **Sanctuary** (closest map to done) + **Maya** (chosen
+2026-09-18) + one hand-picked mission + a handful of guns, working
+end-to-end: spawn, fight, loot a gun, equip it, use her action skill
+(Phaselock), complete the mission, die, respawn. That's Phase 4's gate below.
+Broad map coverage (79 more maps) and the remaining Vault Hunters are
+deferred until that gate is met; they move to Phase 5/6.
 
 ---
 
@@ -71,6 +89,8 @@ well-bounded ones are marked *good first task*.
       [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] Broader map coverage. Command-line and in-game selectors exist; the
       in-game list only offers already imported scenes (2026-09-14).
+      *Lower priority than the vertical slice above until the Phase 4 gate is
+      met (2026-09-18).*
 - [ ] Performance: Sanctuary profiled at 12–15 FPS on an Intel Iris Xe
       laptop, GPU-bound with ~72% of the frame in TSR; `-LowEnd` reaches the
       60 FPS cap. Candidate anti-aliasing change recorded, not applied. See
@@ -188,6 +208,8 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
   - [x] Placeholder character controller with collision (opt-in `-Walk`)
         *Caveat:* UE5 movement defaults, verified at the Sanctuary start only
 - [ ] Map coverage: **3 / 82** (`Ash_P`, `Sanctuary_P`, `SouthpawFactory_P`)
+      *Caveat: broadening past Sanctuary is deferred until the Phase 4
+      vertical-slice gate is met; see the priority note above.*
   - [x] Command-line base-game map selector (`tools/viewer.py`)
   - [x] Optional DLC package discovery (82 installed map names total)
   - [x] In-game map selector (Tab list, digit keys; imported scenes only)
@@ -198,8 +220,12 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 - [ ] Verification: side-by-side screenshots against the real game per map
       (not yet started; needs matched viewpoints)
 
-**Gate:** 82/82 maps load and are walkable → public release. Kill criterion:
-if no map loads by month 6, stop and reassess.
+**Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually
+verified against the real game → work moves on to Phase 2 for the vertical
+slice (Sanctuary + one Vault Hunter). Full 82/82 map coverage remains the
+eventual completion target for this phase but is deferred until the Phase 4
+vertical-slice gate is met; see Phase 5. Kill criterion unchanged: if no map
+loads by month 6, stop and reassess. *(Passed: three maps already load.)*
 
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
@@ -213,7 +239,10 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ## Phase 2: UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: +3–6 months.* Goal: Gearbox's own gameplay code executing.
+*Estimate: +3–6 months.* Goal: Gearbox's own gameplay code executing, scoped
+to what Sanctuary and the chosen first Vault Hunter actually need (see
+[vertical-slice priority](#priority-the-vertical-slice)), not full native
+coverage.
 
 - [ ] Object model: `UObject` with class/outer/name/property bag; `UClass`
       hierarchy; class default objects from package CDOs; `FName` table;
@@ -236,7 +265,8 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ## Phase 3: Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: +6–12 months.* Goal: the 1,914 documented UE3 natives. Ground
+*Estimate: +6–12 months.* Goal: the UE3 natives the vertical slice needs
+(movement, collision, animation playback), not all 1,914 up front. Ground
 truth: UDK.
 
 - [ ] `Actor` (166): spawn/destroy, transforms, timers, traces, movement,
@@ -257,8 +287,9 @@ collision, matching UDK-derived golden tests.
 
 ## Phase 4: Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">: the mountain
 
-*Estimate: +12–24 months.* Goal: a Vault Hunter walks, shoots real guns, uses
-real skills, and enemies fight back. Ground truth: the original game
+*Estimate: +12–24 months.* Goal: **Maya**, the vertical slice's first Vault
+Hunter, walks, shoots a handful of real guns, uses Phaselock and her skill
+trees, and enemies on Sanctuary fight back. Ground truth: the original game
 instrumented with unrealsdk, plus community documentation.
 
 Method: the golden-file loop. Hook a native in the real game, log every
@@ -283,8 +314,10 @@ Priority order:
       (41) via an SWF VM; debug HUD until then
 - [ ] Wwise audio (17 + `AkAudio`), Bink video
 
-**Gate:** a full loop on one map: spawn, fight enemies, loot a gun, equip it,
-use a skill, die, respawn.
+**Gate:** a full loop on Sanctuary with Maya: spawn, fight enemies, loot a
+gun, equip it, use Phaselock, complete one hand-picked mission, die, respawn.
+This is the vertical slice; once met, broad map and character coverage
+(Phase 5/6) becomes the priority again.
 
 ---
 
@@ -292,6 +325,10 @@ use a skill, die, respawn.
 
 *Estimate: +12–24 months.*
 
+- [ ] Broad map coverage: the remaining ~79 maps, deferred from Phase 1's
+      vertical-slice rescoping (2026-09-18)
+- [ ] Remaining Vault Hunters (5 of 6), deferred from Phase 4's
+      vertical-slice rescoping (2026-09-18)
 - [ ] Kismet interpreter (`MissionTracker`, 81 natives)
 - [ ] Matinee → Sequencer for cutscenes
 - [ ] Mission system, objectives, fast travel, vending, ECHO/dialogue, Bink

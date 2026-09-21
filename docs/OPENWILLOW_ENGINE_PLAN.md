@@ -164,6 +164,23 @@ Rule: a native without a golden file is a guess. Guesses are labelled `// UNVERI
 Times assume one person, near-full-time, AI-assisted, learning as they go. Halve the pace for part-time. These are
 honest ranges, not promises; no project of this shape has been completed AI-first yet.
 
+### 5.0 Priority: the vertical slice
+
+Adopted 2026-09-18 from outside feedback (see `DECISIONS.md`). Porting all 82 maps is the *easier* part of this
+project; the harder, unproven part is Phases 2-4 below. Finishing map breadth first, only to discover in Phase 2-4
+that the approach doesn't hold, would waste most of the project's calendar time on the easy part. So the phases
+below are scoped to prove the hard parts on **one map and one character** before spending time on breadth:
+
+1. Finish **Sanctuary** (already the most complete map) to visual/walkable parity.
+2. Get **Maya** (chosen 2026-09-18) working end-to-end: movement, a few weapons, animations, her action skill
+   (Phaselock). Her skill trees (Motion, Harmony, Cataclysm) are the target for Phase 4's skill-tree work.
+3. Phases 2 and 3 below, scoped to what Sanctuary and that one character need, not full native coverage.
+4. One hand-picked simple mission and a handful of guns, end-to-end: spawn, fight, loot, equip, use a skill,
+   complete the mission, die, respawn. That's Phase 4's gate.
+
+Broad map coverage (the remaining ~79 maps) and the remaining Vault Hunters move to Phase 5, after the Phase 4 gate
+is met.
+
 ### Phase 0: Foundation & spikes · 3–6 weeks
 
 Goal: a repo, a build, a package loader, and a decided host engine.
@@ -209,12 +226,15 @@ poster, and the thing that tells you whether the loop holds.
 **Verification:** side-by-side screenshots against the real game from the same spot, per map. Keep a folder.
 Your eye is the test.
 
-**Gate:** 82/82 maps load and are walkable. Public release. If at 4 months you cannot load *one* map, stop and
-reassess honestly; the loop isn't holding.
+**Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually verified against the real game →
+move on to Phase 2 for the vertical slice. Full 82/82 map coverage remains this phase's eventual completion target
+but is deferred until the Phase 4 vertical-slice gate is met (§5.0); see Phase 5. If at 4 months you cannot load
+*one* map, stop and reassess honestly; the loop isn't holding.
 
 ### Phase 2: UnrealScript VM (M2) · 3–6 months
 
-Goal: Gearbox's own gameplay code executing.
+Goal: Gearbox's own gameplay code executing, scoped to what Sanctuary and the chosen first Vault Hunter need (§5.0),
+not full native coverage yet.
 
 **Steps**
 1. **Object model**: `UObject` with class, outer, name, property bag; `UClass` with hierarchy and default objects
@@ -239,7 +259,8 @@ native is a logged stub, not a mystery.
 
 ### Phase 3: Stock engine natives (M3a) · 6–12 months
 
-Goal: the 1,914 documented UE3 natives, i.e. a generic UE3 game runs. Ground truth = UDK (source A).
+Goal: the UE3 natives the vertical slice needs (movement, collision, animation playback), not all 1,914 up front
+(§5.0). Ground truth = UDK (source A).
 
 **Order, by dependency:**
 1. `Actor` (166): spawn/destroy, transforms, timers, `Trace`/`FastTrace`, `SetLocation`/`Move`, attachment,
@@ -259,8 +280,9 @@ engine exactly as it does in UDK.
 
 ### Phase 4: Willow natives (M3b) · 12–24 months · **the mountain**
 
-Goal: a Vault Hunter walks, shoots real guns, uses real skills, and enemies fight back. Ground truth = the
-original game instrumented with unrealsdk (source B) + community docs (source C).
+Goal: **Maya**, the vertical slice's first Vault Hunter (§5.0), walks, shoots a handful of real guns, uses
+Phaselock and her skill trees, and enemies on Sanctuary fight back. Ground truth = the original game instrumented
+with unrealsdk (source B) + community docs (source C).
 
 **Method: the golden-file loop (your loop, formalised):**
 1. Pick a native from the priority list.
@@ -288,10 +310,14 @@ original game instrumented with unrealsdk (source B) + community docs (source C)
 **Verification:** you, playing, with a checklist per system: "Jakobs recoil recovery matches," "Maya's Phaselock
 duration matches," "Bee shield amp matches." Golden files for numbers; your hands for feel.
 
-**Gate:** a full loop on one map: spawn, fight enemies, loot a gun, equip it, use a skill, die, respawn.
+**Gate:** a full loop on Sanctuary with Maya: spawn, fight enemies, loot a gun, equip it, use Phaselock, complete
+one hand-picked mission, die, respawn. This is the vertical slice (§5.0); once met, broad map and character
+coverage (Phase 5) becomes the priority again.
 
 ### Phase 5: Campaign completable (M4) · 12–24 months
 
+0. **Broad map coverage** (the remaining ~79 maps) and **remaining Vault Hunters** (5 of 6), both deferred from
+   Phases 1 and 4 by the 2026-09-18 vertical-slice rescoping (§5.0).
 1. **Kismet interpreter**: sequences are data in the map packages; implement the node types they use
    (`MissionTracker` 81 natives sits here).
 2. **Matinee → Sequencer** for cutscenes/scripted moments.
@@ -318,11 +344,11 @@ duration matches," "Bee shield amp matches." Golden files for numbers; your hand
 | Milestone | What you can show | Full-time + AI | Part-time |
 |---|---|---|---|
 | Phase 0 | A mesh and a texture from BL2 inside the host engine | 3–6 wks | 2–3 mo |
-| **M1** | Walk all 82 maps, modern renderer, 64-bit, **public release** | 2–4 mo | 6–12 mo |
-| M2 | Gearbox's script running in your VM | +3–6 mo | +12 mo |
-| M3a | Generic UE3 pawn moves/animates correctly | +6–12 mo | +2 yr |
-| M3b | Vault Hunter shoots real guns, enemies fight back | +12–24 mo | +3–4 yr |
-| M4 | Campaign completable with real saves | +12–24 mo | +3 yr |
+| **M1** | Sanctuary walkable and verified, modern renderer, 64-bit (rescoped 2026-09-18; all 82 maps moves to M4) | 2–4 mo | 6–12 mo |
+| M2 | Gearbox's script running in your VM, scoped to Sanctuary + one Vault Hunter | +3–6 mo | +12 mo |
+| M3a | A UE3 pawn moves/animates correctly on Sanctuary | +6–12 mo | +2 yr |
+| M3b | Maya shoots real guns on Sanctuary, uses Phaselock, enemies fight back, one mission completable: **the vertical slice** | +12–24 mo | +3–4 yr |
+| M4 | Campaign completable with real saves, remaining maps and Vault Hunters added | +12–24 mo | +3 yr |
 | M5 | Co-op, DLC, TPS, mods, editor | ongoing | ongoing |
 | **Cumulative to M4** | | **~3–5 years** | **~8–10 years** |
 
@@ -343,6 +369,10 @@ duration matches," "Bee shield amp matches." Golden files for numbers; your hand
    Ask it to explain any line you can't. That's the "learning by accident"; it is not optional and it is the reason
    this can work.
 8. **Publish early.** M1 in public. Contributors arrive for things that already run.
+9. **Debug it yourself before asking the AI to fix it** (adopted 2026-09-18 from outside feedback). Read the
+   error, check documentation, Stack Overflow, GitHub issues, and understand what's actually wrong before bringing
+   it to an AI assistant, and only once genuinely stuck. Throwing an error message straight back at an AI teaches
+   you nothing and lets technical debt pile up quietly; AI is a tool here, not the developer.
 
 ---
 
