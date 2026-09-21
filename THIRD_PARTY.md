@@ -58,3 +58,45 @@ provenance record is complete.
 
 The container/table layouts are recorded in the existing workspace research.
 No game binaries, leaked source, or third-party UE3 source were used.
+
+## External community tools used locally
+
+These tools are not dependencies of the project and are kept outside the
+repository. They are used against the maintainer's own game installation; no
+game-derived output is tracked.
+
+### UModel / UE Viewer
+
+- Source: https://github.com/gildor2/UEViewer
+- Official project/download information: https://www.gildor.org/en/projects/umodel
+- Local source commit: `a0bfb468d42be831b126632fd8a0ae6b3614f981`
+- Local binary: UModel build 1590, SHA-256
+  `13502E5A4D8F6B5F32252AFEBD6360F7302CCFACCF6B8DDA65BEFF0BE2D364A0`
+- License: MIT, as supplied by the upstream `LICENSE.txt`.
+- Use: external package listing, visual inspection and export benchmark.
+- No source was copied or translated into this repository. If that changes,
+  update this file and preserve the upstream notice before making the change.
+
+### Gildor BuildTools
+
+- Source: https://github.com/gildor2/BuildTools
+- Use: external build helper for the UModel source tree.
+- The repository contains public-domain helper scripts and GPL-covered MSys2
+  binary components. It remains outside this repository and is not linked or
+  vendored here.
+
+### UPK Explorer
+
+- Project/download page: https://www.nexusmods.com/site/mods/587
+- Use: optional secondary UE2/UE3 inspection and conversion tool under
+  consideration; it is not required for the first UModel path.
+- The current distribution is authenticated on Nexus Mods and its standalone
+  redistribution terms have not been established here. It is not vendored or
+  silently redistributed by this project.
+
+### GPL research references
+
+UE Explorer (GPL-3.0) and UPKUtils (GPL-2.0) may be consulted as external
+research references only. No code from either project is copied into this MIT
+repository. Any future code reuse requires a separate maintainer license
+decision before implementation.

@@ -1,5 +1,9 @@
 # BL2_ReBased (code prefix OpenWillow/ow): working notes for AI assistants
 
+Read `AGENTS.md` first. It is the tool-neutral project brief and defines the
+vertical-slice priority plus the external-extraction support strategy. This
+file adds repository-specific safety rules and sensitive areas.
+
 Read the "Is this legal?" section of README.md and docs/LEGAL.md first. The rules are
 non-negotiable: no game files or asset dumps in the repo, no leaked/decompiled
 source, record provenance and licenses, disclose AI assistance, keep
@@ -17,8 +21,10 @@ sensitive, say what you intend to change, and wait for confirmation:
   (`StaticMesh`) serialization: the version 832/46 layout has no public spec;
   do not invent offsets from memory. Label guesses `UNVERIFIED`.
 - `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE`: dependency and
-  license/provenance decisions. The project license is MIT (2026-09-13). Never copy code from GPL tools (Legendary
-  Explorer, umodel, etc.) without the user deciding on licensing first.
+  license/provenance decisions. The project license is MIT (2026-09-13). Never
+  copy code from GPL tools (Legendary Explorer, UE Explorer, UPKUtils, etc.).
+  UModel / UE Viewer may be used as an external binary or format reference;
+  copying its MIT-licensed code still requires a provenance entry first.
 - The host-engine choice (docs/OPENWILLOW_ENGINE_PLAN.md §2.1) is made (UE5) and
   is not reopened by an AI assistant.
 
@@ -75,6 +81,28 @@ Outside feedback (2026-09-18, see DECISIONS.md) set the working norm:
 
 This doesn't relax any other rule in this file: sensitive areas are still
 sensitive, and everything still needs a check against the real game.
+
+## External extraction policy
+
+Use UModel / UE Viewer as the first external extraction candidate for supported
+Borderlands 2 UE3 assets needed by the Sanctuary/Maya proof of concept. Its
+exported meshes, textures, animations and sounds are local payloads for the UE5
+import pipeline; they are not a replacement for our package identity,
+object-path resolution, cross-package reference handling, scene manifests or
+verification. UModel material files are heuristic and do not prove complete
+UE5 material-graph compatibility.
+
+Before introducing another external tool, timebox a representative benchmark
+and record its version, provenance, license, command line, elapsed time,
+successes, failures, unsupported types, duplicates and output size. Put tools
+outside the repository and generated output under ignored `local/`. Never copy
+game-derived output into the repository and never assume a batch command
+successfully exported every object without an inventory.
+
+The current verified local candidate is UModel build 1590 from the official
+`gildor2/UEViewer` repository. The actual executable path is machine-specific;
+use an explicit `-UModel` path or an environment variable rather than adding a
+binary to this repository.
 
 ## Every change
 

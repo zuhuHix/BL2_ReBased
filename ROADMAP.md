@@ -143,6 +143,49 @@ the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 
 ---
 
+## Phase 0.5: External extraction support for the vertical slice (in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+
+*Estimate: 1–2 weeks for the spike. This supports the Sanctuary/Maya pipeline
+proof of concept and can shorten asset preparation; it does not replace the
+runtime, gameplay or parity phases.*
+
+Goal: establish whether a mature community exporter can provide repeatable local
+visual payloads for the Sanctuary/Maya vertical-slice importer without
+replacing OpenWillow's metadata, reference and verification responsibilities.
+
+- [x] Acquire UModel / UE Viewer outside the repository. The current local
+      candidate is build 1590 from the upstream `gildor2/UEViewer` checkout;
+      source commit, binary hash and provenance are recorded in the
+      [external-tool benchmark](docs/verification/EXTERNAL_TOOL_BENCHMARK.md).
+- [x] Confirm Borderlands 2 detection and package listing: 920 files scanned,
+      `Ash_P.upk` recognized as version `832/46` with 21,834 exports.
+- [x] Export representative static and skeletal meshes plus a TFC-streamed
+      texture: `Ash_Road01` produced glTF and its binary buffer in 0.1 seconds,
+      `MetalRoadConcrete_Dif` produced a 1024x1024 DDS in 0.09 seconds, and
+      `Skel_BugMorph` produced glTF in 0.08 seconds. UModel warnings and output
+      inventories are recorded; UE5 import and visual parity are not yet
+      verified.
+- [ ] Export representative animations, materials and sounds.
+- [ ] Run a bounded multi-package batch and inventory successes, failures,
+      unsupported types, duplicates, warnings, output bytes and elapsed time.
+- [ ] Compare the external inventory with the `ow-package` census and prepared
+      scene manifests.
+- [ ] Import representative outputs into UE5 and choose the most reproducible
+      adapter format (glTF, PSK/PSA or another proven path).
+- [ ] Decide whether UModel becomes the default visual payload backend. Keep
+      `ow-package` authoritative for package identity, object paths, placement
+      metadata and verification regardless of the outcome.
+
+**Gate:** representative exports are repeatable, all failures and unsupported
+categories are enumerated, at least one output path reaches UE5, and the
+external inventory can be related back to package/object identity. Until then,
+the full-install export remains an unmeasured experiment.
+
+Record: [external-tool benchmark](docs/verification/EXTERNAL_TOOL_BENCHMARK.md)
+and [tooling reference](docs/TOOLING.md#external-tools).
+
+---
+
 ## Phase 1: World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
 *Estimate: 2–4 months full-time. Started 2026-09-10.*
@@ -153,12 +196,14 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
       cross-package import resolution; texture and mesh importers behind C++
       APIs instead of CLI-only spikes)
 - [ ] Static mesh importer for all meshes
+  - [ ] External visual-payload adapter after the Phase 0.5 gate
   - [x] All render LODs, all UV sets, section material references
   - [x] Collision hulls from `RB_BodySetup` (box and convex) *Caveat:*
         sphere, capsule and cooked PhysX shapes unsupported; refreshed on
         Sanctuary only
   - [ ] Source mesh data
 - [ ] Texture importer with TFC streaming
+  - [ ] External texture-payload adapter after the Phase 0.5 gate
   - [x] `Textures.tfc`, DXT1/DXT5
   - [x] `PF_A8R8G8B8` (automated extraction verified)
   - [ ] Other pixel formats
@@ -346,6 +391,10 @@ This is the vertical slice; once met, broad map and character coverage
 Stated up front so nobody has to guess whether the project is alive:
 
 - Phase 0 not gated in 3 months → tooling loop isn't working. *(Passed.)*
+- The Phase 0.5 exporter spike does not produce a repeatable, attributable
+  representative export within 2 weeks → keep it as an inspection oracle and
+  continue the bounded OpenWillow importer path; do not stall the project on a
+  community tool.
 - M1 cannot load a single map by month 6 → the loop isn't holding for this
   approach; stop and reassess honestly rather than push on hope. *(Three maps
   already load.)*
