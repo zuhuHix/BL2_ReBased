@@ -114,6 +114,22 @@ decide once.
 C++ for the VM, native layer and asset pipeline; non-negotiable for performance (thousands of actors running
 interpreted script). Python for tooling and analysis (like `native_count.py`).
 
+### 2.3 External extraction accelerator
+
+The asset pipeline may use mature community exporters, with UModel / UE Viewer
+as the first candidate, to shorten local visual-asset preparation for the
+Sanctuary/Maya vertical slice. This is an implementation tactic, not a change
+to the runtime architecture. External exports remain untrusted payloads that
+need object-path, reference, material, LOD, animation and UE5 import checks.
+The OpenWillow reader remains responsible for package identity, metadata,
+cross-package resolution, scene manifests and verification, and it remains the
+fallback for exporter gaps.
+
+The external path must be benchmarked on representative BL2 packages before it
+becomes a default. See the Phase 0.5 gate in `ROADMAP.md`; the measured export
+time may reduce the asset-preparation part of the vertical slice, but does not
+reduce the later VM, native behavior, gameplay or campaign work.
+
 ---
 
 ## 3. Sources of truth: where "correct" comes from

@@ -57,6 +57,19 @@ The engine reads the player's own installed copy of Borderlands 2 at runtime
 and refuses to start without one. It does not modify the installation. There
 is no plan, ever, to make the engine work without the original game.
 
+## External community tools
+
+The project may use community tools such as UModel / UE Viewer locally to
+inspect or export data from the contributor's own install. Their binaries and
+any generated output stay outside the repository or under ignored local output
+directories. No extracted or derived game data is distributed by this project.
+
+Using an exporter does not make a legal conclusion about copying, conversion,
+fair use, non-commercial distribution or rights to the resulting data. Those
+questions remain outside this technical policy and require appropriate legal
+advice. Every tool's source, version, license and use (reference, local
+execution or copied code) must be recorded in [THIRD_PARTY.md](../THIRD_PARTY.md).
+
 ## Clean-room rules
 
 1. **Never redistribute a Gearbox file.** See above.

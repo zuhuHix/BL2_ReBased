@@ -8,6 +8,84 @@ the ignored `local/` directory.
 Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3. The UE5
 host additionally needs Unreal Engine 5.8 installed.
 
+## External tools
+
+External tools are optional local dependencies. Keep their binaries outside the
+repository and write every game-derived export under the ignored `local/`
+directory. Do not add a binary, an extracted asset or a generated manifest to
+git.
+
+### UModel / UE Viewer
+
+UModel is the primary external visual inspection and extraction candidate. The
+current verified local executable is build 1590 from the official
+[`gildor2/UEViewer` repository](https://github.com/gildor2/UEViewer). The
+[official project page](https://www.gildor.org/en/projects/umodel) documents
+the exporter. It recognizes this Borderlands 2 install as the
+`border` game tag and package version `832/46`. The source repository is used
+as provenance; no source was copied into this project.
+
+The official project page documents package listing and export of static and
+skeletal meshes, animations, textures and sounds. It also documents important
+limits: some material types are unsupported, exported material files are
+heuristic, and exported data does not prove UE5 material or gameplay parity.
+
+The current maintainer checkout is outside this repository at
+`C:\Users\zuhu\Documents\BL2_Tools\UEViewer-src`. Other machines must pass
+their own path explicitly. The reusable wrapper is
+`tools/export_with_umodel.ps1`:
+
+```powershell
+./tools/export_with_umodel.ps1 `
+  -UModel 'C:/path/to/BL2_Tools/UEViewer-src/umodel.exe' `
+  -Cooked 'C:/path/to/Borderlands 2/WillowGame/CookedPCConsole' `
+  -Package Ash_P `
+  -Object Ash_Road01
+```
+
+The wrapper writes a timestamped directory under
+`local/external/umodel/`, preserves the run log and reports exit code,
+elapsed time, file count and output bytes. It intentionally exports one named
+package/object at a time; a whole-install run must wait for the benchmark gate.
+
+For direct inspection, these commands were verified locally:
+
+```powershell
+$umodel = 'C:/path/to/BL2_Tools/UEViewer-src/umodel.exe'
+$cooked = 'C:/path/to/Borderlands 2/WillowGame/CookedPCConsole'
+$out = 'C:/path/to/BL2_ReBased/local/external/umodel-smoke'
+& $umodel "-path=$cooked" '-game=border' '-list' 'Ash_P'
+& $umodel "-path=$cooked" '-game=border' '-export' '-gltf' '-lods' '-dds' `
+  '-nooverwrite' "-out=$out" 'Ash_P' 'Ash_Road01' 'StaticMesh'
+```
+
+After representative packages have been tested and an output-size policy is
+recorded, a cautious full-install command is:
+
+```powershell
+& $umodel "-path=$cooked" '-game=border' '-export' '-gltf' '-lods' '-dds' `
+  '-sounds' '-nooverwrite' '-uncook' "-out=$out" '*.upk'
+```
+
+This is deliberately not marked as a guaranteed all-asset export. The command
+must be accompanied by an inventory of attempted packages, exported classes,
+failures, unsupported objects, duplicates, warnings, elapsed time and output
+size. See [EXTERNAL_TOOL_BENCHMARK.md](verification/EXTERNAL_TOOL_BENCHMARK.md).
+
+### Secondary tools
+
+| Tool | Use | Current policy |
+|---|---|---|
+| [UPK Explorer](https://www.nexusmods.com/site/mods/587) | UE2/UE3 GUI inspection, texture/TFC work, package exploration and optional FBX/audio workflows | Optional fallback; current distribution is on Nexus Mods and requires an authenticated download; not required for the first UModel spike |
+| `ow-package` | Package identity, census, properties, bounded payloads, scene records and verification | Project-owned and retained even if UModel becomes the visual backend |
+| `pyunrealsdk` and community data tools | Future runtime observation and behavioral golden data | Not an asset-extraction replacement; use only with clean-room and license review |
+| UE Explorer / UPKUtils | Format and behavior references | GPL-licensed references; do not copy code into this MIT project |
+
+The external-tool acquisition and first smoke results are recorded in the
+[benchmark record](verification/EXTERNAL_TOOL_BENCHMARK.md). A successful
+UModel export is not independent proof that the corresponding custom decoder,
+material graph or original-game behavior is correct.
+
 ## Build and test
 
 ```powershell

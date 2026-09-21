@@ -1,5 +1,30 @@
 # Decisions and evidence
 
+## 2026-09-18: Material inference honesty fixes (stale metadata, auxiliary suffixes)
+
+Two game-free fixes from a code-only pipeline review of zuhu's Sanctuary
+screenshots (view-dependent shading, untextured town center). No new
+serialization, offsets, or bounds checks; `src/` untouched.
+
+- A failed diffuse texture decode no longer leaves `diffuse_inference` /
+  `diffuse_inference_method` / `surface_approximation` metadata claiming a
+  diffuse that never decoded (`tools/prepare_level.py`, channel loop). The
+  material renders the neutral fallback, and the manifest now says so too;
+  refresh previously counted these as fixed while the audit counted them as
+  gaps. Synthetic test: `test_failed_diffuse_decode_clears_stale_inference`.
+- `AUXILIARY_TEXTURE` now also excludes `_detail`, `_rough(ness)`,
+  `_height`, `_bump`, `_opacity`, `_illum`, `_lightmap`, `_gloss`,
+  `_metal(lic)`, `_ao`, `_cavity`, `_displacement`, `_reflection` and `_env`
+  suffixes (plus `_\d+` variants). A lone utility map previously became
+  BaseColor with fixed roughness 0.65, producing wrong albedo with
+  view-dependent shading. Synthetic assertions extend the existing
+  `sole_cooked_resource_texture` cases.
+
+Evidence: `ctest` 6/6 plus all pure-Python suites pass on a game-less PC;
+`tools/verify_packages.py` not run (needs the install). Sanctuary/Ash
+re-measurement against the real game remains open, as do the documented
+approximations (fixed 0.65 roughness, planar/UV0 mappings, sky graph).
+
 ## 2026-09-18: First Vault Hunter chosen: Maya
 
 zuhu chose Maya as the vertical slice's first Vault Hunter, resolving the
@@ -952,3 +977,28 @@ already-hidden `Mat_CloudLayer_Light`, and tiled a dust sprite as yellow/black
 stripes; the hide rule now names both instances and `refresh_materials.py`
 re-evaluates it.
 
+## 2026-09-16: External extraction is an accelerator, not a replacement
+
+The project will evaluate mature community exporters before expanding every
+custom visual decoder. UModel / UE Viewer is the first candidate because its
+official compatibility data includes Borderlands 2 and it recognizes this
+installation as package version `832/46`.
+
+The verified local candidate is UModel build 1590 from the upstream
+`gildor2/UEViewer` checkout at commit
+`a0bfb468d42be831b126632fd8a0ae6b3614f981`. The executable SHA-256 is
+`13502E5A4D8F6B5F32252AFEBD6360F7302CCFACCF6B8DDA65BEFF0BE2D364A0`.
+It scanned 920 files, listed `Ash_P.upk` with 21,834 exports and exported
+`Ash_Road01` as glTF in 0.1 seconds. Follow-up smoke runs exported the
+TFC-streamed `MetalRoadConcrete_Dif` texture as a 1024x1024 DDS in 0.09
+seconds and `Skel_BugMorph` as glTF in 0.08 seconds. The skeletal run emitted
+unknown-field warnings that remain recorded as benchmark limitations. All
+output was written only under ignored `local/external/`.
+
+This is an acquisition and smoke result, not an importer or compatibility
+decision. The Phase 0.5 gate in `ROADMAP.md` must test textures, static and
+skeletal meshes, animations, sounds, materials, batch failures, duplicates,
+output size and UE5 importability. Until that gate passes, UModel remains an
+external visual oracle and optional payload source; `ow-package` remains the
+project's metadata, reference and verification path. No UModel source was
+copied, and no game-derived output is tracked.

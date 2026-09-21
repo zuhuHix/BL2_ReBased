@@ -316,9 +316,13 @@ def unnamed_diffuse_candidate(parameters, identity):
 
 DIFFUSE_SUFFIX = re.compile(r'_diff?(?:_\d+)?$', re.IGNORECASE)
 # Cooked-resource texture names that are not plausible diffuse sources: normal
-# maps, packed composite/specular/emissive channels, masks, gray noise tiles.
+# maps, packed composite/specular/emissive channels, masks, gray noise tiles,
+# and detail/roughness/height/opacity-style utility maps that would otherwise
+# become a wrong BaseColor with view-dependent shading.
 AUXILIARY_TEXTURE = re.compile(
-    r'(_n|_nm|_nrm|normal|_gray|_grey|_hs|_spec|_emis|_emissive|_alpha|_mask|_comp|_lm|noise|_cube)(?:_\d+)?$',
+    r'(_n|_nm|_nrm|normal|_gray|_grey|_hs|_spec|_emis|_emissive|_alpha|_mask|_comp|_lm|noise|_cube'
+    r'|_detail|_rough(?:ness)?|_height|_bump|_opacity|_illum|_lightmap|_gloss|_metal(?:lic)?'
+    r'|_ao|_cavity|_disp(?:lacement)?|_refl(?:ection)?|_env)(?:_\d+)?$',
     re.IGNORECASE)
 
 
@@ -874,6 +878,14 @@ class Scene:
                             material['_channel_priority'][channel] = priority
                             material['_channel_stub'][channel] = is_stub
                     except ValueError as error:
+                        # A failed channel decode must not leave inference
+                        # metadata claiming a diffuse that never decoded: the
+                        # material renders the neutral fallback, so the record
+                        # must say so too.
+                        if channel == 'diffuse':
+                            material.pop('diffuse_inference', None)
+                            material.pop('diffuse_inference_method', None)
+                            material.pop('surface_approximation', None)
                         self.issue(material['source'] + ':' + channel, error)
                 material.pop('_channel_priority', None)
                 material.pop('_channel_stub', None)

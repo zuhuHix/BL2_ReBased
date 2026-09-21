@@ -63,6 +63,12 @@ agreed. This matters most for anything that touches the sensitive areas below.
   [THIRD_PARTY.md](THIRD_PARTY.md) with its license, before code is written.
   Changing anything under `third_party/` means re-verifying the recorded
   hashes.
+- **Use external exporters as measured inputs.** Community tools may be used
+  outside the repository to accelerate local extraction. Record the tool
+  version, command, output inventory, failures, unsupported types, duplicates,
+  elapsed time and license. Do not commit their binaries or game-derived
+  output, and do not treat a successful export as proof of UE5 or gameplay
+  compatibility.
 - **Match the tone.** The docs are hedged and evidence-first on purpose.
 
 ## Sensitive areas
@@ -102,6 +108,7 @@ The PR template asks for:
 
 This is a solo project and AI coding tools are part of its workflow; the
 project rules require saying so. If you use them too, the same rules apply to
-their output: [CLAUDE.md](CLAUDE.md) is the working brief, a pre-write hook
+their output: [AGENTS.md](AGENTS.md) is the tool-neutral working brief,
+[CLAUDE.md](CLAUDE.md) adds the repository-specific rules, a pre-write hook
 enforces the sensitive-area prompts, and you are responsible for what you
 submit. Read what it writes.
