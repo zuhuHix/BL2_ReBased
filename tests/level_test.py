@@ -245,6 +245,12 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(pick(), (None, None))
         names[8] = 'Map:DefaultNormal'
         self.assertEqual(pick(5, 8), (('Map', 5), 'sole_cooked_resource_texture'))
+        for utility in ('Ground_Detail', 'Rock_Rough', 'Rock_Roughness_2', 'Cliff_Height',
+                        'Road_Bump', 'Wall_Opacity', 'Trim_Illum', 'Floor_Lightmap',
+                        'Metal_Gloss', 'Trim_Metallic', 'Crevice_AO', 'Rock_Env'):
+            names[9] = 'Map:' + utility
+            self.assertEqual(pick(9, 3), (None, None), utility)
+        self.assertEqual(pick(5, 9), (('Map', 5), 'sole_cooked_resource_texture'))
         translucent = lambda *keys: m.cooked_diffuse_candidate([('Map', k) for k in keys], lambda t: names[t[1]], planar, 'BLEND_Translucent')
         self.assertEqual(translucent(5, 3), (None, None))
         self.assertEqual(translucent(2, 3), (('Map', 2), 'sole_cooked_resource_dif_texture'))
@@ -272,6 +278,23 @@ class SceneTests(unittest.TestCase):
         scene.material_metadata = lambda key: {'blend_mode': 'BLEND_Translucent'}
         scene.material(('Map', 1))
         self.assertNotIn('constant_diffuse', scene.materials['1'])
+
+    def test_failed_diffuse_decode_clears_stale_inference(self):
+        scene = object.__new__(m.Scene)
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.identity = lambda key: {1: 'Map:Material', 2: 'Map:Wall_Dif'}[key[1]]
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: {}
+        scene.load = lambda package: {2: {'class': 'Engine.Texture2D'}}
+        scene.cooked_material_textures = lambda key: (key, [('Map', 2)], 32)
+        scene.texture = lambda key, channel: (_ for _ in ()).throw(ValueError('bad mip'))
+        scene.material(('Map', 1))
+        material = scene.materials['1']
+        self.assertEqual(material['channels'], {})
+        self.assertNotIn('diffuse_inference', material)
+        self.assertNotIn('diffuse_inference_method', material)
+        self.assertTrue(any(i['object'] == 'Map:Material:diffuse' for i in scene.issues))
 
     def test_cooked_resource_references_and_parent_validation(self):
         scene = object.__new__(m.Scene)
