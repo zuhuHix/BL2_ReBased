@@ -24,9 +24,12 @@ def sample(name, surface, axis='v', distance=256.0, repeats=4.0,
         'axis': axis,
         'axis_vector': [1.0, 0.0, 0.0] if axis == 'u' else [0.0, 1.0, 0.0],
         'anchors': {
-            'a': {'world_cm': [0.0, 0.0, 0.0], 'pixel': [10.0, 20.0]},
+            'a': {'world_cm': [0.0, 0.0, 0.0],
+                  'pixel_original_game': [10.0, 20.0],
+                  'pixel_ue5': [12.0, 22.0]},
             'b': {'world_cm': [distance, 0.0, 0.0] if axis == 'u' else [0.0, distance, 0.0],
-                  'pixel': [110.0, 20.0] if axis == 'u' else [10.0, 120.0]},
+                  'pixel_original_game': [110.0, 20.0] if axis == 'u' else [10.0, 120.0],
+                  'pixel_ue5': [112.0, 22.0] if axis == 'u' else [12.0, 122.0]},
         },
         'captures': {'original_game': 'original.png', 'ue5': 'ue5.png'},
         'original_repeat_count': repeats,
@@ -86,6 +89,23 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(report['measurements'][0]['capture_status'], 'missing')
         self.assertIn('Two independent matched captures with original repeat counts are required for texel scale.',
                       report['missing_evidence'])
+
+    def test_each_view_requires_its_own_pixel_anchors(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                root = self.files()
+                raw = sample('unmeasured-view', SURFACE_A)
+                for anchor in raw['anchors'].values():
+                    anchor.pop('pixel_original_game')
+                    if legacy:
+                        anchor.pop('pixel_ue5')
+                        anchor['pixel'] = [10.0, 20.0]
+                report = analyze({'schema': 1, 'measurements': [raw]}, root,
+                                 scales=[64.0])
+                self.assertEqual(report['measurements'], [])
+                self.assertEqual(len(report['invalid_measurements']), 1)
+                self.assertIn('pixel_original_game',
+                              report['invalid_measurements'][0]['error'])
 
     def test_scene_inventory_is_preserved(self):
         root = self.files()

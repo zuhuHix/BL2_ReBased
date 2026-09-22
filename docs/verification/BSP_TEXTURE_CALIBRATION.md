@@ -39,8 +39,16 @@ JSON report. Each measurement must include:
   "axis": "u",
   "axis_vector": [1.0, 0.0, 0.0],
   "anchors": {
-    "a": {"world_cm": [0, 0, 0], "pixel": [10, 20]},
-    "b": {"world_cm": [256, 0, 0], "pixel": [110, 20]}
+    "a": {
+      "world_cm": [0, 0, 0],
+      "pixel_original_game": [10, 20],
+      "pixel_ue5": [12, 22]
+    },
+    "b": {
+      "world_cm": [256, 0, 0],
+      "pixel_original_game": [110, 20],
+      "pixel_ue5": [112, 22]
+    }
   },
   "captures": {
     "original_game": "original/<capture>.png",
