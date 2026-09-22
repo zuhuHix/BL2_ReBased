@@ -450,6 +450,19 @@ imports the actors under `OuterShell/` without shadow casting. Which of
 interpreted. See the
 [sky approximation record](verification/NATIVE_SKY_APPROXIMATION.md).
 
+The Hyperion station in front of the moon (`Prop_MoonBase.Mesh.MoonBase02`)
+is an ordinary lit placement whose cooked texture list carries two `_Dif`
+textures, so the generic rule gave up and it rendered as a dark silhouette.
+`INSPECTED_COLOR_FALLBACKS` in `prepare_level.py` names its own
+diffuse/normal/emissive textures for that placed instance; the tint, fog and
+emissive-multiplier constants are recorded as omitted. The moon itself
+(`Mati_Moon`, Unlit additive) is listed in `INSPECTED_UNLIT_COLOR_MULTIPLIERS`,
+which records its `p_moonColor` vector as `unlit_color_multiplier`; the host
+multiplies the recovered Unlit color by it and `verify_level.py` checks the
+pair (`verified_unlit_multiplier_materials`). The station shadow mask,
+crater relief and time-of-day tint stay omitted. See the
+[moon base record](verification/MOON_BASE_SURFACE.md).
+
 Observed blocking helpers are retained for source collision where recovered and
 hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
 94 `Common_Meshes.CollisionCube` placements, and six cloud `Blocking_Plane`

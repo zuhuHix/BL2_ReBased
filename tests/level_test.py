@@ -126,6 +126,109 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(scene.materials['1']['channels'], {})
         self.assertIn('requires the inspected road texture', scene.issues[-2]['error'])
 
+    def test_moon_base_color_is_instance_keyed_and_requires_inspected_base(self):
+        scene = object.__new__(m.Scene)
+        paths = {1: 'Prop_MoonBase.Materials.Mati_MoonBase_02a',
+                 2: 'Prop_MoonBase.Materials.Mat_MoonBase_02a',
+                 3: 'Prop_MoonBase.Textures.MoonBase02a_Nrm', 4: 'Prop_MoonBase.Textures.MoonBase02a_Dif',
+                 5: 'Prop_MoonBase.Textures.MoonBase02a_Emis', 6: 'FX_Shared_Smoke.Textures.Tiling_SmokePanner2_Dif',
+                 7: 'Prop_MoonBase.Materials.Mat_MoonBase'}
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.identity = lambda key: key[0] + ':' + paths[key[1]]
+        scene.load = lambda package: {i: {'class': 'Engine.Texture2D'} for i in (3, 4, 5, 6)}
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: {}
+        scene.texture = lambda key, channel: str(key[1]) + '.png'
+        cooked = [(2, i) for i in (3, 4, 5, 6)]
+        scene.cooked_material_textures = lambda key: ((key[0], 2), [(key[0], i) for _, i in cooked], 80)
+        # Two _Dif textures defeat the generic rule; the inspected entry names the hull set.
+        scene.material(('Sanctuary_Light', 1))
+        record = scene.materials['1']
+        self.assertEqual(record['channels'], {'diffuse': '4.png', 'normal': '3.png', 'emissive': '5.png'})
+        self.assertEqual(record['diffuse_inference_method'], 'moon_base_color_fallback_v1')
+        approximation = record['surface_approximation']
+        self.assertEqual(approximation['normal_texture'], 'Sanctuary_Light:Prop_MoonBase.Textures.MoonBase02a_Nrm')
+        self.assertEqual(approximation['emissive_texture'], 'Sanctuary_Light:Prop_MoonBase.Textures.MoonBase02a_Emis')
+        self.assertIn('MoonBase_Color tint', approximation['omitted'])
+        self.assertIn('hull color, normal and emissive', scene.issues[-1]['error'])
+        # The base itself is not an entry, and the generic rule still gives up on it.
+        scene.materials.clear()
+        scene.material(('Sanctuary_Light', 2))
+        self.assertEqual(scene.materials['2']['channels'], {})
+        # Another package's instance of the same name gets nothing.
+        scene.materials.clear()
+        scene.material(('Other', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        # The entry refuses an instance whose parent is not the inspected base.
+        scene.materials.clear()
+        scene.cooked_material_textures = lambda key: ((key[0], 7), [(key[0], i) for _, i in cooked], 80)
+        scene.material(('Sanctuary_Light', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        self.assertIn('requires the inspected base material', scene.issues[-2]['error'])
+        # And an instance whose cooked list lost the hull diffuse.
+        scene.materials.clear()
+        scene.cooked_material_textures = lambda key: ((key[0], 2), [(key[0], i) for i in (3, 5, 6)], 80)
+        scene.material(('Sanctuary_Light', 1))
+        self.assertEqual(scene.materials['1']['channels'], {})
+        self.assertIn('requires the inspected hull texture', scene.issues[-2]['error'])
+
+    def test_unlit_color_multiplier_reads_instance_over_base_and_is_scoped(self):
+        def expression(cls, **kwargs):
+            return {**record(**kwargs), 'class': 'Engine.MaterialExpression' + cls}
+        records = {
+            1: {'path': 'Prop_MoonBase.Materials.Mat_Moon', 'class': 'Engine.Material',
+                **record(LightingModel='MLM_Unlit', BlendMode='BLEND_Additive', Expressions=[{'index': 3}])},
+            2: {'path': 'Prop_MoonBase.Materials.Mati_Moon', 'class': 'Engine.MaterialInstanceConstant',
+                **record(Parent={'index': 1})},
+            3: expression('VectorParameter', ParameterName='p_moonColor',
+                          DefaultValue={'R': 4.0, 'G': 4.0, 'B': 4.0, 'A': 1}),
+            4: {'path': 'Other.Mat_Other', 'class': 'Engine.Material',
+                **record(LightingModel='MLM_Unlit', Expressions=[{'index': 3}])},
+        }
+        scene = object.__new__(m.Scene)
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.load = lambda package: records
+        scene.resolve = lambda package, ref: (package, ref['index']) if isinstance(ref, dict) and ref['index'] else None
+        scene.identity = lambda key: key[0] + ':' + records[key[1]]['path']
+        scene.material_parameters = lambda key: {}
+        scene.cooked_material_textures = lambda key: None
+        scene.native_sky_approximation = lambda key: None
+        scene.material(('Sanctuary_Light', 2))
+        multiplier = scene.materials['2']['unlit_color_multiplier']
+        self.assertEqual(multiplier['rgb'], [4.0, 4.0, 4.0])
+        self.assertEqual(multiplier['parameter'], 'p_moonColor')
+        self.assertEqual(multiplier['source_material'], 'Sanctuary_Light:Prop_MoonBase.Materials.Mat_Moon')
+        self.assertIn('MoonBase02_GRP station shadow mask', multiplier['omitted'])
+        # An instance override wins over the base default.
+        scene.materials.clear()
+        records[2]['data']['properties'] += tags(VectorParameterValues=[tags(
+            ParameterName='p_moonColor', ParameterValue={'R': 1.0, 'G': 2.0, 'B': 3.0, 'A': 1})])
+        scene.material(('Sanctuary_Light', 2))
+        self.assertEqual(scene.materials['2']['unlit_color_multiplier']['rgb'], [1.0, 2.0, 3.0])
+        # The base itself and another package's instance are not entries.
+        scene.materials.clear()
+        scene.material(('Sanctuary_Light', 1))
+        self.assertNotIn('unlit_color_multiplier', scene.materials['1'])
+        scene.materials.clear()
+        scene.material(('Other', 2))
+        self.assertNotIn('unlit_color_multiplier', scene.materials['2'])
+        # A chain that does not end at the inspected base is refused with an issue.
+        scene.materials.clear()
+        records[2]['data']['properties'] = tags(Parent={'index': 4})
+        scene.material(('Sanctuary_Light', 2))
+        self.assertNotIn('unlit_color_multiplier', scene.materials['2'])
+        self.assertIn('requires the inspected base material', scene.issues[-2]['error'])
+        # A negative or missing constant is refused.
+        scene.materials.clear()
+        records[2]['data']['properties'] = tags(Parent={'index': 1})
+        records[3]['data']['properties'] = tags(ParameterName='p_moonColor',
+                                                DefaultValue={'R': -1.0, 'G': 4.0, 'B': 4.0, 'A': 1})
+        scene.material(('Sanctuary_Light', 2))
+        self.assertNotIn('unlit_color_multiplier', scene.materials['2'])
+        self.assertIn('missing or invalid', scene.issues[-2]['error'])
+
     def test_transition_helpers_do_not_hide_ice_or_ordinary_planes(self):
         materials = {'transition': {'source': 'Sanctuary_Land:' + m.HIDDEN_TRANSITION_MATERIAL},
                      'ice': {'source': 'Sanctuary_Land:Prop_Glacier.Materials.Mat_FrozenLake'}}

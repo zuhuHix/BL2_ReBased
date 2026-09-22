@@ -86,6 +86,12 @@ well-bounded ones are marked *good first task*.
       materials now have scoped FrozenLake and regular-concrete/HLS fallbacks;
       native layer blending, HLS UV mapping and matched original screenshots
       remain open. See the [artifact pass](docs/verification/SANCTUARY_ARTIFACT_PASS.md).
+      The Hyperion moon base in the sky now uses its own inspected
+      diffuse/normal/emissive textures instead of the neutral fallback; its
+      tint and fog terms remain omitted. The moon's Unlit color is scaled by
+      its own `p_moonColor`; the station shadow mask, relief and
+      time-of-day tint remain omitted pending an in-game reference. See the
+      [moon base record](docs/verification/MOON_BASE_SURFACE.md).
 - [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
       (4 in Sanctuary).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and

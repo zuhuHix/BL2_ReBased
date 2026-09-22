@@ -197,6 +197,7 @@ channels = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR, 'normal': unreal.M
             'specular': unreal.MaterialProperty.MP_SPECULAR, 'emissive': unreal.MaterialProperty.MP_EMISSIVE_COLOR}
 verified_channels = set()
 verified_unlit_materials = []
+verified_unlit_multipliers = []
 verified_sky_approximations = []
 
 
@@ -264,6 +265,14 @@ for name, definition in scene['materials'].items():
             verify_sky_approximation(material, name, definition['sky_approximation'])
             verified_sky_approximations.append(name)
         elif not definition['channels'].get('emissive'):
+            multiplier = definition.get('unlit_color_multiplier')
+            if multiplier is not None:
+                assert isinstance(visible, unreal.MaterialExpressionMultiply), name
+                visible, scale = mel.get_inputs_for_material_expression(material, visible)
+                assert isinstance(scale, unreal.MaterialExpressionConstant3Vector), name
+                value = scale.get_editor_property('constant')
+                close([value.r, value.g, value.b], multiplier['rgb'], 1e-6)
+                verified_unlit_multipliers.append(name)
             if definition['channels'].get('diffuse'):
                 assert isinstance(visible, unreal.MaterialExpressionTextureSample)
                 assert visible.get_editor_property('texture').get_name() == Path(definition['channels']['diffuse']).stem
@@ -303,6 +312,7 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_materials': verified_unlit_materials,
           'verified_native_skybox_placements': verified_native_skybox,
           'verified_sky_approximation_materials': verified_sky_approximations,
+          'verified_unlit_multiplier_materials': verified_unlit_multipliers,
           'verified_outer_shell_placements': verified_outer_shell,
           'verified_outer_shell_replacements': verified_outer_shell_replacements,
           'expected_outer_shell_replacements': sum(
