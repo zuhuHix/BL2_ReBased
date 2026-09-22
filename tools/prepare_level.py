@@ -113,6 +113,7 @@ OUTER_SHELL_MESHES = {'Prop_Skybox.Meshes.SanctuarySky',
 OUTER_SHELL_OVERRIDE_SUFFIX = '_Teleported'
 HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
 HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
+HIDDEN_COLLISION_MATERIAL = 'Common_Meshes.Collision.Mat_Collision'
 HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
 
 # Cheap, opt-in Matinee placement experiment for the Sanctuary hull. This is
@@ -318,7 +319,8 @@ def apply_outer_shell_policy(actor, mesh_identity, sections, materials, enabled)
         actor.pop('outer_shell_replaced', None)
 
 
-def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None):
+def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None,
+                       source_hidden=None):
     """Return whether an observed helper has no recoverable host-side visual."""
     mesh = identity.rsplit(':', 1)[-1]
     if source == HIDDEN_FOREGROUND_SOURCE:
@@ -326,8 +328,17 @@ def hidden_visual_mesh(identity, effective_materials=None, materials=None, sourc
         # directly in the Sanctuary start view, despite carrying a prop mesh.
         return True
     if mesh == HIDDEN_COLLISION_MESH:
-        # CollisionCube is source collision geometry, not a renderable prop.
-        return True
+        # CollisionCube is usually hidden collision geometry, but not always:
+        # six Sanctuary_Land placements tile the Mati_FloorConcrete01 street
+        # in front of Scooter's garage and serialize no hidden flag. Hide a
+        # cube only when the source hides it (component HiddenGame or owner
+        # actor bHidden). Render it only when a material resolves to a known
+        # source other than the cube's own collision material.
+        if source_hidden:
+            return True
+        sources = [(materials or {}).get(name, {}).get('source', '').rsplit(':', 1)[-1]
+                   for name in effective_materials or ()]
+        return not any(s and s != HIDDEN_COLLISION_MATERIAL for s in sources)
     if mesh == HIDDEN_VISUAL_MESH:
         # Blocking_Cube is an observed placement helper even when an
         # unreliable diffuse override was attached to it.
@@ -1266,14 +1277,21 @@ class Scene:
                         for material_name in effective_materials:
                             if material_name in self.materials:
                                 self.materials[material_name]['two_sided'] = True
+                    owner = records.get(record['outer'])
+                    source_hidden = bool(p.get('HiddenGame')) or bool(
+                        owner and props(owner).get('bHidden'))
                     actor = {'source': record['path'], 'level': level, 'mesh': mesh_name,
                              'transform': pose, 'materials': overrides, 'static': True,
                              'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
                              'native_skybox': is_native_skybox,
                              'native_skybox_source': mesh_identity if is_native_skybox else None,
+                             # Observed component HiddenGame or owner bHidden,
+                             # kept so refresh_materials.py can re-apply the
+                             # same hidden-visual rule offline.
+                             'source_hidden': source_hidden,
                              'hidden_visual': hidden_visual_mesh(
                                  mesh_identity, effective_materials, self.materials,
-                                 record['path'])}
+                                 record['path'], source_hidden)}
                     apply_outer_shell_policy(actor, mesh_identity, self.meshes[mesh_name]['sections'],
                                              self.materials, getattr(self, 'outer_shell', False))
                     actors.append(actor)

@@ -27,7 +27,10 @@ def restore_hidden_visual_policy(manifest):
                      if s['slot'] < len(actor['materials']) and actor['materials'][s['slot']]
                      else s['material'] for s in mesh['sections']]
         actor['hidden_visual'] = hidden_visual_mesh(
-            mesh['source'], effective, manifest['materials'], actor['source'])
+            mesh['source'], effective, manifest['materials'], actor['source'],
+            # Manifests written before the flag was recorded keep the earlier
+            # conservative result: treat an unknown source flag as hidden.
+            actor.get('source_hidden', True))
 
 
 def restore_outer_shell_policy(manifest, enabled):

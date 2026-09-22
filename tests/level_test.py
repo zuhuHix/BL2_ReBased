@@ -750,6 +750,27 @@ class SceneTests(unittest.TestCase):
             'Sanctuary_P:Common_Meshes.Blocking.Blocking_Cube', ['textured']))
         self.assertTrue(m.hidden_visual_mesh(
             'Sanctuary_P:Common_Meshes.CollisionCube', ['collision']))
+        cube = 'Sanctuary_Land:Common_Meshes.CollisionCube'
+        cube_materials = {
+            'collision': {'source': 'Sanctuary_P:Common_Meshes.Collision.Mat_Collision'},
+            'concrete': {'source': 'Sanctuary_Land:TilingMaterials.Materials.Mati_FloorConcrete01'}}
+        # An authored surface material with no source hidden flag renders.
+        self.assertFalse(m.hidden_visual_mesh(cube, ['concrete'], cube_materials, 'SMC_544', False))
+        # Component HiddenGame or owner bHidden hides it despite the material.
+        self.assertTrue(m.hidden_visual_mesh(cube, ['concrete'], cube_materials, 'SMC_544', True))
+        # The cube's own collision material, or an unresolved one, stays hidden.
+        self.assertTrue(m.hidden_visual_mesh(cube, ['collision'], cube_materials, 'SMC_1', False))
+        self.assertTrue(m.hidden_visual_mesh(cube, ['missing'], cube_materials, 'SMC_1', False))
+        from refresh_materials import restore_hidden_visual_policy
+        manifest = {'actors': [{'source': 'A', 'mesh': 'cube', 'materials': ['concrete'],
+                                'source_hidden': False, 'hidden_visual': True},
+                               {'source': 'B', 'mesh': 'cube', 'materials': ['concrete'],
+                                'hidden_visual': False}],
+                    'meshes': {'cube': {'source': cube, 'sections': [{'slot': 0, 'material': 'collision'}]}},
+                    'materials': cube_materials}
+        restore_hidden_visual_policy(manifest)
+        # A manifest without the recorded flag keeps the conservative hide.
+        self.assertEqual([a['hidden_visual'] for a in manifest['actors']], [False, True])
         materials = {'cloud': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'},
                      'cloud01': {'source': 'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'},
                      'other': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_Other'}}

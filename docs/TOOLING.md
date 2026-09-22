@@ -468,9 +468,13 @@ crater relief and time-of-day tint stay omitted. See the
 
 Observed blocking helpers are retained for source collision where recovered and
 hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
-94 `Common_Meshes.CollisionCube` placements, and six cloud `Blocking_Plane`
+the 81 of 94 `Common_Meshes.CollisionCube` placements whose component sets
+`HiddenGame`, whose owner actor sets `bHidden`, or which carry no material
+other than the cube's own `Mat_Collision`, and six cloud `Blocking_Plane`
 placements (four `Mat_CloudLayer_Light`, two `Mat_CloudLayer_01`). The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
-placement that blocked the start view is also hidden. This is a bounded visual
+placement that blocked the start view is also hidden. The other 13
+CollisionCube placements, including the concrete street slabs in front of
+Scooter's garage, render with their placed materials. This is a bounded visual
 artifact policy, not complete collision or material parity.
 
 Unlit Material v1 colors now feed Emissive Color when no explicit emissive
