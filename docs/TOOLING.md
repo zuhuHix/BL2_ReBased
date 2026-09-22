@@ -273,7 +273,10 @@ remains open.
 tails. The Ash-specific prefixes and native collection layout remain subject to
 independent visual/in-game validation; see [DECISIONS.md](../DECISIONS.md).
 
-`-ImportOnly` also reopens and verifies the saved scene: placement counts,
+`-ImportOnly` writes the import commandlet log to `<scene>/ue-import.log` and
+fails if any material reported `Failed to compile Material`; such a material
+would otherwise render as UE's default checkerboard while the graph checks
+below still pass. It also reopens and verifies the saved scene: placement counts,
 collection transforms, material overrides, imported section bounds against
 source OBJ vertices, and material graph/color-space settings. To exercise all
 four channels independently of game data, run `python tests/prepare_ue_smoke.py`

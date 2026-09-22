@@ -194,6 +194,48 @@ INSPECTED_COLOR_FALLBACKS = {
         'omitted': ['MoonBase_Color tint', 'Emissive_Mult scalar', 'Fog/Fog_Intensity blend',
                     'RimLight_Color', 'Tiling_SmokePanner2_Dif overlay', 'UV modulation'],
         'issue': 'Approximation: inspected MoonBase02a _Dif/_Nrm/_Emis textures used as hull color, normal and emissive; tint, fog, rim light, emissive multiplier and smoke overlay not reconstructed'},
+    # Sanctuary's snow terrains. Both cooked lists carry SnowDrift_01_Dif and
+    # DirtySnow_Dif (PatchySnow adds GrasslandsRock_Dif and the
+    # HighContrastPatches_Gray mask), so the sole-_Dif rule gave up and the
+    # ground rendered as the neutral white. The inspected textures were read
+    # side by side: SnowDrift is near-uniform clean snow, DirtySnow is snow
+    # with dark dirt patches, the mask is a blob pattern. One color per
+    # material is a stand-in; the masked layer blend is not reconstructed.
+    'Sanctuary_P:Env_Ice.Materials.Mat_PatchySnow': {
+        'method': 'patchy_snow_color_fallback_v1', 'label': 'Patchy-snow', 'noun': 'snow',
+        'color': 'Sanctuary_P:Prop_Terrain.Textures.DirtySnow_Dif',
+        'normal': 'Sanctuary_P:Prop_Rocks_02.Textures.WasteLandRock_Nrm',
+        'omitted': ['HighContrastPatches_Gray masked blend of SnowDrift_01_Dif / DirtySnow_Dif / GrasslandsRock_Dif',
+                    'UV modulation'],
+        'issue': 'Approximation: inspected DirtySnow_Dif texture used as snow color; masked snow/dirt/rock blend not reconstructed'},
+    'Sanctuary_Land:Prop_Skybox.MoveMe.Mat_SolidSnow': {
+        'method': 'solid_snow_color_fallback_v1', 'label': 'Solid-snow', 'noun': 'snow',
+        'color': 'Sanctuary_P:Prop_Aliens.Textures.SnowDrift_01_Dif',
+        'normal': 'Sanctuary_P:Prop_Rocks_02.Textures.WasteLandRock_Nrm',
+        'omitted': ['SnowDrift_01_Dif / DirtySnow_Dif blend', 'UV modulation'],
+        'issue': 'Approximation: inspected SnowDrift_01_Dif texture used as snow color; snow blend not reconstructed'},
+    # Remaining Sanctuary terrain layers, read the same way once the cooked
+    # weight blend exposed them: sand with tyre tracks under a gray macro
+    # variation mask; dark lichen ground under a pale green macro tint and a
+    # rock overlay; dirty snow next to the clean drift.
+    'Sanctuary_P:Prop_Terrain.Materials.Mat_InterludeSandTracks': {
+        'method': 'sand_tracks_color_fallback_v1', 'label': 'Sand-tracks', 'noun': 'sand',
+        'color': 'Sanctuary_P:Prop_Terrain.Textures.InterludeSandTracks_Dif',
+        'normal': 'Sanctuary_P:Prop_Terrain.Textures.InterludeSandTracks_Nrm',
+        'omitted': ['InterludeSandMacro_Dif macro variation', 'UV modulation'],
+        'issue': 'Approximation: inspected InterludeSandTracks_Dif/_Nrm used as sand color and normal; macro variation not reconstructed'},
+    'Sanctuary_P:Env_Ice.Materials.Mat_ColdGrass': {
+        'method': 'cold_grass_color_fallback_v1', 'label': 'Cold-grass', 'noun': 'ground',
+        'color': 'Sanctuary_P:Prop_Terrain.Textures.LichenTerrian_Dif',
+        'normal': None,
+        'omitted': ['FoliageGreensB macro tint', 'HighContrastPatches_Gray masked GrasslandsRock_Dif overlay', 'UV modulation'],
+        'issue': 'Approximation: inspected LichenTerrian_Dif texture used as ground color; tint and masked rock overlay not reconstructed'},
+    'Sanctuary_P:Env_Ice.Materials.Mat_DirtySnow': {
+        'method': 'dirty_snow_color_fallback_v1', 'label': 'Dirty-snow', 'noun': 'snow',
+        'color': 'Sanctuary_P:Prop_Terrain.Textures.DirtySnow_Dif',
+        'normal': 'Sanctuary_P:Prop_Rocks_02.Textures.WasteLandRock_Nrm',
+        'omitted': ['SnowDrift_01_Dif blend', 'UV modulation'],
+        'issue': 'Approximation: inspected DirtySnow_Dif texture used as snow color; snow blend not reconstructed'},
 }
 
 # Inspected Unlit materials whose visible color is scaled by a named vector

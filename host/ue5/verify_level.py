@@ -199,6 +199,7 @@ verified_channels = set()
 verified_unlit_materials = []
 verified_unlit_multipliers = []
 verified_sky_approximations = []
+verified_terrain_blends = []
 
 
 def verify_sky_approximation(material, name, sky):
@@ -254,9 +255,54 @@ def verify_sky_approximation(material, name, sky):
     close([opacity.get_editor_property('r')], [sky['scalars']['cloud_cap_opacity']], 1e-6)
 
 
+def verify_terrain_blend(material, name, definition):
+    """Verify each recorded weight/diffuse input reaches Base Color."""
+    assert definition['method'] == 'terrain_weighted_sum_v2', name
+    assert definition['mapping_status'] == 'validated', name
+    root_node = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
+    assert root_node is not None, name
+    nodes, texture_names = [], []
+    pending, seen = [root_node], set()
+    while pending:
+        node = pending.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        nodes.append(node)
+        if isinstance(node, unreal.MaterialExpressionTextureSample):
+            texture = node.get_editor_property('texture')
+            if texture is not None:
+                texture_names.append(texture.get_name())
+        pending.extend(item for item in mel.get_inputs_for_material_expression(material, node)
+                       if item is not None)
+    expected_weights = {Path(layer['weightmap_file']).stem for layer in definition['layers']}
+    expected_diffuse = {Path(layer['diffuse']).stem for layer in definition['layers']
+                        if layer.get('diffuse')}
+    assert expected_weights <= set(texture_names), (name, expected_weights, texture_names)
+    assert expected_diffuse <= set(texture_names), (name, expected_diffuse, texture_names)
+    assert sum(isinstance(node, unreal.MaterialExpressionMultiply) for node in nodes) >= len(definition['layers'])
+    # Layer sums plus one Add per non-zero UV offset (weight texel centring).
+    assert sum(isinstance(node, unreal.MaterialExpressionAdd) for node in nodes) >= max(0, len(definition['layers']) - 1)
+    for layer in definition['layers']:
+        if layer.get('diffuse'):
+            continue
+        color = layer.get('fallback_color')
+        assert isinstance(color, list) and len(color) == 3, name
+        assert any(isinstance(node, unreal.MaterialExpressionConstant3Vector) and
+                   abs(node.get_editor_property('constant').r - color[0]) < 1e-6 and
+                   abs(node.get_editor_property('constant').g - color[1]) < 1e-6 and
+                   abs(node.get_editor_property('constant').b - color[2]) < 1e-6
+                   for node in nodes), (name, color)
+    return {'layers': len(definition['layers']), 'weightmaps': len(expected_weights),
+            'diffuse_textures': len(expected_diffuse), 'graph': 'weighted_sum_reaches_base_color'}
+
+
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
     assert material.get_editor_property('two_sided') == bool(definition.get('two_sided', False)), name
+    if definition.get('terrain_blend'):
+        verified_terrain_blends.append({'material': name,
+                                       **verify_terrain_blend(material, name, definition['terrain_blend'])})
     if definition.get('lighting_model') == 'MLM_Unlit':
         assert material.get_editor_property('shading_model') == unreal.MaterialShadingModel.MSM_UNLIT
         visible = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
@@ -312,6 +358,7 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_materials': verified_unlit_materials,
           'verified_native_skybox_placements': verified_native_skybox,
           'verified_sky_approximation_materials': verified_sky_approximations,
+          'verified_terrain_blend_materials': verified_terrain_blends,
           'verified_unlit_multiplier_materials': verified_unlit_multipliers,
           'verified_outer_shell_placements': verified_outer_shell,
           'verified_outer_shell_replacements': verified_outer_shell_replacements,

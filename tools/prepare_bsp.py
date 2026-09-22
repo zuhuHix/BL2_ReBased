@@ -17,6 +17,7 @@ from bsp_decode import (decode_model, decode_component, validate_coverage,
 from prepare_level import Scene, transform
 
 UV_POLICIES = ('surface_axes', 'planar')
+V_ORIENTATIONS = ('flip', 'same')
 # World units per texture repeat for unit-length axes. Every oracle we have
 # (umodel, the game's object dumps) is silent on this constant; only a matched
 # in-game view can confirm it. See DECISIONS.md, 2026-09-18 texture axes.
@@ -37,9 +38,12 @@ def planar_uv(p, point):
     return point[axes[0]] / 128, point[axes[1]] / 128
 
 
-def section_obj(polygons, uv='surface_axes', texel_scale=TEXEL_SCALE):
+def section_obj(polygons, uv='surface_axes', texel_scale=TEXEL_SCALE,
+                v_orientation='flip'):
     if uv not in UV_POLICIES:
         raise ValueError('Unknown BSP UV policy')
+    if v_orientation not in V_ORIENTATIONS:
+        raise ValueError('Unknown BSP V orientation')
     lines, faces, offset = [], [], 0
     for p in polygons:
         normal = p['plane'][:3]
@@ -47,8 +51,11 @@ def section_obj(polygons, uv='surface_axes', texel_scale=TEXEL_SCALE):
             lines.append('v ' + ' '.join(format(x, '.9g') for x in v))
         for v in p['points']:
             s, t = surface_uv(p, v, texel_scale) if uv == 'surface_axes' else planar_uv(p, v)
-            # Same V convention as the static-mesh OBJ writer in src/assets.cpp.
-            lines.append(f'vt {s:.9g} {1-t:.9g}')
+            # Static meshes use a V flip, but BSP has no independent matched
+            # original-game observation yet. Keep the historical default while
+            # allowing a calibration sweep to select the other orientation.
+            exported_v = 1-t if v_orientation == 'flip' else t
+            lines.append(f'vt {s:.9g} {exported_v:.9g}')
         for _ in p['points']:
             lines.append('vn ' + ' '.join(format(x, '.9g') for x in normal))
         # Match host_obj's left-handed face convention. Polygon ordering above
@@ -93,6 +100,8 @@ def main():
     parser.add_argument('--collision', action='store_true')
     parser.add_argument('--uv', choices=UV_POLICIES, default='surface_axes',
                         help='surface_axes: native base point and texture axes; planar: 128 cm world placeholder')
+    parser.add_argument('--v-orientation', choices=V_ORIENTATIONS, default='flip',
+                        help='BSP V export orientation; default is the existing UNVERIFIED flip')
     parser.add_argument('--texel-scale', type=float, default=TEXEL_SCALE,
                         help='world units per texture repeat for unit axes (UNVERIFIED default %(default)s)')
     args = parser.parse_args()
@@ -102,6 +111,8 @@ def main():
                   'texel_scale_status': 'UNVERIFIED', 'axes_status': 'corroborated by Polys cross-check'}
                  if args.uv == 'surface_axes' else
                  {'policy': 'planar_world_128cm_approximation'})
+    uv_policy['v_orientation'] = args.v_orientation
+    uv_policy['v_orientation_status'] = 'UNVERIFIED'
     if not (args.game/'Binaries/Win32/Borderlands2.exe').is_file():
         parser.error('An installed Borderlands 2 is required')
     filename = args.scene/'scene.json'
@@ -158,7 +169,8 @@ def main():
                 material = scene.material(key)
                 if material is None: raise ValueError('BSP material reference did not resolve')
                 polygons = [model['polygons'][i] for i in element['nodes']]
-                obj,n = section_obj(polygons, args.uv, args.texel_scale)
+                obj,n = section_obj(polygons, args.uv, args.texel_scale,
+                                    args.v_orientation)
                 file = name+f'_s{slot}.obj'
                 (args.scene/file).write_text(obj,encoding='utf-8')
                 sections.append({'slot':slot,'file':file,'material':material,
@@ -185,6 +197,7 @@ def main():
         issues.append({'object':level+':'+model['path'],'bsp':True,
                        'error':('Approximation: planar 128cm UVs, ' if args.uv == 'planar' else
                                 'Native texture axes with an UNVERIFIED texel scale, ')
+                               + 'V orientation UNVERIFIED, '
                                + 'host lighting and opt-in triangle collision; lightmaps/collision flags UNVERIFIED'})
     manifest.update(actors=actors,meshes=meshes,materials=scene.materials,
                     issues=issues+[dict(i,bsp=True) for i in scene.issues],

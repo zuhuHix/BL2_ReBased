@@ -50,6 +50,7 @@ def audit(scene):
     if scene['schema'] != 1 or scene['dynamic_policy'] != 'frozen':
         raise ValueError('Unsupported scene schema/policy')
     uses = defaultdict(list)
+    section_audit = []
     for actor in scene['actors']:
         mesh = scene['meshes'][actor['mesh']]
         for section in mesh['sections']:
@@ -58,6 +59,31 @@ def audit(scene):
             material = overrides[slot] if slot < len(overrides) and overrides[slot] else section['material']
             uses[material].append({'level': actor['level'], 'component': actor['source'],
                                    'mesh': mesh['source'], 'slot': slot})
+            definition = scene['materials'].get(material)
+            scope = 'terrain' if actor.get('terrain') else 'bsp' if actor.get('bsp') else 'building_or_prop'
+            if material is not None and definition is None:
+                cause, disposition = 'unresolved_material_binding', 'repair_required'
+            elif material is None:
+                cause, disposition = 'unassigned_material', 'explicit_importer_neutral_fallback_rgb_0.5'
+            elif definition.get('channels', {}).get('diffuse'):
+                cause, disposition = 'recovered_diffuse', 'inspect_native_graph_parity'
+            elif 'constant_diffuse' in definition:
+                cause, disposition = 'constant_diffuse', 'explicit_manifest_color'
+            else:
+                cause, disposition = gap_status(definition), 'explicit_importer_neutral_fallback_rgb_0.5'
+            section_audit.append({
+                'level': actor['level'], 'component': actor['source'],
+                'mesh': mesh['source'], 'slot': slot, 'scope': scope,
+                'material_id': material, 'material': (definition or {}).get('source'),
+                'cause': cause, 'disposition': disposition,
+                'classification': ('unresolved material binding' if cause == 'unresolved_material_binding'
+                                   else 'separate building/prop material issue' if scope == 'building_or_prop' and cause != 'recovered_diffuse'
+                                   else 'present geometry with incomplete material' if cause != 'recovered_diffuse'
+                                   else 'present geometry with recovered diffuse'),
+                'geometry_file': section.get('file'),
+                'hidden_visual': actor.get('hidden_visual', False),
+                'evidence': 'scene manifest binding; rendered appearance UNVERIFIED',
+                'visual_status': 'UNVERIFIED'})
     gaps = []
     partial_surfaces = []
     counts = Counter()
@@ -114,6 +140,7 @@ def audit(scene):
             'unassigned_placed_sections': len(uses[None]),
             'unassigned_placements': uses[None], 'gaps': gaps,
             'partial_surfaces': partial_surfaces,
+            'section_audit': section_audit,
             'note': 'Counts describe manifest coverage, not visual fidelity or shader reconstruction.'}
 
 
@@ -130,7 +157,7 @@ def main():
         args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({k: v for k, v in report.items()
                       if k not in ('gaps', 'unassigned_placements', 'partial_surfaces',
-                                   'issue_examples')}, indent=2))
+                                   'issue_examples', 'section_audit')}, indent=2))
     if report['unassigned_placed_sections']:
         print(f"Unassigned placed sections: {report['unassigned_placed_sections']}")
     for category, count in report['issue_counts'].items():

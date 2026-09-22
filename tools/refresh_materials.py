@@ -68,15 +68,20 @@ def main():
             return decode(key, channel)
 
         scene.texture = texture
-    sources = {m['source'] for m in manifest['materials'].values()}
+    # Weighted terrain materials are host-side blends built by prepare_terrain.py;
+    # carry them over and re-run that tool afterwards to refresh their layers.
+    terrain_blends = {name: m for name, m in manifest['materials'].items() if 'terrain_blend' in m}
+    sources = {m['source'] for name, m in manifest['materials'].items() if name not in terrain_blends}
     for number, (name, material) in enumerate(manifest['materials'].items(), 1):
+        if name in terrain_blends:
+            continue
         package, path = material['source'].split(':', 1)
         index = material_index(scene.load(package), path)
         if scene.material((package, index)) != name:
             raise ValueError('Material identity changed: ' + material['source'])
         if number % 25 == 0:
             print(f'Refreshed {number}/{len(manifest["materials"])} materials', flush=True)
-    manifest['materials'] = scene.materials
+    manifest['materials'] = {**scene.materials, **terrain_blends}
     restore_sky_policy(manifest)
     restore_outer_shell_policy(manifest, args.outer_shell)
     restore_hidden_visual_policy(manifest)

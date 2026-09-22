@@ -64,8 +64,16 @@ if ($ViewOnly) {
     & $editor $project $savedMap -game @viewArgs @lowEndArgs -log @walkArgs
 } elseif ($ImportOnly) {
     $commandlet = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-    & $commandlet $project -run=pythonscript "-script=$script" -unattended -nullrhi -nosplash
+    $importLog = Join-Path $env:OPENWILLOW_SCENE 'ue-import.log'
+    & $commandlet $project -run=pythonscript "-script=$script" -unattended -nullrhi -nosplash "-abslog=$importLog"
     if ($LASTEXITCODE -ne 0) { throw "Scene import failed: $LASTEXITCODE" }
+    # A material whose shader fails to compile silently renders as the default
+    # checkerboard; the saved-scene verifier only inspects the graph, so gate here.
+    $compileFailures = @(Select-String -LiteralPath $importLog -Pattern 'Failed to compile Material' -SimpleMatch)
+    if ($compileFailures.Count -gt 0) {
+        $compileFailures | ForEach-Object { Write-Host $_.Line }
+        throw "$($compileFailures.Count) material(s) failed to compile during import; see $importLog"
+    }
     $verify = Join-Path $repo 'host/ue5/verify_level.py'
     & $commandlet $project -run=pythonscript "-script=$verify" -unattended -nullrhi -nosplash
     if ($LASTEXITCODE -ne 0) { throw "Saved scene verification failed: $LASTEXITCODE" }
