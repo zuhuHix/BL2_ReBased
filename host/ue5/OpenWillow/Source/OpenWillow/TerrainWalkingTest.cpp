@@ -15,11 +15,13 @@
 
 // Runtime check of imported terrain floors, separate from the saved-asset
 // verification scripts. It reads terrain-runtime.json from the prepared scene:
-// for every terrain, stand on a corroborated cell, trace a flagged hole at its
-// recorded point, and walk across a component seam when one exists. A clear
-// original-point trace is direct host evidence; displacement and obstruction
-// are reported separately. Passing shows the host collision behaves as the
-// decoded topology predicts; it does not establish original-game parity.
+// for every terrain, stand on corroborated cells, trace several spaced flagged
+// holes at their recorded points, and walk across a component seam when one
+// exists. A clear original-point trace is direct host evidence; displacement
+// and obstruction are reported separately. Passing shows the host collision
+// behaves as the decoded topology predicts; it does not establish original-game
+// parity. Endpoint assertions are intentionally never used as original-hole
+// proof.
 class FOpenWillowTerrainCheck : public IAutomationLatentCommand
 {
 public:
@@ -89,19 +91,33 @@ public:
             if (!Occluded) Test->TestTrue(*FString::Printf(TEXT("%s: pawn stands on the imported terrain floor"), *Source), Rests);
             else Test->AddWarning(FString::Printf(TEXT("%s: every stand candidate is covered by other geometry; floor unverified at runtime"), *Source));
             if (Probe == 0) FScreenshotRequest::RequestScreenshot(TEXT("OpenWillowTerrainStand.png"), false, false);
-            if (P->HasTypedField<EJson::Object>(TEXT("hole")))
+            Holes.Reset();
+            if (P->HasTypedField<EJson::Array>(TEXT("hole_candidates")))
             {
-                Teleport(Pawn, Point(P->GetObjectField(TEXT("hole")), TEXT("point")));
+                for (const auto& Value : P->GetArrayField(TEXT("hole_candidates")))
+                {
+                    const TSharedPtr<FJsonObject>* Object = nullptr;
+                    if (Value->TryGetObject(Object) && Object && Object->IsValid()) Holes.Add(*Object);
+                }
+            }
+            // Local scenes prepared before the spaced-candidate policy retain
+            // one object. Keep that input valid while preferring the new list.
+            if (Holes.IsEmpty() && P->HasTypedField<EJson::Object>(TEXT("hole")))
+                Holes.Add(P->GetObjectField(TEXT("hole")));
+            HoleCandidate = 0;
+            if (!Holes.IsEmpty())
+            {
+                Teleport(Pawn, Point(Holes[0], TEXT("point")));
                 Step = 2; StageTime = Time;
-                LogHolePath(World, Pawn, Source, 0);
+                LogHolePath(World, Pawn, Source, HoleCandidate, 0);
             }
             else Step = 3;
             return false;
         }
-        if (Step == 2) LogHolePath(World, Pawn, Source, Time - StageTime);
+        if (Step == 2) LogHolePath(World, Pawn, Source, HoleCandidate, Time - StageTime);
         if (Step == 2 && Time - StageTime > 2.5)
         {
-            const TSharedPtr<FJsonObject> Hole = P->GetObjectField(TEXT("hole"));
+            const TSharedPtr<FJsonObject> Hole = Holes[HoleCandidate];
             const FVector OriginalPoint = Point(Hole, TEXT("point"));
             FString Hit; FVector Where;
             const bool OnTerrain = TraceDown(World, Pawn->GetActorLocation(), Hit, Where);
@@ -147,7 +163,15 @@ public:
                 *OriginalTraceStart.ToString(), *OriginalTraceEnd.ToString(), *OriginalState,
                 OriginalTraceHit, *ActorLabel(OriginalHit.GetActor()), *OriginalHit.ImpactPoint.ToString(),
                 *OriginalHit.ImpactNormal.ToString(), OriginalHit.bStartPenetrating, OriginalTracePawnIgnored));
-            Step = 3; return false;
+            if (HoleCandidate + 1 < Holes.Num())
+            {
+                ++HoleCandidate;
+                Teleport(Pawn, Point(Holes[HoleCandidate], TEXT("point")));
+                StageTime = Time;
+                LogHolePath(World, Pawn, Source, HoleCandidate, 0);
+            }
+            else Step = 3;
+            return false;
         }
         if (Step == 3)
         {
@@ -186,7 +210,7 @@ public:
         return false;
     }
 private:
-    void LogHolePath(UWorld* World, AOpenWillowWalker* Pawn, const FString& Source, double Elapsed)
+    void LogHolePath(UWorld* World, AOpenWillowWalker* Pawn, const FString& Source, int CandidateIndex, double Elapsed)
     {
         auto* Move = Pawn->GetCharacterMovement();
         FHitResult Hit;
@@ -194,8 +218,8 @@ private:
         const FVector Position = Pawn->GetActorLocation();
         World->LineTraceSingleByChannel(Hit, Position, Position - FVector(0, 0, 2000), ECC_Visibility, Params);
         const FHitResult& Floor = Move->CurrentFloor.HitResult;
-        Test->AddInfo(FString::Printf(TEXT("Terrain hole path: %s t=%.4f dt=%.4f pawn=%s velocity=%s input=%s mode=%d floor=%s floor_normal=%s floor_penetrating=%d trace=%s trace_point=%s trace_normal=%s trace_penetrating=%d"),
-            *Source, Elapsed, World->GetDeltaSeconds(), *Position.ToString(), *Move->Velocity.ToString(),
+        Test->AddInfo(FString::Printf(TEXT("Terrain hole path: %s hole_candidate=%d t=%.4f dt=%.4f pawn=%s velocity=%s input=%s mode=%d floor=%s floor_normal=%s floor_penetrating=%d trace=%s trace_point=%s trace_normal=%s trace_penetrating=%d"),
+            *Source, CandidateIndex, Elapsed, World->GetDeltaSeconds(), *Position.ToString(), *Move->Velocity.ToString(),
             *Pawn->GetLastMovementInputVector().ToString(), static_cast<int>(Move->MovementMode),
             *ActorLabel(Floor.GetActor()), *Floor.ImpactNormal.ToString(), Floor.bStartPenetrating,
             *ActorLabel(Hit.GetActor()), *Hit.ImpactPoint.ToString(), *Hit.ImpactNormal.ToString(), Hit.bStartPenetrating));
@@ -274,6 +298,8 @@ private:
     int HoleEndpointOnOther = 0, HoleOriginalObstructed = 0, HoleOriginalTerrain = 0, HoleOriginalPenetrating = 0, HoleEndpointDisplaced = 0;
     int SeamPassed = 0, SeamTotal = 0, SeamSkipped = 0;
     TArray<TSharedPtr<FJsonObject>> Stands;
+    TArray<TSharedPtr<FJsonObject>> Holes;
+    int HoleCandidate = 0;
     FVector Origin, SeamEnd;
     FString SeamStartHit;
     TArray<TSharedPtr<FJsonObject>> Probes;
