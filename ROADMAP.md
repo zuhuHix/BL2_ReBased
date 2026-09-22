@@ -72,7 +72,9 @@ well-bounded ones are marked *good first task*.
       triangles, 105 sections) with native materials, native texture axes
       (field roles confirmed against 15,393 editor FPoly records, 0 differ;
       texel scale still `UNVERIFIED`) and opt-in triangle collision. Native
-      terrain blending, the BSP texel scale, lightmaps / collision flags,
+      terrain blend parity (31 cooked weights now reproduce their PF_G8
+      textures and drive eight host weighted-sum materials), the BSP texel
+      scale and V orientation, lightmaps / collision flags,
       other maps and original-game alignment remain open. Hole runtime
       assertions include occluded/displaced probes; see the
       [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md),

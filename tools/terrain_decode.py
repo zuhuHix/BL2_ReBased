@@ -9,11 +9,228 @@ import json
 import math
 from pathlib import Path
 import struct
+import zlib
 
 from prepare_level import Scene, transform, values
 
 
 MAX_SAMPLES = 4_000_000
+
+
+def _png_gray(path):
+    """Read the bounded 8-bit grayscale channel emitted by the reader.
+
+    The texture command writes a PNG, rather than exposing a native texture
+    buffer to this diagnostic.  This small decoder accepts only the formats
+    emitted by ``assets.cpp`` (8-bit grayscale/RGB/RGBA), validates every
+    row/filter extent, and returns source texel values without resampling.
+    It deliberately rejects other PNG variants instead of guessing.
+    """
+    raw = Path(path).read_bytes()
+    if raw[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError('weightmap is not a PNG')
+    position, header, compressed = 8, None, bytearray()
+    while position + 12 <= len(raw):
+        size = struct.unpack_from('>I', raw, position)[0]
+        end = position + 12 + size
+        if end > len(raw):
+            raise ValueError('truncated weightmap PNG chunk')
+        kind = raw[position + 4:position + 8]
+        body = raw[position + 8:position + 8 + size]
+        if kind == b'IHDR':
+            if size != 13:
+                raise ValueError('invalid weightmap PNG header')
+            header = struct.unpack('>IIBBBBB', body)
+        elif kind == b'IDAT':
+            compressed.extend(body)
+        elif kind == b'IEND':
+            if end != len(raw):
+                raise ValueError('trailing weightmap PNG bytes')
+            break
+        position = end
+    if header is None:
+        raise ValueError('weightmap PNG has no header')
+    width, height, depth, color, compression, filtering, interlace = header
+    if (not width or not height or depth != 8 or compression != 0 or
+            filtering != 0 or interlace != 0 or color not in (0, 2, 6)):
+        raise ValueError('unsupported weightmap PNG encoding')
+    channels = {0: 1, 2: 3, 6: 4}[color]
+    row_bytes = width * channels
+    decoded = zlib.decompress(bytes(compressed))
+    if len(decoded) != height * (row_bytes + 1):
+        raise ValueError('weightmap PNG scanline extent mismatch')
+    rows, previous, cursor = [], bytearray(row_bytes), 0
+    for _ in range(height):
+        filter_type = decoded[cursor]
+        cursor += 1
+        current = bytearray(decoded[cursor:cursor + row_bytes])
+        cursor += row_bytes
+        if filter_type not in (0, 1, 2, 3, 4):
+            raise ValueError('unsupported weightmap PNG filter')
+        for i in range(row_bytes):
+            left = current[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if filter_type == 1:
+                current[i] = (current[i] + left) & 255
+            elif filter_type == 2:
+                current[i] = (current[i] + up) & 255
+            elif filter_type == 3:
+                current[i] = (current[i] + ((left + up) // 2)) & 255
+            elif filter_type == 4:
+                estimate = left + up - up_left
+                pa, pb, pc = abs(estimate - left), abs(estimate - up), abs(estimate - up_left)
+                predictor = left if pa <= pb and pa <= pc else up if pb <= pc else up_left
+                current[i] = (current[i] + predictor) & 255
+        rows.append([current[i * channels] for i in range(width)])
+        previous = current
+    return {'width': width, 'height': height, 'values': rows,
+            'sha256': hashlib.sha256(bytes(v for row in rows for v in row)).hexdigest()}
+
+
+def _field_stats(rows):
+    flat = [int(v) for row in rows for v in row]
+    if not flat:
+        raise ValueError('empty weightmap/alpha field')
+    mean = sum(flat) / len(flat)
+    variance = sum((v - mean) ** 2 for v in flat) / len(flat)
+    return {'count': len(flat), 'min': min(flat), 'max': max(flat),
+            'mean': mean, 'unique': len(set(flat)),
+            'sha256': hashlib.sha256(bytes(flat)).hexdigest(),
+            'nonconstant': len(set(flat)) > 1,
+            'variance': variance}
+
+
+def _oriented(rows, flip_x=False, flip_y=False, transpose=False):
+    """Return a bounded view copy in target row-major orientation."""
+    source = rows[::-1] if flip_y else rows
+    source = [row[::-1] if flip_x else row[:] for row in source]
+    if transpose:
+        source = [list(column) for column in zip(*source)]
+    return source
+
+
+def _nearest(rows, x, y):
+    return rows[min(len(rows) - 1, max(0, int(math.floor(y + .5))))][
+        min(len(rows[0]) - 1, max(0, int(math.floor(x + .5))))]
+
+
+def _bilinear(rows, x, y):
+    x = min(len(rows[0]) - 1, max(0.0, x)); y = min(len(rows) - 1, max(0.0, y))
+    x0, y0 = int(math.floor(x)), int(math.floor(y)); x1 = min(x0 + 1, len(rows[0]) - 1); y1 = min(y0 + 1, len(rows) - 1)
+    fx, fy = x - x0, y - y0
+    return ((1 - fy) * ((1 - fx) * rows[y0][x0] + fx * rows[y0][x1]) +
+            fy * ((1 - fx) * rows[y1][x0] + fx * rows[y1][x1]))
+
+
+def _score_field(reference, candidate):
+    ref = [int(v) for row in reference for v in row]
+    got = [float(v) for row in candidate for v in row]
+    if len(ref) != len(got):
+        raise ValueError('mapping shape mismatch')
+    errors = [abs(a - b) for a, b in zip(ref, got)]
+    mean_ref, mean_got = sum(ref) / len(ref), sum(got) / len(got)
+    den_ref = math.sqrt(sum((v - mean_ref) ** 2 for v in ref))
+    den_got = math.sqrt(sum((v - mean_got) ** 2 for v in got))
+    covariance = sum((a - mean_ref) * (b - mean_got) for a, b in zip(ref, got))
+    return {'exact': sum(e == 0 for e in errors), 'count': len(errors),
+            'exact_fraction': sum(e == 0 for e in errors) / len(errors),
+            'mae': sum(errors) / len(errors), 'max_error': max(errors),
+            'correlation': covariance / (den_ref * den_got) if den_ref and den_got else None}
+
+
+def _mapping_candidates(source, target_width, target_height):
+    """Yield deterministic crop/orientation/resampling hypotheses.
+
+    These are diagnostics only.  No hypothesis is promoted to native terrain
+    semantics: a mapping is ``verified`` only for an exact nonconstant field
+    match, and the report retains all coordinates and interpolation choices.
+    """
+    sw, sh = source['width'], source['height']
+    rows = source['values']
+    orientations = [(False, False, False), (True, False, False),
+                    (False, True, False), (True, True, False)]
+    seen = set()
+    def emit(name, candidate, details):
+        key = (name, json.dumps(details, sort_keys=True))
+        if key not in seen:
+            seen.add(key); yield name, candidate, details
+    # Direct integer crops are the only operation previously checked. Include
+    # all small edge offsets; large texture borders are also tested centrally.
+    if sw >= target_width and sh >= target_height:
+        x_offsets = list(range(sw - target_width + 1)) if sw - target_width <= 4 else [0, (sw - target_width) // 2, sw - target_width]
+        y_offsets = list(range(sh - target_height + 1)) if sh - target_height <= 4 else [0, (sh - target_height) // 2, sh - target_height]
+        for transpose in (False, True):
+            cw, ch = (target_height, target_width) if transpose else (target_width, target_height)
+            if sw < cw or sh < ch:
+                continue
+            xs = list(range(sw - cw + 1)) if sw - cw <= 4 else [0, (sw - cw) // 2, sw - cw]
+            ys = list(range(sh - ch + 1)) if sh - ch <= 4 else [0, (sh - ch) // 2, sh - ch]
+            for x0 in xs:
+                for y0 in ys:
+                    crop = [row[x0:x0 + cw] for row in rows[y0:y0 + ch]]
+                    for fx, fy, _ in orientations:
+                        out = _oriented(crop, fx, fy, transpose)
+                        details = {'crop': [x0, y0, cw, ch], 'flip_x': fx, 'flip_y': fy, 'transpose': transpose, 'resampling': 'none'}
+                        yield from emit('integer_crop', out, details)
+    # Endpoint and texel-center mappings cover normalized and padded grids.
+    for transpose in (False, True):
+        ow, oh = (sh, sw) if transpose else (sw, sh)
+        for fx, fy, _ in orientations:
+            oriented = _oriented(rows, fx, fy, transpose)
+            for mode in ('endpoint', 'center'):
+                for interpolation in ('nearest', 'bilinear'):
+                    out = []
+                    for ty in range(target_height):
+                        row = []
+                        for tx in range(target_width):
+                            if mode == 'endpoint':
+                                sx = tx * (ow - 1) / max(1, target_width - 1)
+                                sy = ty * (oh - 1) / max(1, target_height - 1)
+                            else:
+                                sx = (tx + .5) * ow / target_width - .5
+                                sy = (ty + .5) * oh / target_height - .5
+                            row.append(_nearest(oriented, sx, sy) if interpolation == 'nearest' else _bilinear(oriented, sx, sy))
+                        out.append(row)
+                    details = {'crop': [0, 0, ow, oh], 'flip_x': fx, 'flip_y': fy, 'transpose': transpose, 'resampling': mode + '_' + interpolation}
+                    yield from emit('normalized_resample', out, details)
+
+
+def analyze_weightmap_correspondence(alpha, weightmaps):
+    """Compare decoded native-tail alpha fields to owned PF_G8 maps.
+
+    Returns identity, dimensions, value hashes/statistics, and the best
+    bounded mapping hypotheses.  It proves only observed byte correspondence;
+    layer blending, filters and any source-side composition remain explicit.
+    """
+    maps = []
+    for index, values_ in enumerate(alpha['maps']):
+        rows = [list(values_[y * alpha['width']:(y + 1) * alpha['width']]) for y in range(alpha['height'])]
+        maps.append({'index': index, 'width': alpha['width'], 'height': alpha['height'],
+                     'stats': _field_stats(rows), 'values': rows})
+    textures = []
+    for item in weightmaps:
+        decoded = _png_gray(item['file'])
+        textures.append({**item, **decoded, 'stats': _field_stats(decoded['values'])})
+    comparisons = []
+    for field in maps:
+        ranked = []
+        for texture in textures:
+            for name, candidate, details in _mapping_candidates(texture, field['width'], field['height']):
+                score = _score_field(field['values'], candidate)
+                ranked.append({'texture': texture['identity'], 'texture_dimensions': [texture['width'], texture['height']],
+                               'field_index': field['index'], 'hypothesis': name, **details, **score})
+        ranked.sort(key=lambda row: (-row['exact'], row['mae'], -(row['correlation'] or -2)))
+        comparisons.append({'field_index': field['index'], 'field_stats': field['stats'], 'best': ranked[:8],
+                            'nonconstant_exact': [r for r in ranked if r['exact'] == r['count'] and field['stats']['nonconstant']]})
+    exact = [r for row in comparisons for r in row['nonconstant_exact']]
+    return {'alpha_dimensions': [alpha['width'], alpha['height']],
+            'alpha_fields': [{'index': m['index'], 'stats': m['stats']} for m in maps],
+            'weightmaps': [{'identity': t['identity'], 'dimensions': [t['width'], t['height']], 'stats': t['stats']} for t in textures],
+            'comparisons': comparisons,
+            'resolution': 'verified_exact_nonconstant' if exact else 'UNVERIFIED',
+            'verified_exact_nonconstant': exact,
+            'scope': 'byte comparison of native-tail alpha arrays against PF_G8 values; native composition/filter/slope semantics UNVERIFIED'}
 
 
 def native_offset(payload, data, expected_prefix):
@@ -59,7 +276,16 @@ def decode_terrain(payload, data):
     pose = transform(p)
     if not all(math.isfinite(v) for group in pose.values() for v in group):
         raise ValueError('Nonfinite terrain transform')
+    # Per-vertex layer weights are stored at NumPatches * WeightmapTesselationLevel + 1
+    # samples per axis (observed: level 2 on Sanctuary_P Terrain_2 and Sanctuary_Land Terrain_3).
+    tessellation = p.get('WeightmapTesselationLevel', 1)
+    if type(tessellation) is not int or tessellation <= 0:
+        raise ValueError('Invalid weightmap tessellation level')
+    weight_grid = [dims[0] * tessellation + 1, dims[1] * tessellation + 1]
+    if weight_grid[0] * weight_grid[1] > MAX_SAMPLES:
+        raise ValueError('Terrain weight sample budget exceeded')
     return {**remainder(payload, start, end), 'width': width, 'height': height,
+            'weightmap_tessellation': tessellation, 'weight_grid': weight_grid,
             'heights': heights, 'flags': flags, 'actor_transform': pose,
             'layers': p.get('Layers', []), 'components': p.get('TerrainComponents', []),
             'height_convention': 'row-major +X/+Y; local Z=(sample-32768)/128; corroborated by component bounds',
@@ -77,7 +303,7 @@ def decode_alpha_maps(payload, terrain):
     blends with, and how, remains UNVERIFIED; they are retained as data only.
     """
     start = terrain['opaque_tail_offset']
-    count = terrain['width'] * terrain['height']
+    count = terrain['weight_grid'][0] * terrain['weight_grid'][1]
     layers = len(terrain['layers'])
     if start + 4 > len(payload) or struct.unpack_from('<I', payload, start)[0] != layers:
         return None
@@ -87,8 +313,49 @@ def decode_alpha_maps(payload, terrain):
             return None
         maps.append(list(payload[position + 4:position + 4 + count]))
         position += 4 + count
-    return {'maps': maps, 'end': position, 'indexing': 'AlphaMapIndex UNVERIFIED',
+    return {'maps': maps, 'width': terrain['width'], 'height': terrain['height'], 'end': position, 'indexing': 'AlphaMapIndex UNVERIFIED',
             'blending': 'UNVERIFIED'}
+
+
+def decode_weighted_materials(payload, terrain, alpha, index):
+    """The cooked per-layer weights and their texture pairing, after the alpha maps.
+
+    Observed on all eight installed Sanctuary terrains (2026-09-22): u32 count,
+    then per entry ``Data[grid]`` bytes, i32 SizeX, i32 SizeY, i32 terrain
+    reference (this actor), i32 TerrainMaterial reference; then u32 count and
+    that many TerrainWeightMapTexture references, entry i pairing with weight
+    i. Every Data array equalled its texture's PF_G8 texels (31 of 31), which
+    is the check `prepare_terrain.py` repeats before trusting the pairing.
+    Anything else leaves the tail opaque and returns None.
+    """
+    gw, gh = terrain['weight_grid']
+    count = gw * gh
+    position = alpha['end'] if alpha else terrain['opaque_tail_offset']
+    if position + 4 > len(payload):
+        return None
+    entries = struct.unpack_from('<I', payload, position)[0]
+    if not 0 < entries <= 64:
+        return None
+    position += 4
+    weights = []
+    for _ in range(entries):
+        if position + 4 + count + 16 > len(payload) or struct.unpack_from('<I', payload, position)[0] != count:
+            return None
+        data = payload[position + 4:position + 4 + count]
+        size_x, size_y, owner, material = struct.unpack_from('<4i', payload, position + 4 + count)
+        if (size_x, size_y) != (gw, gh) or owner != index or material == 0:
+            return None
+        weights.append({'data': data, 'material': material})
+        position += 4 + count + 16
+    if position + 4 > len(payload) or struct.unpack_from('<I', payload, position)[0] != entries:
+        return None
+    textures = struct.unpack_from('<%di' % entries, payload, position + 4)
+    if any(t <= 0 for t in textures):
+        return None
+    for weight, texture in zip(weights, textures):
+        weight['texture'] = texture
+    return {'weights': weights, 'end': position + 4 + 4 * entries,
+            'pairing': 'WeightedMaterials[i] <-> WeightedTextureMaps[i]; byte equality checked per texture'}
 
 
 def decode_component(payload, data):
@@ -312,6 +579,10 @@ def main():
                         r['diagnostic']['alpha_maps'] = alpha and {
                             'layers': len(alpha['maps']), 'consumed_to': alpha['end'],
                             'means': [sum(m) / len(m) for m in alpha['maps']],
+                            'dimensions': [r['diagnostic']['width'], r['diagnostic']['height']],
+                            'fields': [{'index': i, 'stats': _field_stats([
+                                m[y * r['diagnostic']['width']:(y + 1) * r['diagnostic']['width']]
+                                for y in range(r['diagnostic']['height'])])} for i, m in enumerate(alpha['maps'])],
                             'indexing': alpha['indexing'], 'blending': alpha['blending']}
                 elif r['class'] == 'Engine.TerrainWeightMapTexture' and args.weightmaps:
                     filename = f'{package}_{r["index"]}_weightmap.png'
@@ -329,6 +600,53 @@ def main():
                                       'non_root_owned')
             except ValueError as error:
                 report['errors'].append({'package': package, 'index': r['index'], 'error': str(error)})
+        if args.weightmaps:
+            for terrain_record in selected:
+                if terrain_record['class'] != 'Engine.Terrain' or 'diagnostic' not in terrain_record:
+                    continue
+                alpha = decode_alpha_maps(payloads[terrain_record['index']], terrain_record['diagnostic'])
+                owned = []
+                for weightmap in selected:
+                    if (weightmap['class'] != 'Engine.TerrainWeightMapTexture' or
+                            weightmap.get('outer') != terrain_record['index'] or
+                            'decoded_weightmap' not in weightmap):
+                        continue
+                    decoded = weightmap['decoded_weightmap']
+                    owned.append({'identity': package + ':' + weightmap['path'],
+                                  'file': args.output / decoded['file']})
+                try:
+                    if alpha is not None and owned:
+                        correspondence = analyze_weightmap_correspondence(alpha, owned)
+                    else:
+                        inventory = []
+                        for item in owned:
+                            decoded = _png_gray(item['file'])
+                            inventory.append({'identity': item['identity'],
+                                              'dimensions': [decoded['width'], decoded['height']],
+                                              'stats': _field_stats(decoded['values'])})
+                        correspondence = {
+                            'alpha_dimensions': [terrain_record['diagnostic']['width'],
+                                                 terrain_record['diagnostic']['height']],
+                            'alpha_fields': [], 'weightmaps': inventory,
+                            'comparisons': [],
+                            'resolution': 'UNVERIFIED_NO_NATIVE_ALPHA_ARRAY',
+                            'verified_exact_nonconstant': [],
+                            'scope': ('PF_G8 inventory only; this terrain has no decoded '
+                                      'native-tail alpha array sequence')}
+                    correspondence['layers'] = []
+                    for layer in terrain_record['diagnostic']['layers']:
+                        layer_values = values(layer)
+                        setup = layer_values.get('Setup') or {}
+                        correspondence['layers'].append({
+                            'name': layer_values.get('Name'),
+                            'alpha_map_index': layer_values.get('AlphaMapIndex'),
+                            'hidden': bool(layer_values.get('Hidden', False)),
+                            'setup': setup.get('path'),
+                        })
+                    terrain_record['diagnostic']['weightmap_correspondence'] = correspondence
+                except (OSError, ValueError, zlib.error) as error:
+                    report['errors'].append({'package': package, 'index': terrain_record['index'],
+                                             'error': 'Weightmap correspondence: ' + str(error)})
         for r in selected:
             if r['class'] == 'Engine.TerrainComponent' and 'diagnostic' in r:
                 try:
@@ -345,6 +663,24 @@ def main():
         report['packages'][package] = selected
     output = args.output / 'terrain_diagnostics.json'
     output.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    if args.weightmaps:
+        correspondence = {
+            'schema': 'terrain-weightmap-correspondence-v1',
+            'status': 'diagnostic_only',
+            'packages': {},
+            'scope': ('PF_G8 source texel dimensions/values and bounded alpha-field '
+                      'hypotheses; layer blending, filters and native semantics remain UNVERIFIED')}
+        for package, rows in report['packages'].items():
+            entries = []
+            for record in rows:
+                diagnostic = record.get('diagnostic', {})
+                if record.get('class') == 'Engine.Terrain' and 'weightmap_correspondence' in diagnostic:
+                    entries.append({'identity': package + ':' + record['path'],
+                                    'export_index': record['index'],
+                                    'correspondence': diagnostic['weightmap_correspondence']})
+            correspondence['packages'][package] = entries
+        (args.output / 'layer-correspondence.json').write_text(
+            json.dumps(correspondence, indent=2), encoding='utf-8')
     print(json.dumps({'output': str(output), 'errors': len(report['errors'])}))
     return bool(report['errors'])
 

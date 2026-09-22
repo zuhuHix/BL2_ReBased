@@ -77,7 +77,10 @@ class BspTests(unittest.TestCase):
         self.assertIn('vt -1 1\n',obj);self.assertIn('vt 0 2\n',obj)
         obj,_=section_obj(m['polygons'],'planar')
         self.assertIn('vt 3.125 -2.125\n',obj)
+        obj,_=section_obj(m['polygons'],'surface_axes',128.,'same')
+        self.assertIn('vt -3.125 0\n',obj)
         with self.assertRaises(ValueError):section_obj(m['polygons'],'guess')
+        with self.assertRaises(ValueError):section_obj(m['polygons'],'surface_axes',128.,'guess')
 
     def test_texture_reference_range(self):
         b,c,r=fixture()

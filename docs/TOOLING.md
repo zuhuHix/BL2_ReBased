@@ -273,7 +273,10 @@ remains open.
 tails. The Ash-specific prefixes and native collection layout remain subject to
 independent visual/in-game validation; see [DECISIONS.md](../DECISIONS.md).
 
-`-ImportOnly` also reopens and verifies the saved scene: placement counts,
+`-ImportOnly` writes the import commandlet log to `<scene>/ue-import.log` and
+fails if any material reported `Failed to compile Material`; such a material
+would otherwise render as UE's default checkerboard while the graph checks
+below still pass. It also reopens and verifies the saved scene: placement counts,
 collection transforms, material overrides, imported section bounds against
 source OBJ vertices, and material graph/color-space settings. To exercise all
 four channels independently of game data, run `python tests/prepare_ue_smoke.py`
@@ -579,7 +582,11 @@ scale and collision flags retain the limitations below.
 `tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
 rewrites a prepared scene with one static mesh per TerrainComponent whose
 vertex/strip data corroborates the terrain hole/diagonal flags, a labeled
-material approximation, and (with `--collision`) triangle-mesh collision. It
+material approximation, and (with `--collision`) triangle-mesh collision.
+Cooked weighted materials now drive a host weighted sum when every weight
+array matches its paired PF_G8 texture byte for byte (31/31 on Sanctuary).
+Failed verification retains the labeled dominant-layer fallback. This does
+not establish native shader or original-game visual parity. It
 also writes `terrain-runtime.json`; `test_ue_viewer.ps1 -Terrain` then runs
 `OpenWillow.TerrainWalking`, which stands on each terrain, drops into a
 flagged hole cell and walks one component seam. Full viewer logs now include

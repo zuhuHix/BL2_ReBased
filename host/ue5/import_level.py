@@ -147,6 +147,120 @@ def build_sky_approximation(material, name, sky):
         raise RuntimeError('Cannot connect sky approximation visible color: ' + name)
 
 
+def terrain_texture(filename, srgb, grayscale=False):
+    """Import one terrain input and preserve the recorded color-space policy."""
+    texture = textures.get(filename)
+    if texture is None:
+        texture = imported(filename, unreal.Texture2D)
+        textures[filename] = texture
+    texture.set_editor_property('srgb', srgb)
+    if grayscale:
+        compression = getattr(unreal.TextureCompressionSettings, 'TC_GRAYSCALE',
+                              unreal.TextureCompressionSettings.TC_DEFAULT)
+    else:
+        compression = unreal.TextureCompressionSettings.TC_DEFAULT
+    texture.set_editor_property('compression_settings', compression)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    return texture
+
+
+def terrain_uv(material, mapping):
+    """Create the explicit patch-to-texture coordinate transform from evidence."""
+    mapping = mapping or {}
+    scale = mapping.get('scale', [1.0, 1.0])
+    offset = mapping.get('offset', [0.0, 0.0])
+    if (not isinstance(scale, list) or len(scale) != 2 or
+            not isinstance(offset, list) or len(offset) != 2):
+        raise RuntimeError('Terrain material has incomplete sampling coordinates')
+    coordinates = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate)
+    coordinates.set_editor_property('coordinate_index', int(mapping.get('coordinate_index', 0)))
+    coordinates.set_editor_property('u_tiling', float(scale[0]))
+    coordinates.set_editor_property('v_tiling', float(scale[1]))
+    if offset != [0, 0] and offset != [0.0, 0.0]:
+        translate = mel.create_material_expression(material, unreal.MaterialExpressionConstant2Vector)
+        translate.set_editor_property('r', float(offset[0]))
+        translate.set_editor_property('g', float(offset[1]))
+        add = mel.create_material_expression(material, unreal.MaterialExpressionAdd)
+        if not (mel.connect_material_expressions(coordinates, '', add, 'A') and
+                mel.connect_material_expressions(translate, '', add, 'B')):
+            raise RuntimeError('Cannot connect terrain sampling offset')
+        return add
+    return coordinates
+
+
+def build_terrain_blend(material, name, definition):
+    """Build the dedicated weighted terrain graph from validated manifest rows.
+
+    The graph is deliberately a host weighted sum.  The manifest records the
+    validated map/layer sampling evidence and keeps native normalization,
+    slope/noise filters and lightmaps explicitly UNVERIFIED.
+    """
+    if definition.get('method') != 'terrain_weighted_sum_v2':
+        raise RuntimeError('Unsupported terrain material method: ' + str(definition.get('method')))
+    if not definition.get('layers'):
+        raise RuntimeError('Terrain weighted material has no layers')
+    accumulated = None
+    for layer in definition['layers']:
+        weight_file = layer.get('weightmap_file')
+        if not weight_file:
+            raise RuntimeError('Terrain layer has no imported weightmap: ' + str(layer.get('layer_index')))
+        weight = terrain_texture(weight_file, False, grayscale=True)
+        expected = layer.get('weightmap_dimensions')
+        if expected:
+            try:
+                actual = [weight.get_size_x(), weight.get_size_y()]
+                if actual != expected:
+                    raise RuntimeError('Terrain weightmap dimensions changed during import: ' +
+                                       f'{actual} != {expected}')
+            except AttributeError:
+                # Older UE Python bindings do not expose size accessors; the
+                # PNG manifest still carries the source dimensions and hash.
+                pass
+        weight_sample = mel.create_material_expression(material, unreal.MaterialExpressionTextureSample)
+        weight_sample.set_editor_property('texture', weight)
+        # TC_GRAYSCALE textures must be sampled as Linear Grayscale or the material fails to compile.
+        weight_sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+        weight_uv = terrain_uv(material, layer.get('mapping'))
+        if not mel.connect_material_expressions(weight_uv, '', weight_sample, 'UVs'):
+            raise RuntimeError('Cannot connect terrain weightmap UVs: ' + name)
+
+        diffuse_file = layer.get('diffuse')
+        if diffuse_file:
+            diffuse = terrain_texture(diffuse_file, True)
+            color = mel.create_material_expression(material, unreal.MaterialExpressionTextureSample)
+            color.set_editor_property('texture', diffuse)
+            color.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+            color_uv = terrain_uv(material, layer.get('diffuse_mapping') or layer.get('mapping'))
+            if not mel.connect_material_expressions(color_uv, '', color, 'UVs'):
+                raise RuntimeError('Cannot connect terrain diffuse UVs: ' + name)
+            color_pin = 'RGB'
+        else:
+            fallback = layer.get('fallback_color')
+            if not (isinstance(fallback, list) and len(fallback) == 3):
+                raise RuntimeError('Terrain layer has no diffuse or explicit fallback color')
+            color = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+            color.set_editor_property('constant', unreal.LinearColor(*fallback, 1.0))
+            color_pin = ''
+        weighted = mel.create_material_expression(material, unreal.MaterialExpressionMultiply)
+        if not (mel.connect_material_expressions(color, color_pin, weighted, 'A') and
+                mel.connect_material_expressions(weight_sample, 'R', weighted, 'B')):
+            raise RuntimeError('Cannot connect terrain layer weight: ' + name)
+        if accumulated is None:
+            accumulated = weighted
+        else:
+            added = mel.create_material_expression(material, unreal.MaterialExpressionAdd)
+            if not (mel.connect_material_expressions(accumulated, '', added, 'A') and
+                    mel.connect_material_expressions(weighted, '', added, 'B')):
+                raise RuntimeError('Cannot connect terrain layer sum: ' + name)
+            accumulated = added
+    if not mel.connect_material_property(accumulated, '', unreal.MaterialProperty.MP_BASE_COLOR):
+        raise RuntimeError('Cannot connect terrain weighted Base Color: ' + name)
+    roughness = mel.create_material_expression(material, unreal.MaterialExpressionConstant)
+    roughness.set_editor_property('r', 0.65)
+    if not mel.connect_material_property(roughness, '', unreal.MaterialProperty.MP_ROUGHNESS):
+        raise RuntimeError('Cannot connect terrain weighted roughness: ' + name)
+
+
 for name, definition in scene['materials'].items():
     material_path = destination + '/Assets/M_' + name
     material = unreal.load_asset(material_path) if unreal.EditorAssetLibrary.does_asset_exist(material_path) else None
@@ -174,6 +288,13 @@ for name, definition in scene['materials'].items():
         material.set_editor_property('two_sided', bool(definition.get('two_sided', False)))
     except Exception:
         pass
+    terrain_blend = definition.get('terrain_blend')
+    if terrain_blend is not None:
+        build_terrain_blend(material, name, terrain_blend)
+        mel.recompile_material(material)
+        unreal.EditorAssetLibrary.save_loaded_asset(material)
+        materials[name] = material
+        continue
     fallback = None
     if not definition['channels'].get('diffuse'):
         # A recorded constant comes from an unconnected UE3 DiffuseColor input
