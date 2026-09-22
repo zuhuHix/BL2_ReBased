@@ -2,8 +2,9 @@
 import argparse
 import json
 from pathlib import Path
-from prepare_level import (Scene, apply_outer_shell_policy, hidden_visual_mesh, material_index,
-                           native_skybox_placement)
+from prepare_level import (Scene, apply_outer_shell_policy,
+                           apply_section_material_policies, hidden_visual_mesh,
+                           material_index, native_skybox_placement)
 
 
 def restore_sky_policy(manifest):
@@ -81,6 +82,13 @@ def main():
             raise ValueError('Material identity changed: ' + material['source'])
         if number % 25 == 0:
             print(f'Refreshed {number}/{len(manifest["materials"])} materials', flush=True)
+    for mesh in manifest['meshes'].values():
+        package = mesh['source'].split(':', 1)[0]
+        apply_section_material_policies(
+            mesh['source'], mesh['sections'],
+            material_for_path=lambda path, package=package: scene.material(
+                (package, material_index(scene.load(package), path))),
+            material_source_for_id=lambda name: scene.materials[name]['source'])
     manifest['materials'] = {**scene.materials, **terrain_blends}
     restore_sky_policy(manifest)
     restore_outer_shell_policy(manifest, args.outer_shell)
