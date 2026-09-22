@@ -46,6 +46,11 @@ for name, definition in {
     'UnlitNeutral': {'channels': {}},
     'UnlitEmissiveFirst': {'channels': {'emissive': 'emissive.png', 'diffuse': 'diffuse.png'}},
     'UnlitEmissiveLast': {'channels': {'diffuse': 'diffuse.png', 'emissive': 'emissive.png'}},
+    # An inspected named constant scaling the visible Unlit color (the moon's p_moonColor).
+    'UnlitScaled': {'channels': {'diffuse': 'diffuse.png'}, 'blend_mode': 'BLEND_Additive',
+                    'unlit_color_multiplier': {'method': 'unlit_color_multiplier_v1', 'status': 'partial_unverified',
+                                               'parameter': 'p_moonColor', 'source_material': 'Synthetic.Mat_Moon',
+                                               'rgb': [4.02, 4.02, 4.02], 'omitted': ['shadow mask']}},
 }.items():
     scene['materials'][name] = dict(definition, source='Synthetic.' + name, lighting_model='MLM_Unlit')
 

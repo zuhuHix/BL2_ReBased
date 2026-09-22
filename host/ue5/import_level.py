@@ -238,6 +238,18 @@ for name, definition in scene['materials'].items():
     elif definition.get('lighting_model') == 'MLM_Unlit' and emissive_sample is None:
         color_node = diffuse_sample if diffuse_sample is not None else fallback
         color_pin = 'RGB' if diffuse_sample is not None else ''
+        multiplier = definition.get('unlit_color_multiplier')
+        if color_node is not None and multiplier is not None:
+            # An inspected named constant scales the visible color (see
+            # prepare_level.INSPECTED_UNLIT_COLOR_MULTIPLIERS); recorded, not decoded.
+            scale = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+            rgb = multiplier['rgb']
+            scale.set_editor_property('constant', unreal.LinearColor(rgb[0], rgb[1], rgb[2], 1))
+            scaled = mel.create_material_expression(material, unreal.MaterialExpressionMultiply)
+            if not (mel.connect_material_expressions(color_node, color_pin, scaled, 'A')
+                    and mel.connect_material_expressions(scale, '', scaled, 'B')):
+                raise RuntimeError('Cannot connect unlit color multiplier: ' + name)
+            color_node, color_pin = scaled, ''
         if color_node is None or not mel.connect_material_property(
                 color_node, color_pin, unreal.MaterialProperty.MP_EMISSIVE_COLOR):
             raise RuntimeError('Cannot connect unlit visible color: ' + name)

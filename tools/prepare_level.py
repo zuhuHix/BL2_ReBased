@@ -160,8 +160,11 @@ REGULAR_DIFFUSE_FALLBACKS = {
 # Inspected opaque materials whose stripped graphs defeat the generic _Dif
 # heuristic: their cooked lists carry several _Dif overlays, so the sole-_Dif
 # rule either picks a blend layer or gives up. Each entry names the texture
-# that carries the surface's own color, and a native normal only when one
-# survives in the cooked list. Membership never recovers the layered graph.
+# that carries the surface's own color, and a native normal (and emissive)
+# only when one survives in the cooked list. An entry keyed by a placed
+# instance must name the inspected 'base' it was read against; the instance
+# is only accepted when it adds no texture parameter of its own, which the
+# caller already guarantees. Membership never recovers the layered graph.
 INSPECTED_COLOR_FALLBACKS = {
     'Sanctuary_Land:Prop_Glacier.Materials.Mat_FrozenLake': {
         'method': 'frozen_lake_color_fallback_v1', 'label': 'Frozen-lake', 'noun': 'ice',
@@ -177,6 +180,39 @@ INSPECTED_COLOR_FALLBACKS = {
         'omitted': ['BrokenRoad_Alpha snow/rock layer blend', 'noise and splatter overlays',
                     'stripped p_Normal texture', 'UV modulation'],
         'issue': 'Approximation: inspected BrokenRoad_Dif texture used as road color; snow/rock layer blend and stripped normal not reconstructed'},
+    # The Hyperion station hanging in Sanctuary's sky. The placed instance
+    # overrides nothing; its base keeps only tint/fog/rim/emissive-multiplier
+    # constants, and the cooked list is the hull's own _Dif/_Nrm/_Emis plus a
+    # Tiling_SmokePanner2_Dif overlay, so the sole-_Dif rule gave up and the
+    # station rendered as the neutral gray (read as black against the sky).
+    'Sanctuary_Light:Prop_MoonBase.Materials.Mati_MoonBase_02a': {
+        'method': 'moon_base_color_fallback_v1', 'label': 'Moon-base', 'noun': 'hull',
+        'base': 'Sanctuary_Light:Prop_MoonBase.Materials.Mat_MoonBase_02a',
+        'color': 'Sanctuary_Light:Prop_MoonBase.Textures.MoonBase02a_Dif',
+        'normal': 'Sanctuary_Light:Prop_MoonBase.Textures.MoonBase02a_Nrm',
+        'emissive': 'Sanctuary_Light:Prop_MoonBase.Textures.MoonBase02a_Emis',
+        'omitted': ['MoonBase_Color tint', 'Emissive_Mult scalar', 'Fog/Fog_Intensity blend',
+                    'RimLight_Color', 'Tiling_SmokePanner2_Dif overlay', 'UV modulation'],
+        'issue': 'Approximation: inspected MoonBase02a _Dif/_Nrm/_Emis textures used as hull color, normal and emissive; tint, fog, rim light, emissive multiplier and smoke overlay not reconstructed'},
+}
+
+# Inspected Unlit materials whose visible color is scaled by a named vector
+# constant. The host multiplies the recovered Unlit color by the recorded
+# value; everything else in the stripped graph stays omitted. Keyed by the
+# placed material; the chain must end at the named base.
+INSPECTED_UNLIT_COLOR_MULTIPLIERS = {
+    # Elpis. Mat_Moon is additive Unlit with p_moonColor 4.02 gray; without
+    # it the additive moon washes out against the dome. The H-shaped
+    # MoonBase02_GRP mask, p_moonTimeBaseShadow, Moon_Comp relief and the
+    # orange p_Basecolor2 are not placed by anything the package retains.
+    'Sanctuary_Light:Prop_MoonBase.Materials.Mati_Moon': {
+        'method': 'unlit_color_multiplier_v1',
+        'base': 'Sanctuary_Light:Prop_MoonBase.Materials.Mat_Moon',
+        'parameter': 'p_moonColor',
+        'omitted': ['MoonBase02_GRP station shadow mask', 'p_moonTimeBaseShadow',
+                    'Moon_Comp crater relief', 'p_Basecolor2 secondary color',
+                    'p_DarkColor', 'Transition_Track time-of-day tint',
+                    'p_moonTime/p_moonRotation UV motion']},
 }
 
 
@@ -556,6 +592,30 @@ class Scene:
                 vectors[e.get('ParameterName', '').casefold()] = e.get('ParameterValue')
         return chain[-1], samplers, scalars, vectors
 
+    def unlit_color_multiplier(self, key, material):
+        """Recorded RGB multiplier for an inspected Unlit chain, or None.
+
+        The value is the named vector constant with instance overrides last.
+        It is recorded with its provenance; the host applies it to the
+        visible Unlit color. This does not reconstruct the stripped graph.
+        """
+        entry = INSPECTED_UNLIT_COLOR_MULTIPLIERS.get(self.identity(key))
+        if entry is None:
+            return None
+        if material.get('lighting_model') != 'MLM_Unlit':
+            raise ValueError('Unlit color multiplier requires an Unlit chain')
+        base, _, _, vectors = self.named_chain_parameters(key)
+        if self.identity(base) != entry['base']:
+            raise ValueError('Unlit color multiplier requires the inspected base material')
+        value = vectors.get(entry['parameter'].casefold())
+        if not isinstance(value, dict) or not all(
+                isinstance(value.get(c), (int, float)) and not isinstance(value.get(c), bool)
+                and math.isfinite(value[c]) and value[c] >= 0 for c in 'RGB'):
+            raise ValueError(f"Unlit color multiplier {entry['parameter']} is missing or invalid")
+        return {'method': entry['method'], 'status': 'partial_unverified',
+                'parameter': entry['parameter'], 'source_material': self.identity(base),
+                'rgb': [float(value[c]) for c in 'RGB'], 'omitted': entry['omitted']}
+
     def native_sky_approximation(self, key):
         """Named inputs of the observed time-of-day sky master, or None.
 
@@ -744,6 +804,16 @@ class Scene:
                         material['sky_approximation'] = sky
                         self.issue(material['source'],
                                    'Approximation: Time_of_Day column of the transition strip over dome V with a horizon-tinted cloud layer; sky master graph not reconstructed')
+                if self.identity(key) in INSPECTED_UNLIT_COLOR_MULTIPLIERS:
+                    try:
+                        multiplier = self.unlit_color_multiplier(key, material)
+                    except ValueError as error:
+                        multiplier = None
+                        self.issue(material['source'] + ':multiplier', error)
+                    if multiplier is not None:
+                        material['unlit_color_multiplier'] = multiplier
+                        self.issue(material['source'],
+                                   f"Approximation: Unlit color scaled by {multiplier['parameter']}; shadow mask, relief and secondary color not reconstructed")
                 regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
                 if regular_fallback is not None:
                     parent = self.resolve(key[0], props(self.load(key[0])[key[1]]).get('Parent', 0))
@@ -800,10 +870,14 @@ class Scene:
                                 textures, self.identity,
                                 lambda t: self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1],
                                 material.get('blend_mode', 'BLEND_Opaque'))
-                            fallback = (INSPECTED_COLOR_FALLBACKS.get(self.identity(base))
-                                        if key == base and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
+                            fallback = (INSPECTED_COLOR_FALLBACKS.get(self.identity(key))
+                                        if material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
                                         else None)
                             if fallback is not None:
+                                # A base-keyed entry applies to that base only; an
+                                # instance-keyed entry to the inspected parent only.
+                                if self.identity(base) != fallback.get('base', self.identity(key)):
+                                    raise ValueError(f"{fallback['label']} fallback requires the inspected base material")
                                 def inspected(identity, kind):
                                     found = [t for t in textures if self.identity(t) == identity
                                              and self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D']
@@ -814,6 +888,9 @@ class Scene:
                                 normal = inspected(fallback['normal'], 'normal') if fallback['normal'] else None
                                 if normal is not None and not any(channel_for_parameter(p) == 'normal' for p in parameters):
                                     parameters['p_normal'] = normal
+                                emissive = inspected(fallback['emissive'], 'emissive') if fallback.get('emissive') else None
+                                if emissive is not None and not any(channel_for_parameter(p) == 'emissive' for p in parameters):
+                                    parameters['p_emissive'] = emissive
                                 material['surface_approximation'] = {
                                     'method': method, 'status': 'partial_unverified',
                                     'source_texture': self.identity(inferred),
@@ -821,6 +898,8 @@ class Scene:
                                     'omitted': fallback['omitted']}
                                 if normal is not None:
                                     material['surface_approximation']['normal_texture'] = self.identity(normal)
+                                if emissive is not None:
+                                    material['surface_approximation']['emissive_texture'] = self.identity(emissive)
                             glacier = (self.glacier_primary_surface(key, base, textures)
                                        if inferred is None and material.get('blend_mode', 'BLEND_Opaque') == 'BLEND_Opaque'
                                        else None)
