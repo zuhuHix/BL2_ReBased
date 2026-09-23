@@ -1350,6 +1350,70 @@ the roof textures are gone from the street. Not verified: a matched
 original-game capture comparison, and which earlier commit first made the
 overlap visible.
 
+## 2026-09-23: Maya's body, default head and first-person arms reach UE5
+
+First Maya asset slice for the vertical slice: meshes and a default-skin
+surface only, with no animation, skeleton merge or gameplay.
+UModel build 1590 exported `GD_Siren_Streaming_SF` `Skel_SirenBody`
+(5,368 vertices, 27 joints) and `Hands_Siren` (2,204 vertices, 47 joints),
+plus `CD_Siren_Head_Default_SF` `Skel_Siren000` (2,803 vertices, 7 joints),
+as glTF. Each mesh run exited 255 after writing the mesh but before any
+texture, following missing `Common_Textures` stub imports. Exporting each
+`Texture2D` alone as PNG succeeded. UE 5.8 rejects UModel's BC1 DDS
+(`DXGIFormat not supported : 71`), so PNG is the texture path.
+`host/ue5/import_character.py` imports them as UE5 skeletal meshes, and
+`tools/run_ue_character.ps1` imports and captures a `-game` preview. Height
+comes out at about 172 cm (glTF metres, Y-up converted by UE). The head's
+lowest point meets the body's neck in bind pose.
+
+Surface: the default skin (`CD_Siren_Skin_Default` ->
+`CD_Skins_Siren_MainGame.Mati_Default_Body` / `Mati_Default_Head`, parent
+`Common_Materials.Player.Master_Player`) passes `p_Diffuse`, `p_Normal`,
+`p_Masks` and Shadow/Midtone/Hilight colours for zones A, B and C, read with
+`ow-package --properties` and `level-arrays.schema`. `Master_Player`'s graph is
+stripped, so the combine is not known. Observed: each `_Msk` holds two
+half-width copies of the UV layout. In the right half, the head's hair is R
+(zone A, whose midtone is blue), the face is B and the collar is G. The host
+therefore samples the right half at `u/2 + 0.5`, takes A = R, B = G, C = B, and
+multiplies the diffuse by `2 x Midtone` inside each zone.
+
+UNVERIFIED: that combine, the factor 2, the unused Shadow/Hilight colours and
+intensity scalars, the `_Msk` left half (it may drive the tattoo glow; the
+emissive colours are not used), the hands reusing the body colours, and
+left/right handedness. Result compared by eye only, with no original-game
+capture: the preview shows blue hair, a yellow-orange top with grey panels,
+black trousers, and a tattooed arm opposite a yellow sleeve, the arms matching
+the body. The preview's fixed exposure and 2.5 lux sun are an inspection aid.
+No C++ or parser code changed.
+
+## 2026-09-23: Maya's first-person arms on the Sanctuary walker
+
+UModel can export `AnimSet` animation as glTF only from its viewer
+(`glTF animation could be exported from mesh viewer only`), so
+`Hands_Siren` and `1st_Person_Unarmed` / `1st_Person_Pistol` were exported
+as MD5. `tools/prepare_character_pose.py` bakes one frame into an OBJ,
+reusing the pillar's MD5 helpers. The arms skeleton has a `Camera` bone
+(bind position about 167 cm up), and vertices are written in that bone's
+space. The walker (`-owwalk`) attaches the mesh to its camera at the origin
+when given `-owarms=<asset>`. That BL2 places the first-person view at this
+bone is UNVERIFIED: it is inferred from the bone's name and position.
+
+Field of view: `DefaultEngine.ini` sets `[Engine.LocalPlayer]
+AspectRatioAxisConstraint=AspectRatio_MaintainYFOV`. The walker therefore
+treats a BL2 FOV value as horizontal at 4:3 and converts it to UE's
+horizontal FOV at the actual aspect. `-owfov=` defaults to 90 (106 degrees
+horizontal at 16:9). With UE's plain 90 degrees, the Scooter's sign
+appeared about 40% wider than in a maintainer's capture from nearly the same
+spot; with the conversion it matches by eye. The player's actual FOV setting
+was not read. The 4:3 reference is UE3 behaviour assumed, not decoded.
+
+Current state: the Pistol_Idle frame 0 pose is static, with no gun, walk bob or
+animation playback. In the capture, the hand sits further right than the real
+game's pistol hand. Camera height stays at the walker's 152 cm eye, not the
+bone's 167 cm. Automated: the host builds and the import succeeds. Visual:
+one capture compared by eye with a maintainer screenshot. Gameplay: not run
+through the walking tests with arms attached.
+
 ## 2026-09-16: External extraction is an accelerator, not a replacement
 
 The project will evaluate mature community exporters before expanding every

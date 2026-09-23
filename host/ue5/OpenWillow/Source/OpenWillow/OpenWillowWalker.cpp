@@ -2,6 +2,10 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
 AOpenWillowWalker::AOpenWillowWalker()
@@ -11,10 +15,34 @@ AOpenWillowWalker::AOpenWillowWalker()
     Camera->SetupAttachment(GetCapsuleComponent());
     Camera->SetRelativeLocation(FVector(0, 0, 64));
     Camera->bUsePawnControlRotation = true;
+    Arms = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FirstPersonArms"));
+    Arms->SetupAttachment(Camera);
+    Arms->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Arms->SetCastShadow(false);
     GetCharacterMovement()->MaxWalkSpeed = 450;
     GetCharacterMovement()->JumpZVelocity = 420;
     GetCharacterMovement()->MaxStepHeight = 35;
     GetCharacterMovement()->SetWalkableFloorAngle(45);
+}
+
+void AOpenWillowWalker::BeginPlay()
+{
+    Super::BeginPlay();
+    FString Path;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("owarms="), Path)) return;
+    UStaticMesh* ArmsMesh = LoadObject<UStaticMesh>(nullptr, *Path);
+    if (!ArmsMesh) { UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms mesh not found: %s"), *Path); return; }
+    Arms->SetStaticMesh(ArmsMesh);
+    // BL2 keeps vertical FOV (DefaultEngine.ini: AspectRatio_MaintainYFOV) and,
+    // as UE3 does, reads its FOV setting as horizontal at 4:3. UE's camera FOV
+    // is horizontal at the actual aspect, so convert. -owfov=<BL2 setting>; the
+    // 90 default matches a maintainer capture by eye, not a read setting.
+    float Bl2Fov = 90;
+    FParse::Value(FCommandLine::Get(), TEXT("owfov="), Bl2Fov);
+    const float Aspect = Camera->AspectRatio > 0 ? Camera->AspectRatio : 16.f / 9.f;
+    Camera->SetFieldOfView(FMath::RadiansToDegrees(2 * FMath::Atan(
+        FMath::Tan(FMath::DegreesToRadians(Bl2Fov) / 2) * Aspect / (4.f / 3.f))));
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow first-person arms: %s"), *Path);
 }
 
 void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
