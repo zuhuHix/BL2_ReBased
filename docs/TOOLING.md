@@ -477,12 +477,14 @@ overrides had made collision boxes visible across rooftops. The two actor
 placements are roughly 10 x 9 x 4 m; the collection instance is about 5 m per
 side. Their source collision remains enabled. Six cloud
 `Blocking_Plane` placements (four `Mat_CloudLayer_Light`, two
-`Mat_CloudLayer_01`) are hidden as well. The exact `Sanctuary_P`
+`Mat_CloudLayer_01`) are hidden as well. The exact `Sanctuary_Outer`
 `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg` placement that blocked the start
 view is also hidden. Two additional oversized `Sanctuary_Outer`
 `Prop_Garbage.Meshes.BoxLrg` placements (`InterpActor_26` and `InterpActor_33`)
-were identified in the UE viewport and hidden as visual-only blockers; all
-three BoxLrg placements retain their source collision. The remaining 10
+were identified in the UE viewport and hidden as visual-only blockers. `_26`
+and `_33` retain their source collision. `_34` does not: its box encloses the
+game's own `WillowCoopPlayerStart_0`, so it cannot block landed play (see
+DECISIONS.md, 2026-09-23). The remaining 10
 `CollisionCube` placements, including
 the thin concrete street slabs in front of Scooter's garage, render with their
 placed materials. This is a bounded visual artifact policy, not complete

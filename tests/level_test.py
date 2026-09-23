@@ -466,6 +466,14 @@ class SceneTests(unittest.TestCase):
         self.assertFalse(applied)
         self.assertIs(unchanged, pose)
 
+    def test_landed_inactive_collision_is_exact_level_and_source(self):
+        source = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
+        self.assertFalse(m.placement_collision('Sanctuary_Outer', source, {}))
+        self.assertTrue(m.placement_collision('Sanctuary_P', source, {}))
+        self.assertTrue(m.placement_collision(
+            'Sanctuary_Outer', 'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20', {}))
+        self.assertFalse(m.placement_collision('Sanctuary_P', 'Other.Component', {'BlockActors': False}))
+
     def test_game_winding_becomes_outward_obj_face(self):
         # UE game index order opposes the stored outward normal. After the
         # handedness adapter, standard OBJ cross products must agree with it.

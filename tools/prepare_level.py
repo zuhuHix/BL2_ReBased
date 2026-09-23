@@ -124,6 +124,13 @@ MATINEE_FIRST_KEY_TRANSLATION = [16551, -171794, -164]
 MATINEE_FIRST_KEY_ROTATION = [0, 78.75, 0]
 
 
+def placement_collision(level, source, component_props):
+    """Return whether a placed component blocks the host walker."""
+    if (level, source) in LANDED_INACTIVE_COLLISION:
+        return False
+    return bool(component_props.get('BlockActors', True) and component_props.get('CollideActors', True))
+
+
 def apply_matinee_first_key_pose(source, pose):
     """Apply the observed first RelativeToInitial key to one hull pose.
 
@@ -155,6 +162,13 @@ HIDDEN_BOX_LRG_SOURCES = {
     'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
     'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',
     'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20',
+}
+# Sanctuary_Outer InterpActor_34's box (z 2503-2963) encloses the game's own
+# WillowCoopPlayerStart_0 (655.6, -6348.9, 2800), so it cannot be blocking in
+# landed play; which of _Land/_Outer is active is Kismet state we do not run.
+# Only this placement has that evidence; _26 and _33 keep their collision.
+LANDED_INACTIVE_COLLISION = {
+    ('Sanctuary_Outer', 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'),
 }
 # These adjacent Sanctuary_P collision boxes were surfaced with the concrete
 # tile override in the authored level. Their roughly 10 x 9 x 4 m bounds make
@@ -1304,7 +1318,7 @@ class Scene:
                         owner and props(owner).get('bHidden'))
                     actor = {'source': record['path'], 'level': level, 'mesh': mesh_name,
                              'transform': pose, 'materials': overrides, 'static': True,
-                             'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
+                             'collision_enabled': placement_collision(level, record['path'], p),
                              'native_skybox': is_native_skybox,
                              'native_skybox_source': mesh_identity if is_native_skybox else None,
                              # Observed component HiddenGame or owner bHidden,

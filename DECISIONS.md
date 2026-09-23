@@ -1,5 +1,24 @@
 # Decisions and evidence
 
+## 2026-09-23: Sanctuary central-pillar shell hierarchy
+
+The Sanctuary pillar's UModel build 1590 MD5 mesh names the actual 17-bone
+hierarchy, but its `Open.md5anim` hierarchy lists the child tracks under Root.
+The animation frame values for those tracks are local to the **mesh** parents:
+composing them through the mesh hierarchy returns all 17 frame-0 joints to
+their mesh bind positions within 0.11 cm, with quaternion alignment above
+0.999. Composing through the animation header instead placed the front and
+upper TopShell plates thousands of centimetres below the cap.
+
+`prepare_sanctuary_pillar.py` now uses the mesh hierarchy for the bounded
+17-joint `Open` bake and rejects a changed hierarchy or a frame-0 bind-pose
+mismatch. The lower Base and Tile OBJ sections remain byte-identical; only
+the Top and Topinner sections change. UModel remains the external mesh and
+animation payload source. The project still owns package identity, placement,
+material selection and the frame-0 verification. Corrected UE5 host captures
+are under ignored `local/center-pillar/`; original-game visual parity and
+runtime animation remain **UNVERIFIED** pending paired capture review.
+
 ## 2026-09-22: spaced hole probes and target-aware inspection candidates
 
 `prepare_terrain.py` now emits three spaced flagged-hole candidates per
@@ -1190,6 +1209,105 @@ that Kismet or Matinee toggles at runtime is only the saved state. The owner
 flag is applied only to CollisionCube; other meshes with a `bHidden` owner
 are unchanged by this entry. Whether `Master_Black` and `Mat_RoadIceSkybox`
 look right in the original game has not been checked against a capture.
+
+## 2026-09-23: landed Sanctuary centre pillar with its pre-takeoff surface
+
+The centre of the Sanctuary plaza is `SkeletalMeshActor_2` in
+`Sanctuary_Dynamic`, using `Skel_SanctuaryCentralPillar`. The full mesh is the
+tall spire seen after Sanctuary takes flight. Before that, the takeoff Matinee
+has not run, and only the top of the spire shows above the plinth as an angular
+monolith. `tools/prepare_sanctuary_pillar.py` bakes one frame of UModel build
+1590's MD5 export of the mesh and its `Open` animation to OBJ. It places the
+actor at the first world key of the `Spire` group's move track in
+`Episode_8`'s `InterpData_0`, (8424, 632, 544), at the actor's 0.67 scale.
+That key was read in an earlier session and is recorded in the script; it was
+not re-derived for this entry. The reference state is a maintainer's own save
+at *Welcome to Sanctuary* (Plan B, "Install first fuel cell") and its in-game
+capture of the plaza. Neither is tracked.
+
+The surface comes from `Master_SancSpire`. Its instances pass two textures:
+`Color` (`SancSpire_Col`, a low-contrast tint in three horizontal-UV strips,
+selected by `Color_UV_Scale & Offset`) and `Luminosity` (`SancSpire_Lum`,
+three unrelated grayscale detail maps packed in R, G and B). The master's
+`Luminosity_Channel` static component mask defaults to R. Each instance
+overrides it, and the value is not in the tagged properties. We located it by
+searching each instance's trailing static-parameter bytes for the mask node's
+`ExpressionGUID` and reading the four flags before it: Top = G, Base = B,
+Tile = R. `Emissive_Channel` uses the same pattern. Two independent checks
+agree with that reading. First, Base's rasterized UV islands land on B-channel
+detail, while the area outside them is B's flat filler (mean 138 outside vs 59
+inside). Second, the coarse Col-strip/Lum-channel correlation is highest on the
+same diagonal. Topinner samples `StubWhite_Gray` as Luminosity and carries its
+detail in `SancPillarTopInner_Dif`. Our decode of `SancSpire_Lum` matches
+UModel's DDS within 1/255.
+
+What is approximated and UNVERIFIED: the cook stripped every non-parameter
+node of `Master_SancSpire`, so how Color and Luminosity are combined is not
+known. The tool bakes `2 x Luminosity[channel] x Color strip` in 8-bit sRGB
+space per section, chosen so the roughly mid-grey tint (mean about 119) stays
+near neutral. The baked sections then use the mesh's raw UVs. The emissive
+channel is dropped: `p_emissive` defaults to 0 and no instance raises it (Topinner
+sets it to 0 explicitly). The glow is assumed to belong to the takeoff
+sequence; that is not checked. The pose is a frozen frame 0, collision is
+absent, and the placement is compared by eye only. Before this change, the
+host rendered the pillar with the raw Col atlas as diffuse and
+`SancPillar_Emm` as emissive, giving an iridescent surface with coloured
+streaks. The master's default `SancPillar_Emm` was used even though the
+instances override Emissive with `SancSpire_Ems`.
+
+Host result: the UE5 import passes its saved-scene, collision and UV
+verifiers with no material compile failures. The four plaza Inspection
+captures show a weathered grey-blue panelled monolith with no iridescence or
+glow. Compared by eye with the maintainer's capture: the silhouette and
+overall tone agree. The host shows more high-contrast grating and light panels
+on the faces than the original, which could come from the unverified combine
+step, the missing lighting and specular behaviour, or UV placement. That
+difference has not been resolved.
+
+UV fix (same day): the tool wrote UModel's MD5 V as-is, but OBJ V is bottom-up and
+ow-package writes `1 - v` (`src/assets.cpp`). The earlier Base-channel UV-island
+test only matched top-down V, which confirms the MD5 V is top-down. After flipping V,
+close-up host captures show the vertical "SANCTUARY" face and the single grated
+channel seen in the game close-ups; the diamond-grating "shard" look came from
+sampling the texture upside down. Compared by eye only.
+
+Open (pose not solved): close-up game captures show the same `Top` texture details
+("SANCTUARY" lettering, screw hatch, grated channel), so the plaza
+monolith is this pillar. But in the game it stands much taller through the
+plinth hole, and its top block is tilted. No frame of the UModel-exported
+`Open` / `Open_Idle` clips matches; frame 0 equals the bind pose. What was
+checked: our skinning matches UModel's PSK bind pose to within 0.15 units
+across all 5,811 vertices. The Y flip matches UModel's PSKX of
+`SanctuaryPlatformInner` against our reader. Nothing else occupies the space
+above the plinth. What is left to check: the Matinee movement and
+anim-control tracks for `SkeletalMeshActor_2` (the actor is
+`PHYS_Interpolating`), and whether UModel decodes this compressed animation
+correctly.
+
+## 2026-09-23: no walker collision for the BoxLrg on the Sanctuary player start
+
+A maintainer walking the host scene was stuck at spawn and identified the
+blocker in the UE editor as `Sanctuary_Outer` `InterpActor_34`
+`StaticMeshComponent_20`. It is a `Prop_Garbage.Meshes.BoxLrg` at
+(2251, -4296, 2733), yaw -61.875 degrees, with DrawScale 20 and DrawScale3D
+(1.5, 4, 0.5). That makes a box roughly 19 x 34 x 4.6 m spanning z 2503-2963.
+It was already hidden visually on 2026-09-22, with its collision kept.
+`Sanctuary_P`'s own `WillowCoopPlayerStart_0` is at (655.6, -6348.9, 2800),
+inside that box, and the host spawns 100 units above it. A blocking volume on
+the game's own player start cannot be active when the player is in the landed
+town. The component serializes no collision overrides, so it blocks under
+UE3 defaults. So something the host does not run (Kismet level visibility of
+`_Outer` versus `_Land`, or `_Outer`'s `Main_Sequence` Matinee) must remove or
+move it in the original. Which one is not known; we found no record-level
+reference to the actor in `_Outer`'s scene records, but the record schema does
+not cover Kismet variables.
+
+`tools/prepare_level.py` now leaves exactly this (level, source) placement
+without walker collision. The other two hidden BoxLrg placements (`_26`,
+`_33`) keep their collision, since there is no comparable evidence for them.
+`docs/TOOLING.md` previously placed `_34` in `Sanctuary_P`; the manifest records
+it in `Sanctuary_Outer`, and the doc is corrected. Not verified: whether other
+`_Outer` content should be inactive in landed play.
 
 ## 2026-09-16: External extraction is an accelerator, not a replacement
 
