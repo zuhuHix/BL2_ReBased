@@ -2,7 +2,7 @@
 import argparse
 import json
 from pathlib import Path
-from prepare_level import (Scene, apply_outer_shell_policy,
+from prepare_level import (HIDDEN_COLLISION_MESH, Scene, apply_outer_shell_policy,
                            apply_section_material_policies, hidden_visual_mesh,
                            material_index, native_skybox_placement)
 
@@ -26,11 +26,14 @@ def restore_hidden_visual_policy(manifest):
         effective = [actor['materials'][s['slot']]
                      if s['slot'] < len(actor['materials']) and actor['materials'][s['slot']]
                      else s['material'] for s in mesh['sections']]
+        source_hidden = actor.get('source_hidden')
+        if source_hidden is None:
+            # Manifests written before the flag was recorded keep the earlier
+            # result: an unknown flag hides a CollisionCube and nothing else.
+            source_hidden = mesh['source'].rsplit(':', 1)[-1] == HIDDEN_COLLISION_MESH
         actor['hidden_visual'] = hidden_visual_mesh(
             mesh['source'], effective, manifest['materials'], actor['source'],
-            # Manifests written before the flag was recorded keep the earlier
-            # conservative result: treat an unknown source flag as hidden.
-            actor.get('source_hidden', True))
+            source_hidden)
 
 
 def restore_outer_shell_policy(manifest, enabled):
