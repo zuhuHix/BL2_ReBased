@@ -1245,6 +1245,13 @@ on the faces than the original, which could come from the unverified combine
 step, the missing lighting and specular behaviour, or UV placement. That
 difference has not been resolved.
 
+UV fix (same day): the tool wrote UModel's MD5 V as-is, but OBJ V is bottom-up and
+ow-package writes `1 - v` (`src/assets.cpp`). The earlier Base-channel UV-island
+test only matched top-down V, which confirms the MD5 V is top-down. After flipping V,
+close-up host captures show the vertical "SANCTUARY" face and the single grated
+channel seen in the game close-ups; the diamond-grating "shard" look came from
+sampling the texture upside down. Compared by eye only.
+
 Open (pose not solved): close-up game captures show the same `Top` texture details
 ("SANCTUARY" lettering, screw hatch, grated channel), so the plaza
 monolith is this pillar. But in the game it stands much taller through the

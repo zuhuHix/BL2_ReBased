@@ -232,7 +232,9 @@ def bake(mesh_path, animation_path, frame, output, uv_atlas=None):
                 return uv
             su, sv, ou, ov = uv_atlas[slot]
             return (uv[0]*su+ou, uv[1]*sv+ov)
-        lines.extend('vt ' + ' '.join(format(v, '.9g') for v in atlas_uv(verts[i][0]))
+        # UModel's MD5 V is top-down like UE; OBJ V is bottom-up. Flip it the
+        # same way ow-package's own OBJ writer does (src/assets.cpp).
+        lines.extend('vt {} {}'.format(*(format(v, '.9g') for v in (lambda u: (u[0], 1 - u[1]))(atlas_uv(verts[i][0]))))
                      for i in range(len(verts)))
         # MD5 is right handed. Mirroring its Y into UE3 coordinates reverses
         # triangle order. The host OBJ adapter handles the UE5 OBJ convention.
