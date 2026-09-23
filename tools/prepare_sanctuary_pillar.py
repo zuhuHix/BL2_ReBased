@@ -127,7 +127,7 @@ def read_mesh(path):
     return joints, sections
 
 
-def read_animation(path, frame):
+def read_animation(path, frame, mesh_joints):
     text = Path(path).read_text(encoding='utf-8')
     if 'MD5Version 10' not in text or 'numJoints 17' not in text or 'numAnimatedComponents 102' not in text:
         raise ValueError('Unexpected Sanctuary pillar MD5 animation header')
@@ -143,8 +143,15 @@ def read_animation(path, frame):
             raise ValueError('Pillar animation uses an unsupported component layout')
         names.append(name)
         parents.append(int(parent))
-    if len(names) != 17:
-        raise ValueError('Pillar animation joint count changed')
+    if len(names) != 17 or names != [joint[0] for joint in mesh_joints]:
+        raise ValueError('Pillar mesh and animation bones differ')
+    # UModel's MD5 animation hierarchy flattens the child indices to Root,
+    # while its frame transforms are local to the mesh's actual joint parents.
+    # The corrected frame 0 matches every mesh bind joint within 0.11 cm.
+    mesh_parents = [joint[1] for joint in mesh_joints]
+    if parents not in ([-1] + [0] * 16, mesh_parents):
+        raise ValueError('Unexpected pillar animation hierarchy')
+    parents = mesh_parents
     frames = re.search(r'\bnumFrames\s+(\d+)', text)
     if frames is None or not 0 <= frame < int(frames.group(1)):
         raise ValueError('Pillar animation frame is out of range')
@@ -213,9 +220,13 @@ def bake_spire_diffuse(color_path, luminosity_path, channel, atlas, output_path)
 
 def bake(mesh_path, animation_path, frame, output, uv_atlas=None):
     joints, sections = read_mesh(mesh_path)
-    names, world = read_animation(animation_path, frame)
-    if names != [joint[0] for joint in joints]:
-        raise ValueError('Pillar mesh and animation bones differ')
+    _, world = read_animation(animation_path, frame, joints)
+    if frame == 0:
+        for joint, (position, orientation) in zip(joints, world):
+            distance = math.dist(joint[2], position)
+            alignment = abs(sum(a*b for a, b in zip(joint[3], orientation)))
+            if distance > 0.15 or alignment < 0.999:
+                raise ValueError(f'Pillar animation bind pose differs at {joint[0]}')
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     report = []
@@ -392,4 +403,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
