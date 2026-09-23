@@ -780,7 +780,24 @@ class SceneTests(unittest.TestCase):
         # The cube's own collision material, or an unresolved one, stays hidden.
         self.assertTrue(m.hidden_visual_mesh(cube, ['collision'], cube_materials, 'SMC_1', False))
         self.assertTrue(m.hidden_visual_mesh(cube, ['missing'], cube_materials, 'SMC_1', False))
+        # Any static placement the source hides is not drawn, whatever its mesh;
+        # an InterpActor's flag may be toggled at runtime, so it is not applied.
+        low = 'Sanctuary_P:Prop_SanctuaryRoad.Mesh.SanctuarySidewalk_ParkingLot_Low'
+        smc = 'TheWorld.PersistentLevel.StaticMeshCollectionActor_24.StaticMeshActor_SMC_288'
+        self.assertTrue(m.hidden_visual_mesh(low, ['concrete'], cube_materials, smc, True))
+        self.assertFalse(m.hidden_visual_mesh(low, ['concrete'], cube_materials, smc, False))
+        self.assertFalse(m.hidden_visual_mesh(
+            low, ['concrete'], cube_materials,
+            'TheWorld.PersistentLevel.InterpActor_4.StaticMeshComponent_5', True))
         from refresh_materials import restore_hidden_visual_policy
+        legacy = {'actors': [{'source': smc, 'mesh': 'low', 'materials': [], 'hidden_visual': True},
+                             {'source': smc, 'mesh': 'low', 'materials': [],
+                              'source_hidden': True, 'hidden_visual': False}],
+                  'meshes': {'low': {'source': low, 'sections': [{'slot': 0, 'material': 'concrete'}]}},
+                  'materials': cube_materials}
+        restore_hidden_visual_policy(legacy)
+        # Without a recorded flag, only a CollisionCube is presumed hidden.
+        self.assertEqual([a['hidden_visual'] for a in legacy['actors']], [False, True])
         manifest = {'actors': [{'source': 'A', 'mesh': 'cube', 'materials': ['concrete'],
                                 'source_hidden': False, 'hidden_visual': True},
                                {'source': 'B', 'mesh': 'cube', 'materials': ['concrete'],

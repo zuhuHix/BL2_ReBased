@@ -363,6 +363,14 @@ def hidden_visual_mesh(identity, effective_materials=None, materials=None, sourc
         return True
     if (identity, source) in HIDDEN_COLLISION_PLACEMENTS:
         return True
+    if source_hidden and '.InterpActor_' not in (source or ''):
+        # A static placement whose component serializes HiddenGame (or whose
+        # owner serializes bHidden) is never drawn in game. Sanctuary_Px's
+        # merged building shells and the _Low sidewalk/parking-lot proxies
+        # are such placements; rendered, they lay roof atlases over the street
+        # in front of Scooter's. An InterpActor's flag is only its saved state
+        # (Kismet or Matinee can toggle it), so movers keep the rules below.
+        return True
     if mesh == HIDDEN_COLLISION_MESH:
         # CollisionCube is usually hidden collision geometry, but not always:
         # six Sanctuary_Land placements tile the Mati_FloorConcrete01 street

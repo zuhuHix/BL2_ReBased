@@ -154,13 +154,17 @@ for source in scene['actors']:
             if section is scene['meshes'][source['mesh']]['sections'][0]:
                 verified_hidden_visual += 1
             hidden_source = scene['meshes'][source['mesh']]['source']
-            assert hidden_source.endswith((
+            # A static placement the source hides (HiddenGame / owner bHidden)
+            # may carry any mesh; everything else must be a known helper.
+            source_hidden_static = (source.get('source_hidden')
+                                    and '.InterpActor_' not in source['source'])
+            assert source_hidden_static or hidden_source.endswith((
                 'Common_Meshes.Blocking.Blocking_Cube',
                 'Common_Meshes.CollisionCube',
                 'Common_Meshes.Blocking.Blocking_Plane',
                 'Common_Meshes.BasePlane_256x128',
                 'Prop_Garbage.Meshes.BoxLrg'))
-            if hidden_source.endswith('Prop_Garbage.Meshes.BoxLrg'):
+            if hidden_source.endswith('Prop_Garbage.Meshes.BoxLrg') and not source_hidden_static:
                 assert source['source'] in {
                     'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
                     'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',

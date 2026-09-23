@@ -487,8 +487,12 @@ game's own `WillowCoopPlayerStart_0`, so it cannot block landed play (see
 DECISIONS.md, 2026-09-23). The remaining 10
 `CollisionCube` placements, including
 the thin concrete street slabs in front of Scooter's garage, render with their
-placed materials. This is a bounded visual artifact policy, not complete
-collision or material parity.
+placed materials. Any other static (non-`InterpActor`) placement whose
+component sets `HiddenGame` or whose owner sets `bHidden` is hidden the same
+way, collision kept. Nearly all of these are `Sanctuary_Px` low-detail shells
+and `_Low` sidewalk proxies that otherwise cover the street with roof atlases
+(DECISIONS.md, 2026-09-23). This is a bounded visual artifact policy, not
+complete collision or material parity.
 
 Unlit Material v1 colors now feed Emissive Color when no explicit emissive
 texture exists. The saved-scene verifier reports `verified_unlit_materials`.
