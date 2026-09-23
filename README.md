@@ -49,6 +49,8 @@ Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md).
 
 ## What you'd get (eventually)
 
+**The first milestone:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in UE5. Everything below comes after that.
+
 When it's done (and "done" is years away, see the roadmap, this isn't a remaster, not a remake) here's what a new machine actually buys you:
 
 - **Co-op that works.** No SHiFT, no forced account linking, no hardlock on the title screen.
@@ -62,13 +64,25 @@ When it's done (and "done" is years away, see the roadmap, this isn't a remaster
 
 ## Where things stand
 
-*Updated 2026-09-15.*
+*Updated 2026-09-23.*
 
-Three maps load and you can fly around them as frozen scenery in UE5: **Ash**, **Sanctuary**, and **Southpaw Factory**. Real textures, no guns, no enemies, no story. This is the museum-tour phase right now, but I'm getting there.
+Okay, Sanctuary is starting to actually look like Sanctuary.
 
-The engine reads all 2,008 packages from a full BL2 install (base game plus every DLC), no errors. Property decoding is byte-for-byte verified against the real game for the code packages. Sanctuary's native `Sky_Dome` now renders a daytime gradient with cloud bands built from its own textures and parameters (a labeled approximation; the stripped sky graph is not decoded), and the city's outer hull can be imported opt-in; some white/green surfaces, walking, and full visual parity are still open, and it runs slowly. Terrain topology and host collision are imported for Sanctuary; details in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md). 79 maps still to load.
+Three maps load in UE5 and you can fly around them as frozen scenery: **Ash**, **Sanctuary** and **Southpaw Factory**. There are still no guns, no enemies and no story yet.
 
-**Next up:** getting Sanctuary to actually look right (the remaining white/green surfaces, BSP floors, terrain blending, better collision coverage) plus native sky parity. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
+Since the last update, Sanctuary got a lot of love:
+
+- **The ground finally looks like ground.** Terrain layer blending is recovered, and BSP floors are coming through, backed by a new calibration check so they stay right.
+- **The moon base has textures now**, and the moon in the sky is scaled from the game's own `p_moonColor` value instead of a number I made up.
+- **The big central structure is fixed.** The pillar shells sit where they should and their textures aren't flipped anymore.
+- **Stuff that shouldn't be there is gone.** Every placement the game marks as hidden is now hidden, and oversized invisible blockers keep their collision without covering the city.
+- **The sky** still uses `Sky_Dome`'s own textures and settings (a labeled approximation, since the stripped sky graph isn't decoded yet).
+
+Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. The first native-function dispatch stubs are in too, a tiny first step toward Phase 2 (actually running the game's code).
+
+Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
+
+**Next up:** finishing Sanctuary's last visual gaps, then Maya: movement, a few guns and Phaselock. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
 
 <details>
 <summary><b>Show me the numbers behind that</b></summary>
@@ -79,7 +93,7 @@ Every claim above comes from a dated verification record. Automated checks are r
 | Milestone | Evidence |
 |---|---|
 | Phase 0 gated 2026-09-10 | Reader reads 2,008 / 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
-| Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a Sanctuary `Sky_Dome` sky approximation built from the dome's own inputs (UE5 atmosphere kept for ambient light), an opt-in outer-hull import and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`); an in-game Tab list switches between imported scenes. Walking is an opt-in placeholder verified on Sanctuary only. Sanctuary runs at 12–15 FPS on an integrated-GPU laptop, GPU-bound in TSR. Sanctuary terrain floors are imported with corroborated topology and walkable triangle collision. Not done: native sky graph decode and parity, terrain layer blending, BSP, skeletal meshes, lightmaps, real material graphs, full collision, 79 more maps. |
+| Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a Sanctuary `Sky_Dome` sky approximation built from the dome's own inputs (UE5 atmosphere kept for ambient light), an opt-in outer-hull import and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`); an in-game Tab list switches between imported scenes. Walking is an opt-in placeholder verified on Sanctuary only. Sanctuary runs at 12–15 FPS on an integrated-GPU laptop, GPU-bound in TSR. Sanctuary terrain floors are imported with corroborated topology and walkable triangle collision. Not done: native sky graph decode and parity, skeletal meshes, lightmaps, real material graphs, full collision, 79 more maps. |
 
 Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md) · [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md) · [collision and walking](COLLISION_WALKING_VERIFICATION.md) · [performance / in-game selector](docs/verification/PERFORMANCE.md) · [umodel cross-check](docs/verification/UMODEL_CROSSCHECK.md) · [object-dump cross-check](docs/verification/BLCMM_DUMP_CROSSCHECK.md) · [BSP texture axes](docs/verification/BSP_TEXTURE_AXES.md).
 
@@ -96,7 +110,7 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | Phase | What you'll be able to do | Time (est.) | Status |
 |:--|:--|:--|:--|
 | **0 · Read the files** | The engine can open every BL2 file | ~3–6 weeks | Done (took a week) |
-| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. Museum tour, no enemies, no guns. Full 82-map coverage comes later, in phase 5 | ~2–4 months | In progress (1 of 82 targeted for now) |
+| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | ~2–4 months | In progress (1 of 82 targeted for now) |
 | **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | +3–6 months | Not started |
 | **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | +6–12 months | Not started |
 | **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions reverse-engineered by watching the game (this is the mountain). This is the vertical slice | +1–2 years | Not started |
