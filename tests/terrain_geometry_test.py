@@ -131,12 +131,13 @@ class GeometryTests(unittest.TestCase):
             component_obj(terrain(), geometry['section'], [[3, 0, False]], [1, 1])
 
     def test_runtime_probe_candidates(self):
-        # 12 x 12 patches split into two components; a hole block at (5..6, 5..6).
+        # 12 x 12 patches split into two components; a large hole block gives
+        # the spaced runtime selector several independent candidates.
         w = 13
         flat = {'width': w, 'height': w, 'heights': [32768] * (w * w), 'flags': [0] * (w * w)}
-        for y in (5, 6):
-            for x in (5, 6):
-                flat['flags'][y * w + x] = 1
+        hole_area = {(x, y) for y in range(3, 10) for x in range(3, 10)}
+        for x, y in hole_area:
+            flat['flags'][y * w + x] = 1
         cells = [(x, y) for y in range(12) for x in range(12) if not flat['flags'][y * w + x] & 1]
         components = [{'section': [0, 0, 6, 12], 'cells': [[x, y, False] for x, y in cells if x < 6]},
                       {'section': [6, 0, 6, 12], 'cells': [[x, y, False] for x, y in cells if x >= 6]}]
@@ -146,10 +147,19 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(len(probes['stands']), 6)
         chosen = [tuple(s['cell']) for s in probes['stands']]
         for i, a in enumerate(chosen):
-            self.assertNotIn(a, [(5, 5), (5, 6), (6, 5), (6, 6)])
+            self.assertNotIn(a, hole_area)
             for b in chosen[i + 1:]:
                 self.assertGreaterEqual(max(abs(a[0] - b[0]), abs(a[1] - b[1])), 4)
-        self.assertIn(tuple(probes['hole']['cell']), [(5, 5), (5, 6), (6, 5), (6, 6)])
+        self.assertIn(tuple(probes['hole']['cell']), hole_area)
+        self.assertEqual(probes['holes'], 49)
+        self.assertEqual(probes['hole'], probes['hole_candidates'][0])
+        self.assertEqual(probes['hole_probe_policy'], 'three_spaced_adjacent_cells_v1')
+        self.assertEqual(len(probes['hole_candidates']), 3)
+        hole_cells = [tuple(h['cell']) for h in probes['hole_candidates']]
+        for i, a in enumerate(hole_cells):
+            self.assertIn(a, hole_area)
+            for b in hole_cells[i + 1:]:
+                self.assertGreaterEqual(max(abs(a[0] - b[0]), abs(a[1] - b[1])), 4)
         self.assertEqual(probes['stand']['surface'], [300.0, 300.0])
         self.assertEqual(probes['stand']['point'][2], 450.0)
         self.assertEqual(probes['seam']['cells'][0][0] + 1, probes['seam']['cells'][1][0])

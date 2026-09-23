@@ -1,5 +1,63 @@
 # Decisions and evidence
 
+## 2026-09-22: spaced hole probes and target-aware inspection candidates
+
+`prepare_terrain.py` now emits three spaced flagged-hole candidates per
+terrain (`hole_probe_policy=three_spaced_adjacent_cells_v1`,
+`hole_candidates`) instead of a single one, so one prop or building floor
+sitting over the chosen cell cannot hide the whole runtime check. The legacy
+`hole` object is still emitted as the first candidate, and regenerating
+Sanctuary's `terrain-runtime.json` left all eight first candidates identical
+to the previously recorded cells, so this is a strict superset rather than a
+change to existing evidence. `TerrainWalkingTest.cpp` walks the candidate
+list and falls back to the single `hole` object for scenes prepared before
+this change. Endpoint assertions are still reported separately from the
+original-point band trace and are explicitly not treated as original-hole
+proof; whether any of these cells is a hole in the original game remains
+UNVERIFIED pending matched screenshots.
+
+`prepare_inspection_views.py` adds host-side candidate poses that look back
+at a recorded terrain stand point for the obstructed Terrain_10 view
+(`target_trace_candidate_v1`), and `InspectionTest.cpp` selects the first
+candidate whose target trace reaches the requested actor, warning and
+advancing when one is obstructed. The offsets are deliberately broad and
+symmetric host inspection candidates, not recovered original-game camera
+coordinates.
+
+`tools/diagnose_sanctuary_geometry.py` is a new read-only diagnostic that
+resolves scene ownership, per-section effective material, terrain layer
+provenance and camera-ray coverage gaps from the prepared manifest. It
+reports; it does not modify host geometry. It has not yet produced a
+confirmed cause for the Scooter-street opening or the bright snow-view
+surface.
+
+Verification: UE5 `OpenWillowEditor` compiles with both test changes; the
+runtime automation tests could not be run in this worktree because the
+Sanctuary map is not imported here. ctest 6/6 and 154 focused Python tests
+passed.
+
+## 2026-09-22: bounded dispositions for Sanctuary null mesh sections
+
+The installed Sanctuary payload assigns material index zero (`None`) to 15
+placed sections: six `ResistanceBanner_03` sections, four `Blocking_Cube`
+sections, three `VendingIcon` sections and two `SancBuild1_Trim` sections.
+`tools/prepare_level.py` now records exact, package-scoped dispositions rather
+than treating these as unresolved path lookups. The six banner companion
+sections use the observed `Mati_ResistanceBanners_Static` from the sibling
+`ResistanceBannerFrame_02` mesh; the two trim sections reuse the observed
+`Mati_SancBuild1a_04` slot-0 material, corroborated by `SancBuild1Base_Trim`.
+The three vending icons retain a named host neutral fallback. The four
+unassigned blocking helpers retain their observed collision body and the
+existing render-only hide policy for the exact `InterpActor_19/55/56/57`
+placements. `refresh_materials.py` reapplies these rules to older manifests.
+
+These are host-side material/visibility dispositions, not native bindings or
+shader reconstruction. `audit_scene_materials.py` reports all 15 as explicit
+policy rows with `visual_status=UNVERIFIED` and zero unresolved null sections;
+matched original-game screenshots remain required for visual acceptance. See
+`docs/verification/SANCTUARY_SECTION_MATERIAL_ASSIGNMENTS.md` and
+`tests/material_assignment_test.py`.
+
 ## 2026-09-18: Material inference honesty fixes (stale metadata, auxiliary suffixes)
 
 Two game-free fixes from a code-only pipeline review of zuhu's Sanctuary
@@ -1091,6 +1149,47 @@ pass against the final imported map. Direct hole evidence remains 3/8 and
 visual review still finds unresolved artifacts. The maintainer deferred
 matched original-game captures and item 6 calibration to a later pass.
 See [the refresh record](docs/verification/SANCTUARY_TERRAIN_BSP_REFRESH.md).
+
+## 2026-09-22: hide CollisionCube placements by their observed hidden flags
+
+The 2026-09-14 render-only policy hid all 94 `Common_Meshes.CollisionCube`
+placements by mesh name. That removed the street in front of Scooter's
+garage: six `Sanctuary_Land` `StaticMeshCollectionActor_38` placements
+(`SMC_544/603/608/615/617/618`) are 1536x1536 uu `Mati_FloorConcrete01`
+slabs with top z = 2720, and 8 of the 11 floating liquid decals in the
+scene sit 8 uu above them. Nothing else in the manifest covers that area.
+
+`prepare_level.py` now records `source_hidden` for each placement: whether
+the component serializes `HiddenGame`, or its owner actor serializes
+`bHidden`. A CollisionCube is hidden when `source_hidden` is set, or when none
+of its effective materials resolves to a known source other than the cube's
+own `Common_Meshes.Collision.Mat_Collision`. In the regenerated Sanctuary
+manifest, 81 cubes stay hidden: 65 set `HiddenGame` (one also has
+`Mati_FogsheetBlack`) and 16 belong to `bHidden` `InterpActor`s. Those
+`InterpActor`s include the 13 `Mati_SlateRock8xTileWarm` cubes that are
+parked about 350,000 uu away. 13 cubes render: eight `Mati_FloorConcrete01`,
+three `Mati_SancBaseConcrete_tile02`, one `Master_Black` sheet
+(1000x70x0.05 scale, shadows and lighting disabled) and one
+`Mat_RoadIceSkybox` piece. `refresh_materials.py` treats a manifest without
+`source_hidden` as hidden, which keeps the earlier result for older
+manifests.
+
+Verified: decoded flags and resolved materials for all 94 placements, and
+synthetic tests of the rule. Comparing the regenerated manifest with the
+previous one: exactly 13 placements change, all CollisionCube, from hidden
+to rendered. The placement count (4469) and issue count (185) are unchanged.
+The UE5 import and its saved-scene, collision and UV verifiers pass. An
+ad-hoc Inspection capture from (1500, -6400, 2900) toward the
+`ScootersGarageSign` shows a continuous concrete street where the sky showed
+through before. The run reported one camera-rotation tolerance error for the
+fractional ad-hoc pitch; the screenshots were still captured. The layout
+matches a maintainer's original-game capture of the same spot. The dark puddle
+stain visible in that capture does not appear in the host; the liquid decal
+planes above the slabs were not investigated in this pass. Not verified: in UE3, `bHidden` on an owner
+that Kismet or Matinee toggles at runtime is only the saved state. The owner
+flag is applied only to CollisionCube; other meshes with a `bHidden` owner
+are unchanged by this entry. Whether `Master_Black` and `Mat_RoadIceSkybox`
+look right in the original game has not been checked against a capture.
 
 ## 2026-09-16: External extraction is an accelerator, not a replacement
 

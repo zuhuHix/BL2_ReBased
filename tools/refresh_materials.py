@@ -2,8 +2,9 @@
 import argparse
 import json
 from pathlib import Path
-from prepare_level import (Scene, apply_outer_shell_policy, hidden_visual_mesh, material_index,
-                           native_skybox_placement)
+from prepare_level import (Scene, apply_outer_shell_policy,
+                           apply_section_material_policies, hidden_visual_mesh,
+                           material_index, native_skybox_placement)
 
 
 def restore_sky_policy(manifest):
@@ -26,7 +27,10 @@ def restore_hidden_visual_policy(manifest):
                      if s['slot'] < len(actor['materials']) and actor['materials'][s['slot']]
                      else s['material'] for s in mesh['sections']]
         actor['hidden_visual'] = hidden_visual_mesh(
-            mesh['source'], effective, manifest['materials'], actor['source'])
+            mesh['source'], effective, manifest['materials'], actor['source'],
+            # Manifests written before the flag was recorded keep the earlier
+            # conservative result: treat an unknown source flag as hidden.
+            actor.get('source_hidden', True))
 
 
 def restore_outer_shell_policy(manifest, enabled):
@@ -81,6 +85,13 @@ def main():
             raise ValueError('Material identity changed: ' + material['source'])
         if number % 25 == 0:
             print(f'Refreshed {number}/{len(manifest["materials"])} materials', flush=True)
+    for mesh in manifest['meshes'].values():
+        package = mesh['source'].split(':', 1)[0]
+        apply_section_material_policies(
+            mesh['source'], mesh['sections'],
+            material_for_path=lambda path, package=package: scene.material(
+                (package, material_index(scene.load(package), path))),
+            material_source_for_id=lambda name: scene.materials[name]['source'])
     manifest['materials'] = {**scene.materials, **terrain_blends}
     restore_sky_policy(manifest)
     restore_outer_shell_policy(manifest, args.outer_shell)

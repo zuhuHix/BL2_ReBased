@@ -22,6 +22,10 @@ from terrain_decode import (decode_alpha_maps, decode_component, decode_componen
 
 TERRAIN_CLASSES = ('Engine.Terrain', 'Engine.TerrainComponent')
 COLLISION_POLICY = 'native_strip_triangle_mesh_v1'
+# Keep more than one hole candidate per terrain so a single prop or building
+# floor cannot hide the whole runtime check.  Candidate endpoints are still
+# host diagnostics; they never establish the original game's hole behaviour.
+HOLE_PROBE_COUNT = 3
 
 # This is a local evidence contract.  It is intentionally stricter than the
 # old dominant-alpha approximation: a weighted graph is emitted only when a
@@ -507,8 +511,9 @@ def runtime_probes(terrain, pose, path, components):
         return chosen
 
     stands = interior(list(cells), lambda c: c in cells, count=6)
-    hole = interior([h for h in holes if any(n in cells for n in neighbours(*h))], lambda c: c not in cells)
-    hole = hole[0] if hole else None
+    hole_candidates = interior(
+        [h for h in holes if any(n in cells for n in neighbours(*h))],
+        lambda c: c not in cells, count=HOLE_PROBE_COUNT)
     seam = None
     sections = [g['section'] for g in components]
 
@@ -532,9 +537,14 @@ def runtime_probes(terrain, pose, path, components):
                 break
         if seam:
             break
-    return {'source': path, 'cells': len(cells), 'holes': len(holes), 'stand': probe(*stands[0]),
-            'stands': [probe(*c) for c in stands],
-            'hole': probe(*hole) if hole else None, 'seam': seam}
+    hole_probes = [probe(*c) for c in hole_candidates]
+    return {'source': path, 'cells': len(cells), 'holes': len(holes),
+            'hole_probe_policy': 'three_spaced_adjacent_cells_v1',
+            'stand': probe(*stands[0]), 'stands': [probe(*c) for c in stands],
+            # Keep the first object for older local scenes and readers.  New
+            # runtime checks consume the complete spaced candidate list.
+            'hole': hole_probes[0] if hole_probes else None,
+            'hole_candidates': hole_probes, 'seam': seam}
 
 
 def main():

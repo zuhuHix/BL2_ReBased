@@ -113,6 +113,7 @@ OUTER_SHELL_MESHES = {'Prop_Skybox.Meshes.SanctuarySky',
 OUTER_SHELL_OVERRIDE_SUFFIX = '_Teleported'
 HIDDEN_VISUAL_MESH = 'Common_Meshes.Blocking.Blocking_Cube'
 HIDDEN_COLLISION_MESH = 'Common_Meshes.CollisionCube'
+HIDDEN_COLLISION_MATERIAL = 'Common_Meshes.Collision.Mat_Collision'
 HIDDEN_CLOUD_MESH = 'Common_Meshes.Blocking.Blocking_Plane'
 
 # Cheap, opt-in Matinee placement experiment for the Sanctuary hull. This is
@@ -146,7 +147,27 @@ HIDDEN_CLOUD_MATERIALS = {'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light',
                           'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'}
 HIDDEN_TRANSITION_MESH = 'Common_Meshes.BasePlane_256x128'
 HIDDEN_TRANSITION_MATERIAL = 'Common_Materials.Environment.WorldTransition'
-HIDDEN_FOREGROUND_SOURCE = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
+# These three oversized BoxLrg placements are environmental blocking volumes,
+# not authored props. Preserve their source collision while hiding only their
+# visuals; InterpActor_26 and _33 were confirmed in the UE viewport.
+HIDDEN_BOX_LRG_MESH = 'Prop_Garbage.Meshes.BoxLrg'
+HIDDEN_BOX_LRG_SOURCES = {
+    'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
+    'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',
+    'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20',
+}
+# These adjacent Sanctuary_P collision boxes were surfaced with the concrete
+# tile override in the authored level. Their roughly 10 x 9 x 4 m bounds make
+# them collision helpers, not rooftop render meshes; keep their source
+# collision while hiding only these exact visual placements.
+HIDDEN_COLLISION_PLACEMENTS = {
+    ('Sanctuary_P:Common_Meshes.CollisionCube',
+     'TheWorld.PersistentLevel.StaticMeshActor_372.StaticMeshComponent_2968'),
+    ('Sanctuary_P:Common_Meshes.CollisionCube',
+     'TheWorld.PersistentLevel.StaticMeshActor_690.StaticMeshComponent_2968'),
+    ('Sanctuary_P:Common_Meshes.CollisionCube',
+     'TheWorld.PersistentLevel.StaticMeshCollectionActor_27.StaticMeshActor_SMC_544'),
+}
 # This optimized Sanctuary material is an HLS master: its Color and Luminosity
 # texture parameters are combined by a stripped static permutation resource.
 # Feeding the luminosity atlas directly to Base Color produces the observed
@@ -318,16 +339,28 @@ def apply_outer_shell_policy(actor, mesh_identity, sections, materials, enabled)
         actor.pop('outer_shell_replaced', None)
 
 
-def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None):
+def hidden_visual_mesh(identity, effective_materials=None, materials=None, source=None,
+                       source_hidden=None):
     """Return whether an observed helper has no recoverable host-side visual."""
     mesh = identity.rsplit(':', 1)[-1]
-    if source == HIDDEN_FOREGROUND_SOURCE:
-        # This exact observed BoxLrg placement is a developer blocking volume
-        # directly in the Sanctuary start view, despite carrying a prop mesh.
+    if mesh == HIDDEN_BOX_LRG_MESH and source in HIDDEN_BOX_LRG_SOURCES:
+        # These exact observed BoxLrg placements are blocking volumes despite
+        # carrying a prop mesh; keep their collision, but do not render them.
+        return True
+    if (identity, source) in HIDDEN_COLLISION_PLACEMENTS:
         return True
     if mesh == HIDDEN_COLLISION_MESH:
-        # CollisionCube is source collision geometry, not a renderable prop.
-        return True
+        # CollisionCube is usually hidden collision geometry, but not always:
+        # six Sanctuary_Land placements tile the Mati_FloorConcrete01 street
+        # in front of Scooter's garage and serialize no hidden flag. The three
+        # exact oversized Sanctuary_P boxes above are hidden despite their
+        # concrete material override. For all others, obey source hidden flags
+        # or render only a resolved material other than Mat_Collision.
+        if source_hidden:
+            return True
+        sources = [(materials or {}).get(name, {}).get('source', '').rsplit(':', 1)[-1]
+                   for name in effective_materials or ()]
+        return not any(s and s != HIDDEN_COLLISION_MATERIAL for s in sources)
     if mesh == HIDDEN_VISUAL_MESH:
         # Blocking_Cube is an observed placement helper even when an
         # unreliable diffuse override was attached to it.
@@ -459,6 +492,132 @@ def material_index(records, path):
     if len(matches) != 1:
         raise ValueError('Material identity is missing or ambiguous: ' + path)
     return matches[0]
+
+
+# Four source mesh families have an observed material index of zero (None) in
+# the installed payload. Keep those observations explicit instead of letting
+# the host silently use its default material. The two real-material
+# rules are narrow and only cover the exact section/mesh pairs below; they are
+# not a general "nearest material" heuristic.
+SECTION_MATERIAL_POLICY_VERSION = 'sanctuary_unassigned_sections_v1'
+RESISTANCE_BANNER_STATIC_MATERIAL = (
+    'Prop_RolandsResistance.Materials.Mati_ResistanceBanners_Static')
+
+
+def _section_for_slot(sections, slot):
+    matches = [section for section in sections if section.get('slot') == slot]
+    if len(matches) != 1:
+        raise ValueError(f'Expected exactly one mesh section slot {slot}')
+    return matches[0]
+
+
+def apply_section_material_policies(mesh_identity, sections, material_for_path=None,
+                                    material_source_for_id=None):
+    """Apply the four observed Sanctuary section dispositions.
+
+    ``material_for_path`` is supplied by the package-backed preparer and lets
+    the banner rule resolve its explicitly observed companion material.  The
+    refresh path supplies the same callback so older manifests are upgraded
+    deterministically.  Null source indices stay recorded in
+    ``material_policy.native_material_index``; a policy is not evidence that
+    the original shader graph or final in-game appearance has been recovered.
+    """
+    # These are Sanctuary-specific observations. Do not apply them to an
+    # unrelated map that happens to reuse a common package object name.
+    supported = {
+        'Sanctuary_P:Prop_RolandsResistance.Mesh.ResistanceBanner_03',
+        'Sanctuary_Px:Env_Sanctuary.Meshes.SancBuild1_Trim',
+        'Sanctuary_P:prop_signs.VendingIcon',
+        'Sanctuary_P:Common_Meshes.Blocking.Blocking_Cube'}
+    if mesh_identity not in supported:
+        return sections
+    short_name = mesh_identity.rsplit(':', 1)[-1]
+
+    if short_name == 'Prop_RolandsResistance.Mesh.ResistanceBanner_03':
+        source = _section_for_slot(sections, 0)
+        target = _section_for_slot(sections, 1)
+        observed = source.get('material')
+        if not observed:
+            raise ValueError('ResistanceBanner_03 observed source material is missing')
+        expected = (material_for_path(RESISTANCE_BANNER_STATIC_MATERIAL)
+                    if material_for_path is not None else target.get('material'))
+        if not expected:
+            raise ValueError('ResistanceBanner_03 static companion material is unavailable')
+        existing_policy = target.get('material_policy')
+        if target.get('material') not in (None, expected) or (
+                target.get('material') is not None and
+                (not isinstance(existing_policy, dict) or
+                 existing_policy.get('method') != 'observed_companion_material_v1')):
+            raise ValueError('ResistanceBanner_03 section 1 has an unexpected material')
+        target['material'] = expected
+        target['material_policy'] = {
+            'version': SECTION_MATERIAL_POLICY_VERSION,
+            'method': 'observed_companion_material_v1',
+            'status': 'partial_unverified',
+            'native_material_index': 0,
+            'material_source': RESISTANCE_BANNER_STATIC_MATERIAL,
+            'evidence': ('Section 1 is eight source triangles on the two banner-end '
+                         'strips; ResistanceBannerFrame_02 observes the same static '
+                         'banner material.')}
+        return sections
+
+    if short_name == 'Env_Sanctuary.Meshes.SancBuild1_Trim':
+        source = _section_for_slot(sections, 0)
+        target = _section_for_slot(sections, 1)
+        observed = source.get('material')
+        if not observed:
+            raise ValueError('SancBuild1_Trim observed source material is missing')
+        expected_source = 'Sanctuary_P:Prop_SancBuildings.Material.Mati_SancBuild1a_04'
+        if material_source_for_id is not None and material_source_for_id(observed) != expected_source:
+            raise ValueError('SancBuild1_Trim section 0 is not Mati_SancBuild1a_04')
+        existing_policy = target.get('material_policy')
+        if target.get('material') not in (None, observed) or (
+                target.get('material') is not None and
+                (not isinstance(existing_policy, dict) or
+                 existing_policy.get('method') != 'same_mesh_observed_material_v1')):
+            raise ValueError('SancBuild1_Trim section 1 has an unexpected material')
+        target['material'] = observed
+        target['material_policy'] = {
+            'version': SECTION_MATERIAL_POLICY_VERSION,
+            'method': 'same_mesh_observed_material_v1',
+            'status': 'partial_unverified',
+            'native_material_index': 0,
+            'source_slot': 0,
+            'evidence': ('Section 0 observes Mati_SancBuild1a_04; the sibling '
+                         'SancBuild1Base_Trim also uses that material for every '
+                         'render section.')}
+        return sections
+
+    if short_name == 'prop_signs.VendingIcon':
+        target = _section_for_slot(sections, 0)
+        if target.get('material') is not None:
+            raise ValueError('VendingIcon source section unexpectedly has a material')
+        target['material_policy'] = {
+            'version': SECTION_MATERIAL_POLICY_VERSION,
+            'method': 'host_neutral_fallback_v1',
+            'status': 'explicit_host_fallback',
+            'native_material_index': 0,
+            'fallback': 'M_OpenWillowNeutralFallback',
+            'fallback_rgb': [0.5, 0.5, 0.5],
+            'evidence': ('The source mesh is a 32-triangle icon with material '
+                         'index 0/None and no observed mesh material.')}
+        return sections
+
+    if short_name == 'Common_Meshes.Blocking.Blocking_Cube':
+        target = _section_for_slot(sections, 0)
+        if target.get('material') is not None:
+            raise ValueError('Blocking_Cube source section unexpectedly has a material')
+        target['material_policy'] = {
+            'version': SECTION_MATERIAL_POLICY_VERSION,
+            'method': 'helper_hidden_collision_only_v1',
+            'status': 'observed_helper_policy',
+            'native_material_index': 0,
+            'collision_body': 'Common_Meshes.Blocking.Blocking_Cube.RB_BodySetup_1',
+            'evidence': ('The source mesh is material index 0/None and carries the '
+                         'observed convex blocking body; placed helpers remain hidden.')}
+        return sections
+
+    return sections
 
 
 def cooked_texture_references(payload, data):
@@ -1042,6 +1201,11 @@ class Scene:
                 (self.output / file).write_text(''.join(header + group))
                 sections.append({'slot': i, 'file': file,
                                  'material': self.material(self.resolve(key[0], section['material_index']))})
+            apply_section_material_policies(
+                self.identity(key), sections,
+                material_for_path=lambda path: self.material(
+                    (key[0], material_index(self.load(key[0]), path))),
+                material_source_for_id=lambda name: self.materials[name]['source'])
             collision = {'status': 'absent', 'hulls': []}
             body = self.resolve(key[0], data.get('body_setup', 0))
             if body:
@@ -1135,14 +1299,21 @@ class Scene:
                         for material_name in effective_materials:
                             if material_name in self.materials:
                                 self.materials[material_name]['two_sided'] = True
+                    owner = records.get(record['outer'])
+                    source_hidden = bool(p.get('HiddenGame')) or bool(
+                        owner and props(owner).get('bHidden'))
                     actor = {'source': record['path'], 'level': level, 'mesh': mesh_name,
                              'transform': pose, 'materials': overrides, 'static': True,
                              'collision_enabled': p.get('BlockActors', True) and p.get('CollideActors', True),
                              'native_skybox': is_native_skybox,
                              'native_skybox_source': mesh_identity if is_native_skybox else None,
+                             # Observed component HiddenGame or owner bHidden,
+                             # kept so refresh_materials.py can re-apply the
+                             # same hidden-visual rule offline.
+                             'source_hidden': source_hidden,
                              'hidden_visual': hidden_visual_mesh(
                                  mesh_identity, effective_materials, self.materials,
-                                 record['path'])}
+                                 record['path'], source_hidden)}
                     apply_outer_shell_policy(actor, mesh_identity, self.meshes[mesh_name]['sections'],
                                              self.materials, getattr(self, 'outer_shell', False))
                     actors.append(actor)

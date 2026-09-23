@@ -14,8 +14,16 @@
 #include "Serialization/JsonSerializer.h"
 #include "UnrealClient.h"
 
+struct FOpenWillowInspectionPose
+{
+    FVector Position;
+    FRotator Rotation;
+    float Fov = 75;
+};
+
 // Repeatable host viewpoints for visual investigations. This checks capture
-// positions only; comparison with original-game images remains a human gate.
+// positions and optional host target visibility; comparison with original-game
+// images remains a human gate.
 class FOpenWillowInspectionCheck : public IAutomationLatentCommand
 {
 public:
@@ -50,20 +58,42 @@ public:
                 if (!Row.IsValid() || Row->Type != EJson::Object)
                 { Test->AddError(TEXT("Invalid inspection view")); return true; }
                 const auto Object = Row->AsObject();
-                FVector Position, Rotation;
-                double Fov = 75;
-                if (!Vector(Object, TEXT("location"), Position)
-                    || !Vector(Object, TEXT("rotation"), Rotation)
-                    || !Object->TryGetNumberField(TEXT("fov"), Fov)
-                    || !FMath::IsFinite(Fov) || Fov < 10 || Fov > 150)
+                FOpenWillowInspectionPose Base;
+                if (!Pose(Object, Base))
                 { Test->AddError(TEXT("View requires finite location, rotation and FOV in 10..150")); return true; }
-                Positions.Add(Position); Rotations.Add(FRotator(Rotation.X, Rotation.Y, Rotation.Z)); Fovs.Add(Fov);
+                TArray<FOpenWillowInspectionPose> ViewCandidates;
+                ViewCandidates.Add(Base);
+                const TArray<TSharedPtr<FJsonValue>>* CandidateRows = nullptr;
+                if (Object->TryGetArrayField(TEXT("candidates"), CandidateRows))
+                {
+                    if (CandidateRows->Num() < 1 || CandidateRows->Num() > 8)
+                    { Test->AddError(TEXT("Inspection candidates require 1..8 poses")); return true; }
+                    ViewCandidates.Reset();
+                    for (const auto& CandidateRow : *CandidateRows)
+                    {
+                        const TSharedPtr<FJsonObject>* CandidateObject = nullptr;
+                        if (!CandidateRow.IsValid() || !CandidateRow->TryGetObject(CandidateObject)
+                            || !CandidateObject || !CandidateObject->IsValid())
+                        { Test->AddError(TEXT("Invalid inspection candidate")); return true; }
+                        FOpenWillowInspectionPose Candidate;
+                        if (!Pose(*CandidateObject, Candidate))
+                        { Test->AddError(TEXT("Inspection candidate requires finite location, rotation and FOV in 10..150")); return true; }
+                        ViewCandidates.Add(Candidate);
+                    }
+                }
+                Candidates.Add(ViewCandidates);
+                FVector Target = FVector::ZeroVector;
+                HasTargets.Add(Vector(Object, TEXT("target"), Target));
+                Targets.Add(Target);
+                FString TargetActor;
+                Object->TryGetStringField(TEXT("target_actor_contains"), TargetActor);
+                TargetActorContains.Add(TargetActor);
             }
             Origin = Pawn->GetActorLocation(); OriginalRotation = PC->GetControlRotation();
             OriginalFov = PC->PlayerCameraManager->GetFOVAngle();
             Loaded = true;
         }
-        if (Index >= Positions.Num())
+        if (Index >= Candidates.Num())
         {
             Pawn->SetActorLocation(Origin, false, nullptr, ETeleportType::TeleportPhysics);
             PC->SetControlRotation(OriginalRotation); PC->PlayerCameraManager->SetFOV(OriginalFov);
@@ -73,26 +103,53 @@ public:
         if (Stage == 0)
         {
             if (auto* Movement = Pawn->GetMovementComponent()) Movement->StopMovementImmediately();
-            Pawn->SetActorLocation(Positions[Index], false, nullptr, ETeleportType::TeleportPhysics);
-            PC->SetControlRotation(Rotations[Index]); PC->PlayerCameraManager->SetFOV(Fovs[Index]);
+            const FOpenWillowInspectionPose& PoseValue = Candidates[Index][CandidateIndex];
+            Pawn->SetActorLocation(PoseValue.Position, false, nullptr, ETeleportType::TeleportPhysics);
+            PC->SetControlRotation(PoseValue.Rotation); PC->PlayerCameraManager->SetFOV(PoseValue.Fov);
             Stage = 1; StageStarted = Now; return false;
         }
         if (Stage == 1 && Now - StageStarted > 8)
         {
+            const FOpenWillowInspectionPose& PoseValue = Candidates[Index][CandidateIndex];
             Test->TestTrue(TEXT("Inspection camera position matches requested view"),
-                PC->PlayerCameraManager->GetCameraLocation().Equals(Positions[Index], 1));
+                PC->PlayerCameraManager->GetCameraLocation().Equals(PoseValue.Position, 1));
             Test->TestTrue(TEXT("Inspection camera rotation matches requested view"),
-                PC->PlayerCameraManager->GetCameraRotation().Equals(Rotations[Index], .1));
+                PC->PlayerCameraManager->GetCameraRotation().Equals(PoseValue.Rotation, .1));
             Test->TestTrue(TEXT("Inspection FOV matches requested view"),
-                FMath::Abs(PC->PlayerCameraManager->GetFOVAngle() - Fovs[Index]) < .1);
+                FMath::Abs(PC->PlayerCameraManager->GetFOVAngle() - PoseValue.Fov) < .1);
+            FString TargetHit = TEXT("none");
+            bool TargetTraceHit = false, TargetInView = false, TargetMatched = false;
+            if (HasTargets[Index])
+            {
+                FHitResult Hit;
+                FCollisionQueryParams Params(SCENE_QUERY_STAT(OpenWillowInspectionTarget), true, Pawn);
+                TargetTraceHit = World->LineTraceSingleByChannel(
+                    Hit, PoseValue.Position, Targets[Index], ECC_Visibility, Params);
+                const FVector ToTarget = (Targets[Index] - PoseValue.Position).GetSafeNormal();
+                const float MinimumCosine = FMath::Cos(FMath::DegreesToRadians(PoseValue.Fov * .6f));
+                TargetInView = FVector::DotProduct(PoseValue.Rotation.Vector(), ToTarget) >= MinimumCosine;
+                const AActor* HitActor = Hit.GetActor();
+                TargetHit = HitActor ? (HitActor->Tags.Num() > 0
+                    ? HitActor->Tags[0].ToString() : HitActor->GetName()) : TEXT("none");
+                TargetMatched = TargetTraceHit && TargetInView && (TargetActorContains[Index].IsEmpty()
+                    || TargetHit.Contains(TargetActorContains[Index]));
+                if (!TargetMatched && CandidateIndex + 1 < Candidates[Index].Num())
+                {
+                    Test->AddWarning(FString::Printf(
+                        TEXT("Inspection view %d candidate %d obstructed before target: hit=%s expected=%s; trying candidate %d"),
+                        Index, CandidateIndex, *TargetHit, *TargetActorContains[Index], CandidateIndex + 1));
+                    ++CandidateIndex; Stage = 0; StageStarted = Now; return false;
+                }
+            }
             const FString Name = FPaths::Combine(FPaths::ScreenShotDir(),
                 FString::Printf(TEXT("%s_inspection_%02d.png"), *World->GetMapName(), Index));
             FScreenshotRequest::RequestScreenshot(Name, false, true);
-            Test->AddInfo(FString::Printf(TEXT("Inspection view %d: location=%s rotation=%s fov=%.1f screenshot=%s"),
-                Index, *Positions[Index].ToString(), *Rotations[Index].ToString(), Fovs[Index], *Name));
+            Test->AddInfo(FString::Printf(TEXT("Inspection view %d candidate %d: location=%s rotation=%s fov=%.1f target_trace_hit=%d target_in_view=%d target_trace=%s target_matches=%d screenshot=%s"),
+                Index, CandidateIndex, *PoseValue.Position.ToString(), *PoseValue.Rotation.ToString(), PoseValue.Fov,
+                TargetTraceHit, TargetInView, *TargetHit, TargetMatched, *Name));
             Stage = 2; StageStarted = Now;
         }
-        else if (Stage == 2 && Now - StageStarted > 2) { ++Index; Stage = 0; }
+        else if (Stage == 2 && Now - StageStarted > 2) { ++Index; CandidateIndex = 0; Stage = 0; }
         return false;
     }
 private:
@@ -106,6 +163,20 @@ private:
                 || !FMath::IsFinite(Components[I])) return false;
         Out = FVector(Components[0], Components[1], Components[2]); return true;
     }
+    static bool Pose(const TSharedPtr<FJsonObject>& Object, FOpenWillowInspectionPose& Out)
+    {
+        FVector Position, Rotation;
+        double Fov = 75;
+        if (!Vector(Object, TEXT("location"), Position)
+            || !Vector(Object, TEXT("rotation"), Rotation)
+            || !Object->TryGetNumberField(TEXT("fov"), Fov)
+            || !FMath::IsFinite(Fov) || Fov < 10 || Fov > 150)
+            return false;
+        Out.Position = Position;
+        Out.Rotation = FRotator(Rotation.X, Rotation.Y, Rotation.Z);
+        Out.Fov = static_cast<float>(Fov);
+        return true;
+    }
     FAutomationTestBase* Test;
     double Started, StageStarted = 0;
     bool Loaded = false;
@@ -113,9 +184,11 @@ private:
     FVector Origin;
     FRotator OriginalRotation;
     float OriginalFov = 75;
-    TArray<FVector> Positions;
-    TArray<FRotator> Rotations;
-    TArray<double> Fovs;
+    TArray<TArray<FOpenWillowInspectionPose>> Candidates;
+    TArray<FVector> Targets;
+    TArray<bool> HasTargets;
+    TArray<FString> TargetActorContains;
+    int CandidateIndex = 0;
 };
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowInspectionTest, "OpenWillow.Inspection",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
