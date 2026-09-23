@@ -758,6 +758,17 @@ class SceneTests(unittest.TestCase):
         self.assertFalse(m.hidden_visual_mesh(cube, ['concrete'], cube_materials, 'SMC_544', False))
         # Component HiddenGame or owner bHidden hides it despite the material.
         self.assertTrue(m.hidden_visual_mesh(cube, ['concrete'], cube_materials, 'SMC_544', True))
+        sanctuary_cube = 'Sanctuary_P:Common_Meshes.CollisionCube'
+        rooftop_boxes = (
+            'TheWorld.PersistentLevel.StaticMeshActor_372.StaticMeshComponent_2968',
+            'TheWorld.PersistentLevel.StaticMeshActor_690.StaticMeshComponent_2968',
+            'TheWorld.PersistentLevel.StaticMeshCollectionActor_27.StaticMeshActor_SMC_544')
+        for source in rooftop_boxes:
+            self.assertTrue(m.hidden_visual_mesh(
+                sanctuary_cube, ['concrete'], cube_materials, source, False))
+        self.assertFalse(m.hidden_visual_mesh(
+            sanctuary_cube, ['concrete'], cube_materials,
+            'TheWorld.PersistentLevel.StaticMeshActor_371.StaticMeshComponent_2968', False))
         # The cube's own collision material, or an unresolved one, stays hidden.
         self.assertTrue(m.hidden_visual_mesh(cube, ['collision'], cube_materials, 'SMC_1', False))
         self.assertTrue(m.hidden_visual_mesh(cube, ['missing'], cube_materials, 'SMC_1', False))
@@ -771,6 +782,15 @@ class SceneTests(unittest.TestCase):
         restore_hidden_visual_policy(manifest)
         # A manifest without the recorded flag keeps the conservative hide.
         self.assertEqual([a['hidden_visual'] for a in manifest['actors']], [False, True])
+        exact_manifest = {
+            'actors': [{'source': rooftop_boxes[0], 'mesh': 'rooftop_cube',
+                        'materials': ['concrete'], 'source_hidden': False,
+                        'hidden_visual': False}],
+            'meshes': {'rooftop_cube': {'source': sanctuary_cube,
+                                        'sections': [{'slot': 0, 'material': 'collision'}]}},
+            'materials': cube_materials}
+        restore_hidden_visual_policy(exact_manifest)
+        self.assertTrue(exact_manifest['actors'][0]['hidden_visual'])
         materials = {'cloud': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light'},
                      'cloud01': {'source': 'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'},
                      'other': {'source': 'Sanctuary_P:Env_Ice.Materials.Mat_Other'}}
@@ -790,12 +810,26 @@ class SceneTests(unittest.TestCase):
                     'materials': materials}
         restore_hidden_visual_policy(manifest)
         self.assertEqual([a['hidden_visual'] for a in manifest['actors']], [True, False])
-        self.assertTrue(m.hidden_visual_mesh(
-            'Sanctuary_P:Prop_Garbage.Meshes.BoxLrg', [], {},
-            'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'))
+        box_lrg = 'Sanctuary_P:Prop_Garbage.Meshes.BoxLrg'
+        box_sources = (
+            'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
+            'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',
+            'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20')
+        for source in box_sources:
+            self.assertTrue(m.hidden_visual_mesh(box_lrg, [], {}, source, False))
         self.assertFalse(m.hidden_visual_mesh(
-            'Sanctuary_P:Prop_Garbage.Meshes.BoxLrg', [], {},
-            'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20'))
+            box_lrg, [], {},
+            'TheWorld.PersistentLevel.InterpActor_28.StaticMeshComponent_20', False))
+        box_manifest = {
+            'actors': [{'source': source, 'mesh': 'box', 'materials': [],
+                        'source_hidden': False, 'hidden_visual': False}
+                       for source in box_sources],
+            'meshes': {'box': {'source': box_lrg,
+                               'sections': [{'slot': 0, 'material': 'base'}]}},
+            'materials': {}}
+        restore_hidden_visual_policy(box_manifest)
+        self.assertEqual([a['hidden_visual'] for a in box_manifest['actors']],
+                         [True, True, True])
 
 
 if __name__ == '__main__':

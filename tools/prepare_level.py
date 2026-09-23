@@ -147,7 +147,27 @@ HIDDEN_CLOUD_MATERIALS = {'Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light',
                           'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'}
 HIDDEN_TRANSITION_MESH = 'Common_Meshes.BasePlane_256x128'
 HIDDEN_TRANSITION_MATERIAL = 'Common_Materials.Environment.WorldTransition'
-HIDDEN_FOREGROUND_SOURCE = 'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'
+# These three oversized BoxLrg placements are environmental blocking volumes,
+# not authored props. Preserve their source collision while hiding only their
+# visuals; InterpActor_26 and _33 were confirmed in the UE viewport.
+HIDDEN_BOX_LRG_MESH = 'Prop_Garbage.Meshes.BoxLrg'
+HIDDEN_BOX_LRG_SOURCES = {
+    'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
+    'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',
+    'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20',
+}
+# These adjacent Sanctuary_P collision boxes were surfaced with the concrete
+# tile override in the authored level. Their roughly 10 x 9 x 4 m bounds make
+# them collision helpers, not rooftop render meshes; keep their source
+# collision while hiding only these exact visual placements.
+HIDDEN_COLLISION_PLACEMENTS = {
+    ('Sanctuary_P:Common_Meshes.CollisionCube',
+     'TheWorld.PersistentLevel.StaticMeshActor_372.StaticMeshComponent_2968'),
+    ('Sanctuary_P:Common_Meshes.CollisionCube',
+     'TheWorld.PersistentLevel.StaticMeshActor_690.StaticMeshComponent_2968'),
+    ('Sanctuary_P:Common_Meshes.CollisionCube',
+     'TheWorld.PersistentLevel.StaticMeshCollectionActor_27.StaticMeshActor_SMC_544'),
+}
 # This optimized Sanctuary material is an HLS master: its Color and Luminosity
 # texture parameters are combined by a stripped static permutation resource.
 # Feeding the luminosity atlas directly to Base Color produces the observed
@@ -323,17 +343,19 @@ def hidden_visual_mesh(identity, effective_materials=None, materials=None, sourc
                        source_hidden=None):
     """Return whether an observed helper has no recoverable host-side visual."""
     mesh = identity.rsplit(':', 1)[-1]
-    if source == HIDDEN_FOREGROUND_SOURCE:
-        # This exact observed BoxLrg placement is a developer blocking volume
-        # directly in the Sanctuary start view, despite carrying a prop mesh.
+    if mesh == HIDDEN_BOX_LRG_MESH and source in HIDDEN_BOX_LRG_SOURCES:
+        # These exact observed BoxLrg placements are blocking volumes despite
+        # carrying a prop mesh; keep their collision, but do not render them.
+        return True
+    if (identity, source) in HIDDEN_COLLISION_PLACEMENTS:
         return True
     if mesh == HIDDEN_COLLISION_MESH:
         # CollisionCube is usually hidden collision geometry, but not always:
         # six Sanctuary_Land placements tile the Mati_FloorConcrete01 street
-        # in front of Scooter's garage and serialize no hidden flag. Hide a
-        # cube only when the source hides it (component HiddenGame or owner
-        # actor bHidden). Render it only when a material resolves to a known
-        # source other than the cube's own collision material.
+        # in front of Scooter's garage and serialize no hidden flag. The three
+        # exact oversized Sanctuary_P boxes above are hidden despite their
+        # concrete material override. For all others, obey source hidden flags
+        # or render only a resolved material other than Mat_Collision.
         if source_hidden:
             return True
         sources = [(materials or {}).get(name, {}).get('source', '').rsplit(':', 1)[-1]

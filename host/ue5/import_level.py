@@ -761,7 +761,10 @@ unreal.EditorAssetLibrary.save_directory(destination)
                                  'Prop_Garbage.Meshes.BoxLrg'],
                       'materials': ['Sanctuary_P:Env_Ice.Materials.Mat_CloudLayer_Light',
                                     'Sanctuary_Light:Env_Ice.Materials.Mat_CloudLayer_01'],
-                      'sources': ['TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'],
+                      'sources': [
+                          'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
+                          'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',
+                          'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20'],
                       'policy': 'hide_unrecovered_visual_preserve_source_collision'},
     'terrain': {'placements': terrain_placements,
                 'policy': scene.get('terrain_policy'),

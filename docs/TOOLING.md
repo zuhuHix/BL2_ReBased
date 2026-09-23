@@ -470,12 +470,23 @@ Observed blocking helpers are retained for source collision where recovered and
 hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
 the 81 of 94 `Common_Meshes.CollisionCube` placements whose component sets
 `HiddenGame`, whose owner actor sets `bHidden`, or which carry no material
-other than the cube's own `Mat_Collision`, and six cloud `Blocking_Plane`
-placements (four `Mat_CloudLayer_Light`, two `Mat_CloudLayer_01`). The exact `Sanctuary_P` `InterpActor_34` `Prop_Garbage.Meshes.BoxLrg`
-placement that blocked the start view is also hidden. The other 13
-CollisionCube placements, including the concrete street slabs in front of
-Scooter's garage, render with their placed materials. This is a bounded visual
-artifact policy, not complete collision or material parity.
+other than the cube's own `Mat_Collision`, plus three oversized adjacent
+`Sanctuary_P` placements (`StaticMeshActor_372`, `StaticMeshActor_690`, and
+`StaticMeshCollectionActor_27` instance `SMC_544`), whose concrete-tile
+overrides had made collision boxes visible across rooftops. The two actor
+placements are roughly 10 x 9 x 4 m; the collection instance is about 5 m per
+side. Their source collision remains enabled. Six cloud
+`Blocking_Plane` placements (four `Mat_CloudLayer_Light`, two
+`Mat_CloudLayer_01`) are hidden as well. The exact `Sanctuary_P`
+`InterpActor_34` `Prop_Garbage.Meshes.BoxLrg` placement that blocked the start
+view is also hidden. Two additional oversized `Sanctuary_Outer`
+`Prop_Garbage.Meshes.BoxLrg` placements (`InterpActor_26` and `InterpActor_33`)
+were identified in the UE viewport and hidden as visual-only blockers; all
+three BoxLrg placements retain their source collision. The remaining 10
+`CollisionCube` placements, including
+the thin concrete street slabs in front of Scooter's garage, render with their
+placed materials. This is a bounded visual artifact policy, not complete
+collision or material parity.
 
 Unlit Material v1 colors now feed Emissive Color when no explicit emissive
 texture exists. The saved-scene verifier reports `verified_unlit_materials`.

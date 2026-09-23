@@ -161,8 +161,11 @@ for source in scene['actors']:
                 'Common_Meshes.BasePlane_256x128',
                 'Prop_Garbage.Meshes.BoxLrg'))
             if hidden_source.endswith('Prop_Garbage.Meshes.BoxLrg'):
-                assert source['source'].endswith(
-                    'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20')
+                assert source['source'] in {
+                    'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20',
+                    'TheWorld.PersistentLevel.InterpActor_33.StaticMeshComponent_20',
+                    'TheWorld.PersistentLevel.InterpActor_34.StaticMeshComponent_20',
+                }
             assert not component.get_editor_property('visible')
             definition = scene['meshes'][source['mesh']]
             expected_collision = (unreal.CollisionEnabled.QUERY_AND_PHYSICS
