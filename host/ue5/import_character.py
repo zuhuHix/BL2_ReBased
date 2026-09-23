@@ -11,11 +11,8 @@ color. The combine, the factor 2, the Shadow/Hilight colors and the Msk left
 half are UNVERIFIED and not reproduced.
 """
 import os
-import sys
 from pathlib import Path
 import unreal
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scene_geometry import host_obj
 
 root = Path(os.environ['OPENWILLOW_CHARACTER']).resolve()
 destination = '/Game/OpenWillow/Characters/Maya'
@@ -151,38 +148,6 @@ for stem, prefix in PARTS.items():
     if not eal.save_loaded_asset(mesh, only_if_is_dirty=False):
         raise RuntimeError(f'Could not save {stem}')
     meshes[stem] = mesh
-
-# Posed first-person arms (tools/prepare_character_pose.py), camera-bone space.
-pose_root = os.environ.get('OPENWILLOW_CHARACTER_POSE')
-for obj in sorted(Path(pose_root).glob('*.obj')) if pose_root else []:
-    converted = Path(pose_root) / 'ue-obj' / f'SM_Arms_{obj.stem}.obj'
-    converted.parent.mkdir(exist_ok=True)
-    converted.write_text(host_obj(obj.read_text(encoding='utf-8')), encoding='utf-8')
-    options = unreal.FbxImportUI()
-    options.import_mesh = True
-    options.import_materials = False
-    options.import_textures = False
-    options.import_as_skeletal = False
-    options.mesh_type_to_import = unreal.FBXImportType.FBXIT_STATIC_MESH
-    data = options.static_mesh_import_data
-    data.set_editor_property('combine_meshes', True)
-    data.set_editor_property('convert_scene', False)
-    data.set_editor_property('convert_scene_unit', False)
-    options.set_editor_property('static_mesh_import_data', data)
-    task = unreal.AssetImportTask()
-    task.filename = str(converted)
-    task.destination_path = f'{destination}/FirstPerson'
-    task.automated = True
-    task.replace_existing = True
-    task.options = options
-    tools.import_asset_tasks([task])
-    arms = [o for o in task.get_objects() if isinstance(o, unreal.StaticMesh)]
-    if len(arms) != 1:
-        raise RuntimeError(f'Expected one static mesh from {obj.name}: {task.get_objects()}')
-    for index in range(len(arms[0].get_editor_property('static_materials'))):
-        arms[0].set_material(index, unreal.load_asset(f'{destination}/Materials/MI_SirenHands'))
-    eal.save_loaded_asset(arms[0], only_if_is_dirty=False)
-    unreal.log(f'OW_CHARACTER arms {arms[0].get_path_name()}')
 
 # A preview level with body and head at the origin, the arms beside them.
 level = f'{destination}/MayaPreview'
