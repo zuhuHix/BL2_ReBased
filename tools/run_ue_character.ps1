@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Engine,
     [Parameter(Mandatory=$true)][string]$Exports,
-    # UModel MD5 export root holding Hands_Siren and AnimSet/1st_Person_Pistol;
+    # UModel MD5 export root holding Hands_Siren and the Unarmed/Pistol AnimSets;
     # when given, the arms animations are converted and imported too.
     [string]$Md5,
     [ValidateSet('front', 'face', 'back')][string]$View = 'front',
@@ -10,6 +10,8 @@ param(
     [switch]$Sanctuary,
     # With -Sanctuary: walk forward unattended (captures the run animation).
     [switch]$AutoWalk,
+    # Optional X,Y,Z point for a repeatable Sanctuary walking capture.
+    [double[]]$Spawn,
     [int]$Wait = 30,
     # Launch for play (WASD/mouse/space) instead of capturing a screenshot.
     [switch]$Play
@@ -41,13 +43,18 @@ if (!$CaptureOnly) {
         $env:OPENWILLOW_CHARACTER_ANIMS = ''
         & $commandlet $project -run=pythonscript "-script=$animScript" -unattended -nullrhi -nosplash "-abslog=$(Join-Path $animDir 'reference.log')" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Reference pose dump failed: $LASTEXITCODE" }
-        $tracks = Join-Path $animDir 'pistol.json'
+        $tracks = Join-Path $animDir 'unarmed.json'
         & python (Join-Path $PSScriptRoot 'prepare_character_anims.py') --mesh (Join-Path $md5Root 'SkeletalMesh3/Hands_Siren.md5mesh') `
-            --reference $env:OPENWILLOW_CHARACTER_REFERENCE --animset (Join-Path $md5Root 'AnimSet/1st_Person_Pistol') `
+            --reference $env:OPENWILLOW_CHARACTER_REFERENCE --animset (Join-Path $md5Root 'AnimSet/1st_Person_Unarmed') `
             --clips Idle Run_F Sprint Jump_Start Jump_Idle Jump_End --output $tracks
         if ($LASTEXITCODE -ne 0) { throw "Animation conversion failed: $LASTEXITCODE" }
+        $pistolTracks = Join-Path $animDir 'pistol.json'
+        & python (Join-Path $PSScriptRoot 'prepare_character_anims.py') --mesh (Join-Path $md5Root 'SkeletalMesh3/Hands_Siren.md5mesh') `
+            --reference $env:OPENWILLOW_CHARACTER_REFERENCE --animset (Join-Path $md5Root 'AnimSet/1st_Person_Pistol') `
+            --clips Idle Run_F Sprint Jump_Start Jump_Idle Jump_End --output $pistolTracks
+        if ($LASTEXITCODE -ne 0) { throw "Pistol animation conversion failed: $LASTEXITCODE" }
         $env:OPENWILLOW_CHARACTER_REFERENCE = ''
-        $env:OPENWILLOW_CHARACTER_ANIMS = "Pistol=$tracks"
+        $env:OPENWILLOW_CHARACTER_ANIMS = "Unarmed=$tracks;Pistol=$pistolTracks"
         $animLog = Join-Path $animDir 'anims.log'
         & $commandlet $project -run=pythonscript "-script=$animScript" -unattended -nullrhi -nosplash "-abslog=$animLog" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Animation import failed: $LASTEXITCODE; see $animLog" }
@@ -70,6 +77,12 @@ $level = @('/Game/OpenWillow/Characters/Maya/MayaPreview')
 if ($Sanctuary) {
     $shot = Join-Path $out 'sanctuary-maya.png'
     $level = @('/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya')
+    if ($Spawn) {
+        if ($Spawn.Count -ne 3) { throw '-Spawn requires X,Y,Z' }
+        $level += @("-owspawnx=$($Spawn[0])", "-owspawny=$($Spawn[1])", "-owspawnz=$($Spawn[2])")
+        $level += '-owspawnprobe'
+        $shot = Join-Path $out 'sanctuary-maya-spawn.png'
+    }
     if ($AutoWalk) { $level += '-owautowalk'; $shot = Join-Path $out 'sanctuary-maya-walk.png' }
 }
 $gameArgs = @('-game', '-windowed', '-WinX=0', '-WinY=0', '-ResX=1280', '-ResY=720', '-nosplash')

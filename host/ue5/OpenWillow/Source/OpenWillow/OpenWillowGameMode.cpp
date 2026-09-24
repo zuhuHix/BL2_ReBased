@@ -47,6 +47,16 @@ void AOpenWillowGameMode::RestartPlayer(AController* NewPlayer)
 
     if (Cast<AOpenWillowWalker>(Pawn))
     {
+        // Optional local inspection point for reproducing a walking report.
+        // All three coordinates are required; ordinary player starts are unchanged.
+        float X = 0, Y = 0, Z = 0;
+        if (FParse::Value(FCommandLine::Get(), TEXT("owspawnx="), X)
+            && FParse::Value(FCommandLine::Get(), TEXT("owspawny="), Y)
+            && FParse::Value(FCommandLine::Get(), TEXT("owspawnz="), Z)
+            && FMath::IsFinite(X) && FMath::IsFinite(Y) && FMath::IsFinite(Z))
+        {
+            Pawn->SetActorLocation(FVector(X, Y, Z), false, nullptr, ETeleportType::TeleportPhysics);
+        }
         Player->SetViewTarget(Pawn);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow walking pawn activated at %s"), *Pawn->GetActorLocation().ToString());
         return;

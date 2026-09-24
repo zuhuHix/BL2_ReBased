@@ -15,6 +15,21 @@ from collision_geometry import hulls as collision_hulls
 from installed_content import PACKAGE_SUFFIXES, cache_directory, content_files
 
 
+SCOOTER_FRONTAGE_TRIANGLE_SOURCES = frozenset({
+    'Sanctuary_P:Env_Sanctuary.Meshes.SancScooterStairs',
+    'Sanctuary_P:Prop_SanctuaryRoad.Mesh.SanctuarySidewalk_ParkingLot_Low',
+})
+
+
+def scooter_frontage_collision(source, collision):
+    """Use render triangles only for observed missing Scooter floor shapes."""
+    if source in SCOOTER_FRONTAGE_TRIANGLE_SOURCES and collision['status'] == 'absent':
+        return {'status': 'triangle_mesh', 'hulls': [],
+                'method': 'scooter_frontage_render_triangles_v1',
+                'source_collision': 'absent'}
+    return collision
+
+
 def values(tags):
     return {p['name']: p['value'] for p in tags if p.get('status') == 'decoded'}
 
@@ -1240,7 +1255,11 @@ class Scene:
                 except (ValueError, KeyError) as error:
                     collision = {'status': 'unsupported', 'hulls': [], 'reason': str(error)}
                     self.issue(self.identity(key) + ':collision', error)
-            self.meshes[name] = {'source': self.identity(key), 'sections': sections, 'collision': collision}
+            source = self.identity(key)
+            # Both observed placements have collision enabled but no
+            # RB_BodySetup; the host needs a walkable floor at this frontage.
+            collision = scooter_frontage_collision(source, collision)
+            self.meshes[name] = {'source': source, 'sections': sections, 'collision': collision}
         return name
 
     def levels(self, persistent):

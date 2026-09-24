@@ -25,6 +25,17 @@ def record(**kwargs):
 
 
 class SceneTests(unittest.TestCase):
+    def test_scooter_frontage_collision_is_source_scoped(self):
+        absent = {'status': 'absent', 'hulls': []}
+        for source in m.SCOOTER_FRONTAGE_TRIANGLE_SOURCES:
+            fallback = m.scooter_frontage_collision(source, absent)
+            self.assertEqual(fallback['status'], 'triangle_mesh')
+            self.assertEqual(fallback['source_collision'], 'absent')
+        self.assertIs(m.scooter_frontage_collision('Other.Mesh', absent), absent)
+        supported = {'status': 'supported', 'hulls': [[1, 2, 3]]}
+        self.assertIs(m.scooter_frontage_collision(
+            'Sanctuary_P:Env_Sanctuary.Meshes.SancScooterStairs', supported), supported)
+
     def test_material_refresh_restores_only_unlit_dome_interior(self):
         from refresh_materials import restore_sky_policy
         manifest = {'actors': [{'mesh': 'dome', 'materials': ['sky']},

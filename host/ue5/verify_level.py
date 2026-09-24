@@ -174,8 +174,9 @@ for source in scene['actors']:
             definition = scene['meshes'][source['mesh']]
             expected_collision = (unreal.CollisionEnabled.QUERY_AND_PHYSICS
                                   if source.get('collision_enabled', False)
-                                  and section is definition['sections'][0]
-                                  and bool(definition.get('collision', {}).get('hulls', []))
+                                  and (definition.get('collision', {}).get('status') == 'triangle_mesh'
+                                       or (section is definition['sections'][0]
+                                           and bool(definition.get('collision', {}).get('hulls', []))))
                                   else unreal.CollisionEnabled.NO_COLLISION)
             assert component.get_collision_enabled() == expected_collision
 

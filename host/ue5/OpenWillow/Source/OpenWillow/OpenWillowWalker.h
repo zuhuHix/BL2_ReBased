@@ -29,5 +29,6 @@ private:
     UPROPERTY() TObjectPtr<class UAnimSequence> LandAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> Current;
     bool bWasFalling = false;
+    bool bSpawnProbeLogged = false;
     float LandUntil = 0;
 };
