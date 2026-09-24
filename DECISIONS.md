@@ -1350,6 +1350,92 @@ the roof textures are gone from the street. Not verified: a matched
 original-game capture comparison, and which earlier commit first made the
 overlap visible.
 
+## 2026-09-23: Maya's body, default head and first-person arms reach UE5
+
+First Maya asset slice for the vertical slice: meshes and a default-skin
+surface only, with no animation, skeleton merge or gameplay.
+UModel build 1590 exported `GD_Siren_Streaming_SF` `Skel_SirenBody`
+(5,368 vertices, 27 joints) and `Hands_Siren` (2,204 vertices, 47 joints),
+plus `CD_Siren_Head_Default_SF` `Skel_Siren000` (2,803 vertices, 7 joints),
+as glTF. Each mesh run exited 255 after writing the mesh but before any
+texture, following missing `Common_Textures` stub imports. Exporting each
+`Texture2D` alone as PNG succeeded. UE 5.8 rejects UModel's BC1 DDS
+(`DXGIFormat not supported : 71`), so PNG is the texture path.
+`host/ue5/import_character.py` imports them as UE5 skeletal meshes, and
+`tools/run_ue_character.ps1` imports and captures a `-game` preview. Height
+comes out at about 172 cm (glTF metres, Y-up converted by UE). The head's
+lowest point meets the body's neck in bind pose.
+
+Surface: the default skin (`CD_Siren_Skin_Default` ->
+`CD_Skins_Siren_MainGame.Mati_Default_Body` / `Mati_Default_Head`, parent
+`Common_Materials.Player.Master_Player`) passes `p_Diffuse`, `p_Normal`,
+`p_Masks` and Shadow/Midtone/Hilight colours for zones A, B and C, read with
+`ow-package --properties` and `level-arrays.schema`. `Master_Player`'s graph is
+stripped, so the combine is not known. Observed: each `_Msk` holds two
+half-width copies of the UV layout. In the right half, the head's hair is R
+(zone A, whose midtone is blue), the face is B and the collar is G. The host
+therefore samples the right half at `u/2 + 0.5`, takes A = R, B = G, C = B, and
+multiplies the diffuse by `2 x Midtone` inside each zone.
+
+UNVERIFIED: that combine, the factor 2, the unused Shadow/Hilight colours and
+intensity scalars, the `_Msk` left half (it may drive the tattoo glow; the
+emissive colours are not used), the hands reusing the body colours, and
+left/right handedness. Result compared by eye only, with no original-game
+capture: the preview shows blue hair, a yellow-orange top with grey panels,
+black trousers, and a tattooed arm opposite a yellow sleeve, the arms matching
+the body. The preview's fixed exposure and 2.5 lux sun are an inspection aid.
+No C++ or parser code changed.
+
+## 2026-09-23: Maya's animated first-person arms and eye height on the Sanctuary walker
+
+UModel can export `AnimSet` animation as glTF only from its viewer
+(`glTF animation could be exported from mesh viewer only`), so `Hands_Siren`
+and `1st_Person_Pistol` were exported as MD5.
+`tools/prepare_character_anims.py` converts six clips (Idle, Run_F, Sprint,
+Jump_Start, Jump_Idle, Jump_End; 30 fps) into bone tracks for the UE skeleton
+imported from the same mesh's glTF. The MD5-to-UE map is fitted from the 47
+bind positions and must be a pure Y mirror (it is). Each bone's axis
+convention is absorbed by comparing the MD5 and UE bind poses.
+`host/ue5/import_character_anims.py` writes the tracks as AnimSequences through
+the editor's animation data controller.
+
+A per-frame root correction keeps the arms skeleton's `Camera` bone at the
+player camera. In all six clips that bone does not move relative to the root
+(range 0.1 cm or less), so this is equivalent to a fixed attachment. That BL2
+views from this bone is UNVERIFIED. Check: the right hand's camera-space
+position from forward kinematics of the written tracks equals a direct MD5
+computation (47, 17, -21.5 cm, frames 0/30/60 of Idle). At the converted FOV
+this projects to about 64% across the screen, which matches the pistol hand
+in a maintainer capture outside Scooter's. The earlier static OBJ bake of the
+same frame rendered the hand near 85-90% across, so that render was wrong and
+the static path has been removed; `prepare_character_pose.py` remains as the
+MD5 reader and a single-frame OBJ baker.
+
+The walker's `-owmaya` mode plays Idle, Run_F (horizontal speed over 50),
+Jump_Idle (falling) and Jump_End (landing) with hard cuts. BL2's AnimTree
+blending is not reproduced. The clips themselves are subtle: the hand moves
+about 2 cm running and 5 cm jumping. The strong running gun bob seen in the
+game is assumed to come from native weapon code, which is not implemented.
+
+Eye height and collision come from `GD_Siren_Streaming.Pawn_Siren`: the
+`CylinderComponent` (properties at offset 8, not 4) gives CollisionRadius 42
+and CollisionHeight 80. The pawn gives BaseEyeHeight 70 and a serialized
+EyeHeight of 77. `-owmaya` uses a 42/80 capsule and puts the camera 70 above
+its centre (150 cm standing eye). Choosing BaseEyeHeight over EyeHeight is
+UE3 behaviour assumed, not checked in the game.
+
+FOV: `DefaultEngine.ini` sets `[Engine.LocalPlayer]
+AspectRatioAxisConstraint=AspectRatio_MaintainYFOV`. A BL2 FOV value is
+treated as horizontal at 4:3 and converted to UE's horizontal FOV at the
+actual aspect. `-owfov=` defaults to 90 (106 degrees at 16:9). This matched
+the Scooter's capture by eye; the player's actual setting was not read.
+
+Automated: host build; import commandlets exit 0; `OpenWillow.Walking` passes
+(without `-owmaya`). Runtime: an unattended `-owautowalk` run logged the state
+sequence Idle, Jump_Idle, Jump_End, Run_F, then Run_F/Idle alternating once
+per 6 s lap as the pawn bumped geometry. Visual: idle and walking captures
+compared by eye only. No gun is held.
+
 ## 2026-09-16: External extraction is an accelerator, not a replacement
 
 The project will evaluate mature community exporters before expanding every
