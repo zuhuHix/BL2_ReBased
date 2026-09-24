@@ -6,6 +6,7 @@ recreates the arms skeletal mesh. Also dumps the skeleton's reference pose to
 OPENWILLOW_CHARACTER_REFERENCE when that is set (input to the converter).
 """
 import json
+import math
 import os
 from pathlib import Path
 import unreal
@@ -42,7 +43,13 @@ for pair in filter(None, os.environ.get('OPENWILLOW_CHARACTER_ANIMS', '').split(
         sequence = tools.create_asset(name, f'{destination}/FirstPerson', unreal.AnimSequence, factory)
         controller = sequence.controller
         controller.open_bracket(unreal.Text('OpenWillow MD5 import'))
-        controller.set_frame_rate(unreal.FrameRate(int(round(data['rate'])), 1))
+        rate = int(round(data['rate']))
+        # A new UE sequence starts at 30 fps and only accepts a rate that is
+        # a multiple or factor of its current rate. Bridge e.g. 30 -> 210 ->
+        # 42 without changing the source clip's timing or keys.
+        if rate != 30:
+            controller.set_frame_rate(unreal.FrameRate(math.lcm(30, rate), 1))
+        controller.set_frame_rate(unreal.FrameRate(rate, 1))
         # UE counts frames as intervals: N keys span N-1 frames.
         controller.set_number_of_frames(unreal.FrameNumber(max(1, data['frames'] - 1)))
         for bone, track in data['tracks'].items():

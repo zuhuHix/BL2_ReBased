@@ -14,7 +14,7 @@ namespace
 const TCHAR* MayaRoot = TEXT("/Game/OpenWillow/Characters/Maya");
 UAnimSequence* LoadArmsAnim(const TCHAR* Clip)
 {
-    const FString Path = FString::Printf(TEXT("%s/FirstPerson/Anim_Pistol_%s.Anim_Pistol_%s"), MayaRoot, Clip, Clip);
+    const FString Path = FString::Printf(TEXT("%s/FirstPerson/Anim_Unarmed_%s.Anim_Unarmed_%s"), MayaRoot, Clip, Clip);
     UAnimSequence* Anim = LoadObject<UAnimSequence>(nullptr, *Path);
     if (!Anim) UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms animation not found: %s"), *Path);
     return Anim;
@@ -64,6 +64,7 @@ void AOpenWillowWalker::BeginPlay()
     USkeletalMesh* ArmsMesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
     if (!ArmsMesh) { UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms mesh not found: %s"), *MeshPath); return; }
     Arms->SetSkeletalMesh(ArmsMesh);
+    // The walker has no equipped weapon yet. Use Maya's unarmed set.
     IdleAnim = LoadArmsAnim(TEXT("Idle"));
     RunAnim = LoadArmsAnim(TEXT("Run_F"));
     JumpAnim = LoadArmsAnim(TEXT("Jump_Idle"));
@@ -83,6 +84,15 @@ void AOpenWillowWalker::Play(UAnimSequence* Anim, bool bLoop)
 void AOpenWillowWalker::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    if (!bSpawnProbeLogged && FParse::Param(FCommandLine::Get(), TEXT("owspawnprobe"))
+        && GetWorld()->GetTimeSeconds() > 5)
+    {
+        bSpawnProbeLogged = true;
+        const auto* Floor = GetCharacterMovement()->CurrentFloor.HitResult.GetActor();
+        const FString Source = Floor && Floor->Tags.Num() ? Floor->Tags[0].ToString() : TEXT("none");
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow spawn probe grounded=%d pawn=%s floor=%s"),
+            GetCharacterMovement()->IsMovingOnGround(), *GetActorLocation().ToString(), *Source);
+    }
     if (!Current) return;
     // -owautowalk: walk a slow circle unattended so captures can check the run
     // clip without running into a wall.
