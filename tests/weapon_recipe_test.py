@@ -27,8 +27,14 @@ class FakePackage:
 def world():
     stage = [const(1), const(100), const(0), const(0, 'Weight.Common'), const(50)]
     return {
-        'Weight.Common': {'ValueFormula': {'Multiplier': const(100), 'Level': const(1), 'Power': const(1)},
+        'Weight.Common': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(100), 'Level': const(1), 'Power': const(1)},
                           'RangeRestriction': {'MinValue': const(100)}},
+        # Like GD_Balance.Weighting.Weight_2_Uncommon: min 100 present but disabled.
+        'Weight.Uncommon': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(10), 'Level': const(1), 'Power': const(1),
+                                             'Offset': const(0)},
+                            'RangeRestriction': {'MinValue': const(100)}},
+        'Weight.Clamped': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(10), 'Level': const(1), 'Power': const(1)},
+                           'RangeRestriction': {'bEnableMinValueRestriction': True, 'MinValue': const(100)}},
         'Type': {'GestaltMesh': 'Gestalt', 'TitleList': ['Name.TypeTitle']},
         'Root': {'WeaponPartListCollection': 'Root.List', 'InventoryDefinition': 'Type',
                  'Manufacturers': [{'Manufacturer': 'Makers.Vladof'}]},
@@ -57,9 +63,14 @@ def world():
 
 
 class WeaponRecipeTests(unittest.TestCase):
-    def test_formula_weight_uses_multiplier_level_power_and_minimum(self):
+    def test_formula_weight_uses_multiplier_level_power(self):
         package = FakePackage(world())
         self.assertEqual(w.attribute_value(package, const(0, 'Weight.Common'), 30), 100)
+
+    def test_range_restriction_applies_only_when_enabled(self):
+        package = FakePackage(world())
+        self.assertEqual(w.attribute_value(package, const(0, 'Weight.Uncommon'), 30), 10)
+        self.assertEqual(w.attribute_value(package, const(0, 'Weight.Clamped'), 30), 100)
 
     def test_selective_replaces_only_enabled_slots(self):
         recipe = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=2)

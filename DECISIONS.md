@@ -1731,3 +1731,43 @@ Follow-up, part weights and item stats (same day):
 
 Automated: `tests/weapon_recipe_test.py` 5/5 and `tests/weapon_stats_test.py`
 2/2, synthetic.
+
+Follow-up, cross-checked against OpenBLCMM (same day):
+
+The maintainer approved downloading OpenBLCMM. Installed outside the repo
+at `C:/Users/yorad/Tools/OpenBLCMM/`:
+- OpenBLCMM v1.4.1 (`OpenBLCMM-1.4.1-Windows.zip`, SHA-256
+  `bbe9d09a3373de7f20b2f138b865baed762f2a8e6ef9b50738966f4095bc4000`) from the
+  official BLCM/OpenBLCMM release.
+- Datapack `blcmm_data_BL2-2023-04-20-01.jar` (SHA-256
+  `8bf07971904ed9d511586e11adcc4e676fbeda546994b439456860fcce2457bc`) from
+  BLCM/OpenBLCMM-Data.
+- Its `data.db` matched the shipped `.sha256sum` and was extracted to
+  `%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/`, where `tools/blcmm_dumps.py`
+  looks for it.
+No OpenBLCMM code is used and no dump text enters the repository
+(THIRD_PARTY.md already records this relationship). Subobject names in the
+dumps use a colon (`Pistol_Vladof:PartList`).
+
+Results:
+- Part lists agree. All 45 part-list slots across the five Infinity-chain
+  balances match our decode exactly: part order, per-part `Manufacturers`
+  overrides, stage and weight indices, `ConsolidatedAttributeInitData`
+  constants and `PartReplacementMode`. The game itself holds weight 0 for
+  every grip and body.
+- A clamp bug in our evaluator was fixed. Cooked data omits false booleans;
+  the dumps show `RangeRestriction.bEnableMinValueRestriction=False` on
+  `Weight_*` and `Init_WeaponDamage`. We had applied those minima anyway,
+  which flattened `Weight_2_Uncommon` (10) and `Weight_4_Rare` (1) to 100.
+  Restrictions now apply only when enabled; the formula also adds `Offset`
+  and honours `ValueFormula.bEnabled`. A definition with another
+  `BaseValueMode` or an enabled `ConditionalInitialization` is reported as
+  unresolved instead of guessed.
+- Manufacturer weight overrides now apply only when an entry names the
+  weapon's manufacturer. Entries with `Manufacturer=None` are not wildcards;
+  as wildcards they would make every `DefaultWeight` formula unused, whereas
+  BL2 elemental-chance mods work by editing those formulas. UNVERIFIED.
+- Resulting Infinity odds: element None 76.9%, Fire, Shock and Corrosive
+  7.7% each; accessory None 74.1%, the other seven 3.7% each; sight 12.5%
+  each of eight. Level-30 damage over seeds 1-8 is 649-835. No value has
+  been compared with an in-game card.

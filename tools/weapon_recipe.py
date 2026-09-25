@@ -17,7 +17,8 @@ UNVERIFIED rules (no public spec; flagged in every recipe):
 - Merge order root -> leaf. EPRM_Selective replaces enabled slots, EPRM_Additive
   appends to them, EPRM_Complete replaces every slot. A missing mode is Additive.
 - A slot whose candidates all weigh 0 picks uniformly among them.
-- Manufacturer grade restrictions and attribute-based weights are ignored.
+- A part's Manufacturers weight overrides DefaultWeight only when it names
+  the weapon's manufacturer; manufacturer grade restrictions are ignored.
 - Name: highest-Priority title from the parts' TitleList (weapon type as
   fallback) and highest-Priority prefix from their PrefixList, ties broken by
   the seed. Name parts whose Expressions test Weapon_Is_<Manufacturer> == 1
@@ -88,19 +89,31 @@ def attribute_value(package, init, level, attributes=None):
     definition = init.get('InitializationDefinition')
     attribute = init.get('BaseValueAttribute')
     if definition:
-        formula = package.props(definition).get('ValueFormula') or {}
+        props = package.props(definition)
+        # Only the plain formula path is evaluated; other modes need runtime state.
+        if (props.get('BaseValueMode') or 'BASEVALUE_InitializationDefSetsBaseValue') != 'BASEVALUE_InitializationDefSetsBaseValue':
+            return None
+        if (props.get('ConditionalInitialization') or {}).get('bEnabled'):
+            return None
+        formula = props.get('ValueFormula') or {}
+        if not formula.get('bEnabled'):
+            return None
         terms = {k: attribute_value(package, formula.get(k) or {}, level, attributes)
-                 for k in ('Multiplier', 'Level', 'Power')}
+                 for k in ('Multiplier', 'Level', 'Power', 'Offset')}
         if None in terms.values():
             return None
-        base = terms['Multiplier'] * (terms['Level'] ** terms['Power'])
-        clamp = package.props(definition).get('RangeRestriction') or {}
-        low = attribute_value(package, clamp['MinValue'], level, attributes) if clamp.get('MinValue') else None
-        high = attribute_value(package, clamp['MaxValue'], level, attributes) if clamp.get('MaxValue') else None
-        if low is not None:
-            base = max(base, low)
-        if high is not None:
-            base = min(base, high)
+        base = terms['Multiplier'] * (terms['Level'] ** terms['Power']) + terms['Offset']
+        # Cooked data omits false flags; a restriction applies only when enabled
+        # (the OpenBLCMM dump of Weight_2_Uncommon shows bEnable...=False).
+        clamp = props.get('RangeRestriction') or {}
+        if clamp.get('bEnableMinValueRestriction') and clamp.get('MinValue'):
+            low = attribute_value(package, clamp['MinValue'], level, attributes)
+            if low is not None:
+                base = max(base, low)
+        if clamp.get('bEnableMaxValueRestriction') and clamp.get('MaxValue'):
+            high = attribute_value(package, clamp['MaxValue'], level, attributes)
+            if high is not None:
+                base = min(base, high)
     elif attribute:
         if attribute not in attributes:
             return None
@@ -111,8 +124,15 @@ def attribute_value(package, init, level, attributes=None):
     return base * (1.0 if scale is None else scale)
 
 
-def slot_candidates(package, collection, stage):
-    """{slot: [(part, weight or None)]} for enabled slots of one part list."""
+def slot_candidates(package, collection, stage, manufacturer=None):
+    """{slot: [(part, weight or None)]} for enabled slots of one part list.
+
+    A WeightedPart's Manufacturers entry overrides DefaultWeightIndex only when
+    it names the weapon's manufacturer. Entries with Manufacturer=None are not
+    treated as wildcards: that would make DefaultWeight's rarity formulas dead
+    data, while BL2 elemental-chance mods work by editing those formulas.
+    UNVERIFIED precedence.
+    """
     props = package.props(collection)
     consolidated = props.get('ConsolidatedAttributeInitData') or []
     slots = {}
@@ -122,13 +142,18 @@ def slot_candidates(package, collection, stage):
             continue
         entries = []
         for part in data.get('WeightedParts') or []:
-            def at(name):
-                i = part.get(f'{name}Index', -1)
+            def at(name, index=None):
+                i = part.get(f'{name}Index', -1) if index is None else index
                 return attribute_value(package, consolidated[i], stage) if 0 <= i < len(consolidated) else None
             low, high = at('MinGameStage'), at('MaxGameStage')
             if (low is not None and stage < low) or (high is not None and stage > high):
                 continue
-            entries.append((part['Part'], at('DefaultWeight')))
+            weight = at('DefaultWeight')
+            for override in part.get('Manufacturers') or []:
+                if manufacturer and override.get('Manufacturer') == manufacturer:
+                    weight = at('DefaultWeight', override.get('DefaultWeightIndex', -1))
+                    break
+            entries.append((part['Part'], weight))
         slots[slot] = entries
     return slots, props.get('PartReplacementMode') or 'EPRM_Additive'
 
@@ -148,7 +173,7 @@ def roll(package, balance, seed, stage):
         collection = package.props(step).get('WeaponPartListCollection')
         if not collection:
             continue
-        slots, mode = slot_candidates(package, collection, stage)
+        slots, mode = slot_candidates(package, collection, stage, manufacturer)
         history.append({'balance': step, 'part_list': collection, 'mode': mode, 'slots': sorted(slots)})
         if mode == 'EPRM_Complete':
             merged = {}

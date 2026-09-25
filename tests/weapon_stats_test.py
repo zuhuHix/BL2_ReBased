@@ -25,7 +25,7 @@ class FakePackage:
 def world():
     return {
         'Scaler': {}, 'Scaler.ConstantAttributeValueResolver_0': {'ConstantValue': 2.0},
-        'Init.Damage': {'ValueFormula': {'Multiplier': const(10), 'Level': const(0, 'Scaler'),
+        'Init.Damage': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(10), 'Level': const(0, 'Scaler'),
                                          'Power': const(0, A + 'WeaponLevel')}},
         'Type': {'InstantHitDamage': const(0, init='Init.Damage', scale=1.5), 'FireRate': 0.25, 'ClipSize': 10,
                  'ReloadTime': 2.0, 'Spread': 2.0, 'AttributeSlotEffects': [
