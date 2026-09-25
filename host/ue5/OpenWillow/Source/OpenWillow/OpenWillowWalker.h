@@ -12,7 +12,8 @@ public:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
-    bool IsInfinityEquipped() const { return bInfinityEquipped; }
+    bool HasWeaponOut() const { return bWeaponOut; }
+    const class UOpenWillowInventory* GetInventory() const { return Inventory; }
     float PhaselockRemaining() const;
     float PhaselockCooldown() const { return PhaselockCooldownSeconds; }
     float LastTargetHitAt() const { return TargetHitAt; }
@@ -23,11 +24,15 @@ private:
     void Look(float Value);
     void SprintPressed();
     void SprintReleased();
-    void EquipInfinity();
-    void HolsterInfinity();
+    void SelectSlot(int32 Slot);
+    void Holster();
+    void SelectSlot1() { SelectSlot(0); }
+    void SelectSlot2() { SelectSlot(1); }
+    void SelectSlot3() { SelectSlot(2); }
+    void SelectSlot4() { SelectSlot(3); }
     void FirePressed();
     void FireReleased();
-    void FireInfinity();
+    void FireWeapon();
     void UsePhaselock();
     void RunCombatShots(float Now);
     void SpawnCombatTarget();
@@ -39,6 +44,7 @@ private:
     // component's origin (tools/prepare_character_anims.py).
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> Arms;
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> WeaponVisual;
+    UPROPERTY() TObjectPtr<class UOpenWillowInventory> Inventory;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> SprintAnim;
@@ -54,9 +60,9 @@ private:
     bool bWasFalling = false;
     bool bSpawnProbeLogged = false;
     bool bMayaActive = false;
-    bool bInfinityEquipped = false;
+    bool bWeaponOut = false;
     bool bFireHeld = false;
-    int32 InfinityShot = 0;
+    int32 ShotCount = 0;
     int32 CombatShotStep = 0;
     float NextShotAt = 0;
     float PhaselockReadyAt = 0;

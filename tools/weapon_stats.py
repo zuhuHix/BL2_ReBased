@@ -13,6 +13,8 @@ are listed in every output.
 - Attribute operands resolve for Weapon_Is_<Maker> (1 for the weapon's own
   manufacturer, else 0), WeaponLevel (the requested level) and attributes with
   a ConstantAttributeValueResolver. Anything else is reported as unresolved.
+- Rarity is the highest Rarity value among the chosen parts (1 Common ..
+  5 Legendary), each resolved through its ItemRarity attribute constant.
 - Manufacturer grades on the balance and skill/class effects are not applied.
 """
 import argparse
@@ -125,6 +127,9 @@ def evaluate(package, recipe, level):
         return final.get(ATTR + name)
     interval = stat('WeaponFireInterval')
     elemental = recipe['parts'].get('Elemental', {}).get('part', '')
+    rarities = [value(package.props(choice['part']).get('Rarity'))
+                for choice in recipe['parts'].values() if package.props(choice['part']).get('Rarity')]
+    rarities = [r for r in rarities if r is not None]
     card = {
         'name': recipe.get('name'),
         'level': level,
@@ -136,12 +141,15 @@ def evaluate(package, recipe, level):
         'shot_cost': stat('WeaponShotCost'),
         'spin_up': stat('WeaponBarrelSpinUpDuration'),
         'element': elemental.rsplit('_', 1)[-1] if elemental else None,
+        'rarity': int(max(rarities)) if rarities else None,
+        'manufacturer': maker or None,
     }
     return {
         'card': card, 'attributes': final, 'grades': grades, 'modifiers': sources,
         'unresolved_attributes': sorted(unresolved),
         'unverified_rules': ['(base + PreAdd) * (1 + Scale) + PostAdd with 0 clamp',
-                             'slot grade = sum of GradeIncrease', 'manufacturer grades not applied',
+                             'slot grade = sum of GradeIncrease', 'rarity = max over parts',
+                             'manufacturer grades not applied',
                              'accuracy percentage not derived from spread'],
     }
 

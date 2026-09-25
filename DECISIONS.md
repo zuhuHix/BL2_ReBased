@@ -1771,3 +1771,27 @@ Results:
   7.7% each; accessory None 74.1%, the other seven 3.7% each; sight 12.5%
   each of eight. Level-30 damage over seeds 1-8 is 649-835. No value has
   been compared with an in-game card.
+
+## 2026-09-25: Inventory component uses rolled weapon recipes (host)
+
+`UOpenWillowInventory` loads every recipe under `local/items` (or
+`-owitems=<dir>`) that `tools/weapon_stats.py` has evaluated. It keeps a
+backpack plus BL2's four weapon slots, and the first four items are equipped
+in order. Keys 1-4 select a slot and 0 holsters; an empty slot keeps the
+current weapon. The walker fires the active item's evaluated values:
+- interval 1 / fire rate
+- spin-up delay
+- per-shot damage (no criticals, element or resistance yet)
+Each item's mesh is `SK_<recipe id>`, imported by
+`host/ue5/import_weapon_items.py` from its `filter_gestalt_gltf.py --recipe`
+output. Only the Infinity MIC has a material approximation; other materials
+get a neutral grey stand-in with a logged warning. Item rarity is the highest
+part `Rarity` (`ItemRarity5_Legendary` = 5, resolved through its constant
+attribute), which gives the HUD's rarity colour. Taking the max is
+UNVERIFIED.
+
+Runtime check: 8 Infinity recipes (seeds 1-8, level 30) loaded. Slot 1 fired
+"Despair Infinity" at 740 per hit and 8/s; switching to slot 4 loaded "Angry
+Infinity" (753, 9.1/s) with its own rolled Tediore sight on screen. The host
+dummy's health was raised to 20,000 so the capture sequence survives level-30
+damage.

@@ -1,6 +1,8 @@
 #include "OpenWillowWalker.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowInventory.h"
+#include "Misc/Paths.h"
 #include "OpenWillowShotFx.h"
 #include "Animation/AnimSequence.h"
 #include "Camera/CameraComponent.h"
@@ -50,6 +52,7 @@ AOpenWillowWalker::AOpenWillowWalker()
     WeaponVisual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     WeaponVisual->SetCastShadow(false);
     WeaponVisual->SetHiddenInGame(true);
+    Inventory = CreateDefaultSubobject<UOpenWillowInventory>(TEXT("Inventory"));
     GetCharacterMovement()->MaxWalkSpeed = 450;
     GetCharacterMovement()->JumpZVelocity = 420;
     GetCharacterMovement()->MaxStepHeight = 35;
@@ -103,20 +106,19 @@ void AOpenWillowWalker::BeginPlay()
     FirePistolAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("ADD_Fire_Recoil"));
     PhaselockAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Lift"));
     PhaselockFailAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Fail"));
-    // The local UModel export is a shared pistol gestalt, not a verified
-    // Infinity part assembly. Keep that distinction in the asset path/log.
-    const TCHAR* VisualPath = TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy");
-    if (USkeletalMesh* PistolMesh = LoadObject<USkeletalMesh>(nullptr, VisualPath))
-    {
-        WeaponVisual->SetSkeletalMesh(PistolMesh);
-        // UE3 gestalt guns point along -Y; the hand's weapon bone expects X.
-        // The yaw is an observed fit (see the barrel-axis log), not read data.
-        float WeaponYaw = 90.f;
-        FParse::Value(FCommandLine::Get(), TEXT("owweaponyaw="), WeaponYaw);
-        WeaponVisual->SetRelativeRotation(FRotator(0, WeaponYaw, 0));
-    }
-    else UE_LOG(LogTemp, Warning, TEXT("OpenWillow optional pistol visual proxy missing: %s"), VisualPath);
-    EquipInfinity();
+    // UE3 gestalt guns point along -Y; the hand's weapon bone expects X.
+    // The yaw is an observed fit (see the barrel-axis log), not read data.
+    float WeaponYaw = 90.f;
+    FParse::Value(FCommandLine::Get(), TEXT("owweaponyaw="), WeaponYaw);
+    WeaponVisual->SetRelativeRotation(FRotator(0, WeaponYaw, 0));
+    // Rolled weapons: recipes from tools/weapon_recipe.py + weapon_stats.py,
+    // by default under the repository's ignored local/items (-owitems=<dir>).
+    FString ItemDir = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/items")));
+    FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir);
+    const int32 Loaded = Inventory->LoadRecipes(ItemDir);
+    for (int32 Slot = 0; Slot < FMath::Min(Loaded, UOpenWillowInventory::SlotCount); ++Slot)
+        Inventory->Equip(Slot, Slot);
+    SelectSlot(0);
     // -owcombattest: spawn the stand-in target once Maya has landed, so it
     // stands on the ground in front of her rather than at the drop height.
     bWantsCombatTarget = FParse::Param(FCommandLine::Get(), TEXT("owcombattest"));
@@ -178,10 +180,11 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     // numbered captures, so presentation reviews use repeatable views.
     static const bool bCombatShots = FParse::Param(FCommandLine::Get(), TEXT("owcombatshots"));
     if (bCombatShots && bMayaActive && Controller) RunCombatShots(Now);
-    if (bMayaActive && bInfinityEquipped && bFireHeld && Now >= NextShotAt)
+    const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
+    if (bMayaActive && bWeaponOut && Weapon && bFireHeld && Now >= NextShotAt)
     {
-        FireInfinity();
-        NextShotAt = Now + 0.1f; // local 10 Hz prototype; final rate needs BL2 attribute evaluation
+        FireWeapon();
+        NextShotAt = Now + 1.f / Weapon->FireRate; // evaluated item-card fire rate
     }
     if (!ArmsAnim) return;
     // BL2's own AnimTree is not reproduced; the native arms instance blends
@@ -204,17 +207,30 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWJump"), IE_Released, this, &ACharacter::StopJumping);
     Input->BindAction(TEXT("OWSprint"), IE_Pressed, this, &AOpenWillowWalker::SprintPressed);
     Input->BindAction(TEXT("OWSprint"), IE_Released, this, &AOpenWillowWalker::SprintReleased);
-    Input->BindAction(TEXT("OWEquipInfinity"), IE_Pressed, this, &AOpenWillowWalker::EquipInfinity);
-    Input->BindAction(TEXT("OWHolsterInfinity"), IE_Pressed, this, &AOpenWillowWalker::HolsterInfinity);
+    Input->BindAction(TEXT("OWWeapon1"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot1);
+    Input->BindAction(TEXT("OWWeapon2"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot2);
+    Input->BindAction(TEXT("OWWeapon3"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot3);
+    Input->BindAction(TEXT("OWWeapon4"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot4);
+    Input->BindAction(TEXT("OWHolster"), IE_Pressed, this, &AOpenWillowWalker::Holster);
     Input->BindAction(TEXT("OWFire"), IE_Pressed, this, &AOpenWillowWalker::FirePressed);
     Input->BindAction(TEXT("OWFire"), IE_Released, this, &AOpenWillowWalker::FireReleased);
     Input->BindAction(TEXT("OWPhaselock"), IE_Pressed, this, &AOpenWillowWalker::UsePhaselock);
 }
-void AOpenWillowWalker::EquipInfinity()
+void AOpenWillowWalker::SelectSlot(int32 Slot)
 {
     if (!bMayaActive || !ArmsAnim) return;
-    bInfinityEquipped = true;
-    WeaponVisual->SetHiddenInGame(false);
+    const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot);
+    if (!Item) return; // an empty slot keeps the current weapon, as in BL2
+    Inventory->SetActiveSlot(Slot);
+    bWeaponOut = true;
+    bFireHeld = false;
+    // Each rolled weapon imports as SK_<recipe id>; fall back to the older
+    // single Infinity assembly when that item has not been imported.
+    const FString ItemMesh = FString::Printf(TEXT("/Game/OpenWillow/Weapons/Items/SK_%s.SK_%s"), *Item->Id, *Item->Id);
+    USkeletalMesh* WeaponMesh = LoadObject<USkeletalMesh>(nullptr, *ItemMesh);
+    if (!WeaponMesh) WeaponMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy"));
+    WeaponVisual->SetSkeletalMesh(WeaponMesh);
+    WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr);
     IdleAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Idle"));
     RunAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Run_F"));
     SprintAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Sprint"));
@@ -222,12 +238,14 @@ void AOpenWillowWalker::EquipInfinity()
     LandAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Jump_End"));
     ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
     if (DrawPistolAnim) ArmsAnim->PlayAction(DrawPistolAnim);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped Infinity (pistol visual is an unverified shared-gestalt proxy)"));
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
+        Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);
 }
-void AOpenWillowWalker::HolsterInfinity()
+void AOpenWillowWalker::Holster()
 {
     if (!bMayaActive || !ArmsAnim) return;
-    bInfinityEquipped = false;
+    bWeaponOut = false;
+    Inventory->SetActiveSlot(INDEX_NONE);
     bFireHeld = false;
     WeaponVisual->SetHiddenInGame(true);
     IdleAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Idle"));
@@ -236,24 +254,24 @@ void AOpenWillowWalker::HolsterInfinity()
     JumpAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Jump_Idle"));
     LandAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Jump_End"));
     ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya holstered Infinity"));
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya holstered her weapon"));
 }
 void AOpenWillowWalker::FirePressed()
 {
-    if (!bMayaActive || !bInfinityEquipped) return;
+    const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
+    if (!bMayaActive || !bWeaponOut || !Weapon) return;
     bFireHeld = true;
-    // The installed Infinity barrel has spinning enabled and a 0.8 second
-    // spin-up formula. Its other attribute modifiers are not yet evaluated.
-    NextShotAt = GetWorld()->GetTimeSeconds() + 0.8f;
+    // Spinning barrels wait for their evaluated spin-up (Infinity: 0.55 s).
+    NextShotAt = FMath::Max(NextShotAt, GetWorld()->GetTimeSeconds() + Weapon->SpinUp);
 }
 void AOpenWillowWalker::FireReleased() { bFireHeld = false; }
-void AOpenWillowWalker::FireInfinity()
+void AOpenWillowWalker::FireWeapon()
 {
     // ADD_Fire_Recoil is a UE3 additive clip; layer it on the held pose.
     if (ArmsAnim && FirePistolAnim) ArmsAnim->PlayAdditive(FirePistolAnim, 0.45f);
     // A deterministic figure-eight is a visual proxy for the installed
     // FiringPatternLines array, whose serialized elements remain unsupported.
-    const float Phase = InfinityShot++ * (PI / 8.f);
+    const float Phase = ShotCount++ * (PI / 8.f);
     const float Spread = FMath::Tan(FMath::DegreesToRadians(2.1f));
     const FVector ForwardAim = Camera->GetForwardVector();
     const FVector Direction = (ForwardAim + Spread * (FMath::Sin(Phase) * Camera->GetRightVector()
@@ -280,8 +298,10 @@ void AOpenWillowWalker::FireInfinity()
         return;
     }
     {
-        // Placeholder per-shot damage; BL2 damage needs level/attribute evaluation.
-        UGameplayStatics::ApplyPointDamage(Target, 87.f, Direction, Hit,
+        // Evaluated item-card damage (tools/weapon_stats.py); no crits, element
+        // or target resistances yet.
+        const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
+        UGameplayStatics::ApplyPointDamage(Target, Weapon ? Weapon->Damage : 0.f, Direction, Hit,
             GetController(), this, UDamageType::StaticClass());
         TargetHitAt = GetWorld()->GetTimeSeconds();
     }
@@ -348,7 +368,9 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     case 10: if (Now < 14.f) return; FirePressed(); break;
     case 11: if (Now < 15.1f) return; Shot(TEXT("5_FiringWall")); break;
     case 12: if (Now < 15.3f) return; FireReleased(); break;
-    case 13: if (Now < 16.3f) return;
+    case 13: if (Now < 15.6f) return; Turn(-35.f, 0.f); SelectSlot(3); break;
+    case 14: if (Now < 16.6f) return; Shot(TEXT("6_Slot4")); break;
+    case 15: if (Now < 17.2f) return;
         if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
         break;
     default: return;

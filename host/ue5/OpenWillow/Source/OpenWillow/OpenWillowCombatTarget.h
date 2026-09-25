@@ -46,8 +46,8 @@ private:
     float LastHitAt = -10;
     float DiedAt = -10;
     float FallVelocity = 0;
-    float MaxHealth = 2000.f;
-    float Health = 2000.f;
+    float MaxHealth = 20000.f; // host dummy; sized for level-30 item damage
+    float Health = 20000.f;
     bool bPhaselocked = false;
     bool bDead = false;
 };

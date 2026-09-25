@@ -1,5 +1,6 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowInventory.h"
 #include "OpenWillowWalker.h"
 #include "CanvasItem.h"
 #include "Engine/Canvas.h"
@@ -21,6 +22,19 @@ const FLinearColor ShieldBlue(0.2f, 0.7f, 1.f);
 const FLinearColor HealthRed(0.85f, 0.1f, 0.08f);
 const FLinearColor Experience(0.95f, 0.75f, 0.15f);
 const FLinearColor PhaselockViolet(0.7f, 0.35f, 1.f);
+
+// BL2's item rarity colours: white, green, blue, purple, orange.
+FLinearColor RarityColor(int32 Rarity)
+{
+    switch (Rarity)
+    {
+    case 2: return FLinearColor(0.25f, 0.9f, 0.2f);
+    case 3: return FLinearColor(0.2f, 0.5f, 1.f);
+    case 4: return FLinearColor(0.65f, 0.3f, 1.f);
+    case 5: return Legendary;
+    default: return FLinearColor::White;
+    }
+}
 
 // A parallelogram slanted like BL2's bars; Skew shifts the top edge right.
 void Slant(UCanvas& Canvas, float X, float Y, float W, float H, float Skew, const FLinearColor& Color)
@@ -140,19 +154,34 @@ void AOpenWillowMayaHUD::DrawHUD()
         Outlined(*this, FString::Printf(TEXT("%.0f"), FMath::CeilToFloat(Remaining)), FLinearColor::White,
             X + 30.f, IconY - 12.f, Large, 1.f);
 
-    // Angled ammo panel, bottom right: legendary orange name, unlimited ammo.
-    const float PanelW = 250.f;
+    // Angled weapon panel, bottom right: rarity-coloured name, manufacturer,
+    // ammo (infinite when the evaluated shot cost is 0) and the four slots.
+    const UOpenWillowInventory* Inventory = Maya->GetInventory();
+    const FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    const float PanelW = 270.f;
     const float PanelX = W - PanelW - 50.f;
+    const FLinearColor Tint = Weapon ? RarityColor(Weapon->Rarity) : FLinearColor::White;
     Slant(*Canvas, PanelX, H - 96.f, PanelW, 58.f, 14.f, Backing);
-    Slant(*Canvas, PanelX, H - 42.f, PanelW, 4.f, 1.f, Legendary);
-    if (Maya->IsInfinityEquipped())
+    Slant(*Canvas, PanelX, H - 42.f, PanelW, 4.f, 1.f, Tint);
+    if (Maya->HasWeaponOut() && Weapon)
     {
-        Outlined(*this, TEXT("Infinity"), Legendary, PanelX + 26.f, H - 92.f, Large, 1.f);
-        Outlined(*this, TEXT("Vladof"), FLinearColor(0.75f, 0.75f, 0.75f), PanelX + 26.f, H - 64.f, Small, 1.f);
-        Outlined(*this, TEXT("∞"), FLinearColor::White, PanelX + PanelW - 58.f, H - 100.f, Large, 2.f);
+        Outlined(*this, Weapon->Name, Tint, PanelX + 26.f, H - 92.f, Large, 1.f);
+        Outlined(*this, Weapon->Manufacturer, FLinearColor(0.75f, 0.75f, 0.75f), PanelX + 26.f, H - 64.f, Small, 1.f);
+        if (Weapon->ShotCost <= 0.f)
+            Outlined(*this, FString::Chr(TCHAR(0x221E)), FLinearColor::White, PanelX + PanelW - 58.f, H - 100.f, Large, 2.f);
+        else
+            Outlined(*this, FString::Printf(TEXT("%.0f"), Weapon->Magazine), FLinearColor::White,
+                PanelX + PanelW - 58.f, H - 92.f, Large, 1.2f);
     }
     else
     {
         Outlined(*this, TEXT("Unarmed"), FLinearColor::White, PanelX + 26.f, H - 92.f, Large, 1.f);
+    }
+    for (int32 Slot = 0; Inventory && Slot < UOpenWillowInventory::SlotCount; ++Slot)
+    {
+        const FOpenWillowWeaponItem* Held = Inventory->SlotItem(Slot);
+        const bool bActive = Slot == Inventory->GetActiveSlot();
+        const FLinearColor Pip = Held ? RarityColor(Held->Rarity) * (bActive ? 1.f : 0.45f) : FLinearColor(0.2f, 0.2f, 0.2f, 0.6f);
+        Slant(*Canvas, PanelX + 26.f + Slot * 30.f, H - 30.f, 24.f, bActive ? 8.f : 5.f, 3.f, Pip);
     }
 }
