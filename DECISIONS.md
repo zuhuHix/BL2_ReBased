@@ -1809,3 +1809,11 @@ module now depends on UMG, Slate and SlateCore. Captures now request the UI
 layer so screenshots include UMG widgets. The unattended sequence adds
 `OWCombat_6_Slot4` and `OWCombat_7_Inventory`; the latter was inspected and
 shows the card for "Extended Infinity" (835, 7.3/s) compared with slot 1.
+
+Item level (same day): `weapon_stats.py --level` now defaults to the recipe's
+`game_stage`, the level it was rolled at. `Init_WeaponDamage` scales by
+`1.13 ^ WeaponLevel`; for Extended Infinity (seed 5) the tool gives 24, 246,
+835, 9,621 and 141,555 damage at levels 1, 20, 30, 50 and 72. The level-50
+value looks high for a BL2 pistol. The likely suspect is the summed slot-grade
+bonus (+3% per WeaponDamage grade), whose combination rule is UNVERIFIED. A
+real item card at a known level is needed to calibrate.

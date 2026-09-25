@@ -159,7 +159,7 @@ def main():
     parser.add_argument('--reader', required=True)
     parser.add_argument('--package', required=True)
     parser.add_argument('--recipe', required=True, help='tools/weapon_recipe.py output; stats are added to it')
-    parser.add_argument('--level', type=int, default=30)
+    parser.add_argument('--level', type=int, help="item level; defaults to the recipe's game_stage (the level it was rolled at)")
     args = parser.parse_args()
     recipe_path = Path(args.recipe)
     recipe = json.loads(recipe_path.read_text(encoding='utf-8'))
@@ -170,7 +170,8 @@ def main():
         'AttributeSlotUpgrades=StructProperty:AttributeSlotUpgradeData',
     ]) + '\n', encoding='utf-8')
     package = weapon_recipe.Package(str(Path(args.reader).resolve()), Path(args.package), str(schema.resolve()))
-    recipe['stats'] = evaluate(package, recipe, args.level)
+    level = args.level if args.level is not None else int(recipe.get('game_stage') or 1)
+    recipe['stats'] = evaluate(package, recipe, level)
     recipe_path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
     print(json.dumps(recipe['stats']['card'], indent=1))
     if recipe['stats']['unresolved_attributes']:
