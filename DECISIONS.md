@@ -1626,3 +1626,30 @@ Automated: host build; import commandlets exit 0. Runtime: the unattended
 sequence logs 4 target hits, Phaselock activation and release about 5.5 s
 later. Visual: the captures were reviewed by eye and by the reviewer agent.
 None was compared with the original game.
+
+Follow-up after a maintainer play test (same day):
+
+- Key 1 did not re-equip the Infinity. The map selector's controller
+  bindings for 1-9 consumed the key before the pawn's `OWEquipInfinity`
+  action. Those bindings no longer consume input. Pressing 1 with the map
+  menu open now does both, which is harmless because the map changes.
+- Phaselock timing is now read from `GD_Siren_Streaming_SF.upk`.
+  `ActionSkill_Phaselock` (`LiftActionSkill`) has LiftDuration 0.7,
+  LockFadeOutTime 1.1 and LiftSnapTimePct/HeightPct 0.5. Its
+  LockDurationFormula is `Att_Phaselock_Duration`, base 5, scaled by
+  `PhaselockTimeScale`, default 1. The host lock is now 5 s instead of the
+  5.5 s placeholder, and the shell fades over the last 1.1 s. `Startup.upk`
+  `Cooldown_Phaselock` resolves to a constant 13, which confirms the host
+  cooldown. Skill-tree and class-mod modifiers are not applied. The lift
+  snap is not modelled and the 170 cm lift height is still an estimate. The
+  skill also names BL2's hand-orb, enemy-bubble and point-light effects; those
+  are not hosted.
+- Infinity material: `Pattern_Infiniti` is a 256x4 color ramp (black, navy,
+  purple, pink, cream) that the first version ignored. It is now sampled
+  through UV1. `p_PatternScalePosition` is read as UV1 scale (-1.4429, 30)
+  and offset (0.3671, 0.03). It is weighted into regions A and B by
+  `p_PatternChannelScale` (0.85, 1), tinted by `p_PatternColor` and shaded
+  by the detail channel. Every one of those parameter meanings is an
+  UNVERIFIED guess at the stripped `Master_Gun` graph. The gun now shows a
+  multicolor gradient instead of flat white; it has not been compared with
+  the game.

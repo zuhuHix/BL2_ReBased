@@ -63,7 +63,8 @@ private:
     float LandUntil = 0;
     float TargetHitAt = -10;
     float PhaselockBeamUntil = 0;
-    float PhaselockCooldownSeconds = 13.f; // host prototype; BL2 formula still needs evaluation
+    // Cooldown_Phaselock ConstantAttributeValueResolver: 13 s (no skill/class mods).
+    float PhaselockCooldownSeconds = 13.f;
     bool bWantsCombatTarget = false;
     bool bBarrelAxisLogged = false;
     // Look-input weapon sway, in degrees (yaw, pitch).

@@ -11,6 +11,8 @@ paint regions, and one p_Diffuse channel picks between each region's
 shadow/midtone/highlight colors from the MIC. p_Diffuse's channels hold
 separate atlases; its name (LauncherShotgunPistol) suggests R/G/B in that
 order, so the pistol detail is read from blue. That order is an inference.
+Pattern_Infiniti is a color ramp applied through UV1 to regions A and B;
+see the pattern block below for how its parameters were interpreted.
 M_OW_FxAdditive (tracers, flashes, Phaselock sphere) and M_OW_BulletHole
 (impact decal) are host-only effect materials.
 Only generated UE assets under /Game/OpenWillow/Weapons/InfinityProxy are touched.
@@ -42,13 +44,13 @@ def import_file(path):
     return task.get_objects()
 
 
-def import_texture(name, normal=False):
+def import_texture(name, normal=False, color=False):
     path = textures / f'{name}.png'
     if not path.is_file():
         raise RuntimeError(f'Missing UModel texture export: {path}')
     texture = next(a for a in import_file(path) if isinstance(a, unreal.Texture2D))
     # Masks and detail are data, not color; the normal map is two-channel.
-    texture.set_editor_property('srgb', False)
+    texture.set_editor_property('srgb', color)
     if normal:
         texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
     eal.save_loaded_asset(texture, only_if_is_dirty=False)
@@ -62,6 +64,8 @@ mesh = meshes[0]
 masks = import_texture('Weap_Pistols_Comp')
 detail = import_texture('Weap_LauncherShotgunPistol_Comp')
 normal = import_texture('Weap_Pistols_Nrm', normal=True)
+# 256x4 color ramp (black, navy, purple, pink, cream), not a tiled motif.
+ramp = import_texture('Pattern_Infiniti', color=True)
 
 # Mati_VladofLegendaryPistol_Infinity VectorParameterValues (UModel props).
 colors = {
@@ -124,8 +128,33 @@ for row, (region, pin) in enumerate((('A', 'R'), ('B', 'G'), ('C', 'B'))):
     tone = lerp(lerp(shadow, mid, low, '', -600, y), hilight, high, '', -450, y)
     weighted = binary(unreal.MaterialExpressionMultiply, tone, '', mask_sample, pin, -300, y)
     total = weighted if total is None else binary(unreal.MaterialExpressionAdd, total, '', weighted, '', -150, y)
+# Pattern: the MIC's p_PatternScalePosition (-1.4429, 30, 0.3671, 0.03) is
+# read as UV1 scale (R, G) and offset (B, A); p_PatternChannelScale (0.85, 1)
+# weights it into regions A and B; p_PatternColor tints it and the detail
+# channel shades it. Parameter semantics are UNVERIFIED guesses at Master_Gun.
+uv1 = node(unreal.MaterialExpressionTextureCoordinate, -1700, 1100)
+uv1.set_editor_property('coordinate_index', 1)
+uv1.set_editor_property('u_tiling', -1.4429)
+uv1.set_editor_property('v_tiling', 30.0)
+offset = node(unreal.MaterialExpressionConstant2Vector, -1700, 1200)
+offset.set_editor_property('r', 0.3671)
+offset.set_editor_property('g', 0.03)
+ramp_uv = binary(unreal.MaterialExpressionAdd, uv1, '', offset, '', -1550, 1150)
+ramp_sample = node(unreal.MaterialExpressionTextureSample, -1400, 1150)
+ramp_sample.set_editor_property('texture', ramp)
+mel.connect_material_expressions(ramp_uv, '', ramp_sample, 'UVs')
+pattern_tint = constant3((5.0585, 5.65528, 1.92727), -1400, 1400)
+tinted = binary(unreal.MaterialExpressionMultiply, ramp_sample, 'RGB', pattern_tint, '', -1200, 1200)
+shaded = binary(unreal.MaterialExpressionMultiply, tinted, '', detail_sample, 'B', -1050, 1200)
+weight_a = node(unreal.MaterialExpressionConstant, -1400, 1500)
+weight_a.set_editor_property('r', 0.85)
+pattern_a = binary(unreal.MaterialExpressionMultiply, mask_sample, 'R', weight_a, '', -1200, 1450)
+pattern_weight = binary(unreal.MaterialExpressionAdd, pattern_a, '', mask_sample, 'G', -1050, 1450)
+pattern_alpha = node(unreal.MaterialExpressionSaturate, -900, 1450)
+mel.connect_material_expressions(pattern_weight, '', pattern_alpha, '')
+patterned = lerp(total, shaded, pattern_alpha, '', -100, 0)
 base = node(unreal.MaterialExpressionSaturate, 0, 0)
-mel.connect_material_expressions(total, '', base, '')
+mel.connect_material_expressions(patterned, '', base, '')
 mel.connect_material_property(base, '', unreal.MaterialProperty.MP_BASE_COLOR)
 mel.connect_material_property(normal_sample, 'RGB', unreal.MaterialProperty.MP_NORMAL)
 metallic = node(unreal.MaterialExpressionConstant, 0, 200)

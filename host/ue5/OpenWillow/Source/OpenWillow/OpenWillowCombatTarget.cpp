@@ -12,7 +12,8 @@ const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 const FLinearColor PhaselockColor(0.55f, 0.18f, 1.f);
 constexpr float LiftHeight = 170.f; // host estimate; BL2 lift height not read
-constexpr float LiftSeconds = 0.7f; // installed Phaselock lift duration
+constexpr float LiftSeconds = 0.7f; // ActionSkill_Phaselock.LiftDuration
+constexpr float LockFadeSeconds = 1.1f; // ActionSkill_Phaselock.LockFadeOutTime
 constexpr float RespawnSeconds = 3.f;
 
 UStaticMeshComponent* Part(AActor* Owner, USceneComponent* Parent, const TCHAR* Name,
@@ -129,9 +130,11 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         Pivot->SetRelativeRotation(FRotator(Wobble.Y + 8.f * FMath::Sin(Held * 1.3f),
             Held * 25.f, Wobble.X + 6.f * FMath::Sin(Held * 1.7f)));
         const float Pulse = 0.85f + 0.15f * FMath::Sin(Held * 7.f);
-        const float Grow = FMath::Clamp(Held / 0.25f, 0.f, 1.f);
-        LockSphere->SetRelativeScale3D(FVector(2.2f * Grow * Pulse));
-        if (LockMaterial) LockMaterial->SetScalarParameterValue(TEXT("Intensity"), 3.f * Pulse);
+        // Shell grows in, then fades over ActionSkill_Phaselock.LockFadeOutTime.
+        const float Grow = FMath::Clamp(Held / 0.25f, 0.f, 1.f)
+            * FMath::Clamp((LockEndsAt - Now) / LockFadeSeconds, 0.f, 1.f);
+        LockSphere->SetRelativeScale3D(FVector(2.2f * FMath::Max(Grow, 0.01f) * Pulse));
+        if (LockMaterial) LockMaterial->SetScalarParameterValue(TEXT("Intensity"), 3.f * Pulse * Grow);
         FallVelocity = 0.f;
         if (Now >= LockEndsAt)
         {

@@ -101,7 +101,10 @@ void AOpenWillowPlayerController::SetupInputComponent()
                                           EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine};
     for (const FKey& Key : Digits)
     {
-        InputComponent->BindKey(Key, IE_Pressed, this, &AOpenWillowPlayerController::OnDigitKey);
+        // Don't consume: with the menu closed, the pawn's own digit actions
+        // (e.g. Maya's 1 = equip Infinity) must still receive the key.
+        InputComponent->BindKey(Key, IE_Pressed, this, &AOpenWillowPlayerController::OnDigitKey)
+            .bConsumeInput = false;
     }
 }
 

@@ -302,7 +302,9 @@ void AOpenWillowWalker::UsePhaselock()
         return;
     }
     AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
-    if (!Target || !Target->BeginPhaselock(Now, 5.5f))
+    // ActionSkill_Phaselock.LockDurationFormula -> Att_Phaselock_Duration
+    // base 5 s, times PhaselockTimeScale (default 1). Skill mods not applied.
+    if (!Target || !Target->BeginPhaselock(Now, 5.f))
     {
         if (ArmsAnim && PhaselockFailAnim) ArmsAnim->PlayAction(PhaselockFailAnim);
         return;
