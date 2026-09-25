@@ -16,12 +16,16 @@ public:
     void SetClips(UAnimSequence* InIdle, UAnimSequence* InRun, UAnimSequence* InSprint,
         UAnimSequence* InJump, UAnimSequence* InLand);
     void SetMovement(float InGroundSpeed, bool bInFalling, bool bInLanding);
+    void PlayAction(UAnimSequence* InAction, float InWeight = 1.f);
 
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Idle;
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Run;
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Sprint;
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Jump;
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Land;
+    UPROPERTY(Transient) TObjectPtr<UAnimSequence> Action;
+    int32 ActionSerial = 0;
+    float ActionWeight = 1.f;
     float GroundSpeed = 0;
     bool bFalling = false;
     bool bLanding = false;
@@ -54,4 +58,11 @@ private:
     float PreviousOverlayTime = 0;
     float OverlayAlpha = 0;
     float OverlayCrossfade = 1;
+    const UAnimSequence* DesiredAction = nullptr;
+    const UAnimSequence* ActiveAction = nullptr;
+    int32 DesiredActionSerial = 0;
+    int32 ActiveActionSerial = 0;
+    float DesiredActionWeight = 1.f;
+    float ActionTime = 0;
+    float ActionAlpha = 0;
 };

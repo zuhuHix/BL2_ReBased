@@ -43,7 +43,17 @@ for pair in filter(None, os.environ.get('OPENWILLOW_CHARACTER_ANIMS', '').split(
         sequence = tools.create_asset(name, f'{destination}/FirstPerson', unreal.AnimSequence, factory)
         controller = sequence.controller
         controller.open_bracket(unreal.Text('OpenWillow MD5 import'))
-        rate = int(round(data['rate']))
+        source_rate = float(data['rate'])
+        rate = int(round(source_rate))
+        if abs(source_rate - rate) > 0.001:
+            # UE's integer FrameRate cannot preserve e.g. UModel's 29.1429
+            # fps pistol recoil. Bridging 30 -> 870 -> 29 triggers an engine
+            # resampling ensure, so nearby rates use 30 fps. The small timing
+            # change is logged and remains a local visual approximation.
+            if abs(source_rate - 30.0) > 1.5:
+                raise RuntimeError(f'{name}: unsupported noninteger frame rate {source_rate}')
+            rate = 30
+            unreal.log_warning(f'OW_ANIM {name}: source {source_rate} fps imported at 30 fps')
         # A new UE sequence starts at 30 fps and only accepts a rate that is
         # a multiple or factor of its current rate. Bridge e.g. 30 -> 210 ->
         # 42 without changing the source clip's timing or keys.

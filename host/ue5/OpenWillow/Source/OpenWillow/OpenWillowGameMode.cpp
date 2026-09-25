@@ -1,6 +1,7 @@
 ﻿#include "OpenWillowGameMode.h"
 #include "Camera/CameraActor.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowMayaHUD.h"
 #include "OpenWillowMapSelector.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -18,6 +19,9 @@ AOpenWillowGameMode::AOpenWillowGameMode()
     DefaultPawnClass = FParse::Param(FCommandLine::Get(), TEXT("owwalk"))
         ? AOpenWillowWalker::StaticClass() : ASpectatorPawn::StaticClass();
     PlayerControllerClass = AOpenWillowPlayerController::StaticClass();
+    if (FParse::Param(FCommandLine::Get(), TEXT("owwalk"))
+        && FParse::Param(FCommandLine::Get(), TEXT("owmaya")))
+        HUDClass = AOpenWillowMayaHUD::StaticClass();
 }
 
 void AOpenWillowGameMode::BeginPlay()

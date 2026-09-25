@@ -48,6 +48,13 @@ void UOpenWillowArmsAnimInstance::SetMovement(float InGroundSpeed, bool bInFalli
     bLanding = bInLanding;
 }
 
+void UOpenWillowArmsAnimInstance::PlayAction(UAnimSequence* InAction, float InWeight)
+{
+    Action = InAction;
+    ActionWeight = FMath::Clamp(InWeight, 0.f, 1.f);
+    ++ActionSerial;
+}
+
 FAnimInstanceProxy* UOpenWillowArmsAnimInstance::CreateAnimInstanceProxy()
 {
     return new FOpenWillowArmsProxy(this);
@@ -64,6 +71,9 @@ void FOpenWillowArmsProxy::PreUpdate(UAnimInstance* Instance, float DeltaSeconds
     DesiredOverlay = Arms->bFalling ? Arms->Jump.Get()
         : Arms->bLanding ? Arms->Land.Get() : nullptr;
     DesiredSpeed = Arms->GroundSpeed;
+    DesiredAction = Arms->Action;
+    DesiredActionSerial = Arms->ActionSerial;
+    DesiredActionWeight = Arms->ActionWeight;
 }
 
 void FOpenWillowArmsProxy::UpdateAnimationNode(const FAnimationUpdateContext& Context)
@@ -92,6 +102,21 @@ void FOpenWillowArmsProxy::UpdateAnimationNode(const FAnimationUpdateContext& Co
     {
         Overlay = nullptr;
         PreviousOverlay = nullptr;
+    }
+    if (DesiredActionSerial != ActiveActionSerial)
+    {
+        ActiveActionSerial = DesiredActionSerial;
+        ActiveAction = DesiredAction;
+        ActionTime = 0.f;
+        ActionAlpha = 0.f;
+    }
+    if (ActiveAction)
+    {
+        Advance(ActiveAction, ActionTime, DeltaSeconds, false);
+        const bool bEnded = ActionTime >= ActiveAction->GetPlayLength();
+        ActionAlpha = FMath::FInterpConstantTo(ActionAlpha,
+            bEnded ? 0.f : DesiredActionWeight, DeltaSeconds, 12.f);
+        if (bEnded && ActionAlpha <= 0.f) ActiveAction = nullptr;
     }
 }
 
@@ -131,6 +156,12 @@ bool FOpenWillowArmsProxy::Evaluate(FPoseContext& Output)
         {
             Mix(Output, OverlayPose, OverlayAlpha);
         }
+    }
+    if (ActiveAction && ActionAlpha > 0.f)
+    {
+        FPoseContext ActionPose(Output);
+        Sample(ActiveAction, ActionTime, false, ActionPose);
+        Mix(Output, ActionPose, ActionAlpha);
     }
     return true;
 }
