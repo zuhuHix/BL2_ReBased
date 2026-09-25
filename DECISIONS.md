@@ -1653,3 +1653,52 @@ Follow-up after a maintainer play test (same day):
   UNVERIFIED guess at the stripped `Master_Gun` graph. The gun now shows a
   multicolor gradient instead of flat white; it has not been compared with
   the game.
+
+## 2026-09-25: Weapon part rolls from installed balance data (items before UI)
+
+The maintainer chose to build the item/part layer before the inventory and
+HUD. Item cards need a gun's name, rarity, parts and stats, and a UMG
+rebuild of BL2's UI was chosen over running its Scaleform movies.
+`UI_HUD.HUD` and `SharedWillowInventory` `SwfMovie`s exist in `Startup.upk`.
+SWF playback remains an optional later benchmark.
+
+`tools/weapon_recipe.py` reads a `WeaponBalanceDefinition` through
+`ow-package --properties` with an array schema; parser code is unchanged. It
+follows `BaseDefinition` to the root, whose `InventoryDefinition` is the
+`WeaponTypeDefinition` and whose `Manufacturers[0]` is the manufacturer. It
+merges each balance's `WeaponPartListCollection` per slot, filters by game
+stage, weights, rolls from a seed and writes a JSON recipe: parts, gestalt
+fragments, material instance and name. `filter_gestalt_gltf.py --recipe`
+builds that roll's mesh.
+
+Decoded and used:
+- `WeightedParts` entries index `ConsolidatedAttributeInitData` for min/max
+  game stage and weight.
+- Rarity weights such as `GD_Balance.Weighting.Weight_1_Common` are
+  `ValueFormula` Multiplier 100 x Level 1 ^ Power 1, clamped at a 100 minimum.
+- Name parts carry `Priority`. Manufacturer variants carry an `Expressions`
+  entry `Weapon_Is_<Maker> == 1`. For example, "Xtra Fast" is the Bandit
+  spelling of Vladof's "Rapid".
+
+For `Pistol_Vladof_5_Infinity` the chain is `Pistol_Vladof` (Additive), then
+`_2_Uncommon`, `_3_Rare`, `_4_VeryRare` and `_5_Infinity`, all Selective.
+Barrel and material are fixed, so the Infinity's paint does not roll. Grip,
+sight, element and accessory roll across manufacturers. Seeds 1-5 gave
+Burning, Caustic, Discharge, Angry and Discharge Infinity. Every rolled
+fragment exists in the pistol gestalt.
+
+UNVERIFIED, flagged in each recipe:
+- The replacement-mode semantics (Selective replaces enabled slots,
+  Additive appends, Complete replaces all).
+- The uniform pick when every candidate weighs 0. The Infinity barrel and the
+  root body and grip entries do weigh 0.
+- Manufacturer grade restrictions are ignored.
+- The name rule: highest priority, ties broken by the seed.
+Recipes have not been compared with in-game drops.
+
+Also recorded for the weapon pass: `WeaponType_Vladof_Pistol` gives
+FirstPersonMeshFOV 45, PlayerViewOffset (20, 4, 2), FireRate 0.125,
+ClipSize 20, Spread 2.1 and the WeaponKick values. The separate 45 degree
+weapon FOV likely explains the oversized gun in the host view.
+
+Automated: `python tests/weapon_recipe_test.py` 5/5 on synthetic data.

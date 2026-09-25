@@ -678,6 +678,18 @@ python tools/filter_gestalt_gltf.py --gltf <UModel GestaltDef_Pistol_GestaltSkel
   --parts Pistol_Body_Vladof Pistol_Barrel_Vladof Pistol_Grip_Vladof Pistol_Scope_Vladof
 ```
 
+To roll a gun from its balance data instead of naming parts by hand:
+
+```powershell
+python tools/weapon_recipe.py --reader build/Release/ow-package.exe --package "$game/WillowGame/CookedPCConsole/Startup.upk" `
+  --balance GD_Weap_Pistol.A_Weapons_Legendary.Pistol_Vladof_5_Infinity --seed 3 --output local/items/infinity_3.json
+python tools/filter_gestalt_gltf.py --gltf <gestalt glTF> --gestalt local/infinity/gestaltdef.json `
+  --recipe local/items/infinity_3.json --output local/items/infinity_3.gltf
+```
+
+The recipe lists the merge chain, candidates, weights, name parts and the
+rules that are still UNVERIFIED.
+
 Import with `OPENWILLOW_PISTOL_GLTF` pointing at the filtered glTF and
 `OPENWILLOW_INFINITY_TEXTURES` at UModel's PNG export of
 `Mati_VladofLegendaryPistol_Infinity`, running

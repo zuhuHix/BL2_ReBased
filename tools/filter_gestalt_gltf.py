@@ -30,7 +30,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--gltf', required=True)
     parser.add_argument('--gestalt', required=True, help='ow-package --properties JSON of the GestaltDef')
-    parser.add_argument('--parts', required=True, nargs='+', help='SkeletalMeshFragmentName values to keep')
+    parts = parser.add_mutually_exclusive_group(required=True)
+    parts.add_argument('--parts', nargs='+', help='SkeletalMeshFragmentName values to keep')
+    parts.add_argument('--recipe', help='tools/weapon_recipe.py output; keeps its gestalt_fragments')
     parser.add_argument('--output', required=True, help='output .gltf; a .bin is written beside it')
     args = parser.parse_args()
 
@@ -53,7 +55,8 @@ def main():
         starts.append(first)
         first += count
 
-    wanted = set(args.parts)
+    wanted = set(args.parts) if args.parts else set(
+        json.loads(Path(args.recipe).read_text(encoding='utf-8'))['gestalt_fragments'])
     found = {p['SkeletalMeshFragmentName'] for p in parts} & wanted
     if found != wanted:
         raise RuntimeError(f'unknown fragments: {sorted(wanted - found)}')
