@@ -2,6 +2,8 @@
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowInventoryWidget.h"
+#include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
 #include "OpenWillowShotFx.h"
 #include "Animation/AnimSequence.h"
@@ -212,6 +214,7 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWWeapon3"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot3);
     Input->BindAction(TEXT("OWWeapon4"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot4);
     Input->BindAction(TEXT("OWHolster"), IE_Pressed, this, &AOpenWillowWalker::Holster);
+    Input->BindAction(TEXT("OWInventory"), IE_Pressed, this, &AOpenWillowWalker::ToggleInventory);
     Input->BindAction(TEXT("OWFire"), IE_Pressed, this, &AOpenWillowWalker::FirePressed);
     Input->BindAction(TEXT("OWFire"), IE_Released, this, &AOpenWillowWalker::FireReleased);
     Input->BindAction(TEXT("OWPhaselock"), IE_Pressed, this, &AOpenWillowWalker::UsePhaselock);
@@ -240,6 +243,35 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     if (DrawPistolAnim) ArmsAnim->PlayAction(DrawPistolAnim);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
         Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);
+}
+void AOpenWillowWalker::EquipItem(int32 Item, int32 Slot)
+{
+    if (!Inventory->Equip(Item, Slot)) return;
+    // Equipping into the held slot, or with nothing held, draws the item now.
+    if (!bWeaponOut || Inventory->GetActiveSlot() == Slot || Inventory->GetActiveSlot() == INDEX_NONE)
+        SelectSlot(Slot);
+}
+void AOpenWillowWalker::ToggleInventory()
+{
+    APlayerController* PC = Cast<APlayerController>(Controller);
+    if (!bMayaActive || !PC) return;
+    bFireHeld = false;
+    if (InventoryScreen && InventoryScreen->IsInViewport())
+    {
+        InventoryScreen->RemoveFromParent();
+        PC->SetInputMode(FInputModeGameOnly());
+        PC->SetShowMouseCursor(false);
+        return;
+    }
+    if (!InventoryScreen) InventoryScreen = CreateWidget<UOpenWillowInventoryWidget>(PC);
+    InventoryScreen->Bind(this);
+    InventoryScreen->AddToViewport(10);
+    InventoryScreen->Refresh();
+    InventoryScreen->SetIsFocusable(true);
+    FInputModeUIOnly Mode;
+    Mode.SetWidgetToFocus(InventoryScreen->TakeWidget());
+    PC->SetInputMode(Mode);
+    PC->SetShowMouseCursor(true);
 }
 void AOpenWillowWalker::Holster()
 {
@@ -344,7 +376,7 @@ void AOpenWillowWalker::RunCombatShots(float Now)
 {
     auto Shot = [](const TCHAR* Name)
     {
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), false, false);
+        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), true, false);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat capture %s"), Name);
     };
     auto Turn = [this](float Yaw, float Pitch)
@@ -370,7 +402,9 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     case 12: if (Now < 15.3f) return; FireReleased(); break;
     case 13: if (Now < 15.6f) return; Turn(-35.f, 0.f); SelectSlot(3); break;
     case 14: if (Now < 16.6f) return; Shot(TEXT("6_Slot4")); break;
-    case 15: if (Now < 17.2f) return;
+    case 15: if (Now < 17.f) return; ToggleInventory(); if (InventoryScreen) InventoryScreen->ShowCard(4); break;
+    case 16: if (Now < 17.8f) return; Shot(TEXT("7_Inventory")); break;
+    case 17: if (Now < 18.4f) return;
         if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
         break;
     default: return;

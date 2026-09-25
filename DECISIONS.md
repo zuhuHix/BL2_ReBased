@@ -1795,3 +1795,17 @@ Runtime check: 8 Infinity recipes (seeds 1-8, level 30) loaded. Slot 1 fired
 Infinity" (753, 9.1/s) with its own rolled Tediore sight on screen. The host
 dummy's health was raised to 20,000 so the capture sequence survives level-30
 damage.
+
+Inventory screen (same day): `UOpenWillowInventoryWidget`, UMG built in C++
+so the layout is reviewable text rather than a Blueprint asset. It opens with
+I; Tab stays the dev map selector. The layout follows BL2's inventory:
+equipped slots and backpack on the left in rarity colours, and an item card
+with level, manufacturer, damage, fire rate, reload, magazine, spread,
+element, "Consumes no ammo" and spin-up. Stats are compared against the
+targeted slot, green up and red down, with lower reload and spread counted as
+better. Clicking a slot targets it; clicking a backpack item equips it there.
+Fonts, frames and icons are host stand-ins, not BL2's Scaleform art. The
+module now depends on UMG, Slate and SlateCore. Captures now request the UI
+layer so screenshots include UMG widgets. The unattended sequence adds
+`OWCombat_6_Slot4` and `OWCombat_7_Inventory`; the latter was inspected and
+shows the card for "Extended Infinity" (835, 7.3/s) compared with slot 1.
