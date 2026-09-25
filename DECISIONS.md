@@ -1702,3 +1702,32 @@ ClipSize 20, Spread 2.1 and the WeaponKick values. The separate 45 degree
 weapon FOV likely explains the oversized gun in the host view.
 
 Automated: `python tests/weapon_recipe_test.py` 5/5 on synthetic data.
+
+Follow-up, part weights and item stats (same day):
+
+- Weights: the maintainer expected every part to carry a drop weight. In the
+  cooked `Pistol_Vladof.PartList`, `ConsolidatedAttributeInitData` is
+  [1, 100, 0]. Every grip, sight and body entry points at the 0 with no
+  InitializationDefinition. Elements and accessories do use rarity formulas
+  (`Weight_1_Common` = 100 and so on). What BL2 does with an all-zero slot is
+  native code; the host picks uniformly, still UNVERIFIED. The OpenBLCMM dump
+  oracle is not installed on this machine, so no in-engine cross-check was
+  made.
+- `tools/weapon_stats.py` evaluates a recipe into item-card numbers. Base
+  values come from the weapon type (`InstantHitDamage`, `FireRate`,
+  `ClipSize`, `ReloadTime`, `Spread`). Damage is `Init_WeaponDamage` = 8 x
+  `Att_UniversalBalanceScaler` ^ `WeaponLevel`, minimum 5, times the type's
+  1.45. The scaler resolves through a ConstantAttributeValueResolver to 1.13.
+  Part `WeaponAttributeEffects` are added, along with the type's
+  `AttributeSlotEffects` at the summed `AttributeSlotUpgrades` grade.
+  `Weapon_Is_<Maker>` operands are 1 only for the weapon's own manufacturer.
+  Infinity seed 1 at level 30: damage 649, fire rate 8/s, magazine 1, shot
+  cost 0, spin-up 0.55 s. The combination (base + PreAdd) x (1 + Scale) +
+  PostAdd with a 0 clamp, the grade sum, the unapplied balance manufacturer
+  grades and the missing accuracy-percentage conversion are all UNVERIFIED.
+  No value has been compared with an in-game item card.
+- `attribute_value` now applies BaseValueScaleConstant to formula and
+  attribute bases too, and resolves attribute operands from a supplied map.
+
+Automated: `tests/weapon_recipe_test.py` 5/5 and `tests/weapon_stats_test.py`
+2/2, synthetic.

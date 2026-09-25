@@ -76,26 +76,39 @@ class Package:
         return self.cache[path]
 
 
-def attribute_value(package, init, level):
-    """AttributeInitializationData -> float, or None if it needs runtime state."""
-    if init.get('BaseValueAttribute'):
-        return None
-    value = (init.get('BaseValueConstant') or 0.0) * (init.get('BaseValueScaleConstant', 1.0) or 1.0)
+def attribute_value(package, init, level, attributes=None):
+    """AttributeInitializationData -> float, or None if it needs runtime state.
+
+    The base is the InitializationDefinition's ValueFormula result if set,
+    else the BaseValueAttribute's value from `attributes` if set, else
+    BaseValueConstant; the base is then multiplied by BaseValueScaleConstant.
+    `level` is kept for callers that only need constant weights.
+    """
+    attributes = attributes or {}
     definition = init.get('InitializationDefinition')
+    attribute = init.get('BaseValueAttribute')
     if definition:
         formula = package.props(definition).get('ValueFormula') or {}
-        terms = {k: attribute_value(package, formula.get(k) or {}, level) for k in ('Multiplier', 'Level', 'Power')}
+        terms = {k: attribute_value(package, formula.get(k) or {}, level, attributes)
+                 for k in ('Multiplier', 'Level', 'Power')}
         if None in terms.values():
             return None
-        value = terms['Multiplier'] * (terms['Level'] ** terms['Power'])
+        base = terms['Multiplier'] * (terms['Level'] ** terms['Power'])
         clamp = package.props(definition).get('RangeRestriction') or {}
-        low = attribute_value(package, clamp.get('MinValue') or {}, level) if clamp.get('MinValue') else None
-        high = attribute_value(package, clamp.get('MaxValue') or {}, level) if clamp.get('MaxValue') else None
+        low = attribute_value(package, clamp['MinValue'], level, attributes) if clamp.get('MinValue') else None
+        high = attribute_value(package, clamp['MaxValue'], level, attributes) if clamp.get('MaxValue') else None
         if low is not None:
-            value = max(value, low)
+            base = max(base, low)
         if high is not None:
-            value = min(value, high)
-    return value
+            base = min(base, high)
+    elif attribute:
+        if attribute not in attributes:
+            return None
+        base = attributes[attribute]
+    else:
+        base = init.get('BaseValueConstant') or 0.0
+    scale = init.get('BaseValueScaleConstant')
+    return base * (1.0 if scale is None else scale)
 
 
 def slot_candidates(package, collection, stage):
