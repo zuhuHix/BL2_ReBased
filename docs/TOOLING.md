@@ -662,6 +662,35 @@ the camera assertions alone do not verify appearance or original-game parity.
 The saved map and its starting pose are not changed. `-Inspect` is exclusive
 with the walking, terrain, BSP, selector and profile test modes.
 
+## Maya with the Infinity and Phaselock (host prototype)
+
+The Infinity visual keeps only chosen fragments of UModel's pistol gestalt
+glTF. Decode the gestalt part ranges with a local array schema, then filter:
+
+```powershell
+# local/infinity/gestalt.schema holds lines such as
+#   GestaltInfos=StructProperty:GestaltInfo
+#   Parts=StructProperty:GestaltPartInfo
+./build/Release/ow-package.exe "$game/WillowGame/CookedPCConsole/Startup.upk" --properties <GestaltDef_Pistol index> `
+  --property-offset 4 --array-schema local/infinity/gestalt.schema > local/infinity/gestaltdef.json
+python tools/filter_gestalt_gltf.py --gltf <UModel GestaltDef_Pistol_GestaltSkeletalMesh.gltf> `
+  --gestalt local/infinity/gestaltdef.json --output local/infinity/Infinity.gltf `
+  --parts Pistol_Body_Vladof Pistol_Barrel_Vladof Pistol_Grip_Vladof Pistol_Scope_Vladof
+```
+
+Import with `OPENWILLOW_PISTOL_GLTF` pointing at the filtered glTF and
+`OPENWILLOW_INFINITY_TEXTURES` at UModel's PNG export of
+`Mati_VladofLegendaryPistol_Infinity`, running
+`host/ue5/import_infinity_proxy.py` as a `pythonscript` commandlet. The pistol
+and Phaselock arm clips come from `tools/import_maya_combat_anims.ps1`.
+
+`-owwalk -owmaya -owcombattest -owcombatshots` on `Sanctuary_P` spawns a
+training dummy once Maya lands, runs a fixed aim/fire/Phaselock sequence and
+writes `OWCombat_1_Idle` to `OWCombat_5_FiringWall` PNGs under
+`Saved/Screenshots/WindowsEditor/`, then quits. Controls in play: LMB fire,
+F Phaselock, 1 equip, 0 holster. See DECISIONS.md (2026-09-25) for what is
+data-derived and what is estimated.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied

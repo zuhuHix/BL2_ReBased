@@ -55,6 +55,13 @@ void UOpenWillowArmsAnimInstance::PlayAction(UAnimSequence* InAction, float InWe
     ++ActionSerial;
 }
 
+void UOpenWillowArmsAnimInstance::PlayAdditive(UAnimSequence* InAdditive, float InWeight)
+{
+    Additive = InAdditive;
+    AdditiveWeight = FMath::Clamp(InWeight, 0.f, 1.f);
+    ++AdditiveSerial;
+}
+
 FAnimInstanceProxy* UOpenWillowArmsAnimInstance::CreateAnimInstanceProxy()
 {
     return new FOpenWillowArmsProxy(this);
@@ -74,6 +81,14 @@ void FOpenWillowArmsProxy::PreUpdate(UAnimInstance* Instance, float DeltaSeconds
     DesiredAction = Arms->Action;
     DesiredActionSerial = Arms->ActionSerial;
     DesiredActionWeight = Arms->ActionWeight;
+    if (Arms->AdditiveSerial != ActiveAdditiveSerial)
+    {
+        // Restart on every shot so rapid fire keeps re-kicking the arms.
+        ActiveAdditiveSerial = Arms->AdditiveSerial;
+        ActiveAdditive = Arms->Additive;
+        ActiveAdditiveWeight = Arms->AdditiveWeight;
+        AdditiveTime = 0.f;
+    }
 }
 
 void FOpenWillowArmsProxy::UpdateAnimationNode(const FAnimationUpdateContext& Context)
@@ -117,6 +132,11 @@ void FOpenWillowArmsProxy::UpdateAnimationNode(const FAnimationUpdateContext& Co
         ActionAlpha = FMath::FInterpConstantTo(ActionAlpha,
             bEnded ? 0.f : DesiredActionWeight, DeltaSeconds, 12.f);
         if (bEnded && ActionAlpha <= 0.f) ActiveAction = nullptr;
+    }
+    if (ActiveAdditive)
+    {
+        Advance(ActiveAdditive, AdditiveTime, DeltaSeconds, false);
+        if (AdditiveTime >= ActiveAdditive->GetPlayLength()) ActiveAdditive = nullptr;
     }
 }
 
@@ -162,6 +182,20 @@ bool FOpenWillowArmsProxy::Evaluate(FPoseContext& Output)
         FPoseContext ActionPose(Output);
         Sample(ActiveAction, ActionTime, false, ActionPose);
         Mix(Output, ActionPose, ActionAlpha);
+    }
+    if (ActiveAdditive)
+    {
+        // Delta = clip(t) relative to clip(0). Frame 0 is identity for tracked
+        // bones, and this also cancels untracked bones' reference pose.
+        FPoseContext Delta(Output);
+        FPoseContext Base(Output);
+        Sample(ActiveAdditive, AdditiveTime, false, Delta);
+        Sample(ActiveAdditive, 0.f, false, Base);
+        FAnimationRuntime::ConvertPoseToAdditive(Delta.Pose, Base.Pose);
+        FAnimationPoseData OutputData(Output);
+        const FAnimationPoseData DeltaData(Delta);
+        FAnimationRuntime::AccumulateAdditivePose(OutputData, DeltaData, ActiveAdditiveWeight, AAT_LocalSpaceBase);
+        Output.Pose.NormalizeRotations();
     }
     return true;
 }

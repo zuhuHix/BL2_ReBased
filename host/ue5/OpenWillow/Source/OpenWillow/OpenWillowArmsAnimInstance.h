@@ -17,6 +17,9 @@ public:
         UAnimSequence* InJump, UAnimSequence* InLand);
     void SetMovement(float InGroundSpeed, bool bInFalling, bool bInLanding);
     void PlayAction(UAnimSequence* InAction, float InWeight = 1.f);
+    // UE3 ADD_ clips store per-bone deltas (identity at frame 0); they are
+    // layered on the current pose instead of replacing it.
+    void PlayAdditive(UAnimSequence* InAdditive, float InWeight = 1.f);
 
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Idle;
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Run;
@@ -26,6 +29,9 @@ public:
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> Action;
     int32 ActionSerial = 0;
     float ActionWeight = 1.f;
+    UPROPERTY(Transient) TObjectPtr<UAnimSequence> Additive;
+    int32 AdditiveSerial = 0;
+    float AdditiveWeight = 1.f;
     float GroundSpeed = 0;
     bool bFalling = false;
     bool bLanding = false;
@@ -65,4 +71,8 @@ private:
     float DesiredActionWeight = 1.f;
     float ActionTime = 0;
     float ActionAlpha = 0;
+    const UAnimSequence* ActiveAdditive = nullptr;
+    int32 ActiveAdditiveSerial = 0;
+    float ActiveAdditiveWeight = 1.f;
+    float AdditiveTime = 0;
 };
