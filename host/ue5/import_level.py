@@ -489,7 +489,10 @@ for instance in scene['actors']:
     for section in scene['meshes'][instance['mesh']]['sections']:
         actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector())
         actor.set_actor_label(actor_label(instance['level'], instance['source'], section['slot']))
-        actor.set_editor_property('tags', [unreal.Name(instance['source'])])
+        tags = [unreal.Name(instance['source'])]
+        if instance['level'] == 'Sanctuary_Outer':
+            tags.append(unreal.Name('OpenWillow_OuterSublevel'))
+        actor.set_editor_property('tags', tags)
         actor.set_folder_path(('NativeSkybox/' if is_native_skybox else 'OuterShell/' if is_outer_shell else '')
                               + instance['level'])
         component = actor.static_mesh_component

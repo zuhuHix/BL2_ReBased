@@ -11,12 +11,33 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerStart.h"
 #include "GameFramework/SpectatorPawn.h"
+#include "Engine/StaticMeshActor.h"
 
 AOpenWillowGameMode::AOpenWillowGameMode()
 {
     DefaultPawnClass = FParse::Param(FCommandLine::Get(), TEXT("owwalk"))
         ? AOpenWillowWalker::StaticClass() : ASpectatorPawn::StaticClass();
     PlayerControllerClass = AOpenWillowPlayerController::StaticClass();
+}
+
+void AOpenWillowGameMode::BeginPlay()
+{
+    Super::BeginPlay();
+    if (!FParse::Param(FCommandLine::Get(), TEXT("owwalk"))) return;
+    // Sanctuary_Outer is streamed separately from the landed town in UE3.
+    // Its skybox buildings, hull and collision boxes do not belong in a
+    // landed walking session.
+    int32 HiddenSections = 0;
+    for (TActorIterator<AStaticMeshActor> It(GetWorld()); It; ++It)
+    {
+        if (It->ActorHasTag(TEXT("OpenWillow_OuterSublevel")))
+        {
+            It->SetActorHiddenInGame(true);
+            It->SetActorEnableCollision(false);
+            ++HiddenSections;
+        }
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow landed walk hid %d outer-sublevel sections"), HiddenSections);
 }
 
 AActor* AOpenWillowGameMode::ChoosePlayerStart_Implementation(AController* Player)

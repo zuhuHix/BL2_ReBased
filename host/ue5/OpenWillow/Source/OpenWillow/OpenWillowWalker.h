@@ -17,7 +17,8 @@ private:
     void Right(float Value);
     void Turn(float Value);
     void Look(float Value);
-    void Play(class UAnimSequence* Anim, bool bLoop);
+    void SprintPressed();
+    void SprintReleased();
     UPROPERTY() TObjectPtr<class UCameraComponent> Camera;
     // Maya's first-person arms (-owmaya). Their animations carry a root
     // correction that keeps the arms skeleton's Camera bone at this
@@ -25,9 +26,11 @@ private:
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> Arms;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;
+    UPROPERTY() TObjectPtr<class UAnimSequence> SprintAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> JumpAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> LandAnim;
-    UPROPERTY() TObjectPtr<class UAnimSequence> Current;
+    UPROPERTY() TObjectPtr<class UOpenWillowArmsAnimInstance> ArmsAnim;
+    bool bSprintHeld = false;
     bool bWasFalling = false;
     bool bSpawnProbeLogged = false;
     float LandUntil = 0;

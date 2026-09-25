@@ -1,9 +1,12 @@
 #include "OpenWillowWalker.h"
+#include "OpenWillowArmsAnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/SkeletalMesh.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -44,6 +47,16 @@ AOpenWillowWalker::AOpenWillowWalker()
 void AOpenWillowWalker::BeginPlay()
 {
     Super::BeginPlay();
+    // BL2's installed DefaultGame.ini sets Engine.WorldInfo.DefaultGravityZ
+    // to -500 cm/s^2. Scale the host world's gravity to that magnitude rather
+    // than inheriting UE5's default -980, so the jump arc uses BL2 gravity.
+    const float HostGravity = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 0.f;
+    if (HostGravity > KINDA_SMALL_NUMBER)
+    {
+        GetCharacterMovement()->GravityScale = 500.f / HostGravity;
+    }
+    // JumpZVelocity=420 is still an estimate: at -500 cm/s^2 it predicts a
+    // 176 cm apex and 1.68 s ideal flight, pending a measured BL2 jump.
     if (!FParse::Param(FCommandLine::Get(), TEXT("owmaya"))) return;
     // GD_Siren_Streaming.Pawn_Siren: CylinderComponent CollisionRadius 42,
     // CollisionHeight 80 (UE3 half-height) and BaseEyeHeight 70 above the
@@ -57,7 +70,14 @@ void AOpenWillowWalker::BeginPlay()
     // 90 default matches a maintainer capture by eye, not a read setting.
     float Bl2Fov = 90;
     FParse::Value(FCommandLine::Get(), TEXT("owfov="), Bl2Fov);
-    const float Aspect = Camera->AspectRatio > 0 ? Camera->AspectRatio : 16.f / 9.f;
+    float Aspect = 16.f / 9.f;
+    if (GEngine && GEngine->GameViewport)
+    {
+        FVector2D ViewportSize = FVector2D::ZeroVector;
+        GEngine->GameViewport->GetViewportSize(ViewportSize);
+        if (ViewportSize.Y > KINDA_SMALL_NUMBER)
+            Aspect = ViewportSize.X / ViewportSize.Y;
+    }
     Camera->SetFieldOfView(FMath::RadiansToDegrees(2 * FMath::Atan(
         FMath::Tan(FMath::DegreesToRadians(Bl2Fov) / 2) * Aspect / (4.f / 3.f))));
     const FString MeshPath = FString::Printf(TEXT("%s/Meshes/Hands_Siren/SkeletalMeshes/Hands_Siren.Hands_Siren"), MayaRoot);
@@ -67,18 +87,16 @@ void AOpenWillowWalker::BeginPlay()
     // The walker has no equipped weapon yet. Use Maya's unarmed set.
     IdleAnim = LoadArmsAnim(TEXT("Idle"));
     RunAnim = LoadArmsAnim(TEXT("Run_F"));
+    SprintAnim = LoadArmsAnim(TEXT("Sprint"));
     JumpAnim = LoadArmsAnim(TEXT("Jump_Idle"));
     LandAnim = LoadArmsAnim(TEXT("Jump_End"));
-    Play(IdleAnim, true);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya first-person arms active"));
-}
-
-void AOpenWillowWalker::Play(UAnimSequence* Anim, bool bLoop)
-{
-    if (!Anim || Anim == Current) return;
-    Current = Anim;
-    Arms->PlayAnimation(Anim, bLoop);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow arms animation: %s"), *Anim->GetName());
+    Arms->SetAnimInstanceClass(UOpenWillowArmsAnimInstance::StaticClass());
+    ArmsAnim = Cast<UOpenWillowArmsAnimInstance>(Arms->GetAnimInstance());
+    if (ArmsAnim)
+    {
+        ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya first-person arms active (walk/sprint/jump blends)"));
+    }
 }
 
 void AOpenWillowWalker::Tick(float DeltaSeconds)
@@ -93,7 +111,6 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         UE_LOG(LogTemp, Display, TEXT("OpenWillow spawn probe grounded=%d pawn=%s floor=%s"),
             GetCharacterMovement()->IsMovingOnGround(), *GetActorLocation().ToString(), *Source);
     }
-    if (!Current) return;
     // -owautowalk: walk a slow circle unattended so captures can check the run
     // clip without running into a wall.
     static const bool bAutoWalk = FParse::Param(FCommandLine::Get(), TEXT("owautowalk"));
@@ -102,17 +119,15 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         Controller->SetControlRotation(Controller->GetControlRotation() + FRotator(0, 60 * DeltaSeconds, 0));
         AddMovementInput(FRotator(0, GetControlRotation().Yaw, 0).Vector(), 1);
     }
-    // Arms state: in the air, just landed, moving, standing. Clip choice is
-    // ours; BL2's own AnimTree blending is not reproduced.
+    if (!ArmsAnim) return;
+    // BL2's own AnimTree is not reproduced; the native arms instance blends
+    // the imported poses according to measured speed and the jump state.
     const bool bFalling = GetCharacterMovement()->IsFalling();
     const float Now = GetWorld()->GetTimeSeconds();
     if (bWasFalling && !bFalling && LandAnim)
         LandUntil = Now + LandAnim->GetPlayLength();
     bWasFalling = bFalling;
-    if (bFalling) Play(JumpAnim, true);
-    else if (Now < LandUntil) Play(LandAnim, false);
-    else if (GetVelocity().Size2D() > 50) Play(RunAnim, true);
-    else Play(IdleAnim, true);
+    ArmsAnim->SetMovement(GetVelocity().Size2D(), bFalling, Now < LandUntil);
 }
 
 void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
@@ -124,6 +139,20 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAxis(TEXT("OWLook"), this, &AOpenWillowWalker::Look);
     Input->BindAction(TEXT("OWJump"), IE_Pressed, this, &ACharacter::Jump);
     Input->BindAction(TEXT("OWJump"), IE_Released, this, &ACharacter::StopJumping);
+    Input->BindAction(TEXT("OWSprint"), IE_Pressed, this, &AOpenWillowWalker::SprintPressed);
+    Input->BindAction(TEXT("OWSprint"), IE_Released, this, &AOpenWillowWalker::SprintReleased);
+}
+void AOpenWillowWalker::SprintPressed()
+{
+    bSprintHeld = true;
+    GetCharacterMovement()->MaxWalkSpeed = 650.f; // estimated pending BL2 timing measurement
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint on, max speed 650 cm/s"));
+}
+void AOpenWillowWalker::SprintReleased()
+{
+    bSprintHeld = false;
+    GetCharacterMovement()->MaxWalkSpeed = 450.f;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint off, max speed 450 cm/s"));
 }
 void AOpenWillowWalker::Forward(float Value) { AddMovementInput(FRotator(0, GetControlRotation().Yaw, 0).Vector(), Value); }
 void AOpenWillowWalker::Right(float Value) { AddMovementInput(FRotationMatrix(FRotator(0, GetControlRotation().Yaw, 0)).GetUnitAxis(EAxis::Y), Value); }
