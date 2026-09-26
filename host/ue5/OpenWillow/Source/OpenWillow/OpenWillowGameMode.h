@@ -13,6 +13,7 @@ class OPENWILLOW_API AOpenWillowGameMode : public AGameModeBase
 public:
     AOpenWillowGameMode();
 
+    virtual void BeginPlay() override;
     virtual void RestartPlayer(AController* NewPlayer) override;
 
 protected:

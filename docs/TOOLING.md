@@ -662,6 +662,109 @@ the camera assertions alone do not verify appearance or original-game parity.
 The saved map and its starting pose are not changed. `-Inspect` is exclusive
 with the walking, terrain, BSP, selector and profile test modes.
 
+## Maya with the Infinity and Phaselock (host prototype)
+
+The Infinity visual keeps only chosen fragments of UModel's pistol gestalt
+glTF. Decode the gestalt part ranges with a local array schema, then filter:
+
+```powershell
+# local/infinity/gestalt.schema holds lines such as
+#   GestaltInfos=StructProperty:GestaltInfo
+#   Parts=StructProperty:GestaltPartInfo
+./build/Release/ow-package.exe "$game/WillowGame/CookedPCConsole/Startup.upk" --properties <GestaltDef_Pistol index> `
+  --property-offset 4 --array-schema local/infinity/gestalt.schema > local/infinity/gestaltdef.json
+python tools/filter_gestalt_gltf.py --gltf <UModel GestaltDef_Pistol_GestaltSkeletalMesh.gltf> `
+  --gestalt local/infinity/gestaltdef.json --output local/infinity/Infinity.gltf `
+  --parts Pistol_Body_Vladof Pistol_Barrel_Vladof Pistol_Grip_Vladof Pistol_Scope_Vladof
+```
+
+To roll a gun from its balance data instead of naming parts by hand:
+
+```powershell
+python tools/weapon_recipe.py --reader build/Release/ow-package.exe --package "$game/WillowGame/CookedPCConsole/Startup.upk" `
+  --balance GD_Weap_Pistol.A_Weapons_Legendary.Pistol_Vladof_5_Infinity --seed 3 --output local/items/infinity_3.json
+python tools/filter_gestalt_gltf.py --gltf <gestalt glTF> --gestalt local/infinity/gestaltdef.json `
+  --recipe local/items/infinity_3.json --output local/items/infinity_3.gltf
+```
+
+The recipe lists the merge chain, candidates, weights, name parts and the
+rules that are still UNVERIFIED.
+
+Import with `OPENWILLOW_PISTOL_GLTF` pointing at the filtered glTF and
+`OPENWILLOW_INFINITY_TEXTURES` at UModel's PNG export of
+`Mati_VladofLegendaryPistol_Infinity`, running
+`host/ue5/import_infinity_proxy.py` as a `pythonscript` commandlet. The pistol
+and Phaselock arm clips come from `tools/import_maya_combat_anims.ps1`.
+
+`-owwalk -owmaya -owcombattest -owcombatshots` on `Sanctuary_P` spawns a
+training dummy once Maya lands, runs a fixed aim/fire/Phaselock sequence and
+writes `OWCombat_1_Idle` to `OWCombat_5_FiringWall` PNGs under
+`Saved/Screenshots/WindowsEditor/`, then quits. Controls in play: LMB fire,
+F Phaselock, 1 equip, 0 holster. See DECISIONS.md (2026-09-25) for what is
+data-derived and what is estimated.
+
+## BL2's HUD movie over UE5 (browser-overlay prototype)
+
+Convert the UI movies into `local/ui/run` first (DECISIONS.md 2026-09-26:
+`tools/extract_swfmovie.py`, then `tools/gfx_to_swf.py --localization
+<install>/WillowGame/Localization/INT --inline-font-imports`, font library
+first, and `tools/hud_harness_swf.py`), with a Ruffle web build in
+`local/ui/run/ruffle`. Then:
+
+```powershell
+./tools/run_ue_flash_hud.ps1 -Engine $engine -Game $game            # editor; press Play
+./tools/run_ue_flash_hud.ps1 -Engine $engine -Game $game -GameWindow
+```
+
+The script starts `tools/hud_overlay/serve.py` on port 8767 if it is not
+running and launches Sanctuary as Maya with `-owflashhud=<url>` and
+`-owflashskills=<url>`. The HUD overlay logs "OpenWillow Flash HUD page loaded"
+and "HUD movie ready" in the UE log.
+It is a prototype: see DECISIONS.md for what is driven and what is not.
+
+For Maya's Skills tab, convert `UI_StatusMenu.StatusMenu` and its shared imports
+into `local/ui/run` with the same converter and a StatusMenu harness, then
+prepare Maya's tree and icon movies from the installed packages:
+
+```powershell
+python tools/prepare_skill_tree.py --reader build/Release/ow-package.exe --game $game --output local/ui/run
+python tools/hud_overlay/serve.py --movies local/ui/run
+```
+
+Open `http://127.0.0.1:8767/skills.html?points=41&action=1` for a standalone visual
+check. In the UE game window, press **K** to open Maya's Skills tab, hover a
+skill for its description, use the arrows to rotate branches, and press
+**Esc** or the movie's close button to return to play. The standalone `points`
+query is only a display check. The UE host currently sends zero available
+points and Phaselock grade one; it does not track earned points or branch
+grades. The page accepts a future `owSkills({points, actionGrade, grades,
+classModText})` update, where `grades` maps installed skill object paths to
+ranks. The movie renders locked, available, partial and maxed badge frames
+and uses its branch tween and sway. Spending, grade effects and current/next
+grade stat calculations are not wired yet. A browser check proves the movie
+and data render; verify the input and overlay lifecycle in UE separately.
+
+For a repeatable UE capture, launch the same script with
+`-GameWindow -Extra @('-owcombattest','-owcombatshots','-owskillshots')`.
+After the combat and inventory captures it opens Skills, writes
+`OWCombat_8_Skills.png`, requests the page's close route, and writes
+`OWCombat_9_AfterSkills.png` under UE `Saved/Screenshots` before quitting.
+
+## Tracing the real game's UI code (golden files for menus)
+
+With the community mod SDK installed in the game (THIRD_PARTY.md), copy
+`tools/sdk_trace/openwillow_uitrace/` into `<game>/sdk_mods/` and put the
+absolute path of the repository's `local/ui/traces` in a `trace_dir.txt` next
+to its `__init__.py`. In game, enable "OpenWillow UI Trace" in the mod menu,
+use the menus, then disable it to close the file. Then:
+
+```powershell
+python tools/sdk_trace/summarize.py                       # newest trace
+python tools/sdk_trace/summarize.py --timeline StatusMenuExGFxMovie
+```
+
+Traces are game data and stay under `local/`. See DECISIONS.md 2026-09-26.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied

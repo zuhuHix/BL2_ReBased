@@ -96,6 +96,26 @@ execution or copied code) must be recorded in [THIRD_PARTY.md](../THIRD_PARTY.md
 
 None of this is invented for this project. OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian have all operated under the same rules for years, and that precedent is followed on purpose, not by accident.
 
+### UI movies (Scaleform/Flash)
+
+Borderlands 2's HUD and menus ship as Scaleform movies (`SwfMovie` objects in
+the installed packages). The engine may load them from the player's install and
+execute their ActionScript at runtime, as it will UnrealScript: the scripts are
+game content, not the game executable, so running them is not decompiling
+`Borderlands2.exe`. Rules specific to them (maintainer decision, 2026-09-26):
+
+- Movies, their textures and fonts are read from the install at runtime and
+  never enter the repository; converted copies stay under ignored `local/`.
+- Disassembled or decompiled ActionScript listings are game-derived data: they
+  may be produced locally to learn which host callbacks a movie calls, and
+  stay under `local/`. Gearbox's script logic is never transcribed into
+  project code; the host only implements the interface the movies call.
+- No Scaleform SDK, runtime or leaked GFx source is used. Scaleform-specific
+  tags are decoded from the files themselves and recorded with how they were
+  observed; the base container is Adobe's public SWF specification.
+- Any Flash player used or embedded is recorded in THIRD_PARTY.md with its
+  license before integration.
+
 ## Contributor certification
 
 By opening a pull request you certify that:

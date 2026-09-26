@@ -119,3 +119,58 @@ UE Explorer (GPL-3.0) and UPKUtils (GPL-2.0) may be consulted as external
 research references only. No code from either project is copied into this MIT
 repository. Any future code reuse requires a separate maintainer license
 decision before implementation.
+
+### OpenBLCMM and its BL2 datapack
+
+- Source: https://github.com/BLCM/OpenBLCMM (GPL-3.0), release v1.4.1,
+  `OpenBLCMM-1.4.1-Windows.zip` SHA-256
+  `bbe9d09a3373de7f20b2f138b865baed762f2a8e6ef9b50738966f4095bc4000`.
+- Datapack: https://github.com/BLCM/OpenBLCMM-Data release 2023-04-21-01,
+  `blcmm_data_BL2-2023-04-20-01.jar` SHA-256
+  `8bf07971904ed9d511586e11adcc4e676fbeda546994b439456860fcce2457bc`.
+- Local: `C:/Users/yorad/Tools/OpenBLCMM/`; `data.db` extracted to
+  `%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/`.
+- Use: observed-game oracle read by `tools/blcmm_dumps.py` (see "Oracles").
+  No code copied; no dump text tracked.
+
+### Ruffle (Flash player) - benchmark candidate for BL2's UI movies
+
+- Source: https://github.com/ruffle-rs/ruffle, license MIT OR Apache-2.0
+  (upstream `LICENSE.md`).
+- Local binary: `nightly-2026-09-26`, `ruffle-nightly-2026_09_26-windows-x86_64.zip`
+  SHA-256 `a3f2a75b63a84f7a5600733f9c39ea9d6b9a4d6e703b26c5d92ead470184aa5b`,
+  unpacked to `C:/Users/yorad/Tools/Ruffle/nightly-2026-09-26/`.
+- On first run the desktop build downloaded Cisco's OpenH264 2.4.1 (its own
+  BSD-2-Clause license and Cisco's binary terms) to
+  `%LOCALAPPDATA%/ruffle/video/`; it is Ruffle's, unused by this project.
+- Use: local execution only, as a timeboxed benchmark of running the game's
+  converted HUD movie (maintainer approval 2026-09-26). Not a dependency, not
+  linked, not vendored. Embedding it in the UE5 host is a separate decision.
+- Web build `@ruffle-rs/ruffle` `0.7.0-nightly.2026.9.26` (MIT OR Apache-2.0,
+  its `package.json`), unpacked under ignored `local/ui/run/ruffle/`. It is
+  served locally to the browser bench and to the UE5 browser-overlay prototype
+  (`tools/hud_overlay/`, maintainer approval 2026-09-26). The overlay uses
+  UE's own `WebBrowser` module (CEF, shipped with the engine); no Ruffle code
+  is in the repository.
+
+### unrealsdk, pyunrealsdk and the willow2 mod manager (installed by the player)
+
+- Sources: https://github.com/bl-sdk/unrealsdk and
+  https://github.com/bl-sdk/pyunrealsdk (LGPL-3.0, per the `LICENSE` files
+  installed with the SDK's `.stubs` and `mods_base`), mod manager
+  https://github.com/bl-sdk/willow2-mod-manager.
+- Local install, in the player's game folder (not ours):
+  `Binaries/Win32/Plugins/unrealsdk.dll` v3.2.0 (b1852aa4) SHA-256
+  `7921eca8e44d30db08d9741b70cfe8a19904cd52049f4a5ff98b0b0a88e2c05c`,
+  `pyunrealsdk.dll` v1.10.0 (c72c5558) SHA-256
+  `a1c4647367dd4828d6e3b87e9c8fad131d8c1fd6179512105c9631033aad652a`,
+  mod manager 3.8 (9097107f), per `unrealsdk.log` and `unrealsdk.toml`.
+- Use: external execution only, to observe the running game (docs/LEGAL.md,
+  clean-room rule 3). `tools/sdk_trace/openwillow_uitrace` is our own mod
+  (MIT); it imports the SDK's Python API at runtime inside the game and copies
+  none of its code. Traces it writes are game data and stay under `local/`.
+
+### gameswf - benchmark candidate (pending)
+
+- tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
+  Approved for the same benchmark; not yet downloaded or built.

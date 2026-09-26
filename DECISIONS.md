@@ -1492,5 +1492,666 @@ decision. The Phase 0.5 gate in `ROADMAP.md` must test textures, static and
 skeletal meshes, animations, sounds, materials, batch failures, duplicates,
 output size and UE5 importability. Until that gate passes, UModel remains an
 external visual oracle and optional payload source; `ow-package` remains the
-project's metadata, reference and verification path. No UModel source was
+project’s metadata, reference and verification path. No UModel source was
 copied, and no game-derived output is tracked.
+
+## 2026-09-25: landed walk excludes Sanctuary_Outer
+
+`Sanctuary_Outer` and `Sanctuary_Land` are separate Kismet-streamed sublevels.
+The landed walking view now tags all 29 `_Outer` placements (31 rendered mesh
+sections) on import and hides them with collision disabled at `-owwalk` startup.
+The saved inspection map retains them for scene-provenance work. This includes
+the liftoff hull and antennas, skybox buildings, and invisible collision boxes;
+it does not suppress the landed road or plaza geometry. The alternative
+`Sanctuary_LandedComparison` map and captures are ignored local outputs.
+
+Automated: UE 5.8.3 reimport and saved-scene, collision and UV verifiers passed;
+the runtime log reports 31 hidden sections; 6 CTest cases and the nine-package
+comparison passed. Visual: a capture from (8424, -2600, 3900) facing north
+shows a clear road into the plaza. The maintainer identified the center object
+in an overhead host capture as the intended monolith and accepted its current
+appearance in that view. Its UModel 1590 `Open` frame-0 bake is present; exact
+pose parity against the original-game reference has not been measured.
+The maintainer's side-street framing was matched at approximately
+(8150, -700, 3800), yaw -90 degrees, 106-degree FOV: one Resistance poster on
+the left, two on the right and the road cover align with the report image.
+In the landed comparison capture the tall slab and blocky wall are absent,
+exposing Dr. Zed's building beyond the street. This is visual validation of
+that view, not an original-game placement comparison. Runtime: the walking
+pawn and Maya's first-person arms initialize; the reported street has not yet
+been traversed after this change.
+
+## 2026-09-25: Archives floor collision for the Sanctuary walker
+
+The visible `Sanctuary_P` placements of
+`Env_Sanctuary.Meshes.RolandsArchivesFloors` (`StaticMeshActor_44` component
+228) and `RolandsArchivesCrushRoom` (`StaticMeshActor_222` component 439) have
+host collision enabled but neither mesh has an `RB_BodySetup`. The first has
+three render sections with horizontal triangles at z 3680 and 4256; the
+adjoining room has floor triangles at z 4256. Their actor placement translates
+Y by -384. The separate `Sanctuary_Px` copies of the main floor remain
+source-hidden with collision disabled.
+
+For these two exact mesh identities, `prepare_level.py` now records a
+`triangle_mesh` fallback when the source body is absent. UE5 uses each
+section's render triangles as complex collision and retains each placement's
+source collision switch. This is a host walking approximation, not a claim
+about the original game's blocking volumes or collision parity. UModel build
+1590 is available at `C:/Users/yorad/Tools/UEViewer/umodel.exe` (SHA-256
+`13502E5A4D8F6B5F32252AFEBD6360F7302CCFACCF6B8DDA65BEFF0BE2D364A0`),
+but this collision decision uses the project's package identities and local
+render geometry rather than an external collision export.
+
+Fresh Sanctuary static-mesh, terrain and BSP preparation completed: 4,430
+base placements, eight terrains with 15 components, and 228 root BSP polygons.
+The previous local scene included the baked centre pillar. Its preparation
+step could not rerun because this Python 3.14 installation lacks NumPy, so
+the prior ignored scene was restored with only the two freshly prepared
+collision records inserted; a comparison found those were the only changed
+shared mesh records. UE5 reimport and saved scene, collision and UV checks
+passed. The collision check reports 619 mesh sections, 3,246 enabled
+components, 131 enabled triangle components and zero errors. A live
+`-owwalk -owmaya -owspawnprobe` drop at (12357.3, 857.3, 4456) settled at
+z 4338.15, `grounded=1`, directly on `StaticMeshActor_44` component 228.
+Two adjoining-room drops grounded on overlapping props, so direct runtime
+ground contact on the CrushRoom triangles and a walked route through the
+building remain unverified. CTest passed 6/6, `tests/level_test.py` passed
+31/31 and installed-package verification matched all nine code packages.
+
+## 2026-09-25: Maya holds a part-filtered Infinity and casts Phaselock (host prototype)
+
+The Infinity visual is no longer the whole pistol gestalt. `ow-package
+--properties` with a local array schema (element types only, no parser change)
+decodes `Weap_Pistol.GestaltDef_Pistol.GestaltInfos[0].Parts`: 59 fragments,
+each a `SkeletalMeshFragmentName`, `MaterialIndex`, `FirstIndex` and
+`NumPrimitives`. Their per-material triangle totals (22,316 and 538) equal the
+two UModel glTF primitives exactly, which supports the assumption that UModel
+writes sections in material order. `tools/filter_gestalt_gltf.py` checks that
+equality and keeps only named fragments.
+
+Part choice: `Pistol_Vladof_5_Infinity` uses `EPRM_Selective` over base
+`Pistol_Vladof_4_VeryRare`. Its barrel `Pistol_Barrel_Vladof_Infinity` maps to
+gestalt fragment `Pistol_Barrel_Vladof`; the base body `Pistol_Body_Vladof_4`
+maps to `Pistol_Body_Vladof`. The base sight list spans eight manufacturers and
+the grip comes from data not traced here, so `Pistol_Scope_Vladof` and
+`Pistol_Grip_Vladof` are one plausible roll, not the only one. Kept: 1,505
+triangles. The UE mesh bounds still count the unused gestalt vertices.
+
+Material: `M_OW_InfinityApprox` is an UNVERIFIED stand-in for the stripped
+`Master_Gun` graph. `p_Masks` R/G/B select regions A/B/C. A `p_Diffuse` channel
+lerps each region's shadow/midtone/highlight colors from the MIC. The pistol
+detail is read from blue, inferred from the texture name
+`Weap_LauncherShotgunPistol_Comp`. `p_HighlightsIntensity`,
+`p_ShadowsIntensity`, the pattern and the decal are not used. The white body
+with navy detail follows the MIC colors; it is not compared with a game capture.
+
+Pose: the mesh attaches to `R_Weapon_Bone` with a 90 degree yaw, an observed
+fit. A logged barrel axis (`WeaponOffset` to `Barrel` bone) is 0.89 forward
+in view; its 0.45 up component matches the bones' 6.5 cm height difference.
+`ADD_Fire_Recoil` has identity tracks at frame 0 on all 47 bones, so it is a
+UE3 additive clip. The arms instance now layers it as clip(t) relative to
+clip(0) instead of blending it as a full pose, which had collapsed the arm.
+Its 29.1429 fps source imports at 30 fps (logged). A broken earlier import of
+that clip crashed any load in animation compression; the generated asset was
+deleted and re-imported.
+
+Gameplay, all host prototypes: hitscan at 10 Hz after a 0.8 s spin-up, the
+installed `SpinUpDuration`. The fire rate is not evaluated. A deterministic
+figure-eight stands in for the undecoded `FiringPatternLines`. Damage is a
+placeholder 87 per shot. Tracers, the muzzle flash, impact sparks and bullet
+decals are engine shapes with host materials, not `FX_WEP_Pistol` particles.
+The muzzle point is estimated from the barrel's gestalt bounds, 27 cm ahead
+of the `Barrel` bone. Phaselock sweeps a 30 cm sphere. The host-made training
+dummy lifts in the installed 0.7 s over an estimated 170 cm, hovers in a
+violet shell and falls back at -500 cm/s^2. A violet beam runs from Maya's
+`L_Hand` bone during `Phase_Lock_Lift`. A point light on the shell pooled
+violet on the road under Lumen and was removed. The duration (5.5 s) and
+cooldown (13 s) remain unevaluated. The HUD follows BL2's layout with canvas
+shapes; it is not BL2's Scaleform.
+
+`-owcombatshots` (with `-owwalk -owmaya -owcombattest`) runs an unattended
+aim/fire/Phaselock sequence and writes five `OWCombat_*.png` captures.
+
+Review: an independent reviewer agent scored the five captures from BL2
+feel, not from data: 1/10 before this pass, then 4/10 and 4/10. Its open
+items: the gun sits high and tilted in the view, the material is flat
+white, the tracer and figure-eight spread are hard to see in stills, and the
+Phaselock shell and beam look generic. It also found the dummy and HUD
+placeholder-grade and saw arcs in the sky. The gun pose follows BL2's pistol
+Idle clip on `R_Weapon_Bone`; the view has not been compared with a matched
+game capture, so a socket or axis error is not ruled out. This is a working
+prototype, not visual parity.
+
+Automated: host build; import commandlets exit 0. Runtime: the unattended
+sequence logs 4 target hits, Phaselock activation and release about 5.5 s
+later. Visual: the captures were reviewed by eye and by the reviewer agent.
+None was compared with the original game.
+
+Follow-up after a maintainer play test (same day):
+
+- Key 1 did not re-equip the Infinity. The map selector's controller
+  bindings for 1-9 consumed the key before the pawn's `OWEquipInfinity`
+  action. Those bindings no longer consume input. Pressing 1 with the map
+  menu open now does both, which is harmless because the map changes.
+- Phaselock timing is now read from `GD_Siren_Streaming_SF.upk`.
+  `ActionSkill_Phaselock` (`LiftActionSkill`) has LiftDuration 0.7,
+  LockFadeOutTime 1.1 and LiftSnapTimePct/HeightPct 0.5. Its
+  LockDurationFormula is `Att_Phaselock_Duration`, base 5, scaled by
+  `PhaselockTimeScale`, default 1. The host lock is now 5 s instead of the
+  5.5 s placeholder, and the shell fades over the last 1.1 s. `Startup.upk`
+  `Cooldown_Phaselock` resolves to a constant 13, which confirms the host
+  cooldown. Skill-tree and class-mod modifiers are not applied. The lift
+  snap is not modelled and the 170 cm lift height is still an estimate. The
+  skill also names BL2's hand-orb, enemy-bubble and point-light effects; those
+  are not hosted.
+- Infinity material: `Pattern_Infiniti` is a 256x4 color ramp (black, navy,
+  purple, pink, cream) that the first version ignored. It is now sampled
+  through UV1. `p_PatternScalePosition` is read as UV1 scale (-1.4429, 30)
+  and offset (0.3671, 0.03). It is weighted into regions A and B by
+  `p_PatternChannelScale` (0.85, 1), tinted by `p_PatternColor` and shaded
+  by the detail channel. Every one of those parameter meanings is an
+  UNVERIFIED guess at the stripped `Master_Gun` graph. The gun now shows a
+  multicolor gradient instead of flat white; it has not been compared with
+  the game.
+
+## 2026-09-25: Weapon part rolls from installed balance data (items before UI)
+
+The maintainer chose to build the item/part layer before the inventory and
+HUD. Item cards need a gun's name, rarity, parts and stats, and a UMG
+rebuild of BL2's UI was chosen over running its Scaleform movies.
+`UI_HUD.HUD` and `SharedWillowInventory` `SwfMovie`s exist in `Startup.upk`.
+SWF playback remains an optional later benchmark.
+
+`tools/weapon_recipe.py` reads a `WeaponBalanceDefinition` through
+`ow-package --properties` with an array schema; parser code is unchanged. It
+follows `BaseDefinition` to the root, whose `InventoryDefinition` is the
+`WeaponTypeDefinition` and whose `Manufacturers[0]` is the manufacturer. It
+merges each balance's `WeaponPartListCollection` per slot, filters by game
+stage, weights, rolls from a seed and writes a JSON recipe: parts, gestalt
+fragments, material instance and name. `filter_gestalt_gltf.py --recipe`
+builds that roll's mesh.
+
+Decoded and used:
+- `WeightedParts` entries index `ConsolidatedAttributeInitData` for min/max
+  game stage and weight.
+- Rarity weights such as `GD_Balance.Weighting.Weight_1_Common` are
+  `ValueFormula` Multiplier 100 x Level 1 ^ Power 1, clamped at a 100 minimum.
+- Name parts carry `Priority`. Manufacturer variants carry an `Expressions`
+  entry `Weapon_Is_<Maker> == 1`. For example, "Xtra Fast" is the Bandit
+  spelling of Vladof's "Rapid".
+
+For `Pistol_Vladof_5_Infinity` the chain is `Pistol_Vladof` (Additive), then
+`_2_Uncommon`, `_3_Rare`, `_4_VeryRare` and `_5_Infinity`, all Selective.
+Barrel and material are fixed, so the Infinity's paint does not roll. Grip,
+sight, element and accessory roll across manufacturers. Seeds 1-5 gave
+Burning, Caustic, Discharge, Angry and Discharge Infinity. Every rolled
+fragment exists in the pistol gestalt.
+
+UNVERIFIED, flagged in each recipe:
+- The replacement-mode semantics (Selective replaces enabled slots,
+  Additive appends, Complete replaces all).
+- The uniform pick when every candidate weighs 0. The Infinity barrel and the
+  root body and grip entries do weigh 0.
+- Manufacturer grade restrictions are ignored.
+- The name rule: highest priority, ties broken by the seed.
+Recipes have not been compared with in-game drops.
+
+Also recorded for the weapon pass: `WeaponType_Vladof_Pistol` gives
+FirstPersonMeshFOV 45, PlayerViewOffset (20, 4, 2), FireRate 0.125,
+ClipSize 20, Spread 2.1 and the WeaponKick values. The separate 45 degree
+weapon FOV likely explains the oversized gun in the host view.
+
+Automated: `python tests/weapon_recipe_test.py` 5/5 on synthetic data.
+
+Follow-up, part weights and item stats (same day):
+
+- Weights: the maintainer expected every part to carry a drop weight. In the
+  cooked `Pistol_Vladof.PartList`, `ConsolidatedAttributeInitData` is
+  [1, 100, 0]. Every grip, sight and body entry points at the 0 with no
+  InitializationDefinition. Elements and accessories do use rarity formulas
+  (`Weight_1_Common` = 100 and so on). What BL2 does with an all-zero slot is
+  native code; the host picks uniformly, still UNVERIFIED. The OpenBLCMM dump
+  oracle is not installed on this machine, so no in-engine cross-check was
+  made.
+- `tools/weapon_stats.py` evaluates a recipe into item-card numbers. Base
+  values come from the weapon type (`InstantHitDamage`, `FireRate`,
+  `ClipSize`, `ReloadTime`, `Spread`). Damage is `Init_WeaponDamage` = 8 x
+  `Att_UniversalBalanceScaler` ^ `WeaponLevel`, minimum 5, times the type's
+  1.45. The scaler resolves through a ConstantAttributeValueResolver to 1.13.
+  Part `WeaponAttributeEffects` are added, along with the type's
+  `AttributeSlotEffects` at the summed `AttributeSlotUpgrades` grade.
+  `Weapon_Is_<Maker>` operands are 1 only for the weapon's own manufacturer.
+  Infinity seed 1 at level 30: damage 649, fire rate 8/s, magazine 1, shot
+  cost 0, spin-up 0.55 s. The combination (base + PreAdd) x (1 + Scale) +
+  PostAdd with a 0 clamp, the grade sum, the unapplied balance manufacturer
+  grades and the missing accuracy-percentage conversion are all UNVERIFIED.
+  No value has been compared with an in-game item card.
+- `attribute_value` now applies BaseValueScaleConstant to formula and
+  attribute bases too, and resolves attribute operands from a supplied map.
+
+Automated: `tests/weapon_recipe_test.py` 5/5 and `tests/weapon_stats_test.py`
+2/2, synthetic.
+
+Follow-up, cross-checked against OpenBLCMM (same day):
+
+The maintainer approved downloading OpenBLCMM. Installed outside the repo
+at `C:/Users/yorad/Tools/OpenBLCMM/`:
+- OpenBLCMM v1.4.1 (`OpenBLCMM-1.4.1-Windows.zip`, SHA-256
+  `bbe9d09a3373de7f20b2f138b865baed762f2a8e6ef9b50738966f4095bc4000`) from the
+  official BLCM/OpenBLCMM release.
+- Datapack `blcmm_data_BL2-2023-04-20-01.jar` (SHA-256
+  `8bf07971904ed9d511586e11adcc4e676fbeda546994b439456860fcce2457bc`) from
+  BLCM/OpenBLCMM-Data.
+- Its `data.db` matched the shipped `.sha256sum` and was extracted to
+  `%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/`, where `tools/blcmm_dumps.py`
+  looks for it.
+No OpenBLCMM code is used and no dump text enters the repository
+(THIRD_PARTY.md already records this relationship). Subobject names in the
+dumps use a colon (`Pistol_Vladof:PartList`).
+
+Results:
+- Part lists agree. All 45 part-list slots across the five Infinity-chain
+  balances match our decode exactly: part order, per-part `Manufacturers`
+  overrides, stage and weight indices, `ConsolidatedAttributeInitData`
+  constants and `PartReplacementMode`. The game itself holds weight 0 for
+  every grip and body.
+- A clamp bug in our evaluator was fixed. Cooked data omits false booleans;
+  the dumps show `RangeRestriction.bEnableMinValueRestriction=False` on
+  `Weight_*` and `Init_WeaponDamage`. We had applied those minima anyway,
+  which flattened `Weight_2_Uncommon` (10) and `Weight_4_Rare` (1) to 100.
+  Restrictions now apply only when enabled; the formula also adds `Offset`
+  and honours `ValueFormula.bEnabled`. A definition with another
+  `BaseValueMode` or an enabled `ConditionalInitialization` is reported as
+  unresolved instead of guessed.
+- Manufacturer weight overrides now apply only when an entry names the
+  weapon's manufacturer. Entries with `Manufacturer=None` are not wildcards;
+  as wildcards they would make every `DefaultWeight` formula unused, whereas
+  BL2 elemental-chance mods work by editing those formulas. UNVERIFIED.
+- Resulting Infinity odds: element None 76.9%, Fire, Shock and Corrosive
+  7.7% each; accessory None 74.1%, the other seven 3.7% each; sight 12.5%
+  each of eight. Level-30 damage over seeds 1-8 is 649-835. No value has
+  been compared with an in-game card.
+
+## 2026-09-25: Inventory component uses rolled weapon recipes (host)
+
+`UOpenWillowInventory` loads every recipe under `local/items` (or
+`-owitems=<dir>`) that `tools/weapon_stats.py` has evaluated. It keeps a
+backpack plus BL2's four weapon slots, and the first four items are equipped
+in order. Keys 1-4 select a slot and 0 holsters; an empty slot keeps the
+current weapon. The walker fires the active item's evaluated values:
+- interval 1 / fire rate
+- spin-up delay
+- per-shot damage (no criticals, element or resistance yet)
+Each item's mesh is `SK_<recipe id>`, imported by
+`host/ue5/import_weapon_items.py` from its `filter_gestalt_gltf.py --recipe`
+output. Only the Infinity MIC has a material approximation; other materials
+get a neutral grey stand-in with a logged warning. Item rarity is the highest
+part `Rarity` (`ItemRarity5_Legendary` = 5, resolved through its constant
+attribute), which gives the HUD's rarity colour. Taking the max is
+UNVERIFIED.
+
+Runtime check: 8 Infinity recipes (seeds 1-8, level 30) loaded. Slot 1 fired
+"Despair Infinity" at 740 per hit and 8/s; switching to slot 4 loaded "Angry
+Infinity" (753, 9.1/s) with its own rolled Tediore sight on screen. The host
+dummy's health was raised to 20,000 so the capture sequence survives level-30
+damage.
+
+Inventory screen (same day): `UOpenWillowInventoryWidget`, UMG built in C++
+so the layout is reviewable text rather than a Blueprint asset. It opens with
+I; Tab stays the dev map selector. The layout follows BL2's inventory:
+equipped slots and backpack on the left in rarity colours, and an item card
+with level, manufacturer, damage, fire rate, reload, magazine, spread,
+element, "Consumes no ammo" and spin-up. Stats are compared against the
+targeted slot, green up and red down, with lower reload and spread counted as
+better. Clicking a slot targets it; clicking a backpack item equips it there.
+Fonts, frames and icons are host stand-ins, not BL2's Scaleform art. The
+module now depends on UMG, Slate and SlateCore. Captures now request the UI
+layer so screenshots include UMG widgets. The unattended sequence adds
+`OWCombat_6_Slot4` and `OWCombat_7_Inventory`; the latter was inspected and
+shows the card for "Extended Infinity" (835, 7.3/s) compared with slot 1.
+
+Item level (same day): `weapon_stats.py --level` now defaults to the recipe's
+`game_stage`, the level it was rolled at. `Init_WeaponDamage` scales by
+`1.13 ^ WeaponLevel`; for Extended Infinity (seed 5) the tool gives 24, 246,
+835, 9,621 and 141,555 damage at levels 1, 20, 30, 50 and 72. The level-50
+value looks high for a BL2 pistol. The likely suspect is the summed slot-grade
+bonus (+3% per WeaponDamage grade), whose combination rule is UNVERIFIED. A
+real item card at a known level is needed to calibrate.
+
+## 2026-09-26: Run BL2's real HUD movie (option 1), benchmark players first
+
+The maintainer chose to run the game's own HUD movie over rebuilding it,
+"as true to game as possible even if harder". Observed in `Startup.upk`
+(export 46064, `GFxUI.SwfMovie UI_HUD.HUD`):
+- `SourceFile` `..\..\WillowGame\Flash\UI_HUD\HUD.swf`, timestamp 2012-08-01.
+  `RawData` holds a 131,240-byte `CFX` file: zlib-compressed Scaleform SWF,
+  version 9, 336,607 bytes uncompressed.
+- The stage is 1280x720 at 24 fps.
+- Tag census: 353 sprites, 13,446 PlaceObject2, 389 frame labels, 314 shapes,
+  81 edit texts, 737 DoAction plus 22 DoInitAction and no DoABC, so the
+  scripts are ActionScript 2. It also has 25 Scaleform DefineExternalImage2,
+  164 DefineSubImage and one DefineCompactedFont, and 12 ImportAssets2 tags
+  (`gfxfontlib.swf` fonts `$WillowBody`, `$WillowHead`, `$WillowCompact`, and
+  `SharedWillowComponents.swf`).
+- Its art is 17 separate `UI_HUD` `Texture2D`s: DXT1/DXT5, power-of-two
+  padded, including the 1024x1024 atlas `texture1`. All 17 decode with
+  `ow-package --texture` to ignored `local/ui/tex`.
+
+Observed tag layouts (from the bytes; no Scaleform code consulted):
+- DefineExternalImage2 (1009): u32 character id, u16 format (13 in every
+  record), u16 target width, u16 target height, u8-length export name, then
+  u8-length file name. Example: id 0xB8 -> `HUD_IB8.tga`, 389x14; the
+  matching texture is `UI_HUD.HUD_IB8`, 512x16.
+- DefineSubImage (1008): u16 id, u16 image id, then u16 x1, y1, x2, y2.
+- UNVERIFIED: the first 1009 record, the atlas `texture1.tga`, reads
+  `01 00 09 00` where the others hold a u32 id. The sub-images reference
+  image 1. How that id relates to the `-nopack` weapon placeholders, which
+  also start at id 1, is unresolved.
+
+Policy recorded in docs/LEGAL.md, "UI movies", with maintainer approval: the
+movies run from the install; disassembled script listings stay local; no
+transcription into project code; no Scaleform SDK or source. Next, a
+timeboxed benchmark of Ruffle (MIT/Apache-2.0) and of public-domain gameswf
+on a standard SWF converted locally from the installed movie. Integration
+into UE5 waits for those results.
+
+Benchmark progress (same day):
+- `tools/extract_swfmovie.py` writes a `SwfMovie`'s RawData. The value starts
+  24 bytes (the UE3 tag header) plus a u32 count after the property's
+  reported offset; checked against the CFX signature at byte 256 of
+  `UI_HUD.HUD`.
+- `tools/gfx_to_swf.py` turned the installed HUD into a 1,067,262-byte
+  standard SWF under `local/ui`. It converts 16 external images and 164
+  sub-images to `DefineBitsLossless2`; the 8 `-nopack` weapon-icon slots,
+  filled by the game at runtime, become transparent. It drops
+  `ExporterInfo` and `DefineCompactedFont`.
+- Ruffle nightly-2026-09-26 loads it (`Loaded SWF version 9, resolution
+  1280x720 @ 24 FPS`). It then fails to fetch `../gfxfontlib.swf`: the
+  `--base` argument must be a `file:///` directory URL.
+- The font library is `UI_FontsEn.FontsEn` (`FontsEn.swf`, CFX version 8). It
+  holds three `DefineCompactedFont` tags only: WillowBody, "Compacta Bd BT"
+  and "Chintzy CPU BRK". Those fonts are licensed to the game and load from
+  the install only. Text needs this Scaleform font format decoded into
+  standard `DefineFont3`.
+- `SharedWillowComponents.swf`, which the HUD imports, is not in
+  `Startup.upk`; its package is not yet found.
+- Nothing rendered yet. Window capture of Ruffle's Vulkan surface via
+  PrintWindow came back blank, and a screen-copy capture was discarded
+  because it caught other desktop windows. The HUD's clips are also expected
+  to stay hidden until game code drives them, so a visual check needs a host
+  harness that calls into the movie.
+
+## 2026-09-26: HUD movie renders in Ruffle with game fonts, library imports and localized text
+
+Continues the HUD benchmark above. All of this is in the locally converted
+copies under ignored `local/ui/run`; the install is untouched.
+
+Observed and implemented (layouts read from the bytes; no Scaleform code or
+SDK consulted):
+- `SharedWillowComponents.SharedWillowComponents` and
+  `SharedComponents.ConsoleComponents` are in `WillowGame.upk`, not
+  `Startup.upk`.
+- Packed atlases: a DefineExternalImage2 whose bytes 2-3 are `09 00` is read as
+  an atlas, with bytes 0-1 a u16 atlas index. DefineSubImage's second u16 is
+  that index. UNVERIFIED reading, but consistent across UI_HUD (index 1),
+  SharedWillowComponents and ConsoleComponents (0 and 1). This replaces the
+  earlier `--pack-texture` guess.
+- DefineCompactedFont (1005) is decoded by `tools/gfx_compacted_font.py` and
+  written as DefineFont3. The layout is documented in that file's docstring.
+  Glyphs were checked by contour closure and bounds on every ASCII glyph, and
+  by rendering. From `FontsEn`: WillowBody 293 glyphs, 28 skipped; "Compacta
+  Bd BT" 232, 10 skipped; "Chintzy CPU BRK" 40, none skipped. Skipped glyphs
+  use edge-word bit 0 (accented Latin Extended and some quotes). That encoding
+  is not understood, so they are emitted empty and listed in the report.
+- Font aliases: the font library's sample texts read `$Alias = Font Name`, and
+  each font is also exported under its alias (`$WillowBody`, `$WillowCompact`,
+  `$WillowTechNumbers`).
+- `--localization`: `$File.Section.Key` tokens are replaced from the install's
+  `.int` files, with `Patched*.int` overriding its base file. None of the HUD's
+  static DefineEditText strings use tokens. All 40 HUD tokens are ActionScript
+  ConstantPool/Push strings (for example
+  `$WillowMenu.HUD.EnemyLevelAbbreviation`), which Scaleform translates when
+  script assigns them. They sit in straight-line frame scripts with no
+  branches, functions, `with` or `try`, so each string is rewritten in place
+  and only its action's length changes. Streams containing any of those actions
+  are left alone and counted as `script_skipped` (0 in the three movies). In
+  Ruffle, the XP bar's level label now reads `LV` instead of a clipped `$Willo`.
+- `--inline-font-imports` works around a Ruffle limitation read from its
+  source (`core/src/loader.rs` `load_asset_movie`,
+  `core/src/display_object/movie_clip.rs` `preload`, nightly 2026-09-26). An
+  imported movie is preloaded once. If it has its own ImportAssets, preload
+  stops there and never resumes, so its later exports never register.
+  SharedWillowComponents imports its fonts from gfxfontlib, so every HUD import
+  from it (value clip, eridium counter, item cards, manufacturer logos) failed
+  with "non-registered character ID". The option replaces a font-only import
+  with the DefineFont3 from the already converted library, under the
+  importing id, plus an ExportAssets under the import name so HTML
+  `<font face="$WillowBody">` still resolves. Scaleform resolves nested imports
+  itself; this changes only our converted copies. After this change the HUD
+  loads with no missing characters or unknown-font warnings. `$WillowHead` is
+  not exported by gfxfontlib and remains a plain import.
+- `tools/hud_harness_swf.py` writes a small AVM1 wrapper, our own bytecode
+  assembled from the public SWF spec. It loads a movie into `_level1` and
+  exposes `ow(target, op, a, b)` to JavaScript through ExternalInterface.
+  `gotoAndStop("16_9")` on the root shows the 16:9 layout: vitals, XP bar,
+  ammo and grenade bars, minimap and crosshair.
+
+Not yet verified or still open:
+- Nothing has been compared to the game beyond eyeballing the layout against
+  `local/ui/ref`. Bars show authoring-time fill; no host data is driven yet.
+  103 "Stack underflow" warnings during the first frames are unexplained.
+- About 10 "Character ID collision" errors remain. Ruffle fetches
+  SharedWillowComponents once per import tag (5 times) and registers the
+  exports each time. This looks harmless but is UNVERIFIED.
+- No count or render agreement here claims full Scaleform compatibility.
+
+## 2026-09-26: Prototype: BL2's HUD movie over UE5 through the engine's web browser
+
+The maintainer chose to prototype the quick path before any native Ruffle
+embedding: UE's built-in CEF browser (the `WebBrowser` engine module, shipped
+with UE 5.8; no new repository dependency) shows a transparent local page that
+runs Ruffle with the converted HUD, and the C++ HUD pushes Maya's state into it.
+This is a stopgap to test the real movie with live game data, not the final
+integration.
+
+- `-owflashhud=<url>` on the Maya HUD (`AOpenWillowMayaHUD`) adds a
+  transparent, hit-test-invisible `SWebBrowser` over the viewport. The canvas
+  bars, crosshair and weapon panel are then skipped; damage numbers are still
+  drawn by the host. The module must be loaded explicitly
+  (`IWebBrowserModule::Get()`); `SWebBrowserView` creates no window otherwise,
+  which surfaced as an immediate load error.
+- `tools/hud_overlay/index.html` (our code) runs Ruffle with
+  `wmode: 'transparent'`, waits until the HUD has loaded all frames before
+  jumping to `16_9` (jumping earlier left `p1` missing), hides `bossModule`,
+  and exposes `owHud(state)`. `tools/hud_overlay/serve.py` serves it with the
+  converted movies from `local/ui/run`; `tools/run_ue_flash_hud.ps1` starts
+  both.
+- Clip mapping, observed in the Ruffle bench by setting frames and reading
+  them back, not read from the game's scripts: `p1.health`, `p1.shield`,
+  `p1.grenades` and `p1.bullets` have 100 bar frames with frame 1 full;
+  `shield`/`grenades` frame 101 is `none`, `bullets` 102/103 are
+  `weaponSwitch`/`noWeapon`; `p1.xpbar` frame N is N% full; `p1.character`
+  frame `siren` shows the action-skill icon. Whether the game uses exactly
+  these frames for a given value is UNVERIFIED.
+- Only real host state is sent: Maya takes no damage and has no XP, grenade
+  or magazine tracking yet, so vitals are full with empty number fields,
+  grenades are hidden, and the ammo text is the recipe's magazine size.
+
+Checked: a `-game` run with `-owcombattest -owcombatshots` logged "page
+loaded" and "HUD movie ready" from inside UE, and the captures show the movie's
+bars, action-skill icon, XP bar, ammo panel, minimap and crosshair over
+Sanctuary, under the inventory screen. Not checked: frame cost of the
+browser, input focus in a long play session, behaviour at other window aspect
+ratios, and anything against the real game's HUD beyond layout by eye.
+
+## 2026-09-26: What BL2's menus depend on; pause menu renders in Ruffle
+
+Asked "how could we mass import the menu logic", measured the dependency
+first. Counts come from `ow-package --exports` over the install and from
+string scans of decompressed movies. The movies' script listings stay local
+(docs/LEGAL.md, "UI movies").
+
+- Movies: 914 packages scanned, 0 failures, 64 hold `GFxUI.SwfMovie` exports,
+  280 distinct movies. 137 are skill/action-skill icons, about 40 are ECHO
+  portraits and small icons, one is a tactical map per level, and about 30 are
+  real screens. Examples: `UI_StatusMenu.StatusMenu` (inventory, skills,
+  missions and map), `UI_FrontEnd_TitleMenusClik`, `UI_Options`,
+  `UI_VendingMachine`, `UI_FastTravelStation`, `UI_Mission`, `UI_Trading`.
+- The logic that drives them is UnrealScript. Classes whose names match UI
+  patterns own 3,205 of WillowGame's 11,945 functions, including
+  `StatusMenuExGFxMovie` 196, `FrontendGFxMovie` 192 and `WillowHUDGFxMovie`
+  127. Add 162 in GearboxFramework, 73 in Engine, and GFxUI's 196: the
+  `GFxMoviePlayer`/`GFxObject` bridge, mostly natives. This is name-pattern
+  counting, so it is approximate in both directions. The functions read game
+  state (inventory, item definitions, skills, missions, player controller),
+  which is why ROADMAP.md places the menus in Phase 4 on top of the Phase 2 VM.
+- Movie to game: the movies call named ExternalInterface functions. The HUD
+  uses 13 `ext*` names; StatusMenu uses 41 in script constant pools and 55
+  `ext*` byte strings overall. In Ruffle, clicking StatusMenu's Skills tab
+  called `extGenericButtonClicked("skills")` on the page. No call fired at
+  load, so the movie appears to wait for the game to drive it first
+  (UNVERIFIED).
+
+Converter changes (`tools/gfx_to_swf.py`):
+- Import URLs have `\` replaced by `/`. StatusMenu imports
+  `..\SharedWillowInventory\...`, which Scaleform on Windows accepts and a web
+  player does not.
+- Script localization no longer skips streams with branches. After strings
+  change length, every Jump/If offset and every DefineFunction(2), With and
+  Try size is recomputed from old-to-new action positions. A stream is left
+  unchanged, and counted as `script_skipped`, if any distance does not end on
+  an action boundary. `tests/gfx_to_swf_test.py` (synthetic AVM1) covers
+  forward and backward branches, non-spanning jumps, function and Try sizes,
+  the misaligned fallback, and URL normalization. It is not yet registered
+  with ctest because that needs a CMakeLists.txt change. On the real outputs:
+  HUD 40, StatusMenu 30 and SharedWillowInventory 4 tokens translated, 0
+  skipped; 2,168 branches checked, 0 off an action boundary.
+
+StatusMenu (with `SharedWillowInventory`, textures decoded with `ow-package
+--texture`) now renders in the Ruffle bench: tab bar, localized title
+"INVENTORY", close button, background. Its panels stay empty because nothing
+plays the game side.
+
+## 2026-09-26: Menus for Maya: trace Gearbox's UI code in the real game, then build to the trace
+
+The maintainer asked to "run Gearbox's code and base off that" to get Maya's
+menus working faster. Running it inside OpenWillow needs the Phase 2 VM and
+the natives the menu code reaches, which is months away. Reading the scripts
+and porting them is forbidden (docs/LEGAL.md, "UI movies" and clean-room rule
+3). The approved route is observation: run the real game with the community
+mod SDK the player already has installed, record everything the UI code does,
+and build host controllers that reproduce the recording against the same
+movies. The traces also become golden files for the VM later.
+
+- The SDK is in the player's install: unrealsdk v3.2.0, pyunrealsdk v1.10.0,
+  mod manager 3.8, recorded in THIRD_PARTY.md with maintainer approval. Its
+  log shows ProcessEvent and CallFunction detoured, so script calls to native
+  functions are hookable too.
+- `tools/sdk_trace/openwillow_uitrace` is our own logging-only mod, installed
+  with maintainer approval into the game's `sdk_mods` folder. When enabled
+  from the mod menu, it hooks every function declared on classes inheriting
+  `GFxMoviePlayer` or `GFxObject`. That covers the controllers, the Scaleform
+  bridge and the `ext*` callbacks. It writes JSONL to `local/ui/traces`, the
+  path taken from `trace_dir.txt` beside the installed mod. After 200 detailed
+  records per function it only counts, so per-frame HUD traffic stays bounded.
+- `tools/sdk_trace/summarize.py` reports classes, bridge calls and callbacks,
+  and prints a per-class timeline. Checked on a synthetic trace only.
+
+Subsequent real-game runs produced two local traces: 2,919 functions hooked,
+60,200 and 37,502 JSONL records over 90.4 and 40.2 seconds, respectively,
+with zero trace errors. Performance cost while enabled is not measured.
+Controllers built from a trace must still be checked side by side with the
+real game.
+
+## 2026-09-26: Maya's Skills tab populated through the StatusMenu movie
+
+The real-game UI trace under ignored `local/ui/traces` showed the host's
+`SetupSkillTree` opening `skills`, then calling movie methods to set the class
+portrait, points and branch names. The movie called `extInitTree` for its three
+branches. A browser probe of the converted StatusMenu verified that these
+methods, `SetCellVisible`, `SetInfo`, and `loadMovie` on each icon container
+render Maya's data from `tools/prepare_skill_tree.py` without copying menu
+script logic into the project.
+
+`tools/hud_overlay/skills.js` waits for all three movie callbacks, then fills
+Maya's 30 skill cells, action-skill art, portrait, labels and descriptions.
+Its transparent HTML hit targets follow the movie clips' `getBounds` after the
+opening tween so hover and branch arrows work in Ruffle. The UE host opens the
+page with **K**, sends its current zero skill points and restores game input on
+close. The standalone `?points=N` value is only for visual checks.
+
+Automated extraction check: the local JSON has three branches and 30 skills;
+all 32 distinct referenced movies have SWFs and converter reports, with zero
+missing external textures and zero dropped tags in those reports. Visual check
+in a local browser at 1280x720: all 30 icons render; hovering Mind's Eye
+updates the info panel; the right arrow centres Cataclysm. The movie still
+logs Ruffle character-ID collisions and AVM1 stack underflows. A UE 5.8
+Sanctuary game-window capture at 1280x720 shows the populated menu with Maya's
+portrait, action-skill description, three branches and icons. The first
+capture at 3 seconds after opening was blank because the imported movie had
+not initialized; the menu logged ready about 4 seconds after opening and
+rendered in a later capture. The automated UE run also observed the page's
+close route restoring the game view. Manual pointer and keyboard interaction
+in the UE window, skill spending, earned points and skill effects remain
+UNVERIFIED.
+
+## 2026-09-27: Skills visual states and motion from the installed movie
+
+The maintainer's original-game reference shows rank badges, stronger depth
+between the selected and side branches, a green action-skill frame, class-mod
+text when equipped, richer grade descriptions, and contextual footer text.
+The converted movie already contains `SkillTreeCellController.SetState` frames
+for disabled, enabled, partly invested and maxed skills (with separate kill
+skill frames), plus `SetCharacter`, `TweenBranch`, the sway clip and tooltip
+text. Browser probes against the local movie confirmed these methods and the
+resulting colours and rank badges. No movie art was copied into the repo.
+
+The overlay now drives those frames from a grade map, displays Phaselock as
+1/1 in the current UE slice, uses the movie's imported full WillowBody font
+for the badge slash, starts sway, tweens the initial branch layout, and shows
+the controls that actually work. Ruffle did not apply the traced Z depth to
+the side branches in the browser check, so their 2D scale and positions are
+adjusted in the page. A host supplied class-mod label can appear through the
+movie, but the current prototype has no class mod equipped or represented.
+Current branch grades and available points remain zero. The original-game
+capture's invested grades and calculated current/next grade stats cannot be
+claimed for this host yet; they require actual skill state and attribute
+evaluation. Pointer hover animation is an overlay effect because native
+Ruffle rollover callbacks did not fire in the browser probe.
+
+Runtime check: UE 5.8 opened the updated menu in a Sanctuary game window and
+captured `OWCombat_8_Skills.png` under ignored UE `Saved/Screenshots`. The
+image shows the 1/1 action badge, 0/5 first-tier badges, dimmed deeper tiers,
+the receded side branches and corrected footer. The movie logged ready about
+9.6 seconds after the overlay opened in this run; the scripted page close
+restored the game view. This checks rendering and the close route, not manual
+mouse interaction or skill spending.
+
+The first runtime capture still showed gameplay health, ammo, level and
+minimap HUD behind Skills. The host now hides both its Flash HUD viewport
+widget and native HUD drawing while Skills is open and restores them on close;
+the subsequent `OWCombat_8_Skills.png` capture shows none of those HUD elements,
+and `OWCombat_9_AfterSkills.png` shows them restored after the page close route.
+
+How the interface was learned, and what it rests on:
+- `tools/hud_harness_swf.py` gained four ops besides get/set/call: `apply`
+  (call with an argument array), `keys` (member names), `unhide`
+  (`ASSetPropFlags(target, null, 0, 1)`, bench inspection only, to list class
+  methods) and `forward` (installs a clip function that relays to the page
+  through ExternalInterface, the page's stand-in for Scaleform's
+  `SetFunction`). Ruffle ends `Enumerate2` with undefined rather than the
+  spec's null, so `keys` compares with `==`.
+- Method names and parameter lists (for example `SetCellVisible(BranchNum,
+  TierNum, CellNum)`, `TweenBranch(BranchNum, bImmediate, TweenDuration, XPos,
+  YPos, ZPos, XScale, YScale, Alpha)`) come from a local signature listing of
+  the converted StatusMenu (`local/ui/as2_signatures.py`, output kept under
+  `local/` per docs/LEGAL.md). No function bodies were transcribed. Cell
+  states are the cell sprite's frame labels.
+- The movie calls `extCellClicked(branch, tier, cell)` itself on mouse
+  release (trace seq 25355), so the game does not hit-test cells.
+- `tools/prepare_skill_tree.py` places cells by tier size (1 skill: column 1;
+  2: columns 0 and 2; 3: all). All 28 tree cells hovered in the two traces
+  match; `bCellIsOccupied` is a bool array that `ow-package` does not decode
+  yet, and extending the array decoder is a sensitive-area change not made
+  here. Traced branch layouts fit X = 15 + 330d, Z = -5500|d|, alpha =
+  100 - 15|d| for branch offset d (two observations; UNVERIFIED beyond them).

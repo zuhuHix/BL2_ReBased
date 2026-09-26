@@ -19,6 +19,10 @@ SCOOTER_FRONTAGE_TRIANGLE_SOURCES = frozenset({
     'Sanctuary_P:Env_Sanctuary.Meshes.SancScooterStairs',
     'Sanctuary_P:Prop_SanctuaryRoad.Mesh.SanctuarySidewalk_ParkingLot_Low',
 })
+ARCHIVES_FLOOR_TRIANGLE_SOURCES = frozenset({
+    'Sanctuary_P:Env_Sanctuary.Meshes.RolandsArchivesFloors',
+    'Sanctuary_P:Env_Sanctuary.Meshes.RolandsArchivesCrushRoom',
+})
 
 
 def scooter_frontage_collision(source, collision):
@@ -26,6 +30,15 @@ def scooter_frontage_collision(source, collision):
     if source in SCOOTER_FRONTAGE_TRIANGLE_SOURCES and collision['status'] == 'absent':
         return {'status': 'triangle_mesh', 'hulls': [],
                 'method': 'scooter_frontage_render_triangles_v1',
+                'source_collision': 'absent'}
+    return collision
+
+
+def archives_floor_collision(source, collision):
+    """Use render triangles for the two observed Archives floor meshes."""
+    if source in ARCHIVES_FLOOR_TRIANGLE_SOURCES and collision['status'] == 'absent':
+        return {'status': 'triangle_mesh', 'hulls': [],
+                'method': 'archives_floor_render_triangles_v1',
                 'source_collision': 'absent'}
     return collision
 
@@ -1256,9 +1269,10 @@ class Scene:
                     collision = {'status': 'unsupported', 'hulls': [], 'reason': str(error)}
                     self.issue(self.identity(key) + ':collision', error)
             source = self.identity(key)
-            # Both observed placements have collision enabled but no
-            # RB_BodySetup; the host needs a walkable floor at this frontage.
+            # Exact Sanctuary meshes with walkable surfaces but no
+            # RB_BodySetup use their render triangles as a host fallback.
             collision = scooter_frontage_collision(source, collision)
+            collision = archives_floor_collision(source, collision)
             self.meshes[name] = {'source': source, 'sections': sections, 'collision': collision}
         return name
 
