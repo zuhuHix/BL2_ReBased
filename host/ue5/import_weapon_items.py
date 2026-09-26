@@ -67,4 +67,9 @@ for recipe_path in sorted(items.glob('*.json')):
         raise RuntimeError(f'Could not save {target}')
     imported += 1
     unreal.log(f"OW_ITEM {target} name={recipe.get('name')} fragments={len(recipe.get('gestalt_fragments', []))}")
+# The glTF import also creates each mesh's Skeleton and PhysicsAsset under
+# <id>/SkeletalMeshes; saving only the mesh left them unsaved, so a fresh
+# editor could not load SK_<id>.
+if not eal.save_directory(destination, only_if_is_dirty=False, recursive=True):
+    raise RuntimeError(f'Could not save {destination}')
 unreal.log(f'OW_ITEMS imported={imported} from {items}')
