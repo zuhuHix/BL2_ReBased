@@ -119,3 +119,35 @@ UE Explorer (GPL-3.0) and UPKUtils (GPL-2.0) may be consulted as external
 research references only. No code from either project is copied into this MIT
 repository. Any future code reuse requires a separate maintainer license
 decision before implementation.
+
+### OpenBLCMM and its BL2 datapack
+
+- Source: https://github.com/BLCM/OpenBLCMM (GPL-3.0), release v1.4.1,
+  `OpenBLCMM-1.4.1-Windows.zip` SHA-256
+  `bbe9d09a3373de7f20b2f138b865baed762f2a8e6ef9b50738966f4095bc4000`.
+- Datapack: https://github.com/BLCM/OpenBLCMM-Data release 2023-04-21-01,
+  `blcmm_data_BL2-2023-04-20-01.jar` SHA-256
+  `8bf07971904ed9d511586e11adcc4e676fbeda546994b439456860fcce2457bc`.
+- Local: `C:/Users/yorad/Tools/OpenBLCMM/`; `data.db` extracted to
+  `%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/`.
+- Use: observed-game oracle read by `tools/blcmm_dumps.py` (see "Oracles").
+  No code copied; no dump text tracked.
+
+### Ruffle (Flash player) - benchmark candidate for BL2's UI movies
+
+- Source: https://github.com/ruffle-rs/ruffle, license MIT OR Apache-2.0
+  (upstream `LICENSE.md`).
+- Local binary: `nightly-2026-09-26`, `ruffle-nightly-2026_09_26-windows-x86_64.zip`
+  SHA-256 `a3f2a75b63a84f7a5600733f9c39ea9d6b9a4d6e703b26c5d92ead470184aa5b`,
+  unpacked to `C:/Users/yorad/Tools/Ruffle/nightly-2026-09-26/`.
+- On first run the desktop build downloaded Cisco's OpenH264 2.4.1 (its own
+  BSD-2-Clause license and Cisco's binary terms) to
+  `%LOCALAPPDATA%/ruffle/video/`; it is Ruffle's, unused by this project.
+- Use: local execution only, as a timeboxed benchmark of running the game's
+  converted HUD movie (maintainer approval 2026-09-26). Not a dependency, not
+  linked, not vendored. Embedding it in the UE5 host is a separate decision.
+
+### gameswf - benchmark candidate (pending)
+
+- tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
+  Approved for the same benchmark; not yet downloaded or built.
