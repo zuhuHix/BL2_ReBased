@@ -229,6 +229,11 @@ void UOpenWillowInventoryWidget::RowClicked(int32 Item, int32 ClickedSlot)
 
 FReply UOpenWillowInventoryWidget::NativeOnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
 {
+    if (Walker && Event.GetKey() == EKeys::K)
+    {
+        Walker->ToggleSkills();
+        return FReply::Handled();
+    }
     if (Walker && (Event.GetKey() == EKeys::I || Event.GetKey() == EKeys::Escape))
     {
         Walker->ToggleInventory();

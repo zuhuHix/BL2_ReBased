@@ -8,6 +8,12 @@
 #include "Engine/Font.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
+#include "Engine/GameViewportClient.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "SWebBrowser.h"
+#include "WebBrowserModule.h"
+#include "Widgets/Layout/SBox.h"
 
 // Host HUD laid out after BL2's (slanted shield/health bottom-left, XP bar
 // bottom-centre with the action skill, angled ammo panel bottom-right). It is
@@ -70,14 +76,177 @@ void Outlined(AHUD& Hud, const FString& Text, const FLinearColor& Color, float X
 }
 }
 
+void AOpenWillowMayaHUD::BeginPlay()
+{
+    Super::BeginPlay();
+    FParse::Value(FCommandLine::Get(), TEXT("owflashskills="), SkillsUrl);
+    FString Url;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url) || !GEngine || !GEngine->GameViewport) return;
+    // SWebBrowser only creates a window once the WebBrowser module is loaded;
+    // the WebBrowserWidget plugin normally does that, and we do not use it.
+    if (!IWebBrowserModule::Get().IsWebModuleAvailable())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow Flash HUD: the engine's web browser (CEF) is not available"));
+        return;
+    }
+    // Transparent and hit-test invisible, so mouse and keys still reach the game.
+    FlashHud = SNew(SWebBrowser)
+        .InitialURL(Url)
+        .ShowControls(false)
+        .ShowAddressBar(false)
+        .ShowErrorMessage(true)
+        .ShowInitialThrobber(false)
+        .SupportsTransparency(true)
+        .BackgroundColor(FColor(0, 0, 0, 0))
+        .BrowserFrameRate(30)
+        .OnLoadCompleted_Lambda([] { UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD page loaded")); })
+        .OnLoadError_Lambda([] { UE_LOG(LogTemp, Warning, TEXT("OpenWillow Flash HUD page failed to load; is tools/hud_overlay/serve.py running?")); })
+        .OnConsoleMessage_Lambda([](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
+            { UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD console: %s (%s:%d)"), *Message, *Source, Line); });
+    FlashHudRoot = SNew(SBox).Visibility(EVisibility::HitTestInvisible)[FlashHud.ToSharedRef()];
+    GEngine->GameViewport->AddViewportWidgetContent(FlashHudRoot.ToSharedRef(), 5);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD overlay: %s"), *Url);
+}
+
+void AOpenWillowMayaHUD::ToggleSkills()
+{
+    if (SkillsBrowser) { CloseSkills(); return; }
+    if (SkillsUrl.IsEmpty() || !GEngine || !GEngine->GameViewport || !PlayerOwner) return;
+    if (!IWebBrowserModule::Get().IsWebModuleAvailable())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow Skills: the engine's web browser is not available"));
+        return;
+    }
+    SkillsBrowser = SNew(SWebBrowser)
+        .InitialURL(SkillsUrl)
+        .ShowControls(false)
+        .ShowAddressBar(false)
+        .ShowErrorMessage(true)
+        .ShowInitialThrobber(false)
+        .SupportsTransparency(true)
+        .BackgroundColor(FColor(0, 0, 0, 0))
+        .BrowserFrameRate(30)
+        .OnBeforeNavigation_Lambda([this](const FString& NextUrl, const FWebNavigationRequest&)
+            {
+                if (!NextUrl.EndsWith(TEXT("/__ow_close_skills"))) return false;
+                bCloseSkillsRequested = true;
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills close requested by page"));
+                return true; // Consume the page's close route without navigating away.
+            })
+        .OnLoadCompleted_Lambda([] { UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills page loaded")); })
+        .OnLoadError_Lambda([] { UE_LOG(LogTemp, Warning, TEXT("OpenWillow Skills page failed to load")); })
+        .OnConsoleMessage_Lambda([](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
+            { UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills console: %s (%s:%d)"), *Message, *Source, Line); });
+    SkillsRoot = SNew(SBox)[SkillsBrowser.ToSharedRef()];
+    GEngine->GameViewport->AddViewportWidgetContent(SkillsRoot.ToSharedRef(), 20);
+    if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::Collapsed);
+    FInputModeUIOnly Mode;
+    Mode.SetWidgetToFocus(SkillsBrowser.ToSharedRef());
+    PlayerOwner->SetInputMode(Mode);
+    PlayerOwner->SetShowMouseCursor(true);
+    NextSkillsPush = 0.f;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills overlay: %s"), *SkillsUrl);
+}
+
+void AOpenWillowMayaHUD::CloseSkills()
+{
+    if (!SkillsBrowser) return;
+    if (SkillsRoot && GEngine && GEngine->GameViewport)
+        GEngine->GameViewport->RemoveViewportWidgetContent(SkillsRoot.ToSharedRef());
+    SkillsRoot.Reset();
+    SkillsBrowser.Reset();
+    bCloseSkillsRequested = false;
+    if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
+    if (PlayerOwner)
+    {
+        PlayerOwner->SetInputMode(FInputModeGameOnly());
+        PlayerOwner->SetShowMouseCursor(false);
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills overlay closed"));
+}
+
+void AOpenWillowMayaHUD::RequestSkillsCloseFromPage()
+{
+    if (SkillsBrowser)
+        SkillsBrowser->ExecuteJavascript(TEXT("window.location.href='/__ow_close_skills'"));
+}
+
+void AOpenWillowMayaHUD::EndPlay(const EEndPlayReason::Type Reason)
+{
+    CloseSkills();
+    if (FlashHudRoot && GEngine && GEngine->GameViewport)
+        GEngine->GameViewport->RemoveViewportWidgetContent(FlashHudRoot.ToSharedRef());
+    FlashHudRoot.Reset();
+    FlashHud.Reset();
+    Super::EndPlay(Reason);
+}
+
+void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
+{
+    // Only state the host really has: Maya takes no damage and has no XP,
+    // grenades or magazine tracking yet, so vitals stay full, grenades are
+    // hidden and the ammo text is the magazine size. Field meanings are in
+    // tools/hud_overlay/index.html.
+    const UOpenWillowInventory* Inventory = Maya.GetInventory();
+    const FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    const bool bArmed = Maya.HasWeaponOut() && Weapon;
+    const FString State = FString::Printf(
+        TEXT("{\"character\":\"siren\",\"health\":1,\"shield\":1,\"healthText\":\"\",\"shieldText\":\"\","
+             "\"xp\":0,\"grenades\":null,\"weaponOut\":%s,\"ammo\":1,\"ammoText\":\"%s\"}"),
+        bArmed ? TEXT("true") : TEXT("false"),
+        bArmed ? *FString::Printf(TEXT("%.0f"), Weapon->Magazine) : TEXT(""));
+    // Resend once a second too: the page may not have loaded the first time.
+    const float Now = GetWorld()->GetRealTimeSeconds();
+    if (State == LastFlashState && Now < NextFlashPush) return;
+    FlashHud->ExecuteJavascript(FString::Printf(TEXT("window.owHud && window.owHud(%s)"), *State));
+    LastFlashState = State;
+    NextFlashPush = Now + 1.f;
+}
+
+void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
+{
+    // Damage numbers pop in large, rise and fade over each hit location.
+    const float Now = GetWorld()->GetTimeSeconds();
+    for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It)
+    {
+        for (const FOpenWillowDamagePopup& Popup : It->Popups)
+        {
+            const float Age = Now - Popup.Born;
+            const FVector Screen = Project(Popup.Location + FVector(0, 0, 70.f * Age), false);
+            if (Screen.Z <= 0.f) continue;
+            const float Alpha = FMath::Clamp(1.f - Age / 1.2f, 0.f, 1.f);
+            const float Scale = 1.9f + 0.8f * FMath::Max(0.f, 1.f - Age / 0.15f);
+            Outlined(*this, FString::Printf(TEXT("%.0f"), Popup.Amount),
+                FLinearColor(1.f, 0.95f, 0.8f, Alpha), Screen.X, Screen.Y, Font, Scale);
+        }
+    }
+}
+
 void AOpenWillowMayaHUD::DrawHUD()
 {
     Super::DrawHUD();
+    if (bCloseSkillsRequested) CloseSkills();
+    if (SkillsBrowser && GetWorld()->GetRealTimeSeconds() >= NextSkillsPush)
+    {
+        // The host has no earned skill points or grade tracking yet.
+        // Maya can already cast Phaselock in the current vertical slice.
+        SkillsBrowser->ExecuteJavascript(TEXT("window.owSkills && window.owSkills({points:0,actionGrade:1})"));
+        NextSkillsPush = GetWorld()->GetRealTimeSeconds() + 1.f;
+    }
+    if (SkillsBrowser) return; // The gameplay HUD is hidden behind the menu.
     if (!Canvas || !PlayerOwner) return;
     const AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
     if (!Maya) return;
     UFont* Small = GEngine->GetSmallFont();
     UFont* Large = GEngine->GetLargeFont();
+    if (FlashHud)
+    {
+        // The movie draws the crosshair, bars and weapon panel; damage
+        // numbers are not driven in it yet.
+        PushFlashHudState(*Maya);
+        DrawDamagePopups(Large);
+        return;
+    }
     const float W = Canvas->ClipX;
     const float H = Canvas->ClipY;
     const float Now = GetWorld()->GetTimeSeconds();
@@ -99,20 +268,7 @@ void AOpenWillowMayaHUD::DrawHUD()
         DrawLine(X + 14.f, Y + 14.f, X + 7.f, Y + 7.f, Hit, 2.f);
     }
 
-    // Damage numbers pop in large, rise and fade over each hit location.
-    for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It)
-    {
-        for (const FOpenWillowDamagePopup& Popup : It->Popups)
-        {
-            const float Age = Now - Popup.Born;
-            const FVector Screen = Project(Popup.Location + FVector(0, 0, 70.f * Age), false);
-            if (Screen.Z <= 0.f) continue;
-            const float Alpha = FMath::Clamp(1.f - Age / 1.2f, 0.f, 1.f);
-            const float Scale = 1.9f + 0.8f * FMath::Max(0.f, 1.f - Age / 0.15f);
-            Outlined(*this, FString::Printf(TEXT("%.0f"), Popup.Amount),
-                FLinearColor(1.f, 0.95f, 0.8f, Alpha), Screen.X, Screen.Y, Large, Scale);
-        }
-    }
+    DrawDamagePopups(Large);
 
     // Shield over health, bottom left. Maya takes no damage yet: both full.
     const float BarW = W * 0.19f;

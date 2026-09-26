@@ -1944,3 +1944,214 @@ Not yet verified or still open:
   SharedWillowComponents once per import tag (5 times) and registers the
   exports each time. This looks harmless but is UNVERIFIED.
 - No count or render agreement here claims full Scaleform compatibility.
+
+## 2026-09-26: Prototype: BL2's HUD movie over UE5 through the engine's web browser
+
+The maintainer chose to prototype the quick path before any native Ruffle
+embedding: UE's built-in CEF browser (the `WebBrowser` engine module, shipped
+with UE 5.8; no new repository dependency) shows a transparent local page that
+runs Ruffle with the converted HUD, and the C++ HUD pushes Maya's state into it.
+This is a stopgap to test the real movie with live game data, not the final
+integration.
+
+- `-owflashhud=<url>` on the Maya HUD (`AOpenWillowMayaHUD`) adds a
+  transparent, hit-test-invisible `SWebBrowser` over the viewport. The canvas
+  bars, crosshair and weapon panel are then skipped; damage numbers are still
+  drawn by the host. The module must be loaded explicitly
+  (`IWebBrowserModule::Get()`); `SWebBrowserView` creates no window otherwise,
+  which surfaced as an immediate load error.
+- `tools/hud_overlay/index.html` (our code) runs Ruffle with
+  `wmode: 'transparent'`, waits until the HUD has loaded all frames before
+  jumping to `16_9` (jumping earlier left `p1` missing), hides `bossModule`,
+  and exposes `owHud(state)`. `tools/hud_overlay/serve.py` serves it with the
+  converted movies from `local/ui/run`; `tools/run_ue_flash_hud.ps1` starts
+  both.
+- Clip mapping, observed in the Ruffle bench by setting frames and reading
+  them back, not read from the game's scripts: `p1.health`, `p1.shield`,
+  `p1.grenades` and `p1.bullets` have 100 bar frames with frame 1 full;
+  `shield`/`grenades` frame 101 is `none`, `bullets` 102/103 are
+  `weaponSwitch`/`noWeapon`; `p1.xpbar` frame N is N% full; `p1.character`
+  frame `siren` shows the action-skill icon. Whether the game uses exactly
+  these frames for a given value is UNVERIFIED.
+- Only real host state is sent: Maya takes no damage and has no XP, grenade
+  or magazine tracking yet, so vitals are full with empty number fields,
+  grenades are hidden, and the ammo text is the recipe's magazine size.
+
+Checked: a `-game` run with `-owcombattest -owcombatshots` logged "page
+loaded" and "HUD movie ready" from inside UE, and the captures show the movie's
+bars, action-skill icon, XP bar, ammo panel, minimap and crosshair over
+Sanctuary, under the inventory screen. Not checked: frame cost of the
+browser, input focus in a long play session, behaviour at other window aspect
+ratios, and anything against the real game's HUD beyond layout by eye.
+
+## 2026-09-26: What BL2's menus depend on; pause menu renders in Ruffle
+
+Asked "how could we mass import the menu logic", measured the dependency
+first. Counts come from `ow-package --exports` over the install and from
+string scans of decompressed movies. The movies' script listings stay local
+(docs/LEGAL.md, "UI movies").
+
+- Movies: 914 packages scanned, 0 failures, 64 hold `GFxUI.SwfMovie` exports,
+  280 distinct movies. 137 are skill/action-skill icons, about 40 are ECHO
+  portraits and small icons, one is a tactical map per level, and about 30 are
+  real screens. Examples: `UI_StatusMenu.StatusMenu` (inventory, skills,
+  missions and map), `UI_FrontEnd_TitleMenusClik`, `UI_Options`,
+  `UI_VendingMachine`, `UI_FastTravelStation`, `UI_Mission`, `UI_Trading`.
+- The logic that drives them is UnrealScript. Classes whose names match UI
+  patterns own 3,205 of WillowGame's 11,945 functions, including
+  `StatusMenuExGFxMovie` 196, `FrontendGFxMovie` 192 and `WillowHUDGFxMovie`
+  127. Add 162 in GearboxFramework, 73 in Engine, and GFxUI's 196: the
+  `GFxMoviePlayer`/`GFxObject` bridge, mostly natives. This is name-pattern
+  counting, so it is approximate in both directions. The functions read game
+  state (inventory, item definitions, skills, missions, player controller),
+  which is why ROADMAP.md places the menus in Phase 4 on top of the Phase 2 VM.
+- Movie to game: the movies call named ExternalInterface functions. The HUD
+  uses 13 `ext*` names; StatusMenu uses 41 in script constant pools and 55
+  `ext*` byte strings overall. In Ruffle, clicking StatusMenu's Skills tab
+  called `extGenericButtonClicked("skills")` on the page. No call fired at
+  load, so the movie appears to wait for the game to drive it first
+  (UNVERIFIED).
+
+Converter changes (`tools/gfx_to_swf.py`):
+- Import URLs have `\` replaced by `/`. StatusMenu imports
+  `..\SharedWillowInventory\...`, which Scaleform on Windows accepts and a web
+  player does not.
+- Script localization no longer skips streams with branches. After strings
+  change length, every Jump/If offset and every DefineFunction(2), With and
+  Try size is recomputed from old-to-new action positions. A stream is left
+  unchanged, and counted as `script_skipped`, if any distance does not end on
+  an action boundary. `tests/gfx_to_swf_test.py` (synthetic AVM1) covers
+  forward and backward branches, non-spanning jumps, function and Try sizes,
+  the misaligned fallback, and URL normalization. It is not yet registered
+  with ctest because that needs a CMakeLists.txt change. On the real outputs:
+  HUD 40, StatusMenu 30 and SharedWillowInventory 4 tokens translated, 0
+  skipped; 2,168 branches checked, 0 off an action boundary.
+
+StatusMenu (with `SharedWillowInventory`, textures decoded with `ow-package
+--texture`) now renders in the Ruffle bench: tab bar, localized title
+"INVENTORY", close button, background. Its panels stay empty because nothing
+plays the game side.
+
+## 2026-09-26: Menus for Maya: trace Gearbox's UI code in the real game, then build to the trace
+
+The maintainer asked to "run Gearbox's code and base off that" to get Maya's
+menus working faster. Running it inside OpenWillow needs the Phase 2 VM and
+the natives the menu code reaches, which is months away. Reading the scripts
+and porting them is forbidden (docs/LEGAL.md, "UI movies" and clean-room rule
+3). The approved route is observation: run the real game with the community
+mod SDK the player already has installed, record everything the UI code does,
+and build host controllers that reproduce the recording against the same
+movies. The traces also become golden files for the VM later.
+
+- The SDK is in the player's install: unrealsdk v3.2.0, pyunrealsdk v1.10.0,
+  mod manager 3.8, recorded in THIRD_PARTY.md with maintainer approval. Its
+  log shows ProcessEvent and CallFunction detoured, so script calls to native
+  functions are hookable too.
+- `tools/sdk_trace/openwillow_uitrace` is our own logging-only mod, installed
+  with maintainer approval into the game's `sdk_mods` folder. When enabled
+  from the mod menu, it hooks every function declared on classes inheriting
+  `GFxMoviePlayer` or `GFxObject`. That covers the controllers, the Scaleform
+  bridge and the `ext*` callbacks. It writes JSONL to `local/ui/traces`, the
+  path taken from `trace_dir.txt` beside the installed mod. After 200 detailed
+  records per function it only counts, so per-frame HUD traffic stays bounded.
+- `tools/sdk_trace/summarize.py` reports classes, bridge calls and callbacks,
+  and prints a per-class timeline. Checked on a synthetic trace only.
+
+Subsequent real-game runs produced two local traces: 2,919 functions hooked,
+60,200 and 37,502 JSONL records over 90.4 and 40.2 seconds, respectively,
+with zero trace errors. Performance cost while enabled is not measured.
+Controllers built from a trace must still be checked side by side with the
+real game.
+
+## 2026-09-26: Maya's Skills tab populated through the StatusMenu movie
+
+The real-game UI trace under ignored `local/ui/traces` showed the host's
+`SetupSkillTree` opening `skills`, then calling movie methods to set the class
+portrait, points and branch names. The movie called `extInitTree` for its three
+branches. A browser probe of the converted StatusMenu verified that these
+methods, `SetCellVisible`, `SetInfo`, and `loadMovie` on each icon container
+render Maya's data from `tools/prepare_skill_tree.py` without copying menu
+script logic into the project.
+
+`tools/hud_overlay/skills.js` waits for all three movie callbacks, then fills
+Maya's 30 skill cells, action-skill art, portrait, labels and descriptions.
+Its transparent HTML hit targets follow the movie clips' `getBounds` after the
+opening tween so hover and branch arrows work in Ruffle. The UE host opens the
+page with **K**, sends its current zero skill points and restores game input on
+close. The standalone `?points=N` value is only for visual checks.
+
+Automated extraction check: the local JSON has three branches and 30 skills;
+all 32 distinct referenced movies have SWFs and converter reports, with zero
+missing external textures and zero dropped tags in those reports. Visual check
+in a local browser at 1280x720: all 30 icons render; hovering Mind's Eye
+updates the info panel; the right arrow centres Cataclysm. The movie still
+logs Ruffle character-ID collisions and AVM1 stack underflows. A UE 5.8
+Sanctuary game-window capture at 1280x720 shows the populated menu with Maya's
+portrait, action-skill description, three branches and icons. The first
+capture at 3 seconds after opening was blank because the imported movie had
+not initialized; the menu logged ready about 4 seconds after opening and
+rendered in a later capture. The automated UE run also observed the page's
+close route restoring the game view. Manual pointer and keyboard interaction
+in the UE window, skill spending, earned points and skill effects remain
+UNVERIFIED.
+
+## 2026-09-27: Skills visual states and motion from the installed movie
+
+The maintainer's original-game reference shows rank badges, stronger depth
+between the selected and side branches, a green action-skill frame, class-mod
+text when equipped, richer grade descriptions, and contextual footer text.
+The converted movie already contains `SkillTreeCellController.SetState` frames
+for disabled, enabled, partly invested and maxed skills (with separate kill
+skill frames), plus `SetCharacter`, `TweenBranch`, the sway clip and tooltip
+text. Browser probes against the local movie confirmed these methods and the
+resulting colours and rank badges. No movie art was copied into the repo.
+
+The overlay now drives those frames from a grade map, displays Phaselock as
+1/1 in the current UE slice, uses the movie's imported full WillowBody font
+for the badge slash, starts sway, tweens the initial branch layout, and shows
+the controls that actually work. Ruffle did not apply the traced Z depth to
+the side branches in the browser check, so their 2D scale and positions are
+adjusted in the page. A host supplied class-mod label can appear through the
+movie, but the current prototype has no class mod equipped or represented.
+Current branch grades and available points remain zero. The original-game
+capture's invested grades and calculated current/next grade stats cannot be
+claimed for this host yet; they require actual skill state and attribute
+evaluation. Pointer hover animation is an overlay effect because native
+Ruffle rollover callbacks did not fire in the browser probe.
+
+Runtime check: UE 5.8 opened the updated menu in a Sanctuary game window and
+captured `OWCombat_8_Skills.png` under ignored UE `Saved/Screenshots`. The
+image shows the 1/1 action badge, 0/5 first-tier badges, dimmed deeper tiers,
+the receded side branches and corrected footer. The movie logged ready about
+9.6 seconds after the overlay opened in this run; the scripted page close
+restored the game view. This checks rendering and the close route, not manual
+mouse interaction or skill spending.
+
+The first runtime capture still showed gameplay health, ammo, level and
+minimap HUD behind Skills. The host now hides both its Flash HUD viewport
+widget and native HUD drawing while Skills is open and restores them on close;
+the subsequent `OWCombat_8_Skills.png` capture shows none of those HUD elements,
+and `OWCombat_9_AfterSkills.png` shows them restored after the page close route.
+
+How the interface was learned, and what it rests on:
+- `tools/hud_harness_swf.py` gained four ops besides get/set/call: `apply`
+  (call with an argument array), `keys` (member names), `unhide`
+  (`ASSetPropFlags(target, null, 0, 1)`, bench inspection only, to list class
+  methods) and `forward` (installs a clip function that relays to the page
+  through ExternalInterface, the page's stand-in for Scaleform's
+  `SetFunction`). Ruffle ends `Enumerate2` with undefined rather than the
+  spec's null, so `keys` compares with `==`.
+- Method names and parameter lists (for example `SetCellVisible(BranchNum,
+  TierNum, CellNum)`, `TweenBranch(BranchNum, bImmediate, TweenDuration, XPos,
+  YPos, ZPos, XScale, YScale, Alpha)`) come from a local signature listing of
+  the converted StatusMenu (`local/ui/as2_signatures.py`, output kept under
+  `local/` per docs/LEGAL.md). No function bodies were transcribed. Cell
+  states are the cell sprite's frame labels.
+- The movie calls `extCellClicked(branch, tier, cell)` itself on mouse
+  release (trace seq 25355), so the game does not hit-test cells.
+- `tools/prepare_skill_tree.py` places cells by tier size (1 skill: column 1;
+  2: columns 0 and 2; 3: all). All 28 tree cells hovered in the two traces
+  match; `bCellIsOccupied` is a bool array that `ow-package` does not decode
+  yet, and extending the array decoder is a sensitive-area change not made
+  here. Traced branch layouts fit X = 15 + 330d, Z = -5500|d|, alpha =
+  100 - 15|d| for branch offset d (two observations; UNVERIFIED beyond them).

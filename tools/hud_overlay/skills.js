@@ -1,0 +1,246 @@
+// Drive the installed game's StatusMenu Skills frame through its observed
+// movie interface. Movie and skill data are served from ignored local/ui/run.
+const player = window.RufflePlayer.newest().createPlayer();
+document.body.appendChild(player);
+player.ruffle().load({ url: 'UI_StatusMenu/harness.swf', base: 'UI_StatusMenu/' });
+
+const ROOT = '_level1'; // The harness loads StatusMenu at level 1.
+const SKILLS = ROOT + '.skills';
+const STAGE_WIDTH = 1280;
+const STAGE_HEIGHT = 720;
+const query = new URLSearchParams(location.search);
+const treeName = /^[a-z0-9_]+$/i.test(query.get('tree') || 'siren')
+  ? (query.get('tree') || 'siren') : 'siren';
+const call = (path, method, ...args) => player.ow(path, 'apply', method, args);
+const get = (path, member) => player.ow(path, 'get', member);
+const set = (path, member, value) => player.ow(path, 'set', member, value);
+
+let data;
+let ready = false;
+let loadedBranches = new Set();
+let points = Math.max(0, Number(query.get('points') || 0) || 0);
+let actionGrade = Math.max(0, Number(query.get('action') || 0) || 0);
+let grades = {};
+let classModText = '';
+let selectedBranch = 1; // Harmony is in the middle on the movie's initial frame.
+let hitTargets = [];
+let displayedStates = new Map();
+
+function setGradeText(path, value) {
+  // Some movie text fields embed a digits-only WillowBody subset. Selecting
+  // its full imported alias also renders the slash in ranks such as 0/5.
+  const color = (Number(get(path, 'textColor')) || 0xb6cee2).toString(16).padStart(6, '0');
+  set(path, 'html', true);
+  set(path, 'htmlText', `<font face="$WillowBody" size="13" color="#${color}">${value}</font>`);
+}
+
+// Host state may arrive before the movie loads. The host owns skill points;
+// this page only presents them. ?points=N is for a standalone visual check.
+window.owSkills = state => {
+  let ranksChanged = false;
+  if (typeof state.points === 'number' && Number.isFinite(state.points))
+    points = Math.max(0, Math.floor(state.points));
+  if (typeof state.actionGrade === 'number' && Number.isFinite(state.actionGrade)) {
+    actionGrade = Math.max(0, Math.floor(state.actionGrade));
+    ranksChanged = true;
+  }
+  if (state.grades && typeof state.grades === 'object' && !Array.isArray(state.grades)) {
+    grades = state.grades;
+    ranksChanged = true;
+  }
+  if (typeof state.classModText === 'string') {
+    classModText = state.classModText;
+    if (ready) call(SKILLS, 'SetCharacter', classModText, data.className, data.portrait);
+  }
+  if (ready) call(SKILLS, 'SetSkillPoints', points);
+  if (ready && ranksChanged) renderRanks();
+};
+window.owPlayer = player; // Useful for local inspection, not a game interface.
+
+function showInfo(skill) {
+  if (!skill || !ready) return;
+  const description = (skill.description || '').replaceAll('<StringAliasMap:Action.ActionSkill>', 'F');
+  call(SKILLS + '.InformationBox', 'SetInfo', skill.name || '', description);
+}
+
+function drawBranch(index, branch) {
+  call(SKILLS, 'SetTreeName', index, branch.name);
+  branch.tiers.forEach((tier, tierIndex) => {
+    tier.skills.forEach(skill => {
+      const cell = `${SKILLS}.Tree${index + 1}.SkillRow${tierIndex + 1}.Cell${skill.cell + 1}`;
+      call(SKILLS, 'SetCellVisible', index, tierIndex, skill.cell);
+      hitTargets.push({ path: cell, skill, branch: index });
+    });
+  });
+}
+
+function rank(skill) {
+  const value = Number(grades[skill.id]) || 0;
+  return Math.min(skill.maxGrade, Math.max(0, Math.floor(value)));
+}
+
+function renderRanks() {
+  // The movie owns the badge art and colour frames. The host owns grades;
+  // until grade tracking exists it sends no branch grades, so only the first
+  // tier is available and every other tier stays locked.
+  data.branches.forEach((branch, branchIndex) => {
+    const invested = branch.tiers.reduce((sum, tier) =>
+      sum + tier.skills.reduce((tierSum, skill) => tierSum + rank(skill), 0), 0);
+    let required = 0;
+    branch.tiers.forEach((tier, tierIndex) => {
+      for (const skill of tier.skills) {
+        const grade = rank(skill);
+        const status = grade >= skill.maxGrade ? 'maxed'
+          : grade > 0 ? 'some' : invested >= required ? 'enabled' : 'disabled';
+        const cell = `${SKILLS}.Tree${branchIndex + 1}.SkillRow${tierIndex + 1}.Cell${skill.cell + 1}`;
+        const state = `${skill.killSkill ? 'KillSkill_' : ''}${status}`;
+        if (displayedStates.get(cell) !== state) {
+          call(cell, 'SetState', state);
+          if (skill.icon) call(`${cell}.iconContainer`, 'loadMovie', skill.icon);
+          displayedStates.set(cell, state);
+        }
+        if (status !== 'disabled') setGradeText(`${cell}.points`, `${grade}/${skill.maxGrade}`);
+      }
+      required += tier.pointsToUnlockNext || 0;
+    });
+  });
+  const grade = Math.min(data.actionSkill.maxGrade, actionGrade);
+  const action = `${SKILLS}.ActiveAbility.BackgroundState`;
+  const actionState = grade >= data.actionSkill.maxGrade ? 4 : grade > 0 ? 3 : points ? 2 : 1;
+  if (displayedStates.get(action) !== actionState) {
+    player.ow(action, 'gotoAndStop', actionState);
+    if (data.actionSkill.icon) call(`${action}.iconContainer`, 'loadMovie', data.actionSkill.icon);
+    displayedStates.set(action, actionState);
+  }
+  if (grade || points) setGradeText(`${action}.points`, `${grade}/${data.actionSkill.maxGrade}`);
+}
+
+function updateBranch(which) {
+  if (!ready) return;
+  selectedBranch = (which + data.branches.length) % data.branches.length;
+  // These are the three positions observed in the UI trace when Harmony is
+  // centred. The movie owns the tween and the 3D panel rendering.
+  data.branches.forEach((_, i) => {
+    const slot = (i - selectedBranch + 3) % 3;
+    // Ruffle currently ignores the movie's Z perspective. Scale the side
+    // branches in 2D to match their receding size in the game's GFx view.
+    const x = [15, 270, -240][slot];
+    const z = [0, -5500, -5500][slot];
+    const alpha = [100, 85, 85][slot];
+    const scale = slot === 0 ? 100 : 75;
+    call(SKILLS, 'TweenBranch', i + 1, false, 0.3, x, 17, z, scale, scale, alpha);
+  });
+  setTimeout(layoutHits, 600);
+}
+
+function addHit(path, onEnter, onClick, label, parent, kind = '') {
+  const bounds = call(path, 'getBounds', ROOT);
+  if (!bounds || !Number.isFinite(bounds.xMin) || !Number.isFinite(bounds.yMin)) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `movie-hit ${kind}`;
+  button.setAttribute('aria-label', label);
+  button.style.left = `${100 * bounds.xMin / STAGE_WIDTH}%`;
+  button.style.top = `${100 * bounds.yMin / STAGE_HEIGHT}%`;
+  button.style.width = `${100 * (bounds.xMax - bounds.xMin) / STAGE_WIDTH}%`;
+  button.style.height = `${100 * (bounds.yMax - bounds.yMin) / STAGE_HEIGHT}%`;
+  if (onEnter) button.addEventListener('pointerenter', onEnter);
+  if (onClick) button.addEventListener('click', onClick);
+  parent.appendChild(button);
+}
+
+function layoutHits() {
+  if (!ready) return;
+  const layer = document.getElementById('hit-layer');
+  layer.replaceChildren();
+  for (const hit of hitTargets.filter(hit => hit.branch === selectedBranch))
+    addHit(hit.path, () => showInfo(hit.skill), () => showInfo(hit.skill), hit.skill.name, layer, 'skill-hit');
+  addHit(`${SKILLS}.ActiveAbility`, () => showInfo(data.actionSkill),
+    () => showInfo(data.actionSkill), data.actionSkill.name, layer);
+  addHit(`${SKILLS}.arrowLeft`, null, () => updateBranch(selectedBranch - 1),
+    'Previous skill tree', layer);
+  addHit(`${SKILLS}.arrowRight`, null, () => updateBranch(selectedBranch + 1),
+    'Next skill tree', layer);
+  // This route is intercepted by the UE browser before it navigates.
+  addHit(`${ROOT}.header.pcCloseButton`, null, closeSkills, 'Close skills', layer);
+}
+
+function closeSkills() {
+  if (window.owCloseSkills) window.owCloseSkills();
+  else location.href = '/__ow_close_skills';
+}
+
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' || event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    closeSkills();
+  } else if (event.key === 'ArrowLeft') {
+    event.preventDefault();
+    updateBranch(selectedBranch - 1);
+  } else if (event.key === 'ArrowRight') {
+    event.preventDefault();
+    updateBranch(selectedBranch + 1);
+  }
+});
+window.addEventListener('resize', () => { if (ready) layoutHits(); });
+
+window.owInitTree = (number, path) => {
+  if (path !== `${SKILLS}.Tree${number + 1}`) return;
+  loadedBranches.add(number);
+  console.log(`OpenWillow Skills tree initialized: ${number + 1}/3`);
+  if (loadedBranches.size === 3) populate();
+};
+
+function populate() {
+  if (ready || !data) return;
+  call(SKILLS, 'SetCharacter', classModText, data.className, data.portrait);
+  call(SKILLS, 'SetSkillPoints', points);
+  call(SKILLS, 'SetAllSkillIconsInvisible');
+  data.branches.forEach((branch, index) => drawBranch(index, branch));
+  call(`${SKILLS}.InformationBox`, 'SetRemainingPointsTitle', data.pointsTitle);
+  renderRanks();
+  set(`${ROOT}.tooltips.tooltips`, 'htmlText',
+    '<font face="$WillowBody" size="15" color="#a4e8f3">[LEFT/RIGHT] Rotate Trees     [ESC] Close</font>');
+  ready = true;
+  showInfo(data.actionSkill);
+  updateBranch(selectedBranch);
+  call(`${ROOT}.sway`, 'BeginSway');
+  layoutHits();
+  setTimeout(layoutHits, 600); // The movie's opening branch tween moves the hit areas.
+  setTimeout(() => {
+    const loading = document.getElementById('loading');
+    loading.classList.add('finished');
+    setTimeout(() => { loading.hidden = true; }, 300);
+  }, 700);
+  console.log(`OpenWillow Skills movie ready: ${data.branches.length} branches, ${hitTargets.length} skills`);
+}
+
+async function boot() {
+  const response = await fetch(`skilltree_${treeName}.json`);
+  if (!response.ok) throw new Error(`Missing local skill tree: skilltree_${treeName}.json`);
+  data = await response.json();
+  const timer = setInterval(() => {
+    try {
+      if (typeof player.ow !== 'function') return;
+      const total = get(ROOT, '_totalframes');
+      if (!total || get(ROOT, '_framesloaded') < total) return;
+      clearInterval(timer);
+      console.log(`OpenWillow Skills StatusMenu loaded: ${total} frames`);
+      player.ow(ROOT, 'gotoAndStop', 'skills');
+      player.ow(SKILLS, 'forward', 'extInitTree', 'owInitTree');
+    } catch (error) {
+      console.warn('Waiting for StatusMenu:', error);
+    }
+  }, 100);
+  setTimeout(() => {
+    if (!ready) {
+      document.querySelector('#loading small').textContent = 'Could not load the skill tree. Press Esc to return.';
+      console.error('OpenWillow Skills: movie did not initialize all three branches');
+    }
+  }, 25000);
+}
+
+boot().catch(error => {
+  document.querySelector('#loading small').textContent = 'Could not load the skill tree. Press Esc to return.';
+  console.error('OpenWillow Skills:', error);
+});

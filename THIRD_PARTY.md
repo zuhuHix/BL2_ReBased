@@ -146,6 +146,29 @@ decision before implementation.
 - Use: local execution only, as a timeboxed benchmark of running the game's
   converted HUD movie (maintainer approval 2026-09-26). Not a dependency, not
   linked, not vendored. Embedding it in the UE5 host is a separate decision.
+- Web build `@ruffle-rs/ruffle` `0.7.0-nightly.2026.9.26` (MIT OR Apache-2.0,
+  its `package.json`), unpacked under ignored `local/ui/run/ruffle/`. It is
+  served locally to the browser bench and to the UE5 browser-overlay prototype
+  (`tools/hud_overlay/`, maintainer approval 2026-09-26). The overlay uses
+  UE's own `WebBrowser` module (CEF, shipped with the engine); no Ruffle code
+  is in the repository.
+
+### unrealsdk, pyunrealsdk and the willow2 mod manager (installed by the player)
+
+- Sources: https://github.com/bl-sdk/unrealsdk and
+  https://github.com/bl-sdk/pyunrealsdk (LGPL-3.0, per the `LICENSE` files
+  installed with the SDK's `.stubs` and `mods_base`), mod manager
+  https://github.com/bl-sdk/willow2-mod-manager.
+- Local install, in the player's game folder (not ours):
+  `Binaries/Win32/Plugins/unrealsdk.dll` v3.2.0 (b1852aa4) SHA-256
+  `7921eca8e44d30db08d9741b70cfe8a19904cd52049f4a5ff98b0b0a88e2c05c`,
+  `pyunrealsdk.dll` v1.10.0 (c72c5558) SHA-256
+  `a1c4647367dd4828d6e3b87e9c8fad131d8c1fd6179512105c9631033aad652a`,
+  mod manager 3.8 (9097107f), per `unrealsdk.log` and `unrealsdk.toml`.
+- Use: external execution only, to observe the running game (docs/LEGAL.md,
+  clean-room rule 3). `tools/sdk_trace/openwillow_uitrace` is our own mod
+  (MIT); it imports the SDK's Python API at runtime inside the game and copies
+  none of its code. Traces it writes are game data and stay under `local/`.
 
 ### gameswf - benchmark candidate (pending)
 

@@ -5,6 +5,11 @@ from Adobe's public SWF specification; it contains no game data. It loads the
 movie into _level1 with loadMovieNum and registers one ExternalInterface
 callback, `ow(target, op, a, b)`:
   op "set": target[a] = b          op "get": return target[a]
+  op "apply": return target[a].apply(target, b), b an array of arguments
+  op "keys": return target's enumerable member names joined by ","
+  op "unhide": ASSetPropFlags(target, null, 0, 1) so "keys" also lists hidden members
+  op "forward": target[a] = a function that calls ExternalInterface b with its
+                arguments (the page's stand-in for Scaleform's SetFunction)
   otherwise: return target[op](a, b)
 `target` is a dot path resolved with eval (e.g. "_level1.p1.health"), so a
 harness page can move clips to frame labels, set text, or read state the way
@@ -62,6 +67,20 @@ class Asm:
 GET_VAR, SET_VAR, GET_MEMBER, SET_MEMBER = 0x1C, 0x1D, 0x4E, 0x4F
 CALL_METHOD, EQUALS2, NOT, POP, RETURN, STORE_REG = 0x52, 0x49, 0x12, 0x17, 0x3E, 0x87
 IF, JUMP, DEFINE_FUNCTION, GET_URL2, STOP = 0x9D, 0x99, 0x9B, 0x9A, 0x07
+ENUMERATE2, ADD2, CALL_FUNCTION, INIT_ARRAY = 0x55, 0x47, 0x3D, 0x42
+
+
+def forward_body():
+    """Body of the relay installed by op "forward"; `b` is the enclosing call's argument."""
+    a = Asm()
+    a.push('arguments'); a.op(GET_VAR); a.push(1)
+    a.push('b'); a.op(GET_VAR); a.push(1); a.op(INIT_ARRAY)
+    a.push('concat'); a.op(CALL_METHOD)                         # [b].concat(arguments)
+    a.push(None, 2)
+    a.push('flash'); a.op(GET_VAR); a.push('external'); a.op(GET_MEMBER)
+    a.push('ExternalInterface'); a.op(GET_MEMBER); a.push('call'); a.op(GET_MEMBER)
+    a.push('apply'); a.op(CALL_METHOD); a.op(RETURN)
+    return a.bytes()
 
 
 def callback_body():
@@ -74,8 +93,41 @@ def callback_body():
     a.push(True); a.op(RETURN)
     a.label('not_set')
     # if (op == "get") return r1[a];
-    a.push('op'); a.op(GET_VAR); a.push('get'); a.op(EQUALS2); a.op(NOT); a.branch(IF, 'call')
+    a.push('op'); a.op(GET_VAR); a.push('get'); a.op(EQUALS2); a.op(NOT); a.branch(IF, 'not_get')
     a.push(('reg', 1)); a.push('a'); a.op(GET_VAR); a.op(GET_MEMBER); a.op(RETURN)
+    a.label('not_get')
+    # if (op == "apply") return r1[a].apply(r1, b);   b is an array of arguments
+    a.push('op'); a.op(GET_VAR); a.push('apply'); a.op(EQUALS2); a.op(NOT); a.branch(IF, 'not_apply')
+    a.push('b'); a.op(GET_VAR); a.push(('reg', 1)); a.push(2)
+    a.push(('reg', 1)); a.push('a'); a.op(GET_VAR); a.op(GET_MEMBER); a.push('apply'); a.op(CALL_METHOD); a.op(RETURN)
+    a.label('not_apply')
+    # if (op == "keys") return member names of r1 joined by ",";
+    a.push('op'); a.op(GET_VAR); a.push('keys'); a.op(EQUALS2); a.op(NOT); a.branch(IF, 'not_keys')
+    a.push(''); a.op(STORE_REG, b'\x02'); a.op(POP)
+    a.push(('reg', 1)); a.op(ENUMERATE2)                      # pushes null, then each name
+    a.label('next_key')
+    # The spec ends the list with null; Ruffle uses undefined. == matches both.
+    a.op(STORE_REG, b'\x03'); a.push(None); a.op(EQUALS2); a.branch(IF, 'keys_done')
+    a.push(('reg', 2)); a.push(('reg', 3)); a.op(ADD2); a.push(','); a.op(ADD2)
+    a.op(STORE_REG, b'\x02'); a.op(POP); a.branch(JUMP, 'next_key')
+    a.label('keys_done')
+    a.push(('reg', 2)); a.op(RETURN)
+    a.label('not_keys')
+    # if (op == "unhide") { ASSetPropFlags(r1, null, 0, 1); return true; }   bench inspection only
+    a.push('op'); a.op(GET_VAR); a.push('unhide'); a.op(EQUALS2); a.op(NOT); a.branch(IF, 'not_unhide')
+    a.push(1, 0, None, ('reg', 1), 4, 'ASSetPropFlags'); a.op(CALL_FUNCTION); a.op(POP)
+    a.push(True); a.op(RETURN)
+    a.label('not_unhide')
+    # if (op == "forward") { r1[a] = function () { return ExternalInterface.call.apply(null, [b].concat(arguments)); } }
+    # The host's equivalent of Scaleform's SetFunction: a movie call to r1[a](...)
+    # reaches the page as window[b](...).
+    a.push('op'); a.op(GET_VAR); a.push('forward'); a.op(EQUALS2); a.op(NOT); a.branch(IF, 'call')
+    relay = forward_body()
+    a.push(('reg', 1)); a.push('a'); a.op(GET_VAR)
+    a.op(DEFINE_FUNCTION, b'\0' + struct.pack('<H', 0) + struct.pack('<H', len(relay)))
+    a.code += relay
+    a.op(SET_MEMBER)
+    a.push(True); a.op(RETURN)
     a.label('call')
     # return r1[op](a, b);
     a.push('b'); a.op(GET_VAR); a.push('a'); a.op(GET_VAR); a.push(2)

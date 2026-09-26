@@ -3,6 +3,7 @@
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryWidget.h"
+#include "OpenWillowMayaHUD.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
 #include "OpenWillowShotFx.h"
@@ -215,6 +216,7 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWWeapon4"), IE_Pressed, this, &AOpenWillowWalker::SelectSlot4);
     Input->BindAction(TEXT("OWHolster"), IE_Pressed, this, &AOpenWillowWalker::Holster);
     Input->BindAction(TEXT("OWInventory"), IE_Pressed, this, &AOpenWillowWalker::ToggleInventory);
+    Input->BindAction(TEXT("OWSkills"), IE_Pressed, this, &AOpenWillowWalker::ToggleSkills);
     Input->BindAction(TEXT("OWFire"), IE_Pressed, this, &AOpenWillowWalker::FirePressed);
     Input->BindAction(TEXT("OWFire"), IE_Released, this, &AOpenWillowWalker::FireReleased);
     Input->BindAction(TEXT("OWPhaselock"), IE_Pressed, this, &AOpenWillowWalker::UsePhaselock);
@@ -256,6 +258,7 @@ void AOpenWillowWalker::ToggleInventory()
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
     bFireHeld = false;
+    if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) HUD->CloseSkills();
     if (InventoryScreen && InventoryScreen->IsInViewport())
     {
         InventoryScreen->RemoveFromParent();
@@ -272,6 +275,19 @@ void AOpenWillowWalker::ToggleInventory()
     Mode.SetWidgetToFocus(InventoryScreen->TakeWidget());
     PC->SetInputMode(Mode);
     PC->SetShowMouseCursor(true);
+}
+void AOpenWillowWalker::ToggleSkills()
+{
+    APlayerController* PC = Cast<APlayerController>(Controller);
+    if (!bMayaActive || !PC) return;
+    bFireHeld = false;
+    if (InventoryScreen && InventoryScreen->IsInViewport())
+    {
+        InventoryScreen->RemoveFromParent();
+        PC->SetInputMode(FInputModeGameOnly());
+        PC->SetShowMouseCursor(false);
+    }
+    if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) HUD->ToggleSkills();
 }
 void AOpenWillowWalker::Holster()
 {
@@ -405,6 +421,18 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     case 15: if (Now < 17.f) return; ToggleInventory(); if (InventoryScreen) InventoryScreen->ShowCard(4); break;
     case 16: if (Now < 17.8f) return; Shot(TEXT("7_Inventory")); break;
     case 17: if (Now < 18.4f) return;
+        if (FParse::Param(FCommandLine::Get(), TEXT("owskillshots"))) ToggleSkills();
+        else if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+        break;
+    // CEF loads the StatusMenu plus shared imports and thirty icon movies;
+    // allow it to reach the populated frame before the visual capture.
+    case 18: if (Now < 33.f) return; Shot(TEXT("8_Skills")); break;
+    case 19: if (Now < 34.f) return;
+        if (APlayerController* PC = Cast<APlayerController>(Controller))
+            if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) HUD->RequestSkillsCloseFromPage();
+        break;
+    case 20: if (Now < 35.f) return; Shot(TEXT("9_AfterSkills")); break;
+    case 21: if (Now < 35.5f) return;
         if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
         break;
     default: return;

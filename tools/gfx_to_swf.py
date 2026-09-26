@@ -120,6 +120,17 @@ def parse_assets(body, code):
     return url, items
 
 
+def normalize_import_url(body):
+    r"""ImportAssets(2) body with '\' in its URL replaced by '/'.
+
+    Some movies (UI_StatusMenu) import `..\SharedWillowInventory\...`;
+    Scaleform on Windows accepts that, a web player requests a literal
+    backslash path and fails.
+    """
+    end = body.index(b'\0')
+    return body[:end].replace(b'\\', b'/') + body[end:]
+
+
 def exported_fonts(path):
     """{export name: DefineFont3 body} of an already converted SWF."""
     fonts, exports = {}, []
@@ -185,10 +196,30 @@ def translate(raw, table, counts):
     return TOKEN.sub(swap, text).encode('utf-8')
 
 
-# Actions that carry a byte offset or size over later code; rewriting a
-# string ahead of one would need relocation, so such streams are left alone.
-RELOCATING_ACTIONS = {0x99, 0x9D, 0x9B, 0x8E, 0x94, 0x8F}  # Jump, If, DefineFunction(2), With, Try
+# Actions that measure a byte distance over later code. Changing a string's
+# length moves every later byte, so these are re-measured on the new layout.
+BRANCHES = {0x99, 0x9D}                    # Jump, If: s16 offset from the action's end
+FUNCTIONS = {0x9B, 0x8E}                   # DefineFunction(2): u16 body size, last field
+WITH, TRY = 0x94, 0x8F                     # With: u16 size; Try: three u16 block sizes
 PUSH_SIZES = {1: 4, 2: 0, 3: 0, 4: 1, 5: 1, 6: 8, 7: 4, 8: 1, 9: 2}  # non-string Push value sizes
+
+
+def translate_strings(op, data, table, counts):
+    """ConstantPool (0x88) or Push (0x96) payload with tokens translated."""
+    if op == 0x88:
+        strings = data[2:].split(b'\0')[:-1]
+        return data[:2] + b''.join(translate(s, table, counts) + b'\0' for s in strings)
+    new, i = bytearray(), 0
+    while i < len(data):
+        kind = data[i]
+        if kind == 0:
+            end = data.index(b'\0', i + 1)
+            new += b'\0' + translate(data[i + 1:end], table, counts) + b'\0'
+            i = end + 1
+        else:
+            new += data[i:i + 1 + PUSH_SIZES[kind]]
+            i += 1 + PUSH_SIZES[kind]
+    return bytes(new)
 
 
 def localize_actions(code, table, counts):
@@ -196,42 +227,67 @@ def localize_actions(code, table, counts):
 
     Scaleform's translator swaps such strings when script assigns them to a
     text field (the HUD shows "$WillowMenu.HUD.EnemyLevelAbbreviation" as "LV"
-    in game); players without a translator show the raw token. Only
-    ConstantPool (0x88) and Push (0x96) strings are rewritten, and only in
-    streams without branches or nested code.
+    in game); players without a translator show the raw token. ConstantPool
+    and Push strings are rewritten, then every branch offset and function,
+    With and Try size is recomputed from old and new action positions. If a
+    distance does not start and end on an action boundary the stream is left
+    unchanged and its tokens are counted as script_skipped.
     """
     if not table or b'$' not in code:
         return code
-    records, pos = [], 0
+    records, pos = [], 0                   # (old position, op, payload or None)
     while pos < len(code) and code[pos]:
         op = code[pos]
         size = struct.unpack_from('<H', code, pos + 1)[0] if op >= 0x80 else 0
-        records.append((op, code[pos + 3:pos + 3 + size] if op >= 0x80 else None))
+        records.append((pos, op, code[pos + 3:pos + 3 + size] if op >= 0x80 else None))
         pos += 3 + size if op >= 0x80 else 1
-    if any(op in RELOCATING_ACTIONS for op, _ in records):
+    tail = pos                             # ActionEnd (or end of data)
+
+    local = Counter()
+    payloads = [translate_strings(op, data, table, local) if op in (0x88, 0x96) else data
+                for _, op, data in records]
+    if not local:
+        return code
+    moved, new_pos = {}, 0                 # old action start -> new start
+    for (old, op, _), data in zip(records, payloads):
+        moved[old] = new_pos
+        new_pos += 1 if data is None else 3 + len(data)
+    moved[tail] = new_pos
+
+    def distance(old_from, old_to, new_from):
+        if old_to not in moved:
+            raise ValueError('distance does not end on an action boundary')
+        return moved[old_to] - new_from
+
+    try:
+        for i, ((old, op, data), new) in enumerate(zip(records, payloads)):
+            end, new_end = old + 3 + len(data or b''), moved[old] + 3 + len(new or b'')
+            if op in BRANCHES:
+                target = end + struct.unpack_from('<h', data)[0]
+                payloads[i] = struct.pack('<h', distance(end, target, new_end))
+            elif op in FUNCTIONS or op == WITH:
+                size = struct.unpack_from('<H', new, len(new) - 2)[0]
+                payloads[i] = new[:-2] + struct.pack('<H', distance(end, end + size, new_end))
+            elif op == TRY:
+                sizes = struct.unpack_from('<3H', new, 1)
+                bounds, at = [], end
+                for size in sizes:
+                    bounds.append(at + size)
+                    at += size
+                starts = [end] + bounds[:2]
+                news = [new_end] + [moved.get(b, -1) for b in bounds[:2]]
+                fixed = [distance(s, b, n) for s, b, n in zip(starts, bounds, news)]
+                payloads[i] = new[:1] + struct.pack('<3H', *fixed) + new[7:]
+    except (ValueError, struct.error):
         counts['script_skipped'] += len(TOKEN.findall(code.decode('latin-1')))
         return code
+    counts.update(local)
     out = bytearray()
-    for op, data in records:
-        if op == 0x88:
-            strings = data[2:].split(b'\0')[:-1]
-            data = data[:2] + b''.join(translate(s, table, counts) + b'\0' for s in strings)
-        elif op == 0x96:
-            new, i = bytearray(), 0
-            while i < len(data):
-                kind = data[i]
-                if kind == 0:
-                    end = data.index(b'\0', i + 1)
-                    new += b'\0' + translate(data[i + 1:end], table, counts) + b'\0'
-                    i = end + 1
-                else:
-                    new += data[i:i + 1 + PUSH_SIZES[kind]]
-                    i += 1 + PUSH_SIZES[kind]
-            data = bytes(new)
+    for (_, op, _), data in zip(records, payloads):
         out.append(op)
         if data is not None:
             out += struct.pack('<H', len(data)) + data
-    return bytes(out) + code[pos:]
+    return bytes(out) + code[tail:]
 
 
 def font_aliases(tags):
@@ -332,8 +388,9 @@ class Converter:
                 out += write_tag(code, localize_actions(body, self.localization, self.text))
             elif code == DO_INIT_ACTION:
                 out += write_tag(code, body[:2] + localize_actions(body[2:], self.localization, self.text))
-            elif code in (IMPORT_ASSETS, IMPORT_ASSETS2) and self.font_base is not None:
-                out += self.inline_fonts(code, body)
+            elif code in (IMPORT_ASSETS, IMPORT_ASSETS2):
+                body = normalize_import_url(body)
+                out += self.inline_fonts(code, body) if self.font_base is not None else write_tag(code, body)
             elif code >= 1000:
                 self.dropped[code] += 1
             else:

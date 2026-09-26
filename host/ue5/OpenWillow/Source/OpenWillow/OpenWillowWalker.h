@@ -17,6 +17,7 @@ public:
     // Puts backpack item Item into weapon slot Slot and draws it (inventory screen).
     void EquipItem(int32 Item, int32 Slot);
     void ToggleInventory();
+    void ToggleSkills();
     float PhaselockRemaining() const;
     float PhaselockCooldown() const { return PhaselockCooldownSeconds; }
     float LastTargetHitAt() const { return TargetHitAt; }
