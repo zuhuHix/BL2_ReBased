@@ -128,22 +128,39 @@ function renderRanks() {
   if (grade || points) setGradeText(`${action}.points`, `${grade}/${data.actionSkill.maxGrade}`);
 }
 
-function updateBranch(which) {
+// Branch layout from the real-game UI trace (DECISIONS.md 2026-09-27): the
+// trees stay in one row and slide; the selected one comes forward. For offset
+// d from the selected branch the game tweens X = 15 + 330d, Y = 17,
+// Z = -5500|d|, scale 100, alpha 100 - 15|d|, and first calls the movie's
+// BubbleSortBranchDepths(selected + 1) so the front tree draws on top.
+// Ruffle ignores the Z coordinate, so the page projects it in 2D: scale by
+// f = PERSPECTIVE / (PERSPECTIVE + |Z|) about PROJECTION (parent-local
+// coordinates). Both constants were fitted to one real-game capture
+// (Cataclysm at 70.6% behind Harmony); they are not read from the movie.
+const PERSPECTIVE = 13200;
+const PROJECTION = { x: -209, y: 12 };
+function branchTween(offset) {
+  const x = 15 + 330 * offset, y = 17, z = -5500 * Math.abs(offset);
+  const f = PERSPECTIVE / (PERSPECTIVE - z);
+  return {
+    x: PROJECTION.x + (x - PROJECTION.x) * f,
+    y: PROJECTION.y + (y - PROJECTION.y) * f,
+    scale: 100 * f,
+    alpha: 100 - 15 * Math.abs(offset),
+  };
+}
+
+function updateBranch(which, immediate = false) {
   if (!ready) return;
-  selectedBranch = (which + data.branches.length) % data.branches.length;
-  // These are the three positions observed in the UI trace when Harmony is
-  // centred. The movie owns the tween and the 3D panel rendering.
+  // The trace never pressed an arrow at either end, so whether the row wraps
+  // there is unobserved (UNVERIFIED); a row with a fixed order suggests not.
+  selectedBranch = Math.max(0, Math.min(data.branches.length - 1, which));
+  call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
   data.branches.forEach((_, i) => {
-    const slot = (i - selectedBranch + 3) % 3;
-    // Ruffle currently ignores the movie's Z perspective. Scale the side
-    // branches in 2D to match their receding size in the game's GFx view.
-    const x = [15, 270, -240][slot];
-    const z = [0, -5500, -5500][slot];
-    const alpha = [100, 85, 85][slot];
-    const scale = slot === 0 ? 100 : 75;
-    call(SKILLS, 'TweenBranch', i + 1, false, 0.3, x, 17, z, scale, scale, alpha);
+    const t = branchTween(i - selectedBranch);
+    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, t.x, t.y, 0, t.scale, t.scale, t.alpha);
   });
-  setTimeout(layoutHits, 600);
+  setTimeout(layoutHits, immediate ? 50 : 600);
 }
 
 function addHit(path, onEnter, onClick, label, parent, kind = '') {
