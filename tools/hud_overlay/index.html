@@ -7,7 +7,7 @@
 
   The host calls owHud(state) with any of these fields (all optional):
     health, shield, ammo, xp   fill fractions 0..1
-    healthText, shieldText, ammoText, grenadeText, levelText   strings
+    healthText, shieldText, ammoText, grenadeText, levelText, classModText   strings
     grenades                   fill fraction 0..1
     weaponOut                  bool
     character                  frame label of p1.character, e.g. "siren"
@@ -51,6 +51,10 @@
     if ('shieldText' in s) call(P1 + '.shield.shield_disp', 'set', 'text', s.shieldText);
     if ('ammoText' in s) call(P1 + '.bullets.bullet_c', 'set', 'text', s.ammoText);
     if ('grenadeText' in s) call(P1 + '.grenades.grenadesDisp', 'set', 'text', s.grenadeText);
+    // XP bar caption: "LV" (lvdisp, localized in the movie), the level number
+    // and the class-mod title ("LV 17 Hoarding War Dog" in the game).
+    if ('levelText' in s) call(P1 + '.levelClassMod.level', 'set', 'text', s.levelText);
+    if ('classModText' in s) call(P1 + '.levelClassMod.comm', 'set', 'text', s.classModText);
   }
 
   // The host may call before the movie is ready; keep the latest values.

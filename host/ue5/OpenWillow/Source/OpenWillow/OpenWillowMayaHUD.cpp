@@ -221,8 +221,8 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
 {
     // Only state the host really has: Maya takes no damage and has no
     // grenade or magazine tracking yet, so vitals stay full, grenades are
-    // hidden and the ammo text is the magazine size. XP is the level
-    // progress from UOpenWillowSkills. Field meanings are in
+    // hidden and the ammo text is the magazine size. XP and the level come
+    // from UOpenWillowSkills. Field meanings are in
     // tools/hud_overlay/index.html.
     const UOpenWillowInventory* Inventory = Maya.GetInventory();
     const UOpenWillowSkills* Skills = Maya.GetSkills();
@@ -230,8 +230,9 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     const bool bArmed = Maya.HasWeaponOut() && Weapon;
     const FString State = FString::Printf(
         TEXT("{\"character\":\"siren\",\"health\":1,\"shield\":1,\"healthText\":\"\",\"shieldText\":\"\","
-             "\"xp\":%.3f,\"grenades\":null,\"weaponOut\":%s,\"ammo\":1,\"ammoText\":\"%s\"}"),
+             "\"xp\":%.3f,\"levelText\":\"%d\",\"grenades\":null,\"weaponOut\":%s,\"ammo\":1,\"ammoText\":\"%s\"}"),
         Skills ? Skills->LevelProgress() : 0.f,
+        Skills ? Skills->GetLevel() : 1,
         bArmed ? TEXT("true") : TEXT("false"),
         bArmed ? *FString::Printf(TEXT("%.0f"), Weapon->Magazine) : TEXT(""));
     // Resend once a second too: the page may not have loaded the first time.

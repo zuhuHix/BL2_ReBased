@@ -739,7 +739,9 @@ query is only a display check; the page never changes grades itself.
 
 In UE the host owns Maya's level, XP and grades (`UOpenWillowSkills`). The host
 earns no XP yet, so pass `-Extra @('-owlevel=45')` to start with points (one per
-level from level 5; the default level 1 has none). Click a skill or the action
+level from level 5; the default level 1 has none). Phaselock (**F**) works only
+after its point is spent in Skills; `-owcombattest` starts at level 5 or more
+with Phaselock trained. The HUD's XP bar shows the level number. Click a skill or the action
 skill to spend: the page logs `OWSKILL {"branch":B,"tier":T,"cell":C}` to its
 console (`-1,-1,-1` for the action skill), the host validates it (points left,
 action skill first, tier unlock, max grade) and answers with

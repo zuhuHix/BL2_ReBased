@@ -133,10 +133,19 @@ void AOpenWillowWalker::BeginPlay()
     int32 StartLevel = 1;
     FParse::Value(FCommandLine::Get(), TEXT("owlevel="), StartLevel);
     Skills->SetLevel(StartLevel);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points"), Skills->GetLevel(), Skills->AvailablePoints());
     // -owcombattest: spawn the stand-in target once Maya has landed, so it
     // stands on the ground in front of her rather than at the drop height.
     bWantsCombatTarget = FParse::Param(FCommandLine::Get(), TEXT("owcombattest"));
+    // The scripted combat run casts Phaselock, so it starts with the action
+    // skill trained (at least level 5, one point spent).
+    if (bWantsCombatTarget)
+    {
+        if (Skills->GetLevel() < 5) Skills->SetLevel(5);
+        FString Reason;
+        Skills->TrySpend(-1, -1, -1, Reason);
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d"),
+        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade());
 }
 
 void AOpenWillowWalker::Tick(float DeltaSeconds)
@@ -369,6 +378,10 @@ void AOpenWillowWalker::FireWeapon()
 void AOpenWillowWalker::UsePhaselock()
 {
     if (!bMayaActive) return;
+    // Phaselock needs its skill point, as in the game, where the action skill
+    // is bought in the Skills tab (traced). What the game does when the key is
+    // pressed before that (nothing, a message or a sound) is UNVERIFIED.
+    if (!Skills || Skills->GetActionGrade() < 1) return;
     const float Now = GetWorld()->GetTimeSeconds();
     if (Now < PhaselockReadyAt) return;
     const FVector Start = Camera->GetComponentLocation();
