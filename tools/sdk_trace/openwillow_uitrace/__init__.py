@@ -9,7 +9,9 @@ menu controllers (StatusMenuExGFxMovie, ...), the Scaleform bridge they call
 Each call is written as one JSON line: sequence number, time, phase
 ("call"/"return"), function path, the object it ran on, and its arguments or
 return value. After MAX_DETAILED calls to one function only a count is kept,
-so per-frame HUD updates do not flood the file.
+so per-frame HUD updates do not flood the file. Bridge calls that name a movie
+member (Invoke, ActionScript*, GetObject, Set*) are counted per member, so a
+busy one such as SetInfo cannot use up the budget of the rest.
 
 This records observed behaviour (docs/LEGAL.md, clean-room rule 3). Traces
 contain game data and belong under the repository's ignored local/ folder;
@@ -26,15 +28,16 @@ from unrealsdk import logging
 from unrealsdk.hooks import Type, add_hook, remove_hook
 from unrealsdk.unreal import UObject, WrappedArray, WrappedStruct
 
-__version__ = "0.1.0"
-__version_info__ = (0, 1, 0)
+__version__ = "0.2.0"
+__version_info__ = (0, 2, 0)
 
 HOOK_ID = "openwillow_uitrace"
 BASES = ("GFxMoviePlayer", "GFxObject")
 MAX_DETAILED = 200          # full records per function; later calls only counted
 MAX_DEPTH = 3               # nesting kept when writing structs and arrays
+MEMBER_ARGS = ("Member", "Method", "Path")  # bridge arguments naming a movie member
 
-state = {"file": None, "seq": 0, "start": 0.0, "hooked": [], "calls": Counter()}
+state = {"file": None, "seq": 0, "start": 0.0, "hooked": [], "calls": Counter(), "last_detailed": {}}
 
 
 def trace_dir():
@@ -67,15 +70,25 @@ def write(record):
     state["file"].write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def detailed(path):
-    state["calls"][path] += 1
-    return state["calls"][path] <= MAX_DETAILED
+def budget_key(path, args):
+    """The function, plus the movie member a bridge call names, if any."""
+    names = {p.Name for p in args._type._properties()}
+    for name in MEMBER_ARGS:
+        if name in names:
+            member = getattr(args, name)
+            if isinstance(member, str) and member:
+                return f"{path}#{member}"
+    return path
 
 
 def on_call(obj, args, _ret, func):
     try:
         path = func.func._path_name()
-        if detailed(path):
+        key = budget_key(path, args)
+        state["calls"][key] += 1
+        # Returns have no arguments, so they follow their call's decision.
+        state["last_detailed"][path] = state["calls"][key] <= MAX_DETAILED
+        if state["last_detailed"][path]:
             write({"phase": "call", "func": path, "obj": plain(obj),
                    "args": {p.Name: plain(getattr(args, p.Name))
                             for p in args._type._properties() if p.Name != "ReturnValue"}})
@@ -86,7 +99,7 @@ def on_call(obj, args, _ret, func):
 def on_return(_obj, _args, ret, func):
     try:
         path = func.func._path_name()
-        if state["calls"][path] <= MAX_DETAILED:
+        if state["last_detailed"].get(path, True):
             write({"phase": "return", "func": path, "ret": plain(ret)})
     except Exception as error:
         write({"phase": "error", "error": repr(error)[:300]})
@@ -110,7 +123,7 @@ def enable():
     folder.mkdir(parents=True, exist_ok=True)
     name = time.strftime("uitrace_%Y%m%d_%H%M%S.jsonl")
     state.update(file=(folder / name).open("w", encoding="utf-8"), seq=0,
-                 start=time.perf_counter(), calls=Counter())
+                 start=time.perf_counter(), calls=Counter(), last_detailed={})
     functions = ui_functions()
     for path in functions:
         add_hook(path, Type.PRE, HOOK_ID, on_call)
