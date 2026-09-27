@@ -37,4 +37,8 @@ private:
     TSharedPtr<SWidget> SkillsRoot;
     bool bCloseSkillsRequested = false;
     float NextSkillsPush = 0.f;
+    // Spends the page reported (branch, tier, cell), applied in DrawHUD.
+    void OnSkillsConsole(const FString& Message);
+    void PushSkillsState();
+    TArray<FIntVector> PendingSpends;
 };

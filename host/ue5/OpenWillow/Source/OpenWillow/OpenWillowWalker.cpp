@@ -4,6 +4,7 @@
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryWidget.h"
 #include "OpenWillowMayaHUD.h"
+#include "OpenWillowSkills.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
 #include "OpenWillowShotFx.h"
@@ -56,6 +57,7 @@ AOpenWillowWalker::AOpenWillowWalker()
     WeaponVisual->SetCastShadow(false);
     WeaponVisual->SetHiddenInGame(true);
     Inventory = CreateDefaultSubobject<UOpenWillowInventory>(TEXT("Inventory"));
+    Skills = CreateDefaultSubobject<UOpenWillowSkills>(TEXT("Skills"));
     GetCharacterMovement()->MaxWalkSpeed = 450;
     GetCharacterMovement()->JumpZVelocity = 420;
     GetCharacterMovement()->MaxStepHeight = 35;
@@ -122,6 +124,16 @@ void AOpenWillowWalker::BeginPlay()
     for (int32 Slot = 0; Slot < FMath::Min(Loaded, UOpenWillowInventory::SlotCount); ++Slot)
         Inventory->Equip(Slot, Slot);
     SelectSlot(0);
+    // Skill tree from tools/prepare_skill_tree.py, the same file the Skills
+    // page shows (-owskilltree=<file>). The host earns no XP yet, so
+    // -owlevel=<N> sets Maya's starting level (default 1, no skill points).
+    FString TreeFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/ui/run/skilltree_siren.json")));
+    FParse::Value(FCommandLine::Get(), TEXT("owskilltree="), TreeFile);
+    if (!Skills->LoadTree(TreeFile)) UE_LOG(LogTemp, Warning, TEXT("OpenWillow skill tree not loaded: %s"), *TreeFile);
+    int32 StartLevel = 1;
+    FParse::Value(FCommandLine::Get(), TEXT("owlevel="), StartLevel);
+    Skills->SetLevel(StartLevel);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points"), Skills->GetLevel(), Skills->AvailablePoints());
     // -owcombattest: spawn the stand-in target once Maya has landed, so it
     // stands on the ground in front of her rather than at the drop height.
     bWantsCombatTarget = FParse::Param(FCommandLine::Get(), TEXT("owcombattest"));

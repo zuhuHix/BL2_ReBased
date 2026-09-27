@@ -34,8 +34,9 @@ function setGradeText(path, value) {
   set(path, 'htmlText', `<font face="$WillowBody" size="13" color="#${color}">${value}</font>`);
 }
 
-// Host state may arrive before the movie loads. The host owns skill points;
-// this page only presents them. ?points=N is for a standalone visual check.
+// Host state may arrive before the movie loads. The host owns level, skill
+// points and grades; this page only presents them and reports clicks with
+// reportSpend. ?points=N&action=N is for a standalone visual check.
 window.owSkills = state => {
   let ranksChanged = false;
   if (typeof state.points === 'number' && Number.isFinite(state.points))
@@ -57,6 +58,17 @@ window.owSkills = state => {
 };
 window.owPlayer = player; // Useful for local inspection, not a game interface.
 
+// A click on a skill, reported the way the movie's own extCellClicked
+// reports it: (branch, tier, cell), with -1, -1, -1 for the action skill
+// (observed in a real-game UI trace). The UE host reads this console line,
+// validates the spend and answers with owSkills(state).
+function reportSpend(branch, tier, cell) {
+  console.log('OWSKILL ' + JSON.stringify({ branch, tier, cell }));
+}
+window.owCellClicked = (branch, tier, cell) => {
+  if ([branch, tier, cell].every(Number.isInteger)) reportSpend(branch, tier, cell);
+};
+
 function showInfo(skill) {
   if (!skill || !ready) return;
   const description = (skill.description || '').replaceAll('<StringAliasMap:Action.ActionSkill>', 'F');
@@ -69,7 +81,7 @@ function drawBranch(index, branch) {
     tier.skills.forEach(skill => {
       const cell = `${SKILLS}.Tree${index + 1}.SkillRow${tierIndex + 1}.Cell${skill.cell + 1}`;
       call(SKILLS, 'SetCellVisible', index, tierIndex, skill.cell);
-      hitTargets.push({ path: cell, skill, branch: index });
+      hitTargets.push({ path: cell, skill, branch: index, tier: tierIndex });
     });
   });
 }
@@ -80,9 +92,10 @@ function rank(skill) {
 }
 
 function renderRanks() {
-  // The movie owns the badge art and colour frames. The host owns grades;
-  // until grade tracking exists it sends no branch grades, so only the first
-  // tier is available and every other tier stays locked.
+  // The movie owns the badge art and colour frames. The host owns grades.
+  // Tiers show as enabled by the host's rule: the action skill has its
+  // unlock points and the branch holds every lower tier's points.
+  const treesOpen = actionGrade >= (data.actionSkillPoints ?? 1);
   data.branches.forEach((branch, branchIndex) => {
     const invested = branch.tiers.reduce((sum, tier) =>
       sum + tier.skills.reduce((tierSum, skill) => tierSum + rank(skill), 0), 0);
@@ -91,7 +104,7 @@ function renderRanks() {
       for (const skill of tier.skills) {
         const grade = rank(skill);
         const status = grade >= skill.maxGrade ? 'maxed'
-          : grade > 0 ? 'some' : invested >= required ? 'enabled' : 'disabled';
+          : grade > 0 ? 'some' : treesOpen && invested >= required ? 'enabled' : 'disabled';
         const cell = `${SKILLS}.Tree${branchIndex + 1}.SkillRow${tierIndex + 1}.Cell${skill.cell + 1}`;
         const state = `${skill.killSkill ? 'KillSkill_' : ''}${status}`;
         if (displayedStates.get(cell) !== state) {
@@ -153,10 +166,17 @@ function layoutHits() {
   if (!ready) return;
   const layer = document.getElementById('hit-layer');
   layer.replaceChildren();
+  // ActiveAbility's bounds reach over the first tier (an invisible child), so
+  // it goes first and the skill cells stack above it.
+  addHit(`${SKILLS}.ActiveAbility`, () => showInfo(data.actionSkill), () => {
+    showInfo(data.actionSkill);
+    reportSpend(-1, -1, -1);
+  }, data.actionSkill.name, layer);
   for (const hit of hitTargets.filter(hit => hit.branch === selectedBranch))
-    addHit(hit.path, () => showInfo(hit.skill), () => showInfo(hit.skill), hit.skill.name, layer, 'skill-hit');
-  addHit(`${SKILLS}.ActiveAbility`, () => showInfo(data.actionSkill),
-    () => showInfo(data.actionSkill), data.actionSkill.name, layer);
+    addHit(hit.path, () => showInfo(hit.skill), () => {
+      showInfo(hit.skill);
+      reportSpend(hit.branch, hit.tier, hit.skill.cell);
+    }, hit.skill.name, layer, 'skill-hit');
   addHit(`${SKILLS}.arrowLeft`, null, () => updateBranch(selectedBranch - 1),
     'Previous skill tree', layer);
   addHit(`${SKILLS}.arrowRight`, null, () => updateBranch(selectedBranch + 1),
@@ -228,6 +248,9 @@ async function boot() {
       console.log(`OpenWillow Skills StatusMenu loaded: ${total} frames`);
       player.ow(ROOT, 'gotoAndStop', 'skills');
       player.ow(SKILLS, 'forward', 'extInitTree', 'owInitTree');
+      // The page's hit targets cover the cells, so this fires only if the
+      // movie itself sees a release; that was not observed in the UE check.
+      player.ow(SKILLS, 'forward', 'extCellClicked', 'owCellClicked');
     } catch (error) {
       console.warn('Waiting for StatusMenu:', error);
     }

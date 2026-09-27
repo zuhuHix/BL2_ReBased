@@ -14,6 +14,7 @@ public:
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
     bool HasWeaponOut() const { return bWeaponOut; }
     const class UOpenWillowInventory* GetInventory() const { return Inventory; }
+    class UOpenWillowSkills* GetSkills() const { return Skills; }
     // Puts backpack item Item into weapon slot Slot and draws it (inventory screen).
     void EquipItem(int32 Item, int32 Slot);
     void ToggleInventory();
@@ -49,6 +50,7 @@ private:
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> Arms;
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> WeaponVisual;
     UPROPERTY() TObjectPtr<class UOpenWillowInventory> Inventory;
+    UPROPERTY() TObjectPtr<class UOpenWillowSkills> Skills;
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;

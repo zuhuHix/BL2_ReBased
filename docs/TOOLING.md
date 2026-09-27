@@ -735,14 +735,22 @@ Open `http://127.0.0.1:8767/skills.html?points=41&action=1` for a standalone vis
 check. In the UE game window, press **K** to open Maya's Skills tab, hover a
 skill for its description, use the arrows to rotate branches, and press
 **Esc** or the movie's close button to return to play. The standalone `points`
-query is only a display check. The UE host currently sends zero available
-points and Phaselock grade one; it does not track earned points or branch
-grades. The page accepts a future `owSkills({points, actionGrade, grades,
-classModText})` update, where `grades` maps installed skill object paths to
-ranks. The movie renders locked, available, partial and maxed badge frames
-and uses its branch tween and sway. Spending, grade effects and current/next
-grade stat calculations are not wired yet. A browser check proves the movie
-and data render; verify the input and overlay lifecycle in UE separately.
+query is only a display check; the page never changes grades itself.
+
+In UE the host owns Maya's level, XP and grades (`UOpenWillowSkills`). The host
+earns no XP yet, so pass `-Extra @('-owlevel=45')` to start with points (one per
+level from level 5; the default level 1 has none). Click a skill or the action
+skill to spend: the page logs `OWSKILL {"branch":B,"tier":T,"cell":C}` to its
+console (`-1,-1,-1` for the action skill), the host validates it (points left,
+action skill first, tier unlock, max grade) and answers with
+`owSkills({points, actionGrade, grades})`, where `grades` maps installed skill
+object paths to ranks. Each decision is logged as "OpenWillow Skills spend
+(B,T,C) accepted" or "refused: <reason>". Grades live on the walker, so they
+survive closing and reopening the menu, but there is no save file yet. The host
+reads the same `local/ui/run/skilltree_siren.json` (`-owskilltree=<file>`
+overrides). Grade effects and current/next grade stat text are not wired yet.
+`OpenWillow.Skills` is a UE automation test of the spend rules on a synthetic
+tree; run it in `-game` mode (see `tools/test_ue_viewer.ps1` for the pattern).
 
 For a repeatable UE capture, launch the same script with
 `-GameWindow -Extra @('-owcombattest','-owcombatshots','-owskillshots')`.
