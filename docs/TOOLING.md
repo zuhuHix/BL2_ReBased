@@ -748,7 +748,17 @@ object paths to ranks. Each decision is logged as "OpenWillow Skills spend
 (B,T,C) accepted" or "refused: <reason>". Grades live on the walker, so they
 survive closing and reopening the menu, but there is no save file yet. The host
 reads the same `local/ui/run/skilltree_siren.json` (`-owskilltree=<file>`
-overrides). Grade effects and current/next grade stat text are not wired yet.
+overrides). Grade effects are not applied.
+
+The info box and footer are built from the install. `prepare_skill_tree.py`
+(via `tools/skill_stats.py`) writes per-grade stat lines from each skill's
+SkillEffectDefinitions and AttributePresentationDefinitions, localized from
+`<Package>.int`, plus the footer and "Next Level:" strings from
+`WillowGame.int` with key names from `DefaultGame.ini` MenuInputMapArray.
+`tools/hud_overlay/skill_info.js` arranges them into the info-box HTML.
+Hovering selects a skill with the movie's own highlight; clicking or
+**Enter** spends. Synthetic tests: `python tests/skill_stats_test.py` and
+`node tests/skill_info_test.js`.
 `OpenWillow.Skills` is a UE automation test of the spend rules on a synthetic
 tree; run it in `-game` mode (see `tools/test_ue_viewer.ps1` for the pattern).
 

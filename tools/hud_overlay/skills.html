@@ -21,9 +21,6 @@ ruffle-player{width:100%;height:100%;display:block}
 #hit-layer{position:absolute;inset:0;z-index:1;pointer-events:none}
 .movie-hit{position:absolute;border:0;padding:0;background:transparent;pointer-events:auto;cursor:pointer}
 .movie-hit:focus-visible{outline:2px solid #ffe25b;outline-offset:-2px}
-.skill-hit:hover{box-shadow:0 0 9px 2px rgba(103,230,255,.8),inset 0 0 0 2px rgba(255,228,95,.85);
-  animation:skill-pulse .9s ease-in-out infinite alternate}
-@keyframes skill-pulse{to{box-shadow:0 0 14px 4px rgba(103,230,255,.45),inset 0 0 0 2px rgba(255,228,95,.55)}}
 </style>
 <script>
   window.RufflePlayer = window.RufflePlayer || {};
@@ -35,5 +32,6 @@ ruffle-player{width:100%;height:100%;display:block}
 </head><body>
 <div id="hit-layer" aria-label="Maya skill tree controls"></div>
 <div id="loading" role="status" aria-live="polite">SKILLS<small>Loading Maya's skill tree...</small></div>
+<script src="skill_info.js"></script>
 <script src="skills.js"></script>
 </body></html>
