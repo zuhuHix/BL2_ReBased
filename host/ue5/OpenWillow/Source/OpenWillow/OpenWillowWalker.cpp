@@ -4,6 +4,7 @@
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryWidget.h"
 #include "OpenWillowMayaHUD.h"
+#include "OpenWillowSkills.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
 #include "OpenWillowShotFx.h"
@@ -56,6 +57,7 @@ AOpenWillowWalker::AOpenWillowWalker()
     WeaponVisual->SetCastShadow(false);
     WeaponVisual->SetHiddenInGame(true);
     Inventory = CreateDefaultSubobject<UOpenWillowInventory>(TEXT("Inventory"));
+    Skills = CreateDefaultSubobject<UOpenWillowSkills>(TEXT("Skills"));
     GetCharacterMovement()->MaxWalkSpeed = 450;
     GetCharacterMovement()->JumpZVelocity = 420;
     GetCharacterMovement()->MaxStepHeight = 35;
@@ -122,9 +124,28 @@ void AOpenWillowWalker::BeginPlay()
     for (int32 Slot = 0; Slot < FMath::Min(Loaded, UOpenWillowInventory::SlotCount); ++Slot)
         Inventory->Equip(Slot, Slot);
     SelectSlot(0);
+    // Skill tree from tools/prepare_skill_tree.py, the same file the Skills
+    // page shows (-owskilltree=<file>). The host earns no XP yet, so
+    // -owlevel=<N> sets Maya's starting level (default 1, no skill points).
+    FString TreeFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/ui/run/skilltree_siren.json")));
+    FParse::Value(FCommandLine::Get(), TEXT("owskilltree="), TreeFile);
+    if (!Skills->LoadTree(TreeFile)) UE_LOG(LogTemp, Warning, TEXT("OpenWillow skill tree not loaded: %s"), *TreeFile);
+    int32 StartLevel = 1;
+    FParse::Value(FCommandLine::Get(), TEXT("owlevel="), StartLevel);
+    Skills->SetLevel(StartLevel);
     // -owcombattest: spawn the stand-in target once Maya has landed, so it
     // stands on the ground in front of her rather than at the drop height.
     bWantsCombatTarget = FParse::Param(FCommandLine::Get(), TEXT("owcombattest"));
+    // The scripted combat run casts Phaselock, so it starts with the action
+    // skill trained (at least level 5, one point spent).
+    if (bWantsCombatTarget)
+    {
+        if (Skills->GetLevel() < 5) Skills->SetLevel(5);
+        FString Reason;
+        Skills->TrySpend(-1, -1, -1, Reason);
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d"),
+        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade());
 }
 
 void AOpenWillowWalker::Tick(float DeltaSeconds)
@@ -246,19 +267,25 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
         Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);
 }
-void AOpenWillowWalker::EquipItem(int32 Item, int32 Slot)
+bool AOpenWillowWalker::EquipItem(int32 Item, int32 Slot)
 {
-    if (!Inventory->Equip(Item, Slot)) return;
+    if (!Inventory->Items().IsValidIndex(Item) || !Skills || Inventory->Items()[Item].Level > Skills->GetLevel()) return false;
+    if (!Inventory->Equip(Item, Slot)) return false;
     // Equipping into the held slot, or with nothing held, draws the item now.
-    if (!bWeaponOut || Inventory->GetActiveSlot() == Slot || Inventory->GetActiveSlot() == INDEX_NONE)
+    if (!bWeaponOut || Inventory->GetActiveSlot() == Slot || !Inventory->ActiveWeapon())
         SelectSlot(Slot);
+    return true;
 }
 void AOpenWillowWalker::ToggleInventory()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
     bFireHeld = false;
-    if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) HUD->CloseSkills();
+    if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD()))
+    {
+        if (HUD->ToggleInventory()) return;
+        HUD->CloseSkills();
+    }
     if (InventoryScreen && InventoryScreen->IsInViewport())
     {
         InventoryScreen->RemoveFromParent();
@@ -309,8 +336,17 @@ void AOpenWillowWalker::FirePressed()
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     if (!bMayaActive || !bWeaponOut || !Weapon) return;
     bFireHeld = true;
-    // Spinning barrels wait for their evaluated spin-up (Infinity: 0.55 s).
-    NextShotAt = FMath::Max(NextShotAt, GetWorld()->GetTimeSeconds() + Weapon->SpinUp);
+    // BSM_SpinUpToFullFireRate (the Vladof pistol type) fires at once while the
+    // barrel spins up; the name reads as a fire-interval ramp from
+    // StartingSpinUpFireIntervalMultiplier x interval down to the interval.
+    // The Infinity's multiplier is the class default 1, so that ramp is flat
+    // and is not modelled. Other modes keep the older wait-for-spin-up guess.
+    // Both readings are UNVERIFIED against the native weapon code.
+    if (Weapon->SpinMode != TEXT("BSM_SpinUpToFullFireRate"))
+        NextShotAt = FMath::Max(NextShotAt, GetWorld()->GetTimeSeconds() + Weapon->SpinUp);
+    else if (Weapon->SpinStartIntervalScale != 1.f)
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s: spin-up fire-rate ramp (start x%.2f) is not modelled"),
+            *Weapon->Name, Weapon->SpinStartIntervalScale);
 }
 void AOpenWillowWalker::FireReleased() { bFireHeld = false; }
 void AOpenWillowWalker::FireWeapon()
@@ -357,6 +393,10 @@ void AOpenWillowWalker::FireWeapon()
 void AOpenWillowWalker::UsePhaselock()
 {
     if (!bMayaActive) return;
+    // Phaselock needs its skill point, as in the game, where the action skill
+    // is bought in the Skills tab (traced). What the game does when the key is
+    // pressed before that (nothing, a message or a sound) is UNVERIFIED.
+    if (!Skills || Skills->GetActionGrade() < 1) return;
     const float Now = GetWorld()->GetTimeSeconds();
     if (Now < PhaselockReadyAt) return;
     const FVector Start = Camera->GetComponentLocation();
@@ -390,6 +430,9 @@ float AOpenWillowWalker::PhaselockRemaining() const
 }
 void AOpenWillowWalker::RunCombatShots(float Now)
 {
+    // Give the imported inventory the same loading allowance as Skills.
+    FString InventoryMovieUrl;
+    if (CombatShotStep >= 16 && FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryMovieUrl)) Now -= 15.f;
     auto Shot = [](const TCHAR* Name)
     {
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), true, false);

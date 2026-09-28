@@ -25,6 +25,8 @@ struct FOpenWillowWeaponItem
     float Spread = 0;
     float ShotCost = 1;    // 0 means firing costs no ammo (Infinity)
     float SpinUp = 0;      // seconds; 0 when the barrel does not spin
+    FString SpinMode;      // WeaponTypeDefinition.BarrelSpinMode, e.g. BSM_SpinUpToFullFireRate
+    float SpinStartIntervalScale = 1; // barrel StartingSpinUpFireIntervalMultiplier
     TArray<FString> Fragments;
 };
 
@@ -46,6 +48,7 @@ public:
     const FOpenWillowWeaponItem* ActiveWeapon() const;
     const FOpenWillowWeaponItem* SlotItem(int32 Slot) const;
     const TArray<FOpenWillowWeaponItem>& Items() const { return Backpack; }
+    FString StateJson(int32 Level) const;
 private:
     TArray<FOpenWillowWeaponItem> Backpack;
     int32 Slots[SlotCount] = {INDEX_NONE, INDEX_NONE, INDEX_NONE, INDEX_NONE};

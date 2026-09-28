@@ -19,7 +19,9 @@ import urllib.parse
 from pathlib import Path
 
 HERE = Path(__file__).parent
-PAGES = {'/': 'index.html', '/index.html': 'index.html', '/skills.html': 'skills.html', '/skills.js': 'skills.js'}
+PAGES = {'/': 'index.html', '/index.html': 'index.html', '/skills.html': 'skills.html', '/skills.js': 'skills.js',
+         '/skill_info.js': 'skill_info.js', '/inventory.html': 'inventory.html',
+         '/inventory.js': 'inventory.js'}
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8'}
 PACKAGE_PREFIX = '/ package/'
 
@@ -43,6 +45,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
+        # Launchers reuse a running server; this tells them whose pages it serves.
+        self.send_header('X-OpenWillow-Pages', str(HERE.resolve()))
         super().end_headers()
 
     def log_message(self, *args):

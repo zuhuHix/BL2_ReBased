@@ -21,21 +21,24 @@ let loadedBranches = new Set();
 let points = Math.max(0, Number(query.get('points') || 0) || 0);
 let actionGrade = Math.max(0, Number(query.get('action') || 0) || 0);
 let grades = {};
+let bonuses = {}; // class-mod bonus grades by skill id, from the host
 let classModText = '';
+let selected = null; // the highlighted skill: { skill, branch, tier, cell, highlight }
 let selectedBranch = 1; // Harmony is in the middle on the movie's initial frame.
 let hitTargets = [];
 let displayedStates = new Map();
 
-function setGradeText(path, value) {
+function setGradeText(path, value, colour = null) {
   // Some movie text fields embed a digits-only WillowBody subset. Selecting
   // its full imported alias also renders the slash in ranks such as 0/5.
-  const color = (Number(get(path, 'textColor')) || 0xb6cee2).toString(16).padStart(6, '0');
+  const color = colour || (Number(get(path, 'textColor')) || 0xb6cee2).toString(16).padStart(6, '0');
   set(path, 'html', true);
   set(path, 'htmlText', `<font face="$WillowBody" size="13" color="#${color}">${value}</font>`);
 }
 
-// Host state may arrive before the movie loads. The host owns skill points;
-// this page only presents them. ?points=N is for a standalone visual check.
+// Host state may arrive before the movie loads. The host owns level, skill
+// points and grades; this page only presents them and reports clicks with
+// reportSpend. ?points=N&action=N is for a standalone visual check.
 window.owSkills = state => {
   let ranksChanged = false;
   if (typeof state.points === 'number' && Number.isFinite(state.points))
@@ -48,19 +51,85 @@ window.owSkills = state => {
     grades = state.grades;
     ranksChanged = true;
   }
+  if (state.bonuses && typeof state.bonuses === 'object' && !Array.isArray(state.bonuses)) {
+    bonuses = state.bonuses;
+    ranksChanged = true;
+  }
   if (typeof state.classModText === 'string') {
     classModText = state.classModText;
     if (ready) call(SKILLS, 'SetCharacter', classModText, data.className, data.portrait);
   }
   if (ready) call(SKILLS, 'SetSkillPoints', points);
   if (ready && ranksChanged) renderRanks();
+  if (ready) refreshSelection();
 };
 window.owPlayer = player; // Useful for local inspection, not a game interface.
 
-function showInfo(skill) {
-  if (!skill || !ready) return;
-  const description = (skill.description || '').replaceAll('<StringAliasMap:Action.ActionSkill>', 'F');
-  call(SKILLS + '.InformationBox', 'SetInfo', skill.name || '', description);
+// A click on a skill, reported the way the movie's own extCellClicked
+// reports it: (branch, tier, cell), with -1, -1, -1 for the action skill
+// (observed in a real-game UI trace). The UE host reads this console line,
+// validates the spend and answers with owSkills(state).
+function reportSpend(branch, tier, cell) {
+  console.log('OWSKILL ' + JSON.stringify({ branch, tier, cell }));
+}
+window.owCellClicked = (branch, tier, cell) => {
+  if ([branch, tier, cell].every(Number.isInteger)) reportSpend(branch, tier, cell);
+};
+
+// Selection, as traced: the highlight clip goes to "over" ("over_KillSkill"
+// for kill skills) and the cell tweens to Z 200 over 0.2 s; the previous one
+// goes back to "up" and Z 0. The screen opens with the action skill selected.
+function actionTarget() {
+  return { skill: data.actionSkill, branch: -1, tier: -1, cell: `${SKILLS}.ActiveAbility`,
+    highlight: `${SKILLS}.ActiveAbility.highlight` };
+}
+
+function select(target) {
+  if (!ready || !target) return;
+  if (!selected || selected.cell !== target.cell) {
+    if (selected) {
+      player.ow(selected.highlight, 'gotoAndStop', 'up');
+      call(selected.cell, 'TweenZPos', 0, 0.2);
+    }
+    player.ow(target.highlight, 'gotoAndStop', target.skill.killSkill ? 'over_KillSkill' : 'over');
+    call(target.cell, 'TweenZPos', 200, 0.2);
+    selected = target;
+  }
+  refreshSelection();
+}
+
+function skillState(target) {
+  if (target.branch < 0) return { grade: Math.min(data.actionSkill.maxGrade, actionGrade), locked: false, bonus: 0 };
+  return { grade: rank(target.skill), locked: !tierOpen(target.branch, target.tier),
+    bonus: Math.max(0, Math.floor(Number(bonuses[target.skill.id]) || 0)) };
+}
+
+function canSpend(target) {
+  const state = skillState(target);
+  return points > 0 && !state.locked && state.grade < target.skill.maxGrade;
+}
+
+// Info box text (tools/hud_overlay/skill_info.js reproduces the traced
+// SetInfo HTML) and the footer, built from the install's own strings.
+function refreshSelection() {
+  if (!ready || !selected) return;
+  // The info box's embedded font is a subset without ' : + %. Scaleform falls
+  // back to the imported font library for missing glyphs and Ruffle does not,
+  // so the page selects the imported $WillowBody alias itself (as for badges).
+  const face = html => `<font face="$WillowBody">${html}</font>`;
+  const name = selected.skill.name || '';
+  call(SKILLS + '.InformationBox', 'SetInfo', name,
+    face(skillInfoHtml(selected.skill, skillState(selected), data.strings)));
+  // SetInfo writes the name as plain text; re-set it as HTML for the font.
+  const escaped = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  set(`${SKILLS}.InformationBox.infoWrapper.SkillName`, 'htmlText', face(escaped));
+  const tips = [canSpend(selected) ? data.strings.spendPoint : '', data.strings.close].filter(Boolean);
+  set(`${ROOT}.tooltips.tooltips`, 'htmlText',
+    `<font face="$WillowBody" size="15" color="#a4e8f3">${tips.join('   ')}</font>`);
+}
+
+function spendSelected() {
+  if (selected && canSpend(selected)) reportSpend(selected.branch, selected.tier, selected.branch < 0 ? -1 : selected.skill.cell);
 }
 
 function drawBranch(index, branch) {
@@ -69,7 +138,8 @@ function drawBranch(index, branch) {
     tier.skills.forEach(skill => {
       const cell = `${SKILLS}.Tree${index + 1}.SkillRow${tierIndex + 1}.Cell${skill.cell + 1}`;
       call(SKILLS, 'SetCellVisible', index, tierIndex, skill.cell);
-      hitTargets.push({ path: cell, skill, branch: index });
+      hitTargets.push({ skill, branch: index, tier: tierIndex, cell,
+        highlight: `${SKILLS}.Tree${index + 1}.SkillRow${tierIndex + 1}.Highlight${skill.cell + 1}` });
     });
   });
 }
@@ -79,19 +149,61 @@ function rank(skill) {
   return Math.min(skill.maxGrade, Math.max(0, Math.floor(value)));
 }
 
+function invested(branchIndex) {
+  return data.branches[branchIndex].tiers.reduce((sum, tier) =>
+    sum + tier.skills.reduce((tierSum, skill) => tierSum + rank(skill), 0), 0);
+}
+
+// The host's rule: trees open once the action skill has its unlock points
+// (the traced info text is grey for tree skills before that), and a tier
+// opens once its branch holds every lower tier's points.
+function treesOpen() {
+  return actionGrade >= (data.actionSkillPoints ?? 1);
+}
+
+function tierOpen(branchIndex, tierIndex) {
+  const tiers = data.branches[branchIndex].tiers;
+  const required = tiers.slice(0, tierIndex).reduce((sum, tier) => sum + (tier.pointsToUnlockNext || 0), 0);
+  return treesOpen() && invested(branchIndex) >= required;
+}
+
+// ProgressBackground frame at the bottom of each tier row, measured in
+// Ruffle (the lit band grows about 0.43 px per frame). The maintainer's
+// real-game capture has 10 points in Harmony and the band ending at the
+// bottom of tier 3, the deepest open tier. Filling part of the way toward the
+// next tier is an assumption (UNVERIFIED).
+const PROGRESS_FRAMES = [173, 333, 490, 646, 815, 962];
+function progressFrame(branchIndex) {
+  if (!treesOpen()) return 1;
+  const tiers = data.branches[branchIndex].tiers, spent = invested(branchIndex);
+  let required = 0;
+  for (let k = 0; k < tiers.length; k++) {
+    const next = required + (tiers[k].pointsToUnlockNext || 0);
+    const here = PROGRESS_FRAMES[Math.min(k, PROGRESS_FRAMES.length - 1)];
+    if (k === tiers.length - 1 || spent < next) {
+      if (k === tiers.length - 1 || next <= required) return here;
+      const toward = PROGRESS_FRAMES[Math.min(k + 1, PROGRESS_FRAMES.length - 1)];
+      return Math.round(here + (toward - here) * (spent - required) / (next - required));
+    }
+    required = next;
+  }
+  return 1;
+}
+
 function renderRanks() {
-  // The movie owns the badge art and colour frames. The host owns grades;
-  // until grade tracking exists it sends no branch grades, so only the first
-  // tier is available and every other tier stays locked.
+  // The movie owns the badge art and colour frames. The host owns grades.
   data.branches.forEach((branch, branchIndex) => {
-    const invested = branch.tiers.reduce((sum, tier) =>
-      sum + tier.skills.reduce((tierSum, skill) => tierSum + rank(skill), 0), 0);
-    let required = 0;
+    const frame = progressFrame(branchIndex);
+    if (displayedStates.get(`progress${branchIndex}`) !== frame) {
+      call(SKILLS, 'SetBranchProgression', branchIndex, frame);
+      displayedStates.set(`progress${branchIndex}`, frame);
+    }
     branch.tiers.forEach((tier, tierIndex) => {
+      const open = tierOpen(branchIndex, tierIndex);
       for (const skill of tier.skills) {
         const grade = rank(skill);
         const status = grade >= skill.maxGrade ? 'maxed'
-          : grade > 0 ? 'some' : invested >= required ? 'enabled' : 'disabled';
+          : grade > 0 ? 'some' : open ? 'enabled' : 'disabled';
         const cell = `${SKILLS}.Tree${branchIndex + 1}.SkillRow${tierIndex + 1}.Cell${skill.cell + 1}`;
         const state = `${skill.killSkill ? 'KillSkill_' : ''}${status}`;
         if (displayedStates.get(cell) !== state) {
@@ -99,9 +211,12 @@ function renderRanks() {
           if (skill.icon) call(`${cell}.iconContainer`, 'loadMovie', skill.icon);
           displayedStates.set(cell, state);
         }
-        if (status !== 'disabled') setGradeText(`${cell}.points`, `${grade}/${skill.maxGrade}`);
+        // A trained skill's badge counts class-mod grades, drawn in the
+        // class-mod cyan (9/5 in the maintainer's capture; colour by eye).
+        const bonus = grade > 0 ? Math.max(0, Math.floor(Number(bonuses[skill.id]) || 0)) : 0;
+        if (status !== 'disabled')
+          setGradeText(`${cell}.points`, `${grade + bonus}/${skill.maxGrade}`, bonus ? '33ffff' : null);
       }
-      required += tier.pointsToUnlockNext || 0;
     });
   });
   const grade = Math.min(data.actionSkill.maxGrade, actionGrade);
@@ -115,22 +230,39 @@ function renderRanks() {
   if (grade || points) setGradeText(`${action}.points`, `${grade}/${data.actionSkill.maxGrade}`);
 }
 
-function updateBranch(which) {
+// Branch layout from the real-game UI trace (DECISIONS.md 2026-09-27): the
+// trees stay in one row and slide; the selected one comes forward. For offset
+// d from the selected branch the game tweens X = 15 + 330d, Y = 17,
+// Z = -5500|d|, scale 100, alpha 100 - 15|d|, and first calls the movie's
+// BubbleSortBranchDepths(selected + 1) so the front tree draws on top.
+// Ruffle ignores the Z coordinate, so the page projects it in 2D: scale by
+// f = PERSPECTIVE / (PERSPECTIVE + |Z|) about PROJECTION (parent-local
+// coordinates). Both constants were fitted to one real-game capture
+// (Cataclysm at 70.6% behind Harmony); they are not read from the movie.
+const PERSPECTIVE = 13200;
+const PROJECTION = { x: -209, y: 12 };
+function branchTween(offset) {
+  const x = 15 + 330 * offset, y = 17, z = -5500 * Math.abs(offset);
+  const f = PERSPECTIVE / (PERSPECTIVE - z);
+  return {
+    x: PROJECTION.x + (x - PROJECTION.x) * f,
+    y: PROJECTION.y + (y - PROJECTION.y) * f,
+    scale: 100 * f,
+    alpha: 100 - 15 * Math.abs(offset),
+  };
+}
+
+function updateBranch(which, immediate = false) {
   if (!ready) return;
-  selectedBranch = (which + data.branches.length) % data.branches.length;
-  // These are the three positions observed in the UI trace when Harmony is
-  // centred. The movie owns the tween and the 3D panel rendering.
+  // The trace never pressed an arrow at either end, so whether the row wraps
+  // there is unobserved (UNVERIFIED); a row with a fixed order suggests not.
+  selectedBranch = Math.max(0, Math.min(data.branches.length - 1, which));
+  call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
   data.branches.forEach((_, i) => {
-    const slot = (i - selectedBranch + 3) % 3;
-    // Ruffle currently ignores the movie's Z perspective. Scale the side
-    // branches in 2D to match their receding size in the game's GFx view.
-    const x = [15, 270, -240][slot];
-    const z = [0, -5500, -5500][slot];
-    const alpha = [100, 85, 85][slot];
-    const scale = slot === 0 ? 100 : 75;
-    call(SKILLS, 'TweenBranch', i + 1, false, 0.3, x, 17, z, scale, scale, alpha);
+    const t = branchTween(i - selectedBranch);
+    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, t.x, t.y, 0, t.scale, t.scale, t.alpha);
   });
-  setTimeout(layoutHits, 600);
+  setTimeout(layoutHits, immediate ? 50 : 600);
 }
 
 function addHit(path, onEnter, onClick, label, parent, kind = '') {
@@ -144,7 +276,10 @@ function addHit(path, onEnter, onClick, label, parent, kind = '') {
   button.style.top = `${100 * bounds.yMin / STAGE_HEIGHT}%`;
   button.style.width = `${100 * (bounds.xMax - bounds.xMin) / STAGE_WIDTH}%`;
   button.style.height = `${100 * (bounds.yMax - bounds.yMin) / STAGE_HEIGHT}%`;
-  if (onEnter) button.addEventListener('pointerenter', onEnter);
+  if (onEnter) {
+    button.addEventListener('pointerenter', onEnter);
+    button.addEventListener('focus', onEnter);
+  }
   if (onClick) button.addEventListener('click', onClick);
   parent.appendChild(button);
 }
@@ -153,10 +288,16 @@ function layoutHits() {
   if (!ready) return;
   const layer = document.getElementById('hit-layer');
   layer.replaceChildren();
+  // ActiveAbility's bounds reach over the first tier (an invisible child), so
+  // it goes first and the skill cells stack above it.
+  // Hover selects (the movie reports extCellRolledOver in the game); a click
+  // spends, as the traced extCellClicked on release does.
+  const action = actionTarget();
+  addHit(action.cell, () => select(action), () => { select(action); spendSelected(); },
+    data.actionSkill.name, layer);
   for (const hit of hitTargets.filter(hit => hit.branch === selectedBranch))
-    addHit(hit.path, () => showInfo(hit.skill), () => showInfo(hit.skill), hit.skill.name, layer, 'skill-hit');
-  addHit(`${SKILLS}.ActiveAbility`, () => showInfo(data.actionSkill),
-    () => showInfo(data.actionSkill), data.actionSkill.name, layer);
+    addHit(hit.cell, () => select(hit), () => { select(hit); spendSelected(); },
+      hit.skill.name, layer, 'skill-hit');
   addHit(`${SKILLS}.arrowLeft`, null, () => updateBranch(selectedBranch - 1),
     'Previous skill tree', layer);
   addHit(`${SKILLS}.arrowRight`, null, () => updateBranch(selectedBranch + 1),
@@ -174,6 +315,9 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape' || event.key.toLowerCase() === 'k') {
     event.preventDefault();
     closeSkills();
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    spendSelected();
   } else if (event.key === 'ArrowLeft') {
     event.preventDefault();
     updateBranch(selectedBranch - 1);
@@ -198,11 +342,9 @@ function populate() {
   call(SKILLS, 'SetAllSkillIconsInvisible');
   data.branches.forEach((branch, index) => drawBranch(index, branch));
   call(`${SKILLS}.InformationBox`, 'SetRemainingPointsTitle', data.pointsTitle);
-  renderRanks();
-  set(`${ROOT}.tooltips.tooltips`, 'htmlText',
-    '<font face="$WillowBody" size="15" color="#a4e8f3">[LEFT/RIGHT] Rotate Trees     [ESC] Close</font>');
   ready = true;
-  showInfo(data.actionSkill);
+  renderRanks();
+  select(actionTarget());
   updateBranch(selectedBranch);
   call(`${ROOT}.sway`, 'BeginSway');
   layoutHits();
@@ -228,6 +370,9 @@ async function boot() {
       console.log(`OpenWillow Skills StatusMenu loaded: ${total} frames`);
       player.ow(ROOT, 'gotoAndStop', 'skills');
       player.ow(SKILLS, 'forward', 'extInitTree', 'owInitTree');
+      // The page's hit targets cover the cells, so this fires only if the
+      // movie itself sees a release; that was not observed in the UE check.
+      player.ow(SKILLS, 'forward', 'extCellClicked', 'owCellClicked');
     } catch (error) {
       console.warn('Waiting for StatusMenu:', error);
     }

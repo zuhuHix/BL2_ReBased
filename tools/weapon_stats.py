@@ -88,7 +88,8 @@ def evaluate(package, recipe, level):
         base[attribute] = value(raw) if isinstance(raw, dict) else raw
     base[ATTR + 'WeaponShotCost'] = 1.0
     barrel = package.props(recipe['parts']['Barrel']['part']) if 'Barrel' in recipe['parts'] else {}
-    if barrel.get('bIsSpinningEnabled') and barrel.get('SpinUpDuration'):
+    spin = bool(barrel.get('bIsSpinningEnabled'))
+    if spin and barrel.get('SpinUpDuration'):
         base[ATTR + 'WeaponBarrelSpinUpDuration'] = value(barrel['SpinUpDuration'])
 
     mods, sources = {}, []
@@ -140,6 +141,10 @@ def evaluate(package, recipe, level):
         'spread': stat('WeaponSpread'),
         'shot_cost': stat('WeaponShotCost'),
         'spin_up': stat('WeaponBarrelSpinUpDuration'),
+        # How the spin-up gates firing, from the weapon type; None if the barrel does not spin.
+        'spin_mode': weapon_type.get('BarrelSpinMode') if spin else None,
+        # Cooked data omits the class default, 1 on Default__WeaponPartDefinition.
+        'spin_start_interval_scale': barrel.get('StartingSpinUpFireIntervalMultiplier', 1.0) if spin else None,
         'element': elemental.rsplit('_', 1)[-1] if elemental else None,
         'rarity': int(max(rarities)) if rarities else None,
         'manufacturer': maker or None,

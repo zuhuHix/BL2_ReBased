@@ -60,6 +60,16 @@ class WeaponStatsTests(unittest.TestCase):
         self.assertEqual(card['magazine'], 1.0)       # foreign-maker +3 is 0; clamp then +1
         self.assertAlmostEqual(card['reload_time'], 1.0)  # own-maker -50%
 
+    def test_spin_mode_and_default_start_scale(self):
+        objects = world()
+        self.assertIsNone(s.evaluate(FakePackage(objects), recipe(), level=1)['card']['spin_mode'])
+        objects['Type']['BarrelSpinMode'] = 'BSM_SpinUpToFullFireRate'
+        objects['Barrel'].update({'bIsSpinningEnabled': True, 'SpinUpDuration': const(0.8)})
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(card['spin_mode'], 'BSM_SpinUpToFullFireRate')
+        self.assertEqual(card['spin_start_interval_scale'], 1.0)  # omitted class default
+        self.assertAlmostEqual(card['spin_up'], 0.8)
+
 
 if __name__ == '__main__':
     unittest.main()

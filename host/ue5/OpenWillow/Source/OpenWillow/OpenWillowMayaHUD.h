@@ -16,11 +16,16 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void DrawHUD() override;
     void ToggleSkills();
+    bool ToggleInventory();
     void CloseSkills();
     void RequestSkillsCloseFromPage();
     bool IsSkillsOpen() const { return SkillsBrowser.IsValid(); }
 
 private:
+    void OpenStatusMenu(bool bInventory);
+    FString InventoryUrl;
+    bool bInventoryOpen = false;
+    TArray<TPair<FString, int32>> PendingEquips;
     void DrawDamagePopups(UFont* Font);
     // -owflashhud=<url>: BL2's own HUD movie in Ruffle, in a transparent
     // web page over the viewport (tools/hud_overlay). Prototype only.
@@ -37,4 +42,8 @@ private:
     TSharedPtr<SWidget> SkillsRoot;
     bool bCloseSkillsRequested = false;
     float NextSkillsPush = 0.f;
+    // Spends the page reported (branch, tier, cell), applied in DrawHUD.
+    void OnSkillsConsole(const FString& Message);
+    void PushSkillsState();
+    TArray<FIntVector> PendingSpends;
 };

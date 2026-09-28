@@ -31,12 +31,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from extract_swfmovie import extract  # noqa: E402
+import skill_stats  # noqa: E402
 
 SCHEMA_LINES = [
     'Children=ObjectProperty',
     'Tiers=StructProperty:SkillTreeTier',
     'Skills=ObjectProperty',
-]
+] + skill_stats.SCHEMA_LINES
+# Grades past MaxGrade that class mods can reach; their stats are written too.
+BONUS_GRADES = 7
+# Keyboard names for the game's <StringAliasMap:Action.*> tokens. The game
+# takes these from the player's key bindings (profile data, not the install's
+# .ini files). F matches the traced Phaselock text; V is BL2's default melee
+# key and is UNVERIFIED here.
+ACTION_KEYS = {'Action.ActionSkill': 'F', 'Action.Melee': 'V'}
+ALIAS = re.compile(r'<StringAliasMap:([^>]+)>')
+MAPPED = re.compile(r'<Strings:(\w+)\.(\w+)\.(\w+)>')
 SKILL_TAG = re.compile(r'\[skill\](.*?)\[-skill\]', re.S)
 
 
@@ -46,6 +56,7 @@ class Package:
         exports = json.loads(self.run('--exports'))
         self.index = {e['path']: e['index'] for e in exports}
         self.classes = {e['path']: e['class'] for e in exports}
+        self.cache = {}
 
     def run(self, *args):
         result = subprocess.run([self.reader, str(self.path), *map(str, args)], capture_output=True, text=True)
@@ -54,11 +65,16 @@ class Package:
         return result.stdout
 
     def props(self, path):
+        if path in self.cache:
+            return self.cache[path]
+        if path not in self.index:
+            raise KeyError(f'{path} is not an export of {self.path.name}')
         args = ['--properties', self.index[path], '--property-offset', 4]
         if self.schema:
             args += ['--array-schema', self.schema]
         data = json.loads(self.run(*args))
-        return {p['name']: plain(p.get('value')) for p in data['properties'] if p.get('status') == 'decoded'}
+        self.cache[path] = {p['name']: plain(p.get('value')) for p in data['properties'] if p.get('status') == 'decoded'}
+        return self.cache[path]
 
 
 def plain(value):
@@ -83,8 +99,33 @@ def read_int(localization, file, section, key):
     raise KeyError(f'{file} [{section}] {key}')
 
 
-def description_html(text):
-    return SKILL_TAG.sub(r'<font color="#FFDEAD"><i>\1</i></font>', text or '')
+def unquote(text):
+    return text[1:-1] if len(text) >= 2 and text[0] == text[-1] == '"' else text
+
+
+def description_html(text, aliases):
+    text = ALIAS.sub(lambda m: aliases.get(m.group(1), m.group(0)), text or '')
+    return SKILL_TAG.sub(r'<font color="#FFDEAD"><i>\1</i></font>', text)
+
+
+def key_aliases(game, localization):
+    """<StringAliasMap:X> -> PC text, from DefaultGame.ini MenuInputMapArray
+    (Set="PC") with <Strings:File.Section.Key> resolved from the .int files."""
+    ini = (Path(game) / 'WillowGame' / 'Config' / 'DefaultGame.ini').read_bytes().decode('latin-1')
+    aliases = dict(ACTION_KEYS)
+    for field, text in re.findall(r'MenuInputMapArray=\(FieldName="([^"]+)",Set="PC",\s*MappedText="([^"]*)"\)', ini):
+        aliases.setdefault(field, text)
+
+    def strings(match):
+        try:
+            return read_int(localization, f'{match.group(1)}.int', match.group(2), match.group(3))
+        except KeyError:  # left as the token, like any alias we cannot name
+            return match.group(0)
+
+    for _ in range(3):  # entries may refer to other aliases
+        aliases = {k: MAPPED.sub(strings, ALIAS.sub(lambda m: aliases.get(m.group(1), m.group(0)), v))
+                   for k, v in aliases.items()}
+    return aliases
 
 
 def columns(count):
@@ -123,8 +164,13 @@ def convert_movie(package, path, output, local):
     raise RuntimeError(f'{path}: textures still missing after decoding: {[i["file"] for i in missing]}')
 
 
-def skill_entry(package, path, column, converted, output, local):
+def skill_entry(package, path, column, converted, output, local, context):
     props = package.props(path)
+    max_grade = props.get('MaxGrade', 1)
+    stats, notes = skill_stats.skill_lines(package, path, props, context['resolver'],
+                                           context['localization'], max_grade + BONUS_GRADES)
+    context['notes'].extend(notes)
+    description = skill_stats.localized_description(path, props, context['localization'], package.classes)
     icon = props.get('SkillIcon')
     if icon and icon not in converted:
         convert_movie(package, icon, output, local)
@@ -132,8 +178,10 @@ def skill_entry(package, path, column, converted, output, local):
     return {
         'id': path,
         'name': props.get('SkillName', ''),
-        'description': description_html(props.get('SkillDescription')),
-        'maxGrade': props.get('MaxGrade', 1),
+        'description': description_html(description, context['aliases']),
+        'maxGrade': max_grade,
+        # stats[g]: [before, number, after] lines at grade g (tools/skill_stats.py).
+        'stats': [[list(line) for line in stats[g]] for g in sorted(stats)],
         'killSkill': props.get('SkillType') == 'SKILL_TYPE_Kill',
         'icon': movie_url(icon) if icon else '',
         'cell': column,
@@ -149,6 +197,8 @@ def main():
     parser.add_argument('--class-string', default='SkillsSirenClassString',
                         help='[SkillTreeMovie] key in WillowGame.int for the class name')
     parser.add_argument('--portrait', default='UI_CharacterPortraits.Siren')
+    parser.add_argument('--skills-package', default='GD_Siren_Skills',
+                        help='package whose .int localizes the skills (<name>.int)')
     parser.add_argument('--name', default='siren')
     parser.add_argument('--output', default='local/ui/run')
     args = parser.parse_args()
@@ -164,9 +214,17 @@ def main():
     reader = str(Path(args.reader).resolve())
     package = Package(reader, cooked / args.package, str(schema.resolve()))
 
+    startup = Package(reader, cooked / 'Startup.upk', str(schema.resolve()))
+    aliases = key_aliases(game, localization)
+    context = {
+        'resolver': skill_stats.Resolver([package, startup]),
+        'localization': skill_stats.localization_for(game, args.skills_package),
+        'aliases': aliases,
+        'notes': [],
+    }
     converted = set()
     root = package.props(package.props(args.tree)['Root'])
-    action = skill_entry(package, root['Tiers'][0]['Skills'][0], 0, converted, output, local)
+    action = skill_entry(package, root['Tiers'][0]['Skills'][0], 0, converted, output, local, context)
     branches = []
     for branch_path in root['Children']:
         branch = package.props(branch_path)
@@ -175,13 +233,15 @@ def main():
             skills = tier.get('Skills') or []
             tiers.append({
                 'pointsToUnlockNext': tier.get('PointsToUnlockNextTier', 0),
-                'skills': [skill_entry(package, s, c, converted, output, local)
+                'skills': [skill_entry(package, s, c, converted, output, local, context)
                            for s, c in zip(skills, columns(len(skills)))],
             })
         branches.append({'id': branch_path, 'name': branch.get('BranchName', ''), 'tiers': tiers})
 
-    startup = Package(reader, cooked / 'Startup.upk')
     convert_movie(startup, args.portrait, output, local)
+
+    def tooltip(key):
+        return description_html(read_int(localization, 'WillowGame.int', 'SkillTreeGFxObject', key), aliases)
 
     tree = {
         'className': read_int(localization, 'WillowGame.int', 'SkillTreeMovie', args.class_string),
@@ -190,6 +250,17 @@ def main():
         'actionSkill': action,
         'actionSkillPoints': root['Tiers'][0].get('PointsToUnlockNextTier', 1),
         'branches': branches,
+        'strings': {
+            'nextLevel': read_int(localization, 'WillowGame.int', 'SkillTreeGFxObject', 'SkillModifierNextLevel'),
+            'spendPoint': tooltip('Tooltips_SpendPoints'),
+            'overview': tooltip('Tooltips_Overview'),
+            'close': tooltip('Tooltips_Cancel'),
+            'classModBonus': unquote(read_int(localization, 'WillowGame.int', 'SkillTreeGFxObject', 'ClassModBonusString')),
+            'classModUntrained': unquote(read_int(localization, 'WillowGame.int', 'SkillTreeGFxObject', 'ClassModUntrainedString')),
+            'pointSingular': read_int(localization, 'WillowGame.int', 'SkillTreeGFxObject', 'SkillPoints_Sing'),
+            'pointPlural': read_int(localization, 'WillowGame.int', 'SkillTreeGFxObject', 'SkillPoints_Plur'),
+        },
+        'unresolved': sorted(set(context['notes']) | context['resolver'].unresolved),
     }
     target = output / f'skilltree_{args.name}.json'
     target.write_text(json.dumps(tree, indent=1, ensure_ascii=False), encoding='utf-8')
