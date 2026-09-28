@@ -1,8 +1,10 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$Engine,
     [Parameter(Mandatory=$true)][string]$Game,
     # Start as a standalone game window instead of the editor.
     [switch]$GameWindow,
+    # Experimental imported inventory; requires prepare_inventory_movie.py.
+    [switch]$InventoryMovie,
     # Extra command-line switches, e.g. '-owcombattest', '-owcombatshots'.
     [string[]]$Extra = @(),
     [int]$Port = 8767
@@ -17,9 +19,17 @@ $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $url = "http://127.0.0.1:$Port/"
 
-# Reuse an overlay server that is already running, else start one.
-try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 $url | Out-Null }
-catch {
+# Reuse an overlay server that is already running, else start one. Another
+# checkout's server would serve its own (possibly older) pages, so refuse it.
+$pages = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'hud_overlay')).Path
+try { $running = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 $url }
+catch { $running = $null }
+if ($running) {
+    $served = "$($running.Headers['X-OpenWillow-Pages'])"
+    if ($served -ne $pages) {
+        throw "Port $Port serves pages from '$served', not '$pages'. Stop that server or pass -Port."
+    }
+} else {
     Start-Process -WindowStyle Hidden -FilePath python -ArgumentList @(
         "`"$(Join-Path $PSScriptRoot 'hud_overlay/serve.py')`"", '--port', $Port)
     Start-Sleep 2
@@ -29,5 +39,6 @@ catch {
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
 $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url", "-owflashskills=${url}skills.html") + $Extra
+if ($InventoryMovie) { $arguments += "-owflashinventory=${url}inventory.html" }
 if ($GameWindow) { $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash') }
 Start-Process -FilePath $editor -ArgumentList $arguments

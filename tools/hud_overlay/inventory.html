@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- Original host adapter; all movie assets are served from ignored local/. -->
+<html><head><meta charset="utf-8"><title>OpenWillow inventory</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
+ruffle-player{display:block;width:100%;height:100%}
+#controls{position:absolute;inset:0;pointer-events:none}
+.cell{position:absolute;background:transparent;border:0;color:#fff;font:bold 13px Arial;
+ text-shadow:1px 1px 2px #000;pointer-events:auto;cursor:pointer;padding:5px}
+.cell:focus-visible{outline:2px solid #ffe25b}
+#loading{position:absolute;inset:0;display:grid;place-items:center;background:#12283d;color:white;font:20px Arial}
+#loading[hidden]{display:none}
+</style>
+<script>
+window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden',splashScreen:false,
+ wmode:'transparent',backgroundColor:null,letterbox:'off',logLevel:'error',contextMenu:'off',allowScriptAccess:true}};
+</script><script src="ruffle/ruffle.js"></script>
+</head><body><div id="controls" aria-label="Inventory controls"></div>
+<div id="loading" role="status">Loading inventory…</div>
+<script src="inventory.js"></script></body></html>

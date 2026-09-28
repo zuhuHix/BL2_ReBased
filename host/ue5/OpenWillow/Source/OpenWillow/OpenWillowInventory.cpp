@@ -46,6 +46,8 @@ int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
         Item.Spread = Number(*Card, TEXT("spread"), 0);
         Item.ShotCost = Number(*Card, TEXT("shot_cost"), 1);
         Item.SpinUp = Number(*Card, TEXT("spin_up"), 0);
+        (*Card)->TryGetStringField(TEXT("spin_mode"), Item.SpinMode);
+        Item.SpinStartIntervalScale = Number(*Card, TEXT("spin_start_interval_scale"), 1);
         Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
         Backpack.Add(MoveTemp(Item));
     }
@@ -71,4 +73,38 @@ const FOpenWillowWeaponItem* UOpenWillowInventory::SlotItem(int32 Slot) const
 const FOpenWillowWeaponItem* UOpenWillowInventory::ActiveWeapon() const
 {
     return SlotItem(ActiveSlot);
+}
+
+FString UOpenWillowInventory::StateJson(int32 Level) const
+{
+    TSharedRef<FJsonObject> State = MakeShared<FJsonObject>();
+    State->SetNumberField(TEXT("activeSlot"), ActiveSlot);
+    State->SetNumberField(TEXT("level"), Level);
+    TArray<TSharedPtr<FJsonValue>> ItemsJson, SlotsJson;
+    for (const FOpenWillowWeaponItem& Item : Backpack)
+    {
+        TSharedRef<FJsonObject> Value = MakeShared<FJsonObject>();
+        Value->SetStringField(TEXT("id"), Item.Id);
+        Value->SetStringField(TEXT("name"), Item.Name);
+        Value->SetStringField(TEXT("manufacturer"), Item.Manufacturer);
+        Value->SetStringField(TEXT("element"), Item.Element);
+        Value->SetNumberField(TEXT("rarity"), Item.Rarity);
+        Value->SetNumberField(TEXT("level"), Item.Level);
+        Value->SetNumberField(TEXT("damage"), Item.Damage);
+        Value->SetNumberField(TEXT("fireRate"), Item.FireRate);
+        Value->SetNumberField(TEXT("reloadTime"), Item.ReloadTime);
+        Value->SetNumberField(TEXT("magazine"), Item.Magazine);
+        ItemsJson.Add(MakeShared<FJsonValueObject>(Value));
+    }
+    for (int32 Slot = 0; Slot < SlotCount; ++Slot)
+    {
+        const FOpenWillowWeaponItem* Item = SlotItem(Slot);
+        if (Item) SlotsJson.Add(MakeShared<FJsonValueString>(Item->Id));
+        else SlotsJson.Add(MakeShared<FJsonValueNull>());
+    }
+    State->SetArrayField(TEXT("items"), ItemsJson);
+    State->SetArrayField(TEXT("slots"), SlotsJson);
+    FString Json;
+    FJsonSerializer::Serialize(State, TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json));
+    return Json;
 }

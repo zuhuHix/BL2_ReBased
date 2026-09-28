@@ -129,7 +129,7 @@ function refreshSelection() {
 }
 
 function spendSelected() {
-  if (selected) reportSpend(selected.branch, selected.tier, selected.branch < 0 ? -1 : selected.skill.cell);
+  if (selected && canSpend(selected)) reportSpend(selected.branch, selected.tier, selected.branch < 0 ? -1 : selected.skill.cell);
 }
 
 function drawBranch(index, branch) {
@@ -276,7 +276,10 @@ function addHit(path, onEnter, onClick, label, parent, kind = '') {
   button.style.top = `${100 * bounds.yMin / STAGE_HEIGHT}%`;
   button.style.width = `${100 * (bounds.xMax - bounds.xMin) / STAGE_WIDTH}%`;
   button.style.height = `${100 * (bounds.yMax - bounds.yMin) / STAGE_HEIGHT}%`;
-  if (onEnter) button.addEventListener('pointerenter', onEnter);
+  if (onEnter) {
+    button.addEventListener('pointerenter', onEnter);
+    button.addEventListener('focus', onEnter);
+  }
   if (onClick) button.addEventListener('click', onClick);
   parent.appendChild(button);
 }

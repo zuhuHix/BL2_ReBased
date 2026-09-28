@@ -84,6 +84,7 @@ void AOpenWillowMayaHUD::BeginPlay()
 {
     Super::BeginPlay();
     FParse::Value(FCommandLine::Get(), TEXT("owflashskills="), SkillsUrl);
+    FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryUrl);
     FString Url;
     if (!FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url) || !GEngine || !GEngine->GameViewport) return;
     // SWebBrowser only creates a window once the WebBrowser module is loaded;
@@ -114,15 +115,32 @@ void AOpenWillowMayaHUD::BeginPlay()
 
 void AOpenWillowMayaHUD::ToggleSkills()
 {
-    if (SkillsBrowser) { CloseSkills(); return; }
-    if (SkillsUrl.IsEmpty() || !GEngine || !GEngine->GameViewport || !PlayerOwner) return;
+    if (SkillsBrowser && !bInventoryOpen) { CloseSkills(); return; }
+    CloseSkills();
+    OpenStatusMenu(false);
+}
+
+bool AOpenWillowMayaHUD::ToggleInventory()
+{
+    if (InventoryUrl.IsEmpty()) return false;
+    if (SkillsBrowser && bInventoryOpen) { CloseSkills(); return true; }
+    CloseSkills();
+    OpenStatusMenu(true);
+    return SkillsBrowser.IsValid();
+}
+
+void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
+{
+    const FString& MenuUrl = bInventory ? InventoryUrl : SkillsUrl;
+    if (MenuUrl.IsEmpty() || !GEngine || !GEngine->GameViewport || !PlayerOwner) return;
     if (!IWebBrowserModule::Get().IsWebModuleAvailable())
     {
         UE_LOG(LogTemp, Warning, TEXT("OpenWillow Skills: the engine's web browser is not available"));
         return;
     }
+    bInventoryOpen = bInventory;
     SkillsBrowser = SNew(SWebBrowser)
-        .InitialURL(SkillsUrl)
+        .InitialURL(MenuUrl)
         .ShowControls(false)
         .ShowAddressBar(false)
         .ShowErrorMessage(true)
@@ -132,7 +150,7 @@ void AOpenWillowMayaHUD::ToggleSkills()
         .BrowserFrameRate(30)
         .OnBeforeNavigation_Lambda([this](const FString& NextUrl, const FWebNavigationRequest&)
             {
-                if (!NextUrl.EndsWith(TEXT("/__ow_close_skills"))) return false;
+                if (!NextUrl.EndsWith(TEXT("/__ow_close_skills")) && !NextUrl.EndsWith(TEXT("/__ow_close_inventory"))) return false;
                 bCloseSkillsRequested = true;
                 UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills close requested by page"));
                 return true; // Consume the page's close route without navigating away.
@@ -152,7 +170,7 @@ void AOpenWillowMayaHUD::ToggleSkills()
     PlayerOwner->SetInputMode(Mode);
     PlayerOwner->SetShowMouseCursor(true);
     NextSkillsPush = 0.f;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills overlay: %s"), *SkillsUrl);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Status menu overlay: %s"), *MenuUrl);
 }
 
 void AOpenWillowMayaHUD::CloseSkills()
@@ -164,6 +182,8 @@ void AOpenWillowMayaHUD::CloseSkills()
     SkillsBrowser.Reset();
     bCloseSkillsRequested = false;
     PendingSpends.Reset();
+    PendingEquips.Reset();
+    bInventoryOpen = false;
     if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
     if (PlayerOwner)
     {
@@ -175,6 +195,18 @@ void AOpenWillowMayaHUD::CloseSkills()
 
 void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
 {
+    if (bInventoryOpen)
+    {
+        if (!Message.StartsWith(TEXT("OWEQUIP "), ESearchCase::CaseSensitive)) return;
+        TSharedPtr<FJsonObject> Request;
+        FString Id;
+        double Slot = -1;
+        if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Message.Mid(8)), Request) && Request
+            && Request->TryGetStringField(TEXT("id"), Id) && Request->TryGetNumberField(TEXT("slot"), Slot)
+            && FMath::IsFinite(Slot) && Slot >= 0 && Slot < UOpenWillowInventory::SlotCount && Slot == FMath::FloorToDouble(Slot))
+            PendingEquips.Emplace(Id, int32(Slot));
+        return;
+    }
     // The page reports a skill click as console.log('OWSKILL {"branch":B,
     // "tier":T,"cell":C}'); the host decides whether it is a valid spend.
     static const FString Prefix = TEXT("OWSKILL ");
@@ -198,6 +230,13 @@ void AOpenWillowMayaHUD::PushSkillsState()
     const UOpenWillowSkills* Skills = Maya ? Maya->GetSkills() : nullptr;
     NextSkillsPush = GetWorld()->GetRealTimeSeconds() + 1.f;
     if (!SkillsBrowser || !Skills) return;
+    if (bInventoryOpen)
+    {
+        const UOpenWillowInventory* Inventory = Maya->GetInventory();
+        if (Inventory) SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owInventory && window.owInventory(%s)"),
+            *Inventory->StateJson(Skills->GetLevel())));
+        return;
+    }
     SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owSkills && window.owSkills(%s)"), *Skills->StateJson()));
 }
 
@@ -266,6 +305,21 @@ void AOpenWillowMayaHUD::DrawHUD()
 {
     Super::DrawHUD();
     if (bCloseSkillsRequested) CloseSkills();
+    if (SkillsBrowser && bInventoryOpen && PendingEquips.Num())
+    {
+        AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;
+        const UOpenWillowInventory* Inventory = Maya ? Maya->GetInventory() : nullptr;
+        if (Inventory) for (const auto& Request : PendingEquips)
+        {
+            const int32 Index = Inventory->Items().IndexOfByPredicate([&Request](const FOpenWillowWeaponItem& Item)
+                { return Item.Id == Request.Key; });
+            const bool bAccepted = Index != INDEX_NONE && Maya->EquipItem(Index, Request.Value);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Inventory equip %s slot %d: %s"), *Request.Key, Request.Value,
+                bAccepted ? TEXT("accepted") : TEXT("rejected: unknown item, slot, or level requirement"));
+        }
+        PendingEquips.Reset();
+        PushSkillsState();
+    }
     if (SkillsBrowser && PendingSpends.Num())
     {
         AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;

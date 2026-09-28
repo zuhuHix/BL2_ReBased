@@ -267,19 +267,25 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
         Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);
 }
-void AOpenWillowWalker::EquipItem(int32 Item, int32 Slot)
+bool AOpenWillowWalker::EquipItem(int32 Item, int32 Slot)
 {
-    if (!Inventory->Equip(Item, Slot)) return;
+    if (!Inventory->Items().IsValidIndex(Item) || !Skills || Inventory->Items()[Item].Level > Skills->GetLevel()) return false;
+    if (!Inventory->Equip(Item, Slot)) return false;
     // Equipping into the held slot, or with nothing held, draws the item now.
-    if (!bWeaponOut || Inventory->GetActiveSlot() == Slot || Inventory->GetActiveSlot() == INDEX_NONE)
+    if (!bWeaponOut || Inventory->GetActiveSlot() == Slot || !Inventory->ActiveWeapon())
         SelectSlot(Slot);
+    return true;
 }
 void AOpenWillowWalker::ToggleInventory()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
     bFireHeld = false;
-    if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) HUD->CloseSkills();
+    if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD()))
+    {
+        if (HUD->ToggleInventory()) return;
+        HUD->CloseSkills();
+    }
     if (InventoryScreen && InventoryScreen->IsInViewport())
     {
         InventoryScreen->RemoveFromParent();
@@ -330,8 +336,17 @@ void AOpenWillowWalker::FirePressed()
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     if (!bMayaActive || !bWeaponOut || !Weapon) return;
     bFireHeld = true;
-    // Spinning barrels wait for their evaluated spin-up (Infinity: 0.55 s).
-    NextShotAt = FMath::Max(NextShotAt, GetWorld()->GetTimeSeconds() + Weapon->SpinUp);
+    // BSM_SpinUpToFullFireRate (the Vladof pistol type) fires at once while the
+    // barrel spins up; the name reads as a fire-interval ramp from
+    // StartingSpinUpFireIntervalMultiplier x interval down to the interval.
+    // The Infinity's multiplier is the class default 1, so that ramp is flat
+    // and is not modelled. Other modes keep the older wait-for-spin-up guess.
+    // Both readings are UNVERIFIED against the native weapon code.
+    if (Weapon->SpinMode != TEXT("BSM_SpinUpToFullFireRate"))
+        NextShotAt = FMath::Max(NextShotAt, GetWorld()->GetTimeSeconds() + Weapon->SpinUp);
+    else if (Weapon->SpinStartIntervalScale != 1.f)
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s: spin-up fire-rate ramp (start x%.2f) is not modelled"),
+            *Weapon->Name, Weapon->SpinStartIntervalScale);
 }
 void AOpenWillowWalker::FireReleased() { bFireHeld = false; }
 void AOpenWillowWalker::FireWeapon()
@@ -415,6 +430,9 @@ float AOpenWillowWalker::PhaselockRemaining() const
 }
 void AOpenWillowWalker::RunCombatShots(float Now)
 {
+    // Give the imported inventory the same loading allowance as Skills.
+    FString InventoryMovieUrl;
+    if (CombatShotStep >= 16 && FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryMovieUrl)) Now -= 15.f;
     auto Shot = [](const TCHAR* Name)
     {
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), true, false);

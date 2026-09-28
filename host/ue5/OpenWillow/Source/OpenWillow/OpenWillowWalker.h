@@ -16,7 +16,7 @@ public:
     const class UOpenWillowInventory* GetInventory() const { return Inventory; }
     class UOpenWillowSkills* GetSkills() const { return Skills; }
     // Puts backpack item Item into weapon slot Slot and draws it (inventory screen).
-    void EquipItem(int32 Item, int32 Slot);
+    bool EquipItem(int32 Item, int32 Slot);
     void ToggleInventory();
     void ToggleSkills();
     float PhaselockRemaining() const;
