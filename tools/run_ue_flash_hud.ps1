@@ -3,8 +3,10 @@
     [Parameter(Mandatory=$true)][string]$Game,
     # Start as a standalone game window instead of the editor.
     [switch]$GameWindow,
-    # Experimental imported inventory; requires prepare_inventory_movie.py.
-    [switch]$InventoryMovie,
+   # Use the fallback host panel only when explicitly requested.
+   [switch]$NoInventoryMovie,
+    # Imported BL2 StatusMenu inventory is on by default.
+    [switch]$InventoryMovie = $true,
     # Extra command-line switches, e.g. '-owcombattest', '-owcombatshots'.
     [string[]]$Extra = @(),
     [int]$Port = 8767
@@ -39,6 +41,6 @@ if ($running) {
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
 $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url", "-owflashskills=${url}skills.html") + $Extra
-if ($InventoryMovie) { $arguments += "-owflashinventory=${url}inventory.html" }
+if ($InventoryMovie -and !$NoInventoryMovie) { $arguments += "-owflashinventory=${url}inventory.html" }
 if ($GameWindow) { $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash') }
 Start-Process -FilePath $editor -ArgumentList $arguments

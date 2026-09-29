@@ -1,4 +1,5 @@
 #include "OpenWillowMapSelector.h"
+#include "OpenWillowWalker.h"
 #include "Components/InputComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
@@ -6,6 +7,8 @@
 #include "HAL/FileManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/FileHelper.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -88,7 +91,7 @@ void AOpenWillowPlayerController::BeginPlay()
     UE_LOG(LogTemp, Display, TEXT("OpenWillow map selector: %d entries (Tab lists them, 1-9 open an imported map)"), Maps.Num());
     if (GEngine)
     {
-        GEngine->AddOnScreenDebugMessage(MenuMessageKey, 8.0f, FColor::Yellow, TEXT("Tab: map list"));
+        if (!FParse::Param(FCommandLine::Get(), TEXT("owmaya"))) GEngine->AddOnScreenDebugMessage(MenuMessageKey, 8.0f, FColor::Yellow, TEXT("Tab: map list"));
     }
 }
 
@@ -116,6 +119,12 @@ void AOpenWillowPlayerController::Tick(float DeltaSeconds)
 
 void AOpenWillowPlayerController::ToggleMenu()
 {
+    // With Maya in play Tab is her inventory (as in BL2's status menu); the map list
+    // stays available on other pawns and through the OWMapList console command.
+    if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetPawn()))
+    {
+        if (Maya->IsMayaActive()) { Maya->ToggleInventory(); return; }
+    }
     bMenuOpen = !bMenuOpen;
     if (bMenuOpen)
     {

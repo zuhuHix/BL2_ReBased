@@ -1,0 +1,23 @@
+#!/bin/sh
+# OPENWILLOW_WORKTREE_ASSETS
+
+set -u
+
+WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+SEED_ROOT="$(dirname "$COMMON_DIR")/local/worktree-seed"
+PROVISIONER="$SEED_ROOT/provision_worktree_assets.ps1"
+
+if [ ! -f "$PROVISIONER" ]; then
+    echo "OpenWillow worktree asset seed is not installed; run tools/install_worktree_assets_hook.ps1." >&2
+    exit 1
+fi
+if ! command -v powershell.exe >/dev/null 2>&1 || ! command -v cygpath >/dev/null 2>&1; then
+    echo "OpenWillow worktree asset seeding needs Windows PowerShell and Git Bash." >&2
+    exit 1
+fi
+
+powershell.exe -NoLogo -NoProfile -NonInteractive \
+    -File "$(cygpath -w "$PROVISIONER")" \
+    -WorktreeRoot "$(cygpath -w "$WORKTREE_ROOT")"
+exit $?

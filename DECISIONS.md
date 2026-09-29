@@ -2425,3 +2425,147 @@ latest host level guard is not compiled or runtime-verified. Full evidence,
 benchmark command, local reference provenance and limitations are in
 `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`. AI-assisted implementation;
 all game-derived outputs remain local and ignored.
+
+## 2026-09-29: Weapon card accuracy, sale value and red text from install data
+
+The inventory card lacked the Accuracy row, the price and the red flavour line.
+`tools/weapon_stats.py` now derives them from the installed data, and the host
+forwards them (`accuracy`, `accuracyKnown`, `value`, `valueKnown`, `funStats`).
+No package parser changes; the properties are read with the existing
+`ow-package --properties`.
+
+- **Accuracy**: `AttrPresent_WeaponSpread` remaps spread 0..15 to 100..0, so
+  accuracy is `100 * (1 - spread / 15)` (orientation inferred, clamp
+  UNVERIFIED). The spread input is the existing UNVERIFIED model, which does not
+  reproduce the spread of any of seven real cards (Conference Call: model 3.90,
+  real 4.44; Striker: 1.02 vs 1.995). Emitted with `accuracy_known = false`.
+- **Sale value**: the type's `MonetaryValue` price calculator with the product of
+  the parts' `MonetaryValueMod` and the level, rounded down. Integer-exact for
+  5 of 7 real cards (shotgun, AR, SMG); the two launchers do not reproduce.
+  `sale_value_known` is true only for the shotgun, assault rifle and SMG
+  calculators; others carry the number flagged false.
+- **Red text**: the title part's `CustomPresentations` line with
+  `TextColor` (220, 70, 70), overridden by the installed `.int` when present. All
+  nine red lines on real cards exist verbatim in the data. White stat lines are
+  not derived.
+- Host: items with no recipe `type` (the Infinity recipes) get a type label from
+  the resolved ammo type.
+
+Automated: `tests/weapon_stats_test.py` 11/11 (8 new, synthetic), CTest 6/6,
+`verify_packages.py` counts match, UE module build succeeded. No in-game check
+yet. Evidence and limits: `docs/verification/INVENTORY_CARD_STATS.md`.
+AI-assisted; the real-card observations are local ignored traces.
+
+## 2026-09-29: Inventory on Tab, header tabs, varied demo weapons, shield preview
+
+AI-assisted. The maintainer asked for the whole inventory menu to work, opened
+with **Tab**, and said local decoding of anything the menu needs is fine for
+speed. That widens what is decoded (more weapon meshes and a shield mesh from
+the installed game through the existing UModel path) but not where it goes: all
+game-derived output (recipes, glTF, textures, preview PNGs, the gear manifest)
+stays under ignored `local/`; no game file, decompiled source or third-party
+code was added to the repository, and no GPL tool was used.
+
+- **Tab.** `AOpenWillowPlayerController::ToggleMenu` (the map list's Tab) now
+  hands Tab to `AOpenWillowWalker::ToggleInventory` while Maya is the pawn; the
+  map list stays on other pawns and via `OWMapList`. The page closes on Tab,
+  Escape or I; category cycling moved to `[` / `]` (Tab used to cycle it).
+- **Header tabs.** The five StatusMenu header tabs (movie clips nav1..nav5) have
+  hit boxes on both pages. Inventory and Skills switch through the intercepted
+  routes `/__ow_tab_skills` and `/__ow_tab_inventory` (host: `PendingTabSwitch`
+  in `AOpenWillowMayaHUD`); K / I do the same from the keyboard. Missions, Map
+  and Challenges have no host data, so they are disabled with an "unavailable"
+  label instead of being faked.
+- **Backpack panel.** The converted movie leaves it full size and overlapping the
+  INVENTORY title. The page now scales it to 0.74 and places it at
+  (682, 134) in the 1280x720 stage; row positions are computed in stage pixels
+  and converted to panel units. Numbers are read from the reference captures
+  (host choices, not movie values).
+- **Type icons.** Probed in the bench: the movie draws frames `Sniper` and
+  `Rocket`; `Sniper Rifle` / `Rocket Launcher` draw nothing (the launcher card
+  used to show a pistol).
+- **Demo weapons.** 18 new rolled recipes (pistol, SMG, assault rifle, shotgun,
+  sniper, launcher; seven manufacturers; common to legendary) rolled with
+  `tools/weapon_recipe.py` / `weapon_stats.py`, filtered with
+  `filter_gestalt_gltf.py`, previews from `render_weapon_previews.py`, meshes
+  imported by `import_weapon_items.py` (28 items). UNVERIFIED: rarity is the
+  maximum over parts; 11 recipes drop fragments supplied only by `*_None` parts
+  because those decode with meaningless mesh names; preview paint is the same
+  approximation as before (colours are not faithful); rolled part mixes can be
+  cross-manufacturer. In-hand meshes still use a neutral grey material except
+  the Infinity.
+- **Backpack size.** The demo library exceeds the 12-slot base, so the host sets
+  the class maximum (39) unless `-owbackpack=<12..39>`; an optional local
+  `load_order.txt` in the recipe folder orders the first items so the list is
+  not eight identical guns in a row.
+- **Shield preview.** "The Bee" now has a rendered preview from the shared
+  Hyperion shield gestalt (four Hyperion fragments, section totals agree); the
+  fragment choice for this specific roll and the paint are UNVERIFIED. Relic,
+  grenade mod and class mod previews exist locally but no such items are in the
+  manifest, so no cell shows them.
+- **Maya display.** Her two lights now carry distinct forward-shading
+  priorities, which removes the editor's "Multiple directional lights" on-screen
+  warning; the leftover bone-name debug logging was removed.
+
+Automated: UE 5.8 build succeeded; in-engine `tools/test_inventory_actions.ps1`
+26/26 (adds Tab open/close through the controller path, K / I tab switching, `]`
+category cycling); `ctest` 6/6; `verify_packages.py` all nine packages match;
+`tests/weapon_stats_test.py`, `skill_stats_test.py`, `skill_info_test.js` pass.
+A local browser check (`tab_check.py`, synthetic snapshot) covers Tab, K, `]`,
+the disabled tabs and the Skills-tab click. Visual: fresh 1280x720 engine
+captures `OWCombat_7*`; the independent critic's score is recorded in
+`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`. Not verified: a physical
+keyboard Tab press (the test injects the key through the player controller),
+drag and drop, the Missions / Map / Challenges tabs, the in-hand materials, and
+any claim of parity with the original inventory.
+
+## 2026-09-29: Maya's inventory preview uses the game's Idle_Inventory clip and an ink outline
+
+AI-assisted. UModel 1590 MD5 export of `GD_Siren_Streaming_SF` `Skel_SirenBody`
+and AnimSets `Base_Siren`, `Unarmed_Siren`, `Rifle_Siren` (0.9 s, 68 clips, no
+failures). `Base_Siren.Idle_Inventory` (271 frames, 30 fps) is converted by
+`tools/prepare_character_anims.py --anchor none` (new option: skips the
+first-person camera correction; the MD5-to-UE Y-mirror check still passes) and
+imported by `import_character_anims.py` onto the body skeleton
+(`OPENWILLOW_CHARACTER_MESH` / `_ANIM_FOLDER`). The head follows through leader
+pose (same bone names). `host/ue5/import_character_menu_look.py` adds an
+inverted-hull outline material and Specular 0.15 / Roughness 0.85 on
+`M_OW_Character`; both are art-direction approximations, UNVERIFIED against
+BL2's stripped `Master_Player` shaders.
+
+Visual (engine capture at DistanceCm 345): hand-on-hip idle on the same side as
+the 1920x1080 reference, which also supports the earlier UNVERIFIED body
+handedness. The final framing (DistanceCm 300, ScreenX 0.79) is built but its
+capture run stalled at editor start-up, so it is not visually verified. The
+backdrop post-process still darkens Maya with the world (suit reads brown);
+that belongs to the backdrop pass. No critic re-score of this change.
+
+## 2026-09-30: Inventory backdrop grading excludes Maya
+
+AI-assisted bounded host rendering change; existing UModel 1590 payloads and
+object identity/import paths remain unchanged. No new extraction or third-party
+code. `import_character_menu_look.py` now also generates `M_OW_MenuBackdrop`
+locally. After-tonemap gain, desaturation and vignette use custom stencil 247
+on the menu body, head and ink hulls, with a scene-depth visibility check. The
+renderer enables depth/stencil (`r.CustomDepth=3`). The display owns the
+blendable; destroying it on close removes the effect. Missing material logs a
+warning and leaves world grading disabled. Depth of field remains focused on
+Maya. Lighting reduced from 14/18 to 4/5 lux because Maya no longer needs to
+compensate for global dimming.
+
+Visual: fresh 1280x720 engine captures show yellow suit panels rather than
+brown, world dimming and the inventory idle/outline. The 300 cm capture clipped
+her elbow; default distance restored to 345 cm and visually checked again.
+`OWCombat_9_AfterSkills` shows gameplay colour/FOV restored after menu close.
+Local before/after evidence: `local/inventory/{before,after}-backdrop.png`;
+captures remain ignored. Material generation and UE 5.8 module build passed.
+CTest: 6/6; package verification: all nine decoded byte/count/export-field
+checks match; in-engine inventory action regression: 26/26 with Slate inputs.
+Detailed runtime results and limits are recorded in
+`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`.
+
+UNVERIFIED: exact BL2 shader/lighting parity, stencil occlusion under arbitrary
+camera/world geometry, temporal edge stability, and an independent critic
+re-score. Self-review against the local real-game reference still finds a
+brighter face, different outfit and approximate blurred backdrop/glass; the
+previous independent 5.5/10 score is not updated by this visual check.
