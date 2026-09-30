@@ -516,3 +516,20 @@ empty-target captures show face clear of backpack at sampled poses. CTest
 This is a head-anchor framing check, not proof of every silhouette/weapon
 pixel, every viewport aspect ratio or original-game full-cycle pose parity.
 No independent critic; the full menu goal remains incomplete.
+
+### Scaleform projection support probe (2026-09-30)
+
+Developer-only `tools/hud_overlay/probe_scaleform_3d.js`: execute its source in
+the ready inventory browser, then await `owProbeScaleform3D()`. The page never
+loads it automatically. Synthetic green square; four cases, 405.5 ms including
+four 100 ms waits; gfxExtensions=true. Flat/yrotation45/depth300 all 100x100;
+ordinary rotation45 141.4x141.4. The 3D properties round-trip but have no geometry
+effect in Ruffle 0.7.0-nightly.2026.9.26. Cleanup removes the probe clip.
+This supplies an observed renderer limitation, not stock transform values.
+Autodesk documents these as Scaleform-specific AS2 extensions:
+https://help.autodesk.com/cloudhelp/ENU/Scaleform-Help/scaleform_help/3di.html.
+Neither local SDK trace has a nonzero 3D SetDisplayInfo call. Exact projection
+therefore remains unverified and unimplemented. No new tool/export dependency.
+CTest 6/6 (8.64 s), all nine package checks match, JS syntax/diff checks pass;
+no engine rerun because runtime unchanged. HTTP probe loading failed; direct
+execution of its repository source through the preview bridge succeeded.
