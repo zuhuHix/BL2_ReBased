@@ -992,3 +992,9 @@ while swapping. The in-engine action runner verifies ordering, top clamp,
 selection retention and native-cell/hit-target alignment. See
 [verification](verification/INVENTORY_MOVIE_PROTOTYPE.md) for remaining stock
 input and visual parity gaps.
+
+E/Enter on a backpack item starts a transfer: choose an unlocked weapon slot
+with its number, Up/Down keys or cell click, then E/Enter to confirm. Gear targets
+its matching slot. Escape cancels while keeping the source selected. An empty
+destination offers Equip, an occupied destination Swap. These flows reuse the
+host's equip validation; exact stock grid traversal remains unverified.

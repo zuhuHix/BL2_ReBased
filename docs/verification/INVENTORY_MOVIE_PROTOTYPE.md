@@ -471,3 +471,31 @@ PageUp/PageDown, transfer guards and native/HTML alignment after sort/comparison
 Settled engine comparison capture shows rows in their frames and disabled grey
 Drop/Sort hints. CTest **6/6** (22.16 s); all nine package checks match. JS syntax
 and diff checks pass. No independent critic or full stock focus/sort claim.
+
+### Backpack-origin transfer (2026-09-30)
+
+Original-game trace `_220818` seq 23550 / 24230 and right-origin TweenCards
+observations establish a missing flow: backpack selection starts transfer to
+equipped slots before confirmation. E/Enter now pins the source, permits
+compatible destination selection, compares its occupant, and confirms through
+host validation. Escape cancels while retaining source/menu/equipment.
+Empty destinations use pending Equip with no comparison item. Gear cannot move
+to weapon slots. Transfer snapshots retain a source regardless of which panel
+it started in. Native card tween direction is preserved; both panel focus
+arguments match the observed comparison calls. No new exports/dependencies.
+
+The first runtime passed 43/43. Follow-up adds empty-destination checks and
+captures both right-origin states. Exact stock initial analogue, keyboard grid
+traversal, hover/click timing, sort cycle, 3D projection and Inspect/material
+parity remain incomplete; this is not a 1:1 completion claim.
+
+Final verification: UE build succeeded (7.84 s); runtime **45/45 PASS**, log
+`local/inventory-actions/run-20260930-021213.log`. New captures
+`OWInventory_backpack_transfer_changes_destination.png` and
+`OWInventory_backpack_transfer_empty_destination.png` show yellow source card
+on the right, green destination comparison on the left, and a single source
+card/Equip hint for an empty target. Both retain the source weapon preview.
+CTest **6/6** (21.64 s); all nine decoded byte/count/export comparisons match;
+JS syntax and diff checks pass. Screenshots/logs/assets remain ignored outputs.
+Maya's animated sway can move her behind the backpack; exact pose/framing over
+the whole idle and independent critic remain unverified. 1:1 is incomplete.

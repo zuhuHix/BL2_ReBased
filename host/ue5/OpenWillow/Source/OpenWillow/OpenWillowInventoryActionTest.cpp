@@ -354,8 +354,48 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             { D = TEXT("PageDown failed to restore sort while retaining selected instance"); return false; }
             D = TEXT("PageDown reversed sort and retained the selected stable ID"); return true;
         });
+    Add(TEXT("backpack_select_starts_transfer_without_equipping"), false,
+        [this] { PressKey(TEXT("e")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Source, Selected;
+            bool FromEquipped = true;
+            if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source) || Source != SelId
+                || !Page->TryGetStringField(TEXT("sel"), Selected) || Selected != SelId
+                || !Page->TryGetBoolField(TEXT("transferFromEquipped"), FromEquipped) || FromEquipped
+                || HostEquipped(SelId))
+            { D = TEXT("backpack E failed to pin the source or equipped it prematurely"); return false; }
+            D = TEXT("backpack E pinned source; host equipment unchanged"); return true;
+        });
+    Add(TEXT("backpack_transfer_changes_destination"), false,
+        [this] { PressKey(TEXT("2")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Source, Selected, Compare;
+            double Target = -1;
+            if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source) || Source != SelId
+                || !Page->TryGetStringField(TEXT("sel"), Selected) || Selected != SelId
+                || !Page->TryGetStringField(TEXT("compare"), Compare) || Compare != HostSlotId(1)
+                || !Page->TryGetNumberField(TEXT("target"), Target) || Target != 1 || HostEquipped(SelId))
+            { D = TEXT("destination change lost source or comparison"); return false; }
+            D = TEXT("slot 2 chosen; source fixed and destination weapon compared"); return true;
+        });
+    Add(TEXT("backpack_transfer_cancel_keeps_source"), false,
+        [this] { PressKey(TEXT("Escape")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Selected;
+            if (!Page || !Page->TryGetStringField(TEXT("sel"), Selected) || Selected != SelId
+                || HostEquipped(SelId) || !Hud->IsInventoryOpen()
+                || Page->HasTypedField<EJson::String>(TEXT("transfer")))
+            { D = TEXT("cancel lost source, changed equipment or closed inventory"); return false; }
+            D = TEXT("Escape cancelled swap, retained backpack source and menu"); return true;
+        });
     Add(TEXT("equip_weapon_slot2"), true,
-        [this] { DisplacedId = HostSlotId(1); PressKey(TEXT("2")); PressKey(TEXT("Enter")); },
+        [this] { DisplacedId = HostSlotId(1); PressKey(TEXT("2")); PressKey(TEXT("Enter")); PressKey(TEXT("Enter")); },
         [this, CheckAction, Snapshot](FString& D)
         {
             if (!CheckAction(TEXT("equip"), true, SelId, D)) return false;
@@ -385,8 +425,32 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             return true;
         });
 
+    Add(TEXT("backpack_transfer_empty_destination"), false,
+        [this] { PressKey(TEXT("e")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Source;
+            double Target = -1;
+            if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source) || Source != SelId
+                || !Page->TryGetNumberField(TEXT("target"), Target) || Target != 1
+                || Page->HasTypedField<EJson::String>(TEXT("compare")) || !HostSlotId(1).IsEmpty()
+                || HostEquipped(SelId))
+            { D = TEXT("empty destination did not retain backpack source with no comparison"); return false; }
+            D = TEXT("empty slot 2 remains a valid pending destination; no premature equip"); return true;
+        });
+    Add(TEXT("backpack_empty_transfer_cancel"), false,
+        [this] { PressKey(TEXT("Escape")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            if (!Page || Page->HasTypedField<EJson::String>(TEXT("transfer")) || HostEquipped(SelId)
+                || !HostSlotId(1).IsEmpty() || !Hud->IsInventoryOpen())
+            { D = TEXT("empty-slot cancel changed equipment or closed inventory"); return false; }
+            D = TEXT("empty-slot transfer cancelled without changing equipment"); return true;
+        });
     Add(TEXT("equip_weapon_slot1_active"), true,
-        [this] { DisplacedId = HostSlotId(0); PressKey(TEXT("1")); PressKey(TEXT("Enter")); },
+        [this] { DisplacedId = HostSlotId(0); PressKey(TEXT("1")); PressKey(TEXT("Enter")); PressKey(TEXT("Enter")); },
         [this, CheckAction, Snapshot](FString& D)
         {
             if (!CheckAction(TEXT("equip"), true, SelId, D)) return false;
@@ -674,7 +738,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
     Add(TEXT("set_level_36"), false, [this] { Walker->GetSkills()->SetLevel(36); },
         [LevelVerify](FString& D) { return LevelVerify(36, D); }, 8.f);
 
-    Add(TEXT("gear_equip_shield"), true, [this] { PressKey(TEXT("Enter")); },
+    Add(TEXT("gear_equip_shield"), true, [this] { PressKey(TEXT("Enter")); PressKey(TEXT("Enter")); },
         [this, CheckAction, Snapshot, ShieldWorn](FString& D)
         {
             if (!CheckAction(TEXT("equip"), true, ShieldId, D)) return false;
@@ -747,6 +811,8 @@ void UOpenWillowInventoryActionTest::FinishStep(bool bOk, const FString& Detail)
         && (Step.Name == TEXT("open_inventory") || Step.Name == TEXT("gear_equip_shield")
             || Step.Name == TEXT("inspect_weapon") || Step.Name == TEXT("inspect_rotate_weapon")
             || Step.Name == TEXT("transfer_selection_preserves_full_size_cards")
+            || Step.Name == TEXT("backpack_transfer_changes_destination")
+            || Step.Name == TEXT("backpack_transfer_empty_destination")
             || Step.Name == TEXT("close_inventory_final")))
     {
         // A page report can precede CEF's composited pixels. Hold the current

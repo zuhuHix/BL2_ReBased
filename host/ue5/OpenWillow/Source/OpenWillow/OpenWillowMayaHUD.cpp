@@ -366,7 +366,7 @@ void AOpenWillowMayaHUD::RequestPageReport()
         "try{console.log('OWINVPAGE '+JSON.stringify({ready:!!ready,hasState:!!state,"
         "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,sort:sortIndex,"
         "inspect:inspectMode,inspectFrames:inspectFrameCount,inspectImageBytes:inspectImage.length,inspectYaw:inspectYaw,"
-        "transfer:transferSourceId,compare:compareId,"
+        "transfer:transferSourceId,transferFromEquipped:transferFromEquipped,compare:compareId,"
         "firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
         "backpackHeaderAnchored:(function(){var row=document.querySelector('[data-kind=backpack]');var buttons=Array.from(document.querySelectorAll('[data-kind=category]'));"
         "return !!row&&buttons.length===2&&buttons.every(function(n){var b=n.getBoundingClientRect(),r=row.getBoundingClientRect();return b.bottom<=r.top+2&&b.top>=r.top-60})})(),"

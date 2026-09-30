@@ -103,6 +103,7 @@ let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSl
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
+let transferFromEquipped = false;
 let transferCategoryBefore = 0;
 let compareStartedFromLeft = false;
 let lastMenuPreviewId = null;
@@ -241,7 +242,7 @@ window.owInventory = snapshot => {
   if (serial === lastState) return;
   lastState = serial;
   state = snapshot;
-  if (transferSourceId && !equippedIds().has(transferSourceId)) transferSourceId = null;
+  if (transferSourceId && !itemById(transferSourceId)) finishTransfer();
   if (firstSnapshot && Number.isInteger(state.activeSlot) && state.activeSlot >= 0 && state.activeSlot < 4)
     targetSlot = state.activeSlot;
   if (!Number.isInteger(targetSlot) || targetSlot < 0 || targetSlot >= slotsUnlocked())
@@ -333,6 +334,11 @@ dragLayer.addEventListener('drop', event => {
 
 function select(id) {
   if (!itemById(id) || selectedId === id) return;
+  if (transferSourceId && !transferFromEquipped) {
+    const slot = state.slots.indexOf(id);
+    if (!gearSlotForItem(itemById(transferSourceId)) && slot >= 0) setTargetSlot(slot);
+    return;
+  }
   if (transferSourceId && equippedIds().has(id)) return;
   if (selectedId !== id) compareId = transferSourceId;
   selectedId = id;
@@ -347,6 +353,7 @@ function equip() {
   const levelAllowed = item?.levelKnown === false || item?.level === undefined
     || Number(item.level) <= Number(state.level);
   if (!item || !levelAllowed) return;
+  if (!transferSourceId) { beginBackpackTransfer(); return; }
   const gearSlot = gearSlotForItem(item);
   if (gearSlot) {
     if (state.gearSlots?.[gearSlot] !== item.id) { requestAction('equip', {id:item.id, gearSlot}); finishTransfer(); }
@@ -390,6 +397,17 @@ function toggleCompare() {
   drawCard();
 }
 
+function beginBackpackTransfer() {
+  const source = itemById(selectedId);
+  if (!source || equippedIds().has(source.id)) return;
+  transferSourceId = source.id;
+  transferFromEquipped = false;
+  transferCategoryBefore = categoryIndex;
+  targetGearSlot = gearSlotForItem(source);
+  compareId = equippedIdFor(source);
+  render();
+}
+
 function beginEquippedTransfer() {
   const source = itemById(selectedId);
   if (!source || !equippedIds().has(source.id)) return;
@@ -400,6 +418,7 @@ function beginEquippedTransfer() {
   if (!gearSlot) targetSlot = state.slots.indexOf(source.id);
   targetGearSlot = gearSlot;
   transferSourceId = source.id;
+  transferFromEquipped = true;
   transferCategoryBefore = categoryIndex;
   compareId = source.id;
   categoryIndex = categories.findIndex(category => category.key === (gearSlot || 'weapons'));
@@ -411,6 +430,7 @@ function finishTransfer(cancel = false) {
   if (!transferSourceId) return;
   if (cancel && itemById(transferSourceId)) selectedId = transferSourceId;
   transferSourceId = compareId = null;
+  transferFromEquipped = false;
   categoryIndex = transferCategoryBefore;
   firstRow = scrollForSelected(backpackItems());
   if (ready) render();
@@ -603,7 +623,7 @@ function setCompareLayout(active, fromLeft = false) {
   compareLayoutActive = active;
   compareStartedFromLeft = fromLeft;
   call(INV, 'TweenPanel', 'Equipped', true, active);
-  call(INV, 'TweenPanel', 'Backpack', !active, active);
+  call(INV, 'TweenPanel', 'Backpack', true, active);
   call(INV, 'TweenCards', active, fromLeft);
 }
 
@@ -694,16 +714,16 @@ function drawCard() {
     console.log('OWMENUPREVIEW ' + JSON.stringify({id:previewId}));
   }
   const compare = compareId && compareId !== selectedId ? itemById(compareId) : null;
-  const fromLeft = Boolean(transferSourceId && compare);
+  const fromLeft = Boolean(transferSourceId && transferFromEquipped && compare);
   configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : compare);
   configureCard(INV + '.compareCard', fromLeft ? item : compare, fromLeft ? compare : item, 'compare');
-  setCompareLayout(Boolean(compare), fromLeft);
+  setCompareLayout(Boolean(compare) || Boolean(transferSourceId), fromLeft);
   const gearSlot = gearSlotForItem(item);
   const compareSlotLabel = gearSlot
     ? gearSlots.find(slot => slot.key === gearSlot)?.label || 'gear slot'
     : `slot ${targetSlot+1}`;
   // Match the observed stock tooltip line. Extra host keys remain available.
-  const hints = [[transferSourceId ? '[E] Swap' : '[E] Select/Compare', !!item],
+  const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
   if (transferSourceId || (item && !equippedIds().has(item.id)))
     hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
@@ -881,6 +901,10 @@ function focusItem(id) {
 }
 
 function moveSelection(delta) {
+  if (transferSourceId && !transferFromEquipped) {
+    if (!targetGearSlot) cycleTargetSlot(delta);
+    return;
+  }
   const rows = backpackItems();
   if (!rows.length) return;
   let index = rows.findIndex(item => item.id === selectedId);
@@ -895,10 +919,16 @@ function moveSelection(delta) {
 }
 
 function setTargetSlot(slot) {
+  if (transferSourceId && !transferFromEquipped && targetGearSlot) return;
   if (slot < 0 || slot > 3 || slotLocked(slot)) return;
   if (slot !== targetSlot) compareId = null;
   targetGearSlot = null;
   targetSlot = slot;
+  if (transferSourceId && !transferFromEquipped) {
+    compareId = state.slots[slot] || null;
+    render();
+    return;
+  }
   const held = state.slots[targetSlot];
   const selectedIsBackpack = itemById(selectedId) && !equippedIds().has(selectedId);
   if (!selectedIsBackpack) {
@@ -1098,6 +1128,10 @@ function render() {
       continue;
     }
     const slotButton = hit(cell, item ? '' : `${label}, empty`, () => {
+      if (transferSourceId) {
+        if (!transferFromEquipped && i < 4) setTargetSlot(i);
+        return;
+      }
       if (slot) {
         targetGearSlot = slot.key;
         if (item) select(item.id);
@@ -1232,7 +1266,8 @@ function handleKey(event) {
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
   else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); setTargetSlot(Number(event.key)-1); }
   else if (key === 'enter') { event.preventDefault(); equip(); }
-  else if (key === 'e' || key === 'c') { event.preventDefault(); toggleCompare(); }
+  else if (key === 'e') { event.preventDefault(); equip(); }
+  else if (key === 'c') { event.preventDefault(); toggleCompare(); }
   else if (key === 'q') { event.preventDefault(); dropSelected(); }
   else if (key === 't') { event.preventDefault(); toggleMark('trash'); }
   else if (key === 'f') { event.preventDefault(); toggleInspect(); }
