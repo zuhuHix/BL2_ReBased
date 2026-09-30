@@ -603,3 +603,125 @@ This tests feasibility only, not stock angles, whole-menu depth ordering,
 drag/tween synchronization, memory cost or engine integration. Not loaded by
 inventory.html; production path unchanged. CTest 6/6 (8.69 s), nine package
 checks match, JS syntax/diff pass. No engine rerun or independent critic.
+
+### Inventory navigation and empty-cell selection (2026-09-30)
+
+AI-assisted interaction pass. Arrow keys and gamepad D-pad share one navigation
+table (see "Original-game keyboard observation" below for what it is based on).
+Wheel/chevrons still scroll; PageUp/PageDown still sort. This first version chose
+neighbours from native cell centers; the observation below replaced that with the
+observed table.
+
+Empty weapon selection clears the previous card/preview ID. Equipment selection
+survives unrelated snapshots and follows host changes to the selected slot.
+Confirmed backpack equips update navigation to their destination. HTML pressed
+state identifies equipment by slot index (including empty cells) and follows
+backpack keys. Transfer sources stay pinned; Escape restores the source.
+Inspect suppresses directional inventory navigation. No parser, dependency or
+engine changes; no new extraction backend.
+
+Automated checks:
+
+```text
+node tests/inventory_navigation_test.js
+14/14 navigation checks passed (synthetic, stock traversal unverified)
+node --check tools/hud_overlay/inventory.js
+git diff --check
+ctest --test-dir build -C Release --output-on-failure
+100% tests passed, 0 tests failed out of 6
+Total Test time (real) = 19.25 sec
+python tools/verify_packages.py --reader build/Release/ow-package.exe
+Core: 234397 bytes, 1621 exports; decoded bytes, counts and export fields match
+Engine: 5878264 bytes, 33166 exports; decoded bytes, counts and export fields match
+GameFramework: 61714 bytes, 258 exports; decoded bytes, counts and export fields match
+GearboxFramework: 1224040 bytes, 7098 exports; decoded bytes, counts and export fields match
+WillowGame: 13054200 bytes, 56443 exports; decoded bytes, counts and export fields match
+GFxUI: 136680 bytes, 841 exports; decoded bytes, counts and export fields match
+IpDrv: 230751 bytes, 1364 exports; decoded bytes, counts and export fields match
+OnlineSubsystemSteamworks: 265760 bytes, 1709 exports; decoded bytes, counts and export fields match
+AkAudio: 39503 bytes, 176 exports; decoded bytes, counts and export fields match
+```
+
+Node runs the actual adapter with synthetic snapshots, cell centers and minimal
+DOM, without Ruffle, Slate or host validation. The new worktree lacks the prior
+ignored seed, recipes and reference captures. Seven UI movies were recovered
+with the existing reader/converter/library workaround and the same Ruffle web
+version 0.7.0-nightly.2026.9.26 from npm. Final recovery: 17.823 s, 29 runtime
+files including Ruffle, under ignored local/ui/run; report and recovery script
+also stay local. Dynamic -nopack images retain transparent placeholders.
+Initial exact-name texture lookup failed; local recovery resolved case-insensitive
+package texture paths and empty export names using explicit image filenames,
+then reconverted. This does not prove general identity resolution.
+
+The in-engine action test's `select_backpack_weapon` step used ArrowDown from the
+equipped panel to reach the backpack. Under the new navigation that stays in
+equipment, so the step now presses ArrowRight eight times (extra presses in
+Backpack are no-ops). **Edited but not compiled or run**: this worktree has no
+imported Sanctuary/Maya content, scene data or UE binaries, so the previous
+46/46 result predates this pass and the suite needs a rerun on a seeded checkout.
+
+T3 preview navigation (including environment-port navigation) reports connection
+refused while the local server responds HTTP 200. No live browser, UE runtime,
+physical-input or matched original-game check completed for this pass. No
+independent critic. Full 1:1 menu parity remains incomplete.
+
+### Original-game keyboard observation (2026-09-30)
+
+AI-assisted. The community mod SDK (mod manager v3.8, unrealsdk v3.2.0, pyunrealsdk
+v1.10.0; the DLL SHA-256 values match THIRD_PARTY.md) was installed in the player's
+Borderlands 2 folder, with `tools/sdk_trace/openwillow_uitrace` (v0.2.1, plus an opt-in
+`autostart.txt` switch that turned out not to auto-enable on a first run; the mod was
+enabled from the in-game mod menu). Keys were sent to the running original game with
+scan-code input while the player's own character sat in Sanctuary; nothing was
+equipped, dropped or sorted permanently (sort was cycled and restored, transfers were
+cancelled with Escape). Screenshots, the action log with UTC timestamps and the 2,919
+function trace (`uitrace_20260930_164540.jsonl`, ~4 MB) stay under ignored `local/`.
+Observed, PC keyboard, no key held:
+
+- Weapon slots 1-4 are a vertical chain; Up at slot 1 and Down at the last slot do not wrap.
+- Down from slot 4 enters the shield (top-left of a 2x2 gear grid: shield / class mod over
+  grenade mod / relic). Up from the shield returns to slot 4. Right shield->class mod,
+  grenade mod->relic; Down shield->grenade mod, class mod->relic; Up grenade mod->shield;
+  Left class mod->shield and relic->grenade mod (later Left from grenade mod did nothing).
+- Right from a weapon slot or from the relic enters Backpack, on the remembered row.
+  Left from Backpack returns to the last selected equipped cell (slot 4 and relic seen),
+  not to the cell the selected item would occupy.
+- Backpack Up/Down are linear across category headers and continue through trailing
+  `[EMPTY]` cells to the last cell; neither end wraps. Empty cells show no item card.
+- PageDown cycles the backpack header ALL -> TYPES -> BRANDS -> ITEMS -> VALUE -> ALL;
+  PageUp runs it backwards. Groups are the movie's own sub-headers (weapon types,
+  manufacturers, item classes). The host's DEFAULT/NAME/RARITY/LEVEL/DAMAGE list is
+  therefore **not** stock and has not been replaced yet.
+- Enter on an equipped weapon opens a compare view: equipped card left, candidate card
+  right, backpack header `(COMPARE)`, non-weapon cells outlined red; Up/Down walk
+  candidates; Escape cancels to the same slot. Enter on a backpack weapon opens the
+  same view with Up/Down choosing the destination slot; Left/Right changed nothing.
+- F opens a full-screen Inspect with a large rotating gun and the card at top-left
+  (this port still uses a smaller host box); Escape returns to the same selection.
+
+Not observed and left as marked host guesses in `inventory.js` (`GEAR_NEIGHBOURS`):
+Up from the class mod and relic, Left from the shield, Right/Left in compare view, mouse
+hover/click, gamepad input, and behaviour with fewer than four unlocked weapon slots.
+Item names and stats in the screenshots belong to the player's save and must not be
+copied into the repository.
+
+Port changes from this: `navigateInventory` now follows the table above (no wrap, backpack
+Left uses `lastEquippedIndex`, backpack-origin swap clamps on Up/Down and ignores
+Left/Right). `tests/inventory_navigation_test.js` was rewritten to those observations:
+
+```text
+node tests/inventory_navigation_test.js
+17/17 navigation checks passed (traversal from original-game observation; UNVERIFIED cells noted in inventory.js)
+```
+
+Still open for 1:1: the stock sort list and grouping, trailing empty backpack cells, the
+full-screen Inspect, red-outlined ineligible cells in compare view, and everything mouse
+and controller. The in-engine action suite has not been rerun since this change.
+
+Worktree seed (this session): `tools/seed_inventory_demo.py` rolls 18 demo recipes,
+`tools/seed_inventory_assets.ps1` exports and imports Maya's Idle_Inventory (271 frames),
+the armed Rifle_Siren idle (381 frames), the menu look and the weapon meshes;
+`python tools/render_weapon_previews.py` and `tools/prepare_skill_tree.py` regenerate
+previews and the skill tree. Not restored: the original gear manifest and
+`observed_gear.json` (built from traces that no longer exist) and the Infinity proxy
+material, so gear steps of the action suite will not pass until they are rebuilt.

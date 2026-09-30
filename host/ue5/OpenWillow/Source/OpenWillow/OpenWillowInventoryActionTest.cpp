@@ -331,7 +331,10 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         {
             PrevSel.Reset();
             if (TSharedPtr<FJsonObject> Page = PageObject()) Page->TryGetStringField(TEXT("sel"), PrevSel);
-            PressKey(TEXT("ArrowDown"));
+            // Host navigation: Right walks the equipment cells, then enters
+            // Backpack; further Right presses there are no-ops. Eight covers
+            // every cell. Stock traversal is UNVERIFIED.
+            for (int32 i = 0; i < 8; ++i) PressKey(TEXT("ArrowRight"));
         },
         [this, Snapshot](FString& D)
         {
