@@ -1,5 +1,7 @@
 #include "OpenWillowInventoryActionTest.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowInventoryMayaDisplay.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowSkills.h"
@@ -174,6 +176,22 @@ void UOpenWillowInventoryActionTest::BuildSteps()
 
     // Tab is the primary key (the controller forwards it to Maya); I is exercised at the reopen step.
     Add(TEXT("open_inventory"), false, [this] { PressGameKey(EKeys::Tab); }, OpenVerify, 120.f);
+    Add(TEXT("maya_armed_idle_full_loop_framing"), false,
+        [this]
+        {
+            bMeasurePreviewLoop = true;
+            PreviewLoopSamples = 0;
+            PreviewHeadMin = FVector2D(1., 1.);
+            PreviewHeadMax = FVector2D(0., 0.);
+        },
+        [this](FString& D)
+        {
+            bMeasurePreviewLoop = false;
+            D = FString::Printf(TEXT("%d head samples over 13 s; normalized x %.3f..%.3f y %.3f..%.3f"),
+                PreviewLoopSamples, PreviewHeadMin.X, PreviewHeadMax.X, PreviewHeadMin.Y, PreviewHeadMax.Y);
+            return PreviewLoopSamples >= 100 && PreviewHeadMin.X >= .78 && PreviewHeadMax.X <= .98
+                && PreviewHeadMin.Y >= .10 && PreviewHeadMax.Y <= .40;
+        }, 18.f, false, 13.f);
 
     Add(TEXT("backpack_wheel_scrolls_one_row"), false,
         [this]
@@ -860,6 +878,30 @@ void UOpenWillowInventoryActionTest::TickComponent(float DeltaTime, ELevelTick T
     Hud = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
     if (!Walker || !PC || !Hud || !GetWorld()) return;
     const float Now = GetWorld()->GetRealTimeSeconds();
+    if (bMeasurePreviewLoop)
+    {
+        int32 Width = 0, Height = 0;
+        PC->GetViewportSize(Width, Height);
+        for (TActorIterator<AOpenWillowInventoryMayaDisplay> It(GetWorld()); It; ++It)
+        {
+            TArray<USkeletalMeshComponent*> Parts;
+            It->GetComponents(Parts);
+            for (USkeletalMeshComponent* Part : Parts)
+            {
+                if (Part->GetFName() != TEXT("MayaBody") || !Part->DoesSocketExist(TEXT("Head"))) continue;
+                FVector2D Screen;
+                if (Width > 0 && Height > 0 && PC->ProjectWorldLocationToScreen(Part->GetBoneLocation(TEXT("Head")), Screen))
+                {
+                    Screen /= FVector2D(Width, Height);
+                    PreviewHeadMin.X = FMath::Min(PreviewHeadMin.X, Screen.X);
+                    PreviewHeadMin.Y = FMath::Min(PreviewHeadMin.Y, Screen.Y);
+                    PreviewHeadMax.X = FMath::Max(PreviewHeadMax.X, Screen.X);
+                    PreviewHeadMax.Y = FMath::Max(PreviewHeadMax.Y, Screen.Y);
+                    ++PreviewLoopSamples;
+                }
+            }
+        }
+    }
     if (!PendingScreenshot.IsEmpty() && Now >= ScreenshotAt)
     {
         FScreenshotRequest::RequestScreenshot(PendingScreenshot, true, false);

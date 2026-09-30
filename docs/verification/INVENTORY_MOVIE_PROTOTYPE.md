@@ -499,3 +499,20 @@ CTest **6/6** (21.64 s); all nine decoded byte/count/export comparisons match;
 JS syntax and diff checks pass. Screenshots/logs/assets remain ignored outputs.
 Maya's animated sway can move her behind the backpack; exact pose/framing over
 the whole idle and independent critic remain unverified. 1:1 is incomplete.
+
+### Full-loop preview framing (2026-09-30)
+
+No new exports or imports. Forward kinematics of the existing converted armed
+idle (381 frames / 30 fps) finds a stationary root; head lateral range is
+-10.16..11.69 cm, so the observed sway is authored. Default ScreenX .79 -> .86
+fits the default-Maya stock reference's right-side composition without removing
+that motion. Head anchor bounds are checked throughout a live 13-second loop.
+
+UE build 11.49 s; runtime **46/46 PASS**, log
+`local/inventory-actions/run-20260930-021751.log`. 2,110 projected Head-bone
+samples: normalized x **.806.. .906**, y **.319.. .360**. Fresh open and
+empty-target captures show face clear of backpack at sampled poses. CTest
+**6/6** (22.01 s); all nine package checks match; diff check passes.
+This is a head-anchor framing check, not proof of every silhouette/weapon
+pixel, every viewport aspect ratio or original-game full-cycle pose parity.
+No independent critic; the full menu goal remains incomplete.

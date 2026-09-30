@@ -998,3 +998,8 @@ with its number, Up/Down keys or cell click, then E/Enter to confirm. Gear targe
 its matching slot. Escape cancels while keeping the source selected. An empty
 destination offers Equip, an occupied destination Swap. These flows reuse the
 host's equip validation; exact stock grid traversal remains unverified.
+
+Maya's default inventory ScreenX anchor is .86. The action runner samples her
+live Head bone for 13 seconds (a full armed idle loop) and reports normalized
+bounds. This checks head-anchor framing at the test viewport; full silhouette,
+weapon clipping and exact stock pose remain separately unverified.

@@ -43,7 +43,7 @@ public:
     // Distance from the camera to Maya, cm.
     UPROPERTY(EditAnywhere, Config, Category = "Framing") float DistanceCm = 300.f;
     // Where Maya's centre line lands horizontally (0 = left edge, 1 = right).
-    UPROPERTY(EditAnywhere, Config, Category = "Framing") float ScreenX = 0.79f;
+    UPROPERTY(EditAnywhere, Config, Category = "Framing") float ScreenX = 0.86f;
     // Where the top of her head lands vertically (0 = top edge). The rest of
     // her extends below the bottom of the frame, like the real screen.
     UPROPERTY(EditAnywhere, Config, Category = "Framing") float HeadTopScreenY = 0.16f;

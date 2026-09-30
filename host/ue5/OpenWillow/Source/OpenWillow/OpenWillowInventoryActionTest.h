@@ -84,4 +84,7 @@ private:
     int32 CountBefore = 0, PickupAttemptsBefore = 0;
     TArray<FString> FillerIds;
     TArray<FString> VisibleBeforeScroll;
+    bool bMeasurePreviewLoop = false;
+    int32 PreviewLoopSamples = 0;
+    FVector2D PreviewHeadMin, PreviewHeadMax;
 };
