@@ -572,3 +572,16 @@ The early comparison screenshot includes Preparing Shaders (2), so it does
 not verify final batch appearance. CTest 6/6 (20.95 s); nine package checks
 match; syntax/diff and 14 complete input validations pass. Null pattern
 negative check rejected. No general shader parity or all-weapon claim.
+
+### Maya hold-reference audit (2026-09-30)
+
+`audit_maya_menu_pose.py` validates reflected AnimSetList object typing and local
+AnimSet reference identity through the existing package CLI. Nine holds / zero
+trailing property bytes / eight unsupported WeaponActions. Five weapon classes
+reference Rifle_Siren; launcher references RocketLauncher_Siren, unarmed
+Unarmed_Siren. This establishes set references, not menu action selection/IK.
+UModel 1590 launcher export: .086 s, 9 MD5 clips / 357936 bytes, no duplicates
+or failures, no Idle_Inventory. UModel hold-definition dump is unsupported
+(Unknown class, .114 s); exit 0 does not mean success. Payloads stay ignored.
+CTest 6/6 (8.57 s), nine package checks match, syntax/diff pass. Native pipe
+recheck still explicitly unavailable. No runtime change or new engine capture.

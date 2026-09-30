@@ -1033,3 +1033,15 @@ pattern placement and original Master_Gun lighting remain unverified.
 more than one. The UE importer accepts either form. Inputs are validated before
 preparation writes its output; unsupported pattern inputs fail rather than
 silently choosing a substitute. Keep existing Infinity paint imports separate.
+
+Audit Maya's third-person hold references without changing the package decoder:
+
+```powershell
+python tools/audit_maya_menu_pose.py --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --output local/character/anim/hold-reference-audit.json
+```
+
+The script checks the reflected AnimSetList inner property type, supplies that
+metadata to the existing CLI, and validates local reference identity/class.
+It retains unsupported WeaponActions explicitly. Shared Rifle_Siren references
+do not by themselves prove inventory action selection or IK behaviour.
