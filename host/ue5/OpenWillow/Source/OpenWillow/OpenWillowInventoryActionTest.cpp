@@ -205,6 +205,49 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             D = TEXT("Escape closed inspect and kept inventory open"); return true;
         });
 
+    Add(TEXT("equipped_enter_starts_transfer"), false,
+        [this] { PressKey(TEXT("Enter")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Source, Compare, Selected;
+            if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source)
+                || !Page->TryGetStringField(TEXT("compare"), Compare)
+                || !Page->TryGetStringField(TEXT("sel"), Selected)
+                || Source != HostSlotId(0) || Compare != Source || Selected == Source || HostEquipped(Selected))
+            { D = TEXT("equipped Enter did not open a backpack transfer comparison"); return false; }
+            D = TEXT("equipped Enter selected a backpack candidate and preserved equipped comparison"); return true;
+        });
+    Add(TEXT("transfer_selection_preserves_full_size_cards"), false,
+        [this] { PressKey(TEXT("ArrowDown")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Source, Compare;
+            const TSharedPtr<FJsonObject>* Main = nullptr;
+            const TSharedPtr<FJsonObject>* Other = nullptr;
+            double MainMin = 0, MainMax = 0, OtherMin = 0, OtherMax = 0;
+            bool ValuesVisible = false;
+            if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source)
+                || !Page->TryGetStringField(TEXT("compare"), Compare) || Source != HostSlotId(0) || Compare != Source
+                || !Page->TryGetObjectField(TEXT("mainCardBounds"), Main) || !Page->TryGetObjectField(TEXT("compareCardBounds"), Other)
+                || !(*Main)->TryGetNumberField(TEXT("xMin"), MainMin) || !(*Main)->TryGetNumberField(TEXT("xMax"), MainMax)
+                || !(*Other)->TryGetNumberField(TEXT("xMin"), OtherMin) || !(*Other)->TryGetNumberField(TEXT("xMax"), OtherMax)
+                || MainMax-MainMin < 230 || OtherMax-OtherMin < 230
+                || !Page->TryGetBoolField(TEXT("compareStatsVisible"), ValuesVisible) || !ValuesVisible)
+            { D = TEXT("selection lost the source comparison or shrank its cards"); return false; }
+            D = FString::Printf(TEXT("source preserved; card widths %.1f / %.1f"), MainMax-MainMin, OtherMax-OtherMin); return true;
+        });
+    Add(TEXT("transfer_escape_returns_equipped"), false,
+        [this] { PressKey(TEXT("Escape")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Selected;
+            if (!Page || !Page->TryGetStringField(TEXT("sel"), Selected) || Selected != HostSlotId(0)
+                || !Hud->IsInventoryOpen()) { D = TEXT("transfer Escape did not restore equipped selection"); return false; }
+            D = TEXT("Escape cancelled transfer and restored equipped selection without closing inventory"); return true;
+        });
     Add(TEXT("select_backpack_weapon"), false,
         [this]
         {
@@ -617,6 +660,7 @@ void UOpenWillowInventoryActionTest::FinishStep(bool bOk, const FString& Detail)
     if (bOk && FParse::Param(FCommandLine::Get(), TEXT("owinventoryshots"))
         && (Step.Name == TEXT("open_inventory") || Step.Name == TEXT("gear_equip_shield")
             || Step.Name == TEXT("inspect_weapon") || Step.Name == TEXT("inspect_rotate_weapon")
+            || Step.Name == TEXT("transfer_selection_preserves_full_size_cards")
             || Step.Name == TEXT("close_inventory_final")))
     {
         // A page report can precede CEF's composited pixels. Hold the current

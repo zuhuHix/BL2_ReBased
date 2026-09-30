@@ -355,3 +355,28 @@ and stock focus/swap/sort behaviour remain approximate, Inspect occupies a
 temporary host box, gear meshes are unresolved, and character/weapon shaders
 are heuristic. Continuous readback latency and arbitrary stencil occlusion
 are unverified. Historical critic score **5.5/10** is unchanged.
+
+### Equipped transfer and stock comparison follow-up
+
+Runtime: `local/inventory-actions/run-20260930-011746.log`, **35/35 PASS**;
+same command/Slate route as above. Added equipped Enter opening transfer,
+selection preserving the source and full-size cards, Escape cancelling without
+closing. First-stat fields are asserted visible after the native tween.
+Widths measured 268.1 / 289.6 in root bounds. The settled
+`OWInventory_transfer_selection_preserves_full_size_cards.png` shows both
+numeric stat/delta columns and large cards over the panels. HTML category
+arrows are now hidden when covered; that final CSS-only change was checked
+through the existing occlusion path, without another engine build.
+
+Recorded card positions/scales and panel tweens replace the 55% host layout.
+The source/candidate roles follow the observed left-origin transfer. Visual
+comparison uses the third-party stock/controller capture at
+https://www.thatgamesux.com/borderlands-2-can-there-be-too-much-loot
+(ignored `local/ui/ref/inventory_compare_real.jpg`), not a matched Maya session.
+Browser Enter/Down/E verified persistent source and the correct equip request;
+runtime host equip validation remains covered by the full suite.
+
+UE build succeeded; node syntax and diff checks passed; CTest **6/6**, 8.47 s;
+all nine package checks match the byte/export counts listed above. 1:1 panel
+projection, backpack-origin focus flow, original Inspect layout, unresolved
+gear meshes and material parity remain unverified. No independent critic run.

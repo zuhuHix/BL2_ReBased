@@ -724,6 +724,11 @@ It is a prototype: see DECISIONS.md for what is driven and what is not.
 The BL2-style StatusMenu Inventory movie is enabled by default; press **Tab**
 (or **I**) for Inventory and **K** for Skills; the header tabs and the K/I keys switch between the two pages. Pass `-NoInventoryMovie` only to use the
 fallback host inventory panel.
+Enter or E on an equipped item starts a transfer comparison with compatible
+backpack items. Move through candidates, then E or Enter to swap; Escape
+cancels back to the equipped item. Backpack Enter remains a direct equip
+shortcut. Comparison uses recorded movie card positions/scales and panel
+tweens; numeric fields are restored after the unsupported native tween callback.
 Weapon cells use static mesh previews generated from the locally exported
 UModel glTF meshes. If those ignored previews are absent, run
 `python tools/render_weapon_previews.py` to create them under

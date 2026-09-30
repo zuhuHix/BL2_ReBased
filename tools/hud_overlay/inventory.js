@@ -33,17 +33,10 @@ const sortModes = [
   {key:'level', label:'LEVEL'},
   {key:'damage', label:'DAMAGE'}
 ];
-// SetComparingTweenInfo(TT, MCLX,MCLY,MCLZ, MCRX,MCRY,MCRZ, CCLX,CCLY,CCLZ, CCRX,CCRY,CCRZ, MCSL,MCSR,
-// CCSL,CCSR) (signature from the converted movie). Observed in the local game trace: duration 0.2, the
-// main/compare card positions and 75/81/81/75 scales. The compare-active slots (main card "R", compare
-// card "R") are host-chosen: the trace put the selected card over the Equipped list, so here the
-// equipped item's card (compare, left) and the selected item's card (main, right) sit side by side in
-// the free area left of the Equipped panel at 55% scale. Measured in the bench at 1280x720: the
-// compare card's bounds (tick included) start at x=8+ and the main card's bkgd ends at x=~372, left
-// of the Equipped frame (x~378); the y values are the trace's. The scale is smaller than the traced 62
-// only so that both cards fit; stacking them vertically was not done because the card height grows
-// with the flavour text. Not a parity claim.
-const compareTween = [0.2,-355,-150,500,-286,-150,500,-300,-145,500,-466,-150,500,75,55,81,55];
+// Recorded stock card positions/scales. The stock comparison capture confirms
+// that full-size cards intentionally overlay the upper equipment panels.
+// All positions are movie-local; Ruffle still lacks the original 3D projection.
+const compareTween = [0.2,-355,-150,500,-30,-145,500,-30,-145,500,-355,-150,500,75,81,81,75];
 const comparePanelTweens = [
   ['Equipped',0.2,53,-25,0,-176,-25,-10000,-30,-25,-2650],
   ['Backpack',0.2,64,-45,-300,385,-70,-4950,390,-43,-2650]
@@ -108,6 +101,9 @@ const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, page = 0;
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
+let transferSourceId = null;
+let transferCategoryBefore = 0;
+let compareStartedFromLeft = false;
 let headerPending = false, headerSerial = 0, headerName = '';
 let inspectMode = false;
 let inspectItemId = null, inspectYaw = 0, inspectPitch = 0, inspectImage = '', inspectFrameCount = 0;
@@ -236,13 +232,14 @@ window.owInventory = snapshot => {
   if (serial === lastState) return;
   lastState = serial;
   state = snapshot;
+  if (transferSourceId && !equippedIds().has(transferSourceId)) transferSourceId = null;
   if (firstSnapshot && Number.isInteger(state.activeSlot) && state.activeSlot >= 0 && state.activeSlot < 4)
     targetSlot = state.activeSlot;
   if (!Number.isInteger(targetSlot) || targetSlot < 0 || targetSlot >= slotsUnlocked())
     targetSlot = firstOpenSlot(state.activeSlot);
   if (!itemById(selectedId)) {
     const heldId = state.slots[targetSlot];
-    selectedId = itemById(heldId)?.id || backpackItems()[0]?.id || null;
+    selectedId = transferSourceId ? backpackItems()[0]?.id || null : itemById(heldId)?.id || backpackItems()[0]?.id || null;
   }
   if (!itemById(compareId) || compareId === selectedId) compareId = null;
   if (ready) render();
@@ -327,7 +324,8 @@ dragLayer.addEventListener('drop', event => {
 
 function select(id) {
   if (!itemById(id) || selectedId === id) return;
-  if (selectedId !== id) compareId = null;
+  if (transferSourceId && equippedIds().has(id)) return;
+  if (selectedId !== id) compareId = transferSourceId;
   selectedId = id;
   targetGearSlot = gearSlotForItem(itemById(id));
   syncSelection();
@@ -336,16 +334,18 @@ function select(id) {
 
 function equip() {
   const item = itemById(selectedId);
+  if (item && equippedIds().has(item.id) && !transferSourceId) { beginEquippedTransfer(); return; }
   const levelAllowed = item?.levelKnown === false || item?.level === undefined
     || Number(item.level) <= Number(state.level);
   if (!item || !levelAllowed) return;
   const gearSlot = gearSlotForItem(item);
   if (gearSlot) {
-    if (state.gearSlots?.[gearSlot] !== item.id) requestAction('equip', {id:item.id, gearSlot});
+    if (state.gearSlots?.[gearSlot] !== item.id) { requestAction('equip', {id:item.id, gearSlot}); finishTransfer(); }
   } else if (slotLocked(targetSlot)) {
     return;
   } else if (state.slots[targetSlot] !== item.id) {
     requestAction('equip', {id:item.id, slot:targetSlot});
+    finishTransfer();
   }
 }
 
@@ -369,6 +369,8 @@ function toggleMark(action) {
 }
 
 function toggleCompare() {
+  if (transferSourceId) { equip(); return; }
+  if (!transferSourceId && equippedIds().has(selectedId)) { beginEquippedTransfer(); return; }
   const equippedId = equippedIdFor(itemById(selectedId));
   if (!equippedId || equippedId === selectedId || !itemById(selectedId)) {
     compareId = null;
@@ -376,6 +378,32 @@ function toggleCompare() {
     compareId = compareId === equippedId ? null : equippedId;
   }
   drawCard();
+}
+
+function beginEquippedTransfer() {
+  const source = itemById(selectedId);
+  if (!source || !equippedIds().has(source.id)) return;
+  const gearSlot = gearSlotForItem(source);
+  const candidates = (state.items || []).filter(item => !equippedIds().has(item.id)
+    && gearSlotForItem(item) === gearSlot);
+  if (!candidates.length) { announce('No compatible backpack items'); return; }
+  if (!gearSlot) targetSlot = state.slots.indexOf(source.id);
+  targetGearSlot = gearSlot;
+  transferSourceId = source.id;
+  transferCategoryBefore = categoryIndex;
+  compareId = source.id;
+  categoryIndex = categories.findIndex(category => category.key === (gearSlot || 'weapons'));
+  selectedId = candidates[0].id;
+  page = pageForSelected(backpackItems());
+  render();
+}
+function finishTransfer(cancel = false) {
+  if (!transferSourceId) return;
+  if (cancel && itemById(transferSourceId)) selectedId = transferSourceId;
+  transferSourceId = compareId = null;
+  categoryIndex = transferCategoryBefore;
+  page = pageForSelected(backpackItems());
+  if (ready) render();
 }
 
 function closeInventory() { location.href = '/__ow_close_inventory'; }
@@ -560,14 +588,17 @@ function statComparison(stat, otherStats) {
   return {arrow:better ? 'up' : 'down', delta:deltaText};
 }
 
-function setCompareLayout(active) {
-  if (compareLayoutActive === active) return;
+function setCompareLayout(active, fromLeft = false) {
+  if (compareLayoutActive === active && compareStartedFromLeft === fromLeft) return;
   compareLayoutActive = active;
-  // A backpack item is the selected/main card, so use the right-panel tween.
-  call(INV, 'TweenCards', active, false);
+  compareStartedFromLeft = fromLeft;
+  call(INV, 'TweenPanel', 'Equipped', true, active);
+  call(INV, 'TweenPanel', 'Backpack', !active, active);
+  call(INV, 'TweenCards', active, fromLeft);
 }
 
 const statMainX = new Map();
+const statVisibility = new Map();
 // Frame style: the movie's card background has three frames, named by SetBackgroundStyle (probed in
 // the bench: default, 'highlight' = yellow, 'compare' = green). The game trace calls
 // SetBackgroundStyle('highlight') on both cards while the menu opens, and both reference captures
@@ -585,6 +616,7 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
   call(card, 'TurnOffAllTopStats');
   const stats = cardStats(item), otherStats = cardStats(compareItem || {});
   for (let index=0; index<5; index++) {
+    for (const field of ['mainField', 'auxField', 'arrow']) statVisibility.set(`${card}.stat${index+1}.${field}`, false);
     set(`${card}.stat${index+1}.arrow`, '_visible', false);
     set(`${card}.stat${index+1}.auxField`, '_visible', false);
   }
@@ -597,6 +629,9 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     const row = `${card}.stat${index+1}`;
     text(`${row}.labelField`, stat.label, 14, 0xa4e8f3);
     text(`${row}.mainField`, formatted, 14);
+    statVisibility.set(`${row}.mainField`, true);
+    statVisibility.set(`${row}.auxField`, Boolean(delta));
+    statVisibility.set(`${row}.arrow`, compare?.arrow === 'up' || compare?.arrow === 'down');
     if (compare?.arrow === 'up' || compare?.arrow === 'down') set(`${row}.arrow`, '_visible', true);
     if (delta) set(`${row}.auxField`, '_visible', true);
     // The value and the delta are both right-aligned to the same edge, so with a delta showing
@@ -644,15 +679,17 @@ function fitFunStats(card, hasFunStats) {
 function drawCard() {
   const item = itemById(selectedId);
   const compare = compareId && compareId !== selectedId ? itemById(compareId) : null;
-  configureCard(INV + '.mainCard', item, compare);
-  configureCard(INV + '.compareCard', compare, item, 'compare');
-  setCompareLayout(Boolean(compare));
+  const fromLeft = Boolean(transferSourceId && compare);
+  configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : compare);
+  configureCard(INV + '.compareCard', fromLeft ? item : compare, fromLeft ? compare : item, 'compare');
+  setCompareLayout(Boolean(compare), fromLeft);
   const gearSlot = gearSlotForItem(item);
   const compareSlotLabel = gearSlot
     ? gearSlots.find(slot => slot.key === gearSlot)?.label || 'gear slot'
     : `slot ${targetSlot+1}`;
   // Match the observed stock tooltip line. Extra host keys remain available.
-  const hints = ['[E] Select/Compare', '[Q] Drop', '[Escape] Close', '[F] Inspect'].join('   ');
+  const hints = [transferSourceId ? '[E] Swap' : '[E] Select/Compare', '[Q] Drop',
+    transferSourceId ? '[Escape] Cancel' : '[Escape] Close', '[F] Inspect'].join('   ');
   text(ROOT + '.tooltips.tooltips', hints, 15, 0xa4e8f3, 'center');
   applyAmmoHighlight(item);
   // While the inspect panel is open it stands in for the selected card.
@@ -786,8 +823,8 @@ inspectSurface.addEventListener('pointerup', endInspectDrag);
 inspectSurface.addEventListener('pointercancel', endInspectDrag);
 
 // Hide the thumbnails and hit boxes of any cell a visible item card overlaps, so previews
-// never bleed over card text. With the compare layout the cards sit left of the Equipped
-// list and this hides nothing; it guards other card positions and animation frames.
+// never bleed over card text. Full-size stock comparisons intentionally cover
+// parts of both panels, including host category arrows and mark hit targets.
 function applyCardOcclusion() {
   const stage = document.getElementById('stage').getBoundingClientRect();
   const scale = stage.width / 1280;
@@ -823,7 +860,7 @@ function moveSelection(delta) {
   if (index < 0) index = 0;
   index = Math.max(0, Math.min(rows.length-1, index + delta));
   selectedId = rows[index].id;
-  compareId = null;
+  compareId = transferSourceId;
   const nextPage = Math.floor(index/PAGE_SIZE);
   if (nextPage !== page) { page = nextPage; render(); focusItem(selectedId); }
   else { syncSelection(); drawCard(); }
@@ -886,6 +923,10 @@ function applyStatus() {
 // these are re-applied on every layout poll and not only inside render().
 function applyMovieVisibility() {
   if (!state) return;
+  // The stock tween temporarily hides values; its native completion callback
+  // is absent here. Restore the fields populated from the current snapshot.
+  for (const [path, visible] of statVisibility)
+    if (get(path, '_visible') !== visible) set(path, '_visible', visible);
   const hasMoney = displayCount(state.money) !== null, hasEridium = displayCount(state.eridium) !== null;
   set(INV+'.ammo', '_visible', hasAmmoField());
   set(INV+'.currencyPanel', '_visible', hasMoney || hasEridium);
@@ -1138,6 +1179,7 @@ function handleKey(event) {
     return;
   }
   if (key === 'escape' && inspectMode) { event.preventDefault(); toggleInspect(); }
+  else if (key === 'escape' && transferSourceId) { event.preventDefault(); finishTransfer(true); syncSelection(); }
   else if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
   else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); setTargetSlot(Number(event.key)-1); }

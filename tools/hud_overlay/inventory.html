@@ -23,8 +23,7 @@ ruffle-player{display:block;width:100%;height:100%;
 .cell:focus-visible{outline:2px solid #ffe25b}
 .cell.tab-current{cursor:default}.cell:disabled{cursor:not-allowed}
 /* A visible item card overlaps this cell: its thumbnail must not bleed over the card text. */
-.cell.covered{pointer-events:none}
-.cell.covered img,.cell.covered svg,.cell.covered .mark{visibility:hidden}
+.cell.covered{pointer-events:none;visibility:hidden}
 .cell.chevron{display:grid;place-items:center;padding:0;color:#a4e8f3;font:bold 26px/1 Arial;
  background:rgba(8,24,39,.55);border:1px solid #59dced;border-radius:3px}
 .cell.chevron:hover{background:rgba(25,186,211,.45);color:#fff}
