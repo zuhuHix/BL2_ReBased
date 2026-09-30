@@ -8,12 +8,17 @@ import json
 import os
 import sys
 
-# Paths where a wrong assumption cascades. Editing prompts for confirmation.
-SENSITIVE = {
+# Paths where a wrong assumption cascades.
+#  - EDIT_THEN_WARN: the maintainer (2026-09-30) allows editing these freely; the assistant must
+#    say so plainly in its final message (what changed, what is verified vs UNVERIFIED).
+#  - ASK: license/provenance files stay a maintainer decision and still prompt.
+EDIT_THEN_WARN = {
     "src/package.cpp": "binary reader / bounds checks (Reader, require(), limit)",
     "src/container.cpp": "LZO container decoding and size validation",
     "src/container.hpp": "container interface",
-    "CMakeLists.txt": "build + GPL dependency wiring",
+    "CMakeLists.txt": "build + dependency wiring",
+}
+ASK = {
     "THIRD_PARTY.md": "provenance and license record",
     "LICENSE*": "project license is MIT; changing it is a maintainer decision",
     "COPYING*": "project license is MIT; changing it is a maintainer decision",
@@ -57,12 +62,19 @@ for pat in FORBIDDEN:
             "(docs/LEGAL.md). Fixtures must be synthetic.",
             f"BLOCKED: attempted to write game asset file {rel}")
 
-for pat, why in SENSITIVE.items():
+for pat, why in EDIT_THEN_WARN.items():
+    if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(base, pat):
+        out("allow",
+            f"SENSITIVE AREA (edit allowed): '{rel}' - {why}. Never loosen a bounds check to make "
+            "something work, keep ctest + tools/verify_packages.py green, add a DECISIONS.md entry "
+            "if parsing behavior changes, and WARN THE MAINTAINER in the final message that this "
+            "file was touched (what changed, what is verified vs UNVERIFIED).",
+            f"Sensitive file edited: {rel} ({why}); report it at the end.")
+
+for pat, why in ASK.items():
     if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(base, pat):
         out("ask",
-            f"SENSITIVE AREA: '{rel}' — {why}. Before editing: state what is verified vs "
-            "UNVERIFIED, keep bounds checks intact, run ctest + tools/verify_packages.py, "
-            "and add a DECISIONS.md entry if parsing behavior changes.",
-            f"⚠ Sensitive file: {rel} — {why}. Review this edit carefully.")
+            f"SENSITIVE AREA: '{rel}' - {why}. Maintainer confirmation required.",
+            f"Sensitive file: {rel} - {why}. Review this edit carefully.")
 
 sys.exit(0)

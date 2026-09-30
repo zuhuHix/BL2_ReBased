@@ -48,6 +48,14 @@ When asked to work on a new asset or game-system capability:
 9. Preserve clean-room boundaries, licenses and parser safety rules. Never
    loosen bounds checks or invent serialization offsets.
 
+## Sensitive files
+
+Since 2026-09-30 you may edit `src/package.cpp`, `src/container.*` and `CMakeLists.txt` without
+asking first. Afterwards tell the maintainer, in your final message, which of them you touched,
+what changed and what is verified versus `UNVERIFIED`. Never loosen a bounds check; keep `ctest`
+and `tools/verify_packages.py` green. `THIRD_PARTY.md`, `LICENSE` and dependency/license
+decisions still need the maintainer. Details in `CLAUDE.md`.
+
 ## Current priority
 
 The current priority is a pipeline proof of concept: one end-to-end playable
@@ -82,8 +90,8 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   start of the sort list is on branch `t3code/wip-inventory-sort-list`.
 - **Phase 2 (script VM):** started 2026-09-30. `research/script_disasm.py` (Python, read-only)
   decodes 12,968 of 12,978 script functions exactly; record in
-  `docs/verification/SCRIPT_BYTECODE_DISASM.md`. Next: C++ port in `src/` (needs maintainer
-  confirmation, it touches `CMakeLists.txt`), object model, interpreter. Finding to remember:
+  `docs/verification/SCRIPT_BYTECODE_DISASM.md`. Next: C++ port in `src/`, object model,
+  interpreter (the maintainer authorised touching `package.cpp`/`CMakeLists.txt` for this). Finding to remember:
   the inventory sort logic is **native** code, but menu navigation/equip logic is readable script.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the

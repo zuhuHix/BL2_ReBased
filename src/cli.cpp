@@ -1,5 +1,7 @@
 #include "assets.hpp"
 #include "natives.hpp"
+#include "script.hpp"
+#include "vm.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -15,7 +17,9 @@ void usage() {
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
-        "[--all-mips <directory>]] | --native <name> [--native-args <args>] | --native-selftest");
+        "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
+        "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
+        "--native <name> [--native-args <args>] | --native-selftest");
 }
 
 int32_t signedNumber(const std::string& value) {
@@ -222,6 +226,135 @@ int main(int argc, char** argv) {
             std::cout << "{\"version\":832,\"licensee\":46,\"names\":" << package->names.size()
                       << ",\"imports\":" << package->imports.size()
                       << ",\"exports\":" << package->exports.size() << "}\n";
+            return 0;
+        }
+
+        if (mode == "--script-check") {
+            // Structural validation of every script function (research/script_disasm.py --check).
+            const bool listFailures = argc == 4 && std::string(argv[3]) == "--failures";
+            if (argc != 3 && !listFailures) usage();
+            const auto result = script::checkPackage(*package);
+            std::cout << "{\"package\":" << quote(package->packageName) << ",\"functions\":" << result.functions
+                      << ",\"native\":" << result.native << ",\"script\":" << result.functions - result.native
+                      << ",\"decoded\":" << result.decoded << ",\"failed\":" << result.failures.size();
+            if (listFailures) {
+                std::cout << ",\"failures\":[";
+                for (size_t i = 0; i < result.failures.size(); ++i)
+                    std::cout << (i ? "," : "") << quote(result.failures[i]);
+                std::cout << ']';
+            }
+            std::cout << "}\n";
+            return 0;
+        }
+
+        if (mode == "--run") {
+            // Runs one script function on the VM and prints its result and log (Phase 2; see docs/verification).
+            std::string functionPath, selfClass;
+            std::filesystem::path cooked;
+            std::vector<vm::Value> values;
+            struct PendingStruct { size_t slot; std::string type; std::vector<std::string> fields; };
+            std::vector<PendingStruct> pendingStructs;
+            for (int i = 3; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--run" || option == "--disasm") continue;
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--self") selfClass = nextValue(i, argc, argv, "--self");
+                else if (option == "--arg") {
+                    const std::string text = nextValue(i, argc, argv, "--arg");
+                    const auto colon = text.find(':');
+                    if (colon == std::string::npos) usage();
+                    const auto kind = text.substr(0, colon), body = text.substr(colon + 1);
+                    const auto split = [](const std::string& list) {
+                        std::vector<std::string> parts;
+                        size_t from = 0;
+                        while (from <= list.size()) {
+                            const auto comma = list.find(',', from);
+                            parts.push_back(list.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
+                            if (comma == std::string::npos) break;
+                            from = comma + 1;
+                        }
+                        return parts;
+                    };
+                    if (kind == "i") values.push_back(vm::Value::makeInt(std::stoll(body)));
+                    else if (kind == "f") values.push_back(vm::Value::makeFloat(std::stod(body)));
+                    else if (kind == "b") values.push_back(vm::Value::makeBool(body == "true" || body == "1"));
+                    else if (kind == "y") values.push_back(vm::Value::makeByte(std::stoll(body)));
+                    else if (kind == "s") values.push_back(vm::Value::makeString(body));
+                    else if (kind == "n") values.push_back(vm::Value::makeName(body));
+                    else if (kind == "as" || kind == "ai" || kind == "af") {
+                        vm::Value array = vm::Value::makeArray();
+                        for (const auto& part : split(body)) {
+                            if (kind == "as") array.elements().push_back(vm::Value::makeString(part));
+                            else if (kind == "ai") array.elements().push_back(vm::Value::makeInt(std::stoll(part)));
+                            else array.elements().push_back(vm::Value::makeFloat(std::stod(part)));
+                        }
+                        values.push_back(std::move(array));
+                    } else if (kind == "v" || kind == "r") {
+                        // v:x,y,z vector; r:pitch,yaw,roll rotator
+                        const auto parts = split(body);
+                        if (parts.size() != 3) usage();
+                        pendingStructs.push_back({values.size(), kind == "v" ? "Vector" : "Rotator", parts});
+                        values.push_back(vm::Value());
+                    } else if (kind == "st") {
+                        // st:Package.Struct:Field=value,Field=value (values are numbers)
+                        const auto second = body.find(':');
+                        if (second == std::string::npos) usage();
+                        pendingStructs.push_back({values.size(), body.substr(0, second), split(body.substr(second + 1))});
+                        values.push_back(vm::Value());
+                    } else usage();
+                } else if (functionPath.empty()) functionPath = option;
+                else usage();
+            }
+            if (functionPath.empty() || cooked.empty()) usage();
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::ObjectPtr self;
+            if (!selfClass.empty()) self = runtime.instantiate(runtime.findClass(selfClass));
+            auto* function = runtime.findFunction(functionPath);
+            for (const auto& pending : pendingStructs) {
+                const bool native = pending.type == "Vector" || pending.type == "Rotator";
+                vm::Value value = native ? runtime.zeroStruct(pending.type) : runtime.newStruct(pending.type);
+                for (size_t f = 0; f < pending.fields.size(); ++f) {
+                    const auto& text = pending.fields[f];
+                    if (native) {
+                        if (f < 3) value.mut().values[f] = pending.type == "Vector" ? vm::Value::makeFloat(std::stod(text))
+                                                                                     : vm::Value::makeInt(std::stoll(text));
+                        continue;
+                    }
+                    const auto equal = text.find('=');
+                    vm::Value* slot = equal == std::string::npos ? nullptr : value.field(text.substr(0, equal));
+                    if (!slot) throw std::runtime_error("unknown struct field in --arg: " + text);
+                    const auto number = text.substr(equal + 1);
+                    if (slot->kind == vm::Value::Kind::Int) *slot = vm::Value::makeInt(std::stoll(number));
+                    else if (slot->kind == vm::Value::Kind::Byte) *slot = vm::Value::makeByte(std::stoll(number));
+                    else if (slot->kind == vm::Value::Kind::Bool) *slot = vm::Value::makeBool(number == "true" || number == "1");
+                    else *slot = vm::Value::makeFloat(std::stod(number));
+                }
+                values[pending.slot] = std::move(value);
+            }
+            std::string result, error;
+            std::vector<vm::Value> outs;
+            try { result = runtime.call(*function, self, values, &outs).describe(); }
+            catch (const std::exception& problem) { error = problem.what(); }
+            std::cout << "{\"function\":" << quote(function->path) << ",\"result\":" << (error.empty() ? quote(result) : "null")
+                      << ",\"error\":" << (error.empty() ? "null" : quote(error)) << ",\"steps\":" << runtime.steps << ",\"args\":[";
+            for (size_t i = 0; i < outs.size(); ++i) std::cout << (i ? "," : "") << quote(outs[i].describe());
+            std::cout << "],\"log\":[";
+            for (size_t i = 0; i < runtime.log.size(); ++i) std::cout << (i ? "," : "") << quote(runtime.log[i]);
+            std::cout << "]}\n";
+            return error.empty() ? 0 : 1;
+        }
+
+        if (mode == "--disasm") {
+            if (argc != 4) usage();
+            const std::string target = argv[3];
+            int32_t index = 0;
+            if (target.find_first_not_of("0123456789") == std::string::npos) index = signedNumber(target);
+            else index = package->findExport(target);
+            if (!index) throw std::runtime_error("function not found: " + target);
+            const auto info = script::readFunction(*package, index);
+            std::cout << script::disassemble(*package, info, script::decode(*package, info));
             return 0;
         }
 
