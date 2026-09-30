@@ -776,12 +776,23 @@ python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBod
 $env:OPENWILLOW_CHARACTER_REFERENCE=''; $env:OPENWILLOW_CHARACTER_ANIMS='Body=local/character/anim/siren_body.json'
 UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
 UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_menu_look.py -unattended -nullrhi
+# 4. Armed inventory pose, from the already exported Rifle_Siren AnimSet
+# Use the Python environment with numpy installed. Paths passed to the UE
+# commandlet must be absolute because its working directory differs.
+python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBody.md5mesh --reference local/character/anim/body_ref_pose.json --animset <...>/AnimSet/Rifle_Siren --clips Idle_Inventory --output local/character/anim/siren_body_inventory_rifle.json
+$env:OPENWILLOW_CHARACTER_ANIMS="InventoryRifle=$pwd/local/character/anim/siren_body_inventory_rifle.json"
+UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
 ```
 
 Framing, clip and outline width are `Config=Game` properties of
 `AOpenWillowInventoryMayaDisplay` (`[/Script/OpenWillow.OpenWillowInventoryMayaDisplay]`
 in `DefaultGame.ini`). Without the clip Maya shows in bind pose; without the
 outline material she has no ink line.
+The selected inventory instance is resolved by the host to its recipe mesh;
+weapons use the armed clip and attach to `R_Weapon_Bone`, gear returns to the
+unarmed clip. Missing armed clip/mesh leaves the weapon hidden. The armed clip
+is currently shared by weapon types: exact hold-definition/launcher differences
+remain unverified. The display gun/outline also use stencil 247.
 
 The same menu-look script creates `M_OW_MenuBackdrop`. Renderer setting
 `r.CustomDepth=3` enables its stencil mask; the display reserves stencil 247

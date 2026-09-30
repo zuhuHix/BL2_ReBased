@@ -104,6 +104,14 @@ let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = fa
 let transferSourceId = null;
 let transferCategoryBefore = 0;
 let compareStartedFromLeft = false;
+let lastMenuPreviewId = null;
+window.owRefreshMenuPreview = () => {
+  lastMenuPreviewId = null;
+  inspectMode = false;
+  inspectPointer = null;
+  if (transferSourceId) finishTransfer(true);
+  if (ready && state) drawCard();
+};
 let headerPending = false, headerSerial = 0, headerName = '';
 let inspectMode = false;
 let inspectItemId = null, inspectYaw = 0, inspectPitch = 0, inspectImage = '', inspectFrameCount = 0;
@@ -678,6 +686,11 @@ function fitFunStats(card, hasFunStats) {
 
 function drawCard() {
   const item = itemById(selectedId);
+  const previewId = item?.id || '';
+  if (lastMenuPreviewId !== previewId) {
+    lastMenuPreviewId = previewId;
+    console.log('OWMENUPREVIEW ' + JSON.stringify({id:previewId}));
+  }
   const compare = compareId && compareId !== selectedId ? itemById(compareId) : null;
   const fromLeft = Boolean(transferSourceId && compare);
   configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : compare);

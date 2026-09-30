@@ -62,6 +62,8 @@ private:
     UPROPERTY() TObjectPtr<AOpenWillowInventoryMayaDisplay> InventoryMayaDisplay;
     UPROPERTY() TObjectPtr<AOpenWillowInventoryPreviewActor> InspectActor;
     FString PendingInspectRequest;
+    FString PendingMenuPreviewId;
+    bool bMenuPreviewRequested = false;
     double NextInspectFrame = 0;
     TArray<FString> PendingInventoryActions;
     FInventoryActionRecord LastAction;

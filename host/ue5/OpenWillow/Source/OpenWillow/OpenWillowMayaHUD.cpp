@@ -176,6 +176,7 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         SkillsRoot = SNew(SBox)[SkillsBrowser.ToSharedRef()];
         GEngine->GameViewport->AddViewportWidgetContent(SkillsRoot.ToSharedRef(), 20);
     }
+    if (bInventory) SkillsBrowser->ExecuteJavascript(TEXT("window.owRefreshMenuPreview && window.owRefreshMenuPreview()"));
     if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::Collapsed);
     FInputModeUIOnly Mode;
     Mode.SetWidgetToFocus(SkillsBrowser.ToSharedRef());
@@ -224,6 +225,7 @@ void AOpenWillowMayaHUD::CloseSkills()
     if (IsValid(InspectActor)) InspectActor->Destroy();
     InspectActor = nullptr;
     PendingInspectRequest.Reset();
+    bMenuPreviewRequested = false;
     if (bInventoryOpen)
     {
         if (AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr)
@@ -255,6 +257,13 @@ void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
 {
     if (bInventoryOpen)
     {
+        if (Message.StartsWith(TEXT("OWMENUPREVIEW "), ESearchCase::CaseSensitive) && Message.Len() <= 1024)
+        {
+            TSharedPtr<FJsonObject> Request;
+            if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Message.Mid(14)), Request) && Request
+                && Request->TryGetStringField(TEXT("id"), PendingMenuPreviewId)) bMenuPreviewRequested = true;
+            return;
+        }
         if (Message.StartsWith(TEXT("OWINSPECT "), ESearchCase::CaseSensitive))
         {
             if (Message.Len() <= 1024) PendingInspectRequest = Message.Mid(10);
@@ -472,6 +481,14 @@ void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
 void AOpenWillowMayaHUD::DrawHUD()
 {
     Super::DrawHUD();
+    if (bInventoryOpen && bMenuPreviewRequested && IsValid(InventoryMayaDisplay))
+    {
+        bMenuPreviewRequested = false;
+        const AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;
+        const UOpenWillowInventory* Inventory = Maya ? Maya->GetInventory() : nullptr;
+        const FOpenWillowWeaponItem* Item = Inventory ? Inventory->FindItemById(PendingMenuPreviewId) : nullptr;
+        InventoryMayaDisplay->SetPreviewWeapon(Item ? Item->Id : FString());
+    }
     if (SkillsBrowser && bInventoryOpen && !PendingInspectRequest.IsEmpty()
         && GetWorld()->GetRealTimeSeconds() >= NextInspectFrame)
     {

@@ -51,7 +51,11 @@ AOpenWillowInventoryMayaDisplay::AOpenWillowInventoryMayaDisplay()
     BodyOutline->SetupAttachment(SceneRoot);
     HeadOutline = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("MayaHeadOutline"));
     HeadOutline->SetupAttachment(SceneRoot);
-    for (USkeletalMeshComponent* Part : {Body.Get(), Head.Get(), BodyOutline.Get(), HeadOutline.Get()})
+    Weapon = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("MenuWeapon"));
+    Weapon->SetupAttachment(Body, TEXT("R_Weapon_Bone"));
+    WeaponOutline = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("MenuWeaponOutline"));
+    WeaponOutline->SetupAttachment(Body, TEXT("R_Weapon_Bone"));
+    for (USkeletalMeshComponent* Part : {Body.Get(), Head.Get(), BodyOutline.Get(), HeadOutline.Get(), Weapon.Get(), WeaponOutline.Get()})
     {
         Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         Part->SetGenerateOverlapEvents(false);
@@ -68,6 +72,30 @@ AOpenWillowInventoryMayaDisplay::AOpenWillowInventoryMayaDisplay()
     Backdrop->BlendWeight = 1.f;
     KeyLight = MakeMayaOnlyLight(this, SceneRoot, TEXT("MayaKeyLight"), 2);
     RimLight = MakeMayaOnlyLight(this, SceneRoot, TEXT("MayaRimLight"), 1);
+}
+
+void AOpenWillowInventoryMayaDisplay::SetPreviewWeapon(const FString& RecipeId)
+{
+    if (PreviewRecipeId == RecipeId || !bHasMeshes) return;
+    PreviewRecipeId = RecipeId;
+    USkeletalMesh* Mesh = RecipeId.IsEmpty() ? nullptr : LoadObject<USkeletalMesh>(nullptr,
+        *FString::Printf(TEXT("/Game/OpenWillow/Weapons/Items/SK_%s.SK_%s"), *RecipeId, *RecipeId));
+    UAnimSequence* Idle = LoadObject<UAnimSequence>(nullptr, Mesh ? *WeaponIdleAnimation : *IdleAnimation);
+    // Missing armed animation must not put a weapon through the unarmed hand.
+    if (Mesh && !Idle) Mesh = nullptr;
+    Weapon->SetSkeletalMesh(Mesh);
+    WeaponOutline->SetSkeletalMesh(Mesh);
+    UMaterialInterface* Outline = Mesh && OutlineThicknessCm > 0.f ? LoadObject<UMaterialInterface>(nullptr, OutlinePath) : nullptr;
+    WeaponOutline->SetVisibility(Outline != nullptr);
+    if (Outline)
+    {
+        for (int32 Slot = 0; Slot < WeaponOutline->GetNumMaterials(); ++Slot) WeaponOutline->SetMaterial(Slot, Outline);
+        WeaponOutline->SetScalarParameterValueOnMaterials(TEXT("ThicknessCm"), OutlineThicknessCm);
+        WeaponOutline->SetLeaderPoseComponent(Weapon);
+    }
+    if (!Idle) Idle = LoadObject<UAnimSequence>(nullptr, *IdleAnimation);
+    if (Idle) Body->PlayAnimation(Idle, true);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow menu weapon preview: %s mesh=%d armedIdle=%d"), *RecipeId, Mesh != nullptr, Mesh && Idle);
 }
 
 void AOpenWillowInventoryMayaDisplay::ApplyBackdrop()

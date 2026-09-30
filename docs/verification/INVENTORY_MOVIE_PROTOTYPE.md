@@ -380,3 +380,26 @@ UE build succeeded; node syntax and diff checks passed; CTest **6/6**, 8.47 s;
 all nine package checks match the byte/export counts listed above. 1:1 panel
 projection, backpack-origin focus flow, original Inspect layout, unresolved
 gear meshes and material parity remain unverified. No independent critic run.
+
+### Selected weapon on Maya's display copy
+
+Existing UModel 1590 `Rifle_Siren.Idle_Inventory` converted/imported locally:
+381 frames / 30 fps. Import success, 0 errors / 1 warning. The first relative
+input path failed and was corrected to absolute. A separate bounded
+`Pistol_Siren` export request (0.274 s) found no object; no substitute package
+identity was invented. Existing package listing and body reference identify
+`R_Weapon_Bone`; selected host recipe meshes attach there with an ink hull.
+Gear selection restores the base inventory idle and clears the gun.
+
+UE build succeeded, 13.85 s. Runtime **35/35 PASS**, log
+`local/inventory-actions/run-20260930-012557.log`. Preview logs confirm named
+pistol/shotgun/SMG meshes and armed idle; gear clears both. Fresh open/compare
+captures show the attachment following the animated hand. Material paint is
+still incomplete (SMG rendered mostly neutral); sharing the Rifle idle across
+weapon types is not verified stock hold-definition behaviour. CTest **6/6**,
+8.54 s; all nine package checks match; JS syntax/diff checks pass. Browser
+reopen callback resets Inspect and reissues the current selection. That final
+cached-state/empty-selection JS change did not require another engine build.
+
+All animation, mesh, export logs and screenshots remain ignored local/UE
+outputs. No independent critic and no claim of 1:1 parity.

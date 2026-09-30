@@ -30,6 +30,7 @@ class OPENWILLOW_API AOpenWillowInventoryMayaDisplay : public AActor
     GENERATED_BODY()
 public:
     AOpenWillowInventoryMayaDisplay();
+    void SetPreviewWeapon(const FString& RecipeId);
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 
@@ -55,6 +56,8 @@ public:
     // Animation played on the display copy (the game's inventory idle by default).
     UPROPERTY(EditAnywhere, Config, Category = "Pose") FString IdleAnimation =
         TEXT("/Game/OpenWillow/Characters/Maya/ThirdPerson/Anim_Body_Idle_Inventory.Anim_Body_Idle_Inventory");
+    UPROPERTY(EditAnywhere, Config, Category = "Pose") FString WeaponIdleAnimation =
+        TEXT("/Game/OpenWillow/Characters/Maya/ThirdPerson/Anim_InventoryRifle_Idle_Inventory.Anim_InventoryRifle_Idle_Inventory");
     // Width of the ink outline (0 = none). UNVERIFIED art-direction value.
     UPROPERTY(EditAnywhere, Config, Category = "Pose") float OutlineThicknessCm = 0.35f;
 
@@ -78,6 +81,9 @@ private:
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> Head;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> BodyOutline;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> HeadOutline;
+    UPROPERTY() TObjectPtr<USkeletalMeshComponent> Weapon;
+    UPROPERTY() TObjectPtr<USkeletalMeshComponent> WeaponOutline;
+    FString PreviewRecipeId;
     UPROPERTY() TObjectPtr<UPostProcessComponent> Backdrop;
     UPROPERTY() TObjectPtr<UDirectionalLightComponent> KeyLight;
     UPROPERTY() TObjectPtr<UDirectionalLightComponent> RimLight;
