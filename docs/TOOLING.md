@@ -930,6 +930,29 @@ retain defaults; other missing inputs fail. Output is JSONL with case index,
 result type/value, native flag, per-case error and unimplemented-call list.
 The batch command exits zero when individual cases fail: inspect those fields.
 
+The UE5 inventory now links the C++ VM for item-only backpack movement. Build
+`cmake --build build --config Release` before the Win64 UE editor target; its
+module links `build/Release/ow-core.lib` and `ow-lzokay.lib`. Inventory opens
+the VM lazily from `OPENWILLOW_BL2`. `OWINVVM` log entries carry script expression
+counts/errors; page reports include `vm.enabled/calls/errors/steps/discarded`.
+The in-engine suite includes `vm_backpack_down` and `vm_backpack_up`, which must
+observe new successful script calls and the expected actual page selections.
+Equipment, transfers and sorting still use the existing host adapter.
+
+For a direct installed-script check:
+
+```powershell
+$cooked = Join-Path $env:OPENWILLOW_BL2 'WillowGame/CookedPCConsole'
+build/Release/ow-package.exe "$cooked/WillowGame.upk" --inventory-move 1 0 5 --cooked $cooked
+```
+
+The provider currently contains item-only rows. Headers and empty-cell kinds
+are not modelled by this bridge yet. If UE stalls waiting for the local Zen
+server before loading, the inventory runner accepts the installed fallback:
+`-Extra @('-ddc=InstalledNoZenLocalFallback','-d3d11')`. This is the verified
+launch-time workaround for this run,
+not a change to project cache settings or runtime verification by itself.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied

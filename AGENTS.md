@@ -94,6 +94,9 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   Current evidence and next bounded state-faithful comparison:
   `docs/verification/SCRIPT_VM_PROTOTYPE.md`. Full runtime semantics remain UNVERIFIED. Finding to remember:
   the inventory sort logic is **native** code, but menu navigation/equip logic is readable script.
+  First host connection: ordinary item-only backpack Up/Down executes the installed
+  `InventoryListPanelGFxObject.MoveDelta`; equipment, transfers and sorting remain in
+  the host adapter. Build the CMake Release libraries before building the UE module.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
   in-engine suite `tools/test_inventory_actions.ps1` (needs a seeded worktree, see below).

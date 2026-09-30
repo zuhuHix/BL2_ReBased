@@ -85,7 +85,7 @@ python tools/replay_trace.py local/ui/traces/uitrace_20260930_164540.jsonl `
   --output local/phase2/trace-replay-20261001.json
 ```
 
-## Next bounded work
+## Next bounded work before the UE5 connection
 
 Choose a scalar, side-effect-free script on the Sanctuary/Maya path and capture
 its required receiver properties alongside inputs/outputs. Add only the state
@@ -93,3 +93,65 @@ needed to replay that function faithfully before treating matches as behavioral
 evidence. Full object/state/latent semantics, the ten decode failures, native
 coverage and UE5 gameplay integration remain open. Do not implement movie
 bridge or timer stubs merely because the zero-input sweep ranks them highly.
+
+## First UE5 inventory connection (2026-10-01)
+
+AI-assisted. The first host integration executes the installed
+`InventoryListPanelGFxObject.MoveDelta` for ordinary item-only backpack Up/Down.
+The page sends a bounded movement request to the HUD's game-thread queue; the
+HUD calls the linked C++ VM and returns the selected index. Ruffle and the host
+still handle list presentation, cards, equipment navigation and equip actions.
+This is execution that changes the page selection, not a shadow comparison.
+
+`src/inventory_navigation.*` instantiates the reflected panel/provider, supplies
+the current item-list length through `CachedObjects`, and binds only the native
+`GetEntryKindAtIndex` interface. Its item kind is looked up as `EAK_Source` in
+the getter's reflected return enum. The existing enum serialization order in
+`vm.cpp` was checked against that installed export and is read with a bounded
+Reader, validated prefix/count/name references and exact export consumption.
+No navigation algorithm, extracted script bytes or listings are embedded.
+No original package/container bounds check changed. CMake adds this source.
+
+Each request validates direction, list size and selected index. Execution has
+a 20,000-expression limit. Every VM diagnostic (including an unimplemented
+native) rejects the result. The page orders repeated keys, discards replies
+after selection/list changes, cancels pending work on close, and reports an
+error on invalid replies or a six-second timeout; a failed VM does not silently
+resume host movement. If initialization is unavailable, the existing host
+adapter remains active with `vm.enabled=false` and a HUD initialization error.
+
+The UE module now links the local CMake Release `ow-core.lib` and `ow-lzokay.lib`;
+build these first. Win64 Development editor linkage is verified; other platforms
+and packaged builds are UNVERIFIED. This reuses the already recorded lzokay
+dependency and does not add a dependency or license decision. UModel remains
+the external asset backend; this pass extracts no new assets.
+
+Verification: Release CLI and UE5 editor builds succeed; CTest 8/8 (52.57 s),
+plus the final updated VM test rerun; all nine package differential checks
+match. Navigation tests 22/22, including ordered VM replies, stale selection/list
+rejection, cancellation, timeout and failure handling. A synthetic provider fixture deliberately places
+the source enum at a different index and uses a toy arithmetic script rather
+than stock navigation; it verifies enum lookup, provider length, native dispatch,
+invalid input/result rejection and malformed enum counts. Direct installed-script
+calls verify forward/backward item movement, both boundaries and a one-item list,
+with no VM diagnostics. Full original-game behavior parity remains UNVERIFIED.
+
+In-engine results are recorded in the inventory verification record. The first
+run stalled waiting for Zen before gameplay and was stopped; the retry used UE's
+built-in `-ddc=InstalledNoZenLocalFallback` cache graph, checked in the installed
+BaseEngine.ini, but stalled loading Sanctuary. The third launch added `-d3d11`
+and reached the suite. Both `vm_backpack_down` and `vm_backpack_up` pass with
+55 expressions each, actual expected selections and no VM errors. No project
+cache/renderer configuration or authored editor state changed.
+
+Full action suite reports **41/48 passed, seven failed, zero not run; overall
+FAIL**. Wrong selected-item expectations after drag cause marking/drop failures
+and a pickup cascade; missing shield data causes gear failures. Some dependent
+passes are weak (empty shield ID and stale DropId). No additional VM movement
+calls occur after the two passing checks. A VM-disabled baseline was not run;
+these are unresolved suite issues, not proven pre-existing failures. See the
+inventory record for the precise evidence limits.
+
+Next: equipment navigation and the movie/controller object graph, then equip
+script integration. Native sorting, category/empty-entry models, latent/state
+semantics, visuals and the Sanctuary/Maya gameplay gate remain open.

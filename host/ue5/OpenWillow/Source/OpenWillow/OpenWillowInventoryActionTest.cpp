@@ -349,6 +349,45 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             return true;
         });
 
+    for (const int32 Delta : {1, -1})
+    {
+        Add(Delta == 1 ? TEXT("vm_backpack_down") : TEXT("vm_backpack_up"), false,
+            [this, Delta]
+            {
+                VmExpectedId.Reset(); VmCallsBefore = -1;
+                const auto Page = PageObject();
+                const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+                const TSharedPtr<FJsonObject>* Vm = nullptr;
+                FString Selected;
+                if (Page && Page->TryGetArrayField(TEXT("backpack"), Rows)
+                    && Page->TryGetStringField(TEXT("sel"), Selected) && Page->TryGetObjectField(TEXT("vm"), Vm))
+                {
+                    VmCallsBefore = int32((*Vm)->GetNumberField(TEXT("calls")));
+                    for (int32 I = 0; I < Rows->Num(); ++I)
+                        if ((*Rows)[I]->AsString() == Selected)
+                            VmExpectedId = (*Rows)[FMath::Clamp(I + Delta, 0, Rows->Num() - 1)]->AsString();
+                }
+                PressKey(Delta == 1 ? TEXT("ArrowDown") : TEXT("ArrowUp"));
+            },
+            [this, Snapshot](FString& D)
+            {
+                const auto Page = Snapshot(D);
+                const TSharedPtr<FJsonObject>* Vm = nullptr;
+                FString Selected;
+                bool Enabled = false;
+                double Calls = 0, Errors = -1, Expressions = 0;
+                if (!Page || !Page->TryGetObjectField(TEXT("vm"), Vm) || !Page->TryGetStringField(TEXT("sel"), Selected)
+                    || !(*Vm)->TryGetBoolField(TEXT("enabled"), Enabled) || !Enabled
+                    || !(*Vm)->TryGetNumberField(TEXT("calls"), Calls) || Calls <= VmCallsBefore
+                    || !(*Vm)->TryGetNumberField(TEXT("errors"), Errors) || Errors != 0
+                    || !(*Vm)->TryGetNumberField(TEXT("steps"), Expressions) || Expressions <= 0
+                    || VmExpectedId.IsEmpty() || Selected != VmExpectedId)
+                { D = TEXT("original MoveDelta did not produce the expected page selection without diagnostics"); return false; }
+                D = FString::Printf(TEXT("MoveDelta calls=%.0f expressions=%.0f selected=%s"), Calls, Expressions, *Selected);
+                return true;
+            });
+    }
+
     Add(TEXT("pageup_sorts_preserving_selection"), false,
         [this] { PressKey(TEXT("PageUp")); },
         [this, Snapshot](FString& D)

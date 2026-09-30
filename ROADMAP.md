@@ -315,6 +315,8 @@ coverage.
       [the record](docs/verification/SCRIPT_BYTECODE_DISASM.md). C++ object
       loading, interpretation, Core natives and a default-state sweep exist;
       full states/latent behavior and opcode semantics remain unverified.
+      First UE5 inventory connection executes original `MoveDelta` on item-only
+      backpack rows; the rest of the menu remains on the host adapter.
 - [ ] Interpreter: expressions, locals, `out` params, structs, dynamic arrays,
       casts, `foreach`, `switch`, `goto`, delegates, `super`, states and
       transitions, latent functions, timers

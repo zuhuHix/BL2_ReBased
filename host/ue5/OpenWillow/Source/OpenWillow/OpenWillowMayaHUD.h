@@ -9,6 +9,7 @@ class SWidget;
 class SBox;
 class AOpenWillowInventoryMayaDisplay;
 class AOpenWillowInventoryPreviewActor;
+class FOpenWillowInventoryVm;
 
 UCLASS()
 class OPENWILLOW_API AOpenWillowMayaHUD : public AHUD
@@ -67,6 +68,8 @@ private:
     bool bMenuPreviewRequested = false;
     double NextInspectFrame = 0;
     TArray<FString> PendingInventoryActions;
+    TSharedPtr<FOpenWillowInventoryVm> InventoryVm;
+    TArray<FString> PendingInventoryVmMoves;
     FInventoryActionRecord LastAction;
     FString LastPageReport;
     int32 PageReportCount = 0;

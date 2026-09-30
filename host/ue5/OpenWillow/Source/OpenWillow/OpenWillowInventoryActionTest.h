@@ -82,6 +82,8 @@ private:
     // Carried between steps.
     FString SelId, PrevSel, DisplacedId, DropId, DropName, ShieldId;
     int32 CountBefore = 0, PickupAttemptsBefore = 0;
+    int32 VmCallsBefore = 0;
+    FString VmExpectedId;
     TArray<FString> FillerIds;
     TArray<FString> VisibleBeforeScroll;
     bool bMeasurePreviewLoop = false;

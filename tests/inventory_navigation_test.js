@@ -149,4 +149,50 @@ check('Confirmed host equip moves navigation to the occupied destination', () =>
   assert.equal(run('navigationPanel'), 'equipped');
   press('ArrowUp'); assert.equal(selected(), 'w0');
 });
-console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; UNVERIFIED cells noted in inventory.js)`);
+check('VM movement waits for its result and preserves queued key order', () => {
+  run('reset(); inventoryVm.failed=false; window.owConfigureInventoryVm(true)');
+  press('ArrowRight', 'ArrowDown', 'ArrowDown');
+  assert.equal(selected(), 'b0');
+  assert.equal(run('inventoryVm.queue.length'), 1);
+  run('window.owInventoryVmResult({serial:inventoryVm.pending.serial,index:1,steps:55,error:""})');
+  assert.equal(selected(), 'b1');
+  assert.equal(run('inventoryVm.pending.selectedId'), 'b1');
+  run('window.owInventoryVmResult({serial:inventoryVm.pending.serial,index:2,steps:55,error:""})');
+  assert.equal(selected(), 'b2'); assert.equal(run('inventoryVm.pending'), null);
+});
+check('VM replies do not overwrite a changed selection or a reordered list', () => {
+  press('ArrowDown');
+  run("select('b5'); window.owInventoryVmResult({serial:inventoryVm.pending.serial,index:3,steps:55,error:''})");
+  assert.equal(selected(), 'b5');
+  press('ArrowDown');
+  run("sortIndex=1; state.items.find(item=>item.id==='b0').name='zzzz'; window.owInventoryVmResult({serial:inventoryVm.pending.serial,index:6,steps:55,error:''})");
+  assert.equal(selected(), 'b5'); assert.equal(run('inventoryVm.pending'), null);
+});
+check('VM failure blocks movement and cannot be silently re-enabled by a snapshot', () => {
+  run('reset(); window.owConfigureInventoryVm(true)');
+  press('ArrowRight', 'ArrowDown');
+  run('window.owInventoryVmResult({serial:inventoryVm.pending.serial,index:-1,steps:0,error:"UNIMPLEMENTED test"}); window.owConfigureInventoryVm(true)');
+  press('ArrowDown'); assert.equal(selected(), 'b0');
+  assert.equal(run('inventoryVm.enabled'), false);
+  run('inventoryVm.failed=false; window.owConfigureInventoryVm(false)');
+});
+check('Closing cancels VM work and obsolete serials cannot change selection', () => {
+  run('reset(); window.owConfigureInventoryVm(true)');
+  press('ArrowRight', 'ArrowDown');
+  run('const canceledSerial=inventoryVm.pending.serial; window.owInventoryVmResult({serial:canceledSerial+1,index:1,steps:55,error:""})');
+  assert.equal(selected(), 'b0'); assert.notEqual(run('inventoryVm.pending'), null);
+  run('window.owCancelInventoryVm(); window.owInventoryVmResult({serial:canceledSerial,index:1,steps:55,error:""})');
+  assert.equal(selected(), 'b0'); assert.equal(run('inventoryVm.pending'), null);
+  run('window.owConfigureInventoryVm(false)');
+});
+check('Only the current VM request can time out', () => {
+  run('reset(); const vmTimers=[]; setTimeout=callback=>vmTimers.push(callback); window.owConfigureInventoryVm(true)');
+  press('ArrowRight', 'ArrowDown');
+  run('window.owCancelInventoryVm(); vmTimers[0]()');
+  assert.equal(run('inventoryVm.failed'), false);
+  press('ArrowDown');
+  run('vmTimers[1]()');
+  assert.equal(run('inventoryVm.failed'), true); assert.equal(run('inventoryVm.pending'), null);
+  assert.equal(selected(), 'b0');
+});
+console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);

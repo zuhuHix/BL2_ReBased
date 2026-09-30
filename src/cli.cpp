@@ -2,6 +2,7 @@
 #include "natives.hpp"
 #include "script.hpp"
 #include "vm.hpp"
+#include "inventory_navigation.hpp"
 
 #include <fstream>
 #include <cmath>
@@ -21,6 +22,7 @@ void usage() {
         "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
         "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
         "--run-batch <file> --cooked <directory> | "
+        "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -394,6 +396,15 @@ int main(int argc, char** argv) {
                 std::cout << "]}" << '\n';
             }
             return 0;
+        }
+
+        if (mode == "--inventory-move") {
+            if (argc != 8 || std::string(argv[6]) != "--cooked") usage();
+            vm::InventoryNavigation navigation(argv[7]);
+            const auto result = navigation.move(signedNumber(argv[3]), signedNumber(argv[4]), signedNumber(argv[5]));
+            std::cout << "{\"index\":" << result.index << ",\"steps\":" << result.steps
+                      << ",\"error\":" << (result.error.empty() ? "null" : quote(result.error)) << "}\n";
+            return result.error.empty() ? 0 : 1;
         }
 
         if (mode == "--vm-sweep") {

@@ -786,3 +786,40 @@ empty-cell selection/hit boxes, removing the category filter, the page report in
 rows), the in-engine steps, and the node tests. Remaining order of work: (2) sort list,
 (3) selectable empty cells, (4) full-screen Inspect with an auto-rotating gun, (5) red `bad`
 cell state on the gear cells during compare; then weapon models/textures and Phaselock.
+
+### First interpreter connection (2026-10-01)
+
+AI-assisted. Ordinary item-only backpack Up/Down now executes the installed
+`InventoryListPanelGFxObject.MoveDelta` through the linked C++ VM. The page sends
+an ordered request to the HUD, the host supplies provider length/entry kind,
+and the returned index updates actual page selection. Equipment navigation,
+transfers, equip actions, sorting and rendering still use the host adapter.
+Category headers and empty entries are not supplied to this first provider.
+No script listing or game bytes were transcribed into project source.
+
+The two new Slate-key engine checks pass: `vm_backpack_down` moves index 1 to 2,
+`vm_backpack_up` returns 2 to 1. Each executes 55 expressions; page reports
+two completed calls, 110 expressions, zero VM errors. This verifies the
+key -> page -> UE5 -> installed script -> page selection route, not full
+original-game menu parity. Synthetic navigation checks: 22/22; CTest: 8/8;
+all nine package differential comparisons match. Full details and enum
+validation are in [the VM record](SCRIPT_VM_PROTOTYPE.md).
+
+The successful engine launch used `-ddc=InstalledNoZenLocalFallback -d3d11`.
+An initial launch stalled waiting for Zen, and the next passed cache startup
+but stalled loading Sanctuary before gameplay. Both test-owned processes were
+stopped before retry; no authored editor state or renderer/cache project
+configuration changed. The log is under ignored
+`local/inventory-actions/run-20261001-004912.log`.
+
+Full action runner: **41/48 passed, seven failed, zero not run; overall FAIL**.
+Steps 29-32 (favorite/trash/drop) act on the selected item after the drag tests
+while expecting the earlier transfer item; step 34 cascades from that mismatch.
+No VM movement calls occurred after the successful step 14. Steps 39 and 45
+fail because the shield recipe/manifest is missing. These failures have not
+been independently compared against a VM-disabled baseline, so they are not
+claimed to be proven pre-existing regressions. Raw passes also include weak
+downstream checks: step 44 reports a shield equip with an empty ID, and the
+pickup checks depend on the earlier incorrect DropId. Do not treat those passes
+as evidence of gear/pickup parity. Correcting these test/data issues remains open.
+The bounded VM acceptance is the two explicit expression-count/selection checks.

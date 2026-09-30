@@ -923,15 +923,59 @@ function focusItem(id) {
   button?.focus({preventScroll:true});
 }
 
-function moveSelection(delta) {
-  if (transferSourceId && !transferFromEquipped) {
-    if (!targetGearSlot) cycleTargetSlot(delta);
+// Item-only backpack movement is executed by the installed UnrealScript VM.
+// Requests are ordered; replies from an obsolete selection/list are discarded.
+const inventoryVm = {enabled:false, calls:0, errors:0, steps:0, discarded:0, pending:null, queue:[], serial:0, failed:false};
+window.owInventoryVm = inventoryVm;
+window.owConfigureInventoryVm = enabled => { inventoryVm.enabled = Boolean(enabled) && !inventoryVm.failed; };
+window.owCancelInventoryVm = () => { inventoryVm.pending = null; inventoryVm.queue.length = 0; };
+function inventoryVmFailure(reason) {
+  inventoryVm.pending = null; inventoryVm.errors++; inventoryVm.failed = true;
+  inventoryVm.enabled = false; inventoryVm.queue.length = 0;
+  console.error('OpenWillow inventory VM failed: ' + reason);
+  announce('Inventory script error: ' + reason);
+}
+function requestInventoryMove(delta) {
+  if (inventoryVm.queue.length >= 32) return;
+  inventoryVm.queue.push(delta);
+  dispatchInventoryMove();
+}
+function dispatchInventoryMove() {
+  if (inventoryVm.pending || !inventoryVm.queue.length) return;
+  if (!inventoryVm.enabled || navigationPanel !== 'backpack' || transferSourceId || inspectMode) {
+    inventoryVm.queue.length = 0; return;
+  }
+  const rows = backpackItems();
+  if (!rows.length) { inventoryVm.queue.length = 0; return; }
+  const start = rows.findIndex(item => item.id === selectedId);
+  if (start < 0) { inventoryVm.queue.length = 0; return; }
+  const delta = inventoryVm.queue.shift(), serial = ++inventoryVm.serial;
+  inventoryVm.pending = {serial, selectedId, ids:rows.map(item => item.id)};
+  console.log('OWINVMOVE ' + JSON.stringify({serial, delta, start, count:rows.length}));
+  setTimeout(() => {
+    if (inventoryVm.pending?.serial === serial) inventoryVmFailure('host response timed out');
+  }, 6000);
+}
+window.owInventoryVmResult = result => {
+  const pending = inventoryVm.pending;
+  if (!pending || result.serial !== pending.serial) return;
+  inventoryVm.pending = null;
+  if (result.error || !Number.isInteger(result.index) || result.index < 0 || result.index >= pending.ids.length
+      || !Number.isInteger(result.steps) || result.steps <= 0) {
+    inventoryVmFailure(result.error || 'invalid response');
     return;
   }
   const rows = backpackItems();
-  if (!rows.length) return;
-  let index = rows.findIndex(item => item.id === selectedId);
-  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
+  if (navigationPanel !== 'backpack' || transferSourceId || inspectMode || selectedId !== pending.selectedId
+      || rows.length !== pending.ids.length || rows.some((item, index) => item.id !== pending.ids[index])) {
+    inventoryVm.discarded++; inventoryVm.queue.length = 0; return;
+  }
+  inventoryVm.calls++; inventoryVm.steps += result.steps;
+  applyBackpackSelection(rows, result.index);
+  dispatchInventoryMove();
+};
+
+function applyBackpackSelection(rows, index) {
   selectedId = rows[index].id;
   navigationPanel = 'backpack';
   lastBackpackId = selectedId;
@@ -941,6 +985,22 @@ function moveSelection(delta) {
   if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
   else { syncSelection(); drawCard(); focusItem(selectedId); }
   announce(itemAriaLabel(itemById(selectedId)));
+}
+
+function moveSelection(delta) {
+  if (transferSourceId && !transferFromEquipped) {
+    if (!targetGearSlot) cycleTargetSlot(delta);
+    return;
+  }
+  const rows = backpackItems();
+  if (!rows.length) return;
+  if (inventoryVm.failed && navigationPanel === 'backpack' && !transferSourceId) return;
+  if (inventoryVm.enabled && navigationPanel === 'backpack' && !transferSourceId) {
+    requestInventoryMove(delta); return;
+  }
+  let index = rows.findIndex(item => item.id === selectedId);
+  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
+  applyBackpackSelection(rows, index);
 }
 
 // Host spatial navigation uses the movie's actual cell centers rather than

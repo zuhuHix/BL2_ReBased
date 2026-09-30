@@ -85,7 +85,8 @@ CPF_PARM, CPF_OUT, CPF_OPT, CPF_RET = 0x80, 0x100, 0x10, 0x400
 def build_package():
     p = Package()
     imp = {n: p.add_import('Class', n) for n in
-           ('Class', 'Function', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty', 'ArrayProperty')}
+           ('Class', 'Function', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty', 'ArrayProperty',
+            'ObjectProperty', 'ByteProperty', 'Enum')}
     none = p.fname('None')
 
     def prop(kind, owner, name, flags=0):
@@ -106,7 +107,7 @@ def build_package():
     return p, imp, none, prop, func
 
 
-def make():
+def make(inventory=False):
     p, imp, none, prop, _ = build_package()
 
     def make_function(owner, name, declared, asm_fn, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None,
@@ -269,6 +270,33 @@ def make():
         a.stmt(); a.raw(0x04); a.raw(0x36); local(a, ids, 'Items')
         a.end(); return a
     make_function(foo, 'Arr', [], arr, locals_=[('Array', 'Items', 0)])
+    if inventory:
+        # Entirely synthetic interface fixture: its MoveDelta deliberately returns
+        # source-kind + list-length - 5, rather than implementing stock navigation.
+        # Source at position 3 proves the bridge resolves enum names, not a constant.
+        provider = p.add_export(imp['Class'], 'InventoryDataProviderGFxObject', w32(0) * 4, super_ref=obj)
+        cached = prop('ArrayProperty', provider, 'CachedObjects')
+        entries = ['DummyA', 'DummyB', 'DummyC', 'EAK_Source', 'DummyMax']
+        enum = p.add_export(imp['Enum'], 'SyntheticKinds', w32(0) + none + w32(0, len(entries))
+                            + b''.join(p.fname(name) for name in entries), outer=provider)
+        getter = make_function(provider, 'GetEntryKindAtIndex', [('Int', 'Index', 0)], None,
+                               flags=FUNC_NATIVE | FUNC_PUBLIC, result='Byte')
+        result_slot = getter['ReturnValue'] - 1
+        original = p.exports[result_slot]
+        p.exports[result_slot] = (*original[:4], original[4] + w32(enum))
+        panel = p.add_export(imp['Class'], 'InventoryListPanelGFxObject', w32(0) * 4, super_ref=obj)
+        data = prop('ObjectProperty', panel, 'DataProvider')
+        native('Sub_IntInt', '-', 147, ['Int', 'Int'], 'Int')
+        def movement(ids):
+            a = Asm(); a.stmt(); a.raw(0x04); a.raw(147); a.raw(146)
+            # Context provider.GetEntryKindAtIndex(0)
+            a.raw(0x19); a.raw(0x01); a.ref(data); a.w(0); a.ref(getter['ReturnValue']); a.raw(0)
+            a.raw(0x1C); a.ref(getter['__self__']); intc(a, 0); a.raw(0x16)
+            # Context provider.CachedObjects.Length
+            a.raw(0x19); a.raw(0x01); a.ref(data); a.w(0); a.ref(0); a.raw(0)
+            a.raw(0x36); a.raw(0x01); a.ref(cached)
+            a.raw(0x16); intc(a, 5); a.raw(0x16); a.end(); return a
+        make_function(panel, 'MoveDelta', [('Int', 'Delta', 0), ('Int', 'StartIndex', 0), ('Int', 'OriginalIndex', 0)], movement)
     return p
 
 
@@ -354,5 +382,29 @@ with tempfile.TemporaryDirectory() as folder:
     paired, rejected = replay_trace.pairs([call(1, 'Core.Foo:Answer'), ret(2, 'Core.Foo:Add2', 0),
                                          ret(3, 'Core.Foo:Answer', 42)])
     assert not paired and rejected['unpaired_return'] == 2 and rejected['unpaired_call'] == 1
+    (root / 'WillowGame.upk').write_bytes(make(inventory=True).build())
+    def inventory_move(delta, start, count):
+        output = subprocess.run([reader, str(root / 'WillowGame.upk'), '--inventory-move', str(delta), str(start), str(count),
+                                 '--cooked', str(root)], capture_output=True, text=True, encoding='utf-8')
+        return output.returncode, json.loads(output.stdout)
+    code, moved = inventory_move(1, 0, 5)
+    assert code == 0 and moved['index'] == 3 and moved['steps'] > 0, moved
+    code, moved = inventory_move(-1, 2, 4)
+    assert code == 0 and moved['index'] == 2, moved
+    code, bad_result = inventory_move(1, 0, 1)
+    assert code == 1 and 'invalid index' in bad_result['error'], bad_result
+    for delta, start, count in [(0, 0, 5), (1, -1, 5), (1, 5, 5), (1, 0, 0), (1, 0, 2049)]:
+        code, rejected = inventory_move(delta, start, count)
+        assert code == 1 and rejected['steps'] == 0, rejected
+    malformed = make(inventory=True)
+    for slot, export in enumerate(malformed.exports):
+        if export[3] == malformed.fname('SyntheticKinds'):
+            payload = bytearray(export[4]); payload[16:20] = w32(100000)
+            malformed.exports[slot] = (*export[:4], bytes(payload))
+            break
+    (root / 'WillowGame.upk').write_bytes(malformed.build())
+    rejected = subprocess.run([reader, str(root / 'WillowGame.upk'), '--inventory-move', '1', '0', '5', '--cooked', str(root)],
+                              capture_output=True, text=True, encoding='utf-8')
+    assert rejected.returncode != 0 and 'invalid inventory entry enum count' in rejected.stderr, rejected.stderr
     # a runaway script stops at the step limit instead of hanging is covered by the C++ limit, not here
 print('vm synthetic coverage passed.')
