@@ -533,3 +533,15 @@ therefore remains unverified and unimplemented. No new tool/export dependency.
 CTest 6/6 (8.64 s), all nine package checks match, JS syntax/diff checks pass;
 no engine rerun because runtime unchanged. HTTP probe loading failed; direct
 execution of its repository source through the preview bridge succeeded.
+
+### Getter output observation fix (2026-09-30)
+
+Tracer 0.2.1 adds return object identity and out.D for GetDisplayInfo. The old
+tracer omits the getter's completed output; zero-filled input D is not evidence
+of a flat original transform. No additional native query or property write.
+Three synthetic callback contract checks pass; real post-hook output timing
+remains unverified until a fresh original-game capture. Existing local installed
+tracer updated with prior own-script backup under local/ui/tool-backups; source/
+installed SHA256 match. trace_dir.txt preserved. No live game/capture this pass.
+CTest 6/6 (8.53 s), all nine package checks match, Python syntax/diff pass.
+Menu runtime unchanged; projection and complete menu parity remain unresolved.

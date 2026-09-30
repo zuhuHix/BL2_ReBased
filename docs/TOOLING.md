@@ -880,6 +880,13 @@ python tools/sdk_trace/summarize.py --timeline StatusMenuExGFxMovie
 
 Traces are game data and stay under `local/`. See DECISIONS.md 2026-09-26.
 
+Tracer 0.2.1 adds object identity to return records and `out.D` to
+`GFxUI.GFxObject:GetDisplayInfo` returns. Earlier traces record the getter's
+input struct but omit its completed output; do not use zero-filled inputs as
+proof of a flat transform. Native post-hook output timing remains to be checked
+in a fresh original-game capture. Synthetic callback checks:
+`python tests/ui_trace_returns_test.py`.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied
