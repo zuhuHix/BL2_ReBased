@@ -51,6 +51,7 @@ struct Frame {
 struct Interp {
     Runtime& rt;
     unsigned depth = 0;
+    std::vector<const Function*> stack;                       // active script functions, innermost last
     Value scratch;                                            // sink for writes through a null reference
     std::map<std::pair<const Package*, int32_t>, PropertyDecl> decls;
 
@@ -58,7 +59,8 @@ struct Interp {
 
     // ---------------------------------------------------------------------------- reference helpers
     const PropertyDecl& decl(const Frame& f, int32_t ref) {
-        const auto resolved = rt.store().resolve(f.function->package, ref);
+        const auto resolved = rt.resolveRef(f.function->package, ref);
+        if (!resolved) throw RuntimeError("unresolved property reference " + std::to_string(ref) + " in " + f.function->path);
         const auto key = std::make_pair(resolved.package.get(), resolved.index);
         const auto found = decls.find(key);
         if (found != decls.end()) return found->second;
@@ -250,15 +252,16 @@ struct Interp {
         case script::EX_LabelTable: case script::EX_FilterEditorOnly:
             return Value();
         case script::EX_ObjectConst: {
-            const auto resolved = rt.store().resolve(f.function->package, e.refs.at(0));
-            if (resolved.package && resolved.index > 0) {
+            const auto resolved = rt.resolveRef(f.function->package, e.refs.at(0));
+            if (resolved) {
                 const auto& exportObject = resolved.package->exports[size_t(resolved.index) - 1];
                 try {
                     if (resolved.package->object(exportObject.cls).name == "Class")
                         return Value::makeClass(rt.classAt(resolved.package, resolved.index));
                 } catch (const std::exception&) {}
             }
-            return Value::makeObject(rt.resource(resolved.package, resolved.index));
+            return Value::makeObject(resolved ? rt.resource(resolved.package, resolved.index)
+                                              : rt.resource(f.function->package, e.refs.at(0)));
         }
         case script::EX_LocalVariable: case script::EX_LocalOutVariable: case script::EX_InstanceVariable:
         case script::EX_DefaultVariable: case script::EX_StateVariable: case script::EX_Op4C: case script::EX_Op4D:
@@ -584,8 +587,16 @@ struct Interp {
                 throw RuntimeError("cannot run " + function.path + ": " + error.what());
             }
         }
-        if (depth >= MAX_CALL_DEPTH) throw RuntimeError("call depth limit reached in " + function.path);
-        struct DepthGuard { unsigned& d; DepthGuard(unsigned& x) : d(x) { ++d; } ~DepthGuard() { --d; } } guard(depth);
+        if (depth >= MAX_CALL_DEPTH) {
+            std::string trace;
+            for (size_t i = stack.size() > 4 ? stack.size() - 4 : 0; i < stack.size(); ++i) trace += " <- " + stack[i]->path;
+            throw RuntimeError("call depth limit reached in " + function.path + trace);
+        }
+        struct DepthGuard {
+            Interp& in;
+            DepthGuard(Interp& x, const Function* f) : in(x) { ++in.depth; in.stack.push_back(f); }
+            ~DepthGuard() { --in.depth; in.stack.pop_back(); }
+        } guard(*this, &function);
 
         Frame frame;
         frame.function = &function;

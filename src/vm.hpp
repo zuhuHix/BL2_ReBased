@@ -90,6 +90,21 @@ struct PropertyDecl {
     bool isReturn() const { return flags & 0x400; }
 };
 
+// A package-relative reference resolved to the package that really holds the object.
+struct Resolved {
+    std::shared_ptr<const Package> package;
+    int32_t index = 0;
+    explicit operator bool() const { return package && index > 0; }
+};
+
+// Lookup tables over one package's exports, built once.
+struct PackageIndex {
+    std::vector<std::string> classNames;                               // class name per export (index - 1)
+    std::unordered_map<int32_t, std::vector<int32_t>> children;       // outer export -> child exports, ascending
+    std::unordered_map<std::string, std::vector<int32_t>> byName;     // lower-cased export name -> exports
+    std::unordered_map<std::string, int32_t> byPath;                  // lower-cased object path -> first export
+};
+
 struct StructDef {
     std::string name;
     std::vector<PropertyDecl> fields;
@@ -189,6 +204,11 @@ public:
     Function* findMethod(Class* cls, const std::string& name, const std::string& state = "");
     Function* nativeByIndex(uint32_t index);        // numbered natives come from the loaded code packages
     const StructDef* structAt(const std::shared_ptr<const Package>& package, int32_t ref);
+    // Resolves a reference (import or export) to the object's real package, cached. Empty when the target does not
+    // exist in the installed packages (some imports name engine-native objects that have no export).
+    Resolved resolveRef(const std::shared_ptr<const Package>& package, int32_t ref);
+    const PackageIndex& indexOf(const Package& package);
+    int32_t findExport(const Package& package, const std::string& objectPath);   // fast Package::findExport
 
     // Objects and values.
     ObjectPtr instantiate(Class* cls, const std::string& name = "");
@@ -220,6 +240,8 @@ private:
     bool nativeIndexBuilt_ = false;
     std::vector<std::shared_ptr<const Package>> codePackages_;
     std::map<std::pair<const Package*, int32_t>, ObjectPtr> resources_;
+    std::map<std::pair<const Package*, int32_t>, Resolved> refCache_;
+    std::unordered_map<const Package*, std::shared_ptr<PackageIndex>> indexes_;
 
     std::vector<PropertyDecl> childProperties(const std::shared_ptr<const Package>& package, int32_t outer);
     PropertyDecl readProperty(const std::shared_ptr<const Package>& package, int32_t index);
@@ -229,5 +251,14 @@ private:
     void buildDefaults(Class* cls);
     void applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& package, int32_t exportIndex);
 };
+
+struct SweepOptions {
+    std::string classFilter;            // only functions of this class ("" = all)
+    size_t limit = 0;                   // stop after this many functions (0 = all)
+    size_t stepLimit = 200000;          // per function
+    size_t top = 25;                    // entries kept per ranked list
+};
+// Robustness sweep over a package's script functions, see vm_sweep.cpp. Returns a JSON summary.
+std::string sweepPackage(Runtime& runtime, const std::shared_ptr<const Package>& package, const SweepOptions& options);
 
 } // namespace vm

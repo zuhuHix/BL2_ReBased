@@ -18,6 +18,8 @@ std::string lower(std::string_view text) {
     return out;
 }
 
+std::string lowered(std::string_view text) { return lower(text); }
+
 bool endsWith(const std::string& text, const char* suffix) {
     const size_t n = std::strlen(suffix);
     return text.size() >= n && text.compare(text.size() - n, n, suffix) == 0;
@@ -180,18 +182,6 @@ Runtime::Runtime(PackageStore& store) : store_(store) {}
 std::shared_ptr<const Package> Runtime::package(const std::string& name) { return store_.loadPackage(name); }
 
 namespace {
-struct Resolved { std::shared_ptr<const Package> package; int32_t index = 0; };
-
-Resolved resolveRef(PackageStore& store, const std::shared_ptr<const Package>& package, int32_t ref) {
-    if (!ref) return {};
-    if (ref > 0) {
-        package->object(ref);
-        return {package, ref};
-    }
-    const auto resolved = store.resolve(package, ref);
-    return {resolved.package, resolved.index};
-}
-
 const ::Object* exportOf(const Package& package, int32_t index) {
     return index > 0 && size_t(index) <= package.exports.size() ? &package.exports[size_t(index) - 1] : nullptr;
 }
@@ -202,6 +192,75 @@ std::string classNameOf(const Package& package, int32_t index) {
     try { return package.object(object->cls).name; } catch (const std::exception&) { return "?"; }
 }
 } // namespace
+
+const PackageIndex& Runtime::indexOf(const Package& pkg) {
+    auto& slot = indexes_[&pkg];
+    if (slot) return *slot;
+    slot = std::make_shared<PackageIndex>();
+    slot->classNames.reserve(pkg.exports.size());
+    std::vector<std::string> paths(pkg.exports.size());
+    for (int32_t index = 1; size_t(index) <= pkg.exports.size(); ++index) {
+        const auto& object = pkg.exports[size_t(index) - 1];
+        slot->classNames.push_back(classNameOf(pkg, index));
+        if (object.outer > 0) slot->children[object.outer].push_back(index);
+        slot->byName[lower(object.name)].push_back(index);
+        // Outers are usually exported before what they contain; fall back to the slow path otherwise.
+        std::string path;
+        if (object.outer > 0 && size_t(object.outer) < size_t(index) && !paths[size_t(object.outer) - 1].empty())
+            path = paths[size_t(object.outer) - 1] + "." + object.name;
+        else if (!object.outer) path = object.name;
+        else { try { path = pkg.path(index); } catch (const std::exception&) { path = object.name; } }
+        paths[size_t(index) - 1] = path;
+        slot->byPath.emplace(lower(path), index);
+    }
+    return *slot;
+}
+
+int32_t Runtime::findExport(const Package& pkg, const std::string& objectPath) {
+    std::string wanted = lower(objectPath);
+    const auto prefix = lower(pkg.packageName) + ".";
+    if (wanted.rfind(prefix, 0) == 0) wanted.erase(0, prefix.size());
+    const auto& table = indexOf(pkg);
+    const auto found = table.byPath.find(wanted);
+    return found == table.byPath.end() ? 0 : found->second;
+}
+
+Resolved Runtime::resolveRef(const std::shared_ptr<const Package>& pkg, int32_t ref) {
+    if (!pkg || !ref) return {};
+    if (ref > 0) {
+        if (size_t(ref) > pkg->exports.size()) return {};
+        return {pkg, ref};
+    }
+    const auto key = std::make_pair(pkg.get(), ref);
+    const auto cached = refCache_.find(key);
+    if (cached != refCache_.end()) return cached->second;
+    Resolved result;
+    try {
+        // Walk the import chain to its root (the package name). PackageStore::resolve would fall back to loading
+        // every installed package when an import has no export (engine-native objects such as Core.Class); the
+        // VM only needs the direct answer.
+        int32_t cursor = ref;
+        bool allImports = true;
+        for (unsigned depth = 0; cursor && depth < 64; ++depth) {
+            const auto& object = pkg->object(cursor);
+            if (cursor > 0) { allImports = false; break; }
+            if (!object.outer) break;
+            cursor = object.outer;
+        }
+        if (allImports && cursor < 0) {
+            const std::string root = pkg->object(cursor).name;
+            const std::string full = pkg->path(ref);
+            auto target = store_.loadPackage(root);
+            const auto index = findExport(*target, full);
+            if (index) result = {target, index};
+        } else {
+            const auto resolved = store_.resolve(pkg, ref);
+            result = {resolved.package, resolved.index};
+        }
+    } catch (const std::exception&) { /* no such object in the installed packages */ }
+    refCache_[key] = result;
+    return result;
+}
 
 PropertyDecl Runtime::readProperty(const std::shared_ptr<const Package>& package, int32_t index) {
     const auto* object = exportOf(*package, index);
@@ -226,11 +285,12 @@ PropertyDecl Runtime::readProperty(const std::shared_ptr<const Package>& package
 // reverse declaration order and linked by Next; descending export index reproduces the chain (checked over
 // every function of Core and Engine: 5,980 of 5,984).
 std::vector<PropertyDecl> Runtime::childProperties(const std::shared_ptr<const Package>& package, int32_t outer) {
+    const auto& table = indexOf(*package);
     std::vector<int32_t> found;
-    for (int32_t index = 1; size_t(index) <= package->exports.size(); ++index) {
-        const auto& object = package->exports[size_t(index) - 1];
-        if (object.outer == outer && endsWith(classNameOf(*package, index), "Property")) found.push_back(index);
-    }
+    const auto children = table.children.find(outer);
+    if (children != table.children.end())
+        for (const auto index : children->second)
+            if (endsWith(table.classNames[size_t(index) - 1], "Property")) found.push_back(index);
     std::sort(found.begin(), found.end(), std::greater<>());
     std::vector<PropertyDecl> result;
     for (const auto index : found) {
@@ -241,7 +301,7 @@ std::vector<PropertyDecl> Runtime::childProperties(const std::shared_ptr<const P
 }
 
 const StructDef* Runtime::structAt(const std::shared_ptr<const Package>& package, int32_t ref) {
-    const auto target = resolveRef(store_, package, ref);
+    const auto target = resolveRef(package, ref);
     if (!target.package) return nullptr;
     const auto key = std::make_pair(target.package.get(), target.index);
     const auto cached = structs_.find(key);
@@ -291,7 +351,7 @@ Value Runtime::newStruct(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("struct path must be Package.Struct: " + path);
     auto pkg = package(path.substr(0, dot));
-    const auto index = pkg->findExport(path.substr(dot + 1));
+    const auto index = findExport(*pkg, path.substr(dot + 1));
     if (!index) throw RuntimeError("struct not found: " + path);
     return zeroOfDef(structAt(pkg, index));
 }
@@ -322,7 +382,7 @@ Value Runtime::zeroValue(const PropertyDecl& decl) {
 }
 
 Class* Runtime::classAt(const std::shared_ptr<const Package>& package, int32_t index) {
-    const auto target = resolveRef(store_, package, index);
+    const auto target = resolveRef(package, index);
     if (!target.package) return nullptr;
     const auto key = std::make_pair(target.package.get(), target.index);
     const auto cached = classByExport_.find(key);
@@ -334,7 +394,7 @@ Class* Runtime::findClass(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("class path must be Package.Class: " + path);
     auto pkg = package(path.substr(0, dot));
-    const auto index = pkg->findExport(path.substr(dot + 1));
+    const auto index = findExport(*pkg, path.substr(dot + 1));
     if (!index) throw RuntimeError("class not found: " + path);
     return classAt(pkg, index);
 }
@@ -353,24 +413,27 @@ Class* Runtime::loadClass(const std::shared_ptr<const Package>& package, int32_t
     classes_[lower(cls->path)] = std::move(cls);
     if (exportObject.super) raw->super = classAt(package, exportObject.super);
     raw->properties = childProperties(package, index);
-    for (int32_t child = 1; size_t(child) <= package->exports.size(); ++child) {
-        const auto& object = package->exports[size_t(child) - 1];
-        if (object.outer != index) continue;
-        const auto kind = classNameOf(*package, child);
-        if (kind == "Function") {
-            if (auto* function = functionAt(package, child)) raw->functions[lower(function->name)] = function;
-        } else if (kind == "State") {
-            State state;
-            state.name = object.name;
-            for (int32_t inner = 1; size_t(inner) <= package->exports.size(); ++inner) {
-                const auto& member = package->exports[size_t(inner) - 1];
-                if (member.outer == child && classNameOf(*package, inner) == "Function")
-                    if (auto* function = functionAt(package, inner)) {
-                        function->state = object.name;
-                        state.functions[lower(function->name)] = function;
-                    }
+    const auto& table = indexOf(*package);
+    const auto members = table.children.find(index);
+    if (members != table.children.end()) {
+        for (const int32_t child : members->second) {
+            const auto& object = package->exports[size_t(child) - 1];
+            const auto& kind = table.classNames[size_t(child) - 1];
+            if (kind == "Function") {
+                if (auto* function = functionAt(package, child)) raw->functions[lower(function->name)] = function;
+            } else if (kind == "State") {
+                State state;
+                state.name = object.name;
+                const auto inner = table.children.find(child);
+                if (inner != table.children.end())
+                    for (const int32_t member : inner->second)
+                        if (table.classNames[size_t(member) - 1] == "Function")
+                            if (auto* function = functionAt(package, member)) {
+                                function->state = object.name;
+                                state.functions[lower(function->name)] = function;
+                            }
+                raw->states[lower(object.name)] = std::move(state);
             }
-            raw->states[lower(object.name)] = std::move(state);
         }
     }
     return raw;
@@ -399,7 +462,7 @@ std::string typeTag(Runtime& runtime, const PropertyDecl& decl) {
 } // namespace
 
 Function* Runtime::functionAt(const std::shared_ptr<const Package>& package, int32_t index) {
-    const auto target = resolveRef(store_, package, index);
+    const auto target = resolveRef(package, index);
     if (!target.package || !script::isFunctionExport(*target.package, target.index)) return nullptr;
     const auto key = std::make_pair(target.package.get(), target.index);
     const auto cached = functions_.find(key);
@@ -448,7 +511,7 @@ Function* Runtime::findFunction(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("function path must be Package.Class.Function: " + path);
     auto pkg = package(path.substr(0, dot));
-    const auto index = pkg->findExport(path.substr(dot + 1));
+    const auto index = findExport(*pkg, path.substr(dot + 1));
     if (!index) throw RuntimeError("function not found: " + path);
     auto* function = functionAt(pkg, index);
     if (!function) throw RuntimeError("not a function: " + path);
@@ -533,9 +596,12 @@ struct TagReader {
 
     int byteFromEnum(const std::string& enumName, const std::string& valueName) {
         // Enum exports hold [NetIndex][None][Next][count][FName * count]; a value's index is its position.
-        for (int32_t index = 1; size_t(index) <= package->exports.size(); ++index) {
+        const auto& table = runtime.indexOf(*package);
+        const auto candidates = table.byName.find(lowered(enumName));
+        if (candidates == table.byName.end()) return 0;
+        for (const int32_t index : candidates->second) {
             const auto& object = package->exports[size_t(index) - 1];
-            if (object.name != enumName || classNameOf(*package, index) != "Enum") continue;
+            if (object.name != enumName || table.classNames[size_t(index) - 1] != "Enum") continue;
             size_t at = size_t(object.offset) + 16;
             if (at + 4 > size_t(object.offset) + size_t(object.size)) return 0;
             const int32_t count = int32_t(u32At(*package, at));
@@ -581,10 +647,12 @@ struct TagReader {
     }
 
     const StructDef* findStruct(const std::string& type) {
-        for (int32_t index = 1; size_t(index) <= package->exports.size(); ++index) {
-            const auto& object = package->exports[size_t(index) - 1];
-            if (object.name == type && classNameOf(*package, index) == "ScriptStruct") return runtime.structAt(package, index);
-        }
+        const auto& table = runtime.indexOf(*package);
+        const auto candidates = table.byName.find(lowered(type));
+        if (candidates != table.byName.end())
+            for (const int32_t index : candidates->second)
+                if (package->exports[size_t(index) - 1].name == type && table.classNames[size_t(index) - 1] == "ScriptStruct")
+                    return runtime.structAt(package, index);
         for (int32_t index = 1; size_t(index) <= package->imports.size(); ++index) {
             const auto& object = package->imports[size_t(index) - 1];
             if (object.name == type && object.className == "ScriptStruct") {
@@ -666,7 +734,7 @@ void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_
                 const PropertyDecl* innerDecl = nullptr;
                 std::string innerType;
                 if (decl) {
-                    const auto target = resolveRef(store_, decl->package, decl->typeRef);
+                    const auto target = resolveRef(decl->package, decl->typeRef);
                     if (target.package) {
                         inner = readProperty(target.package, target.index);
                         innerDecl = &inner;
@@ -744,8 +812,8 @@ ObjectPtr Runtime::resource(const std::shared_ptr<const Package>& pkg, int32_t r
     int32_t index = ref;
     if (ref < 0) {
         try {
-            const auto resolved = store_.resolve(pkg, ref);
-            if (resolved.package) { owner = resolved.package; index = resolved.index; }
+            const auto resolved = resolveRef(pkg, ref);
+            if (resolved) { owner = resolved.package; index = resolved.index; }
         } catch (const std::exception&) { /* keep the unresolved reference */ }
     }
     const auto key = std::make_pair(owner.get(), index);
@@ -778,7 +846,10 @@ void Runtime::buildDefaults(Class* cls) {
     // Each class's default object records only the values it changes; apply root to leaf.
     for (Class* cursor : chain) {
         const auto wanted = "Default__" + cursor->name;
-        for (int32_t index = 1; size_t(index) <= cursor->package->exports.size(); ++index) {
+        const auto& table = indexOf(*cursor->package);
+        const auto candidates = table.byName.find(lower(wanted));
+        if (candidates == table.byName.end()) continue;
+        for (const int32_t index : candidates->second) {
             const auto& exportObject = cursor->package->exports[size_t(index) - 1];
             if (exportObject.name != wanted || exportObject.cls != cursor->index) continue;
             try { applyTaggedDefaults(*object, cursor, cursor->package, index); }

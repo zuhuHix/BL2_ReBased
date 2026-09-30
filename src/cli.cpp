@@ -18,6 +18,7 @@ void usage() {
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
         "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
+        "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -244,6 +245,26 @@ int main(int argc, char** argv) {
                 std::cout << ']';
             }
             std::cout << "}\n";
+            return 0;
+        }
+
+        if (mode == "--vm-sweep") {
+            vm::SweepOptions options;
+            std::filesystem::path cooked;
+            for (int i = 3; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--class") options.classFilter = nextValue(i, argc, argv, "--class");
+                else if (option == "--limit") options.limit = unsignedNumber(nextValue(i, argc, argv, "--limit"));
+                else if (option == "--steps") options.stepLimit = unsignedNumber(nextValue(i, argc, argv, "--steps"));
+                else if (option == "--top") options.top = unsignedNumber(nextValue(i, argc, argv, "--top"));
+                else usage();
+            }
+            if (cooked.empty()) usage();
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            std::cout << vm::sweepPackage(runtime, store.loadPath(sourcePath), options) << '\n';
             return 0;
         }
 

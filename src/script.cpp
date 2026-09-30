@@ -37,21 +37,21 @@ const Layout* layoutFor(uint8_t op) {
         set(0x2D, "BoolVariable", "E"); set(0x2E, "DynamicCast", "rE"); set(0x2F, "Iterator", "Ew");
         set(0x30, "IteratorPop", ""); set(0x31, "IteratorNext", ""); set(0x32, "StructCmpEq", "rEE");
         set(0x33, "StructCmpNe", "rEE"); set(0x35, "StructMember", "rrbbE"); set(0x36, "DynArrayLength", "E");
-        set(0x38, "PrimitiveCast", "bE"); set(0x39, "DynArrayInsert", "EEE"); set(0x3A, "ReturnNothing", "r");
-        set(0x3B, "EqualEqual_DelDel", "EE"); set(0x3C, "NotEqual_DelDel", "EE");
-        set(0x3D, "EqualEqual_DelFunc", "EE"); set(0x3E, "NotEqual_DelFunc", "EE"); set(0x3F, "EmptyDelegate", "");
-        set(0x40, "DynArrayRemove", "EEE"); set(0x41, "DebugInfo", "iiib"); set(0x43, "DelegateProperty", "nr");
+        set(0x38, "PrimitiveCast", "bE"); set(0x39, "DynArrayInsert", "EP"); set(0x3A, "ReturnNothing", "r");
+        set(0x3B, "EqualEqual_DelDel", "EP"); set(0x3C, "NotEqual_DelDel", "EP");
+        set(0x3D, "EqualEqual_DelFunc", "EP"); set(0x3E, "NotEqual_DelFunc", "EP"); set(0x3F, "EmptyDelegate", "");
+        set(0x40, "DynArrayRemove", "EP"); set(0x41, "DebugInfo", "iiib"); set(0x43, "DelegateProperty", "nr");
         set(0x44, "LetDelegate", "EE");
-        set(0x46, "DynArrayFind", "EwE");                   // UNVERIFIED (array, u16, item)
+        set(0x46, "DynArrayFind", "EwP");                   // array, u16, item, EndFunctionParms
         set(0x47, "DynArrayFindStruct", "EwP");             // UNVERIFIED (array, u16, params up to 0x16)
         set(0x49, "DefaultParmValue", "wE"); set(0x4A, "EmptyParmValue", ""); set(0x4B, "InstanceDelegate", "n");
         set(0x4C, "Op4C", "i"); set(0x4D, "Op4D", "i"); set(0x4E, "Op4E", "i"); set(0x4F, "Op4F", "i");
         set(0x50, "Op50", "i");                             // UNVERIFIED meaning, plain i32 (not a reference)
         set(0x51, "InterfaceContext", "E"); set(0x52, "InterfaceCast", "rE"); set(0x53, "EndOfScript", "");
-        set(0x54, "DynArrayAdd", "EE");
+        set(0x54, "DynArrayAdd", "EP");
         set(0x55, "DynArrayAddItem", "EwP"); set(0x56, "DynArrayRemoveItem", "EwP");  // UNVERIFIED: P ends at 0x16
-        set(0x57, "DynArrayInsertItem", "EEE"); set(0x58, "DynArrayIterator", "EEbEw");
-        set(0x59, "DynArraySort", "EE"); set(0x5A, "FilterEditorOnly", "w");
+        set(0x57, "DynArrayInsertItem", "EP"); set(0x58, "DynArrayIterator", "EEbEw");
+        set(0x59, "DynArraySort", "EP"); set(0x5A, "FilterEditorOnly", "w");
         set(0x5E, "Op5E", "r");                             // UNVERIFIED meaning
         set(0x5F, "Op5F", "EE");                            // UNVERIFIED: typed Let
         set(0x1B, "VirtualFunction", "nP"); set(0x1C, "FinalFunction", "rP"); set(0x37, "GlobalFunction", "nP");
@@ -306,6 +306,9 @@ Code decode(const Package& package, const FunctionInfo& function) {
     Code code;
     while (decoder.pos < decoder.end) {
         const uint32_t memory = decoder.memoryOffset();
+        // A statement never starts with EndFunctionParms: one there means a call consumed too few operands
+        // (the dynamic-array tokens carry their own terminator; this check found the layouts that missed it).
+        if (decoder.data[decoder.pos] == EX_EndFunctionParms) throw DecodeError("stray EndFunctionParms at statement level");
         code.statements.push_back(decoder.expression(0));
         code.statementAt.emplace(memory, code.statements.size() - 1);
         if (code.statements.back().op == EX_EndOfScript) break;

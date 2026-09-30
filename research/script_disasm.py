@@ -72,15 +72,15 @@ SIMPLE = {
     0x2C: ("IntConstByte", "b"), 0x2D: ("BoolVariable", "E"), 0x2E: ("DynamicCast", "rE"),
     0x2F: ("Iterator", "Ew"), 0x30: ("IteratorPop", ""), 0x31: ("IteratorNext", ""),
     0x32: ("StructCmpEq", "rEE"), 0x33: ("StructCmpNe", "rEE"), 0x35: ("StructMember", "rrbbE"),
-    0x36: ("DynArrayLength", "E"), 0x38: ("PrimitiveCast", "bE"), 0x39: ("DynArrayInsert", "EEE"),
-    0x3A: ("ReturnNothing", "r"), 0x3B: ("EqualEqual_DelDel", "EE"), 0x3C: ("NotEqual_DelDel", "EE"),
-    0x3D: ("EqualEqual_DelFunc", "EE"), 0x3E: ("NotEqual_DelFunc", "EE"), 0x3F: ("EmptyDelegate", ""),
-    0x40: ("DynArrayRemove", "EEE"), 0x41: ("DebugInfo", "iiib"), 0x43: ("DelegateProperty", "nr"),
-    0x44: ("LetDelegate", "EE"), 0x46: ("DynArrayFind", "EwE"), 0x47: ("DynArrayFindStruct", "EwP"),
+    0x36: ("DynArrayLength", "E"), 0x38: ("PrimitiveCast", "bE"), 0x39: ("DynArrayInsert", "EP"),
+    0x3A: ("ReturnNothing", "r"), 0x3B: ("EqualEqual_DelDel", "EP"), 0x3C: ("NotEqual_DelDel", "EP"),
+    0x3D: ("EqualEqual_DelFunc", "EP"), 0x3E: ("NotEqual_DelFunc", "EP"), 0x3F: ("EmptyDelegate", ""),
+    0x40: ("DynArrayRemove", "EP"), 0x41: ("DebugInfo", "iiib"), 0x43: ("DelegateProperty", "nr"),
+    0x44: ("LetDelegate", "EE"), 0x46: ("DynArrayFind", "EwP"), 0x47: ("DynArrayFindStruct", "EwP"),
     0x49: ("DefaultParmValue", "wE"), 0x4A: ("EmptyParmValue", ""), 0x4B: ("InstanceDelegate", "n"),
     0x51: ("InterfaceContext", "E"), 0x52: ("InterfaceCast", "rE"), 0x53: ("EndOfScript", ""),
-    0x54: ("DynArrayAdd", "EE"), 0x55: ("DynArrayAddItem", "EwP"), 0x56: ("DynArrayRemoveItem", "EwP"),
-    0x57: ("DynArrayInsertItem", "EEE"), 0x58: ("DynArrayIterator", "EEbEw"), 0x59: ("DynArraySort", "EE"),
+    0x54: ("DynArrayAdd", "EP"), 0x55: ("DynArrayAddItem", "EwP"), 0x56: ("DynArrayRemoveItem", "EwP"),
+    0x57: ("DynArrayInsertItem", "EP"), 0x58: ("DynArrayIterator", "EEbEw"), 0x59: ("DynArraySort", "EP"),
     0x5A: ("FilterEditorOnly", "w"),
     # Not in the set the format's public descriptions list; present in this build. Each carries one i32 that is
     # NOT an object reference (a least-squares fit of the header's in-memory size against reference counts,
@@ -204,6 +204,8 @@ class Decoder:
         while self.p < len(self.d):
             start = self.p
             self.statement_starts.add(self.memory_offset())
+            if self.d[start] == 0x16:
+                raise DecodeError("stray EndFunctionParms at statement level")
             text = self.expression()
             lines.append((start, text))
             if self.d[start] == EX_END_OF_SCRIPT:
