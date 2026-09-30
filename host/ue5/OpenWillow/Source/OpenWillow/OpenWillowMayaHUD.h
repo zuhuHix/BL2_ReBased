@@ -53,6 +53,7 @@ public:
     // Test: dispatch the browser's native drag/drop DOM events over live cells.
     void SendPageDrag(const FString& Id, int32 DestinationSlot);
     void SendPageInspectDrag();
+    void SendPageBackpackWheel(int32 PixelDelta);
 
 private:
     void OpenStatusMenu(bool bInventory);

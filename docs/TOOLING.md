@@ -980,3 +980,9 @@ vertex lists, duplicate coplanar polys) is reported, not counted. The report
 also carries negative controls for the other int slots.
 `tests/crosscheck_bsp_polys_test.py` covers it on synthetic fixtures. Results:
 [texture-axis record](verification/BSP_TEXTURE_AXES.md).
+
+Inventory backpack scrolling uses seven full rows and a clipped eighth-row
+preview. Mouse wheel/chevrons move one row; PageUp/PageDown move seven. The
+in-engine action runner verifies row overlap ordering and the top clamp. See
+[verification](verification/INVENTORY_MOVIE_PROTOTYPE.md) for remaining stock
+input and visual parity gaps.

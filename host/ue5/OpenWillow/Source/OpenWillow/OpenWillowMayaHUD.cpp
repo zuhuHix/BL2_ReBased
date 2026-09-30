@@ -366,6 +366,7 @@ void AOpenWillowMayaHUD::RequestPageReport()
         "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,"
         "inspect:inspectMode,inspectFrames:inspectFrameCount,inspectImageBytes:inspectImage.length,inspectYaw:inspectYaw,"
         "transfer:transferSourceId,compare:compareId,"
+        "firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
         "mainCardBounds:readBounds(INV+'.mainCard.bkgd'),compareCardBounds:readBounds(INV+'.compareCard.bkgd'),"
         "compareStatsVisible:!!get(INV+'.mainCard.stat1.mainField','_visible')&&!!get(INV+'.compareCard.stat1.mainField','_visible'),"
         "level:state?state.level:null,slots:state?state.slots:null,gearSlots:state?state.gearSlots:null,"
@@ -406,6 +407,13 @@ void AOpenWillowMayaHUD::SendPageInspectDrag()
     SkillsBrowser->ExecuteJavascript(TEXT("(()=>{const p=document.getElementById('inspect-preview');"
         "for(const [type,x] of [['pointerdown',100],['pointermove',220],['pointerup',220]])"
         "p.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:7,button:0,clientX:x,clientY:100}));})()"));
+}
+
+void AOpenWillowMayaHUD::SendPageBackpackWheel(int32 PixelDelta)
+{
+    if (!SkillsBrowser) return;
+    SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("document.querySelector('[data-kind=backpack-zone]')"
+        "?.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:%d,deltaMode:0}))"), PixelDelta));
 }
 
 void AOpenWillowMayaHUD::RequestSkillsCloseFromPage()

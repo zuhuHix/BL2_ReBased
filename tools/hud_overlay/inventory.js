@@ -14,10 +14,11 @@ const call = (path, method, ...args) => player.ow(path, 'apply', method, args);
 const get = (path, member) => player.ow(path, 'get', member);
 const set = (path, member, value) => player.ow(path, 'set', member, value);
 const colors = [0xffffff, 0xffffff, 0x39ff14, 0x3c8dff, 0xb43cff, 0xffb400];
-// Backpack rows per page. The real game shows about seven rows (the reference captures show seven
+// Fully visible backpack rows. The real game shows about seven rows (the reference captures show seven
 // and the top of an eighth); the converted cell is drawn at ROW_SCALE so seven fit above the panel's
 // scroll chevron. Both numbers are host choices measured in the bench, not movie values.
-const PAGE_SIZE = 7, ROW_SCALE = 0.94, ROW_PITCH = 61;
+const VISIBLE_ROWS = 7, ROW_SCALE = 0.94, ROW_PITCH = 61;
+const RENDERED_ROWS = VISIBLE_ROWS + 1, PEEK_HEIGHT = 16;
 // Reference composition, measured from the local stock inventory stills in
 // 1280x720 space. The runtime does not project the movie's GFx panel depth;
 // the host places/sizes Backpack beside Equipped. These are presentation
@@ -98,7 +99,7 @@ const MAX_DISPLAY_CREDITS = 99999999;
 // (found empirically in the bench, so UNVERIFIED against the original).
 const FUN_STATS_OVERLAP = 6;
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
-let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, page = 0;
+let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
@@ -402,7 +403,7 @@ function beginEquippedTransfer() {
   compareId = source.id;
   categoryIndex = categories.findIndex(category => category.key === (gearSlot || 'weapons'));
   selectedId = candidates[0].id;
-  page = pageForSelected(backpackItems());
+  firstRow = scrollForSelected(backpackItems());
   render();
 }
 function finishTransfer(cancel = false) {
@@ -410,7 +411,7 @@ function finishTransfer(cancel = false) {
   if (cancel && itemById(transferSourceId)) selectedId = transferSourceId;
   transferSourceId = compareId = null;
   categoryIndex = transferCategoryBefore;
-  page = pageForSelected(backpackItems());
+  firstRow = scrollForSelected(backpackItems());
   if (ready) render();
 }
 
@@ -724,28 +725,33 @@ function syncSelection() {
     if (cellButton) cellButton.setAttribute('aria-pressed', String(i === selectedCell));
   }
   const rows = backpackItems();
-  for (let row=0; row<PAGE_SIZE; row++) {
-    const item = rows[page*PAGE_SIZE+row];
-    if (item) call(`${INV}.storagePanel.owRow${row}`, 'SetSelected', item.id === selectedId);
+  for (let row=0; row<RENDERED_ROWS; row++) {
+    const item = rows[firstRow+row];
+    if (item) call(`${INV}.storagePanel.owRows.owRow${row}`, 'SetSelected', item.id === selectedId);
   }
 }
 
-function pageForSelected(rows) {
+function scrollForSelected(rows) {
   const index = rows.findIndex(item => item.id === selectedId);
-  return index < 0 ? page : Math.floor(index / PAGE_SIZE);
+  const maximum = Math.max(0, rows.length - VISIBLE_ROWS);
+  const start = Math.max(0, Math.min(maximum, firstRow));
+  if (index < 0) return start;
+  if (index < start) return index;
+  return index >= start + VISIBLE_ROWS ? Math.min(maximum, index - VISIBLE_ROWS + 1) : start;
 }
 
-function changePage(delta) {
+function scrollBackpack(delta) {
   const rows = backpackItems();
-  const maxPage = Math.max(0, Math.ceil(rows.length/PAGE_SIZE)-1);
-  page = Math.max(0, Math.min(maxPage, page + delta));
+  const next = Math.max(0, Math.min(Math.max(0, rows.length-VISIBLE_ROWS), firstRow + delta));
+  if (next === firstRow) return;
+  firstRow = next;
   render();
 }
 
 function changeSort() {
   sortIndex = (sortIndex + 1) % sortModes.length;
   const rows = backpackItems();
-  page = pageForSelected(rows);
+  firstRow = scrollForSelected(rows);
   render();
   announce(`Backpack sorted by ${sortModes[sortIndex].label.toLowerCase()}`);
 }
@@ -874,8 +880,8 @@ function moveSelection(delta) {
   index = Math.max(0, Math.min(rows.length-1, index + delta));
   selectedId = rows[index].id;
   compareId = transferSourceId;
-  const nextPage = Math.floor(index/PAGE_SIZE);
-  if (nextPage !== page) { page = nextPage; render(); focusItem(selectedId); }
+  const nextFirstRow = scrollForSelected(rows);
+  if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
   else { syncSelection(); drawCard(); }
   announce(itemAriaLabel(itemById(selectedId)));
 }
@@ -984,7 +990,7 @@ function refreshBackpackHeader() {
   const tag = category.key === 'all' && mode.key !== 'default' ? mode.label : category.label;
   call(panel, 'SetSortLabel', `BACKPACK <font size="16">(${escapeHtml(tag)})</font>`);
   document.querySelectorAll('#controls [data-kind="category"]').forEach(node => node.remove());
-  const panelBounds = readBounds(panel + '.bkgd'), firstRowBounds = readBounds(`${panel}.owRow0`);
+  const panelBounds = readBounds(panel + '.bkgd'), firstRowBounds = readBounds(`${panel}.owRows.owRow0`);
   headerPending = !panelBounds || !firstRowBounds;
   if (headerPending) return;
   // Only a single category can be named honestly for an unfiltered mixed list.
@@ -1004,7 +1010,7 @@ function refreshBackpackHeader() {
   set(path, '_visible', true);
   // Chevrons sit in the gutter between the visible cell column (the clip's own bounds include
   // glow art out to the panel frame) and the panel frame, level with the sub-label.
-  const column = readBounds(`${panel}.owRow0.hitTestClip`) || firstRowBounds;
+  const column = readBounds(`${panel}.owRows.owRow0.hitTestClip`) || firstRowBounds;
   const shown = readBounds(path) || bounds;
   const cy = (shown.yMin + shown.yMax) / 2, size = 24;
   [[-1, '‹', 'Previous category', column.xMin - size - 3],
@@ -1018,7 +1024,7 @@ function refreshBackpackHeader() {
 
 function changeCategory(delta) {
   categoryIndex = (categoryIndex + delta + categories.length) % categories.length;
-  page = 0;
+  firstRow = 0;
   const rows = backpackItems();
   const selected = itemById(selectedId);
   // Keep an equipped selection; a backpack selection that the filter hides moves to the first row.
@@ -1027,7 +1033,7 @@ function changeCategory(delta) {
     targetGearSlot = gearSlotForItem(itemById(selectedId));
     compareId = null;
   }
-  page = pageForSelected(rows);
+  firstRow = scrollForSelected(rows);
   render();
   announce(`Backpack category ${categories[categoryIndex].label.toLowerCase()}, ${rows.length} items`);
 }
@@ -1100,20 +1106,25 @@ function render() {
   }
 
   const rows = backpackItems();
-  page = Math.min(page, Math.max(0, Math.ceil(rows.length/PAGE_SIZE)-1));
+  firstRow = Math.max(0, Math.min(firstRow, Math.max(0, rows.length-VISIBLE_ROWS)));
   const panel = INV + '.storagePanel';
   const panelBounds = call(panel+'.bkgd','getBounds',ROOT);
+  const rowGroup = panel + '.owRows';
+  if (!frameReady(rowGroup)) call(panel, 'createEmptyMovieClip', 'owRows', 2000);
+  set(rowGroup, 'scrollRect', null);
+  set(rowGroup, '_x', 0);
+  set(rowGroup, '_y', 0);
   if (panelBounds) {
     const zone = overlayButton(panelBounds, 'Return equipped item to backpack', () => {}, 'backpack-zone');
     zone.tabIndex = -1;
     zone.removeAttribute('title');
     zone.setAttribute('aria-hidden', 'true');
   }
-  for (let row=0; row<PAGE_SIZE; row++) {
-    const path = `${panel}.owRow${row}`;
+  for (let row=0; row<RENDERED_ROWS; row++) {
+    const path = `${panel}.owRows.owRow${row}`;
     call(path, 'removeMovieClip');
-    const item = rows[page*PAGE_SIZE+row];
-    call(panel, 'attachMovie', 'inventory - cell', `owRow${row}`, 2000+row);
+    const item = rows[firstRow+row];
+    call(rowGroup, 'attachMovie', 'inventory - cell', `owRow${row}`, 2000+row);
     const fullBounds = call(path, 'getBounds', ROOT);
     set(path, '_xscale', ROW_SCALE * 100);
     set(path, '_yscale', ROW_SCALE * 100);
@@ -1135,10 +1146,33 @@ function render() {
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     call(path, 'SetSelected', Boolean(item && item.id === selectedId));
     if (!item) continue;
-    const rowButton = hit(path, '', () => select(item.id), () => select(item.id), color(item), item, 'backpack', `${path}.hitTestClip`);
-    addMarkControls(path, item, rowButton);
+    const rowButton = hit(path, '', () => {
+      select(item.id);
+      if (row >= VISIBLE_ROWS) { firstRow = scrollForSelected(rows); render(); }
+    }, row < VISIBLE_ROWS ? () => select(item.id) : null, color(item), item, 'backpack', `${path}.hitTestClip`);
+    if (row >= VISIBLE_ROWS && rowButton) rowButton.dataset.partial = 'true';
+    if (row < VISIBLE_ROWS) addMarkControls(path, item, rowButton);
     const button = [...layer.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === item.id);
     if (button) button.addEventListener('dblclick', event => { event.preventDefault(); select(item.id); equip(); });
+  }
+  const firstBounds = call(rowGroup+'.owRow0', 'getBounds', rowGroup);
+  if (firstBounds) {
+    const height = VISIBLE_ROWS * ROW_PITCH + PEEK_HEIGHT;
+    // scrollRect translates its contents by -x/-y. Move the group by the same
+    // amount so the existing row positions and hit-target bounds stay aligned.
+    const top = readBounds(rowGroup+'.owRow0');
+    set(rowGroup, '_x', firstBounds.xMin);
+    set(rowGroup, '_y', firstBounds.yMin);
+    set(rowGroup, 'scrollRect', {x:firstBounds.xMin, y:firstBounds.yMin,
+      width:firstBounds.xMax-firstBounds.xMin, height});
+    const bottom = top?.yMin + height * PANEL_SCALE_Y * COMPOSITION_SCALE;
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    for (const button of layer.querySelectorAll('[data-partial=true]')) {
+      const bounds = button.getBoundingClientRect();
+      const limit = stage.top + bottom * stage.width / 1280;
+      const cropped = Math.max(0, Math.min(100, (bounds.bottom-limit) / bounds.height * 100));
+      button.style.clipPath = `inset(0 0 ${cropped}% 0)`;
+    }
   }
 
   const count = Number.isFinite(state.backpackCount) ? state.backpackCount : rows.length;
@@ -1152,12 +1186,12 @@ function render() {
   addHeaderTabs();
   const sortButton = hit(panel+'.pcSortButton', `Sort backpack by ${sortModes[sortIndex].label.toLowerCase()}`, changeSort, null, null, null, 'sort');
   if (sortButton && capacity) sortButton.title = `Backpack ${count}/${capacity}`;
-  const morePrevious = page > 0, moreNext = (page+1)*PAGE_SIZE < rows.length;
+  const morePrevious = firstRow > 0, moreNext = firstRow+VISIBLE_ROWS < rows.length;
   // The scroll chevrons are only drawn when there is somewhere to scroll.
   set(panel+'.moreUp', '_visible', morePrevious);
   set(panel+'.moreDown', '_visible', moreNext);
-  if (morePrevious) hit(panel+'.moreUp', 'Previous backpack page', () => changePage(-1), null, null, null, 'previous');
-  if (moreNext) hit(panel+'.moreDown', 'Next backpack page', () => changePage(1), null, null, null, 'next');
+  if (morePrevious) hit(panel+'.moreUp', 'Scroll backpack up', () => scrollBackpack(-1), null, null, null, 'previous');
+  if (moreNext) hit(panel+'.moreDown', 'Scroll backpack down', () => scrollBackpack(1), null, null, null, 'next');
   drawCard();
   document.getElementById('loading').hidden = true;
   document.getElementById('live-status').textContent = `${count}${capacity ? ` of ${capacity}` : ''} items in backpack. Sorted by ${sortModes[sortIndex].label.toLowerCase()}.`;
@@ -1209,10 +1243,20 @@ function handleKey(event) {
   else if (key === 's') { event.preventDefault(); changeSort(); }
   else if (key === 'arrowup') { event.preventDefault(); moveSelection(-1); }
   else if (key === 'arrowdown') { event.preventDefault(); moveSelection(1); }
-  else if (key === 'arrowleft' || key === 'pageup') { event.preventDefault(); changePage(-1); }
-  else if (key === 'arrowright' || key === 'pagedown') { event.preventDefault(); changePage(1); }
+  else if (key === 'arrowleft' || key === 'pageup') { event.preventDefault(); scrollBackpack(-VISIBLE_ROWS); }
+  else if (key === 'arrowright' || key === 'pagedown') { event.preventDefault(); scrollBackpack(VISIBLE_ROWS); }
 }
 window.addEventListener('keydown', handleKey);
+let wheelRows = 0;
+dragLayer.addEventListener('wheel', event => {
+  if (!ready || !state || inspectMode || !event.target.closest('[data-kind="backpack"], [data-kind="backpack-zone"], [data-kind="previous"], [data-kind="next"], [data-kind="category"], [data-kind="sort"]')) return;
+  event.preventDefault();
+  const amount = event.deltaY * (event.deltaMode === 1 ? 1 : event.deltaMode === 2 ? VISIBLE_ROWS : .01);
+  if (Math.sign(amount) !== Math.sign(wheelRows)) wheelRows = 0;
+  wheelRows += amount;
+  const steps = Math.trunc(wheelRows);
+  if (steps) { wheelRows -= steps; scrollBackpack(steps); }
+}, {passive:false});
 // Letterbox the movie and its hit targets together. Panel composition lives
 // in the movie, so the curved-glass art still reaches the viewport edges.
 function layoutStage() {
@@ -1235,7 +1279,7 @@ const gamepadActions = {
   6: toggleCompare,
   10: () => toggleMark('trash'),
   12: () => moveSelection(-1), 13: () => moveSelection(1),
-  14: () => changePage(-1), 15: () => changePage(1)
+  14: () => scrollBackpack(-1), 15: () => scrollBackpack(1)
 };
 setInterval(() => {
   if (!ready || !navigator.getGamepads) return;

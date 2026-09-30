@@ -403,3 +403,16 @@ cached-state/empty-selection JS change did not require another engine build.
 
 All animation, mesh, export logs and screenshots remain ignored local/UE
 outputs. No independent critic and no claim of 1:1 parity.
+
+### Continuous backpack window (2026-09-30)
+
+Seven full rows plus a masked eighth-row preview replace discrete pagination.
+Native cells are grouped under AS2 scrollRect; the partial HTML hit target uses
+the same visible boundary. Wheel and chevrons move one row, PageUp/PageDown seven;
+selection reveals itself with the minimum window movement. Browser measurement
+shows ~9.5 px of the partial hit target. In-engine 37/37 PASS, log
+`local/inventory-actions/run-20260930-014550.log`; new checks verify one-row
+advance retaining six IDs in order and large upward delta clamping to the top.
+UE build 7.75 s; CTest 6/6 (20.39 s), all nine package checks match.
+Original-game wheel acceleration and physical bottom-edge clicks remain
+unverified. This does not establish complete inventory parity.

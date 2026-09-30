@@ -172,6 +172,48 @@ void UOpenWillowInventoryActionTest::BuildSteps()
     // Tab is the primary key (the controller forwards it to Maya); I is exercised at the reopen step.
     Add(TEXT("open_inventory"), false, [this] { PressGameKey(EKeys::Tab); }, OpenVerify, 120.f);
 
+    Add(TEXT("backpack_wheel_scrolls_one_row"), false,
+        [this]
+        {
+            VisibleBeforeScroll.Reset();
+            if (auto Page = PageObject())
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Visible = nullptr;
+                if (Page->TryGetArrayField(TEXT("visibleBackpack"), Visible))
+                    for (const auto& Id : *Visible) VisibleBeforeScroll.Add(Id->AsString());
+            }
+            Hud->SendPageBackpackWheel(100);
+        },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            const TArray<TSharedPtr<FJsonValue>>* Visible = nullptr;
+            double First = -1;
+            if (!Page || !Page->TryGetNumberField(TEXT("firstRow"), First) || First != 1
+                || !Page->TryGetArrayField(TEXT("visibleBackpack"), Visible)
+                || VisibleBeforeScroll.Num() != 7 || Visible->Num() != 7)
+            { D = TEXT("wheel did not advance exactly one visible row"); return false; }
+            for (int32 I = 0; I < 6; ++I)
+                if ((*Visible)[I]->AsString() != VisibleBeforeScroll[I+1])
+                { D = TEXT("wheel skipped/reordered the retained six rows"); return false; }
+            D = TEXT("one row advanced; six previous items retained in order"); return true;
+        });
+    Add(TEXT("backpack_scroll_clamps_at_top"), false,
+        [this] { Hud->SendPageBackpackWheel(-10000); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            const TArray<TSharedPtr<FJsonValue>>* Visible = nullptr;
+            double First = -1;
+            if (!Page || !Page->TryGetNumberField(TEXT("firstRow"), First) || First != 0
+                || !Page->TryGetArrayField(TEXT("visibleBackpack"), Visible) || Visible->Num() != VisibleBeforeScroll.Num())
+            { D = TEXT("scroll did not clamp to the original top window"); return false; }
+            for (int32 I = 0; I < VisibleBeforeScroll.Num(); ++I)
+                if ((*Visible)[I]->AsString() != VisibleBeforeScroll[I])
+                { D = TEXT("top window differs after scroll return"); return false; }
+            D = TEXT("large upward wheel delta clamps to original top items"); return true;
+        });
+
     Add(TEXT("inspect_weapon"), false, [this] { PressKey(TEXT("f")); },
         [this, Snapshot](FString& D)
         {

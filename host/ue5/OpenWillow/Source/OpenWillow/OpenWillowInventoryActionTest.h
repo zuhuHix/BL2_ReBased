@@ -83,4 +83,5 @@ private:
     FString SelId, PrevSel, DisplacedId, DropId, DropName, ShieldId;
     int32 CountBefore = 0, PickupAttemptsBefore = 0;
     TArray<FString> FillerIds;
+    TArray<FString> VisibleBeforeScroll;
 };
