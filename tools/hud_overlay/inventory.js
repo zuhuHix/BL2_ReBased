@@ -19,20 +19,25 @@ const colors = [0xffffff, 0xffffff, 0x39ff14, 0x3c8dff, 0xb43cff, 0xffb400];
 // scroll chevron. Both numbers are host choices measured in the bench, not movie values.
 const VISIBLE_ROWS = 7, ROW_SCALE = 0.94, ROW_PITCH = 61;
 const RENDERED_ROWS = VISIBLE_ROWS + 1, PEEK_HEIGHT = 16;
+// A sub-header ("WEAPONS", "DAHL") takes this much list height (row pixels), measured from the original
+// captures (about 0.4 of a cell pitch); HEADER_OVERLAP tucks its label against the cell below. Host values.
+const HEADER_PITCH = 24, HEADER_OVERLAP = 3;
+const WINDOW_HEIGHT = VISIBLE_ROWS * ROW_PITCH;
 // Reference composition, measured from the local stock inventory stills in
 // 1280x720 space. The runtime does not project the movie's GFx panel depth;
 // the host places/sizes Backpack beside Equipped. These are presentation
 // choices, not decoded movie values or proof of original 3D projection parity.
 const COMPOSITION_SCALE = 1.09;
 const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 135;
-// This list is a host-side convenience. The original movie's full sort cycle
-// was not exercised in the local game trace, so these modes are not parity claims.
+// The stock backpack sort cycle, read from the original game (2026-09-30): PageDown runs ALL -> TYPES ->
+// BRANDS -> ITEMS -> VALUE -> ALL, PageUp runs it backwards, no sort mode is remembered per item. What each
+// mode lists and how its sub-headers read is in backpackGroups().
 const sortModes = [
-  {key:'default', label:'DEFAULT'},
-  {key:'name', label:'NAME'},
-  {key:'rarity', label:'RARITY'},
-  {key:'level', label:'LEVEL'},
-  {key:'damage', label:'DAMAGE'}
+  {key:'all', label:'ALL'},
+  {key:'types', label:'TYPES'},
+  {key:'brands', label:'BRANDS'},
+  {key:'items', label:'ITEMS'},
+  {key:'value', label:'VALUE'}
 ];
 // Recorded stock card positions/scales. The stock comparison capture confirms
 // that full-size cards intentionally overlay the upper equipment panels.
@@ -42,19 +47,28 @@ const comparePanelTweens = [
   ['Equipped',0.2,53,-25,0,-176,-25,-10000,-30,-25,-2650],
   ['Backpack',0.2,64,-45,-300,385,-70,-4950,390,-43,-2650]
 ];
-// Backpack filter (the original's "(ALL)" tag). Labels are the host's wording, not movie strings:
-// the converted movie only carries a placeholder header ("Assault Rifles").
 const gearSlots = [
   {key:'shield', itemType:'shield', label:'Shield'},
   {key:'grenadeMod', itemType:'grenade_mod', label:'Grenade Mod'},
   {key:'classMod', itemType:'class_mod', label:'Class Mod'},
   {key:'relic', itemType:'relic', label:'Relic'}
 ];
-const categories = [
-  {key:'all', label:'ALL', match:null},
-  {key:'weapons', label:'WEAPONS', match:item => !gearSlotForItem(item)},
-  ...gearSlots.map(slot => ({key:slot.key, label:`${slot.label.toUpperCase()}S`, match:item => item.itemType === slot.itemType}))
+// Item classes in list order. Observed: WEAPONS, then RELICS, then CLASS MODS. Where SHIELDS and
+// GRENADE MODS sit, and their labels, were not in the observed backpack: UNVERIFIED host choice.
+const itemClasses = [
+  {key:'weapon', label:'WEAPONS'}, {key:'shield', label:'SHIELDS'}, {key:'grenade_mod', label:'GRENADE MODS'},
+  {key:'relic', label:'RELICS'}, {key:'class_mod', label:'CLASS MODS'}
 ];
+// Weapon-type sub-headers. Only ASSAULT RIFLES and SUB-MACHINE GUNS were observed; the other labels are
+// the natural plurals, UNVERIFIED. Groups are ordered alphabetically (AR before SMG was observed).
+const weaponTypeLabels = new Map([
+  ['pistol','PISTOLS'], ['smg','SUB-MACHINE GUNS'], ['shotgun','SHOTGUNS'], ['assault rifle','ASSAULT RIFLES'],
+  ['ar','ASSAULT RIFLES'], ['sniper rifle','SNIPER RIFLES'], ['sniper','SNIPER RIFLES'],
+  ['rocket launcher','ROCKET LAUNCHERS'], ['rocket','ROCKET LAUNCHERS'], ['launcher','ROCKET LAUNCHERS']
+]);
+// Brand sub-headers are the manufacturer in capitals, alphabetical. The Bandit header read "BANDIT MADE"
+// in the original; the other brands' spellings are assumed to be the plain name (UNVERIFIED).
+const brandLabels = new Map([['bandit','BANDIT MADE']]);
 const weaponCardStats = [
   {key:'damage', label:'Damage', decimals:0, higherIsBetter:true, icon:'weaponDamage'},
   // Optional host field (percent, modelled by the host and not verified). The icon frame name is a
@@ -101,11 +115,14 @@ const FUN_STATS_OVERLAP = 6;
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
-let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
+let sortIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
 let navigationPanel = 'equipped', lastBackpackId = null, lastEquippedIndex = 0;
+// A selected empty backpack cell: selectedId is null and this is its index among the empty cells.
+let selectedEmpty = null, lastBackpackEmpty = null;
+// The clips the last render drew for the backpack list: [{entry, path}] (entry indexes backpackEntries()).
+let rowClips = [], headerClips = [];
 let transferFromEquipped = false;
-let transferCategoryBefore = 0;
 let compareStartedFromLeft = false;
 let lastMenuPreviewId = null;
 window.owRefreshMenuPreview = () => {
@@ -152,8 +169,14 @@ function movieTypeIcon(item) {
   return weaponTypeIcons.get(type) || 'Pistol';
 }
 const gearSlotForItem = item => gearSlots.find(slot => slot.itemType === item?.itemType)?.key || null;
-const itemCategoryLabel = item => gearSlotForItem(item)
-  ? gearSlots.find(slot => slot.key === gearSlotForItem(item)).label.toUpperCase() + 'S' : 'WEAPONS';
+// 'weapon' or the gear item type; equipment cells and swap candidates compare by this.
+const itemClass = item => gearSlotForItem(item) ? item.itemType : 'weapon';
+const itemClassLabel = item => itemClasses.find(entry => entry.key === itemClass(item))?.label || 'ITEMS';
+const weaponTypeLabel = item => weaponTypeLabels.get(String(item?.type || '').trim().toLowerCase()) || 'OTHER';
+const brandLabel = item => {
+  const brand = String(item?.manufacturer || '').trim().toLowerCase();
+  return brand ? brandLabels.get(brand) || brand.toUpperCase() : 'OTHER';
+};
 
 // UNVERIFIED PLACEHOLDER ART: the game's real gear icons are 3D renders that this host does
 // not produce yet, and a weapon whose mesh was not exported has no thumbnail either. Both get a
@@ -261,12 +284,22 @@ window.owInventory = snapshot => {
     const heldId = state.slots[targetSlot];
     // An intentionally selected empty equipment cell must stay empty when
     // unrelated ammo/currency snapshots arrive.
-    if (firstSnapshot || selectedId !== null || navigationPanel !== 'equipped') {
+    const onEmptyCell = navigationPanel === 'backpack' && selectedEmpty !== null;
+    if (!onEmptyCell && (firstSnapshot || selectedId !== null || navigationPanel !== 'equipped')) {
+      selectedEmpty = null;
       selectedId = transferSourceId ? backpackItems()[0]?.id || null : itemById(heldId)?.id || backpackItems()[0]?.id || null;
       navigationPanel = equippedIds().has(selectedId) || !selectedId ? 'equipped' : 'backpack';
     }
   }
   if (!itemById(compareId) || compareId === selectedId) compareId = null;
+  // The pack's free space changed: keep an empty-cell selection on a cell that still exists.
+  if (selectedEmpty !== null) {
+    const empties = backpackEntries().filter(entry => entry.kind === 'empty').length;
+    if (selectedEmpty >= empties) {
+      selectedEmpty = empties ? empties - 1 : null;
+      if (selectedEmpty === null) selectedId = backpackItems()[0]?.id || null;
+    }
+  }
   if (ready) render();
 };
 
@@ -275,22 +308,60 @@ function text(path, value, size = 15, tint = 0xffffff, align = '') {
   set(path, 'htmlText', align ? `<p align="${align}">${body}</p>` : body);
 }
 
-function backpackItems() {
+// What the backpack list shows, as [{label, items}] (label null = no sub-header). Observed in the original
+// (2026-09-30): ALL lists everything under class sub-headers; TYPES only weapons under weapon-type
+// sub-headers; BRANDS everything under manufacturer sub-headers (alphabetical); ITEMS only non-weapons
+// under class sub-headers; VALUE everything in one headerless list, dearest first. Inside a group the
+// host's order is kept. While swapping, the list is just the items that fit the source's slot under one
+// sub-header, and the tag reads COMPARE (same class as the source; the gear wording is UNVERIFIED).
+function backpackGroups() {
   const equipped = equippedIds();
-  const category = categories[categoryIndex];
-  const items = state?.items.filter(item => !equipped.has(item.id) && (!category.match || category.match(item))) || [];
-  const mode = sortModes[sortIndex];
-  if (mode.key === 'default') return items;
-  const compareText = (left, right) => String(left ?? '').localeCompare(String(right ?? ''), undefined, {numeric:true, sensitivity:'base'});
-  return items.map((item, order) => ({item, order})).sort((a, b) => {
-    let order = 0;
-    if (mode.key === 'name') order = compareText(a.item.name, b.item.name);
-    else if (mode.key === 'rarity') order = Number(b.item.rarity || 0) - Number(a.item.rarity || 0);
-    else if (mode.key === 'level') order = Number(b.item.level || 0) - Number(a.item.level || 0);
-    else if (mode.key === 'damage') order = Number(b.item.damage || 0) - Number(a.item.damage || 0);
-    return order || a.order - b.order;
-  }).map(entry => entry.item);
+  const items = state?.items.filter(item => !equipped.has(item.id)) || [];
+  const source = itemById(transferSourceId);
+  if (source) {
+    const fits = items.filter(item => itemClass(item) === itemClass(source));
+    return fits.length ? [{label:itemClassLabel(source), items:fits}] : [];
+  }
+  const mode = sortModes[sortIndex].key;
+  if (mode === 'value')
+    return [{label:null, items:items.map((item, order) => ({item, order}))
+      .sort((a, b) => (Number(b.item.value) || 0) - (Number(a.item.value) || 0) || a.order - b.order)
+      .map(entry => entry.item)}];
+  const pool = mode === 'types' ? items.filter(item => itemClass(item) === 'weapon')
+    : mode === 'items' ? items.filter(item => itemClass(item) !== 'weapon') : items;
+  const labelOf = mode === 'types' ? weaponTypeLabel : mode === 'brands' ? brandLabel : itemClassLabel;
+  const groups = new Map();
+  for (const item of pool) {
+    const label = labelOf(item);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(item);
+  }
+  const classRank = label => itemClasses.findIndex(entry => entry.label === label);
+  return [...groups].map(([label, list]) => ({label, items:list})).sort((a, b) =>
+    mode === 'types' || mode === 'brands' ? a.label.localeCompare(b.label) : classRank(a.label) - classRank(b.label));
 }
+
+function backpackItems() { return backpackGroups().flatMap(group => group.items); }
+
+// The scrolling list: sub-headers, items, then the empty cells that fill the pack to its capacity.
+// How many empty cells a filtered list (TYPES, ITEMS, COMPARE) shows is UNVERIFIED; here it is the
+// pack's free space whatever the filter.
+function backpackEntries() {
+  const entries = [];
+  for (const group of backpackGroups()) {
+    if (group.label) entries.push({kind:'header', label:group.label});
+    for (const item of group.items) entries.push({kind:'item', item});
+  }
+  const equipped = equippedIds();
+  const used = state ? state.items.filter(item => !equipped.has(item.id)).length : 0;
+  const capacity = state && Number.isFinite(state.backpackCapacity) ? state.backpackCapacity : 0;
+  for (let index = 0; index < capacity - used; index++) entries.push({kind:'empty', index});
+  return entries;
+}
+// Selectable cells only (no sub-headers). Empty cells are skipped while swapping.
+const backpackCells = entries => entries.filter(entry => entry.kind === 'item' || (entry.kind === 'empty' && !transferSourceId));
+const isSelectedEntry = entry => entry.kind === 'item' ? entry.item.id === selectedId && selectedEmpty === null
+  : entry.kind === 'empty' && selectedEmpty === entry.index && !selectedId;
 
 function requestAction(action, fields = {}) {
   console.log('OWITEM ' + JSON.stringify({action, ...fields}));
@@ -781,28 +852,77 @@ function syncSelection() {
     button.setAttribute('aria-pressed', String(button.dataset.itemId === selectedId));
 }
 
-function scrollForSelected(rows) {
-  const index = rows.findIndex(item => item.id === selectedId);
-  const maximum = Math.max(0, rows.length - VISIBLE_ROWS);
-  const start = Math.max(0, Math.min(maximum, firstRow));
+// Scrolling works on entry indexes (sub-headers take height too). firstRow is the entry index of the
+// top visible *cell*; the sub-header right above it, if any, is drawn in the gap above the first cell.
+// Height from the top cell `first` down to the bottom of cell `last` (heights of everything between).
+function listSpan(entries, first, last) {
+  let height = ROW_PITCH;
+  for (let index = first; index < last; index++) height += entries[index].kind === 'header' ? HEADER_PITCH : ROW_PITCH;
+  return height;
+}
+const isCellEntry = (entries, index) => entries[index] && entries[index].kind !== 'header';
+function nextCell(entries, from) {
+  for (let index = from + 1; index < entries.length; index++) if (isCellEntry(entries, index)) return index;
+  return from;
+}
+function previousCell(entries, from) {
+  for (let index = from - 1; index >= 0; index--) if (isCellEntry(entries, index)) return index;
+  return from;
+}
+function lastCellIndex(entries) {
+  for (let index = entries.length - 1; index >= 0; index--) if (isCellEntry(entries, index)) return index;
+  return -1;
+}
+// The largest top cell that still fills the window down to the last cell.
+function maxFirstRow(entries) {
+  const last = lastCellIndex(entries);
+  if (last < 0) return 0;
+  let first = last;
+  for (let before = previousCell(entries, first); before !== first && listSpan(entries, before, last) <= WINDOW_HEIGHT;
+    before = previousCell(entries, first)) first = before;
+  return first;
+}
+function clampFirstRow(entries, first) {
+  const cells = entries.findIndex((entry, index) => isCellEntry(entries, index));
+  if (cells < 0) return 0;
+  let index = Math.max(cells, Math.min(first, maxFirstRow(entries)));
+  if (!isCellEntry(entries, index)) index = nextCell(entries, index);
+  return Math.min(index, maxFirstRow(entries));
+}
+const selectedEntryIndex = entries => entries.findIndex(isSelectedEntry);
+
+function scrollForSelected(entries) {
+  let start = clampFirstRow(entries, firstRow);
+  const index = selectedEntryIndex(entries);
   if (index < 0) return start;
   if (index < start) return index;
-  return index >= start + VISIBLE_ROWS ? Math.min(maximum, index - VISIBLE_ROWS + 1) : start;
+  while (start < index && listSpan(entries, start, index) > WINDOW_HEIGHT) start = nextCell(entries, start);
+  return start;
 }
 
 function scrollBackpack(delta) {
-  const rows = backpackItems();
-  const next = Math.max(0, Math.min(Math.max(0, rows.length-VISIBLE_ROWS), firstRow + delta));
+  const entries = backpackEntries();
+  let next = clampFirstRow(entries, firstRow);
+  for (let step = 0; step < Math.abs(delta); step++) next = delta > 0 ? nextCell(entries, next) : previousCell(entries, next);
+  next = clampFirstRow(entries, next);
   if (next === firstRow) return;
   firstRow = next;
   render();
 }
 
+// PageDown sorts forward, PageUp backward (observed: extOnChangeSort Delta +1 / -1). A sort keeps
+// the list scrolled to the top and selects its first cell, as every sort step did in the original.
 function changeSort(direction = 1) {
   if (transferSourceId) return;
   sortIndex = (sortIndex + direction + sortModes.length) % sortModes.length;
-  const rows = backpackItems();
-  firstRow = scrollForSelected(rows);
+  firstRow = 0;
+  if (navigationPanel === 'backpack') {
+    const first = backpackCells(backpackEntries())[0];
+    if (first) selectBackpackCell(first);
+    else { selectedId = null; selectedEmpty = null; }
+  }
+  const entries = backpackEntries();
+  firstRow = scrollForSelected(entries);
   render();
   announce(`Backpack sorted by ${sortModes[sortIndex].label.toLowerCase()}`);
 }
