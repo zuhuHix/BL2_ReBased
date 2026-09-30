@@ -887,6 +887,22 @@ proof of a flat transform. Native post-hook output timing remains to be checked
 in a fresh original-game capture. Synthetic callback checks:
 `python tests/ui_trace_returns_test.py`.
 
+## Reading the game's UnrealScript (bytecode disassembler prototype)
+
+`research/script_disasm.py` (Python, read-only) turns every script function in the code
+packages into pseudo-code. Needs `OPENWILLOW_BL2` or `--game <CookedPCConsole>`; generated
+listings belong under ignored `local/`.
+
+```text
+python research/script_disasm.py --check                      # structural validation, ~10 s
+python research/script_disasm.py WillowGame.upk StatusMenuInventoryPanelGFxObject.PanelOnInputKey
+python tests/script_disasm_test.py                            # synthetic tests, no game needed
+```
+
+Native functions print as `native_<n>` and their bodies are not in the packages (the sort
+cycle of the inventory is one). Layouts marked UNVERIFIED in the source are fitted, see
+`docs/verification/SCRIPT_BYTECODE_DISASM.md`.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied

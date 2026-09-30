@@ -35,7 +35,9 @@ on those files and blocks writes of `.upk/.tfc/.pck/.bik` files.
 
 Export census over packages, synthetic tests using the existing `package()` /
 `tag()` fixture helpers in `tests/`, CLI/JSON output flags, documentation,
-`tools/verify_packages.py`. Keep README.md, ROADMAP.md and docs/TOOLING.md in
+`tools/verify_packages.py`, the Python research prototypes (`research/native_count.py`,
+`research/script_disasm.py` and their synthetic tests). Generated disassembly and other
+game-derived output stays under ignored `local/`. Keep README.md, ROADMAP.md and docs/TOOLING.md in
 agreement with DECISIONS.md and the verification records under docs/verification/.
 
 ## Development priority: prove the vertical slice first
@@ -103,6 +105,23 @@ The current verified local candidate is UModel build 1590 from the official
 `gildor2/UEViewer` repository. The actual executable path is machine-specific;
 use an explicit `-UModel` path or an environment variable rather than adding a
 binary to this repository.
+
+## Phase 2 (script VM) rules
+
+The bytecode layout has no public spec for this build. Recover it from the packages, check it
+with structural oracles (sizes meet, jumps land on statements, totals match the census), and
+label what is fitted rather than proven `UNVERIFIED`. The C++ port into `src/` touches
+`CMakeLists.txt` and likely the `Reader`: stop and confirm first (sensitive areas above).
+Do not copy UE Explorer or other GPL tool code. See `docs/verification/SCRIPT_BYTECODE_DISASM.md`.
+
+## Menu parity work
+
+Re-observe the real game (docs/TOOLING.md "Tracing the real game's UI code") rather than guess;
+read script with `research/script_disasm.py` first, since navigation/equip logic is bytecode while
+the backpack sort is native. The in-engine suite (`tools/test_inventory_actions.ps1`) must be
+rerun after any change to `tools/hud_overlay/inventory.js` or `OpenWillowMayaHUD.cpp`'s page
+report; report its pass/fail counts honestly, including steps that fail only because local
+data (the gear manifest) is missing.
 
 ## Every change
 

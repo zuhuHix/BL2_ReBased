@@ -725,3 +725,64 @@ the armed Rifle_Siren idle (381 frames), the menu look and the weapon meshes;
 previews and the skill tree. Not restored: the original gear manifest and
 `observed_gear.json` (built from traces that no longer exist) and the Infinity proxy
 material, so gear steps of the action suite will not pass until they are rebuilt.
+
+### Original-game sort and compare observation, and the action-suite rerun (2026-09-30)
+
+AI-assisted; same capture session as the keyboard observation above (screenshots and the
+2,919-function trace stay under ignored `local/`; item names and stats in them belong to
+the player's save and are not copied here).
+
+**Sort cycle (observed).** PageDown sends `extOnChangeSort(Delta=+1)`, PageUp `-1`, so PageDown
+runs ALL -> TYPES -> BRANDS -> ITEMS -> VALUE -> ALL. The port has it reversed (PageUp forward).
+Every sort step selected the **first cell** and showed the list from the top.
+
+- Sub-headers are slim labels above the first item of each group, drawn inside the scrolling
+  list; one is about 0.37 of a cell pitch tall. The first sits directly under
+  "BACKPACK (TAG)". The tag is the sort mode; the port's host-invented category filter
+  (`[`/`]`, chevrons) has no stock counterpart.
+- ALL: everything grouped by class. WEAPONS, then RELICS, then CLASS MODS were seen. Where
+  SHIELDS and GRENADE MODS sit was not in the observed pack: UNVERIFIED.
+- TYPES: weapons only, grouped by weapon type ("ASSAULT RIFLES" before "SUB-MACHINE GUNS";
+  other labels and alphabetical order are guesses).
+- BRANDS: everything grouped by manufacturer, alphabetical (five brands seen; the Bandit
+  header read "BANDIT MADE" while the card logo reads "BANDIT").
+- ITEMS: non-weapons only, RELICS then CLASS MODS (so class order is not alphabetical).
+- VALUE: one headerless list, dearest first.
+- Empty cells follow the last item in every mode. How many a filtered mode shows is unknown.
+
+**Compare view (observed, both origins).** Backpack tag reads "(COMPARE)". The list is the
+weapons only under one "WEAPONS" sub-header, then empty cells. The four **gear cells of the
+Equipped panel are outlined red** (the movie's cell symbols have a `bad` frame; frame labels
+`normal, locked, bad, lockedbad, added` read from the converted library). Equipped-origin:
+green comparison frame on the equipped card. Gear compare (what turns red, what header)
+was not observed.
+
+**Inspect (observed).** Full-screen dark backdrop, the item card at top-left, a large gun
+filling the middle; Escape returns to the same selection.
+
+**Trace.** `SetSortLabel` / `ApplySortConfiguration` carry `SortFilterCategorizeData
+{SortType, FilterType, CategoryType, SortTitleLookupKey}`: the default is `(0,0,0,"")`,
+compare `(2,1,1,"Compare")`, leaving compare `(2,0,1,"all")`. What the numbers mean is UNVERIFIED.
+**The sort ordering itself is native code** (`extOnChangeSort`, `ApplySortConfiguration` are
+`FUNC_Native`), so it cannot be read from bytecode; see
+[SCRIPT_BYTECODE_DISASM.md](SCRIPT_BYTECODE_DISASM.md) for what can.
+
+**Action suite rerun (this worktree, seeded, slate keys, 2 slots).** `tools/test_inventory_actions.ps1`
+reported **30/46 passed, 16 failed**. The regression from the navigation change was one
+assumption: after `unequip` the page now keeps the emptied equipment cell selected (the
+step `backpack_transfer_empty_destination` pressed `e` expecting the backpack pistol), and
+steps 21-30 cascaded from it. The step now presses ArrowRight first (edited, **not yet
+rerun**: it needs an editor rebuild). Steps 37, 42, 43 fail for a different, known reason:
+the gear manifest is not restored in this worktree ("no shield in the local gear manifest").
+Steps 13/14 (`pageup_sorts_preserving_selection`, `pagedown_reverses_sort`) pass today but
+encode the wrong stock behaviour (sort does not preserve selection; PageDown is forward) and
+must change with the sort work.
+
+**State of the sort-list work.** A partial, **non-running** implementation of the stock list
+model is on branch `t3code/wip-inventory-sort-list` (one WIP commit: modes, grouping,
+entries with sub-headers and empty cells, entry-based scrolling). Unfinished: the render loop,
+empty-cell selection/hit boxes, removing the category filter, the page report in
+`OpenWillowMayaHUD.cpp` (`cat`, `backpackHeaderAnchored`, `backpackRowsAligned` assume the old
+rows), the in-engine steps, and the node tests. Remaining order of work: (2) sort list,
+(3) selectable empty cells, (4) full-screen Inspect with an auto-rotating gun, (5) red `bad`
+cell state on the gear cells during compare; then weapon models/textures and Phaselock.

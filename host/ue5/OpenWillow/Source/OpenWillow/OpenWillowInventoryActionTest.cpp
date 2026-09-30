@@ -447,7 +447,9 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         });
 
     Add(TEXT("backpack_transfer_empty_destination"), false,
-        [this] { PressKey(TEXT("e")); },
+        // After the unequip the page keeps the now-empty equipment cell selected (as the
+        // original does for an empty cell), so Right re-enters Backpack on its remembered row.
+        [this] { PressKey(TEXT("ArrowRight")); PressKey(TEXT("e")); },
         [this, Snapshot](FString& D)
         {
             auto Page = Snapshot(D);

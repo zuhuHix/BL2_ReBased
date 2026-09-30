@@ -309,7 +309,12 @@ coverage.
       hierarchy; class default objects from package CDOs; `FName` table;
       cross-package reference resolution
 - [ ] Bytecode loader for every `UFunction` / `UState`; opcode table; handle
-      the Gearbox local-variable-array quirk flagged by UE Explorer
+      the Gearbox local-variable-array quirk flagged by UE Explorer.
+      **Python prototype done (2026-09-30):** `research/script_disasm.py`
+      decodes 12,968 of 12,978 script functions exactly (every structural check
+      passes; 10 known failures), see
+      [the record](docs/verification/SCRIPT_BYTECODE_DISASM.md). Still open:
+      the C++ port in `src/`, `UState`, and the unverified opcode layouts
 - [ ] Interpreter: expressions, locals, `out` params, structs, dynamic arrays,
       casts, `foreach`, `switch`, `goto`, delegates, `super`, states and
       transitions, latent functions, timers

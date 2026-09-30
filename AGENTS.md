@@ -67,3 +67,41 @@ When the maintainer asks for an implementation task, state which external-tool
 path is being used, what remains owned by this project and what acceptance
 check will prove the slice. Then execute that bounded slice without reopening
 settled architecture decisions.
+
+## Where things stand (updated 2026-09-30)
+
+Read this first when picking work up; it is the short version of ROADMAP.md.
+
+- **Phase 1 (Sanctuary):** loads and walks; visual parity still open.
+- **Maya prototype:** in UE5 with Infinity and Phaselock as host prototypes (not stock logic).
+- **Inventory menu:** the real StatusMenu movie runs under Ruffle inside UE5 with a host adapter
+  (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.
+  Open, in order: stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), selectable
+  empty backpack cells, full-screen Inspect, red `bad` cells in compare view. State and evidence:
+  `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last two sections). A partial, non-running
+  start of the sort list is on branch `t3code/wip-inventory-sort-list`.
+- **Phase 2 (script VM):** started 2026-09-30. `research/script_disasm.py` (Python, read-only)
+  decodes 12,968 of 12,978 script functions exactly; record in
+  `docs/verification/SCRIPT_BYTECODE_DISASM.md`. Next: C++ port in `src/` (needs maintainer
+  confirmation, it touches `CMakeLists.txt`), object model, interpreter. Finding to remember:
+  the inventory sort logic is **native** code, but menu navigation/equip logic is readable script.
+- **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
+  `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
+  in-engine suite `tools/test_inventory_actions.ps1` (needs a seeded worktree, see below).
+
+### Setting up a fresh worktree
+
+Ignored data (`host/ue5/OpenWillow/Content`, `local/`) does not come from git. See
+`tools/worktree-assets.md` and `tools/seed_inventory_demo.py`, `tools/seed_inventory_assets.ps1`
+(set `OPENWILLOW_BL2`, `OPENWILLOW_UMODEL`), `tools/render_weapon_previews.py`,
+`tools/prepare_skill_tree.py`. Check what already exists before re-seeding.
+
+### Working rules that have paid off
+
+- Observe the real game for behaviour before inventing it; decode its bytecode for logic
+  (Phase 2 tooling) where the function is script, and observe where it is native.
+- Keep guesses labelled `UNVERIFIED` in code and docs; never copy game data, item names or stats
+  from a player's save into the repository.
+- Only one UE editor at a time per machine: `tools/test_inventory_actions.ps1` holds
+  `local/ue_run.lock`. The page loads `tools/hud_overlay/*.js` from disk at start, so do not edit
+  them while a run is in progress.
