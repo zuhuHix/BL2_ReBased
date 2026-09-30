@@ -585,3 +585,21 @@ or failures, no Idle_Inventory. UModel hold-definition dump is unsupported
 (Unknown class, .114 s); exit 0 does not mean success. Payloads stay ignored.
 CTest 6/6 (8.57 s), nine package checks match, syntax/diff pass. Native pipe
 recheck still explicitly unavailable. No runtime change or new engine capture.
+
+### Independent panel-plane rendering benchmark (2026-09-30)
+
+Developer-only `probe_panel_projection.js`, existing Ruffle/local movie. A
+temporary second player draws native equipment-panel art under a synthetic
+CSS rotateY(20deg)/1200 px perspective. Its HTML target shares the plane:
+center elementFromPoint passes; snapshot shows art/green border transformed
+together. Two completed runs 3018.1/2990.5 ms. Last 60 RAF intervals mean
+5.97 ms, max 8 ms (browser cadence, not UE throughput). Cleanup leaves one
+main player and ready inventory. No output assets. First awaited observation
+timed out; later instrumented run reported premature frame readiness, fixed
+by waiting for _framesloaded == _totalframes and using _level1-relative bounds.
+No restart was based solely on timeout; cleanup/terminal state was observed.
+
+This tests feasibility only, not stock angles, whole-menu depth ordering,
+drag/tween synchronization, memory cost or engine integration. Not loaded by
+inventory.html; production path unchanged. CTest 6/6 (8.69 s), nine package
+checks match, JS syntax/diff pass. No engine rerun or independent critic.

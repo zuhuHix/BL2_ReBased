@@ -1045,3 +1045,11 @@ The script checks the reflected AnimSetList inner property type, supplies that
 metadata to the existing CLI, and validates local reference identity/class.
 It retains unsupported WeaponActions explicitly. Shared Rifle_Siren references
 do not by themselves prove inventory action selection or IK behaviour.
+
+`tools/hud_overlay/probe_panel_projection.js` is a developer-only rendering
+benchmark, not loaded by the inventory. Evaluate its repository source in the
+collaborative preview, then start `owProbePanelProjection()` asynchronously and
+poll `window.owPanelProjectionProbeState`. A visual hold argument of at most
+10000 ms allows a screenshot before cleanup. It creates a temporary second
+Ruffle player, isolates equipment-panel art and tests a synthetic CSS plane
+with a matching HTML target. Angles/perspective are synthetic, not stock values.
