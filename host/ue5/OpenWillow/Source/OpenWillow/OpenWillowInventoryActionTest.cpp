@@ -155,6 +155,9 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         Page->TryGetBoolField(TEXT("ready"), bReady);
         Page->TryGetBoolField(TEXT("hasState"), bHasState);
         if (!bReady || !bHasState) { D = FString::Printf(TEXT("page ready=%d state=%d"), bReady, bHasState); return false; }
+        bool bHeaderAnchored = false;
+        Page->TryGetBoolField(TEXT("backpackHeaderAnchored"), bHeaderAnchored);
+        if (!bHeaderAnchored) { D = TEXT("backpack category controls are not above the first row"); return false; }
         FString Shown;
         for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
         {

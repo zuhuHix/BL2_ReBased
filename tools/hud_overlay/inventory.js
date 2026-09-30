@@ -978,7 +978,7 @@ function applyAmmoHighlight(item) {
 // one with the same name in the same frame leaves that name pointing at the doomed clip, so the
 // text and position went to it and the survivor kept the movie's default "Assault Rifles" at the
 // panel origin (the stray label seen right of the Backpack in the engine captures).
-function refreshBackpackHeader() {
+function refreshBackpackHeader(rowBounds = null, columnBounds = null) {
   const panel = INV + '.storagePanel';
   if (headerName) call(`${panel}.${headerName}`, 'removeMovieClip');
   headerName = `owHeader${++headerSerial}`;
@@ -990,7 +990,7 @@ function refreshBackpackHeader() {
   const tag = category.key === 'all' && mode.key !== 'default' ? mode.label : category.label;
   call(panel, 'SetSortLabel', `BACKPACK <font size="16">(${escapeHtml(tag)})</font>`);
   document.querySelectorAll('#controls [data-kind="category"]').forEach(node => node.remove());
-  const panelBounds = readBounds(panel + '.bkgd'), firstRowBounds = readBounds(`${panel}.owRows.owRow0`);
+  const panelBounds = readBounds(panel + '.bkgd'), firstRowBounds = rowBounds || readBounds(`${panel}.owRows.owRow0`);
   headerPending = !panelBounds || !firstRowBounds;
   if (headerPending) return;
   // Only a single category can be named honestly for an unfiltered mixed list.
@@ -1010,7 +1010,7 @@ function refreshBackpackHeader() {
   set(path, '_visible', true);
   // Chevrons sit in the gutter between the visible cell column (the clip's own bounds include
   // glow art out to the panel frame) and the panel frame, level with the sub-label.
-  const column = readBounds(`${panel}.owRows.owRow0.hitTestClip`) || firstRowBounds;
+  const column = columnBounds || readBounds(`${panel}.owRows.owRow0.hitTestClip`) || firstRowBounds;
   const shown = readBounds(path) || bounds;
   const cy = (shown.yMin + shown.yMax) / 2, size = 24;
   [[-1, '‹', 'Previous category', column.xMin - size - 3],
@@ -1155,6 +1155,11 @@ function render() {
     const button = [...layer.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === item.id);
     if (button) button.addEventListener('dblclick', event => { event.preventDefault(); select(item.id); equip(); });
   }
+  // Ruffle applies scrollRect's translation on the next movie frame. Capture
+  // the root-space header anchors before setting it, so same-frame getBounds
+  // cannot temporarily move the header/chevrons up to the tab bar.
+  const headerRowBounds = readBounds(rowGroup+'.owRow0');
+  const headerColumnBounds = readBounds(rowGroup+'.owRow0.hitTestClip');
   const firstBounds = call(rowGroup+'.owRow0', 'getBounds', rowGroup);
   if (firstBounds) {
     const height = VISIBLE_ROWS * ROW_PITCH + PEEK_HEIGHT;
@@ -1181,7 +1186,7 @@ function render() {
   // The original feeds "used/capacity" to a hidden clip (INV.storageCount) and draws no
   // visible count, so the count stays out of the header (tooltip and screen readers only).
   call(INV, 'SetStorageInfoCardData', capacity ? `${count}/${capacity}` : String(count));
-  refreshBackpackHeader();
+  refreshBackpackHeader(headerRowBounds, headerColumnBounds);
   hit(ROOT+'.header.pcCloseButton', 'Close inventory', closeInventory, null, null, null, 'close');
   addHeaderTabs();
   const sortButton = hit(panel+'.pcSortButton', `Sort backpack by ${sortModes[sortIndex].label.toLowerCase()}`, changeSort, null, null, null, 'sort');

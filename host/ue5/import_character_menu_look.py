@@ -14,6 +14,9 @@ BL2 draws its ink lines with its own shaders; `Master_Player`'s graph is
 stripped in the cooked data, so both are art-direction approximations
 (UNVERIFIED), not reconstructions.
 """
+import os
+import re
+from pathlib import Path
 import unreal
 
 destination = '/Game/OpenWillow/Characters/Maya'
@@ -74,6 +77,45 @@ def matte_character():
     unreal.log('OW_LOOK M_OW_Character specular 0.15 roughness 0.85')
 
 
+def inventory_head():
+    """Preview-only correction while the cooked Master_Player graph is unavailable.
+
+    Read palette values from the user's local UModel export. The existing parent
+    multiplies zones by two: compensate the face and use the default dark-blue
+    hair shadow rather than its violet midtone. This is visually tuned, not a
+    reconstruction of the stock shadow/highlight shader.
+    """
+    source = os.environ.get('OPENWILLOW_MENU_HEAD_PROPS')
+    if not source:
+        unreal.log_warning('OW_LOOK head correction skipped: set OPENWILLOW_MENU_HEAD_PROPS')
+        return
+    source = Path(source)
+    if source.name != 'Mati_Default_Head.props.txt':
+        raise RuntimeError('Expected the locally exported Mati_Default_Head.props.txt')
+    text = source.read_text(encoding='utf-8')
+    if "Parent = Material3'Common_Materials.Player.Master_Player'" not in text:
+        raise RuntimeError('Expected the default Maya head Master_Player instance')
+    values = {}
+    for raw, name in re.findall(r'ParameterValue = (\{[^\n]+\})\s*\n\s*ParameterName = (\w+)', text):
+        values[name] = {key: float(value) for key, value in
+                        re.findall(r'([RGBA])=([-\d.eE+]+)', raw)}
+    parent = unreal.load_asset(f'{destination}/Materials/MI_SirenHead')
+    if parent is None:
+        raise RuntimeError('Import Maya head before its menu material')
+    path = f'{destination}/Materials/MI_InventorySirenHead'
+    instance = unreal.load_asset(path) if eal.does_asset_exist(path) else None
+    if instance is None:
+        instance = tools.create_asset('MI_InventorySirenHead', f'{destination}/Materials',
+                                     unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mel.set_material_instance_parent(instance, parent)
+    for zone, source_name in (('A', 'p_AColorShadow'), ('C', 'p_CColorMidtone')):
+        color = values[source_name]
+        mel.set_material_instance_vector_parameter_value(instance, f'{zone}ColorMidtone',
+            unreal.LinearColor(*(color[key] * 0.5 for key in 'RGB'), 1.0))
+    eal.save_loaded_asset(instance, only_if_is_dirty=False)
+    unreal.log(f'OW_LOOK {path}: local default palette, hair shadow and half face gain')
+
+
 def backdrop_material():
     """After-tonemap world grading, preserving visible stencil-247 Maya pixels."""
     path = f'{destination}/M_OW_MenuBackdrop'
@@ -124,4 +166,5 @@ return lerp(grey.xxx, Color.rgb, Saturation) * Gain.rgb * shade;
 
 outline_material()
 matte_character()
+inventory_head()
 backdrop_material()

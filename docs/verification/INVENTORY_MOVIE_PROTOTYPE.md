@@ -416,3 +416,34 @@ advance retaining six IDs in order and large upward delta clamping to the top.
 UE build 7.75 s; CTest 6/6 (20.39 s), all nine package checks match.
 Original-game wheel acceleration and physical bottom-edge clicks remain
 unverified. This does not establish complete inventory parity.
+
+### Default head preview palette and crop anchors (2026-09-30)
+
+External export: UModel 1590, `-game=border -export -png`, package
+`CD_Siren_Skin_Default_SF`, object `Mati_Default_Head`, type
+`MaterialInstanceConstant`: 0.773 s, exit 0, eight files / 6,508,229 bytes,
+zero failures/duplicates in the fresh local output. Four PNGs, two material
+summaries and two property dumps; cooked Master_Player graph remains unavailable.
+The property dump matches the earlier export SHA256. All output stays local.
+
+The look script's optional OPENWILLOW_MENU_HEAD_PROPS input creates a separate
+inventory head instance. Existing factor-two gain is compensated on the face;
+hair uses the source default shadow colour instead of violet midtone. A fresh
+engine capture shows dark-blue hair and less pale face. This is visual tuning
+of an approximate shader, not a verified stock shading reconstruction.
+Gameplay mesh materials are not replaced. Import succeeded (zero errors/two
+warnings: initial missing generated instance and reference-gathering warning).
+
+Crop/header regression fixed by capturing header anchors before Ruffle applies
+scrollRect. Browser header controls now measure ~169-193 px, above the first
+row, instead of ~52-76 px beside the tabs. Engine open/reopen checks assert the
+relative placement. Final validation results are recorded below.
+
+Final checks: UE build succeeded (7.95 s); in-engine **37/37 PASS**, log
+`local/inventory-actions/run-20260930-015423.log`, including header placement
+on initial open, reopen and return from Skills. Fresh open capture confirms
+header at backpack and corrected head material; preview palette load logged.
+CTest **6/6** (15.60 s); all nine decoded byte/count/export comparisons match.
+Python/JS syntax and diff checks pass. No independent critic or matched stock
+Maya capture; panel perspective, shader ramps, focus/sort and Inspect parity
+remain incomplete.

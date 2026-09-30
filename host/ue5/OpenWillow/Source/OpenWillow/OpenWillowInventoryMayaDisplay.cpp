@@ -138,6 +138,13 @@ void AOpenWillowInventoryMayaDisplay::BeginPlay()
     }
     Body->SetSkeletalMesh(BodyMesh);
     Head->SetSkeletalMesh(HeadMesh);
+    // Preview-specific palette correction; the gameplay mesh/material stays separate.
+    if (UMaterialInterface* MenuHead = LoadObject<UMaterialInterface>(nullptr,
+        TEXT("/Game/OpenWillow/Characters/Maya/Materials/MI_InventorySirenHead.MI_InventorySirenHead")))
+    {
+        Head->SetMaterial(0, MenuHead);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory Maya preview head palette loaded"));
+    }
     // BL2's own inventory idle (Base_Siren.Idle_Inventory, imported by import_character_anims.py).
     // The head mesh has its own 7-bone skeleton with the body's bone names, so it follows the body.
     if (UAnimSequence* Idle = LoadObject<UAnimSequence>(nullptr, *IdleAnimation))

@@ -775,6 +775,10 @@ python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBod
 # 3. Import the clips, then the outline material and matte character material
 $env:OPENWILLOW_CHARACTER_REFERENCE=''; $env:OPENWILLOW_CHARACTER_ANIMS='Body=local/character/anim/siren_body.json'
 UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
+# Optional default head colour correction for the inventory display only.
+# UModel export includes the local property dump used by the look script.
+umodel.exe -path=<CookedPCConsole> -game=border -export -png -out=local/external/umodel/maya-menu-head CD_Siren_Skin_Default_SF Mati_Default_Head MaterialInstanceConstant
+$env:OPENWILLOW_MENU_HEAD_PROPS="$pwd/local/external/umodel/maya-menu-head/CD_Siren_Skin_Default_SF/MaterialInstanceConstant/Mati_Default_Head.props.txt"
 UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_menu_look.py -unattended -nullrhi
 # 4. Armed inventory pose, from the already exported Rifle_Siren AnimSet
 # Use the Python environment with numpy installed. Paths passed to the UE
