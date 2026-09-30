@@ -1,8 +1,11 @@
 #include "OpenWillowInventoryPreviewActor.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "ImageUtils.h"
+#include "Misc/Base64.h"
 
 AOpenWillowInventoryPreviewActor::AOpenWillowInventoryPreviewActor()
 {
@@ -17,6 +20,24 @@ AOpenWillowInventoryPreviewActor::AOpenWillowInventoryPreviewActor()
     PreviewWeapon->SetGenerateOverlapEvents(false);
     PreviewWeapon->SetCastShadow(false);
     PreviewWeapon->SetVisibleInSceneCaptureOnly(true);
+    PreviewWeapon->SetLightingChannels(false, false, true);
+
+    KeyLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("PreviewKey"));
+    FillLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("PreviewFill"));
+    for (UPointLightComponent* Light : {KeyLight.Get(), FillLight.Get()})
+    {
+        Light->SetupAttachment(SceneRoot);
+        Light->SetMobility(EComponentMobility::Movable);
+        Light->SetCastShadows(false);
+        Light->LightingChannels.bChannel0 = false;
+        Light->LightingChannels.bChannel2 = true;
+        Light->SetIntensityUnits(ELightUnits::Lumens);
+        Light->SetAttenuationRadius(1000.f);
+    }
+    KeyLight->SetRelativeLocation(FVector(150, -200, 150));
+    KeyLight->SetIntensity(2000.f);
+    FillLight->SetRelativeLocation(FVector(-100, 150, 80));
+    FillLight->SetIntensity(1000.f);
 
     Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("InventoryCapture"));
     Capture->SetupAttachment(SceneRoot);
@@ -26,6 +47,10 @@ AOpenWillowInventoryPreviewActor::AOpenWillowInventoryPreviewActor()
     Capture->bCaptureEveryFrame = false;
     Capture->bCaptureOnMovement = false;
     Capture->FOVAngle = 30.f;
+    Capture->PostProcessSettings.bOverride_AutoExposureMethod = true;
+    Capture->PostProcessSettings.AutoExposureMethod = AEM_Manual;
+    Capture->PostProcessSettings.bOverride_AutoExposureApplyPhysicalCameraExposure = true;
+    Capture->PostProcessSettings.AutoExposureApplyPhysicalCameraExposure = false;
 }
 
 void AOpenWillowInventoryPreviewActor::BeginPlay()
@@ -74,4 +99,21 @@ bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FString& ItemId)
     // has no imported mesh.
     Capture->CaptureScene();
     return bHasPreview;
+}
+
+FString AOpenWillowInventoryPreviewActor::InspectFrame(float Yaw, float Pitch)
+{
+    if (!bHasPreview || !RenderTarget || !FMath::IsFinite(Yaw) || !FMath::IsFinite(Pitch)) return FString();
+    const FBoxSphereBounds Bounds = PreviewWeapon->GetLocalBounds();
+    const float Radius = FMath::Max(Bounds.SphereRadius, 20.f);
+    const FVector BaseOffset(Radius * 2.2f, -Radius * 5.2f, Radius * 1.2f);
+    const FVector Offset = FRotator(FMath::Clamp(Pitch, -80.f, 80.f), FMath::Fmod(Yaw, 360.f), 0.f).RotateVector(BaseOffset);
+    Capture->SetRelativeLocation(Offset);
+    Capture->SetRelativeRotation((-Offset).Rotation());
+    Capture->CaptureScene();
+    FImage Image;
+    TArray64<uint8> Png;
+    if (!FImageUtils::GetRenderTargetImage(RenderTarget, Image)
+        || !FImageUtils::CompressImage(Png, TEXT("png"), Image, 0) || Png.IsEmpty()) return FString();
+    return TEXT("data:image/png;base64,") + FBase64::Encode(Png.GetData(), Png.Num());
 }

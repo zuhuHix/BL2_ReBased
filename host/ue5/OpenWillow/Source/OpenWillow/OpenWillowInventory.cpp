@@ -193,6 +193,7 @@ int32 UOpenWillowInventory::LoadGearManifest(const FString& FilePath)
         ItemObject->TryGetStringField(TEXT("manufacturer"), Item.Manufacturer);
         ItemObject->TryGetStringField(TEXT("rarityColor"), Item.RarityColor);
         ItemObject->TryGetStringField(TEXT("funStats"), Item.FunStats);
+        ItemObject->TryGetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
         if (Item.Id.IsEmpty() || Item.Name.IsEmpty() || !IsGearItemType(Item.ItemType) || IsKnownItemId(Item.Id))
             continue;
 
@@ -230,6 +231,7 @@ int32 UOpenWillowInventory::LoadGearManifest(const FString& FilePath)
                     || !StatObject->TryGetStringField(TEXT("value"), Stat.Value)
                     || Stat.Label.IsEmpty()) continue;
                 Stat.bHasBetterDirection = StatObject->TryGetBoolField(TEXT("higherIsBetter"), Stat.bHigherIsBetter);
+                StatObject->TryGetStringField(TEXT("icon"), Stat.Icon);
                 Item.Stats.Add(MoveTemp(Stat));
             }
         }
@@ -690,11 +692,13 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
         Value->SetBoolField(TEXT("favoriteKnown"), Item.bFavoriteKnown);
         Value->SetBoolField(TEXT("trashKnown"), Item.bTrashKnown);
         Value->SetStringField(TEXT("funStats"), Item.FunStats);
+        if (!Item.FunStatsMarkup.IsEmpty()) Value->SetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
         TArray<TSharedPtr<FJsonValue>> StatsJson;
         for (const FOpenWillowGearStat& Stat : Item.Stats)
         {
             TSharedRef<FJsonObject> StatValue = MakeShared<FJsonObject>();
             StatValue->SetStringField(TEXT("label"), Stat.Label);
+            if (!Stat.Icon.IsEmpty()) StatValue->SetStringField(TEXT("icon"), Stat.Icon);
             StatValue->SetStringField(TEXT("value"), Stat.Value);
             if (Stat.bHasBetterDirection) StatValue->SetBoolField(TEXT("higherIsBetter"), Stat.bHigherIsBetter);
             StatsJson.Add(MakeShared<FJsonValueObject>(StatValue));

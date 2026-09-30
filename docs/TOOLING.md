@@ -729,6 +729,32 @@ UModel glTF meshes. If those ignored previews are absent, run
 `python tools/render_weapon_previews.py` to create them under
 `local/ui/run/previews/`.
 
+**F** opens the native UE weapon mesh preview; hold the left mouse button and
+drag to orbit it, then **F** or **Escape** to return to inventory. This uses
+the already imported `Weapons/Items/SK_<recipe ID>` asset. The host resolves
+the stable inventory ID before loading a mesh, clamps pitch and limits frame
+requests to 10 Hz. Its render target is sent to the page as an in-memory PNG;
+no game payload enters source control. Unresolved gear meshes show unavailable.
+Inspect layout and imported weapon materials remain approximations.
+
+Existing UI Trace SDK observations can populate local gear cards without
+guessing rolled parts or package identity:
+
+```powershell
+python tools/prepare_inventory_gear.py local/ui/traces/<trace>.jsonl --output local/inventory/observed_gear.json
+python tests/inventory_gear_test.py
+./tools/test_inventory_actions.ps1 -Port 8791 -Extra @('-owinventoryshots','-NoLiveCoding')
+```
+
+The exporter does not equip observations or merge them into a live manifest.
+Review the output, preserve stable IDs and copy only reviewed entries into
+`local/inventory/gear_manifest.json`. `funStatsMarkup` preserves observed Flash
+TextField formatting; the adapter passes it only to the movie, never browser
+HTML. `packageResolved` and `visualIdentityResolved` remain false. The capture
+flag writes settled open/equip/inspect/close screenshots to the ignored UE
+Saved/Screenshots directory. Drag/drop tests dispatch DOM events; key tests
+use Slate, so physical mouse/keyboard verification remains separate.
+
 Maya's inventory preview plays the game's own third-person `Idle_Inventory`
 clip and draws an ink outline. To build them in a fresh worktree:
 

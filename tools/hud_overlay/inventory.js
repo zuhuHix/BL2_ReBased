@@ -6,7 +6,7 @@ window.owInventoryStartedAt = startupAt;
 window.owInventoryMovieReady = false;
 window.owInventoryReady = false;
 const player = window.RufflePlayer.newest().createPlayer();
-document.body.prepend(player);
+document.getElementById('presentation').prepend(player);
 window.owPlayer = player;
 
 const ROOT = '_level1', INV = ROOT + '.inventory';
@@ -18,12 +18,12 @@ const colors = [0xffffff, 0xffffff, 0x39ff14, 0x3c8dff, 0xb43cff, 0xffb400];
 // and the top of an eighth); the converted cell is drawn at ROW_SCALE so seven fit above the panel's
 // scroll chevron. Both numbers are host choices measured in the bench, not movie values.
 const PAGE_SIZE = 7, ROW_SCALE = 0.94, ROW_PITCH = 61;
-// The original draws the Backpack panel receding behind the Equipped panel: about 0.74 of the converted
-// panel's size, top edge level with the Equipped list rather than the tab strip, right edge near x=910
-// (measured on the 1024x576 and 1920x1080 reference captures, scaled to the 1280x720 stage). The
-// converted movie leaves it full size and overlapping the INVENTORY title, so the host scales and
-// places the clip. Host choices, not movie values.
-const PANEL_SCALE = 0.74, PANEL_LEFT = 682, PANEL_TOP = 134;
+// Reference composition, measured from the local stock inventory stills in
+// 1280x720 space. The runtime does not project the movie's GFx panel depth;
+// the host places/sizes Backpack beside Equipped. These are presentation
+// choices, not decoded movie values or proof of original 3D projection parity.
+const COMPOSITION_SCALE = 1.09;
+const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 135;
 // This list is a host-side convenience. The original movie's full sort cycle
 // was not exercised in the local game trace, so these modes are not parity claims.
 const sortModes = [
@@ -35,7 +35,7 @@ const sortModes = [
 ];
 // SetComparingTweenInfo(TT, MCLX,MCLY,MCLZ, MCRX,MCRY,MCRZ, CCLX,CCLY,CCLZ, CCRX,CCRY,CCRZ, MCSL,MCSR,
 // CCSL,CCSR) (signature from the converted movie). Observed in the local game trace: duration 0.2, the
-// main/compare card positions and 75/62/81/62 scales. The compare-active slots (main card "R", compare
+// main/compare card positions and 75/81/81/75 scales. The compare-active slots (main card "R", compare
 // card "R") are host-chosen: the trace put the selected card over the Equipped list, so here the
 // equipped item's card (compare, left) and the selected item's card (main, right) sit side by side in
 // the free area left of the Equipped panel at 55% scale. Measured in the bench at 1280x720: the
@@ -110,6 +110,9 @@ let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = ''
 let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let headerPending = false, headerSerial = 0, headerName = '';
 let inspectMode = false;
+let inspectItemId = null, inspectYaw = 0, inspectPitch = 0, inspectImage = '', inspectFrameCount = 0;
+let inspectResolved = false;
+let inspectPointer = null, inspectLastRequest = 0;
 let firstStateRendered = false;
 const escapeHtml = text => String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 function itemColor(item) {
@@ -271,6 +274,57 @@ function requestAction(action, fields = {}) {
   console.log('OWITEM ' + JSON.stringify({action, ...fields}));
 }
 
+// Native HTML drag events carry only the stable inventory ID. Every drop is
+// checked against the latest snapshot, then goes through the host's existing
+// equip/unequip validation; the page never moves an item optimistically.
+let draggedItemId = null;
+const dragLayer = document.getElementById('controls');
+dragLayer.addEventListener('dragstart', event => {
+  const source = event.target.closest('[data-item-id]');
+  const item = source && itemById(source.dataset.itemId);
+  if (!item || !event.dataTransfer) { event.preventDefault(); return; }
+  draggedItemId = item.id;
+  event.dataTransfer.setData('text/plain', item.id);
+  event.dataTransfer.effectAllowed = 'move';
+});
+dragLayer.addEventListener('dragend', () => { draggedItemId = null; });
+function inventoryDropRequest(id, target) {
+  const item = itemById(id);
+  if (!item || !target) return null;
+  const kind = target.dataset.kind;
+  if (kind === 'backpack' || kind === 'backpack-zone') {
+    const slot = (state.slots || []).indexOf(id);
+    if (slot >= 0) return {action:'unequip', slot};
+    const gearSlot = gearSlotForItem(item);
+    return gearSlot && state.gearSlots?.[gearSlot] === id ? {action:'unequip', gearSlot} : null;
+  }
+  if (kind !== 'slot') return null;
+  const slot = Number(target.dataset.slot);
+  if (!Number.isInteger(slot) || slot < 0 || slot >= 8 || slotLocked(slot)) return null;
+  const levelAllowed = item.levelKnown === false || item.level === undefined || Number(item.level) <= Number(state.level);
+  if (!levelAllowed) return null;
+  const gearSlot = gearSlotForItem(item);
+  if (slot < 4)
+    return !gearSlot && state.slots[slot] !== id ? {action:'equip', id, slot} : null;
+  const destination = gearSlots[slot-4]?.key;
+  return gearSlot === destination && state.gearSlots?.[destination] !== id
+    ? {action:'equip', id, gearSlot:destination} : null;
+}
+dragLayer.addEventListener('dragover', event => {
+  if (!inventoryDropRequest(draggedItemId, event.target.closest('[data-kind]'))) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+});
+dragLayer.addEventListener('drop', event => {
+  const id = event.dataTransfer?.getData('text/plain');
+  const request = inventoryDropRequest(id, event.target.closest('[data-kind]'));
+  draggedItemId = null;
+  if (!request) return;
+  event.preventDefault();
+  const {action, ...fields} = request;
+  requestAction(action, fields);
+});
+
 function select(id) {
   if (!itemById(id) || selectedId === id) return;
   if (selectedId !== id) compareId = null;
@@ -366,6 +420,7 @@ function hit(path, label, click, hover, tint, item = null, kind = 'item', areaPa
   button.setAttribute('aria-label', item ? itemAriaLabel(item) : label);
   button.dataset.kind = kind;
   if (item) {
+    button.draggable = true;
     button.dataset.itemId = item.id;
     button.classList.add('weapon-preview');
     button.classList.add(`weapon-${kind}`);
@@ -378,8 +433,6 @@ function hit(path, label, click, hover, tint, item = null, kind = 'item', areaPa
     // No rendered preview (gear, or a weapon without an exported mesh): show the placeholder.
     button.appendChild(preview);
     loadPreview(preview, item, () => { preview.remove(); button.appendChild(gearPlaceholder(item)); });
-    if (item.favorite) button.appendChild(markBadge('favorite', '★', 'Favorite'));
-    if (item.trash) button.appendChild(markBadge('trash', '×', 'Trash'));
   }
   // The SWF stage is 1280 × 720; Ruffle stretches it to the player box.
   Object.assign(button.style, {
@@ -433,12 +486,31 @@ function loadPreview(image, item, onFailure) {
   if (urls.length) tryNext(); else queueMicrotask(onFailure);
 }
 
-function markBadge(kind, glyph, label) {
-  const badge = document.createElement('span');
-  badge.className = `mark ${kind}`;
-  badge.textContent = glyph;
-  badge.setAttribute('aria-hidden', 'true');
-  return badge;
+function addMarkControls(cell, item, owner) {
+  if (!item || !owner) return;
+  set(cell, 'bTrashFavoritesEnabled', true);
+  const buttons = [];
+  for (const kind of ['favorite', 'trash']) {
+    const button = hit(`${cell}.${kind}`, `${kind === 'favorite' ? 'Favorite' : 'Trash'} ${item.name}`,
+      () => { select(item.id); requestAction(kind, {id:item.id}); }, null, null, null, `mark-${kind}`);
+    if (!button) continue;
+    button.dataset.markOwner = item.id;
+    button.style.pointerEvents = item[kind] ? 'auto' : 'none';
+    buttons.push([button, kind]);
+  }
+  const enter = () => {
+    call(cell, 'onRollOver');
+    buttons.forEach(([button]) => { button.style.pointerEvents = 'auto'; });
+  };
+  const leave = event => {
+    if (event.relatedTarget === owner || event.relatedTarget?.dataset.markOwner === item.id) return;
+    call(cell, 'onRollOut');
+    buttons.forEach(([button, kind]) => { button.style.pointerEvents = item[kind] ? 'auto' : 'none'; });
+  };
+  for (const button of [owner, ...buttons.map(([button]) => button)]) {
+    button.addEventListener('pointerenter', enter);
+    button.addEventListener('pointerleave', leave);
+  }
 }
 
 function normalizeStatKey(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
@@ -452,7 +524,7 @@ function cardStats(item) {
       value:stat.value,
       decimals:Number.isInteger(stat.decimals) ? stat.decimals : statDecimals(stat.value),
       higherIsBetter:typeof stat.higherIsBetter === 'boolean' ? stat.higherIsBetter : undefined,
-      icon:statIcons.get(key)
+      icon:stat.icon || statIcons.get(key)
     };
   });
   return weaponCardStats.filter(stat => item?.[stat.key] !== undefined && item?.[stat.key] !== null)
@@ -533,13 +605,15 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     const deltaWidth = delta ? Number(get(`${row}.auxField`, 'textWidth')) : 0;
     set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) - (deltaWidth > 0 ? deltaWidth + 6 : 0));
   });
-  // Flavour lines are '; '-joined. A weapon's first line is the red-text line (#dc4646, colour
-  // supplied by the host contract); every other line, and all gear lines, are white.
+  // Legacy plain-text payloads are '; '-joined. The weapon contract puts red
+  // text first; observed gear formatting below overrides this fallback.
   const funLines = typeof item.funStats === 'string' ? item.funStats.split(/;\s*/).filter(Boolean) : [];
   const redFirst = !gearSlotForItem(item);
   const funStats = funLines.map((line, index) =>
     `• <font color="${redFirst && index === 0 ? '#dc4646' : '#ffffff'}">${escapeHtml(line)}</font>\n`).join('');
-  call(card, 'SetFunStats', funStats);
+  // Preserve observed gear colours/emphasis in the movie's TextField. This payload
+  // is passed only to Flash; it must never be inserted into browser HTML.
+  call(card, 'SetFunStats', typeof item.funStatsMarkup === 'string' && item.funStatsMarkup ? item.funStatsMarkup : funStats);
   const levelKnown = item.levelKnown !== false && Number.isFinite(Number(item.level));
   call(card, 'SetLevelRequirement', levelKnown, levelKnown && Number(item.level) <= Number(state.level), false,
     levelKnown ? `LEVEL REQUIREMENT: ${item.level}` : '');
@@ -573,20 +647,12 @@ function drawCard() {
   configureCard(INV + '.mainCard', item, compare);
   configureCard(INV + '.compareCard', compare, item, 'compare');
   setCompareLayout(Boolean(compare));
-  const equipped = Boolean(item && equippedIds().has(item.id));
-  const action = item && item.levelKnown !== false && item.level !== undefined
-    && Number(item.level) > Number(state.level) ? '[Enter] Locked' : '[Enter] Equip';
   const gearSlot = gearSlotForItem(item);
   const compareSlotLabel = gearSlot
     ? gearSlots.find(slot => slot.key === gearSlot)?.label || 'gear slot'
     : `slot ${targetSlot+1}`;
-  // The first four hints are the original's strings, in its order. In this build E only toggles
-  // the compare card and Enter equips; Enter/Del, T and V are host extras (the original does
-  // trash/favourite with cell icons), so they follow the original four.
-  const hints = [
-    '[E] Select/Compare', '[Q] Drop', '[Escape] Close', '[F] Inspect',
-    equipped ? '[Del] Unequip' : action, '[T] Trash', '[V] Fav'
-  ].join('   ');
+  // Match the observed stock tooltip line. Extra host keys remain available.
+  const hints = ['[E] Select/Compare', '[Q] Drop', '[Escape] Close', '[F] Inspect'].join('   ');
   text(ROOT + '.tooltips.tooltips', hints, 15, 0xa4e8f3, 'center');
   applyAmmoHighlight(item);
   // While the inspect panel is open it stands in for the selected card.
@@ -644,6 +710,13 @@ function updateInspect() {
   const item = itemById(selectedId);
   if (!inspect) return;
   if (!inspectMode || !item) { inspect.hidden = true; return; }
+  if (inspectItemId !== item.id) {
+    inspectItemId = item.id;
+    inspectYaw = inspectPitch = 0;
+    inspectImage = '';
+    inspectResolved = false;
+    requestInspectFrame();
+  }
   const bounds = readBounds(INV + '.mainCard.bkgd');
   if (!bounds) { inspect.hidden = true; return; }
   Object.assign(inspect.style, {
@@ -657,23 +730,60 @@ function updateInspect() {
   inspect.appendChild(title);
   const picture = document.createElement('div');
   picture.className = 'inspect-picture';
-  // Without a preview image the item shows its placeholder icon.
   const image = document.createElement('img');
   image.alt = `${item.name} preview`;
+  image.draggable = false;
   picture.appendChild(image);
-  loadPreview(image, item, () => { image.remove(); picture.appendChild(gearPlaceholder(item)); });
+  if (inspectImage) image.src = inspectImage;
+  else { image.remove(); picture.textContent = inspectResolved || gearSlotForItem(item) ? '3D model unavailable' : 'Loading 3D model…'; }
   inspect.appendChild(picture);
   const hint = document.createElement('span');
-  hint.textContent = '[F] Close';
+  hint.textContent = 'Drag to rotate   [F] Close';
   inspect.appendChild(hint);
   inspect.hidden = false;
 }
 
 function toggleInspect() {
   inspectMode = !inspectMode;
+  if (inspectMode) inspectItemId = null;
   // Leaving inspect brings the hidden card back through the normal draw path.
   drawCard();
 }
+
+function requestInspectFrame() {
+  if (!inspectMode || !inspectItemId) return;
+  inspectLastRequest = performance.now();
+  console.log('OWINSPECT ' + JSON.stringify({id:inspectItemId, yaw:inspectYaw, pitch:inspectPitch}));
+}
+window.owInspectFrame = reply => {
+  if (!inspectMode || reply?.id !== inspectItemId) return;
+  inspectImage = typeof reply.image === 'string' && reply.image.startsWith('data:image/png;base64,') ? reply.image : '';
+  inspectFrameCount++;
+  inspectResolved = true;
+  updateInspect();
+  if (!inspectImage) document.querySelector('#inspect-preview .inspect-picture').textContent = '3D model unavailable';
+};
+const inspectSurface = document.getElementById('inspect-preview');
+inspectSurface.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  inspectPointer = {id:event.pointerId, x:event.clientX, y:event.clientY};
+  if (event.isTrusted) inspectSurface.setPointerCapture(event.pointerId);
+});
+inspectSurface.addEventListener('pointermove', event => {
+  if (!inspectPointer || inspectPointer.id !== event.pointerId) return;
+  inspectYaw = (inspectYaw + (event.clientX-inspectPointer.x)*.7) % 360;
+  inspectPitch = Math.max(-80, Math.min(80, inspectPitch + (event.clientY-inspectPointer.y)*.7));
+  inspectPointer.x = event.clientX; inspectPointer.y = event.clientY;
+  if (performance.now()-inspectLastRequest >= 100) requestInspectFrame();
+});
+const endInspectDrag = event => {
+  if (!inspectPointer || inspectPointer.id !== event.pointerId) return;
+  inspectPointer = null;
+  requestInspectFrame();
+};
+inspectSurface.addEventListener('pointerup', endInspectDrag);
+inspectSurface.addEventListener('pointercancel', endInspectDrag);
 
 // Hide the thumbnails and hit boxes of any cell a visible item card overlaps, so previews
 // never bleed over card text. With the compare layout the cards sit left of the Equipped
@@ -831,12 +941,12 @@ function refreshBackpackHeader() {
   const bounds = readBounds(path);
   if (!bounds || bounds.xMax <= bounds.xMin) { call(path, 'removeMovieClip'); headerPending = true; return; }
   set(path+'.textField', 'htmlText',
-    `<p align="center"><font face="$WillowBody" size="14" color="#e2edf1">${escapeHtml(name)} (${rows.length})</font></p>`);
+    `<p align="center"><font face="$WillowBody" size="14" color="#e2edf1">${escapeHtml(name)}</font></p>`);
   const width = bounds.xMax - bounds.xMin, height = bounds.yMax - bounds.yMin;
   const desiredX = (firstRowBounds.xMin + firstRowBounds.xMax - width) / 2;
   const desiredY = firstRowBounds.yMin - height + 4;
-  set(path, '_x', Number(get(path, '_x') || 0) + (desiredX - bounds.xMin) / PANEL_SCALE);
-  set(path, '_y', Number(get(path, '_y') || 0) + (desiredY - bounds.yMin) / PANEL_SCALE);
+  set(path, '_x', Number(get(path, '_x') || 0) + (desiredX - bounds.xMin) / (PANEL_SCALE * COMPOSITION_SCALE));
+  set(path, '_y', Number(get(path, '_y') || 0) + (desiredY - bounds.yMin) / (PANEL_SCALE_Y * COMPOSITION_SCALE));
   set(path, '_visible', true);
   // Chevrons sit in the gutter between the visible cell column (the clip's own bounds include
   // glow art out to the panel frame) and the panel frame, level with the sub-label.
@@ -874,13 +984,13 @@ function placeStoragePanel() {
   const panel = INV + '.storagePanel';
   if (Math.abs(Number(get(panel, '_xscale')) - PANEL_SCALE * 100) > 0.5) {
     set(panel, '_xscale', PANEL_SCALE * 100);
-    set(panel, '_yscale', PANEL_SCALE * 100);
+    set(panel, '_yscale', PANEL_SCALE_Y * 100);
   }
   const bounds = readBounds(panel + '.bkgd');
   if (!bounds) return;
   const dx = PANEL_LEFT - bounds.xMin, dy = PANEL_TOP - bounds.yMin;
-  if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx);
-  if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy);
+  if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
+  if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
 }
 
 function render() {
@@ -910,7 +1020,7 @@ function render() {
       call(cell, 'SetCellState', locked ? 'locked' : 'normal');
       set(cell+'.emptyLabel', '_visible', !locked && !item);
     }
-    call(cell, 'SetTrashFavoriteMark', 0);
+    call(cell, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     call(cell, 'SetSelected', !locked && i === selectedCell);
     const slot = i < 4 ? null : gearSlots[i-4];
     const label = slot ? slot.label : `Weapon slot ${i+1}`;
@@ -919,7 +1029,7 @@ function render() {
       if (lockedButton) lockedButton.disabled = true;
       continue;
     }
-    hit(cell, item ? '' : `${label}, empty`, () => {
+    const slotButton = hit(cell, item ? '' : `${label}, empty`, () => {
       if (slot) {
         targetGearSlot = slot.key;
         if (item) select(item.id);
@@ -931,12 +1041,20 @@ function render() {
       }
       render();
     }, item ? () => select(item.id) : null, color(item), item, 'slot', `${cell}.hitTestClip`);
+    if (slotButton) slotButton.dataset.slot = String(i);
+    addMarkControls(cell, item, slotButton);
   }
 
   const rows = backpackItems();
   page = Math.min(page, Math.max(0, Math.ceil(rows.length/PAGE_SIZE)-1));
   const panel = INV + '.storagePanel';
   const panelBounds = call(panel+'.bkgd','getBounds',ROOT);
+  if (panelBounds) {
+    const zone = overlayButton(panelBounds, 'Return equipped item to backpack', () => {}, 'backpack-zone');
+    zone.tabIndex = -1;
+    zone.removeAttribute('title');
+    zone.setAttribute('aria-hidden', 'true');
+  }
   for (let row=0; row<PAGE_SIZE; row++) {
     const path = `${panel}.owRow${row}`;
     call(path, 'removeMovieClip');
@@ -952,18 +1070,19 @@ function render() {
       // rows hundreds of pixels off-screen in Ruffle. The scaled cell stays centred on the
       // column the unscaled cell would have had.
       // Bounds are in stage pixels; the row's _x/_y are in the scaled panel's own units.
-      const desiredX = panelBounds.xMin + (24 + ((fullBounds.xMax - fullBounds.xMin) - (cellBounds.xMax - cellBounds.xMin)) / 2) * PANEL_SCALE;
-      const desiredY = panelBounds.yMin + (75 + row*ROW_PITCH) * PANEL_SCALE;
-      set(path, '_x', Number(get(path, '_x') || 0) + (desiredX - cellBounds.xMin) / PANEL_SCALE);
-      set(path, '_y', Number(get(path, '_y') || 0) + (desiredY - cellBounds.yMin) / PANEL_SCALE);
+      const desiredX = (panelBounds.xMin + panelBounds.xMax - (cellBounds.xMax - cellBounds.xMin)) / 2;
+      const desiredY = panelBounds.yMin + (75 + row*ROW_PITCH) * PANEL_SCALE_Y * COMPOSITION_SCALE;
+      set(path, '_x', Number(get(path, '_x') || 0) + (desiredX - cellBounds.xMin) / (PANEL_SCALE * COMPOSITION_SCALE));
+      set(path, '_y', Number(get(path, '_y') || 0) + (desiredY - cellBounds.yMin) / (PANEL_SCALE_Y * COMPOSITION_SCALE));
     }
     call(path, 'SetSoldOut', false);
     call(path, 'SetEmptyCell', !item);
     call(path, 'SetRarityColor', item ? color(item) : 0);
-    call(path, 'SetTrashFavoriteMark', 0);
+    call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     call(path, 'SetSelected', Boolean(item && item.id === selectedId));
     if (!item) continue;
-    hit(path, '', () => select(item.id), () => select(item.id), color(item), item, 'backpack', `${path}.hitTestClip`);
+    const rowButton = hit(path, '', () => select(item.id), () => select(item.id), color(item), item, 'backpack', `${path}.hitTestClip`);
+    addMarkControls(path, item, rowButton);
     const button = [...layer.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === item.id);
     if (button) button.addEventListener('dblclick', event => { event.preventDefault(); select(item.id); equip(); });
   }
@@ -1039,12 +1158,12 @@ function handleKey(event) {
   else if (key === 'arrowright' || key === 'pagedown') { event.preventDefault(); changePage(1); }
 }
 window.addEventListener('keydown', handleKey);
-// The player keeps the 1280x720 stage's aspect ratio (letterboxed) in any viewport, so
-// the overlay is confined to the same rectangle; hit-box percentages are relative to it.
+// Letterbox the movie and its hit targets together. Panel composition lives
+// in the movie, so the curved-glass art still reaches the viewport edges.
 function layoutStage() {
   const scale = Math.min(innerWidth / 1280, innerHeight / 720);
   const width = 1280 * scale, height = 720 * scale;
-  Object.assign(document.getElementById('stage').style, {
+  Object.assign(document.getElementById('presentation').style, {
     left:`${(innerWidth - width) / 2}px`, top:`${(innerHeight - height) / 2}px`,
     width:`${width}px`, height:`${height}px`
   });
@@ -1103,6 +1222,10 @@ function prepareMovie() {
   if (!frameReady(INV+'.storagePanel') || !frameReady(INV+'.equippedPanel.cell1')
       || !frameReady(INV+'.mainCard') || !frameReady(INV+'.compareCard')) return false;
   const panel = INV+'.storagePanel';
+  // The movie's curved ring is opaque in this runtime. Preserve its own art
+  // while exposing the live world behind it, as in the local reference.
+  set(ROOT+'.ring', '_alpha', 32);
+  set(ROOT+'.scanlines', '_alpha', 9);
   configureCompareTween();
   call(INV, 'ConfigureForPlayer', 0);
   // This is the BL2 trace's Maya portrait path; the movie asset remains local.
@@ -1181,6 +1304,13 @@ function pollReady() {
   // of wall-clock time (two identical animation frames are not enough, the tween can stall
   // between frames). watchLayout() corrects anything that still moves afterwards.
   if (signature && now - stableSince >= READY_SETTLE_MS) {
+    // Apply after the opening tween settles, before deriving HTML hit bounds.
+    for (const path of [INV, ROOT+'.header', ROOT+'.tooltips']) {
+      set(path, '_x', Number(get(path, '_x')) * COMPOSITION_SCALE + 100);
+      set(path, '_y', Number(get(path, '_y')) * COMPOSITION_SCALE);
+      set(path, '_xscale', Number(get(path, '_xscale')) * COMPOSITION_SCALE);
+      set(path, '_yscale', Number(get(path, '_yscale')) * COMPOSITION_SCALE);
+    }
     ready = true;
     window.owInventoryMovieReady = true;
     window.owInventoryMovieReadyAt = performance.now();

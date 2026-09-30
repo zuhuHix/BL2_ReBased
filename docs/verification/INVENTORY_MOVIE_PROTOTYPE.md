@@ -302,3 +302,56 @@ This is self-review, not an independent critic re-score; the earlier **5.5/10**
 remains historical. Face brightness, outfit differences, world blur and curved
 glass remain visible gaps against `local/ui/ref/inventory_maya_real.jpg`.
 Arbitrary stencil occlusion and temporal edge stability are UNVERIFIED.
+
+## 2026-09-30 stock-target refinement and rotating Inspect
+
+AI-assisted; target confirmed as stock inventory and default Maya. No new
+external extractor or dependency. UModel 1590 payloads and the existing Ruffle
+runtime remain local. The page owns adaptation; UE validates inventory requests
+and renders the Maya/weapon display copies.
+
+Automated extraction/observation: `prepare_inventory_gear.py` consumed two
+existing UI Trace SDK JSONL files (`uitrace_20260926_220818` / `_221202`),
+87 completed gear observations, 11 unique cards, 76 duplicates, 0.287 s:
+4 shields / 4 class mods / 3 relics / 0 grenade mods. Output is ignored
+`local/inventory/observed_gear.json`. Stat icons and original Flash flavour
+markup survive; visual identity and package balance remain unresolved. Unknown
+types/incomplete transactions are excluded, not classified as working assets.
+
+```text
+UE 5.8 OpenWillowEditor: Result: Succeeded (10.51 s, lighting refinement)
+CTest: 100% tests passed, 0 tests failed out of 6 (8.55 s)
+Package verification: all nine decoded byte/count/export comparisons match
+Core 234397 / 1621; Engine 5878264 / 33166
+GameFramework 61714 / 258; GearboxFramework 1224040 / 7098
+WillowGame 13054200 / 56443; GFxUI 136680 / 841
+IpDrv 230751 / 1364; OnlineSubsystemSteamworks 265760 / 1709
+AkAudio 39503 / 176
+weapon_stats_test.py: 11 passed; inventory_gear_test.py: 4 passed
+node --check inventory.js; git diff --check: passed
+OWINVTEST SUMMARY result=PASS steps=32 passed=32 failed=0 not_run=0 keys=slate
+```
+
+Runtime log: `local/inventory-actions/run-20260930-010138.log`; command:
+`./tools/test_inventory_actions.ps1 -Port 8791 -Extra @('-owinventoryshots','-NoLiveCoding')`.
+New checks cover DOM weapon drag to slot/backpack, rejection of weapon-to-shield,
+native Inspect frame receipt, an 84-degree DOM pointer orbit (second frame),
+and Escape closing Inspect while keeping inventory open. The first Inspect run
+used the wrong case for the helper key, was stopped, corrected, then rerun.
+Previous equip/drop/lock/level-gate/tab/close checks all still pass.
+
+Visual self-review: settled engine open capture shows currency zero, yellow
+suit, full elbow and world behind translucent glass. Camera-pitch compensation
+keeps the display upright relative to the menu camera. Inspect before/after
+captures show actual mesh rotation; dedicated lights/manual exposure corrected
+the initially dark mesh. Screenshots remain in ignored
+`host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor/OWInventory_*.png`.
+Browser clicking a native favorite hit target produced the expected stable-ID
+request. This is not physical in-engine mouse validation or an independent
+critic re-score.
+
+Still below 1:1: affine panels lack the original perspective, compare placement
+and stock focus/swap/sort behaviour remain approximate, Inspect occupies a
+temporary host box, gear meshes are unresolved, and character/weapon shaders
+are heuristic. Continuous readback latency and arbitrary stencil occlusion
+are unverified. Historical critic score **5.5/10** is unchanged.

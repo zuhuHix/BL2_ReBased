@@ -78,6 +78,7 @@ struct FOpenWillowGearStat
     GENERATED_BODY()
     FString Label;
     FString Value;
+    FString Icon; // observed movie frame name, optional
     bool bHasBetterDirection = false;
     bool bHigherIsBetter = false;
 };
@@ -93,6 +94,7 @@ struct FOpenWillowGearItem
     FString Manufacturer;
     FString RarityColor;   // display color may be known when the numeric tier is not
     FString FunStats;
+    FString FunStatsMarkup; // observed Flash text formatting, never browser HTML
     int32 Level = 0;
     int32 Rarity = 0;
     int32 SaleValue = 0;

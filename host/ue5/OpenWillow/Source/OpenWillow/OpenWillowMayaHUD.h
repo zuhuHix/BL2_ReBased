@@ -8,6 +8,7 @@ class SWebBrowser;
 class SWidget;
 class SBox;
 class AOpenWillowInventoryMayaDisplay;
+class AOpenWillowInventoryPreviewActor;
 
 UCLASS()
 class OPENWILLOW_API AOpenWillowMayaHUD : public AHUD
@@ -49,6 +50,9 @@ public:
     // Makes the page log a raw OWITEM request (skips the page's own checks),
     // so host-side validation can be tested on its own.
     void InjectPageRequest(const FString& Json);
+    // Test: dispatch the browser's native drag/drop DOM events over live cells.
+    void SendPageDrag(const FString& Id, int32 DestinationSlot);
+    void SendPageInspectDrag();
 
 private:
     void OpenStatusMenu(bool bInventory);
@@ -56,6 +60,9 @@ private:
     FString InventoryUrl;
     bool bInventoryOpen = false;
     UPROPERTY() TObjectPtr<AOpenWillowInventoryMayaDisplay> InventoryMayaDisplay;
+    UPROPERTY() TObjectPtr<AOpenWillowInventoryPreviewActor> InspectActor;
+    FString PendingInspectRequest;
+    double NextInspectFrame = 0;
     TArray<FString> PendingInventoryActions;
     FInventoryActionRecord LastAction;
     FString LastPageReport;

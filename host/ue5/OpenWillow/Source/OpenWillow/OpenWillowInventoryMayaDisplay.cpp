@@ -178,8 +178,13 @@ void AOpenWillowInventoryMayaDisplay::UpdateView(const FVector& CameraLocation, 
     const FVector HeadTop = CameraLocation + Forward * DistanceCm
         + Right * ((ScreenX * 2.f - 1.f) * TanH * DistanceCm)
         + Up * ((1.f - HeadTopScreenY * 2.f) * TanV * DistanceCm);
-    SetActorLocation(HeadTop - FVector::UpVector * (MeshTopZ * MeshScale));
-    SetActorRotation(FRotator(0.f, CameraRotation.Yaw + 180.f + TurnTowardMenuDeg, 0.f));
+    // This is a presentation copy: orient its up axis with the menu camera,
+    // rather than the world, so looking up/down before opening the menu does
+    // not change Maya's screen size, lean or overlap with the Backpack panel.
+    const FQuat DisplayRotation = CameraRotation.Quaternion()
+        * FRotator(0.f, 180.f + TurnTowardMenuDeg, 0.f).Quaternion();
+    SetActorRotation(DisplayRotation);
+    SetActorLocation(HeadTop - DisplayRotation.RotateVector(FVector::UpVector * (MeshTopZ * MeshScale)));
 
     // Light travel directions in camera space. Key: warm, from the front-right
     // and above. Rim: cool, from behind-left (the menu side) and above.

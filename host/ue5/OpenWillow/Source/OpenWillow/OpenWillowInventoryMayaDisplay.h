@@ -22,7 +22,7 @@ class USkeletalMeshComponent;
 //
 // All values below are tunable in DefaultGame.ini without a rebuild:
 //   [/Script/OpenWillow.OpenWillowInventoryMayaDisplay]
-//   DistanceCm=345
+//   DistanceCm=300
 // Screen fractions are 0..1 from the top-left of the viewport.
 UCLASS(Config=Game)
 class OPENWILLOW_API AOpenWillowInventoryMayaDisplay : public AActor
@@ -40,7 +40,7 @@ public:
     // large without wide-angle distortion. Horizontal FOV in degrees.
     UPROPERTY(EditAnywhere, Config, Category = "Framing") float MenuHorizontalFov = 38.f;
     // Distance from the camera to Maya, cm.
-    UPROPERTY(EditAnywhere, Config, Category = "Framing") float DistanceCm = 345.f;
+    UPROPERTY(EditAnywhere, Config, Category = "Framing") float DistanceCm = 300.f;
     // Where Maya's centre line lands horizontally (0 = left edge, 1 = right).
     UPROPERTY(EditAnywhere, Config, Category = "Framing") float ScreenX = 0.79f;
     // Where the top of her head lands vertically (0 = top edge). The rest of
@@ -59,18 +59,18 @@ public:
     UPROPERTY(EditAnywhere, Config, Category = "Pose") float OutlineThicknessCm = 0.35f;
 
     // Backdrop post-process. Stencil 247 excludes visible Maya/outline pixels.
-    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") FLinearColor BackdropGain = FLinearColor(0.42f, 0.44f, 0.5f);
-    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") float BackdropSaturation = 0.55f;
+    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") FLinearColor BackdropGain = FLinearColor(0.70f, 0.72f, 0.78f);
+    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") float BackdropSaturation = 0.75f;
     // Cinematic depth of field focused on Maya; lower f-stop = blurrier
     // backdrop.
-    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") float DepthOfFieldFstop = 1.2f;
-    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") float VignetteIntensity = 1.1f;
+    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") float DepthOfFieldFstop = 16.f;
+    UPROPERTY(EditAnywhere, Config, Category = "Backdrop") float VignetteIntensity = 0.35f;
 
     // Lights that only affect Maya. Intensities are lux.
     UPROPERTY(EditAnywhere, Config, Category = "Lighting") FLinearColor KeyColor = FLinearColor(1.f, 0.66f, 0.42f);
-    UPROPERTY(EditAnywhere, Config, Category = "Lighting") float KeyIntensity = 4.f;
+    UPROPERTY(EditAnywhere, Config, Category = "Lighting") float KeyIntensity = 1.5f;
     UPROPERTY(EditAnywhere, Config, Category = "Lighting") FLinearColor RimColor = FLinearColor(0.35f, 0.7f, 1.f);
-    UPROPERTY(EditAnywhere, Config, Category = "Lighting") float RimIntensity = 5.f;
+    UPROPERTY(EditAnywhere, Config, Category = "Lighting") float RimIntensity = 3.f;
 
 private:
     UPROPERTY() TObjectPtr<USceneComponent> SceneRoot;

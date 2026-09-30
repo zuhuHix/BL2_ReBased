@@ -7,6 +7,7 @@
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
+#include "UnrealClient.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "InputKeyEventArgs.h"
@@ -171,6 +172,39 @@ void UOpenWillowInventoryActionTest::BuildSteps()
     // Tab is the primary key (the controller forwards it to Maya); I is exercised at the reopen step.
     Add(TEXT("open_inventory"), false, [this] { PressGameKey(EKeys::Tab); }, OpenVerify, 120.f);
 
+    Add(TEXT("inspect_weapon"), false, [this] { PressKey(TEXT("f")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            bool Open = false;
+            double Bytes = 0;
+            if (!Page || !Page->TryGetBoolField(TEXT("inspect"), Open) || !Open
+                || !Page->TryGetNumberField(TEXT("inspectImageBytes"), Bytes) || Bytes < 100)
+            { D = TEXT("waiting for an imported weapon's 3D inspect frame"); return false; }
+            D = FString::Printf(TEXT("native 3D frame received (%d data URL bytes)"), int32(Bytes));
+            return true;
+        }, 12.f);
+    Add(TEXT("inspect_rotate_weapon"), false, [this] { Hud->SendPageInspectDrag(); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            double Yaw = 0, Frames = 0;
+            if (!Page || !Page->TryGetNumberField(TEXT("inspectYaw"), Yaw) || FMath::Abs(Yaw) < 20
+                || !Page->TryGetNumberField(TEXT("inspectFrames"), Frames) || Frames < 2)
+            { D = TEXT("waiting for rotated native frame after DOM pointer drag"); return false; }
+            D = FString::Printf(TEXT("pointer drag rotated %.1f degrees; %d frames received"), Yaw, int32(Frames));
+            return true;
+        }, 12.f);
+    Add(TEXT("inspect_escape_returns_inventory"), false, [this] { PressKey(TEXT("Escape")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            bool Open = true;
+            if (!Page || !Page->TryGetBoolField(TEXT("inspect"), Open) || Open || !Hud->IsInventoryOpen())
+            { D = TEXT("inspect did not close back to inventory"); return false; }
+            D = TEXT("Escape closed inspect and kept inventory open"); return true;
+        });
+
     Add(TEXT("select_backpack_weapon"), false,
         [this]
         {
@@ -250,6 +284,39 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             if (!Page) return false;
             if (!PageSlot(Page, 0).IsEmpty()) { D = TEXT("page slot 1 not refreshed"); return false; }
             D = TEXT("active weapon holstered and returned to backpack");
+            return true;
+        });
+
+    Add(TEXT("drag_weapon_to_slot2"), true,
+        [this] { Hud->SendPageDrag(SelId, 1); },
+        [this, CheckAction, Snapshot](FString& D)
+        {
+            if (!CheckAction(TEXT("equip"), true, SelId, D)) return false;
+            TSharedPtr<FJsonObject> Page = Snapshot(D);
+            if (!Page || HostSlotId(1) != SelId || PageSlot(Page, 1) != SelId)
+            { D = TEXT("drag did not equip the weapon on host and page"); return false; }
+            D = TEXT("DOM drag/drop equipped the weapon in slot 2 on host and page");
+            return true;
+        });
+    Add(TEXT("drag_weapon_back_to_backpack"), true,
+        [this] { Hud->SendPageDrag(SelId, -1); },
+        [this, CheckAction, Snapshot](FString& D)
+        {
+            if (!CheckAction(TEXT("unequip"), true, FString(), D)) return false;
+            TSharedPtr<FJsonObject> Page = Snapshot(D);
+            if (!Page || !HostSlotId(1).IsEmpty() || !PageSlot(Page, 1).IsEmpty()
+                || !Walker->GetInventory()->FindItemById(SelId) || HostEquipped(SelId))
+            { D = TEXT("drag did not return the equipped item to the backpack"); return false; }
+            D = TEXT("DOM drag/drop returned the weapon to the backpack without losing it");
+            return true;
+        });
+    Add(TEXT("drag_weapon_to_gear_refused"), false,
+        [this] { Hud->SendPageDrag(SelId, 4); },
+        [this](FString& D)
+        {
+            if (Hud->LastInventoryAction().Serial != ActionSerialAtBegin || HostEquipped(SelId))
+            { D = TEXT("invalid weapon-to-shield drag sent a request or changed inventory"); return false; }
+            D = TEXT("weapon-to-shield drag rejected by the page without sending a request");
             return true;
         });
 
@@ -547,12 +614,23 @@ void UOpenWillowInventoryActionTest::FinishStep(bool bOk, const FString& Detail)
         StepIndex + 1, *Step.Name, bOk ? 1 : 0, *Detail.Replace(TEXT("\n"), TEXT(" ")));
     if (!bOk && Hud)
         UE_LOG(LogTemp, Display, TEXT("OWINVTEST page report at failure: %s"), *Hud->PageReport().Left(1200));
+    if (bOk && FParse::Param(FCommandLine::Get(), TEXT("owinventoryshots"))
+        && (Step.Name == TEXT("open_inventory") || Step.Name == TEXT("gear_equip_shield")
+            || Step.Name == TEXT("inspect_weapon") || Step.Name == TEXT("inspect_rotate_weapon")
+            || Step.Name == TEXT("close_inventory_final")))
+    {
+        // A page report can precede CEF's composited pixels. Hold the current
+        // menu state before capturing, then advance only after the capture frame.
+        PendingScreenshot = FString::Printf(TEXT("OWInventory_%s"), *Step.Name);
+        ScreenshotAt = GetWorld()->GetRealTimeSeconds() + 0.8f;
+    }
     (bOk ? Passed : Failed)++;
     const bool bAbort = !bOk && Step.Name == TEXT("open_inventory");
     ++StepIndex;
     if (bAbort) { Summarize(TEXT("aborted: the inventory page never opened")); return; }
     if (!Steps.IsValidIndex(StepIndex)) { Summarize(nullptr); return; }
-    BeginStep(GetWorld()->GetRealTimeSeconds());
+    if (!PendingScreenshot.IsEmpty()) Phase = EPhase::WaitCapture;
+    else BeginStep(GetWorld()->GetRealTimeSeconds());
 }
 
 void UOpenWillowInventoryActionTest::Summarize(const TCHAR* Reason)
@@ -586,6 +664,12 @@ void UOpenWillowInventoryActionTest::TickComponent(float DeltaTime, ELevelTick T
     Hud = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
     if (!Walker || !PC || !Hud || !GetWorld()) return;
     const float Now = GetWorld()->GetRealTimeSeconds();
+    if (!PendingScreenshot.IsEmpty() && Now >= ScreenshotAt)
+    {
+        FScreenshotRequest::RequestScreenshot(PendingScreenshot, true, false);
+        PendingScreenshot.Reset();
+        if (Phase == EPhase::WaitCapture) { Phase = EPhase::AdvanceAfterCapture; return; }
+    }
     if (bHavePendingRelease)
     {
         // Released a tick after the press so the action mapping sees both.
@@ -612,6 +696,9 @@ void UOpenWillowInventoryActionTest::TickComponent(float DeltaTime, ELevelTick T
     if (Now - StartedAt > WholeRunSeconds) { Summarize(TEXT("timeout")); return; }
     switch (Phase)
     {
+    case EPhase::AdvanceAfterCapture:
+        BeginStep(Now);
+        break;
     case EPhase::WaitAction:
         if (Hud->LastInventoryAction().Serial > ActionSerialAtBegin) { Phase = EPhase::Settle; PhaseStart = Now; }
         else if (Now - PhaseStart > ActionWaitSeconds)

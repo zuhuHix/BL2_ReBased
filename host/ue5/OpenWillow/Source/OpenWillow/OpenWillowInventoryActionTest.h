@@ -39,7 +39,7 @@ private:
         TFunction<void()> Begin;
         TFunction<bool(FString&)> Verify;
     };
-    enum class EPhase : uint8 { Waiting, WaitAction, Settle, WaitReport, Retry, Finished };
+    enum class EPhase : uint8 { Waiting, WaitAction, Settle, WaitReport, Retry, WaitCapture, AdvanceAfterCapture, Finished };
 
     void BuildSteps();
     void BeginStep(float Now);
@@ -77,6 +77,8 @@ private:
     int32 Failed = 0;
     FKey PendingRelease;
     bool bHavePendingRelease = false;
+    FString PendingScreenshot;
+    float ScreenshotAt = 0.f;
     // Carried between steps.
     FString SelId, PrevSel, DisplacedId, DropId, DropName, ShieldId;
     int32 CountBefore = 0, PickupAttemptsBefore = 0;

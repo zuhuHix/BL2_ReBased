@@ -162,9 +162,12 @@ void AOpenWillowWalker::BeginPlay()
         FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/inventory/gear_manifest.json")));
     FParse::Value(FCommandLine::Get(), TEXT("owgear="), GearManifestPath);
     Inventory->LoadGearManifest(GearManifestPath);
-    // -owslots=<2..4>: unlocked weapon slots (default 4, UNVERIFIED for a new
-    // character). -owmoney / -owerid set the purse; unset they stay out of
-    // the inventory snapshot. -owinventoryselftest runs the synthetic checks.
+    // The host's new-session purse starts at zero (no BL2 save is imported).
+    // Explicit -owmoney / -owerid values and the capture fixture override it.
+    Inventory->SetMoney(0);
+    Inventory->SetEridium(0);
+    // -owslots=<2..4> overrides the prototype's slot availability.
+    // -owinventoryselftest runs the synthetic checks.
     int32 SlotsUnlocked = UOpenWillowInventory::SlotCount;
     if (FParse::Value(FCommandLine::Get(), TEXT("owslots="), SlotsUnlocked)
         && !Inventory->SetWeaponSlotsUnlocked(SlotsUnlocked))

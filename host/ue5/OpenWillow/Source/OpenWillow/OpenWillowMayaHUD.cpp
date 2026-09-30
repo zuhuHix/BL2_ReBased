@@ -3,6 +3,7 @@
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowInventoryMayaDisplay.h"
+#include "OpenWillowInventoryPreviewActor.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
 #include "CanvasItem.h"
@@ -220,6 +221,9 @@ TSharedPtr<SWebBrowser> AOpenWillowMayaHUD::CreateStatusBrowser(const FString& M
 void AOpenWillowMayaHUD::CloseSkills()
 {
     if (!SkillsBrowser) return;
+    if (IsValid(InspectActor)) InspectActor->Destroy();
+    InspectActor = nullptr;
+    PendingInspectRequest.Reset();
     if (bInventoryOpen)
     {
         if (AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr)
@@ -251,6 +255,11 @@ void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
 {
     if (bInventoryOpen)
     {
+        if (Message.StartsWith(TEXT("OWINSPECT "), ESearchCase::CaseSensitive))
+        {
+            if (Message.Len() <= 1024) PendingInspectRequest = Message.Mid(10);
+            return;
+        }
         // -owinventoryactions test hook: the page's answer to RequestPageReport.
         if (Message.StartsWith(TEXT("OWINVPAGE "), ESearchCase::CaseSensitive))
         {
@@ -346,6 +355,7 @@ void AOpenWillowMayaHUD::RequestPageReport()
     SkillsBrowser->ExecuteJavascript(TEXT(
         "try{console.log('OWINVPAGE '+JSON.stringify({ready:!!ready,hasState:!!state,"
         "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,"
+        "inspect:inspectMode,inspectFrames:inspectFrameCount,inspectImageBytes:inspectImage.length,inspectYaw:inspectYaw,"
         "level:state?state.level:null,slots:state?state.slots:null,gearSlots:state?state.gearSlots:null,"
         "count:state?state.backpackCount:null,"
         "items:state?state.items.map(function(i){return [i.id,i.favorite?1:0,i.trash?1:0]}):[]}))}"
@@ -356,6 +366,34 @@ void AOpenWillowMayaHUD::InjectPageRequest(const FString& Json)
 {
     if (!SkillsBrowser || Json.Contains(TEXT("'")) || Json.Contains(TEXT("\\"))) return;
     SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("console.log('OWITEM %s')"), *Json));
+}
+
+void AOpenWillowMayaHUD::SendPageDrag(const FString& Id, int32 DestinationSlot)
+{
+    if (!SkillsBrowser) return;
+    // JSON serialization keeps item IDs out of JavaScript source quoting.
+    TSharedPtr<FJsonObject> Args = MakeShared<FJsonObject>();
+    Args->SetStringField(TEXT("id"), Id);
+    Args->SetNumberField(TEXT("slot"), DestinationSlot);
+    FString Json;
+    FJsonSerializer::Serialize(Args.ToSharedRef(), TJsonWriterFactory<>::Create(&Json));
+    SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT(
+        "(function(a){var source=Array.from(document.querySelectorAll('[data-item-id]')).find(function(n){return n.dataset.itemId===a.id});"
+        "var target=a.slot<0?document.querySelector('[data-kind=backpack-zone]'):document.querySelector('[data-kind=slot][data-slot=\"'+a.slot+'\"]');"
+        "if(!source||!target){console.log('OWDRAGTEST missing source/target');return;}"
+        "var transfer=new DataTransfer();"
+        "source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:transfer}));"
+        "target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer}));"
+        "target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));"
+        "source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:transfer}));})(%s)"), *Json));
+}
+
+void AOpenWillowMayaHUD::SendPageInspectDrag()
+{
+    if (!SkillsBrowser) return;
+    SkillsBrowser->ExecuteJavascript(TEXT("(()=>{const p=document.getElementById('inspect-preview');"
+        "for(const [type,x] of [['pointerdown',100],['pointermove',220],['pointerup',220]])"
+        "p.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:7,button:0,clientX:x,clientY:100}));})()"));
 }
 
 void AOpenWillowMayaHUD::RequestSkillsCloseFromPage()
@@ -431,6 +469,37 @@ void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
 void AOpenWillowMayaHUD::DrawHUD()
 {
     Super::DrawHUD();
+    if (SkillsBrowser && bInventoryOpen && !PendingInspectRequest.IsEmpty()
+        && GetWorld()->GetRealTimeSeconds() >= NextInspectFrame)
+    {
+        NextInspectFrame = GetWorld()->GetRealTimeSeconds() + .1;
+        TSharedPtr<FJsonObject> Request;
+        FString Id;
+        double Yaw = 0, Pitch = 0;
+        const AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;
+        const UOpenWillowInventory* Inventory = Maya ? Maya->GetInventory() : nullptr;
+        if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(PendingInspectRequest), Request) && Request
+            && Request->TryGetStringField(TEXT("id"), Id) && Request->TryGetNumberField(TEXT("yaw"), Yaw)
+            && Request->TryGetNumberField(TEXT("pitch"), Pitch) && FMath::IsFinite(Yaw) && FMath::IsFinite(Pitch) && Inventory)
+        {
+            const FOpenWillowWeaponItem* Item = Inventory->FindItemById(Id);
+            FString InspectPng;
+            if (Item)
+            {
+                if (!IsValid(InspectActor)) InspectActor = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(
+                    AOpenWillowInventoryPreviewActor::StaticClass(), FVector(0, 0, -100000), FRotator::ZeroRotator);
+                if (InspectActor && InspectActor->SetItemPreview(Item->Id))
+                    InspectPng = InspectActor->InspectFrame(FMath::Fmod(Yaw, 360.0), FMath::Clamp(Pitch, -80.0, 80.0));
+            }
+            TSharedRef<FJsonObject> Reply = MakeShared<FJsonObject>();
+            Reply->SetStringField(TEXT("id"), Id);
+            Reply->SetStringField(TEXT("image"), InspectPng);
+            FString Json;
+            FJsonSerializer::Serialize(Reply, TJsonWriterFactory<>::Create(&Json));
+            SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owInspectFrame && window.owInspectFrame(%s)"), *Json));
+        }
+        PendingInspectRequest.Reset();
+    }
     if (bInventoryOpen && IsValid(InventoryMayaDisplay) && PlayerOwner && PlayerOwner->PlayerCameraManager)
         InventoryMayaDisplay->UpdateView(PlayerOwner->PlayerCameraManager->GetCameraLocation(),
             PlayerOwner->PlayerCameraManager->GetCameraRotation());
