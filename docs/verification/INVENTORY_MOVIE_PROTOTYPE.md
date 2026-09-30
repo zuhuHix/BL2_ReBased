@@ -545,3 +545,20 @@ tracer updated with prior own-script backup under local/ui/tool-backups; source/
 installed SHA256 match. trace_dir.txt preserved. No live game/capture this pass.
 CTest 6/6 (8.53 s), all nine package checks match, Python syntax/diff pass.
 Menu runtime unchanged; projection and complete menu parity remain unresolved.
+
+### Selected SMG paint pass (2026-09-30)
+
+Existing UModel 1590 payloads supply two MICs and four textures for one selected
+Maliwan epic SMG. New preparation/import scripts apply an explicitly approximate
+palette material to its existing mesh; no exports or mesh reimport. Its one
+glTF primitive contains UV1. Commandlet reports zero errors/warnings, script
+execution 1.00 s. Fresh engine capture
+`OWInventory_backpack_transfer_empty_destination.png` shows blue/pale metal
+paint rather than neutral grey. Source graph/packed normal/emissive/pattern and
+lighting parity remain unverified; no claim about other weapon materials.
+
+Runtime log `local/inventory-actions/run-20260930-023458.log`: 46/46 PASS;
+2049 head samples, normalized x .806.. .906, y .319.. .360 over 13 seconds.
+CTest 6/6 (17.39 s); nine package checks match; Python syntax checks pass.
+Only self-review, no independent critic. Native computer-use pipe unavailable;
+fresh original-game getter observation and physical input checks remain open.

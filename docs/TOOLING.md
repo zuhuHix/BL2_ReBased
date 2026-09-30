@@ -1010,3 +1010,21 @@ Maya's default inventory ScreenX anchor is .86. The action runner samples her
 live Head bone for 13 seconds (a full armed idle loop) and reports normalized
 bounds. This checks head-anchor framing at the test viewport; full silhouette,
 weapon clipping and exact stock pose remain separately unverified.
+
+An optional paint pass applies the existing thumbnail palette approximation to
+one already imported recipe mesh, without reimporting meshes or deleting folders:
+
+```powershell
+python tools/prepare_weapon_paint.py --recipe local/items/smg_maliwan_epic_1.json `
+  --materials local/external/umodel/weapon-materials-20260929 `
+  --output local/items/paint/smg_maliwan_epic_1.json
+$env:OPENWILLOW_WEAPON_PAINT = "$pwd/local/items/paint/smg_maliwan_epic_1.json"
+& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' `
+  "$pwd/host/ue5/OpenWillow/OpenWillow.uproject" -run=pythonscript `
+  "-script=$pwd/host/ue5/import_weapon_paint.py" -unattended -nullrhi
+```
+
+Run this after `import_weapon_items.py`, which replaces item materials. The
+prepared JSON and imported textures/materials remain ignored. This is tested
+only for the selected Maliwan epic SMG; packed normal/emissive semantics,
+pattern placement and original Master_Gun lighting remain unverified.
