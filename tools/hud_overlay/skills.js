@@ -304,6 +304,9 @@ function layoutHits() {
     'Next skill tree', layer);
   // This route is intercepted by the UE browser before it navigates.
   addHit(`${ROOT}.header.pcCloseButton`, null, closeSkills, 'Close skills', layer);
+  // Header tabs (nav1..nav5 = Missions, Map, Inventory, Skills, Challenges). Only Inventory is another
+  // page this host has; the UE browser intercepts the route. The others have no host data yet.
+  addHit(`${ROOT}.header.nav3`, null, () => { location.href = '/__ow_tab_inventory'; }, 'Inventory tab', layer);
 }
 
 function closeSkills() {
@@ -312,9 +315,12 @@ function closeSkills() {
 }
 
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' || event.key.toLowerCase() === 'k') {
+  if (event.key === 'Escape' || event.key.toLowerCase() === 'k' || event.key === 'Tab') {
     event.preventDefault();
     closeSkills();
+  } else if (event.key.toLowerCase() === 'i') {
+    event.preventDefault();
+    location.href = '/__ow_tab_inventory';
   } else if (event.key === 'Enter') {
     event.preventDefault();
     spendSelected();

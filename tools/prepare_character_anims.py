@@ -8,7 +8,8 @@ as a Y mirror) and D_i = W_i(bind)^-1 C^-1 T_i(bind) absorbs each imported
 bone's axis convention. A per-frame root correction then places the `Camera`
 bone at the component origin, reproducing the camera-space framing of
 prepare_character_pose.py, so the arms can be attached to the player camera.
-That BL2 views from this bone is UNVERIFIED.
+That BL2 views from this bone is UNVERIFIED. `--anchor none` skips that
+correction (third-person body clips keep the MD5 root motion as authored).
 """
 import argparse
 import json
@@ -100,15 +101,16 @@ def convert(mesh_path, reference_path, animations, anchor='Camera'):
     inverse_c = np.linalg.inv(c)
     fix = [np.linalg.inv(w) @ inverse_c @ t for w, t in zip(bind_md5, bind_ue)]
     parents = [joint[1] for joint in joints]
-    camera = names.index(anchor)
+    camera = names.index(anchor) if anchor else None
     output = {}
     for label, path in animations.items():
         rate, clip = frames(path, joints)
         tracks = {name: {'pos': [], 'rot': []} for name in names}
         for world in clip:
             ue = [c @ w @ d for w, d in zip(world, fix)]
-            view = MIRROR @ np.linalg.inv(world[camera]) @ inverse_c
-            ue = [view @ t for t in ue]
+            if camera is not None:
+                view = MIRROR @ np.linalg.inv(world[camera]) @ inverse_c
+                ue = [view @ t for t in ue]
             for i, name in enumerate(names):
                 local = ue[i] if parents[i] < 0 else np.linalg.inv(ue[parents[i]]) @ ue[i]
                 tracks[name]['pos'].append([float(v) for v in local[:3, 3]])
@@ -124,9 +126,10 @@ def main():
     parser.add_argument('--animset', type=Path, required=True, help='Folder of .md5anim files')
     parser.add_argument('--clips', nargs='+', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--anchor', default='Camera', help="bone placed at the origin each frame, or 'none'")
     args = parser.parse_args()
     clips = {clip: args.animset / f'{clip}.md5anim' for clip in args.clips}
-    result = convert(args.mesh, args.reference, clips)
+    result = convert(args.mesh, args.reference, clips, None if args.anchor.lower() == 'none' else args.anchor)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result), encoding='utf-8')
     print(json.dumps({k: {'frames': v['frames'], 'rate': v['rate']} for k, v in result.items()}))

@@ -721,6 +721,92 @@ running and launches Sanctuary as Maya with `-owflashhud=<url>` and
 `-owflashskills=<url>`. The HUD overlay logs "OpenWillow Flash HUD page loaded"
 and "HUD movie ready" in the UE log.
 It is a prototype: see DECISIONS.md for what is driven and what is not.
+The BL2-style StatusMenu Inventory movie is enabled by default; press **Tab**
+(or **I**) for Inventory and **K** for Skills; the header tabs and the K/I keys switch between the two pages. Pass `-NoInventoryMovie` only to use the
+fallback host inventory panel.
+Enter or E on an equipped item starts a transfer comparison with compatible
+backpack items. Move through candidates, then E or Enter to swap; Escape
+cancels back to the equipped item. Backpack Enter remains a direct equip
+shortcut. Comparison uses recorded movie card positions/scales and panel
+tweens; numeric fields are restored after the unsupported native tween callback.
+Weapon cells use static mesh previews generated from the locally exported
+UModel glTF meshes. If those ignored previews are absent, run
+`python tools/render_weapon_previews.py` to create them under
+`local/ui/run/previews/`.
+
+**F** opens the native UE weapon mesh preview; hold the left mouse button and
+drag to orbit it, then **F** or **Escape** to return to inventory. This uses
+the already imported `Weapons/Items/SK_<recipe ID>` asset. The host resolves
+the stable inventory ID before loading a mesh, clamps pitch and limits frame
+requests to 10 Hz. Its render target is sent to the page as an in-memory PNG;
+no game payload enters source control. Unresolved gear meshes show unavailable.
+Inspect layout and imported weapon materials remain approximations.
+
+Existing UI Trace SDK observations can populate local gear cards without
+guessing rolled parts or package identity:
+
+```powershell
+python tools/prepare_inventory_gear.py local/ui/traces/<trace>.jsonl --output local/inventory/observed_gear.json
+python tests/inventory_gear_test.py
+./tools/test_inventory_actions.ps1 -Port 8791 -Extra @('-owinventoryshots','-NoLiveCoding')
+```
+
+The exporter does not equip observations or merge them into a live manifest.
+Review the output, preserve stable IDs and copy only reviewed entries into
+`local/inventory/gear_manifest.json`. `funStatsMarkup` preserves observed Flash
+TextField formatting; the adapter passes it only to the movie, never browser
+HTML. `packageResolved` and `visualIdentityResolved` remain false. The capture
+flag writes settled open/equip/inspect/close screenshots to the ignored UE
+Saved/Screenshots directory. Drag/drop tests dispatch DOM events; key tests
+use Slate, so physical mouse/keyboard verification remains separate.
+
+Maya's inventory preview plays the game's own third-person `Idle_Inventory`
+clip and draws an ink outline. To build them in a fresh worktree:
+
+```powershell
+# 1. UModel 1590 MD5 export of the third-person body and its AnimSets
+umodel.exe -path=<CookedPCConsole> -game=border -export -md5 -out=local/external/umodel/maya-body-anims GD_Siren_Streaming_SF Skel_SirenBody SkeletalMesh
+umodel.exe -path=<CookedPCConsole> -game=border -export -md5 -out=local/external/umodel/maya-body-anims GD_Siren_Streaming_SF Base_Siren AnimSet
+# 2. Body reference pose, then conversion (--anchor none: no first-person camera correction; needs numpy)
+$env:OPENWILLOW_CHARACTER_MESH='Skel_SirenBody'; $env:OPENWILLOW_CHARACTER_ANIM_FOLDER='ThirdPerson'
+$env:OPENWILLOW_CHARACTER_REFERENCE='local/character/anim/body_ref_pose.json'; $env:OPENWILLOW_CHARACTER_ANIMS=''
+UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
+python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBody.md5mesh --reference local/character/anim/body_ref_pose.json --animset <...>/AnimSet/Base_Siren --clips Idle_Inventory Idle_var1 --output local/character/anim/siren_body.json
+# 3. Import the clips, then the outline material and matte character material
+$env:OPENWILLOW_CHARACTER_REFERENCE=''; $env:OPENWILLOW_CHARACTER_ANIMS='Body=local/character/anim/siren_body.json'
+UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
+# Optional default head colour correction for the inventory display only.
+# UModel export includes the local property dump used by the look script.
+umodel.exe -path=<CookedPCConsole> -game=border -export -png -out=local/external/umodel/maya-menu-head CD_Siren_Skin_Default_SF Mati_Default_Head MaterialInstanceConstant
+$env:OPENWILLOW_MENU_HEAD_PROPS="$pwd/local/external/umodel/maya-menu-head/CD_Siren_Skin_Default_SF/MaterialInstanceConstant/Mati_Default_Head.props.txt"
+UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_menu_look.py -unattended -nullrhi
+# 4. Armed inventory pose, from the already exported Rifle_Siren AnimSet
+# Use the Python environment with numpy installed. Paths passed to the UE
+# commandlet must be absolute because its working directory differs.
+python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBody.md5mesh --reference local/character/anim/body_ref_pose.json --animset <...>/AnimSet/Rifle_Siren --clips Idle_Inventory --output local/character/anim/siren_body_inventory_rifle.json
+$env:OPENWILLOW_CHARACTER_ANIMS="InventoryRifle=$pwd/local/character/anim/siren_body_inventory_rifle.json"
+UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
+```
+
+Framing, clip and outline width are `Config=Game` properties of
+`AOpenWillowInventoryMayaDisplay` (`[/Script/OpenWillow.OpenWillowInventoryMayaDisplay]`
+in `DefaultGame.ini`). Without the clip Maya shows in bind pose; without the
+outline material she has no ink line.
+The selected inventory instance is resolved by the host to its recipe mesh;
+weapons use the armed clip and attach to `R_Weapon_Bone`, gear returns to the
+unarmed clip. Missing armed clip/mesh leaves the weapon hidden. The armed clip
+is currently shared by weapon types: exact hold-definition/launcher differences
+remain unverified. The display gun/outline also use stencil 247.
+
+The same menu-look script creates `M_OW_MenuBackdrop`. Renderer setting
+`r.CustomDepth=3` enables its stencil mask; the display reserves stencil 247
+for Maya's body, head and outline copies. The material dims/desaturates the
+world after tonemapping, excluding visible Maya pixels (with a scene-depth
+check so occluded pixels are not exempt). Gain, saturation and vignette remain
+configurable on the display actor. Without this material, world dimming is
+disabled and the host logs a warning. Closing the menu destroys the display
+and its post-process component. No new extraction is needed; regenerate this
+local material after updating an existing worktree.
 
 For Maya's Skills tab, convert `UI_StatusMenu.StatusMenu` and its shared imports
 into `local/ui/run` with the same converter and a StatusMenu harness, then
@@ -769,6 +855,15 @@ For a repeatable UE capture, launch the same script with
 After the combat and inventory captures it opens Skills, writes
 `OWCombat_8_Skills.png`, requests the page's close route, and writes
 `OWCombat_9_AfterSkills.png` under UE `Saved/Screenshots` before quitting.
+With `-owcombatshots` (test only) Maya starts at level 36 unless `-owlevel`
+is given, so the level-30 recipes and the level-36 gear item are equippable;
+the slots get one weapon per ammo type first, and demo currency and ammo
+reserves are set (made-up numbers). It also writes `OWCombat_7b_InventoryCompare`
+and `OWCombat_7c_InventoryInspect` by sending the page the Down, E and F keys,
+then fires slot 2 from a nearly empty magazine to exercise reload. Other
+switches: `-owslots=<2..4>` (unlocked weapon slots, default 4),
+`-owmoney=<n>`, `-owerid=<n>`, `-owinventoryselftest` (synthetic inventory
+round-trip checks, logged), **R** reloads in play.
 
 ## Tracing the real game's UI code (golden files for menus)
 
@@ -784,6 +879,13 @@ python tools/sdk_trace/summarize.py --timeline StatusMenuExGFxMovie
 ```
 
 Traces are game data and stay under `local/`. See DECISIONS.md 2026-09-26.
+
+Tracer 0.2.1 adds object identity to return records and `out.D` to
+`GFxUI.GFxObject:GetDisplayInfo` returns. Earlier traces record the getter's
+input struct but omit its completed output; do not use zero-filled inputs as
+proof of a flat transform. Native post-hook output timing remains to be checked
+in a fresh original-game capture. Synthetic callback checks:
+`python tests/ui_trace_returns_test.py`.
 
 ## Independent oracles: umodel and the game's own object dumps
 
@@ -889,3 +991,65 @@ vertex lists, duplicate coplanar polys) is reported, not counted. The report
 also carries negative controls for the other int slots.
 `tests/crosscheck_bsp_polys_test.py` covers it on synthetic fixtures. Results:
 [texture-axis record](verification/BSP_TEXTURE_AXES.md).
+
+Inventory backpack scrolling uses seven full rows and a clipped eighth-row
+preview. Mouse wheel/chevrons move one row; PageUp sorts forward and PageDown
+sorts backward, as resolved in the original-game trace. Drop/Sort are disabled
+while swapping. The in-engine action runner verifies ordering, top clamp,
+selection retention and native-cell/hit-target alignment. See
+[verification](verification/INVENTORY_MOVIE_PROTOTYPE.md) for remaining stock
+input and visual parity gaps.
+
+E/Enter on a backpack item starts a transfer: choose an unlocked weapon slot
+with its number, Up/Down keys or cell click, then E/Enter to confirm. Gear targets
+its matching slot. Escape cancels while keeping the source selected. An empty
+destination offers Equip, an occupied destination Swap. These flows reuse the
+host's equip validation; exact stock grid traversal remains unverified.
+
+Maya's default inventory ScreenX anchor is .86. The action runner samples her
+live Head bone for 13 seconds (a full armed idle loop) and reports normalized
+bounds. This checks head-anchor framing at the test viewport; full silhouette,
+weapon clipping and exact stock pose remain separately unverified.
+
+An optional paint pass applies the existing thumbnail palette approximation to
+one already imported recipe mesh, without reimporting meshes or deleting folders:
+
+```powershell
+python tools/prepare_weapon_paint.py --recipe local/items/smg_maliwan_epic_1.json `
+  --materials local/external/umodel/weapon-materials-20260929 `
+  --output local/items/paint/smg_maliwan_epic_1.json
+$env:OPENWILLOW_WEAPON_PAINT = "$pwd/local/items/paint/smg_maliwan_epic_1.json"
+& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' `
+  "$pwd/host/ue5/OpenWillow/OpenWillow.uproject" -run=pythonscript `
+  "-script=$pwd/host/ue5/import_weapon_paint.py" -unattended -nullrhi
+```
+
+Run this after `import_weapon_items.py`, which replaces item materials. The
+prepared JSON and imported textures/materials remain ignored. This is tested
+only for the selected Maliwan epic SMG; packed normal/emissive semantics,
+pattern placement and original Master_Gun lighting remain unverified.
+
+`--recipe` also accepts several explicit paths, writing a list when there is
+more than one. The UE importer accepts either form. Inputs are validated before
+preparation writes its output; unsupported pattern inputs fail rather than
+silently choosing a substitute. Keep existing Infinity paint imports separate.
+
+Audit Maya's third-person hold references without changing the package decoder:
+
+```powershell
+python tools/audit_maya_menu_pose.py --reader build/Release/ow-package.exe `
+  --game $env:OPENWILLOW_BL2 --output local/character/anim/hold-reference-audit.json
+```
+
+The script checks the reflected AnimSetList inner property type, supplies that
+metadata to the existing CLI, and validates local reference identity/class.
+It retains unsupported WeaponActions explicitly. Shared Rifle_Siren references
+do not by themselves prove inventory action selection or IK behaviour.
+
+`tools/hud_overlay/probe_panel_projection.js` is a developer-only rendering
+benchmark, not loaded by the inventory. Evaluate its repository source in the
+collaborative preview, then start `owProbePanelProjection()` asynchronously and
+poll `window.owPanelProjectionProbeState`. A visual hold argument of at most
+10000 ms allows a screenshot before cleanup. It creates a temporary second
+Ruffle player, isolates equipment-panel art and tests a synthetic CSS plane
+with a matching HTML target. Angles/perspective are synthetic, not stock values.

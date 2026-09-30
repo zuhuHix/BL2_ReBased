@@ -3,11 +3,49 @@
 <html><head><meta charset="utf-8"><title>OpenWillow inventory</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
-ruffle-player{display:block;width:100%;height:100%}
+#presentation{position:absolute;width:1280px;height:720px}
+ruffle-player{display:block;width:100%;height:100%;
+ -webkit-mask-image:linear-gradient(to right,#000 0%,#000 73%,transparent 77%);
+ mask-image:linear-gradient(to right,#000 0%,#000 73%,transparent 77%)}
+#stage{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
 #controls{position:absolute;inset:0;pointer-events:none}
 .cell{position:absolute;background:transparent;border:0;color:#fff;font:bold 13px Arial;
- text-shadow:1px 1px 2px #000;pointer-events:auto;cursor:pointer;padding:5px}
+ text-shadow:1px 1px 2px #000;pointer-events:auto;cursor:pointer;padding:5px;user-select:none;
+ touch-action:manipulation}
+/* The thumbnail is fitted inside the cell's inner frame (the cell art has a border and glow of its own),
+   so a long barrel or a tall scope never reaches the cell edge. Previews are tight-cropped by
+   tools/render_weapon_previews.py, so object-fit:contain fills this box on its longer axis. */
+.cell.weapon-preview{display:flex;align-items:center;justify-content:center;padding:0;overflow:hidden}
+.cell.weapon-preview img{display:block;width:90%;height:84%;object-fit:contain;pointer-events:none;
+ filter:drop-shadow(0 1px 2px #07111a);}
+.cell.weapon-preview .gear-icon{width:74%;height:74%}
+.cell.weapon-preview.gear-item img{width:76%;height:76%}
 .cell:focus-visible{outline:2px solid #ffe25b}
+.cell.tab-current{cursor:default}.cell:disabled{cursor:not-allowed}
+/* A visible item card overlaps this cell: its thumbnail must not bleed over the card text. */
+.cell.covered{pointer-events:none;visibility:hidden}
+.cell.chevron{display:grid;place-items:center;padding:0;color:#a4e8f3;font:bold 26px/1 Arial;
+ background:rgba(8,24,39,.55);border:1px solid #59dced;border-radius:3px}
+.cell.chevron:hover{background:rgba(25,186,211,.45);color:#fff}
+/* UNVERIFIED placeholder art for gear (see gearPlaceholder in inventory.js); --tint is the rarity colour. */
+.gear-icon{display:block;width:100%;height:100%;pointer-events:none;overflow:visible;
+ filter:drop-shadow(0 1px 2px #07111a)}
+.gear-icon path,.gear-icon circle,.gear-icon rect{fill:color-mix(in srgb,var(--tint) 38%,#0b1a2a);
+ stroke:var(--tint);stroke-width:2;stroke-linejoin:round}
+.gear-icon .line{fill:none;stroke:#fff;stroke-opacity:.7;stroke-width:1.6;stroke-linecap:round}
+#live-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);
+ white-space:nowrap;border:0}
+/* Fully opaque: while open it stands in for the item card, and nothing beneath may show through. */
+#inspect-preview{position:absolute;z-index:5;display:grid;grid-template-rows:auto 1fr auto;justify-items:center;
+ overflow:hidden;box-sizing:border-box;padding:6px 8px;background:#081827;border:2px solid #59dced;
+ box-shadow:0 0 14px #19bad3;pointer-events:auto;touch-action:none;cursor:grab}
+#inspect-preview[hidden]{display:none}
+#inspect-preview strong{font:bold 15px Arial;text-shadow:1px 1px 2px #001;white-space:nowrap}
+#inspect-preview .inspect-picture{width:100%;min-height:0;display:grid;place-items:center}
+#inspect-preview img,#inspect-preview .gear-icon{grid-area:1/1;width:100%;height:100%;object-fit:contain;
+ image-rendering:auto}
+#inspect-preview .gear-icon{width:70%}
+#inspect-preview span{color:#9fefff;font:bold 12px Arial;text-shadow:1px 1px 2px #001}
 #loading{position:absolute;inset:0;display:grid;place-items:center;background:#12283d;color:white;font:20px Arial}
 #loading[hidden]{display:none}
 </style>
@@ -15,6 +53,7 @@ ruffle-player{display:block;width:100%;height:100%}
 window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden',splashScreen:false,
  wmode:'transparent',backgroundColor:null,letterbox:'off',logLevel:'error',contextMenu:'off',allowScriptAccess:true}};
 </script><script src="ruffle/ruffle.js"></script>
-</head><body><div id="controls" aria-label="Inventory controls"></div>
+</head><body><div id="presentation"><div id="stage"><div id="controls" aria-label="Inventory controls"></div>
+<div id="inspect-preview" hidden aria-live="polite"></div></div></div><div id="live-status" role="status" aria-live="polite"></div>
 <div id="loading" role="status">Loading inventory…</div>
 <script src="inventory.js"></script></body></html>

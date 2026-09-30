@@ -3,6 +3,8 @@
 #include "GameFramework/Character.h"
 #include "OpenWillowWalker.generated.h"
 
+struct FOpenWillowTakenInventoryItem;
+
 UCLASS()
 class OPENWILLOW_API AOpenWillowWalker : public ACharacter
 {
@@ -13,10 +15,20 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
     bool HasWeaponOut() const { return bWeaponOut; }
+    bool IsMayaActive() const { return bMayaActive; }
+    // Pickup presses that found a dropped item in reach (test hook).
+    int32 PickupAttemptCount() const { return PickupAttempts; }
+    bool LastPickupAccepted() const { return bLastPickupAccepted; }
+    class UOpenWillowInventory* GetInventory() { return Inventory; }
     const class UOpenWillowInventory* GetInventory() const { return Inventory; }
     class UOpenWillowSkills* GetSkills() const { return Skills; }
     // Puts backpack item Item into weapon slot Slot and draws it (inventory screen).
     bool EquipItem(int32 Item, int32 Slot);
+    void SetInventoryPresentation(bool bShow);
+    // Returns the weapon to the backpack and holsters it if it was active.
+    bool UnequipSlot(int32 Slot);
+    // Removes by stable instance ID and preserves the payload for a pickup actor.
+    bool TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem);
     void ToggleInventory();
     void ToggleSkills();
     float PhaselockRemaining() const;
@@ -37,9 +49,15 @@ private:
     void SelectSlot4() { SelectSlot(3); }
     void FirePressed();
     void FireReleased();
+    void ReloadPressed();
+    // Starts a timed reload of the held weapon; false when it cannot reload.
+    bool StartReload(float Now);
+    void CancelReload();
     void FireWeapon();
+    void PickupNearby();
     void UsePhaselock();
     void RunCombatShots(float Now);
+    void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
     void AimAt(const FVector& Point);
     FVector MuzzleLocation() const;
@@ -68,10 +86,16 @@ private:
     bool bSpawnProbeLogged = false;
     bool bMayaActive = false;
     bool bWeaponOut = false;
+    bool bInventoryPresentation = false;
+    int32 PickupAttempts = 0;
+    bool bLastPickupAccepted = false;
     bool bFireHeld = false;
     int32 ShotCount = 0;
     int32 CombatShotStep = 0;
     float NextShotAt = 0;
+    bool bReloading = false;
+    float ReloadEndsAt = 0;
+    bool bOutOfAmmoLogged = false;
     float PhaselockReadyAt = 0;
     float LandUntil = 0;
     float TargetHitAt = -10;

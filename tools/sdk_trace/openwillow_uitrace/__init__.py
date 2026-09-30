@@ -28,8 +28,8 @@ from unrealsdk import logging
 from unrealsdk.hooks import Type, add_hook, remove_hook
 from unrealsdk.unreal import UObject, WrappedArray, WrappedStruct
 
-__version__ = "0.2.0"
-__version_info__ = (0, 2, 0)
+__version__ = "0.2.1"
+__version_info__ = (0, 2, 1)
 
 HOOK_ID = "openwillow_uitrace"
 BASES = ("GFxMoviePlayer", "GFxObject")
@@ -96,11 +96,17 @@ def on_call(obj, args, _ret, func):
         write({"phase": "error", "error": repr(error)[:300]})
 
 
-def on_return(_obj, _args, ret, func):
+def on_return(obj, args, ret, func):
     try:
         path = func.func._path_name()
         if state["last_detailed"].get(path, True):
-            write({"phase": "return", "func": path, "ret": plain(ret)})
+            record = {"phase": "return", "func": path, "obj": plain(obj), "ret": plain(ret)}
+            # D is an out parameter: its pre-call value is often an empty
+            # struct. Preserve the native getter's completed output, without
+            # invoking another getter or changing any game property.
+            if path == "GFxUI.GFxObject:GetDisplayInfo":
+                record["out"] = {"D": plain(args.D)}
+            write(record)
     except Exception as error:
         write({"phase": "error", "error": repr(error)[:300]})
 

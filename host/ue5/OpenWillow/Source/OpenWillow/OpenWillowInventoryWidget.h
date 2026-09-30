@@ -5,8 +5,10 @@
 #include "OpenWillowInventoryWidget.generated.h"
 
 class AOpenWillowWalker;
+class AOpenWillowInventoryPreviewActor;
 class UVerticalBox;
 class UTextBlock;
+class UImage;
 
 // One clickable row: an equipped slot or a backpack item. Built in C++ so
 // the layout is reviewable text, not a binary Blueprint asset.
@@ -43,12 +45,17 @@ public:
     void RowClicked(int32 Item, int32 ClickedSlot);
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
+    virtual void NativeDestruct() override;
     virtual FReply NativeOnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
 private:
+    void EnsurePreviewActor();
     UPROPERTY() TObjectPtr<AOpenWillowWalker> Walker;
+    UPROPERTY() TObjectPtr<AOpenWillowInventoryPreviewActor> PreviewActor;
     UPROPERTY() TObjectPtr<UVerticalBox> SlotList;
     UPROPERTY() TObjectPtr<UVerticalBox> BackpackList;
     UPROPERTY() TObjectPtr<UVerticalBox> Card;
+    UPROPERTY() TObjectPtr<UImage> PreviewImage;
+    UPROPERTY() TObjectPtr<UTextBlock> PreviewStatus;
     int32 CardItem = INDEX_NONE;
     int32 TargetSlot = 0;
 };

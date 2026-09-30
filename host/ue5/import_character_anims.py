@@ -1,9 +1,12 @@
-"""Create AnimSequences on Maya's arms skeleton from converted bone tracks (editor Python).
+"""Create AnimSequences on one of Maya's skeletons from converted bone tracks (editor Python).
 
 OPENWILLOW_CHARACTER_ANIMS lists `set=path.json` pairs written by
 tools/prepare_character_anims.py. Run after import_character.py, which
 recreates the arms skeletal mesh. Also dumps the skeleton's reference pose to
 OPENWILLOW_CHARACTER_REFERENCE when that is set (input to the converter).
+OPENWILLOW_CHARACTER_MESH (default Hands_Siren) picks the mesh whose skeleton
+gets the clips and OPENWILLOW_CHARACTER_ANIM_FOLDER (default FirstPerson) the
+content subfolder, so the third-person body clips use the same path.
 """
 import json
 import math
@@ -12,9 +15,11 @@ from pathlib import Path
 import unreal
 
 destination = '/Game/OpenWillow/Characters/Maya'
-mesh = unreal.load_asset(f'{destination}/Meshes/Hands_Siren/SkeletalMeshes/Hands_Siren')
+mesh_name = os.environ.get('OPENWILLOW_CHARACTER_MESH') or 'Hands_Siren'
+folder = os.environ.get('OPENWILLOW_CHARACTER_ANIM_FOLDER') or 'FirstPerson'
+mesh = unreal.load_asset(f'{destination}/Meshes/{mesh_name}/SkeletalMeshes/{mesh_name}')
 if mesh is None:
-    raise RuntimeError('Import Hands_Siren with import_character.py first')
+    raise RuntimeError(f'Import {mesh_name} with import_character.py first')
 skeleton = mesh.get_editor_property('skeleton')
 tools = unreal.AssetToolsHelpers.get_asset_tools()
 eal = unreal.EditorAssetLibrary
@@ -34,13 +39,13 @@ for pair in filter(None, os.environ.get('OPENWILLOW_CHARACTER_ANIMS', '').split(
     label, path = pair.split('=', 1)
     for clip, data in json.loads(Path(path).read_text(encoding='utf-8')).items():
         name = f'Anim_{label}_{clip}'
-        asset_path = f'{destination}/FirstPerson/{name}'
+        asset_path = f'{destination}/{folder}/{name}'
         if eal.does_asset_exist(asset_path):
             eal.delete_asset(asset_path)
         factory = unreal.AnimSequenceFactory()
         factory.set_editor_property('target_skeleton', skeleton)
         factory.set_editor_property('preview_skeletal_mesh', mesh)
-        sequence = tools.create_asset(name, f'{destination}/FirstPerson', unreal.AnimSequence, factory)
+        sequence = tools.create_asset(name, f'{destination}/{folder}', unreal.AnimSequence, factory)
         controller = sequence.controller
         controller.open_bracket(unreal.Text('OpenWillow MD5 import'))
         source_rate = float(data['rate'])

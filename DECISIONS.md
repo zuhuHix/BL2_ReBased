@@ -2425,3 +2425,556 @@ latest host level guard is not compiled or runtime-verified. Full evidence,
 benchmark command, local reference provenance and limitations are in
 `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`. AI-assisted implementation;
 all game-derived outputs remain local and ignored.
+
+## 2026-09-29: Weapon card accuracy, sale value and red text from install data
+
+The inventory card lacked the Accuracy row, the price and the red flavour line.
+`tools/weapon_stats.py` now derives them from the installed data, and the host
+forwards them (`accuracy`, `accuracyKnown`, `value`, `valueKnown`, `funStats`).
+No package parser changes; the properties are read with the existing
+`ow-package --properties`.
+
+- **Accuracy**: `AttrPresent_WeaponSpread` remaps spread 0..15 to 100..0, so
+  accuracy is `100 * (1 - spread / 15)` (orientation inferred, clamp
+  UNVERIFIED). The spread input is the existing UNVERIFIED model, which does not
+  reproduce the spread of any of seven real cards (Conference Call: model 3.90,
+  real 4.44; Striker: 1.02 vs 1.995). Emitted with `accuracy_known = false`.
+- **Sale value**: the type's `MonetaryValue` price calculator with the product of
+  the parts' `MonetaryValueMod` and the level, rounded down. Integer-exact for
+  5 of 7 real cards (shotgun, AR, SMG); the two launchers do not reproduce.
+  `sale_value_known` is true only for the shotgun, assault rifle and SMG
+  calculators; others carry the number flagged false.
+- **Red text**: the title part's `CustomPresentations` line with
+  `TextColor` (220, 70, 70), overridden by the installed `.int` when present. All
+  nine red lines on real cards exist verbatim in the data. White stat lines are
+  not derived.
+- Host: items with no recipe `type` (the Infinity recipes) get a type label from
+  the resolved ammo type.
+
+Automated: `tests/weapon_stats_test.py` 11/11 (8 new, synthetic), CTest 6/6,
+`verify_packages.py` counts match, UE module build succeeded. No in-game check
+yet. Evidence and limits: `docs/verification/INVENTORY_CARD_STATS.md`.
+AI-assisted; the real-card observations are local ignored traces.
+
+## 2026-09-29: Inventory on Tab, header tabs, varied demo weapons, shield preview
+
+AI-assisted. The maintainer asked for the whole inventory menu to work, opened
+with **Tab**, and said local decoding of anything the menu needs is fine for
+speed. That widens what is decoded (more weapon meshes and a shield mesh from
+the installed game through the existing UModel path) but not where it goes: all
+game-derived output (recipes, glTF, textures, preview PNGs, the gear manifest)
+stays under ignored `local/`; no game file, decompiled source or third-party
+code was added to the repository, and no GPL tool was used.
+
+- **Tab.** `AOpenWillowPlayerController::ToggleMenu` (the map list's Tab) now
+  hands Tab to `AOpenWillowWalker::ToggleInventory` while Maya is the pawn; the
+  map list stays on other pawns and via `OWMapList`. The page closes on Tab,
+  Escape or I; category cycling moved to `[` / `]` (Tab used to cycle it).
+- **Header tabs.** The five StatusMenu header tabs (movie clips nav1..nav5) have
+  hit boxes on both pages. Inventory and Skills switch through the intercepted
+  routes `/__ow_tab_skills` and `/__ow_tab_inventory` (host: `PendingTabSwitch`
+  in `AOpenWillowMayaHUD`); K / I do the same from the keyboard. Missions, Map
+  and Challenges have no host data, so they are disabled with an "unavailable"
+  label instead of being faked.
+- **Backpack panel.** The converted movie leaves it full size and overlapping the
+  INVENTORY title. The page now scales it to 0.74 and places it at
+  (682, 134) in the 1280x720 stage; row positions are computed in stage pixels
+  and converted to panel units. Numbers are read from the reference captures
+  (host choices, not movie values).
+- **Type icons.** Probed in the bench: the movie draws frames `Sniper` and
+  `Rocket`; `Sniper Rifle` / `Rocket Launcher` draw nothing (the launcher card
+  used to show a pistol).
+- **Demo weapons.** 18 new rolled recipes (pistol, SMG, assault rifle, shotgun,
+  sniper, launcher; seven manufacturers; common to legendary) rolled with
+  `tools/weapon_recipe.py` / `weapon_stats.py`, filtered with
+  `filter_gestalt_gltf.py`, previews from `render_weapon_previews.py`, meshes
+  imported by `import_weapon_items.py` (28 items). UNVERIFIED: rarity is the
+  maximum over parts; 11 recipes drop fragments supplied only by `*_None` parts
+  because those decode with meaningless mesh names; preview paint is the same
+  approximation as before (colours are not faithful); rolled part mixes can be
+  cross-manufacturer. In-hand meshes still use a neutral grey material except
+  the Infinity.
+- **Backpack size.** The demo library exceeds the 12-slot base, so the host sets
+  the class maximum (39) unless `-owbackpack=<12..39>`; an optional local
+  `load_order.txt` in the recipe folder orders the first items so the list is
+  not eight identical guns in a row.
+- **Shield preview.** "The Bee" now has a rendered preview from the shared
+  Hyperion shield gestalt (four Hyperion fragments, section totals agree); the
+  fragment choice for this specific roll and the paint are UNVERIFIED. Relic,
+  grenade mod and class mod previews exist locally but no such items are in the
+  manifest, so no cell shows them.
+- **Maya display.** Her two lights now carry distinct forward-shading
+  priorities, which removes the editor's "Multiple directional lights" on-screen
+  warning; the leftover bone-name debug logging was removed.
+
+Automated: UE 5.8 build succeeded; in-engine `tools/test_inventory_actions.ps1`
+26/26 (adds Tab open/close through the controller path, K / I tab switching, `]`
+category cycling); `ctest` 6/6; `verify_packages.py` all nine packages match;
+`tests/weapon_stats_test.py`, `skill_stats_test.py`, `skill_info_test.js` pass.
+A local browser check (`tab_check.py`, synthetic snapshot) covers Tab, K, `]`,
+the disabled tabs and the Skills-tab click. Visual: fresh 1280x720 engine
+captures `OWCombat_7*`; the independent critic's score is recorded in
+`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`. Not verified: a physical
+keyboard Tab press (the test injects the key through the player controller),
+drag and drop, the Missions / Map / Challenges tabs, the in-hand materials, and
+any claim of parity with the original inventory.
+
+## 2026-09-29: Maya's inventory preview uses the game's Idle_Inventory clip and an ink outline
+
+AI-assisted. UModel 1590 MD5 export of `GD_Siren_Streaming_SF` `Skel_SirenBody`
+and AnimSets `Base_Siren`, `Unarmed_Siren`, `Rifle_Siren` (0.9 s, 68 clips, no
+failures). `Base_Siren.Idle_Inventory` (271 frames, 30 fps) is converted by
+`tools/prepare_character_anims.py --anchor none` (new option: skips the
+first-person camera correction; the MD5-to-UE Y-mirror check still passes) and
+imported by `import_character_anims.py` onto the body skeleton
+(`OPENWILLOW_CHARACTER_MESH` / `_ANIM_FOLDER`). The head follows through leader
+pose (same bone names). `host/ue5/import_character_menu_look.py` adds an
+inverted-hull outline material and Specular 0.15 / Roughness 0.85 on
+`M_OW_Character`; both are art-direction approximations, UNVERIFIED against
+BL2's stripped `Master_Player` shaders.
+
+Visual (engine capture at DistanceCm 345): hand-on-hip idle on the same side as
+the 1920x1080 reference, which also supports the earlier UNVERIFIED body
+handedness. The final framing (DistanceCm 300, ScreenX 0.79) is built but its
+capture run stalled at editor start-up, so it is not visually verified. The
+backdrop post-process still darkens Maya with the world (suit reads brown);
+that belongs to the backdrop pass. No critic re-score of this change.
+
+## 2026-09-30: Inventory backdrop grading excludes Maya
+
+AI-assisted bounded host rendering change; existing UModel 1590 payloads and
+object identity/import paths remain unchanged. No new extraction or third-party
+code. `import_character_menu_look.py` now also generates `M_OW_MenuBackdrop`
+locally. After-tonemap gain, desaturation and vignette use custom stencil 247
+on the menu body, head and ink hulls, with a scene-depth visibility check. The
+renderer enables depth/stencil (`r.CustomDepth=3`). The display owns the
+blendable; destroying it on close removes the effect. Missing material logs a
+warning and leaves world grading disabled. Depth of field remains focused on
+Maya. Lighting reduced from 14/18 to 4/5 lux because Maya no longer needs to
+compensate for global dimming.
+
+Visual: fresh 1280x720 engine captures show yellow suit panels rather than
+brown, world dimming and the inventory idle/outline. The 300 cm capture clipped
+her elbow; default distance restored to 345 cm and visually checked again.
+`OWCombat_9_AfterSkills` shows gameplay colour/FOV restored after menu close.
+Local before/after evidence: `local/inventory/{before,after}-backdrop.png`;
+captures remain ignored. Material generation and UE 5.8 module build passed.
+CTest: 6/6; package verification: all nine decoded byte/count/export-field
+checks match; in-engine inventory action regression: 26/26 with Slate inputs.
+Detailed runtime results and limits are recorded in
+`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`.
+
+UNVERIFIED: exact BL2 shader/lighting parity, stencil occlusion under arbitrary
+camera/world geometry, temporal edge stability, and an independent critic
+re-score. Self-review against the local real-game reference still finds a
+brighter face, different outfit and approximate blurred backdrop/glass; the
+previous independent 5.5/10 score is not updated by this visual check.
+
+## 2026-09-30: Stock inventory target, camera-space framing and native item inspection
+
+AI-assisted. The maintainer selected stock inventory and default Maya as the
+target; the custom appearance in the older screenshot is not the appearance
+target. Existing UModel 1590 exports, local SWF conversion and Ruffle
+0.7.0-nightly.2026.9.26 remain the external payload path. Project code owns
+stable inventory identity, host validation, layout and input adaptation.
+
+The menu display now rotates with the camera, including pitch, so looking
+up/down before opening does not tilt the display copy out of its framing.
+Distance 300 cm / ScreenX 0.79 fits in fresh captures after this correction;
+key/rim 1.5/3, f-stop 16 and lighter backdrop grading expose the world through
+the curved glass. Affine panel layout and native glass alpha are adjusted
+against the stock screenshot. Native movie favorite/trash icons replace HTML
+symbols and have explicit hit targets. Drag/drop uses stable IDs and the
+existing authoritative equip/unequip path, rejecting wrong gear types and
+locked slots. The host starts its new-session purse at zero; this is host
+state, not a decoded BL2 save or economy implementation.
+
+`prepare_inventory_gear.py` consumes existing SDK callback observations,
+keeping interleaved card transactions separate and ending at SetHeight.
+Benchmark: two ignored traces, 87 gear observations, 11 unique cards,
+76 duplicates; four shields, four class mods, three relics, zero grenade mods;
+0.287 s. Output: `local/inventory/observed_gear.json`. No failed input reads.
+Unknown types and unfinished transactions are omitted (synthetic coverage).
+No package identity, rolled parts or mesh is inferred. Observed stat icons and
+Flash flavour formatting are preserved, including red text among white bonuses.
+Formatting is passed only to the movie TextField, never browser HTML.
+
+Inspect reuses the existing UE preview actor and imported recipe mesh rather
+than a static PNG. The host resolves the current inventory instance, clamps
+orbit pitch and rate-limits capture to 10 Hz. PNG frames stay in memory; close
+destroys the actor. Gear without resolved visual identity is unavailable.
+The render target uses isolated channel-2 lights and manual exposure.
+[Epic's image utility API](https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/FImageUtils)
+supports render-target readback and PNG encoding; no third-party code was added.
+
+Verified: UE 5.8 build; 32/32 in-engine actions with Slate keys and synthetic DOM
+drag/pointer events; rotated Inspect captures; currency zero; yellow suit and
+unclipped elbow. CTest 6/6, all nine package byte/count/export comparisons match,
+weapon-stat tests 11/11 and gear-observation tests 4/4. The initial Inspect test
+used an unmapped uppercase helper key and was corrected to lowercase before
+the passing run. Lighting refinement is checked separately in the verification
+record. All game-derived payloads/captures remain ignored.
+
+UNVERIFIED: 1:1 parity, physical drag input, continuous Inspect latency, original
+Inspect composition, BL2 material graphs, exact 3D panel projection, stock
+focus/swap and sorting behaviour, compare-card placement, unresolved gear art,
+and an independent critic re-score. The old 5.5/10 score remains historical.
+
+## 2026-09-30: Equipped transfer state and stock-sized comparison cards
+
+AI-assisted, same local SWF/Ruffle payload path. Recorded callbacks show
+equipped-to-backpack transfer, `TweenPanel` compare positions and left-origin
+`TweenCards`. Enter/E on equipped now pins that source, filters compatible
+backpack candidates and preserves the comparison while moving selection.
+E/Enter confirms through the existing validated host equip path; Escape
+restores source selection/category without closing inventory. Backpack Enter
+remains a host direct-equip shortcut, not a verified stock focus sequence.
+
+A newly consulted [stock comparison screenshot](https://www.thatgamesux.com/borderlands-2-can-there-be-too-much-loot)
+confirms that large cards intentionally overlap the upper equipment/backpack
+panels. The previous host-chosen 55% cards were incorrect. Recorded
+75/81/81/75 scales and positions are restored; equipped source is the left
+highlight card and the candidate is the right comparison card. Numeric fields
+must be reasserted after the movie tween because its native completion callback
+is absent. Host overlays covered by cards are hidden, including category arrows.
+
+Verified: UE build, 35/35 in-engine actions, source preserved on selection,
+268.1/289.6 card widths and both first-stat fields visible after tween; settled
+capture reviewed. Browser E produces the expected candidate-ID/slot request.
+CTest 6/6 (8.47 s); all nine package byte/count/export checks match. Details in
+the inventory verification record. No extracted payload or reference image is
+tracked. Not verified: exact 3D perspective, full stock focus behaviour,
+physical mouse interaction, other sort/inspect states or independent critic.
+
+## 2026-09-30: Inventory Maya displays the selected weapon
+
+AI-assisted bounded host presentation change. Reuses UModel 1590's already
+exported `GD_Siren_Streaming_SF/Rifle_Siren.Idle_Inventory`: 381 frames at 30 fps,
+converted with the existing MD5-to-UE body reference and `--anchor none`, imported
+as `Anim_InventoryRifle_Idle_Inventory`. No animation data is tracked. The
+first commandlet attempt used a relative input path and failed; absolute input
+import succeeded, zero errors/one reference-gathering warning. A representative
+request for `Pistol_Siren` returned no matching export (0.274 s); package listing
+contains Base, Rifle, RocketLauncher and Unarmed third-person sets, not that
+requested name. No serialization or architecture change followed that failure.
+
+The page reports selection through a dedicated preview message. UE resolves
+the current stable inventory instance to its recipe ID before loading the
+mesh; arbitrary page asset paths are not accepted. The display uses the armed
+clip and existing `R_Weapon_Bone` attachment, with a matching ink hull/stencil
+247. Gear selection clears the gun and restores unarmed idle. Cached-menu
+reopen resets transient inspect/transfer state and reissues selection to the
+new display actor; empty selection clears an old display weapon.
+
+Verified: UE build (13.85 s); in-engine 35/35 actions, log
+`run-20260930-012557.log`; weapon IDs/mesh/armed-idle load logged for pistol,
+shotgun and SMG; gear logs mesh=0 / armedIdle=0. Open and comparison captures
+show the gun attached and following the armed pose. CTest 6/6 (8.54 s), all
+nine package checks match, JS syntax/diff checks pass; browser reopen callback
+clears Inspect and reissues current selection. No new independent critic.
+
+UNVERIFIED: exact weapon-specific hold definitions/launcher pose, material
+paint for most display guns, all animation phases/long-gun clipping and parity
+against a matched default-Maya original-game capture. Stock shader/3D-panel
+projection gaps remain; 1:1 goal is not complete.
+
+## 2026-09-30: Inventory continuous backpack window
+
+AI-assisted presentation change reuses the existing UModel/Ruffle local payload
+path; the project owns row selection, input routing and host validation. Seven
+full backpack rows now scroll by one item instead of seven-item pages. Selection
+crossing the window edge reveals the next item. Wheel input accumulates fractional
+steps, reversals reset accumulation, and offsets clamp to the available list.
+Page keys advance seven rows. Eight native cells are rendered under an AS2
+scrollRect, leaving a clipped eighth-row preview; its HTML hit target is clipped
+as well. Selecting the preview reveals that row fully.
+
+Ruffle's existing scrollRect was checked with a small drawn-rectangle probe
+before using it; no new tool or extraction architecture. Stock reference shows
+seven rows and the next-row sliver. Browser measurement confirms about 9.5 px
+of the eighth hit target remains visible. UE build succeeded (7.75 s), runtime
+37/37 PASS (run-20260930-014550.log), including overlap ordering and top clamp.
+CTest 6/6 (20.39 s); all nine decoded-package checks match. No extracted output
+is tracked. UNVERIFIED: original-game wheel acceleration, bottom-edge physical
+mouse interaction, stock horizontal focus navigation and independent critic.
+The full 1:1 goal remains active.
+
+## 2026-09-30: Default Maya head preview correction and crop anchors
+
+AI-assisted inventory-only material adjustment. Existing UModel 1590 external
+binary (official gildor2/UEViewer source) exports `CD_Siren_Skin_Default_SF
+Mati_Default_Head MaterialInstanceConstant` with `-game=border -export -png`.
+Fresh representative export: 0.773 s, exit 0, eight files / 6,508,229 bytes:
+two material descriptions, two property dumps, four PNGs (head diffuse/normal/
+mask plus referenced Fire_Tile). Zero failed exports or duplicates in the fresh
+output; Master_Player's cooked graph remains unsupported, not reconstructed.
+Output: ignored `local/external/umodel/maya-menu-head-palette-20260930`;
+log `local/ue-import/inventory-head-export.log`. Parent/texture references agree
+with the earlier default head export; the head property dump SHA256 matches.
+
+The look script reads that local palette and creates MI_InventorySirenHead,
+parented to the imported head instance. The existing factor-two shader is
+compensated for the face, while hair uses the default dark-blue shadow colour
+at half gain. Only the inventory display actor applies this material; original
+mesh assets retain their materials. This is an explicitly UNVERIFIED visual
+translation of the missing stock shader, not proof of original ramp math.
+Engine captures show dark-blue hair instead of violet and less pale face;
+body colour/ramp and matched original-game lighting still need work.
+
+A regression from the crop change was found in fresh captures: immediate
+getBounds after setting scrollRect yielded transient displaced header anchors.
+The page now captures row/header anchors before setting the crop. Browser
+controls sit above row one (~169-193 px), rather than beside the tabs (~52-76).
+Engine open/reopen verification now asserts that relationship. No independent
+critic; 1:1 menu remains incomplete.
+
+Verified final follow-up: UE build 7.95 s; runtime 37/37 PASS,
+`run-20260930-015423.log`, including header placement on open/reopen/Skills return.
+CTest 6/6 (15.60 s), all nine package checks match, Python/JS syntax/diff checks
+pass. Fresh capture confirms corrected header and preview palette load.
+
+## 2026-09-30: Observed sort bindings and swap action guards
+
+AI-assisted UI correction based on existing local UI Trace SDK observations;
+no new extraction backend. In `uitrace_20260926_221202.jsonl`, seq 16508-16512
+resolves GBA_SortInvForward/GBA_SortInvBackward to Page Up/Page Down and marks
+Drop/Sort disabled during transfer. The page now uses those directional sort
+keys, preserves the selected stable instance, shows the contextual Sort hint,
+and blocks Drop/Sort while swapping. Slate test routing now includes both page
+keys. The sort-mode list itself remains a host approximation: the traces do
+not exercise the full stock cycle, so binding agreement is not full sort parity.
+
+Repeated browser renders revealed an additional nonzero-scrollRect-origin
+regression: native cells drifted from their HTML hit targets after sort/filter/
+transfer renders. Backpack rows now use panel-local coordinates under a fixed
+zero-origin mask. Twelve repeated renders leave the first native hit clip at
+803.75/194.95 and HTML target at 803.75/194.9375 in 1280x720; no accumulating
+offset. Engine comparison/sort checks now assert native/HTML alignment.
+The first action run used reversed sort directions; the original alias return
+was then inspected, directions corrected, and checks rerun. Final validation
+is recorded in the inventory verification record. Full focus navigation, exact
+stock sort cycle, Inspect/perspective/shader parity remain incomplete.
+
+Final: UE build 8.06 s; in-engine 40/40 PASS (`run-20260930-020452.log`),
+comparison capture reviewed; CTest 6/6 (22.16 s), all nine package checks match,
+JS syntax/diff checks pass. Game-derived output remains ignored; 1:1 active.
+
+## 2026-09-30: Backpack-origin inventory transfer
+
+AI-assisted behavioural correction using existing original-game UI Trace SDK
+observations. `_220818` seq 23550 starts equip from InventoryListPanel, seq
+24230 passes the backpack item to equipped-panel StartEquip with type-cell
+selection, and subsequent TweenCards records bStartedFromLeftPanel=false.
+This complements the already implemented equipped-origin transfer. No new
+extraction tool or asset export; UModel/Ruffle payloads remain local.
+
+E/Enter on a backpack item now starts a pending transfer rather than equipping
+immediately. The source stable ID stays pinned while choosing an unlocked
+weapon slot; comparison follows its current occupant. Gear can only target its
+matching slot. Confirm submits the existing host-validated equip; Escape keeps
+the source in the backpack and leaves equipment unchanged. Empty slots remain
+valid pending targets and show Equip rather than Swap, with no invented
+comparison item. Selected previews remain on the backpack source. Clicks on
+equipped slots during left-origin transfer no longer silently change its
+pinned destination. Snapshot refresh only cancels a transfer if its source
+vanishes, rather than cancelling every backpack-origin transfer.
+
+Panel/card tweens now distinguish transfer direction and keep the transfer
+layout for empty destinations. Both panel focus arguments follow observed
+comparison calls. Existing action checks were updated to start then confirm;
+new checks cover pinned source, destination comparison, cancel and empty slot.
+Stock initial analogue selection, exact keyboard grid traversal and click vs
+hover timing remain unverified. Full 1:1 goal remains active.
+
+Final checks: UE build 7.84 s; runtime 45/45 PASS
+(`run-20260930-021213.log`), occupied/empty right-origin captures reviewed;
+CTest 6/6 (21.64 s), all nine package checks match, JS syntax/diff pass.
+Animated preview can overlap the backpack; full-cycle pose/framing remains
+unverified, alongside the other full-parity gaps.
+
+## 2026-09-30: Full-loop Maya preview framing
+
+AI-assisted presentation refinement reuses existing UModel 1590 body/animation
+payloads and the project-owned MD5-to-UE converter. No extraction/import or
+animation-track edit. Forward kinematics on the local converted Rifle idle
+(381 frames / 30 fps) finds a stationary Root, authored Hips ranges
+x -4.70..8.21 / y -11.21..16.65 cm and Head x -5.12..5.84 /
+y -10.16..11.69 cm. Thus the earlier sideways movement is authored animation,
+not accumulating root drift. The base unarmed idle's head y range is
+-10.19..2.14 cm; these measurements do not prove exact original-game playback.
+
+Default horizontal preview anchor moves from .79 to .86 to fit the stock
+(default outfit) reference's right-side composition over the whole armed loop.
+The authored motion is retained. The action runner now projects the live Head
+bone throughout 13 seconds, slightly longer than the 12.7-second source clip,
+and checks its normalized position stays to the right of the backpack region
+and on screen. This measures the head anchor, not all silhouette pixels or
+weapon-specific hold definitions.
+
+Verified: UE build 11.49 s; runtime 46/46 PASS,
+`run-20260930-021751.log`: 2,110 head samples, x .806.. .906 / y .319.. .360.
+Fresh open and empty-target captures show the face clear of the backpack at
+the sampled poses. CTest 6/6 (22.01 s), all nine package checks match, diff
+check passes. No independent critic or matched original full-loop capture;
+exact body/weapon clipping, stock initial pose/hold selection and full visual
+parity remain incomplete. All local payloads/screenshots remain ignored.
+
+## 2026-09-30: Scaleform 3D projection probe
+
+AI-assisted developer-only benchmark, no menu runtime change. Autodesk's
+primary 3D guide documents AS2 _z/_xrotation/_yrotation/_matrix3d/_perspfov as
+Scaleform extensions (https://help.autodesk.com/cloudhelp/ENU/Scaleform-Help/scaleform_help/3di.html).
+The current Ruffle 0.7.0-nightly.2026.9.26 bridge was tested with original
+synthetic 100x100 geometry, not game art. `probe_scaleform_3d.js` is never loaded
+by the inventory page; paste/run it in the ready browser, then await
+`owProbeScaleform3D()`. Four cases / 405.5 ms including four 100 ms waits,
+with gfxExtensions=true. Flat, _yrotation=45 and _z=-300 all remain 100x100;
+ordinary _rotation=45 produces 141.4x141.4 bounds. Three cases execute but two
+3D mutations have no rendered effect; ordinary rotation is the positive
+control. The temporary clip is removed in finally. No output duplicates,
+exports or new external tools. A first attempt to load the probe by HTTP failed;
+executing its repository source through preview_evaluate succeeded.
+
+Both existing SDK traces contain Get/SetDisplayInfo observations, but zero
+nonzero Z/XRotation/YRotation SetDisplayInfo calls. Thus they do not establish
+the stock projection values. This confirms a renderer support gap rather than
+proving an intended transform. Do not compensate by inventing 3D parameter
+values or claim the current affine presentation is 1:1. A projection adapter
+requires a separate rendering/interaction benchmark and original transform
+observations before replacing the current path. Other parity work can continue.
+
+Verification: developer probe above; CTest 6/6 (8.64 s), all nine package checks
+match, JS syntax/diff checks pass. No new engine run (runtime unchanged);
+previous 46-action run is retained as earlier evidence, not this probe's scope.
+
+## 2026-09-30: Preserve display-info getter output in UI observations
+
+AI-assisted trace instrumentation fix. Existing UI Trace SDK 0.2.0 records
+GetDisplayInfo's input D but omits its post-call out parameter; its return value
+alone is unset. Thus earlier zero-valued getter input records do not prove a
+flat original transform. Version 0.2.1 adds return object identity and out.D for
+that getter only, using the existing WrappedStruct serializer, with no extra
+getter invocation/property writes or new extraction tool. Normal return format
+remains compatible; exhausted budgets and callback errors retain isolation.
+The SDK API is referenced from primary bl-sdk/pyunrealsdk documentation; no
+external source copied. Native post-hook output timing remains UNVERIFIED
+until a fresh game run, not established by synthetic mocks.
+
+Three synthetic callback-contract checks pass (completed output/identity,
+unrelated return, budget/error isolation). CTest 6/6 (8.53 s); all nine package
+checks match, Python syntax/diff pass. Updated the already installed local
+OpenWillow tracer after checking its identity, preserving trace_dir.txt and
+backing up the prior own script under ignored local/ui/tool-backups. Installed
+and repository script SHA256 match. No original game is running and no new
+native trace was captured. No UE runtime change or new engine run. The
+projection gap and full 1:1 goal remain unresolved; other work can continue.
+
+## 2026-09-30: Local paint pass for the selected Maliwan SMG
+
+AI-assisted bounded visual improvement using the already benchmarked UModel
+1590 exports, not another extraction backend. prepare_weapon_paint.py resolves
+the known recipe's two-MIC parent chain and four existing textures; the UE
+importer assigns an approximate material to its existing mesh without mesh
+reimport or directory deletion. One glTF primitive has UV1. No new exports,
+duplicates or external binaries. Preparation succeeded; UE commandlet completed
+with zero reported errors/warnings (script execution 1.00 s). Output remains
+under ignored local/ and UE Content. Leaf-name resolution is bounded to this
+known export set, not proof of general cross-package material identity.
+
+The in-engine screenshot shows blue/pale metal paint replacing neutral grey.
+The missing Master_Gun graph, inferred detail channel, HDR palette compression,
+packed normal/emissive semantics, pattern placement, roughness and metallic
+response remain UNVERIFIED. Other weapons still use their previous materials;
+this does not establish stock shader parity.
+
+Fresh runtime run local/inventory-actions/run-20260930-023458.log: 46/46 PASS,
+including 2049 live head samples across the full 13-second armed idle. CTest
+6/6 (17.39 s); all nine package checks match decoded bytes/counts/export fields.
+Python syntax checks pass. Native computer-use pipe was unavailable, so no fresh
+original-game trace or physical input validation occurred. Self-review only;
+no independent critic rerun. Full menu projection, Inspect and appearance parity
+remain open.
+
+## 2026-09-30: Explicit batch coverage for weapon paint
+
+AI-assisted extension of the same local paint pass to explicit recipe lists.
+Preparation validates all required texture/vector inputs and rejects duplicate
+IDs before writing a batch. No backend or architecture change. Of 28 existing
+mesh recipes, 14 support this four-texture approximation, 6 have missing/null
+pattern inputs and remain unchanged, and 8 Infinity variants are excluded to
+retain their previous paint. Coverage report remains ignored at
+local/items/paint/coverage.json. Preparation took .055 s; 56 texture references
+use 24 unique existing source PNGs (32 repeated source references, no new
+exports). All 14 glTF primitives contain UV1. Batch UE commandlet completed
+with zero reported errors/warnings, script execution 11.67 s. Separate per-item
+texture assets currently duplicate shared source payloads locally; not a
+deduplicated material library. No claim that all 14 paints visually match.
+
+Fresh engine run local/inventory-actions/run-20260930-023958.log: 46/46 PASS,
+1802 full-loop head samples, same framing bounds. Early comparison capture
+still displays Preparing Shaders (2), so that image is not final shader
+appearance evidence. The prior completed SMG capture remains the bounded
+visual result. CTest 6/6 (20.95 s), all nine package checks match, Python syntax
+and diff checks pass; 14/14 complete input validations pass, null pattern
+negative check rejected explicitly. Other stock visual/input parity gaps
+remain open; no fresh original-game capture or independent critic.
+
+## 2026-09-30: Audit Maya's hold references before changing menu animation
+
+AI-assisted read-only audit using the existing bounded package CLI. No parser,
+serialization layout or engine change. WillowGame's reflected
+BodyWeaponHoldDefinition.AnimSetList inner property is Core.ObjectProperty;
+the audit supplies that metadata through the existing --array-schema option
+and checks each reference against the actual local Engine.AnimSet export.
+Nine third-person Maya holds found, zero trailing bytes in their property
+streams, eight unsupported WeaponActions retained explicitly. Pistol, rifle,
+shotgun, SMG and sniper reference Rifle_Siren. Launcher references
+RocketLauncher_Siren; unarmed references Unarmed_Siren. Default and Blizzard
+contain no own AnimSetList. This supports sharing the Rifle set across five
+classes, not the complete menu action/clip selection, inheritance or IK.
+
+Representative existing-backend benchmark: UModel 1590 from official
+https://github.com/gildor2/UEViewer, local external binary. Command
+`umodel -path=<CookedPCConsole> -game=border -export -md5
+-out=local/external/umodel/maya-launcher-anims-20260930 GD_Siren_Streaming_SF
+RocketLauncher_Siren AnimSet`: .086 s, exit 0, 9 MD5 clips / 357936 bytes,
+zero duplicate files or export failures, no Idle_Inventory. A separate
+`-dump ... WeaponHold_Siren_Pistol BodyWeaponHoldDefinition` benchmark took
+.114 s and reported Unknown class/no supported objects despite exit 0;
+that class is unsupported by UModel. No new tool or architecture change.
+Do not substitute a launcher Draw or additive clip for the inventory idle.
+
+Reproducible own audit tool writes ignored local output, .914 s for nine holds.
+CTest 6/6 (8.57 s), all nine package checks match, Python syntax/diff pass.
+No runtime changes, new engine run or independent critic. Native computer-use
+pipe remains explicitly unavailable on recheck, so no fresh game observation.
+Full projection, action selection, Inspect and visual parity remain open.
+
+## 2026-09-30: Benchmark an independent native-art panel projection plane
+
+AI-assisted developer-only benchmark using existing Ruffle
+0.7.0-nightly.2026.9.26 and local StatusMenu payloads; no external backend,
+new dependency, game-derived code or production rendering change. A temporary
+second player exposes native equipment-panel art inside a CSS plane. Synthetic
+rotateY(20deg), perspective 1200 px; HTML hit target shares that plane.
+Native cell bounds 429.55..597.05 x / 119.8..189.3 y, transformed target
+169.52 x 82.71 px. Center elementFromPoint hits the target. Snapshot confirms
+the panel art and green target transform together. Benchmark completes in
+2990.5 ms; 60 browser RAF intervals mean 5.97 ms/max 8 ms. This is browser
+cadence, not UE render throughput or a full interaction/performance gate.
+Cleanup verified: one remaining main player, main inventory ready.
+
+The first awaited preview call timed out at 15 s. Its temporary DOM was then
+observed removed; a subsequently instrumented probe reported initialization
+failure. Corrected readiness to wait for all movie frames, as the main adapter
+already does, and used _level1-relative bounds. Corrected probe completes with
+explicit state/results and removes its temporary player in finally. Two
+successful runs (3018.1 and 2990.5 ms), zero output assets/duplicates. No memory,
+drag, all-cell alignment, multi-panel overlap or tween-synchronization claim.
+
+This establishes a bounded possible rendering path, not original projection
+values or 1:1 stock layout. The production affine adapter remains until real
+transforms and broader interaction/performance checks support replacing it.
+CTest 6/6 (8.69 s); all nine package checks match; JS syntax/diff pass. No new
+engine run or independent critic because runtime unchanged. Native capture
+connection is still unavailable. Full menu parity remains open.

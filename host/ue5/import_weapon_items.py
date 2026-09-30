@@ -19,10 +19,16 @@ items = Path(os.environ['OPENWILLOW_ITEMS']).resolve()
 tools = unreal.AssetToolsHelpers.get_asset_tools()
 eal = unreal.EditorAssetLibrary
 mel = unreal.MaterialEditingLibrary
+recipes = []
+for recipe_path in sorted(items.glob('*.json')):
+    gltf = recipe_path.with_suffix('.gltf')
+    if gltf.is_file():
+        recipes.append((recipe_path, gltf, json.loads(recipe_path.read_text(encoding='utf-8'))))
 
 infinity = unreal.load_asset('/Game/OpenWillow/Weapons/InfinityProxy/M_OW_InfinityApprox')
-if infinity is None:
-    raise RuntimeError('Run import_infinity_proxy.py first; M_OW_InfinityApprox is missing')
+needs_infinity = any(recipe.get('material') == INFINITY_MIC for _, _, recipe in recipes)
+if needs_infinity and infinity is None:
+    unreal.log_warning('M_OW_InfinityApprox is missing; Infinity items will use the neutral grey stand-in')
 if eal.does_directory_exist(destination):
     eal.delete_directory(destination)
 neutral = tools.create_asset('M_OW_GunNeutral', destination, unreal.Material, unreal.MaterialFactoryNew())
@@ -34,11 +40,7 @@ mel.recompile_material(neutral)
 eal.save_loaded_asset(neutral, only_if_is_dirty=False)
 
 imported = 0
-for recipe_path in sorted(items.glob('*.json')):
-    gltf = recipe_path.with_suffix('.gltf')
-    if not gltf.is_file():
-        continue
-    recipe = json.loads(recipe_path.read_text(encoding='utf-8'))
+for recipe_path, gltf, recipe in recipes:
     task = unreal.AssetImportTask()
     task.filename = str(gltf)
     task.destination_path = destination
@@ -50,9 +52,11 @@ for recipe_path in sorted(items.glob('*.json')):
     if len(meshes) != 1:
         raise RuntimeError(f'{gltf.name}: expected one skeletal mesh, found {len(meshes)}')
     mesh = meshes[0]
-    material = infinity if recipe.get('material') == INFINITY_MIC else neutral
+    wants_infinity = recipe.get('material') == INFINITY_MIC
+    material = infinity if wants_infinity and infinity is not None else neutral
     if material is neutral:
-        unreal.log_warning(f"OW_ITEM {recipe_path.stem}: no reconstruction for {recipe.get('material')}; neutral stand-in")
+        detail = 'Infinity approximation unavailable' if wants_infinity else f"no reconstruction for {recipe.get('material')}"
+        unreal.log_warning(f'OW_ITEM {recipe_path.stem}: {detail}; neutral stand-in')
     slots = mesh.get_editor_property('materials')
     for i in range(len(slots)):
         slot = slots[i]
