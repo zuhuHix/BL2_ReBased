@@ -986,7 +986,9 @@ also carries negative controls for the other int slots.
 [texture-axis record](verification/BSP_TEXTURE_AXES.md).
 
 Inventory backpack scrolling uses seven full rows and a clipped eighth-row
-preview. Mouse wheel/chevrons move one row; PageUp/PageDown move seven. The
-in-engine action runner verifies row overlap ordering and the top clamp. See
+preview. Mouse wheel/chevrons move one row; PageUp sorts forward and PageDown
+sorts backward, as resolved in the original-game trace. Drop/Sort are disabled
+while swapping. The in-engine action runner verifies ordering, top clamp,
+selection retention and native-cell/hit-target alignment. See
 [verification](verification/INVENTORY_MOVIE_PROTOTYPE.md) for remaining stock
 input and visual parity gaps.

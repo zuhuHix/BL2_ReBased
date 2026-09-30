@@ -334,6 +334,7 @@ bool AOpenWillowMayaHUD::SendSlateKey(const FString& Key)
     static const FKeyMap Map[] = {
         {TEXT("ArrowDown"), EKeys::Down, 40, 0}, {TEXT("ArrowUp"), EKeys::Up, 38, 0},
         {TEXT("ArrowLeft"), EKeys::Left, 37, 0}, {TEXT("ArrowRight"), EKeys::Right, 39, 0},
+        {TEXT("PageUp"), EKeys::PageUp, 33, 0}, {TEXT("PageDown"), EKeys::PageDown, 34, 0},
         {TEXT("Enter"), EKeys::Enter, 13, 13}, {TEXT("Delete"), EKeys::Delete, 46, 0},
         {TEXT("Escape"), EKeys::Escape, 27, 0}, {TEXT("Tab"), EKeys::Tab, 9, 9},
         {TEXT("1"), EKeys::One, '1', '1'}, {TEXT("2"), EKeys::Two, '2', '2'},
@@ -363,12 +364,16 @@ void AOpenWillowMayaHUD::RequestPageReport()
     // it accepted); a page that has not loaded yet reports the error instead.
     SkillsBrowser->ExecuteJavascript(TEXT(
         "try{console.log('OWINVPAGE '+JSON.stringify({ready:!!ready,hasState:!!state,"
-        "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,"
+        "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,sort:sortIndex,"
         "inspect:inspectMode,inspectFrames:inspectFrameCount,inspectImageBytes:inspectImage.length,inspectYaw:inspectYaw,"
         "transfer:transferSourceId,compare:compareId,"
         "firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
         "backpackHeaderAnchored:(function(){var row=document.querySelector('[data-kind=backpack]');var buttons=Array.from(document.querySelectorAll('[data-kind=category]'));"
         "return !!row&&buttons.length===2&&buttons.every(function(n){var b=n.getBoundingClientRect(),r=row.getBoundingClientRect();return b.bottom<=r.top+2&&b.top>=r.top-60})})(),"
+        "backpackRowsAligned:(function(){var stage=document.getElementById('stage').getBoundingClientRect(),scale=stage.width/1280;"
+        "return Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).every(function(n,i){"
+        "var a=readBounds(INV+'.storagePanel.owRows.owRow'+i+'.hitTestClip'),b=n.getBoundingClientRect();"
+        "return !!a&&Math.abs(stage.left+a.xMin*scale-b.left)<2&&Math.abs(stage.top+a.yMin*scale-b.top)<2})})(),"
         "mainCardBounds:readBounds(INV+'.mainCard.bkgd'),compareCardBounds:readBounds(INV+'.compareCard.bkgd'),"
         "compareStatsVisible:!!get(INV+'.mainCard.stat1.mainField','_visible')&&!!get(INV+'.compareCard.stat1.mainField','_visible'),"
         "level:state?state.level:null,slots:state?state.slots:null,gearSlots:state?state.gearSlots:null,"

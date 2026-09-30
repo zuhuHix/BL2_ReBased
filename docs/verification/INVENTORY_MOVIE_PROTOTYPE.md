@@ -447,3 +447,27 @@ CTest **6/6** (15.60 s); all nine decoded byte/count/export comparisons match.
 Python/JS syntax and diff checks pass. No independent critic or matched stock
 Maya capture; panel perspective, shader ramps, focus/sort and Inspect parity
 remain incomplete.
+
+### Stock sort key and transfer guards (2026-09-30)
+
+Existing SDK trace `_221202`, seq 16508-16512, resolves forward/backward sort
+aliases to Page Up/Page Down. Transfer tooltip disables Drop and Sort. The page
+now follows those bindings/guards and presents a contextual Sort hint. The
+underlying host sort modes are still unverified against the full stock cycle.
+No new extraction tool/output; observations remain ignored local data.
+
+Repeated render verification exposed accumulated crop offsets, beyond the
+previous header fix. Fixed zero-origin scrollRect with panel-local row placement
+replaces the changing mask origin. Twelve browser renders retained matching
+native/HTML positions (x 803.75, y 194.95/194.9375). Runtime comparison and sort
+checks now assert native hit clips match their HTML targets within two pixels.
+Three new action checks cover transfer Drop/Sort refusal and directional sort
+with stable selection. The first run's direction was reversed; the trace alias
+return supplied the correction before final validation.
+
+Final verification: UE build succeeded (8.06 s). Runtime **40/40 PASS**, log
+`local/inventory-actions/run-20260930-020452.log`, including fixed-direction
+PageUp/PageDown, transfer guards and native/HTML alignment after sort/comparison.
+Settled engine comparison capture shows rows in their frames and disabled grey
+Drop/Sort hints. CTest **6/6** (22.16 s); all nine package checks match. JS syntax
+and diff checks pass. No independent critic or full stock focus/sort claim.

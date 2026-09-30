@@ -273,15 +273,30 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             const TSharedPtr<FJsonObject>* Other = nullptr;
             double MainMin = 0, MainMax = 0, OtherMin = 0, OtherMax = 0;
             bool ValuesVisible = false;
+            bool RowsAligned = false;
             if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source)
                 || !Page->TryGetStringField(TEXT("compare"), Compare) || Source != HostSlotId(0) || Compare != Source
                 || !Page->TryGetObjectField(TEXT("mainCardBounds"), Main) || !Page->TryGetObjectField(TEXT("compareCardBounds"), Other)
                 || !(*Main)->TryGetNumberField(TEXT("xMin"), MainMin) || !(*Main)->TryGetNumberField(TEXT("xMax"), MainMax)
                 || !(*Other)->TryGetNumberField(TEXT("xMin"), OtherMin) || !(*Other)->TryGetNumberField(TEXT("xMax"), OtherMax)
                 || MainMax-MainMin < 230 || OtherMax-OtherMin < 230
-                || !Page->TryGetBoolField(TEXT("compareStatsVisible"), ValuesVisible) || !ValuesVisible)
+                || !Page->TryGetBoolField(TEXT("compareStatsVisible"), ValuesVisible) || !ValuesVisible
+                || !Page->TryGetBoolField(TEXT("backpackRowsAligned"), RowsAligned) || !RowsAligned)
             { D = TEXT("selection lost the source comparison or shrank its cards"); return false; }
             D = FString::Printf(TEXT("source preserved; card widths %.1f / %.1f"), MainMax-MainMin, OtherMax-OtherMin); return true;
+        });
+    Add(TEXT("transfer_blocks_drop_and_sort"), false,
+        [this] { CountBefore = Walker->GetInventory()->BackpackCount(); PressKey(TEXT("q")); PressKey(TEXT("PageDown")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            FString Source;
+            double Sort = -1;
+            if (!Page || !Page->TryGetStringField(TEXT("transfer"), Source) || Source != HostSlotId(0)
+                || !Page->TryGetNumberField(TEXT("sort"), Sort) || Sort != 0
+                || Walker->GetInventory()->BackpackCount() != CountBefore)
+            { D = TEXT("swap mode accepted Drop or Sort"); return false; }
+            D = TEXT("swap remained active; Drop and Sort changed neither items nor sort mode"); return true;
         });
     Add(TEXT("transfer_escape_returns_equipped"), false,
         [this] { PressKey(TEXT("Escape")); },
@@ -313,6 +328,32 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             return true;
         });
 
+    Add(TEXT("pageup_sorts_preserving_selection"), false,
+        [this] { PressKey(TEXT("PageUp")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            double Sort = -1;
+            FString Selected;
+            bool RowsAligned = false;
+            if (!Page || !Page->TryGetNumberField(TEXT("sort"), Sort) || Sort != 1
+                || !Page->TryGetStringField(TEXT("sel"), Selected) || Selected != SelId
+                || !Page->TryGetBoolField(TEXT("backpackRowsAligned"), RowsAligned) || !RowsAligned)
+            { D = TEXT("PageUp failed to sort while retaining selected instance"); return false; }
+            D = TEXT("PageUp advanced sort and retained the selected stable ID"); return true;
+        });
+    Add(TEXT("pagedown_reverses_sort"), false,
+        [this] { PressKey(TEXT("PageDown")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            double Sort = -1;
+            FString Selected;
+            if (!Page || !Page->TryGetNumberField(TEXT("sort"), Sort) || Sort != 0
+                || !Page->TryGetStringField(TEXT("sel"), Selected) || Selected != SelId)
+            { D = TEXT("PageDown failed to restore sort while retaining selected instance"); return false; }
+            D = TEXT("PageDown reversed sort and retained the selected stable ID"); return true;
+        });
     Add(TEXT("equip_weapon_slot2"), true,
         [this] { DisplacedId = HostSlotId(1); PressKey(TEXT("2")); PressKey(TEXT("Enter")); },
         [this, CheckAction, Snapshot](FString& D)

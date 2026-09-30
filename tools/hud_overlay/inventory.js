@@ -370,6 +370,7 @@ function unequip() {
 }
 
 function dropSelected() {
+  if (transferSourceId) return;
   if (itemById(selectedId)) requestAction('drop', {id:selectedId});
 }
 
@@ -702,9 +703,15 @@ function drawCard() {
     ? gearSlots.find(slot => slot.key === gearSlot)?.label || 'gear slot'
     : `slot ${targetSlot+1}`;
   // Match the observed stock tooltip line. Extra host keys remain available.
-  const hints = [transferSourceId ? '[E] Swap' : '[E] Select/Compare', '[Q] Drop',
-    transferSourceId ? '[Escape] Cancel' : '[Escape] Close', '[F] Inspect'].join('   ');
-  text(ROOT + '.tooltips.tooltips', hints, 15, 0xa4e8f3, 'center');
+  const hints = [[transferSourceId ? '[E] Swap' : '[E] Select/Compare', !!item],
+    ['[Q] Drop', !!item && !transferSourceId]];
+  if (transferSourceId || (item && !equippedIds().has(item.id)))
+    hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
+  hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
+  const markup = hints.map(([label, enabled]) =>
+    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
+  set(ROOT + '.tooltips.tooltips', 'htmlText',
+    `<p align="center"><font face="$WillowBody" size="15">${markup}</font></p>`);
   applyAmmoHighlight(item);
   // While the inspect panel is open it stands in for the selected card.
   if (inspectMode && item) call(INV + '.mainCard', 'SetVisible_', false);
@@ -748,8 +755,9 @@ function scrollBackpack(delta) {
   render();
 }
 
-function changeSort() {
-  sortIndex = (sortIndex + 1) % sortModes.length;
+function changeSort(direction = 1) {
+  if (transferSourceId) return;
+  sortIndex = (sortIndex + direction + sortModes.length) % sortModes.length;
   const rows = backpackItems();
   firstRow = scrollForSelected(rows);
   render();
@@ -1111,9 +1119,8 @@ function render() {
   const panelBounds = call(panel+'.bkgd','getBounds',ROOT);
   const rowGroup = panel + '.owRows';
   if (!frameReady(rowGroup)) call(panel, 'createEmptyMovieClip', 'owRows', 2000);
-  set(rowGroup, 'scrollRect', null);
-  set(rowGroup, '_x', 0);
-  set(rowGroup, '_y', 0);
+  const localPanelBounds = call(panel+'.bkgd', 'getBounds', panel);
+  let rowWidth = 0;
   if (panelBounds) {
     const zone = overlayButton(panelBounds, 'Return equipped item to backpack', () => {}, 'backpack-zone');
     zone.tabIndex = -1;
@@ -1125,20 +1132,18 @@ function render() {
     call(path, 'removeMovieClip');
     const item = rows[firstRow+row];
     call(rowGroup, 'attachMovie', 'inventory - cell', `owRow${row}`, 2000+row);
-    const fullBounds = call(path, 'getBounds', ROOT);
+    const localCell = call(path, 'getBounds', path);
     set(path, '_xscale', ROW_SCALE * 100);
     set(path, '_yscale', ROW_SCALE * 100);
-    const cellBounds = call(path, 'getBounds', ROOT);
-    if (panelBounds && cellBounds && fullBounds) {
-      // Align in a single coordinate space. getBounds(path,path) is local to
-      // the new clip; mixing that with the panel's movie coordinates moves
-      // rows hundreds of pixels off-screen in Ruffle. The scaled cell stays centred on the
-      // column the unscaled cell would have had.
-      // Bounds are in stage pixels; the row's _x/_y are in the scaled panel's own units.
-      const desiredX = (panelBounds.xMin + panelBounds.xMax - (cellBounds.xMax - cellBounds.xMin)) / 2;
-      const desiredY = panelBounds.yMin + (75 + row*ROW_PITCH) * PANEL_SCALE_Y * COMPOSITION_SCALE;
-      set(path, '_x', Number(get(path, '_x') || 0) + (desiredX - cellBounds.xMin) / (PANEL_SCALE * COMPOSITION_SCALE));
-      set(path, '_y', Number(get(path, '_y') || 0) + (desiredY - cellBounds.yMin) / (PANEL_SCALE_Y * COMPOSITION_SCALE));
+    if (localPanelBounds && localCell) {
+      rowWidth = (localCell.xMax-localCell.xMin) * ROW_SCALE;
+      // Keep the mask origin at zero for every render. Ruffle defers changes
+      // to a nonzero scrollRect origin; measuring during that transition made
+      // repeated sort/filter/transfer renders accumulate a position offset.
+      set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2);
+      set(rowGroup, '_y', localPanelBounds.yMin+75);
+      set(path, '_x', -localCell.xMin * ROW_SCALE);
+      set(path, '_y', -localCell.yMin * ROW_SCALE + row*ROW_PITCH);
     }
     call(path, 'SetSoldOut', false);
     call(path, 'SetEmptyCell', !item);
@@ -1155,21 +1160,12 @@ function render() {
     const button = [...layer.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === item.id);
     if (button) button.addEventListener('dblclick', event => { event.preventDefault(); select(item.id); equip(); });
   }
-  // Ruffle applies scrollRect's translation on the next movie frame. Capture
-  // the root-space header anchors before setting it, so same-frame getBounds
-  // cannot temporarily move the header/chevrons up to the tab bar.
   const headerRowBounds = readBounds(rowGroup+'.owRow0');
   const headerColumnBounds = readBounds(rowGroup+'.owRow0.hitTestClip');
-  const firstBounds = call(rowGroup+'.owRow0', 'getBounds', rowGroup);
-  if (firstBounds) {
+  if (rowWidth) {
     const height = VISIBLE_ROWS * ROW_PITCH + PEEK_HEIGHT;
-    // scrollRect translates its contents by -x/-y. Move the group by the same
-    // amount so the existing row positions and hit-target bounds stay aligned.
-    const top = readBounds(rowGroup+'.owRow0');
-    set(rowGroup, '_x', firstBounds.xMin);
-    set(rowGroup, '_y', firstBounds.yMin);
-    set(rowGroup, 'scrollRect', {x:firstBounds.xMin, y:firstBounds.yMin,
-      width:firstBounds.xMax-firstBounds.xMin, height});
+    const top = headerRowBounds;
+    set(rowGroup, 'scrollRect', {x:0, y:0, width:rowWidth, height});
     const bottom = top?.yMin + height * PANEL_SCALE_Y * COMPOSITION_SCALE;
     const stage = document.getElementById('stage').getBoundingClientRect();
     for (const button of layer.querySelectorAll('[data-partial=true]')) {
@@ -1189,7 +1185,7 @@ function render() {
   refreshBackpackHeader(headerRowBounds, headerColumnBounds);
   hit(ROOT+'.header.pcCloseButton', 'Close inventory', closeInventory, null, null, null, 'close');
   addHeaderTabs();
-  const sortButton = hit(panel+'.pcSortButton', `Sort backpack by ${sortModes[sortIndex].label.toLowerCase()}`, changeSort, null, null, null, 'sort');
+  const sortButton = hit(panel+'.pcSortButton', `Sort backpack by ${sortModes[sortIndex].label.toLowerCase()}`, () => changeSort(), null, null, null, 'sort');
   if (sortButton && capacity) sortButton.title = `Backpack ${count}/${capacity}`;
   const morePrevious = firstRow > 0, moreNext = firstRow+VISIBLE_ROWS < rows.length;
   // The scroll chevrons are only drawn when there is somewhere to scroll.
@@ -1248,8 +1244,10 @@ function handleKey(event) {
   else if (key === 's') { event.preventDefault(); changeSort(); }
   else if (key === 'arrowup') { event.preventDefault(); moveSelection(-1); }
   else if (key === 'arrowdown') { event.preventDefault(); moveSelection(1); }
-  else if (key === 'arrowleft' || key === 'pageup') { event.preventDefault(); scrollBackpack(-VISIBLE_ROWS); }
-  else if (key === 'arrowright' || key === 'pagedown') { event.preventDefault(); scrollBackpack(VISIBLE_ROWS); }
+  else if (key === 'pageup') { event.preventDefault(); changeSort(1); }
+  else if (key === 'pagedown') { event.preventDefault(); changeSort(-1); }
+  else if (key === 'arrowleft') { event.preventDefault(); scrollBackpack(-VISIBLE_ROWS); }
+  else if (key === 'arrowright') { event.preventDefault(); scrollBackpack(VISIBLE_ROWS); }
 }
 window.addEventListener('keydown', handleKey);
 let wheelRows = 0;
