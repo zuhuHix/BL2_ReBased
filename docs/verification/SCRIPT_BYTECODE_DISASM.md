@@ -3,8 +3,9 @@
 AI-assisted (2026-09-30). This is the first piece of ROADMAP Phase 2: a **read-only
 disassembler prototype in Python** (`research/script_disasm.py`), the same way
 `research/native_count.py` preceded the C++ package reader. It executes nothing.
-There is no C++ port yet, no interpreter, and no object model; those are the next steps
-(see "What is not done").
+The initial Python-only stage is preserved below. The C++ port, interpreter and object
+model subsequently landed in commits 429a5f8 and e8ba65f; current execution evidence
+and remaining work are in [the VM record](SCRIPT_VM_PROTOTYPE.md).
 
 No game bytes are in the repository. The generated listings stay under ignored `local/`.
 The opcode set is the general, public UE3 expression-token set written from knowledge of
@@ -82,10 +83,8 @@ INVENTORY_MOVIE_PROTOTYPE.md does.
 
 ## What is not done
 
-- **No C++ port.** The loader belongs in `src/` next to `package.cpp`; that needs a
-  `CMakeLists.txt` change and possibly a touch of the `Reader`, both listed as sensitive in
-  CLAUDE.md. Waiting on explicit confirmation.
-- **No interpreter and no object model** (ROADMAP Phase 2 bullets 1 and 3).
+- **Full semantic validation remains open.** The C++ loader, object model and interpreter
+  exist; this historical structural record does not prove their runtime semantics.
 - Opcode operand layouts marked UNVERIFIED in the source table, including the meaning of
   `0x4C`-`0x50`, `0x5E` and `0x5F` (a typed `Let`).
 - Native function *names* come from `FriendlyName`/`iNative` of exports that happen to be

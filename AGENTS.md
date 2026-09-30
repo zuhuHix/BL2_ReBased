@@ -76,7 +76,7 @@ path is being used, what remains owned by this project and what acceptance
 check will prove the slice. Then execute that bounded slice without reopening
 settled architecture decisions.
 
-## Where things stand (updated 2026-09-30)
+## Where things stand (updated 2026-10-01)
 
 Read this first when picking work up; it is the short version of ROADMAP.md.
 
@@ -88,10 +88,11 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   empty backpack cells, full-screen Inspect, red `bad` cells in compare view. State and evidence:
   `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last two sections). A partial, non-running
   start of the sort list is on branch `t3code/wip-inventory-sort-list`.
-- **Phase 2 (script VM):** started 2026-09-30. `research/script_disasm.py` (Python, read-only)
-  decodes 12,968 of 12,978 script functions exactly; record in
-  `docs/verification/SCRIPT_BYTECODE_DISASM.md`. Next: C++ port in `src/`, object model,
-  interpreter (the maintainer authorised touching `package.cpp`/`CMakeLists.txt` for this). Finding to remember:
+- **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
+  script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
+  model, interpreter, Core natives, default-state sweep and scalar trace replay exist.
+  Current evidence and next bounded state-faithful comparison:
+  `docs/verification/SCRIPT_VM_PROTOTYPE.md`. Full runtime semantics remain UNVERIFIED. Finding to remember:
   the inventory sort logic is **native** code, but menu navigation/equip logic is readable script.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the

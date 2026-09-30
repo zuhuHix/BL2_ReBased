@@ -903,6 +903,33 @@ Native functions print as `native_<n>` and their bodies are not in the packages 
 cycle of the inventory is one). Layouts marked UNVERIFIED in the source are fitted, see
 `docs/verification/SCRIPT_BYTECODE_DISASM.md`.
 
+The C++ loader and VM now support `--script-check`, `--disasm`, `--run`,
+`--run-batch` and `--vm-sweep`. The two diagnostic harnesses are:
+
+```powershell
+python tools/vm_census.py --reader build/Release/ow-package.exe `
+  --json local/phase2/vm-census.json
+python tools/replay_trace.py local/ui/traces/<trace>.jsonl `
+  --reader build/Release/ow-package.exe --limit 400 `
+  --output local/phase2/trace-replay.json
+```
+
+Replay accepts `--function <substring>` and `--cooked <directory>`. It compares
+scalar returns on newly instantiated receivers with class defaults, skips lossy
+objects/aggregates/out results, and blocks native/stub executions from match
+counting. Matches do not establish live-state parity. Pairing rejections,
+mismatches and skip/block reasons remain in the local report. Evidence and
+remaining work: [VM prototype](verification/SCRIPT_VM_PROTOTYPE.md).
+
+Batch format: one case per line, `Package.Class.Function<TAB>Package.SelfClass`
+followed by `<TAB>Parameter=kind:value` fields. `i/f/b/y/s/n/o` are explicitly
+typed int/float/bool/byte/string/name/null-object; `d/t` adapt numeric/text input
+to the reflected parameter type. String/name/text bodies are UTF-8 hex; bool
+is `0` or `1`, null-object has an empty body. Missing trailing optional inputs
+retain defaults; other missing inputs fail. Output is JSONL with case index,
+result type/value, native flag, per-case error and unimplemented-call list.
+The batch command exits zero when individual cases fail: inspect those fields.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied

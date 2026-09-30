@@ -78,7 +78,7 @@ Since the last update, Sanctuary got a lot of love:
 - **Stuff that shouldn't be there is gone.** Every placement the game marks as hidden is now hidden, and oversized invisible blockers keep their collision without covering the city.
 - **The sky** still uses `Sky_Dome`'s own textures and settings (a labeled approximation, since the stripped sky graph isn't decoded yet).
 
-Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. The first native-function dispatch stubs are in too, and as of 2026-09-30 a read-only disassembler (a Python prototype) reads the game's own UnrealScript: 12,968 of its 12,978 script functions decode exactly ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)). That is the first real step toward Phase 2 (actually running the game's code); nothing executes yet.
+Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. Phase 2 now has a C++ bytecode loader, object model, interpreter and Core native implementations. Both disassemblers structurally decode 12,968 of 12,978 script functions ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)); ten still fail. A default-state sweep and scalar trace-replay harness exercise execution, but live-game semantics and gameplay integration remain UNVERIFIED ([VM record](docs/verification/SCRIPT_VM_PROTOTYPE.md)).
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 

@@ -4,6 +4,7 @@
 #include "vm.hpp"
 
 #include <fstream>
+#include <cmath>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -19,6 +20,7 @@ void usage() {
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
         "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
         "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
+        "--run-batch <file> --cooked <directory> | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -245,6 +247,152 @@ int main(int argc, char** argv) {
                 std::cout << ']';
             }
             std::cout << "}\n";
+            return 0;
+        }
+
+        if (mode == "--run-batch") {
+            // One case per line: function TAB self-class TAB name=kind:value ... ; text values are hex-encoded.
+            // Prints one JSON object per case. Used by tools/replay_trace.py to compare against recorded calls.
+            if (argc != 6 || std::string(argv[4]) != "--cooked") usage();
+            std::ifstream cases(argv[3]);
+            if (!cases) throw std::runtime_error("cannot open batch file");
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            const auto fromHex = [](const std::string& hex) {
+                if (hex.size() % 2 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+                    throw std::runtime_error("invalid hex text");
+                std::string text;
+                for (size_t i = 0; i + 1 < hex.size(); i += 2) text.push_back(char(std::stoi(hex.substr(i, 2), nullptr, 16)));
+                return text;
+            };
+            std::string line;
+            const auto integer = [](const std::string& body) {
+                size_t used = 0;
+                const auto value = std::stoll(body, &used);
+                if (used != body.size()) throw std::runtime_error("invalid integer");
+                return value;
+            };
+            const auto number = [](const std::string& body) {
+                size_t used = 0;
+                const auto value = std::stod(body, &used);
+                if (used != body.size() || !std::isfinite(value)) throw std::runtime_error("invalid number");
+                return value;
+            };
+            size_t caseNumber = 0;
+            while (std::getline(cases, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+                std::vector<std::string> fields;
+                size_t from = 0;
+                while (true) {
+                    const auto tab = line.find('\t', from);
+                    fields.push_back(line.substr(from, tab == std::string::npos ? std::string::npos : tab - from));
+                    if (tab == std::string::npos) break;
+                    from = tab + 1;
+                }
+                std::string error, type = "None", text;
+                vm::Value result;
+                bool native = false;
+                runtime.log.clear();
+                try {
+                    if (fields.size() < 2) throw std::runtime_error("malformed case");
+                    auto* function = runtime.findFunction(fields[0]);
+                    native = function->isNative();
+                    vm::ObjectPtr self;
+                    if (!fields[1].empty()) self = runtime.instantiate(runtime.findClass(fields[1]));
+                    if (self && function->owner && !self->cls->isChildOf(function->owner))
+                        throw std::runtime_error("self class does not inherit function owner");
+                    std::vector<vm::Value> values(function->params.size());
+                    std::vector<bool> given(function->params.size(), false);
+                    for (size_t i = 2; i < fields.size(); ++i) {
+                        const auto equal = fields[i].find('=');
+                        const auto colon = fields[i].find(':', equal == std::string::npos ? 0 : equal);
+                        if (equal == std::string::npos || colon == std::string::npos) throw std::runtime_error("malformed argument");
+                        const auto name = fields[i].substr(0, equal), kind = fields[i].substr(equal + 1, colon - equal - 1);
+                        const auto body = fields[i].substr(colon + 1);
+                        size_t slot = function->params.size();
+                        for (size_t p = 0; p < function->params.size(); ++p) {
+                            std::string a = function->params[p].name, b = name;
+                            for (auto& c : a) c = char(std::tolower(static_cast<unsigned char>(c)));
+                            for (auto& c : b) c = char(std::tolower(static_cast<unsigned char>(c)));
+                            if (a == b) slot = p;
+                        }
+                        if (slot == function->params.size()) throw std::runtime_error("no parameter named " + name);
+                        if (given[slot]) throw std::runtime_error("duplicate parameter " + name);
+                        if (kind == "i") values[slot] = vm::Value::makeInt(integer(body));
+                        else if (kind == "f") values[slot] = vm::Value::makeFloat(number(body));
+                        else if (kind == "b") {
+                            if (body != "0" && body != "1") throw std::runtime_error("invalid bool");
+                            values[slot] = vm::Value::makeBool(body == "1");
+                        }
+                        else if (kind == "y") values[slot] = vm::Value::makeByte(integer(body));
+                        else if (kind == "s") values[slot] = vm::Value::makeString(fromHex(body));
+                        else if (kind == "n") values[slot] = vm::Value::makeName(fromHex(body));
+                        else if (kind == "o") {
+                            if (!body.empty()) throw std::runtime_error("only null object arguments are supported");
+                            values[slot] = vm::Value::makeObject(nullptr);
+                        }
+                        else if (kind == "d") {
+                            // a number converted by the parameter's declared type
+                            const auto& declared = function->params[slot].type;
+                            if (declared == "IntProperty") values[slot] = vm::Value::makeInt(signedNumber(body));
+                            else if (declared == "FloatProperty") values[slot] = vm::Value::makeFloat(number(body));
+                            else if (declared == "ByteProperty") {
+                                const auto value = integer(body);
+                                if (value < 0 || value > 255) throw std::runtime_error("byte out of range");
+                                values[slot] = vm::Value::makeByte(value);
+                            }
+                            else if (declared == "BoolProperty") values[slot] = vm::Value::makeBool(number(body) != 0);
+                            else throw std::runtime_error("number given for a " + declared + " parameter");
+                        } else if (kind == "t") {
+                            // text converted by the declared type: a name or a string
+                            if (function->params[slot].type == "NameProperty") values[slot] = vm::Value::makeName(fromHex(body));
+                            else if (function->params[slot].type == "StrProperty") values[slot] = vm::Value::makeString(fromHex(body));
+                            else throw std::runtime_error("text given for a " + function->params[slot].type + " parameter");
+                        }
+                        else throw std::runtime_error("unknown argument kind " + kind);
+                        const auto& declared = function->params[slot].type;
+                        using K = vm::Value::Kind;
+                        const auto k = values[slot].kind;
+                        if (!((declared == "IntProperty" && k == K::Int) ||
+                              (declared == "FloatProperty" && k == K::Float) ||
+                              (declared == "BoolProperty" && k == K::Bool) ||
+                              (declared == "ByteProperty" && k == K::Byte) ||
+                              (declared == "StrProperty" && k == K::String) ||
+                              (declared == "NameProperty" && k == K::Name) ||
+                              (declared == "ObjectProperty" && k == K::Object)))
+                            throw std::runtime_error("argument type does not match " + declared);
+                        given[slot] = true;
+                    }
+                    // Preserve omitted trailing optionals; do not silently substitute zero for missing inputs.
+                    size_t count = given.size();
+                    while (count && !given[count - 1] && function->params[count - 1].isOptional()) --count;
+                    for (size_t p = 0; p < count; ++p)
+                        if (!given[p]) throw std::runtime_error("missing parameter " + function->params[p].name);
+                    values.resize(count);
+                    result = runtime.call(*function, self, values);
+                    using K = vm::Value::Kind;
+                    switch (result.kind) {
+                    case K::Int: type = "Int"; text = std::to_string(result.i); break;
+                    case K::Byte: type = "Byte"; text = std::to_string(result.i); break;
+                    case K::Bool: type = "Bool"; text = result.i ? "1" : "0"; break;
+                    case K::Float: { std::ostringstream s; s.precision(9); s << result.f; type = "Float"; text = s.str(); break; }
+                    case K::String: type = "String"; text = result.s; break;
+                    case K::Name: type = "Name"; text = result.s; break;
+                    case K::Object: type = "Object"; text = result.o ? result.o->name : "None"; break;
+                    case K::None: type = "None"; break;
+                    default: type = "Unsupported"; break;
+                    }
+                } catch (const std::exception& problem) { error = problem.what(); }
+                std::cout << "{\"case\":" << caseNumber++ << ",\"type\":" << quote(type) << ",\"value\":" << quote(text)
+                          << ",\"native\":" << (native ? "true" : "false")
+                          << ",\"error\":" << (error.empty() ? "null" : quote(error)) << ",\"unimplemented\":[";
+                bool first = true;
+                for (const auto& entry : runtime.log)
+                    if (entry.rfind("UNIMPLEMENTED ", 0) == 0) { std::cout << (first ? "" : ",") << quote(entry.substr(14)); first = false; }
+                std::cout << "]}" << '\n';
+            }
             return 0;
         }
 

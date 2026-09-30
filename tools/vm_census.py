@@ -17,6 +17,7 @@ import argparse
 import collections
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -32,6 +33,7 @@ def main():
     parser.add_argument("--steps", type=int, default=200000)
     parser.add_argument("--json", default=None)
     args = parser.parse_args()
+    args.reader = str(Path(args.reader).resolve())
     game = args.game or os.path.join(os.environ["OPENWILLOW_BL2"], "WillowGame", "CookedPCConsole")
     demand = collections.Counter()
     failures = collections.Counter()

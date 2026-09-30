@@ -310,11 +310,11 @@ coverage.
       cross-package reference resolution
 - [ ] Bytecode loader for every `UFunction` / `UState`; opcode table; handle
       the Gearbox local-variable-array quirk flagged by UE Explorer.
-      **Python prototype done (2026-09-30):** `research/script_disasm.py`
-      decodes 12,968 of 12,978 script functions exactly (every structural check
-      passes; 10 known failures), see
-      [the record](docs/verification/SCRIPT_BYTECODE_DISASM.md). Still open:
-      the C++ port in `src/`, `UState`, and the unverified opcode layouts
+      **Python and C++ prototypes present (2026-10-01):** both structurally
+      decode 12,968 of 12,978 script functions (10 known failures), see
+      [the record](docs/verification/SCRIPT_BYTECODE_DISASM.md). C++ object
+      loading, interpretation, Core natives and a default-state sweep exist;
+      full states/latent behavior and opcode semantics remain unverified.
 - [ ] Interpreter: expressions, locals, `out` params, structs, dynamic arrays,
       casts, `foreach`, `switch`, `goto`, delegates, `super`, states and
       transitions, latent functions, timers
@@ -323,6 +323,9 @@ coverage.
 - [ ] The 286 Core builtins (operators, math, string, name, object)
 - [ ] Test harness running pure-script classes in isolation (the 268
       script-only `Behavior_*` classes), outputs compared to UDK
+      **Diagnostic harness present:** synthetic execution tests, `--vm-sweep`
+      and scalar UI trace replay. Default-state return agreement does not pass
+      this gate; see [VM evidence](docs/verification/SCRIPT_VM_PROTOTYPE.md).
 
 **Gate:** VM runs `Behavior_*` chains and the stat-free parts of
 `WillowWeapon` without crashing; every unmet native is a logged stub.

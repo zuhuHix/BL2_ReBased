@@ -308,5 +308,51 @@ with tempfile.TemporaryDirectory() as folder:
     mystery = run(root, 'Core.Foo.CallMystery')
     assert mystery['result'] == '0' and any('UNIMPLEMENTED Object.Mystery(int)' in l for l in mystery['log']), mystery
     assert run(root, 'Core.Foo.Arr')['result'] == '2'
+    # Complete the interrupted batch-replay path: named inputs, optional defaults,
+    # strict malformed-input rejection, case ordering and per-case log isolation.
+    batch = root / 'cases.tsv'
+    lines = [
+        'Core.Foo.Add2\tCore.Foo\tB=d:2\ta=d:40',
+        'Core.Foo.Opt\tCore.Foo\tA=d:1',
+        'Core.Foo.Join\tCore.Foo\tA=t:610962\tB=t:0a63',
+        'Core.Foo.CallMystery\tCore.Foo',
+        'Core.Foo.Missing\tCore.Foo',
+        'Core.Foo.Join\tCore.Foo\tA=t:6\tB=t:62',
+        'Core.Foo.Add2\tCore.Foo\tA=d:1oops\tB=d:2',
+        'Core.Foo.Add2\tCore.Foo\tA=d:1\ta=d:2\tB=d:3',
+        'Core.Foo.Add2\tCore.Foo\tA=d:1',
+        'Core.Foo.Add2\tCore.Foo\tA=t:31\tB=d:2',
+        'Core.Foo.Answer\tCore.Object',
+        'Core.Foo.Answer\tCore.Foo',
+    ]
+    batch.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    output = subprocess.run([reader, str(root / 'Core.upk'), '--run-batch', str(batch), '--cooked', str(root)],
+                            check=True, capture_output=True, text=True, encoding='utf-8')
+    results = [json.loads(line) for line in output.stdout.splitlines()]
+    assert [item['case'] for item in results] == list(range(len(lines)))
+    assert [item['value'] for item in results[:3]] == ['42', '6', 'a\tb\nc'], results[:3]
+    assert results[3]['unimplemented'] and not results[4]['unimplemented'], results[3:5]
+    assert all(item['error'] for item in results[4:11]), results[4:11]
+    assert results[11]['value'] == '42' and results[11]['error'] is None
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+    import replay_trace
+    call = lambda seq, func, args={}: dict(seq=seq, phase='call', func=func, obj="Foo'Transient.Foo_0'", args=args)
+    ret = lambda seq, func, value: dict(seq=seq, phase='return', func=func, obj="Foo'Transient.Foo_0'", ret=value)
+    trace = root / 'trace.jsonl'
+    records = [call(1, 'Core.Foo:Add2', {'A': 40, 'B': 2}),
+               call(2, 'Core.Foo:Answer'), ret(3, 'Core.Foo:Answer', 42), ret(4, 'Core.Foo:Add2', 42),
+               call(5, 'Core.Foo:Answer'), ret(6, 'Core.Foo:Answer', 99),
+               call(7, 'Core.Foo:CallMystery'), ret(8, 'Core.Foo:CallMystery', 0),
+               call(9, 'Core.Foo:Add2', {'A': {'field': 1}, 'B': 2}), ret(10, 'Core.Foo:Add2', 3),
+               call(11, 'Core.Foo:Answer')]
+    trace.write_text('\n'.join(json.dumps(record) for record in records), encoding='utf-8')
+    report = replay_trace.replay(Path(reader), root, trace)
+    assert report['counts'] == {'return_match_unverified': 2, 'return_mismatch_unverified': 1,
+                                'blocked': 1, 'skipped': 1}, report
+    assert report['pairing_rejections'] == {'unpaired_call': 1}, report
+    paired, rejected = replay_trace.pairs([call(1, 'Core.Foo:Answer'), ret(2, 'Core.Foo:Add2', 0),
+                                         ret(3, 'Core.Foo:Answer', 42)])
+    assert not paired and rejected['unpaired_return'] == 2 and rejected['unpaired_call'] == 1
     # a runaway script stops at the step limit instead of hanging is covered by the C++ limit, not here
 print('vm synthetic coverage passed.')
