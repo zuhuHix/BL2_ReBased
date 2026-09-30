@@ -1028,3 +1028,8 @@ Run this after `import_weapon_items.py`, which replaces item materials. The
 prepared JSON and imported textures/materials remain ignored. This is tested
 only for the selected Maliwan epic SMG; packed normal/emissive semantics,
 pattern placement and original Master_Gun lighting remain unverified.
+
+`--recipe` also accepts several explicit paths, writing a list when there is
+more than one. The UE importer accepts either form. Inputs are validated before
+preparation writes its output; unsupported pattern inputs fail rather than
+silently choosing a substitute. Keep existing Infinity paint imports separate.

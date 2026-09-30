@@ -562,3 +562,13 @@ Runtime log `local/inventory-actions/run-20260930-023458.log`: 46/46 PASS;
 CTest 6/6 (17.39 s); nine package checks match; Python syntax checks pass.
 Only self-review, no independent critic. Native computer-use pipe unavailable;
 fresh original-game getter observation and physical input checks remain open.
+
+Batch follow-up: 14 supported recipes / 6 unsupported pattern inputs / 8
+Infinity variants excluded to retain previous paint. 56 local texture imports
+reference 24 unique source PNGs; all 14 source primitives have UV1. Commandlet
+reports zero errors/warnings (11.67 s script execution). Runtime
+`run-20260930-023958.log` passes 46/46, with 1802 full-loop head samples.
+The early comparison screenshot includes Preparing Shaders (2), so it does
+not verify final batch appearance. CTest 6/6 (20.95 s); nine package checks
+match; syntax/diff and 14 complete input validations pass. Null pattern
+negative check rejected. No general shader parity or all-weapon claim.
