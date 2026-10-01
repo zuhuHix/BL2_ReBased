@@ -88,6 +88,17 @@ class WeaponRecipeTests(unittest.TestCase):
         self.assertEqual(recipe['manufacturer'], 'Makers.Vladof')
         self.assertEqual(recipe['name'], 'Vladof Word Unique')
 
+    def test_stage_none_lists_every_stage_and_merge_modes(self):
+        merged = w.merge(FakePackage(world()), 'Leaf', None)
+        self.assertEqual(merged['chain'], ['Root', 'Leaf'])
+        self.assertEqual([p for p, _ in merged['merged']['Grip']], ['Grip.A', 'Grip.Late'])
+        base = {'Body': [('A', 1)], 'Grip': [('G', 1)]}
+        self.assertEqual(w.merge_slots(base, {'Body': [('B', 1)]}, 'EPRM_Additive')['Body'], [('A', 1), ('B', 1)])
+        self.assertEqual(w.merge_slots(base, {'Body': [('B', 1)]}, 'EPRM_Selective'),
+                         {'Body': [('B', 1)], 'Grip': [('G', 1)]})
+        self.assertEqual(w.merge_slots(base, {'Body': [('B', 1)]}, 'EPRM_Complete'), {'Body': [('B', 1)]})
+        self.assertEqual(base['Body'], [('A', 1)])  # inputs are not modified
+
     def test_zero_weight_slot_is_flagged(self):
         recipe = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=2)
         self.assertTrue(any(n.startswith('Body: all candidates weigh 0') for n in recipe['notes']))

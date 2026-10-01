@@ -16,6 +16,9 @@ Data used (all decoded from the package):
 UNVERIFIED rules (no public spec; flagged in every recipe):
 - Merge order root -> leaf. EPRM_Selective replaces enabled slots, EPRM_Additive
   appends to them, EPRM_Complete replaces every slot. A missing mode is Additive.
+  Checked 2026-10-01 against the running game's RuntimePartListCollection for 243
+  of 249 Startup balances (tools/weapon_balance.py crosscheck); Complete does not
+  occur there and stays unchecked.
 - A slot whose candidates all weigh 0 picks uniformly among them.
 - A part's Manufacturers weight overrides DefaultWeight only when it names
   the weapon's manufacturer; manufacturer grade restrictions are ignored.
@@ -27,8 +30,10 @@ UNVERIFIED rules (no public spec; flagged in every recipe):
 """
 import argparse
 import json
+import os
 import random
 import subprocess
+import tempfile
 from pathlib import Path
 
 SLOTS = ['Body', 'Grip', 'Barrel', 'Sight', 'Stock', 'Elemental', 'Accessory1', 'Accessory2', 'Material']
@@ -53,11 +58,17 @@ def plain(value):
     return value
 
 
+def decoded(data):
+    """One ow-package --properties JSON object -> {name: plain value}."""
+    return {p['name']: None if p.get('status') == 'unsupported' else plain(p['value']) for p in data['properties']}
+
+
 class Package:
     def __init__(self, reader, path, schema):
         self.reader, self.path, self.schema = reader, path, schema
         exports = json.loads(self.run('--exports'))
         self.index = {e['path']: e['index'] for e in exports}
+        self.classes = {e['path']: e['class'] for e in exports}
         self.cache = {}
 
     def run(self, *args):
@@ -72,9 +83,59 @@ class Package:
                 raise KeyError(f'{path} is not an export of {self.path.name}')
             data = json.loads(self.run('--properties', self.index[path], '--property-offset', 4,
                                        '--array-schema', self.schema))
-            self.cache[path] = {p['name']: None if p.get('status') == 'unsupported' else plain(p['value'])
-                                for p in data['properties']}
+            self.cache[path] = decoded(data)
         return self.cache[path]
+
+    def preload(self, paths):
+        """Decode many exports in one ow-package process (--properties-batch) into the cache.
+
+        Only a speed-up: the decoder is the same as props(). Exports that fail
+        stay uncached, so props() raises for them as before.
+        """
+        todo = [p for p in dict.fromkeys(paths) if p in self.index and p not in self.cache]
+        if not todo:
+            return
+        handle, name = tempfile.mkstemp(suffix='.txt')
+        try:
+            with os.fdopen(handle, 'w') as stream:
+                stream.write('\n'.join(str(self.index[p]) for p in todo) + '\n')
+            out = self.run('--properties-batch', name, '--property-offset', 4, '--array-schema', self.schema)
+        finally:
+            os.unlink(name)
+        for line in out.splitlines():
+            data = json.loads(line)
+            if 'error' not in data:
+                self.cache[data['path']] = decoded(data)
+
+    def crawl(self, roots, follow=lambda path, cls: True, limit=100000):
+        """Preload `roots` and every export they reference (transitively) that `follow` accepts.
+
+        Subobjects nobody references by path (an attribute's ConstantAttributeValueResolver_0)
+        are not reached; callers look those up by prefix.
+        """
+        seen, frontier = set(), [r for r in roots if r in self.index]
+        while frontier and len(seen) < limit:
+            seen.update(frontier)
+            self.preload(frontier)
+            found = set()
+            for path in frontier:
+                for ref in references(self.cache.get(path)):
+                    if ref in self.index and ref not in seen and follow(ref, self.classes.get(ref, '')):
+                        found.add(ref)
+            frontier = sorted(found)
+        return seen
+
+
+def references(value):
+    """Every string inside a decoded value (candidate object paths)."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from references(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from references(v)
 
 
 def attribute_value(package, init, level, attributes=None):
@@ -146,7 +207,8 @@ def slot_candidates(package, collection, stage, manufacturer=None):
                 i = part.get(f'{name}Index', -1) if index is None else index
                 return attribute_value(package, consolidated[i], stage) if 0 <= i < len(consolidated) else None
             low, high = at('MinGameStage'), at('MaxGameStage')
-            if (low is not None and stage < low) or (high is not None and stage > high):
+            # stage None lists every part regardless of game stage (crosschecks, legal-part lists).
+            if stage is not None and ((low is not None and stage < low) or (high is not None and stage > high)):
                 continue
             weight = at('DefaultWeight')
             for override in part.get('Manufacturers') or []:
@@ -158,7 +220,21 @@ def slot_candidates(package, collection, stage, manufacturer=None):
     return slots, props.get('PartReplacementMode') or 'EPRM_Additive'
 
 
-def roll(package, balance, seed, stage):
+def merge_slots(merged, slots, mode):
+    """Apply one part list's enabled slots on top of `merged` (UNVERIFIED rule, see docstring)."""
+    merged = {} if mode == 'EPRM_Complete' else dict(merged)
+    for slot, entries in slots.items():
+        merged[slot] = merged.get(slot, []) + entries if mode == 'EPRM_Additive' else list(entries)
+    return merged
+
+
+def merge(package, balance, stage):
+    """Follow BaseDefinition to the root and merge every part list, root first.
+
+    Returns {chain, weapon_type, manufacturer, merged: {slot: [(part, weight)]}, history}.
+    The merge rule is the UNVERIFIED one in the module docstring; tools/weapon_balance.py
+    compares its result with the game's own RuntimePartListCollection.
+    """
     chain, cursor = [], balance
     while cursor:
         chain.append(cursor)
@@ -175,10 +251,15 @@ def roll(package, balance, seed, stage):
             continue
         slots, mode = slot_candidates(package, collection, stage, manufacturer)
         history.append({'balance': step, 'part_list': collection, 'mode': mode, 'slots': sorted(slots)})
-        if mode == 'EPRM_Complete':
-            merged = {}
-        for slot, entries in slots.items():
-            merged[slot] = merged.get(slot, []) + entries if mode == 'EPRM_Additive' else list(entries)
+        merged = merge_slots(merged, slots, mode)
+    return {'chain': chain, 'weapon_type': weapon_type, 'manufacturer': manufacturer, 'merged': merged,
+            'history': history, 'manufacturers': makers}
+
+
+def roll(package, balance, seed, stage):
+    merged_chain = merge(package, balance, stage)
+    weapon_type, manufacturer = merged_chain['weapon_type'], merged_chain['manufacturer']
+    merged, history = merged_chain['merged'], merged_chain['history']
 
     rng = random.Random(seed)
     parts, notes = {}, []

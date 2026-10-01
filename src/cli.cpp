@@ -20,6 +20,7 @@ void usage() {
     throw std::runtime_error(
         "usage: ow-package <package> [--exports | --imports | --census | --scene-records <schema> | --terrain-records <schema> | --payload <index> | --payloads <index>... | --verify-decoded <file> | "
         "--resolve <reference> --cooked <directory> | --properties <index> "
+        "--property-offset <bytes> [--array-schema <file>] | --properties-batch <index-file> "
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
@@ -874,6 +875,31 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (mode == "--properties-batch") {
+            // Same decoder as --properties, for many exports in one process: <file> holds one export index
+            // per line; prints one JSON object per line (an {"index","error"} object when one fails).
+            if ((argc != 6 && argc != 8) || std::string(argv[4]) != "--property-offset") usage();
+            const size_t propertyOffset = unsignedNumber(argv[5]);
+            if (argc == 8) {
+                if (std::string(argv[6]) != "--array-schema") usage();
+                loadSchema(*package, argv[7]);
+            }
+            std::ifstream indices(argv[3]);
+            if (!indices) throw std::runtime_error("cannot open index file");
+            std::string line;
+            while (std::getline(indices, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+                const auto index = signedNumber(line);
+                try {
+                    Reader reader = package->reader();
+                    std::cout << package->properties(reader, index, propertyOffset) << '\n';
+                } catch (const std::exception& error) {
+                    std::cout << "{\"index\":" << index << ",\"error\":" << quote(error.what()) << "}\n";
+                }
+            }
+            return 0;
+        }
         if (mode == "--properties" || mode == "--mesh" || mode == "--texture") {
             if (argc < 4) usage();
             const auto index = signedNumber(argv[3]);
