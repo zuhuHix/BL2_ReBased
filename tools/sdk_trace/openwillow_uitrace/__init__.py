@@ -156,7 +156,9 @@ mod = build_mod(
                 "Changes nothing in game. Enable, use the menus, then disable to close the trace file.",
     version=__version__,
     supported_games=Game.BL2,
-    auto_enable=False,
+    # Scripted captures create autostart.txt beside this file so no mod-menu
+    # clicks are needed; without it the mod stays off until enabled by hand.
+    auto_enable=Path(__file__).with_name("autostart.txt").is_file(),
     inject_version_from_pyproject=False,
     on_enable=enable,
     on_disable=disable,

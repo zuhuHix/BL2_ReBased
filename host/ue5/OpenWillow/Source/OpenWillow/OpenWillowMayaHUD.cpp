@@ -1,6 +1,9 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowInventoryVm.h"
+#include "HAL/PlatformMisc.h"
+#include "Misc/Paths.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowInventoryMayaDisplay.h"
 #include "OpenWillowInventoryPreviewActor.h"
@@ -177,6 +180,15 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         GEngine->GameViewport->AddViewportWidgetContent(SkillsRoot.ToSharedRef(), 20);
     }
     if (bInventory) SkillsBrowser->ExecuteJavascript(TEXT("window.owRefreshMenuPreview && window.owRefreshMenuPreview()"));
+    if (bInventory)
+    {
+        if (!InventoryVm)
+        {
+            const FString Game = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_BL2"));
+            InventoryVm = MakeShared<FOpenWillowInventoryVm>(FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole")));
+            UE_LOG(LogTemp, Display, TEXT("OWINVVM initialized ready=%d error=%s"), InventoryVm->IsReady(), *InventoryVm->Error());
+        }
+    }
     if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::Collapsed);
     FInputModeUIOnly Mode;
     Mode.SetWidgetToFocus(SkillsBrowser.ToSharedRef());
@@ -222,6 +234,7 @@ TSharedPtr<SWebBrowser> AOpenWillowMayaHUD::CreateStatusBrowser(const FString& M
 void AOpenWillowMayaHUD::CloseSkills()
 {
     if (!SkillsBrowser) return;
+    if (bInventoryOpen) SkillsBrowser->ExecuteJavascript(TEXT("window.owCancelInventoryVm && window.owCancelInventoryVm()"));
     if (IsValid(InspectActor)) InspectActor->Destroy();
     InspectActor = nullptr;
     PendingInspectRequest.Reset();
@@ -243,6 +256,7 @@ void AOpenWillowMayaHUD::CloseSkills()
     PendingTabSwitch = 0;
     PendingSpends.Reset();
     PendingInventoryActions.Reset();
+    PendingInventoryVmMoves.Reset();
     bInventoryOpen = false;
     if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
     if (PlayerOwner)
@@ -257,6 +271,12 @@ void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
 {
     if (bInventoryOpen)
     {
+        if (Message.StartsWith(TEXT("OWINVMOVE "), ESearchCase::CaseSensitive))
+        {
+            if (Message.Len() <= 1024 && PendingInventoryVmMoves.Num() < 64)
+                PendingInventoryVmMoves.Add(Message.Mid(10));
+            return;
+        }
         if (Message.StartsWith(TEXT("OWMENUPREVIEW "), ESearchCase::CaseSensitive) && Message.Len() <= 1024)
         {
             TSharedPtr<FJsonObject> Request;
@@ -312,6 +332,8 @@ void AOpenWillowMayaHUD::PushSkillsState()
     if (bInventoryOpen)
     {
         const UOpenWillowInventory* Inventory = Maya->GetInventory();
+        SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owConfigureInventoryVm && window.owConfigureInventoryVm(%s)"),
+            InventoryVm && InventoryVm->IsReady() ? TEXT("true") : TEXT("false")));
         if (Inventory) SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owInventory && window.owInventory(%s)"),
             *Inventory->StateJson(Skills->GetLevel())));
         return;
@@ -366,8 +388,9 @@ void AOpenWillowMayaHUD::RequestPageReport()
         "try{console.log('OWINVPAGE '+JSON.stringify({ready:!!ready,hasState:!!state,"
         "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,sort:sortIndex,"
         "inspect:inspectMode,inspectFrames:inspectFrameCount,inspectImageBytes:inspectImage.length,inspectYaw:inspectYaw,"
+        "vm:{enabled:inventoryVm.enabled,calls:inventoryVm.calls,errors:inventoryVm.errors,steps:inventoryVm.steps,discarded:inventoryVm.discarded},"
         "transfer:transferSourceId,transferFromEquipped:transferFromEquipped,compare:compareId,"
-        "firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
+        "backpack:backpackItems().map(i=>i.id),firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
         "backpackHeaderAnchored:(function(){var row=document.querySelector('[data-kind=backpack]');var buttons=Array.from(document.querySelectorAll('[data-kind=category]'));"
         "return !!row&&buttons.length===2&&buttons.every(function(n){var b=n.getBoundingClientRect(),r=row.getBoundingClientRect();return b.bottom<=r.top+2&&b.top>=r.top-60})})(),"
         "backpackRowsAligned:(function(){var stage=document.getElementById('stage').getBoundingClientRect(),scale=stage.width/1280;"
@@ -549,6 +572,12 @@ void AOpenWillowMayaHUD::DrawHUD()
             CloseSkills();
             OpenStatusMenu(bToInventory);
         }
+    }
+    if (SkillsBrowser && bInventoryOpen && InventoryVm && PendingInventoryVmMoves.Num())
+    {
+        for (const FString& Request : PendingInventoryVmMoves)
+            SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owInventoryVmResult && window.owInventoryVmResult(%s)"), *InventoryVm->Move(Request)));
+        PendingInventoryVmMoves.Reset();
     }
     if (SkillsBrowser && bInventoryOpen && PendingInventoryActions.Num())
     {

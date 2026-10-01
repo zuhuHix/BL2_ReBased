@@ -1,7 +1,15 @@
 #include "assets.hpp"
 #include "natives.hpp"
+#include "script.hpp"
+#include "vm.hpp"
+#include "inventory_navigation.hpp"
+#include "mover.hpp"
+#include "kismet.hpp"
+#include "mission.hpp"
+#include "slice.hpp"
 
 #include <fstream>
+#include <cmath>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -15,7 +23,57 @@ void usage() {
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
-        "[--all-mips <directory>]] | --native <name> [--native-args <args>] | --native-selftest");
+        "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
+        "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
+        "--run-batch <file> --cooked <directory> | "
+        "--inventory-move <delta> <start> <count> --cooked <directory> | "
+        "--mover-probe <actor> <action> --cooked <directory> | "
+        "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name>) | "
+        "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
+        "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
+        "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
+        "--native <name> [--native-args <args>] | --native-selftest");
+}
+
+
+// Reflection-typed JSON view of a VM value (used by --object-dump). Object references print as the target's path.
+void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
+    using Kind = vm::Value::Kind;
+    switch (value.kind) {
+    case Kind::None: out << "null"; break;
+    case Kind::Int: case Kind::Byte: out << value.i; break;
+    case Kind::Bool: out << (value.i ? "true" : "false"); break;
+    case Kind::Float: out << value.f; break;
+    case Kind::String: case Kind::Name: out << quote(value.s); break;
+    case Kind::Delegate: out << quote("delegate:" + value.s); break;
+    case Kind::Class: out << quote(value.cls ? "class:" + value.cls->path : "class:None"); break;
+    case Kind::Object:
+        if (!value.o) out << "null";
+        else if (value.o->resourcePackage) out << quote(value.o->resourcePackage->path(value.o->resourceIndex));
+        else out << quote(value.o->name);
+        break;
+    case Kind::Struct: {
+        out << '{';
+        const auto* aggregate = value.aggregate();
+        for (size_t i = 0; aggregate && i < aggregate->names.size(); ++i) {
+            if (i) out << ',';
+            out << quote(aggregate->names[i]) << ':';
+            if (depth > 12) out << "\"...\""; else valueJson(out, aggregate->values[i], depth + 1);
+        }
+        out << '}';
+        break;
+    }
+    case Kind::Array: {
+        out << '[';
+        const auto& elements = value.elements();
+        for (size_t i = 0; i < elements.size(); ++i) {
+            if (i) out << ',';
+            if (depth > 12) out << "\"...\""; else valueJson(out, elements[i], depth + 1);
+        }
+        out << ']';
+        break;
+    }
+    }
 }
 
 int32_t signedNumber(const std::string& value) {
@@ -222,6 +280,544 @@ int main(int argc, char** argv) {
             std::cout << "{\"version\":832,\"licensee\":46,\"names\":" << package->names.size()
                       << ",\"imports\":" << package->imports.size()
                       << ",\"exports\":" << package->exports.size() << "}\n";
+            return 0;
+        }
+
+        if (mode == "--script-check") {
+            // Structural validation of every script function (research/script_disasm.py --check).
+            const bool listFailures = argc == 4 && std::string(argv[3]) == "--failures";
+            if (argc != 3 && !listFailures) usage();
+            const auto result = script::checkPackage(*package);
+            std::cout << "{\"package\":" << quote(package->packageName) << ",\"functions\":" << result.functions
+                      << ",\"native\":" << result.native << ",\"script\":" << result.functions - result.native
+                      << ",\"decoded\":" << result.decoded << ",\"failed\":" << result.failures.size();
+            if (listFailures) {
+                std::cout << ",\"failures\":[";
+                for (size_t i = 0; i < result.failures.size(); ++i)
+                    std::cout << (i ? "," : "") << quote(result.failures[i]);
+                std::cout << ']';
+            }
+            std::cout << "}\n";
+            return 0;
+        }
+
+        if (mode == "--run-batch") {
+            // One case per line: function TAB self-class TAB name=kind:value ... ; text values are hex-encoded.
+            // Prints one JSON object per case. Used by tools/replay_trace.py to compare against recorded calls.
+            if (argc != 6 || std::string(argv[4]) != "--cooked") usage();
+            std::ifstream cases(argv[3]);
+            if (!cases) throw std::runtime_error("cannot open batch file");
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            const auto fromHex = [](const std::string& hex) {
+                if (hex.size() % 2 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+                    throw std::runtime_error("invalid hex text");
+                std::string text;
+                for (size_t i = 0; i + 1 < hex.size(); i += 2) text.push_back(char(std::stoi(hex.substr(i, 2), nullptr, 16)));
+                return text;
+            };
+            std::string line;
+            const auto integer = [](const std::string& body) {
+                size_t used = 0;
+                const auto value = std::stoll(body, &used);
+                if (used != body.size()) throw std::runtime_error("invalid integer");
+                return value;
+            };
+            const auto number = [](const std::string& body) {
+                size_t used = 0;
+                const auto value = std::stod(body, &used);
+                if (used != body.size() || !std::isfinite(value)) throw std::runtime_error("invalid number");
+                return value;
+            };
+            size_t caseNumber = 0;
+            while (std::getline(cases, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+                std::vector<std::string> fields;
+                size_t from = 0;
+                while (true) {
+                    const auto tab = line.find('\t', from);
+                    fields.push_back(line.substr(from, tab == std::string::npos ? std::string::npos : tab - from));
+                    if (tab == std::string::npos) break;
+                    from = tab + 1;
+                }
+                std::string error, type = "None", text;
+                vm::Value result;
+                bool native = false;
+                runtime.log.clear();
+                try {
+                    if (fields.size() < 2) throw std::runtime_error("malformed case");
+                    auto* function = runtime.findFunction(fields[0]);
+                    native = function->isNative();
+                    vm::ObjectPtr self;
+                    if (!fields[1].empty()) self = runtime.instantiate(runtime.findClass(fields[1]));
+                    if (self && function->owner && !self->cls->isChildOf(function->owner))
+                        throw std::runtime_error("self class does not inherit function owner");
+                    std::vector<vm::Value> values(function->params.size());
+                    std::vector<bool> given(function->params.size(), false);
+                    for (size_t i = 2; i < fields.size(); ++i) {
+                        const auto equal = fields[i].find('=');
+                        const auto colon = fields[i].find(':', equal == std::string::npos ? 0 : equal);
+                        if (equal == std::string::npos || colon == std::string::npos) throw std::runtime_error("malformed argument");
+                        const auto name = fields[i].substr(0, equal), kind = fields[i].substr(equal + 1, colon - equal - 1);
+                        const auto body = fields[i].substr(colon + 1);
+                        size_t slot = function->params.size();
+                        for (size_t p = 0; p < function->params.size(); ++p) {
+                            std::string a = function->params[p].name, b = name;
+                            for (auto& c : a) c = char(std::tolower(static_cast<unsigned char>(c)));
+                            for (auto& c : b) c = char(std::tolower(static_cast<unsigned char>(c)));
+                            if (a == b) slot = p;
+                        }
+                        if (slot == function->params.size()) throw std::runtime_error("no parameter named " + name);
+                        if (given[slot]) throw std::runtime_error("duplicate parameter " + name);
+                        if (kind == "i") values[slot] = vm::Value::makeInt(integer(body));
+                        else if (kind == "f") values[slot] = vm::Value::makeFloat(number(body));
+                        else if (kind == "b") {
+                            if (body != "0" && body != "1") throw std::runtime_error("invalid bool");
+                            values[slot] = vm::Value::makeBool(body == "1");
+                        }
+                        else if (kind == "y") values[slot] = vm::Value::makeByte(integer(body));
+                        else if (kind == "s") values[slot] = vm::Value::makeString(fromHex(body));
+                        else if (kind == "n") values[slot] = vm::Value::makeName(fromHex(body));
+                        else if (kind == "o") {
+                            if (!body.empty()) throw std::runtime_error("only null object arguments are supported");
+                            values[slot] = vm::Value::makeObject(nullptr);
+                        }
+                        else if (kind == "d") {
+                            // a number converted by the parameter's declared type
+                            const auto& declared = function->params[slot].type;
+                            if (declared == "IntProperty") values[slot] = vm::Value::makeInt(signedNumber(body));
+                            else if (declared == "FloatProperty") values[slot] = vm::Value::makeFloat(number(body));
+                            else if (declared == "ByteProperty") {
+                                const auto value = integer(body);
+                                if (value < 0 || value > 255) throw std::runtime_error("byte out of range");
+                                values[slot] = vm::Value::makeByte(value);
+                            }
+                            else if (declared == "BoolProperty") values[slot] = vm::Value::makeBool(number(body) != 0);
+                            else throw std::runtime_error("number given for a " + declared + " parameter");
+                        } else if (kind == "t") {
+                            // text converted by the declared type: a name or a string
+                            if (function->params[slot].type == "NameProperty") values[slot] = vm::Value::makeName(fromHex(body));
+                            else if (function->params[slot].type == "StrProperty") values[slot] = vm::Value::makeString(fromHex(body));
+                            else throw std::runtime_error("text given for a " + function->params[slot].type + " parameter");
+                        }
+                        else throw std::runtime_error("unknown argument kind " + kind);
+                        const auto& declared = function->params[slot].type;
+                        using K = vm::Value::Kind;
+                        const auto k = values[slot].kind;
+                        if (!((declared == "IntProperty" && k == K::Int) ||
+                              (declared == "FloatProperty" && k == K::Float) ||
+                              (declared == "BoolProperty" && k == K::Bool) ||
+                              (declared == "ByteProperty" && k == K::Byte) ||
+                              (declared == "StrProperty" && k == K::String) ||
+                              (declared == "NameProperty" && k == K::Name) ||
+                              (declared == "ObjectProperty" && k == K::Object)))
+                            throw std::runtime_error("argument type does not match " + declared);
+                        given[slot] = true;
+                    }
+                    // Preserve omitted trailing optionals; do not silently substitute zero for missing inputs.
+                    size_t count = given.size();
+                    while (count && !given[count - 1] && function->params[count - 1].isOptional()) --count;
+                    for (size_t p = 0; p < count; ++p)
+                        if (!given[p]) throw std::runtime_error("missing parameter " + function->params[p].name);
+                    values.resize(count);
+                    result = runtime.call(*function, self, values);
+                    using K = vm::Value::Kind;
+                    switch (result.kind) {
+                    case K::Int: type = "Int"; text = std::to_string(result.i); break;
+                    case K::Byte: type = "Byte"; text = std::to_string(result.i); break;
+                    case K::Bool: type = "Bool"; text = result.i ? "1" : "0"; break;
+                    case K::Float: { std::ostringstream s; s.precision(9); s << result.f; type = "Float"; text = s.str(); break; }
+                    case K::String: type = "String"; text = result.s; break;
+                    case K::Name: type = "Name"; text = result.s; break;
+                    case K::Object: type = "Object"; text = result.o ? result.o->name : "None"; break;
+                    case K::None: type = "None"; break;
+                    default: type = "Unsupported"; break;
+                    }
+                } catch (const std::exception& problem) { error = problem.what(); }
+                std::cout << "{\"case\":" << caseNumber++ << ",\"type\":" << quote(type) << ",\"value\":" << quote(text)
+                          << ",\"native\":" << (native ? "true" : "false")
+                          << ",\"error\":" << (error.empty() ? "null" : quote(error)) << ",\"unimplemented\":[";
+                bool first = true;
+                for (const auto& entry : runtime.log)
+                    if (entry.rfind("UNIMPLEMENTED ", 0) == 0) { std::cout << (first ? "" : ",") << quote(entry.substr(14)); first = false; }
+                std::cout << "]}" << '\n';
+            }
+            return 0;
+        }
+
+        if (mode == "--inventory-move") {
+            if (argc != 8 || std::string(argv[6]) != "--cooked") usage();
+            vm::InventoryNavigation navigation(argv[7]);
+            const auto result = navigation.move(signedNumber(argv[3]), signedNumber(argv[4]), signedNumber(argv[5]));
+            std::cout << "{\"index\":" << result.index << ",\"steps\":" << result.steps
+                      << ",\"error\":" << (result.error.empty() ? "null" : quote(result.error)) << "}\n";
+            return result.error.empty() ? 0 : 1;
+        }
+
+        if (mode == "--vm-sweep") {
+            vm::SweepOptions options;
+            std::filesystem::path cooked;
+            for (int i = 3; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--class") options.classFilter = nextValue(i, argc, argv, "--class");
+                else if (option == "--limit") options.limit = unsignedNumber(nextValue(i, argc, argv, "--limit"));
+                else if (option == "--steps") options.stepLimit = unsignedNumber(nextValue(i, argc, argv, "--steps"));
+                else if (option == "--top") options.top = unsignedNumber(nextValue(i, argc, argv, "--top"));
+                else usage();
+            }
+            if (cooked.empty()) usage();
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            std::cout << vm::sweepPackage(runtime, store.loadPath(sourcePath), options) << '\n';
+            return 0;
+        }
+
+        if (mode == "--kismet-census") {
+            // Loads every Sequence of the package through the executor and reports link resolution.
+            if (argc != 5 || std::string(argv[3]) != "--cooked") usage();
+            PackageStore store(argv[4]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            auto pkg = runtime.package(package->packageName);
+            vm::Class* sequenceClass = runtime.findClass("Engine.Sequence");
+            size_t sequences = 0, failed = 0, ops = 0, links = 0, unresolved = 0, outputs = 0;
+            std::cout << "{\"sequences\":[";
+            bool first = true;
+            for (int32_t index = 1; size_t(index) <= pkg->exports.size(); ++index) {
+                vm::Class* cls = nullptr;
+                try { cls = runtime.classAt(pkg, pkg->object(index).cls); } catch (const std::exception&) { continue; }
+                if (!cls || !cls->isChildOf(sequenceClass)) continue;
+                ++sequences;
+                std::cout << (first ? "" : ",") << "{\"path\":" << quote(pkg->path(index));
+                first = false;
+                try {
+                    vm::Kismet kismet(runtime, pkg, pkg->path(index));
+                    const auto stats = kismet.linkStats();
+                    ops += kismet.ops().size(); links += stats.links; unresolved += stats.unresolved; outputs += stats.outputs;
+                    std::cout << ",\"ops\":" << kismet.ops().size() << ",\"outputs\":" << stats.outputs << ",\"links\":" << stats.links
+                              << ",\"unresolved\":" << stats.unresolved << ",\"variable_links\":" << stats.variableLinks << "}";
+                } catch (const std::exception& error) {
+                    ++failed;
+                    std::cout << ",\"error\":" << quote(error.what()) << "}";
+                }
+            }
+            std::cout << "],\"totals\":{\"sequences\":" << sequences << ",\"failed\":" << failed << ",\"ops\":" << ops
+                      << ",\"outputs\":" << outputs << ",\"links\":" << links << ",\"unresolved\":" << unresolved
+                      << "},\"log_entries\":" << runtime.log.size() << "}\n";
+            return 0;
+        }
+        if (mode == "--mission-run") {
+            // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | obj:<name> | custom:<name> | turnin | tick:<seconds>
+            if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::MissionSystem mission(runtime, package->packageName, argv[3]);
+            std::set<std::string> completed;
+            for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
+            std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
+            bool first = true;
+            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed"};
+            for (int i = 6; i < argc; ++i) {
+                const std::string step = argv[i];
+                bool ok = true;
+                if (step == "accept") ok = mission.accept(completed);
+                else if (step == "turnin") ok = mission.turnInMission();
+                else if (step.rfind("obj:", 0) == 0) ok = mission.completeObjective(step.substr(4));
+                else if (step.rfind("custom:", 0) == 0) ok = mission.customEvent(step.substr(7));
+                else if (step.rfind("tick:", 0) == 0) mission.tick(std::stod(step.substr(5)));
+                else usage();
+                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
+                          << ",\"set\":" << quote(mission.activeSet()) << ",\"effects\":[";
+                first = false;
+                bool firstEffect = true;
+                for (const auto& effect : mission.drain()) {
+                    std::cout << (firstEffect ? "" : ",") << "{\"t\":" << effect.time << ",\"kind\":" << quote(kinds[int(effect.kind)])
+                              << ",\"a\":" << quote(effect.a) << ",\"b\":" << quote(effect.b) << ",\"c\":" << quote(effect.c) << "}";
+                    firstEffect = false;
+                }
+                std::cout << "]}";
+            }
+            std::cout << "],\"status\":" << int(mission.status()) << ",\"errors\":[";
+            first = true;
+            for (const auto& line : mission.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}\n";
+            return mission.errors.empty() ? 0 : 1;
+        }
+        if (mode == "--slice-run") {
+            // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
+            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s>. Package argument is Sanctuary_Dynamic.
+            if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::FireMissionSlice slice(runtime, argv[3], package->packageName,
+                                       "GD_TargetDummy.Character.CharClass_TargetDummy.BehaviorProviderDefinition_5");
+            std::set<std::string> completed;
+            for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
+            static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
+                                          "reward", "status", "objective_set", "objective_complete"};
+            std::cout << "{\"steps\":[";
+            bool first = true;
+            for (int i = 6; i < argc; ++i) {
+                const std::string step = argv[i];
+                bool ok = true;
+                if (step == "accept") ok = slice.accept(completed);
+                else if (step == "range") ok = slice.enterRange();
+                else if (step == "hit:fire") ok = slice.hitDummy(true);
+                else if (step == "hit:other") ok = slice.hitDummy(false);
+                else if (step == "turnin") ok = slice.turnIn();
+                else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
+                else usage();
+                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false") << ",\"events\":[";
+                first = false;
+                bool firstEvent = true;
+                for (const auto& event : slice.drain()) {
+                    std::cout << (firstEvent ? "" : ",") << "{\"kind\":" << quote(kinds[int(event.kind)]) << ",\"a\":" << quote(event.a)
+                              << ",\"b\":" << quote(event.b) << ",\"c\":" << quote(event.c) << "}";
+                    firstEvent = false;
+                }
+                std::cout << "]}";
+            }
+            std::cout << "],\"status\":" << int(slice.mission().status()) << ",\"errors\":[";
+            first = true;
+            for (const auto& line : slice.errors()) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"dummy_boundary\":[";
+            first = true;
+            for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"dummy_trace\":[";
+            first = true;
+            for (const auto& line : slice.dummy().trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}\n";
+            return slice.errors().empty() ? 0 : 1;
+        }
+        if (mode == "--mover-event") {
+            // Stock activation probe: a remote event through the action's installed Kismet sequence, then completion.
+            if (argc != 8 || std::string(argv[5]) != "--cooked") usage();
+            vm::Mover mover(argv[6], package->packageName, argv[3], argv[4]);
+            const auto dispatch = mover.remoteEvent(argv[7]);
+            std::cout << "{\"event\":" << quote(argv[7]) << ",\"matched\":" << dispatch.matched << ",\"motion\":" << dispatch.motion;
+            const auto list = [](const char* name, const std::vector<std::string>& lines) {
+                std::cout << ",\"" << name << "\":[";
+                bool first = true;
+                for (const auto& line : lines) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+                std::cout << "]";
+            };
+            list("trace", dispatch.trace); list("host_boundary", dispatch.hostBoundary); list("errors", dispatch.errors);
+            bool failed = !dispatch.errors.empty() || !dispatch.matched || dispatch.motion == 0;
+            if (dispatch.motion != 0) {
+                const auto start = mover.notify(false, dispatch.motion < 0);
+                const auto finish = mover.notify(true, dispatch.motion < 0);
+                const auto done = mover.motionFinished(dispatch.motion < 0);
+                std::cout << ",\"start_steps\":" << start.steps << ",\"finish_steps\":" << finish.steps
+                          << ",\"start_error\":" << quote(start.error) << ",\"finish_error\":" << quote(finish.error);
+                list("finished_trace", done.trace); list("finished_errors", done.errors);
+                failed |= !start.error.empty() || !finish.error.empty() || !done.errors.empty();
+            }
+            std::cout << "}\n";
+            return failed ? 1 : 0;
+        }
+        if (mode == "--mover-probe") {
+            if (argc != 7 || std::string(argv[5]) != "--cooked") usage();
+            vm::Mover mover(argv[6], package->packageName, argv[3], argv[4]);
+            std::cout << "{\"loading_diagnostics\":[";
+            bool first = true;
+            for (const auto& warning : mover.loadingDiagnostics()) {
+                std::cout << (first ? "" : ",") << quote(warning); first = false;
+            }
+            std::cout << "],\"events\":[";
+            first = true; bool failed = false;
+            for (bool reverse : {false, true}) {
+                for (int event = 0; event < 3; ++event) {
+                    const auto result = event == 2 ? mover.advance(10) : mover.notify(event == 1, reverse);
+                    std::cout << (first ? "" : ",") << "{\"reverse\":" << (reverse ? "true" : "false")
+                              << ",\"event\":" << quote(event == 0 ? "start" : event == 1 ? "finish" : "timers")
+                              << ",\"steps\":" << result.steps << ",\"checkpoint\":" << (result.checkpoint ? "true" : "false")
+                              << ",\"error\":" << quote(result.error) << '}';
+                    first = false; failed |= !result.error.empty();
+                }
+            }
+            std::cout << "]}\n";
+            return failed ? 1 : 0;
+        }
+        if (mode == "--object-dump") {
+            // Instantiates one export through the VM (class defaults + tagged overrides) and prints its properties.
+            if ((argc != 7 && argc != 8) || std::string(argv[5]) != "--cooked" || (argc == 8 && std::string(argv[7]) != "--all")) usage();
+            const bool everything = argc == 8;   // --all: every property, not only those that differ from the class default
+            PackageStore store(argv[6]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            auto pkg = runtime.package(package->packageName);
+            const auto object = runtime.instantiateExport(pkg, signedNumber(argv[3]), unsignedNumber(argv[4]));
+            std::cout << "{\"path\":" << quote(pkg->path(signedNumber(argv[3]))) << ",\"class\":" << quote(object->cls->path)
+                      << ",\"properties\":{";
+            std::map<std::string, const vm::Value*> sorted;
+            for (const auto& [name, value] : object->props) sorted.emplace(name, &value);
+            bool first = true;
+            const auto defaults = runtime.defaultsOf(object->cls);
+            for (const auto& [name, value] : sorted) {
+                // Only properties that differ from the class default (what the export actually overrides).
+                const auto base = defaults->props.find(name);
+                if (!everything && base != defaults->props.end() && vm::sameValue(base->second, *value)) continue;
+                std::cout << (first ? "" : ",") << quote(name) << ':';
+                valueJson(std::cout, *value, 0);
+                first = false;
+            }
+            std::cout << "},\"log\":[";
+            first = true;
+            for (const auto& line : runtime.log) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}" << '\n';
+            return 0;
+        }
+        if (mode == "--kismet-run") {
+            // Runs one installed Kismet sequence from an entry point. World-acting ops are recorded, not run.
+            if (argc < 8 || std::string(argv[4]) != "--cooked") usage();
+            std::filesystem::path cooked = argv[5];
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::Kismet kismet(runtime, runtime.package(package->packageName), argv[3]);
+            std::vector<std::string> hostCalls;
+            kismet.handle("Engine.SequenceAction", [&hostCalls](vm::Kismet& k, vm::Kismet::Op& op, int input) {
+                hostCalls.push_back(op.cls + ":" + op.name + " <- " + k.inputDesc(op, input));
+            });
+            const std::string entry = argv[6];
+            size_t matched = 0;
+            if (entry == "--remote" && argc == 8) matched = kismet.remoteEvent(argv[7]);
+            else if (entry == "--mission" && argc == 9) matched = kismet.missionRemoteEvent(argv[7], argv[8]);
+            else if (entry == "--op" && argc == 8) {
+                auto* op = kismet.find(argv[7]);
+                if (op) { kismet.activateEvent(*op); matched = 1; }
+            } else usage();
+            kismet.run();
+            std::cout << "{\"sequence\":" << quote(argv[3]) << ",\"ops\":" << kismet.ops().size()
+                      << ",\"entry_matches\":" << matched << ",\"executed\":" << kismet.executed << ",\"trace\":[";
+            bool first = true;
+            for (const auto& line : kismet.trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"host_boundary\":[";
+            first = true;
+            for (const auto& line : hostCalls) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"errors\":[";
+            first = true;
+            for (const auto& line : kismet.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"log\":[";
+            first = true;
+            for (const auto& line : runtime.log) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}\n";
+            return kismet.errors.empty() && matched ? 0 : 1;
+        }
+        if (mode == "--run") {
+            // Runs one script function on the VM and prints its result and log (Phase 2; see docs/verification).
+            std::string functionPath, selfClass;
+            std::filesystem::path cooked;
+            std::vector<vm::Value> values;
+            struct PendingStruct { size_t slot; std::string type; std::vector<std::string> fields; };
+            std::vector<PendingStruct> pendingStructs;
+            for (int i = 3; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--run" || option == "--disasm") continue;
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--self") selfClass = nextValue(i, argc, argv, "--self");
+                else if (option == "--arg") {
+                    const std::string text = nextValue(i, argc, argv, "--arg");
+                    const auto colon = text.find(':');
+                    if (colon == std::string::npos) usage();
+                    const auto kind = text.substr(0, colon), body = text.substr(colon + 1);
+                    const auto split = [](const std::string& list) {
+                        std::vector<std::string> parts;
+                        size_t from = 0;
+                        while (from <= list.size()) {
+                            const auto comma = list.find(',', from);
+                            parts.push_back(list.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
+                            if (comma == std::string::npos) break;
+                            from = comma + 1;
+                        }
+                        return parts;
+                    };
+                    if (kind == "i") values.push_back(vm::Value::makeInt(std::stoll(body)));
+                    else if (kind == "f") values.push_back(vm::Value::makeFloat(std::stod(body)));
+                    else if (kind == "b") values.push_back(vm::Value::makeBool(body == "true" || body == "1"));
+                    else if (kind == "y") values.push_back(vm::Value::makeByte(std::stoll(body)));
+                    else if (kind == "s") values.push_back(vm::Value::makeString(body));
+                    else if (kind == "n") values.push_back(vm::Value::makeName(body));
+                    else if (kind == "as" || kind == "ai" || kind == "af") {
+                        vm::Value array = vm::Value::makeArray();
+                        for (const auto& part : split(body)) {
+                            if (kind == "as") array.elements().push_back(vm::Value::makeString(part));
+                            else if (kind == "ai") array.elements().push_back(vm::Value::makeInt(std::stoll(part)));
+                            else array.elements().push_back(vm::Value::makeFloat(std::stod(part)));
+                        }
+                        values.push_back(std::move(array));
+                    } else if (kind == "v" || kind == "r") {
+                        // v:x,y,z vector; r:pitch,yaw,roll rotator
+                        const auto parts = split(body);
+                        if (parts.size() != 3) usage();
+                        pendingStructs.push_back({values.size(), kind == "v" ? "Vector" : "Rotator", parts});
+                        values.push_back(vm::Value());
+                    } else if (kind == "st") {
+                        // st:Package.Struct:Field=value,Field=value (values are numbers)
+                        const auto second = body.find(':');
+                        if (second == std::string::npos) usage();
+                        pendingStructs.push_back({values.size(), body.substr(0, second), split(body.substr(second + 1))});
+                        values.push_back(vm::Value());
+                    } else usage();
+                } else if (functionPath.empty()) functionPath = option;
+                else usage();
+            }
+            if (functionPath.empty() || cooked.empty()) usage();
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::ObjectPtr self;
+            if (!selfClass.empty()) self = runtime.instantiate(runtime.findClass(selfClass));
+            auto* function = runtime.findFunction(functionPath);
+            for (const auto& pending : pendingStructs) {
+                const bool native = pending.type == "Vector" || pending.type == "Rotator";
+                vm::Value value = native ? runtime.zeroStruct(pending.type) : runtime.newStruct(pending.type);
+                for (size_t f = 0; f < pending.fields.size(); ++f) {
+                    const auto& text = pending.fields[f];
+                    if (native) {
+                        if (f < 3) value.mut().values[f] = pending.type == "Vector" ? vm::Value::makeFloat(std::stod(text))
+                                                                                     : vm::Value::makeInt(std::stoll(text));
+                        continue;
+                    }
+                    const auto equal = text.find('=');
+                    vm::Value* slot = equal == std::string::npos ? nullptr : value.field(text.substr(0, equal));
+                    if (!slot) throw std::runtime_error("unknown struct field in --arg: " + text);
+                    const auto number = text.substr(equal + 1);
+                    if (slot->kind == vm::Value::Kind::Int) *slot = vm::Value::makeInt(std::stoll(number));
+                    else if (slot->kind == vm::Value::Kind::Byte) *slot = vm::Value::makeByte(std::stoll(number));
+                    else if (slot->kind == vm::Value::Kind::Bool) *slot = vm::Value::makeBool(number == "true" || number == "1");
+                    else *slot = vm::Value::makeFloat(std::stod(number));
+                }
+                values[pending.slot] = std::move(value);
+            }
+            std::string result, error;
+            std::vector<vm::Value> outs;
+            try { result = runtime.call(*function, self, values, &outs).describe(); }
+            catch (const std::exception& problem) { error = problem.what(); }
+            std::cout << "{\"function\":" << quote(function->path) << ",\"result\":" << (error.empty() ? quote(result) : "null")
+                      << ",\"error\":" << (error.empty() ? "null" : quote(error)) << ",\"steps\":" << runtime.steps << ",\"args\":[";
+            for (size_t i = 0; i < outs.size(); ++i) std::cout << (i ? "," : "") << quote(outs[i].describe());
+            std::cout << "],\"log\":[";
+            for (size_t i = 0; i < runtime.log.size(); ++i) std::cout << (i ? "," : "") << quote(runtime.log[i]);
+            std::cout << "]}\n";
+            return error.empty() ? 0 : 1;
+        }
+
+        if (mode == "--disasm") {
+            if (argc != 4) usage();
+            const std::string target = argv[3];
+            int32_t index = 0;
+            if (target.find_first_not_of("0123456789") == std::string::npos) index = signedNumber(target);
+            else index = package->findExport(target);
+            if (!index) throw std::runtime_error("function not found: " + target);
+            const auto info = script::readFunction(*package, index);
+            std::cout << script::disassemble(*package, info, script::decode(*package, info));
             return 0;
         }
 

@@ -33,6 +33,21 @@ deferred until that gate is met; they move to Phase 5/6.
 
 ## Now / next
 
+The first world-object connection is a bounded Sanctuary Matinee door: installed
+movement keys drive the existing mesh/collision, and original mover notification
+scripts run in the VM using placed state. Activation is a developer interaction;
+mission gating, sequence dispatch, audio and original-game motion parity remain
+open. See [the mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
+The next world slice is the door's stock activation path and one mission/NPC
+interaction, after a matched original-game comparison; inventory work remains
+open below.
+
+Slice progress (2026-10-01): the door is activated through its installed Kismet events, and the stock
+"Rock, Paper, Genocide: Fire Weapons!" mission runs in the host through native executors over installed data
+(mission, behavior provider, dummy provider), including respawn and save/resume. Marcus, the dummy pawn, the lent
+weapon, Phaselock from stock data and every parity claim remain open; see
+[the route record](docs/verification/SANCTUARY_RPG_MISSION.md).
+
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 
@@ -309,7 +324,14 @@ coverage.
       hierarchy; class default objects from package CDOs; `FName` table;
       cross-package reference resolution
 - [ ] Bytecode loader for every `UFunction` / `UState`; opcode table; handle
-      the Gearbox local-variable-array quirk flagged by UE Explorer
+      the Gearbox local-variable-array quirk flagged by UE Explorer.
+      **Python and C++ prototypes present (2026-10-01):** both structurally
+      decode 12,968 of 12,978 script functions (10 known failures), see
+      [the record](docs/verification/SCRIPT_BYTECODE_DISASM.md). C++ object
+      loading, interpretation, Core natives and a default-state sweep exist;
+      full states/latent behavior and opcode semantics remain unverified.
+      First UE5 inventory connection executes original `MoveDelta` on item-only
+      backpack rows; the rest of the menu remains on the host adapter.
 - [ ] Interpreter: expressions, locals, `out` params, structs, dynamic arrays,
       casts, `foreach`, `switch`, `goto`, delegates, `super`, states and
       transitions, latent functions, timers
@@ -318,6 +340,9 @@ coverage.
 - [ ] The 286 Core builtins (operators, math, string, name, object)
 - [ ] Test harness running pure-script classes in isolation (the 268
       script-only `Behavior_*` classes), outputs compared to UDK
+      **Diagnostic harness present:** synthetic execution tests, `--vm-sweep`
+      and scalar UI trace replay. Default-state return agreement does not pass
+      this gate; see [VM evidence](docs/verification/SCRIPT_VM_PROTOTYPE.md).
 
 **Gate:** VM runs `Behavior_*` chains and the stat-free parts of
 `WillowWeapon` without crashing; every unmet native is a logged stub.

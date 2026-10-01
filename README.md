@@ -78,7 +78,7 @@ Since the last update, Sanctuary got a lot of love:
 - **Stuff that shouldn't be there is gone.** Every placement the game marks as hidden is now hidden, and oversized invisible blockers keep their collision without covering the city.
 - **The sky** still uses `Sky_Dome`'s own textures and settings (a labeled approximation, since the stripped sky graph isn't decoded yet).
 
-Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. The first native-function dispatch stubs are in too, a tiny first step toward Phase 2 (actually running the game's code).
+Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. Phase 2 now has a C++ bytecode loader, object model, interpreter and Core native implementations. Both disassemblers structurally decode 12,968 of 12,978 script functions ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)); ten still fail. Ordinary item-only backpack Up/Down now executes the installed navigation script in UE5, with two passing key-to-script-to-selection checks. The rest of the menu still uses the host adapter; full live-game semantics and gameplay integration remain UNVERIFIED ([VM record](docs/verification/SCRIPT_VM_PROTOTYPE.md)).
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
@@ -130,6 +130,11 @@ If you want to help me spend way more time on this (a better subscription, maybe
 I'm not sure anyone actually reads this far, but if you did, thank you for checking the project out. I'm open to any constructive criticism, and if you feel like sending a PR, go for it.
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
+
+A first Sanctuary world-object bridge now connects installed Matinee movement
+keys and mover scripts to one door's host movement/collision. Its developer
+interaction does not implement mission activation or audio. See the
+[verification record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
 
 ## Is this legal?
 

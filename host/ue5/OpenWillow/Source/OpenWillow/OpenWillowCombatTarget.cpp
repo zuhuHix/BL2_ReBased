@@ -1,5 +1,7 @@
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowShotFx.h"
+#include "OpenWillowQuest.h"
+#include "OpenWillowWalker.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/DamageEvents.h"
 #include "Engine/StaticMesh.h"
@@ -162,6 +164,10 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     AController* EventInstigator, AActor* DamageCauser)
 {
     if (bDead) return 0.f;
+    // The dummy's own behavior provider (OnTakeDamage) runs in the quest component of the shooter.
+    if (const auto* Shooter = Cast<AOpenWillowWalker>(DamageCauser))
+        if (UOpenWillowQuest* Quest = Shooter->GetQuest(); Quest && Quest->Enabled())
+            Quest->OnDummyDamaged(DamageEvent.DamageTypeClass && DamageEvent.DamageTypeClass->IsChildOf(UOpenWillowFireDamageType::StaticClass()));
     const float Now = GetWorld()->GetTimeSeconds();
     const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
     Health -= Applied;

@@ -103,6 +103,7 @@ let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSl
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
+let navigationPanel = 'equipped', lastBackpackId = null, lastEquippedIndex = 0;
 let transferFromEquipped = false;
 let transferCategoryBefore = 0;
 let compareStartedFromLeft = false;
@@ -247,9 +248,23 @@ window.owInventory = snapshot => {
     targetSlot = state.activeSlot;
   if (!Number.isInteger(targetSlot) || targetSlot < 0 || targetSlot >= slotsUnlocked())
     targetSlot = firstOpenSlot(state.activeSlot);
+  if (!transferSourceId && navigationPanel === 'backpack' && equippedIds().has(selectedId)) {
+    navigationPanel = 'equipped';
+    targetGearSlot = gearSlotForItem(itemById(selectedId));
+    if (!targetGearSlot) targetSlot = state.slots.indexOf(selectedId);
+  }
+  if (!firstSnapshot && !transferSourceId && navigationPanel === 'equipped') {
+    const id = targetGearSlot ? state.gearSlots?.[targetGearSlot] : state.slots[targetSlot];
+    selectedId = itemById(id)?.id || null;
+  }
   if (!itemById(selectedId)) {
     const heldId = state.slots[targetSlot];
-    selectedId = transferSourceId ? backpackItems()[0]?.id || null : itemById(heldId)?.id || backpackItems()[0]?.id || null;
+    // An intentionally selected empty equipment cell must stay empty when
+    // unrelated ammo/currency snapshots arrive.
+    if (firstSnapshot || selectedId !== null || navigationPanel !== 'equipped') {
+      selectedId = transferSourceId ? backpackItems()[0]?.id || null : itemById(heldId)?.id || backpackItems()[0]?.id || null;
+      navigationPanel = equippedIds().has(selectedId) || !selectedId ? 'equipped' : 'backpack';
+    }
   }
   if (!itemById(compareId) || compareId === selectedId) compareId = null;
   if (ready) render();
@@ -342,6 +357,10 @@ function select(id) {
   if (transferSourceId && equippedIds().has(id)) return;
   if (selectedId !== id) compareId = transferSourceId;
   selectedId = id;
+  navigationPanel = equippedIds().has(id) ? 'equipped' : 'backpack';
+  if (navigationPanel === 'backpack') lastBackpackId = id;
+  else if (!gearSlotForItem(itemById(id))) lastEquippedIndex = targetSlot = state.slots.indexOf(id);
+  else lastEquippedIndex = 4 + gearSlots.findIndex(slot => slot.key === gearSlotForItem(itemById(id)));
   targetGearSlot = gearSlotForItem(itemById(id));
   syncSelection();
   drawCard();
@@ -402,6 +421,7 @@ function beginBackpackTransfer() {
   if (!source || equippedIds().has(source.id)) return;
   transferSourceId = source.id;
   transferFromEquipped = false;
+  navigationPanel = 'equipped';
   transferCategoryBefore = categoryIndex;
   targetGearSlot = gearSlotForItem(source);
   compareId = equippedIdFor(source);
@@ -423,6 +443,8 @@ function beginEquippedTransfer() {
   compareId = source.id;
   categoryIndex = categories.findIndex(category => category.key === (gearSlot || 'weapons'));
   selectedId = candidates[0].id;
+  navigationPanel = 'backpack';
+  lastBackpackId = selectedId;
   firstRow = scrollForSelected(backpackItems());
   render();
 }
@@ -431,6 +453,7 @@ function finishTransfer(cancel = false) {
   if (cancel && itemById(transferSourceId)) selectedId = transferSourceId;
   transferSourceId = compareId = null;
   transferFromEquipped = false;
+  navigationPanel = equippedIds().has(selectedId) || !selectedId ? 'equipped' : 'backpack';
   categoryIndex = transferCategoryBefore;
   firstRow = scrollForSelected(backpackItems());
   if (ready) render();
@@ -743,12 +766,10 @@ function drawCard() {
 function syncSelection() {
   if (!ready || !state) return;
   const equipped = INV + '.equippedPanel';
-  const slotIds = equippedItems();
   const selectedCell = selectedSlotIndex();
   for (let i=0; i<8; i++) {
     call(`${equipped}.cell${i+1}`, 'SetSelected', i === selectedCell);
-    const cellButton = [...document.querySelectorAll('#controls [data-kind="slot"]')]
-      .find(node => node.dataset.itemId === slotIds[i]);
+    const cellButton = document.querySelector(`#controls [data-kind="slot"][data-slot="${i}"]`);
     if (cellButton) cellButton.setAttribute('aria-pressed', String(i === selectedCell));
   }
   const rows = backpackItems();
@@ -756,6 +777,8 @@ function syncSelection() {
     const item = rows[firstRow+row];
     if (item) call(`${INV}.storagePanel.owRows.owRow${row}`, 'SetSelected', item.id === selectedId);
   }
+  for (const button of document.querySelectorAll('#controls [data-kind="backpack"]'))
+    button.setAttribute('aria-pressed', String(button.dataset.itemId === selectedId));
 }
 
 function scrollForSelected(rows) {
@@ -900,6 +923,70 @@ function focusItem(id) {
   button?.focus({preventScroll:true});
 }
 
+// Item-only backpack movement is executed by the installed UnrealScript VM.
+// Requests are ordered; replies from an obsolete selection/list are discarded.
+const inventoryVm = {enabled:false, calls:0, errors:0, steps:0, discarded:0, pending:null, queue:[], serial:0, failed:false};
+window.owInventoryVm = inventoryVm;
+window.owConfigureInventoryVm = enabled => { inventoryVm.enabled = Boolean(enabled) && !inventoryVm.failed; };
+window.owCancelInventoryVm = () => { inventoryVm.pending = null; inventoryVm.queue.length = 0; };
+function inventoryVmFailure(reason) {
+  inventoryVm.pending = null; inventoryVm.errors++; inventoryVm.failed = true;
+  inventoryVm.enabled = false; inventoryVm.queue.length = 0;
+  console.error('OpenWillow inventory VM failed: ' + reason);
+  announce('Inventory script error: ' + reason);
+}
+function requestInventoryMove(delta) {
+  if (inventoryVm.queue.length >= 32) return;
+  inventoryVm.queue.push(delta);
+  dispatchInventoryMove();
+}
+function dispatchInventoryMove() {
+  if (inventoryVm.pending || !inventoryVm.queue.length) return;
+  if (!inventoryVm.enabled || navigationPanel !== 'backpack' || transferSourceId || inspectMode) {
+    inventoryVm.queue.length = 0; return;
+  }
+  const rows = backpackItems();
+  if (!rows.length) { inventoryVm.queue.length = 0; return; }
+  const start = rows.findIndex(item => item.id === selectedId);
+  if (start < 0) { inventoryVm.queue.length = 0; return; }
+  const delta = inventoryVm.queue.shift(), serial = ++inventoryVm.serial;
+  inventoryVm.pending = {serial, selectedId, ids:rows.map(item => item.id)};
+  console.log('OWINVMOVE ' + JSON.stringify({serial, delta, start, count:rows.length}));
+  setTimeout(() => {
+    if (inventoryVm.pending?.serial === serial) inventoryVmFailure('host response timed out');
+  }, 6000);
+}
+window.owInventoryVmResult = result => {
+  const pending = inventoryVm.pending;
+  if (!pending || result.serial !== pending.serial) return;
+  inventoryVm.pending = null;
+  if (result.error || !Number.isInteger(result.index) || result.index < 0 || result.index >= pending.ids.length
+      || !Number.isInteger(result.steps) || result.steps <= 0) {
+    inventoryVmFailure(result.error || 'invalid response');
+    return;
+  }
+  const rows = backpackItems();
+  if (navigationPanel !== 'backpack' || transferSourceId || inspectMode || selectedId !== pending.selectedId
+      || rows.length !== pending.ids.length || rows.some((item, index) => item.id !== pending.ids[index])) {
+    inventoryVm.discarded++; inventoryVm.queue.length = 0; return;
+  }
+  inventoryVm.calls++; inventoryVm.steps += result.steps;
+  applyBackpackSelection(rows, result.index);
+  dispatchInventoryMove();
+};
+
+function applyBackpackSelection(rows, index) {
+  selectedId = rows[index].id;
+  navigationPanel = 'backpack';
+  lastBackpackId = selectedId;
+  targetGearSlot = gearSlotForItem(rows[index]);
+  compareId = transferSourceId;
+  const nextFirstRow = scrollForSelected(rows);
+  if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
+  else { syncSelection(); drawCard(); focusItem(selectedId); }
+  announce(itemAriaLabel(itemById(selectedId)));
+}
+
 function moveSelection(delta) {
   if (transferSourceId && !transferFromEquipped) {
     if (!targetGearSlot) cycleTargetSlot(delta);
@@ -907,15 +994,97 @@ function moveSelection(delta) {
   }
   const rows = backpackItems();
   if (!rows.length) return;
+  if (inventoryVm.failed && navigationPanel === 'backpack' && !transferSourceId) return;
+  if (inventoryVm.enabled && navigationPanel === 'backpack' && !transferSourceId) {
+    requestInventoryMove(delta); return;
+  }
   let index = rows.findIndex(item => item.id === selectedId);
-  if (index < 0) index = 0;
-  index = Math.max(0, Math.min(rows.length-1, index + delta));
-  selectedId = rows[index].id;
-  compareId = transferSourceId;
-  const nextFirstRow = scrollForSelected(rows);
-  if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
-  else { syncSelection(); drawCard(); }
-  announce(itemAriaLabel(itemById(selectedId)));
+  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
+  applyBackpackSelection(rows, index);
+}
+
+// Host spatial navigation uses the movie's actual cell centers rather than
+// assuming export order is screen order. Exact stock traversal is UNVERIFIED.
+function selectEquipmentSlot(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= 8 || slotLocked(index)) return;
+  if (transferSourceId) {
+    if (!transferFromEquipped && !targetGearSlot && index < 4) setTargetSlot(index);
+    return;
+  }
+  navigationPanel = 'equipped';
+  lastEquippedIndex = index;
+  targetGearSlot = index >= 4 ? gearSlots[index-4].key : null;
+  if (index < 4) targetSlot = index;
+  selectedId = itemById(equippedItems()[index])?.id || null;
+  compareId = null;
+  syncSelection();
+  drawCard();
+  document.querySelector(`#controls [data-kind="slot"][data-slot="${index}"]`)?.focus({preventScroll:true});
+  announce(selectedId ? itemAriaLabel(itemById(selectedId))
+    : `${index < 4 ? `Weapon slot ${index+1}` : gearSlots[index-4].label}, empty`);
+}
+
+// Equipment cell indices: 0-3 weapon slots, then gearSlots order (4 shield, 5 grenade mod,
+// 6 class mod, 7 relic). The stock screen puts the gear in a 2x2 grid: shield / class mod
+// on top, grenade mod / relic below. Observed in the original game (2026-09-30, keyboard
+// arrows, no wrapping anywhere): Down from the last weapon enters the shield, Up from the
+// shield returns to it, Right from a weapon slot or from a right-hand gear cell enters the
+// backpack, Left from a left-hand cell does nothing. Up from class mod / relic was not
+// observed; the entries marked UNVERIFIED are host guesses.
+const GEAR_NEIGHBOURS = {
+  4: {up:'weapons', down:5, right:6},
+  5: {up:4, right:7},
+  6: {up:'weapons', down:7, left:4, right:'backpack'},  // up UNVERIFIED
+  7: {up:6, left:5, right:'backpack'}                   // up UNVERIFIED
+};
+
+function equipmentNeighbour(index, direction) {
+  const lastWeapon = () => { for (let i = 3; i >= 0; i--) if (!slotLocked(i)) return i; return 0; };
+  let next;
+  if (index < 4) {
+    if (direction === 'up') for (let i = index-1; i >= 0 && next === undefined; i--) { if (!slotLocked(i)) next = i; }
+    else if (direction === 'down') {
+      for (let i = index+1; i < 4 && next === undefined; i++) { if (!slotLocked(i)) next = i; }
+      if (next === undefined) next = 4;
+    } else if (direction === 'right') next = 'backpack';
+  } else {
+    next = GEAR_NEIGHBOURS[index]?.[direction];
+    if (next === 'weapons') next = lastWeapon();
+  }
+  return next;
+}
+
+function enterBackpack() {
+  const rows = backpackItems();
+  const id = rows.find(item => item.id === lastBackpackId)?.id || rows[firstRow]?.id;
+  if (id) { select(id); firstRow = scrollForSelected(rows); render(); focusItem(id); }
+}
+
+function navigateInventory(direction) {
+  if (inspectMode) return;
+  const horizontal = direction === 'left' || direction === 'right';
+  if (transferSourceId) {
+    // Observed: an equipped-origin swap walks the compatible backpack candidates with Up/Down;
+    // a backpack-origin swap picks the destination weapon slot with Up/Down. In both, Left and
+    // Right did nothing and the ends did not wrap.
+    if (horizontal) return;
+    if (transferFromEquipped) moveSelection(direction === 'up' ? -1 : 1);
+    else if (!targetGearSlot) {
+      for (let slot = targetSlot + (direction === 'up' ? -1 : 1); slot >= 0 && slot < 4; slot += direction === 'up' ? -1 : 1)
+        if (!slotLocked(slot)) { setTargetSlot(slot); break; }
+    }
+    return;
+  }
+  if (navigationPanel === 'backpack') {
+    if (!horizontal) moveSelection(direction === 'up' ? -1 : 1);
+    // Observed: Left returns to the equipped cell last selected there, not to the cell the
+    // selected backpack item would occupy.
+    else if (direction === 'left') selectEquipmentSlot(lastEquippedIndex);
+    return;
+  }
+  const next = equipmentNeighbour(selectedSlotIndex(), direction);
+  if (next === 'backpack') enterBackpack();
+  else if (Number.isInteger(next)) selectEquipmentSlot(next);
 }
 
 function setTargetSlot(slot) {
@@ -933,6 +1102,7 @@ function setTargetSlot(slot) {
   const selectedIsBackpack = itemById(selectedId) && !equippedIds().has(selectedId);
   if (!selectedIsBackpack) {
     selectedId = itemById(held)?.id || null;
+    navigationPanel = 'equipped';
     compareId = null;
   }
   render();
@@ -1132,18 +1302,13 @@ function render() {
         if (!transferFromEquipped && i < 4) setTargetSlot(i);
         return;
       }
-      if (slot) {
-        targetGearSlot = slot.key;
-        if (item) select(item.id);
-        else { selectedId = null; compareId = null; syncSelection(); drawCard(); }
-      } else {
-        targetSlot = i;
-        targetGearSlot = null;
-        if (item) select(item.id); else { syncSelection(); drawCard(); }
-      }
+      selectEquipmentSlot(i);
       render();
     }, item ? () => select(item.id) : null, color(item), item, 'slot', `${cell}.hitTestClip`);
-    if (slotButton) slotButton.dataset.slot = String(i);
+    if (slotButton) {
+      slotButton.dataset.slot = String(i);
+      slotButton.setAttribute('aria-pressed', String(i === selectedCell));
+    }
     addMarkControls(cell, item, slotButton);
   }
 
@@ -1277,12 +1442,9 @@ function handleKey(event) {
   else if (key === 'delete' || key === 'backspace') { event.preventDefault(); unequip(); }
   else if (key === 'u') { event.preventDefault(); unequip(); }
   else if (key === 's') { event.preventDefault(); changeSort(); }
-  else if (key === 'arrowup') { event.preventDefault(); moveSelection(-1); }
-  else if (key === 'arrowdown') { event.preventDefault(); moveSelection(1); }
+  else if (key.startsWith('arrow')) { event.preventDefault(); navigateInventory(key.slice(5)); }
   else if (key === 'pageup') { event.preventDefault(); changeSort(1); }
   else if (key === 'pagedown') { event.preventDefault(); changeSort(-1); }
-  else if (key === 'arrowleft') { event.preventDefault(); scrollBackpack(-VISIBLE_ROWS); }
-  else if (key === 'arrowright') { event.preventDefault(); scrollBackpack(VISIBLE_ROWS); }
 }
 window.addEventListener('keydown', handleKey);
 let wheelRows = 0;
@@ -1316,8 +1478,8 @@ const gamepadActions = {
   4: () => cycleTargetSlot(-1), 5: () => cycleTargetSlot(1),
   6: toggleCompare,
   10: () => toggleMark('trash'),
-  12: () => moveSelection(-1), 13: () => moveSelection(1),
-  14: () => scrollBackpack(-1), 15: () => scrollBackpack(1)
+  12: () => navigateInventory('up'), 13: () => navigateInventory('down'),
+  14: () => navigateInventory('left'), 15: () => navigateInventory('right')
 };
 setInterval(() => {
   if (!ready || !navigator.getGamepads) return;

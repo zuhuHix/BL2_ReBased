@@ -9,33 +9,42 @@ non-negotiable: no game files or asset dumps in the repo, no leaked/decompiled
 source, record provenance and licenses, disclose AI assistance, keep
 verification claims honest.
 
-## Sensitive areas: stop and warn before editing
+## Sensitive areas: edit freely, then warn at the end
 
-Before changing any of these, tell the user explicitly that the area is
-sensitive, say what you intend to change, and wait for confirmation:
+Policy changed by the maintainer on 2026-09-30: models are good and cheap enough that these
+files no longer need a confirmation before editing. You may change `src/package.cpp` (the
+`Reader` struct, `require()`, `limit`, size and terminator checks), `src/container.cpp` /
+`src/container.hpp` (LZO container validation) and `CMakeLists.txt` whenever the work needs it.
+The obligations that remain:
 
-- `src/package.cpp`: the `Reader` struct, `require()`, `limit`, size and
-  terminator checks. Never loosen a bounds check to "make it work".
-- `src/container.cpp` / `src/container.hpp`: LZO container validation.
-- Struct/array property decoding, texture (`Texture2D`) and mesh
-  (`StaticMesh`) serialization: the version 832/46 layout has no public spec;
-  do not invent offsets from memory. Label guesses `UNVERIFIED`.
-- `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE`: dependency and
-  license/provenance decisions. The project license is MIT (2026-09-13). Never
-  copy code from GPL tools (Legendary Explorer, UE Explorer, UPKUtils, etc.).
-  UModel / UE Viewer may be used as an external binary or format reference;
-  copying its MIT-licensed code still requires a provenance entry first.
-- The host-engine choice (docs/OPENWILLOW_ENGINE_PLAN.md §2.1) is made (UE5) and
-  is not reopened by an AI assistant.
+- **Warn the maintainer in your final message**: name each sensitive file you touched, what
+  changed and why, and what is verified versus `UNVERIFIED`.
+- Never loosen a bounds check "to make it work"; fix the cause.
+- Keep `ctest` and `tools/verify_packages.py` green and add a DECISIONS.md entry when parsing
+  behaviour changes.
+- Struct/array property decoding, texture (`Texture2D`) and mesh (`StaticMesh`) serialization
+  and UnrealScript bytecode: the version 832/46 layout has no public spec. Do not invent offsets
+  from memory; recover them from the packages, check them with structural oracles, and label
+  guesses `UNVERIFIED`.
+- Still a maintainer decision (the guard hook still prompts): `THIRD_PARTY.md`, `LICENSE`, and
+  any dependency/license/provenance change. The project license is MIT (2026-09-13). Never copy
+  code from GPL tools (Legendary Explorer, UE Explorer, UPKUtils, etc.). UModel / UE Viewer may be
+  used as an external binary or format reference; copying its MIT-licensed code still requires a
+  provenance entry first.
+- The host-engine choice (docs/OPENWILLOW_ENGINE_PLAN.md section 2.1) is made (UE5) and is not
+  reopened by an AI assistant.
 
-A `PreToolUse` hook in `.claude/settings.json` enforces a confirmation prompt
-on those files and blocks writes of `.upk/.tfc/.pck/.bik` files.
+A `PreToolUse` hook in `.claude/settings.json` (`.claude/hooks/sensitive_guard.py`) allows edits
+to the first group with a reminder, prompts for the license/provenance files, and still blocks
+writes of `.upk/.tfc/.pck/.bik` files.
 
 ## Safe to work on without ceremony
 
 Export census over packages, synthetic tests using the existing `package()` /
 `tag()` fixture helpers in `tests/`, CLI/JSON output flags, documentation,
-`tools/verify_packages.py`. Keep README.md, ROADMAP.md and docs/TOOLING.md in
+`tools/verify_packages.py`, the Python research prototypes (`research/native_count.py`,
+`research/script_disasm.py` and their synthetic tests). Generated disassembly and other
+game-derived output stays under ignored `local/`. Keep README.md, ROADMAP.md and docs/TOOLING.md in
 agreement with DECISIONS.md and the verification records under docs/verification/.
 
 ## Development priority: prove the vertical slice first
@@ -103,6 +112,23 @@ The current verified local candidate is UModel build 1590 from the official
 `gildor2/UEViewer` repository. The actual executable path is machine-specific;
 use an explicit `-UModel` path or an environment variable rather than adding a
 binary to this repository.
+
+## Phase 2 (script VM) rules
+
+The bytecode layout has no public spec for this build. Recover it from the packages, check it
+with structural oracles (sizes meet, jumps land on statements, totals match the census), and
+label what is fitted rather than proven `UNVERIFIED`. The C++ port into `src/` may touch
+`CMakeLists.txt` and the `Reader`: go ahead, then warn the maintainer in the final message.
+Do not copy UE Explorer or other GPL tool code. See `docs/verification/SCRIPT_BYTECODE_DISASM.md`.
+
+## Menu parity work
+
+Re-observe the real game (docs/TOOLING.md "Tracing the real game's UI code") rather than guess;
+read script with `research/script_disasm.py` first, since navigation/equip logic is bytecode while
+the backpack sort is native. The in-engine suite (`tools/test_inventory_actions.ps1`) must be
+rerun after any change to `tools/hud_overlay/inventory.js` or `OpenWillowMayaHUD.cpp`'s page
+report; report its pass/fail counts honestly, including steps that fail only because local
+data (the gear manifest) is missing.
 
 ## Every change
 

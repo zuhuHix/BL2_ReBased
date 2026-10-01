@@ -603,3 +603,301 @@ This tests feasibility only, not stock angles, whole-menu depth ordering,
 drag/tween synchronization, memory cost or engine integration. Not loaded by
 inventory.html; production path unchanged. CTest 6/6 (8.69 s), nine package
 checks match, JS syntax/diff pass. No engine rerun or independent critic.
+
+### Inventory navigation and empty-cell selection (2026-09-30)
+
+AI-assisted interaction pass. Arrow keys and gamepad D-pad share one navigation
+table (see "Original-game keyboard observation" below for what it is based on).
+Wheel/chevrons still scroll; PageUp/PageDown still sort. This first version chose
+neighbours from native cell centers; the observation below replaced that with the
+observed table.
+
+Empty weapon selection clears the previous card/preview ID. Equipment selection
+survives unrelated snapshots and follows host changes to the selected slot.
+Confirmed backpack equips update navigation to their destination. HTML pressed
+state identifies equipment by slot index (including empty cells) and follows
+backpack keys. Transfer sources stay pinned; Escape restores the source.
+Inspect suppresses directional inventory navigation. No parser, dependency or
+engine changes; no new extraction backend.
+
+Automated checks:
+
+```text
+node tests/inventory_navigation_test.js
+14/14 navigation checks passed (synthetic, stock traversal unverified)
+node --check tools/hud_overlay/inventory.js
+git diff --check
+ctest --test-dir build -C Release --output-on-failure
+100% tests passed, 0 tests failed out of 6
+Total Test time (real) = 19.25 sec
+python tools/verify_packages.py --reader build/Release/ow-package.exe
+Core: 234397 bytes, 1621 exports; decoded bytes, counts and export fields match
+Engine: 5878264 bytes, 33166 exports; decoded bytes, counts and export fields match
+GameFramework: 61714 bytes, 258 exports; decoded bytes, counts and export fields match
+GearboxFramework: 1224040 bytes, 7098 exports; decoded bytes, counts and export fields match
+WillowGame: 13054200 bytes, 56443 exports; decoded bytes, counts and export fields match
+GFxUI: 136680 bytes, 841 exports; decoded bytes, counts and export fields match
+IpDrv: 230751 bytes, 1364 exports; decoded bytes, counts and export fields match
+OnlineSubsystemSteamworks: 265760 bytes, 1709 exports; decoded bytes, counts and export fields match
+AkAudio: 39503 bytes, 176 exports; decoded bytes, counts and export fields match
+```
+
+Node runs the actual adapter with synthetic snapshots, cell centers and minimal
+DOM, without Ruffle, Slate or host validation. The new worktree lacks the prior
+ignored seed, recipes and reference captures. Seven UI movies were recovered
+with the existing reader/converter/library workaround and the same Ruffle web
+version 0.7.0-nightly.2026.9.26 from npm. Final recovery: 17.823 s, 29 runtime
+files including Ruffle, under ignored local/ui/run; report and recovery script
+also stay local. Dynamic -nopack images retain transparent placeholders.
+Initial exact-name texture lookup failed; local recovery resolved case-insensitive
+package texture paths and empty export names using explicit image filenames,
+then reconverted. This does not prove general identity resolution.
+
+The in-engine action test's `select_backpack_weapon` step used ArrowDown from the
+equipped panel to reach the backpack. Under the new navigation that stays in
+equipment, so the step now presses ArrowRight eight times (extra presses in
+Backpack are no-ops). **Edited but not compiled or run**: this worktree has no
+imported Sanctuary/Maya content, scene data or UE binaries, so the previous
+46/46 result predates this pass and the suite needs a rerun on a seeded checkout.
+
+T3 preview navigation (including environment-port navigation) reports connection
+refused while the local server responds HTTP 200. No live browser, UE runtime,
+physical-input or matched original-game check completed for this pass. No
+independent critic. Full 1:1 menu parity remains incomplete.
+
+### Original-game keyboard observation (2026-09-30)
+
+AI-assisted. The community mod SDK (mod manager v3.8, unrealsdk v3.2.0, pyunrealsdk
+v1.10.0; the DLL SHA-256 values match THIRD_PARTY.md) was installed in the player's
+Borderlands 2 folder, with `tools/sdk_trace/openwillow_uitrace` (v0.2.1, plus an opt-in
+`autostart.txt` switch that turned out not to auto-enable on a first run; the mod was
+enabled from the in-game mod menu). Keys were sent to the running original game with
+scan-code input while the player's own character sat in Sanctuary; nothing was
+equipped, dropped or sorted permanently (sort was cycled and restored, transfers were
+cancelled with Escape). Screenshots, the action log with UTC timestamps and the 2,919
+function trace (`uitrace_20260930_164540.jsonl`, ~4 MB) stay under ignored `local/`.
+Observed, PC keyboard, no key held:
+
+- Weapon slots 1-4 are a vertical chain; Up at slot 1 and Down at the last slot do not wrap.
+- Down from slot 4 enters the shield (top-left of a 2x2 gear grid: shield / class mod over
+  grenade mod / relic). Up from the shield returns to slot 4. Right shield->class mod,
+  grenade mod->relic; Down shield->grenade mod, class mod->relic; Up grenade mod->shield;
+  Left class mod->shield and relic->grenade mod (later Left from grenade mod did nothing).
+- Right from a weapon slot or from the relic enters Backpack, on the remembered row.
+  Left from Backpack returns to the last selected equipped cell (slot 4 and relic seen),
+  not to the cell the selected item would occupy.
+- Backpack Up/Down are linear across category headers and continue through trailing
+  `[EMPTY]` cells to the last cell; neither end wraps. Empty cells show no item card.
+- PageDown cycles the backpack header ALL -> TYPES -> BRANDS -> ITEMS -> VALUE -> ALL;
+  PageUp runs it backwards. Groups are the movie's own sub-headers (weapon types,
+  manufacturers, item classes). The host's DEFAULT/NAME/RARITY/LEVEL/DAMAGE list is
+  therefore **not** stock and has not been replaced yet.
+- Enter on an equipped weapon opens a compare view: equipped card left, candidate card
+  right, backpack header `(COMPARE)`, non-weapon cells outlined red; Up/Down walk
+  candidates; Escape cancels to the same slot. Enter on a backpack weapon opens the
+  same view with Up/Down choosing the destination slot; Left/Right changed nothing.
+- F opens a full-screen Inspect with a large rotating gun and the card at top-left
+  (this port still uses a smaller host box); Escape returns to the same selection.
+
+Not observed and left as marked host guesses in `inventory.js` (`GEAR_NEIGHBOURS`):
+Up from the class mod and relic, Left from the shield, Right/Left in compare view, mouse
+hover/click, gamepad input, and behaviour with fewer than four unlocked weapon slots.
+Item names and stats in the screenshots belong to the player's save and must not be
+copied into the repository.
+
+Port changes from this: `navigateInventory` now follows the table above (no wrap, backpack
+Left uses `lastEquippedIndex`, backpack-origin swap clamps on Up/Down and ignores
+Left/Right). `tests/inventory_navigation_test.js` was rewritten to those observations:
+
+```text
+node tests/inventory_navigation_test.js
+17/17 navigation checks passed (traversal from original-game observation; UNVERIFIED cells noted in inventory.js)
+```
+
+Still open for 1:1: the stock sort list and grouping, trailing empty backpack cells, the
+full-screen Inspect, red-outlined ineligible cells in compare view, and everything mouse
+and controller. The in-engine action suite has not been rerun since this change.
+
+Worktree seed (this session): `tools/seed_inventory_demo.py` rolls 18 demo recipes,
+`tools/seed_inventory_assets.ps1` exports and imports Maya's Idle_Inventory (271 frames),
+the armed Rifle_Siren idle (381 frames), the menu look and the weapon meshes;
+`python tools/render_weapon_previews.py` and `tools/prepare_skill_tree.py` regenerate
+previews and the skill tree. Not restored: the original gear manifest and
+`observed_gear.json` (built from traces that no longer exist) and the Infinity proxy
+material, so gear steps of the action suite will not pass until they are rebuilt.
+
+### Original-game sort and compare observation, and the action-suite rerun (2026-09-30)
+
+AI-assisted; same capture session as the keyboard observation above (screenshots and the
+2,919-function trace stay under ignored `local/`; item names and stats in them belong to
+the player's save and are not copied here).
+
+**Sort cycle (observed).** PageDown sends `extOnChangeSort(Delta=+1)`, PageUp `-1`, so PageDown
+runs ALL -> TYPES -> BRANDS -> ITEMS -> VALUE -> ALL. The port has it reversed (PageUp forward).
+Every sort step selected the **first cell** and showed the list from the top.
+
+- Sub-headers are slim labels above the first item of each group, drawn inside the scrolling
+  list; one is about 0.37 of a cell pitch tall. The first sits directly under
+  "BACKPACK (TAG)". The tag is the sort mode; the port's host-invented category filter
+  (`[`/`]`, chevrons) has no stock counterpart.
+- ALL: everything grouped by class. WEAPONS, then RELICS, then CLASS MODS were seen. Where
+  SHIELDS and GRENADE MODS sit was not in the observed pack: UNVERIFIED.
+- TYPES: weapons only, grouped by weapon type ("ASSAULT RIFLES" before "SUB-MACHINE GUNS";
+  other labels and alphabetical order are guesses).
+- BRANDS: everything grouped by manufacturer, alphabetical (five brands seen; the Bandit
+  header read "BANDIT MADE" while the card logo reads "BANDIT").
+- ITEMS: non-weapons only, RELICS then CLASS MODS (so class order is not alphabetical).
+- VALUE: one headerless list, dearest first.
+- Empty cells follow the last item in every mode. How many a filtered mode shows is unknown.
+
+**Compare view (observed, both origins).** Backpack tag reads "(COMPARE)". The list is the
+weapons only under one "WEAPONS" sub-header, then empty cells. The four **gear cells of the
+Equipped panel are outlined red** (the movie's cell symbols have a `bad` frame; frame labels
+`normal, locked, bad, lockedbad, added` read from the converted library). Equipped-origin:
+green comparison frame on the equipped card. Gear compare (what turns red, what header)
+was not observed.
+
+**Inspect (observed).** Full-screen dark backdrop, the item card at top-left, a large gun
+filling the middle; Escape returns to the same selection.
+
+**Trace.** `SetSortLabel` / `ApplySortConfiguration` carry `SortFilterCategorizeData
+{SortType, FilterType, CategoryType, SortTitleLookupKey}`: the default is `(0,0,0,"")`,
+compare `(2,1,1,"Compare")`, leaving compare `(2,0,1,"all")`. What the numbers mean is UNVERIFIED.
+**The sort ordering itself is native code** (`extOnChangeSort`, `ApplySortConfiguration` are
+`FUNC_Native`), so it cannot be read from bytecode; see
+[SCRIPT_BYTECODE_DISASM.md](SCRIPT_BYTECODE_DISASM.md) for what can.
+
+**Action suite rerun (this worktree, seeded, slate keys, 2 slots).** `tools/test_inventory_actions.ps1`
+reported **30/46 passed, 16 failed**. The regression from the navigation change was one
+assumption: after `unequip` the page now keeps the emptied equipment cell selected (the
+step `backpack_transfer_empty_destination` pressed `e` expecting the backpack pistol), and
+steps 21-30 cascaded from it. The step now presses ArrowRight first (edited, **not yet
+rerun**: it needs an editor rebuild). Steps 37, 42, 43 fail for a different, known reason:
+the gear manifest is not restored in this worktree ("no shield in the local gear manifest").
+Steps 13/14 (`pageup_sorts_preserving_selection`, `pagedown_reverses_sort`) pass today but
+encode the wrong stock behaviour (sort does not preserve selection; PageDown is forward) and
+must change with the sort work.
+
+**State of the sort-list work.** A partial, **non-running** implementation of the stock list
+model is on branch `t3code/wip-inventory-sort-list` (one WIP commit: modes, grouping,
+entries with sub-headers and empty cells, entry-based scrolling). Unfinished: the render loop,
+empty-cell selection/hit boxes, removing the category filter, the page report in
+`OpenWillowMayaHUD.cpp` (`cat`, `backpackHeaderAnchored`, `backpackRowsAligned` assume the old
+rows), the in-engine steps, and the node tests. Remaining order of work: (2) sort list,
+(3) selectable empty cells, (4) full-screen Inspect with an auto-rotating gun, (5) red `bad`
+cell state on the gear cells during compare; then weapon models/textures and Phaselock.
+
+### First interpreter connection (2026-10-01)
+
+AI-assisted. Ordinary item-only backpack Up/Down now executes the installed
+`InventoryListPanelGFxObject.MoveDelta` through the linked C++ VM. The page sends
+an ordered request to the HUD, the host supplies provider length/entry kind,
+and the returned index updates actual page selection. Equipment navigation,
+transfers, equip actions, sorting and rendering still use the host adapter.
+Category headers and empty entries are not supplied to this first provider.
+No script listing or game bytes were transcribed into project source.
+
+The two new Slate-key engine checks pass: `vm_backpack_down` moves index 1 to 2,
+`vm_backpack_up` returns 2 to 1. Each executes 55 expressions; page reports
+two completed calls, 110 expressions, zero VM errors. This verifies the
+key -> page -> UE5 -> installed script -> page selection route, not full
+original-game menu parity. Synthetic navigation checks: 22/22; CTest: 8/8;
+all nine package differential comparisons match. Full details and enum
+validation are in [the VM record](SCRIPT_VM_PROTOTYPE.md).
+
+The successful engine launch used `-ddc=InstalledNoZenLocalFallback -d3d11`.
+An initial launch stalled waiting for Zen, and the next passed cache startup
+but stalled loading Sanctuary before gameplay. Both test-owned processes were
+stopped before retry; no authored editor state or renderer/cache project
+configuration changed. The log is under ignored
+`local/inventory-actions/run-20261001-004912.log`.
+
+Full action runner: **41/48 passed, seven failed, zero not run; overall FAIL**.
+Steps 29-32 (favorite/trash/drop) act on the selected item after the drag tests
+while expecting the earlier transfer item; step 34 cascades from that mismatch.
+No VM movement calls occurred after the successful step 14. Steps 39 and 45
+fail because the shield recipe/manifest is missing. These failures have not
+been independently compared against a VM-disabled baseline, so they are not
+claimed to be proven pre-existing regressions. Raw passes also include weak
+downstream checks: step 44 reports a shield equip with an empty ID, and the
+pickup checks depend on the earlier incorrect DropId. Do not treat those passes
+as evidence of gear/pickup parity. Correcting these test/data issues remains open.
+The bounded VM acceptance is the two explicit expression-count/selection checks.
+
+### Suite correction 2026-10-01
+
+AI-assisted. Test and fixture work only: no change to `tools/hud_overlay/inventory.js`, `src/`,
+`CMakeLists.txt` or the host runtime. Files: `OpenWillowInventoryActionTest.cpp/.h`,
+`tools/test_inventory_actions.ps1`. The 2026-10-01 record above reported 41/48 with raw passes
+that proved little (a shield equip with an empty id, pickup checks against a stale `DropId`);
+this pass fixes the test, not the product.
+
+**Gear data.** `prepare_inventory_gear.py` ran on the one trace still present,
+`local/ui/traces/uitrace_20260930_164540.jsonl` (the 2026-09-30 keyboard-observation capture):
+36 completed observations, 8 unique cards, 28 duplicates, 0.188 s, 1 shield / 4 class mods /
+2 relics / 1 grenade mod, written to ignored `local/inventory/observed_gear.json`. (The earlier
+note that the source traces no longer exist applied to the 09-26 pair, not this file.) No new
+original-game capture was needed or made. I did **not** promote it to `gear_manifest.json`:
+the cards come from a player's save (levels 35-50, not the 36 the old steps assumed), and the
+suite should not depend on them. Instead the test adds one obviously fake shield
+(`test_shield_synthetic_1`, "TEST SHIELD (SYNTHETIC)", level 36, one fake stat) to the host
+inventory before the page opens, and selects it by walking to it in the unfiltered backpack
+(the host-only `[ ]` category filter is no longer used by the suite). The weapons are still the
+seeded local recipe demo set, chosen by what the page reports, never by a hard-coded id.
+
+**Statuses.** Every row is `PASS`, `FAIL`, `NOT_RUN` or `KNOWN_DIVERGENCE`
+(`OWINVTEST step=N action=... status=... ok=... detail=...`). Each step now has its own
+precondition, evaluated against a fresh page report before any input is sent; a precondition that
+does not hold is `NOT_RUN` (nothing sent, nothing claimed). The summary reads
+`result=PASS | PASS_WITH_KNOWN_DIVERGENCE | FAIL` plus
+`passed= failed= not_run= known_divergence=`; the runner exits 0 / 3 / 1 and 2 for no summary,
+and refuses to start while an Unreal editor is running. `KNOWN_DIVERGENCE` is never a pass.
+Steps 15/16 (PageUp/PageDown) assert what the host does today and report it as
+`KNOWN_DIVERGENCE`: stock PageDown is forward (ALL, TYPES, BRANDS, ITEMS, VALUE) and each step
+selects the first cell, whereas the host's PageUp is forward over its own modes and keeps the
+selection. The sort list itself is the separate unfinished feature on
+`t3code/wip-inventory-sort-list`.
+
+Other corrections: marking and drop steps first walk the page selection to the working weapon
+(arrow keys, one burst at a time) and assert it, then start from a checked host state
+(favorite/trash flags, no pickup already nearby); `DropId` is set only after that check, so a
+failed drop cannot leak into the pickup steps. Pickup steps need a recorded drop, a pickup actor
+in range and the dropped item out of the inventory. The shield steps assert level, selection and
+worn-state before and after; empty ids fail instead of matching anything. The refused-drag and
+level-gate-in-page steps are negative checks whose key/drag delivery cannot be observed; they
+require a preceding positive control (the earlier drag steps pass first) and say so in the row.
+Transfer, scroll, inspect and slot steps gained exact selection/state preconditions
+(candidate moved by ArrowDown; Up returns to the working weapon; key `2` must change the target).
+
+**Evidence.** Launch: `-ddc=InstalledNoZenLocalFallback -d3d11` (now the runner's default
+`-Extra`; no project config changed); UE 5.8 `OpenWillowEditor Win64 Development` build
+succeeded (14.5 s, last build). The suite ran three times in total:
+
+```text
+run-20261001-091241.log  PASS=43 FAIL=1 NOT_RUN=3 KNOWN_DIVERGENCE=2   result=FAIL (49 steps)
+run-20261001-091727.log  PASS=47 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=2   result=PASS_WITH_KNOWN_DIVERGENCE
+run-20261001-092122.log  PASS=47 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=2   result=PASS_WITH_KNOWN_DIVERGENCE
+node tests/inventory_navigation_test.js: 22/22 (synthetic)   python tests/inventory_gear_test.py: 4 OK
+ctest --test-dir build -C Release: 8/8 passed (19.08 s)
+verify_packages.py: all nine decoded byte/count/export comparisons match
+```
+
+The first run is the useful negative evidence: the shield walk timed out at 40 s (one key per
+3 s report round trip), that step failed and the three steps depending on the selected shield
+reported `NOT_RUN` with the reason, rather than passing on an empty id. Walking now sends
+bursts of up to eight ordered presses and waits for the expected row. Both later runs are
+identical. Run-to-run stability is two identical runs, not a statistical claim. Non-passes in the
+final runs: steps 15 and 16 only, both `KNOWN_DIVERGENCE` as above.
+
+Not reproduced: the old selected-item mismatch (the page selected a different weapon after the
+drag steps). In all three runs the page already selected the working weapon there, so the
+explicit select step was a no-op at that point; why it differed earlier is **UNVERIFIED**
+(hover selection under the in-game cursor is a hypothesis, not tested). The new step makes the
+suite independent of it either way, but the walk was only exercised for real by the shield step.
+
+Still unverified: a **VM-disabled baseline was not run** (no switch to turn the inventory VM off
+exists in the files this pass could touch), so the VM steps are not compared with the host
+adapter; stock backpack traversal and sort remain as in the observation sections above; keys
+are Slate events, not physical input; weak negative checks noted above; the host `[ ]`
+category filter and the host sort modes have no in-suite coverage now except steps 15/16.
+Item names in local logs come from the seeded recipes and are not copied here.

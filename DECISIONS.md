@@ -2978,3 +2978,114 @@ transforms and broader interaction/performance checks support replacing it.
 CTest 6/6 (8.69 s); all nine package checks match; JS syntax/diff pass. No new
 engine run or independent critic because runtime unchanged. Native capture
 connection is still unavailable. Full menu parity remains open.
+
+## 2026-09-30: Phase 2 starts with a read-only bytecode disassembler (Python prototype)
+
+AI-assisted. Prompted by the inventory-parity work: the original menu's input
+code could not be read, only observed. Added `research/script_disasm.py` (prototype, in the
+manner of `native_count.py`) and `tests/script_disasm_test.py` (synthetic, 11 checks). It
+reads the nine code packages with the existing Python reader and decodes every script
+`UFunction` without executing anything.
+
+Established from the data: the function header layout (a `u16` local-variable array, ten
+`i32`, the in-memory size, the file size), `0x53` as end of script in this build, and that
+jump/skip operands are measured in in-memory bytes where each object reference is 8 bytes
+(a least-squares fit gave exactly 4 extra bytes per reference). Result: 12,968 of 12,978
+script functions decode exactly under structural checks (header size meets the function tail,
+grammar consumes exactly the script, in-memory size equals the header, jump targets are
+statement starts); the 12,978 total matches the native census. Ten functions still fail
+and some operand layouts are fitted, not proven: they are marked UNVERIFIED in the source.
+Full record: `docs/verification/SCRIPT_BYTECODE_DISASM.md`.
+
+Finding that changes the approach: the backpack sort logic (`extOnChangeSort`,
+`ApplySortConfiguration`) is native C++, not bytecode, so its ordering still comes from
+observing the game. Script-side menu navigation (`NormalMove`, `MoveDelta`, `StartEquip`,
+`IsComparing`) is readable. Not done: C++ port (touches `CMakeLists.txt` and possibly the
+`Reader`, both sensitive areas, awaiting confirmation), object model, interpreter.
+No game bytes committed; listings stay under ignored `local/`.
+
+## 2026-10-01: Resume the VM handoff through diagnostic trace replay
+
+AI-assisted. Preserve the two local Phase 2 commits and the existing uncommitted
+batch CLI before continuing. Complete that batch/replay path rather than replacing
+the interpreter architecture. No parser layout, bounds check, dependency or
+license changes. Input validation rejects malformed scalar payloads, missing or
+duplicate arguments and incompatible receiver classes; omitted trailing optional
+parameters retain script defaults. Clear native logs before every case, including
+cases that fail during lookup. Native/stub execution cannot count as a return match.
+
+Replay uses fresh class-default receivers, not recorded live object state. Results
+remain UNVERIFIED: the first 400 existing trace pairs yielded 25 return matches,
+four mismatches, 19 blocked and 352 skipped. CTest 8/8; all nine package differential
+checks match; both disassemblers remain at 12,968/12,978 structurally decoded.
+Full evidence and the next state-faithful comparison are documented in
+`docs/verification/SCRIPT_VM_PROTOTYPE.md`. No fresh in-game or UE validation.
+
+## 2026-10-01: Connect item-only backpack movement to the original script VM
+
+AI-assisted. Prefer the smallest live menu connection over replacing the entire
+adapter at once: execute installed `InventoryListPanelGFxObject.MoveDelta` for
+ordinary backpack Up/Down, supplying the list length and binding the provider's
+native entry-kind interface. Resolve the source kind through reflected enum
+identity instead of hardcoding a numeric enum value. Reuse the enum serialization
+order already decoded in vm.cpp, with a bounded Reader, checked prefix/count/name
+references and exact consumption. No existing package/container bounds checks
+are loosened. CMake adds the independent navigation adapter to ow-core; the UE
+module links the local Release libraries. No dependency/license change.
+
+Fail on VM diagnostics, malformed input or invalid results. Serialize repeated
+keys, reject obsolete selection/list replies and cancel on menu close. Synthetic
+tests and direct installed-script checks establish the bridge plumbing and
+bounded navigation behavior. Full original-game state, equipment/equip scripts,
+sorting, empty/category entries and visual parity remain UNVERIFIED. Verification
+details: `docs/verification/SCRIPT_VM_PROTOTYPE.md` and the inventory record.
+
+Runtime acceptance: two new Slate-key checks pass through original MoveDelta
+and update the actual page selection, 55 expressions each, zero diagnostics.
+Full runner remains FAIL (41/48, seven failures from item-selection expectations,
+a pickup cascade and missing shield data; no VM-disabled baseline). Dependent
+gear/pickup passes are not parity evidence. CTest 8/8 and navigation 22/22 pass;
+nine package differential checks match. Engine test used launch-only cache
+fallback/D3D11 after two startup stalls; no project renderer/cache changes.
+
+
+## 2026-10-01: one placed Sanctuary mover before broad world behavior
+
+Reuse one prepared door mesh/material/convex-collision chain. Follow the installed
+Matinee action's variable/data/group/track references using the owned reader,
+resolve shared resources in the existing scene scope, and keep curves/bindings
+under ignored local output. No new extraction backend or license decision.
+
+Extend VM object materialisation to explicit placed exports: class defaults plus
+tagged overrides at caller-supplied, established 4/8/26 prefixes. Validate the
+prefix fits the export rather than scanning offsets or loosening bounds. Native
+tails, resource object graphs and archetype inheritance stay outside this helper.
+Use installed InterpActor lifecycle scripts and scoped timer natives; reject
+loading/execution diagnostics and restore script state on failure. No script
+listing or original game logic is transcribed into project code.
+
+The host evaluates the installed movement keys and promotes only the bound
+component to movable at runtime, restoring its pose/mobility on failure or
+shutdown. E input is a developer activation path. Mission/Kismet activation,
+Ak-event tracks, encroachment, checkpoint persistence and original-game relative
+frame/Euler/auto-curve parity remain UNVERIFIED. Test synthetic state/timers and
+real host collision separately; see the mover verification record.
+
+## 2026-10-01: native mission/Kismet executors over installed data; struct-embedded arrays by reflection
+
+AI-assisted. Context: the Sanctuary + Maya slice needs mission, behavior and Kismet logic, and
+`MissionTracker`, `BehaviorKernel`, `Behavior_AdvanceObjectiveSet/MissionRemoteEvent/ActivateMission/
+CompleteMission` and `SequenceOp` activation are native in this build (no script), while their definitions
+are readable data. Decision: implement small native executors in `src/kismet.*` and `src/mission.*` that
+read the installed definitions through the VM's reflection-typed property reader, report world-acting ops
+at a host boundary instead of running them, and record every guess as `UNVERIFIED` (see
+`docs/verification/SANCTUARY_RPG_MISSION.md`). Do not recreate recoverable content.
+
+Parsing behaviour change (`src/vm.cpp`): arrays inside structs are decoded using the struct field's own
+reflection, and struct declarations are taken from the property declaration rather than looked up by name in
+the object's package (which only worked for structs the package happened to import; `SeqOpOutputLink.Links`
+had silently decoded as empty). No bounds check was loosened: element decoding still requires exact
+consumption of the tagged size and fails the whole property otherwise. `CMakeLists.txt` gained `kismet.cpp`,
+`mission.cpp` and a synthetic test; no dependency or license change. Verified: CTest 9/9, nine package
+comparisons, Kismet census 0 unresolved links over `Sanctuary_Dynamic`, in-engine door suite 16/16.
+Unverified: all native semantics against the original game (no paired capture yet).
