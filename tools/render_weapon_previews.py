@@ -230,24 +230,43 @@ def find_props(mic_name, roots):
     return None
 
 
-def resolve_material(mic_name, roots):
-    """Child overrides parent; returns (params, texture_dir, chain) or None."""
+def resolve_material(mic_name, roots, base_defaults=None):
+    """Child overrides parent; returns (params, texture_dir, chain) or None.
+
+    UModel exports MICs but not the base Material their chain ends at, so a
+    parameter no MIC sets is absent. `base_defaults(name)` may return that
+    Material's own parameter defaults ({"path", "scalar", "vector", "source"});
+    they fill only what every MIC left unset. params["source"] records, per
+    kind and name, the MIC or base-Material expression each value came from.
+    """
     path = find_props(mic_name, roots)
     if path is None:
         return None
     chain = []
     merged = {"scalar": {}, "vector": {}, "texture": {}}
-    current, guard = (mic_name, path), 0
+    source = {kind: {} for kind in merged}
+    current, guard, base = (mic_name, path), 0, None
     while current and guard < 8:
         name, props = current
         parent, params = parse_props(props)
         chain.append(name)
         for kind in merged:
             for key, value in params[kind].items():
-                merged[kind].setdefault(key, value)
+                if key not in merged[kind]:
+                    merged[kind][key] = value
+                    source[kind][key] = name
         nxt = find_props(parent, roots) if parent else None
         current = (parent, nxt) if nxt else None
+        base = parent if nxt is None else None
         guard += 1
+    defaults = base_defaults(base) if base and base_defaults else None
+    if defaults:
+        for kind in ("scalar", "vector"):  # texture defaults are engine stubs with no local PNG
+            for key, value in defaults[kind].items():
+                if key not in merged[kind]:
+                    merged[kind][key] = value
+                    source[kind][key] = defaults["source"][kind][key]
+    merged["source"] = source
     texture_dir = path.parents[1] / "Texture2D"
     return merged, texture_dir, chain
 
@@ -293,7 +312,7 @@ class Paint:
         if resolved is None:
             self.note = f"no UModel export of {mic or 'material'}"
             return
-        params, texdir, chain = resolved
+        params, texdir, chain = resolved  # thumbnails: no base defaults, white zone fallback below
         self.chain = chain
         vec, tex, sca = params["vector"], params["texture"], params["scalar"]
 

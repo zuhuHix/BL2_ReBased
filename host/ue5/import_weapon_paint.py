@@ -2,7 +2,9 @@
 
 OPENWILLOW_WEAPON_PAINT is prepare_weapon_paint.py's ignored local JSON.
 No mesh reimport, no directory deletion. Master_Gun's missing graph, packed
-detail channel, pattern UV1 and lighting response remain UNVERIFIED.
+detail channel, pattern UV1 and lighting response remain UNVERIFIED. The decal
+layer (data['decal'], drawn only when 'used') follows the reading spelled out
+in its 'reading' field and is UNVERIFIED as well.
 """
 import json
 import os
@@ -38,7 +40,7 @@ def apply(data):
         return value
 
 
-    def texture(parameter, normal=False, color=False):
+    def texture(parameter, normal=False, color=False, address=None):
         task = unreal.AssetImportTask()
         task.filename = data['textures'][parameter]
         task.destination_path = destination
@@ -53,15 +55,31 @@ def apply(data):
         asset.set_editor_property('srgb', color)
         if normal:
             asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
+        # Installed Texture2D AddressX/AddressY (e.g. ['TA_Clamp', 'TA_Wrap']), read by prepare_weapon_paint.py.
+        for prop, mode in zip(('address_x', 'address_y'), address or []):
+            asset.set_editor_property(prop, getattr(unreal.TextureAddress, mode.upper()))
         eal.save_loaded_asset(asset, only_if_is_dirty=False)
         return node(unreal.MaterialExpressionTextureSample, texture=asset,
             sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if normal else
                 unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if color else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
 
 
+    def place_uv1(sample, scale):
+        # UV1 * scale.xy + scale.zw, the UNVERIFIED reading of p_PatternScalePosition / p_DecalScalePosition.
+        uv = node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1, u_tiling=scale[0], v_tiling=scale[1])
+        offset = node(unreal.MaterialExpressionConstant2Vector, r=scale[2], g=scale[3])
+        shift = node(unreal.MaterialExpressionAdd)
+        mel.connect_material_expressions(uv, '', shift, 'A')
+        mel.connect_material_expressions(offset, '', shift, 'B')
+        mel.connect_material_expressions(shift, '', sample, 'UVs')
+
+
     # pattern_used false (prepare_weapon_paint.py): zone colours only, no pattern texture or blend.
     pattern = data.get('pattern_used', True)
+    decal = data.get('decal') or {}
+    use_decal = bool(decal.get('used'))
     inputs = {'Mask': texture('p_Masks'), 'Detail': texture('p_Diffuse')}
+    outputs = {}  # custom input -> (expression, output name) for non-default outputs
     if pattern:
         inputs['Pattern'] = texture('p_Pattern', color=True)
     normal = texture('p_NormalScopesEmissive', normal=True)
@@ -74,13 +92,15 @@ def apply(data):
         for name, parameter in [('PatternColor', 'p_PatternColor'), ('PatternWeight', 'p_PatternChannelScale')]:
             inputs[name] = node(unreal.MaterialExpressionConstant3Vector,
                 constant=unreal.LinearColor(*vectors[parameter][:3], 1))
-        scale = vectors['p_PatternScalePosition']
-        uv = node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1, u_tiling=scale[0], v_tiling=scale[1])
-        offset = node(unreal.MaterialExpressionConstant2Vector, r=scale[2], g=scale[3])
-        shift = node(unreal.MaterialExpressionAdd)
-        mel.connect_material_expressions(uv, '', shift, 'A')
-        mel.connect_material_expressions(offset, '', shift, 'B')
-        mel.connect_material_expressions(shift, '', inputs['Pattern'], 'UVs')
+        place_uv1(inputs['Pattern'], vectors['p_PatternScalePosition'])
+    if use_decal:
+        inputs['Decal'] = texture('p_Decal', color=True, address=decal['address'])
+        outputs['DecalAlpha'] = (inputs['Decal'], 'A')
+        for name, key in [('DecalColor', 'color'), ('DecalWeight', 'channel')]:
+            inputs[name] = node(unreal.MaterialExpressionConstant3Vector,
+                constant=unreal.LinearColor(*decal[key][:3], 1))
+        inputs['DecalReplace'] = node(unreal.MaterialExpressionConstant, r=decal['replace'])
+        place_uv1(inputs['Decal'], decal['scale_position'])
     channel = 'rgb'[data['detail_channel']]
     code = f'float d=Detail.{channel}; float low=saturate(d*2), high=saturate(d*2-1);\n'
     for zone in 'ABC':
@@ -88,21 +108,28 @@ def apply(data):
     code += '''float3 base=A*Mask.r+B*Mask.g+C*Mask.b;
     base += (1-saturate(Mask.r+Mask.g+Mask.b))*float3(.2,.2,.22);
     PATTERN_BLEND
+    DECAL_BLEND
     // Compress together to retain HDR palette hue within UE's base-color range.
     return base/(1+max(base.r,max(base.g,base.b)));
     '''
     code = code.replace('PATTERN_BLEND', 'base=lerp(base,Pattern.rgb*PatternColor*d,saturate(dot(Mask.rgb,PatternWeight)));'
                         if pattern else '// no pattern for this MIC chain')
+    # UNVERIFIED decal reading (prepare_weapon_paint.DECAL_READING): multiply, or replace as DecalReplace -> 1.
+    code = code.replace('DECAL_BLEND', 'float3 decal=Decal.rgb*DecalColor;\n    '
+                        'base=lerp(base,lerp(base*decal,decal*d,DecalReplace),saturate(dot(Mask.rgb,DecalWeight))*DecalAlpha);'
+                        if use_decal else '// no decal drawn for this MIC chain')
     effect = node(unreal.MaterialExpressionCustom, code=code,
         output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     custom_inputs = []
-    for name in inputs:
+    for name in list(inputs) + list(outputs):
         entry = unreal.CustomInput()
         entry.set_editor_property('input_name', name)
         custom_inputs.append(entry)
     effect.set_editor_property('inputs', custom_inputs)
     for name, value in inputs.items():
         mel.connect_material_expressions(value, '', effect, name)
+    for name, (value, output) in outputs.items():
+        mel.connect_material_expressions(value, output, effect, name)
     mel.connect_material_property(effect, '', unreal.MaterialProperty.MP_BASE_COLOR)
     mel.connect_material_property(normal, 'RGB', unreal.MaterialProperty.MP_NORMAL)
     for prop, value in [(unreal.MaterialProperty.MP_METALLIC, .35), (unreal.MaterialProperty.MP_ROUGHNESS, .55)]:
@@ -118,7 +145,8 @@ def apply(data):
     mesh.set_editor_property('materials', slots)
     eal.save_loaded_asset(mesh, only_if_is_dirty=False)
     unreal.log(f'OW_PAINT {recipe_id} -> {mesh_path}: {data["material_identity"]}, {len(slots)} slots, '
-               f'pattern {"used" if pattern else "not used"}, shader UNVERIFIED')
+               f'pattern {"used" if pattern else "not used"}, decal {"used" if use_decal else "not used"}, '
+               f'shader UNVERIFIED')
 
 
 data = json.loads(Path(os.environ['OPENWILLOW_WEAPON_PAINT']).read_text())
