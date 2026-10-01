@@ -32,7 +32,8 @@ public:
         enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved };
         Kind kind;
         std::string a, b, c;        // RemoteEvent: a=event; Dialog: a=event tag, b=group, c=name tag;
-                                    // SetSequence: a=provider path, b=sequence; ObjectiveSet*: a=name;
+                                    // SetSequence: a=provider path, b=sequence, c=action (CHANGE_Enable/Disable/Toggle);
+                                    // ObjectiveSet*: a=name;
                                     // StatusChanged: a=status; Reward: a=XP attribute path;
                                     // MissionWeapon*: a=MissionWeaponBalanceDefinition path
         double time = 0;
@@ -50,6 +51,9 @@ public:
     std::string description() const { return description_; }
     std::vector<std::string> dependencies() const { return dependencies_; }
     bool objectiveComplete(const std::string& objectiveName) const { return completedObjectives_.count(objectiveName) != 0; }
+    // "NotStarted", "Active" (in the active objective set, not complete) or "Complete", for an objective path of this
+    // mission; "" when the path is not one of its objectives. The mapping onto the game's objective states is UNVERIFIED.
+    std::string objectiveState(const std::string& objectivePath) const;
 
     // True when every dependency mission is in `completed` (paths).
     bool available(const std::set<std::string>& completed) const;

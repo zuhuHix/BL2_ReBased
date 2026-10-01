@@ -12,6 +12,7 @@
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -32,6 +33,8 @@ void usage() {
         "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name>) | "
         "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
         "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
+        "--slice-run <mission-path> --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
+        "--behavior-run <provider-path> --cooked <directory> <step>... | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -569,8 +572,10 @@ int main(int argc, char** argv) {
                 bool ok = true;
                 if (step == "accept") ok = slice.accept(completed);
                 else if (step == "range") ok = slice.enterRange();
+                else if (step == "spawn") ok = slice.spawnDummy();
                 else if (step == "hit:fire") ok = slice.hitDummy(true);
                 else if (step == "hit:other") ok = slice.hitDummy(false);
+                else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
                 else if (step == "turnin") ok = slice.turnIn();
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
@@ -590,11 +595,121 @@ int main(int argc, char** argv) {
             std::cout << "],\"dummy_boundary\":[";
             first = true;
             for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"dummy_boundary_calls\":[";
+            first = true;
+            for (const auto& call : slice.dummy().boundaryCalls) {
+                std::cout << (first ? "" : ",") << "{\"event\":" << quote(call.event) << ",\"class\":" << quote(call.cls)
+                          << ",\"name\":" << quote(call.name) << ",\"sequence\":" << quote(call.sequence) << ",\"fields\":{";
+                bool firstField = true;
+                for (const auto& [key, value] : call.fields) { std::cout << (firstField ? "" : ",") << quote(key) << ':' << quote(value); firstField = false; }
+                std::cout << "}}";
+                first = false;
+            }
+            std::cout << "],\"dummy_enabled_sequences\":[";
+            first = true;
+            for (const auto& name : slice.dummy().sequenceNames())
+                if (slice.dummy().sequenceEnabled(name)) { std::cout << (first ? "" : ",") << quote(name); first = false; }
             std::cout << "],\"dummy_trace\":[";
             first = true;
             for (const auto& line : slice.dummy().trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "]}\n";
             return slice.errors().empty() ? 0 : 1;
+        }
+        if (mode == "--behavior-run") {
+            // --behavior-run <provider-path> --cooked <dir> <step>...: one provider alone. Steps: enable:<seq> | disable:<seq> |
+            // tick:<s> | event:<name>[:<Property>=<object path>[,<Property>=<object path>...]] (event output values).
+            // Behavior_CompareObject runs (built in); every other behavior class is reported at the boundary.
+            if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            auto pkg = runtime.package(package->packageName);
+            const int32_t index = runtime.findExport(*pkg, argv[3]);
+            if (index <= 0) throw std::runtime_error(std::string("provider not found: ") + argv[3]);
+            vm::BehaviorProvider provider(runtime, pkg, index);
+            std::set<std::string> classes;
+            for (const auto& name : provider.sequenceNames())
+                for (const auto& behavior : provider.behaviors(name))
+                    if (behavior.cls != "WillowGame.Behavior_CompareObject") classes.insert(behavior.cls);
+            for (const auto& cls : classes) provider.reportAtBoundary(cls);
+            for (int i = 6; i < argc; ++i) {
+                const std::string step = argv[i];
+                if (step.rfind("enable:", 0) == 0) provider.setSequenceEnabled(step.substr(7), true);
+                else if (step.rfind("disable:", 0) == 0) provider.setSequenceEnabled(step.substr(8), false);
+                else if (step.rfind("tick:", 0) == 0) provider.tick(std::stod(step.substr(5)));
+                else if (step.rfind("event:", 0) == 0) {
+                    const std::string rest = step.substr(6);
+                    const auto colon = rest.find(':');
+                    std::map<std::string, std::string> outputs;
+                    if (colon != std::string::npos) {
+                        std::stringstream list(rest.substr(colon + 1));
+                        std::string pair;
+                        while (std::getline(list, pair, ',')) {
+                            const auto eq = pair.find('=');
+                            if (eq == std::string::npos) usage();
+                            outputs[pair.substr(0, eq)] = pair.substr(eq + 1);
+                        }
+                    }
+                    provider.fireEvent(rest.substr(0, colon), outputs);
+                } else usage();
+            }
+            const auto list = [](const char* name, const std::vector<std::string>& lines) {
+                std::cout << ",\"" << name << "\":[";
+                bool first = true;
+                for (const auto& line : lines) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+                std::cout << "]";
+            };
+            std::cout << "{\"provider\":" << quote(provider.path()) << ",\"values_decoded\":" << (provider.valuesDecoded() ? "true" : "false");
+            list("trace", provider.trace);
+            list("boundary", provider.boundary);
+            list("errors", provider.errors);
+            list("diagnostics", provider.diagnostics);
+            std::cout << "}\n";
+            return provider.errors.empty() ? 0 : 1;
+        }
+        if (mode == "--behavior-dump") {
+            // --behavior-dump <provider-path> --cooked <dir>: sequences, enable conditions, decoded variables (including
+            // the untagged value block) and every property-to-variable link, as the executor sees them.
+            if (argc != 6 || std::string(argv[4]) != "--cooked") usage();
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            auto pkg = runtime.package(package->packageName);
+            const int32_t index = runtime.findExport(*pkg, argv[3]);
+            if (index <= 0) throw std::runtime_error(std::string("provider not found: ") + argv[3]);
+            vm::BehaviorProvider provider(runtime, pkg, index);
+            std::cout << "{\"provider\":" << quote(provider.path()) << ",\"values_decoded\":" << (provider.valuesDecoded() ? "true" : "false")
+                      << ",\"diagnostics\":[";
+            bool first = true;
+            for (const auto& line : provider.diagnostics) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"sequences\":[";
+            first = true;
+            for (const auto& name : provider.sequenceNames()) {
+                const auto condition = provider.enableCondition(name);
+                std::cout << (first ? "" : ",") << "{\"name\":" << quote(name) << ",\"enabled_on_spawn\":"
+                          << (provider.sequenceEnabled(name) ? "true" : "false") << ",\"condition\":"
+                          << quote(condition ? condition->cls->path + ":" + condition->name : "") << ",\"variables\":[";
+                bool firstVariable = true;
+                for (const auto& variable : provider.variables(name)) {
+                    std::cout << (firstVariable ? "" : ",") << "{\"type\":" << quote(variable.type) << ",\"name\":" << quote(variable.name)
+                              << ",\"word\":" << variable.word << ",\"object\":" << quote(variable.object) << "}";
+                    firstVariable = false;
+                }
+                std::cout << "],\"behavior_inputs\":[";
+                bool firstLink = true;
+                for (const auto& behavior : provider.behaviors(name))
+                    for (const auto& link : behavior.variables) {
+                        std::cout << (firstLink ? "" : ",") << "{\"behavior\":" << quote(behavior.name) << ",\"property\":" << quote(link.property)
+                                  << ",\"link\":" << quote(link.type) << ",\"variables\":[";
+                        for (size_t v = 0; v < link.variables.size(); ++v) std::cout << (v ? "," : "") << link.variables[v];
+                        std::cout << "]}";
+                        firstLink = false;
+                    }
+                std::cout << "]}";
+                first = false;
+            }
+            std::cout << "]}\n";
+            return provider.valuesDecoded() ? 0 : 1;
         }
         if (mode == "--mover-event") {
             // Stock activation probe: a remote event through the action's installed Kismet sequence, then completion.

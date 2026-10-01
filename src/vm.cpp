@@ -335,6 +335,10 @@ Value Runtime::zeroStruct(const std::string& name) {
     return value;
 }
 
+namespace {
+void applyStructDefaults(Runtime& runtime, const StructDef* def, Value& value, unsigned depth);
+}
+
 Value Runtime::zeroOfDef(const StructDef* def) {
     Value value = zeroStruct(def ? def->name : "");
     if (def && !nativeStruct(def->name)) {
@@ -343,6 +347,7 @@ Value Runtime::zeroOfDef(const StructDef* def) {
             aggregate.names.push_back(field.name);
             aggregate.values.push_back(zeroValue(field));
         }
+        applyStructDefaults(*this, def, value, 0);
     }
     return value;
 }
@@ -597,26 +602,41 @@ struct TagReader {
         return Value::makeObject(runtime.resource(package, ref));
     }
 
-    int byteFromEnum(const std::string& enumName, const std::string& valueName) {
-        // Enum exports hold [NetIndex][None][Next][count][FName * count]; a value's index is its position.
+    // Enum exports hold [NetIndex][None][Next][count][FName * count]; a value's index is its position (0 if absent).
+    static int enumPosition(const Package& owner, const ::Object& object, const std::string& valueName) {
+        size_t at = size_t(object.offset) + 16;
+        if (at + 4 > size_t(object.offset) + size_t(object.size)) return 0;
+        const int32_t count = int32_t(u32At(owner, at));
+        at += 4;
+        for (int32_t i = 0; i < count && at + 8 <= size_t(object.offset) + size_t(object.size); ++i, at += 8) {
+            const int32_t nameIndex = int32_t(u32At(owner, at));
+            if (nameIndex >= 0 && size_t(nameIndex) < owner.names.size() && owner.names[size_t(nameIndex)] == valueName)
+                return i;
+        }
+        return 0;
+    }
+
+    int byteFromEnum(const std::string& enumName, const std::string& valueName, const PropertyDecl* decl = nullptr) {
         const auto& table = runtime.indexOf(*package);
         const auto candidates = table.byName.find(lowered(enumName));
-        if (candidates == table.byName.end()) return 0;
-        for (const int32_t index : candidates->second) {
-            const auto& object = package->exports[size_t(index) - 1];
-            if (object.name != enumName || table.classNames[size_t(index) - 1] != "Enum") continue;
-            size_t at = size_t(object.offset) + 16;
-            if (at + 4 > size_t(object.offset) + size_t(object.size)) return 0;
-            const int32_t count = int32_t(u32At(*package, at));
-            at += 4;
-            for (int32_t i = 0; i < count && at + 8 <= size_t(object.offset) + size_t(object.size); ++i, at += 8) {
-                const int32_t nameIndex = int32_t(u32At(*package, at));
-                if (nameIndex >= 0 && size_t(nameIndex) < package->names.size() && package->names[size_t(nameIndex)] == valueName)
-                    return i;
+        if (candidates != table.byName.end())
+            for (const int32_t index : candidates->second) {
+                const auto& object = package->exports[size_t(index) - 1];
+                if (object.name != enumName || table.classNames[size_t(index) - 1] != "Enum") continue;
+                return enumPosition(*package, object, valueName);
             }
-            return 0;
+        // Enum declared in another package: follow the declaring ByteProperty's enum reference (typeRef), which
+        // must name an Enum export called `enumName` (structural check). Without a declaration it stays 0.
+        if (decl && decl->type == "ByteProperty" && decl->typeRef && decl->package) {
+            const auto target = runtime.resolveRef(decl->package, decl->typeRef);
+            if (target) {
+                const auto& owner = *target.package;
+                const auto& object = owner.exports[size_t(target.index) - 1];
+                if (object.name == enumName && runtime.indexOf(owner).classNames[size_t(target.index) - 1] == "Enum")
+                    return enumPosition(owner, object, valueName);
+            }
         }
-        return 0;  // enum declared in another package: UNVERIFIED, resolved as 0
+        return 0;  // no declaration to resolve the enum through: UNVERIFIED, resolved as 0
     }
 
     // `known` is the struct declaration the caller already resolved through reflection; a name lookup in this
@@ -640,13 +660,15 @@ struct TagReader {
         const StructDef* structDef = known ? known : findStruct(type);
         if (structDef)
             for (const auto& field : structDef->fields) declared[lower(field.name)] = field;
-        // Start from the struct's zero value so untouched fields read as defaults.
+        // Start from the struct's default values (zero, then the struct's own default tags) so untouched fields
+        // read as defaults.
         if (const StructDef* def = structDef) {
             auto& aggregate = value.mut();
             for (const auto& field : def->fields) {
                 aggregate.names.push_back(field.name);
                 aggregate.values.push_back(runtime.zeroValue(field));
             }
+            applyStructDefaults(runtime, def, value, depth + 1);
         }
         tagged(value, declared, depth + 1);
         return value;
@@ -736,7 +758,7 @@ void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_
             else if (type == "ObjectProperty" || type == "ComponentProperty" || type == "InterfaceProperty") value = tags.reference(false);
             else if (type == "ClassProperty") value = tags.reference(true);
             else if (type == "ByteProperty" && detail == "None") { tags.reader.require(1); value = Value::makeByte(tags.reader.bytes()[tags.reader.pos++]); }
-            else if (type == "ByteProperty") value = Value::makeByte(tags.byteFromEnum(detail, tags.name()));
+            else if (type == "ByteProperty") value = Value::makeByte(tags.byteFromEnum(detail, tags.name(), decl));
             else if (type == "StructProperty") value = tags.structure(detail, 0, decl ? structAt(decl->package, decl->typeRef) : nullptr);
             else if (type == "ArrayProperty") {
                 const int32_t length = tags.reader.i32();
@@ -805,7 +827,7 @@ void TagReader::tagged(Store& target, const std::unordered_map<std::string, Prop
             else if (type == "ObjectProperty" || type == "ComponentProperty" || type == "InterfaceProperty") value = reference(false);
             else if (type == "ClassProperty") value = reference(true);
             else if (type == "ByteProperty" && detail == "None") { reader.require(1); value = Value::makeByte(reader.bytes()[reader.pos++]); }
-            else if (type == "ByteProperty") value = Value::makeByte(byteFromEnum(detail, name()));
+            else if (type == "ByteProperty") value = Value::makeByte(byteFromEnum(detail, name(), found != declared.end() ? &found->second : nullptr));
             else if (type == "StructProperty") value = structure(detail, depth + 1, found != declared.end() ? runtime.structAt(found->second.package, found->second.typeRef) : nullptr);
             else if (type == "ArrayProperty") {
                 // Arrays inside structs (e.g. SeqOpOutputLink.Links) are typed by the struct's own reflection.
@@ -828,6 +850,31 @@ void TagReader::tagged(Store& target, const std::unordered_map<std::string, Prop
         if (Value* slot = target.field(propertyName)) *slot = std::move(value);
     }
 }
+
+namespace {
+// A ScriptStruct export ends with the struct's default values as a tagged property stream: a 48-byte header whose
+// word at +44 is 0, StructFlags (u32), then the tags and None, ending exactly at the end of the export. FITTED from
+// the packages (research/struct_defaults_census.py: 1,275 of 1,275 ScriptStructs of Core, Engine, GameFramework,
+// GearboxFramework and WillowGame). Only applied when that whole stream is consumed exactly; otherwise the zero
+// value stands. Arrays inside struct defaults are not typed here (no reflection hook) and stay empty.
+void applyStructDefaults(Runtime& runtime, const StructDef* def, Value& value, unsigned depth) {
+    if (!def || !def->package || def->index <= 0 || depth > 16) return;
+    const auto& exported = def->package->exports[size_t(def->index) - 1];
+    if (exported.size < 52) return;
+    const size_t start = size_t(exported.offset), end = start + size_t(exported.size);
+    if (u32At(*def->package, start + 44) != 0) return;
+    std::unordered_map<std::string, PropertyDecl> declared;
+    for (const auto& field : def->fields) declared[lower(field.name)] = field;
+    TagReader tags(runtime, def->package);
+    tags.reader.pos = start + 52;
+    tags.reader.limit = end;
+    Value candidate = value;
+    try {
+        tags.tagged(candidate, declared, depth + 1);
+    } catch (const std::exception&) { return; }
+    if (tags.reader.pos == end) value = std::move(candidate);
+}
+} // namespace
 
 ObjectPtr Runtime::resource(const std::shared_ptr<const Package>& pkg, int32_t ref) {
     if (!pkg || !ref) return nullptr;

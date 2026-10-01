@@ -86,10 +86,15 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
                  refPath(r.property(*b.object, "NameTag")));
             return std::nullopt;
         });
-        provider.handle("GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+        // Action is an ITargetable.EChangeStatus (CHANGE_Toggle, CHANGE_Enable, CHANGE_Disable; class default Enable).
+        const auto actions = enumNames(runtime_, "Engine", "ITargetable.EChangeStatus");
+        provider.handle("GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", [this, actions](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
             const Value* path = p.runtime().property(*b.object, "ProviderDefinitionPathName");
             const Value* components = path ? path->field("PathComponentNames") : nullptr;
-            emit(Effect::Kind::SetSequence, components ? components->s : "", text(p.runtime(), *b.object, "SequenceName"));
+            const Value* action = p.runtime().property(*b.object, "Action");
+            const int64_t index = action ? action->integer() : -1;
+            emit(Effect::Kind::SetSequence, components ? components->s : "", text(p.runtime(), *b.object, "SequenceName"),
+                 index >= 0 && size_t(index) < actions.size() ? actions[size_t(index)] : "");
             return std::nullopt;
         });
     }
@@ -187,6 +192,16 @@ bool MissionSystem::completeObjectiveByPath(const std::string& objectivePath) {
             if (set.objectivePaths[i] == objectivePath) return completeObjective(set.objectives[i]);
     errors.push_back("objective is not part of this mission: " + objectivePath);
     return false;
+}
+
+std::string MissionSystem::objectiveState(const std::string& objectivePath) const {
+    for (const auto& set : sets_)
+        for (size_t i = 0; i < set.objectivePaths.size(); ++i) {
+            if (set.objectivePaths[i] != objectivePath) continue;
+            if (completedObjectives_.count(set.objectives[i])) return "Complete";
+            return status_ == Status::Active && set.path == activeSet_ ? "Active" : "NotStarted";
+        }
+    return "";
 }
 
 bool MissionSystem::customEvent(const std::string& name) {
