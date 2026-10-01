@@ -578,6 +578,9 @@ struct TagReader {
     const std::shared_ptr<const Package>& package;
     Reader reader;
 
+    // Resolves an array property's element declaration through reflection (Runtime::readProperty is private).
+    std::function<std::optional<PropertyDecl>(const PropertyDecl&)> arrayInner;
+
     TagReader(Runtime& r, const std::shared_ptr<const Package>& p) : runtime(r), package(p), reader(p->data) {}
 
     std::string name() { return package->name(reader); }
@@ -616,7 +619,9 @@ struct TagReader {
         return 0;  // enum declared in another package: UNVERIFIED, resolved as 0
     }
 
-    Value structure(const std::string& type, unsigned depth) {
+    // `known` is the struct declaration the caller already resolved through reflection; a name lookup in this
+    // package only works for structs the package happens to import.
+    Value structure(const std::string& type, unsigned depth, const StructDef* known = nullptr) {
         if (depth > 16) throw RuntimeError("struct nesting too deep");
         if (const auto* layout = nativeStruct(type)) {
             Value value = Value::makeStruct(type);
@@ -632,10 +637,11 @@ struct TagReader {
         // Other structs are a nested run of tagged properties ended by "None".
         Value value = Value::makeStruct(type);
         std::unordered_map<std::string, PropertyDecl> declared;
-        if (const StructDef* def = findStruct(type))
-            for (const auto& field : def->fields) declared[lower(field.name)] = field;
+        const StructDef* structDef = known ? known : findStruct(type);
+        if (structDef)
+            for (const auto& field : structDef->fields) declared[lower(field.name)] = field;
         // Start from the struct's zero value so untouched fields read as defaults.
-        if (const StructDef* def = findStruct(type)) {
+        if (const StructDef* def = structDef) {
             auto& aggregate = value.mut();
             for (const auto& field : def->fields) {
                 aggregate.names.push_back(field.name);
@@ -677,7 +683,7 @@ struct TagReader {
         if (innerType == "BoolProperty") return Value::makeBool(reader.u32() != 0);
         if (innerType == "StructProperty" && innerDecl) {
             const auto* def = runtime.structAt(innerDecl->package, innerDecl->typeRef);
-            return structure(def ? def->name : "", depth + 1);
+            return structure(def ? def->name : "", depth + 1, def);
         }
         throw RuntimeError("unsupported array element type " + innerType);
     }
@@ -692,6 +698,11 @@ void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_
     if (exportObject.size < 0 || prefix > size_t(exportObject.size) || size_t(exportObject.size) - prefix < 8)
         throw RuntimeError("object property prefix outside export");
     TagReader tags(*this, pkg);
+    tags.arrayInner = [this](const PropertyDecl& decl) -> std::optional<PropertyDecl> {
+        const auto target = resolveRef(decl.package, decl.typeRef);
+        if (!target.package) return std::nullopt;
+        return readProperty(target.package, target.index);
+    };
     tags.reader.pos = size_t(exportObject.offset) + prefix;
     tags.reader.limit = size_t(exportObject.offset) + size_t(exportObject.size);
     std::unordered_map<std::string, const PropertyDecl*> decls;
@@ -726,7 +737,7 @@ void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_
             else if (type == "ClassProperty") value = tags.reference(true);
             else if (type == "ByteProperty" && detail == "None") { tags.reader.require(1); value = Value::makeByte(tags.reader.bytes()[tags.reader.pos++]); }
             else if (type == "ByteProperty") value = Value::makeByte(tags.byteFromEnum(detail, tags.name()));
-            else if (type == "StructProperty") value = tags.structure(detail, 0);
+            else if (type == "StructProperty") value = tags.structure(detail, 0, decl ? structAt(decl->package, decl->typeRef) : nullptr);
             else if (type == "ArrayProperty") {
                 const int32_t length = tags.reader.i32();
                 if (length < 0 || length > 1'000'000) throw RuntimeError("invalid array length");
@@ -795,14 +806,25 @@ void TagReader::tagged(Store& target, const std::unordered_map<std::string, Prop
             else if (type == "ClassProperty") value = reference(true);
             else if (type == "ByteProperty" && detail == "None") { reader.require(1); value = Value::makeByte(reader.bytes()[reader.pos++]); }
             else if (type == "ByteProperty") value = Value::makeByte(byteFromEnum(detail, name()));
-            else if (type == "StructProperty") value = structure(detail, depth + 1);
+            else if (type == "StructProperty") value = structure(detail, depth + 1, found != declared.end() ? runtime.structAt(found->second.package, found->second.typeRef) : nullptr);
+            else if (type == "ArrayProperty") {
+                // Arrays inside structs (e.g. SeqOpOutputLink.Links) are typed by the struct's own reflection.
+                const int32_t length = reader.i32();
+                if (length < 0 || length > 1'000'000) throw RuntimeError("invalid array length");
+                value = Value::makeArray();
+                std::optional<PropertyDecl> inner;
+                if (found != declared.end() && arrayInner) inner = arrayInner(found->second);
+                for (int32_t i = 0; i < length; ++i) {
+                    if (!inner) throw RuntimeError("array element type unknown");
+                    value.elements().push_back(element(inner->type, &*inner, depth));
+                }
+            }
             else ok = false;
             if (ok && reader.pos != end) ok = false;
         } catch (const std::exception&) { ok = false; }
         reader.limit = savedLimit;
         reader.pos = end;
         if (!ok) continue;
-        (void)found;
         if (Value* slot = target.field(propertyName)) *slot = std::move(value);
     }
 }

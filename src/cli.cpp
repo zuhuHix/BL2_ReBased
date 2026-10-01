@@ -4,6 +4,7 @@
 #include "vm.hpp"
 #include "inventory_navigation.hpp"
 #include "mover.hpp"
+#include "kismet.hpp"
 
 #include <fstream>
 #include <cmath>
@@ -25,6 +26,7 @@ void usage() {
         "--run-batch <file> --cooked <directory> | "
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
+        "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name>) | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -451,6 +453,43 @@ int main(int argc, char** argv) {
             }
             std::cout << "]}\n";
             return failed ? 1 : 0;
+        }
+        if (mode == "--kismet-run") {
+            // Runs one installed Kismet sequence from an entry point. World-acting ops are recorded, not run.
+            if (argc < 8 || std::string(argv[4]) != "--cooked") usage();
+            std::filesystem::path cooked = argv[5];
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::Kismet kismet(runtime, runtime.package(package->packageName), argv[3]);
+            std::vector<std::string> hostCalls;
+            kismet.handle("Engine.SequenceAction", [&hostCalls](vm::Kismet& k, vm::Kismet::Op& op, int input) {
+                hostCalls.push_back(op.cls + ":" + op.name + " <- " + k.inputDesc(op, input));
+            });
+            const std::string entry = argv[6];
+            size_t matched = 0;
+            if (entry == "--remote" && argc == 8) matched = kismet.remoteEvent(argv[7]);
+            else if (entry == "--mission" && argc == 9) matched = kismet.missionRemoteEvent(argv[7], argv[8]);
+            else if (entry == "--op" && argc == 8) {
+                auto* op = kismet.find(argv[7]);
+                if (op) { kismet.activateEvent(*op); matched = 1; }
+            } else usage();
+            kismet.run();
+            std::cout << "{\"sequence\":" << quote(argv[3]) << ",\"ops\":" << kismet.ops().size()
+                      << ",\"entry_matches\":" << matched << ",\"executed\":" << kismet.executed << ",\"trace\":[";
+            bool first = true;
+            for (const auto& line : kismet.trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"host_boundary\":[";
+            first = true;
+            for (const auto& line : hostCalls) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"errors\":[";
+            first = true;
+            for (const auto& line : kismet.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"log\":[";
+            first = true;
+            for (const auto& line : runtime.log) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}\n";
+            return kismet.errors.empty() && matched ? 0 : 1;
         }
         if (mode == "--run") {
             // Runs one script function on the VM and prints its result and log (Phase 2; see docs/verification).

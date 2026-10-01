@@ -1,0 +1,19 @@
+{
+  "include": [
+    "^MissionTracker$",
+    "^MissionDefinition$",
+    "^Mission(Objective|ObjectiveSet|Directives)[A-Za-z]*Definition$",
+    "^Behavior_.*(Mission|Objective).*$",
+    "^BehaviorSequenceEnableByMission$",
+    "^SequenceEventEnableByMission$",
+    "^WillowSeqEvent_MissionRemoteEvent$",
+    "^WillowSeqAct_MissionCustomEvent$",
+    "^SeqEvent_RemoteEvent$",
+    "^SeqAct_ActivateRemoteEvent$",
+    "^WillowDialogAct_MissionSwitch$",
+    "^MissionRewardGFxObject$",
+    "^WillowMissionItem$"
+  ],
+  "exclude": [],
+  "max_detailed": 400
+}
