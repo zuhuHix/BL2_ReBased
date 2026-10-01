@@ -236,3 +236,153 @@ python research/script_disasm.py WillowGame.upk LiftActionSkill.PhaseLockTarget 
 python tests/prepare_action_skill_test.py
 python tests/skill_stats_test.py
 ```
+
+## Stock presentation census (2026-10-02)
+
+AI-assisted (Claude). Read-only census of what the installed data and script say Phaselock *shows*: the bubble,
+the effects, the lifted target's animation and Maya's first-person cast. **No game capture, no UE run.** Sources:
+`ow-package --properties` (tagged reader, with a local array schema), `--behavior-dump`, and `research/script_disasm.py`
+on `LiftActionSkill`, `SpecialMove_PhaseLock` and `SpecialMove_FirstPerson`. Listings, dumps and exports stay under
+ignored `local/phaselock/census/` and `local/phaselock/umodel-test/`. Script behaviour is summarised in our own words.
+Every reading below is `UNVERIFIED` until a game capture confirms it. All objects are in `GD_Siren_Streaming_SF.upk`
+unless noted; a few FX assets are imports exported by `Startup.upk`.
+
+### What the archetype names
+
+`ActionSkill_Phaselock` (with `Default__LiftActionSkill` in `WillowGame.upk` for anything it does not override)
+names every presentation piece:
+
+| Piece | Object / value |
+|---|---|
+| First-person hand effect | `FX_CHAR_Siren.Particles.Part_SirenASHandOrb` (miss: `Part_SirenASHandFizzle`), socket `LilithMeleeFX` on the arms, small offset, scale 0.35 (class defaults) |
+| Third-person hand effect | the same templates at bone `Bip01_L_Hand` |
+| Bubble | `Part_SirenASEnemyOrbBegin` -> `Part_SirenASEnemyOrb` (loop) -> `Part_SirenASEnemyOrbEnd`; `BubbleFXScale` 66.7, intro 0.2 s, outro overlap 0.2 s |
+| Bubble parameters | particle parameters `PhaselockLifeTime` (loop lifetime) and `SphereCollapse` (0 -> `MaxCollapseValue` 0.75 over `CollapseDuration` 2 s) |
+| Light | `PhaselockLight` (a `PointLightComponent`; class default radius 500, brightness 4, blue-violet, no shadows) |
+| Maya's animation | `PhaselockSMD_Hit` `Misc.Phaselock_1st3rd_SM` (third person `AA_PhaseLock`, first person `Misc.Anim_Phaselock` = arms sequence `Phase_Lock_Lift`); miss: `Phaselock_Fizzle_1st3rd_SM` (`AA_PhaseLock_Fail` / `Phase_Lock_Fail`); both block weapon actions |
+| Target animation | `PhaseLockDef_Default` (`HeightFromGround` 200, `DropTime` 0.5) with `SpecialMove_PhaseLock` names `PhaseLock_Lift` (blend-in 0.4 s), `PhaseLock_Loop` (loops), `PhaseLock_Fall` (stops on last frame), `PhaseLock_Land` |
+
+The provider's own effects (see the event table above) add `Part_PhaseLockScreenEffect` (a screen particle shown on
+`OnSelectedTarget`, hidden on `OnActionSkillDeactivated`), `Part_PhaseLock_Miss_Impact` on a miss,
+`Part_PhaseLock_EnemyCannotBeLocked` on a blocked target, and sounds (names only):
+`Ak_Play_FX_Player_Phaselock_Activate`, `_Loop`, `_Collapse`, `Ak_Play_FX_Maya_Phaselock_False_Start`.
+
+### Bubble chain (script, our summary)
+
+- Nothing is drawn around the target during the 0.7 s lift except the light. `LockTarget` spawns the bubble.
+- `SpawnBubbleFX` spawns an emitter at the lift end point with the intro template. Its draw scale is the lifted
+  pawn's mesh bounds sphere radius divided by `BubbleFXScale`, so the bubble follows the body size. After
+  `BubbleFXIntroTime` it changes to the loop template.
+- The loop emitter's life span and its `PhaselockLifeTime` parameter are the locked state's duration plus the
+  overlap. Each tick `UpdateEffects` raises `SphereCollapse` toward 0.75. The rise is timed to end with the lock, over
+  the last `CollapseDuration`.
+- `StartOutro` destroys the loop and spawns the end template, which holds the twirls, smoke and a closing flash.
+- `UpdatePhaselockLight` attaches the light to the lifted pawn. It ramps the light up over the lift, holds it while
+  locked and ramps it down over the outro.
+- Loop template emitters: two 4-frame sprite "spikey" sheets (additive and modulated), a core-colour sprite, a
+  sprite named `Sphere` using `Mat_SirenEnemyOrb` (texture `PhaseLockBubble_Dif_Tex`, its dynamic parameter driven by
+  `SphereCollapse`), a modulate-black sprite, and an orbiting twirl sprite (`FX_CHAR_Lilith.Materials.Mat_PowerUpTwirls`).
+  So the stock bubble is **camera-facing sprites with a bubble texture, not a mesh sphere**. Sizes read from the baked
+  tables are in the 200-500 range before the draw scale (layout fitted, below).
+
+### Target-side animation chain (script, our summary)
+
+- `LiftTarget` picks the `PhaseLockDefinition`: the body class's own definition, then the `LiftBodyMap` body tag
+  (Loader, Probe, Rakk, Gyrocopter), else `PhaseLockDef_Default`. It plays the lift special move, queues the loop and
+  switches the pawn to a flying physics mode with world collision off.
+- `UpdateLiftedPawnMeshOffset` runs after the snap part of the lift. It eases the mesh translation (VInterp speed 5)
+  so that the mesh's bounds centre moves onto the pawn's location, which centres the body in the bubble.
+- `DropTarget` restores default physics, zeroes velocity and plays the drop move stretched to `DropTime`. If the
+  target cannot play drop animations, it stops the loop instead. `CheckLandTarget` plays the land move once the pawn
+  walks again.
+- These names resolve per enemy AnimSet. Seen with `ow-package`: `Anim_Psycho.Base_Pyscho` (Lift 0.87 s, Loop 3.03 s,
+  Fall 0.2 s, Land 0.83 s), `Anim_Nomad.Base_Nomad`, `Anim_Goliath.Base_Goliath` and `Anim_Spiderant_NEW.Shared_Spiderant`
+  (`SouthernShelf_Dynamic.upk`, `IceCanyon_Combat.upk`). 77 packages carry the names.
+- **The Sanctuary target dummy has none of them.** `GD_TargetDummy.Character.Pawn_TargetDummy`'s mesh component uses
+  only `Anim_Sanctuary.Anim_Fink`, and no sequence in `Sanctuary_Dynamic.upk` is named `PhaseLock_*`. Its body class
+  (`BodyTag_Psycho`) has no own `PhaseLockDef`. So the stock data would ask for the default names and find no clip on
+  the slice's dummy. What the engine then shows (probably the idle pose kept), and whether the dummy is liftable at
+  all (`Flag_Skills_CanPhaseLock`), is `UNVERIFIED`. The Psycho-shaped `GD_PsychoShared.Anims.PhaseLockAnim_PsychoShared_*`
+  moves exist in the same package but nothing found here references them.
+
+### Maya's first-person cast: what is attached to the arms
+
+- `Phase_Lock_Lift` (arms AnimSet `Anim_Siren.Siren_1st`, 26 frames, 0.87 s) has one notify at 0.25 s. It is an
+  `AnimNotify_UseBehavior` that fires the custom event `PlayPhaselockHandFXFirstPerson` on the action skill.
+  `Phase_Lock_Fail` fires the same event at 0.05 s.
+- `LiftActionSkill.RunCustomEvent` handles that event. It creates a particle component on the arms at socket
+  `LilithMeleeFX`, with the first-person offset and scale. It sets the component to foreground depth and owner-only
+  visibility, and activates `Part_SirenASHandOrb` (fizzle template on a miss). The component is removed when the
+  system finishes.
+- The socket is on `Char_Siren.Hands_Siren`, bone `L_Weapon_Bone`, a few units out.
+- Hand-orb emitters: three mesh-particle ribbons (`FX_CHAR_Siren.Meshes.Smesh_Twirly_01/02/03` with
+  `Mat_SirenEnergyRibbons`), an energy swirl, a suction sprite, a modulate-black sprite, an inner-orb sprite
+  (`Mat_SirenHandInnerOrb`), a short sub-UV "after smoke" burst and three glow/flash sprites.
+- `Skill_Phaselock`'s `OnActivated` enables `GD_Siren_Skills.CoordinatedEffects.Phaselock_TatooGlow`. That effect
+  drives the material scalar `p_EnablePowerEmissive` over 1 s (rises to about 0.8 near the middle, back to 0). The
+  four curve keys are stored out of time order and are read as stored.
+- `Char_Siren.Mati_Siren_Hands` (parent `Common_Materials.Player.Master_Player`) carries that parameter at 0 and an
+  HDR cyan `p_PowerEmissiveColor`. So the arms' tattoo is expected to flash cyan during the cast. That the coordinated
+  effect reaches the first-person arms mesh is native and `UNVERIFIED`. Which mask channel limits it to the tattoo was
+  not read.
+- **Likely "missing something":** the hand orb at `LilithMeleeFX` from 0.25 s into the arm clip, plus the 1 s cyan
+  tattoo glow on the arm material. The full-screen `Part_PhaseLockScreenEffect` also starts when the target is
+  selected. The host draws a violet beam from `L_Hand` instead, and has no tattoo glow and no screen effect.
+
+### Online references (local only)
+
+On 2026-10-02 the maintainer allowed looking online. The images and their sources are under ignored
+`local/phaselock/ref_online/` (`sources.txt`). Promotional renders show the tattooed left arm glowing cyan with a
+violet orb and orbiting ribbons in the hand, which fits `Part_SirenASHandOrb` plus `Phaselock_TatooGlow`. YouTube
+auto-frames show, in first person, an enemy inside a violet sphere with a dark core (through a scope) and a lifted
+Bullymong with limbs spread while the frame is washed out pale. These are third-party, low-resolution frames. They
+support which effects are visible but are not a capture and verify no timing or value.
+
+### Data layout lead: baked distributions (fitted, UNVERIFIED)
+
+Cooked emitter modules keep no distribution objects (`Distribution` is None). The values are only in each
+`RawDistributionFloat/Vector.LookupTable` (read as a float array). The tables fit this pattern: two leading values
+(the minimum and maximum over all entries), then samples of 1 (float) or 3 (vector) values, or min/max pairs for
+uniform distributions, spaced by `LookupTableTimeScale`. Example: a 23-entry alpha table with time scale 20 is 2
+range values plus 21 samples over the particle's life. The tagged reader shows no `Op`, entry count or chunk size,
+so constant, curve and uniform tables cannot be told apart from the data alone yet. Spawn rates are 0 in the bubble
+emitters, so the particles come from `BurstList`, which the reader does not decode. `ParticleModuleParameterDynamic.DynamicParams`
+and `ParticleSystem.LODSettings` are not decoded either.
+
+### What UModel build 1590 exports here (timed, 2026-10-02)
+
+| Command | Time | Result |
+|---|---|---|
+| `-export -game=border -uncook -groups -png -gltf GD_Siren_Streaming_SF.upk` | 3.3 s | 158/158 supported objects: 107 textures, 33 materials and 8 material instances (`.mat` heuristic), 7 static meshes, 3 skeletal meshes. `ParticleSystem` (36 in the package) is an unknown class and is not exported; AnimSets are skipped in glTF mode. 12 import warnings (textures and materials outside the package, for example `PhaseLockScreenMask02_Dif_Tex`, `EnergyOrbReflect_Cube`) |
+| Targeted from `Startup.upk`: `Mat_EnemyOrbCoreColor`, `Mat_SirenSuction`, `Mat_SirenGlowMOD`, `Mat_SirenHandGlow`, `Smesh_Twirly_01` | 0.1-0.2 s each | all exported with their textures |
+| `Mat_SirenOrbBlackMOD` | 0.1 s | skipped ("empty parameters": a material with no texture parameter) |
+| `Part_SirenASEnemyOrb ParticleSystem` | 0.1 s | "no supported objects" |
+| `-md5 ... Siren_1st AnimSet`; `-md5 SouthernShelf_Dynamic.upk Base_Pyscho AnimSet` | 0.1 s; 1.3 s | exported, including `Phase_Lock_Lift`/`_Fail` and the four Psycho `PhaseLock_*` clips |
+
+So UModel provides the bubble's and hand orb's textures, the twirl meshes, the arms and Psycho clips, and heuristic
+material slots. It provides no emitter structure, module values or material graphs. The material `.mat` files name
+textures only (for example `Mat_SirenEnemyOrb`: `PhaseLockBubble_Dif_Tex`). They do not show blend modes, the
+`SphereCollapse` dynamic-parameter wiring or depth bias.
+
+### Bounded host plan (not started)
+
+1. **Can be imported now (UModel plus the existing glTF/md5 tools):** the bubble and hand-orb textures, the
+   `Smesh_Twirly_01-03` meshes, the Psycho `PhaseLock_*` clips (for a Psycho-shaped target; the slice dummy has none),
+   and the arms are already imported.
+2. **Arm effect, smallest step:** play a host stand-in for the hand orb on `LilithMeleeFX` at 0.25 s into
+   `Phase_Lock_Lift`. It would be a Niagara or mesh assembly with the imported textures and twirl meshes, foreground
+   and owner-only. Separately, drive a cyan emissive pulse on the arms material with the decoded 1 s curve.
+   Both use only numbers read above. The look of the emitters stays a host approximation until step 4.
+3. **Bubble:** replace the 220 cm `M_OW_FxAdditive` sphere with camera-facing sprites using
+   `PhaseLockBubble_Dif_Tex` and the spike sheets. Scale them by mesh bounds radius / 66.7. Spawn them at the lock
+   (not at the cast), with an intro of 0.2 s, an end burst at the outro and the collapse parameter over the last 2 s.
+   The point light (radius 500, brightness 4) was removed earlier for pooling under Lumen; re-adding it needs a
+   Lumen-aware choice.
+4. **Needs decoding first, for anything closer:** the `RawDistribution` table header (op, element count, chunk size)
+   and `BurstList` (spawn counts), `ParticleModuleParameterDynamic.DynamicParams`, the remaining module properties
+   (`Required` sub-UV and alignment are already read), and the material graphs of the FX materials
+   (blend mode, how `SphereCollapse` and the dynamic parameter are used). A `research/` reader for these is the
+   bounded next step. A converter to Niagara is a separate, larger task.
+5. **Target animation:** use the `PhaseLockDefinition` chain (lift with blend-in, queued loop, drop stretched to
+   0.5 s, land on walking) and the mesh-centring rule. For the slice dummy, decide with the maintainer whether a
+   Psycho-shaped dummy borrows the Psycho clips: stock data gives the dummy no clips.
