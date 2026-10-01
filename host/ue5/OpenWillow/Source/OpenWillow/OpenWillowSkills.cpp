@@ -82,6 +82,30 @@ int32 UOpenWillowSkills::Invested(const TArray<FTier>& Branch) const
     return Sum;
 }
 
+int32 UOpenWillowSkills::GradeOf(const FString& Id) const
+{
+    for (const TArray<FTier>& Branch : Branches)
+        for (const FTier& Tier : Branch)
+            for (const FSkill& Skill : Tier.Skills)
+                if (Skill.Id == Id) return Skill.Grade;
+    return 0;
+}
+
+bool UOpenWillowSkills::FindSkill(const FString& Id, int32& OutBranch, int32& OutTier, int32& OutCell) const
+{
+    for (int32 Branch = 0; Branch < Branches.Num(); ++Branch)
+        for (int32 Tier = 0; Tier < Branches[Branch].Num(); ++Tier)
+            for (const FSkill& Skill : Branches[Branch][Tier].Skills)
+                if (Skill.Id == Id)
+                {
+                    OutBranch = Branch;
+                    OutTier = Tier;
+                    OutCell = Skill.Cell;
+                    return true;
+                }
+    return false;
+}
+
 int32 UOpenWillowSkills::SpentPoints() const
 {
     int32 Sum = ActionGrade;

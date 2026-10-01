@@ -63,10 +63,49 @@ TArray<FMoverKey> ReadKeys(const TSharedPtr<FJsonObject>& Object, const TCHAR* N
     if (Result[0].Time != 0 || FMath::Abs(Result.Last().Time - Duration) > 1e-5) throw std::runtime_error("incomplete mover curve");
     return Result;
 }
+// Pose of a Matinee move track (IMF_RelativeToInitial) relative to the placed pose. The placed pose is the pose at
+// t=0, so keys are normalised by the first key: World(t) = Key(t) * Key(0)^-1 * Placed. The position delta is
+// un-rotated by the first rotation key and rotated by the placed rotation. With a zero first rotation key (the
+// door) this is exactly the actor-frame first-key delta used before. Euler keys are (X roll, Y pitch, Z yaw) in
+// degrees. Parity with UE3's own composition is UNVERIFIED.
+FTransform MatineePose(const FTransform& Placed, const TArray<FMoverKey>& Position, const TArray<FMoverKey>& Rotation, double Time) {
+    auto Quat = [](const FVector& Euler) { return FRotator(Euler.Y, Euler.Z, Euler.X).Quaternion(); };
+    const FQuat First = Quat(Rotation[0].Value);
+    const FVector Delta = Evaluate(Position, Time) - Position[0].Value;
+    FTransform Pose = Placed;
+    Pose.SetLocation(Placed.GetLocation() + Placed.GetRotation().RotateVector(First.UnrotateVector(Delta)));
+    Pose.SetRotation(Placed.GetRotation() * First.Inverse() * Quat(Evaluate(Rotation, Time)));
+    return Pose;
+}
+// Scene actors carry their source component path as their first tag. Actor names repeat across sublevels, so the
+// import's level folder (editor data; the host runs in the editor binary) selects the binding's package.
+TArray<AActor*> SceneActors(UWorld* World, const FString& ActorPath, const FString& Level) {
+    TArray<AActor*> Out;
+    const FString Prefix = ActorPath + TEXT(".");
+    for (TActorIterator<AActor> It(World); It; ++It) {
+        if (!It->Tags.Num() || !It->Tags[0].ToString().StartsWith(Prefix)) continue;
+#if WITH_EDITOR
+        if (It->GetFolderPath().ToString() != Level) continue;
+#endif
+        Out.Add(*It);
+    }
+    return Out;
+}
 }
 struct UOpenWillowMover::FImpl {
     TUniquePtr<vm::Mover> Script;
     TArray<FMoverKey> Position, Rotation;
+    FString Package, DoorAction;
+    TArray<FOpenWillowKismetRequest> Requests;
+    // Second bound Matinee action.
+    struct FKey { float Time; FString Name; bool bForward, bBackward; };
+    struct FRestore { TWeakObjectPtr<USceneComponent> Component; FTransform Transform; EComponentMobility::Type Mobility; };
+    FString TrackAction;
+    float TrackDuration = 0;
+    bool bRewindOnPlay = false;
+    TArray<FMoverKey> TrackPosition, TrackRotation;
+    TArray<FKey> TrackKeys;
+    TArray<FRestore> Restore;
 };
 UOpenWillowMover::UOpenWillowMover() {
     PrimaryComponentTick.bCanEverTick = true;
@@ -122,8 +161,10 @@ void UOpenWillowMover::BeginPlay() {
         const FString Game = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_BL2"));
         if (!FPaths::FileExists(FPaths::Combine(Game, TEXT("Binaries/Win32/Borderlands2.exe"))))
             throw std::runtime_error("installed Borderlands 2 is required");
+        Impl->Package = Data->GetStringField(TEXT("package"));
+        Impl->DoorAction = Data->GetStringField(TEXT("action"));
         Impl->Script = MakeUnique<vm::Mover>(std::filesystem::path(*FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole"))),
-            TCHAR_TO_UTF8(*Data->GetStringField(TEXT("package"))), TCHAR_TO_UTF8(*Data->GetStringField(TEXT("actor"))),
+            TCHAR_TO_UTF8(*Impl->Package), TCHAR_TO_UTF8(*Data->GetStringField(TEXT("actor"))),
             TCHAR_TO_UTF8(*Data->GetStringField(TEXT("action"))));
         for (const auto& Warning : Impl->Script->loadingDiagnostics())
             UE_LOG(LogTemp, Warning, TEXT("OWMOVER loading diagnostic: %s"), UTF8_TO_TCHAR(Warning.c_str()));
@@ -148,12 +189,27 @@ void UOpenWillowMover::BeginPlay() {
 }
 void UOpenWillowMover::EndPlay(const EEndPlayReason::Type Reason) {
     if (Mesh && PoseCaptured) { Mesh->SetWorldTransform(Initial, false, nullptr, ETeleportType::TeleportPhysics); Mesh->SetMobility(OriginalMobility); }
+    if (Impl) RestoreTrack();
     Impl.Reset();
     Super::EndPlay(Reason);
+}
+void UOpenWillowMover::RestoreTrack() {
+    // Children first (detach keeps their world pose), then every recorded component back to its placed pose/mobility.
+    for (int32 I = Impl->Restore.Num() - 1; I >= 0; --I) {
+        const auto& Entry = Impl->Restore[I];
+        USceneComponent* Component = Entry.Component.Get();
+        if (!Component) continue;
+        if (Component != TrackMesh) Component->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+        Component->SetWorldTransform(Entry.Transform, false, nullptr, ETeleportType::TeleportPhysics);
+        Component->SetMobility(Entry.Mobility);
+    }
+    Impl->Restore.Reset();
+    bTrackRunning = false;
 }
 void UOpenWillowMover::Fail(const FString& Error) {
     Failed = true; Running = false;
     if (Mesh && PoseCaptured) { Mesh->SetWorldTransform(Initial, false, nullptr, ETeleportType::TeleportPhysics); Mesh->SetMobility(OriginalMobility); }
+    if (Impl) RestoreTrack();
     UE_LOG(LogTemp, Error, TEXT("OWMOVER ERROR %s"), *Error);
     if (Testing) {
         UE_LOG(LogTemp, Display, TEXT("OWMOVERTEST SUMMARY result=FAIL checks=%d errors=%d reason=%s"), Checks, ++Errors, *Error);
@@ -172,6 +228,7 @@ void UOpenWillowMover::StartMotion(bool NextReverse) {
     ScriptSteps += Result.steps;
     if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
     Reverse = NextReverse; Running = true;
+    ++(Reverse ? DoorCloseStarts : DoorOpenStarts);
     UE_LOG(LogTemp, Display, TEXT("OWMOVER start reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
 }
 bool UOpenWillowMover::RemoteEvent(const FString& Name) {
@@ -200,6 +257,35 @@ bool UOpenWillowMover::StandPoint(FVector& Out) const {
     Out = Center - Initial.TransformVectorNoScale(Offset.GetSafeNormal()) * 170;
     return true;
 }
+bool UOpenWillowMover::SequenceEvent(const FString& OpName) {
+    LastEventMatched = 0; LastEventBoundary = 0; LastEventMotion = 0;
+    if (!Impl || Failed || !Mesh) return false;
+    return ApplyDispatch(Impl->Script->sequenceEvent(TCHAR_TO_UTF8(*OpName)), OpName);
+}
+bool UOpenWillowMover::OriginatorEvent(const FString& ObjectPath, TArray<FString>& Entered) {
+    LastEventMatched = 0; LastEventBoundary = 0; LastEventMotion = 0;
+    if (!Impl || Failed || !Mesh) return false;
+    const auto Dispatch = Impl->Script->originatorEvent(TCHAR_TO_UTF8(*ObjectPath));
+    for (const auto& Name : Dispatch.entered) Entered.Add(UTF8_TO_TCHAR(Name.c_str()));
+    return ApplyDispatch(Dispatch, ObjectPath);
+}
+bool UOpenWillowMover::SequenceOutput(const FString& OpName, const FString& Desc) {
+    LastEventMatched = 0; LastEventBoundary = 0; LastEventMotion = 0;
+    if (!Impl || Failed || !Mesh) return false;
+    return ApplyDispatch(Impl->Script->output(TCHAR_TO_UTF8(*OpName), TCHAR_TO_UTF8(*Desc)), OpName + TEXT(".") + Desc);
+}
+TArray<vm::Mover::Variable> UOpenWillowMover::SequenceVariables(const FString& OpName, const FString& Desc) {
+    TArray<vm::Mover::Variable> Out;
+    if (!Impl || Failed) return Out;
+    for (const auto& Variable : Impl->Script->variables(TCHAR_TO_UTF8(*OpName), TCHAR_TO_UTF8(*Desc))) Out.Add(Variable);
+    return Out;
+}
+TArray<FOpenWillowKismetRequest> UOpenWillowMover::DrainRequests() {
+    if (!Impl) return {};
+    TArray<FOpenWillowKismetRequest> Out = MoveTemp(Impl->Requests);
+    Impl->Requests.Reset();
+    return Out;
+}
 bool UOpenWillowMover::ApplyDispatch(const vm::Mover::Dispatch& Dispatch, const FString& Name) {
     for (const auto& Error : Dispatch.errors) {
         Fail(FString::Printf(TEXT("kismet event %s: %s"), *Name, UTF8_TO_TCHAR(Error.c_str())));
@@ -207,12 +293,35 @@ bool UOpenWillowMover::ApplyDispatch(const vm::Mover::Dispatch& Dispatch, const 
     }
     LastEventMatched = int32(Dispatch.matched);
     LastEventBoundary = int32(Dispatch.hostBoundary.size());
-    UE_LOG(LogTemp, Display, TEXT("OWMOVER event=%s matched=%d motion=%d host_boundary=%d trace=%d"),
-        *Name, LastEventMatched, Dispatch.motion, LastEventBoundary, int32(Dispatch.trace.size()));
-    for (const auto& Line : Dispatch.hostBoundary)
-        UE_LOG(LogTemp, Display, TEXT("OWMOVER host boundary (not run): %s"), UTF8_TO_TCHAR(Line.c_str()));
-    if (Dispatch.motion == 0 || Running) return Dispatch.matched > 0;
+    LastEventMotion = Dispatch.motion;
+    if (Dispatch.matched || !Dispatch.trace.empty())
+        UE_LOG(LogTemp, Display, TEXT("OWMOVER event=%s matched=%d motion=%d host_boundary=%d trace=%d"),
+            *Name, LastEventMatched, Dispatch.motion, LastEventBoundary, int32(Dispatch.trace.size()));
+    // World ops: the bound track's own Play/Reverse run here; everything else is queued for the quest component.
+    for (const auto& Request : Dispatch.requests) {
+        FOpenWillowKismetRequest Out{UTF8_TO_TCHAR(Request.cls.c_str()), UTF8_TO_TCHAR(Request.op.c_str()), UTF8_TO_TCHAR(Request.input.c_str())};
+        if (TrackMesh && Out.Class == TEXT("Engine.SeqAct_Interp") && Out.Op == Impl->TrackAction
+            && (Out.Input == TEXT("Play") || Out.Input == TEXT("Reverse"))) {
+            UE_LOG(LogTemp, Display, TEXT("OWMOVER track %s <- %s"), *Out.Op, *Out.Input);
+            StartTrack(Out.Input == TEXT("Reverse"));
+            continue;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWMOVER host request: %s:%s <- %s"), *Out.Class, *Out.Op, *Out.Input);
+        Impl->Requests.Add(Out);
+    }
+    if (Dispatch.motion == 0) return Dispatch.matched > 0;
     const bool NextReverse = Dispatch.motion < 0;
+    if (Running) {
+        // Play/Reverse while the door moves the other way (Marcus reaches the closing node before the opening
+        // finishes): turn the motion around at its current position. InterpActor.InterpolationChanged is not run
+        // and the turn-around semantics are UNVERIFIED against the original.
+        if (NextReverse != Reverse) {
+            Reverse = NextReverse;
+            ++DoorTurnArounds;
+            UE_LOG(LogTemp, Display, TEXT("OWMOVER door turns around at t=%.2f (reverse=%d)"), Time, Reverse);
+        }
+        return true;
+    }
     if ((NextReverse && Time <= 0) || (!NextReverse && Time >= Duration)) return true; // already at that end
     StartMotion(NextReverse);
     return !Failed;
@@ -228,26 +337,125 @@ void UOpenWillowMover::TickComponent(float Delta, ELevelTick Type, FActorCompone
     const auto Timer = Impl->Script->advance(Delta);
     ScriptSteps += Timer.steps;
     if (!Timer.error.empty()) { Fail(UTF8_TO_TCHAR(Timer.error.c_str())); return; }
+    // Sequence time (SeqAct_Delay and delayed links) advances with the world.
+    ApplyDispatch(Impl->Script->advanceSequence(Delta), TEXT("sequence tick"));
+    if (Failed) return;
+    TickTrack(Delta);
+    if (Failed) return;
     if (Running) {
         Time = FMath::Clamp(Time + (Reverse ? -Delta : Delta), 0.f, Duration);
-        const FVector Position = Evaluate(Impl->Position, Time) - Impl->Position[0].Value;
-        const FVector Euler = Evaluate(Impl->Rotation, Time) - Impl->Rotation[0].Value;
-        FTransform Pose = Initial;
         // UE3 relative-frame composition remains UNVERIFIED against original.
-        Pose.SetLocation(Initial.GetLocation() + Initial.TransformVectorNoScale(Position));
-        Pose.SetRotation(Initial.GetRotation() * FRotator(Euler.Y, Euler.Z, Euler.X).Quaternion());
-        Mesh->SetWorldTransform(Pose, false, nullptr, ETeleportType::TeleportPhysics);
+        Mesh->SetWorldTransform(MatineePose(Initial, Impl->Position, Impl->Rotation, Time), false, nullptr, ETeleportType::TeleportPhysics);
         if (Time == 0 || Time == Duration) {
             const auto Result = Impl->Script->notify(true, Reverse);
             ScriptSteps += Result.steps;
             if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
             Running = false;
+            ++(Reverse ? DoorCloseEnds : DoorOpenEnds);
             UE_LOG(LogTemp, Display, TEXT("OWMOVER finish reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
-            const auto Done = Impl->Script->motionFinished(Reverse);
-            for (const auto& Error : Done.errors) { Fail(UTF8_TO_TCHAR(Error.c_str())); return; }
+            ApplyDispatch(Impl->Script->motionFinished(Reverse), Reverse ? TEXT("door Reversed") : TEXT("door Completed"));
+            if (Failed) return;
         }
     }
     if (Testing) RunTest(Delta);
+}
+void UOpenWillowMover::BindTrack(const TSharedPtr<FJsonObject>& Binding) {
+    if (!Impl || Failed || !Mesh) throw std::runtime_error("bind the door mover first (-owmover)");
+    if (TrackMesh) throw std::runtime_error("a track is already bound");
+    if (!Binding || Binding->GetStringField(TEXT("schema")) != TEXT("ow-mover-binding-v1")) throw std::runtime_error("unsupported track binding");
+    if (Binding->GetStringField(TEXT("package")) != Impl->Package) throw std::runtime_error("track binding is in another package");
+    const auto& Groups = Binding->GetArrayField(TEXT("groups"));
+    if (Groups.Num() != 1) throw std::runtime_error("track binding must have exactly one group");
+    const auto Group = Groups[0]->AsObject();
+    const double TrackDuration = Binding->GetNumberField(TEXT("duration"));
+    if (!FMath::IsFinite(TrackDuration) || TrackDuration <= 0 || TrackDuration > 60) throw std::runtime_error("invalid track duration");
+    Impl->TrackDuration = TrackDuration;
+    Impl->bRewindOnPlay = Binding->GetBoolField(TEXT("rewind_on_play"));
+    const FString ActionPath = Binding->GetStringField(TEXT("action"));
+    int32 Dot = INDEX_NONE;
+    if (!ActionPath.FindLastChar(TEXT('.'), Dot) || !Impl->DoorAction.StartsWith(ActionPath.Left(Dot + 1)))
+        throw std::runtime_error("track action is not in the door's Kismet sequence");
+    Impl->TrackAction = ActionPath.Mid(Dot + 1);
+    Impl->TrackPosition = ReadKeys(Group, TEXT("position"), TrackDuration);
+    Impl->TrackRotation = ReadKeys(Group, TEXT("rotation"), TrackDuration);
+    for (const auto& Track : Group->GetArrayField(TEXT("event_tracks"))) {
+        const auto T = Track->AsObject();
+        for (const auto& Key : T->GetArrayField(TEXT("keys"))) {
+            const auto K = Key->AsObject();
+            Impl->TrackKeys.Add({float(K->GetNumberField(TEXT("time"))), K->GetStringField(TEXT("name")),
+                T->GetBoolField(TEXT("fires_forward")), T->GetBoolField(TEXT("fires_backward"))});
+        }
+    }
+    // The group actor's mesh in the loaded map, checked against the placement the data records.
+    const TArray<AActor*> Carriers = SceneActors(GetWorld(), Group->GetStringField(TEXT("actor")), Impl->Package);
+    UStaticMeshComponent* Carrier = Carriers.Num() == 1 ? Carriers[0]->FindComponentByClass<UStaticMeshComponent>() : nullptr;
+    if (!Carrier) throw std::runtime_error("track group actor is missing or ambiguous in the loaded map");
+    const auto InitialData = Group->GetObjectField(TEXT("initial"));
+    const FVector Units = Vector(InitialData, TEXT("rotation_units"));
+    const FQuat Placed = FRotator(Units.X * 360.0 / 65536.0, Units.Y * 360.0 / 65536.0, Units.Z * 360.0 / 65536.0).Quaternion();
+    const FTransform Loaded = Carrier->GetComponentTransform();
+    if (!Loaded.GetLocation().Equals(Vector(InitialData, TEXT("location")), 0.1) || Loaded.GetRotation().AngularDistance(Placed) > 0.001
+        || !Loaded.GetScale3D().Equals(FVector(InitialData->GetNumberField(TEXT("draw_scale"))), 1e-4))
+        throw std::runtime_error("loaded track carrier placement differs from the binding");
+    TrackMesh = Carrier;
+    TrackInitial = Loaded;
+    Impl->Restore.Add({Carrier, Loaded, Carrier->Mobility});
+    Carrier->SetMobility(EComponentMobility::Movable);
+    // Actors the data attaches to the group actor follow it (UE3 Base); ones with no prepared mesh are listed.
+    for (const auto& Value : Group->GetArrayField(TEXT("attached"))) {
+        const FString Name = Value->AsString();
+        const TArray<AActor*> Children = SceneActors(GetWorld(), Name, Impl->Package);
+        if (Children.Num() == 0) UE_LOG(LogTemp, Display, TEXT("OWMOVER track attachment %s has no prepared scene mesh (not moved)"), *Name);
+        for (AActor* Child : Children) {
+            USceneComponent* Root = Child->GetRootComponent();
+            if (!Root) continue;
+            Impl->Restore.Add({Root, Root->GetComponentTransform(), Root->Mobility});
+            Root->SetMobility(EComponentMobility::Movable);
+            Root->AttachToComponent(Carrier, FAttachmentTransformRules::KeepWorldTransform);
+        }
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWMOVER TRACK READY action=%s duration=%.3f keys=%d attached_components=%d omitted_tracks=%d"),
+        *Impl->TrackAction, TrackDuration, Impl->TrackKeys.Num(), Impl->Restore.Num() - 1, Group->GetArrayField(TEXT("omitted_tracks")).Num());
+}
+FVector UOpenWillowMover::TrackOffset() const {
+    return TrackMesh ? TrackMesh->GetComponentLocation() - TrackInitial.GetLocation() : FVector::ZeroVector;
+}
+void UOpenWillowMover::StartTrack(bool bReverse) {
+    // bRewindOnPlay: Play starts from the beginning (read as "every Play rewinds"; UNVERIFIED).
+    if (!bReverse && Impl->bRewindOnPlay) TrackTime = 0;
+    bTrackReverse = bReverse;
+    bTrackRunning = true;
+    FireTrackKeys(TrackTime, TrackTime, true);
+}
+void UOpenWillowMover::FireTrackKeys(float From, float To, bool bInclusiveFrom) {
+    // Event-track keys fire the Matinee action's output of the same name, in the play direction their track allows.
+    // Keys exactly at the start position fire when the motion starts. Boundary semantics UNVERIFIED.
+    for (const auto& Key : Impl->TrackKeys) {
+        const bool bHit = bTrackReverse
+            ? Key.bBackward && ((Key.Time >= To && Key.Time < From) || (bInclusiveFrom && Key.Time == From))
+            : Key.bForward && ((Key.Time > From && Key.Time <= To) || (bInclusiveFrom && Key.Time == From));
+        if (!bHit) continue;
+        UE_LOG(LogTemp, Display, TEXT("OWMOVER track key %s at %.2f"), *Key.Name, Key.Time);
+        ApplyDispatch(Impl->Script->output(TCHAR_TO_UTF8(*Impl->TrackAction), TCHAR_TO_UTF8(*Key.Name)), Key.Name);
+        if (Failed) return;
+    }
+}
+void UOpenWillowMover::TickTrack(float Delta) {
+    if (!TrackMesh || !bTrackRunning) return;
+    const float Before = TrackTime;
+    TrackTime = FMath::Clamp(TrackTime + (bTrackReverse ? -Delta : Delta), 0.f, Impl->TrackDuration);
+    FireTrackKeys(Before, TrackTime, false);
+    if (Failed) return;
+    // Same composition as the door (MatineePose). This carrier's first rotation key is not zero, so its delta is
+    // un-rotated by that key before the placed rotation applies (frame UNVERIFIED; see SANCTUARY_RPG_MISSION.md).
+    TrackMesh->SetWorldTransform(MatineePose(TrackInitial, Impl->TrackPosition, Impl->TrackRotation, TrackTime),
+        false, nullptr, ETeleportType::TeleportPhysics);
+    if ((bTrackReverse && TrackTime <= 0) || (!bTrackReverse && TrackTime >= Impl->TrackDuration)) {
+        bTrackRunning = false;
+        ++(bTrackReverse ? TrackReverseEnds : TrackForwardEnds);
+        ApplyDispatch(Impl->Script->output(TCHAR_TO_UTF8(*Impl->TrackAction), bTrackReverse ? "Reversed" : "Completed"),
+            bTrackReverse ? TEXT("track Reversed") : TEXT("track Completed"));
+    }
 }
 bool UOpenWillowMover::Ray(bool ClosedSpace) const {
     const FTransform Pose = ClosedSpace ? Initial : Mesh->GetComponentTransform();

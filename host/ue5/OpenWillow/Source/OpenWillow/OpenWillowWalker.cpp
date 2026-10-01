@@ -84,13 +84,23 @@ float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& Dama
 
 void AOpenWillowWalker::Respawn()
 {
-    // Host stand-in: back to where this session started with full health. Mission state is not touched.
+    // With -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host
+    // stand-in: back to where this session started. Full health either way; mission state is not touched.
     Health = MaxHealth;
     bFireHeld = false;
     CancelReload();
-    SetActorLocationAndRotation(RespawnLocation, RespawnRotation, false, nullptr, ETeleportType::TeleportPhysics);
+    FVector Location = RespawnLocation;
+    FRotator Rotation = RespawnRotation;
+    FTransform Station;
+    if (Quest && Quest->Enabled() && Quest->RespawnPoint(GetActorLocation(), Station))
+    {
+        Location = Station.GetLocation();
+        Rotation = Station.Rotator();
+    }
+    SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+    if (Controller) Controller->SetControlRotation(Rotation);
     GetCharacterMovement()->StopMovementImmediately();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *RespawnLocation.ToString());
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *Location.ToString());
     if (Quest) Quest->NotifyRespawn();
 }
 
@@ -112,6 +122,21 @@ void AOpenWillowWalker::BeginPlay()
     // 176 cm apex and 1.68 s ideal flight, pending a measured BL2 jump.
     bMayaActive = FParse::Param(FCommandLine::Get(), TEXT("owmaya"));
     if (!bMayaActive) return;
+    // Phaselock numbers from tools/prepare_action_skill.py's manifest; without it the skill is unavailable.
+    PhaselockFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/character/action_skill_siren.json")));
+    FParse::Value(FCommandLine::Get(), TEXT("owactionskill="), PhaselockFile);
+    FString PhaselockError;
+    if (!Phaselock.Load(PhaselockFile, PhaselockError))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock unavailable: %s"), *PhaselockError);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock data: lift %.2f s, lock %.2f x scale %.2f, fade %.2f s, buffer %.2f s, cooldown %.1f s (held rate %.2f), diminishing x%.2f for %.0f s, %s +%d grades"),
+            Phaselock.LiftDuration, Phaselock.LockDurationBase, Phaselock.TimeScaleDefault, Phaselock.LockFadeOutTime, Phaselock.ReleaseBufferTime,
+            Phaselock.CooldownSeconds, Phaselock.CooldownHeldRate, 1.f + Phaselock.DiminishingScale, Phaselock.DiminishingSeconds,
+            *Phaselock.DurationSkill, FMath::Max(0, Phaselock.DurationPostAdd.Num() - 1));
+    }
     // GD_Siren_Streaming.Pawn_Siren: CylinderComponent CollisionRadius 42,
     // CollisionHeight 80 (UE3 half-height) and BaseEyeHeight 70 above the
     // pawn centre, so a 150 cm standing eye. Its serialized EyeHeight is 77;
@@ -140,6 +165,10 @@ void AOpenWillowWalker::BeginPlay()
     Arms->SetSkeletalMesh(ArmsMesh);
     Arms->SetAnimInstanceClass(UOpenWillowArmsAnimInstance::StaticClass());
     ArmsAnim = Cast<UOpenWillowArmsAnimInstance>(Arms->GetAnimInstance());
+    // No clip set yet: the arms would be in their bind pose, without the clips' root correction (presumably out of
+    // view; not checked), so they stay hidden until a weapon is drawn. What the original shows with no weapon is not
+    // observed: UNVERIFIED.
+    UpdateArmsVisibility();
     DrawPistolAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("Draw"));
     FirePistolAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("ADD_Fire_Recoil"));
     PhaselockAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Lift"));
@@ -267,8 +296,13 @@ void AOpenWillowWalker::BeginPlay()
         for (const FOpenWillowGearItem& Item : Gear)
             if (!Inventory->GearSlotItem(Item.ItemType)) Inventory->EquipGearById(Item.Id, Item.ItemType, Skills->GetLevel());
     }
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d"),
-        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade());
+    // -owquest: maximum health from the recovered Init_PlayerHealth formula at this level (skills, class mods and
+    // relics not applied); otherwise the 400 host stand-in stays.
+    float FormulaHealth = 0.f;
+    if (Quest && Quest->Enabled() && Quest->PlayerMaxHealth(Skills->GetLevel(), FormulaHealth))
+        MaxHealth = Health = FormulaHealth;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d, health %.1f"),
+        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade(), MaxHealth);
     if (bInventoryActionsRun)
     {
         UOpenWillowInventoryActionTest* Test = NewObject<UOpenWillowInventoryActionTest>(this, TEXT("InventoryActionTest"));
@@ -312,12 +346,12 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         Arms->SetRelativeRotation(FRotator(Sway.Y, Sway.X, 0));
         LookInput = FVector2D::ZeroVector;
     }
-    if (bMayaActive && Now < PhaselockBeamUntil && CombatTarget.IsValid()
+    if (bMayaActive && Now < PhaselockBeamUntil && PhaselockTarget.IsValid()
         && Arms->GetBoneIndex(TEXT("L_Hand")) != INDEX_NONE)
     {
         const float Fade = FMath::Clamp((PhaselockBeamUntil - Now) / 0.3f, 0.f, 1.f);
         AOpenWillowShotFx::Tracer(GetWorld(), Arms->GetBoneLocation(TEXT("L_Hand")) + Camera->GetForwardVector() * 8.f,
-            CombatTarget->AimPoint(), FLinearColor(0.6f, 0.2f, 1.f) * Fade, 0.9f, 0.02f);
+            PhaselockTarget->AimPoint(), FLinearColor(0.6f, 0.2f, 1.f) * Fade, 0.9f, 0.02f);
     }
     if (bMayaActive && !bBarrelAxisLogged && Now > 6.f && WeaponVisual->GetSkinnedAsset())
     {
@@ -398,11 +432,11 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     bFireHeld = false;
     CancelReload();
     bOutOfAmmoLogged = false;
-    // Each rolled weapon imports as SK_<recipe id>; fall back to the older
+    // Each rolled weapon imports as SK_<recipe id> (or names its mesh); fall back to the older
     // single Infinity assembly when that item has not been imported.
-    const FString ItemMesh = FString::Printf(TEXT("/Game/OpenWillow/Weapons/Items/SK_%s.SK_%s"), *Item->Id, *Item->Id);
-    USkeletalMesh* WeaponMesh = LoadObject<USkeletalMesh>(nullptr, *ItemMesh);
+    USkeletalMesh* WeaponMesh = UOpenWillowInventory::LoadWeaponMesh(*Item);
     if (!WeaponMesh) WeaponMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy"));
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
     WeaponVisual->SetSkeletalMesh(WeaponMesh);
     WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr || bInventoryPresentation);
     IdleAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Idle"));
@@ -411,6 +445,7 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     JumpAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Jump_Idle"));
     LandAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Jump_End"));
     ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
+    UpdateArmsVisibility();
     if (DrawPistolAnim) ArmsAnim->PlayAction(DrawPistolAnim);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
         Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);
@@ -441,6 +476,53 @@ bool AOpenWillowWalker::UnequipSlot(int32 Slot)
     }
     return true;
 }
+bool AOpenWillowWalker::LendWeapon(const FOpenWillowWeaponItem& Item)
+{
+    if (!Inventory || Inventory->FindItemIndexById(Item.Id) != INDEX_NONE || !Inventory->AddToBackpack(Item)) return false;
+    const int32 Index = Inventory->FindItemIndexById(Item.Id);
+    // Where the game puts a lent weapon is native (MissionTracker) and not observed. Host rule (UNVERIFIED): the first
+    // empty unlocked slot, else the last unlocked slot (its weapon goes back to the backpack); drawn at once. The
+    // level requirement is not checked for a lent weapon.
+    int32 Slot = Inventory->GetWeaponSlotsUnlocked() - 1;
+    for (int32 Candidate = 0; Candidate < Inventory->GetWeaponSlotsUnlocked(); ++Candidate)
+        if (!Inventory->SlotItem(Candidate)) { Slot = Candidate; break; }
+    PreLendSlot = Inventory->GetActiveSlot();
+    if (Index == INDEX_NONE || !Inventory->Equip(Index, Slot)) return false;
+    SelectSlot(Slot);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow lent weapon %s (%s, level %d, %.1f damage, %s) in slot %d"), *Item.Id, *Item.Name,
+        Item.Level, Item.Damage, *Item.DamageType, Slot + 1);
+    return true;
+}
+bool AOpenWillowWalker::ReturnLentWeapon(const FString& Id)
+{
+    FOpenWillowTakenInventoryItem Taken;
+    if (!TakeInventoryItemById(Id, Taken)) return false;
+    // Draw what was held before the lend, else the first equipped weapon (host rule, UNVERIFIED).
+    int32 Slot = Inventory->SlotItem(PreLendSlot) ? PreLendSlot : INDEX_NONE;
+    for (int32 Candidate = 0; Slot == INDEX_NONE && Candidate < UOpenWillowInventory::SlotCount; ++Candidate)
+        if (Inventory->SlotItem(Candidate)) Slot = Candidate;
+    if (Slot != INDEX_NONE) SelectSlot(Slot);
+    else Holster();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow returned lent weapon %s; holding slot %d"), *Id, Slot + 1);
+    return true;
+}
+bool AOpenWillowWalker::DrawItemById(const FString& Id)
+{
+    for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
+        if (const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot); Item && UOpenWillowInventory::StableId(*Item) == Id)
+        {
+            SelectSlot(Slot);
+            return true;
+        }
+    return false;
+}
+bool AOpenWillowWalker::FireOnce()
+{
+    FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
+    if (!bMayaActive || !bWeaponOut || !Weapon || bReloading || !Inventory->ConsumeShot(*Weapon)) return false;
+    FireWeapon();
+    return true;
+}
 bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem)
 {
     if (!Inventory) return false;
@@ -459,6 +541,7 @@ bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTake
 void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
+    if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
     if (Mover && Mover->TryInteract()) return;
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);
@@ -480,7 +563,7 @@ void AOpenWillowWalker::PickupNearby()
 void AOpenWillowWalker::SetInventoryPresentation(bool bShow)
 {
     bInventoryPresentation = bShow;
-    if (Arms) Arms->SetHiddenInGame(bShow);
+    UpdateArmsVisibility();
     if (WeaponVisual) WeaponVisual->SetHiddenInGame(bShow || !bWeaponOut);
 }
 void AOpenWillowWalker::ToggleInventory()
@@ -537,7 +620,20 @@ void AOpenWillowWalker::Holster()
     JumpAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Jump_Idle"));
     LandAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Jump_End"));
     ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya holstered her weapon"));
+    UpdateArmsVisibility();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya holstered her weapon (arms %s)"), AreArmsShown() ? TEXT("shown") : TEXT("hidden: no Unarmed clips imported"));
+}
+FString AOpenWillowWalker::HeldWeaponMesh() const
+{
+    return WeaponVisual && bWeaponOut && WeaponVisual->GetSkinnedAsset() ? WeaponVisual->GetSkinnedAsset()->GetPathName() : FString();
+}
+bool AOpenWillowWalker::AreArmsShown() const
+{
+    return Arms && Arms->GetSkinnedAsset() && !bInventoryPresentation && IdleAnim;
+}
+void AOpenWillowWalker::UpdateArmsVisibility()
+{
+    if (Arms) Arms->SetHiddenInGame(bInventoryPresentation || !IdleAnim);
 }
 void AOpenWillowWalker::FirePressed()
 {
@@ -609,10 +705,14 @@ void AOpenWillowWalker::FireWeapon()
         // Evaluated item-card damage (tools/weapon_stats.py); no crits, element
         // or target resistances yet.
         const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
-        // The lent mission pistol is a fire weapon (host classification, UNVERIFIED).
+        // The shot carries the item's stock damage type path (card damage_type); the target reads it while the
+        // damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded.
+        ShotDamageTypeInFlight = Weapon ? Weapon->DamageType : FString();
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s (damage type %s)"), Weapon ? *Weapon->Id : TEXT("-"),
+            *Target->GetName(), ShotDamageTypeInFlight.IsEmpty() ? TEXT("None") : *ShotDamageTypeInFlight);
         UGameplayStatics::ApplyPointDamage(Target, Weapon ? Weapon->Damage : 0.f, Direction, Hit,
-            GetController(), this, Quest && Quest->LentWeaponIsFire()
-                ? TSubclassOf<UDamageType>(UOpenWillowFireDamageType::StaticClass()) : TSubclassOf<UDamageType>(UDamageType::StaticClass()));
+            GetController(), this, UDamageType::StaticClass());
+        ShotDamageTypeInFlight.Reset();
         TargetHitAt = GetWorld()->GetTimeSeconds();
     }
 }
@@ -622,37 +722,67 @@ void AOpenWillowWalker::UsePhaselock()
     // Phaselock needs its skill point, as in the game, where the action skill
     // is bought in the Skills tab (traced). What the game does when the key is
     // pressed before that (nothing, a message or a sound) is UNVERIFIED.
-    if (!Skills || Skills->GetActionGrade() < 1) return;
+    if (!Skills || Skills->GetActionGrade() < 1 || !Phaselock.bLoaded) return;
     const float Now = GetWorld()->GetTimeSeconds();
-    if (Now < PhaselockReadyAt) return;
+    if (PhaselockRemaining() > 0.f) return;
+    // ActionSkillCallback refills the cooldown pool at activation, hit or miss.
+    PhaselockCastAt = Now;
+    PhaselockTimeline = FOpenWillowPhaselockTimeline();
     const FVector Start = Camera->GetComponentLocation();
     FHitResult Hit;
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPhaselock), true, this);
-    // A small sphere sweep gives the aim assist a skill cast needs.
-    if (!GetWorld()->SweepSingleByChannel(Hit, Start, Start + Camera->GetForwardVector() * 2500.f,
-        FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(30.f), Query))
+    // Target choice is native auto-aim in the game (range not in the data). Host stand-in (UNVERIFIED): the view ray
+    // to 2500 cm, else a 30 cm sphere sweep for some aim assist (a sweep that starts inside nearby geometry, such as
+    // the range's low beams, is ignored).
+    const FVector End = Start + Camera->GetForwardVector() * 2500.f;
+    AOpenWillowCombatTarget* Target = nullptr;
+    if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query))
+        Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
+    if (!Target && GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(30.f), Query)
+        && !Hit.bStartPenetrating)
+        Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
+    // SkillDuration = LiftDuration + Att_Phaselock_Duration (with the duration skill's grade) x the target's
+    // PhaselockTimeScale (lower while its diminishing returns run).
+    const int32 Grade = Skills->GradeOf(Phaselock.DurationSkill);
+    if (Target)
+        PhaselockTimeline = Phaselock.Timeline(Phaselock.LockDuration(Grade), Target->PhaselockTimeScale(Now, Phaselock));
+    if (!Target || !Target->BeginPhaselock(Now, Phaselock, PhaselockTimeline))
     {
+        // FizzleOut: no lift; after ReleaseBufferTime Fizzled resets the cooldown and ends the skill.
+        bPhaselockHit = false;
+        PhaselockTarget = nullptr;
+        PhaselockTimeline = FOpenWillowPhaselockTimeline();
+        PhaselockHeldUntil = Now;
+        PhaselockResetAt = Now + Phaselock.ReleaseBufferTime;
         if (ArmsAnim && PhaselockFailAnim) ArmsAnim->PlayAction(PhaselockFailAnim);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock missed (sweep hit %s/%s at %.0f uu; cooldown resets after %.1f s)"),
+            Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("nothing"), Hit.GetComponent() ? *Hit.GetComponent()->GetName() : TEXT("-"),
+            Hit.Distance, Phaselock.ReleaseBufferTime);
         return;
     }
-    AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
-    // ActionSkill_Phaselock.LockDurationFormula -> Att_Phaselock_Duration
-    // base 5 s, times PhaselockTimeScale (default 1). Skill mods not applied.
-    if (!Target || !Target->BeginPhaselock(Now, 5.f))
-    {
-        if (ArmsAnim && PhaselockFailAnim) ArmsAnim->PlayAction(PhaselockFailAnim);
-        return;
-    }
+    bPhaselockHit = true;
+    PhaselockTarget = Target;
+    // The cooldown manager holds the pool from OnSelectedTarget (the cast) to OnReleasedTarget.
+    PhaselockHeldUntil = Now + PhaselockTimeline.ReleasedAt;
+    PhaselockResetAt = TNumericLimits<float>::Max();
     if (ArmsAnim && PhaselockAnim) ArmsAnim->PlayAction(PhaselockAnim);
     // Host cast cue: Tick draws a violet beam from Maya's raised left hand to
     // the target for the lift, so it follows the Phase_Lock_Lift pose.
-    PhaselockBeamUntil = Now + 0.9f;
-    PhaselockReadyAt = Now + PhaselockCooldownSeconds;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock activated on %s"), *Target->GetName());
+    PhaselockBeamUntil = Now + Phaselock.LiftDuration + 0.2f;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock activated on %s: %s grade %d, skill %.2f s (locked %.2f, outro %.2f, release %.2f, end %.2f), cooldown ready at +%.2f s"),
+        *Target->GetName(), *Phaselock.DurationSkill, Grade, PhaselockTimeline.SkillDuration, PhaselockTimeline.LockedAt,
+        PhaselockTimeline.OutroAt, PhaselockTimeline.ReleasedAt, PhaselockTimeline.EndSkillAt,
+        PhaselockTimeline.ReleasedAt + Phaselock.CooldownSeconds / FMath::Max(Phaselock.CooldownRate, KINDA_SMALL_NUMBER));
 }
 float AOpenWillowWalker::PhaselockRemaining() const
 {
-    return GetWorld() ? FMath::Max(0.f, PhaselockReadyAt - GetWorld()->GetTimeSeconds()) : 0.f;
+    // Pool seconds left (BaseMaxValue drained per second), refilled at the last cast.
+    if (!GetWorld() || !Phaselock.bLoaded) return 0.f;
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Now >= PhaselockResetAt) return 0.f;
+    const float Held = FMath::Clamp(Now, PhaselockCastAt, PhaselockHeldUntil) - PhaselockCastAt;
+    const float Free = FMath::Max(0.f, Now - FMath::Max(PhaselockCastAt, PhaselockHeldUntil));
+    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * Phaselock.CooldownRate);
 }
 void AOpenWillowWalker::RunCombatShots(float Now)
 {

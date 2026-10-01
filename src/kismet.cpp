@@ -156,6 +156,20 @@ size_t Kismet::missionRemoteEvent(const std::string& missionPath, const std::str
     return matched;
 }
 
+std::vector<Kismet::Op*> Kismet::eventsForOriginator(const std::string& objectPath) {
+    std::vector<Op*> result;
+    Class* event = runtime_.findClass("Engine.SequenceEvent");
+    for (auto& op : ops_) {
+        if (!op.object->cls->isChildOf(event)) continue;
+        const auto* originator = prop(op, "Originator");
+        if (!originator || originator->kind != Value::Kind::Object || !originator->o) continue;
+        const auto& resource = originator->o;
+        if (resource->resourcePackage && resource->resourcePackage->path(resource->resourceIndex) == objectPath)
+            result.push_back(&op);
+    }
+    return result;
+}
+
 void Kismet::run() {
     while (!queue_.empty()) {
         // Earliest due first; ties keep activation order.

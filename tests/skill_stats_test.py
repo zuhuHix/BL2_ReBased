@@ -82,6 +82,22 @@ def test_skill_lines():
     assert lines[2] == [('Localized speed: ', '+20%', ''), ('', '', ' Quoted text'), ('', '25%', ' chance.')]
 
 
+def test_effect_rows():
+    package = FakePackage({})
+    props = {'SkillEffectDefinitions': [
+        {'AttributeToModify': 'Attr.Time', 'ModifierType': 'MT_PostAdd', 'EffectTarget': 'TARGET_Self',
+         'BaseModifierValue': constant(0.25), 'PerGradeUpgrade': constant(0.25),
+         'GradeToStartApplyingEffect': 1, 'PerGradeUpgradeInterval': 1},
+        {'AttributeToModify': 'Attr.Rate', 'ModifierType': 'MT_PreAdd',
+         'BaseModifierValue': constant(-1.0), 'PerGradeUpgrade': constant(0.0),
+         'GradeToStartApplyingEffect': 0, 'PerGradeUpgradeInterval': 1},
+    ]}
+    rows = s.effect_rows(package, props, s.Resolver([package]), 3)
+    assert rows[0] == {'attribute': 'Attr.Time', 'modifierType': 'MT_PostAdd', 'target': 'TARGET_Self',
+                       'startGrade': 1, 'values': [None, 0.25, 0.5, 0.75]}
+    assert rows[1]['values'] == [-1.0, -1.0, -1.0, -1.0] and rows[1]['target'] is None
+
+
 if __name__ == '__main__':
     tests = [(name, fn) for name, fn in sorted(globals().items()) if name.startswith('test_')]
     for name, fn in tests:

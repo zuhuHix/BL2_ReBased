@@ -717,15 +717,16 @@ void AOpenWillowMayaHUD::DrawHUD()
 
     DrawDamagePopups(Large);
 
-    // Shield over health, bottom left. Maya takes no damage yet: both full.
+    // Shield over health, bottom left. No shield is modelled (full bar); health is Maya's own.
     const float BarW = W * 0.19f;
     SlantBar(*Canvas, 46.f, H - 86.f, BarW, 12.f, 8.f, 1.f, ShieldBlue);
-    SlantBar(*Canvas, 40.f, H - 62.f, BarW, 20.f, 10.f, 1.f, HealthRed);
+    SlantBar(*Canvas, 40.f, H - 62.f, BarW, 20.f, 10.f, FMath::Clamp(Maya->GetHealth() / FMath::Max(1.f, Maya->GetMaxHealth()), 0.f, 1.f), HealthRed);
 
-    // Experience bar with Maya's level, bottom centre (no XP system yet).
+    // Experience bar with Maya's level and progress, bottom centre (UOpenWillowSkills).
+    const UOpenWillowSkills* Skills = Maya->GetSkills();
     const float XpW = W * 0.34f;
-    SlantBar(*Canvas, X - XpW * 0.5f, H - 26.f, XpW, 7.f, 4.f, 0.f, Experience);
-    Outlined(*this, TEXT("1"), Experience, X - XpW * 0.5f - 22.f, H - 34.f, Large, 1.f);
+    SlantBar(*Canvas, X - XpW * 0.5f, H - 26.f, XpW, 7.f, 4.f, Skills ? Skills->LevelProgress() : 0.f, Experience);
+    Outlined(*this, FString::FromInt(Skills ? Skills->GetLevel() : 1), Experience, X - XpW * 0.5f - 22.f, H - 34.f, Large, 1.f);
 
     // Phaselock icon above the XP bar: a ring that refills over the cooldown.
     const float Remaining = Maya->PhaselockRemaining();

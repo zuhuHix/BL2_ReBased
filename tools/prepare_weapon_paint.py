@@ -2,6 +2,9 @@
 
 Uses the same explicitly approximate Master_Gun interpretation as the local
 thumbnail renderer. Output is game-derived and must remain under local/.
+As in the renderer, a MIC chain without p_Pattern (or with no pattern weight)
+gets the zone colours only (`pattern_used` false); its decal (p_Decal) is not
+reproduced. `mesh` names the UE skeletal mesh the importer paints.
 """
 import argparse
 import json
@@ -11,9 +14,15 @@ import re
 from render_weapon_previews import resolve_material, weapon_class, DETAIL_CHANNELS
 
 
-def prepare(recipe_path, materials):
+MESH_ROOT = '/Game/OpenWillow/Weapons/'
+
+
+def prepare(recipe_path, materials, mesh=None):
     if not re.fullmatch(r'[A-Za-z0-9_]+', recipe_path.stem):
         raise ValueError('Invalid recipe ID')
+    mesh = mesh or f'{MESH_ROOT}Items/SK_{recipe_path.stem}'
+    if not re.fullmatch(re.escape(MESH_ROOT) + r'[A-Za-z0-9_/]+', mesh):
+        raise ValueError(f'Mesh must be a /Game/OpenWillow/Weapons/ asset path: {mesh}')
     recipe = json.loads(recipe_path.read_text())
     identity = recipe['material']
     resolved = resolve_material(identity.split('.')[-1], [materials])
@@ -22,8 +31,11 @@ def prepare(recipe_path, materials):
     params, texture_dir, chain = resolved
     kind = weapon_class(recipe, params)
     channel = DETAIL_CHANNELS[(params['texture']['p_Diffuse'], kind)]
+    weights = params['vector'].get('p_PatternChannelScale')
+    pattern_used = bool(params['texture'].get('p_Pattern')) and isinstance(weights, (tuple, list)) and any(
+        isinstance(w, (int, float)) and w > 0 for w in weights[:3])
     paths = {}
-    for name in ['p_Masks', 'p_Diffuse', 'p_NormalScopesEmissive', 'p_Pattern']:
+    for name in ['p_Masks', 'p_Diffuse', 'p_NormalScopesEmissive'] + (['p_Pattern'] if pattern_used else []):
         leaf = params['texture'].get(name)
         if not isinstance(leaf, str) or not leaf:
             raise ValueError(f'Missing texture parameter {name}')
@@ -33,7 +45,8 @@ def prepare(recipe_path, materials):
         paths[name] = str(path.resolve())
     required = [f'p_{zone}Color{tone}' for zone in 'ABC'
                 for tone in ['Shadow', 'Midtone', 'Hilight']]
-    required += ['p_PatternColor', 'p_PatternChannelScale', 'p_PatternScalePosition']
+    if pattern_used:
+        required += ['p_PatternColor', 'p_PatternChannelScale', 'p_PatternScalePosition']
     for name in required:
         value = params['vector'].get(name)
         if not isinstance(value, (tuple, list)) or len(value) != 4 or not all(
@@ -41,7 +54,8 @@ def prepare(recipe_path, materials):
             raise ValueError(f'Missing or invalid vector parameter {name}')
     return {'recipe_id': recipe_path.stem, 'material_identity': identity,
             'parent_chain': chain, 'weapon_class': kind, 'detail_channel': channel,
-            'params': params, 'textures': paths, 'shader_verified': False}
+            'params': params, 'textures': paths, 'pattern_used': pattern_used,
+            'decal_not_reproduced': params['texture'].get('p_Decal'), 'mesh': mesh, 'shader_verified': False}
 
 
 if __name__ == '__main__':
@@ -49,11 +63,17 @@ if __name__ == '__main__':
     parser.add_argument('--recipe', type=Path, nargs='+', required=True)
     parser.add_argument('--materials', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--mesh', help='UE mesh to paint (one recipe only); default /Game/OpenWillow/Weapons/Items/SK_<id>')
+    parser.add_argument('--mesh-folder', help='UE folder holding SK_<id> for every recipe, e.g. /Game/OpenWillow/Weapons/SliceItems')
     args = parser.parse_args()
+    if args.mesh and len(args.recipe) != 1:
+        parser.error('--mesh takes exactly one --recipe')
     local = Path(__file__).resolve().parents[1] / 'local'
     if not args.output.resolve().is_relative_to(local.resolve()):
         parser.error('Output must remain under local/')
-    results = [prepare(recipe, args.materials) for recipe in args.recipe]
+    folder = args.mesh_folder.rstrip('/') if args.mesh_folder else None
+    results = [prepare(recipe, args.materials, args.mesh or (f'{folder}/SK_{recipe.stem}' if folder else None))
+               for recipe in args.recipe]
     ids = [result['recipe_id'] for result in results]
     if len(ids) != len(set(ids)):
         parser.error('Duplicate recipe IDs')
@@ -61,4 +81,5 @@ if __name__ == '__main__':
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2))
     for entry in results:
-        print(f"{entry['recipe_id']}: {len(entry['parent_chain'])} MICs, four textures; shader UNVERIFIED")
+        print(f"{entry['recipe_id']}: {len(entry['parent_chain'])} MICs, {len(entry['textures'])} textures, "
+              f"pattern {'used' if entry['pattern_used'] else 'not used'} -> {entry['mesh']}; shader UNVERIFIED")

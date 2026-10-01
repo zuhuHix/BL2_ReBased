@@ -1,5 +1,11 @@
 # Weapon item-card extras: accuracy, sale value, red text
 
+> Update 2026-10-01: superseded in part by `WEAPON_BALANCE_DECODE.md`. With the weapon type's own
+> effects applied and negative Scales dividing instead of subtracting, the modelled spread reproduces
+> the printed accuracy on all six newly audited cards (`accuracy_known` is now true), and pistol and
+> sniper price calculators are checked. Launcher prices still fail. The text below is the 2026-09-29
+> state.
+
 Date: 2026-09-29. Scope: what `tools/weapon_stats.py` now adds to a weapon
 recipe's `stats.card`, how each field is derived, and how far each was checked
 against real Borderlands 2 item cards. No package parser changes; everything is

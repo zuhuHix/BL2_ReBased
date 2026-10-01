@@ -49,9 +49,7 @@ void AOpenWillowInventoryPickup::Initialize(FOpenWillowTakenInventoryItem InItem
     {
         // Recipe ID identifies an imported mesh; instance ID may have a #N
         // suffix and must never be used as a package path.
-        const FString& AssetId = Item.Weapon.Id;
-        const FString Path = FString::Printf(TEXT("/Game/OpenWillow/Weapons/Items/SK_%s.SK_%s"), *AssetId, *AssetId);
-        USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *Path);
+        USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(Item.Weapon);
         WeaponVisual->SetSkeletalMesh(Mesh);
         WeaponVisual->SetVisibility(Mesh != nullptr);
     }

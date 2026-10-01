@@ -3089,3 +3089,114 @@ consumption of the tagged size and fails the whole property otherwise. `CMakeLis
 `mission.cpp` and a synthetic test; no dependency or license change. Verified: CTest 9/9, nine package
 comparisons, Kismet census 0 unresolved links over `Sanctuary_Dynamic`, in-engine door suite 16/16.
 Unverified: all native semantics against the original game (no paired capture yet).
+
+## 2026-10-01: behavior variable data and two VM reader fixes
+
+AI-assisted. `BehaviorProviderDefinition` variable values are an untagged block after the tagged properties:
+one entry per `VariableData` element, in sequence then variable order, with a size per `EBehaviorVariableType`
+name (Bool/Int/Float/Object 4, Vector 12, DirectionVector 48, InstanceData 12, Attribute 20, UnaryMath 8,
+BinaryMath 12, AttachmentLocation 32, Flag 8, Named*/AllPlayers 0). The table is FITTED: checked by exact
+consumption on 32,185 provider exports (0 mismatches), reference/class checks and cross-copy consistency
+(0 inconsistent), and trusted only when consumed exactly. `Behavior_CompareObject` now runs from data (its
+script: equal objects follow link 0, otherwise link 1); the Fire dummy's sequence is chosen by its
+`BehaviorSequenceEnableByMission` condition, whose evaluation is native, so the rule used is UNVERIFIED.
+
+Parsing behaviour change (`src/vm.cpp`): enum bytes declared in another package now resolve through the
+declaring `ByteProperty` (previously read as 0); struct values start from the `ScriptStruct`'s own default
+tags (header 52 bytes, fitted; 1,275 of 1,275 structs in the code packages end exactly at the export end) and
+only when that stream is consumed exactly. No bounds check was loosened. `CMakeLists.txt` gained the
+`behavior-synthetic` test. Verified: CTest 10/10, nine package comparisons, unchanged mission/Kismet/door
+runs apart from the new `SetSequence` action field. Not verified against the game: link-id semantics, the
+once-per-event rule (duplicate links always differ by id byte; the Fire mission's `Default` event has two such
+pairs, so this rule may drop real activations), and the enable-condition rule. Record:
+`docs/verification/BEHAVIOR_DATA_DECODE.md`.
+
+## 2026-10-01: weapon balances, card stats and loot pools decoded for the slice
+
+AI-assisted. The mission pistol `MW_RockPaper_Fire` resolves through `Pistol_Maliwan` -> `_2_Uncommon` ->
+`Pistol_Maliwan_2_Fire`; body, Fire element and material are fixed, grip/barrel/sight/accessory roll (4,608
+combinations). Our part-list merge equals the game's `RuntimePartListCollection` (OpenBLCMM dumps) for 243 of
+249 Startup balances; the 6 others differ in data the running game changed. `tools/weapon_stats.py` now
+applies the weapon type's own effects and class defaults, divides by negative Scales instead of subtracting
+them (FITTED: 4 of 6 observed cards fully reproduced, was 1), and emits projectiles, status chance/damage,
+firing mode and card rounding. Still failing: launcher sale value, one Dahl SMG (1 damage point) and the
+Bandit slag SMG (damage, magazine). `tools/loot_pools.py` reproduces 2,505 of 2,554 cooked
+`ProbabilityDisplayString` shares; the target dummy has no loot in stock data, so the slice uses
+`StandardEnemyGunsAndGear`. Selection/roll rules, the scale rule and rounding are native and stay UNVERIFIED.
+Reader: additive `--properties-batch` CLI mode. Record: `docs/verification/WEAPON_BALANCE_DECODE.md`.
+
+## 2026-10-01: stock slice world placement, values, Phaselock data, audio chain and NPC assets
+
+AI-assisted. Tooling only; no parsing behaviour change. None of this is checked against the original game.
+
+- World (`tools/prepare_slice_world.py`, record `docs/verification/SLICE_WORLD_PLACEMENT.md`): the GoToRange
+  trigger is `WillowWaypoint_9`, a cylinder (357.81 / 145.31) completed by readable `WillowWaypoint.Touch`
+  script; Marcus is the placed `WillowAIPawn_13` (not population-spawned, correcting the earlier census) with a
+  scripted move-node walk 12 -> 26 -> 35 -> 40 and door Play/Reverse arrival events; the dummy comes from
+  `PopulationOpportunityDen_13` at `WillowPopulationPoint_40`; the target Matinee `SeqAct_Interp_0` is driven
+  by the dummy's own `MoveTargetForward`/`SendTargetBack` behaviours (the mission's `TargetForward`/`TargetBack`
+  events have no Kismet listener); respawn follows the script rule in `GetBestPlayerPlacementPoint`. 20
+  structural oracles pass. UNVERIFIED: native navigation, population spawning, Matinee frame, station activation.
+- Values (`tools/slice_values.py`): XP reward percentage 0.05 (the amount is native; the candidate formula is
+  UNVERIFIED); health 80 x 1.13^L (which of two constants applies is UNVERIFIED).
+- Phaselock (`tools/prepare_action_skill.py`, record `docs/verification/PHASELOCK_STOCK_DATA.md`): lift 0.7 s,
+  lock attribute 5 x target time scale, fade 1.1 s, cooldown pool 13 s paused while the target is held,
+  Suspension +0.5 s per grade. The script was read, never run; the timeline, modifier rule and cooldown
+  semantics are UNVERIFIED.
+- Audio (`tools/audio_census.py`, `tools/audio_slice_chain.py`, record `docs/verification/SLICE_AUDIO_CHAIN.md`):
+  16 slice events resolve to Wwise Vorbis media; containers tile exactly; ids are FNV-1 of the lower-cased
+  name (16/16 events, 99/99 banks). Nothing installed decodes the media; a decoder is a new external tool and
+  therefore a maintainer decision. No tool was downloaded.
+- Assets (`tools/seed_slice_npc_assets.ps1`, record `docs/verification/SLICE_NPC_ASSETS.md`): Marcus, the target
+  dummy and the Maliwan pistol candidate fragments extracted with UModel build 1590 and imported locally
+  (12 jobs, 0 failed). Textures cross-check against our decoder; meshes are identity-only; materials are
+  UModel's texture guess, not verified graphs.
+
+## 2026-10-01: slice host loop uses stock world data
+
+AI-assisted. Host and executor work; no package parsing change. Nothing here is compared against the original game.
+
+- `-owquest` now reads world, NPC and audio data from ignored manifests (`-owslice`, `-ownpcs`, `-owaudio`).
+  Marcus is a placed NPC whose walk is started by the installed Kismet; each move-node arrival re-enters the
+  same sequence, so the door opens and closes through the installed links rather than host calls. The range
+  objective uses the stock waypoint cylinder. The stock dummy spawns at its population point, the map's
+  populated events attach it to the target carrier, its own behaviour events play and reverse the target
+  Matinee, and the installed Destroy op removes it. Maya's health uses the recovered formula and respawn the
+  decoded station selection. Dialog is looked up and logged, never played.
+- Executor additions: `Kismet::eventsForOriginator`, `Mover::sequenceEvent` / `originatorEvent` / `output` /
+  `advanceSequence` / `variables`, CLI `--kismet-run ... --originator <object-path>` (synthetic test case 13).
+- Two host conventions, both UNVERIFIED: Matinee pose = Key(t) x Key(0)^-1 x placed pose (identical to the
+  door's formula when the first rotation key is zero; chosen for the target on screenshot evidence only), and
+  a door that receives the opposite request while moving turns around from where it is.
+- Checks: quest suite 37/37 and resume 7/7, door suite 16/16, CTest 10/10, packages 9/9. Two earlier quest runs
+  failed (35/37, 36/37) and are kept in the record. Not verified against the original game: the navmesh first
+  leg of Marcus's walk (a straight line here), the dummy's spawn trigger and event order, touch semantics,
+  station activation, mesh hit volumes, the dummy's health. Hand play is launched with `tools/run_quest.ps1`.
+  Record: `docs/verification/SANCTUARY_RPG_MISSION.md`, "Host loop with stock world data".
+
+## 2026-10-01: slice player side on stock data
+
+AI-assisted. Host work; no package parsing change; nothing compared against the original game.
+
+- The lent mission weapon is the recipe matching the mission's own `MissionWeapon` (Maliwan fire pistol), given
+  at the Fire objective and shown with the imported Maliwan sample mesh. Each shot hands the held item's
+  damage type path to the dummy's `OnTakeDamage` check; the host fire-damage class is removed. A normal-damage
+  pistol takes the wrong-element path and has its own check.
+- Hand play (`tools/run_quest.ps1`) loads `local/items/slice` with Maya at the slice gear level (8, an
+  UNVERIFIED slice choice). First-person arms stay hidden until a weapon is drawn; whether the original shows
+  arms when unarmed is UNVERIFIED.
+- Turn-in adds the candidate XP amount (0.05 x the experience span at mission level 8 = 396; the native rule
+  is UNVERIFIED) to the skills component.
+- Phaselock reads `action_skill_siren.json`: lift, lock length, fade, cooldown paused while a target is held,
+  miss reset, re-lock penalty, Suspension's bonus. Targeting, the cast gate and target state stay host
+  stand-ins; the cooldown model and curve shapes are UNVERIFIED.
+- Stock data drops no item for this mission (the dummy has no pools; the reward is XP only). A labelled
+  turn-in loot stand-in (first fallback-pool seed that drops a weapon) exercises the pickup path; it is not
+  stock behaviour.
+- `tools/prepare_weapon_paint.py` accepts material chains without a pattern texture; the pistol decal and the
+  shader channel reading are UNVERIFIED.
+- Checks: quest suite 57/57 and resume 7/7, door suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE,
+  CTest 10/10, packages 9/9. Two earlier failing quest runs are kept in the record. Known gaps: Phaselock can
+  lift the target into ceiling beams, XP and skill grades are not saved, health is not recalculated on
+  level-up, slice guns have no inventory 3D preview. Record: `docs/verification/SANCTUARY_RPG_MISSION.md`,
+  "Player side with stock data".

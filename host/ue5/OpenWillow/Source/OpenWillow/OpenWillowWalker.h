@@ -1,9 +1,11 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "OpenWillowPhaselock.h"
 #include "OpenWillowWalker.generated.h"
 
 struct FOpenWillowTakenInventoryItem;
+struct FOpenWillowWeaponItem;
 
 UCLASS()
 class OPENWILLOW_API AOpenWillowWalker : public ACharacter
@@ -31,8 +33,30 @@ public:
     bool TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem);
     void ToggleInventory();
     void ToggleSkills();
+    // Mission weapon lend/return (UOpenWillowQuest): the item goes into a weapon slot and is drawn; on return it is
+    // removed and the slot held before the lend is drawn again. Placement rule: host choice, UNVERIFIED.
+    bool LendWeapon(const FOpenWillowWeaponItem& Item);
+    bool ReturnLentWeapon(const FString& Id);
+    // Draws the equipped weapon with this stable id; false when it is not in a slot.
+    bool DrawItemById(const FString& Id);
+    // One trigger pull of the held weapon (test hook; the fire button goes through the same shot code).
+    bool FireOnce();
+    // Stock damage type path of the shot being applied right now (the held item's card damage type); "" otherwise.
+    const FString& ShotDamageType() const { return ShotDamageTypeInFlight; }
+    // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).
+    void UsePhaselock();
+    const FOpenWillowPhaselockData& GetPhaselockData() const { return Phaselock; }
+    const FString& GetPhaselockFile() const { return PhaselockFile; }
+    // Object path of the mesh shown in Maya's hand ("" when none).
+    FString HeldWeaponMesh() const;
     float PhaselockRemaining() const;
-    float PhaselockCooldown() const { return PhaselockCooldownSeconds; }
+    float PhaselockCooldown() const { return Phaselock.CooldownSeconds; }
+    // Last cast: world time, whether it lifted a target, and its timeline (zero for a miss).
+    float LastPhaselockCastAt() const { return PhaselockCastAt; }
+    bool LastPhaselockHit() const { return bPhaselockHit; }
+    const FOpenWillowPhaselockTimeline& LastPhaselockTimeline() const { return PhaselockTimeline; }
+    class AOpenWillowCombatTarget* LastPhaselockTarget() const { return PhaselockTarget.Get(); }
+    bool AreArmsShown() const;
     float LastTargetHitAt() const { return TargetHitAt; }
     class UOpenWillowMover* GetMover() const { return Mover; }
     class UOpenWillowQuest* GetQuest() const { return Quest; }
@@ -61,7 +85,8 @@ private:
     void CancelReload();
     void FireWeapon();
     void PickupNearby();
-    void UsePhaselock();
+    // Arms are shown while a pose clip set is loaded (a drawn weapon, or Unarmed clips if imported) and no menu covers them.
+    void UpdateArmsVisibility();
     void RunCombatShots(float Now);
     void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
@@ -77,7 +102,8 @@ private:
     UPROPERTY() TObjectPtr<class UOpenWillowSkills> Skills;
     UPROPERTY() TObjectPtr<class UOpenWillowMover> Mover;
     UPROPERTY() TObjectPtr<class UOpenWillowQuest> Quest;
-    // Host stand-ins (UNVERIFIED): Maya's real maximum health and the BL2 death/respawn flow are not recovered.
+    // Host stand-ins (UNVERIFIED) unless -owquest supplies the slice data: then health follows the recovered
+    // formula and respawn the decoded station selection (UOpenWillowQuest).
     float MaxHealth = 400.f;
     float Health = 400.f;
     FVector RespawnLocation = FVector::ZeroVector;
@@ -111,12 +137,21 @@ private:
     bool bReloading = false;
     float ReloadEndsAt = 0;
     bool bOutOfAmmoLogged = false;
-    float PhaselockReadyAt = 0;
     float LandUntil = 0;
     float TargetHitAt = -10;
     float PhaselockBeamUntil = 0;
-    // Cooldown_Phaselock ConstantAttributeValueResolver: 13 s (no skill/class mods).
-    float PhaselockCooldownSeconds = 13.f;
+    FOpenWillowPhaselockData Phaselock;
+    FString PhaselockFile;
+    // Cooldown pool model (UNVERIFIED semantics, PHASELOCK_STOCK_DATA.md): refilled at activation, drained at the held
+    // rate until PhaselockHeldUntil (the release), then at the base rate; a miss resets it at PhaselockResetAt.
+    float PhaselockCastAt = -100.f;
+    float PhaselockHeldUntil = -100.f;
+    float PhaselockResetAt = -100.f;
+    bool bPhaselockHit = false;
+    FOpenWillowPhaselockTimeline PhaselockTimeline;
+    TWeakObjectPtr<class AOpenWillowCombatTarget> PhaselockTarget;
+    FString ShotDamageTypeInFlight;
+    int32 PreLendSlot = INDEX_NONE;
     bool bWantsCombatTarget = false;
     bool bBarrelAxisLogged = false;
     // Look-input weapon sway, in degrees (yaw, pitch).
