@@ -27,8 +27,51 @@ void usage() {
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
         "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name>) | "
+        "--object-dump <export-index> <prefix> --cooked <directory> | "
+        "--kismet-census --cooked <directory> | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
+}
+
+
+// Reflection-typed JSON view of a VM value (used by --object-dump). Object references print as the target's path.
+void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
+    using Kind = vm::Value::Kind;
+    switch (value.kind) {
+    case Kind::None: out << "null"; break;
+    case Kind::Int: case Kind::Byte: out << value.i; break;
+    case Kind::Bool: out << (value.i ? "true" : "false"); break;
+    case Kind::Float: out << value.f; break;
+    case Kind::String: case Kind::Name: out << quote(value.s); break;
+    case Kind::Delegate: out << quote("delegate:" + value.s); break;
+    case Kind::Class: out << quote(value.cls ? "class:" + value.cls->path : "class:None"); break;
+    case Kind::Object:
+        if (!value.o) out << "null";
+        else if (value.o->resourcePackage) out << quote(value.o->resourcePackage->path(value.o->resourceIndex));
+        else out << quote(value.o->name);
+        break;
+    case Kind::Struct: {
+        out << '{';
+        const auto* aggregate = value.aggregate();
+        for (size_t i = 0; aggregate && i < aggregate->names.size(); ++i) {
+            if (i) out << ',';
+            out << quote(aggregate->names[i]) << ':';
+            if (depth > 12) out << "\"...\""; else valueJson(out, aggregate->values[i], depth + 1);
+        }
+        out << '}';
+        break;
+    }
+    case Kind::Array: {
+        out << '[';
+        const auto& elements = value.elements();
+        for (size_t i = 0; i < elements.size(); ++i) {
+            if (i) out << ',';
+            if (depth > 12) out << "\"...\""; else valueJson(out, elements[i], depth + 1);
+        }
+        out << ']';
+        break;
+    }
+    }
 }
 
 int32_t signedNumber(const std::string& value) {
@@ -431,6 +474,66 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (mode == "--kismet-census") {
+            // Loads every Sequence of the package through the executor and reports link resolution.
+            if (argc != 5 || std::string(argv[3]) != "--cooked") usage();
+            PackageStore store(argv[4]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            auto pkg = runtime.package(package->packageName);
+            vm::Class* sequenceClass = runtime.findClass("Engine.Sequence");
+            size_t sequences = 0, failed = 0, ops = 0, links = 0, unresolved = 0, outputs = 0;
+            std::cout << "{\"sequences\":[";
+            bool first = true;
+            for (int32_t index = 1; size_t(index) <= pkg->exports.size(); ++index) {
+                vm::Class* cls = nullptr;
+                try { cls = runtime.classAt(pkg, pkg->object(index).cls); } catch (const std::exception&) { continue; }
+                if (!cls || !cls->isChildOf(sequenceClass)) continue;
+                ++sequences;
+                std::cout << (first ? "" : ",") << "{\"path\":" << quote(pkg->path(index));
+                first = false;
+                try {
+                    vm::Kismet kismet(runtime, pkg, pkg->path(index));
+                    const auto stats = kismet.linkStats();
+                    ops += kismet.ops().size(); links += stats.links; unresolved += stats.unresolved; outputs += stats.outputs;
+                    std::cout << ",\"ops\":" << kismet.ops().size() << ",\"outputs\":" << stats.outputs << ",\"links\":" << stats.links
+                              << ",\"unresolved\":" << stats.unresolved << ",\"variable_links\":" << stats.variableLinks << "}";
+                } catch (const std::exception& error) {
+                    ++failed;
+                    std::cout << ",\"error\":" << quote(error.what()) << "}";
+                }
+            }
+            std::cout << "],\"totals\":{\"sequences\":" << sequences << ",\"failed\":" << failed << ",\"ops\":" << ops
+                      << ",\"outputs\":" << outputs << ",\"links\":" << links << ",\"unresolved\":" << unresolved
+                      << "},\"log_entries\":" << runtime.log.size() << "}\n";
+            return 0;
+        }
+        if (mode == "--mover-event") {
+            // Stock activation probe: a remote event through the action's installed Kismet sequence, then completion.
+            if (argc != 8 || std::string(argv[5]) != "--cooked") usage();
+            vm::Mover mover(argv[6], package->packageName, argv[3], argv[4]);
+            const auto dispatch = mover.remoteEvent(argv[7]);
+            std::cout << "{\"event\":" << quote(argv[7]) << ",\"matched\":" << dispatch.matched << ",\"motion\":" << dispatch.motion;
+            const auto list = [](const char* name, const std::vector<std::string>& lines) {
+                std::cout << ",\"" << name << "\":[";
+                bool first = true;
+                for (const auto& line : lines) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+                std::cout << "]";
+            };
+            list("trace", dispatch.trace); list("host_boundary", dispatch.hostBoundary); list("errors", dispatch.errors);
+            bool failed = !dispatch.errors.empty() || !dispatch.matched || dispatch.motion == 0;
+            if (dispatch.motion != 0) {
+                const auto start = mover.notify(false, dispatch.motion < 0);
+                const auto finish = mover.notify(true, dispatch.motion < 0);
+                const auto done = mover.motionFinished(dispatch.motion < 0);
+                std::cout << ",\"start_steps\":" << start.steps << ",\"finish_steps\":" << finish.steps
+                          << ",\"start_error\":" << quote(start.error) << ",\"finish_error\":" << quote(finish.error);
+                list("finished_trace", done.trace); list("finished_errors", done.errors);
+                failed |= !start.error.empty() || !finish.error.empty() || !done.errors.empty();
+            }
+            std::cout << "}\n";
+            return failed ? 1 : 0;
+        }
         if (mode == "--mover-probe") {
             if (argc != 7 || std::string(argv[5]) != "--cooked") usage();
             vm::Mover mover(argv[6], package->packageName, argv[3], argv[4]);
@@ -453,6 +556,34 @@ int main(int argc, char** argv) {
             }
             std::cout << "]}\n";
             return failed ? 1 : 0;
+        }
+        if (mode == "--object-dump") {
+            // Instantiates one export through the VM (class defaults + tagged overrides) and prints its properties.
+            if (argc != 7 || std::string(argv[5]) != "--cooked") usage();
+            PackageStore store(argv[6]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            auto pkg = runtime.package(package->packageName);
+            const auto object = runtime.instantiateExport(pkg, signedNumber(argv[3]), unsignedNumber(argv[4]));
+            std::cout << "{\"path\":" << quote(pkg->path(signedNumber(argv[3]))) << ",\"class\":" << quote(object->cls->path)
+                      << ",\"properties\":{";
+            std::map<std::string, const vm::Value*> sorted;
+            for (const auto& [name, value] : object->props) sorted.emplace(name, &value);
+            bool first = true;
+            const auto defaults = runtime.defaultsOf(object->cls);
+            for (const auto& [name, value] : sorted) {
+                // Only properties that differ from the class default (what the export actually overrides).
+                const auto base = defaults->props.find(name);
+                if (base != defaults->props.end() && vm::sameValue(base->second, *value)) continue;
+                std::cout << (first ? "" : ",") << quote(name) << ':';
+                valueJson(std::cout, *value, 0);
+                first = false;
+            }
+            std::cout << "},\"log\":[";
+            first = true;
+            for (const auto& line : runtime.log) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}" << '\n';
+            return 0;
         }
         if (mode == "--kismet-run") {
             // Runs one installed Kismet sequence from an entry point. World-acting ops are recorded, not run.

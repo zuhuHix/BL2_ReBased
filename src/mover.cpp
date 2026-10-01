@@ -1,5 +1,6 @@
 #include "mover.hpp"
 #include "vm.hpp"
+#include "kismet.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cctype>
@@ -15,13 +16,17 @@ struct Mover::Impl {
     PackageStore store;
     Runtime runtime;
     ObjectPtr actor, action, audio;
+    std::string package, sequencePath, actionName;
+    std::unique_ptr<Kismet> kismet;
+    int requestedMotion = 0;
+    std::vector<std::string> hostBoundary;
     Function *started = nullptr, *finished = nullptr;
     struct Timer { double due; bool loop; double rate; std::string name; };
     std::map<std::string, Timer> timers;
     std::vector<std::string> diagnostics;
     double clock = 0;
-    explicit Impl(const std::filesystem::path& cooked, const std::string& package,
-                  const std::string& actorPath, const std::string& actionPath) : store(cooked), runtime(store) {
+    explicit Impl(const std::filesystem::path& cooked, const std::string& packageName,
+                  const std::string& actorPath, const std::string& actionPath) : store(cooked), runtime(store), package(packageName) {
         runtime.registerCoreNatives();
         runtime.stepLimit = 20000;
         auto pkg = runtime.package(package);
@@ -83,6 +88,27 @@ struct Mover::Impl {
         if (!diagnostics.empty()) throw RuntimeError("mover object loading emitted a diagnostic: " + diagnostics.front());
         runtime.log.clear();
     }
+    Kismet& sequence() {
+        if (!kismet) {
+            const auto dot = actionPathFull.rfind('.');
+            if (dot == std::string::npos) throw RuntimeError("mover action path has no owning sequence");
+            sequencePath = actionPathFull.substr(0, dot);
+            actionName = actionPathFull.substr(dot + 1);
+            kismet = std::make_unique<Kismet>(runtime, runtime.package(package), sequencePath);
+            Kismet* self = kismet.get();
+            // Only this mover's Matinee action is bound; everything else is reported at the host boundary.
+            self->handle("Engine.SeqAct_Interp", [this](Kismet& k, Kismet::Op& op, int input) {
+                const std::string desc = k.inputDesc(op, input);
+                if (op.name == actionName && (desc == "Play" || desc == "Reverse")) requestedMotion = desc == "Play" ? 1 : -1;
+                else hostBoundary.push_back(op.cls + ":" + op.name + " <- " + desc);
+            });
+            self->handle("Engine.SequenceAction", [this](Kismet& k, Kismet::Op& op, int input) {
+                hostBoundary.push_back(op.cls + ":" + op.name + " <- " + k.inputDesc(op, input));
+            });
+        }
+        return *kismet;
+    }
+    std::string actionPathFull;
     Result result(const std::function<void()>& operation) {
         Result out;
         auto props = actor->props;
@@ -105,7 +131,7 @@ struct Mover::Impl {
 };
 Mover::Mover(const std::filesystem::path& cooked, const std::string& package,
              const std::string& actor, const std::string& action)
-    : impl_(std::make_unique<Impl>(cooked, package, actor, action)) {}
+    : impl_(std::make_unique<Impl>(cooked, package, actor, action)) { impl_->actionPathFull = action; }
 Mover::~Mover() = default;
 const std::vector<std::string>& Mover::loadingDiagnostics() const { return impl_->diagnostics; }
 Mover::Result Mover::notify(bool finished, bool reverse) {
@@ -116,6 +142,35 @@ Mover::Result Mover::notify(bool finished, bool reverse) {
         if (!finished) args.push_back(Value::makeObject(nullptr)); // unused GroupInst in this bounded notification
         i.runtime.call(finished ? *i.finished : *i.started, i.actor, std::move(args));
     });
+}
+Mover::Dispatch Mover::remoteEvent(const std::string& name) {
+    auto& i = *impl_;
+    Dispatch out;
+    i.runtime.log.clear(); i.runtime.steps = 0;
+    i.requestedMotion = 0; i.hostBoundary.clear();
+    try {
+        Kismet& k = i.sequence();
+        k.trace.clear(); k.errors.clear();
+        out.matched = k.remoteEvent(name);
+        k.run();
+        out.trace = k.trace; out.errors = k.errors;
+    } catch (const std::exception& e) { out.errors.push_back(e.what()); }
+    for (const auto& line : i.runtime.log) out.errors.push_back("runtime: " + line);
+    out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
+    return out;
+}
+Mover::Dispatch Mover::motionFinished(bool reverse) {
+    auto& i = *impl_;
+    Dispatch out;
+    try {
+        Kismet& k = i.sequence();
+        k.trace.clear(); k.errors.clear(); i.hostBoundary.clear(); i.requestedMotion = 0;
+        if (auto* op = k.find(i.actionName)) k.fire(*op, reverse ? "Reversed" : "Completed");
+        k.run();
+        out.trace = k.trace; out.errors = k.errors;
+    } catch (const std::exception& e) { out.errors.push_back(e.what()); }
+    out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
+    return out;
 }
 Mover::Result Mover::advance(double seconds) {
     auto& i = *impl_;

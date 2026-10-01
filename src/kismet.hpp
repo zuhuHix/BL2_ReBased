@@ -62,6 +62,9 @@ public:
     Value* variableValue(Op& op, const std::string& desc, size_t i = 0);          // first-class SeqVar value slot
     Value* prop(Op& op, const std::string& name) { return runtime_.property(*op.object, name); }
 
+    struct LinkStats { size_t outputs = 0, links = 0, unresolved = 0, variableLinks = 0; };
+    LinkStats linkStats();                                                        // census of the loaded graph
+
     double now() const { return now_; }
     std::vector<std::string> trace;     // one line per executed impulse, in order
     std::vector<std::string> errors;    // unsupported ops, unresolved links, runaway guards

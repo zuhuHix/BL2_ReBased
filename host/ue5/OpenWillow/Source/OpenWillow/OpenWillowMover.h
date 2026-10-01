@@ -13,7 +13,13 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function) override;
     bool TryInteract();
+    // Stock activation: a remote event through the installed Kismet sequence owning the door's Matinee action.
+    // Returns whether any event node in the sequence matched. Unsupported ops fail the component explicitly.
+    bool RemoteEvent(const FString& Name);
+    int32 LastEventMatched = 0;
+    int32 LastEventBoundary = 0;
 private:
+    void StartMotion(bool NextReverse);
     struct FImpl;
     TSharedPtr<FImpl> Impl;
     void Fail(const FString& Error);

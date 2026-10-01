@@ -21,8 +21,9 @@ Kismet::Kismet(Runtime& runtime, std::shared_ptr<const Package> package, const s
     Class* opClass = runtime_.findClass("Engine.SequenceOp");
     const auto& table = runtime_.indexOf(*package_);
     const auto children = table.children.find(sequenceIndex_);
-    if (children == table.children.end()) throw RuntimeError("kismet sequence has no children: " + sequencePath);
-    for (const int32_t index : children->second) {
+    // An empty container sequence is valid: it simply has no ops of its own.
+    const std::vector<int32_t> none;
+    for (const int32_t index : children == table.children.end() ? none : children->second) {
         const auto& exported = package_->object(index);
         Class* cls = nullptr;
         try { cls = runtime_.classAt(package_, exported.cls); } catch (const std::exception&) { continue; }
@@ -224,6 +225,27 @@ Value* Kismet::variableValue(Op& op, const std::string& desc, size_t i) {
     for (const char* name : {"bValue", "IntValue", "FloatValue"})
         if (Value* value = runtime_.property(*vars[i], name)) return value;
     return nullptr;
+}
+
+Kismet::LinkStats Kismet::linkStats() {
+    LinkStats stats;
+    for (auto& op : ops_) {
+        if (const auto* variableLinks = prop(op, "VariableLinks"); variableLinks && variableLinks->kind == Value::Kind::Array)
+            stats.variableLinks += variableLinks->elements().size();
+        const auto* outputs = prop(op, "OutputLinks");
+        if (!outputs || outputs->kind != Value::Kind::Array) continue;
+        for (const Value& output : outputs->elements()) {
+            ++stats.outputs;
+            const auto* targets = field(output, "Links");
+            if (!targets || targets->kind != Value::Kind::Array) continue;
+            for (const Value& target : targets->elements()) {
+                ++stats.links;
+                const auto* linked = field(target, "LinkedOp");
+                if (!linked || !linked->o || linked->o->resourcePackage != package_ || !findByIndex(linked->o->resourceIndex)) ++stats.unresolved;
+            }
+        }
+    }
+    return stats;
 }
 
 void Kismet::registerLogicOps() {

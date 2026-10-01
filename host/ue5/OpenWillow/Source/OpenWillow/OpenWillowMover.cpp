@@ -164,13 +164,35 @@ bool UOpenWillowMover::TryInteract() {
     if (!Impl || Failed || !Mesh) return false;
     if (FVector::DistSquared(GetOwner()->GetActorLocation(), Mesh->Bounds.Origin) > FMath::Square(220.)) return false;
     if (Running) return true; // consume repeat key while moving
-    const bool NextReverse = Time >= Duration;
+    StartMotion(Time >= Duration);
+    return true;
+}
+void UOpenWillowMover::StartMotion(bool NextReverse) {
     const auto Result = Impl->Script->notify(false, NextReverse);
     ScriptSteps += Result.steps;
-    if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return true; }
+    if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
     Reverse = NextReverse; Running = true;
     UE_LOG(LogTemp, Display, TEXT("OWMOVER start reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
-    return true;
+}
+bool UOpenWillowMover::RemoteEvent(const FString& Name) {
+    LastEventMatched = 0; LastEventBoundary = 0;
+    if (!Impl || Failed || !Mesh) return false;
+    const auto Dispatch = Impl->Script->remoteEvent(TCHAR_TO_UTF8(*Name));
+    for (const auto& Error : Dispatch.errors) {
+        Fail(FString::Printf(TEXT("kismet event %s: %s"), *Name, UTF8_TO_TCHAR(Error.c_str())));
+        return false;
+    }
+    LastEventMatched = int32(Dispatch.matched);
+    LastEventBoundary = int32(Dispatch.hostBoundary.size());
+    UE_LOG(LogTemp, Display, TEXT("OWMOVER event=%s matched=%d motion=%d host_boundary=%d trace=%d"),
+        *Name, LastEventMatched, Dispatch.motion, LastEventBoundary, int32(Dispatch.trace.size()));
+    for (const auto& Line : Dispatch.hostBoundary)
+        UE_LOG(LogTemp, Display, TEXT("OWMOVER host boundary (not run): %s"), UTF8_TO_TCHAR(Line.c_str()));
+    if (Dispatch.motion == 0 || Running) return Dispatch.matched > 0;
+    const bool NextReverse = Dispatch.motion < 0;
+    if ((NextReverse && Time <= 0) || (!NextReverse && Time >= Duration)) return true; // already at that end
+    StartMotion(NextReverse);
+    return !Failed;
 }
 void UOpenWillowMover::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function) {
     Super::TickComponent(Delta, Type, Function);
@@ -198,6 +220,8 @@ void UOpenWillowMover::TickComponent(float Delta, ELevelTick Type, FActorCompone
             if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
             Running = false;
             UE_LOG(LogTemp, Display, TEXT("OWMOVER finish reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
+            const auto Done = Impl->Script->motionFinished(Reverse);
+            for (const auto& Error : Done.errors) { Fail(UTF8_TO_TCHAR(Error.c_str())); return; }
         }
     }
     if (Testing) RunTest(Delta);
@@ -233,6 +257,15 @@ void UOpenWillowMover::RunTest(float Delta) {
     case 7: if (Running) return; Check(!Reverse, TEXT("second_open_start")); Check(Time == Duration && !Ray(true) && Ray(false), TEXT("second_open_collision")); break;
     case 8: Interact(); break;
     case 9: if (Running) return; Check(Reverse, TEXT("second_close_start")); Check(Time == 0 && Initial.Equals(Mesh->GetComponentTransform(), 0.01) && Ray(true) && ScriptSteps > 0, TEXT("second_close_collision")); break;
+    // Stock activation: the installed remote events RE_Ep14_OpenMarcusDoor / RE_Ep14_CloseMarcusDoor drive the
+    // same Matinee action through its Kismet sequence (no developer key).
+    case 10: Check(RemoteEvent(TEXT("RE_Ep14_OpenMarcusDoor")) && Running && !Reverse && LastEventMatched == 1, TEXT("stock_open_event_start")); break;
+    case 11: if (Running) return; Check(Time == Duration && !Ray(true) && Ray(false), TEXT("stock_open_event_collision")); break;
+    case 12: Check(RemoteEvent(TEXT("RE_Ep14_CloseMarcusDoor")) && Running && Reverse && LastEventMatched == 1, TEXT("stock_close_event_start")); break;
+    case 13: if (Running) return; Check(Time == 0 && Initial.Equals(Mesh->GetComponentTransform(), 0.01) && Ray(true), TEXT("stock_close_event_collision")); break;
+    // An installed event that reaches a world-acting op this host does not bind must report it and not move the door.
+    case 14: Check(RemoteEvent(TEXT("RocksPaper_MoveTargetForward")) && !Running && Time == 0 && LastEventMatched == 1 && LastEventBoundary == 1, TEXT("stock_unbound_op_reported_no_motion")); break;
+    case 15: Check(!RemoteEvent(TEXT("OpenWillow_NoSuchEvent")) && !Running && LastEventMatched == 0, TEXT("unknown_event_ignored")); break;
     default:
         UE_LOG(LogTemp, Display, TEXT("OWMOVERTEST SUMMARY result=%s checks=%d errors=%d steps=%lld"), Errors ? TEXT("FAIL") : TEXT("PASS"), Checks, Errors, ScriptSteps);
         FPlatformMisc::RequestExit(false); Testing = false; return;
