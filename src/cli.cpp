@@ -6,6 +6,7 @@
 #include "mover.hpp"
 #include "kismet.hpp"
 #include "mission.hpp"
+#include "slice.hpp"
 
 #include <fstream>
 #include <cmath>
@@ -546,6 +547,53 @@ int main(int argc, char** argv) {
             for (const auto& line : mission.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "]}\n";
             return mission.errors.empty() ? 0 : 1;
+        }
+        if (mode == "--slice-run") {
+            // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
+            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s>. Package argument is Sanctuary_Dynamic.
+            if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::FireMissionSlice slice(runtime, argv[3], package->packageName,
+                                       "GD_TargetDummy.Character.CharClass_TargetDummy.BehaviorProviderDefinition_5");
+            std::set<std::string> completed;
+            for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
+            static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
+                                          "reward", "status", "objective_set", "objective_complete"};
+            std::cout << "{\"steps\":[";
+            bool first = true;
+            for (int i = 6; i < argc; ++i) {
+                const std::string step = argv[i];
+                bool ok = true;
+                if (step == "accept") ok = slice.accept(completed);
+                else if (step == "range") ok = slice.enterRange();
+                else if (step == "hit:fire") ok = slice.hitDummy(true);
+                else if (step == "hit:other") ok = slice.hitDummy(false);
+                else if (step == "turnin") ok = slice.turnIn();
+                else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
+                else usage();
+                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false") << ",\"events\":[";
+                first = false;
+                bool firstEvent = true;
+                for (const auto& event : slice.drain()) {
+                    std::cout << (firstEvent ? "" : ",") << "{\"kind\":" << quote(kinds[int(event.kind)]) << ",\"a\":" << quote(event.a)
+                              << ",\"b\":" << quote(event.b) << ",\"c\":" << quote(event.c) << "}";
+                    firstEvent = false;
+                }
+                std::cout << "]}";
+            }
+            std::cout << "],\"status\":" << int(slice.mission().status()) << ",\"errors\":[";
+            first = true;
+            for (const auto& line : slice.errors()) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"dummy_boundary\":[";
+            first = true;
+            for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "],\"dummy_trace\":[";
+            first = true;
+            for (const auto& line : slice.dummy().trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}\n";
+            return slice.errors().empty() ? 0 : 1;
         }
         if (mode == "--mover-event") {
             // Stock activation probe: a remote event through the action's installed Kismet sequence, then completion.

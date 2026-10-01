@@ -56,6 +56,7 @@ public:
     // ActivateMission: NotStarted -> Active, then the "Default" event.
     bool accept(const std::set<std::string>& completed);
     bool completeObjective(const std::string& objectiveName);
+    bool completeObjectiveByPath(const std::string& objectivePath);   // what Behavior_UpdateMissionObjective names
     bool customEvent(const std::string& name);
     // Turn-in: ReadyToTurnIn -> Complete and a Reward effect.
     bool turnInMission();
@@ -68,8 +69,6 @@ public:
     bool loadState(const std::string& text);
 
 private:
-    struct Sequence;
-    struct Pending { double due; uint64_t order; int sequence; int behavior; uint64_t root; };
     Runtime& runtime_;
     std::shared_ptr<const Package> package_;
     std::string missionPath_, missionName_, giver_, turnIn_, weapon_, description_, xpAttribute_;
@@ -85,15 +84,12 @@ private:
     std::shared_ptr<Impl> impl_;
     std::vector<Effect> effects_;
     double now_ = 0;
-    uint64_t order_ = 0;
-    uint64_t root_ = 0;
 
     void emit(Effect::Kind kind, std::string a = "", std::string b = "", std::string c = "");
     void fireEvent(const std::string& name);
-    void runBehavior(int sequence, int behavior, uint64_t root);
     void setStatus(Status status);
     bool advanceSet(const std::string& setPath);
-    void runDue();
+    void collectProviderErrors();
 };
 
 } // namespace vm

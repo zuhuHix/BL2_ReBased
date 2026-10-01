@@ -1,8 +1,8 @@
 #include "mission.hpp"
+#include "behavior.hpp"
 
 #include <algorithm>
 #include <sstream>
-#include <tuple>
 
 namespace vm {
 namespace {
@@ -21,21 +21,7 @@ ObjectPtr load(Runtime& runtime, const Value* reference) {
 }
 
 struct MissionSystem::Impl {
-    struct Event { std::string name; int start, length; };
-    struct BehaviorRef { ObjectPtr object; std::string cls; int start, length; };
-    struct Link { int behavior; double delay; };
-    struct Sequence {
-        std::string provider, name;
-        bool enabled = true;
-        std::vector<Event> events;
-        std::vector<BehaviorRef> behaviors;
-        std::vector<Link> links;
-    };
-    std::vector<Sequence> sequences;
-    std::vector<MissionSystem::Pending> pending;
-    // A behavior runs at most once per fired event, however many links reach it (the kernel exposes
-    // RecentlyRunBehaviorsForSequence; that this is its rule is UNVERIFIED).
-    std::set<std::tuple<uint64_t, int, int>> ran;
+    std::unique_ptr<BehaviorProvider> provider;
 };
 
 MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath)
@@ -82,52 +68,30 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
         }
     }
 
-    // The behavior provider's sequences: named events, behavior objects, packed output links.
-    if (auto provider = load(runtime_, runtime_.property(*mission, "BehaviorProvider"))) {
-        const std::string providerPath = refPath(runtime_.property(*mission, "BehaviorProvider"));
-        const Value* sequences = runtime_.property(*provider, "BehaviorSequences");
-        if (sequences && sequences->kind == Value::Kind::Array) {
-            for (const auto& data : sequences->elements()) {
-                Impl::Sequence sequence;
-                sequence.provider = providerPath;
-                if (const Value* name = data.field("BehaviorSequenceName")) sequence.name = name->s;
-                if (const Value* enabled = data.field("bEnabledOnSpawn")) sequence.enabled = enabled->truth();
-                const auto unpack = [](const Value* packed, int& start, int& length) {
-                    const Value* field = packed ? packed->field("ArrayIndexAndLength") : nullptr;
-                    const uint32_t raw = field ? uint32_t(field->integer()) : 0;
-                    start = int(raw >> 16); length = int(raw & 0xFFFF);
-                };
-                const Value* links = data.field("ConsolidatedOutputLinkData");
-                if (links) for (const auto& link : links->elements()) {
-                    const uint32_t raw = uint32_t(link.field("LinkIdAndLinkedBehavior")->integer());
-                    sequence.links.push_back({int(raw & 0xFFFFFF), link.field("ActivateDelay")->number()});
-                }
-                if (const Value* events = data.field("EventData2"))
-                    for (const auto& event : events->elements()) {
-                        Impl::Event parsed;
-                        parsed.name = event.field("UserData")->field("EventName")->s;
-                        unpack(event.field("OutputLinks"), parsed.start, parsed.length);
-                        sequence.events.push_back(std::move(parsed));
-                    }
-                if (const Value* behaviors = data.field("BehaviorData2"))
-                    for (const auto& behavior : behaviors->elements()) {
-                        Impl::BehaviorRef parsed;
-                        parsed.object = load(runtime_, behavior.field("Behavior"));
-                        if (!parsed.object) throw RuntimeError("unresolved behavior in " + providerPath);
-                        parsed.cls = parsed.object->cls->path;
-                        unpack(behavior.field("OutputLinks"), parsed.start, parsed.length);
-                        sequence.behaviors.push_back(std::move(parsed));
-                    }
-                // Structural oracle for the packing: every range stays inside the link array, every target in range.
-                const int total = int(sequence.links.size());
-                auto checkRange = [&](int start, int length) { if (start < 0 || length < 0 || start + length > total) throw RuntimeError("behavior link range outside link array in " + providerPath); };
-                for (const auto& event : sequence.events) checkRange(event.start, event.length);
-                for (const auto& behavior : sequence.behaviors) checkRange(behavior.start, behavior.length);
-                for (const auto& link : sequence.links)
-                    if (link.behavior < 0 || size_t(link.behavior) >= sequence.behaviors.size()) throw RuntimeError("behavior link target out of range in " + providerPath);
-                impl_->sequences.push_back(std::move(sequence));
-            }
-        }
+    // The mission's behavior provider; the mission behaviors are bound below.
+    if (const Value* reference = runtime_.property(*mission, "BehaviorProvider"); reference && reference->o && reference->o->resourcePackage) {
+        impl_->provider = std::make_unique<BehaviorProvider>(runtime_, reference->o->resourcePackage, reference->o->resourceIndex);
+        auto& provider = *impl_->provider;
+        provider.handle("WillowGame.Behavior_AdvanceObjectiveSet", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+            advanceSet(refPath(p.runtime().property(*b.object, "ObjectiveSetToAdvanceTo")));
+            return std::nullopt;
+        });
+        provider.handle("WillowGame.Behavior_MissionRemoteEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+            emit(Effect::Kind::RemoteEvent, text(p.runtime(), *b.object, "EventName"));
+            return std::nullopt;
+        });
+        provider.handle("GearboxFramework.Behavior_TriggerDialogEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+            Runtime& r = p.runtime();
+            emit(Effect::Kind::Dialog, refPath(r.property(*b.object, "EventTag")), refPath(r.property(*b.object, "Group")),
+                 refPath(r.property(*b.object, "NameTag")));
+            return std::nullopt;
+        });
+        provider.handle("GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+            const Value* path = p.runtime().property(*b.object, "ProviderDefinitionPathName");
+            const Value* components = path ? path->field("PathComponentNames") : nullptr;
+            emit(Effect::Kind::SetSequence, components ? components->s : "", text(p.runtime(), *b.object, "SequenceName"));
+            return std::nullopt;
+        });
     }
 }
 
@@ -155,64 +119,19 @@ void MissionSystem::setStatus(Status status) {
 }
 
 void MissionSystem::fireEvent(const std::string& name) {
-    const uint64_t root = ++root_;
-    for (size_t s = 0; s < impl_->sequences.size(); ++s) {
-        auto& sequence = impl_->sequences[s];
-        if (!sequence.enabled) continue;
-        for (const auto& event : sequence.events) {
-            if (event.name != name) continue;
-            for (int i = 0; i < event.length; ++i) {
-                const auto& link = sequence.links[size_t(event.start + i)];
-                impl_->pending.push_back({now_ + link.delay, order_++, int(s), link.behavior, root});
-            }
-        }
-    }
-    runDue();
-}
-
-void MissionSystem::runBehavior(int sequenceIndex, int behaviorIndex, uint64_t root) {
-    if (!impl_->ran.insert({root, sequenceIndex, behaviorIndex}).second) return;
-    auto& sequence = impl_->sequences[size_t(sequenceIndex)];
-    auto& behavior = sequence.behaviors[size_t(behaviorIndex)];
-    Object& object = *behavior.object;
-    if (behavior.cls == "WillowGame.Behavior_AdvanceObjectiveSet") {
-        advanceSet(refPath(runtime_.property(object, "ObjectiveSetToAdvanceTo")));
-    } else if (behavior.cls == "WillowGame.Behavior_MissionRemoteEvent") {
-        emit(Effect::Kind::RemoteEvent, text(runtime_, object, "EventName"));
-    } else if (behavior.cls == "GearboxFramework.Behavior_TriggerDialogEvent") {
-        emit(Effect::Kind::Dialog, refPath(runtime_.property(object, "EventTag")), refPath(runtime_.property(object, "Group")),
-             refPath(runtime_.property(object, "NameTag")));
-    } else if (behavior.cls == "GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState") {
-        const Value* path = runtime_.property(object, "ProviderDefinitionPathName");
-        const Value* components = path ? path->field("PathComponentNames") : nullptr;
-        emit(Effect::Kind::SetSequence, components ? components->s : "", text(runtime_, object, "SequenceName"));
-    } else {
-        errors.push_back("unsupported behavior class " + behavior.cls);
-        return;
-    }
-    for (int i = 0; i < behavior.length; ++i) {
-        const auto& link = sequence.links[size_t(behavior.start + i)];
-        impl_->pending.push_back({now_ + link.delay, order_++, sequenceIndex, link.behavior, root});
-    }
-}
-
-void MissionSystem::runDue() {
-    size_t guard = 0;
-    while (!impl_->pending.empty()) {
-        auto next = std::min_element(impl_->pending.begin(), impl_->pending.end(), [](const Pending& a, const Pending& b) {
-            return a.due != b.due ? a.due < b.due : a.order < b.order;
-        });
-        if (next->due > now_) break;
-        const Pending item = *next;
-        impl_->pending.erase(next);
-        if (++guard > 10000) { errors.push_back("mission behavior execution limit exceeded"); impl_->pending.clear(); return; }
-        runBehavior(item.sequence, item.behavior, item.root);
-    }
+    if (impl_->provider) impl_->provider->fireEvent(name);
 }
 
 void MissionSystem::tick(double seconds) {
     now_ += seconds;
-    runDue();
+    if (impl_->provider) impl_->provider->tick(seconds);
+    collectProviderErrors();
+}
+
+void MissionSystem::collectProviderErrors() {
+    if (!impl_->provider) return;
+    for (const auto& line : impl_->provider->errors)
+        if (std::find(errors.begin(), errors.end(), line) == errors.end()) errors.push_back(line);
 }
 
 bool MissionSystem::advanceSet(const std::string& setPath) {
@@ -232,6 +151,7 @@ bool MissionSystem::accept(const std::set<std::string>& completed) {
     if (status_ != Status::NotStarted || !available(completed)) return false;
     setStatus(Status::Active);
     fireEvent("Default");
+    collectProviderErrors();
     return true;
 }
 
@@ -248,6 +168,7 @@ bool MissionSystem::completeObjective(const std::string& objectiveName) {
     const std::string setPath = set->path, next = set->next;
     const bool all = std::all_of(set->objectives.begin(), set->objectives.end(), [&](const std::string& o) { return completedObjectives_.count(o) != 0; });
     fireEvent(objectiveName);
+    collectProviderErrors();
     if (all) {
         completedSets_.insert(setPath);
         // A behavior may already have advanced the set (the common case); otherwise follow NextSet, else the
@@ -258,6 +179,14 @@ bool MissionSystem::completeObjective(const std::string& objectiveName) {
         }
     }
     return true;
+}
+
+bool MissionSystem::completeObjectiveByPath(const std::string& objectivePath) {
+    for (const auto& set : sets_)
+        for (size_t i = 0; i < set.objectivePaths.size(); ++i)
+            if (set.objectivePaths[i] == objectivePath) return completeObjective(set.objectives[i]);
+    errors.push_back("objective is not part of this mission: " + objectivePath);
+    return false;
 }
 
 bool MissionSystem::customEvent(const std::string& name) {
