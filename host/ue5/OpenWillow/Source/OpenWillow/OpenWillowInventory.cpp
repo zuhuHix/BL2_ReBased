@@ -1,7 +1,9 @@
 #include "OpenWillowInventory.h"
 #include "Dom/JsonObject.h"
+#include "Engine/SkeletalMesh.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -74,6 +76,87 @@ UOpenWillowInventory::UOpenWillowInventory()
     }
 }
 
+bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem& Item, FString* OutProvenanceKind)
+{
+    FString Text;
+    if (!FFileHelper::LoadFileToString(Text, *File)) return false;
+    TSharedPtr<FJsonObject> Recipe;
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Recipe) || !Recipe) return false;
+    const TSharedPtr<FJsonObject>* Stats = nullptr;
+    const TSharedPtr<FJsonObject>* Card = nullptr;
+    // Only recipes that tools/weapon_stats.py has evaluated are items.
+    if (!Recipe->TryGetObjectField(TEXT("stats"), Stats) || !(*Stats)->TryGetObjectField(TEXT("card"), Card))
+        return false;
+    Item = FOpenWillowWeaponItem();
+    Item.Id = FPaths::GetBaseFilename(File);
+    Item.InstanceId = Item.Id;
+    Item.Name = Recipe->GetStringField(TEXT("name"));
+    Recipe->TryGetStringField(TEXT("type"), Item.Type);
+    Item.Balance = Recipe->GetStringField(TEXT("balance"));
+    (*Card)->TryGetStringField(TEXT("manufacturer"), Item.Manufacturer);
+    (*Card)->TryGetStringField(TEXT("element"), Item.Element);
+    (*Card)->TryGetStringField(TEXT("damage_type"), Item.DamageType);
+    Item.Rarity = int32(Number(*Card, TEXT("rarity"), 1));
+    Item.Level = int32(Number(*Card, TEXT("level"), 1));
+    Item.Damage = Number(*Card, TEXT("damage"), 0);
+    Item.FireRate = FMath::Max(0.1f, Number(*Card, TEXT("fire_rate"), 1));
+    Item.ReloadTime = Number(*Card, TEXT("reload_time"), 0);
+    Item.Magazine = Number(*Card, TEXT("magazine"), 0);
+    Item.Spread = Number(*Card, TEXT("spread"), 0);
+    Item.ShotCost = Number(*Card, TEXT("shot_cost"), 1);
+    Item.SpinUp = Number(*Card, TEXT("spin_up"), 0);
+    (*Card)->TryGetStringField(TEXT("spin_mode"), Item.SpinMode);
+    Item.SpinStartIntervalScale = Number(*Card, TEXT("spin_start_interval_scale"), 1);
+    double Extra = 0;
+    if ((*Card)->TryGetNumberField(TEXT("accuracy"), Extra) && FMath::IsFinite(Extra))
+    {
+        Item.Accuracy = float(FMath::Clamp(Extra, 0.0, 100.0));
+        Item.bHasAccuracy = true;
+        (*Card)->TryGetBoolField(TEXT("accuracy_known"), Item.bAccuracyKnown);
+    }
+    if ((*Card)->TryGetNumberField(TEXT("sale_value"), Extra) && FMath::IsFinite(Extra) && Extra >= 0 && Extra <= MAX_int32)
+    {
+        Item.SaleValue = int32(Extra);
+        Item.bHasSaleValue = true;
+        (*Card)->TryGetBoolField(TEXT("sale_value_known"), Item.bSaleValueKnown);
+    }
+    (*Card)->TryGetStringField(TEXT("fun_stats"), Item.FunStats);
+    Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
+    const TSharedPtr<FJsonObject>* Provenance = nullptr;
+    if (OutProvenanceKind)
+        *OutProvenanceKind = Recipe->TryGetObjectField(TEXT("provenance"), Provenance) ? (*Provenance)->GetStringField(TEXT("kind")) : FString();
+    return true;
+}
+
+bool UOpenWillowInventory::FindRecipe(const FString& Directory, const FString& ProvenanceKind, const FString& Balance, FOpenWillowWeaponItem& OutItem)
+{
+    TArray<FString> Files;
+    IFileManager::Get().FindFiles(Files, *FPaths::Combine(Directory, TEXT("*.json")), true, false);
+    Files.Sort();
+    for (const FString& File : Files)
+    {
+        FString Provenance;
+        if (ReadRecipe(FPaths::Combine(Directory, File), OutItem, &Provenance)
+            && Provenance == ProvenanceKind && (Balance.IsEmpty() || OutItem.Balance == Balance))
+            return true;
+    }
+    return false;
+}
+
+USkeletalMesh* UOpenWillowInventory::LoadWeaponMesh(const FOpenWillowWeaponItem& Item)
+{
+    // An explicit path (set by whoever placed the item) wins; then the rolled-item folders, where each recipe imports
+    // as SK_<recipe id> (Weapons/Items: import_weapon_items.py; Weapons/SliceItems: import_slice_items.py).
+    if (!Item.MeshPath.IsEmpty()) return LoadObject<USkeletalMesh>(nullptr, *Item.MeshPath);
+    for (const TCHAR* Folder : {TEXT("Items"), TEXT("SliceItems")})
+    {
+        const FString Path = FString::Printf(TEXT("/Game/OpenWillow/Weapons/%s/SK_%s.SK_%s"), Folder, *Item.Id, *Item.Id);
+        if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Game/OpenWillow/Weapons/%s/SK_%s"), Folder, *Item.Id)))
+            if (USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *Path)) return Mesh;
+    }
+    return nullptr;
+}
+
 int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
 {
     TArray<FString> Files;
@@ -103,49 +186,12 @@ int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
         // recipe currently represents one item instance, so loading twice
         // must not duplicate that instance.
         if (IsKnownItemId(ItemId)) continue;
-        FString Text;
-        if (!FFileHelper::LoadFileToString(Text, *FPaths::Combine(Directory, File))) continue;
-        TSharedPtr<FJsonObject> Recipe;
-        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Recipe) || !Recipe) continue;
-        const TSharedPtr<FJsonObject>* Stats = nullptr;
-        const TSharedPtr<FJsonObject>* Card = nullptr;
-        // Only recipes that tools/weapon_stats.py has evaluated are items.
-        if (!Recipe->TryGetObjectField(TEXT("stats"), Stats) || !(*Stats)->TryGetObjectField(TEXT("card"), Card))
-            continue;
         FOpenWillowWeaponItem Item;
-        Item.Id = ItemId;
-        Item.InstanceId = ItemId;
-        Item.Name = Recipe->GetStringField(TEXT("name"));
-        Recipe->TryGetStringField(TEXT("type"), Item.Type);
-        Item.Balance = Recipe->GetStringField(TEXT("balance"));
-        (*Card)->TryGetStringField(TEXT("manufacturer"), Item.Manufacturer);
-        (*Card)->TryGetStringField(TEXT("element"), Item.Element);
-        Item.Rarity = int32(Number(*Card, TEXT("rarity"), 1));
-        Item.Level = int32(Number(*Card, TEXT("level"), 1));
-        Item.Damage = Number(*Card, TEXT("damage"), 0);
-        Item.FireRate = FMath::Max(0.1f, Number(*Card, TEXT("fire_rate"), 1));
-        Item.ReloadTime = Number(*Card, TEXT("reload_time"), 0);
-        Item.Magazine = Number(*Card, TEXT("magazine"), 0);
-        Item.Spread = Number(*Card, TEXT("spread"), 0);
-        Item.ShotCost = Number(*Card, TEXT("shot_cost"), 1);
-        Item.SpinUp = Number(*Card, TEXT("spin_up"), 0);
-        (*Card)->TryGetStringField(TEXT("spin_mode"), Item.SpinMode);
-        Item.SpinStartIntervalScale = Number(*Card, TEXT("spin_start_interval_scale"), 1);
-        double Extra = 0;
-        if ((*Card)->TryGetNumberField(TEXT("accuracy"), Extra) && FMath::IsFinite(Extra))
-        {
-            Item.Accuracy = float(FMath::Clamp(Extra, 0.0, 100.0));
-            Item.bHasAccuracy = true;
-            (*Card)->TryGetBoolField(TEXT("accuracy_known"), Item.bAccuracyKnown);
-        }
-        if ((*Card)->TryGetNumberField(TEXT("sale_value"), Extra) && FMath::IsFinite(Extra) && Extra >= 0 && Extra <= MAX_int32)
-        {
-            Item.SaleValue = int32(Extra);
-            Item.bHasSaleValue = true;
-            (*Card)->TryGetBoolField(TEXT("sale_value_known"), Item.bSaleValueKnown);
-        }
-        (*Card)->TryGetStringField(TEXT("fun_stats"), Item.FunStats);
-        Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
+        FString Provenance;
+        if (!ReadRecipe(FPaths::Combine(Directory, File), Item, &Provenance)) continue;
+        // tools/weapon_slice_gear.py provenance: a mission weapon is lent by its mission and the reward roll is dropped
+        // at turn-in; neither is carried from the start.
+        if (Provenance == TEXT("mission_weapon") || Provenance == TEXT("reward_roll")) continue;
         if (!CanAddToBackpack())
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow inventory: backpack full (%d), skipped recipe %s"), BackpackCapacity, *ItemId);

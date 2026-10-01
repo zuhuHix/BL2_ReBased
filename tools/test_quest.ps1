@@ -20,9 +20,14 @@ if (!$Manifest) { $Manifest = Join-Path $repo 'local/doors/mover.json' }
 if (!$World) { $World = Join-Path $repo 'local/slice/world.json' }
 if (!$Npcs) { $Npcs = Join-Path $repo 'local/slice/npc_assets.json' }
 if (!$Audio) { $Audio = Join-Path $repo 'local/slice/audio.json' }
-foreach ($file in @($Manifest, $World, $Npcs, $Audio)) {
-    if (!(Test-Path -LiteralPath $file)) { throw "Missing manifest $file (tools/prepare_mover.py, prepare_slice_world.py, seed_slice_npc_assets.ps1, audio_slice_chain.py)" }
+$gear = Join-Path $repo 'local/items/slice/slice_manifest.json'
+$actionSkill = Join-Path $repo 'local/character/action_skill_siren.json'
+foreach ($file in @($Manifest, $World, $Npcs, $Audio, $gear, $actionSkill)) {
+    if (!(Test-Path -LiteralPath $file)) { throw "Missing manifest $file (tools/prepare_mover.py, prepare_slice_world.py, seed_slice_npc_assets.ps1, audio_slice_chain.py, weapon_slice_gear.py, prepare_action_skill.py)" }
 }
+# Maya starts at the slice gear level (UNVERIFIED slice choice) so the pool-rolled slice guns are usable.
+$itemDir = Split-Path -Parent $gear
+$gearLevel = [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $lock = Join-Path $repo 'local/ue_run.lock'
@@ -51,7 +56,8 @@ function Invoke-Run([string]$Mode, [string[]]$Extra) {
     $started = Get-Date
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
         "-owmover=`"$Manifest`"", "-owslice=`"$World`"", "-ownpcs=`"$Npcs`"", "-owaudio=`"$Audio`"",
-        '-owquest', '-owquesttest', "-owquestsave=`"$save`"") + $Extra + @(
+        '-owquest', '-owquesttest', "-owquestsave=`"$save`"", "-owitems=`"$itemDir`"",
+        "-owactionskill=`"$actionSkill`"", "-owlevel=$gearLevel") + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
@@ -69,7 +75,7 @@ function Invoke-Run([string]$Mode, [string[]]$Extra) {
         }
     } finally {
         if (Test-Path -LiteralPath $log) {
-            Select-String -LiteralPath $log -Pattern 'OWQUEST|OWMOVER |not found' | ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
+            Select-String -LiteralPath $log -Pattern 'OWQUEST|OWMOVER |not found|lent weapon|returned lent|Phaselock|OpenWillow shot' | ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
         }
         if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 3

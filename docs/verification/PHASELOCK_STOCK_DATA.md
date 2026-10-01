@@ -193,6 +193,10 @@ it is the rule fitted for weapons in `tools/weapon_stats.py`). The manifest has 
 | Skill points | level - 4 from level 5 | same, from `GD_Globals.Skills` |
 | Target state | `bPhaselocked` | `IsPhaselocked` +1 and AI flag `Flag_Skills_IsPhaseLocked`; `AIProvoke` on selection |
 
+The "Host now" column describes the host before 2026-10-01's player-side pass. Which rows the host now takes from
+this manifest, and which remain open, is listed in `docs/verification/SANCTUARY_RPG_MISSION.md`, "Player side with
+stock data".
+
 ## Manifest
 
 `python tools/prepare_action_skill.py --reader build/Release/ow-package.exe --game "$env:OPENWILLOW_BL2"`

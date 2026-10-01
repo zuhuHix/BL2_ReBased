@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "OpenWillowPhaselock.h"
 #include "OpenWillowCombatTarget.generated.h"
 
 struct FOpenWillowDamagePopup
@@ -23,7 +24,15 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
         class AController* EventInstigator, AActor* DamageCauser) override;
-    bool BeginPhaselock(float Now, float Duration);
+    // Lifts and holds the target on the stock timeline (FOpenWillowPhaselockData, LiftActionSkill script reading):
+    // snap lift over LiftDuration to HeightFromGround, sine bob while locked, shell fade over the outro, release at
+    // ReleasedAt, drop over DropTime, then the diminishing-returns modifier for its duration. False when the target is
+    // already phaselocked or dead (CanPhaseLockTarget).
+    bool BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline);
+    // PhaselockTimeScale on this target now (default, or with Skill_Phaselock_DiminishingReturns while it runs).
+    float PhaselockTimeScale(float Now, const FOpenWillowPhaselockData& Data) const { return Data.TargetTimeScale(Now < DiminishedUntil); }
+    float PhaselockReleasedAt() const;
+    float LiftedHeight() const;          // current lift above the target's origin (uu)
     FVector AimPoint() const;
     bool IsPhaselocked() const { return bPhaselocked; }
     float HealthFraction() const { return Health / MaxHealth; }
@@ -54,6 +63,11 @@ private:
     FVector2D WobbleVelocity = FVector2D::ZeroVector;
     float LockStartedAt = 0;
     float LockEndsAt = 0;
+    FOpenWillowPhaselockData Lock;      // the data of the running lock
+    float DropStartedAt = -10;
+    float DropFromHeight = 0;
+    float ReleasedAt = -10;
+    float DiminishedUntil = -10;
     float LastHitAt = -10;
     float DiedAt = -10;
     float FallVelocity = 0;

@@ -40,7 +40,12 @@ struct FOpenWillowWeaponItem
     FString Type;          // evaluated recipe display type, e.g. Shotgun
     FString Manufacturer;
     FString Element;       // "None", "Fire", "Shock", ...
+    // Stock damage type object path of the item's shots (card "damage_type" from tools/weapon_stats.py, e.g.
+    // GD_Incendiary.DamageType.DmgType_Incendiary_Impact); empty when the recipe predates that field.
+    FString DamageType;
     FString Balance;
+    // Explicit UE mesh object path; empty means SK_<Id> in the rolled-item folders (LoadWeaponMesh).
+    FString MeshPath;
     int32 Rarity = 1;      // 1 Common .. 5 Legendary
     int32 Level = 1;
     float Damage = 0;
@@ -134,8 +139,16 @@ public:
     // UNVERIFIED against a live BL2 run: expected base backpack and SDU cap.
     static constexpr int32 DefaultBackpackCapacity = 12;
     static constexpr int32 MaximumBackpackCapacity = 39;
-    // Loads every *.json recipe with stats under Directory; returns the count.
+    // Loads every *.json recipe with stats under Directory; returns the count. Mission weapons and the turn-in loot
+    // stand-in are skipped: the quest lends or drops them (FindRecipe).
     int32 LoadRecipes(const FString& Directory);
+    // One evaluated recipe file as an item; false when it is not one. OutProvenanceKind: the recipe's
+    // provenance.kind ("mission_weapon", "pool_roll", or empty).
+    static bool ReadRecipe(const FString& File, FOpenWillowWeaponItem& OutItem, FString* OutProvenanceKind = nullptr);
+    // The first recipe under Directory with this provenance kind (and this balance path, unless Balance is empty).
+    static bool FindRecipe(const FString& Directory, const FString& ProvenanceKind, const FString& Balance, FOpenWillowWeaponItem& OutItem);
+    // The item's imported mesh, or null when none is imported.
+    static class USkeletalMesh* LoadWeaponMesh(const FOpenWillowWeaponItem& Item);
     // Reads only the explicit host-authored JSON manifest under local/.
     int32 LoadGearManifest(const FString& FilePath);
     // Puts backpack item Item into weapon slot Slot (0-3). Locked slots refuse.

@@ -17,10 +17,24 @@ namespace
 const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 const FLinearColor PhaselockColor(0.55f, 0.18f, 1.f);
-constexpr float LiftHeight = 170.f; // host estimate; BL2 lift height not read
-constexpr float LiftSeconds = 0.7f; // ActionSkill_Phaselock.LiftDuration
-constexpr float LockFadeSeconds = 1.1f; // ActionSkill_Phaselock.LockFadeOutTime
 constexpr float RespawnSeconds = 3.f;
+
+// Height above the floor at Held seconds into a lock (LiftActionSkill.UpdateLiftedPawn / GetBobLocation, read not
+// run): reach SnapHeightPct of the height in SnapTimePct of the lift, the rest by the end of the lift, then a sine
+// bob of BobAmplitude at BobFrequency (sin(t x frequency x pi)). The curve shapes between those points (quadratic in,
+// ease-out) and the bob's time origin (end of the lift) are host choices: UNVERIFIED. The ground trace, collision
+// height and ceiling clamp of GetLiftLocation are not applied (height is above the target's own origin).
+float LiftHeightAt(const FOpenWillowPhaselockData& D, float Held)
+{
+    const float H = D.HeightFromGround;
+    if (Held >= D.LiftDuration)
+        return H + D.BobAmplitude * FMath::Sin((Held - D.LiftDuration) * D.BobFrequency * PI);
+    const float U = D.LiftDuration > 0.f ? Held / D.LiftDuration : 1.f;
+    if (U < D.SnapTimePct)
+        return D.SnapHeightPct * H * FMath::Square(U / D.SnapTimePct);
+    return D.SnapHeightPct * H + (1.f - D.SnapHeightPct) * H
+        * FMath::InterpEaseOut(0.f, 1.f, (U - D.SnapTimePct) / FMath::Max(1.f - D.SnapTimePct, KINDA_SMALL_NUMBER), 2.f);
+}
 
 UStaticMeshComponent* Part(AActor* Owner, USceneComponent* Parent, const TCHAR* Name,
     const TCHAR* Mesh, const FVector& Location, const FVector& Scale)
@@ -124,17 +138,22 @@ bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FStrin
     return true;
 }
 
+float AOpenWillowCombatTarget::PhaselockReleasedAt() const { return ReleasedAt; }
+float AOpenWillowCombatTarget::LiftedHeight() const { return Pivot->GetRelativeLocation().Z; }
+
 FVector AOpenWillowCombatTarget::AimPoint() const
 {
     if (HitVolume) return HitVolume->GetComponentLocation();
     return Torso->GetComponentLocation() + FVector(0, 0, 10);
 }
 
-bool AOpenWillowCombatTarget::BeginPhaselock(float Now, float Duration)
+bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline)
 {
     if (bPhaselocked || bDead) return false;
+    Lock = Data;
     LockStartedAt = Now;
-    LockEndsAt = Now + Duration;
+    LockEndsAt = Now + Timeline.ReleasedAt;
+    DropStartedAt = -10;
     bPhaselocked = true;
     LockSphere->SetHiddenInGame(false);
     return true;
@@ -167,23 +186,36 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     if (bPhaselocked)
     {
         const float Held = Now - LockStartedAt;
-        const float Lift = FMath::InterpEaseOut(0.f, LiftHeight, FMath::Clamp(Held / LiftSeconds, 0.f, 1.f), 2.f);
-        Height = Lift + 6.f * FMath::Sin(Held * 2.4f);
-        Pivot->SetRelativeRotation(FRotator(Wobble.Y + 8.f * FMath::Sin(Held * 1.3f),
-            Held * 25.f, Wobble.X + 6.f * FMath::Sin(Held * 1.7f)));
+        Height = LiftHeightAt(Lock, Held);
+        // The script moves the lifted pawn without rotating it; only hit wobble remains.
+        Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
+        // Host shell (presentation only, not the stock bubble effect): grows in, then fades over the outro
+        // (LockFadeOutTime before the release).
         const float Pulse = 0.85f + 0.15f * FMath::Sin(Held * 7.f);
-        // Shell grows in, then fades over ActionSkill_Phaselock.LockFadeOutTime.
         const float Grow = FMath::Clamp(Held / 0.25f, 0.f, 1.f)
-            * FMath::Clamp((LockEndsAt - Now) / LockFadeSeconds, 0.f, 1.f);
+            * FMath::Clamp((LockEndsAt - Now) / FMath::Max(Lock.LockFadeOutTime, KINDA_SMALL_NUMBER), 0.f, 1.f);
         LockSphere->SetRelativeScale3D(FVector(2.2f * FMath::Max(Grow, 0.01f) * Pulse));
         if (LockMaterial) LockMaterial->SetScalarParameterValue(TEXT("Intensity"), 3.f * Pulse * Grow);
         FallVelocity = 0.f;
         if (Now >= LockEndsAt)
         {
+            // ReleaseTarget: drop over DropTime; OnReleasedTarget activates Skill_Phaselock_DiminishingReturns on the
+            // target for its InitialDuration.
             bPhaselocked = false;
+            ReleasedAt = Now;
+            DropStartedAt = Now;
+            DropFromHeight = Height;
+            DiminishedUntil = Now + Lock.DiminishingSeconds;
             LockSphere->SetHiddenInGame(true);
-            UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock released %s"), *GetName());
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock released %s after %.2f s"), *GetName(), Held);
         }
+    }
+    else if (Now - DropStartedAt < Lock.DropTime)
+    {
+        // Drop back over DropTime (quadratic ease-in: host shape, UNVERIFIED; the stock drop plays DropAnim).
+        Height = DropFromHeight * (1.f - FMath::Square((Now - DropStartedAt) / Lock.DropTime));
+        FallVelocity = 0.f;
+        Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
     }
     else
     {
@@ -204,10 +236,11 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     AController* EventInstigator, AActor* DamageCauser)
 {
     if (bDead) return 0.f;
-    // The dummy's own behavior provider (OnTakeDamage) runs in the quest component of the shooter.
+    // The dummy's own behavior provider (OnTakeDamage) runs in the quest component of the shooter, with the stock
+    // damage type path of the shot in flight ("" = None for damage that is not one of Maya's shots).
     if (const auto* Shooter = Cast<AOpenWillowWalker>(DamageCauser))
         if (UOpenWillowQuest* Quest = Shooter->GetQuest(); Quest && Quest->Enabled())
-            Quest->OnDummyDamaged(this, DamageEvent.DamageTypeClass && DamageEvent.DamageTypeClass->IsChildOf(UOpenWillowFireDamageType::StaticClass()));
+            Quest->OnDummyDamaged(this, Shooter->ShotDamageType());
     const float Now = GetWorld()->GetTimeSeconds();
     const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
     Health -= Applied;

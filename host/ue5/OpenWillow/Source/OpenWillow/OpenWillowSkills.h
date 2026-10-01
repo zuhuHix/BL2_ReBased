@@ -37,6 +37,15 @@ public:
     int32 SpentPoints() const;
     int32 AvailablePoints() const { return FMath::Max(0, EarnedPoints() - SpentPoints()); }
     int32 GetActionGrade() const { return ActionGrade; }
+    // Grade of the tree skill with this id (installed object path); 0 when absent or not trained.
+    int32 GradeOf(const FString& Id) const;
+    // Where the skill sits, in TrySpend's terms; false when the tree has no such skill.
+    bool FindSkill(const FString& Id, int32& OutBranch, int32& OutTier, int32& OutCell) const;
+    // The tier's PointsToUnlockNextTier (0 when absent).
+    int32 TierPoints(int32 Branch, int32 Tier) const
+    {
+        return Branches.IsValidIndex(Branch) && Branches[Branch].IsValidIndex(Tier) ? Branches[Branch][Tier].PointsToUnlockNext : 0;
+    }
 
     // A spend as the StatusMenu movie reports it: extCellClicked(branch, tier,
     // cell), with -1, -1, -1 for the action skill. Returns false and a reason

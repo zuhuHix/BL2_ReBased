@@ -321,3 +321,172 @@ Route:
 3. Step into the start of the centre lane (the waypoint cylinder). The dummy rolls toward you.
 4. Shoot it with a fire weapon. It rolls back and is removed.
 5. Press E at Marcus to turn in.
+
+Superseded for the player side by "Player side with stock data" below (lent stock pistol, XP, Phaselock, loot).
+
+## Player side with stock data (2026-10-01)
+
+AI-assisted (Claude). Host behaviour only. **No original-game capture**: every rule below that the game decides in
+native code is a host choice and is labelled UNVERIFIED here and in the code. Automated checks, visual checks and one
+hand-play session are reported separately.
+
+### What changed
+
+- **Slice gear instead of the level-30 demo set.** `run_quest.ps1` and `test_quest.ps1` pass
+  `-owitems=local/items/slice` (tools/weapon_slice_gear.py) and start Maya at the slice gear level from
+  `slice_manifest.json` (8; that level is itself an UNVERIFIED slice choice inside Sanctuary's 7-9 band, printed at
+  launch). She carries the four pool-rolled slice guns and draws the first. The demo items in `local/items` are not
+  loaded in these sessions. `-Level N` still overrides.
+- **Lent stock pistol.** The mission executor's `MissionWeaponGranted` effect (lent while the objective named by
+  `MissionWeapon.MissionObjective` is active, the rule recorded earlier, UNVERIFIED) now gives Maya the recipe whose
+  provenance is `mission_weapon` and whose balance equals the mission's own `MissionWeapon`
+  (`GD_Z1_RockPaperGenocideData.MW_RockPaper_Fire`). The recipe is `slice_mission_pistol_fire` ("Inflammatory
+  Torment", level 8, 49.1 damage, 1.72/s, magazine 7.26, card damage type
+  `GD_Incendiary.DamageType.DmgType_Incendiary_Impact`). It is shown with the imported
+  `Weapons/MaliwanPistol/SK_Pistol_Maliwan_2_Fire_seed1`, the rolled seed-1 sample from `npc_assets.json`.
+  - Placement (host rule, UNVERIFIED): the first empty slot, else the last slot. It is drawn at once and its level is
+    not checked.
+  - `MissionWeaponRemoved` takes it back and draws the weapon held before. A save made while it is lent re-lends it on
+    the next launch (not exercised by the suite).
+  - Mission weapons and the loot stand-in are no longer loaded into the backpack at start.
+- **Damage type from the item.** A shot carries the held item's card `damage_type` path into the dummy's
+  `OnTakeDamage` (`vm::FireMissionSlice::damageDummy`). The host fire-damage class `UOpenWillowFireDamageType` is
+  removed. `DamageSource` is still passed empty: its stock value is not decoded.
+- **Arms.** The arms are hidden while no pose clip set is loaded and shown once a weapon is drawn.
+  - Why an unarmed Maya showed no arms: the arms mesh was set at start, but the clips were set only in `SelectSlot`.
+    With no weapon the animation instance outputs the bind pose, which lacks the clips' root correction. That the bind
+    pose lies out of view is an inference; it was not checked by screenshot.
+  - No `Unarmed` clips are imported, so holstering also hides the arms.
+  - Whether the original shows arms with no weapon is not observed (UNVERIFIED).
+- **`M_OW_FxAdditive`** (tracers, muzzle and impact flashes, the Phaselock shell) and `M_OW_BulletHole` were missing
+  because `Weapons/InfinityProxy` had never been seeded in this worktree. `tools/seed_slice_player_assets.ps1` step
+  `fx` seeded it with the existing `import_infinity_proxy.py`, from `local/items/pistol_vladof_5_infinity_3.gltf` and
+  the 2026-09-30 UModel texture export.
+- **XP into skills.** Turn-in adds `MissionXp(L)` to the skills component: percentage 0.05 (playthrough 1) x
+  (required(L+1) - required(L)), with required(L) = 60 L^2.8 + 7.33 read from world.json. That is the CANDIDATE rule
+  from `tools/slice_values.py`; `GetExperienceReward` is native, so it is UNVERIFIED.
+  - The mission level is the slice gear level (8), so the reward is 396 XP. The C++ value equals the tool's own
+    candidate table.
+  - Level-up uses the existing threshold curve (60 L^2.8 - 60, which equals required(L) - required(1)).
+  - At level 8 one reward does not level Maya up (7,918 XP to level 9). Points she already has are spent on the
+    Skills page (K).
+  - The canvas HUD now shows her real level, XP progress and health (it showed a fixed "1" before).
+  - Experience and skill grades are not saved.
+- **Stock Phaselock** from `local/character/action_skill_siren.json` (`-owactionskill=`). No number is compiled in;
+  without the manifest the skill is unavailable. Row by row against the record's host-versus-stock table:
+
+  | Row | Status |
+  |---|---|
+  | Lock length | Done: release at LiftDuration + Att_Phaselock_Duration x target PhaselockTimeScale (5.7 s base) |
+  | Fade | Done: the host shell fades over LockFadeOutTime before the release (the shell is host presentation, not the stock bubble effect) |
+  | Lift height | Partly: 200 uu above the target's origin, half of it in the first half of the lift. Ground trace, collision height and ceiling clamp are not applied, and the curve shapes are host choices |
+  | Hover | Done: 30 uu x sin(0.5 pi t) from the end of the lift, no rotation. The bob's time origin is UNVERIFIED and "smoothed" is not modelled |
+  | Cooldown | Done: a 13 s pool refilled at the cast, drained at base rate + CooldownManager PreAdd (0) while held, then at 1/s, so ready about 18.7 s after a base cast (semantics UNVERIFIED) |
+  | Miss | Done: no lift, and the cooldown resets after ReleaseBufferTime (1 s). The miss impact effect is not drawn |
+  | Targeting | Not done: native auto-aim. Host: view ray, then a 30 cm sweep to 2500 cm; a sweep that starts inside geometry is ignored |
+  | Valid target | Partly: not already locked, not dead. Friendliness, vehicles, `Flag_Skills_CanPhaseLock` and blocked-target damage are not done |
+  | Re-lock same target | Done: x0.6 time scale (MT_Scale -0.4) for 25 s after release, so 3.7 s |
+  | Cast gate | Not done beyond "action skill bought" (weapon action, on foot, healthy) |
+  | Upgrades | Done for Suspension: the manifest's PostAdd per grade on Att_Phaselock_Duration. Other skills are not applied |
+  | Skill points | Unchanged (same rule as the data) |
+  | Target state | Partly: host flag only. No IsPhaselocked attribute, AI flag or AIProvoke |
+  | Drop | Host shape: DropTime 0.5 s quadratic ease-in |
+
+- **Loot.** The stock data gives no item drop for this mission. `PawnBalance_TargetDummy` has no item pools, and the
+  mission's `RewardData` tags only `ExperienceRewardPercentage` and `CreditRewardMultiplier` 0 (read with
+  `--properties` on Startup export 24569). Two consequences:
+  - The dummy does not drop anything.
+  - A **turn-in loot stand-in** sits behind the mission reward. `weapon_slice_gear.py --reward-only` rolls the slice
+    fallback list (`StandardEnemyGunsAndGear`) from seed 1 upward with the existing `loot_pools.roll` and keeps the
+    first seed whose roll drops a weapon. That is seed 31 of 31: Pool_GunsAndGear > Pool_Weapons_All > ..._01_Common
+    > Shotguns_01_Common > `SG_Bandit`, parts rolled with the same seed. Seeds 1-30 dropped nothing or money/eridium.
+  - The host drops that recipe as a pickup in front of the player at turn-in. The use key collects it: with nothing
+    to accept or turn in, E near Marcus is no longer consumed.
+  - This is a demonstration of the pickup path, **not stock behaviour**. The seed choice is deliberate and labelled.
+- **Pistol paint.** `prepare_weapon_paint.py` now accepts MIC chains with no pattern texture (as the thumbnail
+  renderer already did) and a `--mesh` target. `Mati_MaliwanUncommon` -> `MasterMati_MaliwanUncommon` provides
+  masks, the packed detail atlas (blue channel for pistols), the normal map and nine A/B/C zone colours.
+  - The pistol now shows pale white and blue-grey zones instead of the raw composite.
+  - Its `p_Decal` (`Pattern_MaliwanUncommon`, with `p_DecalScalePosition`/`p_DecalRotate`/`p_DecalChannel`) is not
+    reproduced.
+  - The Master_Gun graph is stripped, so the channel reading stays UNVERIFIED.
+  - The four pool-rolled slice guns and the loot stand-in have the grey stand-in material: their MICs have no local
+    UModel export.
+
+### Automated checks (2026-10-01, CMake Release and UE module rebuilt first)
+
+- **`tools/test_quest.ps1`: first run 57/57 PASS, resume run 7/7 PASS**, exit 0 (`local/quest/run-first-20261001-155229.log`,
+  `run-resume-20261001-155326.log`). New checks: `mission_weapon_recipe_and_mesh_found`,
+  `mission_weapon_not_carried_before_lend`, `maya_starts_armed_with_arms_shown`,
+  `lent_pistol_drawn_with_recipe_identity_and_stats`, `lent_pistol_shows_imported_mesh_with_arms`,
+  `wrong_element_shot_reaches_dummy_and_does_not_complete` (a real shot from the Jakobs slice pistol,
+  `DmgType_Normal`), `lent_pistol_shot_carries_its_damage_type_to_dummy`,
+  `incendiary_shot_completes_fire_objective_via_dummy_provider`, `mission_weapon_removed_after_objective`,
+  `xp_amount_is_candidate_formula_at_mission_level` (396 = the tool's table), `xp_reward_levels_up_when_requirement_met`
+  (test fixture: experience topped up by 7,522 first; level 8 -> 9, points 4 -> 5), `turn_in_drops_loot_stand_in_pickup`,
+  `use_key_collects_loot_pickup_into_backpack`, `skill_point_buys_phaselock`, `phaselock_timelines_match_manifest_table`
+  (60 values, grades 0-5, first lock and re-lock; agreement between two readings of the same data, not a game check),
+  `phaselock_miss_lifts_nothing_and_holds_skill`, `phaselock_miss_resets_cooldown_after_release_buffer`,
+  `phaselock_hit_uses_manifest_timeline`, `phaselock_lifts_to_stock_height` (224 uu at 1.30 s, within 200 +- 30),
+  `phaselock_releases_at_manifest_time` (5.73 s against 5.70; release on the first tick after the time, one frame
+  allowed), `phaselock_cooldown_paused_while_target_held` (12.97 of 13 left at release),
+  `phaselock_diminishing_returns_on_released_target` (0.6), `suspension_point_adds_manifest_lock_time` (test fixture:
+  level 11; Ward x5 then Suspension 1 gives 5.5). The old host-damage checks were replaced by the real-shot checks.
+- **Earlier failing runs, kept as evidence:**
+  - `run-first-20261001-153640` (50/55): the Phaselock sphere sweep started inside the range's ceiling beam and
+    reported a hit at 0 uu. Fixed by the view-ray-first targeting.
+  - The next run (54/55): the release was seen 0.05 s late, against a 0.05 s tolerance. The check now allows one frame.
+- **`tools/test_mover.ps1`: 16/16 PASS** (`local/doors/run-20261001-160822.log`).
+- **`tools/test_inventory_actions.ps1`: 47 PASS, 0 FAIL, 0 NOT_RUN, 2 KNOWN_DIVERGENCE** (sort order; exit 3)
+  (`local/inventory-actions/run-20261001-160333.log`). The gear manifest is absent in this worktree; the shield
+  steps use the suite's synthetic shield and passed, so no step failed for missing data.
+- **CTest 10/10; `tools/verify_packages.py` 9/9 packages match.**
+
+### Visual checks (by eye; host presentation only)
+
+- `local/quest/OWQuest_2_RangeDummy-20261001-154542.png` (same view in `-155229`): Maya's arms hold the lent Maliwan
+  pistol in pale white and blue-grey paint. The card shows "Inflammatory Torment / Maliwan". The stock dummy kneels in
+  front of the dartboard.
+- `OWQuest_1_MarcusStockPose-*`: Maya holds the grey Jakobs slice pistol at the start; the arms are visible.
+- `OWQuest_4_Phaselock-*`: the host target lifted into the range's ceiling beams inside the violet shell (now drawn
+  with `M_OW_FxAdditive`). The lift has no ceiling clamp; see the table.
+- `local/quest/OWHandSmoke_fresh_40s-20261001-155537.png` (desktop capture of the hand-play window): Sanctuary at the
+  session start. Maya holds the slice pistol with her arms visible, and the objective line reads "talk to Marcus (E)".
+- Earlier captures (`-153640`) show the unpainted composite noise on the same pistol, for comparison.
+
+### One hand-play session (2026-10-01 15:55-15:57, `local/quest/manual-20261001-155458.log`)
+
+The agent started a `run_quest.ps1 -Fresh` smoke window. A person then played it: sprint, reload, slot changes, accept
+at Marcus, the range touch, the dummy, one incendiary shot from the lent pistol completing Fire, the pistol taken back,
+turn-in, +396 XP (level 8 stays 8), and the loot stand-in picked up with E. Phaselock was not used in that session.
+The agent then stopped that window about six minutes after the last input; the mission state had already been saved
+(`manual-save.json`, status Complete). This is the only hand-play evidence. It is not a game comparison.
+
+### Still not done / UNVERIFIED
+
+- Where the game puts a lent weapon, its level, and whether the original shows arms with no weapon.
+- The XP amount rule, the mission level, the experience and skill save, and health after a level-up.
+- `DamageSource`, the Incendiary status effect, the dummy's hit volume and health (20000).
+- Phaselock rows marked not done or partly above. Its sweep is a host stand-in.
+- Loot is a labelled stand-in. Ammo and money drops and pickups are not hosted.
+- Paint: the decal, the Master_Gun lighting, and paint for the other slice guns.
+- Audio: unchanged (lookup only).
+- The inventory page's 3D preview still looks only in `Weapons/Items`, so slice guns show no preview mesh there.
+
+### Hand play (updated)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/run_quest.ps1 -Fresh    # Maya at the slice gear level (8)
+```
+
+Keys are unchanged from the table above. E near Marcus now falls through to pickups when there is nothing to accept or
+turn in. Route:
+1. Maya starts holding the Jakobs slice pistol. Walk to Marcus's shop and press E to accept.
+2. Follow him to the range and step into the centre lane's waypoint cylinder. The lent "Inflammatory Torment" is put
+   in a slot and drawn, and the dummy rolls forward.
+3. Shoot the dummy with it. Another slice gun does not complete the objective. Fire completes, the pistol is taken
+   back, and the dummy rolls back and is removed.
+4. Press E at Marcus to turn in: +396 XP (bar at bottom centre). Press E again by the dropped shotgun to pick it up.
+5. K opens Skills: buy Phaselock (Maya has 4 points at level 8 from the start). F casts it. The only liftable target
+   in this session is the stock dummy while it is on the range, so buy Phaselock before shooting it if you want to
+   lift it. After it is removed, F only shows the miss.

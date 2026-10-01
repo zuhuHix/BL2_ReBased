@@ -53,13 +53,22 @@ struct FOpenWillowSliceData
     // The recovery tool's own answer for a death at the range trigger (an oracle for the host's selection).
     FVector OracleDeathLocation = FVector::ZeroVector, OracleRespawnLocation = FVector::ZeroVector;
     double HealthMultiplier = 0, HealthScaler = 0, HealthMin = 0;
+    // Mission XP (values.xp): the reward attribute and its playthrough-1 percentage, the experience-required formula
+    // required(L) = Multiplier x L^Power + Offset, and the tool's own candidate amounts (an oracle for MissionXp).
+    FString XpRewardAttribute;
+    double XpPercentage = 0, XpMultiplier = 0, XpPower = 0, XpOffset = 0;
+    TMap<int32, int32> XpCandidateByLevel;
     // Imported NPC assets and the audio lookup (key -> entry).
     FOpenWillowNpcAssets Marcus, Dummy;
+    FString PistolMesh;                 // imported rolled sample of the lent Maliwan pistol (npc_assets use.MaliwanPistol)
     TMap<FString, TSharedPtr<FJsonObject>> Audio;
 
     void Load(const FString& WorldFile, const FString& NpcFile, const FString& AudioFile);
     // health(L) = max(min, multiplier x scaler^L); see SLICE_WORLD_PLACEMENT.md 2b (94-constant reading UNVERIFIED).
     float HealthForLevel(int32 Level) const;
+    // CANDIDATE mission XP at mission level L: percentage x (required(L+1) - required(L)), rounded.
+    // MissionDefinition.GetExperienceReward is native, so this rule is UNVERIFIED (tools/slice_values.py).
+    int32 MissionXp(int32 MissionLevel) const;
     // "Sanctuary_Dynamic:TheWorld.PersistentLevel.X" -> "TheWorld.PersistentLevel.X"; op name = last path part.
     static FString ObjectPath(const FString& Value);
     static FString OpName(const FString& Value);

@@ -1164,7 +1164,25 @@ python tools/audio_slice_chain.py --reader $reader                     # local/s
 # Marcus, the target dummy and the stock Maliwan pistol: UModel export + UE import job
 python tools/slice_npc_assets.py all                                   # local/slice/npc_assets.json
 powershell -File tools/seed_slice_npc_assets.ps1                       # runs tools/slice_npc_editor.py in the editor
+
+# Player side: turn-in loot stand-in, mission pistol paint, then the UE assets (additive; see below)
+python tools/weapon_slice_gear.py --game $game --reward-only --gestalt local/gestalt `
+  --gltf local/external/umodel/gestalt/Startup/SkeletalMesh3              # local/items/slice/slice_reward_roll.*
+python tools/prepare_weapon_paint.py --recipe local/items/slice/slice_mission_pistol_fire.json `
+  --materials local/external/umodel/slice-npc/Pistol --mesh /Game/OpenWillow/Weapons/MaliwanPistol/SK_Pistol_Maliwan_2_Fire_seed1 `
+  --output local/items/paint/slice_mission_pistol_fire.json
+powershell -File tools/seed_slice_player_assets.ps1                    # steps fx, items, paint
 ```
+
+`tools/seed_slice_player_assets.ps1` holds `local/ue_run.lock` for each editor launch and never deletes
+`Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when
+`Weapons/InfinityProxy` is absent (it supplies `M_OW_FxAdditive` for tracers, flashes and the Phaselock shell, and
+`M_OW_BulletHole`). `items` runs the new additive `host/ue5/import_slice_items.py` (pool-rolled slice guns and the
+loot stand-in into `Weapons/SliceItems`, grey stand-in material; existing `SK_<id>` assets are skipped). `paint`
+runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains without a pattern texture
+(zone colours only; the decal is not reproduced). `tools/run_quest.ps1` and `tools/test_quest.ps1` pass
+`-owitems=local/items/slice`, `-owactionskill=local/character/action_skill_siren.json` and Maya's level from
+`slice_manifest.json` (an UNVERIFIED slice choice; `run_quest.ps1 -Level N` overrides it).
 
 - `research/behavior_census.py` and `research/struct_defaults_census.py` are the structural
   oracles behind the behavior variable-data decode and the struct-default reader fix.

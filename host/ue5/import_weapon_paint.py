@@ -14,7 +14,10 @@ def apply(data):
     recipe_id = data['recipe_id']
     if not re.fullmatch(r'[A-Za-z0-9_]+', recipe_id):
         raise RuntimeError('Invalid recipe ID')
-    mesh = unreal.load_asset(f'/Game/OpenWillow/Weapons/Items/SK_{recipe_id}')
+    mesh_path = data.get('mesh') or f'/Game/OpenWillow/Weapons/Items/SK_{recipe_id}'
+    if not re.fullmatch(r'/Game/OpenWillow/Weapons/[A-Za-z0-9_/]+', mesh_path):
+        raise RuntimeError('Invalid mesh path')
+    mesh = unreal.load_asset(mesh_path)
     if not isinstance(mesh, unreal.SkeletalMesh):
         raise RuntimeError('Import the recipe mesh first')
     tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -56,34 +59,40 @@ def apply(data):
                 unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if color else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
 
 
-    inputs = {'Mask': texture('p_Masks'), 'Detail': texture('p_Diffuse'),
-              'Pattern': texture('p_Pattern', color=True)}
+    # pattern_used false (prepare_weapon_paint.py): zone colours only, no pattern texture or blend.
+    pattern = data.get('pattern_used', True)
+    inputs = {'Mask': texture('p_Masks'), 'Detail': texture('p_Diffuse')}
+    if pattern:
+        inputs['Pattern'] = texture('p_Pattern', color=True)
     normal = texture('p_NormalScopesEmissive', normal=True)
     vectors = data['params']['vector']
     for zone in 'ABC':
         for tone in ['Shadow', 'Midtone', 'Hilight']:
             inputs[zone+tone] = node(unreal.MaterialExpressionConstant3Vector,
                 constant=unreal.LinearColor(*vectors[f'p_{zone}Color{tone}'][:3], 1))
-    for name, parameter in [('PatternColor', 'p_PatternColor'), ('PatternWeight', 'p_PatternChannelScale')]:
-        inputs[name] = node(unreal.MaterialExpressionConstant3Vector,
-            constant=unreal.LinearColor(*vectors[parameter][:3], 1))
-    scale = vectors['p_PatternScalePosition']
-    uv = node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1, u_tiling=scale[0], v_tiling=scale[1])
-    offset = node(unreal.MaterialExpressionConstant2Vector, r=scale[2], g=scale[3])
-    shift = node(unreal.MaterialExpressionAdd)
-    mel.connect_material_expressions(uv, '', shift, 'A')
-    mel.connect_material_expressions(offset, '', shift, 'B')
-    mel.connect_material_expressions(shift, '', inputs['Pattern'], 'UVs')
+    if pattern:
+        for name, parameter in [('PatternColor', 'p_PatternColor'), ('PatternWeight', 'p_PatternChannelScale')]:
+            inputs[name] = node(unreal.MaterialExpressionConstant3Vector,
+                constant=unreal.LinearColor(*vectors[parameter][:3], 1))
+        scale = vectors['p_PatternScalePosition']
+        uv = node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1, u_tiling=scale[0], v_tiling=scale[1])
+        offset = node(unreal.MaterialExpressionConstant2Vector, r=scale[2], g=scale[3])
+        shift = node(unreal.MaterialExpressionAdd)
+        mel.connect_material_expressions(uv, '', shift, 'A')
+        mel.connect_material_expressions(offset, '', shift, 'B')
+        mel.connect_material_expressions(shift, '', inputs['Pattern'], 'UVs')
     channel = 'rgb'[data['detail_channel']]
     code = f'float d=Detail.{channel}; float low=saturate(d*2), high=saturate(d*2-1);\n'
     for zone in 'ABC':
         code += f'float3 {zone}=lerp(lerp({zone}Shadow,{zone}Midtone,low),{zone}Hilight,high);\n'
     code += '''float3 base=A*Mask.r+B*Mask.g+C*Mask.b;
     base += (1-saturate(Mask.r+Mask.g+Mask.b))*float3(.2,.2,.22);
-    base=lerp(base,Pattern.rgb*PatternColor*d,saturate(dot(Mask.rgb,PatternWeight)));
+    PATTERN_BLEND
     // Compress together to retain HDR palette hue within UE's base-color range.
     return base/(1+max(base.r,max(base.g,base.b)));
     '''
+    code = code.replace('PATTERN_BLEND', 'base=lerp(base,Pattern.rgb*PatternColor*d,saturate(dot(Mask.rgb,PatternWeight)));'
+                        if pattern else '// no pattern for this MIC chain')
     effect = node(unreal.MaterialExpressionCustom, code=code,
         output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     custom_inputs = []
@@ -108,7 +117,8 @@ def apply(data):
     mesh.modify()
     mesh.set_editor_property('materials', slots)
     eal.save_loaded_asset(mesh, only_if_is_dirty=False)
-    unreal.log(f'OW_PAINT {recipe_id}: {data["material_identity"]}, {len(slots)} slots, shader UNVERIFIED')
+    unreal.log(f'OW_PAINT {recipe_id} -> {mesh_path}: {data["material_identity"]}, {len(slots)} slots, '
+               f'pattern {"used" if pattern else "not used"}, shader UNVERIFIED')
 
 
 data = json.loads(Path(os.environ['OPENWILLOW_WEAPON_PAINT']).read_text())

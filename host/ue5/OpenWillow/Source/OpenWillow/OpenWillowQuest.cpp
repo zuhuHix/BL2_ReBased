@@ -1,5 +1,6 @@
 #include "OpenWillowQuest.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowInventoryPickup.h"
 #include "OpenWillowMover.h"
 #include "OpenWillowNpc.h"
 #include "OpenWillowSkills.h"
@@ -77,6 +78,26 @@ void UOpenWillowQuest::BeginPlay()
         Impl = MakeShared<FImpl>(std::filesystem::path(*FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole"))));
         Impl->Data.Load(World, Npcs, Audio);
         Impl->StationCounters.Init(0, Impl->Data.Stations.Num());
+        // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the
+        // gear was rolled at, used here as the mission level (an UNVERIFIED slice choice; the native pick is not decoded).
+        if (!FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir) || ItemDir.IsEmpty())
+            throw std::runtime_error("-owquest needs -owitems=<local/items/slice> (tools/weapon_slice_gear.py)");
+        const FString WeaponDefinition = UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str());
+        if (!UOpenWillowInventory::FindRecipe(ItemDir, TEXT("mission_weapon"), WeaponDefinition, MissionWeapon))
+            throw std::runtime_error(TCHAR_TO_UTF8(*FString::Printf(TEXT("no mission-weapon recipe for %s under %s"), *WeaponDefinition, *ItemDir)));
+        MissionWeapon.MeshPath = Impl->Data.PistolMesh;
+        bHasReward = UOpenWillowInventory::FindRecipe(ItemDir, TEXT("reward_roll"), FString(), RewardItem);
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in: %s"), bHasReward
+            ? *FString::Printf(TEXT("%s \"%s\" (%s; host stand-in, the stock reward has no items)"), *RewardItem.Id, *RewardItem.Name, *RewardItem.Balance)
+            : TEXT("none prepared (tools/weapon_slice_gear.py --reward-only)"));
+        FString GearText;
+        TSharedPtr<FJsonObject> Gear;
+        if (!FFileHelper::LoadFileToString(GearText, *FPaths::Combine(ItemDir, TEXT("slice_manifest.json")))
+            || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(GearText), Gear) || !Gear || !Gear->TryGetNumberField(TEXT("level"), MissionLevel))
+            throw std::runtime_error("slice_manifest.json (level) missing under -owitems");
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon %s -> recipe %s \"%s\" level %d, %.2f damage, %.2f/s, magazine %.2f, damage type %s, mesh %s; mission level %d (slice choice, UNVERIFIED)"),
+            *WeaponDefinition, *MissionWeapon.Id, *MissionWeapon.Name, MissionWeapon.Level, MissionWeapon.Damage, MissionWeapon.FireRate,
+            MissionWeapon.Magazine, *MissionWeapon.DamageType, *MissionWeapon.MeshPath, MissionLevel);
         // Both world-data objectives must belong to the installed mission.
         if (Impl->ObjectiveState(Impl->Data.TriggerObjective).empty() || Impl->ObjectiveState(Impl->Data.DummyObjective).empty())
             throw std::runtime_error("slice manifest objectives are not objectives of the installed mission");
@@ -90,7 +111,8 @@ void UOpenWillowQuest::BeginPlay()
                 throw std::runtime_error("quest save state was rejected");
             Rewards = int32(Data->GetNumberField(TEXT("rewards")));
             Respawns = int32(Data->GetNumberField(TEXT("respawns")));
-            bWeaponLent = Data->GetBoolField(TEXT("weapon_lent"));
+            // A lend in progress is redone on the first tick, once the walker has set up its inventory.
+            bLendPending = Data->GetBoolField(TEXT("weapon_lent"));
             UE_LOG(LogTemp, Display, TEXT("OWQUEST loaded save: status=%d rewards=%d respawns=%d"), Status(), Rewards, Respawns);
         }
         SpawnMarcus();
@@ -299,16 +321,21 @@ void UOpenWillowQuest::Pump()
         }
         case K::StatusEffect: UE_LOG(LogTemp, Display, TEXT("OWQUEST status effect %s on dummy (not applied: no effect system)"), *A); break;
         case K::MissionWeaponGranted:
-            bWeaponLent = true;
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon lent: %s (host: fire-typed shots; stock weapon not hosted)"), *A);
+            if (A != MissionWeapon.Balance) { Fail(TEXT("granted mission weapon has no prepared recipe: ") + A); return; }
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon granted: %s"), *A);
+            LendMissionWeapon();
             break;
         case K::MissionWeaponRemoved:
             bWeaponLent = false;
+            if (Walker && !Walker->ReturnLentWeapon(MissionWeapon.Id))
+                UE_LOG(LogTemp, Warning, TEXT("OWQUEST lent weapon %s was not in Maya's inventory"), *MissionWeapon.Id);
             UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon removed: %s"), *A);
             break;
         case K::Reward:
             ++Rewards;
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s (amount unresolved; counted only)"), *A);
+            if (A != Impl->Data.XpRewardAttribute) { Fail(TEXT("reward attribute differs from world.json values.xp: ") + A); return; }
+            GrantExperience();
+            DropReward();
             break;
         case K::Status: UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A); break;
         case K::ObjectiveSet: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective set active: %s"), *A); break;
@@ -358,20 +385,65 @@ bool UOpenWillowQuest::TryUse()
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
     // The stock mission menu (accept / turn-in screen) is not hosted: the use key accepts or turns in directly.
+    // With nothing to accept or turn in, the key is not consumed (pickups and the door still get it).
     const TCHAR* Action = TEXT("nothing to accept or turn in");
     bool bOk = true;
     if (Current == S::NotStarted) { Action = TEXT("accept"); bOk = Accept(); }
     else if (Current == S::ReadyToTurnIn) { Action = TEXT("turn in"); bOk = TurnIn(); }
     UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d)"), Action, bOk, int32(Current), Status());
-    return true;
+    return Current == S::NotStarted || Current == S::ReadyToTurnIn;
 }
 
-void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, bool bFire)
+void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FString& DamageType)
 {
     if (!Impl || bFailed || !Target || Target != Dummy) return;
-    // Host stand-in for the shot's stock damage type: fire-typed host damage = the incendiary impact type.
-    Impl->Slice->damageDummy(bFire ? "GD_Incendiary.DamageType.DmgType_Incendiary_Impact" : "");
+    // The shot's stock damage type path goes to the dummy's own OnTakeDamage (its CompareObject decides).
+    LastDummyDamageType = DamageType;
+    ++DummyShots;
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy OnTakeDamage DamageType=%s"), DamageType.IsEmpty() ? TEXT("None") : *DamageType);
+    Impl->Slice->damageDummy(TCHAR_TO_UTF8(*DamageType));
     Pump();
+}
+
+void UOpenWillowQuest::LendMissionWeapon()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    bWeaponLent = Walker && Walker->LendWeapon(MissionWeapon);
+    if (!bWeaponLent) UE_LOG(LogTemp, Error, TEXT("OWQUEST could not lend %s to Maya (backpack full or no walker)"), *MissionWeapon.Id);
+}
+
+void UOpenWillowQuest::DropReward()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    if (!bHasReward || !Walker) return;
+    // Host stand-in placement: on the floor 80 uu in front of the player.
+    const FVector Ahead = Walker->GetActorLocation() + FRotator(0, Walker->GetControlRotation().Yaw, 0).Vector() * 80.f;
+    FHitResult Floor;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestReward), true, Walker);
+    const FVector At = GetWorld()->LineTraceSingleByChannel(Floor, Ahead, Ahead - FVector(0, 0, 400), ECC_Visibility, Query) ? Floor.ImpactPoint : Ahead;
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    RewardPickup = GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(At, FRotator::ZeroRotator, Params);
+    if (!RewardPickup) return;
+    FOpenWillowTakenInventoryItem Item;
+    Item.Weapon = RewardItem;
+    RewardPickup->Initialize(Item);
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in dropped: %s \"%s\" at %s (press E to pick up)"), *RewardItem.Id, *RewardItem.Name, *At.ToString());
+}
+
+void UOpenWillowQuest::GrantExperience()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+    if (!Skills) return;
+    // CANDIDATE amount (UNVERIFIED: GetExperienceReward is native) at the slice's mission level.
+    LastXpAmount = Impl->Data.MissionXp(MissionLevel);
+    ExperienceBeforeReward = Skills->GetExperience();
+    LevelBeforeReward = Skills->GetLevel();
+    Skills->AddExperience(LastXpAmount);
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: %.4f x span at mission level %d = %d XP (candidate rule, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
+        *Impl->Data.XpRewardAttribute, Impl->Data.XpPercentage, MissionLevel, LastXpAmount, ExperienceBeforeReward,
+        Skills->GetExperience(), LevelBeforeReward, Skills->GetLevel(), Skills->AvailablePoints());
 }
 
 void UOpenWillowQuest::NotifyRespawn()
@@ -438,7 +510,7 @@ void UOpenWillowQuest::UpdateHints()
     FString Line = TEXT("Rock, Paper, Genocide: Fire Weapons! - ");
     if (Current == S::NotStarted) Line += TEXT("talk to Marcus (E)");
     else if (Current == S::Active && Impl->ObjectiveState(Impl->Data.TriggerObjective) == "Active") Line += TEXT("go to the range");
-    else if (Current == S::Active) Line += TEXT("shoot the target with fire damage");
+    else if (Current == S::Active) Line += TEXT("shoot the target with the lent fire pistol (") + MissionWeapon.Name + TEXT(")");
     else if (Current == S::ReadyToTurnIn) Line += TEXT("turn in to Marcus (E)");
     else Line += TEXT("complete");
     GEngine->AddOnScreenDebugMessage(0x0E57A001, 0.f, FColor::White, Line);
@@ -464,6 +536,11 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
         if (!Walker || !Walker->GetMover()) { Fail(TEXT("-owquest needs the walker's mover (-owwalk -owmover=...)")); return; }
         try { Walker->GetMover()->BindTrack(Impl->Data.TargetBinding); }
         catch (const std::exception& Error) { Fail(UTF8_TO_TCHAR(Error.what())); return; }
+    }
+    if (bLendPending)
+    {
+        bLendPending = false;
+        LendMissionWeapon();
     }
     Impl->Slice->tick(Delta);
     Pump();
@@ -544,6 +621,12 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f)
             && Walker->GetHealth() == Walker->GetMaxHealth() && Walker->GetMaxHealth() != 400.f, TEXT("maya_health_from_formula"));
         Check(!Dummy && !bDummySpawned, TEXT("dummy_absent_before_fire_objective"));
+        // Player side: the mission's own MissionWeapon recipe and mesh exist, it is not carried yet, and Maya starts
+        // armed (slice gear at her level) with the arms shown.
+        Check(MissionWeapon.Balance == UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str()) && MissionWeapon.Level == MissionLevel
+            && !MissionWeapon.DamageType.IsEmpty() && UOpenWillowInventory::LoadWeaponMesh(MissionWeapon), TEXT("mission_weapon_recipe_and_mesh_found"));
+        Check(Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE, TEXT("mission_weapon_not_carried_before_lend"));
+        Check(Walker->HasWeaponOut() && Walker->AreArmsShown(), TEXT("maya_starts_armed_with_arms_shown"));
         PressUse();   // far from Marcus: must do nothing
         break;
     }
@@ -594,6 +677,13 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Waiting(Impl->ObjectiveState(Data.TriggerObjective) == "Complete", 3.f)) return;
         Check(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
         Check(bWeaponLent, TEXT("mission_weapon_lent"));
+        {
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            Check(Held && Held->Id == MissionWeapon.Id && Held->Balance == MissionWeapon.Balance && Held->Level == MissionWeapon.Level
+                && Held->Damage == MissionWeapon.Damage && Held->FireRate == MissionWeapon.FireRate && Held->Magazine == MissionWeapon.Magazine
+                && Held->DamageType == MissionWeapon.DamageType, TEXT("lent_pistol_drawn_with_recipe_identity_and_stats"));
+            Check(Walker->HeldWeaponMesh() == MissionWeapon.MeshPath && Walker->AreArmsShown(), TEXT("lent_pistol_shows_imported_mesh_with_arms"));
+        }
         break;
     case 8: {
         if (Waiting(Dummy && bDummyAttached, 3.f)) return;
@@ -640,35 +730,77 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     case 13: {
         if (TestWait < 0.5f || !Dummy) { if (!Dummy) Fail(TEXT("dummy missing")); return; }
-        FHitResult Hit;
-        const FVector Toward = (Dummy->AimPoint() - Walker->GetActorLocation()).GetSafeNormal();
-        UGameplayStatics::ApplyPointDamage(Dummy, 25.f, Toward, Hit, Walker->GetController(), Walker, UDamageType::StaticClass());
-        Check(Status() == 1, TEXT("non_fire_damage_does_not_complete_objective"));
-        UGameplayStatics::ApplyPointDamage(Dummy, 25.f, Toward, Hit, Walker->GetController(), Walker, UOpenWillowFireDamageType::StaticClass());
-        Check(Status() == 2, TEXT("fire_damage_completes_fire_objective_via_dummy_provider"));
-        Check(!bWeaponLent, TEXT("mission_weapon_removed_after_objective"));
+        // Real shots from the trigger centre (where the aim trace hit the dummy). First the wrong element: an
+        // equipped slice gun whose stock damage type is not the lent pistol's.
+        PlacePlayer(Data.TriggerCenter, Dummy->AimPoint());
+        for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount && WrongId.IsEmpty(); ++Slot)
+            if (const FOpenWillowWeaponItem* Item = Walker->GetInventory()->SlotItem(Slot);
+                Item && Item->Id != MissionWeapon.Id && Item->DamageType != MissionWeapon.DamageType)
+            {
+                WrongId = UOpenWillowInventory::StableId(*Item);
+                WrongType = Item->DamageType;
+            }
+        if (WrongId.IsEmpty() || !Walker->DrawItemById(WrongId)) { Fail(TEXT("no equipped gun with another damage type for the wrong-element shot")); return; }
         break;
     }
-    case 14:
+    case 14: {
+        if (TestWait < 0.5f) return;
+        const int32 Before = DummyShots;
+        Walker->FireOnce();
+        Check(DummyShots == Before + 1 && LastDummyDamageType == WrongType && Status() == 1
+            && Impl->ObjectiveState(Data.DummyObjective) == "Active", TEXT("wrong_element_shot_reaches_dummy_and_does_not_complete"));
+        Walker->DrawItemById(MissionWeapon.Id);
+        break;
+    }
+    case 15: {
+        if (TestWait < 0.5f) return;
+        const int32 Before = DummyShots;
+        Walker->FireOnce();
+        Check(DummyShots == Before + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
+        Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
+        const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+        Check(!bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE && Held && Held->Id != MissionWeapon.Id,
+            TEXT("mission_weapon_removed_after_objective"));
+        break;
+    }
+    case 16:
         if (Waiting(Mover->TrackReverseEnds > 0 && bDummyDestroyedBySequence, 12.f)) return;
         Check(bSendBackFromProvider && Mover->TrackReverseEnds == 1 && Mover->TrackOffset().IsNearlyZero(0.5f), TEXT("dummy_provider_sends_target_back"));
         Check(bDummyDestroyedBySequence && !Dummy, TEXT("installed_kismet_destroys_dummy_at_reverse_end"));
         PlacePlayer(Marcus->GetActorLocation() + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), Marcus->GetActorLocation());
         break;
-    case 15:
+    case 17: {
         if (TestWait < 0.5f) return;
+        // Test fixture: top Maya's experience up so that this reward must cross the next level's requirement.
+        UOpenWillowSkills* Skills = Walker->GetSkills();
+        const int64 Gap = UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel() + 1) - Skills->GetExperience() - Data.MissionXp(MissionLevel);
+        if (Gap > 0) Skills->AddExperience(Gap);
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
+        PointsBeforeReward = Skills->AvailablePoints();
         PressUse();
         break;
-    case 16:
+    }
+    case 18: {
         Check(Status() == 3, TEXT("use_key_turns_in_mission"));
         Check(Rewards == 1, TEXT("xp_reward_granted_once"));
-        PressUse();
+        const UOpenWillowSkills* Skills = Walker->GetSkills();
+        const int32* Oracle = Data.XpCandidateByLevel.Find(MissionLevel);
+        Check(Oracle && LastXpAmount == *Oracle && LastXpAmount > 0 && Skills->GetExperience() == ExperienceBeforeReward + LastXpAmount,
+            TEXT("xp_amount_is_candidate_formula_at_mission_level"));
+        Check(Skills->GetLevel() == LevelBeforeReward + 1 && Skills->GetExperience() >= UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel())
+            && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));
+        Check(bHasReward && RewardPickup && RewardPickup->DisplayName() == RewardItem.Name
+            && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) == INDEX_NONE, TEXT("turn_in_drops_loot_stand_in_pickup"));
+        PressUse();   // nothing left to turn in: the key falls through to the pickup
         break;
-    case 17:
+    }
+    case 19:
         Check(Status() == 3 && Rewards == 1, TEXT("turn_in_not_repeatable"));
+        Check(Walker->LastPickupAccepted() && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) != INDEX_NONE
+            && !IsValid(RewardPickup), TEXT("use_key_collects_loot_pickup_into_backpack"));
         PlacePlayer(Data.OracleDeathLocation, Data.DummyLocation);
         break;
-    case 18: {
+    case 20: {
         if (TestWait < 0.5f) return;
         const int32 Before = Respawns;
         FHitResult Hit;
@@ -679,13 +811,16 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Status() == 3, TEXT("mission_state_survives_respawn"));
         break;
     }
-    case 19:
+    case 21:
         if (Waiting(Walker->GetCharacterMovement()->IsMovingOnGround(), 4.f)) return;
         UE_LOG(LogTemp, Display, TEXT("OWQUEST after respawn: %s grounded=%d"), *Walker->GetActorLocation().ToString(),
             Walker->GetCharacterMovement()->IsMovingOnGround());
         Check(Walker->GetCharacterMovement()->IsMovingOnGround(), TEXT("respawn_point_is_standable"));
         break;
-    case 20:
+    case 22:
+        if (!RunPhaselockTest()) return;
+        break;
+    case 23:
         UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog lookups=%d misses=%d played=%d"), DialogLookups, DialogMisses, DialogPlayed);
         Check(DialogLookups > 0 && DialogMisses == 0 && DialogPlayed == 0, TEXT("dialog_hook_finds_every_line_and_plays_nothing"));
         Check(FPaths::FileExists(SavePath), TEXT("save_file_written"));
@@ -712,4 +847,149 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     ++TestStep;
     TestWait = 0;
+}
+
+// Phaselock against the action-skill manifest, after the mission (the reward's level-up left Maya skill points).
+bool UOpenWillowQuest::RunPhaselockTest()
+{
+    PhaselockWait += GetWorld()->GetDeltaSeconds();
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    UOpenWillowSkills* Skills = Walker->GetSkills();
+    const FOpenWillowPhaselockData& P = Walker->GetPhaselockData();
+    const FOpenWillowPhaselockTimeline Base = P.Timeline(P.LockDuration(0), P.TargetTimeScale(false));
+    auto Next = [this] { ++PhaselockStep; PhaselockWait = 0; };
+    auto Aim = [Walker](const FVector& Point)
+    {
+        if (Walker->GetController()) Walker->GetController()->SetControlRotation((Point - (Walker->GetActorLocation() + FVector(0, 0, 70))).Rotation());
+    };
+    switch (PhaselockStep)
+    {
+    case 0: {
+        FString Reason;
+        Check(P.bLoaded && Skills->TrySpend(-1, -1, -1, Reason) && Skills->GetActionGrade() == 1, TEXT("skill_point_buys_phaselock"));
+        Check(PhaselockTableMatchesManifest(), TEXT("phaselock_timelines_match_manifest_table"));
+        // A host engine-shape target 400 uu down the range lane from the trigger centre (the lane the dummy used).
+        const FVector Lane = (Impl->Data.DummyLocation - Impl->Data.TriggerCenter).GetSafeNormal2D();
+        const FVector Ahead = Impl->Data.TriggerCenter + Lane * 400.f;
+        FHitResult Floor;
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestPhaselockTarget), true, Walker);
+        FVector At = Ahead;
+        if (GetWorld()->LineTraceSingleByChannel(Floor, Ahead + FVector(0, 0, 200), Ahead - FVector(0, 0, 600), ECC_Visibility, Query)) At = Floor.ImpactPoint;
+        PhaselockDummy = GetWorld()->SpawnActor<AOpenWillowCombatTarget>(At, Lane.Rotation() + FRotator(0, 180, 0));
+        PlacePlayer(Impl->Data.TriggerCenter, At + FVector(0, 0, 900));   // looking up past it: the first cast misses
+        Next();
+        return false;
+    }
+    case 1:
+        if (PhaselockWait < 0.5f) return false;
+        Walker->UsePhaselock();
+        Check(!Walker->LastPhaselockHit() && Walker->PhaselockRemaining() > 0.f && PhaselockDummy && !PhaselockDummy->IsPhaselocked(),
+            TEXT("phaselock_miss_lifts_nothing_and_holds_skill"));
+        Next();
+        return false;
+    case 2:
+        if (PhaselockWait < P.ReleaseBufferTime + 0.1f) return false;
+        Check(Walker->PhaselockRemaining() == 0.f, TEXT("phaselock_miss_resets_cooldown_after_release_buffer"));
+        Aim(PhaselockDummy->AimPoint());
+        Next();
+        return false;
+    case 3: {
+        if (PhaselockWait < 0.2f) return false;
+        Walker->UsePhaselock();
+        const FOpenWillowPhaselockTimeline& T = Walker->LastPhaselockTimeline();
+        Check(Walker->LastPhaselockHit() && Walker->LastPhaselockTarget() == PhaselockDummy && PhaselockDummy->IsPhaselocked()
+            && FMath::IsNearlyEqual(T.SkillDuration, Base.SkillDuration, 1e-4f), TEXT("phaselock_hit_uses_manifest_timeline"));
+        PhaselockCastSeen = Walker->LastPhaselockCastAt();
+        Next();
+        return false;
+    }
+    case 4: {
+        if (PhaselockWait < Base.LockedAt + 0.6f) return false;
+        const float Height = PhaselockDummy->LiftedHeight();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock height %.1f at %.2f s (stock %.0f +- bob %.0f)"), Height, PhaselockWait, P.HeightFromGround, P.BobAmplitude);
+        Check(FMath::Abs(Height - P.HeightFromGround) <= P.BobAmplitude + 1.f, TEXT("phaselock_lifts_to_stock_height"));
+        Shot(TEXT("4_Phaselock"));
+        Next();
+        return false;
+    }
+    case 5: {
+        if (PhaselockDummy->IsPhaselocked() && PhaselockWait < 10.f) return false;
+        const float Released = PhaselockDummy->PhaselockReleasedAt() - PhaselockCastSeen;
+        const float Now = GetWorld()->GetTimeSeconds();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock released after %.3f s (manifest %.3f); cooldown left %.2f of %.1f; target time scale %.2f"),
+            Released, Base.ReleasedAt, Walker->PhaselockRemaining(), P.CooldownSeconds, PhaselockDummy->PhaselockTimeScale(Now, P));
+        // The release happens on the first tick at or after the time: allow one slow test frame (0.1 s).
+        Check(!PhaselockDummy->IsPhaselocked() && Released >= Base.ReleasedAt && Released - Base.ReleasedAt <= 0.1f, TEXT("phaselock_releases_at_manifest_time"));
+        Check(FMath::Abs(Walker->PhaselockRemaining() - P.CooldownSeconds) <= 0.1f, TEXT("phaselock_cooldown_paused_while_target_held"));
+        Check(PhaselockDummy->PhaselockTimeScale(Now, P) == P.TargetTimeScale(true) && P.TargetTimeScale(true) < P.TargetTimeScale(false),
+            TEXT("phaselock_diminishing_returns_on_released_target"));
+        Next();
+        return false;
+    }
+    case 6: {
+        // Suspension: the action point, a full lower Motion tier, then one Suspension grade (1 + 5 + 1 points).
+        // Test fixture: raise the level so that many points exist (one per level from 5).
+        TArray<FString> SpendOrder;
+        FString Text;
+        TSharedPtr<FJsonObject> Manifest;
+        if (FFileHelper::LoadFileToString(Text, *Walker->GetPhaselockFile()) && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Manifest) && Manifest)
+            Manifest->GetObjectField(TEXT("upgradePath"))->TryGetStringArrayField(TEXT("spendOrder"), SpendOrder);
+        int32 Branch = 0, Tier = 0, Cell = 0, LowerPoints = 0;
+        if (SpendOrder.Num() == 2 && Skills->FindSkill(SpendOrder[0], Branch, Tier, Cell))
+            LowerPoints = Skills->TierPoints(Branch, Tier);
+        Skills->SetLevel(FMath::Max(Skills->GetLevel(), 4 + 1 + LowerPoints + 1));
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: level %d for %d+1 Motion points"), Skills->GetLevel(), LowerPoints);
+        bool bSpent = SpendOrder.Num() == 2 && LowerPoints > 0;
+        FString Reason;
+        for (int32 I = 0; I < LowerPoints && bSpent; ++I) bSpent = Skills->TrySpend(Branch, Tier, Cell, Reason);
+        if (bSpent && Skills->FindSkill(SpendOrder[1], Branch, Tier, Cell)) bSpent = Skills->TrySpend(Branch, Tier, Cell, Reason);
+        const int32 Grade = Skills->GradeOf(P.DurationSkill);
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST %s grade %d -> lock duration %.2f (base %.2f) %s"), *P.DurationSkill, Grade, P.LockDuration(Grade), P.LockDurationBase, *Reason);
+        Check(bSpent && SpendOrder.Num() == 2 && SpendOrder[1] == P.DurationSkill && Grade == 1 && P.DurationPostAdd.IsValidIndex(1)
+            && FMath::IsNearlyEqual(P.LockDuration(Grade), P.LockDurationBase + P.DurationPostAdd[1]) && P.DurationPostAdd[1] > 0.f,
+            TEXT("suspension_point_adds_manifest_lock_time"));
+        if (PhaselockDummy) PhaselockDummy->Destroy();
+        PhaselockDummy = nullptr;
+        return true;
+    }
+    default:
+        return true;
+    }
+}
+
+// The host timelines against the tool's own table (phaselockByModifierGrade): every grade, first lock and re-lock
+// inside the diminishing-returns window. Agreement between two readings of the same data, not a game check.
+bool UOpenWillowQuest::PhaselockTableMatchesManifest() const
+{
+    const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    const FOpenWillowPhaselockData& P = Walker->GetPhaselockData();
+    FString Text;
+    TSharedPtr<FJsonObject> Manifest;
+    if (!FFileHelper::LoadFileToString(Text, *Walker->GetPhaselockFile()) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Manifest) || !Manifest)
+        return false;
+    int32 Compared = 0, Mismatched = 0;
+    for (const auto& Value : Manifest->GetObjectField(TEXT("upgradePath"))->GetArrayField(TEXT("phaselockByModifierGrade")))
+    {
+        const auto Row = Value->AsObject();
+        const int32 Grade = int32(Row->GetNumberField(TEXT("grade")));
+        for (const bool bRelock : {false, true})
+        {
+            const auto Want = Row->GetObjectField(bRelock ? TEXT("relockWithinDiminishingReturns") : TEXT("firstLock"));
+            const FOpenWillowPhaselockTimeline Got = P.Timeline(P.LockDuration(Grade), P.TargetTimeScale(bRelock));
+            const float Pairs[][2] = {{Got.SkillDuration, float(Want->GetNumberField(TEXT("skillDuration")))},
+                {Got.LockedAt, float(Want->GetNumberField(TEXT("lockedAt")))}, {Got.OutroAt, float(Want->GetNumberField(TEXT("outroAt")))},
+                {Got.ReleasedAt, float(Want->GetNumberField(TEXT("releasedAt")))}, {Got.EndSkillAt, float(Want->GetNumberField(TEXT("endSkillAt")))}};
+            for (const auto& Pair : Pairs)
+            {
+                ++Compared;
+                if (FMath::Abs(Pair[0] - Pair[1]) > 1e-3f)
+                {
+                    ++Mismatched;
+                    UE_LOG(LogTemp, Warning, TEXT("OWQUEST Phaselock grade %d %s: host %.4f manifest %.4f"), Grade, bRelock ? TEXT("relock") : TEXT("first"), Pair[0], Pair[1]);
+                }
+            }
+        }
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock timeline table: %d values compared, %d differ"), Compared, Mismatched);
+    return Compared > 0 && Mismatched == 0;
 }

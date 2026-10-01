@@ -96,6 +96,12 @@ float FOpenWillowSliceData::HealthForLevel(int32 Level) const
     return float(FMath::Max(HealthMin, HealthMultiplier * FMath::Pow(HealthScaler, double(Level))));
 }
 
+int32 FOpenWillowSliceData::MissionXp(int32 MissionLevel) const
+{
+    auto Required = [this](int32 L) { return XpMultiplier * FMath::Pow(double(L), XpPower) + XpOffset; };
+    return int32(FMath::RoundToDouble(XpPercentage * (Required(MissionLevel + 1) - Required(MissionLevel))));
+}
+
 void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile, const FString& AudioFile)
 {
     const auto World = ReadJson(WorldFile);
@@ -187,8 +193,21 @@ void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile
     HealthMin = Restriction->GetBoolField(TEXT("bEnableMinValueRestriction"))
         ? Num(Obj(Restriction, TEXT("MinValue")), TEXT("BaseValueConstant")) : 0.0;
 
+    // Mission XP: percentage, required-experience formula constants and the candidate table.
+    const auto Xp = Obj(Obj(World, TEXT("values")), TEXT("xp"));
+    const auto Percentage = Obj(Xp, TEXT("reward_percentage"));
+    XpRewardAttribute = Str(Percentage, TEXT("attribute"));
+    XpPercentage = Num(Percentage, TEXT("playthrough1"));
+    const auto Required = Obj(Obj(Xp, TEXT("required_formula")), TEXT("formula"));
+    XpMultiplier = Num(Obj(Required, TEXT("Multiplier")), TEXT("BaseValueConstant"));
+    XpPower = Num(Obj(Required, TEXT("Power")), TEXT("BaseValueConstant"));
+    XpOffset = Num(Obj(Required, TEXT("Offset")), TEXT("BaseValueConstant"));
+    for (const auto& Pair : Obj(Xp, TEXT("candidate_amount_by_mission_level"))->Values)
+        XpCandidateByLevel.Add(FCString::Atoi(*Pair.Key), int32(Pair.Value->AsNumber()));
+
     // NPC assets (UE paths) and the pawns' mesh-component translations from the identity manifest beside it.
     const auto Npcs = Obj(ReadJson(NpcFile), TEXT("use"));
+    PistolMesh = AssetPath(Str(Obj(Npcs, TEXT("MaliwanPistol")), TEXT("rolled_sample_mesh")));
     const auto Identity = Obj(ReadJson(FPaths::Combine(FPaths::GetPath(NpcFile), TEXT("npc_identity.json"))), TEXT("npcs"));
     auto ReadNpc = [&](const TCHAR* Key, const TCHAR* Moving, FOpenWillowNpcAssets& Out)
     {
