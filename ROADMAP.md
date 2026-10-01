@@ -1,6 +1,6 @@
 # BL2_ReBased roadmap
 
-The live tracker. Phases, steps, gates and estimates come from
+The live tracker. Phases, steps and gates come from
 [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md); this file
 records where each step actually stands, with the verification record that
 backs it. Checkbox states are conservative: a step is checked only when its
@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-09-21
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-10-01
 
 ---
 
@@ -28,6 +28,37 @@ end-to-end: spawn, fight, loot a gun, equip it, use her action skill
 (Phaselock), complete the mission, die, respawn. That's Phase 4's gate below.
 Broad map coverage (79 more maps) and the remaining Vault Hunters are
 deferred until that gate is met; they move to Phase 5/6.
+
+---
+
+## How it's going
+
+The project is worked on actively. There are no completion dates and no
+time estimates here; this section only records what the repository shows as of
+2026-10-01.
+
+- **Elapsed:** first commit 2026-09-10, so 21 calendar days. 182 commits on
+  `origin/main` across 16 days with at least one commit. Built with heavy AI
+  assistance (see the README). The first commit imported earlier local
+  prototypes, so the repository's clock started a little after the work did.
+- **2026-09-10:** package reader reads 2,008 / 2,008 packages; Phase 0 gated
+  (UE5 chosen as host; one mesh and one texture render in it).
+- **2026-09-13:** Ash and Sanctuary load as frozen scenes in UE5 with a
+  free-flight camera (Southpaw Factory follows on 2026-09-14).
+- **2026-09-14:** placeholder walking with collision on Sanctuary.
+- **2026-09-15:** Sanctuary terrain and BSP floors imported with walkable
+  collision.
+- **2026-09-23 to 2026-09-25:** Maya imported with animated first-person arms;
+  Phaselock cast in the host; recipe-driven weapon inventory screen.
+- **2026-09-30:** read-only script bytecode disassembler, then a C++ bytecode
+  loader, VM runtime and Core natives (prototype).
+- **2026-10-01:** the VM drives backpack navigation in UE5; one Sanctuary door
+  opens from installed Matinee/Kismet data; the stock Fire mission plays end to
+  end in the host with labelled stand-ins.
+
+Not done: nothing has been compared against the original game, Sanctuary visual
+parity is open, and most natives are unverified. No phase after Phase 0 has
+passed its gate, and 79 maps are untouched.
 
 ---
 
@@ -146,7 +177,7 @@ well-bounded ones are marked *good first task*.
 
 ## Phase 0: Foundation and spikes <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: 3–6 weeks. Gated 2026-09-10, ahead of estimate; most of the reader already existed as a Python prototype.*
+*Gated 2026-09-10; most of the reader already existed as a Python prototype.*
 
 Goal: a repo, a build, a package loader, and a decided host engine.
 
@@ -188,9 +219,9 @@ the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 
 ## Phase 0.5: External extraction support for the vertical slice (in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: 1–2 weeks for the spike. This supports the Sanctuary/Maya pipeline
-proof of concept and can shorten asset preparation; it does not replace the
-runtime, gameplay or parity phases.*
+*This supports the Sanctuary/Maya pipeline proof of concept and can speed up
+asset preparation; it does not replace the runtime, gameplay or parity
+phases.*
 
 Goal: establish whether a mature community exporter can provide repeatable local
 visual payloads for the Sanctuary/Maya vertical-slice importer without
@@ -231,7 +262,7 @@ and [tooling reference](docs/TOOLING.md#external-tools).
 
 ## Phase 1: World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: 2–4 months full-time. Started 2026-09-10.*
+*Started 2026-09-10.*
 
 Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 
@@ -305,7 +336,7 @@ verified against the real game → work moves on to Phase 2 for the vertical
 slice (Sanctuary + one Vault Hunter). Full 82/82 map coverage remains the
 eventual completion target for this phase but is deferred until the Phase 4
 vertical-slice gate is met; see Phase 5. Kill criterion unchanged: if no map
-loads by month 6, stop and reassess. *(Passed: three maps already load.)*
+loads, stop and reassess. *(Passed: three maps already load.)*
 
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
@@ -319,8 +350,8 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ## Phase 2: UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: +3–6 months.* Goal: Gearbox's own gameplay code executing, scoped
-to what Sanctuary and the chosen first Vault Hunter actually need (see
+Goal: Gearbox's own gameplay code executing, scoped to what Sanctuary and the
+chosen first Vault Hunter actually need (see
 [vertical-slice priority](#priority-the-vertical-slice)), not full native
 coverage.
 
@@ -355,9 +386,8 @@ coverage.
 
 ## Phase 3: Stock UE3 natives (M3a) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-*Estimate: +6–12 months.* Goal: the UE3 natives the vertical slice needs
-(movement, collision, animation playback), not all 1,914 up front. Ground
-truth: UDK.
+Goal: the UE3 natives the vertical slice needs (movement, collision,
+animation playback), not all 1,914 up front. Ground truth: UDK.
 
 - [ ] `Actor` (166): spawn/destroy, transforms, timers, traces, movement,
       attachment, tick, `Touch`/`Bump`
@@ -377,18 +407,17 @@ collision, matching UDK-derived golden tests.
 
 ## Phase 4: Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">: the mountain
 
-*Estimate: +12–24 months.* Goal: **Maya**, the vertical slice's first Vault
-Hunter, walks, shoots a handful of real guns, uses Phaselock and her skill
-trees, and enemies on Sanctuary fight back. Ground truth: the original game
-instrumented with unrealsdk, plus community documentation.
+Goal: **Maya**, the vertical slice's first Vault Hunter, walks, shoots a
+handful of real guns, uses Phaselock and her skill trees, and enemies on
+Sanctuary fight back. Ground truth: the original game instrumented with
+unrealsdk, plus community documentation.
 
 Method (revised 2026-10-01): find each native's behaviour by analysing the game
 executable locally ([NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md)), write the
 rule down in our own words, implement from that note, then confirm it with the
 golden-file loop: hook the native in the real game, log every call's inputs
 and outputs during play, implement until our engine reproduces the log, extend
-the log on mismatch. Decompiler output never enters the repository. The
-estimates in Phases 2 to 4 predate this and have not been re-baselined.
+the log on mismatch. Decompiler output never enters the repository.
 
 Priority order:
 - [ ] Stat core (~120): `AttributeDefinition*`, `SkillDefinition`,
@@ -416,8 +445,6 @@ This is the vertical slice; once met, broad map and character coverage
 ---
 
 ## Phase 5: Campaign completable (M4) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
-
-*Estimate: +12–24 months.*
 
 - [ ] Broad map coverage: the remaining ~79 maps, deferred from Phase 1's
       vertical-slice rescoping (2026-09-18)
@@ -448,13 +475,14 @@ This is the vertical slice; once met, broad map and character coverage
 
 Stated up front so nobody has to guess whether the project is alive:
 
-- Phase 0 not gated in 3 months → tooling loop isn't working. *(Passed.)*
+- Phase 0 never gets gated → tooling loop isn't working. *(Passed
+  2026-09-10.)*
 - The Phase 0.5 exporter spike does not produce a repeatable, attributable
-  representative export within 2 weeks → keep it as an inspection oracle and
-  continue the bounded OpenWillow importer path; do not stall the project on a
-  community tool.
-- M1 cannot load a single map by month 6 → the loop isn't holding for this
-  approach; stop and reassess honestly rather than push on hope. *(Three maps
-  already load.)*
+  representative export → keep it as an inspection oracle and continue the
+  bounded OpenWillow importer path; do not stall the project on a community
+  tool.
+- M1 cannot load a single map → the loop isn't holding for this approach; stop
+  and reassess honestly rather than push on hope. *(Passed: three maps already
+  load.)*
 - Nobody but the author has contributed by M2 → fine, but plan M3 only.
 - The author stops reading the code → pause and fix that.

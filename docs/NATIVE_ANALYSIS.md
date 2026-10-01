@@ -45,12 +45,17 @@ The repository hook refuses writes of the database and asset file types it knows
 
 ## Tooling
 
-Ghidra (Apache 2.0, with a headless mode that can be scripted) is the obvious default; Binary Ninja and
-IDA are alternatives. None is installed or recorded yet. Before relying on one, add its version, source,
-license and use to [THIRD_PARTY.md](../THIRD_PARTY.md) (maintainer decision, as for any tool), keep the tool
-outside the repository, and keep its projects under `local/analysis/`. Scripts that drive it headlessly
-(import, auto-analysis, apply the names recovered so far, export notes) belong in `tools/` and contain no
-game data, so a fresh machine can rebuild its database from the installed game.
+Ghidra 12.1.4 (Apache 2.0) with Temurin JDK 21 is the chosen tool (maintainer decision 2026-10-01; versions,
+sources, checksums and license in [THIRD_PARTY.md](../THIRD_PARTY.md)). Both live outside the repository, for
+example `C:\Users\<you>\Tools\ghidra_12.1.4_PUBLIC` and `...\jdk-21.0.12.1+1` (set `OPENWILLOW_GHIDRA` and
+`OPENWILLOW_JDK` if yours differ; the JDK is only put on `PATH` by the script, not installed system-wide).
+
+`tools/ghidra_import.ps1` copies `Borderlands2.exe` to a work folder, imports it into a Ghidra project and runs
+auto-analysis headlessly. Two practical points it handles: `analyzeHeadless.bat` breaks on the usual Steam path
+(`Program Files (x86)`), hence the copy; and Ghidra rejects project paths containing a folder that starts with
+`.`, which includes worktrees under `.t3`, so the project lives in `%OPENWILLOW_ANALYSIS%` or
+`%USERPROFILE%\bl2-analysis`, outside every worktree. Further scripts that drive Ghidra headlessly (apply the names
+recovered so far, export behaviour notes) belong in `tools/` and contain no game data.
 
 ## Working on two machines
 
@@ -68,10 +73,16 @@ database and any hand-made patches to imported content.
    `OPENWILLOW_PRIVATE` at. Use a private repository, a cloud-synced folder or an external drive, as you prefer.
    Large imported content is better regenerated than synced; GitHub rejects files over 100 MB.
 
-A private GitHub repository is still a copy of game-derived material on a third party's servers. It is not
-public and not distributed, but that is your risk to take knowingly; a self-hosted or encrypted store avoids it.
-Keep that store separate from this repository, never add it as a submodule or a remote of this one, and never
-link to it from public text.
+The maintainer's store is the private GitHub repository `zuhuHix/BL2_ReBased-private`, cloned to
+`C:\Users\<you>\bl2-private` with `OPENWILLOW_PRIVATE` pointing at it. It is still a copy of game-derived material
+on a third party's servers: not public and not distributed, but a risk taken knowingly; a self-hosted or encrypted
+store avoids it. Keep that repository separate from this one, never add it as a submodule or a remote of this one,
+never make it public, and never link to it from public text. Its README states these rules.
+
+A Ghidra project is a database of many files that changes constantly and can exceed GitHub's 100 MB file limit, so
+do not copy the live project folder in. Export the program (`File > Export Program > Ghidra Zip File`, `.gzf`, or
+a scripted export) into `local/analysis/` and sync that; the other machine imports it instead of re-analysing.
+Rebuilding the analysis from the executable with `tools/ghidra_import.ps1` is the fallback and needs no sync.
 
 ```powershell
 $env:OPENWILLOW_PRIVATE = 'D:\bl2-private'     # a folder (or clone of a private repo) outside this repository

@@ -51,7 +51,7 @@ Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md).
 
 **The first milestone:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in UE5. Everything below comes after that.
 
-When it's done (and "done" is years away, see the roadmap, this isn't a remaster, not a remake) here's what a new machine actually buys you:
+When it's done (see the roadmap; this isn't a remaster, not a remake) here's what a new machine actually buys you:
 
 - **Co-op that works.** No SHiFT, no forced account linking, no hardlock on the title screen.
 - **64-bit.** The ~4 GB memory wall behind a lot of the crashes and Ultra HD pack problems: gone.
@@ -107,17 +107,17 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 
 **Current priority: a vertical slice, not breadth.** Porting all 82 maps is the easy part of this project. The hard, unproven part is phases 2 through 4, actually running the game's code. So right now the goal is proving those on **one map (Sanctuary, already the furthest along) and one Vault Hunter** end-to-end, before spending more time on additional maps or characters. Full details and why: [ROADMAP.md](ROADMAP.md#priority-the-vertical-slice).
 
-| Phase | What you'll be able to do | Time (est.) | Status |
+| Phase | What you'll be able to do | So far (dates from git) | Status |
 |:--|:--|:--|:--|
-| **0 · Read the files** | The engine can open every BL2 file | ~3–6 weeks | Done (took a week) |
-| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | ~2–4 months | In progress (1 of 82 targeted for now) |
-| **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | +3–6 months | Not started |
-| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | +6–12 months | Not started |
-| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions reverse-engineered by watching the game (this is the mountain). This is the vertical slice | +1–2 years | Not started |
-| **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | +1–2 years | Not started |
-| **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | ongoing | Not started |
+| **0 · Read the files** | The engine can open every BL2 file | Reads all 2,008 packages; gated 2026-09-10 | Done |
+| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now) |
+| **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | Prototype since 2026-09-30: C++ bytecode loader, interpreter and Core natives; drives backpack navigation in UE5 since 2026-10-01 | In progress (prototype) |
+| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Only the placeholder UE5 walking controller | Not started |
+| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host with labelled stand-ins: Maya (2026-09-23), Phaselock (2026-09-25), the stock Fire mission loop (2026-10-01); none compared with the original game | In progress (slice pieces) |
+| **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
+| **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
-**Total to a finished campaign: 3–5 years.** One person, AI-assisted. Honestly, not overpromising. Phase 4 is the mountain and that's where most of the time goes.
+I work on this actively, and I'm not promising completion dates. As of 2026-10-01 the repository is 21 days old, with 182 commits across 16 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
 
 ## Help me keep going
 
@@ -276,7 +276,7 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Checkbox-level tracker: done, next, blocked |
 | [DECISIONS.md](DECISIONS.md) | Dated log of every architectural and parsing decision and its evidence |
-| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, estimates, kill criteria |
+| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, kill criteria |
 | [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
 | [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
 | [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |

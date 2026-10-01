@@ -24,9 +24,10 @@ kernel, auto-aim, constraint evaluators, experience and loot rules, Gearbox's na
   behaviour may be recorded; the structure of a listing may not.
 - A rule read from native code and not confirmed by running the game stays `UNVERIFIED`; say how a
   confirmed one was confirmed.
-- A decompiler or disassembler is a new tool: it needs a `THIRD_PARTY.md` entry (still a maintainer
-  decision, the hook prompts) and must live outside the repository. Do not download or install one
-  without the maintainer asking for it.
+- The chosen tool is Ghidra 12.1.4 with a portable Temurin JDK 21 (`THIRD_PARTY.md`); both live outside
+  the repository and `tools/ghidra_import.ps1` drives them headlessly. Any other decompiler or
+  disassembler is a new tool: it needs a `THIRD_PARTY.md` entry (a maintainer decision, the hook
+  prompts) and must live outside the repository. Do not download or install one unasked.
 - Use `tools/private_sync.ps1` to move non-regenerable game-derived files between the maintainer's
   machines; never commit them and never point the store inside the repository.
 

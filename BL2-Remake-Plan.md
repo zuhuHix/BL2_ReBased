@@ -121,9 +121,8 @@ maps, Vault Hunters, campaign breadth, co-op, DLC or editor features.
 ## What the community tools can and cannot save
 
 Extraction can reduce the preparation of static payloads from a long custom
-decoder effort to hours for a batch once the commands and failure policy are
-proven. It may move useful asset preparation from years toward weeks or
-months. It does not provide the UnrealScript VM, Gearbox's native behavior,
+decoder effort to a batch run once the commands and failure policy are
+proven, and it accelerates useful asset preparation. It does not provide the UnrealScript VM, Gearbox's native behavior,
 movement, AI, combat, missions, skill trees, UI, saves, networking or campaign
 parity. Those remain the hard part of the POC and the full project.
 

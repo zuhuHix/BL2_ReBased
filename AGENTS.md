@@ -72,9 +72,8 @@ looting, equipping, using a skill, completing a mission, dying and respawning.
 
 Use external extraction to accelerate the asset side of that slice, but treat
 the Phase 0.5 benchmark in `ROADMAP.md` as a supporting gate, not as a new
-breadth-first roadmap. This may shorten asset preparation from months to weeks
-or months; it does not by itself implement gameplay, scripting, AI, UI, saves,
-networking or campaign parity. Broad map and character coverage is deferred
+breadth-first roadmap. This accelerates asset preparation; it does not by itself
+implement gameplay, scripting, AI, UI, saves, networking or campaign parity. Broad map and character coverage is deferred
 until the vertical-slice gate passes.
 
 When the maintainer asks for an implementation task, state which external-tool

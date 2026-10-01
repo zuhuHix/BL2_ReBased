@@ -166,9 +166,25 @@ decision before implementation.
   `a1c4647367dd4828d6e3b87e9c8fad131d8c1fd6179512105c9631033aad652a`,
   mod manager 3.8 (9097107f), per `unrealsdk.log` and `unrealsdk.toml`.
 - Use: external execution only, to observe the running game (docs/LEGAL.md,
-  clean-room rule 3). `tools/sdk_trace/openwillow_uitrace` is our own mod
+  rule 3). `tools/sdk_trace/openwillow_uitrace` is our own mod
   (MIT); it imports the SDK's Python API at runtime inside the game and copies
   none of its code. Traces it writes are game data and stay under `local/`.
+
+### Ghidra and Temurin JDK 21 (executable analysis; maintainer approval 2026-10-01)
+
+- **Ghidra** 12.1.4 (build 2026-09-21), https://github.com/NationalSecurityAgency/ghidra, Apache License 2.0. Release
+  asset `ghidra_12.1.4_PUBLIC_20260921.zip`, SHA-256
+  `ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db` (matches the checksum published in the release
+  notes). Unpacked outside the repository at `C:\Users\yorad\Tools\ghidra_12.1.4_PUBLIC`. Its bundled native
+  `decompile.exe` launches on the development machine (Smart App Control on).
+- **Eclipse Temurin JDK** 21.0.12.1+1 (portable zip, `OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip`), from
+  https://github.com/adoptium/temurin21-binaries, GPL-2.0 with the Classpath Exception. SHA-256
+  `f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e` (matches the Adoptium API's checksum). Unpacked
+  next to Ghidra and used through `JAVA_HOME` in the shell that runs Ghidra; not installed system-wide.
+- **Use:** local analysis of the player's own `Borderlands2.exe` (docs/LEGAL.md, "Analysing the executable";
+  docs/NATIVE_ANALYSIS.md). Local execution only: no Ghidra or JDK code or file is in the repository, and the
+  repository contains no Ghidra output. Projects and exports live under ignored `local/analysis/` or the private store.
+  Scripts in `tools/` that drive Ghidra headlessly contain no game data.
 
 ### gameswf - benchmark candidate (pending)
 

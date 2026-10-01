@@ -3328,6 +3328,9 @@ plan, that forbade disassembling or decompiling `Borderlands2.exe`.
   `docs/NATIVE_ANALYSIS.md`, README, CLAUDE.md, AGENTS.md, ROADMAP method note, CONTRIBUTING, CODE_OF_CONDUCT, PR and issue
   templates, the plan documents; `.claude/hooks/sensitive_guard.py` and `.gitignore` now also refuse decompiler/disassembler
   database file types; `tools/private_sync.ps1` added.
-- **Not done / still the maintainer's:** no decompiler or disassembler is installed or recorded; a `THIRD_PARTY.md` entry
-  (version, source, license, use) is required before one is relied on, and `THIRD_PARTY.md` was not edited. The phase
-  estimates in ROADMAP.md predate this and are not re-baselined.
+- **Follow-up, same day (maintainer decisions):** Ghidra 12.1.4 with a portable Temurin JDK 21 is the chosen tool and has
+  a `THIRD_PARTY.md` entry (checksums verified against the published ones); `tools/ghidra_import.ps1` imports and
+  analyses the executable headlessly. The private store is the private GitHub repository `zuhuHix/BL2_ReBased-private`.
+  All time-to-completion estimates were removed from ROADMAP.md, README.md and the plan documents; ROADMAP.md now has a
+  "How it's going" section stating what was done in what elapsed time, with no forecast.
+- **Still open:** no native function has been analysed yet, and no analysis result is confirmed against the game.
