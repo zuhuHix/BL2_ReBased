@@ -34,6 +34,12 @@ public:
     float PhaselockRemaining() const;
     float PhaselockCooldown() const { return PhaselockCooldownSeconds; }
     float LastTargetHitAt() const { return TargetHitAt; }
+    class UOpenWillowMover* GetMover() const { return Mover; }
+    class UOpenWillowQuest* GetQuest() const { return Quest; }
+    virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
+        class AController* EventInstigator, AActor* DamageCauser) override;
+    float GetHealth() const { return Health; }
+    float GetMaxHealth() const { return MaxHealth; }
 private:
     void Forward(float Value);
     void Right(float Value);
@@ -70,6 +76,14 @@ private:
     UPROPERTY() TObjectPtr<class UOpenWillowInventory> Inventory;
     UPROPERTY() TObjectPtr<class UOpenWillowSkills> Skills;
     UPROPERTY() TObjectPtr<class UOpenWillowMover> Mover;
+    UPROPERTY() TObjectPtr<class UOpenWillowQuest> Quest;
+    // Host stand-ins (UNVERIFIED): Maya's real maximum health and the BL2 death/respawn flow are not recovered.
+    float MaxHealth = 400.f;
+    float Health = 400.f;
+    FVector RespawnLocation = FVector::ZeroVector;
+    FRotator RespawnRotation = FRotator::ZeroRotator;
+    bool bRespawnPointCaptured = false;
+    void Respawn();
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;

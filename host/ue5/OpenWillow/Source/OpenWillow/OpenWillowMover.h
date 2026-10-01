@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "mover.hpp"
 #include "OpenWillowMover.generated.h"
 
 UCLASS()
@@ -16,10 +17,16 @@ public:
     // Stock activation: a remote event through the installed Kismet sequence owning the door's Matinee action.
     // Returns whether any event node in the sequence matched. Unsupported ops fail the component explicitly.
     bool RemoteEvent(const FString& Name);
+    // A mission behavior's remote event (the Kismet nodes bound to that mission definition path).
+    bool MissionEvent(const FString& MissionPath, const FString& Name);
+    // Closed-position centre of the door and a standing point beside it (test/host positioning).
+    bool Anchor(FVector& Out) const;
+    bool StandPoint(FVector& Out) const;
     int32 LastEventMatched = 0;
     int32 LastEventBoundary = 0;
 private:
     void StartMotion(bool NextReverse);
+    bool ApplyDispatch(const vm::Mover::Dispatch& Dispatch, const FString& Name);
     struct FImpl;
     TSharedPtr<FImpl> Impl;
     void Fail(const FString& Error);

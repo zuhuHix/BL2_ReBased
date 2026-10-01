@@ -1,5 +1,7 @@
 #include "OpenWillowWalker.h"
 #include "OpenWillowMover.h"
+#include "OpenWillowQuest.h"
+#include "Engine/DamageEvents.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
@@ -63,15 +65,41 @@ AOpenWillowWalker::AOpenWillowWalker()
     Inventory = CreateDefaultSubobject<UOpenWillowInventory>(TEXT("Inventory"));
     Skills = CreateDefaultSubobject<UOpenWillowSkills>(TEXT("Skills"));
     Mover = CreateDefaultSubobject<UOpenWillowMover>(TEXT("InstalledMover"));
+    Quest = CreateDefaultSubobject<UOpenWillowQuest>(TEXT("SliceQuest"));
     GetCharacterMovement()->MaxWalkSpeed = 450;
     GetCharacterMovement()->JumpZVelocity = 420;
     GetCharacterMovement()->MaxStepHeight = 35;
     GetCharacterMovement()->SetWalkableFloorAngle(45);
 }
 
+float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+    if (!bMayaActive && !bRespawnPointCaptured) return 0.f;
+    const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
+    Health -= Applied;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.0f damage, health %.0f/%.0f"), Applied, Health, MaxHealth);
+    if (Health <= 0.f) Respawn();
+    return Applied;
+}
+
+void AOpenWillowWalker::Respawn()
+{
+    // Host stand-in: back to where this session started with full health. Mission state is not touched.
+    Health = MaxHealth;
+    bFireHeld = false;
+    CancelReload();
+    SetActorLocationAndRotation(RespawnLocation, RespawnRotation, false, nullptr, ETeleportType::TeleportPhysics);
+    GetCharacterMovement()->StopMovementImmediately();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *RespawnLocation.ToString());
+    if (Quest) Quest->NotifyRespawn();
+}
+
 void AOpenWillowWalker::BeginPlay()
 {
     Super::BeginPlay();
+    RespawnLocation = GetActorLocation();
+    RespawnRotation = GetActorRotation();
+    bRespawnPointCaptured = true;
     // BL2's installed DefaultGame.ini sets Engine.WorldInfo.DefaultGravityZ
     // to -500 cm/s^2. Scale the host world's gravity to that magnitude rather
     // than inheriting UE5's default -980, so the jump arc uses BL2 gravity.
@@ -581,8 +609,10 @@ void AOpenWillowWalker::FireWeapon()
         // Evaluated item-card damage (tools/weapon_stats.py); no crits, element
         // or target resistances yet.
         const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
+        // The lent mission pistol is a fire weapon (host classification, UNVERIFIED).
         UGameplayStatics::ApplyPointDamage(Target, Weapon ? Weapon->Damage : 0.f, Direction, Hit,
-            GetController(), this, UDamageType::StaticClass());
+            GetController(), this, Quest && Quest->LentWeaponIsFire()
+                ? TSubclassOf<UDamageType>(UOpenWillowFireDamageType::StaticClass()) : TSubclassOf<UDamageType>(UDamageType::StaticClass()));
         TargetHitAt = GetWorld()->GetTimeSeconds();
     }
 }

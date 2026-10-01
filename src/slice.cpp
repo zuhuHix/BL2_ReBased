@@ -95,6 +95,13 @@ bool FireMissionSlice::hitDummy(bool fireDamage) {
     return true;
 }
 
+bool FireMissionSlice::loadState(const std::string& state) {
+    if (!mission_->loadState(state)) return false;
+    if (mission_->status() == MissionSystem::Status::Active && mission_->activeSet().find("RocksPaper_FinalObj") != std::string::npos)
+        dummy_->setSequenceEnabled("FireDamage", true);
+    return true;
+}
+
 bool FireMissionSlice::turnIn() {
     const bool ok = mission_->turnInMission();
     pump();

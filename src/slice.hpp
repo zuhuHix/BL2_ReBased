@@ -33,6 +33,10 @@ public:
     bool enterRange();                       // the GoToRange objective
     bool hitDummy(bool fireDamage);          // OnTakeDamage on the dummy; the host classifies the damage type
     bool turnIn();
+    // Persistence: the mission state only (the caller keeps the completed-mission set and rewards). Restoring an
+    // Active mission in its final set re-enables the dummy sequence the host chose when it entered.
+    std::string saveState() const { return mission_->saveState(); }
+    bool loadState(const std::string& state);
     void tick(double seconds);
     std::vector<HostEvent> drain();
     std::vector<std::string> errors() const;

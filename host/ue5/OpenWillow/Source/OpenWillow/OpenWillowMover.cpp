@@ -177,7 +177,30 @@ void UOpenWillowMover::StartMotion(bool NextReverse) {
 bool UOpenWillowMover::RemoteEvent(const FString& Name) {
     LastEventMatched = 0; LastEventBoundary = 0;
     if (!Impl || Failed || !Mesh) return false;
-    const auto Dispatch = Impl->Script->remoteEvent(TCHAR_TO_UTF8(*Name));
+    return ApplyDispatch(Impl->Script->remoteEvent(TCHAR_TO_UTF8(*Name)), Name);
+}
+bool UOpenWillowMover::MissionEvent(const FString& MissionPath, const FString& Name) {
+    LastEventMatched = 0; LastEventBoundary = 0;
+    if (!Impl || Failed || !Mesh) return false;
+    return ApplyDispatch(Impl->Script->missionEvent(TCHAR_TO_UTF8(*MissionPath), TCHAR_TO_UTF8(*Name)), Name);
+}
+bool UOpenWillowMover::Anchor(FVector& Out) const {
+    if (!Mesh || !Mesh->GetStaticMesh()) return false;
+    Out = Initial.TransformPosition(Mesh->GetStaticMesh()->GetBoundingBox().GetCenter());
+    return true;
+}
+bool UOpenWillowMover::StandPoint(FVector& Out) const {
+    FVector Center;
+    if (!Anchor(Center)) return false;
+    const FBox Box = Mesh->GetStaticMesh()->GetBoundingBox();
+    const FVector Extent = Box.GetExtent();
+    int32 Axis = 0;
+    for (int32 I = 1; I < 3; ++I) if (Extent[I] < Extent[Axis]) Axis = I;
+    FVector Offset = FVector::ZeroVector; Offset[Axis] = Extent[Axis] + 30;
+    Out = Center - Initial.TransformVectorNoScale(Offset.GetSafeNormal()) * 170;
+    return true;
+}
+bool UOpenWillowMover::ApplyDispatch(const vm::Mover::Dispatch& Dispatch, const FString& Name) {
     for (const auto& Error : Dispatch.errors) {
         Fail(FString::Printf(TEXT("kismet event %s: %s"), *Name, UTF8_TO_TCHAR(Error.c_str())));
         return false;

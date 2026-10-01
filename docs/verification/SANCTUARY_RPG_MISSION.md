@@ -93,3 +93,39 @@ build\Release\ow-package.exe "$G\Startup.upk" --mission-run GD_Z1_RockPaperGenoc
 build\Release\ow-package.exe "$G\Sanctuary_Dynamic.upk" --kismet-run TheWorld.PersistentLevel.Main_Sequence.RocksPaperGenocide --cooked $G --remote RE_Ep14_OpenMarcusDoor
 python tools/export_index.py        # ignored export caches under local/census/exports
 ```
+
+## Host loop (UE5), 2026-10-01 — `tools/test_quest.ps1`
+
+AI-assisted. Host behaviour only. **Not original-game parity, not a full gameplay loop**: it is a
+reproducible scripted pass over the stock mission data with the stand-ins listed below.
+
+Two editor launches (the runner owns the lock and kills its own process): the first plays the loop and
+writes `local/quest/save.json`, the second resumes from it. Result: **first run 16/16 PASS, resume run 4/4
+PASS** (logs `local/quest/run-first-20261001-101032.log`, `run-resume-20261001-101145.log`; the runner exited
+0 on the second pass of the script, `run-resume-20261001-101145.log`).
+
+What the 16 checks exercise, in order: fresh status NotStarted; accept (Active) and the mission's
+`RocksPaper_MoveMarcusToRange` remote event reaching the installed Kismet node (it ends at
+`WillowSeqAct_AIScripted_2`, reported at the host boundary, **not run**); range objective advances to the
+final set and lends the mission weapon; the dummy takes non-fire damage (objective unchanged) then fire
+damage, which runs the dummy's own installed `OnTakeDamage` behavior chain
+(`CompareObject` -> `AttemptStatusEffect`/`ChangeRemoteBehaviorSequenceState` -> `UpdateMissionObjective`) and
+completes `Fire`; weapon removed; turn-in (Complete, one XP reward, not repeatable); lethal damage to Maya
+respawns her without touching mission state; the save file exists. The resume run checks Complete, reward and
+respawn counters retained and that the completed mission cannot be re-accepted.
+
+**Stand-ins that are NOT recovered from the packages (all UNVERIFIED):** Marcus is a method call, not a placed
+NPC, with no dialog UI or audio (dialog triggers are logged by tag only); the GoToRange trigger is a 700 cm
+radius around the door; the dummy is the existing host engine-shape target, not `GD_TargetDummy`'s mesh/pawn,
+and nothing spawns it through `SeqEvent_PopulatedActor`; "fire damage" is a host damage-type class and the
+`CompareObject` verdict is answered by it (the compared objects sit in an untagged union that is not decoded);
+the dummy's `FireDamage` sequence is enabled by the host (the original selects it through an instance-data
+switch); the lent weapon is not the stock Maliwan pistol (Maya's existing host weapon fires fire-typed
+shots); XP amount is unresolved (counted only); Maya's health (400) and respawn point (session start) are
+invented; the dependency mission `GD_Episode03.M_Ep3_CatchARide` is pre-completed by a fixture.
+Not run at all: `Behavior_Transform` and `Behavior_RegisterTargetable` (listed as host-boundary entries),
+`SeqAct_Interp_0` (target mover), `SeqAct_Toggle`, `GearboxSeqAct_TriggerDialogName`, status effects
+(Incendiary), loot, Phaselock behaviour from stock data, and skill upgrades.
+
+Automated checks at this commit: CTest 9/9 (including `kismet-synthetic`), nine package comparisons match,
+Kismet census 0 unresolved, door suite 16/16 (earlier run), inventory suite 47 PASS / 2 KNOWN_DIVERGENCE.
