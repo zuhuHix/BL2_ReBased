@@ -126,6 +126,28 @@ def effect_value(effect, grade, base, per):
     return base + (per or 0.0) * math.floor((grade - start) / interval)
 
 
+def effect_rows(package, props, resolver, grades):
+    """A skill's effects as numbers: one dict per SkillEffectData with its
+    attribute, ModifierType, EffectTarget and the value at grades 0..grades
+    (None where the effect does not apply yet or its value is unresolved).
+    The grade rule is effect_value's; how the game combines the modifier types
+    is not decided here (see tools/prepare_action_skill.py)."""
+    rows = []
+    for effect in props.get('SkillEffectDefinitions') or []:
+        base = resolver.value(package, effect.get('BaseModifierValue'))
+        per = resolver.value(package, effect.get('PerGradeUpgrade'))
+        rows.append({
+            'attribute': effect.get('AttributeToModify'),
+            'modifierType': effect.get('ModifierType'),
+            'target': effect.get('EffectTarget'),
+            'startGrade': effect.get('GradeToStartApplyingEffect', 1),
+            # Rounded to 6 places: the data are 32-bit floats (0.05 is stored as 0.0500000007).
+            'values': [None if v is None else round(v, 6)
+                       for v in (effect_value(effect, g, base, per) for g in range(grades + 1))],
+        })
+    return rows
+
+
 def format_number(value, flags):
     percent = flags.get('bDisplayAsPercentage', True)
     shown = abs(value) * (100 if percent else 1)
