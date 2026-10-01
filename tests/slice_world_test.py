@@ -80,6 +80,49 @@ def test_scene_nearest_placement():
     assert result['placements'] == 3
 
 
+# ---------------------------------------------------------------- attachment socket and target names
+def close(a, b):
+    return all(abs(x - y) < 1e-6 for x, y in zip(a, b))
+
+
+def test_rotate_and_child_location_follow_unreal_rotators():
+    assert close(w.rotate([0, 90, 0], [1, 0, 0]), [0, 1, 0])      # yaw +90: X -> Y
+    assert close(w.rotate([90, 0, 0], [1, 0, 0]), [0, 0, 1])      # pitch +90: X -> Z
+    assert close(w.rotate([0, 0, 90], [0, 1, 0]), [0, 0, -1])     # roll +90: Y -> -Z (FRotationMatrix's Y row)
+    parent = {'location': [100, 200, 300], 'rotation': [0, -90, 0]}
+    assert close(w.child_location(parent, {'location': [10, 0, 5], 'rotation': [0, 0, 0]}), [100, 190, 305])
+
+
+def attachments(*components):
+    return {'Attachments': [{'Data': {'ComponentData': {'Component': {'index': i + 1, 'path': path}, 'bAttachToMesh': False,
+                                                         'MeshSocketName': 'None'}}} for i, path in enumerate(components)]}
+
+
+def test_attach_socket_picks_the_named_socket_component():
+    components = {'Def.Mesh_1': ('Engine.StaticMeshComponent', {}),
+                  'Def.Socket_1': ('Engine.SocketComponent', {'SocketName': 'Grip', 'Translation': {'X': 1, 'Y': 2, 'Z': 3}}),
+                  'Def.Socket_2': ('Engine.SocketComponent', {'SocketName': 'Hook', 'Translation': {'X': 4, 'Y': 5, 'Z': 6},
+                                                              'Rotation': {'Pitch': 16384}})}
+    body = attachments('Def.Mesh_1', 'Def.Socket_1', 'Def.Socket_2')
+    path, pose = w.attach_socket(body, components, 'Hook')
+    assert path == 'Def.Socket_2'
+    assert pose['location'] == [4, 5, 6] and pose['rotation'] == [90.0, 0.0, 0.0] and pose['scale'] == [1, 1, 1]
+    raises(lambda: w.attach_socket(body, components, 'Missing'), 'found 0')
+    raises(lambda: w.attach_socket(attachments('Def.Socket_1', 'Def.Socket_1'), components, 'Grip'), 'found 2')
+    on_mesh = attachments('Def.Socket_1')
+    on_mesh['Attachments'][0]['Data']['ComponentData'].update(bAttachToMesh=True, MeshSocketName='Bone')
+    raises(lambda: w.attach_socket(on_mesh, components, 'Grip'), 'mesh socket')
+
+
+def test_playthrough_names_table():
+    balance = {'PlayThroughs': [{'PlayThrough': 1, 'DisplayName': 'Plain',
+                                 'TransformedNames': [{'Type': 'EAIT_A', 'TransformedName': 'Alpha'},
+                                                      {'Type': 'EAIT_B', 'TransformedName': 'Beta'}]}]}
+    assert w.playthrough_names(balance) == [{'playthrough': 1, 'display_name': 'Plain',
+                                             'transformed_names': {'EAIT_A': 'Alpha', 'EAIT_B': 'Beta'}}]
+    assert w.playthrough_names({}) == []
+
+
 # ---------------------------------------------------------------- respawn rule
 def station(name, location, can, active=False):
     return {'teleport_destination': name + '.Dest', 'location': location, 'can_resurrect': can, 'runtime_active': active}

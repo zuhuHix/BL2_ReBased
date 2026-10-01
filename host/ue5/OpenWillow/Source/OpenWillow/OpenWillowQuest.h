@@ -55,6 +55,12 @@ public:
     // The walker calls this once its start level is set: the loaded save's "progression" block (level, experience,
     // skill grades) replaces that state. False when the save has no such block (older saves) or it was rejected.
     bool RestoreProgression(class UOpenWillowSkills& Skills);
+    // The dummy's state written by its own provider's world behaviors (run in Pump):
+    //  - Behavior_RegisterTargetable: whether the actor is in the host's targetable list (the stand-in for the global
+    //    TargetableList; no host targeting reads it yet, it is exposed for checks);
+    //  - Behavior_Transform: WillowAIPawn.TransformType and the target name it selects (GetTargetName).
+    bool IsRegisteredTargetable(const AActor* Actor) const;
+    FString DummyTargetName() const;
 
 private:
     struct FImpl;
@@ -132,6 +138,15 @@ private:
     int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0;
     TArray<int32> ArrivalMotions;       // door motion requested by each entered ArrivedAtMoveNode event
     FVector DummySpawnedAt = FVector::ZeroVector;
+    FVector DummyAttachedAt = FVector::ZeroVector;   // dummy location right after the attach op ran
+    FVector AttachCarrierOffset = FVector::ZeroVector; // carrier offset at that moment
+    bool bAttachSocketApplied = false;
+    // Provider-level state of the dummy (the host's provider outlives the actor; applied to whichever dummy exists).
+    FString DummyTransform;             // EAITransformed name set by Behavior_Transform ("" = never set)
+    FString TransformSequence;          // sequence of the Behavior_Transform call that set it
+    bool bDummyTargetable = false;
+    int32 TargetableCalls = 0;
+    FString TargetableSequence;         // sequence of the last Behavior_RegisterTargetable call
     bool bReleaseUse = false;
     bool bTrackBound = false;
     bool bTalkHintLogged = false;

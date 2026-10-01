@@ -30,8 +30,6 @@
 namespace {
 const char* const MissionPath = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire";
 const char* const DummyProvider = "GD_TargetDummy.Character.CharClass_TargetDummy.BehaviorProviderDefinition_5";
-// Host fixture standing in for the player's campaign progress (the mission's only dependency).
-const char* const DependencyMission = "GD_Episode03.M_Ep3_CatchARide";
 // Host-chosen (UNVERIFIED): how close the player must be to Marcus for the use key to talk to him.
 constexpr float TalkReach = 250.f;
 
@@ -55,8 +53,15 @@ struct UOpenWillowQuest::FImpl {
     explicit FImpl(const std::filesystem::path& Cooked) : Store(Cooked), Runtime(Store) {
         Runtime.registerCoreNatives();
         Slice = std::make_unique<vm::FireMissionSlice>(Runtime, MissionPath, "Sanctuary_Dynamic", DummyProvider);
-        Completed.insert(DependencyMission);
+        // FIXTURE standing in for save state, not satisfied from data. A real save carries the completed missions;
+        // nothing installed says which missions are complete for a player in Sanctuary (the level travel station into
+        // Sanctuary already opens while the dependency mission is still active, and the fast-forward that completes
+        // missions in bulk is native, with its trigger set at run time). The fixture marks the mission's own declared
+        // Dependencies complete, read from the definition, so no mission is named here.
+        for (const auto& Dependency : Slice->mission().dependencies()) Completed.insert(Dependency);
+        Fixture = Completed;
     }
+    std::set<std::string> Fixture;     // what the fixture added (checked by the suite)
     std::string ObjectiveState(const FString& Objective) const {
         return Slice->mission().objectiveState(TCHAR_TO_UTF8(*Objective));
     }
@@ -87,6 +92,8 @@ void UOpenWillowQuest::BeginPlay()
             throw std::runtime_error("installed Borderlands 2 is required");
         Impl = MakeShared<FImpl>(std::filesystem::path(*FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole"))));
         Impl->Data.Load(World, Npcs, Audio);
+        for (const auto& Path : Impl->Fixture)
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST FIXTURE (save-state stand-in, not stock data): dependency %hs treated as complete"), Path.c_str());
         Impl->StationCounters.Init(0, Impl->Data.Stations.Num());
         // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the
         // gear was rolled at, used here as the mission level (an UNVERIFIED slice choice; the native pick is not decoded).
@@ -280,10 +287,25 @@ void UOpenWillowQuest::RouteRequests()
                 bool bHolder = false;
                 for (const auto& Variable : Mover->SequenceVariables(R.Op, TEXT("Target")))
                     bHolder |= UTF8_TO_TCHAR(Variable.object.c_str()) == Data.HolderObject;
-                // The holder (an interactive object with no prepared mesh) rides on the target carrier; the dummy
-                // keeps its spawn pose and follows the carrier. Bone "Target" offset not applied (UNVERIFIED).
+                // The holder (an interactive object: static meshes and SocketComponents, no skeleton) rides on the target
+                // carrier. The op's BoneName resolves to the holder's SocketComponent of that name (world.json
+                // holder.attach). The op tags no relative offset or rotation, so the dummy's origin is put on the socket:
+                // UNVERIFIED (Activated is native; bUseConstructAttachment is not interpreted). The carrier only
+                // translates in this binding (constant rotation keys), so the holder now = placed pose + carrier offset.
                 if (bHolder && Mover->TrackCarrier()) {
+                    AttachCarrierOffset = Mover->TrackOffset();
+                    if (Data.bHasAttachSocket && R.Op == Data.AttachOp) {
+                        FTransform Socket = Data.AttachSocketLocal * Data.HolderPose;
+                        Socket.AddToTranslation(AttachCarrierOffset);
+                        Dummy->SetActorLocationAndRotation(Socket.GetLocation(), Socket.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+                        bAttachSocketApplied = true;
+                        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy put on the holder socket at %s rot %s (spawned at %s; socket reading UNVERIFIED)"),
+                            *Socket.GetLocation().ToString(), *Socket.Rotator().ToString(), *DummySpawnedAt.ToString());
+                    } else {
+                        UE_LOG(LogTemp, Warning, TEXT("OWQUEST no attach socket for %s in world.json (regenerate with tools/prepare_slice_world.py): the dummy keeps its spawn pose"), *R.Op);
+                    }
                     Dummy->AttachToComponent(Mover->TrackCarrier(), FAttachmentTransformRules::KeepWorldTransform);
+                    DummyAttachedAt = Dummy->GetActorLocation();
                     bDummyAttached = bRun = true;
                 }
             } else if (R.Class == TEXT("Engine.SeqAct_Destroy") && Holds(R.Op, TEXT("Target")) && Dummy) {
@@ -362,12 +384,35 @@ void UOpenWillowQuest::Pump()
         }
     }
     for (const auto& Line : Impl->Slice->errors()) { Fail(UTF8_TO_TCHAR(Line.c_str())); return; }
-    // World behaviors the dummy provider reached: none has a host binding yet (logged, never counted as run).
+    // World behaviors the dummy provider reached. Behavior_Transform and Behavior_RegisterTargetable acting on the dummy
+    // itself (BCONTEXT_Self) are run here; the rest (IntMath, ChangeInstanceDataSwitch) stay logged with their fields.
     for (const auto& Call : Impl->Slice->dummy().boundaryCalls) {
         TArray<FString> Fields;
         for (const auto& Field : Call.fields) Fields.Add(FString::Printf(TEXT("%hs=%hs"), Field.first.c_str(), Field.second.c_str()));
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy behavior %hs:%hs (%hs.%hs) %s (not run by host)"), Call.cls.c_str(),
-            Call.name.c_str(), Call.sequence.c_str(), Call.event.c_str(), *FString::Join(Fields, TEXT(" ")));
+        auto Value = [&Call](const char* Key) {
+            const auto It = Call.fields.find(Key);
+            return It == Call.fields.end() ? FString() : FString(UTF8_TO_TCHAR(It->second.c_str()));
+        };
+        const bool bSelf = Value("Context") == TEXT("BCONTEXT_Self");
+        const TCHAR* Result = TEXT("not run by host");
+        if (bSelf && Call.cls == "WillowGame.Behavior_Transform") {
+            // Script: WillowAIPawn.TransformType = Transform. Its readable consumer is GetTargetName (the balance's
+            // transformed display name); nothing moves and no time is involved.
+            DummyTransform = Value("Transform");
+            TransformSequence = UTF8_TO_TCHAR(Call.sequence.c_str());
+            Result = TEXT("run by host: TransformType set");
+        } else if (bSelf && Call.cls == "WillowGame.Behavior_RegisterTargetable") {
+            // Script: WillowPawn.Behavior_RegisterTargetable adds/removes the pawn in the global TargetableList (native,
+            // keyed by allegiance). The host keeps a membership flag; which native searches read the list is UNVERIFIED.
+            bDummyTargetable = Value("bUnregister") != TEXT("true");
+            TargetableSequence = UTF8_TO_TCHAR(Call.sequence.c_str());
+            ++TargetableCalls;
+            Result = bDummyTargetable ? TEXT("run by host: registered targetable") : TEXT("run by host: unregistered");
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy behavior %hs:%hs (%hs.%hs) %s (%s)"), Call.cls.c_str(),
+            Call.name.c_str(), Call.sequence.c_str(), Call.event.c_str(), *FString::Join(Fields, TEXT(" ")), Result);
+        if (bSelf && Call.cls == "WillowGame.Behavior_Transform")
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy target name now \"%s\""), *DummyTargetName());
     }
     Impl->Slice->dummy().boundary.clear();
     Impl->Slice->dummy().boundaryCalls.clear();
@@ -490,6 +535,21 @@ bool UOpenWillowQuest::RestoreProgression(UOpenWillowSkills& Skills)
     UE_LOG(LogTemp, Display, TEXT("OWQUEST progression from save: level %d (start level %d replaced), experience %lld, action grade %d, skill points %d"),
         Skills.GetLevel(), StartLevel, Skills.GetExperience(), Skills.GetActionGrade(), Skills.AvailablePoints());
     return true;
+}
+
+bool UOpenWillowQuest::IsRegisteredTargetable(const AActor* Actor) const
+{
+    return Actor && Actor == Dummy && bDummyTargetable;
+}
+
+FString UOpenWillowQuest::DummyTargetName() const
+{
+    if (!Impl || !Impl->Data.bHasDummyNames) return FString();
+    // WillowAIPawn.GetTargetName (script): TransformType != 0 -> GetTransformedName -> the balance's
+    // GetTransformedDisplayName(TransformType) (native: "the playthrough entry of that type" is UNVERIFIED); else the
+    // balance's display name. The name-list and displayed-parent branches before it are not modelled.
+    if (const FString* Name = Impl->Data.DummyTransformedNames.Find(DummyTransform)) return *Name;
+    return Impl->Data.DummyDisplayName;
 }
 
 bool UOpenWillowQuest::RespawnPoint(const FVector& DeathLocation, FTransform& Out)
@@ -678,6 +738,15 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f)
             && Walker->GetHealth() == Walker->GetMaxHealth() && Walker->GetMaxHealth() != 400.f, TEXT("maya_health_from_formula"));
         Check(!Dummy && !bDummySpawned, TEXT("dummy_absent_before_fire_objective"));
+        // The dependency fixture (save-state stand-in) adds exactly the mission's declared Dependencies, and it is
+        // needed: without it the mission could not be accepted.
+        {
+            const auto& Mission = Impl->Slice->mission();
+            const auto Declared = Mission.dependencies();
+            Check(!Declared.empty() && Impl->Fixture == std::set<std::string>(Declared.begin(), Declared.end())
+                && !Mission.available(std::set<std::string>()) && Mission.available(Impl->Completed),
+                TEXT("dependency_fixture_is_the_missions_declared_dependencies"));
+        }
         // Player side: the mission's own MissionWeapon recipe and mesh exist, it is not carried yet, and Maya starts
         // armed (slice gear at her level) with the arms shown.
         Check(MissionWeapon.Balance == UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str()) && MissionWeapon.Level == MissionLevel
@@ -748,6 +817,23 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Dummy && bDummyAttached && Dummy->GetRootComponent()->GetAttachParent() == Mover->TrackCarrier(),
             TEXT("dummy_attached_to_carrier_by_installed_kismet"));
         Check(Mover->TrackRunning() || Mover->TrackForwardEnds > 0, TEXT("dummy_provider_starts_target_matinee"));
+        // Attach point from data: the host's composition (socket pose on the holder's placed pose) lands where the
+        // tool's own composition put it, moved by the carrier offset at attach time.
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy attached at %s, tool's socket %s, carrier offset then %s"), *DummyAttachedAt.ToString(),
+            *Data.AttachSocketWorldOracle.ToString(), *AttachCarrierOffset.ToString());
+        Check(Data.bHasAttachSocket && bAttachSocketApplied && DummyAttachedAt.Equals(Data.AttachSocketWorldOracle + AttachCarrierOffset, 0.5f),
+            TEXT("dummy_attached_at_holder_socket_from_manifest"));
+        // Behavior_Transform ran when the Fire objective enabled its sequence: the dummy's TransformType is set and its
+        // target name is the balance's transformed name for that type, not the plain display name.
+        {
+            const FString* Transformed = Data.DummyTransformedNames.Find(DummyTransform);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy TransformType %s (from %s), target name \"%s\""), *DummyTransform, *TransformSequence, *DummyTargetName());
+            Check(Data.bHasDummyNames && !DummyTransform.IsEmpty() && Transformed && DummyTargetName() == *Transformed
+                && *Transformed != Data.DummyDisplayName && Impl->Slice->dummy().sequenceEnabled(TCHAR_TO_UTF8(*TransformSequence)),
+                TEXT("dummy_transform_type_and_target_name_from_provider"));
+        }
+        // Not targetable yet: the sequence that registers it is enabled by the mission a few seconds later.
+        Check(Dummy && !IsRegisteredTargetable(Dummy) && TargetableCalls == 0, TEXT("dummy_not_targetable_before_register_behavior"));
         Shot(TEXT("2a_DummySpawned"));
         break;
     }
@@ -759,7 +845,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         const FVector KeyDelta = Key(Keys.Num() - 1) - Key(0);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST target track world offset %s (key-space delta %s)"), *Mover->TrackOffset().ToString(), *KeyDelta.ToString());
         Check(Mover->TrackForwardEnds == 1 && FMath::IsNearlyEqual(Mover->TrackOffset().Size(), KeyDelta.Size(), 0.5f), TEXT("target_matinee_reaches_forward_end"));
-        Check(Dummy && (Dummy->GetActorLocation() - DummySpawnedAt).Equals(Mover->TrackOffset(), 0.5f), TEXT("dummy_moves_with_carrier"));
+        Check(Dummy && (Dummy->GetActorLocation() - DummyAttachedAt).Equals(Mover->TrackOffset() - AttachCarrierOffset, 0.5f), TEXT("dummy_moves_with_carrier"));
         // From the trigger centre (where the player stands for the objective) the dummy must be in the line of fire.
         FHitResult Hit;
         FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestAim), true, Walker);
@@ -787,6 +873,11 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     case 13: {
         if (TestWait < 0.5f || !Dummy) { if (!Dummy) Fail(TEXT("dummy missing")); return; }
+        // Behavior_RegisterTargetable (bUnregister false) from the sequence the mission enabled: the dummy is in the
+        // host's targetable list before it is shot.
+        if (!bDummyTargetable && TestWait < 10.f) return;
+        Check(IsRegisteredTargetable(Dummy) && TargetableCalls == 1 && Impl->Slice->dummy().sequenceEnabled(TCHAR_TO_UTF8(*TargetableSequence)),
+            TEXT("dummy_registered_targetable_by_provider"));
         // Real shots from the trigger centre (where the aim trace hit the dummy). First the wrong element: an
         // equipped slice gun whose stock damage type is not the lent pistol's.
         PlacePlayer(Data.TriggerCenter, Dummy->AimPoint());
