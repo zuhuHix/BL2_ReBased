@@ -9,6 +9,7 @@ class USceneComponent;
 class USkeletalMeshComponent;
 class UTextureRenderTarget2D;
 class UPointLightComponent;
+struct FOpenWillowWeaponItem;
 
 // Isolated render target for the inventory card. The weapon is visible only
 // to this scene capture, so previewing an item never puts it into the level.
@@ -19,7 +20,8 @@ class OPENWILLOW_API AOpenWillowInventoryPreviewActor : public AActor
 public:
     AOpenWillowInventoryPreviewActor();
 
-    bool SetItemPreview(const FString& ItemId);
+    // Null clears the preview. The mesh is found the same way as the held weapon (UOpenWillowInventory::LoadWeaponMesh).
+    bool SetItemPreview(const FOpenWillowWeaponItem* Item);
     // Absolute orbit angles, clamped by the host. Returns a local PNG data URL.
     FString InspectFrame(float Yaw, float Pitch);
     UTextureRenderTarget2D* GetRenderTarget() const { return RenderTarget; }

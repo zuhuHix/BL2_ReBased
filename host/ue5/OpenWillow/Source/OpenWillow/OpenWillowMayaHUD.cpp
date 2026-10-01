@@ -525,7 +525,7 @@ void AOpenWillowMayaHUD::DrawHUD()
         const AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;
         const UOpenWillowInventory* Inventory = Maya ? Maya->GetInventory() : nullptr;
         const FOpenWillowWeaponItem* Item = Inventory ? Inventory->FindItemById(PendingMenuPreviewId) : nullptr;
-        InventoryMayaDisplay->SetPreviewWeapon(Item ? Item->Id : FString());
+        InventoryMayaDisplay->SetPreviewWeapon(Item);
     }
     if (SkillsBrowser && bInventoryOpen && !PendingInspectRequest.IsEmpty()
         && GetWorld()->GetRealTimeSeconds() >= NextInspectFrame)
@@ -546,7 +546,7 @@ void AOpenWillowMayaHUD::DrawHUD()
             {
                 if (!IsValid(InspectActor)) InspectActor = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(
                     AOpenWillowInventoryPreviewActor::StaticClass(), FVector(0, 0, -100000), FRotator::ZeroRotator);
-                if (InspectActor && InspectActor->SetItemPreview(Item->Id))
+                if (InspectActor && InspectActor->SetItemPreview(Item))
                     InspectPng = InspectActor->InspectFrame(FMath::Fmod(Yaw, 360.0), FMath::Clamp(Pitch, -80.0, 80.0));
             }
             TSharedRef<FJsonObject> Reply = MakeShared<FJsonObject>();
