@@ -12,16 +12,22 @@ param(
     [ValidateRange(2, 4)][int]$Slots = 2,
     # Send the page synthetic DOM key events instead of Slate key events.
     [switch]$JsKeys,
-    # Extra command-line switches for UnrealEditor.
-    [string[]]$Extra = @()
+    # Extra command-line switches for UnrealEditor. The defaults are the launch-only cache fallback and D3D11
+    # that completed in this environment (docs/verification/INVENTORY_MOVIE_PROTOTYPE.md, 2026-10-01); they
+    # change no project cache/renderer settings. Pass -Extra @() to launch without them.
+    [string[]]$Extra = @('-ddc=InstalledNoZenLocalFallback', '-d3d11')
 )
 # In-engine functional test of the imported inventory page <-> host round
 # trip (-owinventoryactions, UOpenWillowInventoryActionTest): open the page,
 # equip, unequip, favorite, trash, drop, pick up, locked slot and shield level
 # gate, each checked against the host inventory and the page's own snapshot.
-# Prints one row per OWINVTEST step from OpenWillow.log, exits 0 only when the
-# summary line says PASS, and always stops the editor it started and releases
-# local/ue_run.lock. Build the editor target first (docs/TOOLING.md).
+# Prints one row per OWINVTEST step from OpenWillow.log with its status
+# (PASS / FAIL / NOT_RUN = the step's own precondition did not hold / KNOWN_DIVERGENCE =
+# host behaviour documented as different from the original game, never counted as a pass)
+# and a tally. Exit codes: 0 all PASS; 1 FAIL or NOT_RUN present; 2 no summary (launch/timeout);
+# 3 PASS_WITH_KNOWN_DIVERGENCE. Refuses to start when an Unreal editor is already running, and
+# always stops the editor it started and releases local/ue_run.lock.
+# Build the editor target first (docs/TOOLING.md).
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
@@ -73,6 +79,7 @@ function Read-LogText {
 $exitCode = 1
 $process = $null
 $server = $null
+if (Get-Process UnrealEditor -ErrorAction SilentlyContinue) { throw 'An Unreal editor is already running; leave it untouched.' }
 Get-Lock
 try {
     # --- overlay server (the pages the game window loads) ---
@@ -114,12 +121,15 @@ try {
     $text = Read-LogText
 
     Write-Output ''
-    foreach ($m in [regex]::Matches($text, 'OWINVTEST step=(\d+) action=(\S+) ok=([01]) detail=(.*)')) {
-        $status = if ($m.Groups[3].Value -eq '1') { 'PASS' } else { 'FAIL' }
-        Write-Output ('{0,-4} step {1,2} {2,-36} {3}' -f $status, $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[4].Value.Trim())
+    $tally = [ordered]@{ PASS = 0; FAIL = 0; NOT_RUN = 0; KNOWN_DIVERGENCE = 0 }
+    foreach ($m in [regex]::Matches($text, 'OWINVTEST step=(\d+) action=(\S+) status=(\S+) ok=([01]) detail=(.*)')) {
+        $status = $m.Groups[3].Value
+        if ($tally.Contains($status)) { $tally[$status]++ }
+        Write-Output ('{0,-16} step {1,2} {2,-44} {3}' -f $status, $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[5].Value.Trim())
     }
     foreach ($m in [regex]::Matches($text, 'OWINVTEST page report at failure: (.*)')) { Write-Output "     page: $($m.Groups[1].Value.Trim())" }
     Write-Output ''
+    Write-Output ('Rows: ' + (($tally.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '))
     if (!$summary) {
         $reason = if ($process.HasExited) { "editor exited (code $($process.ExitCode)) before the summary" } else { "no summary within $TimeoutSeconds s" }
         Write-Output "OWINVTEST SUMMARY result=FAIL reason=$reason"
@@ -128,7 +138,7 @@ try {
     } else {
         Write-Output "OWINVTEST SUMMARY $summary"
         Write-Output "Log: $log"
-        $exitCode = if ($summary -match '^result=PASS ') { 0 } else { 1 }
+        $exitCode = if ($summary -match '^result=PASS ') { 0 } elseif ($summary -match '^result=PASS_WITH_KNOWN_DIVERGENCE ') { 3 } else { 1 }
     }
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

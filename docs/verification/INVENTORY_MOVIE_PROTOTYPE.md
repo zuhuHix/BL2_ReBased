@@ -823,3 +823,81 @@ downstream checks: step 44 reports a shield equip with an empty ID, and the
 pickup checks depend on the earlier incorrect DropId. Do not treat those passes
 as evidence of gear/pickup parity. Correcting these test/data issues remains open.
 The bounded VM acceptance is the two explicit expression-count/selection checks.
+
+### Suite correction 2026-10-01
+
+AI-assisted. Test and fixture work only: no change to `tools/hud_overlay/inventory.js`, `src/`,
+`CMakeLists.txt` or the host runtime. Files: `OpenWillowInventoryActionTest.cpp/.h`,
+`tools/test_inventory_actions.ps1`. The 2026-10-01 record above reported 41/48 with raw passes
+that proved little (a shield equip with an empty id, pickup checks against a stale `DropId`);
+this pass fixes the test, not the product.
+
+**Gear data.** `prepare_inventory_gear.py` ran on the one trace still present,
+`local/ui/traces/uitrace_20260930_164540.jsonl` (the 2026-09-30 keyboard-observation capture):
+36 completed observations, 8 unique cards, 28 duplicates, 0.188 s, 1 shield / 4 class mods /
+2 relics / 1 grenade mod, written to ignored `local/inventory/observed_gear.json`. (The earlier
+note that the source traces no longer exist applied to the 09-26 pair, not this file.) No new
+original-game capture was needed or made. I did **not** promote it to `gear_manifest.json`:
+the cards come from a player's save (levels 35-50, not the 36 the old steps assumed), and the
+suite should not depend on them. Instead the test adds one obviously fake shield
+(`test_shield_synthetic_1`, "TEST SHIELD (SYNTHETIC)", level 36, one fake stat) to the host
+inventory before the page opens, and selects it by walking to it in the unfiltered backpack
+(the host-only `[ ]` category filter is no longer used by the suite). The weapons are still the
+seeded local recipe demo set, chosen by what the page reports, never by a hard-coded id.
+
+**Statuses.** Every row is `PASS`, `FAIL`, `NOT_RUN` or `KNOWN_DIVERGENCE`
+(`OWINVTEST step=N action=... status=... ok=... detail=...`). Each step now has its own
+precondition, evaluated against a fresh page report before any input is sent; a precondition that
+does not hold is `NOT_RUN` (nothing sent, nothing claimed). The summary reads
+`result=PASS | PASS_WITH_KNOWN_DIVERGENCE | FAIL` plus
+`passed= failed= not_run= known_divergence=`; the runner exits 0 / 3 / 1 and 2 for no summary,
+and refuses to start while an Unreal editor is running. `KNOWN_DIVERGENCE` is never a pass.
+Steps 15/16 (PageUp/PageDown) assert what the host does today and report it as
+`KNOWN_DIVERGENCE`: stock PageDown is forward (ALL, TYPES, BRANDS, ITEMS, VALUE) and each step
+selects the first cell, whereas the host's PageUp is forward over its own modes and keeps the
+selection. The sort list itself is the separate unfinished feature on
+`t3code/wip-inventory-sort-list`.
+
+Other corrections: marking and drop steps first walk the page selection to the working weapon
+(arrow keys, one burst at a time) and assert it, then start from a checked host state
+(favorite/trash flags, no pickup already nearby); `DropId` is set only after that check, so a
+failed drop cannot leak into the pickup steps. Pickup steps need a recorded drop, a pickup actor
+in range and the dropped item out of the inventory. The shield steps assert level, selection and
+worn-state before and after; empty ids fail instead of matching anything. The refused-drag and
+level-gate-in-page steps are negative checks whose key/drag delivery cannot be observed; they
+require a preceding positive control (the earlier drag steps pass first) and say so in the row.
+Transfer, scroll, inspect and slot steps gained exact selection/state preconditions
+(candidate moved by ArrowDown; Up returns to the working weapon; key `2` must change the target).
+
+**Evidence.** Launch: `-ddc=InstalledNoZenLocalFallback -d3d11` (now the runner's default
+`-Extra`; no project config changed); UE 5.8 `OpenWillowEditor Win64 Development` build
+succeeded (14.5 s, last build). The suite ran three times in total:
+
+```text
+run-20261001-091241.log  PASS=43 FAIL=1 NOT_RUN=3 KNOWN_DIVERGENCE=2   result=FAIL (49 steps)
+run-20261001-091727.log  PASS=47 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=2   result=PASS_WITH_KNOWN_DIVERGENCE
+run-20261001-092122.log  PASS=47 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=2   result=PASS_WITH_KNOWN_DIVERGENCE
+node tests/inventory_navigation_test.js: 22/22 (synthetic)   python tests/inventory_gear_test.py: 4 OK
+ctest --test-dir build -C Release: 8/8 passed (19.08 s)
+verify_packages.py: all nine decoded byte/count/export comparisons match
+```
+
+The first run is the useful negative evidence: the shield walk timed out at 40 s (one key per
+3 s report round trip), that step failed and the three steps depending on the selected shield
+reported `NOT_RUN` with the reason, rather than passing on an empty id. Walking now sends
+bursts of up to eight ordered presses and waits for the expected row. Both later runs are
+identical. Run-to-run stability is two identical runs, not a statistical claim. Non-passes in the
+final runs: steps 15 and 16 only, both `KNOWN_DIVERGENCE` as above.
+
+Not reproduced: the old selected-item mismatch (the page selected a different weapon after the
+drag steps). In all three runs the page already selected the working weapon there, so the
+explicit select step was a no-op at that point; why it differed earlier is **UNVERIFIED**
+(hover selection under the in-game cursor is a hypothesis, not tested). The new step makes the
+suite independent of it either way, but the walk was only exercised for real by the shield step.
+
+Still unverified: a **VM-disabled baseline was not run** (no switch to turn the inventory VM off
+exists in the files this pass could touch), so the VM steps are not compared with the host
+adapter; stock backpack traversal and sort remain as in the observation sections above; keys
+are Slate events, not physical input; weak negative checks noted above; the host `[ ]`
+category filter and the host sort modes have no in-suite coverage now except steps 15/16.
+Item names in local logs come from the seeded recipes and are not copied here.
