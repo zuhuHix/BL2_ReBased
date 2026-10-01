@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowSkills.h"
+#include "Dom/JsonObject.h"
 
 // Spend rules on a synthetic tree (no game data): branch 0 has a tier with
 // cells 0 (max 3) and 2 (max 2) that opens the next tier after 3 points,
@@ -51,6 +52,24 @@ bool FOpenWillowSkillsTest::RunTest(const FString&)
     Skills->AddExperience(1);
     TestEqual(TEXT("Level up at the threshold"), Skills->GetLevel(), 47);
     TestEqual(TEXT("Grades survive a level up"), Skills->GetActionGrade(), 1);
+
+    // Quest-save progression: a fresh component with the same tree gets the same state back.
+    Skills->AddExperience(5);
+    const TSharedPtr<FJsonObject> Saved = Skills->ProgressionJson();
+    UOpenWillowSkills* Loaded = NewObject<UOpenWillowSkills>();
+    Loaded->AddBranch({First, Second});
+    Loaded->AddBranch({FTier{0, {{TEXT("Test.D"), 1, 2}}}});
+    Loaded->SetActionSkill(1, 1);
+    Loaded->SetLevel(8);
+    TestTrue(TEXT("Progression restores"), Loaded->RestoreProgression(*Saved, Reason));
+    TestEqual(TEXT("Restored state"), Loaded->StateJson(), Skills->StateJson());
+    TestEqual(TEXT("Restored experience"), Loaded->GetExperience(), Skills->GetExperience());
+    TestEqual(TEXT("Restored level"), Loaded->GetLevel(), 47);
+    Saved->GetObjectField(TEXT("grades"))->SetNumberField(TEXT("Test.C"), 2);
+    TestFalse(TEXT("Grade above its maximum refused"), Loaded->RestoreProgression(*Saved, Reason));
+    Saved->GetObjectField(TEXT("grades"))->SetNumberField(TEXT("Test.C"), 1);
+    Saved->GetObjectField(TEXT("grades"))->SetNumberField(TEXT("Test.Unknown"), 1);
+    TestFalse(TEXT("Unknown skill refused"), Loaded->RestoreProgression(*Saved, Reason));
     return true;
 }
 #endif

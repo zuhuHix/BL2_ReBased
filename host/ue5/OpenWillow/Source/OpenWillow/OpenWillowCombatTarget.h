@@ -25,10 +25,27 @@ public:
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
         class AController* EventInstigator, AActor* DamageCauser) override;
     // Lifts and holds the target on the stock timeline (FOpenWillowPhaselockData, LiftActionSkill script reading):
-    // snap lift over LiftDuration to HeightFromGround, sine bob while locked, shell fade over the outro, release at
-    // ReleasedAt, drop over DropTime, then the diminishing-returns modifier for its duration. False when the target is
-    // already phaselocked or dead (CanPhaseLockTarget).
+    // snap lift over LiftDuration to the lift end (PhaselockLiftHeight), sine bob while locked, shell fade over the
+    // outro, release at ReleasedAt, drop over DropTime, then the diminishing-returns modifier for its duration. False
+    // when the target is already phaselocked or dead (CanPhaseLockTarget).
     bool BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline);
+    // LiftActionSkill.BeginLifting's lift end, as a height above the target's collision centre now: ground within
+    // HeightFromGround below the centre -> ground + collision half height + HeightFromGround, lowered to a surface met on
+    // the way up minus the half height; no ground in reach -> 0 (no lift). See the .cpp for the host choices.
+    float PhaselockLiftHeight(const FOpenWillowPhaselockData& Data) const;
+    // Lift end of the running or last lock, above the target's rest (uu; same frame as LiftedHeight).
+    float PhaselockLiftEnd() const { return LiftTo; }
+    // Centre and half height of the target's colliding components: the host stand-ins for the pawn's Location and
+    // CylinderComponent.CollisionHeight (the stock dummy's collision cylinder is not read; UNVERIFIED).
+    void CollisionCentre(FVector& OutCentre, float& OutHalfHeight) const;
+    // LiftActionSkill.CanPhaseLockTarget as far as the host can say: alive and not already phaselocked. Friendliness is
+    // not modelled (every host target is hostile).
+    bool CanPhaseLockTarget() const { return !bDead && !bPhaselocked; }
+    // Stands for the AI flag Flag_Skills_CanPhaseLock that CanLiftTargetIf tests (in the data it is computed from
+    // Flag_Skills_DisablePhaseLock, PhaseLockOnHold and IsPlayer, none of which the host has). True by default: that
+    // the stock dummy can be lifted is UNVERIFIED. False -> TargetBlocked (no lift).
+    bool CanPhaseLockFlag() const { return bCanPhaseLockFlag; }
+    void SetCanPhaseLockFlag(bool bCan) { bCanPhaseLockFlag = bCan; }
     // PhaselockTimeScale on this target now (default, or with Skill_Phaselock_DiminishingReturns while it runs).
     float PhaselockTimeScale(float Now, const FOpenWillowPhaselockData& Data) const { return Data.TargetTimeScale(Now < DiminishedUntil); }
     float PhaselockReleasedAt() const;
@@ -64,6 +81,9 @@ private:
     float LockStartedAt = 0;
     float LockEndsAt = 0;
     FOpenWillowPhaselockData Lock;      // the data of the running lock
+    float LiftFrom = 0;                 // Pivot height when the lock began
+    float LiftTo = 0;                   // Pivot height at the lift end
+    bool bCanPhaseLockFlag = true;
     float DropStartedAt = -10;
     float DropFromHeight = 0;
     float ReleasedAt = -10;

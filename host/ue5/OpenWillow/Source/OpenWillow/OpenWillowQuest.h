@@ -4,6 +4,8 @@
 #include "OpenWillowInventory.h"
 #include "OpenWillowQuest.generated.h"
 
+class FJsonObject;
+
 // Host binding of the Sanctuary slice mission (-owquest). Runs the installed "Rock, Paper, Genocide: Fire Weapons!"
 // mission and the target dummy's own behavior provider through vm::FireMissionSlice, and the map's installed Kismet
 // sequence through the door's UOpenWillowMover (one sequence instance). World data comes from the ignored manifests
@@ -21,7 +23,8 @@
 //    (tools/weapon_slice_gear.py), lent to Maya with the imported Maliwan mesh; her shots hand the held item's stock
 //    damage type path to the dummy's OnTakeDamage;
 //  - turn-in adds the candidate XP amount (UNVERIFIED rule) at the mission level (slice_manifest.json "level",
-//    an UNVERIFIED slice choice) to Maya's experience.
+//    an UNVERIFIED slice choice) to Maya's experience;
+//  - the save (-owquestsave=) also carries Maya's level, experience and skill grades, which win over -owlevel.
 // Every host-chosen value or rule is labelled UNVERIFIED where it is used and in
 // docs/verification/SANCTUARY_RPG_MISSION.md ("Host loop with stock world data").
 UCLASS()
@@ -49,6 +52,9 @@ public:
     bool PlayerMaxHealth(int32 Level, float& Out) const;
     // Respawn location by the decoded station selection (no station activation is modelled); false without data.
     bool RespawnPoint(const FVector& DeathLocation, FTransform& Out);
+    // The walker calls this once its start level is set: the loaded save's "progression" block (level, experience,
+    // skill grades) replaces that state. False when the save has no such block (older saves) or it was rejected.
+    bool RestoreProgression(class UOpenWillowSkills& Skills);
 
 private:
     struct FImpl;
@@ -65,6 +71,8 @@ private:
     int32 TestStep = 0;
     float TestWait = 0;
     FString SavePath;
+    TSharedPtr<FJsonObject> SavedProgression;   // the loaded save's "progression" block; null for older saves
+    bool bProgressionRestored = false;
 
     void Fail(const FString& Error);
     void Check(bool bGood, const TCHAR* Name);
@@ -103,11 +111,13 @@ private:
     int32 DummyShots = 0;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
     int32 PointsBeforeReward = 0;
+    float HealthBeforeReward = 0, MaxHealthBeforeReward = 0;
     float PhaselockCastSeen = 0;
     bool bLendPending = false;
     int32 PhaselockStep = 0;
     float PhaselockWait = 0;
     UPROPERTY() TObjectPtr<class AOpenWillowCombatTarget> PhaselockDummy;
+    UPROPERTY() TObjectPtr<AActor> PhaselockCeiling;   // suite fixture for the lift's ceiling clamp
 
     UPROPERTY() TObjectPtr<class AOpenWillowNpc> Marcus;
     UPROPERTY() TObjectPtr<class AOpenWillowCombatTarget> Dummy;

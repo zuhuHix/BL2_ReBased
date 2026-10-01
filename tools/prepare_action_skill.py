@@ -17,7 +17,15 @@ What is read, and from where:
   their own properties and the packed output links, checked structurally;
 - the skill-point formulas in GD_Globals.Skills (Startup.upk);
 - the upgrade path's SkillDefinitions, with per-grade numbers from
-  tools/skill_stats.py.
+  tools/skill_stats.py;
+- Skill_Phaselock's constraint evaluators (class and own properties; their
+  Evaluate() is native), the CanLiftTargetIf flag chain and the player
+  controller's auto-aim strategy data (WillowGlobals.AutoAimDefinition, which
+  WillowPlayerController.InitInputSystem hands to its WillowAutoAimStrategy).
+
+Format history: /1 (2026-10-01) first version; /2 (2026-10-01) adds
+skill.constraintEvaluators, actionSkill.canLiftTargetIfChain and autoAim. The
+UE host reads only /2, so a /1 manifest must be regenerated.
 
 Rules that are NOT read from data and stay UNVERIFIED (see the record):
 - attribute modifiers combine as (base + PreAdd) * (1 + Scale) + PostAdd, the
@@ -36,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import prepare_skill_tree  # noqa: E402
 import skill_stats  # noqa: E402
 
-FORMAT = 'openwillow.action_skill/1'
+FORMAT = 'openwillow.action_skill/2'
 SCHEMA_LINES = prepare_skill_tree.SCHEMA_LINES + [
     # LiftActionSkill / SkillDefinition / behaviors
     'PhaselockedAttributeEffects=StructProperty:AttributeEffectData',
@@ -77,6 +85,15 @@ SCRIPT_FLOW = [
      'summary': 'The target is the auto-aim preferred target (native WillowAutoAimStrategy.GetPreferredTarget) '
                 'when it is a WillowPawn, else none; ServerStartActionSkill activates the skill through the '
                 'native SkillEffectManager.'},
+    {'function': 'WillowPlayerController.InitInputSystem', 'events': [],
+     'summary': 'A local controller creates its WillowAutoAimStrategy and sets its DataDefinition to '
+                'WillowGlobals.AutoAimDefinition (see autoAim). No range test appears in script.'},
+    {'function': 'WillowPlayerController.ServerStartActionSkill', 'events': [],
+     'summary': 'Uses the driver when the pawn is a vehicle; returns when that pawn is on a ladder (Physics 9, the '
+                'value BeginLifting also treats as a ladder). Needs the action skill in the skill tree '
+                '(GetSkillState). When IsActionSkillOnCooldown (pool value above 0) is false and the skill is not '
+                'active, it returns in an attached rider seat, else calls the native ActivateSkill; '
+                'SkillConstraints are not evaluated in script.'},
     {'function': 'WillowPlayerController.ActionSkillCallback', 'events': [],
      'summary': 'On activation StartActiveSkillCooldown refills the skill cooldown pool to 100%.'},
     {'function': 'ActionSkill.OnActionSkillStarted', 'events': ['OnActionSkillActivated'],
@@ -94,6 +111,18 @@ SCRIPT_FLOW = [
                 'LockFadeOutTime and EndSkill at SkillDuration + ReleaseBufferTime (from skill start). '
                 'With Thoughtlock active the target is charmed, else LiftTarget lifts it (PhaseLockDefinition '
                 'HeightFromGround and Lift/Loop anims); Helios spawns when active.'},
+    {'function': 'LiftActionSkill.BeginLifting', 'events': [],
+     'summary': 'Lift end: from the pawn location (GetLiftCheckLocation), trace down HeightFromGround (extent 1 uu, '
+                'TRACEFLAG_Blocking, actors included). On a hit the end is the hit location raised by the pawn\'s '
+                'CollisionHeight (cylinder half height) plus HeightFromGround; then a trace from the pawn location '
+                'up to that end lowers it to the hit minus CollisionHeight. Without ground in reach the end is the '
+                'pawn location (no lift).'},
+    {'function': 'LiftActionSkill.GetLiftLocation', 'events': [],
+     'summary': 'Lift curve: up to LiftDuration x LiftSnapTimePct, lerp start -> snap point (LiftSnapHeightPct of '
+                'the way) by a^2; then snap point -> end by 1 - (1 - a)^2.'},
+    {'function': 'LiftActionSkill.GetBobLocation', 'events': [],
+     'summary': 'Bob: end + LiftBobAmplitude x sin((now - SkillStartTime) x LiftBobFrequency x pi) in Z, '
+                'smoothed by VInterpTo from the previous bob location at speed 1.'},
     {'function': 'LiftActionSkill.LockTarget', 'events': ['OnCharmTarget', 'OnTargetBecomesLocked'],
      'summary': 'State Locked for SkillDuration - LiftDuration - LockFadeOutTime; fires OnCharmTarget when '
                 'charmed, else spawns the bubble and fires OnTargetBecomesLocked.'},
@@ -125,7 +154,14 @@ NATIVE = [
     'PlayerSkillTree.GetSkillState / UpgradeSkill (bIsUnlocked: the tier rule)',
     'Engine.ResourcePool (cooldown pool consumption)',
     'GearboxFramework.SpecialMoveComponent.Play / Queue / Stop (animations)',
+    'WeaponActionAvailable / HealthState / VehiclePassenger ExpressionEvaluator.Evaluate (skill constraints)',
+    'GearboxFramework.FlagExpressionEvaluator.Evaluate (CanLiftTargetIf; how a FlagChain combines)',
 ]
+
+# WillowAutoAimStrategyDefinition fields copied into the manifest. What the native
+# GetPreferredTarget does with them is not known.
+AUTO_AIM_FIELDS = ('MinTargetDistance', 'MaxTargetDistance', 'MaxSnapAngle', 'RadiusMultiplier', 'DistanceOffset',
+                   'AcquireTime', 'SustainTime', 'ChangeTime')
 
 
 def unpack(packed):
@@ -277,6 +313,90 @@ def branch_path(package, branch_path_id, upgrade, resolver):
     return {'id': branch_path_id, 'name': branch.get('BranchName', ''), 'tiers': tiers}
 
 
+def with_class_defaults(own, defaults, names):
+    """Each name from the object's own tags, else from its class default object, else 0.
+
+    A name tagged in neither was never set in defaultproperties, so UE3 leaves it
+    zero-initialised. Those names are returned separately so the manifest says so."""
+    values, zero = {}, []
+    for name in names:
+        if name in own:
+            values[name] = own[name]
+        elif name in defaults:
+            values[name] = defaults[name]
+        else:
+            values[name] = 0
+            zero.append(name)
+    return values, zero
+
+
+def owner(packages, path):
+    """The first package that exports path."""
+    for package in packages:
+        if path in package.index:
+            return package
+    raise KeyError(f'{path} is in none of {[p.path.name for p in packages]}')
+
+
+def constraint_evaluators(constraints, packages):
+    """SkillConstraints as one row per evaluator: class, own properties and when it applies.
+
+    An entry names its evaluator directly (Evaluator) or through
+    SkillExpressionEvaluatorDefinitions (EvaluatorDefinitions). Evaluate() is
+    native for every evaluator class used here, so the rows say what is tested
+    only through the class name and properties."""
+    rows = []
+    for constraint in constraints:
+        evaluators = [constraint['Evaluator']] if constraint.get('Evaluator') else []
+        for definition in constraint.get('EvaluatorDefinitions') or []:
+            evaluator = owner(packages, definition).props(definition).get('Evaluator')
+            if not evaluator:
+                raise ValueError(f'{definition} names no Evaluator')
+            evaluators.append(evaluator)
+        for evaluator in evaluators:
+            package = owner(packages, evaluator)
+            rows.append({'evaluator': evaluator, 'class': package.classes[evaluator],
+                         'properties': package.props(evaluator),
+                         'onActivation': constraint.get('bApplyConstraintOnActivatation'),
+                         'whileActive': constraint.get('bApplyConstraintWhileActive'),
+                         'whilePaused': constraint.get('bApplyConstraintWhilePaused'),
+                         'onFailure': constraint.get('OnFailure')})
+    return rows
+
+
+def flag_chain(packages, evaluator):
+    """A FlagExpressionEvaluator's FlagChain as [{flag, test, derivedFrom}].
+
+    derivedFrom is the flag's own EvaluationExpression chain, one level down
+    (Flag_Skills_CanPhaseLock is computed from other flags). How a chain
+    combines its tests is native."""
+    def chain(path):
+        props = owner(packages, path).props(path)
+        return [{'flag': link.get('FlagDefinition'), 'test': link.get('FlagEvalType')} for link in props.get('FlagChain') or []]
+
+    rows = chain(evaluator)
+    for row in rows:
+        expression = owner(packages, row['flag']).props(row['flag']).get('EvaluationExpression') if row['flag'] else None
+        row['derivedFrom'] = chain(expression) if expression else []
+    return {'evaluator': evaluator, 'class': owner(packages, evaluator).classes[evaluator], 'chain': rows}
+
+
+def auto_aim(willow):
+    """The player controller's auto-aim strategy data.
+
+    WillowPlayerController.InitInputSystem (script) creates a WillowAutoAimStrategy
+    and sets its DataDefinition to WillowGlobals.AutoAimDefinition. That the globals
+    object carries its class default value is an inference (no instance found in
+    the installed data). GetPreferredTarget, which picks the action-skill target, is native."""
+    definition = willow.props('Default__WillowGlobals').get('AutoAimDefinition')
+    settings, zero = with_class_defaults(willow.props(definition), willow.props('Default__WillowAutoAimStrategyDefinition'),
+                                         AUTO_AIM_FIELDS)
+    return {'definition': definition, 'class': willow.classes.get(definition), 'settings': settings,
+            'untaggedReadAsZero': zero,
+            'actionSkillCall': 'WillowPlayerController.StartActionSkill: GetPreferredTarget(Self, , '
+                               'bGetInstantaneousTarget=True, ); the result is the target when it is a WillowPawn'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reader', required=True, help='ow-package executable')
@@ -378,6 +498,7 @@ def main():
             'playerLevelRequirement': skill.get('PlayerLevelRequirement'),
             'initialDuration': skill.get('InitialDuration'),
             'constraints': skill.get('SkillConstraints') or [],
+            'constraintEvaluators': constraint_evaluators(skill.get('SkillConstraints') or [], [package, startup]),
             'effects': skill_stats.effect_rows(package, skill, resolver, skill.get('MaxGrade', 1)),
             'behaviorProvider': read_provider(package, skill['BehaviorProviderDefinition'])
             if skill.get('BehaviorProviderDefinition') else None,
@@ -394,6 +515,8 @@ def main():
             'lockDurationScale': {'attribute': scale_attribute, 'default': scale_default},
             'phaselockedAttributeEffects': archetype.get('PhaselockedAttributeEffects') or [],
             'canLiftTargetIf': archetype.get('CanLiftTargetIf'),
+            'canLiftTargetIfChain': flag_chain([package, startup, willow], archetype['CanLiftTargetIf'])
+            if archetype.get('CanLiftTargetIf') else None,
             'phaseLockDefinitions': {'default': archetype.get('DefaultPhaseLockDef'),
                                      'byBodyTag': archetype.get('LiftBodyMap') or [],
                                      'classDefaults': {k: phaselock_def_defaults.get(k) for k in ('HeightFromGround', 'DropTime')}},
@@ -401,6 +524,7 @@ def main():
             'animations': {'hit': archetype.get('PhaselockSMD_Hit'), 'miss': archetype.get('PhaselockSMD_Miss')},
         },
         'helperSkills': helpers,
+        'autoAim': auto_aim(willow),
         'behaviorProvider': provider,
         'eventNamesAreScriptFunctions': event_check,
         'scriptFlow': SCRIPT_FLOW,

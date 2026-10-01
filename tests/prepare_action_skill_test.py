@@ -117,6 +117,64 @@ def test_timeline():
                  'releasedAt': 2.5, 'endSkillAt': 4.5}
 
 
+class PropsPackage:
+    """A package stand-in with exports, classes and decoded properties (invented)."""
+    def __init__(self, name, objects):
+        self.path = Path(name)
+        self.index = {path: i for i, path in enumerate(objects)}
+        self.classes = {path: cls for path, (cls, _) in objects.items()}
+        self.objects = objects
+
+    def props(self, path):
+        return self.objects[path][1]
+
+
+def test_with_class_defaults():
+    values, zero = p.with_class_defaults({'A': 2.0}, {'A': 9.0, 'B': 5.0}, ('A', 'B', 'C'))
+    assert values == {'A': 2.0, 'B': 5.0, 'C': 0} and zero == ['C']
+
+
+def test_constraint_evaluators():
+    own = PropsPackage('Own.upk', {
+        'Pkg.Skill.EvalA': ('Fake.WeaponEvaluator', {}),
+    })
+    shared = PropsPackage('Shared.upk', {
+        'Shared.Constraint': ('Fake.EvaluatorDefinition', {'Evaluator': 'Shared.Constraint.EvalB'}),
+        'Shared.Constraint.EvalB': ('Fake.VehicleEvaluator', {'bNotInVehicle': True}),
+    })
+    constraints = [
+        {'Evaluator': 'Pkg.Skill.EvalA', 'EvaluatorDefinitions': [], 'bApplyConstraintOnActivatation': True,
+         'bApplyConstraintWhileActive': False, 'OnFailure': 'SKILL_Deactivated'},
+        {'Evaluator': None, 'EvaluatorDefinitions': ['Shared.Constraint'], 'bApplyConstraintOnActivatation': True},
+    ]
+    rows = p.constraint_evaluators(constraints, [own, shared])
+    assert [(r['evaluator'], r['class']) for r in rows] == [('Pkg.Skill.EvalA', 'Fake.WeaponEvaluator'),
+                                                            ('Shared.Constraint.EvalB', 'Fake.VehicleEvaluator')]
+    assert rows[0]['whileActive'] is False and rows[0]['onFailure'] == 'SKILL_Deactivated'
+    assert rows[1]['properties'] == {'bNotInVehicle': True} and rows[1]['whileActive'] is None
+    try:
+        p.constraint_evaluators([{'Evaluator': 'Missing.Eval'}], [own, shared])
+    except KeyError as error:
+        assert 'Missing.Eval' in str(error)
+    else:
+        raise AssertionError('an evaluator in no package must be reported')
+
+
+def test_flag_chain():
+    package = PropsPackage('Flags.upk', {
+        'Pkg.Skill.FlagEval': ('Fake.FlagExpressionEvaluator',
+                               {'FlagChain': [{'FlagEvalType': 'FLAG_IsTrue', 'FlagDefinition': 'Flags.CanLift'}]}),
+        'Flags.CanLift': ('Fake.FlagDefinition', {'EvaluationExpression': 'Flags.CanLift.Eval'}),
+        'Flags.CanLift.Eval': ('Fake.FlagExpressionEvaluator',
+                               {'FlagChain': [{'FlagEvalType': 'FLAG_IsFalse', 'FlagDefinition': 'Flags.Disabled'}]}),
+        'Flags.Disabled': ('Fake.FlagDefinition', {}),
+    })
+    result = p.flag_chain([package], 'Pkg.Skill.FlagEval')
+    assert result['class'] == 'Fake.FlagExpressionEvaluator'
+    assert result['chain'] == [{'flag': 'Flags.CanLift', 'test': 'FLAG_IsTrue',
+                                'derivedFrom': [{'flag': 'Flags.Disabled', 'test': 'FLAG_IsFalse'}]}]
+
+
 if __name__ == '__main__':
     tests = [(name, fn) for name, fn in sorted(globals().items()) if name.startswith('test_')]
     for name, fn in tests:

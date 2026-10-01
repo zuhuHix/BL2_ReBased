@@ -104,6 +104,27 @@ void AOpenWillowWalker::Respawn()
     if (Quest) Quest->NotifyRespawn();
 }
 
+void AOpenWillowWalker::RefreshHealthForLevel()
+{
+    // -owquest: maximum health from the recovered Init_PlayerHealth formula at Maya's level (skills, class mods and
+    // relics not applied); otherwise the 400 host stand-in stays.
+    float FormulaHealth = 0.f;
+    if (!Skills || Skills->GetLevel() == HealthLevel || !Quest || !Quest->Enabled()
+        || !Quest->PlayerMaxHealth(Skills->GetLevel(), FormulaHealth))
+        return;
+    // Current health becomes the new maximum, at start and on every level change. For a level-up this follows the
+    // installed data: WillowPlayerController.OnExpLevelChange (script) calls the native
+    // RecalculateAttributeInitializedState, then, with bFeedback, runs PlayerClassDefinition.OnLevelUp
+    // (GD_PlayerShared.Behaviors.PlayerBehavior_LevelUp), whose SkillDefinition_0 adds HealthMaxValue x 1 to
+    // HealthCurrentValue (MT_PostAdd). UNVERIFIED (native): that the pool clamps the sum at the new maximum and the
+    // timed effect acts once as a heal; OnExpLevelChange's 1 s guard (LastLevelUpTime) is not modelled; a level that
+    // goes down (test fixtures only) is treated the same.
+    const int32 FromLevel = HealthLevel;
+    MaxHealth = Health = FormulaHealth;
+    HealthLevel = Skills->GetLevel();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f for level %d (was level %d)"), Health, MaxHealth, HealthLevel, FromLevel);
+}
+
 void AOpenWillowWalker::BeginPlay()
 {
     Super::BeginPlay();
@@ -136,6 +157,9 @@ void AOpenWillowWalker::BeginPlay()
             Phaselock.LiftDuration, Phaselock.LockDurationBase, Phaselock.TimeScaleDefault, Phaselock.LockFadeOutTime, Phaselock.ReleaseBufferTime,
             Phaselock.CooldownSeconds, Phaselock.CooldownHeldRate, 1.f + Phaselock.DiminishingScale, Phaselock.DiminishingSeconds,
             *Phaselock.DurationSkill, FMath::Max(0, Phaselock.DurationPostAdd.Num() - 1));
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock targeting %.0f-%.0f uu (auto-aim data), lift if %s; constraints evaluated [%s], not evaluated [%s]"),
+            Phaselock.TargetMinDistance, Phaselock.TargetMaxDistance, *Phaselock.CanLiftFlag,
+            *FString::Join(Phaselock.GateEvaluators, TEXT(", ")), *FString::Join(Phaselock.GateNotEvaluated, TEXT(", ")));
     }
     // GD_Siren_Streaming.Pawn_Siren: CylinderComponent CollisionRadius 42,
     // CollisionHeight 80 (UE3 half-height) and BaseEyeHeight 70 above the
@@ -216,6 +240,9 @@ void AOpenWillowWalker::BeginPlay()
         FString Reason;
         Skills->TrySpend(-1, -1, -1, Reason);
     }
+    // -owquest: a quest save's progression block (level, experience, skill grades) replaces the start level above,
+    // before the level gates which weapons are equipped. Saves without the block keep the start level.
+    if (Quest && Quest->Enabled()) Quest->RestoreProgression(*Skills);
 
     FString GearManifestPath = FPaths::ConvertRelativePathToFull(
         FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/inventory/gear_manifest.json")));
@@ -296,11 +323,7 @@ void AOpenWillowWalker::BeginPlay()
         for (const FOpenWillowGearItem& Item : Gear)
             if (!Inventory->GearSlotItem(Item.ItemType)) Inventory->EquipGearById(Item.Id, Item.ItemType, Skills->GetLevel());
     }
-    // -owquest: maximum health from the recovered Init_PlayerHealth formula at this level (skills, class mods and
-    // relics not applied); otherwise the 400 host stand-in stays.
-    float FormulaHealth = 0.f;
-    if (Quest && Quest->Enabled() && Quest->PlayerMaxHealth(Skills->GetLevel(), FormulaHealth))
-        MaxHealth = Health = FormulaHealth;
+    RefreshHealthForLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d, health %.1f"),
         Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade(), MaxHealth);
     if (bInventoryActionsRun)
@@ -716,31 +739,69 @@ void AOpenWillowWalker::FireWeapon()
         TargetHitAt = GetWorld()->GetTimeSeconds();
     }
 }
+bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
+{
+    // WillowPlayerController.ServerStartActionSkill (script): the action skill must be in the skill tree (host:
+    // Phaselock bought, as traced in the Skills tab), not on cooldown (IsActionSkillOnCooldown: pool value above 0) and
+    // not active (here covered by the cooldown, which is full while a target is held). Ladders and vehicle rider seats,
+    // which the script also refuses, do not exist in the host. The native ActivateSkill then applies
+    // Skill_Phaselock.SkillConstraints marked for activation (inferred from the data's flags, not shown by script).
+    // Constraints marked while-active (on foot, healthy) would also end a running skill: not modelled.
+    if (!Phaselock.bLoaded) { OutReason = TEXT("no Phaselock manifest"); return false; }
+    if (!Skills || Skills->GetActionGrade() < 1) { OutReason = TEXT("Phaselock not bought"); return false; }
+    if (PhaselockRemaining() > 0.f) { OutReason = TEXT("on cooldown"); return false; }
+    FString Failed;
+    if (!Phaselock.GateOpen(bReloading, Health, Failed)) { OutReason = TEXT("skill constraint ") + Failed; return false; }
+    return true;
+}
 void AOpenWillowWalker::UsePhaselock()
 {
     if (!bMayaActive) return;
-    // Phaselock needs its skill point, as in the game, where the action skill
-    // is bought in the Skills tab (traced). What the game does when the key is
-    // pressed before that (nothing, a message or a sound) is UNVERIFIED.
-    if (!Skills || Skills->GetActionGrade() < 1 || !Phaselock.bLoaded) return;
+    // What the game does when the key is pressed while a cast is refused (nothing, a message or a sound) is UNVERIFIED.
+    FString Refused;
+    if (!CanCastPhaselock(Refused))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock not cast: %s"), *Refused);
+        return;
+    }
     const float Now = GetWorld()->GetTimeSeconds();
-    if (PhaselockRemaining() > 0.f) return;
     // ActionSkillCallback refills the cooldown pool at activation, hit or miss.
     PhaselockCastAt = Now;
     PhaselockTimeline = FOpenWillowPhaselockTimeline();
+    bPhaselockBlocked = false;
     const FVector Start = Camera->GetComponentLocation();
     FHitResult Hit;
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPhaselock), true, this);
-    // Target choice is native auto-aim in the game (range not in the data). Host stand-in (UNVERIFIED): the view ray
-    // to 2500 cm, else a 30 cm sphere sweep for some aim assist (a sweep that starts inside nearby geometry, such as
-    // the range's low beams, is ignored).
-    const FVector End = Start + Camera->GetForwardVector() * 2500.f;
+    // Target choice is native in the game: WillowPlayerController.StartActionSkill asks its auto-aim strategy
+    // (GD_Autoaim.Default) for GetPreferredTarget and takes the result when it is a WillowPawn. Host stand-in
+    // (UNVERIFIED): the view ray, else a 30 cm sphere sweep for some aim assist (host radius; a sweep that starts inside
+    // nearby geometry, such as the range's low beams, is ignored), between the strategy's Min/MaxTargetDistance.
+    const FVector End = Start + Camera->GetForwardVector() * Phaselock.TargetMaxDistance;
     AOpenWillowCombatTarget* Target = nullptr;
     if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query))
         Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
     if (!Target && GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(30.f), Query)
         && !Hit.bStartPenetrating)
         Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
+    if (Target && Hit.Distance < Phaselock.TargetMinDistance) Target = nullptr;
+    // LiftActionSkill.SelectTarget (script): a target that passes CanPhaseLockTarget is lifted when CanLiftTargetIf
+    // (Flag_Skills_CanPhaseLock) holds and it drives no vehicle (the host has none), else blocked; no target, or one
+    // that fails CanPhaseLockTarget, fizzles (FizzleOut below).
+    if (Target && Target->CanPhaseLockTarget() && !Target->CanPhaseLockFlag())
+    {
+        // TargetBlocked fires OnTargetBlocked: no lift and no LiftActionSkill timers. That event's Behavior_CauseDamage
+        // (Phaselock_Impact) is NOT applied here: its amount is not recovered. Nothing resets the cooldown (no
+        // Fizzled), so the pool refilled at activation drains at the base rate from the cast (read from script and
+        // data, never run: UNVERIFIED).
+        bPhaselockHit = false;
+        bPhaselockBlocked = true;
+        PhaselockTarget = nullptr;
+        PhaselockHeldUntil = Now;
+        PhaselockResetAt = TNumericLimits<float>::Max();
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock blocked by %s (%s false): no lift, OnTargetBlocked damage not applied (amount not recovered), cooldown runs"),
+            *Target->GetName(), *Phaselock.CanLiftFlag);
+        return;
+    }
     // SkillDuration = LiftDuration + Att_Phaselock_Duration (with the duration skill's grade) x the target's
     // PhaselockTimeScale (lower while its diminishing returns run).
     const int32 Grade = Skills->GradeOf(Phaselock.DurationSkill);

@@ -4,6 +4,8 @@
 #include "Components/ActorComponent.h"
 #include "OpenWillowSkills.generated.h"
 
+class FJsonObject;
+
 // Maya's level, experience and skill grades. The host owns this state; the
 // Skills page (tools/hud_overlay/skills.js) only reports clicks and shows
 // what the host sends back. Rules and what they rest on are in DECISIONS.md
@@ -33,7 +35,8 @@ public:
     float LevelProgress() const;
 
     // One point per level from level 5.
-    int32 EarnedPoints() const { return FMath::Max(0, Level - 4); }
+    static int32 EarnedPointsAt(int32 AtLevel) { return FMath::Max(0, AtLevel - 4); }
+    int32 EarnedPoints() const { return EarnedPointsAt(Level); }
     int32 SpentPoints() const;
     int32 AvailablePoints() const { return FMath::Max(0, EarnedPoints() - SpentPoints()); }
     int32 GetActionGrade() const { return ActionGrade; }
@@ -54,6 +57,14 @@ public:
 
     // {"points":N,"actionGrade":N,"grades":{"<skill path>":N,...}} for owSkills().
     FString StateJson() const;
+
+    // Progression for the quest save: {"level":N,"experience":N,"actionGrade":N,"points":N,"grades":{"<skill path>":N}}.
+    // "points" (available points) is derived from the rest and written only so a resumed session can be checked.
+    TSharedPtr<FJsonObject> ProgressionJson() const;
+    // Puts back what ProgressionJson wrote (the loaded tree must be the same). On a missing field, an experience
+    // outside the level's band, an unknown skill, a grade above its maximum or more points spent than the level
+    // earns, returns false with a reason and changes nothing.
+    bool RestoreProgression(const FJsonObject& Data, FString& OutError);
 
 private:
     int32 Invested(const TArray<FTier>& Branch) const;

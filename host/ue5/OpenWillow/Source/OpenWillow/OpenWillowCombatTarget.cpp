@@ -19,21 +19,20 @@ const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 const FLinearColor PhaselockColor(0.55f, 0.18f, 1.f);
 constexpr float RespawnSeconds = 3.f;
 
-// Height above the floor at Held seconds into a lock (LiftActionSkill.UpdateLiftedPawn / GetBobLocation, read not
-// run): reach SnapHeightPct of the height in SnapTimePct of the lift, the rest by the end of the lift, then a sine
-// bob of BobAmplitude at BobFrequency (sin(t x frequency x pi)). The curve shapes between those points (quadratic in,
-// ease-out) and the bob's time origin (end of the lift) are host choices: UNVERIFIED. The ground trace, collision
-// height and ceiling clamp of GetLiftLocation are not applied (height is above the target's own origin).
-float LiftHeightAt(const FOpenWillowPhaselockData& D, float Held)
+// Pivot height at Held seconds into a lock that lifts from From to To (LiftActionSkill.UpdateLiftedPawn /
+// GetLiftLocation / GetBobLocation, read not run). Lift, as GetLiftLocation: up to SnapTimePct of the lift, From ->
+// snap point (SnapHeightPct of the way) by a^2; then snap point -> To by 1 - (1 - a)^2 (InterpEaseOut with exponent 2).
+// Bob: To + BobAmplitude x sin(t x BobFrequency x pi). The script measures t from SkillStartTime and smooths the bob
+// with VInterpTo at speed 1; the host measures t from the end of the lift and does not smooth: UNVERIFIED host choices.
+float LiftHeightAt(const FOpenWillowPhaselockData& D, float Held, float From, float To)
 {
-    const float H = D.HeightFromGround;
     if (Held >= D.LiftDuration)
-        return H + D.BobAmplitude * FMath::Sin((Held - D.LiftDuration) * D.BobFrequency * PI);
+        return To + D.BobAmplitude * FMath::Sin((Held - D.LiftDuration) * D.BobFrequency * PI);
     const float U = D.LiftDuration > 0.f ? Held / D.LiftDuration : 1.f;
+    const float Snap = FMath::Lerp(From, To, D.SnapHeightPct);
     if (U < D.SnapTimePct)
-        return D.SnapHeightPct * H * FMath::Square(U / D.SnapTimePct);
-    return D.SnapHeightPct * H + (1.f - D.SnapHeightPct) * H
-        * FMath::InterpEaseOut(0.f, 1.f, (U - D.SnapTimePct) / FMath::Max(1.f - D.SnapTimePct, KINDA_SMALL_NUMBER), 2.f);
+        return FMath::Lerp(From, Snap, FMath::Square(U / D.SnapTimePct));
+    return FMath::InterpEaseOut(Snap, To, (U - D.SnapTimePct) / FMath::Max(1.f - D.SnapTimePct, KINDA_SMALL_NUMBER), 2.f);
 }
 
 UStaticMeshComponent* Part(AActor* Owner, USceneComponent* Parent, const TCHAR* Name,
@@ -147,6 +146,43 @@ FVector AOpenWillowCombatTarget::AimPoint() const
     return Torso->GetComponentLocation() + FVector(0, 0, 10);
 }
 
+void AOpenWillowCombatTarget::CollisionCentre(FVector& OutCentre, float& OutHalfHeight) const
+{
+    // Colliding components only: the engine shapes, or the stock pawn's hit capsule (the shell and the stock mesh have
+    // no collision).
+    FVector Extent;
+    GetActorBounds(true, OutCentre, Extent);
+    OutHalfHeight = Extent.Z;
+}
+
+float AOpenWillowCombatTarget::PhaselockLiftHeight(const FOpenWillowPhaselockData& Data) const
+{
+    // LiftActionSkill.BeginLifting (script, read not run). Both traces are Actor.Trace calls on the lifted pawn with
+    // extent (1,1,1) and TRACEFLAG_Blocking ("8" in Engine.upk), actors included. Host choices, UNVERIFIED: a 1 uu box
+    // sweep on ECC_Visibility (the channel the host's floor and Phaselock traces use) that ignores this target; the
+    // bounds of the colliding components for the pawn's Location and CylinderComponent.CollisionHeight; a sweep that
+    // starts inside geometry counts as no hit, as in the host's targeting.
+    FVector Centre;
+    float HalfHeight = 0.f;
+    CollisionCentre(Centre, HalfHeight);
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPhaselockLift), true, this);
+    const FCollisionShape Box = FCollisionShape::MakeBox(FVector(1.f));
+    FHitResult Hit;
+    // Ground within HeightFromGround below the centre; without it the end stays at the centre (no lift).
+    if (!GetWorld()->SweepSingleByChannel(Hit, Centre, Centre - FVector(0, 0, Data.HeightFromGround), FQuat::Identity,
+            ECC_Visibility, Box, Query) || Hit.bStartPenetrating)
+        return 0.f;
+    FVector End = Hit.Location + FVector(0, 0, HalfHeight + Data.HeightFromGround);
+    // Ceiling clamp: a surface between the centre and the end lowers the end to that surface minus the half height, so
+    // the top of the collision touches it. Only the path of the centre is traced: a surface above the end but below
+    // the end's top is not seen by the script either. A surface closer than the half height above the centre (a host
+    // target placed overlapping it, which a UE3 pawn's collision would prevent) gives a negative lift, kept as the
+    // script computes it.
+    if (GetWorld()->SweepSingleByChannel(Hit, Centre, End, FQuat::Identity, ECC_Visibility, Box, Query) && !Hit.bStartPenetrating)
+        End = Hit.Location - FVector(0, 0, HalfHeight);
+    return End.Z - Centre.Z;
+}
+
 bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline)
 {
     if (bPhaselocked || bDead) return false;
@@ -154,6 +190,10 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
     LockStartedAt = Now;
     LockEndsAt = Now + Timeline.ReleasedAt;
     DropStartedAt = -10;
+    LiftFrom = Pivot->GetRelativeLocation().Z;
+    LiftTo = LiftFrom + PhaselockLiftHeight(Data);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock lift for %s: %.1f -> %.1f uu (HeightFromGround %.0f)"),
+        *GetName(), LiftFrom, LiftTo, Data.HeightFromGround);
     bPhaselocked = true;
     LockSphere->SetHiddenInGame(false);
     return true;
@@ -186,7 +226,7 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     if (bPhaselocked)
     {
         const float Held = Now - LockStartedAt;
-        Height = LiftHeightAt(Lock, Held);
+        Height = LiftHeightAt(Lock, Held, LiftFrom, LiftTo);
         // The script moves the lifted pawn without rotating it; only hit wobble remains.
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
         // Host shell (presentation only, not the stock bubble effect): grows in, then fades over the outro
