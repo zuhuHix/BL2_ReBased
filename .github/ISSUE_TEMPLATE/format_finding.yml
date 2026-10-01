@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         A finding with provenance is usable; one without is a rumour. Please say exactly how you know.
-        **Clean-room rule:** findings derived from leaked source code or from disassembling the executable cannot be used and will be closed. Observations from running the game, from public documentation, and from reading public reference implementations (with their license named) are welcome.
+        **Source rule:** findings derived from leaked source code cannot be used and will be closed. Do not paste or attach decompiler output, listings or analysis databases; describe what you found in your own words. Observations from running the game, from public documentation, and from reading public reference implementations (with their license named) are welcome.
   - type: input
     id: subject
     attributes:
@@ -50,7 +50,7 @@ body:
     attributes:
       label: Rules
       options:
-        - label: This finding does not derive from leaked source code or decompiled executable code.
+        - label: This finding does not derive from leaked source code, and I have pasted no decompiler output.
           required: true
-        - label: This issue contains no game files or raw asset bytes.
+        - label: This issue contains no game files, decompiler output or listings, or raw asset bytes.
           required: true

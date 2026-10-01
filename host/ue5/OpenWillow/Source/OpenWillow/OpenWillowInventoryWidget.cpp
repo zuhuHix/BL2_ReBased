@@ -195,7 +195,7 @@ void UOpenWillowInventoryWidget::ShowCard(int32 Index)
     Card->ClearChildren();
     if (!Inventory->Items().IsValidIndex(Index))
     {
-        if (PreviewActor) PreviewActor->SetItemPreview(FString());
+        if (PreviewActor) PreviewActor->SetItemPreview(nullptr);
         if (PreviewImage) PreviewImage->SetVisibility(ESlateVisibility::Collapsed);
         if (PreviewStatus)
         {
@@ -208,7 +208,7 @@ void UOpenWillowInventoryWidget::ShowCard(int32 Index)
     CardItem = Index;
     const FOpenWillowWeaponItem& Item = Inventory->Items()[Index];
     EnsurePreviewActor();
-    const bool bPreviewLoaded = PreviewActor && PreviewActor->SetItemPreview(Item.Id)
+    const bool bPreviewLoaded = PreviewActor && PreviewActor->SetItemPreview(&Item)
         && PreviewActor->GetRenderTarget();
     if (PreviewImage)
     {

@@ -52,9 +52,13 @@ Gearbox's own `.uncompressed_size` files byte-for-byte. That is the seed of the 
 1. **Never redistribute a Gearbox file.** Not a texture, not a sound, not a UPK, not a decompressed dump. The engine
    reads them from the user's install at runtime. Test fixtures in the repo must be synthetic or generated.
 2. **Never use, read, or accept leaked source code.** Not UE3's, not Gearbox's. If someone offers, refuse in writing.
-   Clean-room only: file formats, observed behaviour, public documentation.
-3. **No decompiled C++ from `Borderlands2.exe` in the repo.** Observing behaviour by running the game (with
-   unrealsdk instrumentation) is fine. Disassembling the exe and transcribing it is the re3 line; don't cross it.
+   Sources are file formats, observed behaviour, public documentation and the maintainer's own analysis.
+3. **Analyse the executable, write your own code.** Disassembling and decompiling `Borderlands2.exe` locally is
+   allowed (maintainer decision, 2026-10-01; see `docs/LEGAL.md`, "Analysing the executable"). Decompiler output and
+   analysis databases are game-derived data and never enter the repo, and nothing is transcribed or converted from them.
+   Original code is written from an own-words description of the behaviour. Observing the running game (unrealsdk
+   instrumentation) stays how rules are confirmed. Publishing code derived from decompiled game code is the re3 line;
+   don't cross it.
 4. **Never sell anything.** Donations to the *engine project* only. No paid builds, no "premium" anything.
 5. **Require the original game.** The engine must refuse to start without a valid BL2 install.
 6. **License hygiene for references.** Legendary Explorer is GPL-3 (copying its code makes your project GPL);
@@ -177,8 +181,8 @@ Rule: a native without a golden file is a guess. Guesses are labelled `// UNVERI
 
 ## 5. Phases
 
-Times assume one person, near-full-time, AI-assisted, learning as they go. Halve the pace for part-time. These are
-honest ranges, not promises; no project of this shape has been completed AI-first yet.
+The phases are listed in dependency order and carry no durations or completion dates; no project of this shape has
+been completed AI-first yet. Where things actually stand, and since when, is recorded in ROADMAP.md ("How it's going").
 
 ### 5.0 Priority: the vertical slice
 
@@ -197,7 +201,7 @@ below are scoped to prove the hard parts on **one map and one character** before
 Broad map coverage (the remaining ~79 maps) and the remaining Vault Hunters move to Phase 5, after the Phase 4 gate
 is met.
 
-### Phase 0: Foundation & spikes · 3–6 weeks
+### Phase 0: Foundation & spikes
 
 Goal: a repo, a build, a package loader, and a decided host engine.
 
@@ -221,7 +225,7 @@ Goal: a repo, a build, a package loader, and a decided host engine.
 
 **Gate:** the census exists, one mesh and one texture from BL2 render inside the host engine.
 
-### Phase 1: World viewer (M1) · 2–4 months
+### Phase 1: World viewer (M1)
 
 Goal: walk around any BL2 map in a modern 64-bit renderer. **Ship this publicly.** It's the proof, the recruiting
 poster, and the thing that tells you whether the loop holds.
@@ -244,10 +248,10 @@ Your eye is the test.
 
 **Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually verified against the real game →
 move on to Phase 2 for the vertical slice. Full 82/82 map coverage remains this phase's eventual completion target
-but is deferred until the Phase 4 vertical-slice gate is met (§5.0); see Phase 5. If at 4 months you cannot load
-*one* map, stop and reassess honestly; the loop isn't holding.
+but is deferred until the Phase 4 vertical-slice gate is met (§5.0); see Phase 5. If no map can be loaded, stop and
+reassess honestly; the loop isn't holding (passed: three maps load).
 
-### Phase 2: UnrealScript VM (M2) · 3–6 months
+### Phase 2: UnrealScript VM (M2)
 
 Goal: Gearbox's own gameplay code executing, scoped to what Sanctuary and the chosen first Vault Hunter need (§5.0),
 not full native coverage yet.
@@ -273,7 +277,7 @@ not full native coverage yet.
 **Gate:** VM runs `Behavior_*` chains and the stat-free parts of `WillowWeapon` without crashing; every unmet
 native is a logged stub, not a mystery.
 
-### Phase 3: Stock engine natives (M3a) · 6–12 months
+### Phase 3: Stock engine natives (M3a)
 
 Goal: the UE3 natives the vertical slice needs (movement, collision, animation playback), not all 1,914 up front
 (§5.0). Ground truth = UDK (source A).
@@ -294,7 +298,7 @@ engine exactly as it does in UDK.
 
 **Gate:** a scripted UE3 pawn moves and animates on a BL2 map with correct collision.
 
-### Phase 4: Willow natives (M3b) · 12–24 months · **the mountain**
+### Phase 4: Willow natives (M3b) · **the mountain**
 
 Goal: **Maya**, the vertical slice's first Vault Hunter (§5.0), walks, shoots a handful of real guns, uses
 Phaselock and her skill trees, and enemies on Sanctuary fight back. Ground truth = the original game instrumented
@@ -330,7 +334,7 @@ duration matches," "Bee shield amp matches." Golden files for numbers; your hand
 one hand-picked mission, die, respawn. This is the vertical slice (§5.0); once met, broad map and character
 coverage (Phase 5) becomes the priority again.
 
-### Phase 5: Campaign completable (M4) · 12–24 months
+### Phase 5: Campaign completable (M4)
 
 0. **Broad map coverage** (the remaining ~79 maps) and **remaining Vault Hunters** (5 of 6), both deferred from
    Phases 1 and 4 by the 2026-09-18 vertical-slice rescoping (§5.0).
@@ -344,7 +348,7 @@ coverage (Phase 5) becomes the priority again.
 
 **Gate:** Claptrap to Warrior, single player, with a real save file.
 
-### Phase 6: Parity and beyond (M5) · ongoing
+### Phase 6: Parity and beyond (M5)
 
 - **Co-op netcode: yours.** Fixes the #1 complaint permanently.
 - DLC coverage; The Pre-Sequel; standalone Dragon Keep.
@@ -357,16 +361,17 @@ coverage (Phase 5) becomes the priority again.
 
 ## 6. Milestone summary
 
-| Milestone | What you can show | Full-time + AI | Part-time |
-|---|---|---|---|
-| Phase 0 | A mesh and a texture from BL2 inside the host engine | 3–6 wks | 2–3 mo |
-| **M1** | Sanctuary walkable and verified, modern renderer, 64-bit (rescoped 2026-09-18; all 82 maps moves to M4) | 2–4 mo | 6–12 mo |
-| M2 | Gearbox's script running in your VM, scoped to Sanctuary + one Vault Hunter | +3–6 mo | +12 mo |
-| M3a | A UE3 pawn moves/animates correctly on Sanctuary | +6–12 mo | +2 yr |
-| M3b | Maya shoots real guns on Sanctuary, uses Phaselock, enemies fight back, one mission completable: **the vertical slice** | +12–24 mo | +3–4 yr |
-| M4 | Campaign completable with real saves, remaining maps and Vault Hunters added | +12–24 mo | +3 yr |
-| M5 | Co-op, DLC, TPS, mods, editor | ongoing | ongoing |
-| **Cumulative to M4** | | **~3–5 years** | **~8–10 years** |
+| Milestone | What you can show |
+|---|---|
+| Phase 0 | A mesh and a texture from BL2 inside the host engine |
+| **M1** | Sanctuary walkable and verified, modern renderer, 64-bit (rescoped 2026-09-18; all 82 maps moves to M4) |
+| M2 | Gearbox's script running in your VM, scoped to Sanctuary + one Vault Hunter |
+| M3a | A UE3 pawn moves/animates correctly on Sanctuary |
+| M3b | Maya shoots real guns on Sanctuary, uses Phaselock, enemies fight back, one mission completable: **the vertical slice** |
+| M4 | Campaign completable with real saves, remaining maps and Vault Hunters added |
+| M5 | Co-op, DLC, TPS, mods, editor |
+
+No durations are given. Status and dates so far: ROADMAP.md.
 
 ---
 
@@ -411,9 +416,10 @@ coverage (Phase 5) becomes the priority again.
 
 ## 9. Kill criteria: be honest with yourself
 
-- Phase 0 not gated in **3 months** → the environment/tooling loop isn't working; fix that before anything else.
-- M1 cannot load a single map by **month 6** → the loop isn't holding for this project. Stop, reassess honestly,
-  and don't keep pushing on hope alone.
+- Phase 0 never gets gated → the environment/tooling loop isn't working; fix that before anything else.
+  *(Passed 2026-09-10.)*
+- M1 cannot load a single map → the loop isn't holding for this project. Stop, reassess honestly,
+  and don't keep pushing on hope alone. *(Passed: three maps load.)*
 - Nobody but you has contributed by **M2** → still fine, but stop planning M5 and plan M3 only.
 - You stop reading the code → the project has become something you can't maintain. Pause and fix that.
 

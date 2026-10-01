@@ -48,6 +48,18 @@ struct FOpenWillowSliceData
     FVector DummyLocation = FVector::ZeroVector;
     FRotator DummyRotation = FRotator::ZeroRotator;
     TSharedPtr<FJsonObject> TargetBinding;
+    // Attach point (world.json target_dummy.holder.attach, optional): the SeqAct_AttachToActor op, the holder's placed
+    // pose, the holder SocketComponent the op's BoneName resolves to (pose on the holder) and the tool's own world
+    // location for that socket (an oracle for the host's composition).
+    bool bHasAttachSocket = false;
+    FString AttachOp;
+    FTransform HolderPose, AttachSocketLocal;
+    FVector AttachSocketWorldOracle = FVector::ZeroVector;
+    // Target names from the dummy's balance (playthrough 1 entry, optional): display name and the transformed name per
+    // EAITransformed value (WillowAIPawn.GetTargetName; the per-type lookup is native, UNVERIFIED).
+    bool bHasDummyNames = false;
+    FString DummyDisplayName;
+    TMap<FString, FString> DummyTransformedNames;
     // Respawn stations and Maya's health formula.
     TArray<FOpenWillowSliceStation> Stations;
     // The recovery tool's own answer for a death at the range trigger (an oracle for the host's selection).

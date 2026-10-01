@@ -16,3 +16,11 @@ __pycache__/
 # Local Claude settings
 .claude/settings.local.json
 /build-*/
+
+# Decompiler/disassembler databases are game-derived data (docs/LEGAL.md, "Analysing the executable")
+*.gzf
+*.gpr
+*.rep/
+*.idb
+*.i64
+*.bndb

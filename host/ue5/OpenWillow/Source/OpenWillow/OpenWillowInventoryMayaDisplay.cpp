@@ -1,4 +1,5 @@
 #include "OpenWillowInventoryMayaDisplay.h"
+#include "OpenWillowInventory.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PostProcessComponent.h"
@@ -74,12 +75,12 @@ AOpenWillowInventoryMayaDisplay::AOpenWillowInventoryMayaDisplay()
     RimLight = MakeMayaOnlyLight(this, SceneRoot, TEXT("MayaRimLight"), 1);
 }
 
-void AOpenWillowInventoryMayaDisplay::SetPreviewWeapon(const FString& RecipeId)
+void AOpenWillowInventoryMayaDisplay::SetPreviewWeapon(const FOpenWillowWeaponItem* Item)
 {
+    const FString RecipeId = Item ? Item->Id : FString();
     if (PreviewRecipeId == RecipeId || !bHasMeshes) return;
     PreviewRecipeId = RecipeId;
-    USkeletalMesh* Mesh = RecipeId.IsEmpty() ? nullptr : LoadObject<USkeletalMesh>(nullptr,
-        *FString::Printf(TEXT("/Game/OpenWillow/Weapons/Items/SK_%s.SK_%s"), *RecipeId, *RecipeId));
+    USkeletalMesh* Mesh = Item ? UOpenWillowInventory::LoadWeaponMesh(*Item) : nullptr;
     UAnimSequence* Idle = LoadObject<UAnimSequence>(nullptr, Mesh ? *WeaponIdleAnimation : *IdleAnimation);
     // Missing armed animation must not put a weapon through the unarmed hand.
     if (Mesh && !Idle) Mesh = nullptr;

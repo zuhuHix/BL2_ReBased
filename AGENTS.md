@@ -5,9 +5,13 @@ This is the tool-neutral project brief. Read it before starting work, then read
 
 ## Strategic direction
 
-BL2_ReBased is a clean-room Borderlands 2 engine reimplementation targeting
-Unreal Engine 5. The original game must be present on the user's machine; the
-project does not ship Gearbox files or Gearbox code.
+BL2_ReBased is a Borderlands 2 engine reimplementation targeting Unreal Engine 5.
+The original game must be present on the user's machine; the project does not ship
+Gearbox files or Gearbox code. Since 2026-10-01 the game executable may be analysed
+locally to learn what its native code does (`docs/LEGAL.md`, "Analysing the
+executable"; `docs/NATIVE_ANALYSIS.md`); the repository still never contains game
+data, decompiler output or code transcribed from it, and project code is written from
+the understanding of what the game does.
 
 Use mature community tools as external extraction backends whenever they can
 save substantial time. Investigate UModel / UE Viewer first for supported UE3
@@ -45,8 +49,10 @@ When asked to work on a new asset or game-system capability:
 8. Prefer the smallest bounded implementation slice that advances the current
    roadmap. Do not redesign the whole project unless benchmark evidence shows
    that the architecture must change.
-9. Preserve clean-room boundaries, licenses and parser safety rules. Never
-   loosen bounds checks or invent serialization offsets.
+9. Preserve the repository boundary (no game data, no decompiler output, no
+   transcribed code), licenses and parser safety rules. Never loosen bounds
+   checks or invent serialization offsets; recover them from the packages or
+   from analysis of the executable, and label unconfirmed ones `UNVERIFIED`.
 
 ## Sensitive files
 
@@ -66,9 +72,8 @@ looting, equipping, using a skill, completing a mission, dying and respawning.
 
 Use external extraction to accelerate the asset side of that slice, but treat
 the Phase 0.5 benchmark in `ROADMAP.md` as a supporting gate, not as a new
-breadth-first roadmap. This may shorten asset preparation from months to weeks
-or months; it does not by itself implement gameplay, scripting, AI, UI, saves,
-networking or campaign parity. Broad map and character coverage is deferred
+breadth-first roadmap. This accelerates asset preparation; it does not by itself
+implement gameplay, scripting, AI, UI, saves, networking or campaign parity. Broad map and character coverage is deferred
 until the vertical-slice gate passes.
 
 When the maintainer asks for an implementation task, state which external-tool
@@ -104,21 +109,36 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   are separate from stock behavior parity. Evidence:
   `docs/verification/SANCTUARY_MOVER_PROTOTYPE.md`.
 - **Mission/Kismet/behavior executors (2026-10-01):** MissionTracker, BehaviorKernel and Kismet activation are native in
-  this build, so `src/kismet.*`, `src/behavior.*`, `src/mission.*`, `src/slice.*` execute their installed *data*. The stock door now
-  opens from its installed remote events, and `tools/test_quest.ps1` plays the Fire mission end to end in the host
-  (accept, remote events, range, lent weapon, dummy provider, turn-in, respawn, save/resume: 16/16 + 4/4), with many
-  documented stand-ins and **no original-game parity capture yet** (needs exclusive screen/keyboard; see
-  `docs/verification/SANCTUARY_RPG_MISSION.md`). Inventory suite: 47 PASS, 2 KNOWN_DIVERGENCE (sort order).
+  this build, so `src/kismet.*`, `src/behavior.*`, `src/mission.*`, `src/slice.*` execute their installed *data*. The stock
+  door opens from its installed remote events, and `tools/test_quest.ps1` plays the Fire mission end to end in the host
+  on stock world data: placed Marcus whose walk is started by the installed Kismet, the stock range cylinder, the stock
+  dummy and target Matinee, formula-based health, decoded respawn selection, a lent stock mission pistol whose item
+  damage type goes to the dummy's check, candidate XP into the skills component, Phaselock read from the manifest
+  (lift rule, valid-target rule and cast gate from script and data), progression (level, XP, skill grades) in the quest
+  save, health recomputed on level change, the dummy's Transform/RegisterTargetable behaviours and holder socket, and a
+  labelled turn-in loot stand-in (stock data drops no item for this mission). Recorded checks: quest suite 73/73 and
+  resume 10/10, door suite 16/16, CTest 10/10, packages 9/9; inventory suite 47 PASS / 2 KNOWN_DIVERGENCE (sort order)
+  on the fully seeded worktree, 45 PASS / 2 NOT_RUN / 2 KNOWN_DIVERGENCE on a regenerated one with a short backpack.
+  This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive
+  screen/keyboard); open items (native auto-aim, constraint evaluation, weapon paint and decal readings, audio) are in
+  `docs/verification/SANCTUARY_RPG_MISSION.md`. Hand play: `tools/run_quest.ps1 -Fresh`.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
-  in-engine suite `tools/test_inventory_actions.ps1` (needs a seeded worktree, see below).
+  in-engine suites `tools/test_inventory_actions.ps1`, `tools/test_mover.ps1` (door) and
+  `tools/test_quest.ps1` (Fire mission slice); all need a seeded worktree, see below.
 
 ### Setting up a fresh worktree
 
 Ignored data (`host/ue5/OpenWillow/Content`, `local/`) does not come from git. See
 `tools/worktree-assets.md` and `tools/seed_inventory_demo.py`, `tools/seed_inventory_assets.ps1`
 (set `OPENWILLOW_BL2`, `OPENWILLOW_UMODEL`), `tools/render_weapon_previews.py`,
-`tools/prepare_skill_tree.py`. Check what already exists before re-seeding.
+`tools/prepare_skill_tree.py`. The slice needs further local data: `tools/prepare_mover.py`,
+`tools/prepare_slice_world.py`, `tools/prepare_action_skill.py`, `tools/seed_slice_npc_assets.ps1` and
+`tools/seed_slice_player_assets.ps1` (see `docs/TOOLING.md` and the verification records they name).
+Check what already exists before re-seeding. Two machine notes from regenerating the slice on a second PC
+(2026-10-01): configure CMake with the MSVC toolset Unreal uses (`cmake -S . -B build -T version=14.50` for UE 5.8
+there; a newer default toolset made the UE module fail to link against `ow-core.lib`), and
+`tools/slice_npc_assets.py` needs a Python with both numpy and Pillow.
 
 ### Working rules that have paid off
 

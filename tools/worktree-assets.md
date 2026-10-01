@@ -28,3 +28,8 @@ generated assets. To repair a worktree manually, run
 
 The hook and seed are local to this clone. The scripts are tracked, but no
 game-derived assets are added to Git.
+
+Files that cannot be regenerated (an executable analysis database, hand-made
+patches) can be shared between machines outside the repository with
+`tools/private_sync.ps1`; see "Working on two machines" in
+[docs/NATIVE_ANALYSIS.md](../docs/NATIVE_ANALYSIS.md).

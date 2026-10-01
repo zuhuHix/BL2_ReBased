@@ -7,6 +7,7 @@
 #include "OpenWillowSliceData.h"
 #include "OpenWillowWalker.h"
 #include "slice.hpp"
+#include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -29,10 +30,17 @@
 namespace {
 const char* const MissionPath = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire";
 const char* const DummyProvider = "GD_TargetDummy.Character.CharClass_TargetDummy.BehaviorProviderDefinition_5";
-// Host fixture standing in for the player's campaign progress (the mission's only dependency).
-const char* const DependencyMission = "GD_Episode03.M_Ep3_CatchARide";
 // Host-chosen (UNVERIFIED): how close the player must be to Marcus for the use key to talk to him.
 constexpr float TalkReach = 250.f;
+
+// JSON text of an object. The test compares a saved block with a freshly built one this way: both come from
+// UOpenWillowSkills::ProgressionJson, so equal fields give equal text.
+FString JsonText(const TSharedPtr<FJsonObject>& Object)
+{
+    FString Text;
+    if (Object) FJsonSerializer::Serialize(Object.ToSharedRef(), TJsonWriterFactory<>::Create(&Text));
+    return Text;
+}
 }
 
 struct UOpenWillowQuest::FImpl {
@@ -45,8 +53,15 @@ struct UOpenWillowQuest::FImpl {
     explicit FImpl(const std::filesystem::path& Cooked) : Store(Cooked), Runtime(Store) {
         Runtime.registerCoreNatives();
         Slice = std::make_unique<vm::FireMissionSlice>(Runtime, MissionPath, "Sanctuary_Dynamic", DummyProvider);
-        Completed.insert(DependencyMission);
+        // FIXTURE standing in for save state, not satisfied from data. A real save carries the completed missions;
+        // nothing installed says which missions are complete for a player in Sanctuary (the level travel station into
+        // Sanctuary already opens while the dependency mission is still active, and the fast-forward that completes
+        // missions in bulk is native, with its trigger set at run time). The fixture marks the mission's own declared
+        // Dependencies complete, read from the definition, so no mission is named here.
+        for (const auto& Dependency : Slice->mission().dependencies()) Completed.insert(Dependency);
+        Fixture = Completed;
     }
+    std::set<std::string> Fixture;     // what the fixture added (checked by the suite)
     std::string ObjectiveState(const FString& Objective) const {
         return Slice->mission().objectiveState(TCHAR_TO_UTF8(*Objective));
     }
@@ -77,6 +92,8 @@ void UOpenWillowQuest::BeginPlay()
             throw std::runtime_error("installed Borderlands 2 is required");
         Impl = MakeShared<FImpl>(std::filesystem::path(*FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole"))));
         Impl->Data.Load(World, Npcs, Audio);
+        for (const auto& Path : Impl->Fixture)
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST FIXTURE (save-state stand-in, not stock data): dependency %hs treated as complete"), Path.c_str());
         Impl->StationCounters.Init(0, Impl->Data.Stations.Num());
         // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the
         // gear was rolled at, used here as the mission level (an UNVERIFIED slice choice; the native pick is not decoded).
@@ -113,7 +130,12 @@ void UOpenWillowQuest::BeginPlay()
             Respawns = int32(Data->GetNumberField(TEXT("respawns")));
             // A lend in progress is redone on the first tick, once the walker has set up its inventory.
             bLendPending = Data->GetBoolField(TEXT("weapon_lent"));
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST loaded save: status=%d rewards=%d respawns=%d"), Status(), Rewards, Respawns);
+            // Maya's progression (added 2026-10-01; older saves have no block). Applied by the walker through
+            // RestoreProgression once her skill tree and start level are set.
+            const TSharedPtr<FJsonObject>* Progression = nullptr;
+            if (Data->TryGetObjectField(TEXT("progression"), Progression)) SavedProgression = *Progression;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST loaded save: status=%d rewards=%d respawns=%d progression=%s"), Status(), Rewards, Respawns,
+                SavedProgression ? TEXT("yes") : TEXT("none (older save)"));
         }
         SpawnMarcus();
         UE_LOG(LogTemp, Display, TEXT("OWQUEST READY mission=%hs status=%d trigger=%s r=%.2f hh=%.2f walk_nodes=%d stations=%d audio_entries=%d"),
@@ -161,6 +183,10 @@ void UOpenWillowQuest::Save()
     Data->SetNumberField(TEXT("rewards"), Rewards);
     Data->SetNumberField(TEXT("respawns"), Respawns);
     Data->SetBoolField(TEXT("weapon_lent"), bWeaponLent);
+    // Maya's progression. Without -owmaya the skills component was never set up, so the loaded block is kept as is.
+    const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    if (Walker && Walker->IsMayaActive() && Walker->GetSkills()) Data->SetObjectField(TEXT("progression"), Walker->GetSkills()->ProgressionJson());
+    else if (SavedProgression) Data->SetObjectField(TEXT("progression"), SavedProgression);
     FString Text;
     FJsonSerializer::Serialize(Data, TJsonWriterFactory<>::Create(&Text));
     IFileManager::Get().MakeDirectory(*FPaths::GetPath(SavePath), true);
@@ -261,10 +287,25 @@ void UOpenWillowQuest::RouteRequests()
                 bool bHolder = false;
                 for (const auto& Variable : Mover->SequenceVariables(R.Op, TEXT("Target")))
                     bHolder |= UTF8_TO_TCHAR(Variable.object.c_str()) == Data.HolderObject;
-                // The holder (an interactive object with no prepared mesh) rides on the target carrier; the dummy
-                // keeps its spawn pose and follows the carrier. Bone "Target" offset not applied (UNVERIFIED).
+                // The holder (an interactive object: static meshes and SocketComponents, no skeleton) rides on the target
+                // carrier. The op's BoneName resolves to the holder's SocketComponent of that name (world.json
+                // holder.attach). The op tags no relative offset or rotation, so the dummy's origin is put on the socket:
+                // UNVERIFIED (Activated is native; bUseConstructAttachment is not interpreted). The carrier only
+                // translates in this binding (constant rotation keys), so the holder now = placed pose + carrier offset.
                 if (bHolder && Mover->TrackCarrier()) {
+                    AttachCarrierOffset = Mover->TrackOffset();
+                    if (Data.bHasAttachSocket && R.Op == Data.AttachOp) {
+                        FTransform Socket = Data.AttachSocketLocal * Data.HolderPose;
+                        Socket.AddToTranslation(AttachCarrierOffset);
+                        Dummy->SetActorLocationAndRotation(Socket.GetLocation(), Socket.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+                        bAttachSocketApplied = true;
+                        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy put on the holder socket at %s rot %s (spawned at %s; socket reading UNVERIFIED)"),
+                            *Socket.GetLocation().ToString(), *Socket.Rotator().ToString(), *DummySpawnedAt.ToString());
+                    } else {
+                        UE_LOG(LogTemp, Warning, TEXT("OWQUEST no attach socket for %s in world.json (regenerate with tools/prepare_slice_world.py): the dummy keeps its spawn pose"), *R.Op);
+                    }
                     Dummy->AttachToComponent(Mover->TrackCarrier(), FAttachmentTransformRules::KeepWorldTransform);
+                    DummyAttachedAt = Dummy->GetActorLocation();
                     bDummyAttached = bRun = true;
                 }
             } else if (R.Class == TEXT("Engine.SeqAct_Destroy") && Holds(R.Op, TEXT("Target")) && Dummy) {
@@ -343,12 +384,35 @@ void UOpenWillowQuest::Pump()
         }
     }
     for (const auto& Line : Impl->Slice->errors()) { Fail(UTF8_TO_TCHAR(Line.c_str())); return; }
-    // World behaviors the dummy provider reached: none has a host binding yet (logged, never counted as run).
+    // World behaviors the dummy provider reached. Behavior_Transform and Behavior_RegisterTargetable acting on the dummy
+    // itself (BCONTEXT_Self) are run here; the rest (IntMath, ChangeInstanceDataSwitch) stay logged with their fields.
     for (const auto& Call : Impl->Slice->dummy().boundaryCalls) {
         TArray<FString> Fields;
         for (const auto& Field : Call.fields) Fields.Add(FString::Printf(TEXT("%hs=%hs"), Field.first.c_str(), Field.second.c_str()));
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy behavior %hs:%hs (%hs.%hs) %s (not run by host)"), Call.cls.c_str(),
-            Call.name.c_str(), Call.sequence.c_str(), Call.event.c_str(), *FString::Join(Fields, TEXT(" ")));
+        auto Value = [&Call](const char* Key) {
+            const auto It = Call.fields.find(Key);
+            return It == Call.fields.end() ? FString() : FString(UTF8_TO_TCHAR(It->second.c_str()));
+        };
+        const bool bSelf = Value("Context") == TEXT("BCONTEXT_Self");
+        const TCHAR* Result = TEXT("not run by host");
+        if (bSelf && Call.cls == "WillowGame.Behavior_Transform") {
+            // Script: WillowAIPawn.TransformType = Transform. Its readable consumer is GetTargetName (the balance's
+            // transformed display name); nothing moves and no time is involved.
+            DummyTransform = Value("Transform");
+            TransformSequence = UTF8_TO_TCHAR(Call.sequence.c_str());
+            Result = TEXT("run by host: TransformType set");
+        } else if (bSelf && Call.cls == "WillowGame.Behavior_RegisterTargetable") {
+            // Script: WillowPawn.Behavior_RegisterTargetable adds/removes the pawn in the global TargetableList (native,
+            // keyed by allegiance). The host keeps a membership flag; which native searches read the list is UNVERIFIED.
+            bDummyTargetable = Value("bUnregister") != TEXT("true");
+            TargetableSequence = UTF8_TO_TCHAR(Call.sequence.c_str());
+            ++TargetableCalls;
+            Result = bDummyTargetable ? TEXT("run by host: registered targetable") : TEXT("run by host: unregistered");
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy behavior %hs:%hs (%hs.%hs) %s (%s)"), Call.cls.c_str(),
+            Call.name.c_str(), Call.sequence.c_str(), Call.event.c_str(), *FString::Join(Fields, TEXT(" ")), Result);
+        if (bSelf && Call.cls == "WillowGame.Behavior_Transform")
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy target name now \"%s\""), *DummyTargetName());
     }
     Impl->Slice->dummy().boundary.clear();
     Impl->Slice->dummy().boundaryCalls.clear();
@@ -441,6 +505,7 @@ void UOpenWillowQuest::GrantExperience()
     ExperienceBeforeReward = Skills->GetExperience();
     LevelBeforeReward = Skills->GetLevel();
     Skills->AddExperience(LastXpAmount);
+    Walker->RefreshHealthForLevel();   // a level-up from this reward sets the new level's health at once
     UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: %.4f x span at mission level %d = %d XP (candidate rule, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
         *Impl->Data.XpRewardAttribute, Impl->Data.XpPercentage, MissionLevel, LastXpAmount, ExperienceBeforeReward,
         Skills->GetExperience(), LevelBeforeReward, Skills->GetLevel(), Skills->AvailablePoints());
@@ -458,6 +523,33 @@ bool UOpenWillowQuest::PlayerMaxHealth(int32 Level, float& Out) const
     if (!Impl || bFailed) return false;
     Out = Impl->Data.HealthForLevel(Level);
     return true;
+}
+
+bool UOpenWillowQuest::RestoreProgression(UOpenWillowSkills& Skills)
+{
+    if (!Impl || bFailed || !SavedProgression) return false;
+    const int32 StartLevel = Skills.GetLevel();
+    FString Error;
+    if (!Skills.RestoreProgression(*SavedProgression, Error)) { Fail(TEXT("quest save progression was rejected: ") + Error); return false; }
+    bProgressionRestored = true;
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST progression from save: level %d (start level %d replaced), experience %lld, action grade %d, skill points %d"),
+        Skills.GetLevel(), StartLevel, Skills.GetExperience(), Skills.GetActionGrade(), Skills.AvailablePoints());
+    return true;
+}
+
+bool UOpenWillowQuest::IsRegisteredTargetable(const AActor* Actor) const
+{
+    return Actor && Actor == Dummy && bDummyTargetable;
+}
+
+FString UOpenWillowQuest::DummyTargetName() const
+{
+    if (!Impl || !Impl->Data.bHasDummyNames) return FString();
+    // WillowAIPawn.GetTargetName (script): TransformType != 0 -> GetTransformedName -> the balance's
+    // GetTransformedDisplayName(TransformType) (native: "the playthrough entry of that type" is UNVERIFIED); else the
+    // balance's display name. The name-list and displayed-parent branches before it are not modelled.
+    if (const FString* Name = Impl->Data.DummyTransformedNames.Find(DummyTransform)) return *Name;
+    return Impl->Data.DummyDisplayName;
 }
 
 bool UOpenWillowQuest::RespawnPoint(const FVector& DeathLocation, FTransform& Out)
@@ -542,6 +634,8 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
         bLendPending = false;
         LendMissionWeapon();
     }
+    // Any other level change (the test fixtures' SetLevel) is picked up here, once a frame.
+    if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->RefreshHealthForLevel();
     Impl->Slice->tick(Delta);
     Pump();
     ProcessArrivals();
@@ -599,6 +693,29 @@ void UOpenWillowQuest::RunTest(float Delta)
             Check(Rewards == 1, TEXT("resume_reward_retained"));
             Check(Respawns >= 1, TEXT("resume_respawn_count_retained"));
             Check(Marcus && Marcus->GetActorLocation().Equals(Data.MarcusLocation, 0.5f), TEXT("resume_marcus_at_stock_pose"));
+            // Progression: the restored state must equal the save's block (what the first run ended with, checked
+            // there by save_holds_final_progression), and the saved level must have replaced -owlevel.
+            {
+                const UOpenWillowSkills* Skills = Walker->GetSkills();
+                const FString& Suspension = Walker->GetPhaselockData().DurationSkill;
+                int32 CommandLevel = 0, SavedLevel = 0, SavedPoints = -1, SavedAction = -1, SavedSuspension = 0;
+                int64 SavedExperience = -1;
+                const TSharedPtr<FJsonObject>* SavedGrades = nullptr;
+                FParse::Value(FCommandLine::Get(), TEXT("owlevel="), CommandLevel);
+                const bool bBlock = SavedProgression && SavedProgression->TryGetNumberField(TEXT("level"), SavedLevel)
+                    && SavedProgression->TryGetNumberField(TEXT("experience"), SavedExperience)
+                    && SavedProgression->TryGetNumberField(TEXT("points"), SavedPoints)
+                    && SavedProgression->TryGetNumberField(TEXT("actionGrade"), SavedAction)
+                    && SavedProgression->TryGetObjectField(TEXT("grades"), SavedGrades);
+                if (bBlock) (*SavedGrades)->TryGetNumberField(Suspension, SavedSuspension);
+                Check(bBlock && bProgressionRestored && SavedLevel != CommandLevel && Skills->GetLevel() == SavedLevel
+                    && Skills->GetExperience() == SavedExperience, TEXT("resume_level_and_experience_from_save_over_owlevel"));
+                Check(bBlock && Skills->AvailablePoints() == SavedPoints && Skills->GetActionGrade() == SavedAction && SavedAction >= 1,
+                    TEXT("resume_skill_points_and_phaselock_from_save"));
+                Check(bBlock && SavedSuspension >= 1 && Skills->GradeOf(Suspension) == SavedSuspension
+                    && JsonText(*SavedGrades) == JsonText(Skills->ProgressionJson()->GetObjectField(TEXT("grades"))),
+                    TEXT("resume_skill_grades_from_save"));
+            }
             PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f, Data.MarcusLocation);
             TestStep = 100;
             TestWait = 0;
@@ -621,6 +738,15 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f)
             && Walker->GetHealth() == Walker->GetMaxHealth() && Walker->GetMaxHealth() != 400.f, TEXT("maya_health_from_formula"));
         Check(!Dummy && !bDummySpawned, TEXT("dummy_absent_before_fire_objective"));
+        // The dependency fixture (save-state stand-in) adds exactly the mission's declared Dependencies, and it is
+        // needed: without it the mission could not be accepted.
+        {
+            const auto& Mission = Impl->Slice->mission();
+            const auto Declared = Mission.dependencies();
+            Check(!Declared.empty() && Impl->Fixture == std::set<std::string>(Declared.begin(), Declared.end())
+                && !Mission.available(std::set<std::string>()) && Mission.available(Impl->Completed),
+                TEXT("dependency_fixture_is_the_missions_declared_dependencies"));
+        }
         // Player side: the mission's own MissionWeapon recipe and mesh exist, it is not carried yet, and Maya starts
         // armed (slice gear at her level) with the arms shown.
         Check(MissionWeapon.Balance == UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str()) && MissionWeapon.Level == MissionLevel
@@ -691,6 +817,23 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Dummy && bDummyAttached && Dummy->GetRootComponent()->GetAttachParent() == Mover->TrackCarrier(),
             TEXT("dummy_attached_to_carrier_by_installed_kismet"));
         Check(Mover->TrackRunning() || Mover->TrackForwardEnds > 0, TEXT("dummy_provider_starts_target_matinee"));
+        // Attach point from data: the host's composition (socket pose on the holder's placed pose) lands where the
+        // tool's own composition put it, moved by the carrier offset at attach time.
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy attached at %s, tool's socket %s, carrier offset then %s"), *DummyAttachedAt.ToString(),
+            *Data.AttachSocketWorldOracle.ToString(), *AttachCarrierOffset.ToString());
+        Check(Data.bHasAttachSocket && bAttachSocketApplied && DummyAttachedAt.Equals(Data.AttachSocketWorldOracle + AttachCarrierOffset, 0.5f),
+            TEXT("dummy_attached_at_holder_socket_from_manifest"));
+        // Behavior_Transform ran when the Fire objective enabled its sequence: the dummy's TransformType is set and its
+        // target name is the balance's transformed name for that type, not the plain display name.
+        {
+            const FString* Transformed = Data.DummyTransformedNames.Find(DummyTransform);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy TransformType %s (from %s), target name \"%s\""), *DummyTransform, *TransformSequence, *DummyTargetName());
+            Check(Data.bHasDummyNames && !DummyTransform.IsEmpty() && Transformed && DummyTargetName() == *Transformed
+                && *Transformed != Data.DummyDisplayName && Impl->Slice->dummy().sequenceEnabled(TCHAR_TO_UTF8(*TransformSequence)),
+                TEXT("dummy_transform_type_and_target_name_from_provider"));
+        }
+        // Not targetable yet: the sequence that registers it is enabled by the mission a few seconds later.
+        Check(Dummy && !IsRegisteredTargetable(Dummy) && TargetableCalls == 0, TEXT("dummy_not_targetable_before_register_behavior"));
         Shot(TEXT("2a_DummySpawned"));
         break;
     }
@@ -702,7 +845,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         const FVector KeyDelta = Key(Keys.Num() - 1) - Key(0);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST target track world offset %s (key-space delta %s)"), *Mover->TrackOffset().ToString(), *KeyDelta.ToString());
         Check(Mover->TrackForwardEnds == 1 && FMath::IsNearlyEqual(Mover->TrackOffset().Size(), KeyDelta.Size(), 0.5f), TEXT("target_matinee_reaches_forward_end"));
-        Check(Dummy && (Dummy->GetActorLocation() - DummySpawnedAt).Equals(Mover->TrackOffset(), 0.5f), TEXT("dummy_moves_with_carrier"));
+        Check(Dummy && (Dummy->GetActorLocation() - DummyAttachedAt).Equals(Mover->TrackOffset() - AttachCarrierOffset, 0.5f), TEXT("dummy_moves_with_carrier"));
         // From the trigger centre (where the player stands for the objective) the dummy must be in the line of fire.
         FHitResult Hit;
         FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestAim), true, Walker);
@@ -730,6 +873,11 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     case 13: {
         if (TestWait < 0.5f || !Dummy) { if (!Dummy) Fail(TEXT("dummy missing")); return; }
+        // Behavior_RegisterTargetable (bUnregister false) from the sequence the mission enabled: the dummy is in the
+        // host's targetable list before it is shot.
+        if (!bDummyTargetable && TestWait < 10.f) return;
+        Check(IsRegisteredTargetable(Dummy) && TargetableCalls == 1 && Impl->Slice->dummy().sequenceEnabled(TCHAR_TO_UTF8(*TargetableSequence)),
+            TEXT("dummy_registered_targetable_by_provider"));
         // Real shots from the trigger centre (where the aim trace hit the dummy). First the wrong element: an
         // equipped slice gun whose stock damage type is not the lent pistol's.
         PlacePlayer(Data.TriggerCenter, Dummy->AimPoint());
@@ -777,6 +925,11 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Gap > 0) Skills->AddExperience(Gap);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
         PointsBeforeReward = Skills->AvailablePoints();
+        // Test fixture: half of Maya's health off, so that what the level-up does to current health is visible.
+        FHitResult Hit;
+        UGameplayStatics::ApplyPointDamage(Walker, Walker->GetMaxHealth() * 0.5f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+        HealthBeforeReward = Walker->GetHealth();
+        MaxHealthBeforeReward = Walker->GetMaxHealth();
         PressUse();
         break;
     }
@@ -789,6 +942,9 @@ void UOpenWillowQuest::RunTest(float Delta)
             TEXT("xp_amount_is_candidate_formula_at_mission_level"));
         Check(Skills->GetLevel() == LevelBeforeReward + 1 && Skills->GetExperience() >= UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel())
             && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));
+        Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Skills->GetLevel()), 0.01f)
+            && Walker->GetMaxHealth() > MaxHealthBeforeReward, TEXT("level_up_sets_formula_max_health"));
+        Check(HealthBeforeReward < MaxHealthBeforeReward && Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("level_up_refills_current_health"));
         Check(bHasReward && RewardPickup && RewardPickup->DisplayName() == RewardItem.Name
             && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) == INDEX_NONE, TEXT("turn_in_drops_loot_stand_in_pickup"));
         PressUse();   // nothing left to turn in: the key falls through to the pickup
@@ -824,6 +980,19 @@ void UOpenWillowQuest::RunTest(float Delta)
         UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog lookups=%d misses=%d played=%d"), DialogLookups, DialogMisses, DialogPlayed);
         Check(DialogLookups > 0 && DialogMisses == 0 && DialogPlayed == 0, TEXT("dialog_hook_finds_every_line_and_plays_nothing"));
         Check(FPaths::FileExists(SavePath), TEXT("save_file_written"));
+        // The Phaselock steps' fixture raised the level with SetLevel; this frame's tick has applied it to health.
+        Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f),
+            TEXT("max_health_follows_level_after_fixtures"));
+        {
+            // The save written this frame (Pump) holds the progression Maya ends the run with: the resume run's reference.
+            FString Text;
+            TSharedPtr<FJsonObject> Saved;
+            const TSharedPtr<FJsonObject>* Progression = nullptr;
+            const bool bRead = FFileHelper::LoadFileToString(Text, *SavePath) && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Saved)
+                && Saved && Saved->TryGetObjectField(TEXT("progression"), Progression);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST saved progression: %s"), bRead ? *JsonText(*Progression) : TEXT("none"));
+            Check(bRead && JsonText(*Progression) == JsonText(Walker->GetSkills()->ProgressionJson()), TEXT("save_holds_final_progression"));
+        }
         UE_LOG(LogTemp, Display, TEXT("OWQUESTTEST SUMMARY result=%s checks=%d errors=%d mode=first_run"), Errors ? TEXT("FAIL") : TEXT("PASS"), Checks, Errors);
         FPlatformMisc::RequestExit(false);
         bTesting = false;
@@ -862,21 +1031,81 @@ bool UOpenWillowQuest::RunPhaselockTest()
     {
         if (Walker->GetController()) Walker->GetController()->SetControlRotation((Point - (Walker->GetActorLocation() + FVector(0, 0, 70))).Rotation());
     };
+    // Distance from the test target's collision centre, lowered by Below, up to the first surface (ECC_Visibility, as
+    // the lift's own traces; Maya and the target ignored); Reach when nothing is nearer. A line trace, not the lift's
+    // 1 uu box, so it is a second reading of the same geometry rather than the same call.
+    auto Headroom = [this, Walker](float Below, float Reach)
+    {
+        FVector Centre;
+        float Half = 0.f;
+        PhaselockDummy->CollisionCentre(Centre, Half);
+        Centre.Z -= Below;
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestPhaselockHeadroom), true, Walker);
+        Query.AddIgnoredActor(PhaselockDummy.Get());
+        FHitResult Hit;
+        return GetWorld()->LineTraceSingleByChannel(Hit, Centre, Centre + FVector(0, 0, Reach), ECC_Visibility, Query) ? Hit.Distance : Reach;
+    };
     switch (PhaselockStep)
     {
     case 0: {
         FString Reason;
         Check(P.bLoaded && Skills->TrySpend(-1, -1, -1, Reason) && Skills->GetActionGrade() == 1, TEXT("skill_point_buys_phaselock"));
         Check(PhaselockTableMatchesManifest(), TEXT("phaselock_timelines_match_manifest_table"));
-        // A host engine-shape target 400 uu down the range lane from the trigger centre (the lane the dummy used).
+        // A host engine-shape target on the range lane from the trigger centre (the lane the dummy used).
         const FVector Lane = (Impl->Data.DummyLocation - Impl->Data.TriggerCenter).GetSafeNormal2D();
-        const FVector Ahead = Impl->Data.TriggerCenter + Lane * 400.f;
-        FHitResult Floor;
         FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestPhaselockTarget), true, Walker);
-        FVector At = Ahead;
-        if (GetWorld()->LineTraceSingleByChannel(Floor, Ahead + FVector(0, 0, 200), Ahead - FVector(0, 0, 600), ECC_Visibility, Query)) At = Floor.ImpactPoint;
+        auto FloorAt = [&](float Along, FVector& Out)
+        {
+            const FVector Ahead = Impl->Data.TriggerCenter + Lane * Along;
+            FHitResult Floor;
+            Out = Ahead;
+            if (!GetWorld()->LineTraceSingleByChannel(Floor, Ahead + FVector(0, 0, 200), Ahead - FVector(0, 0, 600), ECC_Visibility, Query)) return false;
+            Out = Floor.ImpactPoint;
+            return true;
+        };
+        FVector At;
+        FloorAt(400.f, At);
         PhaselockDummy = GetWorld()->SpawnActor<AOpenWillowCombatTarget>(At, Lane.Rotation() + FRotator(0, 180, 0));
-        PlacePlayer(Impl->Data.TriggerCenter, At + FVector(0, 0, 900));   // looking up past it: the first cast misses
+        Query.AddIgnoredActor(PhaselockDummy.Get());
+        // Lift rule probes along the lane, without casting. The cast spot is the first spot (400 uu first) with a surface
+        // less than HeightFromGround above the target's centre, so the script's ceiling clamp applies there; the
+        // open-ground spot is the first with nothing within HeightFromGround + bob. Both are found, not assumed; without
+        // a ceiling spot the cast stays at 400 uu under a test fixture (below).
+        float CastAlong = -1.f, OpenAlong = -1.f, OpenLift = -1.f;
+        FVector CastAt = At;
+        for (const float Along : {400.f, 300.f, 500.f, 200.f, 600.f, 700.f, 100.f, 800.f, 900.f, 1000.f})
+        {
+            FVector Spot;
+            if (!FloorAt(Along, Spot)) continue;
+            PhaselockDummy->SetActorLocation(Spot);
+            const float Room = Headroom(0.f, P.HeightFromGround + P.BobAmplitude);
+            if (CastAlong < 0.f && Room < P.HeightFromGround) { CastAlong = Along; CastAt = Spot; }
+            if (OpenAlong < 0.f && Room >= P.HeightFromGround + P.BobAmplitude) { OpenAlong = Along; OpenLift = PhaselockDummy->PhaselockLiftHeight(P); }
+        }
+        PhaselockDummy->SetActorLocation(CastAt);
+        if (CastAlong < 0.f)
+        {
+            // Test fixture: the lane has no surface that low, so an invisible blocking box is hung over the target with
+            // its underside 3/4 of HeightFromGround above the centre. It is removed after the ceiling check.
+            FVector Centre;
+            float Half = 0.f;
+            PhaselockDummy->CollisionCentre(Centre, Half);
+            const FVector Extent(100.f, 100.f, 10.f);
+            PhaselockCeiling = GetWorld()->SpawnActor<AActor>(Centre + FVector(0, 0, 0.75f * P.HeightFromGround + Extent.Z), FRotator::ZeroRotator);
+            UBoxComponent* Box = NewObject<UBoxComponent>(PhaselockCeiling, TEXT("CeilingFixture"));
+            Box->SetBoxExtent(Extent);
+            Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+            Box->SetCollisionResponseToAllChannels(ECR_Ignore);
+            Box->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+            PhaselockCeiling->SetRootComponent(Box);
+            Box->RegisterComponent();
+            Box->SetWorldLocation(Centre + FVector(0, 0, 0.75f * P.HeightFromGround + Extent.Z));
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock lane probes: cast spot %.0f uu (ceiling %s), open ground %.0f uu with lift %.1f (HeightFromGround %.0f)"),
+            CastAlong < 0.f ? 400.f : CastAlong, CastAlong < 0.f ? TEXT("not found in the lane, test fixture box used") : TEXT("found"), OpenAlong, OpenLift, P.HeightFromGround);
+        // Over open ground the script rule lifts by HeightFromGround (+1 uu: the trace box stops 1 uu above the floor).
+        Check(OpenAlong >= 0.f && FMath::Abs(OpenLift - P.HeightFromGround) <= 2.f, TEXT("phaselock_lifts_to_stock_height"));
+        PlacePlayer(Impl->Data.TriggerCenter, CastAt + FVector(0, 0, 900));   // looking up past it: the first cast misses
         Next();
         return false;
     }
@@ -906,8 +1135,21 @@ bool UOpenWillowQuest::RunPhaselockTest()
     case 4: {
         if (PhaselockWait < Base.LockedAt + 0.6f) return false;
         const float Height = PhaselockDummy->LiftedHeight();
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock height %.1f at %.2f s (stock %.0f +- bob %.0f)"), Height, PhaselockWait, P.HeightFromGround, P.BobAmplitude);
-        Check(FMath::Abs(Height - P.HeightFromGround) <= P.BobAmplitude + 1.f, TEXT("phaselock_lifts_to_stock_height"));
+        const float End = PhaselockDummy->PhaselockLiftEnd();
+        FVector Centre;
+        float Half = 0.f;
+        PhaselockDummy->CollisionCentre(Centre, Half);
+        const float Room = Headroom(Height, 1000.f);   // from the centre before the lift
+        const float Gap = Room - End - Half;           // surface minus the top of the collision at the lift end
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock height %.1f at %.2f s, lift end %.1f (HeightFromGround %.0f, bob %.0f); surface %.1f uu above the rest centre, half height %.1f, top at the lift end %.1f uu below it"),
+            Height, PhaselockWait, End, P.HeightFromGround, P.BobAmplitude, Room, Half, Gap);
+        // BeginLifting's clamp: with a surface less than HeightFromGround above the centre, the lift end puts the top of
+        // the collision at that surface (the 1 uu trace box stops it about 1 uu short), never above it.
+        Check(Room < P.HeightFromGround && End < P.HeightFromGround && Gap >= -0.5f && Gap <= 2.5f, TEXT("phaselock_lift_stays_below_ceiling"));
+        // While locked the target is at the lift end plus the bob (at most its amplitude).
+        Check(FMath::Abs(Height - End) <= P.BobAmplitude + 1.f, TEXT("phaselock_height_is_lift_end_plus_bob"));
+        if (PhaselockCeiling) PhaselockCeiling->Destroy();
+        PhaselockCeiling = nullptr;
         Shot(TEXT("4_Phaselock"));
         Next();
         return false;
@@ -927,6 +1169,40 @@ bool UOpenWillowQuest::RunPhaselockTest()
         return false;
     }
     case 6: {
+        // After the release the pool drains at the base rate: wait until it is empty.
+        if (Walker->PhaselockRemaining() > 0.f && PhaselockWait < P.CooldownSeconds / FMath::Max(P.CooldownRate, KINDA_SMALL_NUMBER) + 1.f) return false;
+        // Cast gate from Skill_Phaselock.SkillConstraints: open in Maya's current state; the host readings of the
+        // weapon-action and health constraints refuse a cast (GateOpen with test inputs; Maya's state is not changed).
+        FString Why, Busy, Hurt;
+        const bool bOpen = Walker->CanCastPhaselock(Why);
+        const bool bBusyRefused = !P.GateOpen(true, Walker->GetHealth(), Busy);
+        const bool bDeadRefused = !P.GateOpen(false, 0.f, Hurt);
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock gate: open=%d %s; reloading refused by %s; health 0 refused by %s; not evaluated [%s]"),
+            bOpen, *Why, *Busy, *Hurt, *FString::Join(P.GateNotEvaluated, TEXT(", ")));
+        Check(bOpen, TEXT("phaselock_cast_gate_open_when_constraints_met"));
+        Check(bBusyRefused && Busy.Contains(TEXT("WeaponActionAvailable")), TEXT("phaselock_weapon_action_constraint_refuses_cast"));
+        Check(bDeadRefused && Hurt.Contains(TEXT("HealthState")), TEXT("phaselock_health_constraint_refuses_cast"));
+        // Blocked target: clear the host property that stands for Flag_Skills_CanPhaseLock, then cast at it.
+        PhaselockDummy->SetCanPhaseLockFlag(false);
+        Aim(PhaselockDummy->AimPoint());
+        Next();
+        return false;
+    }
+    case 7:
+        if (PhaselockWait < 0.2f) return false;
+        Walker->UsePhaselock();
+        Check(Walker->LastPhaselockBlocked() && !Walker->LastPhaselockHit() && !PhaselockDummy->IsPhaselocked()
+            && PhaselockDummy->LiftedHeight() < 1.f, TEXT("phaselock_blocked_target_is_not_lifted"));
+        Next();
+        return false;
+    case 8:
+        // A blocked cast is not a fizzle: nothing resets the cooldown after ReleaseBufferTime.
+        if (PhaselockWait < P.ReleaseBufferTime + 0.1f) return false;
+        Check(Walker->PhaselockRemaining() > 0.f, TEXT("phaselock_blocked_cast_keeps_cooldown"));
+        PhaselockDummy->SetCanPhaseLockFlag(true);
+        Next();
+        return false;
+    case 9: {
         // Suspension: the action point, a full lower Motion tier, then one Suspension grade (1 + 5 + 1 points).
         // Test fixture: raise the level so that many points exist (one per level from 5).
         TArray<FString> SpendOrder;

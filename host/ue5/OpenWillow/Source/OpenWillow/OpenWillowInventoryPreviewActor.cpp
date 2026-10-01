@@ -1,4 +1,5 @@
 #include "OpenWillowInventoryPreviewActor.h"
+#include "OpenWillowInventory.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/PointLightComponent.h"
@@ -63,10 +64,11 @@ void AOpenWillowInventoryPreviewActor::BeginPlay()
     Capture->TextureTarget = RenderTarget;
 }
 
-bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FString& ItemId)
+bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FOpenWillowWeaponItem* Item)
 {
     if (!RenderTarget || !Capture || !PreviewWeapon)
         return false;
+    const FString ItemId = Item ? Item->Id : FString();
     if (CurrentItemId == ItemId)
         return bHasPreview;
 
@@ -74,11 +76,9 @@ bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FString& ItemId)
     bHasPreview = false;
     PreviewWeapon->SetSkeletalMesh(nullptr);
 
-    if (!ItemId.IsEmpty())
+    if (Item)
     {
-        const FString MeshPath = FString::Printf(
-            TEXT("/Game/OpenWillow/Weapons/Items/SK_%s.SK_%s"), *ItemId, *ItemId);
-        if (USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath))
+        if (USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(*Item))
         {
             PreviewWeapon->SetSkeletalMesh(Mesh);
             // Match the orientation used by the held weapon. Center the mesh

@@ -51,7 +51,7 @@ Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md).
 
 **The first milestone:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in UE5. Everything below comes after that.
 
-When it's done (and "done" is years away, see the roadmap, this isn't a remaster, not a remake) here's what a new machine actually buys you:
+When it's done (see the roadmap; this isn't a remaster, not a remake) here's what a new machine actually buys you:
 
 - **Co-op that works.** No SHiFT, no forced account linking, no hardlock on the title screen.
 - **64-bit.** The ~4 GB memory wall behind a lot of the crashes and Ultra HD pack problems: gone.
@@ -82,7 +82,7 @@ Under the hood, the engine still reads all 2,008 packages from a full BL2 instal
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
-**Next up:** finishing Sanctuary's last visual gaps, then Maya: movement, a few guns and Phaselock. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
+**Next up:** finishing Sanctuary's last visual gaps and comparing the host-run Fire mission slice (Maya, a lent pistol, Phaselock from stock data) against the original game, which has not been done yet. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
 
 <details>
 <summary><b>Show me the numbers behind that</b></summary>
@@ -107,17 +107,17 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 
 **Current priority: a vertical slice, not breadth.** Porting all 82 maps is the easy part of this project. The hard, unproven part is phases 2 through 4, actually running the game's code. So right now the goal is proving those on **one map (Sanctuary, already the furthest along) and one Vault Hunter** end-to-end, before spending more time on additional maps or characters. Full details and why: [ROADMAP.md](ROADMAP.md#priority-the-vertical-slice).
 
-| Phase | What you'll be able to do | Time (est.) | Status |
+| Phase | What you'll be able to do | So far (dates from git) | Status |
 |:--|:--|:--|:--|
-| **0 · Read the files** | The engine can open every BL2 file | ~3–6 weeks | Done (took a week) |
-| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | ~2–4 months | In progress (1 of 82 targeted for now) |
-| **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | +3–6 months | Not started |
-| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | +6–12 months | Not started |
-| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions reverse-engineered by watching the game (this is the mountain). This is the vertical slice | +1–2 years | Not started |
-| **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | +1–2 years | Not started |
-| **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | ongoing | Not started |
+| **0 · Read the files** | The engine can open every BL2 file | Reads all 2,008 packages; gated 2026-09-10 | Done |
+| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now) |
+| **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | Prototype since 2026-09-30: C++ bytecode loader, interpreter and Core natives; drives backpack navigation in UE5 since 2026-10-01 | In progress (prototype) |
+| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Only the placeholder UE5 walking controller | Not started |
+| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host with labelled stand-ins: Maya (2026-09-23), Phaselock (2026-09-25), the stock Fire mission loop (2026-10-01); none compared with the original game | In progress (slice pieces) |
+| **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
+| **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
-**Total to a finished campaign: 3–5 years.** One person, AI-assisted. Honestly, not overpromising. Phase 4 is the mountain and that's where most of the time goes.
+I work on this actively, and I'm not promising completion dates. As of 2026-10-01 the repository is 21 days old, with 182 commits across 16 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
 
 ## Help me keep going
 
@@ -131,17 +131,20 @@ I'm not sure anyone actually reads this far, but if you did, thank you for check
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
 
-A first Sanctuary world-object bridge now connects installed Matinee movement
-keys and mover scripts to one door's host movement/collision. Its developer
-interaction does not implement mission activation or audio. See the
-[verification record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
+A first Sanctuary world-object bridge connects installed Matinee movement
+keys and mover scripts to one door's host movement/collision
+([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)). As of 2026-10-01 the door also opens from its
+installed Kismet events, and the stock Fire mission runs in the host on stock world data with labelled stand-ins
+(for example Phaselock targeting and a turn-in loot stand-in); audio is looked up and logged, never played, and
+nothing has been compared against the original game
+([mission record](docs/verification/SANCTUARY_RPG_MISSION.md)).
 
 ## Is this legal?
 
 Yes. I take it seriously. The rules are the same as [OpenMW](https://openmw.org/) (Morrowind) and [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2):
 
 1. **I never share game files.** Not a texture, not a sound. Nothing extracted from the game *ever* enters this repository. Extracted assets live locally during import but stay git-ignored.
-2. **No leaked or decompiled code.** I work from file formats and by watching what the real game does. That's it.
+2. **No leaked source, and no code copied from the game's binary.** I read file formats, watch what the real game does, and (since 2026-10-01) analyse the game executable on my own machine to understand how its native code behaves. Decompiler output and analysis databases are game-derived data and stay out of this repository; the code in it is written from understanding, not from listings. I'm not a lawyer and none of this is legal advice; the risks are spelled out in [docs/LEGAL.md](docs/LEGAL.md).
 3. **You need your own copy of BL2.** The engine refuses to start without it, and never modifies your install.
 4. **I don't make money from this.** No paid builds, no premium anything. Ever. It's a passion project.
 
@@ -221,9 +224,9 @@ The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate; the 
 <summary><b>How we build it: methodology</b></summary>
 <br>
 
-Clean room, strictly: file formats and observed behaviour, nothing else. No leaked source, no decompiled executable code. When a public reference implementation (UE Viewer, UDK headers) helps pin down a serialization *order*, we read it (never copy from it) and log the source and its license in [THIRD_PARTY.md](THIRD_PARTY.md).
+Analyse freely, publish only our own code. File formats, observed behaviour and (since 2026-10-01) analysis of the game executable are all fair sources for *understanding* what the game does. Raw decompiler output and analysis databases stay local, because they're game-derived data, and the code in this repo is written from our own notes, never pasted or converted from a listing. No leaked source. When a public reference implementation (UE Viewer, UDK headers) helps pin down a serialization *order*, we read it (never copy from it) and log the source and its license in [THIRD_PARTY.md](THIRD_PARTY.md). The practical side, including how to share local analysis between two machines, is in [docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md).
 
-Every rebuilt native function needs a definition of "correct," and there are exactly three we'll accept. **UDK**, a free running copy of UE3, covers the 1,914 stock natives. **The original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) covers the rest: hook a function, log what goes in and out during real play, then implement until our engine reproduces that log. **Community documentation** (the BLCM wiki, bl2.parts, Lootlemon) fills in stat math the other two don't reach. No golden file behind it, no claim of correctness. Anything without one stays labelled `UNVERIFIED` until it earns that label removed.
+Every rebuilt native function needs a definition of "correct," and there are three we'll accept. **UDK**, a free running copy of UE3, covers the 1,914 stock natives. **The original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) confirms the rest: hook a function, log what goes in and out during real play, then implement until our engine reproduces that log. **Community documentation** (the BLCM wiki, bl2.parts, Lootlemon) fills in stat math the other two don't reach. Reading the native function itself is now the fastest way to *find* the rule; it doesn't replace the check. A rule read from native code and not yet confirmed by one of the three stays labelled `UNVERIFIED` until it earns that label removed.
 
 That standard isn't just for natives. Every change in this repo ends in a check run against the real game, and the check gets written down: synthetic tests in CI, differential checks against a real install, visual checks by an actual person looking at the screen. [DECISIONS.md](DECISIONS.md) is the record of all of it: every architectural choice, what got verified, and what didn't.
 
@@ -273,11 +276,12 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Checkbox-level tracker: done, next, blocked |
 | [DECISIONS.md](DECISIONS.md) | Dated log of every architectural and parsing decision and its evidence |
-| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, estimates, kill criteria |
+| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, kill criteria |
 | [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
 | [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
 | [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |
-| [docs/LEGAL.md](docs/LEGAL.md) | Clean-room policy, non-affiliation, contributor certification, license |
+| [docs/LEGAL.md](docs/LEGAL.md) | Working rules (analysis allowed, no game data or transcribed code in the repo), non-affiliation, contributor certification, license |
+| [docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md) | Analysing the game executable, and sharing local analysis between two machines |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Dependency and reference provenance |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute, and the sensitive areas |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1 |

@@ -45,15 +45,19 @@ public:
     const FString& ShotDamageType() const { return ShotDamageTypeInFlight; }
     // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).
     void UsePhaselock();
+    // Whether a cast would start now; otherwise why not (not bought, cooldown, or the failing skill constraint).
+    bool CanCastPhaselock(FString& OutReason) const;
     const FOpenWillowPhaselockData& GetPhaselockData() const { return Phaselock; }
     const FString& GetPhaselockFile() const { return PhaselockFile; }
     // Object path of the mesh shown in Maya's hand ("" when none).
     FString HeldWeaponMesh() const;
     float PhaselockRemaining() const;
     float PhaselockCooldown() const { return Phaselock.CooldownSeconds; }
-    // Last cast: world time, whether it lifted a target, and its timeline (zero for a miss).
+    // Last cast: world time, whether it lifted a target, whether the target was blocked (CanLiftTargetIf failed), and
+    // its timeline (zero for a miss or a blocked target).
     float LastPhaselockCastAt() const { return PhaselockCastAt; }
     bool LastPhaselockHit() const { return bPhaselockHit; }
+    bool LastPhaselockBlocked() const { return bPhaselockBlocked; }
     const FOpenWillowPhaselockTimeline& LastPhaselockTimeline() const { return PhaselockTimeline; }
     class AOpenWillowCombatTarget* LastPhaselockTarget() const { return PhaselockTarget.Get(); }
     bool AreArmsShown() const;
@@ -64,6 +68,9 @@ public:
         class AController* EventInstigator, AActor* DamageCauser) override;
     float GetHealth() const { return Health; }
     float GetMaxHealth() const { return MaxHealth; }
+    // -owquest: sets maximum health from the recovered formula when Maya's level differs from the level it was last
+    // set for (start, XP level-up, test fixtures); does nothing otherwise.
+    void RefreshHealthForLevel();
 private:
     void Forward(float Value);
     void Right(float Value);
@@ -106,6 +113,7 @@ private:
     // formula and respawn the decoded station selection (UOpenWillowQuest).
     float MaxHealth = 400.f;
     float Health = 400.f;
+    int32 HealthLevel = 0;              // the level MaxHealth was last set for (0: not yet)
     FVector RespawnLocation = FVector::ZeroVector;
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;
@@ -148,6 +156,7 @@ private:
     float PhaselockHeldUntil = -100.f;
     float PhaselockResetAt = -100.f;
     bool bPhaselockHit = false;
+    bool bPhaselockBlocked = false;
     FOpenWillowPhaselockTimeline PhaselockTimeline;
     TWeakObjectPtr<class AOpenWillowCombatTarget> PhaselockTarget;
     FString ShotDamageTypeInFlight;

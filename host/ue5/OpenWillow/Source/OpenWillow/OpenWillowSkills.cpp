@@ -157,3 +157,76 @@ FString UOpenWillowSkills::StateJson() const
     return FString::Printf(TEXT("{\"points\":%d,\"actionGrade\":%d,\"grades\":{%s}}"),
         AvailablePoints(), ActionGrade, *FString::Join(Grades, TEXT(",")));
 }
+
+TSharedPtr<FJsonObject> UOpenWillowSkills::ProgressionJson() const
+{
+    TSharedPtr<FJsonObject> Grades = MakeShared<FJsonObject>();
+    for (const TArray<FTier>& Branch : Branches)
+        for (const FTier& Tier : Branch)
+            for (const FSkill& Skill : Tier.Skills)
+                if (Skill.Grade > 0) Grades->SetNumberField(Skill.Id, Skill.Grade);
+    TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+    Data->SetNumberField(TEXT("level"), Level);
+    // JSON numbers are doubles: exact for any experience total below 2^53.
+    Data->SetNumberField(TEXT("experience"), double(Experience));
+    Data->SetNumberField(TEXT("actionGrade"), ActionGrade);
+    Data->SetNumberField(TEXT("points"), AvailablePoints());
+    Data->SetObjectField(TEXT("grades"), Grades);
+    return Data;
+}
+
+bool UOpenWillowSkills::RestoreProgression(const FJsonObject& Data, FString& OutError)
+{
+    int32 NewLevel = 0, NewActionGrade = 0;
+    int64 NewExperience = 0;
+    const TSharedPtr<FJsonObject>* Grades = nullptr;
+    if (!Data.TryGetNumberField(TEXT("level"), NewLevel) || !Data.TryGetNumberField(TEXT("experience"), NewExperience)
+        || !Data.TryGetNumberField(TEXT("actionGrade"), NewActionGrade) || !Data.TryGetObjectField(TEXT("grades"), Grades))
+    {
+        OutError = TEXT("level, experience, actionGrade or grades missing");
+        return false;
+    }
+    if (NewLevel < 1 || NewExperience < ExperienceForLevel(NewLevel) || NewExperience >= ExperienceForLevel(NewLevel + 1))
+    {
+        OutError = FString::Printf(TEXT("experience %lld does not belong to level %d"), NewExperience, NewLevel);
+        return false;
+    }
+    if (NewActionGrade < 0 || NewActionGrade > ActionMaxGrade)
+    {
+        OutError = FString::Printf(TEXT("action grade %d outside 0..%d"), NewActionGrade, ActionMaxGrade);
+        return false;
+    }
+    // Grades go into a copy of the tree; every saved id must be a skill of the loaded tree.
+    TArray<TArray<FTier>> NewBranches = Branches;
+    int32 Found = 0;
+    for (TArray<FTier>& Branch : NewBranches)
+        for (FTier& Tier : Branch)
+            for (FSkill& Skill : Tier.Skills)
+            {
+                Skill.Grade = 0;
+                if (!(*Grades)->TryGetNumberField(Skill.Id, Skill.Grade)) continue;
+                ++Found;
+                if (Skill.Grade < 0 || Skill.Grade > Skill.MaxGrade)
+                {
+                    OutError = FString::Printf(TEXT("%s grade %d outside 0..%d"), *Skill.Id, Skill.Grade, Skill.MaxGrade);
+                    return false;
+                }
+            }
+    if (Found != (*Grades)->Values.Num())
+    {
+        OutError = TEXT("the save names skills the loaded tree does not have");
+        return false;
+    }
+    int32 Spent = NewActionGrade;
+    for (const TArray<FTier>& Branch : NewBranches) Spent += Invested(Branch);
+    if (Spent > EarnedPointsAt(NewLevel))
+    {
+        OutError = FString::Printf(TEXT("%d points spent but level %d earns %d"), Spent, NewLevel, EarnedPointsAt(NewLevel));
+        return false;
+    }
+    Branches = MoveTemp(NewBranches);
+    Level = NewLevel;
+    Experience = NewExperience;
+    ActionGrade = NewActionGrade;
+    return true;
+}

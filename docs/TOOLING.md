@@ -78,7 +78,7 @@ size. See [EXTERNAL_TOOL_BENCHMARK.md](verification/EXTERNAL_TOOL_BENCHMARK.md).
 |---|---|---|
 | [UPK Explorer](https://www.nexusmods.com/site/mods/587) | UE2/UE3 GUI inspection, texture/TFC work, package exploration and optional FBX/audio workflows | Optional fallback; current distribution is on Nexus Mods and requires an authenticated download; not required for the first UModel spike |
 | `ow-package` | Package identity, census, properties, bounded payloads, scene records and verification | Project-owned and retained even if UModel becomes the visual backend |
-| `pyunrealsdk` and community data tools | Future runtime observation and behavioral golden data | Not an asset-extraction replacement; use only with clean-room and license review |
+| `pyunrealsdk` and community data tools | Future runtime observation and behavioral golden data | Not an asset-extraction replacement; use for observation only, after license review |
 | UE Explorer / UPKUtils | Format and behavior references | GPL-licensed references; do not copy code into this MIT project |
 
 The external-tool acquisition and first smoke results are recorded in the
@@ -953,6 +953,15 @@ server before loading, the inventory runner accepts the installed fallback:
 launch-time workaround for this run,
 not a change to project cache settings or runtime verification by itself.
 
+### Native functions and sharing local files
+
+The bodies of `native_<n>` functions are in `Borderlands2.exe`, not the packages.
+Analysing the executable locally is allowed; the workflow, what may be committed and the
+tooling notes are in [NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md) (policy:
+[LEGAL.md](LEGAL.md), "Analysing the executable"). `tools/private_sync.ps1` mirrors
+non-regenerable game-derived files (such as an analysis database under `local/analysis`)
+to a store outside the repository; see "Working on two machines" in that page.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied
@@ -1170,9 +1179,24 @@ python tools/weapon_slice_gear.py --game $game --reward-only --gestalt local/ges
   --gltf local/external/umodel/gestalt/Startup/SkeletalMesh3              # local/items/slice/slice_reward_roll.*
 python tools/prepare_weapon_paint.py --recipe local/items/slice/slice_mission_pistol_fire.json `
   --materials local/external/umodel/slice-npc/Pistol --mesh /Game/OpenWillow/Weapons/MaliwanPistol/SK_Pistol_Maliwan_2_Fire_seed1 `
+  --reader $reader --package "$cooked\Startup.upk" `
   --output local/items/paint/slice_mission_pistol_fire.json
 powershell -File tools/seed_slice_player_assets.ps1                    # steps fx, items, paint
+
+# Slice guns: export each recipe's MaterialInstanceConstant chain, prepare, then paint Weapons/SliceItems
+umodel.exe -path=$cooked -game=border -export -png -out=local/external/umodel/slice-guns Startup <Mati name> MaterialInstanceConstant
+python tools/prepare_weapon_paint.py --recipe <local/items/slice/slice_*.json ...> `
+  --materials local/external/umodel/slice-guns --mesh-folder /Game/OpenWillow/Weapons/SliceItems `
+  --reader $reader --package "$cooked\Startup.upk" --output local/items/paint/slice_guns.json
+powershell -File tools/seed_slice_player_assets.ps1 -Steps paint -Paint local/items/paint/slice_guns.json
 ```
+
+`--reader/--package` lets the paint tool fill scalar and vector parameters that no MIC sets from the base
+Material's own parameter expressions (they survive in the cooked package although the graph is stripped) and
+records each value's source; without them a chain that leaves a zone colour to the base material fails rather
+than guessing. The decal layer the importer draws is an `UNVERIFIED` reading (UV1 x scale + offset, zone weights
+times decal alpha, multiply or replace); `p_DecalRotate` and the flip switch are not applied. `tools/slice_npc_assets.py`
+needs numpy and Pillow in the Python that runs it.
 
 `tools/seed_slice_player_assets.ps1` holds `local/ue_run.lock` for each editor launch and never deletes
 `Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when
@@ -1180,7 +1204,7 @@ powershell -File tools/seed_slice_player_assets.ps1                    # steps f
 `M_OW_BulletHole`). `items` runs the new additive `host/ue5/import_slice_items.py` (pool-rolled slice guns and the
 loot stand-in into `Weapons/SliceItems`, grey stand-in material; existing `SK_<id>` assets are skipped). `paint`
 runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains without a pattern texture
-(zone colours only; the decal is not reproduced). `tools/run_quest.ps1` and `tools/test_quest.ps1` pass
+(zone colours, plus the decal reading described above). `tools/run_quest.ps1` and `tools/test_quest.ps1` pass
 `-owitems=local/items/slice`, `-owactionskill=local/character/action_skill_siren.json` and Maya's level from
 `slice_manifest.json` (an UNVERIFIED slice choice; `run_quest.ps1 -Level N` overrides it).
 

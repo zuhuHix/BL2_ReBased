@@ -23,9 +23,11 @@ ASK = {
     "LICENSE*": "project license is MIT; changing it is a maintainer decision",
     "COPYING*": "project license is MIT; changing it is a maintainer decision",
 }
-# Files that must never be written into the repo.
+# Files that must never be written into the repo. The last group is decompiler and disassembler
+# databases (docs/LEGAL.md, "Analysing the executable"): game-derived, kept under local/ or a private store.
 FORBIDDEN = ["*.upk", "*.tfc", "*.pck", "*.bik", "*.umap", "*.uncompressed_size",
-             "*.gfx", "*.swf"]
+             "*.gfx", "*.swf",
+             "*.gzf", "*.gpr", "*.rep", "*.idb", "*.i64", "*.bndb"]
 
 try:
     payload = json.load(sys.stdin)

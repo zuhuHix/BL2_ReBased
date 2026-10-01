@@ -8,6 +8,10 @@ namespace
 {
 const TCHAR* const DiminishingSkill = TEXT("GD_Siren_Skills.Phaselock.Skill_Phaselock_DiminishingReturns");
 const TCHAR* const CooldownManagerSkill = TEXT("GD_Siren_Skills.Phaselock.Skill_Phaselock_CooldownManager");
+// Constraint evaluator classes the host maps to its own state (GateOpen). Their Evaluate() is native.
+const TCHAR* const WeaponActionEvaluator = TEXT("WillowGame.WeaponActionAvailableExpressionEvaluator");
+const TCHAR* const HealthStateEvaluator = TEXT("WillowGame.HealthStateExpressionEvaluator");
+const TCHAR* const VehiclePassengerEvaluator = TEXT("WillowGame.VehiclePassengerExpressionEvaluator");
 
 // The single value of a helper skill's effect on Attribute with ModifierType (helpers carry one value per grade, all
 // equal in this data; anything else is reported, not guessed).
@@ -40,9 +44,9 @@ bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
     TSharedPtr<FJsonObject> Root;
     if (!FFileHelper::LoadFileToString(Text, *File)) { OutError = TEXT("cannot read ") + File; return false; }
     if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root
-        || Root->GetStringField(TEXT("format")) != TEXT("openwillow.action_skill/1"))
+        || Root->GetStringField(TEXT("format")) != TEXT("openwillow.action_skill/2"))
     {
-        OutError = TEXT("not an openwillow.action_skill/1 manifest: ") + File;
+        OutError = TEXT("not an openwillow.action_skill/2 manifest (regenerate it with tools/prepare_action_skill.py): ") + File;
         return false;
     }
     const TSharedPtr<FJsonObject>* Action = nullptr;
@@ -50,11 +54,15 @@ bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
     const TSharedPtr<FJsonObject>* Cooldown = nullptr;
     const TSharedPtr<FJsonObject>* Helpers = nullptr;
     const TSharedPtr<FJsonObject>* Upgrade = nullptr;
+    const TSharedPtr<FJsonObject>* Skill = nullptr;
+    const TSharedPtr<FJsonObject>* AutoAim = nullptr;
+    const TSharedPtr<FJsonObject>* AimSettings = nullptr;
     if (!Root->TryGetObjectField(TEXT("actionSkill"), Action) || !(*Action)->TryGetObjectField(TEXT("settings"), Settings)
         || !Root->TryGetObjectField(TEXT("cooldown"), Cooldown) || !Root->TryGetObjectField(TEXT("helperSkills"), Helpers)
-        || !Root->TryGetObjectField(TEXT("upgradePath"), Upgrade))
+        || !Root->TryGetObjectField(TEXT("upgradePath"), Upgrade) || !Root->TryGetObjectField(TEXT("skill"), Skill)
+        || !Root->TryGetObjectField(TEXT("autoAim"), AutoAim) || !(*AutoAim)->TryGetObjectField(TEXT("settings"), AimSettings))
     {
-        OutError = TEXT("manifest lacks actionSkill/settings, cooldown, helperSkills or upgradePath");
+        OutError = TEXT("manifest lacks actionSkill/settings, cooldown, helperSkills, upgradePath, skill or autoAim/settings");
         return false;
     }
     bool bOk = true;
@@ -79,7 +87,47 @@ bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
     Read((*Action)->GetObjectField(TEXT("lockDurationScale")), TEXT("default"), TimeScaleDefault);
     Read(*Cooldown, TEXT("seconds"), CooldownSeconds);
     Read(*Cooldown, TEXT("baseConsumptionRate"), CooldownRate);
+    Read(*AimSettings, TEXT("MinTargetDistance"), TargetMinDistance);
+    Read(*AimSettings, TEXT("MaxTargetDistance"), TargetMaxDistance);
     if (!bOk) { OutError = TEXT("a Phaselock number is missing from the manifest"); return false; }
+    if (TargetMaxDistance <= TargetMinDistance)
+    {
+        OutError = TEXT("auto-aim MaxTargetDistance is not above MinTargetDistance");
+        return false;
+    }
+
+    // Activation constraints. Only the evaluator classes and property shapes present in this data are mapped; any
+    // other constraint is listed as not evaluated rather than guessed.
+    const TArray<TSharedPtr<FJsonValue>>* Constraints = nullptr;
+    if (!(*Skill)->TryGetArrayField(TEXT("constraintEvaluators"), Constraints))
+    {
+        OutError = TEXT("manifest lacks skill.constraintEvaluators");
+        return false;
+    }
+    for (const auto& Value : *Constraints)
+    {
+        const auto Row = Value->AsObject();
+        bool bOnActivation = false;
+        if (!Row->TryGetBoolField(TEXT("onActivation"), bOnActivation) || !bOnActivation) continue;
+        const FString Class = Row->GetStringField(TEXT("class"));
+        const auto Properties = Row->GetObjectField(TEXT("properties"));
+        bool bFlag = false;
+        const bool bMapped = (Class == WeaponActionEvaluator && Properties->Values.Num() == 0)
+            || (Class == HealthStateEvaluator && Properties->Values.Num() == 1 && Properties->TryGetBoolField(TEXT("bHealthy"), bFlag) && bFlag)
+            || (Class == VehiclePassengerEvaluator && Properties->TryGetBoolField(TEXT("bNotInVehicle"), bFlag) && bFlag);
+        (bMapped ? GateEvaluators : GateNotEvaluated).Add(Class);
+    }
+
+    // CanLiftTargetIf: one FLAG_IsTrue test of Flag_Skills_CanPhaseLock in this data; any other shape is not modelled.
+    const TSharedPtr<FJsonObject>* LiftIf = nullptr;
+    const TArray<TSharedPtr<FJsonValue>>* LiftIfChain = nullptr;
+    if (!(*Action)->TryGetObjectField(TEXT("canLiftTargetIfChain"), LiftIf) || !(*LiftIf)->TryGetArrayField(TEXT("chain"), LiftIfChain)
+        || LiftIfChain->Num() != 1 || (*LiftIfChain)[0]->AsObject()->GetStringField(TEXT("test")) != TEXT("FLAG_IsTrue"))
+    {
+        OutError = TEXT("CanLiftTargetIf is not a single FLAG_IsTrue flag test; not modelled");
+        return false;
+    }
+    CanLiftFlag = (*LiftIfChain)[0]->AsObject()->GetStringField(TEXT("flag"));
 
     // Helper skills: the diminishing-returns modifier on the target and the cooldown manager's rate change.
     const TSharedPtr<FJsonObject>* Diminishing = nullptr;
@@ -117,6 +165,24 @@ bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
                 }
             }
     bLoaded = true;
+    return true;
+}
+
+bool FOpenWillowPhaselockData::GateOpen(bool bWeaponActionBusy, float Health, FString& OutFailed) const
+{
+    for (const FString& Class : GateEvaluators)
+    {
+        // Host readings of native evaluators (UNVERIFIED): a reload is the only timed weapon action the host has; health
+        // above 0 stands for "healthy" (the host has no injured state); the host has no vehicles, so Maya is on foot.
+        const bool bMet = Class == WeaponActionEvaluator ? !bWeaponActionBusy
+            : Class == HealthStateEvaluator ? Health > 0.f
+            : true;
+        if (!bMet)
+        {
+            OutFailed = Class;
+            return false;
+        }
+    }
     return true;
 }
 

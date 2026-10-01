@@ -1,8 +1,17 @@
-# Legal policy and clean-room rules
+# Legal policy and working rules
 
 This page states, in one place, what BL2_ReBased is and is not, what the
 repository contains, and the rules every contributor and every AI assistant
 works under. It is project policy, not legal advice.
+
+**Policy revision (maintainer decision, 2026-10-01).** Earlier versions of this page
+forbade disassembling or decompiling `Borderlands2.exe`. That rule is replaced:
+analysing the executable is now allowed and encouraged as the fastest way to settle
+native behaviour the packages do not describe. What did not change is what may enter
+the repository: no game files, no game-derived data, no Gearbox, 2K or Epic source,
+and no code transcribed from decompiler output. See
+[Analysing the executable](#analysing-the-executable). The reasoning and the accepted
+risk are recorded in [DECISIONS.md](../DECISIONS.md).
 
 ## Non-affiliation
 
@@ -44,8 +53,12 @@ game file and is used solely to identify the game the engine is built for. It
 will be removed promptly at the request of the rights holder (see
 [Contact for rights holders](#contact-for-rights-holders)).
 - Any Gearbox, 2K, Take-Two or Epic Games source code, leaked or otherwise.
-- Any code transcribed from disassembling or decompiling `Borderlands2.exe`
-  or any other shipped binary.
+- Any code transcribed, translated or mechanically converted from disassembling or
+  decompiling `Borderlands2.exe` or any other shipped binary, and any decompiler
+  output itself: listings, pseudo-code, recovered headers or type libraries, and
+  analysis databases (Ghidra projects and exports, IDA or Binary Ninja databases).
+  Those are game-derived data and are handled like any other (see
+  [Analysing the executable](#analysing-the-executable)).
 
 A pre-write hook in [`.claude/hooks/sensitive_guard.py`](../.claude/hooks/sensitive_guard.py)
 refuses to write game-file extensions into the tree, and `.gitignore`
@@ -70,15 +83,19 @@ questions remain outside this technical policy and require appropriate legal
 advice. Every tool's source, version, license and use (reference, local
 execution or copied code) must be recorded in [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-## Clean-room rules
+## Rules
 
 1. **Never redistribute a Gearbox file.** See above.
 2. **Never use, read, or accept leaked source code.** Not Unreal Engine 3's,
    not Gearbox's. If it is offered, the answer is no, in writing.
-3. **No decompiled executable code.** Observing the behaviour of the running
-   game, including hooking its functions with tools such as unrealsdk and
-   logging inputs and outputs, is how we build golden files. Disassembling the
-   executable and transcribing what it does is not permitted.
+3. **Analyse the executable, write your own code.** Disassembling and
+   decompiling `Borderlands2.exe` locally to understand a native function is
+   allowed. Observing the running game (hooking with tools such as unrealsdk,
+   logging inputs and outputs) remains how golden files are built and how
+   analysis results are confirmed. Decompiler output and everything derived
+   mechanically from it stays out of the repository. Project code is written from
+   the understanding, not from the listing: do not paste, translate line by line
+   or auto-convert decompiled code into project files.
 4. **Formats may be referenced; code may not be copied without a decision.**
    Reading a public reference implementation (UE Viewer, Legendary Explorer,
    UDK's shipped `.uc` headers) to learn a serialization order is permitted
@@ -94,7 +111,47 @@ execution or copied code) must be recorded in [THIRD_PARTY.md](../THIRD_PARTY.md
    checks are reported separately from in-game checks. Behaviour that has
    not been verified against the real game is labelled `UNVERIFIED`.
 
-None of this is invented for this project. OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian have all operated under the same rules for years, and that precedent is followed on purpose, not by accident.
+OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian run under
+similar rules about shipping no game files. Several of them are built from
+analysing the original executable; the line they keep is that what they publish
+is their own code. Projects that published code derived from decompiled game
+binaries (the GTA `re3`/`reVC` repositories are the usual example) have been
+taken down by the rights holder. That is the line this policy keeps on the
+publishing side.
+
+## Analysing the executable
+
+Allowed, locally, by anyone working on the project (including AI assistants):
+
+- Loading `Borderlands2.exe` and its DLLs into a disassembler or decompiler, and
+  scripting that analysis.
+- Naming functions, recovering structure layouts and writing down what a native
+  function does.
+
+Rules for what results from it:
+
+1. **Raw output is game-derived data.** Listings, pseudo-code, recovered headers,
+   databases and exports stay under ignored `local/` or in a private store outside
+   this repository ([NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md), "Working on two
+   machines"). Never in a commit, issue, pull request, gist or public chat.
+2. **Write behaviour, then write code.** Record what a function does in your own
+   words (inputs, outputs, formula, edge cases, the order of effects). Implement
+   from that description. Short constants and formulas needed for correct behaviour
+   are fine to record; reproducing the structure of a decompiled function is not.
+3. **Tooling needs provenance first.** A disassembler or decompiler is a new tool:
+   record its version, source, license and use in
+   [THIRD_PARTY.md](../THIRD_PARTY.md) before relying on it (maintainer decision).
+4. **Label what you inferred.** A rule read from native code and not yet confirmed
+   by running the game is still `UNVERIFIED` in code and in docs. A confirmed rule
+   cites how it was confirmed (a capture, a matching in-game number), not the
+   listing.
+5. **Do not share decompiler output with contributors.** Pull requests and issues
+   carry behaviour descriptions and tests; see the contributor certification below.
+
+This policy lowers the speed cost of the hard phases (script natives, Gearbox's own
+natives). It does not remove legal risk: code derived from analysing a binary is
+still derived from it, and the maintainer has accepted that risk for work kept local
+and for original code written from understanding.
 
 ### UI movies (Scaleform/Flash)
 
@@ -122,9 +179,10 @@ By opening a pull request you certify that:
 
 - the contribution is your own original work or is properly attributed
   under a license recorded in `THIRD_PARTY.md`;
-- you have not consulted leaked source code or decompiled executable code
-  in producing it;
-- it contains no game files or game-derived data;
+- you have not consulted leaked source code, and nothing in it is copied,
+  translated or mechanically converted from decompiler output;
+- it contains no game files or game-derived data, which includes decompiler
+  output and analysis databases;
 - any format claim it relies on states how it was observed.
 
 ## Issues and reports
@@ -152,8 +210,9 @@ license agreement.
 
 The MIT License disclaims all warranty and liability. It governs what others
 may do with this code; it does not itself limit any claim a rights holder
-might make. The project's protection against such claims is the clean-room
-policy above.
+might make. The project's protection against such claims is that it ships no game
+files and no code transcribed from the game's binaries, and that it needs the
+player's own copy of the game.
 
 ## Contact for rights holders
 

@@ -34,8 +34,22 @@ struct FOpenWillowPhaselockData
     // The skill on the upgrade path that adds to Att_Phaselock_Duration (Suspension): MT_PostAdd value per grade.
     FString DurationSkill;
     TArray<float> DurationPostAdd;      // index = grade; [0] is 0
+    // Auto-aim strategy data (GD_Autoaim.Default via WillowGlobals.AutoAimDefinition): Min/MaxTargetDistance. The game
+    // picks the target natively (WillowAutoAimStrategy.GetPreferredTarget); the host uses these as the range of its
+    // own view-ray selection, which is UNVERIFIED as a reading of what the native code does with them.
+    float TargetMinDistance = 0, TargetMaxDistance = 0;
+    // Skill_Phaselock.SkillConstraints applied at activation whose evaluator class the host has state for, in data
+    // order (GateOpen), and the classes it cannot evaluate. Every Evaluate() is native: each mapping is UNVERIFIED.
+    TArray<FString> GateEvaluators;
+    TArray<FString> GateNotEvaluated;
+    // CanLiftTargetIf's flag (Flag_Skills_CanPhaseLock): the host target's "can be phaselocked" property stands for it.
+    FString CanLiftFlag;
 
     bool Load(const FString& File, FString& OutError);
+    // The activation constraints the host evaluates, in data order: a weapon action in progress (host: reloading)
+    // fails WeaponActionAvailable, health at 0 fails HealthState bHealthy, and VehiclePassenger always passes (the host
+    // has no vehicles). False with the failing evaluator class in OutFailed.
+    bool GateOpen(bool bWeaponActionBusy, float Health, FString& OutFailed) const;
     // Lock duration attribute at that grade of DurationSkill: (base + PreAdd) x (1 + Scale) + PostAdd, the rule fitted
     // for weapons (UNVERIFIED for skills). Only a PostAdd exists on this path.
     float LockDuration(int32 DurationSkillGrade) const;

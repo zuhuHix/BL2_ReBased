@@ -9,6 +9,7 @@ class UPoseableMeshComponent;
 class UPostProcessComponent;
 class USceneComponent;
 class USkeletalMeshComponent;
+struct FOpenWillowWeaponItem;
 
 // Local inventory presentation of Maya's imported body and head. The movie
 // draws the panels; this actor lets the same local meshes appear beside them.
@@ -30,7 +31,8 @@ class OPENWILLOW_API AOpenWillowInventoryMayaDisplay : public AActor
     GENERATED_BODY()
 public:
     AOpenWillowInventoryMayaDisplay();
-    void SetPreviewWeapon(const FString& RecipeId);
+    // Null shows Maya unarmed. The mesh is found the same way as the held weapon (UOpenWillowInventory::LoadWeaponMesh).
+    void SetPreviewWeapon(const FOpenWillowWeaponItem* Item);
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 

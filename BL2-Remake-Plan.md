@@ -121,9 +121,8 @@ maps, Vault Hunters, campaign breadth, co-op, DLC or editor features.
 ## What the community tools can and cannot save
 
 Extraction can reduce the preparation of static payloads from a long custom
-decoder effort to hours for a batch once the commands and failure policy are
-proven. It may move useful asset preparation from years toward weeks or
-months. It does not provide the UnrealScript VM, Gearbox's native behavior,
+decoder effort to a batch run once the commands and failure policy are
+proven, and it accelerates useful asset preparation. It does not provide the UnrealScript VM, Gearbox's native behavior,
 movement, AI, combat, missions, skill trees, UI, saves, networking or campaign
 parity. Those remain the hard part of the POC and the full project.
 
@@ -134,7 +133,10 @@ parity. Those remain the hard part of the POC and the full project.
   or other payload is committed, distributed or packaged here.
 - Generated output belongs under ignored `local/`; third-party tools belong
   outside the repository.
-- No leaked or decompiled Gearbox source is used.
+- No leaked Gearbox source is used. Analysing the executable locally is allowed;
+  decompiler output and analysis databases are game-derived data and stay out of
+  the repository, and project code is written from understanding, not transcribed
+  from a listing ([docs/LEGAL.md](docs/LEGAL.md)).
 - Every external tool gets a version, source, license and usage record. The
   repository's MIT license covers only original project work.
 

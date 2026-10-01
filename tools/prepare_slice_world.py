@@ -65,6 +65,9 @@ SupportedRemoteEvents=NameProperty
 ObjectiveDefs=ObjectProperty
 ObjectiveDefinitions=ObjectProperty
 Attached=ObjectProperty
+Attachments=StructProperty:BodyInstanceDataUnion
+PlayThroughs=StructProperty:AIPawnPlaythroughData
+TransformedNames=StructProperty:AITransformedName
 '''
 
 
@@ -103,6 +106,57 @@ def distance(a, b, planar=False):
 def in_cylinder(point, center, radius, half_height):
     """UE3 CylinderComponent containment: planar radius and +-CollisionHeight about the centre."""
     return distance(point, center, planar=True) <= radius and abs(point[2] - center[2]) <= half_height
+
+
+def rotate(rotation, v):
+    """`v` given in a frame rotated by `rotation` ([Pitch, Yaw, Roll] degrees) -> the parent frame.
+
+    Rows of Unreal's FRotationMatrix (the convention of tools/crosscheck_blcmm_dumps.py). Checked on the data by
+    the holder-on-carrier oracle in dummy(): Base pose x RelativeLocation reproduces the holder's Location.
+    """
+    p, y, r = (math.radians(a) for a in rotation)
+    sp, sy, sr, cp, cy, cr = math.sin(p), math.sin(y), math.sin(r), math.cos(p), math.cos(y), math.cos(r)
+    rows = [[cp * cy, cp * sy, sp],
+            [sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, -sr * cp],
+            [-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp]]
+    return [sum(v[k] * rows[k][j] for k in range(3)) for j in range(3)]
+
+
+def child_location(parent, child):
+    """World location of `child` ({'location', 'rotation'} relative to `parent`, which is the same shape in world)."""
+    return [a + b for a, b in zip(parent['location'], rotate(parent['rotation'], child['location']))]
+
+
+def attach_socket(body, components, bone):
+    """The SocketComponent of a body composition whose SocketName is `bone`, as (path, local pose).
+
+    `body` is a decoded BodyComposition ({'Attachments': [{'Data': {'ComponentData': {...}}}]}); `components`
+    maps component path -> (class, decoded properties). Exactly one match is required. A socket attached to a
+    mesh socket of the body is rejected: its pose would need that mesh.
+    """
+    found = []
+    for entry in body.get('Attachments') or []:
+        data = (entry.get('Data') or {}).get('ComponentData') or {}
+        path = ref(data.get('Component'))
+        cls, props = components.get(path, (None, {}))
+        if cls == 'Engine.SocketComponent' and props.get('SocketName') == bone:
+            found.append((path, data))
+    if len(found) != 1:
+        raise ValueError(f'Expected one SocketComponent named {bone}, found {len(found)}')
+    path, data = found[0]
+    if data.get('bAttachToMesh') or data.get('MeshSocketName') not in (None, 'None'):
+        raise ValueError(f'{path} is attached to a mesh socket; its pose needs that mesh')
+    pose = transform(components[path][1], component=True)
+    if pose['scale'] != [1, 1, 1]:
+        raise ValueError(f'{path} is scaled')
+    return path, pose
+
+
+def playthrough_names(balance):
+    """AIPawnBalanceDefinition.PlayThroughs -> [{playthrough, display_name, transformed_names {EAITransformed: name}}]."""
+    return [{'playthrough': t.get('PlayThrough'), 'display_name': t.get('DisplayName'),
+             'transformed_names': {n.get('Type'): n.get('TransformedName') for n in t.get('TransformedNames') or []}}
+            for t in balance.get('PlayThroughs') or []]
 
 
 def follow_chain(nodes, start, limit=64):
@@ -448,6 +502,45 @@ def marcus(reader, pkg, trigger):
             'entry_event': f'{pkg}:{entries[0]["path"]}', 'walk_to_range': walk, 'other_walks': others, 'oracles': oracles}
 
 
+def attachment(reader, pkg, step, holder_props, spawn_point):
+    """Where SeqAct_AttachToActor puts the spawned dummy on the holder.
+
+    The op names a BoneName; the holder is a WillowInteractiveObject whose definition's body composition has
+    static meshes and one SocketComponent per named point (no skeleton), so the name resolves to that socket.
+    Activated is native: placing the attached origin on the socket when no relative offset is tagged is the
+    host's reading (UNVERIFIED), as is bUseConstructAttachment's meaning (recorded, not interpreted).
+    """
+    p = reader.props(pkg, step['op'])
+    defaults = reader.class_default('Engine.SeqAct_AttachToActor')
+
+    def flag(name):
+        return bool(p.get(name, defaults.get(name, False)))
+    definition = ref(holder_props.get('InteractiveObjectDefinition'))
+    body = (reader.props(pkg, definition).get('BodyComposition') or {}) if definition else {}
+    components = {}
+    for entry in body.get('Attachments') or []:
+        path = ref(((entry.get('Data') or {}).get('ComponentData') or {}).get('Component'))
+        if path:
+            cls = reader.export(pkg, path)['class']
+            # Only sockets are decoded (the static mesh components do not decode with an established prefix).
+            components[path] = (cls, reader.props(pkg, path) if cls == 'Engine.SocketComponent' else {})
+    path, local = attach_socket(body, components, step.get('bone'))
+    world = child_location(placement(holder_props)['host'], local)
+    point = spawn_point['ue3']['location']
+    return {'op': f'{pkg}:{step["op"]}', 'bone_name': step.get('bone'),
+            'hard_attach': flag('bHardAttach'), 'detach': flag('bDetach'),
+            'use_construct_attachment': flag('bUseConstructAttachment'),
+            'use_relative_offset': flag('bUseRelativeOffset'), 'relative_offset': vector(p.get('RelativeOffset')),
+            'use_relative_rotation': flag('bUseRelativeRotation'),
+            'relative_rotation_units': [int((p.get('RelativeRotation') or {}).get(k, 0)) for k in ('Pitch', 'Yaw', 'Roll')],
+            'socket': {'object': f'{pkg}:{path}', 'definition': definition, 'name': step.get('bone'), 'host': local},
+            'socket_world': {'host': {'location': world}},
+            'spawn_point_offset': {'planar': round(distance(world, point, planar=True), 2), 'dz': round(world[2] - point[2], 2)},
+            'semantics': 'SeqAct_AttachToActor.Activated is native (no script). The BoneName resolves to the holder\'s '
+                         'SocketComponent of that name; with no relative offset tagged the host puts the attached '
+                         'origin on the socket: UNVERIFIED (bUseConstructAttachment not interpreted)'}
+
+
 def dummy(reader, pkg, objectives):
     ops = reader.children(pkg, SEQUENCE)
     dens = []
@@ -463,8 +556,11 @@ def dummy(reader, pkg, objectives):
             factory = ref(entry.get('SpawnFactory'))
             balance = ref(reader.props(pkg, factory).get('PawnBalanceDefinition'))
             b = reader.props(pkg, balance)
+            # Target names (WillowAIPawn.GetTargetName, script): the balance's display name, or, when TransformType is
+            # not 0, AIPawnBalanceDefinition.GetTransformedDisplayName (native; the per-playthrough table is the data).
             archetypes.append({'factory': factory, 'balance': balance, 'archetype': ref(b.get('AIPawnArchetype')),
-                               'default_exp_level': ref((b.get('DefaultExpLevel') or {}).get('BaseValueAttribute'))})
+                               'default_exp_level': ref((b.get('DefaultExpLevel') or {}).get('BaseValueAttribute')),
+                               'playthroughs': playthrough_names(b)})
         points = []
         for point in den.get('SpawnPoints') or []:
             points.append({'object': f'{pkg}:{ref(point)}', **placement(reader.props(pkg, ref(point)))})
@@ -502,13 +598,25 @@ def dummy(reader, pkg, objectives):
     check(oracles, 'population chain resolves to the target-dummy pawn',
           len(arch) == 1 and arch[0]['archetype'] == 'GD_TargetDummy.Character.Pawn_TargetDummy'
           and arch[0]['balance'] == 'GD_Population_Psycho.Balance.PawnBalance_TargetDummy', arch)
+    attach = None
     if holder:
         d = distance(den['spawn_points'][0]['ue3']['location'], vector(hp.get('Location')))
         check(oracles, 'spawn point next to the attachment holder', d < 200, round(d, 1))
+        if ref(hp.get('Base')) and hp.get('RelativeLocation') is not None:
+            # Convention oracle for the socket composition below: the holder's serialized Location equals its Base's
+            # pose applied to its RelativeLocation (the Base's DrawScale is not applied).
+            base = reader.props(pkg, ref(hp['Base']))
+            relative = {'location': vector(hp.get('RelativeLocation')),
+                        'rotation': transform({'Rotation': hp.get('RelativeRotation') or {}})['rotation']}
+            gap = distance(child_location(placement(base)['host'], relative), vector(hp.get('Location')))
+            check(oracles, 'holder Location = Base pose x RelativeLocation', gap < 0.05, round(gap, 4))
+        step = next(s for s in after if s['class'] == 'Engine.SeqAct_AttachToActor')
+        attach = attachment(reader, pkg, step, hp, den['spawn_points'][0])
     return {'den': den, 'other_dens': [d for d in dens if d is not den], 'after_spawn': after,
             'holder': {'object': f'{pkg}:{holder}' if holder else None, **(placement(hp) if hp else {}),
                        'base': ref(hp.get('Base')), 'definition': ref(hp.get('InteractiveObjectDefinition')),
-                       'relative_location': vector(hp.get('RelativeLocation')) if hp else None},
+                       'relative_location': vector(hp.get('RelativeLocation')) if hp else None,
+                       'attach': attach},
             'how_found': 'SeqEvent_PopulatedActor originators in the mission sequence; den chosen by MissionPopulationAspect objective',
             'oracles': oracles}
 

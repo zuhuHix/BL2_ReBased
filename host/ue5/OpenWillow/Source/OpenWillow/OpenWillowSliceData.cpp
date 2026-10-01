@@ -165,8 +165,35 @@ void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile
     const FTransform Spawn = HostPose(Points[0]->AsObject());
     DummyLocation = Spawn.GetLocation();
     DummyRotation = Spawn.Rotator();
-    HolderObject = ObjectPath(Str(Obj(DummyData, TEXT("holder")), TEXT("object")));
+    const auto Holder = Obj(DummyData, TEXT("holder"));
+    HolderObject = ObjectPath(Str(Holder, TEXT("object")));
     TargetBinding = Obj(Obj(World, TEXT("target_mover")), TEXT("binding"));
+    // Attach point. Older manifests have no "attach" block: the host then keeps the spawn pose (logged at attach).
+    const TSharedPtr<FJsonObject>* Attach = nullptr;
+    if (Holder->TryGetObjectField(TEXT("attach"), Attach) && Attach && *Attach)
+    {
+        const auto A = *Attach;
+        // Only the reading the host implements: no relative offset/rotation, no detach. Anything else is an error.
+        if (A->GetBoolField(TEXT("use_relative_offset")) || A->GetBoolField(TEXT("use_relative_rotation")) || A->GetBoolField(TEXT("detach")))
+            Missing(TEXT("attach uses a relative offset, relative rotation or detach, which this host does not implement"));
+        AttachOp = OpName(Str(A, TEXT("op")));
+        HolderPose = HostPose(Holder);
+        AttachSocketLocal = HostPose(Obj(A, TEXT("socket")));
+        AttachSocketWorldOracle = Vec(Obj(Obj(A, TEXT("socket_world")), TEXT("host")), TEXT("location"));
+        bHasAttachSocket = true;
+    }
+    // Target names: the playthrough-1 entry of the den's single archetype (the slice runs playthrough 1, as values.xp).
+    const auto& Archetypes = Arr(Den, TEXT("archetypes"));
+    const TArray<TSharedPtr<FJsonValue>>* Playthroughs = nullptr;
+    if (Archetypes.Num() == 1 && Archetypes[0]->AsObject()->TryGetArrayField(TEXT("playthroughs"), Playthroughs) && Playthroughs)
+        for (const auto& Value : *Playthroughs)
+        {
+            const auto P = Value->AsObject();
+            if (int32(Num(P, TEXT("playthrough"))) != 1) continue;
+            DummyDisplayName = Str(P, TEXT("display_name"));
+            for (const auto& Pair : Obj(P, TEXT("transformed_names"))->Values) DummyTransformedNames.Add(FString(*Pair.Key), Pair.Value->AsString());
+            bHasDummyNames = true;
+        }
 
     // Respawn stations (selection rule in UOpenWillowQuest::RespawnPoint).
     const auto Oracle = Obj(Obj(Obj(World, TEXT("respawn")), TEXT("fresh_state_choice")), TEXT("range_trigger"));
