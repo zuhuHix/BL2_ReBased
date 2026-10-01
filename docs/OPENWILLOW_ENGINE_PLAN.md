@@ -52,9 +52,13 @@ Gearbox's own `.uncompressed_size` files byte-for-byte. That is the seed of the 
 1. **Never redistribute a Gearbox file.** Not a texture, not a sound, not a UPK, not a decompressed dump. The engine
    reads them from the user's install at runtime. Test fixtures in the repo must be synthetic or generated.
 2. **Never use, read, or accept leaked source code.** Not UE3's, not Gearbox's. If someone offers, refuse in writing.
-   Clean-room only: file formats, observed behaviour, public documentation.
-3. **No decompiled C++ from `Borderlands2.exe` in the repo.** Observing behaviour by running the game (with
-   unrealsdk instrumentation) is fine. Disassembling the exe and transcribing it is the re3 line; don't cross it.
+   Sources are file formats, observed behaviour, public documentation and the maintainer's own analysis.
+3. **Analyse the executable, write your own code.** Disassembling and decompiling `Borderlands2.exe` locally is
+   allowed (maintainer decision, 2026-10-01; see `docs/LEGAL.md`, "Analysing the executable"). Decompiler output and
+   analysis databases are game-derived data and never enter the repo, and nothing is transcribed or converted from them.
+   Original code is written from an own-words description of the behaviour. Observing the running game (unrealsdk
+   instrumentation) stays how rules are confirmed. Publishing code derived from decompiled game code is the re3 line;
+   don't cross it.
 4. **Never sell anything.** Donations to the *engine project* only. No paid builds, no "premium" anything.
 5. **Require the original game.** The engine must refuse to start without a valid BL2 install.
 6. **License hygiene for references.** Legendary Explorer is GPL-3 (copying its code makes your project GPL);

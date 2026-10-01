@@ -134,7 +134,10 @@ parity. Those remain the hard part of the POC and the full project.
   or other payload is committed, distributed or packaged here.
 - Generated output belongs under ignored `local/`; third-party tools belong
   outside the repository.
-- No leaked or decompiled Gearbox source is used.
+- No leaked Gearbox source is used. Analysing the executable locally is allowed;
+  decompiler output and analysis databases are game-derived data and stay out of
+  the repository, and project code is written from understanding, not transcribed
+  from a listing ([docs/LEGAL.md](docs/LEGAL.md)).
 - Every external tool gets a version, source, license and usage record. The
   repository's MIT license covers only original project work.
 

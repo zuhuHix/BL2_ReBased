@@ -5,9 +5,30 @@ vertical-slice priority plus the external-extraction support strategy. This
 file adds repository-specific safety rules and sensitive areas.
 
 Read the "Is this legal?" section of README.md and docs/LEGAL.md first. The rules are
-non-negotiable: no game files or asset dumps in the repo, no leaked/decompiled
-source, record provenance and licenses, disclose AI assistance, keep
-verification claims honest.
+non-negotiable: no game files, asset dumps or other game-derived data in the repo, no leaked
+source, no decompiler output and no code transcribed or converted from it, record provenance and
+licenses, disclose AI assistance, keep verification claims honest.
+
+## Analysing the game executable (allowed since 2026-10-01)
+
+The maintainer changed the policy: disassembling and decompiling `Borderlands2.exe` locally is
+allowed, because it is the fastest way to settle native behaviour (mission tracker, behavior
+kernel, auto-aim, constraint evaluators, experience and loot rules, Gearbox's natives). Read
+`docs/LEGAL.md` ("Analysing the executable") and `docs/NATIVE_ANALYSIS.md`. As an assistant:
+
+- Keep raw output (listings, pseudo-code, recovered headers, analysis databases) under ignored
+  `local/analysis/` or the maintainer's private store. Never write it into a tracked file, a commit
+  message, a PR description, an issue or a docs/verification record.
+- Write what a native function does in your own words first, then implement from that note. Do
+  not paste, translate or auto-convert decompiled code. Constants and formulas needed for correct
+  behaviour may be recorded; the structure of a listing may not.
+- A rule read from native code and not confirmed by running the game stays `UNVERIFIED`; say how a
+  confirmed one was confirmed.
+- A decompiler or disassembler is a new tool: it needs a `THIRD_PARTY.md` entry (still a maintainer
+  decision, the hook prompts) and must live outside the repository. Do not download or install one
+  without the maintainer asking for it.
+- Use `tools/private_sync.ps1` to move non-regenerable game-derived files between the maintainer's
+  machines; never commit them and never point the store inside the repository.
 
 ## Sensitive areas: edit freely, then warn at the end
 
@@ -36,7 +57,8 @@ The obligations that remain:
 
 A `PreToolUse` hook in `.claude/settings.json` (`.claude/hooks/sensitive_guard.py`) allows edits
 to the first group with a reminder, prompts for the license/provenance files, and still blocks
-writes of `.upk/.tfc/.pck/.bik` files.
+writes of `.upk/.tfc/.pck/.bik` files and of decompiler/disassembler databases (`.gzf`, `.gpr`,
+`.rep`, `.idb`, `.i64`, `.bndb`).
 
 ## Safe to work on without ceremony
 

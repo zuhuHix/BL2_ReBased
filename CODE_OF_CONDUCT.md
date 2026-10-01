@@ -36,8 +36,9 @@ Examples of unacceptable behavior include:
 * Other conduct which could reasonably be considered inappropriate in a
   professional setting
 
-Project-specific: offering, linking to, or requesting leaked source code or
-decompiled game code is a violation of this project's rules
+Project-specific: offering, linking to, or requesting leaked source code, or
+posting or sharing decompiler output, listings or analysis databases (game-derived
+data) in the project's spaces, is a violation of this project's rules
 ([docs/LEGAL.md](docs/LEGAL.md)) and will be treated as unacceptable behavior.
 
 ## Enforcement Responsibilities

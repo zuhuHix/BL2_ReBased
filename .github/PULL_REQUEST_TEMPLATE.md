@@ -32,5 +32,6 @@ python tests/level_test.py
 ## Certification
 
 - [ ] No game files or game-derived data are included; fixtures are synthetic
-- [ ] No leaked source or decompiled executable code was consulted
+- [ ] No decompiler output or analysis databases are included
+- [ ] No leaked source was consulted, and nothing is copied, translated or converted from decompiler output
 - [ ] I have read `docs/LEGAL.md` and the contributor certification holds for this change

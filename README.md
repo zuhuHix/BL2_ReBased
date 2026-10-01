@@ -144,7 +144,7 @@ nothing has been compared against the original game
 Yes. I take it seriously. The rules are the same as [OpenMW](https://openmw.org/) (Morrowind) and [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2):
 
 1. **I never share game files.** Not a texture, not a sound. Nothing extracted from the game *ever* enters this repository. Extracted assets live locally during import but stay git-ignored.
-2. **No leaked or decompiled code.** I work from file formats and by watching what the real game does. That's it.
+2. **No leaked source, and no code copied from the game's binary.** I read file formats, watch what the real game does, and (since 2026-10-01) analyse the game executable on my own machine to understand how its native code behaves. Decompiler output and analysis databases are game-derived data and stay out of this repository; the code in it is written from understanding, not from listings. I'm not a lawyer and none of this is legal advice; the risks are spelled out in [docs/LEGAL.md](docs/LEGAL.md).
 3. **You need your own copy of BL2.** The engine refuses to start without it, and never modifies your install.
 4. **I don't make money from this.** No paid builds, no premium anything. Ever. It's a passion project.
 
@@ -224,9 +224,9 @@ The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate; the 
 <summary><b>How we build it: methodology</b></summary>
 <br>
 
-Clean room, strictly: file formats and observed behaviour, nothing else. No leaked source, no decompiled executable code. When a public reference implementation (UE Viewer, UDK headers) helps pin down a serialization *order*, we read it (never copy from it) and log the source and its license in [THIRD_PARTY.md](THIRD_PARTY.md).
+Analyse freely, publish only our own code. File formats, observed behaviour and (since 2026-10-01) analysis of the game executable are all fair sources for *understanding* what the game does. Raw decompiler output and analysis databases stay local, because they're game-derived data, and the code in this repo is written from our own notes, never pasted or converted from a listing. No leaked source. When a public reference implementation (UE Viewer, UDK headers) helps pin down a serialization *order*, we read it (never copy from it) and log the source and its license in [THIRD_PARTY.md](THIRD_PARTY.md). The practical side, including how to share local analysis between two machines, is in [docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md).
 
-Every rebuilt native function needs a definition of "correct," and there are exactly three we'll accept. **UDK**, a free running copy of UE3, covers the 1,914 stock natives. **The original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) covers the rest: hook a function, log what goes in and out during real play, then implement until our engine reproduces that log. **Community documentation** (the BLCM wiki, bl2.parts, Lootlemon) fills in stat math the other two don't reach. No golden file behind it, no claim of correctness. Anything without one stays labelled `UNVERIFIED` until it earns that label removed.
+Every rebuilt native function needs a definition of "correct," and there are three we'll accept. **UDK**, a free running copy of UE3, covers the 1,914 stock natives. **The original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) confirms the rest: hook a function, log what goes in and out during real play, then implement until our engine reproduces that log. **Community documentation** (the BLCM wiki, bl2.parts, Lootlemon) fills in stat math the other two don't reach. Reading the native function itself is now the fastest way to *find* the rule; it doesn't replace the check. A rule read from native code and not yet confirmed by one of the three stays labelled `UNVERIFIED` until it earns that label removed.
 
 That standard isn't just for natives. Every change in this repo ends in a check run against the real game, and the check gets written down: synthetic tests in CI, differential checks against a real install, visual checks by an actual person looking at the screen. [DECISIONS.md](DECISIONS.md) is the record of all of it: every architectural choice, what got verified, and what didn't.
 
@@ -280,7 +280,8 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 | [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
 | [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
 | [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |
-| [docs/LEGAL.md](docs/LEGAL.md) | Clean-room policy, non-affiliation, contributor certification, license |
+| [docs/LEGAL.md](docs/LEGAL.md) | Working rules (analysis allowed, no game data or transcribed code in the repo), non-affiliation, contributor certification, license |
+| [docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md) | Analysing the game executable, and sharing local analysis between two machines |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Dependency and reference provenance |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute, and the sensitive areas |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1 |

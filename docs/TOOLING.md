@@ -78,7 +78,7 @@ size. See [EXTERNAL_TOOL_BENCHMARK.md](verification/EXTERNAL_TOOL_BENCHMARK.md).
 |---|---|---|
 | [UPK Explorer](https://www.nexusmods.com/site/mods/587) | UE2/UE3 GUI inspection, texture/TFC work, package exploration and optional FBX/audio workflows | Optional fallback; current distribution is on Nexus Mods and requires an authenticated download; not required for the first UModel spike |
 | `ow-package` | Package identity, census, properties, bounded payloads, scene records and verification | Project-owned and retained even if UModel becomes the visual backend |
-| `pyunrealsdk` and community data tools | Future runtime observation and behavioral golden data | Not an asset-extraction replacement; use only with clean-room and license review |
+| `pyunrealsdk` and community data tools | Future runtime observation and behavioral golden data | Not an asset-extraction replacement; use for observation only, after license review |
 | UE Explorer / UPKUtils | Format and behavior references | GPL-licensed references; do not copy code into this MIT project |
 
 The external-tool acquisition and first smoke results are recorded in the
@@ -952,6 +952,15 @@ server before loading, the inventory runner accepts the installed fallback:
 `-Extra @('-ddc=InstalledNoZenLocalFallback','-d3d11')`. This is the verified
 launch-time workaround for this run,
 not a change to project cache settings or runtime verification by itself.
+
+### Native functions and sharing local files
+
+The bodies of `native_<n>` functions are in `Borderlands2.exe`, not the packages.
+Analysing the executable locally is allowed; the workflow, what may be committed and the
+tooling notes are in [NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md) (policy:
+[LEGAL.md](LEGAL.md), "Analysing the executable"). `tools/private_sync.ps1` mirrors
+non-regenerable game-derived files (such as an analysis database under `local/analysis`)
+to a store outside the repository; see "Working on two machines" in that page.
 
 ## Independent oracles: umodel and the game's own object dumps
 

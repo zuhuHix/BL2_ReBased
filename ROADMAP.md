@@ -382,9 +382,13 @@ Hunter, walks, shoots a handful of real guns, uses Phaselock and her skill
 trees, and enemies on Sanctuary fight back. Ground truth: the original game
 instrumented with unrealsdk, plus community documentation.
 
-Method: the golden-file loop. Hook a native in the real game, log every
-call's inputs and outputs during play, implement until our engine reproduces
-the log, extend the log on mismatch.
+Method (revised 2026-10-01): find each native's behaviour by analysing the game
+executable locally ([NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md)), write the
+rule down in our own words, implement from that note, then confirm it with the
+golden-file loop: hook the native in the real game, log every call's inputs
+and outputs during play, implement until our engine reproduces the log, extend
+the log on mismatch. Decompiler output never enters the repository. The
+estimates in Phases 2 to 4 predate this and have not been re-baselined.
 
 Priority order:
 - [ ] Stat core (~120): `AttributeDefinition*`, `SkillDefinition`,

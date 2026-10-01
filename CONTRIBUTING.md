@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for looking. Read the [Is this legal?](README.md#is-this-legal) section of the README
-and [docs/LEGAL.md](docs/LEGAL.md) first. The clean-room rules are
+and [docs/LEGAL.md](docs/LEGAL.md) first. The legal and working rules are
 non-negotiable and every pull request certifies compliance with them.
 
 **License.** The project is [MIT](LICENSE). By opening a pull request you
@@ -69,6 +69,12 @@ agreed. This matters most for anything that touches the sensitive areas below.
   elapsed time and license. Do not commit their binaries or game-derived
   output, and do not treat a successful export as proof of UE5 or gameplay
   compatibility.
+- **Executable analysis stays local.** You may disassemble or decompile
+  `Borderlands2.exe` on your own machine to understand a native function
+  ([docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md)). Never paste,
+  transcribe or auto-convert decompiler output into a contribution, and never
+  attach listings or analysis databases to an issue or pull request; describe
+  the behaviour in your own words and write the code from that.
 - **Match the tone.** The docs are hedged and evidence-first on purpose.
 
 ## Sensitive areas
@@ -99,8 +105,9 @@ The PR template asks for:
    install. For census/property/asset/level changes: the relevant tool's
    numbers against your install.
 4. In-game or visual checks, reported separately, or "none".
-5. Confirmation that no game-derived data is included and that the
-   contributor certification in [docs/LEGAL.md](docs/LEGAL.md) holds.
+5. Confirmation that no game-derived data (including decompiler output and
+   analysis databases) is included and that the contributor certification in
+   [docs/LEGAL.md](docs/LEGAL.md) holds.
 
 `main` always builds; CI runs the synthetic suites on every PR.
 

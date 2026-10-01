@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks. Checks against real installs are the project's primary correctness method.
-        **Do not attach game files, extracted textures/meshes, dumps, or logs containing raw asset bytes.** Screenshots are fine.
+        **Do not attach game files, extracted textures/meshes, decompiler output or listings, dumps, or logs containing raw asset bytes.** Screenshots are fine.
   - type: dropdown
     id: kind
     attributes:
@@ -55,5 +55,5 @@ body:
     attributes:
       label: Rules
       options:
-        - label: This report contains no game files, extracted assets, or raw asset bytes.
+        - label: This report contains no game files, extracted assets, decompiler output or listings, or raw asset bytes.
           required: true

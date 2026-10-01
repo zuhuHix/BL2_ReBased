@@ -5,9 +5,13 @@ This is the tool-neutral project brief. Read it before starting work, then read
 
 ## Strategic direction
 
-BL2_ReBased is a clean-room Borderlands 2 engine reimplementation targeting
-Unreal Engine 5. The original game must be present on the user's machine; the
-project does not ship Gearbox files or Gearbox code.
+BL2_ReBased is a Borderlands 2 engine reimplementation targeting Unreal Engine 5.
+The original game must be present on the user's machine; the project does not ship
+Gearbox files or Gearbox code. Since 2026-10-01 the game executable may be analysed
+locally to learn what its native code does (`docs/LEGAL.md`, "Analysing the
+executable"; `docs/NATIVE_ANALYSIS.md`); the repository still never contains game
+data, decompiler output or code transcribed from it, and project code is written from
+the understanding of what the game does.
 
 Use mature community tools as external extraction backends whenever they can
 save substantial time. Investigate UModel / UE Viewer first for supported UE3
@@ -45,8 +49,10 @@ When asked to work on a new asset or game-system capability:
 8. Prefer the smallest bounded implementation slice that advances the current
    roadmap. Do not redesign the whole project unless benchmark evidence shows
    that the architecture must change.
-9. Preserve clean-room boundaries, licenses and parser safety rules. Never
-   loosen bounds checks or invent serialization offsets.
+9. Preserve the repository boundary (no game data, no decompiler output, no
+   transcribed code), licenses and parser safety rules. Never loosen bounds
+   checks or invent serialization offsets; recover them from the packages or
+   from analysis of the executable, and label unconfirmed ones `UNVERIFIED`.
 
 ## Sensitive files
 
