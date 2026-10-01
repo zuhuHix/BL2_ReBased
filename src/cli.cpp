@@ -5,6 +5,7 @@
 #include "inventory_navigation.hpp"
 #include "mover.hpp"
 #include "kismet.hpp"
+#include "mission.hpp"
 
 #include <fstream>
 #include <cmath>
@@ -27,8 +28,8 @@ void usage() {
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
         "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name>) | "
-        "--object-dump <export-index> <prefix> --cooked <directory> | "
-        "--kismet-census --cooked <directory> | "
+        "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
+        "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -508,6 +509,44 @@ int main(int argc, char** argv) {
                       << "},\"log_entries\":" << runtime.log.size() << "}\n";
             return 0;
         }
+        if (mode == "--mission-run") {
+            // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | obj:<name> | custom:<name> | turnin | tick:<seconds>
+            if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
+            PackageStore store(argv[5]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            vm::MissionSystem mission(runtime, package->packageName, argv[3]);
+            std::set<std::string> completed;
+            for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
+            std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
+            bool first = true;
+            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed"};
+            for (int i = 6; i < argc; ++i) {
+                const std::string step = argv[i];
+                bool ok = true;
+                if (step == "accept") ok = mission.accept(completed);
+                else if (step == "turnin") ok = mission.turnInMission();
+                else if (step.rfind("obj:", 0) == 0) ok = mission.completeObjective(step.substr(4));
+                else if (step.rfind("custom:", 0) == 0) ok = mission.customEvent(step.substr(7));
+                else if (step.rfind("tick:", 0) == 0) mission.tick(std::stod(step.substr(5)));
+                else usage();
+                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
+                          << ",\"set\":" << quote(mission.activeSet()) << ",\"effects\":[";
+                first = false;
+                bool firstEffect = true;
+                for (const auto& effect : mission.drain()) {
+                    std::cout << (firstEffect ? "" : ",") << "{\"t\":" << effect.time << ",\"kind\":" << quote(kinds[int(effect.kind)])
+                              << ",\"a\":" << quote(effect.a) << ",\"b\":" << quote(effect.b) << ",\"c\":" << quote(effect.c) << "}";
+                    firstEffect = false;
+                }
+                std::cout << "]}";
+            }
+            std::cout << "],\"status\":" << int(mission.status()) << ",\"errors\":[";
+            first = true;
+            for (const auto& line : mission.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]}\n";
+            return mission.errors.empty() ? 0 : 1;
+        }
         if (mode == "--mover-event") {
             // Stock activation probe: a remote event through the action's installed Kismet sequence, then completion.
             if (argc != 8 || std::string(argv[5]) != "--cooked") usage();
@@ -559,7 +598,8 @@ int main(int argc, char** argv) {
         }
         if (mode == "--object-dump") {
             // Instantiates one export through the VM (class defaults + tagged overrides) and prints its properties.
-            if (argc != 7 || std::string(argv[5]) != "--cooked") usage();
+            if ((argc != 7 && argc != 8) || std::string(argv[5]) != "--cooked" || (argc == 8 && std::string(argv[7]) != "--all")) usage();
+            const bool everything = argc == 8;   // --all: every property, not only those that differ from the class default
             PackageStore store(argv[6]);
             vm::Runtime runtime(store);
             runtime.registerCoreNatives();
@@ -574,7 +614,7 @@ int main(int argc, char** argv) {
             for (const auto& [name, value] : sorted) {
                 // Only properties that differ from the class default (what the export actually overrides).
                 const auto base = defaults->props.find(name);
-                if (base != defaults->props.end() && vm::sameValue(base->second, *value)) continue;
+                if (!everything && base != defaults->props.end() && vm::sameValue(base->second, *value)) continue;
                 std::cout << (first ? "" : ",") << quote(name) << ':';
                 valueJson(std::cout, *value, 0);
                 first = false;

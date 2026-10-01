@@ -23,6 +23,8 @@ public:
         std::vector<std::string> trace, hostBoundary, errors;
     };
     Dispatch remoteEvent(const std::string& name);
+    // A mission behavior's remote event (WillowSeqEvent_MissionRemoteEvent nodes bound to that mission).
+    Dispatch missionEvent(const std::string& missionPath, const std::string& name);
     // Reports the end of the host-driven motion to the sequence (fires "Completed" or "Reversed").
     Dispatch motionFinished(bool reverse);
     Result advance(double seconds);

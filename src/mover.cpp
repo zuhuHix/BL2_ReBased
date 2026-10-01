@@ -159,6 +159,22 @@ Mover::Dispatch Mover::remoteEvent(const std::string& name) {
     out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
     return out;
 }
+Mover::Dispatch Mover::missionEvent(const std::string& missionPath, const std::string& name) {
+    auto& i = *impl_;
+    Dispatch out;
+    i.runtime.log.clear(); i.runtime.steps = 0;
+    i.requestedMotion = 0; i.hostBoundary.clear();
+    try {
+        Kismet& k = i.sequence();
+        k.trace.clear(); k.errors.clear();
+        out.matched = k.missionRemoteEvent(missionPath, name);
+        k.run();
+        out.trace = k.trace; out.errors = k.errors;
+    } catch (const std::exception& e) { out.errors.push_back(e.what()); }
+    for (const auto& line : i.runtime.log) out.errors.push_back("runtime: " + line);
+    out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
+    return out;
+}
 Mover::Dispatch Mover::motionFinished(bool reverse) {
     auto& i = *impl_;
     Dispatch out;
