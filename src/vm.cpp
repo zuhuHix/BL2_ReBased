@@ -687,11 +687,12 @@ struct TagReader {
 
 // Applies one object's tagged defaults. Unsupported property kinds are skipped by their stored size, which
 // the tag always records, so a property this runtime cannot decode never desynchronises the rest.
-void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& pkg, int32_t exportIndex) {
+void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& pkg, int32_t exportIndex, size_t prefix) {
     const auto& exportObject = pkg->exports[size_t(exportIndex) - 1];
-    if (exportObject.size < 12) return;
+    if (exportObject.size < 0 || prefix > size_t(exportObject.size) || size_t(exportObject.size) - prefix < 8)
+        throw RuntimeError("object property prefix outside export");
     TagReader tags(*this, pkg);
-    tags.reader.pos = size_t(exportObject.offset) + 4;           // after the net index
+    tags.reader.pos = size_t(exportObject.offset) + prefix;
     tags.reader.limit = size_t(exportObject.offset) + size_t(exportObject.size);
     std::unordered_map<std::string, const PropertyDecl*> decls;
     for (Class* cursor = cls; cursor; cursor = cursor->super)
@@ -867,6 +868,17 @@ ObjectPtr Runtime::instantiate(Class* cls, const std::string& name) {
     object->cls = cls;
     object->name = name.empty() ? cls->name + "_0" : name;
     object->props = defaults->props;
+    return object;
+}
+
+ObjectPtr Runtime::instantiateExport(const std::shared_ptr<const Package>& pkg, int32_t index, size_t prefix) {
+    if (!pkg || index <= 0 || (prefix != 4 && prefix != 8 && prefix != 26))
+        throw RuntimeError("unsupported exported object request");
+    const auto& exported = pkg->object(index);
+    auto object = instantiate(classAt(pkg, exported.cls), exported.name);
+    applyTaggedDefaults(*object, object->cls, pkg, index, prefix);
+    object->resourcePackage = pkg;
+    object->resourceIndex = index;
     return object;
 }
 

@@ -86,7 +86,7 @@ def build_package():
     p = Package()
     imp = {n: p.add_import('Class', n) for n in
            ('Class', 'Function', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty', 'ArrayProperty',
-            'ObjectProperty', 'ByteProperty', 'Enum')}
+            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty')}
     none = p.fname('None')
 
     def prop(kind, owner, name, flags=0):
@@ -107,7 +107,7 @@ def build_package():
     return p, imp, none, prop, func
 
 
-def make(inventory=False):
+def make(inventory=False, mover=False, broken_mover=False):
     p, imp, none, prop, _ = build_package()
 
     def make_function(owner, name, declared, asm_fn, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None,
@@ -297,6 +297,35 @@ def make(inventory=False):
             a.raw(0x36); a.raw(0x01); a.ref(cached)
             a.raw(0x16); intc(a, 5); a.raw(0x16); a.end(); return a
         make_function(panel, 'MoveDelta', [('Int', 'Delta', 0), ('Int', 'StartIndex', 0), ('Int', 'OriginalIndex', 0)], movement)
+    if mover:
+        actor_cls = p.add_export(imp['Class'], 'Actor', w32(0) * 4, super_ref=obj)
+        mover_cls = p.add_export(imp['Class'], 'InterpActor', w32(0) * 4, super_ref=actor_cls)
+        action_cls = p.add_export(imp['Class'], 'SeqAct_Interp', w32(0) * 4, super_ref=obj)
+        audio_cls = p.add_export(imp['Class'], 'AudioComponent', w32(0) * 4, super_ref=obj)
+        checkpoint = prop('BoolProperty', mover_cls, 'bShouldSaveForCheckpoint')
+        delay = prop('FloatProperty', mover_cls, 'Delay')
+        prop('BoolProperty', action_cls, 'bReversePlayback')
+        clear = make_function(actor_cls, 'ClearTimer', [('Name', 'inTimerFunc', CPF_OPT), ('Object', 'inObj', CPF_OPT)], None, flags=FUNC_NATIVE, result=None)['__self__']
+        timer = make_function(actor_cls, 'SetTimer', [('Float', 'InRate', 0), ('Bool', 'inbLoop', CPF_OPT), ('Name', 'inTimerFunc', CPF_OPT), ('Object', 'inObj', CPF_OPT)], None, flags=FUNC_NATIVE, result=None)['__self__']
+        make_function(audio_cls, 'Stop', [], None, flags=FUNC_NATIVE, result=None)
+        def started(ids):
+            a = Asm(); a.stmt(); a.raw(0x14, 0x01); a.ref(checkpoint); a.raw(0x27)
+            a.stmt(); a.raw(0x1C); a.ref(clear); a.raw(0x21); a.b += p.fname('Callback'); a.raw(0x16)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        def finish(ids):
+            a = Asm(); a.stmt(); a.raw(0x1C); a.ref(timer); a.raw(0x01); a.ref(delay)
+            a.raw(0x28, 0x21); a.b += p.fname('Callback'); a.raw(0x16)
+            if broken_mover: a.stmt(); a.raw(0x1C); a.ref(mystery_func); a.raw(0x25, 0x16)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        def callback(ids):
+            a = Asm(); a.stmt(); a.raw(0x14, 0x01); a.ref(checkpoint); a.raw(0x28)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        mystery_func = next(i + 1 for i, x in enumerate(p.exports) if x[3] == p.fname('Mystery'))
+        make_function(mover_cls, 'InterpolationStarted', [('Object', 'InterpAction', 0), ('Object', 'GroupInst', 0)], started, result=None)
+        make_function(mover_cls, 'InterpolationFinished', [('Object', 'InterpAction', 0)], finish, result=None)
+        make_function(mover_cls, 'Callback', [], callback, result=None)
+        p.add_export(mover_cls, 'PlacedMover', bytes(26) + p.fname('Delay') + p.fname('FloatProperty') + w32(4, 0) + struct.pack('<f', 0.5) + none)
+        p.add_export(action_cls, 'PlacedAction', w32(0) + none)
     return p
 
 
@@ -406,5 +435,29 @@ with tempfile.TemporaryDirectory() as folder:
     rejected = subprocess.run([reader, str(root / 'WillowGame.upk'), '--inventory-move', '1', '0', '5', '--cooked', str(root)],
                               capture_output=True, text=True, encoding='utf-8')
     assert rejected.returncode != 0 and 'invalid inventory entry enum count' in rejected.stderr, rejected.stderr
+    # Original synthetic lifecycle, not a transcription of the game scripts:
+    # start sets a flag, completion schedules a callback, callback clears it.
+    for broken in (False, True):
+        (root / 'Engine.upk').write_bytes(make(mover=True, broken_mover=broken).build())
+        probe = subprocess.run([reader, str(root / 'Engine.upk'), '--mover-probe', 'PlacedMover', 'PlacedAction', '--cooked', str(root)], capture_output=True, text=True)
+        result = json.loads(probe.stdout)
+        events = result['events']
+        if broken:
+            assert probe.returncode == 1 and 'UNIMPLEMENTED' in events[1]['error'], result
+            assert events[2]['steps'] == 0 and events[2]['checkpoint'], result  # failed completion rolled its timer back
+        else:
+            assert probe.returncode == 0 and not result['loading_diagnostics'], result
+            for offset in (0, 3):
+                assert events[offset]['checkpoint'] and events[offset + 1]['checkpoint'], result
+                assert events[offset + 2]['steps'] > 0 and not events[offset + 2]['checkpoint'], result
+        rejected = subprocess.run([reader, str(root / 'Engine.upk'), '--mover-probe', 'PlacedAction', 'PlacedMover', '--cooked', str(root)], capture_output=True, text=True)
+        assert rejected.returncode != 0, rejected.stdout
+    truncated = make(mover=True)
+    for slot, export in enumerate(truncated.exports):
+        if export[3] == truncated.fname('PlacedMover'):
+            truncated.exports[slot] = (*export[:4], bytes(25))
+    (root / 'Engine.upk').write_bytes(truncated.build())
+    rejected = subprocess.run([reader, str(root / 'Engine.upk'), '--mover-probe', 'PlacedMover', 'PlacedAction', '--cooked', str(root)], capture_output=True, text=True)
+    assert rejected.returncode != 0 and 'property prefix outside export' in rejected.stderr, rejected.stderr
     # a runaway script stops at the step limit instead of hanging is covered by the C++ limit, not here
 print('vm synthetic coverage passed.')

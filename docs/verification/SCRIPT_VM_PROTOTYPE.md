@@ -155,3 +155,18 @@ inventory record for the precise evidence limits.
 Next: equipment navigation and the movie/controller object graph, then equip
 script integration. Native sorting, category/empty-entry models, latent/state
 semantics, visuals and the Sanctuary/Maya gameplay gate remain open.
+
+
+## 2026-10-01: first placed world-object connection
+
+A bounded Sanctuary door now loads tagged actor/action overrides and executes
+installed InterpActor start/finish notifications through the same VM. Scoped
+timer natives are exercised with synthetic callback/rollback checks. The host
+evaluates installed Matinee keys and moves the existing component/collision.
+Live E-input acceptance passes 10/10 checks over two open/close cycles, 500
+expressions, zero diagnostics. CTest 8/8 and nine package comparisons pass.
+This proves host plumbing, not mission activation, audio or original-game
+movement parity. See [the mover record](SANCTUARY_MOVER_PROTOTYPE.md).
+Current world follow-up: compare the original door and recover its stock
+activation path before connecting a mission/NPC. Equipment/equip/menu parity
+remains a separate open path.

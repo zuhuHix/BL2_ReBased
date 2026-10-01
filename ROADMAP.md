@@ -33,6 +33,15 @@ deferred until that gate is met; they move to Phase 5/6.
 
 ## Now / next
 
+The first world-object connection is a bounded Sanctuary Matinee door: installed
+movement keys drive the existing mesh/collision, and original mover notification
+scripts run in the VM using placed state. Activation is a developer interaction;
+mission gating, sequence dispatch, audio and original-game motion parity remain
+open. See [the mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
+The next world slice is the door's stock activation path and one mission/NPC
+interaction, after a matched original-game comparison; inventory work remains
+open below.
+
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 

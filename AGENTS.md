@@ -97,6 +97,12 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   First host connection: ordinary item-only backpack Up/Down executes the installed
   `InventoryListPanelGFxObject.MoveDelta`; equipment, transfers and sorting remain in
   the host adapter. Build the CMake Release libraries before building the UE module.
+- **First world-object bridge:** a bounded Sanctuary Matinee door adapter loads
+  placed actor/action state and runs installed mover notification scripts in the VM.
+  `tools/prepare_mover.py` prepares its binding/curves; `tools/test_mover.ps1` checks
+  repeated host movement/collision. Developer E activation, mission gating and audio
+  are separate from stock behavior parity. Evidence:
+  `docs/verification/SANCTUARY_MOVER_PROTOTYPE.md`.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
   in-engine suite `tools/test_inventory_actions.ps1` (needs a seeded worktree, see below).

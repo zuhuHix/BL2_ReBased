@@ -3,6 +3,7 @@
 #include "script.hpp"
 #include "vm.hpp"
 #include "inventory_navigation.hpp"
+#include "mover.hpp"
 
 #include <fstream>
 #include <cmath>
@@ -23,6 +24,7 @@ void usage() {
         "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
         "--run-batch <file> --cooked <directory> | "
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
+        "--mover-probe <actor> <action> --cooked <directory> | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
 }
@@ -427,6 +429,29 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (mode == "--mover-probe") {
+            if (argc != 7 || std::string(argv[5]) != "--cooked") usage();
+            vm::Mover mover(argv[6], package->packageName, argv[3], argv[4]);
+            std::cout << "{\"loading_diagnostics\":[";
+            bool first = true;
+            for (const auto& warning : mover.loadingDiagnostics()) {
+                std::cout << (first ? "" : ",") << quote(warning); first = false;
+            }
+            std::cout << "],\"events\":[";
+            first = true; bool failed = false;
+            for (bool reverse : {false, true}) {
+                for (int event = 0; event < 3; ++event) {
+                    const auto result = event == 2 ? mover.advance(10) : mover.notify(event == 1, reverse);
+                    std::cout << (first ? "" : ",") << "{\"reverse\":" << (reverse ? "true" : "false")
+                              << ",\"event\":" << quote(event == 0 ? "start" : event == 1 ? "finish" : "timers")
+                              << ",\"steps\":" << result.steps << ",\"checkpoint\":" << (result.checkpoint ? "true" : "false")
+                              << ",\"error\":" << quote(result.error) << '}';
+                    first = false; failed |= !result.error.empty();
+                }
+            }
+            std::cout << "]}\n";
+            return failed ? 1 : 0;
+        }
         if (mode == "--run") {
             // Runs one script function on the VM and prints its result and log (Phase 2; see docs/verification).
             std::string functionPath, selfClass;

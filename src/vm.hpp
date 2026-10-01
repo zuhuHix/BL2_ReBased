@@ -212,6 +212,9 @@ public:
 
     // Objects and values.
     ObjectPtr instantiate(Class* cls, const std::string& name = "");
+    // Explicit observed prefix, supplied by the caller (4 ordinary objects,
+    // 26 placed actors, 8 components). No offset scanning or native-tail decode.
+    ObjectPtr instantiateExport(const std::shared_ptr<const Package>& package, int32_t index, size_t prefix);
     Value zeroValue(const PropertyDecl& decl);
     Value zeroStruct(const std::string& name);
     Value newStruct(const std::string& path);        // "Package.Struct": zero value with the declared fields
@@ -249,7 +252,7 @@ private:
     void buildNativeIndex();
     Class* loadClass(const std::shared_ptr<const Package>& package, int32_t index);
     void buildDefaults(Class* cls);
-    void applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& package, int32_t exportIndex);
+    void applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& package, int32_t exportIndex, size_t prefix = 4);
 };
 
 struct SweepOptions {

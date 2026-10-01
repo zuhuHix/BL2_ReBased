@@ -1119,3 +1119,14 @@ poll `window.owPanelProjectionProbeState`. A visual hold argument of at most
 10000 ms allows a screenshot before cleanup. It creates a temporary second
 Ruffle player, isolates equipment-panel art and tests a synthetic CSS plane
 with a matching HTML target. Angles/perspective are synthetic, not stock values.
+
+
+## Bounded Sanctuary mover bridge
+
+`tools/prepare_mover.py` follows one installed SeqAct_Interp/group/actor binding
+and emits an ignored local manifest using the owned reader and existing scene
+payloads. Build CMake Release before UE5. Pass `-owmover=<manifest>` to enable
+Maya's nearby E interaction; no manifest leaves the bridge inactive.
+`tools/test_mover.ps1` owns the shared editor lock and a two-cycle input/movement/
+collision test. It refuses an existing editor and never saves the map. Commands,
+limitations and evidence: [mover record](verification/SANCTUARY_MOVER_PROTOTYPE.md).

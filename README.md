@@ -131,6 +131,11 @@ I'm not sure anyone actually reads this far, but if you did, thank you for check
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
 
+A first Sanctuary world-object bridge now connects installed Matinee movement
+keys and mover scripts to one door's host movement/collision. Its developer
+interaction does not implement mission activation or audio. See the
+[verification record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
+
 ## Is this legal?
 
 Yes. I take it seriously. The rules are the same as [OpenMW](https://openmw.org/) (Morrowind) and [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2):

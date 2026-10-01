@@ -69,6 +69,7 @@ private:
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> WeaponVisual;
     UPROPERTY() TObjectPtr<class UOpenWillowInventory> Inventory;
     UPROPERTY() TObjectPtr<class UOpenWillowSkills> Skills;
+    UPROPERTY() TObjectPtr<class UOpenWillowMover> Mover;
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;

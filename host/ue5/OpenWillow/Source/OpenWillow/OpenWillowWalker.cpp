@@ -1,4 +1,5 @@
 #include "OpenWillowWalker.h"
+#include "OpenWillowMover.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
@@ -61,6 +62,7 @@ AOpenWillowWalker::AOpenWillowWalker()
     WeaponVisual->SetHiddenInGame(true);
     Inventory = CreateDefaultSubobject<UOpenWillowInventory>(TEXT("Inventory"));
     Skills = CreateDefaultSubobject<UOpenWillowSkills>(TEXT("Skills"));
+    Mover = CreateDefaultSubobject<UOpenWillowMover>(TEXT("InstalledMover"));
     GetCharacterMovement()->MaxWalkSpeed = 450;
     GetCharacterMovement()->JumpZVelocity = 420;
     GetCharacterMovement()->MaxStepHeight = 35;
@@ -429,6 +431,7 @@ bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTake
 void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
+    if (Mover && Mover->TryInteract()) return;
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);
     for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
