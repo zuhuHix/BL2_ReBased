@@ -130,3 +130,26 @@ Not run at all: `Behavior_Transform` and `Behavior_RegisterTargetable` (listed a
 
 Automated checks at this commit: CTest 9/9 (including `kismet-synthetic`), nine package comparisons match,
 Kismet census 0 unresolved, door suite 16/16 (earlier run), inventory suite 47 PASS / 2 KNOWN_DIVERGENCE.
+
+## Identity census for the pieces still to bind (extraction only, nothing imported)
+
+From the cached export lists (`tools/export_index.py`, ignored `local/census/exports/`), all in
+`Sanctuary_Dynamic.upk` unless noted. These are identities, not verified payloads; no UModel export was run
+for them in this pass, so no extraction success/failure counts exist yet.
+
+- **Marcus:** `GD_Marcus.Character.Pawn_Marcus` (WillowAIPawn, export 7243), `AIDef_Marcus` with its
+  `AIBehaviorProviderDefinition_0` (mission interaction behaviors: `HasMissions`, `ShowMissionInterface` x3,
+  `BehaviorSequenceEnableByMission` x10, `UpdateMissionObjective` x5, dialog and special moves),
+  `Char_Marcus.Meshes.Skel_Marcus` (SkeletalMesh 14798), `Mati_Marcus_Body/Head` and four textures,
+  `GD_Marcus.Character.AnimTree_Marcus`, dialog group `GD_Dialog_NPCImplementation.Groups.DialogGroup_NPC_Marcus`.
+  His world placement is not found by name; he is spawned through the population system (not decoded).
+- **Target dummy that completes `Fire`:** `GD_TargetDummy.Character.Pawn_TargetDummy` with
+  `CharClass_TargetDummy.BehaviorProviderDefinition_5` (export 5500; sequences Idle, FireDamage, AmpDamage,
+  Slagged, Targetable, ObjectiveComplete, ResetTarget), balance `GD_Population_Psycho.Balance.PawnBalance_TargetDummy`.
+  `GD_TargetDummyBot` (a different pawn) serves the Corrosive variant. `FireDamage.OnTakeDamage` completes the Fire
+  objective on damage of the right type; no kill is required by this data.
+- **Lent weapon:** `GD_Z1_RockPaperGenocideData.MW_RockPaper_Fire` (`MissionWeaponBalanceDefinition`) over base
+  `GD_Weap_Pistol.A_Weapons_Elemental.Pistol_Maliwan_2_Fire`, tied to the `Fire` objective.
+- **Original trace channel:** `tools/sdk_trace/openwillow_gametrace` (hooks MissionTracker, behaviors, Kismet
+  remote events; probe channel for asking the real engine to run its own logic). Written against the SDK stubs,
+  never executed.

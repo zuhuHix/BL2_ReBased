@@ -42,6 +42,12 @@ The next world slice is the door's stock activation path and one mission/NPC
 interaction, after a matched original-game comparison; inventory work remains
 open below.
 
+Slice progress (2026-10-01): the door is activated through its installed Kismet events, and the stock
+"Rock, Paper, Genocide: Fire Weapons!" mission runs in the host through native executors over installed data
+(mission, behavior provider, dummy provider), including respawn and save/resume. Marcus, the dummy pawn, the lent
+weapon, Phaselock from stock data and every parity claim remain open; see
+[the route record](docs/verification/SANCTUARY_RPG_MISSION.md).
+
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
 

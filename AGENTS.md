@@ -103,6 +103,12 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   repeated host movement/collision. Developer E activation, mission gating and audio
   are separate from stock behavior parity. Evidence:
   `docs/verification/SANCTUARY_MOVER_PROTOTYPE.md`.
+- **Mission/Kismet/behavior executors (2026-10-01):** MissionTracker, BehaviorKernel and Kismet activation are native in
+  this build, so `src/kismet.*`, `src/behavior.*`, `src/mission.*`, `src/slice.*` execute their installed *data*. The stock door now
+  opens from its installed remote events, and `tools/test_quest.ps1` plays the Fire mission end to end in the host
+  (accept, remote events, range, lent weapon, dummy provider, turn-in, respawn, save/resume: 16/16 + 4/4), with many
+  documented stand-ins and **no original-game parity capture yet** (needs exclusive screen/keyboard; see
+  `docs/verification/SANCTUARY_RPG_MISSION.md`). Inventory suite: 47 PASS, 2 KNOWN_DIVERGENCE (sort order).
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
   in-engine suite `tools/test_inventory_actions.ps1` (needs a seeded worktree, see below).
