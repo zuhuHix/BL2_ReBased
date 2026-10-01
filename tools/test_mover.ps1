@@ -2,19 +2,31 @@ param(
     [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
     [string]$Game = $env:OPENWILLOW_BL2,
     [string]$Manifest,
-    [int]$TimeoutSeconds = 180
+    [int]$TimeoutSeconds = 180,
+    [int]$WaitForEditorSeconds = 600
 )
 # Builds/preparation are separate. Owns one editor process and the shared lock;
-# reports component collision/script checks, not original-game parity.
+# waits while another editor or the lock exists and never touches them.
+# Reports component collision/script checks, not original-game parity.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (!$Manifest) { $Manifest = Join-Path $repo 'local/doors/mover.json' }
 if (!(Test-Path -LiteralPath $Manifest)) { throw 'Prepare a mover manifest first with tools/prepare_mover.py' }
-if (Get-Process UnrealEditor -ErrorAction SilentlyContinue) { throw 'An Unreal editor is already running; leave it untouched.' }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $lock = Join-Path $repo 'local/ue_run.lock'
-$stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+# Take the lock as soon as no editor runs and nobody holds it (CreateNew is the atomic claim).
+$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
+$stream = $null
+while (!$stream) {
+    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
+        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
+    }
+    if (!$stream) {
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        Start-Sleep -Seconds 5
+    }
+}
 $bytes = [System.Text.Encoding]::UTF8.GetBytes("test_mover $((Get-Date).ToString('o'))")
 $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
 $process = $null

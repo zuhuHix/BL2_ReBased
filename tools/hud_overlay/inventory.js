@@ -1625,4 +1625,5 @@ function showError(error) {
   document.getElementById('loading').textContent = 'Inventory unavailable. Press Esc to close.';
   console.error('OpenWillow Inventory:', error);
 }
-setTimeout(() => { if (!ready) showError('movie library did not initialize'); }, 25000);
+// The movie library has been observed to take 15-65 s to initialize on a busy machine.
+setTimeout(() => { if (!ready) showError('movie library did not initialize'); }, 120000);

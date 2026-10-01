@@ -84,13 +84,23 @@ float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& Dama
 
 void AOpenWillowWalker::Respawn()
 {
-    // Host stand-in: back to where this session started with full health. Mission state is not touched.
+    // With -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host
+    // stand-in: back to where this session started. Full health either way; mission state is not touched.
     Health = MaxHealth;
     bFireHeld = false;
     CancelReload();
-    SetActorLocationAndRotation(RespawnLocation, RespawnRotation, false, nullptr, ETeleportType::TeleportPhysics);
+    FVector Location = RespawnLocation;
+    FRotator Rotation = RespawnRotation;
+    FTransform Station;
+    if (Quest && Quest->Enabled() && Quest->RespawnPoint(GetActorLocation(), Station))
+    {
+        Location = Station.GetLocation();
+        Rotation = Station.Rotator();
+    }
+    SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+    if (Controller) Controller->SetControlRotation(Rotation);
     GetCharacterMovement()->StopMovementImmediately();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *RespawnLocation.ToString());
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *Location.ToString());
     if (Quest) Quest->NotifyRespawn();
 }
 
@@ -267,8 +277,13 @@ void AOpenWillowWalker::BeginPlay()
         for (const FOpenWillowGearItem& Item : Gear)
             if (!Inventory->GearSlotItem(Item.ItemType)) Inventory->EquipGearById(Item.Id, Item.ItemType, Skills->GetLevel());
     }
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d"),
-        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade());
+    // -owquest: maximum health from the recovered Init_PlayerHealth formula at this level (skills, class mods and
+    // relics not applied); otherwise the 400 host stand-in stays.
+    float FormulaHealth = 0.f;
+    if (Quest && Quest->Enabled() && Quest->PlayerMaxHealth(Skills->GetLevel(), FormulaHealth))
+        MaxHealth = Health = FormulaHealth;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d, health %.1f"),
+        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade(), MaxHealth);
     if (bInventoryActionsRun)
     {
         UOpenWillowInventoryActionTest* Test = NewObject<UOpenWillowInventoryActionTest>(this, TEXT("InventoryActionTest"));
@@ -459,6 +474,7 @@ bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTake
 void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
+    if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
     if (Mover && Mover->TryInteract()) return;
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);

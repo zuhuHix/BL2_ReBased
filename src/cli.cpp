@@ -30,7 +30,7 @@ void usage() {
         "--run-batch <file> --cooked <directory> | "
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
-        "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name>) | "
+        "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name> | --originator <object-path>) | "
         "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
         "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
         "--slice-run <mission-path> --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
@@ -808,6 +808,8 @@ int main(int argc, char** argv) {
             else if (entry == "--op" && argc == 8) {
                 auto* op = kismet.find(argv[7]);
                 if (op) { kismet.activateEvent(*op); matched = 1; }
+            } else if (entry == "--originator" && argc == 8) {
+                for (auto* op : kismet.eventsForOriginator(argv[7])) { kismet.activateEvent(*op); ++matched; }
             } else usage();
             kismet.run();
             std::cout << "{\"sequence\":" << quote(argv[3]) << ",\"ops\":" << kismet.ops().size()

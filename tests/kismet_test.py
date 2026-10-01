@@ -113,6 +113,7 @@ def build_engine():
     cls('Sequence', op)
     event = cls('SequenceEvent', op)
     prop('Int', event, 'TriggerCount')
+    prop('Object', event, 'Originator')
     remote = cls('SeqEvent_RemoteEvent', event)
     prop('Name', remote, 'EventName')
     action = cls('SequenceAction', op)
@@ -472,6 +473,24 @@ with tempfile.TemporaryDirectory() as folder:
         dict(path='Seq', ops=5, outputs=4, links=5, unresolved=1, variable_links=3)] and census_json['totals'] == dict(
         sequences=1, failed=0, ops=5, outputs=4, links=5, unresolved=1) and census_json['log_entries'] == 0,
           (census.returncode, census.stdout, census.stderr))
+
+    # (13) --originator enters every event whose Originator is that placed object (host: a population den/point
+    # spawned something); events of other originators and non-event ops carrying the property are not entered.
+    elsewhere = ('ext', 'Other', 'Elsewhere')
+    origin_ops = [op('P1', 'SequenceEvent', [], [out('Out', ('Act1', 0))], scalars=[('obj', 'Originator', elsewhere)]),
+                  op('P2', 'SequenceEvent', [], [out('Out', ('Act2', 0))], scalars=[('obj', 'Originator', elsewhere)]),
+                  op('P3', 'SequenceEvent', [], [out('Out', ('Act3', 0))], scalars=[('obj', 'Originator', mission)]),
+                  op('NotEvent', 'SeqAct_ToyWorldAction', ['In'], [], scalars=[('obj', 'Originator', elsewhere)]),
+                  world('Act1'), world('Act2'), world('Act3')]
+    code, got, _ = kismet(root, origin_ops, '--originator', 'Elsewhere')
+    expect('13a originator events', got, code, 0, ops=7, entry_matches=2, executed=4,
+           trace=['event P1', 'P1 output 0 -> 1 link(s)', 'event P2', 'P2 output 0 -> 1 link(s)', 'Act1 <- In', 'Act2 <- In'],
+           host_boundary=[HOST + 'Act1 <- In', HOST + 'Act2 <- In'])
+    code, got, _ = kismet(root, origin_ops, '--originator', 'ToyGroup.ToyMission')
+    expect('13b other originator', got, code, 0, ops=7, executed=2,
+           trace=['event P3', 'P3 output 0 -> 1 link(s)', 'Act3 <- In'], host_boundary=[HOST + 'Act3 <- In'])
+    code, got, _ = kismet(root, origin_ops, '--originator', 'Nowhere')
+    expect('13c unknown originator', got, code, 1, ops=7, entry_matches=0, executed=0)
 
     # (12) a sequence path that does not exist is a hard error, not an empty run.
     missing = subprocess.run([reader, str(root / 'TestSeq.upk'), '--kismet-run', 'NoSuchSeq', '--cooked', str(root),

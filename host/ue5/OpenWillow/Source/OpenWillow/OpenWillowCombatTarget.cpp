@@ -2,7 +2,11 @@
 #include "OpenWillowShotFx.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowWalker.h"
+#include "Animation/AnimSequence.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/DamageEvents.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -86,8 +90,43 @@ void AOpenWillowCombatTarget::BeginPlay()
     }
 }
 
+bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FString& IdlePath, const FString& DeathPath,
+    const FVector& MeshOffset)
+{
+    USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
+    UAnimSequence* Idle = LoadObject<UAnimSequence>(nullptr, *IdlePath);
+    StockDeath = LoadObject<UAnimSequence>(nullptr, *DeathPath);
+    if (!Mesh || !Idle || !StockDeath) return false;
+    for (UStaticMeshComponent* Shape : {Post.Get(), Torso.Get(), Head.Get()})
+    {
+        Shape->SetHiddenInGame(true);
+        Shape->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    }
+    StockMesh = NewObject<USkeletalMeshComponent>(this, TEXT("StockPawnMesh"));
+    StockMesh->SetupAttachment(Pivot);
+    StockMesh->SetSkeletalMesh(Mesh);
+    StockMesh->SetRelativeLocation(MeshOffset);
+    StockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    StockMesh->RegisterComponent();
+    StockMesh->PlayAnimation(Idle, true);
+    // Hit volume: a capsule from the imported mesh's bounds (host-chosen shape; the stock pawn's collision cylinder
+    // is not read). The narrower horizontal extent is the radius, so outstretched bind-pose arms do not widen it.
+    const FBoxSphereBounds Bounds = Mesh->GetBounds();
+    HitVolume = NewObject<UCapsuleComponent>(this, TEXT("StockHitVolume"));
+    HitVolume->SetupAttachment(Pivot);
+    HitVolume->SetRelativeLocation(MeshOffset + Bounds.Origin);
+    HitVolume->SetCapsuleSize(FMath::Min(Bounds.BoxExtent.X, Bounds.BoxExtent.Y), Bounds.BoxExtent.Z);
+    HitVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    HitVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
+    HitVolume->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+    HitVolume->SetHiddenInGame(true);
+    HitVolume->RegisterComponent();
+    return true;
+}
+
 FVector AOpenWillowCombatTarget::AimPoint() const
 {
+    if (HitVolume) return HitVolume->GetComponentLocation();
     return Torso->GetComponentLocation() + FVector(0, 0, 10);
 }
 
@@ -108,6 +147,7 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     Popups.RemoveAll([Now](const FOpenWillowDamagePopup& Popup) { return Now - Popup.Born > 1.2f; });
     if (bDead)
     {
+        if (StockMesh) return; // the stock dummy keeps its death pose until the sequence destroys it
         const float Since = Now - DiedAt;
         Pivot->SetRelativeScale3D(FVector(FMath::Max(0.01f, 1.f - Since / 0.25f)));
         if (Since < RespawnSeconds) return;
@@ -167,7 +207,7 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     // The dummy's own behavior provider (OnTakeDamage) runs in the quest component of the shooter.
     if (const auto* Shooter = Cast<AOpenWillowWalker>(DamageCauser))
         if (UOpenWillowQuest* Quest = Shooter->GetQuest(); Quest && Quest->Enabled())
-            Quest->OnDummyDamaged(DamageEvent.DamageTypeClass && DamageEvent.DamageTypeClass->IsChildOf(UOpenWillowFireDamageType::StaticClass()));
+            Quest->OnDummyDamaged(this, DamageEvent.DamageTypeClass && DamageEvent.DamageTypeClass->IsChildOf(UOpenWillowFireDamageType::StaticClass()));
     const float Now = GetWorld()->GetTimeSeconds();
     const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
     Health -= Applied;
@@ -192,6 +232,7 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         DiedAt = Now;
         LockSphere->SetHiddenInGame(true);
         SetActorEnableCollision(false);
+        if (StockMesh && StockDeath) StockMesh->PlayAnimation(StockDeath, false);
         AOpenWillowShotFx::Flash(GetWorld(), AimPoint(), FLinearColor(1.f, 0.55f, 0.2f), 70.f, 0.25f, 4000.f);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnSeconds);
     }

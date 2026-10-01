@@ -1130,3 +1130,55 @@ Maya's nearby E interaction; no manifest leaves the bridge inactive.
 `tools/test_mover.ps1` owns the shared editor lock and a two-cycle input/movement/
 collision test. It refuses an existing editor and never saves the map. Commands,
 limitations and evidence: [mover record](verification/SANCTUARY_MOVER_PROTOTYPE.md).
+
+
+## Sanctuary Fire-mission slice data (stock values instead of stand-ins)
+
+These tools recover the data the slice mission needs from the installed packages with the owned
+reader. All output is game-derived and stays under ignored `local/`. Everything they report is
+structural: nothing here has been compared against the running game yet, and each record marks
+what is fitted or `UNVERIFIED`.
+
+```powershell
+$reader = "build\Release\ow-package.exe"
+$game   = $env:OPENWILLOW_BL2
+$cooked = "$game\WillowGame\CookedPCConsole"
+
+# World placement: range trigger, Marcus and his walk, dummy spawn, target mover, respawn point
+python tools/prepare_slice_world.py --reader $reader --game $game      # local/slice/world.json
+python tools/slice_values.py --reader $reader --game $game             # XP reward, Maya health
+
+# Phaselock and one upgrade path (Suspension) from skill data
+python tools/prepare_action_skill.py --reader $reader --game $game     # local/character/action_skill_siren.json
+
+# Weapons: legal parts of a balance, card stats, the slice guns, drop tables
+python tools/weapon_balance.py --reader $reader --package "$cooked\Startup.upk" parts --help
+python tools/weapon_slice_gear.py --reader $reader --game $game --level 8 --seed 1   # local/items/slice
+python tools/loot_pools.py --reader $reader --package "$cooked\Startup.upk" table --help
+python tools/weapon_card_audit.py --reader $reader --package "$cooked\Startup.upk" --trace <ui trace .jsonl>
+
+# Audio identity chain (no decoding): UE3 AkEvent -> Wwise event -> bank -> .wem
+python tools/audio_census.py census
+python tools/audio_slice_chain.py --reader $reader                     # local/slice/audio.json
+
+# Marcus, the target dummy and the stock Maliwan pistol: UModel export + UE import job
+python tools/slice_npc_assets.py all                                   # local/slice/npc_assets.json
+powershell -File tools/seed_slice_npc_assets.ps1                       # runs tools/slice_npc_editor.py in the editor
+```
+
+- `research/behavior_census.py` and `research/struct_defaults_census.py` are the structural
+  oracles behind the behavior variable-data decode and the struct-default reader fix.
+- `ow-package --properties-batch` reads many objects from one package in one process; the weapon
+  and loot tools use it.
+- `tools/weapon_card_audit.py` is the only tool here with a real-game reference: it replays cards
+  captured by the UI trace. It reproduces 4 of 6 captured cards; the other two are open.
+- `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
+  yet; picking one is a maintainer decision (license and provenance entry first).
+- `tools/slice_npc_editor.py` imports `unreal` and only runs inside the editor.
+
+Records: [behavior data](verification/BEHAVIOR_DATA_DECODE.md),
+[weapon balances](verification/WEAPON_BALANCE_DECODE.md),
+[world placement](verification/SLICE_WORLD_PLACEMENT.md),
+[Phaselock stock data](verification/PHASELOCK_STOCK_DATA.md),
+[audio chain](verification/SLICE_AUDIO_CHAIN.md),
+[NPC assets](verification/SLICE_NPC_ASSETS.md).

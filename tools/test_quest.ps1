@@ -2,31 +2,56 @@ param(
     [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
     [string]$Game = $env:OPENWILLOW_BL2,
     [string]$Manifest,
-    [int]$TimeoutSeconds = 240
+    [string]$World,
+    [string]$Npcs,
+    [string]$Audio,
+    [int]$TimeoutSeconds = 300,
+    [int]$WaitForEditorSeconds = 600
 )
-# Sanctuary slice loop in the host: stock Fire mission + dummy provider + door Kismet, death/respawn, save.
+# Sanctuary slice loop in the host: stock Fire mission + dummy provider + the map's installed Kismet (door, Marcus's
+# walk, target Matinee) with world data from the ignored slice manifests, death/respawn, save.
 # Two editor launches: the first plays the loop and writes the save, the second resumes from it
-# (progress retained across a restart). Owns one editor process at a time and the shared lock.
+# (progress retained across a restart). Owns one editor process at a time and the shared lock; waits while another
+# editor or the lock exists and never touches them. Screenshots are copied to local/quest/.
 # Reports host behaviour only; original-game parity is UNVERIFIED (see docs/verification/SANCTUARY_RPG_MISSION.md).
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (!$Manifest) { $Manifest = Join-Path $repo 'local/doors/mover.json' }
-if (!(Test-Path -LiteralPath $Manifest)) { throw 'Prepare a mover manifest first with tools/prepare_mover.py' }
-if (Get-Process UnrealEditor -ErrorAction SilentlyContinue) { throw 'An Unreal editor is already running; leave it untouched.' }
+if (!$World) { $World = Join-Path $repo 'local/slice/world.json' }
+if (!$Npcs) { $Npcs = Join-Path $repo 'local/slice/npc_assets.json' }
+if (!$Audio) { $Audio = Join-Path $repo 'local/slice/audio.json' }
+foreach ($file in @($Manifest, $World, $Npcs, $Audio)) {
+    if (!(Test-Path -LiteralPath $file)) { throw "Missing manifest $file (tools/prepare_mover.py, prepare_slice_world.py, seed_slice_npc_assets.ps1, audio_slice_chain.py)" }
+}
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $lock = Join-Path $repo 'local/ue_run.lock'
 $save = Join-Path $repo 'local/quest/save.json'
-New-Item -ItemType Directory -Force (Split-Path $save) | Out-Null
-if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
-$stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+$shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
+# Take the lock as soon as no editor runs and nobody holds it (CreateNew is the atomic claim).
+$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
+$stream = $null
+while (!$stream) {
+    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
+        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
+    }
+    if (!$stream) {
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        Start-Sleep -Seconds 5
+    }
+}
 $bytes = [System.Text.Encoding]::UTF8.GetBytes("test_quest $((Get-Date).ToString('o'))")
 $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+New-Item -ItemType Directory -Force (Split-Path $save) | Out-Null
+if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 $code = 2
 function Invoke-Run([string]$Mode, [string[]]$Extra) {
-    $log = Join-Path $repo ('local/quest/run-' + $Mode + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $log = Join-Path $repo ('local/quest/run-' + $Mode + '-' + $stamp + '.log')
+    $started = Get-Date
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
-        "-owmover=`"$Manifest`"", '-owquest', '-owquesttest', "-owquestsave=`"$save`"") + $Extra + @(
+        "-owmover=`"$Manifest`"", "-owslice=`"$World`"", "-ownpcs=`"$Npcs`"", "-owaudio=`"$Audio`"",
+        '-owquest', '-owquesttest', "-owquestsave=`"$save`"") + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
@@ -44,10 +69,18 @@ function Invoke-Run([string]$Mode, [string[]]$Extra) {
         }
     } finally {
         if (Test-Path -LiteralPath $log) {
-            Select-String -LiteralPath $log -Pattern 'OWQUEST|OWMOVER ' | ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
+            Select-String -LiteralPath $log -Pattern 'OWQUEST|OWMOVER |not found' | ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
         }
         if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 3
+    }
+    # Screenshots written during this run go next to its log.
+    if (Test-Path -LiteralPath $shots) {
+        Get-ChildItem -LiteralPath $shots -Filter 'OWQuest_*.png' | Where-Object { $_.LastWriteTime -ge $started } | ForEach-Object {
+            $target = Join-Path $repo ('local/quest/' + $_.BaseName + '-' + $stamp + '.png')
+            Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+            Write-Host "Screenshot: $target"
+        }
     }
     Write-Host "Log: $log"
     return $summary
@@ -59,9 +92,9 @@ try {
     elseif ($first -notmatch '^result=PASS ') { Write-Output "FIRST RUN: $first" }
     else {
         $second = Invoke-Run 'resume' @('-owquestresume')
-        if (!$second) { Write-Output 'OWQUESTTEST SUMMARY result=FAIL reason=no summary (resume run)' }
+        if (!$second) { Write-Output "FIRST RUN: $first"; Write-Output 'OWQUESTTEST SUMMARY result=FAIL reason=no summary (resume run)' }
         elseif ($second -match '^result=PASS ') { $code = 0; Write-Output "FIRST RUN: $first"; Write-Output "RESUME RUN: $second" }
-        else { $code = 1; Write-Output "RESUME RUN: $second" }
+        else { $code = 1; Write-Output "FIRST RUN: $first"; Write-Output "RESUME RUN: $second" }
     }
 } finally {
     Remove-Item -LiteralPath $lock -Force

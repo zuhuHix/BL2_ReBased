@@ -100,13 +100,32 @@ struct Mover::Impl {
             self->handle("Engine.SeqAct_Interp", [this](Kismet& k, Kismet::Op& op, int input) {
                 const std::string desc = k.inputDesc(op, input);
                 if (op.name == actionName && (desc == "Play" || desc == "Reverse")) requestedMotion = desc == "Play" ? 1 : -1;
-                else hostBoundary.push_back(op.cls + ":" + op.name + " <- " + desc);
+                else boundary(op, desc);
             });
-            self->handle("Engine.SequenceAction", [this](Kismet& k, Kismet::Op& op, int input) {
-                hostBoundary.push_back(op.cls + ":" + op.name + " <- " + k.inputDesc(op, input));
-            });
+            self->handle("Engine.SequenceAction", [this](Kismet& k, Kismet::Op& op, int input) { boundary(op, k.inputDesc(op, input)); });
         }
         return *kismet;
+    }
+    std::vector<Request> requests;
+    void boundary(const Kismet::Op& op, const std::string& desc) {
+        hostBoundary.push_back(op.cls + ":" + op.name + " <- " + desc);
+        requests.push_back({op.cls, op.name, desc});
+    }
+    // One sequence call: clears the per-call state, runs `entry`, then every impulse due now.
+    Dispatch dispatch(const std::function<void(Kismet&, Dispatch&)>& entry) {
+        Dispatch out;
+        runtime.log.clear(); runtime.steps = 0;
+        requestedMotion = 0; hostBoundary.clear(); requests.clear();
+        try {
+            Kismet& k = sequence();
+            k.trace.clear(); k.errors.clear();
+            entry(k, out);
+            k.run();
+            out.trace = k.trace; out.errors = k.errors;
+        } catch (const std::exception& e) { out.errors.push_back(e.what()); }
+        for (const auto& line : runtime.log) out.errors.push_back("runtime: " + line);
+        out.motion = requestedMotion; out.hostBoundary = hostBoundary; out.requests = requests;
+        return out;
     }
     std::string actionPathFull;
     Result result(const std::function<void()>& operation) {
@@ -144,49 +163,65 @@ Mover::Result Mover::notify(bool finished, bool reverse) {
     });
 }
 Mover::Dispatch Mover::remoteEvent(const std::string& name) {
-    auto& i = *impl_;
-    Dispatch out;
-    i.runtime.log.clear(); i.runtime.steps = 0;
-    i.requestedMotion = 0; i.hostBoundary.clear();
-    try {
-        Kismet& k = i.sequence();
-        k.trace.clear(); k.errors.clear();
-        out.matched = k.remoteEvent(name);
-        k.run();
-        out.trace = k.trace; out.errors = k.errors;
-    } catch (const std::exception& e) { out.errors.push_back(e.what()); }
-    for (const auto& line : i.runtime.log) out.errors.push_back("runtime: " + line);
-    out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
-    return out;
+    return impl_->dispatch([&](Kismet& k, Dispatch& out) { out.matched = k.remoteEvent(name); });
 }
 Mover::Dispatch Mover::missionEvent(const std::string& missionPath, const std::string& name) {
-    auto& i = *impl_;
-    Dispatch out;
-    i.runtime.log.clear(); i.runtime.steps = 0;
-    i.requestedMotion = 0; i.hostBoundary.clear();
-    try {
-        Kismet& k = i.sequence();
-        k.trace.clear(); k.errors.clear();
-        out.matched = k.missionRemoteEvent(missionPath, name);
-        k.run();
-        out.trace = k.trace; out.errors = k.errors;
-    } catch (const std::exception& e) { out.errors.push_back(e.what()); }
-    for (const auto& line : i.runtime.log) out.errors.push_back("runtime: " + line);
-    out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
-    return out;
+    return impl_->dispatch([&](Kismet& k, Dispatch& out) { out.matched = k.missionRemoteEvent(missionPath, name); });
 }
 Mover::Dispatch Mover::motionFinished(bool reverse) {
-    auto& i = *impl_;
-    Dispatch out;
-    try {
-        Kismet& k = i.sequence();
-        k.trace.clear(); k.errors.clear(); i.hostBoundary.clear(); i.requestedMotion = 0;
-        if (auto* op = k.find(i.actionName)) k.fire(*op, reverse ? "Reversed" : "Completed");
-        k.run();
-        out.trace = k.trace; out.errors = k.errors;
-    } catch (const std::exception& e) { out.errors.push_back(e.what()); }
-    out.motion = i.requestedMotion; out.hostBoundary = i.hostBoundary;
-    return out;
+    return impl_->dispatch([&](Kismet& k, Dispatch& out) {
+        if (auto* op = k.find(impl_->actionName)) { k.fire(*op, reverse ? "Reversed" : "Completed"); out.matched = 1; }
+    });
+}
+Mover::Dispatch Mover::sequenceEvent(const std::string& opName) {
+    return impl_->dispatch([&](Kismet& k, Dispatch& out) {
+        Kismet::Op* op = k.find(opName);
+        if (!op || !op->object->cls->isChildOf(impl_->runtime.findClass("Engine.SequenceEvent"))) {
+            k.errors.push_back("no sequence event named " + opName);
+            return;
+        }
+        k.activateEvent(*op);
+        out.matched = 1;
+        out.entered.push_back(op->name);
+    });
+}
+Mover::Dispatch Mover::originatorEvent(const std::string& objectPath) {
+    return impl_->dispatch([&](Kismet& k, Dispatch& out) {
+        for (Kismet::Op* op : k.eventsForOriginator(objectPath)) {
+            k.activateEvent(*op);
+            ++out.matched;
+            out.entered.push_back(op->name);
+        }
+    });
+}
+Mover::Dispatch Mover::output(const std::string& opName, const std::string& desc) {
+    return impl_->dispatch([&](Kismet& k, Dispatch& out) {
+        Kismet::Op* op = k.find(opName);
+        if (!op) { k.errors.push_back("no sequence op named " + opName); return; }
+        if (k.outputIndex(*op, desc) < 0) return;   // the op has no such output: nothing is linked to it
+        k.fire(*op, desc);
+        out.matched = 1;
+    });
+}
+Mover::Dispatch Mover::advanceSequence(double seconds) {
+    return impl_->dispatch([&](Kismet& k, Dispatch&) {
+        if (!std::isfinite(seconds) || seconds < 0 || seconds > 60) throw RuntimeError("invalid sequence time delta");
+        k.tick(seconds);
+    });
+}
+std::vector<Mover::Variable> Mover::variables(const std::string& opName, const std::string& desc) {
+    std::vector<Variable> result;
+    Kismet& k = impl_->sequence();
+    Kismet::Op* op = k.find(opName);
+    if (!op) return result;
+    for (const auto& variable : k.variables(*op, desc)) {
+        Variable entry{variable->name, ""};
+        if (const Value* value = impl_->runtime.property(*variable, "ObjValue");
+            value && value->kind == Value::Kind::Object && value->o && value->o->resourcePackage)
+            entry.object = value->o->resourcePackage->path(value->o->resourceIndex);
+        result.push_back(entry);
+    }
+    return result;
 }
 Mover::Result Mover::advance(double seconds) {
     auto& i = *impl_;

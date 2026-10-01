@@ -77,7 +77,8 @@ private:
     UPROPERTY() TObjectPtr<class UOpenWillowSkills> Skills;
     UPROPERTY() TObjectPtr<class UOpenWillowMover> Mover;
     UPROPERTY() TObjectPtr<class UOpenWillowQuest> Quest;
-    // Host stand-ins (UNVERIFIED): Maya's real maximum health and the BL2 death/respawn flow are not recovered.
+    // Host stand-ins (UNVERIFIED) unless -owquest supplies the slice data: then health follows the recovered
+    // formula and respawn the decoded station selection (UOpenWillowQuest).
     float MaxHealth = 400.f;
     float Health = 400.f;
     FVector RespawnLocation = FVector::ZeroVector;

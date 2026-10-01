@@ -47,6 +47,9 @@ public:
     // Entry points.
     size_t remoteEvent(const std::string& name);                                  // SeqEvent_RemoteEvent ops
     size_t missionRemoteEvent(const std::string& missionPath, const std::string& name);
+    // Events whose `Originator` property is the given placed object (e.g. a population den or spawn point's
+    // SeqEvent_PopulatedActor / SeqEvent_PopulatedPoint). Query only: the caller enters them with activateEvent.
+    std::vector<Op*> eventsForOriginator(const std::string& objectPath);
     void activateEvent(Op& event);                                                // fires the event's first output
     void activate(Op& op, int input, double delay = 0);                           // impulse on an input link
     void tick(double seconds);                                                    // advances time, runs due impulses

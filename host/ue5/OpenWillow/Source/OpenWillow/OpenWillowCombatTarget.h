@@ -27,8 +27,19 @@ public:
     FVector AimPoint() const;
     bool IsPhaselocked() const { return bPhaselocked; }
     float HealthFraction() const { return Health / MaxHealth; }
+    // Slice route: show the imported stock pawn (GD_TargetDummy) instead of the engine shapes. The actor origin is
+    // then the UE3 pawn location and the mesh hangs below it by the pawn's component Translation. Hits use the
+    // mesh's physics asset (UModel/glTF import, not the stock collision). A stock dummy does not respawn after
+    // death: the installed Kismet destroys it. Returns false when an asset does not load.
+    // Hits use a hidden capsule sized from the imported mesh bounds (host-chosen; stock collision not read).
+    bool UseStockPawn(const FString& MeshPath, const FString& IdlePath, const FString& DeathPath, const FVector& MeshOffset);
+    bool IsStockPawn() const { return StockMesh != nullptr; }
+    class USkeletalMeshComponent* GetStockMesh() const { return StockMesh; }
     TArray<FOpenWillowDamagePopup> Popups;
 private:
+    UPROPERTY() TObjectPtr<class USkeletalMeshComponent> StockMesh;
+    UPROPERTY() TObjectPtr<class UAnimSequence> StockDeath;
+    UPROPERTY() TObjectPtr<class UCapsuleComponent> HitVolume;
     UPROPERTY() TObjectPtr<class USceneComponent> Base;
     UPROPERTY() TObjectPtr<class USceneComponent> Pivot;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> Post;
