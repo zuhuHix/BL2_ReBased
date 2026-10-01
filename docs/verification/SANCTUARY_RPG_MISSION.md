@@ -101,8 +101,9 @@ reproducible scripted pass over the stock mission data with the stand-ins listed
 
 Two editor launches (the runner owns the lock and kills its own process): the first plays the loop and
 writes `local/quest/save.json`, the second resumes from it. Result: **first run 16/16 PASS, resume run 4/4
-PASS** (logs `local/quest/run-first-20261001-101032.log`, `run-resume-20261001-101145.log`; the runner exited
-0 on the second pass of the script, `run-resume-20261001-101145.log`).
+PASS** (final pair `local/quest/run-first-20261001-101113.log` and `run-resume-20261001-101145.log`, runner
+exit code 0). An earlier script run (`run-first-20261001-101032.log`, also 16/16) stopped after the first launch
+and exited 2 because of a runner output-handling bug, since fixed.
 
 What the 16 checks exercise, in order: fresh status NotStarted; accept (Active) and the mission's
 `RocksPaper_MoveMarcusToRange` remote event reaching the installed Kismet node (it ends at
