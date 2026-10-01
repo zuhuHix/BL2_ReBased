@@ -490,3 +490,93 @@ turn in. Route:
 5. K opens Skills: buy Phaselock (Maya has 4 points at level 8 from the start). F casts it. The only liftable target
    in this session is the stock dummy while it is on the range, so buy Phaselock before shooting it if you want to
    lift it. After it is removed, F only shows the miss.
+
+## Progression, Phaselock rules and dummy behaviours (2026-10-01, second machine)
+
+AI-assisted (Claude, with subagents). Host behaviour only. **No original-game capture**: every rule the game decides in
+native code is a host choice labelled UNVERIFIED here and in the code. This pass ran on a second machine whose ignored
+data was regenerated from the installed game with the documented tools (`docs/TOOLING.md`), not copied; hand-patched
+content from the first machine (for example floor meshes) is not present there. Before any code change the regenerated
+data reproduced the recorded baseline: quest suite 57/57 and resume 7/7, door suite 16/16, CTest 10/10, packages 9/9.
+
+### What changed
+
+- **Progression is saved.** The quest save has an optional `progression` block (level, experience, action grade, skill
+  grades). On load it replaces the `-owlevel` start level before weapons are equipped; a save without it behaves as
+  before; an invalid block fails the quest. `Save()` already ran every tick, so XP, level-ups and skill purchases reach
+  the file within a frame. `tools/run_quest.ps1` without `-Fresh` therefore resumes progression too (its "Maya level N"
+  launch line still prints the gear level, which the save then overrides).
+- **Health follows the level.** Max health is recomputed from the same formula whenever the level changes, and a
+  level-up refills current health. The refill is read from data: `OnExpLevelChange` (script) runs the class's
+  `OnLevelUp` behaviours, whose skill definition adds `HealthMaxValue` to `HealthCurrentValue`. That the pool caps the
+  sum at the maximum, and that the effect acts once, are UNVERIFIED. The same definition also touches the action-skill
+  cooldown; that is not modelled.
+- **Phaselock**, row by row (replaces the rows of the same name in the table above):
+
+  | Row | Status |
+  |---|---|
+  | Lift height | Done from script: `BeginLifting`'s ground trace, collision half height and ceiling clamp on the centre's path, with the `GetLiftLocation` curve. UNVERIFIED: the 1 uu box on `ECC_Visibility`, bounds standing in for the cylinder, the bob's time origin and smoothing; the bob is not clamped |
+  | Targeting | Partly: range from the auto-aim data (`GD_Autoaim.Default` `MaxTargetDistance`); the view ray then the 30 cm sweep stand in for the native `GetPreferredTarget` (UNVERIFIED) |
+  | Valid target | Partly: alive, not already locked, and a host property standing for `Flag_Skills_CanPhaseLock`; a blocked target is not lifted and its damage is not applied (amount not recovered). Friendliness, vehicles and Resurrect are not modelled |
+  | Cast gate | Partly: bought, cooldown, and the activation constraints (weapon action = not reloading, healthy = health above 0, on foot = always). The evaluators are native, so each mapping is UNVERIFIED; while-active constraints, ladders and rider seats are not modelled |
+
+  The earlier statement that Phaselock lifts the target into the range's ceiling beams was a misreading of the
+  screenshot: in the lane the nearest surface is about 460 uu above the target's centre and the lifted target's top
+  stays about 160 uu below it; a beam nearer the camera hides the upper part of the view (the 220 cm presentation shell
+  is a separate host effect). The manifest format is now `openwillow.action_skill/2`.
+- **Dummy behaviours.** `Behavior_Transform` (EAIT_Fire) sets the dummy's transform type and its target name becomes
+  the balance's playthrough-1 transformed name (`GetTransformedDisplayName` is native: UNVERIFIED).
+  `Behavior_RegisterTargetable` puts the dummy in a host targetable list; no host targeting reads it yet. IntMath and
+  ChangeInstanceDataSwitch remain logged, not run.
+- **Attach point.** The `AttachToActor` name `Target` is a `SocketComponent` in the holder's body composition, not a
+  skeletal bone. `world.json` now carries its pose and the host puts the dummy's origin on it at attach (UNVERIFIED:
+  `Activated` is native, `bUseConstructAttachment` is not interpreted). The earlier "kneeling" dummy was the mesh hanging
+  below an origin placed at floor level.
+- **Dependency fixture.** `GD_Episode03.M_Ep3_CatchARide` cannot be satisfied from installed data (a plain dependency;
+  Sanctuary is reachable while it is still active; the bulk fast-forward is native). It remains a fixture standing in
+  for save state, now filled from the mission's declared `Dependencies`, labelled, and logged at start.
+- **Inventory previews** resolve meshes through `UOpenWillowInventory::LoadWeaponMesh`, so slice guns and the lent
+  pistol are found. Not looked at by eye in the inventory page.
+- **Weapon paint.** The five slice guns and the mission pistol are painted from their MIC chains plus Master_Gun's own
+  parameter defaults, with a decal layer by an UNVERIFIED reading (`docs/TOOLING.md`, DECISIONS 2026-10-01).
+
+### Automated checks (2026-10-01 22:23-22:48, CMake Release and UE module rebuilt first)
+
+- **`tools/test_quest.ps1`: first run 73/73 PASS, resume run 10/10 PASS**, exit 0 (`run-first-20261001-224649.log`,
+  `run-resume-20261001-224755.log`; also `-223529` before the paint import). New first-run checks:
+  `level_up_sets_formula_max_health`, `level_up_refills_current_health` (fixture: half of max health removed before
+  turn-in), `max_health_follows_level_after_fixtures`, `save_holds_final_progression`,
+  `phaselock_lift_stays_below_ceiling` (under a test fixture box, because the lane has no low surface),
+  `phaselock_height_is_lift_end_plus_bob`, `phaselock_cast_gate_open_when_constraints_met`,
+  `phaselock_weapon_action_constraint_refuses_cast`, `phaselock_health_constraint_refuses_cast`,
+  `phaselock_blocked_target_is_not_lifted`, `phaselock_blocked_cast_keeps_cooldown`,
+  `dependency_fixture_is_the_missions_declared_dependencies`, `dummy_attached_at_holder_socket_from_manifest`,
+  `dummy_transform_type_and_target_name_from_provider`, `dummy_not_targetable_before_register_behavior`,
+  `dummy_registered_targetable_by_provider`. Changed: `phaselock_lifts_to_stock_height` now asserts the lift rule gives
+  `HeightFromGround` (+-2) over open ground; `dummy_moves_with_carrier` measures from the attached location. New resume
+  checks: `resume_level_and_experience_from_save_over_owlevel`, `resume_skill_points_and_phaselock_from_save`,
+  `resume_skill_grades_from_save` (all compared against the loaded block, not fixed numbers).
+- **Earlier failing run, kept as evidence:** `run-first-20261001-222312` (67/68): `phaselock_lift_stays_below_ceiling`
+  found no surface within `HeightFromGround` of the target's centre anywhere in the lane.
+- **`tools/test_mover.ps1`: 16/16 PASS.** **CTest 10/10; `tools/verify_packages.py` 9/9.** Python: `slice_world_test`
+  15, `prepare_action_skill_test` 9, `weapon_paint_test` 9, `skill_stats_test` 5 passed.
+- **`tools/test_inventory_actions.ps1`: 45 PASS, 0 FAIL, 2 NOT_RUN, 2 KNOWN_DIVERGENCE** (exit 1) on this machine. The
+  two NOT_RUN steps are the backpack scroll steps: the locally seeded backpack has fewer than nine rows. This is
+  missing local data, not a code result; on the first machine the recorded result was 47 PASS.
+
+### Visual checks (host presentation only)
+
+- By eye: `OWQuest_2_RangeDummy-20261001-224649.png` shows the dummy standing on the lane floor in front of the
+  dartboard, and the lent pistol with orange bands over the earlier blue-grey and white patches.
+  `OWQuest_1_MarcusStockPose-*` shows the Jakobs slice pistol with a pale marbled surface instead of flat grey.
+- Independent critic agent (it could not fetch real first-person images and judged from text descriptions of the
+  skins plus one unrelated local reference; low to medium confidence): Jakobs pistol **2/10**, Maliwan fire pistol
+  **4/10** (2/10 before the decal). Both show irregular blotchy patches where the real skins have clean zones.
+
+### Still not done / UNVERIFIED
+
+- Everything native listed above; no rule here has been compared with the running game.
+- Weapon paint: the zone mask reading (blotches), `p_DecalRotate`, static switches; no real-image comparison yet.
+- The parking-lot floor in front of Scooter's garage was not checked: it needs a hand run on the machine that holds
+  the hand-patched content.
+- Audio is unchanged (lookup only; the decoder choice is the maintainer's).

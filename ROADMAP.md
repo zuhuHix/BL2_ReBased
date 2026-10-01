@@ -43,9 +43,11 @@ Slice progress (2026-10-01): the door is activated through its installed Kismet 
 (mission, behavior provider, dummy provider) with stock world data: a placed Marcus whose walk the installed Kismet
 starts, the stock range cylinder, the stock dummy and target Matinee, formula-based health, decoded respawn
 selection, a lent stock mission pistol, damage type taken from the held item, candidate XP into the skills
-component, Phaselock read from stock data and save/resume. Recorded checks: quest suite 57/57 and resume 7/7, door
-suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9. All of it is host behaviour
-with labelled stand-ins (targeting and cast gate for Phaselock, a turn-in loot stand-in because stock data drops
+component, Phaselock read from stock data (lift rule, valid-target rule and cast gate from script and data),
+progression in the quest save, health recomputed on level change, and save/resume. Recorded checks: quest suite
+73/73 and resume 10/10, door suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9.
+All of it is host behaviour with labelled stand-ins (native auto-aim selection and constraint evaluation for
+Phaselock, a save-state fixture for the dependency mission, a turn-in loot stand-in because stock data drops
 nothing for this mission) and `UNVERIFIED` rules; nothing has been compared against the original game, and every
 parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
 [the route record](docs/verification/SANCTUARY_RPG_MISSION.md).

@@ -200,7 +200,7 @@ stock data".
 ## Manifest
 
 `python tools/prepare_action_skill.py --reader build/Release/ow-package.exe --game "$env:OPENWILLOW_BL2"`
-writes `local/character/action_skill_siren.json` (about 20 s). Format `openwillow.action_skill/1`:
+writes `local/character/action_skill_siren.json` (about 20 s). Format `openwillow.action_skill/2` since 2026-10-01 (adds `skill.constraintEvaluators`, `actionSkill.canLiftTargetIfChain` and `autoAim`; a /1 manifest must be regenerated). The fields shared with /1:
 
 - `skill`: id, name, maxGrade, playerLevelRequirement, initialDuration, constraints, `effects` (rows as below),
   `behaviorProvider` (as below).

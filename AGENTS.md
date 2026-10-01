@@ -108,12 +108,15 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   door opens from its installed remote events, and `tools/test_quest.ps1` plays the Fire mission end to end in the host
   on stock world data: placed Marcus whose walk is started by the installed Kismet, the stock range cylinder, the stock
   dummy and target Matinee, formula-based health, decoded respawn selection, a lent stock mission pistol whose item
-  damage type goes to the dummy's check, candidate XP into the skills component, Phaselock read from the manifest and a
-  labelled turn-in loot stand-in (stock data drops no item for this mission). Recorded checks: quest suite 57/57 and
-  resume 7/7, door suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE (sort order), CTest 10/10, packages 9/9.
+  damage type goes to the dummy's check, candidate XP into the skills component, Phaselock read from the manifest
+  (lift rule, valid-target rule and cast gate from script and data), progression (level, XP, skill grades) in the quest
+  save, health recomputed on level change, the dummy's Transform/RegisterTargetable behaviours and holder socket, and a
+  labelled turn-in loot stand-in (stock data drops no item for this mission). Recorded checks: quest suite 73/73 and
+  resume 10/10, door suite 16/16, CTest 10/10, packages 9/9; inventory suite 47 PASS / 2 KNOWN_DIVERGENCE (sort order)
+  on the fully seeded worktree, 45 PASS / 2 NOT_RUN / 2 KNOWN_DIVERGENCE on a regenerated one with a short backpack.
   This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive
-  screen/keyboard); known gaps (XP and skill grades unsaved, no health recalculation on level-up, Phaselock can lift the
-  target into ceiling beams) are in `docs/verification/SANCTUARY_RPG_MISSION.md`. Hand play: `tools/run_quest.ps1 -Fresh`.
+  screen/keyboard); open items (native auto-aim, constraint evaluation, weapon paint and decal readings, audio) are in
+  `docs/verification/SANCTUARY_RPG_MISSION.md`. Hand play: `tools/run_quest.ps1 -Fresh`.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
   in-engine suites `tools/test_inventory_actions.ps1`, `tools/test_mover.ps1` (door) and
@@ -127,7 +130,10 @@ Ignored data (`host/ue5/OpenWillow/Content`, `local/`) does not come from git. S
 `tools/prepare_skill_tree.py`. The slice needs further local data: `tools/prepare_mover.py`,
 `tools/prepare_slice_world.py`, `tools/prepare_action_skill.py`, `tools/seed_slice_npc_assets.ps1` and
 `tools/seed_slice_player_assets.ps1` (see `docs/TOOLING.md` and the verification records they name).
-Check what already exists before re-seeding.
+Check what already exists before re-seeding. Two machine notes from regenerating the slice on a second PC
+(2026-10-01): configure CMake with the MSVC toolset Unreal uses (`cmake -S . -B build -T version=14.50` for UE 5.8
+there; a newer default toolset made the UE module fail to link against `ow-core.lib`), and
+`tools/slice_npc_assets.py` needs a Python with both numpy and Pillow.
 
 ### Working rules that have paid off
 

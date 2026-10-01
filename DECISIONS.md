@@ -3200,3 +3200,101 @@ AI-assisted. Host work; no package parsing change; nothing compared against the 
   lift the target into ceiling beams, XP and skill grades are not saved, health is not recalculated on
   level-up, slice guns have no inventory 3D preview. Record: `docs/verification/SANCTUARY_RPG_MISSION.md`,
   "Player side with stock data".
+
+## 2026-10-01: progression in the quest save; health follows level
+
+AI-assisted. Host work; no package parsing change; nothing compared against the original game.
+
+- The quest save (`-owquestsave=`) gains an optional `progression` block: level, experience, action grade and skill
+  grades (available points are written for checking only; they are derived from level and grades). A save that has
+  the block replaces the `-owlevel` start level before weapons are equipped; saves without it load as before. A block
+  that fails validation (experience outside its level, unknown skill, grade above its maximum, more points spent than
+  earned) is rejected and the quest fails, as for a rejected mission state.
+- Maximum health is recomputed with the same formula whenever Maya's level changes. Current health on a level-up is
+  read from installed data: `WillowPlayerController.OnExpLevelChange` (script) calls the native
+  `RecalculateAttributeInitializedState` and then runs `CharClass_Siren.OnLevelUp` =
+  `GD_PlayerShared.Behaviors.PlayerBehavior_LevelUp`, whose skill definition adds `HealthMaxValue` x 1 to
+  `HealthCurrentValue` (`MT_PostAdd`). The host refills to the new maximum.
+- UNVERIFIED: that the pool caps the sum at the maximum; that the timed effect acts once as a heal; the 1 s guard
+  between level-ups (not modelled); the argument order of `OnExpLevelChange` (taken from export order); level
+  decreases (test fixtures only, treated the same). The health formula's own open constant is unchanged. The same
+  skill definition also scales the action-skill cooldown; the host does not model that.
+- Checks: four new first-run checks and three new resume checks (names in the record), a synthetic round trip in
+  `OpenWillow.Skills` (not run in this pass). Record: `docs/verification/SANCTUARY_RPG_MISSION.md`, "Progression,
+  Phaselock rules and dummy behaviours".
+
+## 2026-10-01: Phaselock lift, target rule and cast gate from script and data
+
+AI-assisted. Host and tooling; no package parsing change; nothing compared against the original game.
+
+- `LiftActionSkill.BeginLifting` (read, not run) computes the lift end from the pawn's centre: a trace down
+  `HeightFromGround`; on ground the end is ground + collision half height + `HeightFromGround`; a trace up the
+  centre's path lowers the end to a surface minus the half height. The host now does the same with a 1 uu box on
+  `ECC_Visibility` and its targets' collision bounds standing in for the cylinder (UNVERIFIED). The rule only traces
+  the centre's path, and the bob is not clamped.
+- Correction to the earlier record: "Phaselock can lift the target into ceiling beams" was a misreading of the
+  screenshot. Measured in the lane, the nearest surface is about 460 uu above the target's centre and the lifted
+  target's top stays about 160 uu below it; a beam nearer the camera hides the upper part of the view. The suite
+  exercises the clamp with a labelled test fixture (an invisible blocking box), because the lane has no low surface.
+- `SelectTarget`/`CanPhaseLockTarget` are followed as far as the host has state: alive, not already locked, and a
+  host property standing for `Flag_Skills_CanPhaseLock`. A blocked target is not lifted; its damage is not applied
+  because the amount is not recovered. The targeting range is the auto-aim data's `MaxTargetDistance`
+  (`GD_Autoaim.Default`); the native `GetPreferredTarget` is not reproduced and the view ray plus 30 cm sweep stay a
+  host stand-in (UNVERIFIED).
+- `Skill_Phaselock.SkillConstraints` evaluators are native. The host maps weapon action to "not reloading", healthy
+  to "health above 0" and treats on-foot as always met (UNVERIFIED). While-active constraints, ladders, rider seats,
+  friendliness, vehicles and Resurrect are not modelled.
+- `tools/prepare_action_skill.py` writes format `openwillow.action_skill/2` (constraint evaluators, the
+  `CanLiftTargetIf` flag chain, auto-aim data). A /1 manifest makes Phaselock unavailable with a message; regenerate.
+
+## 2026-10-01: dummy world behaviours run in the host; attach socket from data; dependency fixture kept
+
+AI-assisted. Host and tooling; no package parsing change; nothing compared against the original game.
+
+- `Behavior_Transform` and `Behavior_RegisterTargetable` are readable script. The first sets
+  `WillowAIPawn.TransformType`, whose readable consumer is `GetTargetName` (the balance's per-playthrough transformed
+  display name; the lookup itself is native). The second registers the pawn in the native global `TargetableList`.
+  The host now runs both for the target dummy: a transform type with its target name, and a targetable flag that no
+  host targeting reads yet. IntMath and ChangeInstanceDataSwitch stay logged.
+- The `AttachToActor` "bone" `Target` is the holder's `SocketComponent` of that name, not a skeletal bone, so no
+  carrier mesh import is needed. `tools/prepare_slice_world.py` emits its pose; the same composition convention
+  reproduces the holder's own Base attachment to 0.0 uu (new oracle, 21 of 21 pass). The host puts the dummy's origin
+  on the socket at attach. By eye the dummy now stands on the lane floor instead of being sunk to its knees.
+- UNVERIFIED: native `SeqAct_AttachToActor.Activated` and `bUseConstructAttachment`; the transformed-name lookup rule
+  and the playthrough (1 assumed); which native code reads the targetable list.
+- The `GD_Episode03.M_Ep3_CatchARide` dependency cannot be satisfied from installed data: the mission lists it as a
+  plain dependency, Sanctuary is reachable while that mission is still active, and the only bulk-completion path
+  (the mission fast-forward) is native with a trigger set at run time. It stays a fixture standing in for save state,
+  now labelled as such, logged at start and filled from the mission's declared `Dependencies` instead of a
+  compiled-in name.
+- Checks for the three entries above (one build, this machine): quest suite 73/73 first run and 10/10 resume
+  (`run-first-20261001-223529`, `run-resume-20261001-223643`), door suite 16/16, CTest 10/10, packages 9/9. One
+  earlier run failed 67/68 (`run-first-20261001-222312`): the new ceiling check found no low surface in the lane.
+  Inventory suite on this machine: 45 PASS, 0 FAIL, 2 NOT_RUN (the locally seeded backpack has fewer than nine
+  rows), 2 KNOWN_DIVERGENCE.
+
+## 2026-10-01: weapon paint reads Master_Gun's parameter defaults and draws a decal layer
+
+AI-assisted. Tooling and editor importer; no package parsing change; nothing compared against the original game.
+
+- Master_Gun's graph is stripped, but its 43 parameter expressions survive in `Startup.upk` and decode completely
+  with the owned reader (`ParameterName`, and `DefaultValue` where it differs from the class default; an absent value
+  is taken from the expression class default in `Engine.upk`, and the scalar default, which serializes nothing, is
+  read as zero). `tools/prepare_weapon_paint.py --reader/--package` uses them only for scalar and vector parameters
+  that no MIC sets and records each value's source. Reader and UModel agree on all 116 MIC parameter values of the
+  nine slice MICs; UModel exports nothing for the Material itself. This makes the two Jakobs common chains
+  preparable (their B and C zone colours are the base defaults), so all five slice guns and the mission pistol are
+  now painted instead of grey.
+- The decal parameters are emitted and the importer draws a decal by this reading: placement UV1 x scale + offset
+  with the installed texture address modes; weight = zone weights dotted with the mask channels, times decal alpha;
+  colour multiplies the zone colours, or replaces them as `p_ReplaceDecal` goes to 1. Evidence is structural only:
+  of six candidate placements only this one puts the clamped Hyperion stripe along the gun; the Jakobs decal and
+  pattern zone weights are exact complements; two chains' decal colours normalise their decal's mean to about 1.
+- UNVERIFIED: the whole paint and decal reading. `p_DecalRotate` and the flip switch are not applied; static
+  parameter overrides (undecoded trailing bytes on the MICs) are unknown; the replace mode is inferred from its name.
+- Checks: `tests/weapon_paint_test.py` 9 passed; imports ran for six guns ("decal used" on each); quest suite 73/73
+  and resume 10/10 afterwards (`run-first-20261001-224649`). Visual, by an independent critic agent that could not
+  fetch real first-person images and judged from text descriptions of the skins plus one unrelated local reference
+  (so low to medium confidence): Jakobs common pistol 2/10, Maliwan fire pistol 4/10 (2/10 before the decal). Its
+  main finding is that both guns show irregular blotchy patches where the real skins have clean zones, so the zone
+  mask reading itself is suspect. That is open work, not a result.
