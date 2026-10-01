@@ -82,7 +82,7 @@ Under the hood, the engine still reads all 2,008 packages from a full BL2 instal
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
-**Next up:** finishing Sanctuary's last visual gaps, then Maya: movement, a few guns and Phaselock. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
+**Next up:** finishing Sanctuary's last visual gaps and comparing the host-run Fire mission slice (Maya, a lent pistol, Phaselock from stock data) against the original game, which has not been done yet. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
 
 <details>
 <summary><b>Show me the numbers behind that</b></summary>
@@ -131,10 +131,13 @@ I'm not sure anyone actually reads this far, but if you did, thank you for check
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
 
-A first Sanctuary world-object bridge now connects installed Matinee movement
-keys and mover scripts to one door's host movement/collision. Its developer
-interaction does not implement mission activation or audio. See the
-[verification record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
+A first Sanctuary world-object bridge connects installed Matinee movement
+keys and mover scripts to one door's host movement/collision
+([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)). As of 2026-10-01 the door also opens from its
+installed Kismet events, and the stock Fire mission runs in the host on stock world data with labelled stand-ins
+(for example Phaselock targeting and a turn-in loot stand-in); audio is looked up and logged, never played, and
+nothing has been compared against the original game
+([mission record](docs/verification/SANCTUARY_RPG_MISSION.md)).
 
 ## Is this legal?
 

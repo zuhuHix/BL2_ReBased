@@ -104,21 +104,30 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   are separate from stock behavior parity. Evidence:
   `docs/verification/SANCTUARY_MOVER_PROTOTYPE.md`.
 - **Mission/Kismet/behavior executors (2026-10-01):** MissionTracker, BehaviorKernel and Kismet activation are native in
-  this build, so `src/kismet.*`, `src/behavior.*`, `src/mission.*`, `src/slice.*` execute their installed *data*. The stock door now
-  opens from its installed remote events, and `tools/test_quest.ps1` plays the Fire mission end to end in the host
-  (accept, remote events, range, lent weapon, dummy provider, turn-in, respawn, save/resume: 16/16 + 4/4), with many
-  documented stand-ins and **no original-game parity capture yet** (needs exclusive screen/keyboard; see
-  `docs/verification/SANCTUARY_RPG_MISSION.md`). Inventory suite: 47 PASS, 2 KNOWN_DIVERGENCE (sort order).
+  this build, so `src/kismet.*`, `src/behavior.*`, `src/mission.*`, `src/slice.*` execute their installed *data*. The stock
+  door opens from its installed remote events, and `tools/test_quest.ps1` plays the Fire mission end to end in the host
+  on stock world data: placed Marcus whose walk is started by the installed Kismet, the stock range cylinder, the stock
+  dummy and target Matinee, formula-based health, decoded respawn selection, a lent stock mission pistol whose item
+  damage type goes to the dummy's check, candidate XP into the skills component, Phaselock read from the manifest and a
+  labelled turn-in loot stand-in (stock data drops no item for this mission). Recorded checks: quest suite 57/57 and
+  resume 7/7, door suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE (sort order), CTest 10/10, packages 9/9.
+  This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive
+  screen/keyboard); known gaps (XP and skill grades unsaved, no health recalculation on level-up, Phaselock can lift the
+  target into ceiling beams) are in `docs/verification/SANCTUARY_RPG_MISSION.md`. Hand play: `tools/run_quest.ps1 -Fresh`.
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
-  in-engine suite `tools/test_inventory_actions.ps1` (needs a seeded worktree, see below).
+  in-engine suites `tools/test_inventory_actions.ps1`, `tools/test_mover.ps1` (door) and
+  `tools/test_quest.ps1` (Fire mission slice); all need a seeded worktree, see below.
 
 ### Setting up a fresh worktree
 
 Ignored data (`host/ue5/OpenWillow/Content`, `local/`) does not come from git. See
 `tools/worktree-assets.md` and `tools/seed_inventory_demo.py`, `tools/seed_inventory_assets.ps1`
 (set `OPENWILLOW_BL2`, `OPENWILLOW_UMODEL`), `tools/render_weapon_previews.py`,
-`tools/prepare_skill_tree.py`. Check what already exists before re-seeding.
+`tools/prepare_skill_tree.py`. The slice needs further local data: `tools/prepare_mover.py`,
+`tools/prepare_slice_world.py`, `tools/prepare_action_skill.py`, `tools/seed_slice_npc_assets.ps1` and
+`tools/seed_slice_player_assets.ps1` (see `docs/TOOLING.md` and the verification records they name).
+Check what already exists before re-seeding.
 
 ### Working rules that have paid off
 

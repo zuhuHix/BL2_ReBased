@@ -38,14 +38,16 @@ movement keys drive the existing mesh/collision, and original mover notification
 scripts run in the VM using placed state. Activation is a developer interaction;
 mission gating, sequence dispatch, audio and original-game motion parity remain
 open. See [the mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
-The next world slice is the door's stock activation path and one mission/NPC
-interaction, after a matched original-game comparison; inventory work remains
-open below.
-
 Slice progress (2026-10-01): the door is activated through its installed Kismet events, and the stock
 "Rock, Paper, Genocide: Fire Weapons!" mission runs in the host through native executors over installed data
-(mission, behavior provider, dummy provider), including respawn and save/resume. Marcus, the dummy pawn, the lent
-weapon, Phaselock from stock data and every parity claim remain open; see
+(mission, behavior provider, dummy provider) with stock world data: a placed Marcus whose walk the installed Kismet
+starts, the stock range cylinder, the stock dummy and target Matinee, formula-based health, decoded respawn
+selection, a lent stock mission pistol, damage type taken from the held item, candidate XP into the skills
+component, Phaselock read from stock data and save/resume. Recorded checks: quest suite 57/57 and resume 7/7, door
+suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9. All of it is host behaviour
+with labelled stand-ins (targeting and cast gate for Phaselock, a turn-in loot stand-in because stock data drops
+nothing for this mission) and `UNVERIFIED` rules; nothing has been compared against the original game, and every
+parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
 [the route record](docs/verification/SANCTUARY_RPG_MISSION.md).
 
 The concrete open items, roughly in the order they are being taken. Small,
