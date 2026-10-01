@@ -1,16 +1,31 @@
 """Apply one local approximate paint material to an existing rolled gun mesh.
 
 OPENWILLOW_WEAPON_PAINT is prepare_weapon_paint.py's ignored local JSON.
-No mesh reimport, no directory deletion. Master_Gun's missing graph, packed
-detail channel, pattern UV1 and lighting response remain UNVERIFIED. The decal
-layer (data['decal'], drawn only when 'used') follows the reading spelled out
-in its 'reading' field and is UNVERIFIED as well.
+No mesh reimport, no directory deletion. The colour model is the UNVERIFIED
+reading in tools/weapon_paint_model.py (data['reading']), recovered from the
+compiled Master_Gun shaders: p_Masks holds a light/dark map (upper half) and the
+zone mask (lower half); zone tones, zones over p_DColor, pattern and decal
+layers, times the detail channel the MIC's static parameters select. The
+environment reflection, emissive and the game's lighting are not reproduced;
+DISPLAY_SCALE maps the HDR result into UE's base-colour range and is chosen by
+eye (UNVERIFIED).
 """
 import json
 import os
 import re
 from pathlib import Path
 import unreal
+
+DISPLAY_SCALE = 0.4  # HDR paint colour -> UE base colour; chosen by eye against screenshots, UNVERIFIED
+
+
+def channel_code(texel, channels):
+    """HLSL for a static component mask: one channel broadcasts, several keep their places."""
+    picked = [c for c in 'rgb' if c.upper() in channels]
+    if len(picked) == 1:
+        return f'{texel}.{picked[0]}.xxx'
+    return f'({texel}.rgb*float3({",".join("1" if c.upper() in channels else "0" for c in "rgb")}))'
+
 
 def apply(data):
     recipe_id = data['recipe_id']
@@ -32,15 +47,13 @@ def apply(data):
     mel.delete_all_material_expressions(material)
     material.set_editor_property('used_with_skeletal_mesh', True)
 
-
     def node(cls, **properties):
         value = mel.create_material_expression(material, cls, -500, 0)
         for key, prop in properties.items():
             value.set_editor_property(key, prop)
         return value
 
-
-    def texture(parameter, normal=False, color=False, address=None):
+    def import_texture(parameter, normal=False, color=False, address=None):
         task = unreal.AssetImportTask()
         task.filename = data['textures'][parameter]
         task.destination_path = destination
@@ -54,78 +67,103 @@ def apply(data):
         asset = textures[0]
         asset.set_editor_property('srgb', color)
         if normal:
+            # TC_NORMALMAP keeps only red/green and rebuilds z, as the game's shader does (blue is not normal data).
             asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
         # Installed Texture2D AddressX/AddressY (e.g. ['TA_Clamp', 'TA_Wrap']), read by prepare_weapon_paint.py.
         for prop, mode in zip(('address_x', 'address_y'), address or []):
             asset.set_editor_property(prop, getattr(unreal.TextureAddress, mode.upper()))
         eal.save_loaded_asset(asset, only_if_is_dirty=False)
+        return asset
+
+    def sample(asset, normal=False, color=False):
         return node(unreal.MaterialExpressionTextureSample, texture=asset,
-            sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if normal else
-                unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if color else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+                    sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if normal else
+                    unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if color else
+                    unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
 
+    def custom(code, output, names):
+        effect = node(unreal.MaterialExpressionCustom, code=code, output_type=output)
+        entries = []
+        for name in names:
+            entry = unreal.CustomInput()
+            entry.set_editor_property('input_name', name)
+            entries.append(entry)
+        effect.set_editor_property('inputs', entries)
+        return effect
 
-    def place_uv1(sample, scale):
-        # UV1 * scale.xy + scale.zw, the UNVERIFIED reading of p_PatternScalePosition / p_DecalScalePosition.
-        uv = node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1, u_tiling=scale[0], v_tiling=scale[1])
-        offset = node(unreal.MaterialExpressionConstant2Vector, r=scale[2], g=scale[3])
+    def feed_uv(target, coordinate, scale=(1.0, 1.0), offset=(0.0, 0.0)):
+        uv = node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=coordinate,
+                  u_tiling=scale[0], v_tiling=scale[1])
         shift = node(unreal.MaterialExpressionAdd)
         mel.connect_material_expressions(uv, '', shift, 'A')
-        mel.connect_material_expressions(offset, '', shift, 'B')
-        mel.connect_material_expressions(shift, '', sample, 'UVs')
+        mel.connect_material_expressions(node(unreal.MaterialExpressionConstant2Vector, r=offset[0], g=offset[1]),
+                                         '', shift, 'B')
+        mel.connect_material_expressions(shift, '', target, 'UVs')
 
+    def constant3(values):
+        return node(unreal.MaterialExpressionConstant3Vector, constant=unreal.LinearColor(*values[:3], 1))
 
-    # pattern_used false (prepare_weapon_paint.py): zone colours only, no pattern texture or blend.
-    pattern = data.get('pattern_used', True)
+    vectors, scalars = data['params']['vector'], data['params']['scalar']
+    pattern = data.get('pattern_used', False)
     decal = data.get('decal') or {}
     use_decal = bool(decal.get('used'))
-    inputs = {'Mask': texture('p_Masks'), 'Detail': texture('p_Diffuse')}
-    outputs = {}  # custom input -> (expression, output name) for non-default outputs
-    if pattern:
-        inputs['Pattern'] = texture('p_Pattern', color=True)
-    normal = texture('p_NormalScopesEmissive', normal=True)
-    vectors = data['params']['vector']
+    inputs, outputs = {}, {}  # custom input -> expression, or (expression, output name)
+
+    masks = import_texture('p_Masks')
+    inputs['Light'] = sample(masks)
+    feed_uv(inputs['Light'], 0, (1.0, 0.5))            # upper half: light/dark map
+    inputs['Mask'] = sample(masks)
+    feed_uv(inputs['Mask'], 0, (1.0, 0.5), (0.0, 0.5))  # lower half: zone mask
+    inputs['Detail'] = sample(import_texture('p_Diffuse'))
+    normal = sample(import_texture('p_NormalScopesEmissive', normal=True), normal=True)
     for zone in 'ABC':
         for tone in ['Shadow', 'Midtone', 'Hilight']:
-            inputs[zone+tone] = node(unreal.MaterialExpressionConstant3Vector,
-                constant=unreal.LinearColor(*vectors[f'p_{zone}Color{tone}'][:3], 1))
+            inputs[zone + tone] = constant3(vectors[f'p_{zone}Color{tone}'])
+    inputs['DColor'] = constant3(vectors['p_DColor'])
+    inputs['Tones'] = node(unreal.MaterialExpressionConstant2Vector, r=scalars['p_HighlightsIntensity'],
+                           g=scalars['p_ShadowsIntensity'])
     if pattern:
-        for name, parameter in [('PatternColor', 'p_PatternColor'), ('PatternWeight', 'p_PatternChannelScale')]:
-            inputs[name] = node(unreal.MaterialExpressionConstant3Vector,
-                constant=unreal.LinearColor(*vectors[parameter][:3], 1))
-        place_uv1(inputs['Pattern'], vectors['p_PatternScalePosition'])
+        inputs['Pattern'] = sample(import_texture('p_Pattern', color=True), color=True)
+        place = vectors['p_PatternScalePosition']
+        feed_uv(inputs['Pattern'], 1, place[:2], place[2:4])
+        inputs['PatternColor'] = constant3(vectors['p_PatternColor'])
+        inputs['PatternWeight'] = constant3(vectors['p_PatternChannelScale'])
+        inputs['PatternReplace'] = node(unreal.MaterialExpressionConstant, r=scalars['p_ReplacePattern'])
     if use_decal:
-        inputs['Decal'] = texture('p_Decal', color=True, address=decal['address'])
+        inputs['Decal'] = sample(import_texture('p_Decal', color=True, address=decal['address']), color=True)
         outputs['DecalAlpha'] = (inputs['Decal'], 'A')
-        for name, key in [('DecalColor', 'color'), ('DecalWeight', 'channel')]:
-            inputs[name] = node(unreal.MaterialExpressionConstant3Vector,
-                constant=unreal.LinearColor(*decal[key][:3], 1))
-        inputs['DecalReplace'] = node(unreal.MaterialExpressionConstant, r=decal['replace'])
-        place_uv1(inputs['Decal'], decal['scale_position'])
-    channel = 'rgb'[data['detail_channel']]
-    code = f'float d=Detail.{channel}; float low=saturate(d*2), high=saturate(d*2-1);\n'
-    for zone in 'ABC':
-        code += f'float3 {zone}=lerp(lerp({zone}Shadow,{zone}Midtone,low),{zone}Hilight,high);\n'
-    code += '''float3 base=A*Mask.r+B*Mask.g+C*Mask.b;
-    base += (1-saturate(Mask.r+Mask.g+Mask.b))*float3(.2,.2,.22);
-    PATTERN_BLEND
-    DECAL_BLEND
-    // Compress together to retain HDR palette hue within UE's base-color range.
-    return base/(1+max(base.r,max(base.g,base.b)));
-    '''
-    code = code.replace('PATTERN_BLEND', 'base=lerp(base,Pattern.rgb*PatternColor*d,saturate(dot(Mask.rgb,PatternWeight)));'
-                        if pattern else '// no pattern for this MIC chain')
-    # UNVERIFIED decal reading (prepare_weapon_paint.DECAL_READING): multiply, or replace as DecalReplace -> 1.
-    code = code.replace('DECAL_BLEND', 'float3 decal=Decal.rgb*DecalColor;\n    '
-                        'base=lerp(base,lerp(base*decal,decal*d,DecalReplace),saturate(dot(Mask.rgb,DecalWeight))*DecalAlpha);'
-                        if use_decal else '// no decal drawn for this MIC chain')
-    effect = node(unreal.MaterialExpressionCustom, code=code,
-        output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    custom_inputs = []
-    for name in list(inputs) + list(outputs):
-        entry = unreal.CustomInput()
-        entry.set_editor_property('input_name', name)
-        custom_inputs.append(entry)
-    effect.set_editor_property('inputs', custom_inputs)
+        place, angle = decal['scale_position'], decal['rotate'] * 3.14159265
+        # Shift by zw, rotate about the centre, scale xy about the centre (tools/weapon_paint_model.decal_uv).
+        uv_code = (f'float2 t=UV+float2({place[2]},{place[3]})-0.5; float s=sin({angle}), c=cos({angle});\n'
+                   f'float2 r=float2(c*t.x-s*t.y, s*t.x+c*t.y)+0.5;\n'
+                   f'return r*float2({place[0]},{place[1]})+(1-float2({place[0]},{place[1]}))*0.5;')
+        uv_node = custom(uv_code, unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['UV'])
+        mel.connect_material_expressions(node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1),
+                                         '', uv_node, 'UV')
+        mel.connect_material_expressions(uv_node, '', inputs['Decal'], 'UVs')
+        inputs['DecalColor'] = constant3(decal['color'])
+        inputs['DecalWeight'] = constant3(decal['channel'])
+        inputs['DecalModes'] = node(unreal.MaterialExpressionConstant2Vector, r=decal['full_color'], g=decal['replace'])
+
+    detail = 'rgb'[data['detail_channel']]
+    code = (f'float high=saturate(Light.r*Tones.x), low=saturate(Light.g*Tones.y);\n'
+            f'float3 c=DColor;\n')
+    for zone, channel in zip('ABC', 'rgb'):
+        code += f'c=lerp(c, lerp(lerp({zone}Midtone,{zone}Hilight,high),{zone}Shadow,low), Mask.{channel});\n'
+    if pattern:
+        code += (f'float3 p={channel_code("Pattern", data.get("pattern_channels", "RGB"))}*PatternColor;\n'
+                 f'float pw=saturate(dot(Mask.rgb*PatternWeight, Mask.rgb*PatternWeight));\n'
+                 f'c=lerp(c*lerp(float3(1,1,1),p,pw), lerp(c,p,pw), PatternReplace);\n')
+    if use_decal:
+        code += (f'float3 d={channel_code("Decal", data.get("decal_channels", "RGB"))};\n'
+                 f'float3 dt=lerp(DecalColor, DecalColor*d, DecalModes.x);\n'
+                 f'float dw=saturate(dot(Mask.rgb*DecalWeight, Mask.rgb*DecalWeight));\n'
+                 f'float3 da=lerp(d*dw, dw*DecalAlpha, DecalModes.x);\n'
+                 f'c=lerp(c*lerp(float3(1,1,1),dt,da), lerp(c,dt,da), DecalModes.y);\n')
+    code += (f'c*=Detail.{detail}*{DISPLAY_SCALE};\n'
+             '// Keep hue when the scaled HDR colour still exceeds 1.\n'
+             'return c/max(1,max(c.r,max(c.g,c.b)));')
+    effect = custom(code, unreal.CustomMaterialOutputType.CMOT_FLOAT3, list(inputs) + list(outputs))
     for name, value in inputs.items():
         mel.connect_material_expressions(value, '', effect, name)
     for name, (value, output) in outputs.items():
@@ -145,8 +183,8 @@ def apply(data):
     mesh.set_editor_property('materials', slots)
     eal.save_loaded_asset(mesh, only_if_is_dirty=False)
     unreal.log(f'OW_PAINT {recipe_id} -> {mesh_path}: {data["material_identity"]}, {len(slots)} slots, '
-               f'pattern {"used" if pattern else "not used"}, decal {"used" if use_decal else "not used"}, '
-               f'shader UNVERIFIED')
+               f'detail {detail}, pattern {"used" if pattern else "not used"}, '
+               f'decal {"used" if use_decal else "not used"}, shader UNVERIFIED')
 
 
 data = json.loads(Path(os.environ['OPENWILLOW_WEAPON_PAINT']).read_text())

@@ -6,12 +6,14 @@ As in the renderer, a MIC chain without p_Pattern (or with no pattern weight)
 gets the zone colours only (`pattern_used` false). `mesh` names the UE
 skeletal mesh the importer paints.
 
-With --reader/--package the owned reader adds two installed facts UModel's
-MIC export lacks: the base Material's own parameter defaults (its surviving
+With --reader/--package the owned reader adds installed facts UModel's MIC
+export lacks: the base Material's own parameter defaults (its surviving
 MaterialExpression*Parameter objects; params["source"] says where each value
-came from) and the decal texture's address modes. The decal layer (`decal`)
-is an UNVERIFIED reading, see DECAL_READING; the graph that consumes it is
-stripped from the cooked data.
+came from), the decal texture's address modes, and the leaf MIC's static
+parameters (tools/material_static_parameters.py), which pick the detail,
+pattern and decal channels. The colour model the importer draws is the
+UNVERIFIED reading in tools/weapon_paint_model.py (PAINT_READING), recovered
+from the compiled Master_Gun shaders; the graph itself is stripped.
 """
 import argparse
 import json
@@ -21,16 +23,17 @@ import re
 import subprocess
 import tempfile
 from render_weapon_previews import resolve_material, weapon_class, DETAIL_CHANNELS
+from material_static_parameters import decode_tail, mask_channels
+from weapon_paint_model import PAINT_PARAMETERS, PAINT_READING
 
 
 MESH_ROOT = '/Game/OpenWillow/Weapons/'
 VALUE_PARAMETERS = {'MaterialExpressionScalarParameter': 'scalar', 'MaterialExpressionVectorParameter': 'vector'}
 ZERO = {'scalar': 0.0, 'vector': (0.0, 0.0, 0.0, 0.0)}
-DECAL_READING = ('UNVERIFIED: p_Decal sampled at UV1 * xy + zw of p_DecalScalePosition (as p_PatternScalePosition), '
-                 'with the installed texture address modes; weight saturate(dot(p_Masks.rgb, p_DecalChannel.rgb)) '
-                 'times decal alpha; Decal.rgb * p_DecalColor multiplies the zone colours, moving to a replace '
-                 '(times the detail tone) as p_ReplaceDecal goes to 1. p_DecalRotate and sw_FlipDecalOnRightSide '
-                 'are not applied.')
+DECAL_READING = ('UNVERIFIED: p_Decal at UV1 shifted by zw of p_DecalScalePosition, rotated about (0.5, 0.5) by '
+                 'p_DecalRotate * pi and scaled by xy about (0.5, 0.5), with the installed texture address modes; '
+                 'tint and amount as in tools/weapon_paint_model.py.')
+STATIC_DEFAULTS = {'p_WeapClassSelect': None, 'p_PatternChannel': 'RGB', 'p_DecalChannel': 'RGB'}
 
 
 def as_value(kind, value):
@@ -86,6 +89,17 @@ class PackageReader:
             text = self.run('--properties-batch', str(listing), '--property-offset', '4')
         return {record['index']: record for record in map(json.loads, filter(str.strip, text.splitlines()))}
 
+    def names(self):
+        if not hasattr(self, '_names'):
+            self._names = json.loads(self.run('--names'))
+        return self._names
+
+    def trailing_bytes(self, index):
+        """Bytes after one export's tagged properties."""
+        record = self.records([index])[index]
+        payload = bytes(json.loads(self.run('--payload', str(index))))
+        return payload[record['property_offset'] + record['consumed_bytes']:]
+
     def find(self, name, klass):
         hits = [e for e in self.exports if e['name'] == name and e['class'].split('.')[-1] == klass]
         return hits[0] if len(hits) == 1 else None
@@ -121,6 +135,20 @@ class InstalledFacts:
                     material['path'], [(e['class'], records[e['index']]) for e in children], self.class_defaults())
         return self.cache[name]
 
+    def static_channels(self, name):
+        """Channels the MIC's static parameter set selects, by parameter name, or None.
+
+        A cooked MIC with a static permutation stores its resolved set (inherited values included),
+        so the leaf MIC is enough. decode_tail refuses unless the trailing bytes are consumed exactly."""
+        mic = self.package.find(name, 'MaterialInstanceConstant')
+        if mic is None:
+            return None
+        tail = self.package.trailing_bytes(mic['index'])
+        if not tail:
+            return None
+        static = decode_tail(tail, self.package.names())['static']
+        return {entry['name']: mask_channels(entry) for entry in static['component_masks']}
+
     def texture_address(self, name):
         texture = self.package.find(name, 'Texture2D')
         if texture is None:
@@ -150,8 +178,6 @@ def decal_layer(params, texture_dir, facts):
         key for key in ('rotate', 'full_color', 'replace') if not isinstance(layer[key], (int, float))]
     if missing:
         layer['not_used_because'] = f"no value for {', '.join(missing)} (base defaults need --reader)"
-    elif layer['full_color'] != 1:
-        layer['not_used_because'] = 'p_UseFullColorDecal is not 1; the single-channel decal is not read'
     elif not path.is_file():
         layer['not_used_because'] = f'missing {path}'
     elif facts is None:
@@ -163,6 +189,20 @@ def decal_layer(params, texture_dir, facts):
         else:
             layer['used'] = True
     return layer
+
+
+def static_choices(chain, params, kind, facts):
+    """(detail channel index, pattern channels, decal channels, where they came from)."""
+    found = facts.static_channels(chain[0]) if facts is not None and hasattr(facts, 'static_channels') else None
+    if found:
+        channels = {name: found.get(name, default) for name, default in STATIC_DEFAULTS.items()}
+        detail = channels['p_WeapClassSelect']
+        if detail is None or len(detail) != 1 or detail not in 'RGB':
+            raise ValueError(f'{chain[0]}: p_WeapClassSelect selects {detail!r}, not one colour channel')
+        return ('RGB'.index(detail), channels['p_PatternChannel'], channels['p_DecalChannel'],
+                f'{chain[0]} static parameters')
+    guess = DETAIL_CHANNELS[(params['texture']['p_Diffuse'], kind)]
+    return guess, 'RGB', 'RGB', 'DETAIL_CHANNELS guess (static parameters need --reader)'
 
 
 def prepare(recipe_path, materials, mesh=None, facts=None):
@@ -178,7 +218,7 @@ def prepare(recipe_path, materials, mesh=None, facts=None):
         raise ValueError(f'No local export of {identity}')
     params, texture_dir, chain = resolved
     kind = weapon_class(recipe, params)
-    channel = DETAIL_CHANNELS[(params['texture']['p_Diffuse'], kind)]
+    channel, pattern_channels, decal_channels, channel_source = static_choices(chain, params, kind, facts)
     weights = params['vector'].get('p_PatternChannelScale')
     pattern_used = bool(params['texture'].get('p_Pattern')) and isinstance(weights, (tuple, list)) and any(
         isinstance(w, (int, float)) and w > 0 for w in weights[:3])
@@ -194,17 +234,22 @@ def prepare(recipe_path, materials, mesh=None, facts=None):
         if not path.is_file():
             raise ValueError(f'Missing {path}')
         paths[name] = str(path.resolve())
-    required = [f'p_{zone}Color{tone}' for zone in 'ABC'
-                for tone in ['Shadow', 'Midtone', 'Hilight']]
+    required = PAINT_PARAMETERS['vector'][1:] + PAINT_PARAMETERS['vector'][:1]  # zone colours first
+    scalars = list(PAINT_PARAMETERS['scalar'])
     if pattern_used:
-        required += ['p_PatternColor', 'p_PatternChannelScale', 'p_PatternScalePosition']
+        required += PAINT_PARAMETERS['pattern_vector']
+        scalars += PAINT_PARAMETERS['pattern_scalar']
     for name in required:
         if not is_vector(params['vector'].get(name)):
-            raise ValueError(f'Missing or invalid vector parameter {name}')
+            raise ValueError(f'Missing or invalid vector parameter {name} (base defaults need --reader)')
+    for name in scalars:
+        if not isinstance(params['scalar'].get(name), (int, float)):
+            raise ValueError(f'Missing scalar parameter {name} (base defaults need --reader)')
     return {'recipe_id': recipe_path.stem, 'material_identity': identity,
             'parent_chain': chain, 'weapon_class': kind, 'detail_channel': channel,
-            'params': params, 'textures': paths, 'pattern_used': pattern_used,
-            'decal': decal, 'mesh': mesh, 'shader_verified': False}
+            'pattern_channels': pattern_channels, 'decal_channels': decal_channels,
+            'channel_source': channel_source, 'params': params, 'textures': paths, 'pattern_used': pattern_used,
+            'decal': decal, 'mesh': mesh, 'reading': PAINT_READING, 'shader_verified': False}
 
 
 if __name__ == '__main__':
@@ -241,4 +286,5 @@ if __name__ == '__main__':
         print(f"{entry['recipe_id']}: {len(entry['parent_chain'])} MICs, {len(entry['textures'])} textures, "
               f"pattern {'used' if entry['pattern_used'] else 'not used'}, "
               f"decal {'none' if decal is None else 'used' if decal['used'] else 'not used: ' + decal['not_used_because']}, "
+              f"detail {'RGB'[entry['detail_channel']]} from {entry['channel_source']}, "
               f"{len(defaulted)} base defaults -> {entry['mesh']}; shader UNVERIFIED")

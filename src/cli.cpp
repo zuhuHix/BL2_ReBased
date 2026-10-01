@@ -19,7 +19,7 @@ namespace {
 
 void usage() {
     throw std::runtime_error(
-        "usage: ow-package <package> [--exports | --imports | --census | --scene-records <schema> | --terrain-records <schema> | --payload <index> | --payloads <index>... | --verify-decoded <file> | "
+        "usage: ow-package <package> [--exports | --imports | --names | --census | --scene-records <schema> | --terrain-records <schema> | --payload <index> | --payload-file <index> <output> | --payloads <index>... | --verify-decoded <file> | "
         "--resolve <reference> --cooked <directory> | --properties <index> "
         "--property-offset <bytes> [--array-schema <file>] | --properties-batch <index-file> "
         "--property-offset <bytes> [--array-schema <file>] | --mesh <index> "
@@ -213,6 +213,23 @@ int main(int argc, char** argv) {
                 std::cout << "]}";
             }
             std::cout << "]\n";
+            return 0;
+        }
+        // Same bytes as --payload, written raw to a file: large objects (a shader cache is
+        // hundreds of MB) are impractical as JSON. The caller keeps the output under local/.
+        if (mode == "--payload-file") {
+            if (argc != 5) usage();
+            const auto index = signedNumber(argv[3]);
+            if (index <= 0) throw std::runtime_error("payload requires a positive export index");
+            const auto& object = package->object(index);
+            auto reader = package->reader();
+            reader.pos = object.offset;
+            reader.require(object.size);
+            std::ofstream output(argv[4], std::ios::binary);
+            if (!output) throw std::runtime_error("cannot open payload output file");
+            output.write(reinterpret_cast<const char*>(package->data.data() + object.offset), object.size);
+            if (!output) throw std::runtime_error("cannot write payload output file");
+            std::cout << "{\"index\":" << index << ",\"bytes\":" << object.size << "}\n";
             return 0;
         }
         if (mode == "--payload") {
@@ -955,6 +972,14 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (mode == "--names") {
+            // Name table in index order, so tools can read FName indices in opaque object data.
+            if (argc != 3) usage();
+            std::cout << '[';
+            for (size_t i = 0; i < package->names.size(); ++i) std::cout << (i ? "," : "") << quote(package->names[i]);
+            std::cout << "]\n";
+            return 0;
+        }
         if (mode == "--exports") {
             if (argc != 3) usage();
             std::cout << '[';

@@ -1194,9 +1194,41 @@ powershell -File tools/seed_slice_player_assets.ps1 -Steps paint -Paint local/it
 `--reader/--package` lets the paint tool fill scalar and vector parameters that no MIC sets from the base
 Material's own parameter expressions (they survive in the cooked package although the graph is stripped) and
 records each value's source; without them a chain that leaves a zone colour to the base material fails rather
-than guessing. The decal layer the importer draws is an `UNVERIFIED` reading (UV1 x scale + offset, zone weights
-times decal alpha, multiply or replace); `p_DecalRotate` and the flip switch are not applied. `tools/slice_npc_assets.py`
-needs numpy and Pillow in the Python that runs it.
+than guessing. With them it also reads the leaf MIC's static parameters, which choose the detail, pattern and
+decal channels. The colour model is described in the next section. `tools/slice_npc_assets.py` needs numpy and
+Pillow in the Python that runs it.
+
+### Weapon paint: where the Master_Gun reading comes from
+
+Master_Gun's expression graph is stripped from the cooked packages, so the paint model was recovered from compiled
+data instead (2026-10-02, AI-assisted, `UNVERIFIED` against the running game):
+
+```powershell
+# Static parameter sets of every MaterialInstanceConstant with a static permutation (exact-consumption oracle)
+python tools/material_static_parameters.py --reader build/Release/ow-package.exe `
+  --package "$cooked\Startup.upk" --mic Mati_MaliwanUncommon Mati_JakobsCommonPistol `
+  --output local/paint_research/static_params.json
+# Raw shader cache object for local study (220 MB, stays under local/)
+build/Release/ow-package.exe "$cooked\RefShaderCache-PC-D3D-SM3.upk" --payload-file 1 local/paint_research/refcache.bin
+build/Release/ow-package.exe "$cooked\RefShaderCache-PC-D3D-SM3.upk" --names > local/paint_research/ref_names.json
+# Preview the reading on a prepared gun (pure Python thumbnail renderer)
+python tools/render_weapon_previews.py slice_pistol --items local/items/slice `
+  --paint local/items/paint/slice_guns.json --output local/paint_research/thumbs --jobs 1
+```
+
+- `tools/material_static_parameters.py` decodes the bytes a cooked MIC keeps after its properties: its own
+  compiled resource block, then its static parameter set. 631 of 631 such MICs in `Startup.upk` consume their
+  bytes exactly. A MIC stores its resolved set, so the leaf MIC alone gives the channels.
+- In the shader cache each Master_Gun shader map is keyed by such a static set and carries its uniform expression
+  set (which parameter feeds which pixel constant and sampler) and the compiled D3D9 SM3 shaders.
+  `research/d3d9_bytecode.py` is our own token reader, written from Microsoft's public description of the
+  format; it is not a disassembler from a third party. Its output is game-derived and stays under `local/`.
+- What the base-pass pixel shader says is written down, in our own words, in `tools/weapon_paint_model.py`. The
+  short form: `p_Masks` stacks a light/dark map (upper half) over the zone mask (lower half); zone tones go from
+  Midtone towards Hilight and Shadow by those maps; zones are blended over `p_DColor`; pattern and decal multiply
+  (or replace) by squared mask weights; the result is multiplied by one detail atlas channel.
+- `host/ue5/import_weapon_paint.py` draws the same model in a Custom node. The environment reflection, emissive
+  and the game's lighting are not reproduced, and `DISPLAY_SCALE` (HDR colour to UE base colour) is chosen by eye.
 
 `tools/seed_slice_player_assets.ps1` holds `local/ue_run.lock` for each editor launch and never deletes
 `Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when

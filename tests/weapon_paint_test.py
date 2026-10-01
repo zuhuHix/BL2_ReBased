@@ -56,8 +56,9 @@ def base_defaults(name):
     if name != 'Base_Gun':
         return None
     vector = dict(colours('ABC'), p_DecalScalePosition=(1, 1, 0, 0), p_DecalChannel=(1, 1, 1, 1),
-                  p_DecalColor=(1, 1, 1, 1), p_AColorMidtone=(5, 5, 5, 1))
-    scalar = {'p_DecalRotate': 0.0, 'p_UseFullColorDecal': 1.0, 'p_ReplaceDecal': 0.0}
+                  p_DecalColor=(1, 1, 1, 1), p_AColorMidtone=(5, 5, 5, 1), p_DColor=(1, 1, 1, 1))
+    scalar = {'p_DecalRotate': 0.0, 'p_UseFullColorDecal': 1.0, 'p_ReplaceDecal': 0.0,
+              'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 3.0}
     return {'path': 'Fake.Base.Base_Gun', 'scalar': scalar, 'vector': vector,
             'texture': {'p_Decal': 'StubTexture'},
             'source': {kind: {name: f'Fake.Base.Base_Gun:{name}' for name in values}
@@ -69,10 +70,14 @@ class FakeFacts:
     class package:
         package = Path('Fake.upk')
 
-    def __init__(self, address=('TA_Clamp', 'TA_Wrap')):
+    def __init__(self, address=('TA_Clamp', 'TA_Wrap'), static=None):
         self.address = address
+        self.static = static
 
     base_defaults = staticmethod(base_defaults)
+
+    def static_channels(self, name):
+        return self.static
 
     def texture_address(self, name):
         return list(self.address) if self.address else None
@@ -161,13 +166,13 @@ class PrepareTest(unittest.TestCase):
             self.assertTrue(decal['used'])
             self.assertEqual(decal['texture'], 'FakeDecal')
             self.assertEqual(list(decal['scale_position']), [4, 2, 0.25, 0])
-            self.assertEqual(decal['rotate'], 0.5)  # emitted; the importer does not apply it
+            self.assertEqual(decal['rotate'], 0.5)
             self.assertEqual(decal['address'], ['TA_Clamp', 'TA_Wrap'])
             self.assertIn('UNVERIFIED', decal['reading'])
             self.assertTrue(out['textures']['p_Decal'].endswith('FakeDecal.png'))
             self.assertEqual(out['params']['source']['vector']['p_CColorHilight'], 'Fake.Base.Base_Gun:p_CColorHilight')
 
-    def test_decal_not_drawn_without_address_or_full_colour(self):
+    def test_decal_not_drawn_without_address_but_single_channel_is_drawn(self):
         with tempfile.TemporaryDirectory() as folder:
             root = chain(Path(folder), colours('ABC') + [('p_DecalScalePosition', (1, 1, 0, 0))])
             unknown = paint.prepare(recipe(root), root, facts=FakeFacts(address=None))['decal']
@@ -176,14 +181,185 @@ class PrepareTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = chain(Path(folder), colours('ABC'), child_scalars=[('p_UseFullColorDecal', 0)])
             single = paint.prepare(recipe(root), root, facts=FakeFacts())
-            self.assertFalse(single['decal']['used'])
-            self.assertIn('p_UseFullColorDecal', single['decal']['not_used_because'])
-            self.assertNotIn('p_Decal', single['textures'])
+            self.assertTrue(single['decal']['used'])  # the compiled shader has a single-channel path
+            self.assertEqual(single['decal']['full_color'], 0)
 
     def test_no_decal_parameter_means_no_layer(self):
         with tempfile.TemporaryDirectory() as folder:
             root = chain(Path(folder), colours('ABC'), decal=False)
-            self.assertIsNone(paint.prepare(recipe(root), root)['decal'])
+            self.assertIsNone(paint.prepare(recipe(root), root, facts=FakeFacts())['decal'])
+
+
+class StaticChoicesTest(unittest.TestCase):
+    def test_static_parameters_pick_channels_over_the_guess(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = chain(Path(folder), colours('ABC'))
+            facts = FakeFacts(static={'p_WeapClassSelect': 'G', 'p_PatternChannel': 'R', 'p_DecalChannel': 'RGB'})
+            out = paint.prepare(recipe(root), root, facts=facts)
+            self.assertEqual(out['detail_channel'], 1)  # the pistol guess would be 2 (blue)
+            self.assertEqual(out['pattern_channels'], 'R')
+            self.assertIn('Mati_Fake static parameters', out['channel_source'])
+            self.assertIn('UNVERIFIED', out['reading'])
+
+    def test_guess_without_static_parameters(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = chain(Path(folder), colours('ABC'))
+            out = paint.prepare(recipe(root), root, facts=FakeFacts(static=None))
+            self.assertEqual(out['detail_channel'], 2)
+            self.assertIn('guess', out['channel_source'])
+
+    def test_more_than_one_detail_channel_refuses(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = chain(Path(folder), colours('ABC'))
+            with self.assertRaisesRegex(ValueError, 'p_WeapClassSelect'):
+                paint.prepare(recipe(root), root, facts=FakeFacts(static={'p_WeapClassSelect': 'RG'}))
+
+
+def tail_bytes(extra=b''):
+    """An invented MIC tail in the observed layout: resource block, then a static parameter set."""
+    import struct
+    i = lambda *values: struct.pack(f'<{len(values)}i', *values)
+    guid = bytes(range(16))
+    resource = i(0, 0, 1) + guid + i(2) + i(2, -5, 7) + i(0, 0, 0, 0, 0, 0) + i(1) + i(0, 1) + struct.pack(
+        '<2f', 1.0, 0.5) + i(0)
+    static = guid + i(1) + i(0, 0) + i(0, 0) + guid  # switch name 0 = False, no override
+    static += i(2) + i(1, 0) + i(0, 0, 1, 0) + i(1) + guid + i(2, 0) + i(1, 1, 1, 0) + i(0) + guid
+    static += i(1) + i(3, 0) + bytes([3]) + i(1) + guid + i(0)
+    return resource + static + extra
+
+
+class StaticParameterDecodeTest(unittest.TestCase):
+    NAMES = ['sw_Fake', 'p_FakeClass', 'p_FakePattern', 'p_FakeNormal']
+
+    def test_exact_consumption(self):
+        from material_static_parameters import decode_tail, mask_channels
+        out = decode_tail(tail_bytes(), self.NAMES)
+        self.assertEqual(out['resource']['textures'], [-5, 7])
+        self.assertEqual(out['resource']['lookups'][0]['v_scale'], 0.5)
+        masks = out['static']['component_masks']
+        self.assertEqual([(m['name'], mask_channels(m), m['override']) for m in masks],
+                         [('p_FakeClass', 'B', True), ('p_FakePattern', 'RGB', False)])
+        self.assertEqual(out['static']['switches'][0]['name'], 'sw_Fake')
+        self.assertEqual(out['static']['normals'][0]['compression'], 3)
+
+    def test_left_over_or_truncated_bytes_refuse(self):
+        from material_static_parameters import decode_tail
+        with self.assertRaisesRegex(ValueError, 'left over'):
+            decode_tail(tail_bytes(b'\0\0\0\0'), self.NAMES)
+        with self.assertRaises(ValueError):
+            decode_tail(tail_bytes()[:-3], self.NAMES)
+
+    def test_bad_name_index_refuses(self):
+        from material_static_parameters import decode_tail
+        with self.assertRaisesRegex(ValueError, 'bad name'):
+            decode_tail(tail_bytes(), self.NAMES[:2])
+
+
+def model_params(**scalars):
+    import weapon_paint_model as model
+    vector = {name: (1.0, 1.0, 1.0, 1.0) for name in model.PAINT_PARAMETERS['vector']}
+    vector.update({'p_AColorMidtone': (2.0, 1.0, 0.5, 1), 'p_AColorHilight': (4.0, 4.0, 4.0, 1),
+                   'p_AColorShadow': (0.0, 0.0, 0.0, 1), 'p_BColorMidtone': (0.0, 1.0, 0.0, 1),
+                   'p_DColor': (0.5, 0.5, 0.5, 1), 'p_PatternColor': (2.0, 2.0, 2.0, 1),
+                   'p_PatternChannelScale': (1.0, 0.0, 0.0, 0), 'p_DecalColor': (1.0, 1.0, 1.0, 1),
+                   'p_DecalChannel': (0.0, 1.0, 0.0, 1)})
+    scalar = {'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 4.0, 'p_ReplacePattern': 0.0,
+              'p_UseFullColorDecal': 1.0, 'p_ReplaceDecal': 0.0}
+    scalar.update(scalars)
+    return {'vector': vector, 'scalar': scalar, 'pattern_channels': 'RGB', 'decal_channels': 'RGB'}
+
+
+class PaintModelTest(unittest.TestCase):
+    """Invented values; checks the reading in tools/weapon_paint_model.py, not the game."""
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+        import weapon_paint_model
+        self.model = weapon_paint_model
+
+    def assertClose(self, got, want):
+        for g, w in zip(got, want):
+            self.assertAlmostEqual(g, w, places=5)
+
+    def test_masks_texture_halves(self):
+        self.assertEqual(self.model.mask_uvs(0.25, 0.5), ((0.25, 0.25), (0.25, 0.75)))
+
+    def test_unmasked_texel_is_dcolor_times_detail(self):
+        self.assertClose(self.model.albedo((0, 0), (0, 0, 0), 0.5, model_params()), (0.25, 0.25, 0.25))
+
+    def test_zone_tones_midtone_then_hilight_then_shadow(self):
+        params = model_params()
+        self.assertClose(self.model.albedo((0, 0), (1, 0, 0), 1.0, params), (2.0, 1.0, 0.5))
+        # highlight amount saturate(0.25 * 2) = 0.5 -> halfway to Hilight
+        self.assertClose(self.model.albedo((0.25, 0), (1, 0, 0), 1.0, params), (3.0, 2.5, 2.25))
+        # shadow amount saturate(0.5 * 4) = 1 -> Shadow wins whatever the highlight
+        self.assertClose(self.model.albedo((1, 0.5), (1, 0, 0), 1.0, params), (0.0, 0.0, 0.0))
+
+    def test_zones_blend_in_order_over_dcolor(self):
+        # A fully, then B by half: halfway between A's midtone and B's midtone
+        self.assertClose(self.model.albedo((0, 0), (1, 0.5, 0), 1.0, model_params()), (1.0, 1.0, 0.25))
+
+    def test_pattern_multiplies_by_squared_weight_or_replaces(self):
+        texel = ((0, 0), (0.5, 0, 0), 1.0)
+        base = (0.5 * 0.5 + 2.0 * 0.5, 0.5 * 0.5 + 1.0 * 0.5, 0.5 * 0.5 + 0.5 * 0.5)
+        weight = 0.25  # (0.5 * 1) ** 2
+        tint = 2.0 * 0.5  # PatternColor * pattern value 0.5
+        multiplied = tuple(b * (1 + (tint - 1) * weight) for b in base)
+        self.assertClose(self.model.albedo(*texel, model_params(), pattern=(0.5, 0.5, 0.5)), multiplied)
+        replaced = tuple(b + (tint - b) * weight for b in base)
+        self.assertClose(self.model.albedo(*texel, model_params(p_ReplacePattern=1.0), pattern=(0.5, 0.5, 0.5)),
+                         replaced)
+
+    def test_decal_full_colour_uses_alpha_single_channel_uses_colour(self):
+        mask = (0, 1, 0)  # zone B, the decal channel
+        full = self.model.albedo((0, 0), mask, 1.0, model_params(), decal=(0.5, 0.5, 0.5, 0.0))
+        self.assertClose(full, (0.0, 1.0, 0.0))  # alpha 0: no decal
+        single = self.model.albedo((0, 0), mask, 1.0, model_params(p_UseFullColorDecal=0.0),
+                                   decal=(0.5, 0.5, 0.5, 0.0))
+        self.assertClose(single, (0.0, 1.0 * (1 + (1 - 1) * 0.5), 0.0))  # tint 1: multiply leaves it
+
+    def test_decal_uv_shift_rotate_scale_about_centre(self):
+        self.assertClose(self.model.decal_uv(0.5, 0.5, (1, 1, 0, 0), 0.0), (0.5, 0.5))
+        self.assertClose(self.model.decal_uv(0.75, 0.5, (1, 1, 0, 0), 0.5), (0.5, 0.75))  # quarter turn
+        self.assertClose(self.model.decal_uv(0.75, 0.5, (2, 2, 0, 0), 0.0), (1.0, 0.5))
+        self.assertClose(self.model.decal_uv(0.5, 0.5, (1, 1, 0.25, 0), 0.0), (0.75, 0.5))
+
+    def test_single_static_channel_broadcasts(self):
+        self.assertEqual(self.model.select((0.1, 0.2, 0.3), 'G'), (0.2, 0.2, 0.2))
+        self.assertEqual(self.model.select((0.1, 0.2, 0.3), 'RB'), (0.1, 0.0, 0.3))
+
+
+class BytecodeReaderTest(unittest.TestCase):
+    """An invented ps_3_0 token stream built from the documented token layout."""
+
+    @staticmethod
+    def stream(end=True):
+        import struct
+        dest = lambda kind, n, mask=0xF: 0x80000000 | ((kind & 7) << 28) | ((kind & 0x18) << 8) | (mask << 16) | n
+        src = lambda kind, n, swizzle=0xE4, modifier=0: (0x80000000 | ((kind & 7) << 28) | ((kind & 0x18) << 8)
+                                                         | (modifier << 24) | (swizzle << 16) | n)
+        tokens = [0xFFFF0300]
+        ctab = b'CTAB' + struct.pack('<7I', 28, 0, 0, 1, 28, 0, 0) + struct.pack('<IHHHHII', 48, 2, 9, 1, 0, 0, 0) + b'Fake\0\0\0\0'
+        tokens += [0xFFFE | (len(ctab) // 4) << 16] + list(struct.unpack(f'<{len(ctab) // 4}I', ctab))
+        tokens += [0x04000004, dest(0, 1, 0x7), src(2, 9), src(1, 0, 0x00), src(0, 2, 0xE4, 6)]  # mad r1.xyz
+        tokens += [0x03000042, dest(0, 0), src(1, 0), src(10, 3)]  # texld r0, v0, s3
+        if end:
+            tokens.append(0x0000FFFF)
+        return struct.pack(f'<{len(tokens)}I', *tokens)
+
+    def test_instructions_and_constant_table(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'research'))
+        from d3d9_bytecode import disassemble
+        shader, constants, lines = disassemble(self.stream())
+        self.assertEqual(shader, 'ps_3_0')
+        self.assertEqual(constants, [('Fake', 'c', 9, 1)])
+        self.assertEqual(lines, ['mad r1.xyz, c9, v0.x, (1-r2)', 'texld r0, v0, s3'])
+
+    def test_missing_end_token_refuses(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'research'))
+        from d3d9_bytecode import disassemble
+        with self.assertRaises(ValueError):
+            disassemble(self.stream(end=False))
 
 
 if __name__ == '__main__':
