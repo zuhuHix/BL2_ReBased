@@ -81,7 +81,7 @@ path is being used, what remains owned by this project and what acceptance
 check will prove the slice. Then execute that bounded slice without reopening
 settled architecture decisions.
 
-## Where things stand (updated 2026-10-01)
+## Where things stand (updated 2026-10-02)
 
 Read this first when picking work up; it is the short version of ROADMAP.md.
 
@@ -122,8 +122,28 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive
   screen/keyboard); open items (native auto-aim, constraint evaluation, weapon paint and decal readings, audio) are in
   `docs/verification/SANCTUARY_RPG_MISSION.md`. Hand play: `tools/run_quest.ps1 -Fresh`.
+- **Native analysis and dispatch rules (2026-10-02):** Ghidra drives the local analysis of the executable
+  (`tools/ghidra/`, `docs/NATIVE_ANALYSIS.md`; raw output stays under ignored `local/analysis/` or the private store).
+  Three own-words note sets exist, all `UNVERIFIED`: mission/behavior/Kismet dispatch
+  (`docs/verification/NATIVE_MISSION_DISPATCH.md`), progression and Phaselock targeting
+  (`NATIVE_PROGRESSION.md`, `NATIVE_PHASELOCK_TARGETING.md`). Only the dispatch notes are implemented, in
+  `src/behavior.*`, `src/kismet.*` and `src/mission.*` (the host fires link ids per the note; the Fire mission's first set
+  now starts from the kickoff, not from accept). Where the host and a note disagree (mission XP 395 vs 396, Phaselock target
+  search) the host is unchanged. After the dispatch change: quest 73/73 and resume 10/10, door 16/16, CTest 10/10,
+  packages 9/9, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE (regenerated worktree).
+- **Weapon paint (2026-10-01/02):** the slice guns are painted from Master_Gun's recovered colour model
+  (`tools/weapon_paint_model.py`, `tools/material_static_parameters.py`, our own SM3 token reader
+  `research/d3d9_bytecode.py`; listings stay under `local/`). Three passes recorded in DECISIONS; the whole reading and the
+  shading stand-ins are `UNVERIFIED` and nothing has been compared with the running game.
+- **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
+  about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC, no real-game
+  figure (`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`, 2026-10-02 section).
+- **Phaselock effects:** `research/particle_system.py` reads cooked `ParticleSystem` templates (layouts checked by
+  oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. The Sanctuary dummy stands on the lane
+  floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
-  `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
+  `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, `python tests/weapon_paint_test.py`,
+  `python tests/particle_system_test.py`, and the
   in-engine suites `tools/test_inventory_actions.ps1`, `tools/test_mover.ps1` (door) and
   `tools/test_quest.ps1` (Fire mission slice); all need a seeded worktree, see below.
 

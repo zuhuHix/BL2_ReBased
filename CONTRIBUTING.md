@@ -117,5 +117,5 @@ This is a solo project and AI coding tools are part of its workflow; the
 project rules require saying so. If you use them too, the same rules apply to
 their output: [AGENTS.md](AGENTS.md) is the tool-neutral working brief,
 [CLAUDE.md](CLAUDE.md) adds the repository-specific rules, a pre-write hook
-enforces the sensitive-area prompts, and you are responsible for what you
+reminds on sensitive-area edits and prompts for license/provenance files, and you are responsible for what you
 submit. Read what it writes.

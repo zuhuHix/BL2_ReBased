@@ -18,7 +18,7 @@ Borderlands 2 runs on Unreal Engine 3, a decade-old engine that Gearbox modified
 
 ---
 
-> **There is nothing to play yet.** Right now the engine can read the game's files and show three maps as frozen scenery in UE5. No guns, no enemies, no story. I put this up early so people can watch it grow, not because it's ready.
+> **There is nothing to play yet.** Right now the engine can read the game's files, show three maps as frozen scenery in UE5, and run one bounded Sanctuary slice (Maya, a lent pistol, Phaselock, one mission) in a developer harness full of labelled stand-ins that has not been compared with the original game. No enemy fights back, no story. I put this up early so people can watch it grow, not because it's ready.
 >
 > This is a fan project. Not affiliated with Gearbox, 2K or Take-Two. No game files and no Gearbox code live in this repo. It only works against **your own purchased copy** of Borderlands 2, and it never touches your install.
 
@@ -64,13 +64,20 @@ When it's done (see the roadmap; this isn't a remaster, not a remake) here's wha
 
 ## Where things stand
 
-*Updated 2026-09-23.*
+*Updated 2026-10-02.*
 
 Okay, Sanctuary is starting to actually look like Sanctuary.
 
-Three maps load in UE5 and you can fly around them as frozen scenery: **Ash**, **Sanctuary** and **Southpaw Factory**. There are still no guns, no enemies and no story yet.
+Three maps load in UE5 and you can fly around them as frozen scenery: **Ash**, **Sanctuary** and **Southpaw Factory**. On Sanctuary there is also a developer slice: Maya walks, holds a lent pistol, casts Phaselock and plays the stock "Rock, Paper, Genocide: Fire Weapons!" mission with Marcus, the range and the target dummy loaded from the game's own data. Many parts are labelled stand-ins and **none of it has been compared with the original game**. There is no real combat against enemies and no story yet.
 
-Since the last update, Sanctuary got a lot of love:
+Since 2026-10-01 (every item below is automated or by-eye evidence on one PC, not parity; the numbers are in [ROADMAP.md](ROADMAP.md#how-its-going)):
+
+- **Native analysis started.** Analysing `Borderlands2.exe` locally is now allowed (see [Is this legal?](#is-this-legal)). The first notes cover mission, behavior and Kismet dispatch, progression and Phaselock targeting. All are `UNVERIFIED` until checked in the real game; only the dispatch notes are implemented so far.
+- **Weapon paint** is rebuilt from the game's own compiled shader data in three passes. It is closer to in-game screenshots by an independent reviewer's score, but still an unverified reading.
+- **Inventory opens faster** (first open 443 ms to 234 ms on my PC; the original game's time is unknown).
+- **A reader for Phaselock's particle templates** exists; nothing is rendered from it yet.
+
+Earlier, on 2026-09-23, Sanctuary got a lot of love:
 
 - **The ground finally looks like ground.** Terrain layer blending is recovered, and BSP floors are coming through, backed by a new calibration check so they stay right.
 - **The moon base has textures now**, and the moon in the sky is scaled from the game's own `p_moonColor` value instead of a number I made up.
@@ -81,6 +88,8 @@ Since the last update, Sanctuary got a lot of love:
 Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. Phase 2 now has a C++ bytecode loader, object model, interpreter and Core native implementations. Both disassemblers structurally decode 12,968 of 12,978 script functions ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)); ten still fail. Ordinary item-only backpack Up/Down now executes the installed navigation script in UE5, with two passing key-to-script-to-selection checks. The rest of the menu still uses the host adapter; full live-game semantics and gameplay integration remain UNVERIFIED ([VM record](docs/verification/SCRIPT_VM_PROTOTYPE.md)).
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
+
+The door and the mission: a Sanctuary Matinee door opens from its installed Kismet events ([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)), and the Fire mission runs in the host on stock world data with labelled stand-ins (for example Phaselock targeting and a turn-in loot stand-in). Audio is looked up and logged, never played. See the [mission record](docs/verification/SANCTUARY_RPG_MISSION.md).
 
 **Next up:** finishing Sanctuary's last visual gaps and comparing the host-run Fire mission slice (Maya, a lent pistol, Phaselock from stock data) against the original game, which has not been done yet. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
 
@@ -117,7 +126,7 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
 | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
-I work on this actively, and I'm not promising completion dates. As of 2026-10-01 the repository is 21 days old, with 182 commits across 16 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
+I work on this actively, and I'm not promising completion dates. As of 2026-10-02 the repository is 22 days old, with 191 commits on `origin/main` across 17 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
 
 ## Help me keep going
 
@@ -130,14 +139,6 @@ If you want to help me spend way more time on this (a better subscription, maybe
 I'm not sure anyone actually reads this far, but if you did, thank you for checking the project out. I'm open to any constructive criticism, and if you feel like sending a PR, go for it.
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
-
-A first Sanctuary world-object bridge connects installed Matinee movement
-keys and mover scripts to one door's host movement/collision
-([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)). As of 2026-10-01 the door also opens from its
-installed Kismet events, and the stock Fire mission runs in the host on stock world data with labelled stand-ins
-(for example Phaselock targeting and a turn-in loot stand-in); audio is looked up and logged, never played, and
-nothing has been compared against the original game
-([mission record](docs/verification/SANCTUARY_RPG_MISSION.md)).
 
 ## Is this legal?
 
@@ -230,7 +231,7 @@ Every rebuilt native function needs a definition of "correct," and there are thr
 
 That standard isn't just for natives. Every change in this repo ends in a check run against the real game, and the check gets written down: synthetic tests in CI, differential checks against a real install, visual checks by an actual person looking at the screen. [DECISIONS.md](DECISIONS.md) is the record of all of it: every architectural choice, what got verified, and what didn't.
 
-It's a one-person project, and I'm not quiet about the tooling. I own every architectural call, every verification and every license or provenance decision myself, but day to day, ChatGPT (Astra and Luna) handles format decoding and smaller one-off tasks, and Claude handles keeping the project organized plus last-resort coding once I've burned through a month's usage on my plan. Both operate under a written brief ([CLAUDE.md](CLAUDE.md)) and guard hooks in [`.claude/`](.claude/) that require my confirmation before anything touches bounds-checking code, dependency wiring or license files.
+It's a one-person project, and I'm not quiet about the tooling. I own every architectural call, every verification and every license or provenance decision myself, but day to day, ChatGPT (Astra and Luna) handles format decoding and smaller one-off tasks, and Claude handles keeping the project organized plus last-resort coding once I've burned through a month's usage on my plan. Both operate under a written brief ([CLAUDE.md](CLAUDE.md)) and guard hooks in [`.claude/`](.claude/). Since 2026-09-30 an assistant may edit the package reader, container code and `CMakeLists.txt` and must then name the change and what is verified in its final message; the hooks still prompt me for license, dependency and provenance files and block game-file and decompiler-database writes.
 
 </details>
 
@@ -262,7 +263,7 @@ A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/i
 
 `tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest. `host/ue5/` is a minimal UE5 C++ project plus editor-Python importer/verifier that builds the scene, an inspection lighting rig and a free-flight spectator pawn, then reopens the saved scene and verifies it.
 
-Not implemented: class/default inheritance, runtime package streaming, other pixel formats, terrain layer blending, BSP, skeletal meshes, lightmaps, material graph translation, full UE3 collision parity, any gameplay.
+Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer. Gameplay exists only as the Sanctuary slice described above, with stand-ins and unverified rules. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for Maya, Marcus and the dummy.)
 
 Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 

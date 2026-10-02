@@ -989,7 +989,12 @@ time. `tools/test_quest.ps1`: 73/73 first run and 10/10 resume at 01:23 with thi
 later first runs (08:24, 08:26) ended silently after check 67, ~58 s in, with no error line and
 no crash dump. A build of HEAD without these edits, to compare, could not link at that point:
 another lane's uncommitted `src/` changes no longer matched the built `ow-core.lib`. That
-failure is **unexplained**.
+failure is **unexplained**. Follow-up (08:38-08:45): after a clean rebuild of `ow-core` and the UE
+module with both lanes' code in place, the quest suite passed 73/73 and 10/10 and exited cleanly
+(no crash report), mover 16/16, inventory 45/0/2/2. Two runs at 08:29-08:30 on the earlier build
+had passed every check but crashed during shutdown, and the module's debug symbols had been
+overwritten by the failed HEAD link, so those stacks could not be read. A mixed build state is the
+likely cause; it is not proven.
 
 **UNVERIFIED / not done.** The original game's open time; the page boot (~5 s) is unchanged,
 and cutting it needs fewer or deduplicated library loads in the converted movie or Ruffle work,

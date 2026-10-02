@@ -962,6 +962,55 @@ tooling notes are in [NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md) (policy:
 non-regenerable game-derived files (such as an analysis database under `local/analysis`)
 to a store outside the repository; see "Working on two machines" in that page.
 
+## Tools added 2026-10-01 and 2026-10-02 (one line each)
+
+Everything here writes game-derived output only under ignored `local/` (or, for Ghidra, `%OPENWILLOW_ANALYSIS%`), and
+every reading it supports stays `UNVERIFIED` until it is compared with the running game.
+
+Native analysis of the executable (local only; policy in [LEGAL.md](LEGAL.md), workflow in
+[NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md), "Native registration and queries"; DECISIONS 2026-10-02):
+
+| Tool | What it does | Command |
+|---|---|---|
+| `tools/ghidra/run.ps1` | Drives the imported Ghidra project headlessly; `-Tables` builds the native tables, `-Query` decompiles by name, native number, string, callers or vtable slot | `powershell -File tools/ghidra/run.ps1 -Tables -Apply` / `... -Query MissionTracker.UpdateObjective,native:114 -Callees 1 -Label` |
+| `tools/ghidra/OwNativeTables.java` | Ghidra script (run by `-Tables`): reads the registration tables, writes `natives.tsv` and `gnatives.tsv` and labels each native | via `run.ps1 -Tables` |
+| `tools/ghidra/OwNativeQuery.java` | Ghidra script (run by `-Query`): resolves queries, writes decompilation under the analysis output folder; its header lists every query form | via `run.ps1 -Query '@<file>'` |
+| `tools/ghidra/script_natives.py` | Lists every native `UFunction` of the code packages with its `iNative` number (input to the join above) | `python tools/ghidra/script_natives.py <out.tsv> [--cooked <CookedPCConsole>]` |
+| `tools/ghidra/class_layout.py` | Computes 32-bit field offsets of a script class from the packages so a native's field read can be named (oracle: `Core.Object` = 0x3C) | `python tools/ghidra/class_layout.py WillowGame.MissionTracker` |
+| `research/mission_event_link_ids.py` | Structural oracle: counts the link ids on mission events and reports any outside the ranges the dispatch note predicts; aggregate counts only | `python research/mission_event_link_ids.py [--packages Startup ...] [--examples]` (needs `OPENWILLOW_BL2`) |
+
+`ow-package` modes added for the slice and the paint work (none changes the install; the executor modes run installed data through our own code, not the game):
+
+| Mode | What it does | Command |
+|---|---|---|
+| `--payload-file` | Writes an export's raw bytes to a file (a shader cache is too large for `--payload`'s JSON) | `ow-package "$cooked\RefShaderCache-PC-D3D-SM3.upk" --payload-file 1 local/paint_research/refcache.bin` |
+| `--names` | Prints the package name table in index order as JSON | `ow-package "$cooked\RefShaderCache-PC-D3D-SM3.upk" --names > local/paint_research/ref_names.json` |
+| `--mission-run` | Runs one mission's native executor over installed data; steps `accept`, `kickoff`, `obj:<name>[:<bit>]`, `custom:<name>`, `turnin`, `tick:<s>` | `ow-package "$cooked\Startup.upk" --mission-run GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire --cooked $cooked accept kickoff obj:RockPaper_GoToRange turnin` |
+| `--behavior-run` | Runs one behavior provider alone; steps `enable:`, `disable:`, `tick:`, `event:<name>[:...]` and `fire:<link id>:<event>` (link-id filter, -1 = all links) | `ow-package "$cooked\Sanctuary_Dynamic.upk" --behavior-run <provider-path> --cooked $cooked fire:-1:OnTakeDamage` |
+| `--kismet-run ... --tick` | Runs a Kismet sequence from an entry point (`--remote`, `--mission`, `--op`, `--originator`); trailing `--tick <s>` pairs advance time and run what is due | `ow-package "$cooked\Sanctuary_Dynamic.upk" --kismet-run TheWorld.PersistentLevel.Main_Sequence.RocksPaperGenocide --cooked $cooked --remote RE_Ep14_OpenMarcusDoor --tick 1 --tick 3` |
+
+The step and event names above are examples from the verification records; the rules the executors follow are the
+`UNVERIFIED` notes in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATCH.md).
+
+Weapon paint and effects (detail in "Weapon paint: where the Master_Gun reading comes from" above):
+
+| Tool | What it does | Command |
+|---|---|---|
+| `tools/material_static_parameters.py` | Decodes the static parameter set a cooked MIC keeps after its properties (631 of 631 in `Startup.upk` consume their bytes exactly) | `python tools/material_static_parameters.py --reader build/Release/ow-package.exe --package "$cooked\Startup.upk" --mic <name>... --output local/paint_research/static_params.json` |
+| `tools/weapon_paint_model.py` | Library: our own-words reading of Master_Gun's colour model, shared by the preparer, the thumbnail renderer and the tests (not a command) | `python tests/weapon_paint_test.py` |
+| `research/d3d9_bytecode.py` | Library: our own SM3 (vs_3_0 / ps_3_0) token reader, written from Microsoft's public D3D9 bytecode description; `disassemble(code)` prints a plain register listing; listings are game-derived and stay under `local/` | imported by the paint research; checked in `python tests/weapon_paint_test.py` |
+| `research/particle_system.py` | Reads cooked `ParticleSystem` templates (emitters, LODs, modules, baked distributions, `BurstList`, `DynamicParams`) to JSON under `local/phaselock/emitters/`; reads only, renders nothing | `python research/particle_system.py [Part_SirenASHandOrb ...] [--package GD_Siren_Streaming_SF] [--oracle]`, tests `python tests/particle_system_test.py` |
+
+Inventory open-time benchmark (DECISIONS 2026-10-02; results in the 2026-10-02 section of
+[INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md); one PC, no original-game figure):
+
+- `-owinvopenbench=<N>` and `-owinvopenbenchdelay=<s>` (UE command line) open the inventory N times and log `OWINVTIME`
+  lines per open; `-owinvnopreload` turns off the level-start preloads for an A/B comparison (it is not a test default).
+- `powershell -File tools/test_inventory_actions.ps1 -OpenBench 5 [-OpenBenchDelay 20] [-Items local/items/slice]
+  [-NoInventoryMovie]` runs the benchmark instead of the action suite and prints one row per open. Pass
+  `-Extra @('-ddc=InstalledNoZenLocalFallback','-d3d11','-owinvnopreload')` for the no-preload run; `-Extra` replaces the
+  default list, so repeat the defaults.
+
 ## Independent oracles: umodel and the game's own object dumps
 
 Two external oracles are run against the existing decode. Neither is copied

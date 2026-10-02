@@ -349,6 +349,8 @@ so constant, curve and uniform tables cannot be told apart from the data alone y
 emitters, so the particles come from `BurstList`, which the reader does not decode. `ParticleModuleParameterDynamic.DynamicParams`
 and `ParticleSystem.LODSettings` are not decoded either.
 
+*Update 2026-10-02:* the "Particle template reader" section below supersedes this lead: the header bytes are ordinary delta-serialized tags and `BurstList` and `DynamicParams` are decoded by `research/particle_system.py`.
+
 ### What UModel build 1590 exports here (timed, 2026-10-02)
 
 | Command | Time | Result |
@@ -381,8 +383,8 @@ textures only (for example `Mat_SirenEnemyOrb`: `PhaseLockBubble_Dif_Tex`). They
 4. **Needs decoding first, for anything closer:** the `RawDistribution` table header (op, element count, chunk size)
    and `BurstList` (spawn counts), `ParticleModuleParameterDynamic.DynamicParams`, the remaining module properties
    (`Required` sub-UV and alignment are already read), and the material graphs of the FX materials
-   (blend mode, how `SphereCollapse` and the dynamic parameter are used). A `research/` reader for these is the
-   bounded next step. A converter to Niagara is a separate, larger task.
+   (blend mode, how `SphereCollapse` and the dynamic parameter are used). A `research/` reader for these was
+   the bounded next step and now exists (`research/particle_system.py`, section below); the FX material graphs remain stripped. A converter to Niagara is a separate, larger task.
 5. **Target animation:** use the `PhaseLockDefinition` chain (lift with blend-in, queued loop, drop stretched to
    0.5 s, land on walking) and the mesh-centring rule. For the slice dummy, decide with the maintainer whether a
    Psycho-shaped dummy borrows the Psycho clips: stock data gives the dummy no clips.

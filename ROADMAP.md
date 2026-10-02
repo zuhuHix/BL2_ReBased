@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-10-01
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-10-02
 
 ---
 
@@ -33,14 +33,20 @@ deferred until that gate is met; they move to Phase 5/6.
 
 ## How it's going
 
-The project is worked on actively. There are no completion dates and no
-time estimates here; this section only records what the repository shows as of
-2026-10-01.
+The project is worked on actively. There are no completion dates, no time
+estimates and no completion percentages here; this section only records what
+the repository shows as of 2026-10-02, and each line names the record that
+backs it ([DECISIONS.md](DECISIONS.md) entry date or verification file). Where
+a number is an automated check it says so; "passes" is never parity with the
+original game.
 
-- **Elapsed:** first commit 2026-09-10, so 21 calendar days. 182 commits on
-  `origin/main` across 16 days with at least one commit. Built with heavy AI
-  assistance (see the README). The first commit imported earlier local
-  prototypes, so the repository's clock started a little after the work did.
+**Elapsed.** First commit 2026-09-10, so 22 calendar days. 191 commits on
+`origin/main` across 17 days with at least one commit. Built with heavy AI
+assistance (see the README). The first commit imported earlier local
+prototypes, so the repository's clock started a little after the work did.
+
+**Dated milestones**
+
 - **2026-09-10:** package reader reads 2,008 / 2,008 packages; Phase 0 gated
   (UE5 chosen as host; one mesh and one texture render in it).
 - **2026-09-13:** Ash and Sanctuary load as frozen scenes in UE5 with a
@@ -54,11 +60,84 @@ time estimates here; this section only records what the repository shows as of
   loader, VM runtime and Core natives (prototype).
 - **2026-10-01:** the VM drives backpack navigation in UE5; one Sanctuary door
   opens from installed Matinee/Kismet data; the stock Fire mission plays end to
-  end in the host with labelled stand-ins.
+  end in the host with labelled stand-ins; weapon balances, loot pools, world
+  placement and Phaselock data decoded for the slice. Policy change: analysing
+  `Borderlands2.exe` locally is allowed, output stays out of the repository
+  (DECISIONS 2026-10-01).
+- **2026-10-02:** Ghidra tooling and the first native-analysis notes (mission,
+  behavior and Kismet dispatch, progression, Phaselock targeting); the executors
+  in `src/behavior.*`, `src/kismet.*` and `src/mission.*` now follow the
+  dispatch notes; weapon paint passes 1 to 3; a `ParticleSystem` template
+  reader; inventory open time measured and reduced.
 
-Not done: nothing has been compared against the original game, Sanctuary visual
-parity is open, and most natives are unverified. No phase after Phase 0 has
-passed its gate, and 79 maps are untouched.
+**Measured** (automated checks and timings; one PC unless stated)
+
+- Package reader: 2,008 / 2,008 packages, 4,751,329 serialized exports
+  (Phase 0 entries, 2026-09-10). Scripts: 12,968 of 12,978 functions decode
+  structurally ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)). Both are
+  structural agreement, not runtime compatibility.
+- Suites after the dispatch-rule change (DECISIONS 2026-10-02): CTest 10/10,
+  packages 9/9, quest suite 73/73 first run and 10/10 resume, door suite
+  16/16, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE
+  (sort order) on a regenerated worktree with a short backpack; 47 PASS / 2
+  KNOWN_DIVERGENCE on the fully seeded one (DECISIONS 2026-10-01).
+- Inventory open time (DECISIONS 2026-10-02,
+  [record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)): first open with the
+  page loaded 443 ms (358-488, 4 launches) before, 234 ms (213-252, 3 launches)
+  after moving one-time VM and mesh work to level start; repeat opens about 60
+  ms. An open pressed in the first ~5 s of play still takes about 5.5 s (the
+  page's movie player booting). No original-game open time exists.
+- Native registration (DECISIONS 2026-10-02, [notes](docs/NATIVE_ANALYSIS.md)):
+  the executable's tables hold 6,877 natives in 770 tables and all 199
+  numbered script natives resolve by name. A census over 133 missions puts all
+  3,420 behavior links in the predicted id ranges (structural only).
+- Weapon paint (DECISIONS 2026-10-01 and 2026-10-02): static parameters decode
+  exactly in 631 of 631 `Startup.upk` MICs; `tests/weapon_paint_test.py` 29
+  passed on invented values. An independent critic agent comparing host stills
+  with wiki in-game screenshots scored the Maliwan uncommon pistol 6.5/10 and the
+  Jakobs common pistol 5.0/10; that is an agent's judgement, not a real-game
+  comparison.
+- Particle templates ([record](docs/verification/PHASELOCK_STOCK_DATA.md),
+  "Particle template reader"): `tests/particle_system_test.py` 16 passed; all
+  17,506 non-empty baked distribution tables in four packages fit the assumed
+  layout. Reader and layout only: nothing is rendered from it yet.
+
+**UNVERIFIED** (read or fitted, not confirmed by running the original game)
+
+- Every native rule in the dispatch, progression and Phaselock-targeting notes
+  and the executor behaviour built on the dispatch notes: synthetic tests show
+  the executors follow the notes, not that the notes are right
+  ([dispatch](docs/verification/NATIVE_MISSION_DISPATCH.md),
+  [progression](docs/verification/NATIVE_PROGRESSION.md),
+  [targeting](docs/verification/NATIVE_PHASELOCK_TARGETING.md)). Where the
+  host and a note disagree the host is unchanged: the notes give 395 mission
+  XP at level 8 where the host gives 396, and a different Phaselock target
+  search than the host's view ray and sweep.
+- The whole weapon paint and decal reading, its display scale and shading
+  inputs (`USE_SHADER_SHADING` stays off until the scene lighting is
+  calibrated); environment reflection, emissive and in-game lighting are not
+  modelled.
+- The slice host stand-ins: kickoff played right after acceptance, dialog
+  outputs selected together, a save-state fixture for the dependency mission, a
+  turn-in loot stand-in (stock data drops nothing for this mission), a lent
+  mission weapon ([route record](docs/verification/SANCTUARY_RPG_MISSION.md)).
+
+**Blocked or open**
+
+- No capture of the original game exists for any slice behaviour: it needs the
+  game driven interactively with exclusive keyboard and screen
+  ([capture blocker](docs/verification/SANCTUARY_RPG_MISSION.md#capture-blocker-needs-the-maintainer)),
+  and a launch under the logged-in Steam account failed (DECISIONS 2026-10-02).
+- Sanctuary visual parity, the stripped sky graph, native material graphs and
+  the 79 untouched maps (see Now / next and Phase 1).
+- Audio is looked up and logged, never played; choosing a decoder is a
+  maintainer decision.
+- Two quest-suite first runs on 2026-10-02 ended silently after check 67; the
+  cause is unproven (a mixed build state is likely: a clean rebuild passed and
+  exited cleanly)
+  ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md), "Suites").
+
+No phase after Phase 0 has passed its gate.
 
 ---
 
@@ -69,19 +148,23 @@ movement keys drive the existing mesh/collision, and original mover notification
 scripts run in the VM using placed state. Activation is a developer interaction;
 mission gating, sequence dispatch, audio and original-game motion parity remain
 open. See [the mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
-Slice progress (2026-10-01): the door is activated through its installed Kismet events, and the stock
+Slice progress (2026-10-02): the door is activated through its installed Kismet events, and the stock
 "Rock, Paper, Genocide: Fire Weapons!" mission runs in the host through native executors over installed data
 (mission, behavior provider, dummy provider) with stock world data: a placed Marcus whose walk the installed Kismet
-starts, the stock range cylinder, the stock dummy and target Matinee, formula-based health, decoded respawn
-selection, a lent stock mission pistol, damage type taken from the held item, candidate XP into the skills
-component, Phaselock read from stock data (lift rule, valid-target rule and cast gate from script and data),
-progression in the quest save, health recomputed on level change, and save/resume. Recorded checks: quest suite
-73/73 and resume 10/10, door suite 16/16, inventory suite 47 PASS / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9.
+starts, the stock range cylinder, the stock dummy (standing on the lane floor; the earlier "kneeling" dummy was its
+mesh hanging below an origin placed at floor level, fixed by attaching it at the holder's socket from data) and target
+Matinee, formula-based health, decoded respawn selection, a lent stock mission pistol, damage type taken from the held
+item, candidate XP into the skills component, Phaselock read from stock data (lift rule, valid-target rule and cast
+gate from script and data), progression in the quest save, health recomputed on level change, and save/resume. The
+executors now follow the native dispatch notes (link-id filters, trigger limits, Kismet op stack, mission set
+completion), all `UNVERIFIED`. Recorded checks (DECISIONS 2026-10-02): quest suite 73/73 and resume 10/10, door suite
+16/16, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9.
 All of it is host behaviour with labelled stand-ins (native auto-aim selection and constraint evaluation for
 Phaselock, a save-state fixture for the dependency mission, a turn-in loot stand-in because stock data drops
 nothing for this mission) and `UNVERIFIED` rules; nothing has been compared against the original game, and every
 parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
-[the route record](docs/verification/SANCTUARY_RPG_MISSION.md).
+[the route record](docs/verification/SANCTUARY_RPG_MISSION.md) and
+[the dispatch notes](docs/verification/NATIVE_MISSION_DISPATCH.md).
 
 The concrete open items, roughly in the order they are being taken. Small,
 well-bounded ones are marked *good first task*.
@@ -348,7 +431,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 2: UnrealScript VM (M2) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
+## Phase 2: UnrealScript VM (M2) (prototype, in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
 Goal: Gearbox's own gameplay code executing, scoped to what Sanctuary and the
 chosen first Vault Hunter actually need (see
@@ -372,6 +455,11 @@ coverage.
       transitions, latent functions, timers
 - [ ] Native dispatch table: all 7,141 natives registered as stubs that log
       `UNIMPLEMENTED name(args)`
+      *Note (2026-10-02):* a scan of the executable's own registration tables
+      finds 6,877 natives in 770 tables, and all 199 numbered script natives
+      bind by name ([DECISIONS.md](DECISIONS.md) 2026-10-02, tooling in
+      `tools/ghidra/`). The two counts come from different sources and have not
+      been reconciled; no stub table exists yet.
 - [ ] The 286 Core builtins (operators, math, string, name, object)
 - [ ] Test harness running pure-script classes in isolation (the 268
       script-only `Behavior_*` classes), outputs compared to UDK
@@ -397,6 +485,9 @@ animation playback), not all 1,914 up front. Ground truth: UDK.
 - [ ] `SkeletalMeshComponent` (127), ~30 `AnimNode*` types,
       `PhysicsAssetInstance` (19)
 - [ ] `ParticleSystemComponent` (46) + Cascade modules → Niagara
+      *Caveat:* only a read-only template reader exists
+      (`research/particle_system.py`, Phaselock templates, layouts checked by
+      oracles); nothing is converted or rendered.
 - [ ] `WorldInfo` (56), `NavigationHandle` (44), `Settings`, `Camera`,
       `Light`, `Sound` stubs
 
@@ -405,7 +496,7 @@ collision, matching UDK-derived golden tests.
 
 ---
 
-## Phase 4: Willow natives (M3b) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">: the mountain
+## Phase 4: Willow natives (M3b) (slice pieces in the host, in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">: the mountain
 
 Goal: **Maya**, the vertical slice's first Vault Hunter, walks, shoots a
 handful of real guns, uses Phaselock and her skill trees, and enemies on
@@ -418,6 +509,10 @@ rule down in our own words, implement from that note, then confirm it with the
 golden-file loop: hook the native in the real game, log every call's inputs
 and outputs during play, implement until our engine reproduces the log, extend
 the log on mismatch. Decompiler output never enters the repository.
+Status (2026-10-02): the Ghidra tooling exists (`tools/ghidra/`) and three note sets
+have been written (mission/behavior/Kismet dispatch, progression, Phaselock targeting), all `UNVERIFIED`; the dispatch
+notes are implemented in the slice executors, the others are not yet. No native rule has been confirmed against the
+running game.
 
 Priority order:
 - [ ] Stat core (~120): `AttributeDefinition*`, `SkillDefinition`,
@@ -450,7 +545,10 @@ This is the vertical slice; once met, broad map and character coverage
       vertical-slice rescoping (2026-09-18)
 - [ ] Remaining Vault Hunters (5 of 6), deferred from Phase 4's
       vertical-slice rescoping (2026-09-18)
-- [ ] Kismet interpreter (`MissionTracker`, 81 natives)
+- [ ] Kismet interpreter (`MissionTracker`, 81 natives). *Caveat:* slice-scoped
+      Kismet, behavior and mission executors already run the Fire mission's
+      installed data (rules `UNVERIFIED`; see Now / next), which is not this
+      step's general interpreter.
 - [ ] Matinee → Sequencer for cutscenes
 - [ ] Mission system, objectives, fast travel, vending, ECHO/dialogue, Bink
       playback

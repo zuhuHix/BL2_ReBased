@@ -242,7 +242,8 @@ lies 70.6 uu from the world.json walk segment between nodes 12 and 26 (18,117.7 
 - `local/quest/OWQuest_1_MarcusStockPose-20261001-150538.png`: Marcus, textured, behind his shop counter bars, facing the
   camera.
 - `OWQuest_2a_DummySpawned-*.png`: the dummy and a dartboard at the far end of the range's centre lane.
-- `OWQuest_2_RangeDummy-20261001-150538.png`: after the forward move, the trolley (dartboard and kneeling dummy) has come down
+- `OWQuest_2_RangeDummy-20261001-150538.png`: after the forward move, the trolley (dartboard and dummy; the dummy looked kneeling because its origin was placed at floor level, corrected in the
+  2026-10-01 second-machine section below) has come down
   the centre lane toward the player.
 - `OWQuest_3_RangeMarcusAndDummy-20261001-150538.png`: Marcus at the end of his walk, standing on the range floor, with the lane
   and dartboard behind him.
@@ -445,11 +446,14 @@ hand-play session are reported separately.
 ### Visual checks (by eye; host presentation only)
 
 - `local/quest/OWQuest_2_RangeDummy-20261001-154542.png` (same view in `-155229`): Maya's arms hold the lent Maliwan
-  pistol in pale white and blue-grey paint. The card shows "Inflammatory Torment / Maliwan". The stock dummy kneels in
-  front of the dartboard.
+  pistol in pale white and blue-grey paint. The card shows "Inflammatory Torment / Maliwan". The stock dummy looks kneeling in
+  front of the dartboard (an origin-placement error, corrected in the second-machine section below; DECISIONS 2026-10-01,
+  "dummy world behaviours run in the host").
 - `OWQuest_1_MarcusStockPose-*`: Maya holds the grey Jakobs slice pistol at the start; the arms are visible.
-- `OWQuest_4_Phaselock-*`: the host target lifted into the range's ceiling beams inside the violet shell (now drawn
-  with `M_OW_FxAdditive`). The lift has no ceiling clamp; see the table.
+- `OWQuest_4_Phaselock-*`: the host target lifted inside the violet shell (now drawn
+  with `M_OW_FxAdditive`). Read at the time as "into the range's ceiling beams" with no ceiling clamp; that reading was
+  wrong, see the correction in the second-machine section below (DECISIONS 2026-10-01, "Phaselock lift, target rule and
+  cast gate").
 - `local/quest/OWHandSmoke_fresh_40s-20261001-155537.png` (desktop capture of the hand-play window): Sanctuary at the
   session start. Maya holds the slice pistol with her arms visible, and the objective line reads "talk to Marcus (E)".
 - Earlier captures (`-153640`) show the unpainted composite noise on the same pistol, for comparison.
