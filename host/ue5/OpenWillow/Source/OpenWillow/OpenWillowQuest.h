@@ -59,7 +59,8 @@ public:
     bool RestoreProgression(class UOpenWillowSkills& Skills);
     // The dummy's state written by its own provider's world behaviors (run in Pump):
     //  - Behavior_RegisterTargetable: whether the actor is in the host's targetable list (the stand-in for the global
-    //    TargetableList; no host targeting reads it yet, it is exposed for checks);
+    //    TargetableList). Phaselock's target choice reads it: the stock dummy is a candidate only once registered
+    //    (AOpenWillowWalker::PreferredPhaselockTarget); host-made targets are not in this list and count as registered;
     //  - Behavior_Transform: WillowAIPawn.TransformType and the target name it selects (GetTargetName).
     bool IsRegisteredTargetable(const AActor* Actor) const;
     FString DummyTargetName() const;

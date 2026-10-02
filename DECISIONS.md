@@ -3588,4 +3588,10 @@ stops until the maintainer clears it.
   violet sphere with a dark core, a large violet light pool, loop sprites not showing, and first-use texture
   compilation delaying the hand orb to +0.53 s. Fixes for some of these are written and not run.
 - Quest suite: check 65's reload refusal is replaced by "reload does not refuse" and "holstered refuses"; new checks
-  for the presentation, an off-crosshair target and going down. Not run.
+  for the presentation, an off-crosshair target and going down. Not run. Expected totals once it can run: 79 first-run
+  checks (75 baseline + 4) and 11 resume checks (unchanged).
+- Resumed later the same day under the maintainer's one-rebuild rule. A normal rebuild with no source change did not
+  relink (the 09:18 DLL stayed, still blocked). After the one requested source change (the stale targeting comment in
+  `OpenWillowQuest.h`), the module was relinked at 10:01 and Smart App Control blocked that DLL as well
+  (`GetLastError=4551`, Code Integrity events 3033/3077/3118 at 10:01:40). UE work stopped again; nothing was done to
+  get around the block.
