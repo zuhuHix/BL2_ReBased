@@ -35,7 +35,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter
 
-from weapon_paint_model import PAINT_PARAMETERS, albedo, decal_uv, mask_uvs, pattern_uv
+from weapon_paint_model import PAINT_PARAMETERS, albedo, decal_uv, mask_uvs, pattern_uv, srgb_to_linear
 
 ROOT = Path(__file__).resolve().parents[1]
 ITEMS = ROOT / "local" / "items"
@@ -282,11 +282,16 @@ def load_channels(path, size=None):
     return image.width, image.height, [c.tobytes() for c in image.split()]
 
 
+SRGB_DECODE = [srgb_to_linear(i / 255.0) for i in range(256)]
+
+
 class Texture:
-    def __init__(self, path, size=2048, address=None):
+    def __init__(self, path, size=2048, address=None, srgb=False):
         self.width, self.height, self.channels = load_channels(path, size)
         self.pixels = None
         self.clamp = [mode == "TA_Clamp" for mode in (address or ["TA_Wrap", "TA_Wrap"])]
+        # sRGB textures decode their colour channels to linear when sampled (alpha stays linear).
+        self.decode = SRGB_DECODE if srgb else None
 
     def rgb(self):
         if self.pixels is None:
@@ -301,6 +306,8 @@ class Texture:
             return int(value * size)
         i = index(v, self.height, self.clamp[1]) * self.width + index(u, self.width, self.clamp[0])
         values = [c[i] / 255.0 for c in self.channels]
+        if self.decode:
+            values[:3] = [self.decode[c[i]] for c in self.channels[:3]]
         return tuple(values) + ((1.0,) if len(values) == 3 else ())
 
 
@@ -329,7 +336,9 @@ class Paint:
         if prepared is not None:
             params, chain = prepared["params"], prepared["parent_chain"]
             paths = prepared["textures"]
-            texture = lambda name, address=None: Texture(Path(paths[name]), address=address) if name in paths else None
+            flags = prepared.get("srgb") or {}
+            texture = lambda name, address=None: Texture(Path(paths[name]), address=address,
+                                                         srgb=bool(flags.get(name))) if name in paths else None
             decal = prepared.get("decal") or {}
             self.detail_channel = prepared["detail_channel"]
             self.pattern_channels = prepared.get("pattern_channels", "RGB")

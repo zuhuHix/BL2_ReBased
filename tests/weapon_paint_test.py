@@ -329,6 +329,73 @@ class PaintModelTest(unittest.TestCase):
         self.assertEqual(self.model.select((0.1, 0.2, 0.3), 'RB'), (0.1, 0.0, 0.3))
 
 
+class ColourSpaceAndReflectionTest(unittest.TestCase):
+    """Invented values for pass 2: SRGB flags, the environment term, sRGB decoding in the renderer."""
+
+    class Engine:
+        def __init__(self, cdo_props):
+            self.cdo_props = cdo_props
+
+        def find(self, name, klass):
+            return {'index': 1} if name == 'Default__Texture' else None
+
+        def records(self, indices):
+            return {1: {'properties': [{'name': k, 'value': v} for k, v in self.cdo_props.items()]}}
+
+    class Package(Engine):
+        def find(self, name, klass):
+            return {'index': 1} if name in ('FakeLinear', 'FakeDefault') else None
+
+        def records(self, indices):
+            return {1: {'properties': [{'name': 'SRGB', 'value': False}] if self.cdo_props == 'linear' else []}}
+
+    def facts(self, texture, cdo):
+        facts = paint.InstalledFacts.__new__(paint.InstalledFacts)
+        facts.package, facts.engine, facts.cache = self.Package(texture), self.Engine(cdo), {}
+        return facts
+
+    def test_srgb_flag_or_class_default(self):
+        self.assertFalse(self.facts('linear', {'SRGB': True}).texture_srgb('FakeLinear'))
+        self.assertTrue(self.facts('absent', {'SRGB': True}).texture_srgb('FakeDefault'))
+        self.assertIsNone(self.facts('absent', {'SRGB': True}).texture_srgb('Missing'))
+        with self.assertRaisesRegex(ValueError, 'Default__Texture'):
+            self.facts('absent', {}).texture_srgb('FakeDefault')
+
+    def test_reflection_adds_and_scales(self):
+        import weapon_paint_model as model
+        params = {'vector': {'p_ReflectColor': (2.0, 1.0, 0.5, 1), 'p_ReflectionChannelScale': (0.0, 1.0, 0.0, 1)},
+                  'scalar': {'p_ReflectColorScale': 0.0}}
+        # zone B fully: R = env * ReflectColor; scale 0 -> plain add
+        self.assertEqual(model.add_reflection((0.1, 0.1, 0.1), (0.5, 0.5, 0.5), (0, 1, 0), params), (1.1, 0.6, 0.35))
+        params['scalar']['p_ReflectColorScale'] = 1.0  # -> c + R * c
+        got = model.add_reflection((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), (0, 1, 0), params)
+        for g, w in zip(got, (1.0, 0.75, 0.625)):
+            self.assertAlmostEqual(g, w)
+        self.assertEqual(model.add_reflection((0.2, 0.2, 0.2), (1, 1, 1), (1, 0, 0), params), (0.2, 0.2, 0.2))
+
+    def test_prepare_emits_srgb_flags_and_reflection(self):
+        class Facts(FakeFacts):
+            def texture_srgb(self, name):
+                return name != 'FakeMasks'
+        with tempfile.TemporaryDirectory() as folder:
+            root = chain(Path(folder), colours('ABC') + [('p_ReflectColor', (1, 1, 1, 1)),
+                                                         ('p_ReflectionChannelScale', (1, 1, 1, 1))],
+                         child_scalars=[('p_ReflectColorScale', 1.0)])
+            out = paint.prepare(recipe(root), root, facts=Facts())
+            self.assertFalse(out['srgb']['p_Masks'])
+            self.assertTrue(out['srgb']['p_Diffuse'])
+            self.assertFalse(out['reflection']['used'])
+            self.assertIn('no P_SimpleReflect', out['reflection']['not_used_because'])
+
+    def test_renderer_decodes_srgb_texels(self):
+        from render_weapon_previews import Texture
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'grey.png'
+            Image.new('RGB', (2, 2), (128, 128, 128)).save(path)
+            self.assertAlmostEqual(Texture(path).sample(0, 0)[0], 128 / 255)
+            self.assertAlmostEqual(Texture(path, srgb=True).sample(0, 0)[0], 0.2158605, places=5)
+
+
 class BytecodeReaderTest(unittest.TestCase):
     """An invented ps_3_0 token stream built from the documented token layout."""
 

@@ -29,8 +29,14 @@ The model, per pixel (UV0 = u0, v0; UV1 = u1, v1):
   mask * p_DecalChannel, clamped, times the decal alpha (full colour) or times the decal colour
   (single channel). Multiply or replace exactly as for the pattern, by p_ReplaceDecal.
 - The result is multiplied by the selected channel of the p_Diffuse detail atlas (UV0).
-- Not modelled: the P_SimpleReflect environment term (added on top, scaled by p_ReflectColor and
-  p_ReflectionChannelScale), emissive, digistruct, the selection tint and all lighting.
+- Environment term: P_SimpleReflect is sampled at the x and y of the tangent-space reflection
+  vector (plus a per-object offset), times p_ReflectColor, times the squared length of
+  mask * p_ReflectionChannelScale, clamped. Call that R and the colour so far c; the output is
+  c + R blended towards R * c by p_ReflectColorScale (see add_reflection).
+- Colour space: vector parameters are linear. Textures follow their installed SRGB flag; the
+  class default (Engine.upk Default__Texture) is SRGB on, and only p_Masks and the normal maps
+  turn it off, so the detail atlas, patterns, decals and the environment map are sRGB-decoded.
+- Not modelled here: emissive, digistruct, the selection tint and all lighting.
 
 Status: UNVERIFIED. The reading is a structural one of compiled data; it has not been checked
 against the running game, only against screenshots by eye.
@@ -40,8 +46,9 @@ import math
 PAINT_READING = ('UNVERIFIED reading of the compiled Master_Gun base-pass shader (see '
                  'tools/weapon_paint_model.py): p_Masks lower half = zone mask, upper half = '
                  'highlight/shadow map; zone tones Midtone->Hilight->Shadow; zones blended over p_DColor; '
-                 'pattern and decal multiply (or replace) by squared mask weights; times the detail channel. '
-                 'Reflection, emissive and lighting are not modelled.')
+                 'pattern and decal multiply (or replace) by squared mask weights; times the detail channel; '
+                 'plus the P_SimpleReflect environment term. Textures decoded per their SRGB flag. '
+                 'Emissive and lighting are not modelled.')
 
 
 def clamp(value):
@@ -118,6 +125,19 @@ def albedo(light, mask, detail, params, pattern=None, decal=None):
     return tuple(c * detail for c in colour)
 
 
+def add_reflection(colour, environment, mask, params):
+    """colour (already times detail) plus the environment term; environment is the linear env texel."""
+    vec, sca = params['vector'], params['scalar']
+    weight = squared_weight(mask, vec['p_ReflectionChannelScale'])
+    reflect = tuple(e * r * weight for e, r in zip(environment, vec['p_ReflectColor'][:3]))
+    scale = sca['p_ReflectColorScale']
+    return tuple(c + r + (r * c - r) * scale for c, r in zip(colour, reflect))
+
+
+def srgb_to_linear(value):
+    return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+
 PAINT_PARAMETERS = {
     'vector': ['p_DColor'] + [f'p_{zone}Color{tone}' for zone in 'ABC' for tone in ('Shadow', 'Midtone', 'Hilight')],
     'scalar': ['p_HighlightsIntensity', 'p_ShadowsIntensity'],
@@ -125,4 +145,6 @@ PAINT_PARAMETERS = {
     'pattern_scalar': ['p_ReplacePattern'],
     'decal_vector': ['p_DecalColor', 'p_DecalChannel', 'p_DecalScalePosition'],
     'decal_scalar': ['p_DecalRotate', 'p_UseFullColorDecal', 'p_ReplaceDecal'],
+    'reflect_vector': ['p_ReflectColor', 'p_ReflectionChannelScale'],
+    'reflect_scalar': ['p_ReflectColorScale'],
 }

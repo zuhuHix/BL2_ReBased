@@ -157,6 +157,24 @@ class InstalledFacts:
         # Absent means the enum's zero value; the install serialises only TA_Clamp/TA_Mirror, so read as wrap.
         return [props.get('AddressX') or 'TA_Wrap', props.get('AddressY') or 'TA_Wrap']
 
+    def texture_srgb(self, name):
+        """The Texture2D's SRGB flag; absent means the class default read from Engine.upk's Default__Texture."""
+        texture = self.package.find(name, 'Texture2D')
+        if texture is None:
+            return None
+        props = {p['name']: p.get('value') for p in self.package.records([texture['index']])[texture['index']]['properties']}
+        if 'SRGB' in props:
+            return bool(props['SRGB'])
+        if not hasattr(self, '_class_srgb'):
+            cdo = self.engine.find('Default__Texture', 'Texture')
+            if cdo is None:
+                raise ValueError('No Default__Texture in Engine.upk')
+            found = {p['name']: p.get('value') for p in self.engine.records([cdo['index']])[cdo['index']]['properties']}
+            if 'SRGB' not in found:
+                raise ValueError('Default__Texture serialises no SRGB; its value is not read')
+            self._class_srgb = bool(found['SRGB'])
+        return self._class_srgb
+
 
 def is_vector(value):
     return isinstance(value, (tuple, list)) and len(value) == 4 and all(
@@ -188,6 +206,35 @@ def decal_layer(params, texture_dir, facts):
             layer['not_used_because'] = f'no unique Texture2D {leaf} in {facts.package.package.name}'
         else:
             layer['used'] = True
+    return layer
+
+
+def reflection_layer(params, texture_dir, facts):
+    """The P_SimpleReflect environment term of tools/weapon_paint_model.py, if every input is known."""
+    leaf = params['texture'].get('P_SimpleReflect')
+    vec, sca = params['vector'], params['scalar']
+    layer = {'texture': leaf, 'used': False, 'address': None,
+             **{name: vec.get(name) for name in PAINT_PARAMETERS['reflect_vector']},
+             **{name: sca.get(name) for name in PAINT_PARAMETERS['reflect_scalar']}}
+    path = texture_dir / f'{leaf}.png' if leaf else None
+    missing = [n for n in PAINT_PARAMETERS['reflect_vector'] if not is_vector(vec.get(n))] + [
+        n for n in PAINT_PARAMETERS['reflect_scalar'] if not isinstance(sca.get(n), (int, float))]
+    if not leaf:
+        layer['not_used_because'] = 'no P_SimpleReflect texture'
+    elif missing:
+        layer['not_used_because'] = f"no value for {', '.join(missing)} (base defaults need --reader)"
+    elif not path.is_file():
+        layer['not_used_because'] = f'missing {path}'
+    elif facts is None:
+        layer['not_used_because'] = 'texture address modes need --reader'
+    else:
+        layer['address'] = facts.texture_address(leaf)
+        layer['used'] = layer['address'] is not None
+        layer['path'] = str(path.resolve())
+        if not layer['used']:
+            layer['not_used_because'] = f'no unique Texture2D {leaf}'
+    if not layer['used']:
+        layer.pop('path', None)
     return layer
 
 
@@ -234,6 +281,12 @@ def prepare(recipe_path, materials, mesh=None, facts=None):
         if not path.is_file():
             raise ValueError(f'Missing {path}')
         paths[name] = str(path.resolve())
+    reflection = reflection_layer(params, texture_dir, facts)
+    if reflection['used']:
+        paths['P_SimpleReflect'] = reflection.pop('path')
+    # Colour space of each texture from its installed SRGB flag; without --reader, None (importer keeps its old choice).
+    srgb = {name: (facts.texture_srgb(params['texture'][name]) if facts is not None and hasattr(facts, 'texture_srgb')
+                   else None) for name in paths}
     required = PAINT_PARAMETERS['vector'][1:] + PAINT_PARAMETERS['vector'][:1]  # zone colours first
     scalars = list(PAINT_PARAMETERS['scalar'])
     if pattern_used:
@@ -248,7 +301,8 @@ def prepare(recipe_path, materials, mesh=None, facts=None):
     return {'recipe_id': recipe_path.stem, 'material_identity': identity,
             'parent_chain': chain, 'weapon_class': kind, 'detail_channel': channel,
             'pattern_channels': pattern_channels, 'decal_channels': decal_channels,
-            'channel_source': channel_source, 'params': params, 'textures': paths, 'pattern_used': pattern_used,
+            'channel_source': channel_source, 'params': params, 'textures': paths, 'srgb': srgb,
+            'reflection': reflection, 'pattern_used': pattern_used,
             'decal': decal, 'mesh': mesh, 'reading': PAINT_READING, 'shader_verified': False}
 
 

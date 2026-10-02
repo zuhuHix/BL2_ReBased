@@ -1227,8 +1227,13 @@ python tools/render_weapon_previews.py slice_pistol --items local/items/slice `
   short form: `p_Masks` stacks a light/dark map (upper half) over the zone mask (lower half); zone tones go from
   Midtone towards Hilight and Shadow by those maps; zones are blended over `p_DColor`; pattern and decal multiply
   (or replace) by squared mask weights; the result is multiplied by one detail atlas channel.
-- `host/ue5/import_weapon_paint.py` draws the same model in a Custom node. The environment reflection, emissive
-  and the game's lighting are not reproduced, and `DISPLAY_SCALE` (HDR colour to UE base colour) is chosen by eye.
+- `host/ue5/import_weapon_paint.py` draws the same model in a Custom node, including the `P_SimpleReflect`
+  environment term (sampled at the tangent-space reflection vector, as the compiled shader does). Emissive and the
+  game's lighting are not reproduced; the colour goes to base colour unscaled (`DISPLAY_SCALE` 1).
+- Colour space (pass 2): each texture follows its installed `SRGB` flag, which `prepare_weapon_paint.py --reader`
+  records in `srgb`. `Engine.upk`'s `Default__Texture` serialises SRGB on; only `p_Masks` and the normal maps
+  turn it off, so the detail atlas, patterns, decals and environment maps are sRGB. Pass 1 had imported the
+  detail atlas as linear, which flattened grime and rust contrast. Vector parameters are linear colours.
 
 `tools/seed_slice_player_assets.ps1` holds `local/ue_run.lock` for each editor launch and never deletes
 `Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when

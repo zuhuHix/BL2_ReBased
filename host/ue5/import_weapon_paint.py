@@ -5,10 +5,12 @@ No mesh reimport, no directory deletion. The colour model is the UNVERIFIED
 reading in tools/weapon_paint_model.py (data['reading']), recovered from the
 compiled Master_Gun shaders: p_Masks holds a light/dark map (upper half) and the
 zone mask (lower half); zone tones, zones over p_DColor, pattern and decal
-layers, times the detail channel the MIC's static parameters select. The
-environment reflection, emissive and the game's lighting are not reproduced;
-DISPLAY_SCALE maps the HDR result into UE's base-colour range and is chosen by
-eye (UNVERIFIED).
+layers, times the detail channel the MIC's static parameters select, plus the
+P_SimpleReflect environment term (sampled at the tangent-space reflection
+vector, as the compiled shader does). Textures use their installed SRGB flag
+(data['srgb']). Emissive and the game's lighting are not reproduced; the
+result goes to base colour unscaled (DISPLAY_SCALE 1), only hue-preserving
+clamped to 1.
 """
 import json
 import os
@@ -16,7 +18,10 @@ import re
 from pathlib import Path
 import unreal
 
-DISPLAY_SCALE = 0.4  # HDR paint colour -> UE base colour; chosen by eye against screenshots, UNVERIFIED
+DISPLAY_SCALE = 1.0  # no scale: the shader's diffuse colour goes to base colour (pass 1 used 0.4, chosen by eye)
+# Pass-1 colour-space choice, used only when the prepared JSON has no SRGB flag (prepared without --reader).
+FALLBACK_SRGB = {'p_Masks': False, 'p_Diffuse': False, 'p_NormalScopesEmissive': False, 'p_Pattern': True,
+                 'p_Decal': True, 'P_SimpleReflect': True}
 
 
 def channel_code(texel, channels):
@@ -53,7 +58,14 @@ def apply(data):
             value.set_editor_property(key, prop)
         return value
 
-    def import_texture(parameter, normal=False, color=False, address=None):
+    srgb_flags = data.get('srgb') or {}
+
+    def is_srgb(parameter):
+        flag = srgb_flags.get(parameter)
+        return FALLBACK_SRGB[parameter] if flag is None else bool(flag)
+
+    def import_texture(parameter, normal=False, address=None):
+        color = is_srgb(parameter)
         task = unreal.AssetImportTask()
         task.filename = data['textures'][parameter]
         task.destination_path = destination
@@ -75,7 +87,8 @@ def apply(data):
         eal.save_loaded_asset(asset, only_if_is_dirty=False)
         return asset
 
-    def sample(asset, normal=False, color=False):
+    def sample(asset, normal=False):
+        color = bool(asset.get_editor_property('srgb'))
         return node(unreal.MaterialExpressionTextureSample, texture=asset,
                     sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if normal else
                     unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if color else
@@ -123,14 +136,14 @@ def apply(data):
     inputs['Tones'] = node(unreal.MaterialExpressionConstant2Vector, r=scalars['p_HighlightsIntensity'],
                            g=scalars['p_ShadowsIntensity'])
     if pattern:
-        inputs['Pattern'] = sample(import_texture('p_Pattern', color=True), color=True)
+        inputs['Pattern'] = sample(import_texture('p_Pattern'))
         place = vectors['p_PatternScalePosition']
         feed_uv(inputs['Pattern'], 1, place[:2], place[2:4])
         inputs['PatternColor'] = constant3(vectors['p_PatternColor'])
         inputs['PatternWeight'] = constant3(vectors['p_PatternChannelScale'])
         inputs['PatternReplace'] = node(unreal.MaterialExpressionConstant, r=scalars['p_ReplacePattern'])
     if use_decal:
-        inputs['Decal'] = sample(import_texture('p_Decal', color=True, address=decal['address']), color=True)
+        inputs['Decal'] = sample(import_texture('p_Decal', address=decal['address']))
         outputs['DecalAlpha'] = (inputs['Decal'], 'A')
         place, angle = decal['scale_position'], decal['rotate'] * 3.14159265
         # Shift by zw, rotate about the centre, scale xy about the centre (tools/weapon_paint_model.decal_uv).
@@ -144,6 +157,23 @@ def apply(data):
         inputs['DecalColor'] = constant3(decal['color'])
         inputs['DecalWeight'] = constant3(decal['channel'])
         inputs['DecalModes'] = node(unreal.MaterialExpressionConstant2Vector, r=decal['full_color'], g=decal['replace'])
+
+    reflection = data.get('reflection') or {}
+    use_reflection = bool(reflection.get('used'))
+    if use_reflection:
+        inputs['Env'] = sample(import_texture('P_SimpleReflect', address=reflection['address']))
+        # Tangent-space reflection xy plus frac(object position xy * 0.001), as the compiled shader samples it.
+        to_tangent = node(unreal.MaterialExpressionTransform,
+                          transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
+                          transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_TANGENT)
+        mel.connect_material_expressions(node(unreal.MaterialExpressionReflectionVectorWS), '', to_tangent, '')
+        env_uv = custom('return R.xy + frac(O.xy * 0.001);', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['R', 'O'])
+        mel.connect_material_expressions(to_tangent, '', env_uv, 'R')
+        mel.connect_material_expressions(node(unreal.MaterialExpressionObjectPositionWS), '', env_uv, 'O')
+        mel.connect_material_expressions(env_uv, '', inputs['Env'], 'UVs')
+        inputs['ReflectColor'] = constant3(reflection['p_ReflectColor'])
+        inputs['ReflectWeight'] = constant3(reflection['p_ReflectionChannelScale'])
+        inputs['ReflectScale'] = node(unreal.MaterialExpressionConstant, r=reflection['p_ReflectColorScale'])
 
     detail = 'rgb'[data['detail_channel']]
     code = (f'float high=saturate(Light.r*Tones.x), low=saturate(Light.g*Tones.y);\n'
@@ -160,8 +190,14 @@ def apply(data):
                  f'float dw=saturate(dot(Mask.rgb*DecalWeight, Mask.rgb*DecalWeight));\n'
                  f'float3 da=lerp(d*dw, dw*DecalAlpha, DecalModes.x);\n'
                  f'c=lerp(c*lerp(float3(1,1,1),dt,da), lerp(c,dt,da), DecalModes.y);\n')
-    code += (f'c*=Detail.{detail}*{DISPLAY_SCALE};\n'
-             '// Keep hue when the scaled HDR colour still exceeds 1.\n'
+    code += f'c*=Detail.{detail};\n'
+    if use_reflection:
+        # Environment term (tools/weapon_paint_model.add_reflection).
+        code += ('float rw=saturate(dot(Mask.rgb*ReflectWeight, Mask.rgb*ReflectWeight));\n'
+                 'float3 R=Env.rgb*ReflectColor*rw;\n'
+                 'c=c+lerp(R, R*c, ReflectScale);\n')
+    code += (f'c*={DISPLAY_SCALE};\n'
+             '// Keep hue when the HDR colour exceeds 1.\n'
              'return c/max(1,max(c.r,max(c.g,c.b)));')
     effect = custom(code, unreal.CustomMaterialOutputType.CMOT_FLOAT3, list(inputs) + list(outputs))
     for name, value in inputs.items():
@@ -184,7 +220,8 @@ def apply(data):
     eal.save_loaded_asset(mesh, only_if_is_dirty=False)
     unreal.log(f'OW_PAINT {recipe_id} -> {mesh_path}: {data["material_identity"]}, {len(slots)} slots, '
                f'detail {detail}, pattern {"used" if pattern else "not used"}, '
-               f'decal {"used" if use_decal else "not used"}, shader UNVERIFIED')
+               f'decal {"used" if use_decal else "not used"}, reflection {"used" if use_reflection else "not used"}, '
+               f'srgb {sorted(k for k in data["textures"] if is_srgb(k))}, shader UNVERIFIED')
 
 
 data = json.loads(Path(os.environ['OPENWILLOW_WEAPON_PAINT']).read_text())
