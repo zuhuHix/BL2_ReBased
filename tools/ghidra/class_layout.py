@@ -32,7 +32,9 @@ PACKAGES = ["Core", "Engine", "GameFramework", "GearboxFramework", "WillowGame",
 CPF_NET = 0x20
 SIMPLE = {"ByteProperty": (1, 1), "IntProperty": (4, 4), "FloatProperty": (4, 4), "ObjectProperty": (4, 4),
           "ClassProperty": (4, 4), "ComponentProperty": (4, 4), "NameProperty": (8, 4), "InterfaceProperty": (8, 4),
-          "StrProperty": (12, 4), "ArrayProperty": (12, 4), "DelegateProperty": (12, 4), "BoolProperty": (4, 4)}
+          "StrProperty": (12, 4), "ArrayProperty": (12, 4), "DelegateProperty": (12, 4), "BoolProperty": (4, 4),
+          # Gearbox attribute properties hold the plain value in place (their modifier stack is a separate field).
+          "FloatAttributeProperty": (4, 4), "IntAttributeProperty": (4, 4), "ByteAttributeProperty": (1, 1)}
 
 
 class Packages:
