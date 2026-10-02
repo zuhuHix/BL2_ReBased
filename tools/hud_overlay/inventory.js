@@ -108,6 +108,30 @@ let transferFromEquipped = false;
 let transferCategoryBefore = 0;
 let compareStartedFromLeft = false;
 let lastMenuPreviewId = null;
+// Open-time instrumentation. The host calls owOpenTiming(<Unix ms of the open request>) on every
+// open; "OWINVTIME js_<event> sinceOpen=<ms>" lines reach the UE log through the console bridge.
+// js_painted is logged two animation frames after the page is ready, rendered and open, i.e. once
+// the browser has composited a frame of the open inventory.
+let openTiming = null;
+function timeLog(event, extra = '') {
+  const since = openTiming ? Date.now() - openTiming.hostEpoch : -1;
+  console.log(`OWINVTIME js_${event} sinceOpen=${since} pageMs=${Math.round(performance.now() - startupAt)} epoch=${Date.now()} ready=${ready} ${extra}`);
+}
+function schedulePaintedLog() {
+  if (!openTiming || openTiming.paintScheduled || !ready || !state || !firstStateRendered) return;
+  openTiming.paintScheduled = true;
+  const timing = openTiming;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (timing === openTiming) timeLog('painted', `size=${innerWidth}x${innerHeight}`);
+  }));
+}
+window.owOpenTiming = hostEpoch => {
+  openTiming = {hostEpoch, paintScheduled:false};
+  timeLog('open', `size=${innerWidth}x${innerHeight} visibility=${document.visibilityState} hasState=${!!state}`);
+  schedulePaintedLog();
+};
+document.addEventListener('visibilitychange', () => timeLog('visibility', document.visibilityState));
+timeLog('page_start');
 window.owRefreshMenuPreview = () => {
   lastMenuPreviewId = null;
   inspectMode = false;
@@ -492,6 +516,15 @@ function addHeaderTabs() {
 
 // areaPath lets a caller lay the box over a child clip instead of the whole clip: the
 // equipped cells' own bounds include animated glow/number art that jitters by ~10px.
+// The host keeps sending pointer events while the cursor rests (UE re-sends the last mouse position;
+// 499 identical events were logged over one equipped cell in a single open), so hover-select only on
+// a real change of position. The first event over a cell only records where the cursor is.
+let lastPointerX = null, lastPointerY = null;
+function pointerMoved(event) {
+  const moved = lastPointerX !== null && (event.clientX !== lastPointerX || event.clientY !== lastPointerY);
+  lastPointerX = event.clientX; lastPointerY = event.clientY;
+  return moved;
+}
 function hit(path, label, click, hover, tint, item = null, kind = 'item', areaPath = path) {
   const bounds = call(areaPath, 'getBounds', ROOT);
   if (!bounds || ![bounds.xMin,bounds.yMin,bounds.xMax,bounds.yMax].every(Number.isFinite)) return null;
@@ -525,7 +558,7 @@ function hit(path, label, click, hover, tint, item = null, kind = 'item', areaPa
   if (click) button.addEventListener('click', click);
   // A rebuilt overlay beneath a stationary cursor must not behave like a new
   // selection. Pointer movement and deliberate keyboard focus still select.
-  if (hover) { button.addEventListener('pointermove', hover); button.addEventListener('focus', hover); }
+  if (hover) { button.addEventListener('pointermove', event => { if (pointerMoved(event)) hover(event); }); button.addEventListener('focus', hover); }
   document.getElementById('controls').appendChild(button);
   return button;
 }
@@ -1404,7 +1437,9 @@ function render() {
     window.owInventoryReady = true;
     window.owInventoryReadyAt = performance.now();
     console.log(`OpenWillow Inventory first state rendered in ${Math.round(window.owInventoryReadyAt-startupAt)}ms`);
+    timeLog('first_render');
   }
+  schedulePaintedLog();
   console.log(`OpenWillow Inventory state: ${state.items.length} items, ${rows.length} backpack`);
 }
 
@@ -1468,7 +1503,11 @@ function layoutStage() {
   });
 }
 layoutStage();
-window.addEventListener('resize', () => { layoutStage(); render(); });
+window.addEventListener('resize', () => {
+  const started = performance.now();
+  layoutStage(); render();
+  timeLog('resize', `size=${innerWidth}x${innerHeight} renderMs=${Math.round(performance.now() - started)}`);
+});
 
 // CEF exposes the standard gamepad API on supported browsers. Actions are
 // edge-triggered so holding a button does not enqueue repeated host requests.
@@ -1489,7 +1528,10 @@ setInterval(() => {
     if (!previous) { previous = []; previousButtons.set(pad.index, previous); }
     pad.buttons.forEach((button, index) => {
       const down = Boolean(button?.pressed);
-      if (down && !previous[index]) gamepadActions[index]?.();
+      if (down && !previous[index] && gamepadActions[index]) {
+        console.log(`OpenWillow Inventory gamepad button ${index} on pad ${pad.index} (${pad.id})`);
+        gamepadActions[index]();
+      }
       previous[index] = down;
     });
   }
@@ -1498,6 +1540,7 @@ setInterval(() => {
 let enteredInventory = false, movieConfigured = false, stableSince = 0, lastBounds = '';
 player.ruffle().load({url:'UI_StatusMenu/harness.swf',base:'UI_StatusMenu/'}).then(() => {
   console.log(`OpenWillow Inventory StatusMenu loaded in ${Math.round(performance.now()-startupAt)}ms`);
+  timeLog('statusmenu_loaded');
 }).catch(showError);
 
 function readBounds(path) {
@@ -1541,6 +1584,7 @@ function prepareMovie() {
   call(INV+'.mainCard', 'SetVisible_', false);
   movieConfigured = true;
   console.log(`OpenWillow Inventory movie structure ready in ${Math.round(performance.now()-startupAt)}ms`);
+  timeLog('movie_structure');
   return true;
 }
 
@@ -1580,18 +1624,29 @@ function watchLayout() {
 }
 setInterval(watchLayout, LAYOUT_POLL_MS);
 
+const bootMarks = new Set();
+function bootMark(name) { if (!bootMarks.has(name)) { bootMarks.add(name); timeLog(name); } }
+function resourceTimes() {
+  return performance.getEntriesByType('resource').filter(entry => entry.duration >= 50)
+    .map(entry => `${entry.name.split('/').pop()}:${Math.round(entry.startTime)}+${Math.round(entry.duration)}`).join(',');
+}
+let prepareAttempts = 0;
 function pollReady() {
   if (typeof player.ow !== 'function') { requestAnimationFrame(pollReady); return; }
+  bootMark('ruffle_api');
   const total = Number(get(ROOT, '_totalframes'));
   if (!total || Number(get(ROOT, '_framesloaded')) < total) { requestAnimationFrame(pollReady); return; }
   if (!enteredInventory) {
+    timeLog('frames_loaded', `total=${total} resources=${resourceTimes()}`);
     enteredInventory = true;
     player.ow(ROOT, 'gotoAndStop', 'inventory');
     requestAnimationFrame(pollReady);
     return;
   }
   if (!movieConfigured) {
+    ++prepareAttempts;
     if (!prepareMovie()) { requestAnimationFrame(pollReady); return; }
+    timeLog('prepare_attempts', `n=${prepareAttempts} resources=${resourceTimes()}`);
     requestAnimationFrame(pollReady);
     return;
   }
@@ -1615,6 +1670,7 @@ function pollReady() {
     window.owInventoryMovieReadyAt = performance.now();
     render();
     console.log(`OpenWillow Inventory movie ready in ${Math.round(window.owInventoryMovieReadyAt-startupAt)}ms`);
+    timeLog('movie_ready');
     return;
   }
   requestAnimationFrame(pollReady);

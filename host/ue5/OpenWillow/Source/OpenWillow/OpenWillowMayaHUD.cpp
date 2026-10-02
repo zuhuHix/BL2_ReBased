@@ -4,6 +4,7 @@
 #include "OpenWillowInventoryVm.h"
 #include "HAL/PlatformMisc.h"
 #include "Misc/Paths.h"
+#include "Misc/App.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowInventoryMayaDisplay.h"
 #include "OpenWillowInventoryPreviewActor.h"
@@ -13,6 +14,7 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
+#include "Engine/SkeletalMesh.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Camera/PlayerCameraManager.h"
@@ -95,12 +97,29 @@ void AOpenWillowMayaHUD::BeginPlay()
     Super::BeginPlay();
     FParse::Value(FCommandLine::Get(), TEXT("owflashskills="), SkillsUrl);
     FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryUrl);
+    FParse::Value(FCommandLine::Get(), TEXT("owinvopenbench="), OpenBenchRuns);
+    FParse::Value(FCommandLine::Get(), TEXT("owinvopenbenchdelay="), OpenBenchDelay);
+    // -owinvnopreload: measurement A/B only; skips the menu preloads below.
+    const bool bPreload = !FParse::Param(FCommandLine::Get(), TEXT("owinvnopreload"));
+    bWeaponMeshesPreloaded = !bPreload;
     if (!InventoryUrl.IsEmpty() && GEngine && GEngine->GameViewport
         && IWebBrowserModule::Get().IsWebModuleAvailable())
     {
+        const double Started = FPlatformTime::Seconds();
         CachedInventoryBrowser = CreateStatusBrowser(InventoryUrl);
         CachedInventoryRoot = SNew(SBox).Visibility(EVisibility::Hidden)[CachedInventoryBrowser.ToSharedRef()];
         GEngine->GameViewport->AddViewportWidgetContent(CachedInventoryRoot.ToSharedRef(), 20);
+        PreloadCreatedAt = FPlatformTime::Seconds();
+        TimeLog(TEXT("preload_browser_created"), FString::Printf(TEXT("dur=%.1fms"), (PreloadCreatedAt - Started) * 1000.));
+        // Do the menu's one-off game-thread work now, during level start, rather than in the
+        // frame the player presses the key (measured 160-240 ms on the first open).
+        double Mark = FPlatformTime::Seconds();
+        if (bPreload) AOpenWillowInventoryMayaDisplay::PreloadAssets(PreloadedMenuAssets);
+        const double AssetsMs = (FPlatformTime::Seconds() - Mark) * 1000.;
+        Mark = FPlatformTime::Seconds();
+        if (bPreload) CreateInventoryVm();
+        TimeLog(TEXT("preload_menu_work"), FString::Printf(TEXT("assets=%d assetsDur=%.1fms vmDur=%.1fms"),
+            PreloadedMenuAssets.Num(), AssetsMs, (FPlatformTime::Seconds() - Mark) * 1000.));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow Inventory movie preloading: %s"), *InventoryUrl);
     }
     FString Url;
@@ -147,6 +166,59 @@ bool AOpenWillowMayaHUD::ToggleInventory()
     return SkillsBrowser.IsValid();
 }
 
+void AOpenWillowMayaHUD::TimeLog(const TCHAR* Event, const FString& Detail) const
+{
+    const double Now = FPlatformTime::Seconds();
+    const int64 Epoch = int64((FDateTime::UtcNow() - FDateTime(1970, 1, 1)).GetTotalMilliseconds());
+    UE_LOG(LogTemp, Display, TEXT("OWINVTIME %s t=%.1fms epoch=%lld frame=%llu %s"), Event,
+        OpenStartedAt > 0 ? (Now - OpenStartedAt) * 1000. : -1., Epoch, uint64(GFrameCounter), *Detail);
+}
+
+void AOpenWillowMayaHUD::TickOpenBench()
+{
+    if (OpenBenchRuns <= 0 || !PlayerOwner) return;
+    AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
+    if (!Maya) return;
+    const double Now = FPlatformTime::Seconds();
+    if (OpenBenchAt == 0) OpenBenchAt = Now + OpenBenchDelay;
+    if (Now < OpenBenchAt && !(OpenBenchPhase == 1 && bOpenBenchPainted)) return;
+    switch (OpenBenchPhase)
+    {
+    case 0: // open, then wait up to 60 s for the page's js_painted report
+        bOpenBenchPainted = false;
+        if (InventoryUrl.IsEmpty())
+        {
+            // Host widget fallback (no -owflashinventory): time the call and the next frame only.
+            OpenStartedAt = Now;
+            OpenFrame = GFrameCounter;
+            bOpenFrameLogged = false;
+            Maya->ToggleInventory();
+            TimeLog(TEXT("fallback_open_call"));
+            bOpenBenchPainted = true;
+        }
+        else Maya->ToggleInventory();
+        OpenBenchPhase = 1;
+        OpenBenchAt = Now + 60.;
+        break;
+    case 1:
+        TimeLog(TEXT("bench_open_result"), FString::Printf(TEXT("run=%d painted=%d"), OpenBenchDone + 1, bOpenBenchPainted));
+        OpenBenchPhase = 2;
+        OpenBenchAt = Now + 2.;
+        break;
+    default: // close, pause, repeat
+        if (IsInventoryOpen()) Maya->ToggleInventory();
+        OpenBenchPhase = 0;
+        OpenBenchAt = Now + 3.;
+        if (++OpenBenchDone >= OpenBenchRuns)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWINVTIME bench_done runs=%d"), OpenBenchDone);
+            OpenBenchRuns = 0;
+            PlayerOwner->ConsoleCommand(TEXT("quit"));
+        }
+        break;
+    }
+}
+
 void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
 {
     const FString& MenuUrl = bInventory ? InventoryUrl : SkillsUrl;
@@ -159,13 +231,26 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
     bInventoryOpen = bInventory;
     if (bInventory)
     {
+        OpenStartedAt = FPlatformTime::Seconds();
+        OpenFrame = GFrameCounter;
+        bOpenFrameLogged = bOpenPushLogged = bOpenPreviewLogged = false;
+        TimeLog(TEXT("open_request"), FString::Printf(TEXT("preloaded=%d sincePreload=%.0fms"),
+            CachedInventoryBrowser.IsValid(), PreloadCreatedAt > 0 ? (OpenStartedAt - PreloadCreatedAt) * 1000. : -1.));
+    }
+    double Mark = FPlatformTime::Seconds();
+    auto Lap = [&Mark]() { const double Now = FPlatformTime::Seconds(), Ms = (Now - Mark) * 1000.; Mark = Now; return Ms; };
+    double PresentationMs = 0, DisplayMs = 0, BrowserMs = 0, VmMs = 0;
+    if (bInventory)
+    {
         AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
         if (Maya) Maya->SetInventoryPresentation(true);
+        PresentationMs = Lap();
         FActorSpawnParameters Spawn;
         Spawn.Owner = Maya;
         Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
         InventoryMayaDisplay = GetWorld()->SpawnActor<AOpenWillowInventoryMayaDisplay>(
             AOpenWillowInventoryMayaDisplay::StaticClass(), FTransform::Identity, Spawn);
+        DisplayMs = Lap();
     }
     if (bInventory && CachedInventoryBrowser && CachedInventoryRoot)
     {
@@ -179,23 +264,40 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         SkillsRoot = SNew(SBox)[SkillsBrowser.ToSharedRef()];
         GEngine->GameViewport->AddViewportWidgetContent(SkillsRoot.ToSharedRef(), 20);
     }
-    if (bInventory) SkillsBrowser->ExecuteJavascript(TEXT("window.owRefreshMenuPreview && window.owRefreshMenuPreview()"));
     if (bInventory)
     {
-        if (!InventoryVm)
-        {
-            const FString Game = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_BL2"));
-            InventoryVm = MakeShared<FOpenWillowInventoryVm>(FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole")));
-            UE_LOG(LogTemp, Display, TEXT("OWINVVM initialized ready=%d error=%s"), InventoryVm->IsReady(), *InventoryVm->Error());
-        }
+        OpenEpoch = int64((FDateTime::UtcNow() - FDateTime(1970, 1, 1)).GetTotalMilliseconds()
+            - (FPlatformTime::Seconds() - OpenStartedAt) * 1000.);
+        bOpenTimingAcked = false;
+        SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owOpenTiming && window.owOpenTiming(%lld)"), OpenEpoch));
+        SkillsBrowser->ExecuteJavascript(TEXT("window.owRefreshMenuPreview && window.owRefreshMenuPreview()"));
+    }
+    BrowserMs = Lap();
+    if (bInventory)
+    {
+        CreateInventoryVm();
+        VmMs = Lap();
     }
     if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::Collapsed);
     FInputModeUIOnly Mode;
     Mode.SetWidgetToFocus(SkillsBrowser.ToSharedRef());
     PlayerOwner->SetInputMode(Mode);
     PlayerOwner->SetShowMouseCursor(true);
+    const double InputMs = Lap();
+    if (bInventory)
+        TimeLog(TEXT("open_host_parts"), FString::Printf(TEXT("presentation=%.1fms mayaDisplay=%.1fms browserShowAndJs=%.1fms vm=%.1fms input=%.1fms"),
+            PresentationMs, DisplayMs, BrowserMs, VmMs, InputMs));
+    if (bInventory) TimeLog(TEXT("open_host_done"));
     NextSkillsPush = 0.f;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Status menu overlay: %s"), *MenuUrl);
+}
+
+void AOpenWillowMayaHUD::CreateInventoryVm()
+{
+    if (InventoryVm) return;
+    const FString Game = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_BL2"));
+    InventoryVm = MakeShared<FOpenWillowInventoryVm>(FPaths::Combine(Game, TEXT("WillowGame/CookedPCConsole")));
+    UE_LOG(LogTemp, Display, TEXT("OWINVVM initialized ready=%d error=%s"), InventoryVm->IsReady(), *InventoryVm->Error());
 }
 
 TSharedPtr<SWebBrowser> AOpenWillowMayaHUD::CreateStatusBrowser(const FString& MenuUrl)
@@ -222,7 +324,12 @@ TSharedPtr<SWebBrowser> AOpenWillowMayaHUD::CreateStatusBrowser(const FString& M
                 UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills close requested by page"));
                 return true; // Consume the page's close route without navigating away.
             })
-        .OnLoadCompleted_Lambda([] { UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills page loaded")); })
+        .OnLoadCompleted_Lambda([this, MenuUrl]
+            {
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills page loaded"));
+                if (MenuUrl == InventoryUrl && PreloadCreatedAt > 0)
+                    TimeLog(TEXT("page_loaded"), FString::Printf(TEXT("sincePreload=%.0fms"), (FPlatformTime::Seconds() - PreloadCreatedAt) * 1000.));
+            })
         .OnLoadError_Lambda([] { UE_LOG(LogTemp, Warning, TEXT("OpenWillow Skills page failed to load")); })
         .OnConsoleMessage_Lambda([this](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
             {
@@ -269,6 +376,14 @@ void AOpenWillowMayaHUD::CloseSkills()
 
 void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
 {
+    if (Message.StartsWith(TEXT("OWINVTIME "), ESearchCase::CaseSensitive))
+    {
+        // Page timing line: log host receipt time with it; js_painted ends a bench open.
+        if (Message.Len() <= 1024) TimeLog(TEXT("page"), Message.Mid(10));
+        if (Message.StartsWith(TEXT("OWINVTIME js_painted "), ESearchCase::CaseSensitive)) bOpenBenchPainted = true;
+        if (Message.StartsWith(TEXT("OWINVTIME js_open "), ESearchCase::CaseSensitive)) bOpenTimingAcked = true;
+        return;
+    }
     if (bInventoryOpen)
     {
         if (Message.StartsWith(TEXT("OWINVMOVE "), ESearchCase::CaseSensitive))
@@ -331,11 +446,20 @@ void AOpenWillowMayaHUD::PushSkillsState()
     if (!SkillsBrowser || !Skills) return;
     if (bInventoryOpen)
     {
+        // An open made before the page script ran is announced again until the page has seen it.
+        if (!bOpenTimingAcked)
+            SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owOpenTiming && window.owOpenTiming(%lld)"), OpenEpoch));
         const UOpenWillowInventory* Inventory = Maya->GetInventory();
         SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owConfigureInventoryVm && window.owConfigureInventoryVm(%s)"),
             InventoryVm && InventoryVm->IsReady() ? TEXT("true") : TEXT("false")));
+        const double Started = FPlatformTime::Seconds();
         if (Inventory) SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owInventory && window.owInventory(%s)"),
             *Inventory->StateJson(Skills->GetLevel())));
+        if (!bOpenPushLogged)
+        {
+            bOpenPushLogged = true;
+            TimeLog(TEXT("first_state_push"), FString::Printf(TEXT("dur=%.1fms"), (FPlatformTime::Seconds() - Started) * 1000.));
+        }
         return;
     }
     SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owSkills && window.owSkills(%s)"), *Skills->StateJson()));
@@ -519,13 +643,40 @@ void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
 void AOpenWillowMayaHUD::DrawHUD()
 {
     Super::DrawHUD();
+    TickOpenBench();
+    if (!bWeaponMeshesPreloaded && PlayerOwner)
+        if (const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()))
+            if (const UOpenWillowInventory* Held = Walker->GetInventory())
+            {
+                // The menu previews load the selected weapon's mesh synchronously (measured 25-1036 ms on a first
+                // selection); load the starting inventory's meshes here, once, outside the menu.
+                bWeaponMeshesPreloaded = true;
+                const double Started = FPlatformTime::Seconds();
+                int32 Meshes = 0;
+                for (const FOpenWillowWeaponItem& Item : Held->Items())
+                    if (USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(Item)) { PreloadedMenuAssets.Add(Mesh); ++Meshes; }
+                TimeLog(TEXT("preload_weapon_meshes"), FString::Printf(TEXT("items=%d meshes=%d dur=%.1fms"),
+                    Held->Items().Num(), Meshes, (FPlatformTime::Seconds() - Started) * 1000.));
+            }
+    if (!bOpenFrameLogged && GFrameCounter > OpenFrame)
+    {
+        // The first frame after the open request: its delta includes the open's game-thread work.
+        bOpenFrameLogged = true;
+        TimeLog(TEXT("first_frame_after_open"), FString::Printf(TEXT("frames=%llu delta=%.1fms"), uint64(GFrameCounter - OpenFrame), FApp::GetDeltaTime() * 1000.));
+    }
     if (bInventoryOpen && bMenuPreviewRequested && IsValid(InventoryMayaDisplay))
     {
         bMenuPreviewRequested = false;
         const AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;
         const UOpenWillowInventory* Inventory = Maya ? Maya->GetInventory() : nullptr;
         const FOpenWillowWeaponItem* Item = Inventory ? Inventory->FindItemById(PendingMenuPreviewId) : nullptr;
+        const double Started = FPlatformTime::Seconds();
         InventoryMayaDisplay->SetPreviewWeapon(Item);
+        if (!bOpenPreviewLogged)
+        {
+            bOpenPreviewLogged = true;
+            TimeLog(TEXT("first_menu_preview"), FString::Printf(TEXT("id=%s dur=%.1fms"), *PendingMenuPreviewId, (FPlatformTime::Seconds() - Started) * 1000.));
+        }
     }
     if (SkillsBrowser && bInventoryOpen && !PendingInspectRequest.IsEmpty()
         && GetWorld()->GetRealTimeSeconds() >= NextInspectFrame)

@@ -12,6 +12,14 @@ param(
     [ValidateRange(2, 4)][int]$Slots = 2,
     # Send the page synthetic DOM key events instead of Slate key events.
     [switch]$JsKeys,
+    # Open-time benchmark instead of the action suite: open the inventory this many times
+    # (-owinvopenbench), the first open OpenBenchDelay seconds after the HUD starts, and print the
+    # OWINVTIME timeline per open. -Items selects the recipe folder (default: the walker's own).
+    [int]$OpenBench = 0,
+    [int]$OpenBenchDelay = 20,
+    [string]$Items,
+    # Bench the host widget fallback instead of the imported page (no -owflashinventory).
+    [switch]$NoInventoryMovie,
     # Extra command-line switches for UnrealEditor. The defaults are the launch-only cache fallback and D3D11
     # that completed in this environment (docs/verification/INVENTORY_MOVIE_PROTOTYPE.md, 2026-10-01); they
     # change no project cache/renderer settings. Pass -Extra @() to launch without them.
@@ -99,9 +107,13 @@ try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
-        "-owflashhud=$url", "-owflashskills=${url}skills.html", "-owflashinventory=${url}inventory.html",
-        '-owinventoryactions', "-owslots=$Slots", '-game', '-windowed', '-ResX=1280', '-ResY=720',
+        "-owflashhud=$url", "-owflashskills=${url}skills.html",
+        "-owslots=$Slots", '-game', '-windowed', '-ResX=1280', '-ResY=720',
         '-nosplash', '-unattended', "-abslog=`"$log`"")
+    if (!$NoInventoryMovie) { $arguments += "-owflashinventory=${url}inventory.html" }
+    if ($OpenBench -gt 0) { $arguments += @("-owinvopenbench=$OpenBench", "-owinvopenbenchdelay=$OpenBenchDelay") }
+    else { $arguments += '-owinventoryactions' }
+    if ($Items) { $arguments += "-owitems=`"$((Resolve-Path -LiteralPath $Items).Path)`"" }
     if ($JsKeys) { $arguments += '-owinventoryjskeys' }
     $arguments += $Extra
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
@@ -111,7 +123,7 @@ try {
     $summary = $null
     while ($true) {
         $text = Read-LogText
-        $found = [regex]::Match($text, 'OWINVTEST SUMMARY (.*)')
+        $found = [regex]::Match($text, $(if ($OpenBench -gt 0) { 'OWINVTIME (bench_done.*)' } else { 'OWINVTEST SUMMARY (.*)' }))
         if ($found.Success) { $summary = $found.Groups[1].Value.Trim(); break }
         if ($process.HasExited) { break }
         if ((Get-Date) -gt $deadline) { break }
@@ -119,6 +131,35 @@ try {
     }
     if ($summary) { [void]$process.WaitForExit(20000) }
     $text = Read-LogText
+
+    if ($OpenBench -gt 0) {
+        # One row per open: ms from the open request (host clock for host events, the page's
+        # Date.now() against the host's open time for js_ events).
+        $runs = $text -split 'OWINVTIME open_request '
+        $rows = @()
+        for ($i = 1; $i -lt $runs.Count; $i++) {
+            $r = $runs[$i]
+            $num = { param($pattern) $m = [regex]::Match($r, $pattern); if ($m.Success) { [double]$m.Groups[1].Value } else { $null } }
+            $rows += [pscustomobject]@{
+                Open = $i
+                HostSyncMs = & $num 'OWINVTIME open_host_done t=([\d.]+)ms'
+                MayaDisplayMs = & $num 'mayaDisplay=([\d.]+)ms'
+                VmMs = & $num ' vm=([\d.]+)ms'
+                FirstFrameDeltaMs = & $num 'first_frame_after_open t=[\d.]+ms .*? delta=([\d.]+)ms'
+                StatePushMs = & $num 'first_state_push t=[\d.]+ms .*? dur=([\d.]+)ms'
+                PreviewLoadMs = & $num 'first_menu_preview t=[\d.]+ms .*? dur=([\d.]+)ms'
+                JsOpen = & $num 'js_open sinceOpen=(-?\d+)'
+                JsResize = & $num 'js_resize sinceOpen=(-?\d+)'
+                JsFirstRender = & $num 'js_first_render sinceOpen=(-?\d+)'
+                JsPainted = & $num 'js_painted sinceOpen=(-?\d+)'
+            }
+        }
+        $rows | Format-Table -AutoSize | Out-String -Width 220 | Write-Output
+        # Page start-up before the first open (preload, page load, movie init).
+        foreach ($line in ($runs[0] -split "`n")) { if ($line -match 'OWINVTIME ') { Write-Output ($line -replace '^.*?OWINVTIME ', '').Trim() } }
+        Write-Output "Log: $log"
+        $exitCode = if ($summary) { 0 } else { 2 }
+    } else {
 
     Write-Output ''
     $tally = [ordered]@{ PASS = 0; FAIL = 0; NOT_RUN = 0; KNOWN_DIVERGENCE = 0 }
@@ -139,6 +180,7 @@ try {
         Write-Output "OWINVTEST SUMMARY $summary"
         Write-Output "Log: $log"
         $exitCode = if ($summary -match '^result=PASS ') { 0 } elseif ($summary -match '^result=PASS_WITH_KNOWN_DIVERGENCE ') { 3 } else { 1 }
+    }
     }
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

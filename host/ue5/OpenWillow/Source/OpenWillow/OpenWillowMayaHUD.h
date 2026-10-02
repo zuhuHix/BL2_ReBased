@@ -59,6 +59,7 @@ public:
 private:
     void OpenStatusMenu(bool bInventory);
     TSharedPtr<SWebBrowser> CreateStatusBrowser(const FString& MenuUrl);
+    void CreateInventoryVm();
     FString InventoryUrl;
     bool bInventoryOpen = false;
     UPROPERTY() TObjectPtr<AOpenWillowInventoryMayaDisplay> InventoryMayaDisplay;
@@ -98,4 +99,25 @@ private:
     void OnSkillsConsole(const FString& Message);
     void PushSkillsState();
     TArray<FIntVector> PendingSpends;
+
+    // Inventory open-time instrumentation: "OWINVTIME <event> t=<ms since the
+    // open request> ..." log lines from the host and (prefixed js_) from
+    // inventory.js, which is told the host's open time in Unix ms.
+    void TimeLog(const TCHAR* Event, const FString& Detail = FString()) const;
+    double OpenStartedAt = 0;      // FPlatformTime::Seconds() of the last open request
+    uint64 OpenFrame = 0;          // GFrameCounter at that request
+    bool bOpenFrameLogged = true, bOpenPushLogged = true, bOpenPreviewLogged = true;
+    double PreloadCreatedAt = 0;
+    // Inventory display assets loaded at BeginPlay (see AOpenWillowInventoryMayaDisplay::PreloadAssets).
+    UPROPERTY() TArray<TObjectPtr<UObject>> PreloadedMenuAssets;
+    bool bWeaponMeshesPreloaded = false;
+    int64 OpenEpoch = 0;           // Unix ms of the open request, passed to the page
+    bool bOpenTimingAcked = true;  // the page logged js_open for the current open
+    // -owinvopenbench=<runs> [-owinvopenbenchdelay=<s>]: open the inventory,
+    // wait until the page reports it painted, hold, close, repeat; then quit.
+    void TickOpenBench();
+    int32 OpenBenchRuns = 0, OpenBenchDone = 0, OpenBenchPhase = 0;
+    double OpenBenchAt = 0;
+    float OpenBenchDelay = 20.f;
+    bool bOpenBenchPainted = false;
 };

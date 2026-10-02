@@ -901,3 +901,97 @@ adapter; stock backpack traversal and sort remain as in the observation sections
 are Slate events, not physical input; weak negative checks noted above; the host `[ ]`
 category filter and the host sort modes have no in-suite coverage now except steps 15/16.
 Item names in local logs come from the seeded recipes and are not copied here.
+
+## Inventory open time — 2026-10-02
+
+The maintainer reported a slow inventory open. Measured before changing anything. This PC, `-game
+-windowed` 1280x720, `-d3d11`, slice recipes (`-Items local/items/slice`), imported page path.
+No real-game open time exists yet (the real-game capture is blocked), so **nothing here is a
+parity claim**.
+
+**Instrumentation.** `OWINVTIME <event> t=<ms since the open request>` lines in the UE log:
+host events from `AOpenWillowMayaHUD` (open request, per-part game-thread cost, first frame
+after the open, first state push, first menu preview) and page events from `inventory.js`
+(`js_open`, `js_resize`, `js_first_render`, `js_painted`, plus page boot marks `js_page_start`,
+`js_ruffle_api`, `js_frames_loaded`, `js_movie_ready`). The host passes the page its open time
+(Unix ms); `js_painted` is two animation frames after the page is open, ready and rendered.
+`tools/test_inventory_actions.ps1 -OpenBench N [-OpenBenchDelay S] [-Items dir]
+[-NoInventoryMovie]` runs `-owinvopenbench` (open, wait for `js_painted`, hold 2 s, close, 3 s,
+repeat, quit) instead of the action suite and prints a table per open. `-owinvnopreload` turns
+the preloads below off for A/B runs.
+
+**Before** (medians over the launches listed; ms from the open request to `js_painted`):
+
+| case | launches | painted | game-thread part |
+|---|---|---|---|
+| first open, page already booted (open 20 s after start) | 4 | 443 (358-488) | 164-238 ms sync in the open frame: inventory VM init 119-166, Maya display spawn 45-115 (sync `LoadObject`); open frame 207-290 ms |
+| repeat open (2nd-5th) | 22 opens | ~60 (48-87) | ~1.3 ms |
+| open pressed as the world appears (page still booting) | 3 | 6030 (5471-7365) | page boot dominates |
+| first weapon preview after open | 13 | 32 typical, outliers 95 / 303 / 1036 | sync weapon mesh load |
+
+Page boot, `js_page_start` to `js_movie_ready`, 10 launches: median ~5.0 s (4.5-6.3; 9.2 s
+on the first launch after a build). Inside it: Ruffle API ready ~1.2 s, the SWF library chain
+(StatusMenu imports SharedWillowInventory and SharedWillowComponents; the browser fetched
+Components three times and Inventory twice, ~60 ms per fetch, 0.3-1 s apart) until ~3.7-5.3 s,
+then the 300 ms layout settle and opening tween. In `-game` runs from this worktree the engine
+init before frame 1 (asset registry gather without a cache, ~9 s) also delays when the page
+script starts; that is not part of an in-game key press.
+
+**Causes found.** (1) One-off game-thread work in the frame of the first open: the inventory VM
+reads WillowGame/Core packages (~120 ms) and the Maya display loads its meshes synchronously
+(~50-115 ms). (2) The first preview of each weapon loads its mesh synchronously (usually ~30 ms,
+up to 1 s once). (3) An open during the first ~5 s of play waits for Ruffle to boot the movie.
+
+**Changed.**
+- `OpenWillowMayaHUD.cpp`: the VM is created and the display's meshes, materials and animations
+  are loaded at HUD BeginPlay (level start) and held, instead of in the open frame; the starting
+  inventory's weapon meshes are loaded once on the first HUD frame. Startup cost measured:
+  assets 23-118 ms (615 ms once, cold), VM 116-149 ms, weapon meshes 51-188 ms for 4 recipes
+  (it grows with the starting backpack).
+- `OpenWillowInventoryMayaDisplay.*`: `PreloadAssets` lists the same assets `BeginPlay` loads.
+- `inventory.js`: timing marks only, plus the hover fix below.
+
+**After** (same setup):
+
+| case | launches | painted | game-thread part |
+|---|---|---|---|
+| first open, page already booted | 3 | 234 (213-252) | 1.3-1.8 ms; open frame 45-47 ms |
+| repeat open | 8 opens | ~62 (55-75) | ~1.3 ms |
+| open pressed as the world appears | 5 | 5507 (5349-6030) | page boot, unchanged |
+| first weapon preview | 9 | 0.5-1.2 ms | |
+
+**Tried and dropped (no measured gain):** a 60 Hz browser frame rate for the status pages
+(page boot median ~4.8 s vs ~5.0 s, within run-to-run spread), and HTTP caching of the
+content-hashed Ruffle wasm/core files (`js_ruffle_api` 1.15-1.25 s either way; the wasm fetch was
+already ~130 ms). Both reverted.
+
+**Host widget fallback** (no `-owflashinventory`, what `tools/run_quest.ps1` hand play gets):
+2.6-4.9 ms per open and a 8-16 ms frame over 9 launches at levels 1 and 8, with and without
+the preloads. One earlier launch showed a 1058 ms first fallback open; it did not reproduce and
+its cause is **not identified**.
+
+**Hover selection under a resting cursor (fixed).** With the desktop cursor parked over an
+equipped cell inside the game window, the page received ~500 identical `pointermove` events
+(UE keeps re-sending the last mouse position) and each one re-selected that cell, so the action
+suite lost its selection after step 7 (6 PASS / 1 FAIL / 42 NOT_RUN). This confirms the
+hypothesis noted as untested in the previous section. Hover now selects only when the pointer
+position actually changes; the first event over a cell just records the position.
+
+**Quest save.** `UOpenWillowQuest::Save()` runs from `Pump()` every tick and rewrote the save
+file every time. It now writes only when the text changed. Measured in a passing first run:
+9327 calls, 8 writes, 0.77 ms per write, so the old behaviour cost about 7 s of file writes over
+that run (estimate: calls x per-write time; the old per-call cost was not timed directly). Not
+on the inventory path: the quest launchers do not pass `-owflashinventory`.
+
+**Suites.** `tools/test_inventory_actions.ps1`: 45 PASS / 0 FAIL / 2 NOT_RUN (short local
+backpack) / 2 KNOWN_DIVERGENCE (sort steps 15-16), identical in runs at 01:29 and 08:23 local
+time. `tools/test_quest.ps1`: 73/73 first run and 10/10 resume at 01:23 with this code; two
+later first runs (08:24, 08:26) ended silently after check 67, ~58 s in, with no error line and
+no crash dump. A build of HEAD without these edits, to compare, could not link at that point:
+another lane's uncommitted `src/` changes no longer matched the built `ow-core.lib`. That
+failure is **unexplained**.
+
+**UNVERIFIED / not done.** The original game's open time; the page boot (~5 s) is unchanged,
+and cutting it needs fewer or deduplicated library loads in the converted movie or Ruffle work,
+not tried here. Opens of a page that is not ready show the page's own "Loading inventory" panel.
+Items picked up later still load their mesh on first preview. All numbers are from one PC.
