@@ -386,3 +386,47 @@ textures only (for example `Mat_SirenEnemyOrb`: `PhaseLockBubble_Dif_Tex`). They
 5. **Target animation:** use the `PhaseLockDefinition` chain (lift with blend-in, queued loop, drop stretched to
    0.5 s, land on walking) and the mesh-centring rule. For the slice dummy, decide with the maintainer whether a
    Psycho-shaped dummy borrows the Psycho clips: stock data gives the dummy no clips.
+
+## Particle template reader (2026-10-02)
+
+AI-assisted (Claude). `research/particle_system.py` (synthetic tests: `tests/particle_system_test.py`, 16 pass) reads
+cooked `ParticleSystem` templates with the pure-Python package loader of `research/behavior_census.py` and writes one
+JSON per template under ignored `local/phaselock/emitters/` (`python research/particle_system.py --oracle`). Each
+JSON holds every emitter, every LOD, every module's properties, the particle parameters, the effect materials'
+tagged properties and a per-emitter digest of LOD 0. No values are recorded here; they stay in the local JSON.
+Nothing was run in the game or in UE.
+
+**How values are resolved.** Cooked templates are delta-serialized: a property equal to the archetype's is not
+written. The reader merges own tags over the archetype chain. That is the export's `ArchetypeIndex`, else the same-named
+child of its outer's archetype, else `Engine.Default__<Class>`, whose own chain is followed to `Core`. Structs merge
+field by field and arrays are replaced whole. Without the class defaults the baked tables look headerless (the
+2026-10-02 census above): `Op`, `LookupTableNumElements` and `LookupTableChunkSize` are ordinary byte tags that are
+only written when they differ from the class default.
+
+**Layouts and what checks them.**
+
+| Item | Reading | Status |
+|---|---|---|
+| Tag streams of all particle and distribution exports | Every tag's value uses exactly its declared size, and the stream ends exactly at the export end. Prefix: 4 bytes, or 8 or 16 for distribution subobjects. Engine 347, GD_Siren_Streaming_SF 2437, Startup 15608, WillowGame 1244 exports; 0 failures | proven structurally; the extra prefix words are not understood |
+| `RawDistribution` table | `[range_a, range_b]` then entries of `ChunkSize` floats, `ChunkSize = NumElements x width` (width 1 float, 3 vector; `NumElements` 2 = low/high pair). Constants and pairs are stored as exactly 2 entries with `TimeScale` 0. Curves store entries at `StartTime + k / TimeScale` | layout: all 17,506 non-empty tables in the four packages pass. Constants and pairs: proven against 171 Engine tables whose uncooked distribution objects are kept, all matching. **Curve sampling: FITTED** (435 of 535 curve tables in the Phaselock package end exactly at time 1.0; no kept curve object has a curve table to compare with) |
+| Range header | Pair tables: (min of the lows, max of the highs), or the range over both halves when `Type` has bit 0x80 (19 Startup tables). Single-value tables: bounds the entries, sometimes wider than the samples (a key between samples) | fitted; `Type` meaning UNVERIFIED |
+| `Op` | 1 for a single value, 2 for a uniform pair; 3 also occurs on pair tables (19 in the Phaselock package). A uniform with low = high is baked as `Op` 1 (15 Engine cases) | values observed; meaning of 2 vs 3 UNVERIFIED |
+| `BurstList` | Tagged structs: `Count`, `CountLow`, `Time`, `CountDistribution`. All four fields are written in every element (192 + 1355 + 155 lists) | layout proven. Whether `Time` is a fraction of the emitter duration is UNVERIFIED |
+| `DynamicParams` | Tagged structs: `ParamName`, `ValueMethod`, `bUseEmitterTime`, `bSpawnTimeOnly`, `bScaleVelocityByParamValue`, `ParamValue` (a raw distribution). All fields are always written | layout proven; the slot-to-material wiring is not in the tags |
+| Particle parameters | `Distribution*ParticleParameter` objects are kept and their table is empty (45 here). They carry `ParameterName`, input and output ranges, and `Constant` (defaults from the class chain) | decoded. The mapping (clamp input, map to output, `Constant` when the parameter is unset) is UE3 general knowledge and UNVERIFIED |
+| Enums | An enum export is a count followed by that many FNames, ending exactly at the export end. Used to name the default (first) value of absent enum properties | fitted on Engine enums |
+| Materials | `BlendMode`, `LightingModel`, `TwoSided` and usage flags read from tags. The expression list survives only as mostly empty object slots plus parameter expressions. Graphs, dynamic-parameter use and texture wiring are not in the tags | as stored |
+
+Names of the template parameters: the bubble loop reads `PhaselockLifeTime` (all six emitters' lifetimes) and
+`SphereCollapse` (the `Sphere` emitter's dynamic parameter 0, input range 0 to 0.75). The intro and the miss effects
+read `PhaseLockIntroLifetime`, which the script summarised above never sets, so they would fall back to the
+parameter's `Constant` (UNVERIFIED engine behaviour). Material blend modes: the bubble's `Sphere`, the core colour and
+the ribbons are additive and unlit. The spike sheets come as one translucent and one modulate copy. The black
+sprites and the `GlowMOD` flashes are modulate. The inner orb, suction, swirl, hand glow and screen effect are
+translucent and unlit.
+
+**Not decoded:** semantic units (rotation in turns, sizes in UU, colour as HDR multipliers) are standard UE3
+knowledge and are not checked here. Orbit chaining, the location primitives and the mesh type-data defaults
+(alignment) are read but not interpreted. The `ow-package` C++ reader needs no change for these structs:
+`BurstList=StructProperty:ParticleBurst` and `DynamicParams=StructProperty:EmitterDynamicParameter` in an
+`--array-schema` file would let it list them too, since their elements are ordinary tag streams.
