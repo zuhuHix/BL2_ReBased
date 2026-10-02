@@ -1229,7 +1229,10 @@ python tools/render_weapon_previews.py slice_pistol --items local/items/slice `
   (or replace) by squared mask weights; the result is multiplied by one detail atlas channel.
 - `host/ue5/import_weapon_paint.py` draws the same model in a Custom node, including the `P_SimpleReflect`
   environment term (sampled at the tangent-space reflection vector, as the compiled shader does). Emissive and the
-  game's lighting are not reproduced; the colour goes to base colour unscaled (`DISPLAY_SCALE` 1).
+  game's lighting are not reproduced. Shading inputs (pass 3, `UNVERIFIED`): the compiled base and light passes
+  multiply the material colour by 0.4 before lighting and take no specular from the material (only
+  `pow(R·L, 15)` times the engine's override), so the importer uses base colour 0.4 × colour, metallic 0,
+  specular 0, roughness 1. Under the host's current scene lighting this renders much darker than pass 2.
 - Colour space (pass 2): each texture follows its installed `SRGB` flag, which `prepare_weapon_paint.py --reader`
   records in `srgb`. `Engine.upk`'s `Default__Texture` serialises SRGB on; only `p_Masks` and the normal maps
   turn it off, so the detail atlas, patterns, decals and environment maps are sRGB. Pass 1 had imported the

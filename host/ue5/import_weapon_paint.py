@@ -8,9 +8,17 @@ zone mask (lower half); zone tones, zones over p_DColor, pattern and decal
 layers, times the detail channel the MIC's static parameters select, plus the
 P_SimpleReflect environment term (sampled at the tangent-space reflection
 vector, as the compiled shader does). Textures use their installed SRGB flag
-(data['srgb']). Emissive and the game's lighting are not reproduced; the
-result goes to base colour unscaled (DISPLAY_SCALE 1), only hue-preserving
-clamped to 1.
+(data['srgb']). Emissive and the game's lighting are not reproduced.
+
+Shading inputs (pass 3, UNVERIFIED; reasoning in tools/weapon_paint_model.py, "Lighting inputs"):
+the compiled passes multiply the material colour by 0.4 before lighting (DIFFUSE_SCALE), and
+their specular is pow(R.L, 15) times the engine's override only, i.e. the material's specular
+input compiled to zero. So base colour = 0.4 x colour (hue-preserving clamp to 1), metallic 0,
+specular 0, roughness 1: a diffuse-only surface whose shine is the environment term already
+inside the colour. The host's Sanctuary lighting is not calibrated to the game's yet, and with those
+inputs the guns render 4-7x darker than the reference screenshots (2026-10-02 stills), so the importer
+keeps the pass-2 host stand-in (USE_SHADER_SHADING False: scale 1, metallic 0.35, roughness 0.55) until
+the scene lighting is calibrated. Set it True to get the shader-grounded inputs.
 """
 import json
 import os
@@ -18,7 +26,13 @@ import re
 from pathlib import Path
 import unreal
 
-DISPLAY_SCALE = 1.0  # no scale: the shader's diffuse colour goes to base colour (pass 1 used 0.4, chosen by eye)
+USE_SHADER_SHADING = False  # see the docstring: waits for calibrated scene lighting
+if USE_SHADER_SHADING:
+    DIFFUSE_SCALE = 0.4  # read from the compiled Master_Gun passes (tools/weapon_paint_model.DIFFUSE_SCALE)
+    SHADING = {'MP_METALLIC': 0.0, 'MP_SPECULAR': 0.0, 'MP_ROUGHNESS': 1.0}  # no material specular in the original
+else:
+    DIFFUSE_SCALE = 1.0  # host stand-in, chosen by eye against the wiki screenshots (pass 2)
+    SHADING = {'MP_METALLIC': 0.35, 'MP_ROUGHNESS': 0.55}
 # Pass-1 colour-space choice, used only when the prepared JSON has no SRGB flag (prepared without --reader).
 FALLBACK_SRGB = {'p_Masks': False, 'p_Diffuse': False, 'p_NormalScopesEmissive': False, 'p_Pattern': True,
                  'p_Decal': True, 'P_SimpleReflect': True}
@@ -196,7 +210,7 @@ def apply(data):
         code += ('float rw=saturate(dot(Mask.rgb*ReflectWeight, Mask.rgb*ReflectWeight));\n'
                  'float3 R=Env.rgb*ReflectColor*rw;\n'
                  'c=c+lerp(R, R*c, ReflectScale);\n')
-    code += (f'c*={DISPLAY_SCALE};\n'
+    code += (f'c*={DIFFUSE_SCALE};\n'
              '// Keep hue when the HDR colour exceeds 1.\n'
              'return c/max(1,max(c.r,max(c.g,c.b)));')
     effect = custom(code, unreal.CustomMaterialOutputType.CMOT_FLOAT3, list(inputs) + list(outputs))
@@ -206,7 +220,7 @@ def apply(data):
         mel.connect_material_expressions(value, output, effect, name)
     mel.connect_material_property(effect, '', unreal.MaterialProperty.MP_BASE_COLOR)
     mel.connect_material_property(normal, 'RGB', unreal.MaterialProperty.MP_NORMAL)
-    for prop, value in [(unreal.MaterialProperty.MP_METALLIC, .35), (unreal.MaterialProperty.MP_ROUGHNESS, .55)]:
+    for prop, value in [(getattr(unreal.MaterialProperty, name), value) for name, value in SHADING.items()]:
         mel.connect_material_property(node(unreal.MaterialExpressionConstant, r=value), '', prop)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)

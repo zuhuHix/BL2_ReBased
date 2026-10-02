@@ -38,6 +38,17 @@ The model, per pixel (UV0 = u0, v0; UV1 = u1, v1):
   turn it off, so the detail atlas, patterns, decals and the environment map are sRGB-decoded.
 - Not modelled here: emissive, digistruct, the selection tint and all lighting.
 
+Lighting inputs (what the lit passes do with that colour; read from the base-pass and
+light-pass pixel shaders of the same permutations):
+- Both multiply the material colour by 0.4 (DIFFUSE_SCALE) in the same instruction that applies
+  the engine's DiffuseOverrideParameter. Most other shaders in the cache apply that override
+  with no extra factor (297 of the first 400 sampled), so the 0.4 belongs to Master_Gun.
+- The light pass adds pow(dot(reflection, light), 15) times SpecularOverrideParameter.xyz and
+  nothing from the material: the material's specular input compiled to zero. The surface is
+  diffuse only; its shine is the environment term inside the colour.
+- A UE5 mapping of that (the importer): base colour 0.4 x colour, metallic 0, specular 0,
+  roughness 1. UNVERIFIED: the game's sky and light values are not reproduced.
+
 Status: UNVERIFIED. The reading is a structural one of compiled data; it has not been checked
 against the running game, only against screenshots by eye.
 """
@@ -137,6 +148,8 @@ def add_reflection(colour, environment, mask, params):
 def srgb_to_linear(value):
     return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
 
+
+DIFFUSE_SCALE = 0.4  # see "Lighting inputs" above
 
 PAINT_PARAMETERS = {
     'vector': ['p_DColor'] + [f'p_{zone}Color{tone}' for zone in 'ABC' for tone in ('Shadow', 'Midtone', 'Hilight')],
