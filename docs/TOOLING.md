@@ -887,6 +887,32 @@ proof of a flat transform. Native post-hook output timing remains to be checked
 in a fresh original-game capture. Synthetic callback checks:
 `python tests/ui_trace_returns_test.py`.
 
+## Driving the real game (ground-truth captures)
+
+`tools/real_game/realgame.ps1` (dot-source it) launches the installed game for captures and talks to it through
+`tools/real_game/openwillow_realgame/`, our own Library mod for the community mod SDK (THIRD_PARTY.md). The mod runs
+`*.py` command files on the game thread and writes `.out` replies; command scripts share one namespace. Needs
+`$env:OPENWILLOW_BL2`. Everything it writes goes under ignored `local/realgame/`.
+
+```powershell
+. tools/real_game/realgame.ps1
+Enter-RunLock; Backup-Saves; Install-Driver          # lock shared with UE runs; copy saves first
+Start-Game @('-windowed','-ResX=1280','-ResY=720','-nostartupmovies')
+Invoke-GamePy 'print(block_saves(), get_pc())'       # at the main menu, before loading a character
+Invoke-GamePyFile tools/real_game/scripts/weapon_cards.py cards   # helpers: spawn, record, card trace
+Invoke-Burst 'phaselock/cast' 7 40 { Send-Key F } 0.75            # QPC-stamped frames around a key press
+Remove-Driver; Exit-RunLock
+python tools/real_game/golden_cards.py               # join records, card trace and screenshots
+python tools/real_game/golden_card_compare.py        # evaluator on the exact rolled parts vs the cards
+```
+
+Input is scan-code keys (`Send-Key`, arrows included), `Send-ClickAt`, `Send-Wheel` and `Send-Drag`; it takes the
+screen and keyboard, so only run it when nobody is using the machine. Rules learned the hard way: look objects up
+again in every command (a stale weapon reference crashed the game), keep spawned items in memory and remove them
+before any travel or quit, and compare the save folder with the backup afterwards. `scripts/phaselock.py` samples the
+lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-down calls. Results:
+`docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
+
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 
 `research/script_disasm.py` (Python, read-only) turns every script function in the code

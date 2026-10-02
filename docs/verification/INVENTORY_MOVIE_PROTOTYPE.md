@@ -1000,3 +1000,9 @@ likely cause; it is not proven.
 and cutting it needs fewer or deduplicated library loads in the converted movie or Ruffle work,
 not tried here. Opens of a page that is not ready show the page's own "Loading inventory" panel.
 Items picked up later still load their mesh on first preview. All numbers are from one PC.
+
+**Original game, 2026-10-02** ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)). Burst screen captures of the
+running game (1280x720 windowed, about 20 ms per frame, key press to frame): first open in the process ~156 ms to the
+first page frame, 272 ms to 90 % of the opening animation; repeat opens 126-150 ms and 236-258 ms (3 opens). The
+capture's own latency is included, so these are upper bounds. The host's numbers above are measured differently
+(log events to `js_painted`), so the two are side by side, not a parity result.

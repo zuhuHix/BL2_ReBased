@@ -68,14 +68,15 @@ When it's done (see the roadmap; this isn't a remaster, not a remake) here's wha
 
 Okay, Sanctuary is starting to actually look like Sanctuary.
 
-Three maps load in UE5 and you can fly around them as frozen scenery: **Ash**, **Sanctuary** and **Southpaw Factory**. On Sanctuary there is also a developer slice: Maya walks, holds a lent pistol, casts Phaselock and plays the stock "Rock, Paper, Genocide: Fire Weapons!" mission with Marcus, the range and the target dummy loaded from the game's own data. Many parts are labelled stand-ins and **none of it has been compared with the original game**. There is no real combat against enemies and no story yet.
+Three maps load in UE5 and you can fly around them as frozen scenery: **Ash**, **Sanctuary** and **Southpaw Factory**. On Sanctuary there is also a developer slice: Maya walks, holds a lent pistol, casts Phaselock and plays the stock "Rock, Paper, Genocide: Fire Weapons!" mission with Marcus, the range and the target dummy loaded from the game's own data. Many parts are labelled stand-ins and **most of it has not been compared with the original game yet**; the first real-game captures (2026-10-02) checked a handful of rules, listed below. There is no real combat against enemies and no story yet.
 
 Since 2026-10-01 (every item below is automated or by-eye evidence on one PC, not parity; the numbers are in [ROADMAP.md](ROADMAP.md#how-its-going)):
 
-- **Native analysis started.** Analysing `Borderlands2.exe` locally is now allowed (see [Is this legal?](#is-this-legal)). The first notes cover mission, behavior and Kismet dispatch, progression and Phaselock targeting. All are `UNVERIFIED` until checked in the real game; only the dispatch notes are implemented so far.
-- **Weapon paint** is rebuilt from the game's own compiled shader data in three passes. It is closer to in-game screenshots by an independent reviewer's score, but still an unverified reading.
-- **Inventory opens faster** (first open 443 ms to 234 ms on my PC; the original game's time is unknown).
+- **Native analysis started.** Analysing `Borderlands2.exe` locally is now allowed (see [Is this legal?](#is-this-legal)). The first notes cover mission, behavior and Kismet dispatch, progression and Phaselock targeting. The dispatch and progression notes are implemented. The progression rules (level curve, max health, skill points, the Fire mission's XP) and Phaselock's lift bob and reload/weapon-swap rules are now confirmed in the real game; everything else stays `UNVERIFIED`.
+- **Weapon paint** is rebuilt from the game's own compiled shader data in three passes. Against real captures of the same guns an independent reviewer scores it only 3-4.5/10 (far too dark, wrong Maliwan orange), so it is still an unverified reading.
+- **Inventory opens faster** (first open 443 ms to 234 ms on my PC; the original game shows its page about 130-160 ms after the key press, measured differently).
 - **A reader for Phaselock's particle templates** exists; nothing is rendered from it yet.
+- **First real-game captures.** The installed game is driven through the community mod SDK to record ground truth: 69 weapon cards with their exact parts, gun skins, Phaselock frame by frame, progression values ([record](docs/verification/REALGAME_GROUND_TRUTH.md)). Nothing game-derived enters the repository.
 
 Earlier, on 2026-09-23, Sanctuary got a lot of love:
 

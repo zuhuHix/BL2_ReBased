@@ -137,10 +137,12 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
 - **Weapon paint (2026-10-01/02):** the slice guns are painted from Master_Gun's recovered colour model
   (`tools/weapon_paint_model.py`, `tools/material_static_parameters.py`, our own SM3 token reader
   `research/d3d9_bytecode.py`; listings stay under `local/`). Three passes recorded in DECISIONS; the whole reading and the
-  shading stand-ins are `UNVERIFIED` and nothing has been compared with the running game.
+  shading stand-ins are `UNVERIFIED`. First real captures (2026-10-02): an independent critic agent scored the host guns
+  3-4.5/10 against them (far too dark, wrong Maliwan orange hue; `docs/verification/REALGAME_GROUND_TRUTH.md`).
 - **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
-  about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC, no real-game
-  figure (`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`, 2026-10-02 section).
+  about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
+  shows its page ~126-156 ms after the key press (screen capture, different method;
+  `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`, 2026-10-02 sections).
 - **Phaselock effects:** `research/particle_system.py` reads cooked `ParticleSystem` templates (layouts checked by
   oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. The Sanctuary dummy stands on the lane
   floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).

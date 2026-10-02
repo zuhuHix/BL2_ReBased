@@ -68,7 +68,11 @@ prototypes, so the repository's clock started a little after the work did.
   behavior and Kismet dispatch, progression, Phaselock targeting); the executors
   in `src/behavior.*`, `src/kismet.*` and `src/mission.*` now follow the
   dispatch notes; weapon paint passes 1 to 3; a `ParticleSystem` template
-  reader; inventory open time measured and reduced.
+  reader; inventory open time measured and reduced. First real-game capture
+  session (the installed game driven through the community mod SDK): the level
+  curve, maximum health, skill points, the Fire mission's XP and the Phaselock
+  bob and cast gates confirmed in game; 69 golden weapon cards with their exact
+  parts ([record](docs/verification/REALGAME_GROUND_TRUTH.md)).
 
 **Measured** (automated checks and timings; one PC unless stated)
 
@@ -86,7 +90,7 @@ prototypes, so the repository's clock started a little after the work did.
   page loaded 443 ms (358-488, 4 launches) before, 234 ms (213-252, 3 launches)
   after moving one-time VM and mesh work to level start; repeat opens about 60
   ms. An open pressed in the first ~5 s of play still takes about 5.5 s (the
-  page's movie player booting). No original-game open time exists.
+  page's movie player booting). The original game: ~126-156 ms (below).
 - Native registration (DECISIONS 2026-10-02, [notes](docs/NATIVE_ANALYSIS.md)):
   the executable's tables hold 6,877 natives in 770 tables and all 199
   numbered script natives resolve by name. A census over 133 missions puts all
@@ -101,11 +105,21 @@ prototypes, so the repository's clock started a little after the work did.
   "Particle template reader"): `tests/particle_system_test.py` 16 passed; all
   17,506 non-empty baked distribution tables in four packages fit the assumed
   layout. Reader and layout only: nothing is rendered from it yet.
+- Real game (2026-10-02, [record](docs/verification/REALGAME_GROUND_TRUTH.md)):
+  the native level curve matches the host's single-precision formula at levels
+  1-59; max health base `80 × 1.13^L` at levels 2, 8, 17 and 70; Fire mission XP
+  395 at stage 8; the Phaselock bob rule reproduces a lifted enemy's height to
+  0.001 units RMS over 435 frames. Weapon cards: the host evaluator on the exact
+  rolled parts matches 52 of 69 cards in every printed stat. Inventory open in
+  the original game: ~126-156 ms to the first page frame. Paint: an independent
+  critic agent scored the host guns 3-4.5/10 against real captures.
 
 **UNVERIFIED** (read or fitted, not confirmed by running the original game)
 
 - Every native rule in the dispatch, progression and Phaselock-targeting notes
-  and the executor behaviour built on the dispatch notes: synthetic tests show
+  not listed as confirmed above (progression sections 2-4 and the Phaselock bob
+  and reload/put-away gates were confirmed in game on 2026-10-02), and the
+  executor behaviour built on the dispatch notes: synthetic tests show
   the executors follow the notes, not that the notes are right
   ([dispatch](docs/verification/NATIVE_MISSION_DISPATCH.md),
   [progression](docs/verification/NATIVE_PROGRESSION.md),

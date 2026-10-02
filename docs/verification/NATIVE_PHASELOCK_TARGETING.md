@@ -2,9 +2,11 @@
 
 AI-assisted. Behaviour notes written from a local reading of `Borderlands2.exe` in Ghidra, under the policy in
 [LEGAL.md](../LEGAL.md) ("Analysing the executable") and [NATIVE_ANALYSIS.md](../NATIVE_ANALYSIS.md), plus script
-read with `ow-package --disasm`. Nothing below is listing, pseudo-code or an address. **Every rule here is
-`UNVERIFIED`**: read from native code or script, not confirmed by running the game. Each section ends with the
-observation that would confirm it. Data values quoted are those the host's Phaselock manifest already decodes
+read with `ow-package --disasm`. Nothing below is listing, pseudo-code or an address. **Every rule here was
+`UNVERIFIED`** when written: read from native code or script. Each section ends with the observation that would
+confirm it. On 2026-10-02 the lift bob (section 5) and the reload/put-away constraints (section 4) were confirmed in
+game; the target score (sections 2-3), the injured/downed rules and the rest stay `UNVERIFIED`
+([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)). Data values quoted are those the host's Phaselock manifest already decodes
 (`GD_Autoaim.Default`, `Skill_Phaselock.SkillConstraints`, `LiftActionSkill` settings).
 
 Host code cited is the working tree on top of commit `17a7664`.
@@ -115,6 +117,12 @@ that ends a running Phaselock when Maya goes down.
 **Confirmation:** in the game, press the action-skill key during a reload (the reading says it casts), during weapon
 swap put-away (should not), and get downed while a target is held (the reading says the lock ends immediately).
 
+**Confirmed in game on 2026-10-02** (SDK marks of `StartActionSkill` and the weapon's reload/put-down calls, per-frame
+skill state): during a manual reload the cast starts and lifts the target, and it aborts the reload
+(`OnAbortReload`); during a swap put-down (`IsPuttingDown()` true) the skill stays idle and no cooldown is used, 2 of 2,
+with a control cast right after each succeeding. Not tested: going down while a target is held, casting while injured
+([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+
 ## 5. Lift bob and the held target
 
 Script (`LiftActionSkill.UpdateLiftedPawn`, `GetBobLocation`): while lifting (less than `LiftDuration` since
@@ -135,6 +143,11 @@ from the lift end position. The cooldown pool's native tick was not read in this
 
 **Confirmation:** a capture of a lifted enemy's height over time (sdk trace of `LiftedPawn.Location.Z`): amplitude
 about 16, period 4 s, phase relative to the cast.
+
+**Confirmed in game on 2026-10-02** by a per-frame SDK trace of the lifted bullymong: this rule, run on the game's own
+frame times and seeded at the end of the lift, reproduces its height over 435 frames with RMS error 0.001 units
+(peaks +15.6/+16.2, trough −16.3, 4.0 s period, first peak 1.63 s after the cast). Lift 0.7 s, hold 3.9 s, release
+1.1 s at level 8 ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 
 ## What was not read
 

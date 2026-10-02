@@ -237,6 +237,17 @@ The tools therefore treat runtime data as an **input**, not a rule: `tools/weapo
 replaces the stat-relevant properties of weapon parts, types and name parts with the dumped values. Whether the port
 should apply hotfix data (and from where; the game downloads it, it is not in the packages) is a maintainer decision.
 
+**Real-game check, 2026-10-02** ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)): the live weapon types do differ
+from the cooked decode (Bandit pistol `ClipSize` 36 vs 30, Dahl pistol 16 vs 12, Bandit shotgun 10 vs 9 and
+`ReloadTime` 4.1 vs 4.4), but none of the 23 entries the game's `Micropatch` service held that day touches a weapon
+(they cover population weights, skills, a shield projectile and rare-enemy balances). So "online hotfix" is not shown
+to be the source of these type-level differences; another package overriding the cooked objects, or older hotfix
+content captured in the 2026-09-26 dump, are the open alternatives. On the 69 golden cards (exact rolled parts,
+cooked data) this commit's evaluator matches 52 in every printed stat (fire rate now 69/69). One card regressed:
+a stage-15 Maliwan pistol whose reload evaluates to exactly 1.75 prints 1.8 here and 1.7 in the game, while a Bandit
+shotgun's fire rate of 1.25 prints 1.3 in the game; the game's float operation order evidently puts one just below
+and the other just above the half (UNVERIFIED which order).
+
 ## 8. Card audit (oracle: 9 distinct cards in the local 2026-09-26 UI traces, levels 34-43)
 
 | code | data | main four stats | every printed field | every field and the name |

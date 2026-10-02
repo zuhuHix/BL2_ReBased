@@ -5,9 +5,10 @@ AI-assisted. Behaviour notes written from a local reading of `Borderlands2.exe` 
 is listing, pseudo-code or an address; functions are named by their registered native name or, for internal
 routines, by what they do and which registered native reaches them. Script behaviour was read with
 `ow-package --disasm`. Data values (constants of the installed `Startup.upk`) were decoded locally with the project
-reader and are quoted only where a rule needs them. **Every rule here is `UNVERIFIED`**: it was read from native code
-or script and has not been confirmed by running the game. Each section ends with the in-game observation that would
-confirm it.
+reader and are quoted only where a rule needs them. **Every rule here was `UNVERIFIED`** when written: it was read
+from native code or script. Each section ends with the in-game observation that would confirm it. On 2026-10-02 the
+mission XP (section 2), level curve and skill points (3) and maximum health base (4) were confirmed in game; the rest
+stays `UNVERIFIED` ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 
 Field offsets were named with `tools/ghidra/class_layout.py`. That tool now also sizes Gearbox's
 `FloatAttributeProperty` / `IntAttributeProperty` (4 bytes, value in place) and `ByteAttributeProperty` (1 byte);
@@ -153,6 +154,10 @@ in the suite). Not modelled: playthrough multipliers, optional objectives, UVHM,
 character whose Sanctuary stage is known; at stage 8 it should read 395. A level-7 and a level-10 character
 entering Sanctuary for the first time should see the reward for stage 7 and stage 9 respectively.
 
+**Confirmed in game on 2026-10-02** by calling `MissionDefinition.GetExperienceReward` on the Fire mission for a
+level-8 Maya (mission game stage 8): 395 ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)). The stage at levels 7
+and 10 and a real turn-in were not observed.
+
 ## 3. Experience curve and level-up
 
 **Required experience** (internal routine used by the reward and the level-up code):
@@ -196,6 +201,11 @@ which one the game's pow gives there is not known.
 357 under the host's) or any low level in an sdk trace of `ExpPointsNextLevelAt`; first skill point on reaching
 level 5.
 
+**Confirmed in game on 2026-10-02** by calling `GetExpPointsRequiredForLevel` for levels 1-80: the single-precision
+form reproduces every level from 1 to 59 (double is one point high at 17, 22, 33, 42, 45, 47, 49); four levels above
+the base cap (60, 68, 74, 79) differ by one. `ExpPointsNextLevelAt` and skill points (`max(0, L − 4)`, spent +
+unspent) were read at levels 2, 8, 17 and 70 and agree ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+
 ## 4. Player maximum health
 
 `CharClass_Siren.HealthPoolDefinition` → `HealthPool.BaseMaxValue` → `Init_PlayerHealth`: a `ValueFormula` with
@@ -222,6 +232,10 @@ in-game). Not checked: whether a level-up refills current health (the host does)
 
 **Confirmation:** Maya's maximum health on the HUD with no health-modifying gear or skills: 90 at level 1, 147 at
 level 5, 212 at level 8 (displayed rounding unknown).
+
+**Confirmed in game on 2026-10-02** by reading the health pool's `MaxValueBaseValue` through the SDK: 102.152 (L2),
+212.6755 (L8), 638.886 (L17), 415,509.44 (L70, UVHM), each `80 × 1.13^L` to float precision. The HUD shows more
+(429 at L8) because the profile's Badass Rank skill modifies the pool ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 
 ## What was not read
 
