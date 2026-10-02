@@ -164,7 +164,7 @@ def price_init(package, init, known, unresolved):
                      for k in ('Multiplier', 'Level', 'Power', 'Offset')}
             if None in terms.values():
                 return None
-            value = terms['Multiplier'] * terms['Level'] ** terms['Power'] + terms['Offset']
+            value = weapon_recipe.formula_value(terms['Multiplier'], terms['Level'], terms['Power'], terms['Offset'])
         if mode == 'BASEVALUE_InitializationDefScalesBaseValue':
             base *= value
         elif mode == 'BASEVALUE_InitializationDefSetsBaseValue':

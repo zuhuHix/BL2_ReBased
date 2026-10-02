@@ -11,7 +11,8 @@ Data used (all decoded from the package):
   WeightedParts[]} and PartReplacementMode, and ConsolidatedAttributeInitData,
   which MinGameStageIndex / MaxGameStageIndex / DefaultWeightIndex point into.
 - Weights using an AttributeInitializationDefinition ValueFormula are
-  evaluated as Multiplier * Level ^ Power, clamped by RangeRestriction.
+  evaluated as Multiplier * (Level ^ Power + Offset) (formula_value()),
+  clamped by RangeRestriction.
 
 UNVERIFIED rules (no public spec; flagged in every recipe):
 - Merge order root -> leaf. EPRM_Selective replaces enabled slots, EPRM_Additive
@@ -138,6 +139,19 @@ def references(value):
             yield from references(v)
 
 
+def formula_value(multiplier, level, power, offset):
+    """ValueFormula result: Multiplier * (Level ^ Power + Offset).
+
+    The offset is added before the multiplier, as the native evaluator reached
+    from AttributeInitializationDefinition.EvaluateInitializationData does
+    (docs/verification/NATIVE_PROGRESSION.md section 1; read from native code,
+    UNVERIFIED in game). Until 2026-10-02 the tools computed
+    Multiplier * Level ^ Power + Offset. The native code works in single
+    precision; this evaluates in Python floats.
+    """
+    return multiplier * (level ** power + offset)
+
+
 def attribute_value(package, init, level, attributes=None):
     """AttributeInitializationData -> float, or None if it needs runtime state.
 
@@ -163,7 +177,7 @@ def attribute_value(package, init, level, attributes=None):
                  for k in ('Multiplier', 'Level', 'Power', 'Offset')}
         if None in terms.values():
             return None
-        base = terms['Multiplier'] * (terms['Level'] ** terms['Power']) + terms['Offset']
+        base = formula_value(terms['Multiplier'], terms['Level'], terms['Power'], terms['Offset'])
         # Cooked data omits false flags; a restriction applies only when enabled
         # (the OpenBLCMM dump of Weight_2_Uncommon shows bEnable...=False).
         clamp = props.get('RangeRestriction') or {}

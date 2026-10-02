@@ -5,6 +5,7 @@
 #include "Animation/AnimSequence.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/DamageEvents.h"
@@ -16,18 +17,14 @@ namespace
 {
 const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
-const FLinearColor PhaselockColor(0.55f, 0.18f, 1.f);
 constexpr float RespawnSeconds = 3.f;
 
-// Pivot height at Held seconds into a lock that lifts from From to To (LiftActionSkill.UpdateLiftedPawn /
-// GetLiftLocation / GetBobLocation, read not run). Lift, as GetLiftLocation: up to SnapTimePct of the lift, From ->
-// snap point (SnapHeightPct of the way) by a^2; then snap point -> To by 1 - (1 - a)^2 (InterpEaseOut with exponent 2).
-// Bob: To + BobAmplitude x sin(t x BobFrequency x pi). The script measures t from SkillStartTime and smooths the bob
-// with VInterpTo at speed 1; the host measures t from the end of the lift and does not smooth: UNVERIFIED host choices.
+// Pivot height at Held seconds into the lift from From to To (LiftActionSkill.UpdateLiftedPawn / GetLiftLocation,
+// read not run): up to SnapTimePct of the lift, From -> snap point (SnapHeightPct of the way) by a^2; then snap point ->
+// To by 1 - (1 - a)^2 (InterpEaseOut with exponent 2). The bob after the lift is in Tick (GetBobLocation).
 float LiftHeightAt(const FOpenWillowPhaselockData& D, float Held, float From, float To)
 {
-    if (Held >= D.LiftDuration)
-        return To + D.BobAmplitude * FMath::Sin((Held - D.LiftDuration) * D.BobFrequency * PI);
+    if (Held >= D.LiftDuration) return To;
     const float U = D.LiftDuration > 0.f ? Held / D.LiftDuration : 1.f;
     const float Snap = FMath::Lerp(From, To, D.SnapHeightPct);
     if (U < D.SnapTimePct)
@@ -75,15 +72,7 @@ AOpenWillowCombatTarget::AOpenWillowCombatTarget()
         FVector(0, 0, 125), FVector(0.55f, 0.4f, 0.75f));
     Head = Part(this, Pivot, TEXT("Head"), TEXT("/Engine/BasicShapes/Sphere.Sphere"),
         FVector(0, 0, 182), FVector(0.3f));
-    LockSphere = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PhaselockSphere"));
-    LockSphere->SetupAttachment(Pivot);
-    LockSphere->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")));
-    LockSphere->SetRelativeLocation(FVector(0, 0, 120));
-    LockSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    LockSphere->SetCastShadow(false);
-    LockSphere->SetHiddenInGame(true);
-    // No point light: under Lumen even a dim one pooled violet on the road
-    // far from the target, so the shell's emissive carries the glow alone.
+    // The Phaselock bubble, light and target clips are created per lock from the stock data (BeginPhaselock).
 }
 
 void AOpenWillowCombatTarget::BeginPlay()
@@ -93,14 +82,6 @@ void AOpenWillowCombatTarget::BeginPlay()
     BodyMaterial = Tint(this, Torso, BodyColor);
     Tint(this, Post, FLinearColor(0.05f, 0.05f, 0.05f));
     HeadMaterial = Tint(this, Head, HeadColor);
-    if (UMaterialInterface* Fx = LoadObject<UMaterialInterface>(nullptr,
-        TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_FxAdditive.M_OW_FxAdditive")))
-    {
-        LockMaterial = UMaterialInstanceDynamic::Create(Fx, this);
-        LockMaterial->SetVectorParameterValue(TEXT("Color"), PhaselockColor);
-        LockMaterial->SetScalarParameterValue(TEXT("Rim"), 1.f);
-        LockSphere->SetMaterial(0, LockMaterial);
-    }
 }
 
 bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FString& IdlePath, const FString& DeathPath,
@@ -122,6 +103,24 @@ bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FStrin
     StockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     StockMesh->RegisterComponent();
     StockMesh->PlayAnimation(Idle, true);
+    StockIdle = Idle;
+    // SpecialMove_PhaseLock plays PhaseLock_Lift/Loop/Fall/Land from the pawn's own AnimSets. The host looks for them
+    // next to the imported idle clip (same name with the clip part replaced); stock data gives the slice dummy none
+    // (PHASELOCK_STOCK_DATA.md), so it keeps its idle and no other pawn's clips are borrowed.
+    if (IdlePath.Contains(TEXT("Idle")))
+    {
+        auto Sibling = [&IdlePath](const TCHAR* Clip)
+        {
+            return LoadObject<UAnimSequence>(nullptr, *IdlePath.Replace(TEXT("Idle"), Clip), nullptr, LOAD_NoWarn | LOAD_Quiet);
+        };
+        LiftClip = Sibling(TEXT("PhaseLock_Lift"));
+        LoopClip = Sibling(TEXT("PhaseLock_Loop"));
+        FallClip = Sibling(TEXT("PhaseLock_Fall"));
+        LandClip = Sibling(TEXT("PhaseLock_Land"));
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s PhaseLock clips: lift %s loop %s fall %s land %s"), *GetName(),
+        LiftClip ? TEXT("yes") : TEXT("no"), LoopClip ? TEXT("yes") : TEXT("no"), FallClip ? TEXT("yes") : TEXT("no"),
+        LandClip ? TEXT("yes") : TEXT("no"));
     // Hit volume: a capsule from the imported mesh's bounds (host-chosen shape; the stock pawn's collision cylinder
     // is not read). The narrower horizontal extent is the radius, so outstretched bind-pose arms do not widen it.
     const FBoxSphereBounds Bounds = Mesh->GetBounds();
@@ -138,6 +137,134 @@ bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FStrin
 }
 
 float AOpenWillowCombatTarget::PhaselockReleasedAt() const { return ReleasedAt; }
+
+float AOpenWillowCombatTarget::AutoAimRadius() const
+{
+    if (HitVolume) return HitVolume->GetScaledCapsuleRadius();
+    const FVector Extent = Torso->Bounds.BoxExtent;
+    return float(FMath::Min(Extent.X, Extent.Y));
+}
+
+float AOpenWillowCombatTarget::MeshBoundsRadius() const
+{
+    if (StockMesh) return StockMesh->Bounds.SphereRadius;
+    FBoxSphereBounds Bounds = Post->Bounds;
+    Bounds = Bounds + Torso->Bounds;
+    Bounds = Bounds + Head->Bounds;
+    return Bounds.SphereRadius;
+}
+
+FString AOpenWillowCombatTarget::PresentationReport() const
+{
+    FString Out;
+    for (const UOpenWillowFxComponent* C : {BubbleIntro.Get(), BubbleLoop.Get(), BubbleOutro.Get()})
+        if (C) Out += TEXT("[") + C->Describe() + TEXT("] ");
+    return Out;
+}
+
+float AOpenWillowCombatTarget::PhaselockLightIntensity() const
+{
+    return LockLight ? LockLight->Intensity : 0.f;
+}
+
+UOpenWillowFxComponent* AOpenWillowCombatTarget::SpawnBubble(const FString& TemplateName, float Now)
+{
+    FString Error;
+    const FOwFxTemplate* Template = FOwFxTemplate::Load(Fx.EmitterDir, TemplateName, Error);
+    if (!Template)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock bubble: %s"), *Error);
+        return nullptr;
+    }
+    // LiftActionSkill.SpawnBubbleFX / TransitionToBubbleFX*: an emitter at the lift end, owned by the lifted pawn,
+    // drawn at Mesh.Bounds.SphereRadius / BubbleFXScale. Basing it on the pawn (so it follows the bob) is a host reading.
+    UOpenWillowFxComponent* C = NewObject<UOpenWillowFxComponent>(this);
+    C->SetupAttachment(Pivot);
+    C->SetRelativeLocation(BubbleOffset);
+    C->RegisterComponent();
+    C->Play(Template, BubbleScale);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock bubble %s at %.2f s, draw scale %.3f (radius %.1f / %.1f), %d emitters skipped"),
+        *TemplateName, Now - LockStartedAt, BubbleScale, MeshBoundsRadius(), Fx.BubbleScaleDivisor, C->SkippedEmitters());
+    return C;
+}
+
+void AOpenWillowCombatTarget::UpdatePresentation(float Now, float Held)
+{
+    if (!bFx) return;
+    const FOpenWillowPhaselockTimeline& T = LockTimeline;
+    // UpdatePhaselockLight: brightness x the lift fraction while lifting, x 1 while locked, x (1 - outro fraction) in
+    // the outro (state fractions of the script's StateDuration).
+    if (LockLight)
+    {
+        float Fraction = 1.f;
+        if (Held < T.LockedAt) Fraction = T.LockedAt > 0.f ? Held / T.LockedAt : 1.f;
+        else if (Held >= T.OutroAt) Fraction = 1.f - (Held - T.OutroAt) / FMath::Max(T.ReleasedAt - T.OutroAt, KINDA_SMALL_NUMBER);
+        LockLight->SetIntensity(Fx.LightBrightness * FMath::Clamp(Fraction, 0.f, 1.f));
+    }
+    if (Held >= T.LockedAt && BubbleStageNow == 0)
+    {
+        // LockTarget -> SpawnBubbleFX: the intro template, scaled from the pawn's mesh bounds at this moment.
+        BubbleScale = MeshBoundsRadius() / Fx.BubbleScaleDivisor;
+        BubbleIntro = SpawnBubble(Fx.BubbleFadeIn, Now);
+        BubbleStageNow = 1;
+    }
+    if (Held >= T.LockedAt + Fx.BubbleIntroTime && BubbleStageNow == 1 && Held < T.OutroAt)
+    {
+        // TransitionToBubbleFXLoop: life span and PhaselockLifeTime = the locked state's duration + the outro overlap;
+        // the collapse starts so that it reaches MaxCollapseValue when the lock ends.
+        const float StateDuration = T.OutroAt - T.LockedAt;
+        CollapseStartAt = Now + StateDuration - Fx.CollapseDuration - Fx.BubbleIntroTime;
+        BubbleLoop = NewObject<UOpenWillowFxComponent>(this);
+        FString Error;
+        if (const FOwFxTemplate* Template = FOwFxTemplate::Load(Fx.EmitterDir, Fx.BubbleLoop, Error))
+        {
+            BubbleLoop->SetupAttachment(Pivot);
+            BubbleLoop->SetRelativeLocation(BubbleOffset);
+            BubbleLoop->RegisterComponent();
+            BubbleLoop->SetFloatParameter(Fx.LifeTimeParam, StateDuration + Fx.BubbleOutroOverlap);
+            BubbleLoop->SetFloatParameter(Fx.CollapseParam, 0.f);
+            BubbleLoop->Play(Template, BubbleScale);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock bubble loop at %.2f s: life %.2f s, collapse from %.2f s"),
+                Held, StateDuration + Fx.BubbleOutroOverlap, CollapseStartAt - LockStartedAt);
+        }
+        else UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock bubble: %s"), *Error);
+        BubbleStageNow = 2;
+    }
+    if (BubbleLoop)
+    {
+        // UpdateEffects: (now - CollapseStartTime) / CollapseDuration x MaxCollapseValue, unclamped in the script; the
+        // template's parameter range clamps it.
+        CollapseNow = (Now - CollapseStartAt) / Fx.CollapseDuration * Fx.MaxCollapse;
+        BubbleLoop->SetFloatParameter(Fx.CollapseParam, CollapseNow);
+    }
+    if (Held >= T.OutroAt && BubbleStageNow >= 1 && BubbleStageNow < 3)
+    {
+        // StartOutro -> TransitionToBubbleFXOutro: the loop is destroyed and the end template spawned.
+        if (BubbleLoop) BubbleLoop->DestroyComponent();
+        BubbleLoop = nullptr;
+        BubbleOutro = SpawnBubble(Fx.BubbleFadeOut, Now);
+        BubbleStageNow = 3;
+    }
+}
+
+void AOpenWillowCombatTarget::ClearPresentation()
+{
+    for (UOpenWillowFxComponent* C : {BubbleIntro.Get(), BubbleLoop.Get(), BubbleOutro.Get()})
+        if (C) C->DestroyComponent();
+    BubbleIntro = BubbleLoop = BubbleOutro = nullptr;
+    if (LockLight) LockLight->DestroyComponent();
+    LockLight = nullptr;
+}
+
+void AOpenWillowCombatTarget::EndPhaselockNow(float Now)
+{
+    if (!bPhaselocked) return;
+    const float Held = Now - LockStartedAt;
+    LockTimeline.OutroAt = FMath::Min(LockTimeline.OutroAt, Held);
+    LockTimeline.ReleasedAt = FMath::Min(LockTimeline.ReleasedAt, Held);
+    LockEndsAt = FMath::Min(LockEndsAt, Now);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock on %s ended early at %.2f s"), *GetName(), Held);
+}
 float AOpenWillowCombatTarget::LiftedHeight() const { return Pivot->GetRelativeLocation().Z; }
 
 FVector AOpenWillowCombatTarget::AimPoint() const
@@ -183,19 +310,59 @@ float AOpenWillowCombatTarget::PhaselockLiftHeight(const FOpenWillowPhaselockDat
     return End.Z - Centre.Z;
 }
 
-bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline)
+bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline,
+    const FOpenWillowPhaselockFxData* InFx)
 {
     if (bPhaselocked || bDead) return false;
     Lock = Data;
+    LockTimeline = Timeline;
     LockStartedAt = Now;
     LockEndsAt = Now + Timeline.ReleasedAt;
     DropStartedAt = -10;
     LiftFrom = Pivot->GetRelativeLocation().Z;
-    LiftTo = LiftFrom + PhaselockLiftHeight(Data);
+    const float Lift = PhaselockLiftHeight(Data);
+    LiftTo = LiftFrom + Lift;
+    bBobStarted = false;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock lift for %s: %.1f -> %.1f uu (HeightFromGround %.0f)"),
         *GetName(), LiftFrom, LiftTo, Data.HeightFromGround);
     bPhaselocked = true;
-    LockSphere->SetHiddenInGame(false);
+    ClearPresentation();
+    BubbleStageNow = 0;
+    CollapseNow = 0;
+    bFx = InFx && InFx->bLoaded;
+    if (bFx)
+    {
+        Fx = *InFx;
+        // The lift end: the pawn's location (collision centre here) raised by the lift, in Pivot space.
+        FVector Centre;
+        float Half = 0.f;
+        CollisionCentre(Centre, Half);
+        BubbleOffset = Pivot->GetComponentTransform().InverseTransformPosition(Centre);
+        // PhaselockLight: the class default PointLightComponent (radius, brightness, colour, falloff, no shadows),
+        // attached to the lifted pawn. UE3 brightness is used as UE5's unitless intensity with UE3-style radial falloff
+        // (bUseInverseSquaredFalloff off, same exponent) and no indirect lighting, as a UE3 dynamic light has none; that
+        // mapping is UNVERIFIED (exposure differs).
+        LockLight = NewObject<UPointLightComponent>(this);
+        LockLight->SetupAttachment(Pivot);
+        LockLight->SetRelativeLocation(BubbleOffset);
+        LockLight->bUseInverseSquaredFalloff = false;
+        LockLight->SetIntensityUnits(ELightUnits::Unitless);
+        LockLight->SetLightFalloffExponent(Fx.LightFalloffExponent);
+        LockLight->SetAttenuationRadius(Fx.LightRadius);
+        LockLight->SetLightColor(FLinearColor(Fx.LightColor));
+        LockLight->SetCastShadows(Fx.bLightShadows);
+        LockLight->SetIndirectLightingIntensity(0.f);
+        LockLight->SetIntensity(0.f);
+        LockLight->RegisterComponent();
+    }
+    if (StockMesh && LiftClip)
+    {
+        StockMesh->PlayAnimation(LiftClip, false);
+        AnimClipEndsAt = Now + LiftClip->GetPlayLength();
+        AnimStage = 1;
+    }
+    else if (StockMesh)
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock: %s has no PhaseLock_Lift clip in its imported AnimSet (stock data); idle kept"), *GetName());
     return true;
 }
 
@@ -227,15 +394,19 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     {
         const float Held = Now - LockStartedAt;
         Height = LiftHeightAt(Lock, Held, LiftFrom, LiftTo);
+        if (Held >= Lock.LiftDuration)
+        {
+            // GetBobLocation: LiftEndLocation + BobAmplitude x sin((now - SkillStartTime) x BobFrequency x pi), then
+            // VInterpTo(previous, target, dt, 1) starting from the lift end (NATIVE_PHASELOCK_TARGETING.md section 5).
+            if (!bBobStarted) { BobHeight = LiftTo; bBobStarted = true; }
+            const float Target = LiftTo + Lock.BobAmplitude * FMath::Sin(Held * Lock.BobFrequency * PI);
+            BobHeight += (Target - BobHeight) * FMath::Clamp(DeltaSeconds * 1.f, 0.f, 1.f);
+            Height = BobHeight;
+        }
+        UpdatePresentation(Now, Held);
+        if (AnimStage == 1 && Now >= AnimClipEndsAt && StockMesh && LoopClip) { StockMesh->PlayAnimation(LoopClip, true); AnimStage = 2; }
         // The script moves the lifted pawn without rotating it; only hit wobble remains.
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
-        // Host shell (presentation only, not the stock bubble effect): grows in, then fades over the outro
-        // (LockFadeOutTime before the release).
-        const float Pulse = 0.85f + 0.15f * FMath::Sin(Held * 7.f);
-        const float Grow = FMath::Clamp(Held / 0.25f, 0.f, 1.f)
-            * FMath::Clamp((LockEndsAt - Now) / FMath::Max(Lock.LockFadeOutTime, KINDA_SMALL_NUMBER), 0.f, 1.f);
-        LockSphere->SetRelativeScale3D(FVector(2.2f * FMath::Max(Grow, 0.01f) * Pulse));
-        if (LockMaterial) LockMaterial->SetScalarParameterValue(TEXT("Intensity"), 3.f * Pulse * Grow);
         FallVelocity = 0.f;
         if (Now >= LockEndsAt)
         {
@@ -246,7 +417,18 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
             DropStartedAt = Now;
             DropFromHeight = Height;
             DiminishedUntil = Now + Lock.DiminishingSeconds;
-            LockSphere->SetHiddenInGame(true);
+            if (LockLight) LockLight->DestroyComponent();
+            LockLight = nullptr;
+            if (BubbleLoop) BubbleLoop->DestroyComponent();
+            BubbleLoop = nullptr;
+            // DropTarget: the drop clip stretched to DropTime, else the loop is stopped (idle).
+            if (StockMesh && FallClip)
+            {
+                StockMesh->PlayAnimation(FallClip, false);
+                StockMesh->SetPlayRate(FallClip->GetPlayLength() / FMath::Max(Lock.DropTime, KINDA_SMALL_NUMBER));
+                AnimStage = 3;
+            }
+            else if (StockMesh && AnimStage != 0) { StockMesh->PlayAnimation(StockIdle, true); AnimStage = 0; }
             UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock released %s after %.2f s"), *GetName(), Held);
         }
     }
@@ -264,6 +446,17 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         Height = FMath::Max(0.f, Height + FallVelocity * DeltaSeconds);
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
     }
+    // CheckLandTarget: the land clip once the pawn is down again, then idle.
+    if (AnimStage == 3 && Height <= 0.f && StockMesh)
+    {
+        StockMesh->SetPlayRate(1.f);
+        if (LandClip) { StockMesh->PlayAnimation(LandClip, false); AnimClipEndsAt = Now + LandClip->GetPlayLength(); AnimStage = 4; }
+        else { StockMesh->PlayAnimation(StockIdle, true); AnimStage = 0; }
+    }
+    if (AnimStage == 4 && Now >= AnimClipEndsAt && StockMesh) { StockMesh->PlayAnimation(StockIdle, true); AnimStage = 0; }
+    // Finished bubble templates are removed (the intro and end emitters have no life span of their own here).
+    if (BubbleIntro && BubbleIntro->IsFinished()) { BubbleIntro->DestroyComponent(); BubbleIntro = nullptr; }
+    if (BubbleOutro && BubbleOutro->IsFinished()) { BubbleOutro->DestroyComponent(); BubbleOutro = nullptr; }
     Pivot->SetRelativeLocation(FVector(0, 0, Height));
     const float Flash = FMath::Clamp(1.f - (Now - LastHitAt) / 0.12f, 0.f, 1.f);
     if (BodyMaterial) BodyMaterial->SetVectorParameterValue(TEXT("Color"),
@@ -303,7 +496,7 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         bDead = true;
         bPhaselocked = false;
         DiedAt = Now;
-        LockSphere->SetHiddenInGame(true);
+        ClearPresentation();
         SetActorEnableCollision(false);
         if (StockMesh && StockDeath) StockMesh->PlayAnimation(StockDeath, false);
         AOpenWillowShotFx::Flash(GetWorld(), AimPoint(), FLinearColor(1.f, 0.55f, 0.2f), 70.f, 0.25f, 4000.f);

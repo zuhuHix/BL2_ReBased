@@ -45,6 +45,17 @@ bool FOpenWillowSkillsTest::RunTest(const FString&)
     TestEqual(TEXT("State for the page"), Skills->StateJson(),
         FString(TEXT("{\"points\":0,\"actionGrade\":1,\"grades\":{\"Test.A\":3,\"Test.C\":1}}")));
 
+    // Level curve (NATIVE_PROGRESSION.md section 3): level 46 is the one threshold seen in the real game; the others
+    // are the note's values, where the old floor(60 L^2.8 - 60) curve was one point lower.
+    TestEqual(TEXT("Level 1 needs nothing"), UOpenWillowSkills::ExperienceForLevel(1), int64(0));
+    TestEqual(TEXT("Level 2 threshold"), UOpenWillowSkills::ExperienceForLevel(2), int64(358));
+    TestEqual(TEXT("Level 5 threshold"), UOpenWillowSkills::ExperienceForLevel(5), int64(5376));
+    TestEqual(TEXT("Level 9 threshold"), UOpenWillowSkills::ExperienceForLevel(9), int64(28126));
+    // Synthetic constants. 1.5 x (n^2 + 0.4): f(1) = 2.1 -> 2, f(2) = 6.6 -> 6, R(2) = 4; with the offset outside
+    // (1.9 -> 1, 6.4 -> 6) it would be 5. 1.5 x (n^2 + 0.2): 1.8 -> 1, 6.3 -> 6, R(2) = 5, where flooring the
+    // unrounded difference (4.5) would give 4.
+    TestEqual(TEXT("Offset inside the multiplier"), UOpenWillowSkills::RequiredExperience(1.5f, 2.f, 0.4f, 2), int64(4));
+    TestEqual(TEXT("Points truncated before the difference"), UOpenWillowSkills::RequiredExperience(1.5f, 2.f, 0.2f, 2), int64(5));
     Skills->SetLevel(46);
     TestEqual(TEXT("Traced level 46 threshold"), Skills->GetExperience(), int64(2715586));
     Skills->AddExperience(UOpenWillowSkills::ExperienceForLevel(47) - Skills->GetExperience() - 1);
@@ -70,6 +81,21 @@ bool FOpenWillowSkillsTest::RunTest(const FString&)
     Saved->GetObjectField(TEXT("grades"))->SetNumberField(TEXT("Test.C"), 1);
     Saved->GetObjectField(TEXT("grades"))->SetNumberField(TEXT("Test.Unknown"), 1);
     TestFalse(TEXT("Unknown skill refused"), Loaded->RestoreProgression(*Saved, Reason));
+
+    // Level cap 50: a grant past level 50's threshold stops there, experience keeps counting, and such a state
+    // round-trips through the save; a level above the cap is refused.
+    Skills->SetLevel(49);
+    Skills->AddExperience(UOpenWillowSkills::ExperienceForLevel(52) - Skills->GetExperience());
+    TestEqual(TEXT("Level stops at the cap"), Skills->GetLevel(), UOpenWillowSkills::MaxLevel);
+    TestEqual(TEXT("Experience past the cap kept"), Skills->GetExperience(), UOpenWillowSkills::ExperienceForLevel(52));
+    Skills->SetLevel(60);
+    TestEqual(TEXT("SetLevel clamps to the cap"), Skills->GetLevel(), 50);
+    Skills->AddExperience(UOpenWillowSkills::ExperienceForLevel(52));
+    const TSharedPtr<FJsonObject> Capped = Skills->ProgressionJson();
+    TestTrue(TEXT("Capped progression restores"), Loaded->RestoreProgression(*Capped, Reason));
+    TestEqual(TEXT("Capped level restored"), Loaded->GetLevel(), 50);
+    Capped->SetNumberField(TEXT("level"), 51);
+    TestFalse(TEXT("Level above the cap refused"), Loaded->RestoreProgression(*Capped, Reason));
     return true;
 }
 #endif

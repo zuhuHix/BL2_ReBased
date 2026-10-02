@@ -126,11 +126,14 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   (`tools/ghidra/`, `docs/NATIVE_ANALYSIS.md`; raw output stays under ignored `local/analysis/` or the private store).
   Three own-words note sets exist, all `UNVERIFIED`: mission/behavior/Kismet dispatch
   (`docs/verification/NATIVE_MISSION_DISPATCH.md`), progression and Phaselock targeting
-  (`NATIVE_PROGRESSION.md`, `NATIVE_PHASELOCK_TARGETING.md`). Only the dispatch notes are implemented, in
+  (`NATIVE_PROGRESSION.md`, `NATIVE_PHASELOCK_TARGETING.md`). The dispatch notes are implemented in
   `src/behavior.*`, `src/kismet.*` and `src/mission.*` (the host fires link ids per the note; the Fire mission's first set
-  now starts from the kickoff, not from accept). Where the host and a note disagree (mission XP 395 vs 396, Phaselock target
-  search) the host is unchanged. After the dispatch change: quest 73/73 and resume 10/10, door 16/16, CTest 10/10,
-  packages 9/9, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE (regenerated worktree).
+  now starts from the kickoff, not from accept). After the dispatch change: quest 73/73 and resume 10/10, door 16/16, CTest
+  10/10, packages 9/9, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE (regenerated worktree). The
+  progression notes are implemented in the tools and host (mission XP 395 at stage 8, single-precision level curve,
+  cap 50; quest 75/75 and resume 11/11). The Phaselock targeting/constraint rules and the stock presentation are written
+  in the host but have not passed a suite: a rebuilt module DLL was blocked by Windows Application Control on
+  2026-10-02 (DECISIONS 2026-10-02).
 - **Weapon paint (2026-10-01/02):** the slice guns are painted from Master_Gun's recovered colour model
   (`tools/weapon_paint_model.py`, `tools/material_static_parameters.py`, our own SM3 token reader
   `research/d3d9_bytecode.py`; listings stay under `local/`). Three passes recorded in DECISIONS; the whole reading and the

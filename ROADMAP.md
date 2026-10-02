@@ -109,10 +109,11 @@ prototypes, so the repository's clock started a little after the work did.
   the executors follow the notes, not that the notes are right
   ([dispatch](docs/verification/NATIVE_MISSION_DISPATCH.md),
   [progression](docs/verification/NATIVE_PROGRESSION.md),
-  [targeting](docs/verification/NATIVE_PHASELOCK_TARGETING.md)). Where the
-  host and a note disagree the host is unchanged: the notes give 395 mission
-  XP at level 8 where the host gives 396, and a different Phaselock target
-  search than the host's view ray and sweep.
+  [targeting](docs/verification/NATIVE_PHASELOCK_TARGETING.md)). The
+  progression rules are implemented in the tools and host (quest suite 75/75
+  and 11/11); the Phaselock targeting, constraint and presentation changes are
+  written but have not passed a suite (module DLL blocked by Windows
+  Application Control, DECISIONS 2026-10-02).
 - The whole weapon paint and decal reading, its display scale and shading
   inputs (`USE_SHADER_SHADING` stays off until the scene lighting is
   calibrated); environment reflection, emissive and in-game lighting are not

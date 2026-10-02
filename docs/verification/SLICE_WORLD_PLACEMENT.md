@@ -163,6 +163,12 @@ The manifest's candidate amount, percentage x (required(L+1) - required(L)), giv
 level: `GameStageRegion = GD_GameStages.Zone1.Sanctuary`, which carries no stage data; the only data hint is the
 mission dens' 7..9 game-stage bounds.
 
+2026-10-02: superseded by [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) section 2 (read from native code,
+UNVERIFIED in game). The amount is truncated, not rounded, on the integer curve (L7 316, **L8 395**, L9 483), and the
+mission level is Sanctuary's region game stage from `GlobalsDefinition.RegionBalanceData` (playthrough 1: clamp(player
+level, 7, 9), or 8..11 once `M_Ep4_WelcomeToSanctuary` is complete), fixed the first time it is asked for. The
+manifest now carries that entry (`values.xp.region_stage`) and the integer curve (`required_points_by_level`).
+
 ## 2b. Maya's health — recovered as a formula (one convention UNVERIFIED)
 
 `CharClass_Siren.HealthPoolDefinition = D_Resourcepools.PlayerPools.HealthPool`, `StartWithMaxValue`, BaseMaxValue
@@ -171,6 +177,10 @@ mission dens' 7..9 game-stage bounds.
 `PlayerExperienceLevel`, min 20: **health(L) = 80 x 1.13^L** -> L1 90.4, L5 147.4, L7 188.2, L10 271.6.
 `UNVERIFIED`: the Multiplier term also carries BaseValueConstant 94; the attribute is used (the existing
 `weapon_recipe.attribute_value` convention). If the constant were used instead, health would be 94 x 1.13^L.
+2026-10-02: closed by [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) sections 1 and 4. The native evaluator takes the
+attribute whenever its context resolver succeeds, and both balance attributes use a resolver that always succeeds, so
+80 x 1.13^L is the reading; 94 is never used. That comes from native code; the in-game check (Maya's HUD health with no
+health gear: 90 at level 1, 147 at 5, 212 at 8) has not been made, so it stays UNVERIFIED.
 Skills, class mods and relics are not applied. **Shield:** `ShieldPool` has no BaseMaxValue — base capacity 0,
 capacity comes from an equipped shield item.
 

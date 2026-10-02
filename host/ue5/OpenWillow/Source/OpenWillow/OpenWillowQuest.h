@@ -22,8 +22,9 @@ class FJsonObject;
 //  - the mission weapon (MissionWeapon, a MissionWeaponBalanceDefinition) is the matching recipe under -owitems=<dir>
 //    (tools/weapon_slice_gear.py), lent to Maya with the imported Maliwan mesh; her shots hand the held item's stock
 //    damage type path to the dummy's OnTakeDamage;
-//  - turn-in adds the candidate XP amount (UNVERIFIED rule) at the mission level (slice_manifest.json "level",
-//    an UNVERIFIED slice choice) to Maya's experience;
+//  - turn-in adds trunc(percentage x curve span) at the mission level to Maya's experience; the mission level is
+//    Sanctuary's region game stage, fixed from her level the first time it is asked for (session start) and kept
+//    in the save (rules read from native code, NATIVE_PROGRESSION.md section 2: UNVERIFIED in game);
 //  - the save (-owquestsave=) also carries Maya's level, experience and skill grades, which win over -owlevel.
 // Every host-chosen value or rule is labelled UNVERIFIED where it is used and in
 // docs/verification/SANCTUARY_RPG_MISSION.md ("Host loop with stock world data").
@@ -54,6 +55,7 @@ public:
     bool RespawnPoint(const FVector& DeathLocation, FTransform& Out);
     // The walker calls this once its start level is set: the loaded save's "progression" block (level, experience,
     // skill grades) replaces that state. False when the save has no such block (older saves) or it was rejected.
+    // Then fixes Sanctuary's region stage from the resulting level unless the save already holds one.
     bool RestoreProgression(class UOpenWillowSkills& Skills);
     // The dummy's state written by its own provider's world behaviors (run in Pump):
     //  - Behavior_RegisterTargetable: whether the actor is in the host's targetable list (the stand-in for the global
@@ -113,7 +115,12 @@ private:
     void DropReward();
     UPROPERTY() TObjectPtr<class AOpenWillowInventoryPickup> RewardPickup;
     FString ItemDir;
-    int32 MissionLevel = 0;
+    int32 GearLevel = 0;                // slice_manifest.json "level": the level the slice gear was rolled at
+    // The mission's level: the GameStageRegion's stage, fixed per player and playthrough the first time it is asked
+    // for (0 = not yet). RegionStageLevel is the player level it was computed from.
+    int32 RegionStage = 0, RegionStageLevel = 0;
+    bool bRegionStageFromSave = false;
+    void FixRegionStage(int32 PlayerLevel);
     int32 LastXpAmount = 0;
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;

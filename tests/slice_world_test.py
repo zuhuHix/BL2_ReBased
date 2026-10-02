@@ -214,9 +214,59 @@ def test_formula_attributes_and_level_formula():
     assert v.formula_at(package, 'Bal.HealthInit', ['Bal.PlayerLevel'], 3, constants) == 80
 
 
-def test_xp_candidate_is_fraction_of_level_gap():
-    required = lambda level: 100.0 * level * level
-    assert v.xp_candidate(0.1, required, 2) == 0.1 * (900 - 400)
+def test_xp_amount_is_truncated_fraction_of_level_gap():
+    required = lambda level: 333 * level * level
+    # 0.1 x (2997 - 1332) = 166.5: truncated to 166 (rounding would give 167).
+    assert v.xp_candidate(0.1, required, 2) == 166
+    assert v.mission_xp(0.1, 999) == 99
+    assert v.mission_xp(0.5, 7, multiplier=2.0) == 7
+
+
+def test_required_points_truncate_each_point_on_the_native_order():
+    # Invented constants. 1.5 x (n^2 + 0.4): f(1) = 2.1 -> 2, f(2) = 6.6 -> 6, so R(2) = 4; the offset outside the
+    # multiplier would give 1.9 -> 1 and 6.4 -> 6, i.e. 5.
+    assert v.required_points(1.5, 2, 0.4, 1) == 0
+    assert v.required_points(1.5, 2, 0.4, 2) == 4
+    # 1.5 x (n^2 + 0.2): 1.8 -> 1, 6.3 -> 6, R(2) = 5, where flooring the unrounded difference (4.5) gives 4.
+    assert v.required_points(1.5, 2, 0.2, 2) == 5
+    # Single precision: 0.1 is not exact in float, 10 x (n + 0.1) at n = 1 is 11.000000149 -> 11.
+    assert v.required_points(10, 1, 0.1, 3) == 20
+    assert v.f32(0.1) != 0.1
+
+
+def region_package():
+    def bound(value):
+        return {'BaseValueConstant': value, 'BaseValueAttribute': None, 'InitializationDefinition': None,
+                'BaseValueScaleConstant': 1}
+    objects = {
+        v.GLOBALS: {'GameStageIncreaseAbovePlayer': bound(0), 'RegionBalanceData': [
+            {'PlayThroughNumber': 1, 'BalanceDefinitions': ['Bal.P1_A', 'Bal.P1_B']},
+            {'PlayThroughNumber': 2, 'BalanceDefinitions': ['Bal.P2']}]},
+        'Bal.P1_A': {'BalanceByRegion': [{'Region': 'Region.Other', 'MinDefaultGameStage': bound(1),
+                                          'MaxDefaultGameStage': bound(2)}]},
+        'Bal.P1_B': {'BalanceByRegion': [{'Region': 'Region.Town', 'MinDefaultGameStage': bound(3),
+                                          'MaxDefaultGameStage': bound(5), 'bSpecifyBoostAbovePlayer': True,
+                                          'GameStageIncreaseAbovePlayer': bound(1),
+                                          'MissionOverrides': [{'Mission': 'M.First', 'MinGameStage': bound(4),
+                                                                'MaxGameStage': bound(6)}]}]},
+        'Bal.P2': {'BalanceByRegion': [{'Region': 'Region.Town', 'MinDefaultGameStage': bound(30),
+                                        'MaxDefaultGameStage': bound(32)}]},
+    }
+    return FakePackage(objects, {})
+
+
+def test_region_stage_entry_for_playthrough_one():
+    stage = v.region_stage(region_package(), 'Region.Town', {})
+    assert stage['balance_definition'] == 'Bal.P1_B'
+    assert stage['default'] == {'min': 3, 'max': 5}
+    assert stage['boost_above_player'] == 1          # the entry's own boost, as it is flagged
+    assert stage['overrides'] == [{'mission': 'M.First', 'min': 4, 'max': 6}]
+    assert v.region_stage(region_package(), 'Region.Town', {}, playthrough=2)['default'] == {'min': 30, 'max': 32}
+    try:
+        v.region_stage(region_package(), 'Region.Missing', {})
+        raise AssertionError('missing region resolved')
+    except v.Unresolved:
+        pass
 
 
 if __name__ == '__main__':

@@ -33,6 +33,9 @@ def world():
         'Weight.Uncommon': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(10), 'Level': const(1), 'Power': const(1),
                                              'Offset': const(0)},
                             'RangeRestriction': {'MinValue': const(100)}},
+        # Invented values: 2 x (3^2 + 1) = 20 under the native order, 19 with the offset outside.
+        'Weight.Offset': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(2), 'Level': const(3), 'Power': const(2),
+                                           'Offset': const(1)}},
         'Weight.Clamped': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(10), 'Level': const(1), 'Power': const(1)},
                            'RangeRestriction': {'bEnableMinValueRestriction': True, 'MinValue': const(100)}},
         'Type': {'GestaltMesh': 'Gestalt', 'TitleList': ['Name.TypeTitle']},
@@ -66,6 +69,12 @@ class WeaponRecipeTests(unittest.TestCase):
     def test_formula_weight_uses_multiplier_level_power(self):
         package = FakePackage(world())
         self.assertEqual(w.attribute_value(package, const(0, 'Weight.Common'), 30), 100)
+
+    def test_offset_is_added_before_the_multiplier(self):
+        package = FakePackage(world())
+        self.assertEqual(w.attribute_value(package, const(0, 'Weight.Offset'), 30), 20)
+        self.assertEqual(w.formula_value(2, 3, 2, 1), 20)
+        self.assertEqual(w.formula_value(1, 3, 2, 1), 10)  # Multiplier 1: both orders agree
 
     def test_range_restriction_applies_only_when_enabled(self):
         package = FakePackage(world())

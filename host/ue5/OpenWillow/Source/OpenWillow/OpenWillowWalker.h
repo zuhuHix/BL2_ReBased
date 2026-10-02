@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "OpenWillowPhaselock.h"
+#include "OpenWillowPhaselockFx.h"
 #include "OpenWillowWalker.generated.h"
 
 struct FOpenWillowTakenInventoryItem;
@@ -60,6 +61,26 @@ public:
     bool LastPhaselockBlocked() const { return bPhaselockBlocked; }
     const FOpenWillowPhaselockTimeline& LastPhaselockTimeline() const { return PhaselockTimeline; }
     class AOpenWillowCombatTarget* LastPhaselockTarget() const { return PhaselockTarget.Get(); }
+    // Host reading of WillowAutoAimStrategy.GetPreferredTarget for the action skill (native; NATIVE_PHASELOCK_TARGETING.md
+    // sections 1-3, UNVERIFIED): every live host target in the targetable list is scored by screen-space magnetism, depth
+    // and line of sight from the player camera; the best score above 0 wins (ties keep the first found).
+    class AOpenWillowCombatTarget* PreferredPhaselockTarget(FString* OutLog = nullptr) const;
+    struct FPhaselockAimScore
+    {
+        float Score = 0, Depth = 0, ScreenOffset = 0, TargetRadius = 0, MagnetRadius = 0;
+        FString Rejected;           // why the score is 0 ("" when it scored)
+    };
+    FPhaselockAimScore ScorePhaselockTarget(const class AOpenWillowCombatTarget* Target) const;
+    // Maya's state as the constraint evaluators read it (host mapping, FOpenWillowPhaselockGateState).
+    FOpenWillowPhaselockGateState PhaselockGateState() const;
+    // From a cast that lifted a target until EndSkill (or an early end by a while-active constraint).
+    bool IsPhaselockActive() const;
+    const FString& LastPhaselockEndReason() const { return PhaselockEndReason; }
+    const FOpenWillowPhaselockFxData& GetPhaselockFx() const { return PhaselockFx; }
+    // Presentation state for checks and logs: tattoo glow parameter now, live hand-orb and screen particles.
+    float TattooGlowNow() const { return TattooGlow; }
+    int32 HandFxParticles() const;
+    int32 ScreenFxParticles() const;
     bool AreArmsShown() const;
     float LastTargetHitAt() const { return TargetHitAt; }
     class UOpenWillowMover* GetMover() const { return Mover; }
@@ -147,9 +168,27 @@ private:
     bool bOutOfAmmoLogged = false;
     float LandUntil = 0;
     float TargetHitAt = -10;
-    float PhaselockBeamUntil = 0;
     FOpenWillowPhaselockData Phaselock;
     FString PhaselockFile;
+    // Stock presentation (tools/prepare_phaselock_fx.py manifest, -owphaselockfx=): hand orb at the arms clip's notify,
+    // tattoo glow on the arms, screen particle while the skill runs.
+    FOpenWillowPhaselockFxData PhaselockFx;
+    UPROPERTY() TObjectPtr<class UOpenWillowFxComponent> HandFx;
+    UPROPERTY() TObjectPtr<class UOpenWillowFxComponent> ScreenFx;
+    UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> TattooGlowMaterial;
+    float HandFxAt = -1;
+    bool bHandFxMiss = false;
+    float GlowStartedAt = -100;
+    float TattooGlow = 0;
+    float Bl2FovSetting = 90;           // the BL2 FOV setting (UE3 FOVAngle, horizontal at 4:3)
+    FString PhaselockEndReason;
+    float PhaselockEndedEarlyAt = -100;
+    void UpdatePhaselockPresentation(float Now);
+    void EndPhaselockEarly(const FString& Reason);
+    // -owphaselockshots (with -owcombattest): an unattended cast with timed captures (OWPhaselock_*.png).
+    void RunPhaselockShots(float Now);
+    int32 PhaselockShotStep = 0;
+    float PhaselockShotCastAt = -1;
     // Cooldown pool model (UNVERIFIED semantics, PHASELOCK_STOCK_DATA.md): refilled at activation, drained at the held
     // rate until PhaselockHeldUntil (the release), then at the base rate; a miss resets it at PhaselockResetAt.
     float PhaselockCastAt = -100.f;

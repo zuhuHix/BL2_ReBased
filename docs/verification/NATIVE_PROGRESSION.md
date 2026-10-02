@@ -51,6 +51,16 @@ slice values are unaffected only because the XP reward uses a difference of two 
 and the health formula has no offset. Worth a census of formulas with both terms before trusting other derived
 numbers.
 
+**Implemented 2026-10-02.** `tools/weapon_recipe.py` (`formula_value`), `tools/weapon_stats.py` and
+`tools/loot_pools.py` now add the offset inside the multiplier (Python floats, not single precision). Census of the
+base-game packages (local, `local/a2impl/formula_census.json`): 228 distinct enabled `ValueFormula` definitions, 33 with
+a non-zero or attribute-valued `Offset`, 19 of those with a `Multiplier` that is not the constant 1 (enemy health and
+damage per player or level, enemy and world-discovery XP, player and Roid melee damage, class-mod stat bonuses, two
+Soldier and one Mercenary skill formulas, vehicle damage, and the XP curve). None of them feeds a slice number: the slice
+gear (`tools/weapon_slice_gear.py`, all five recipes and the manifest), the loot display check (2,505 of 2,554 entries
+agree, 1 differs, 48 unresolved, identical before and after) and Maya's health are unchanged; the XP curve's offset
+cancels in the reward span. DLC packages were not included.
+
 Confirmation: any formula with both a non-zero `Offset` and a non-unit `Multiplier` whose result is visible in the game
 (for example a weapon card stat). A synthetic oracle with invented values: `{Multiplier 2, Level 3, Power 2, Offset 1}`
 gives 20 under this reading and 19 under the tools' reading.
@@ -131,6 +141,14 @@ was first queried (7..9), not the weapon's level. **Implement:** a region-stage 
 `RegionBalanceData` for Sanctuary, stored once per playthrough in the save) and `MissionXp` = truncation of
 `span × pct` on the integer curve.
 
+**Implemented 2026-10-02** in the host: `FOpenWillowSliceData::MissionXp` (truncation on the integer curve from the
+manifest's formula) and `RegionStage` (the playthrough-1 table decoded by `tools/slice_values.py` into
+`values.xp.region_stage`; a labelled stand-in with the bounds above when an older manifest lacks it), fixed by
+`UOpenWillowQuest::FixRegionStage` when the walker sets Maya's level at session start and kept in the quest save. The
+quest suite's player starts at level 8, so the stage is 8 and the reward 395. Completed missions come from the quest's
+completed set (the dependency fixture holds `M_Ep3_CatchARide` only, so the WelcomeToSanctuary override never applies
+in the suite). Not modelled: playthrough multipliers, optional objectives, UVHM, `ResetGameStageForRegion`.
+
 **Confirmation:** the XP number shown on the Fire mission's turn-in (or the experience bar delta in an sdk trace) for a
 character whose Sanctuary stage is known; at stage 8 it should read 395. A level-7 and a level-10 character
 entering Sanctuary for the first time should see the reward for stage 7 and stage 9 respectively.
@@ -168,6 +186,11 @@ most levels (357 vs 358 at level 2, 28,125 vs 28,126 at level 9; equal at 4 and 
 (`AddExperience`) levels up with no cap (comment says so). `OpenWillowSkills.h:38` (`EarnedPointsAt` = max(0, L − 4))
 **matches**. **Implement:** `ExperienceForLevel(n) = max(0, trunc(f32(60 × (n^2.8 + 7.33))) − 499)` evaluated in
 `float`, and the level-50 cap.
+
+**Implemented 2026-10-02:** `UOpenWillowSkills::RequiredExperience` / `ExperienceForLevel` (single precision), the
+cap `MaxLevel` = 50 in `AddExperience` / `SetLevel` / `RestoreProgression` (DLC increments left as a TODO). Float and
+double evaluation of the curve differ by one point at levels 17, 22, 33, 42, 45, 47 and 49 (and most levels above 50);
+which one the game's pow gives there is not known.
 
 **Confirmation:** the experience bar's "next level at" value for a level-2 character (358 if this reading holds,
 357 under the host's) or any low level in an sdk trace of `ExpPointsNextLevelAt`; first skill point on reaching

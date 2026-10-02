@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "OpenWillowPhaselock.h"
+#include "OpenWillowPhaselockFx.h"
 #include "OpenWillowCombatTarget.generated.h"
 
 struct FOpenWillowDamagePopup
@@ -25,10 +26,29 @@ public:
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
         class AController* EventInstigator, AActor* DamageCauser) override;
     // Lifts and holds the target on the stock timeline (FOpenWillowPhaselockData, LiftActionSkill script reading):
-    // snap lift over LiftDuration to the lift end (PhaselockLiftHeight), sine bob while locked, shell fade over the
-    // outro, release at ReleasedAt, drop over DropTime, then the diminishing-returns modifier for its duration. False
-    // when the target is already phaselocked or dead (CanPhaseLockTarget).
-    bool BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline);
+    // snap lift over LiftDuration to the lift end (PhaselockLiftHeight), smoothed sine bob timed from the cast while
+    // locked, release at ReleasedAt, drop over DropTime, then the diminishing-returns modifier for its duration. With
+    // Fx loaded it also draws the stock presentation: the light from the cast, the bubble intro at the lock, the loop
+    // with its collapse parameter, the end template at the outro. False when the target is already phaselocked or dead
+    // (CanPhaseLockTarget).
+    bool BeginPhaselock(float Now, const FOpenWillowPhaselockData& Data, const FOpenWillowPhaselockTimeline& Timeline,
+        const FOpenWillowPhaselockFxData* Fx = nullptr);
+    // The skill was deactivated before its timeline ended (a while-active constraint failed): the outro starts now if
+    // it has not, and the target is released now (LiftActionSkill reading; UNVERIFIED).
+    void EndPhaselockNow(float Now);
+    // Auto-aim stand-ins for the ITargetable queries the native strategy makes (radius and aim point are not read from
+    // the stock pawn): the horizontal radius of the hit volume (stock pawn) or of the torso shape, and AimPoint (chest).
+    float AutoAimRadius() const;
+    bool IsAutoAimTarget() const { return !bDead; }
+    // Bubble draw-scale source: the stock mesh's bounds sphere radius (Pawn.Mesh.Bounds.SphereRadius in the script), or
+    // for the engine-shape dummy the radius of its shapes' bounds (host stand-in).
+    float MeshBoundsRadius() const;
+    // Presentation state for checks: bubble stage (0 none, 1 intro, 2 loop, 3 end), the loop's collapse parameter,
+    // the light's current intensity.
+    int32 BubbleStage() const { return BubbleStageNow; }
+    float BubbleCollapse() const { return CollapseNow; }
+    float PhaselockLightIntensity() const;
+    FString PresentationReport() const;
     // LiftActionSkill.BeginLifting's lift end, as a height above the target's collision centre now: ground within
     // HeightFromGround below the centre -> ground + collision half height + HeightFromGround, lowered to a surface met on
     // the way up minus the half height; no ground in reach -> 0 (no lift). See the .cpp for the host choices.
@@ -71,10 +91,34 @@ private:
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> Post;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> Torso;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> Head;
-    UPROPERTY() TObjectPtr<class UStaticMeshComponent> LockSphere;
     UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> BodyMaterial;
     UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> HeadMaterial;
-    UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> LockMaterial;
+    // Stock presentation (FOpenWillowPhaselockFxData): bubble emitters and the PhaselockLight stand-in.
+    UPROPERTY() TObjectPtr<UOpenWillowFxComponent> BubbleIntro;
+    UPROPERTY() TObjectPtr<UOpenWillowFxComponent> BubbleLoop;
+    UPROPERTY() TObjectPtr<UOpenWillowFxComponent> BubbleOutro;
+    UPROPERTY() TObjectPtr<class UPointLightComponent> LockLight;
+    // The pawn's PhaseLock_* clips when its imported AnimSet has them (the slice dummy's does not).
+    UPROPERTY() TObjectPtr<class UAnimSequence> StockIdle;
+    UPROPERTY() TObjectPtr<class UAnimSequence> LiftClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> LoopClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> FallClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> LandClip;
+    UOpenWillowFxComponent* SpawnBubble(const FString& TemplateName, float Now);
+    void UpdatePresentation(float Now, float Held);
+    void ClearPresentation();
+    FOpenWillowPhaselockFxData Fx;
+    bool bFx = false;
+    FOpenWillowPhaselockTimeline LockTimeline;
+    FVector BubbleOffset = FVector::ZeroVector;   // lift-end location in Pivot space
+    float BubbleScale = 1;
+    float CollapseStartAt = 0;
+    float CollapseNow = 0;
+    int32 BubbleStageNow = 0;
+    float BobHeight = 0;                // smoothed bob (VInterpTo state)
+    bool bBobStarted = false;
+    float AnimClipEndsAt = 0;
+    int32 AnimStage = 0;                // 0 none, 1 lift, 2 loop, 3 fall, 4 land
     FVector HomeLocation = FVector::ZeroVector;
     FVector2D Wobble = FVector2D::ZeroVector;
     FVector2D WobbleVelocity = FVector2D::ZeroVector;

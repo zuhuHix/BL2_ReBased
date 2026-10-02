@@ -205,6 +205,14 @@ class CardFieldTests(unittest.TestCase):
         self.assertEqual(card['sale_value'], 1132)
         self.assertTrue(card['sale_value_known'])  # Shotguns calculator was checked
 
+    def test_price_formula_adds_the_offset_before_the_multiplier(self):
+        objects = card_world()
+        objects['Init.Offset'] = {'ValueFormula': {'bEnabled': True, 'Multiplier': const(2), 'Level': const(3),
+                                                   'Power': const(2), 'Offset': const(1)}}
+        unresolved = set()
+        self.assertEqual(s.price_init(FakePackage(objects), const(0, init='Init.Offset'), {}, unresolved), 20)
+        self.assertEqual(unresolved, set())
+
     def test_unchecked_calculator_is_flagged_not_hidden(self):
         objects = card_world()
         objects['Type']['MonetaryValue']['InitializationDefinition'] = UNCHECKED_CALC

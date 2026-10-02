@@ -369,6 +369,12 @@ hand-play session are reported separately.
   - The mission level is the slice gear level (8), so the reward is 396 XP. The C++ value equals the tool's own
     candidate table.
   - Level-up uses the existing threshold curve (60 L^2.8 - 60, which equals required(L) - required(1)).
+  - 2026-10-02, following [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) (read from native code, UNVERIFIED in game):
+    the amount is truncated on the integer curve R(n) = max(0, trunc(60 x (n^2.8 + 7.33)) - 499) in single precision
+    (395 at stage 8, not 396); the mission level is Sanctuary's region game stage (clamp(level, 7, 9) from the
+    decoded playthrough-1 table, 8..11 once WelcomeToSanctuary is complete), fixed when the walker sets Maya's level at
+    session start and kept in the quest save (`region_stage`); level-up uses the same curve (one point higher than the
+    old one at most levels) with the level-50 cap (DLC cap increments not modelled).
   - At level 8 one reward does not level Maya up (7,918 XP to level 9). Points she already has are spent on the
     Skills page (K).
   - The canvas HUD now shows her real level, XP progress and health (it showed a fixed "1" before).
@@ -490,7 +496,7 @@ turn in. Route:
    in a slot and drawn, and the dummy rolls forward.
 3. Shoot the dummy with it. Another slice gun does not complete the objective. Fire completes, the pistol is taken
    back, and the dummy rolls back and is removed.
-4. Press E at Marcus to turn in: +396 XP (bar at bottom centre). Press E again by the dropped shotgun to pick it up.
+4. Press E at Marcus to turn in: +395 XP since 2026-10-02 (396 before; bar at bottom centre). Press E again by the dropped shotgun to pick it up.
 5. K opens Skills: buy Phaselock (Maya has 4 points at level 8 from the start). F casts it. The only liftable target
    in this session is the stock dummy while it is on the range, so buy Phaselock before shooting it if you want to
    lift it. After it is removed, F only shows the miss.

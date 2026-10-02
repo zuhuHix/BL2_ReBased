@@ -9,7 +9,7 @@ Sources, all decoded from the installed packages with `ow-package --properties`:
   MinGameStageRequirement / MaxGameStageRequirement.
 
 Weights are AttributeInitializationData. They are evaluated here (Values): constants,
-ValueFormula Multiplier * Level ^ Power + Offset with enabled range restrictions,
+ValueFormula Multiplier * (Level ^ Power + Offset) with enabled range restrictions,
 ConstantAttributeValueResolver and ConditionalAttributeValueResolver attributes
 (conditions evaluated against a small context: NumberOfPlayers = 1 by default) and
 DesignerAttributeDefinition BaseValue. Anything else is reported as unresolved and
@@ -90,7 +90,7 @@ class Values:
         terms = {k: self.init(formula.get(k)) for k in ('Multiplier', 'Level', 'Power', 'Offset')}
         if None in terms.values():
             return None
-        value = terms['Multiplier'] * terms['Level'] ** terms['Power'] + terms['Offset']
+        value = weapon_recipe.formula_value(terms['Multiplier'], terms['Level'], terms['Power'], terms['Offset'])
         clamp = props.get('RangeRestriction') or {}
         if clamp.get('bEnableMinValueRestriction'):
             low = self.init(clamp.get('MinValue'))
