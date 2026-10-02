@@ -108,10 +108,95 @@ class WeaponRecipeTests(unittest.TestCase):
         self.assertEqual(w.merge_slots(base, {'Body': [('B', 1)]}, 'EPRM_Complete'), {'Body': [('B', 1)]})
         self.assertEqual(base['Body'], [('A', 1)])  # inputs are not modified
 
-    def test_zero_weight_slot_is_flagged(self):
+    def test_entry_without_manufacturer_list_weighs_flat_100(self):
+        # Body.Unique's DefaultWeightIndex points at 0, but it has no Manufacturers list.
         recipe = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=2)
-        self.assertTrue(any(n.startswith('Body: all candidates weigh 0') for n in recipe['notes']))
+        self.assertEqual(recipe['parts']['Body']['weight'], w.FLAT_WEIGHT)
         self.assertEqual(recipe['gestalt_fragments'], ['Frag_Body', 'Frag_Grip'])
+
+    def test_manufacturer_list_weights_and_none_is_not_a_wildcard(self):
+        stage = [const(1), const(100), const(0), const(7), const(3)]
+
+        def at(name, index=None):
+            return stage[{'DefaultWeight': 2}[name] if index is None else index]
+        own = {'Manufacturers': [{'Manufacturer': 'Makers.Other', 'DefaultWeightIndex': 4},
+                                 {'Manufacturer': 'Makers.Vladof', 'DefaultWeightIndex': 3}]}
+        none_only = {'Manufacturers': [{'Manufacturer': None, 'DefaultWeightIndex': 3}]}
+        weight = lambda part, maker: w.entry_weight(part, maker, lambda n, i=None: at(n, i)['BaseValueConstant'])
+        self.assertEqual(weight(own, 'Makers.Vladof'), 7)
+        self.assertEqual(weight(own, 'Makers.Bandit'), 0)     # not listed: DefaultWeightIndex
+        self.assertEqual(weight(none_only, 'Makers.Vladof'), 0)
+        self.assertEqual(weight(own, None), w.FLAT_WEIGHT)    # no manufacturer known
+        self.assertEqual(weight({}, 'Makers.Vladof'), w.FLAT_WEIGHT)
+
+    def test_stage_window_uses_truncated_bounds(self):
+        objects = world()
+        objects['Root.List']['ConsolidatedAttributeInitData'] = [const(4.9), const(100), const(0), const(0), const(50)]
+        objects['Root.List']['GripPartData']['WeightedParts'] = [weighted('Grip.A', 1)]
+        slots, _ = w.slot_candidates(FakePackage(objects), 'Root.List', 4)
+        self.assertEqual(slots['Grip'], [('Grip.A', w.FLAT_WEIGHT)])  # trunc(4.9) = 4 <= stage 4
+        slots, _ = w.slot_candidates(FakePackage(objects), 'Root.List', 3)
+        self.assertEqual(slots['Grip'], [])
+
+    def test_pick_walks_running_intervals(self):
+        class Fixed:
+            def __init__(self, value):
+                self.value = value
+
+            def randint(self, low, high):
+                return self.value
+        entries = [('A', 0.0), ('B', 1.0), ('C', 3.0), ('B', 2.0), ('C', 0.0)]
+        # Zero weights are skipped (a zero repeat does not remove C); B keeps its later weight 2.
+        part, candidates = w.pick(entries, Fixed(0))
+        self.assertEqual((part, candidates), ('B', {'B': 2.0, 'C': 3.0}))
+        self.assertEqual(w.pick(entries, Fixed(32767))[0], 'C')
+        self.assertEqual(w.pick(entries, Fixed(13106))[0], 'B')   # r = 5 * 13106 / 32767, just under 2.0
+        self.assertEqual(w.pick(entries, Fixed(13107))[0], 'C')   # just over 2.0
+        self.assertEqual(w.pick([('A', 0.0)], Fixed(0)), (None, {}))
+
+    def test_zero_weight_slot_is_left_empty(self):
+        objects = world()
+        objects['Root.List']['GripPartData']['WeightedParts'] = [
+            dict(weighted('Grip.A', 2), Manufacturers=[{'Manufacturer': 'Makers.Vladof', 'DefaultWeightIndex': 2}])]
+        recipe = w.roll(FakePackage(objects), 'Leaf', seed=1, stage=2)
+        self.assertNotIn('Grip', recipe['parts'])
+        self.assertTrue(any(n.startswith('Grip: every candidate weighs 0') for n in recipe['notes']))
+
+    def test_name_parts_type_first_later_part_wins_ties(self):
+        objects = world()
+        objects.update({
+            'Name.TypePrefix': {'PartName': 'Typed', 'Priority': 2},
+            'Name.Tie': {'PartName': 'Tied'},                      # Priority omitted: class default 1
+            'Name.Late': {'PartName': 'Too Late', 'Priority': 9, 'MinExpLevelRequirement': 20},
+            'Name.Zero': {'PartName': 'Never', 'Priority': 0},
+        })
+        objects['Type']['PrefixList'] = ['Name.TypePrefix']
+        objects['Body.A']['PrefixList'] = ['Name.Late', 'Name.Zero']
+        objects['Grip.A']['PrefixList'] = ['Name.Tie']
+        package = FakePackage(objects)
+        parts = {'Body': 'Body.A', 'Grip': 'Grip.A'}
+        prefix, title = w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 5)
+        self.assertEqual((prefix, title), ('Name.TypePrefix', 'Name.TypeTitle'))  # 2 beats the default 1
+        objects['Type']['PrefixList'] = ['Name.Generic']                         # 0.2 < 1: the grip's wins
+        self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 5)[0], 'Name.Tie')
+        self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 20)[0], 'Name.Late')
+        objects['Name.Generic']['Priority'] = 1                                  # tie: the later list wins
+        self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 5)[0], 'Name.Tie')
+
+    def test_evaluator_order_mode_scale_clamp_round(self):
+        objects = world()
+        objects['Def.Scales'] = {'BaseValueMode': 'BASEVALUE_InitializationDefScalesBaseValue',
+                                 'ValueFormula': {'bEnabled': True, 'Multiplier': const(3), 'Level': const(2),
+                                                  'Power': const(1)},
+                                 'RangeRestriction': {'bEnableMaxValueRestriction': True, 'MaxValue': const(50)},
+                                 'RoundingMode': 'ATTRROUNDING_IntCeil'}
+        package = FakePackage(objects)
+        init = {'BaseValueConstant': 2.5, 'InitializationDefinition': 'Def.Scales', 'BaseValueScaleConstant': 1.1}
+        # 2.5 * (3 * 2) = 15, * 1.1 = 16.5, under the max 50, ceil -> 17.
+        self.assertEqual(w.attribute_value(package, init, 1), 17)
+        init['BaseValueScaleConstant'] = 10.0  # 150 clamps to 50 after the scale
+        self.assertEqual(w.attribute_value(package, init, 1), 50)
+        self.assertEqual(w.f32(0.1), 0.10000000149011612)
 
 
 if __name__ == '__main__':

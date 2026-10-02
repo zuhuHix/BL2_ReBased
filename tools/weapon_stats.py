@@ -1,38 +1,44 @@
 """Evaluate item-card stats for a weapon recipe from installed attribute data.
 
 Input is a tools/weapon_recipe.py recipe. The weapon type supplies base
-values; every chosen part's WeaponAttributeEffects and AttributeSlotUpgrades,
-plus the type's AttributeSlotEffects, modify them. All inputs are decoded from
-the package; the combination rules below are UNVERIFIED (no public spec) and
-are listed in every output.
+values; the type's WeaponAttributeEffects, every chosen part's, the activated
+attribute slots and the prefix/title name parts' effects modify them. All
+inputs are decoded from the package. The rules were read from the game's own
+code (docs/verification/NATIVE_WEAPON_RULES.md, 2026-10-02) and are UNVERIFIED
+until a running-game check confirms them; each output lists them.
 
-- Per attribute (combine()): (base + sum PreAdd) * (1 + sum of positive Scales)
-  / (1 + sum of |negative Scales|) + sum PostAdd. Fitted 2026-10-01: it reproduces
-  every printed stat of four of six real cards with the parts their names imply,
-  where the older (1 + sum Scale) rule reproduced one
-  (docs/verification/WEAPON_BALANCE_DECODE.md). Still UNVERIFIED: the native
-  code is not readable.
-- The weapon type's own WeaponAttributeEffects apply like a part's. Bases a type
-  leaves unset come from the class defaults (TYPE_DEFAULTS, WEAPON_DEFAULTS).
-- A slot effect applies BaseModifierValue + PerGradeUpgrade * grade, where the
-  grade sums the parts' GradeIncrease for that SlotName.
+- Per attribute (combine(); NATIVE_WEAPON_RULES.md section 1): the modifier
+  stack sums PreAdd, PostAdd, positive Scales and non-positive Scales separately
+  (single precision), then value = (base + PreAdd) * (1 + up) / (1 - down) +
+  PostAdd. No clamp. Integer attributes (INT_ATTRIBUTES: clip size, projectiles,
+  shot cost, burst count) truncate toward zero. Before 2026-10-02 this was a rule
+  fitted on cards ('split'); it is now the rule the game's code applies.
+- Effect order (script WillowWeapon.InitializeInternal): type, parts in slot
+  order, attribute slots, then prefix and title name parts. The type's
+  WeaponAttributeEffects apply like a part's. Bases a type leaves unset come from
+  the class defaults (TYPE_DEFAULTS, WEAPON_DEFAULTS).
+- A slot effect applies BaseModifierValue + PerGradeUpgrade * grade to slots
+  some upgrade activated (bActivateSlot); the grade sums every GradeIncrease for
+  that SlotName on the type and the parts. The game also adds the type's
+  AttributeSlotBaseGrade (default 1) when a slot is first activated; how that
+  enters the value is not read (SLOT_BASE_GRADE_IN_VALUE, see the note).
 - Attribute operands resolve for Weapon_Is_<Maker> (1 for the weapon's own
   manufacturer, else 0), WeaponLevel (the requested level) and attributes with
   a ConstantAttributeValueResolver. Anything else is reported as unresolved.
-- Rarity is the highest Rarity value among the chosen parts (1 Common ..
-  5 Legendary), each resolved through its ItemRarity attribute constant.
+- Rarity (rarity_of()): level = trunc(type BaseRarity) + sum of trunc(part
+  Rarity); the tier is the first GlobalsDefinition.RarityLevelColors entry whose
+  [MinLevel, MaxLevel] holds it. `rarity` keeps the host's 1..5 scale.
 - Manufacturer grades on the balance and skill/class effects are not applied.
 - Status effect rows (status_rows()) and projectile count reproduce real cards;
-  `display` holds the numbers rounded as the card prints them.
+  `display` holds the numbers rounded as the card prints them (present()).
 
 Card fields beyond the five main stats (docs/verification/INVENTORY_CARD_STATS.md):
 - accuracy: the game's own presentation for WeaponSpread remaps spread linearly
-  (0 -> 100, RemappingData.InputValueMx -> 0). With the 'split' rule the spread
-  input reproduces all six audited cards (accuracy_known).
-- sale_value: the weapon type's MonetaryValue calculator, fed the product of the
-  chosen parts' MonetaryValueMod and the item level, rounded down. Reproduces
-  real cards exactly for every weapon class except launchers; see
-  PRICE_CALCULATORS_CHECKED.
+  (0 -> 100, RemappingData.InputValueMx -> 0), the input clamped to its range.
+- sale_value: the weapon type's MonetaryValue calculator, fed the product of
+  every part's MonetaryValueMod including the prefix and title name parts (the
+  game recomputes the part value after choosing them) and the item level,
+  truncated. See PRICE_CALCULATORS_CHECKED.
 - fun_stats: the red flavour line, the title part's CustomPresentations text.
   White stat lines (zoom, ammo per shot, ...) are not derived.
 """
@@ -43,6 +49,7 @@ from pathlib import Path
 
 import skill_stats
 import weapon_recipe
+from weapon_recipe import f32
 
 ATTR = 'D_Attributes.Weapon.'
 # WeaponTypeDefinition property -> attribute it initializes.
@@ -85,16 +92,44 @@ PART_PRICE_TOTAL = 'D_Attributes.Inventory.InventoryPartMonetaryValueModifierTot
 # so every part combination was tried): 2026-09-29, an integer-exact match exists for
 # each observed shotgun, assault rifle and SMG; 2026-10-01 (tools/weapon_card_audit.py,
 # docs/verification/WEAPON_BALANCE_DECODE.md) also for one pistol and one sniper rifle
-# among the combinations that reproduce every other stat of the card. Launchers
-# (Nukem, Pyrophobia, Big Badaboom) have none. Only checked ones are known.
+# among the combinations that reproduce every other stat of the card. 2026-10-02: with
+# the name parts' MonetaryValueMod in the part total (NATIVE_WEAPON_RULES.md section 6)
+# both observed launchers match too. Only checked ones are known.
 PRICE_CALCULATORS_CHECKED = {'GD_Economy.PriceCalc.Init_Gun_' + name + '_PriceCalculator'
-                             for name in ('Shotguns', 'AssaultRifles', 'SMG', 'Pistols', 'SniperRifles')}
+                             for name in ('Shotguns', 'AssaultRifles', 'SMG', 'Pistols', 'SniperRifles', 'Launchers')}
+# WillowWeapon properties declared IntAttributeProperty in WillowGame.upk: their stack
+# result is truncated toward zero (NATIVE_WEAPON_RULES.md section 1).
+INT_ATTRIBUTES = {ATTR + name for name in ('WeaponClipSize', 'WeaponProjectilesPerShot', 'WeaponShotCost',
+                                           'WeaponAutomaticBurstCount')}
+GLOBALS = 'GD_Globals.General.Globals'
+# GlobalsDefinition.RarityLevelColors RarityRating -> the host's 1..5 rarity number
+# (E-tech, rarity level 6, is rated VeryRare with its own colour; rarity_color carries it).
+RARITY_NUMBER = {'RARITY_Common': 1, 'RARITY_Uncommon': 2, 'RARITY_Rare': 3, 'RARITY_VeryRare': 4,
+                 'RARITY_Legendary': 5}
+# The card's presentation per field, decoded from GD_AttributePresentation.Weapons (local), with the
+# rounding mode and FloatPrecision the data sets (class defaults: IntRound, precision 1). evaluate()
+# re-reads them from the package when the presentation exists; these are the fallbacks.
+PRESENTATIONS = {
+    'damage': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponDamage', 'ATTRROUNDING_IntCeil'),
+    'magazine': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponClipSize', 'ATTRROUNDING_IntFloor'),
+    'fire_rate': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponFireRate', 'ATTRROUNDING_Float'),
+    'reload_time': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponReloadSpeed', 'ATTRROUNDING_Float'),
+    'accuracy': (ACCURACY_PRESENTATION, 'ATTRROUNDING_Float'),
+}
+# Not read from code: the status rows use their own presentation class; one decimal half up
+# matches every observed row.
+STATUS_ROUNDING = 'ATTRROUNDING_Float'
+# How the activation base grade (type AttributeSlotBaseGrade, default 1) enters a slot's value
+# is not read. False: value = BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease), the form
+# that reproduces the audited cards. True adds the base grade (compare with the audit).
+SLOT_BASE_GRADE_IN_VALUE = False
 SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     'WeaponAttributeEffects=StructProperty:AttributeEffectData',
     'AttributeSlotEffects=StructProperty:AttributeSlotEffectData',
     'AttributeSlotUpgrades=StructProperty:AttributeSlotUpgradeData',
     'CustomPresentations=ObjectProperty',
     'DamageSurfaceChanceModifiers=StructProperty:StatusEffectChanceModifier',
+    'RarityLevelColors=StructProperty:RarityLevelColor',
 ]
 # Title parts' CustomPresentations carry the red flavour line, TextColor (220, 70, 70).
 RED_TEXT_COLOR = {'R': 220, 'G': 70, 'B': 70}
@@ -119,9 +154,10 @@ def accuracy_percent(package, spread):
     """Spread -> the card's Accuracy percent via the game's own remap, or None.
 
     AttrPresent_WeaponSpread remaps [InputValueMn (0), InputValueMx (15)] onto
-    [OutputValueMn (100), OutputValueMx (0)]. Orientation (input minimum ->
-    output minimum) is inferred: the reverse would put every real card near 10%.
-    Clamping to the output range is UNVERIFIED.
+    [OutputValueMn (100), OutputValueMx (0)]: the presentation's remap (read from
+    native code, NATIVE_WEAPON_RULES.md section 2) clamps the input to its range
+    and maps InputValueMn to OutputValueMn linearly; an empty input range maps
+    everything to OutputValueMn. UNVERIFIED in game beyond the audited cards.
     """
     if spread is None or ACCURACY_PRESENTATION not in package.index:
         return None
@@ -133,18 +169,20 @@ def accuracy_percent(package, spread):
         return (remap.get(name) or {}).get('BaseValueConstant') or 0.0
     in_low, in_high = constant('InputValueMn'), constant('InputValueMx')
     out_low, out_high = constant('OutputValueMn'), constant('OutputValueMx')
-    if in_high == in_low:
-        return None
-    t = min(1.0, max(0.0, (spread - in_low) / (in_high - in_low)))
-    return out_low + (out_high - out_low) * t
+    if in_high <= in_low:
+        return f32(out_low)
+    slope = f32((out_high - out_low) / (in_high - in_low))
+    clamped = min(in_high, max(in_low, spread))
+    return f32((clamped - in_low) * slope + out_low)
 
 
 def price_init(package, init, known, unresolved):
     """AttributeInitializationData -> float for the price calculators, or None.
 
-    Differs from weapon_recipe.attribute_value in that the definition may scale
-    a base attribute (BASEVALUE_InitializationDefScalesBaseValue). Range
-    restrictions and conditional initialization are ignored (UNVERIFIED).
+    Like weapon_recipe.attribute_value (BaseValueMode, single precision), but it
+    resolves base attributes from `known` or their constant resolvers and records
+    what it cannot resolve. Range restrictions, rounding and conditional
+    initialization are not applied (none occurs in the gun price chain).
     """
     init = init or {}
     attribute, definition = init.get('BaseValueAttribute'), init.get('InitializationDefinition')
@@ -158,22 +196,19 @@ def price_init(package, init, known, unresolved):
         props = package.props(definition)
         mode = props.get('BaseValueMode') or 'BASEVALUE_InitializationDefSetsBaseValue'
         formula = props.get('ValueFormula') or {}
-        value = 0.0
+        # A definition without an enabled formula leaves the base alone (the game's evaluator).
         if formula.get('bEnabled'):
             terms = {k: price_init(package, formula.get(k), known, unresolved)
                      for k in ('Multiplier', 'Level', 'Power', 'Offset')}
             if None in terms.values():
                 return None
             value = weapon_recipe.formula_value(terms['Multiplier'], terms['Level'], terms['Power'], terms['Offset'])
-        if mode == 'BASEVALUE_InitializationDefScalesBaseValue':
-            base *= value
-        elif mode == 'BASEVALUE_InitializationDefSetsBaseValue':
-            base = value
-        else:
-            unresolved.add(f'{definition}: {mode}')
-            return None
+            if mode not in weapon_recipe.BASE_VALUE_MODES:
+                unresolved.add(f'{definition}: {mode}')
+                return None
+            base = f32(weapon_recipe.BASE_VALUE_MODES[mode](f32(base), value))
     scale = init.get('BaseValueScaleConstant')
-    return base * (1.0 if scale is None else scale)
+    return f32(base * (1.0 if scale is None else scale))
 
 
 def sale_value(package, recipe, weapon_type, level, unresolved):
@@ -182,20 +217,31 @@ def sale_value(package, recipe, weapon_type, level, unresolved):
     if not isinstance(init, dict):
         return None, False
     total = 1.0
-    for choice in recipe['parts'].values():
-        modifier = package.props(choice['part']).get('MonetaryValueMod')
+    # Every part in slot order, then the prefix and title name parts: the game recomputes the
+    # part value after choosing the name parts (script WillowWeapon.InitializeInternal), and
+    # launcher prefixes carry a MonetaryValueMod (Att_Price_RarityMultiplier_01_Common).
+    for path in ordered_parts(recipe) + [p for p in (name_part_path(recipe.get('prefix')),
+                                                     name_part_path(recipe.get('title'))) if p]:
+        modifier = package.props(path).get('MonetaryValueMod')
         if not modifier:
             continue
         factor = resolver_constant(package, modifier)
         if factor is None:
             unresolved.add(modifier)
             return None, False
-        total *= factor
+        total = f32(total * factor)
     known = {PART_PRICE_TOTAL: total, ATTR + 'WeaponLevel': float(level)}
     value = price_init(package, init, known, unresolved)
     if value is None:
         return None, False
-    return math.floor(value), init.get('InitializationDefinition') in PRICE_CALCULATORS_CHECKED
+    # The stored MonetaryValue is an integer; the conversion truncates (consistent with every card).
+    return math.trunc(value), init.get('InitializationDefinition') in PRICE_CALCULATORS_CHECKED
+
+
+def ordered_parts(recipe):
+    """The recipe's part paths in the game's slot order (Body .. Material)."""
+    parts = recipe.get('parts') or {}
+    return [parts[slot]['part'] for slot in weapon_recipe.SLOTS if slot in parts and parts[slot].get('part')]
 
 
 def red_text(package, recipe, localize=None):
@@ -223,19 +269,24 @@ def red_text(package, recipe, localize=None):
 SCALE_RULE = 'split'
 
 
-def combine(start, m):
-    """One attribute's value from its base and summed modifiers (UNVERIFIED rule).
+def combine(start, m, integer=False):
+    """One attribute's value from its base and summed modifiers.
 
-    'sum': (base + PreAdd) * (1 + sum of Scale), clamped at 0, + PostAdd.
-    'split': positive Scales multiply, negative ones divide:
-             (base + PreAdd) * (1 + sum up) / (1 + sum |down|), + PostAdd.
+    'split' (default; read from the game's attribute properties, NATIVE_WEAPON_RULES.md
+    section 1): positive Scales multiply and non-positive ones divide,
+    (base + PreAdd) * (1 + up) / (1 + |down|) + PostAdd, no clamp. The sums arrive in
+    single precision; the result is stored as a float, or truncated toward zero for an
+    integer attribute (whose base is an integer).
+    'sum' (the pre-2026-10-01 guess, kept for comparison): (base + PreAdd) * (1 + sum of
+    Scale), clamped at 0, + PostAdd.
     """
     pre, post = m.get('MT_PreAdd', 0.0), m.get('MT_PostAdd', 0.0)
-    if SCALE_RULE == 'split':
-        scale = (1.0 + m.get('scale_up', 0.0)) / (1.0 + m.get('scale_down', 0.0))
-    else:
-        scale = 1.0 + m.get('MT_Scale', 0.0)
-    return max(0.0, (start + pre) * scale) + post
+    if SCALE_RULE != 'split':
+        return max(0.0, (start + pre) * (1.0 + m.get('MT_Scale', 0.0))) + post
+    factor = (1.0 + m.get('scale_up', 0.0)) / (1.0 + m.get('scale_down', 0.0))
+    if integer:
+        return float(math.trunc(factor * (float(math.trunc(start)) + pre) + post))
+    return f32((start + pre) * factor + post)
 
 
 def damage_type_of(package, recipe, weapon_type):
@@ -288,20 +339,84 @@ def half_up(number, digits=1):
     return math.floor(number * scale + 0.5) / scale
 
 
-def display(card):
-    """The numbers as the real item card prints them (rounding observed on 6 real cards, UNVERIFIED rule):
-    damage rounded up, magazine rounded down, the rest to one decimal (half up)."""
+def present(value, rounding, precision=1):
+    """A stat as the card prints it (UAttributePresentationDefinition rounding, NATIVE_WEAPON_RULES.md section 2).
+
+    Values under 1e-8 in size print as 0. ATTRROUNDING_Float rounds half up to
+    `precision` decimals (FloatPrecision, clamped to 0..10); IntRound half up;
+    IntFloor down; IntCeil up. The value is the stored single-precision float.
+    """
+    value = f32(value)
+    if abs(value) < 1e-8:
+        value = 0.0
+    if rounding == 'ATTRROUNDING_IntCeil':
+        return math.ceil(value)
+    if rounding == 'ATTRROUNDING_IntFloor':
+        return math.floor(value)
+    if rounding == 'ATTRROUNDING_IntRound':
+        return math.floor(value + 0.5)
+    return half_up(value, max(0, min(10, precision)))
+
+
+def display(card, rounding=None):
+    """The numbers as the real item card prints them.
+
+    `rounding` maps a card field to (rounding mode, precision); missing fields use
+    the decoded presentation data in PRESENTATIONS (damage IntCeil, magazine
+    IntFloor, fire rate/reload/accuracy Float with one decimal). Status rows use
+    one decimal half up (STATUS_ROUNDING; not read from code).
+    """
+    rounding = rounding or {}
     shown = {}
-    if card.get('damage') is not None:
-        shown['damage'] = math.ceil(card['damage'] - 1e-6)
-    if card.get('magazine') is not None:
-        shown['magazine'] = math.floor(card['magazine'] + 1e-6)
-    for field in ('fire_rate', 'reload_time', 'accuracy', 'status_chance', 'status_dps'):
+    for field, (_, default) in PRESENTATIONS.items():
         if card.get(field) is not None:
-            shown[field] = half_up(card[field])
+            mode, precision = rounding.get(field, (default, 1))
+            shown[field] = present(card[field], mode, precision)
+    for field in ('status_chance', 'status_dps'):
+        if card.get(field) is not None:
+            shown[field] = present(card[field], STATUS_ROUNDING, 1)
     if card.get('projectiles') and card['projectiles'] > 1:
         shown['projectiles'] = card['projectiles']
     return shown
+
+
+def presentation_rounding(package):
+    """{card field: (rounding mode, FloatPrecision)} read from the package's presentations, where present."""
+    found = {}
+    for field, (path, default) in PRESENTATIONS.items():
+        if path in getattr(package, 'index', {}):
+            props = package.props(path)
+            precision = props.get('FloatPrecision')
+            found[field] = (props.get('RoundingMode') or 'ATTRROUNDING_IntRound', 1 if precision is None else precision)
+    return found
+
+
+def rarity_of(package, weapon_type, parts, value):
+    """(rarity level, RarityRating, colour) from the type's BaseRarity and every part's Rarity (each truncated).
+
+    The tier table is GlobalsDefinition.RarityLevelColors (first entry whose
+    [MinLevel, MaxLevel] holds the level); without it the rating is None.
+    """
+    level = 0
+    base = value(weapon_type.get('BaseRarity')) if weapon_type.get('BaseRarity') else 0.0
+    level += math.trunc(base or 0.0)
+    for part in parts:
+        rarity = package.props(part).get('Rarity')
+        amount = value(rarity) if rarity else None
+        level += math.trunc(amount or 0.0)
+    table = package.props(GLOBALS).get('RarityLevelColors') if GLOBALS in getattr(package, 'index', {}) else None
+    for row in table or []:
+        if (row.get('MinLevel') or 0) <= level <= (row.get('MaxLevel') or 0):
+            color = row.get('Color') or {}
+            return level, row.get('RarityRating'), '#%02X%02X%02X' % (color.get('R', 0), color.get('G', 0), color.get('B', 0))
+    return level, None, None
+
+
+def name_part_path(entry):
+    """A recipe's prefix/title entry ({'part': path} or a path) -> path or None."""
+    if isinstance(entry, dict):
+        return entry.get('part')
+    return entry or None
 
 
 def evaluate(package, recipe, level, localize=None):
@@ -358,50 +473,71 @@ def evaluate(package, recipe, level, localize=None):
     mods, sources = {}, []
 
     def add(attribute, kind, amount, source):
+        # The game sums each modifier kind in single precision (NATIVE_WEAPON_RULES.md section 1).
         if amount is None:
             return
+        amount = f32(amount)
         bucket = mods.setdefault(attribute, {'MT_PreAdd': 0.0, 'MT_Scale': 0.0, 'MT_PostAdd': 0.0,
                                              'scale_up': 0.0, 'scale_down': 0.0})
-        bucket[kind] = bucket.get(kind, 0.0) + amount
+        bucket[kind] = f32(bucket.get(kind, 0.0) + amount)
         if kind == 'MT_Scale':
-            bucket['scale_up' if amount > 0 else 'scale_down'] += abs(amount)
+            side = 'scale_up' if amount > 0 else 'scale_down'
+            bucket[side] = f32(bucket[side] + abs(amount))
         if amount:
             sources.append({'attribute': attribute, 'type': kind, 'value': amount, 'source': source})
 
-    # The type's own effects (e.g. Maliwan +status chance, +1 shot cost). Applied like a
-    # part's; the Maliwan sniper's StatusEffectDamage PreAdd reproduces a real card exactly.
-    for effect in weapon_type.get('WeaponAttributeEffects') or []:
-        add(effect['AttributeToModify'], effect['ModifierType'], value(effect.get('BaseModifierValue')),
-            recipe['weapon_type'])
-    grades = {}
-    for slot, choice in recipe['parts'].items():
-        part = package.props(choice['part'])
-        for effect in part.get('WeaponAttributeEffects') or []:
-            add(effect['AttributeToModify'], effect['ModifierType'], value(effect.get('BaseModifierValue')), choice['part'])
-        for upgrade in part.get('AttributeSlotUpgrades') or []:
-            if upgrade.get('bActivateSlot', True):
-                grades[upgrade['SlotName']] = grades.get(upgrade['SlotName'], 0) + (upgrade.get('GradeIncrease') or 0)
+    def apply_effects(path, props):
+        for effect in props.get('WeaponAttributeEffects') or []:
+            add(effect['AttributeToModify'], effect['ModifierType'], value(effect.get('BaseModifierValue')), path)
+
+    # Order of script WillowWeapon.InitializeInternal: the type's own effects (e.g. Maliwan
+    # +status chance, +1 shot cost), each part in slot order, the attribute slots, then the
+    # prefix and title name parts.
+    apply_effects(recipe['weapon_type'], weapon_type)
+    parts = ordered_parts(recipe)
+    grades, activated = {}, set()
+    for path in [recipe['weapon_type']] + parts:
+        props = weapon_type if path == recipe['weapon_type'] else package.props(path)
+        if path != recipe['weapon_type']:
+            apply_effects(path, props)
+        # The type's own AttributeSlotUpgrades count first, then each part's (InitializeAttributeSlots).
+        for upgrade in props.get('AttributeSlotUpgrades') or []:
+            name = upgrade['SlotName']
+            grades[name] = grades.get(name, 0) + (upgrade.get('GradeIncrease') or 0)
+            if upgrade.get('bActivateSlot'):
+                activated.add(name)
+    base_grade = value(weapon_type.get('AttributeSlotBaseGrade') or {'BaseValueConstant': 1.0})
     for effect in weapon_type.get('AttributeSlotEffects') or []:
-        grade = grades.get(effect.get('SlotName'), 0)
+        name = effect.get('SlotName')
+        # Only activated internal slots modify the weapon (external ones go to the owner's pools).
+        if name not in activated or effect.get('bExternalSlot'):
+            continue
+        grade = grades.get(name, 0)
+        if SLOT_BASE_GRADE_IN_VALUE:
+            grade += math.floor((base_grade or 0.0) + 0.5)
+        if effect.get('bEnforceMinimumGrade'):
+            grade = max(grade, effect.get('MinimumGrade') or 0)
+        if effect.get('bEnforceMaximumGrade'):
+            grade = min(grade, effect.get('MaximumGrade') or 0)
         per_grade = value(effect.get('PerGradeUpgrade')) or 0.0
-        amount = (value(effect.get('BaseModifierValue')) or 0.0) + per_grade * grade
-        add(effect['AttributeToModify'], effect['ModifierType'], amount, f"slot {effect.get('SlotName')} grade {grade}")
+        amount = f32((value(effect.get('BaseModifierValue')) or 0.0) + f32(per_grade * grade))
+        add(effect['AttributeToModify'], effect['ModifierType'], amount, f"slot {name} grade {grade}")
+    for path in [p for p in (name_part_path(recipe.get('prefix')), name_part_path(recipe.get('title'))) if p]:
+        apply_effects(path, package.props(path))
 
     final = {}
     for attribute in sorted(set(base) | set(mods)):
         start = base.get(attribute)
         if start is None:
             continue
-        final[attribute] = combine(start, mods.get(attribute, {}))
+        final[attribute] = combine(start, mods.get(attribute, {}), attribute in INT_ATTRIBUTES)
 
     def stat(name):
         return final.get(ATTR + name)
     interval = stat('WeaponFireInterval')
     elemental = recipe['parts'].get('Elemental', {}).get('part', '')
     price, price_checked = sale_value(package, recipe, weapon_type, level, unresolved)
-    rarities = [value(package.props(choice['part']).get('Rarity'))
-                for choice in recipe['parts'].values() if package.props(choice['part']).get('Rarity')]
-    rarities = [r for r in rarities if r is not None]
+    rarity_level, rarity_rating, rarity_color = rarity_of(package, weapon_type, parts, value)
     damage_type = damage_type_of(package, recipe, weapon_type)
     status = status_rows(package, damage_type, final, value)
     projectiles = stat('WeaponProjectilesPerShot')
@@ -409,11 +545,16 @@ def evaluate(package, recipe, level, localize=None):
     firing_mode = barrel.get('CustomFiringModeDefinition') or weapon_type.get('DefaultFiringModeDefinition')
     bullet_speed = package.props(firing_mode).get('Speed') if firing_mode else None
     speed_scale = stat('WeaponProjectileSpeedMultiplier')
+    if rarity_rating in RARITY_NUMBER:
+        rarity = RARITY_NUMBER[rarity_rating]
+    else:  # no table (synthetic data) or a level outside it: the old 1..5 clamp
+        rarity = max(1, min(5, rarity_level)) if rarity_level else None
     card = {
         'name': recipe.get('name'),
         'level': level,
         'damage': stat('WeaponDamage'),
-        'fire_rate': 1.0 / interval if interval else None,
+        # The card shows 1 / FireInterval (the presentation's bDisplayAsInverse).
+        'fire_rate': f32(1.0 / interval) if interval else None,
         'reload_time': stat('WeaponReloadSpeed'),
         'magazine': stat('WeaponClipSize'),
         'spread': stat('WeaponSpread'),
@@ -424,11 +565,14 @@ def evaluate(package, recipe, level, localize=None):
         # Cooked data omits the class default, 1 on Default__WeaponPartDefinition.
         'spin_start_interval_scale': barrel.get('StartingSpinUpFireIntervalMultiplier', 1.0) if spin else None,
         'element': elemental.rsplit('_', 1)[-1] if elemental else None,
-        'rarity': int(max(rarities)) if rarities else None,
+        # Host scale 1 Common .. 5 Legendary; rarity_level / rarity_rating / rarity_color are the game's terms.
+        'rarity': rarity,
+        'rarity_level': rarity_level,
+        'rarity_rating': rarity_rating,
+        'rarity_color': rarity_color,
         'manufacturer': maker or None,
         'accuracy': accuracy_percent(package, stat('WeaponSpread')),
-        # True since 2026-10-01: with the 'split' scale rule the modelled spread reproduces the
-        # printed accuracy on all six audited real cards (WEAPON_BALANCE_DECODE.md); 'sum' did not.
+        # The spread model and the remap are read from the game's code (NATIVE_WEAPON_RULES.md).
         'accuracy_known': SCALE_RULE == 'split',
         'sale_value': price,
         'sale_value_known': price_checked,
@@ -440,18 +584,20 @@ def evaluate(package, recipe, level, localize=None):
         'damage_type': damage_type,
         **status,
     }
-    card['display'] = display(card)
+    card['display'] = display(card, presentation_rounding(package))
     return {
         'card': card, 'attributes': final, 'grades': grades, 'modifiers': sources,
         'unresolved_attributes': sorted(unresolved),
-        'unverified_rules': [f'scale rule {SCALE_RULE!r} (see combine())',
-                             'slot grade = sum of GradeIncrease', 'rarity = max over parts',
+        'unverified_rules': [f'scale rule {SCALE_RULE!r}: read from native code (see combine())',
+                             'slot value = BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease); '
+                             'base-grade term not read (SLOT_BASE_GRADE_IN_VALUE)',
+                             'rarity = sum of truncated part rarities, tier from RarityLevelColors (read)',
                              'manufacturer grades not applied',
-                             'accuracy = presentation remap of the UNVERIFIED spread, clamped to 0..100',
-                             'sale value = floor(price calculator(part MonetaryValueMod product, level))',
+                             'accuracy = presentation remap of the spread, input clamped (read)',
+                             'sale value = trunc(price calculator(part and name-part MonetaryValueMod product, level))',
                              'white stat lines of the fun text are not derived',
                              'status chance = Generic BaseChance * base * chance modifiers; per-shot use is native',
-                             'display rounding (damage up, magazine down, rest one decimal)',
+                             'display rounding from the presentation data (read); status rows one decimal (observed)',
                              'damage type and firing-mode precedence; projectile speed product'],
     }
 

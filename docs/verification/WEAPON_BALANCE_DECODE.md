@@ -6,6 +6,14 @@ section. Game-derived output (recipes, tables, audit reports) stays under ignore
 record holds only rules, counts and identities. Automated checks, oracle checks and in-game checks
 are reported separately. **No in-game check was made in this pass** (the game was not launched).
 
+**Update 2026-10-02:** the rules this record calls fitted or UNVERIFIED were read from the executable in
+[NATIVE_WEAPON_RULES.md](NATIVE_WEAPON_RULES.md) (still UNVERIFIED in game). Changes against this record: the
+"split" scale rule is the game's own, without the clamp at 0; integer stats truncate; values are single precision; the
+card rounding comes from the presentation data; an entry without a `Manufacturers` list weighs a flat 100 and a zero
+slot stays empty (not a uniform pick); names are deterministic; rarity is a sum looked up in a table; the launcher value
+gap is the prefix's `MonetaryValueMod`. On the 9 cards in this machine's traces the tools now reproduce 9 of 9 in every
+printed field with the running game's (hotfixed) data, 5 of 9 on cooked data (section 8 there).
+
 Tools: `tools/weapon_balance.py` (legal parts, runtime part-list crosscheck),
 `tools/weapon_card_audit.py` (card audit), `tools/loot_pools.py` (pool expansion, display oracle,
 seeded rolls), `tools/weapon_slice_gear.py` (slice guns and loot table), and changes to
