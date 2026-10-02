@@ -54,8 +54,55 @@ example `C:\Users\<you>\Tools\ghidra_12.1.4_PUBLIC` and `...\jdk-21.0.12.1+1` (s
 auto-analysis headlessly. Two practical points it handles: `analyzeHeadless.bat` breaks on the usual Steam path
 (`Program Files (x86)`), hence the copy; and Ghidra rejects project paths containing a folder that starts with
 `.`, which includes worktrees under `.t3`, so the project lives in `%OPENWILLOW_ANALYSIS%` or
-`%USERPROFILE%\bl2-analysis`, outside every worktree. Further scripts that drive Ghidra headlessly (apply the names
-recovered so far, export behaviour notes) belong in `tools/` and contain no game data.
+`%USERPROFILE%\bl2-analysis`, outside every worktree. Further scripts that drive Ghidra headlessly belong in
+`tools/ghidra/` (next section) and contain no game data.
+
+## Native registration and queries
+
+`tools/ghidra/` drives the imported project headlessly (Java GhidraScripts; this Ghidra has no Python feature). The
+scripts contain no game data; everything they write is game-derived and goes to `%OPENWILLOW_ANALYSIS%\out`
+(default `%USERPROFILE%\bl2-analysis\out`) or, with `-Out`, under the ignored `local/`. Only one `analyzeHeadless`
+may use the project at a time. Without `-ReadOnly` the project is saved after each run, which is how names persist.
+
+**How registration was found.** In this build every native is registered by name: each native C++ class has a static
+table of pairs, an ANSI string `<CppClass>exec<Function>` (for example `UBehaviorKernelexec...`, `AMissionTracker...`)
+and the function's address, ended by a null pair. No static `GNatives` array exists; natives with a fixed script
+index (`native_<n>` in the disassembler) are bound by name too, so `native_<n>` maps to an address by joining the
+`iNative` stored in each package UFunction's tail with the name tables. Found by searching the executable's strings
+for known native names and following the data references to them. Virtual natives (for example every
+`Behavior_*.ApplyBehaviorToContext`) share one folded exec thunk that calls through the object's vtable; the class's
+vtable is found from its registration (the class name as a UTF-16 string next to an in-place constructor that stores
+the vtable).
+
+```powershell
+# once (and after re-importing): name -> address tables, iNative join, label every native in the database
+powershell -File tools/ghidra/run.ps1 -Tables -Apply
+# decompile natives/addresses into <out>\decomp\*.c, list them in <out>\query.tsv; -Label names resolved natives
+powershell -File tools/ghidra/run.ps1 -Query MissionTracker.UpdateObjective,native:114 -Callees 1 -Label
+powershell -File tools/ghidra/run.ps1 -Query '@C:\path\queries.txt'      # one query per line, '#' comments
+python tools/ghidra/class_layout.py WillowGame.MissionTracker           # name the offsets a native reads
+```
+
+`-Tables` runs `script_natives.py` (package UFunction `iNative` list) and `OwNativeTables.java`, writing
+`natives.tsv` (raw name, C++ class, function, address, table) and `gnatives.tsv` (iNative, script function,
+address). On this build: 6,877 natives in 770 tables, every table naming a single class, all 199 script `iNative`
+values bound by name. Query forms (`OwNativeQuery.java` header has the full list): `Class.Function`,
+`execFunction`, the raw registered name, `native:<n>`, `0x<address>`, `str:<text>` (functions using a string),
+`refs:<address>` (functions referencing a global), `insn:<regex>` / `insn@<lo>-<hi>:<regex>` (functions containing a
+matching instruction), `callers:<query>`, `virtual:<Class>:<hexOffset>[:<Name>]` (a slot of a C++ class's vtable;
+refuses script-only classes) and `name:<address>:<Ns::Name>` (persist your own name; empty resets it). Pass query
+files rather than inline arguments when a query contains `|`, quotes or `=`: `analyzeHeadless.bat` splits arguments
+at `=`, which is why script options use `key:value`.
+
+`class_layout.py` computes 32-bit field offsets from the packages: fields follow the reverse-declaration `Next`
+chain of the cooked packages, bools share 32-bit words, structs align to their largest member. Its oracle is
+`Core.Object` = 0x3C bytes with `Outer` at 0x28; the `SequenceOp` link arrays and `MissionTracker`/`IMission`
+layouts it computes match every offset seen in the native code read so far. It is still a computed layout:
+treat an offset that does not fit the code as a reason to re-check the rule, not the code.
+
+Timing on the analysis machine: about 15 s per run (Ghidra start-up and project open dominate); `-Tables -Apply`
+15 s; a 50-function query 20 to 60 s with decompilation; a whole-program `insn:` scan 30 to 100 s. First results
+are recorded in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATCH.md).
 
 ## Working on two machines
 
