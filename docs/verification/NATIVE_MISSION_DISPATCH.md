@@ -11,7 +11,8 @@ Field offsets in the native code were named with `tools/ghidra/class_layout.py` 
 property chains; its oracle, `Core.Object` = 0x3C bytes with `Outer` at 0x28, matches the engine, and every
 offset used below matched a field of the expected type).
 
-Host code cited is the state at commit `877be8d`.
+Host code cited is the state at commit `877be8d`. Since then (DECISIONS.md, "native dispatch rules implemented") the
+executors in `src/` follow sections A1, A2, A4 and most of B; the "host today" tables below describe the earlier state.
 
 ## A. Behavior kernel: event and output-link dispatch
 

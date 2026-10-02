@@ -77,6 +77,10 @@ private:
     int32 TestStep = 0;
     float TestWait = 0;
     FString SavePath;
+    // Save() runs from Pump() every tick; the file is rewritten only when its text changed.
+    FString LastSavedText;
+    int32 SaveCalls = 0, SaveWrites = 0;
+    double SaveWriteSeconds = 0;
     TSharedPtr<FJsonObject> SavedProgression;   // the loaded save's "progression" block; null for older saves
     bool bProgressionRestored = false;
 

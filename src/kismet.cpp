@@ -94,7 +94,7 @@ void Kismet::fire(Op& op, int output) {
     const auto* disabled = field(link, "bDisabled");
     if (disabled && disabled->truth()) { trace.push_back(op.name + " output " + std::to_string(output) + " disabled"); return; }
     const auto* delay = field(link, "ActivateDelay");
-    const double extra = delay ? delay->number() : 0;
+    const double outputDelay = delay ? delay->number() : 0;
     const auto* targets = field(link, "Links");
     trace.push_back(op.name + " output " + std::to_string(output) + " -> " + std::to_string(targets && targets->kind == Value::Kind::Array ? targets->elements().size() : 0) + " link(s)");
     if (!targets || targets->kind != Value::Kind::Array) return;
@@ -108,20 +108,72 @@ void Kismet::fire(Op& op, int output) {
             errors.push_back(op.name + ": linked op is outside this sequence: " + resource->name);
             continue;
         }
-        activate(*destination, int(inputIndex->integer()), extra);
+        const int input = int(inputIndex->integer());
+        // Delay = target input's ActivateDelay + output's (NATIVE_MISSION_DISPATCH.md A4 step 5, UNVERIFIED).
+        const double total = inputDelay(*destination, input) + outputDelay;
+        if (total > 0) queue_.push_back({now_ + total, order_++, destination->index, input, false});
+        else collected_.push_back({destination->index, input});
+    }
+}
+
+const Value* Kismet::inputLink(Op& op, int input) {
+    const auto* links = prop(op, "InputLinks");
+    if (!links || links->kind != Value::Kind::Array || input < 0 || size_t(input) >= links->elements().size()) return nullptr;
+    return &links->elements()[size_t(input)];
+}
+
+bool Kismet::inputDisabled(Op& op, int input) {
+    const Value* link = inputLink(op, input);
+    const auto* disabled = link ? field(*link, "bDisabled") : nullptr;
+    return disabled && disabled->truth();
+}
+
+double Kismet::inputDelay(Op& op, int input) {
+    const Value* link = inputLink(op, input);
+    const auto* delay = link ? field(*link, "ActivateDelay") : nullptr;
+    return delay ? delay->number() : 0;
+}
+
+// An input activation: counted on the op (a second hit before it runs makes it run twice) and the op is queued unless it
+// already is (NATIVE_MISSION_DISPATCH.md A4 steps 1, 6, 7; UNVERIFIED). A disabled input receives nothing.
+void Kismet::impulse(int32_t index, int input) {
+    Op* op = findByIndex(index);
+    if (!op) return;
+    if (input != kEventInput && inputDisabled(*op, input)) { trace.push_back(op->name + " input " + std::to_string(input) + " disabled"); return; }
+    inputs_[index].push_back(input);
+    if (std::find(stack_.begin(), stack_.end(), index) == stack_.end()) stack_.push_back(index);
+}
+
+// The links fired by one op: inputs are counted in link order, the ops pushed last to first so the first link's target
+// is on top (depth-first in link order).
+void Kismet::applyCollected() {
+    auto links = std::move(collected_);
+    collected_.clear();
+    for (const auto& [index, input] : links) {
+        Op* op = findByIndex(index);
+        if (!op) continue;
+        if (inputDisabled(*op, input)) { trace.push_back(op->name + " input " + std::to_string(input) + " disabled"); continue; }
+        inputs_[index].push_back(input);
+    }
+    for (auto it = links.rbegin(); it != links.rend(); ++it) {
+        if (inputs_[it->first].empty()) continue;
+        const auto at = std::find(stack_.begin(), stack_.end(), it->first);
+        if (at == stack_.end()) stack_.push_back(it->first);
     }
 }
 
 void Kismet::activate(Op& op, int input, double delay) {
-    queue_.push_back({now_ + delay, order_++, op.index, input, false});
+    const double total = delay + inputDelay(op, input);
+    if (total > 0) queue_.push_back({now_ + total, order_++, op.index, input, false});
+    else impulse(op.index, input);
 }
 
 void Kismet::activateEvent(Op& event) {
-    // Events are entered, not activated through an input link: bump the trigger count and fire "Out".
-    ++executed;
+    // Events are entered, not activated through an input link: count the trigger and queue the event, which fires all of
+    // its outputs (disabled ones excepted) when it runs (NATIVE_MISSION_DISPATCH.md A4, UNVERIFIED).
     trace.push_back("event " + event.name);
     if (auto* count = prop(event, "TriggerCount")) *count = Value::makeInt(count->integer() + 1);
-    if (event.object) fire(event, outputIndex(event, "Out") >= 0 ? outputIndex(event, "Out") : 0);
+    impulse(event.index, kEventInput);
 }
 
 size_t Kismet::remoteEvent(const std::string& name) {
@@ -171,23 +223,49 @@ std::vector<Kismet::Op*> Kismet::eventsForOriginator(const std::string& objectPa
 }
 
 void Kismet::run() {
-    while (!queue_.empty()) {
-        // Earliest due first; ties keep activation order.
-        auto next = std::min_element(queue_.begin(), queue_.end(), [](const Impulse& a, const Impulse& b) {
-            return a.due != b.due ? a.due < b.due : a.order < b.order;
-        });
-        if (next->due > now_) break;
-        const Impulse impulse = *next;
-        queue_.erase(next);
-        if (++executed > executionLimit) {
+    size_t steps = 0;
+    applyCollected();   // links fired from outside run() (a host-fired output)
+    while (true) {
+        // Delayed impulses that are due, earliest first; ties keep activation order.
+        while (true) {
+            auto next = std::min_element(queue_.begin(), queue_.end(), [](const Impulse& a, const Impulse& b) {
+                return a.due != b.due ? a.due < b.due : a.order < b.order;
+            });
+            if (next == queue_.end() || next->due > now_) break;
+            const Impulse due = *next;
+            queue_.erase(next);
+            Op* op = findByIndex(due.op);
+            if (!op) continue;
+            if (due.finish) {
+                ++executed;
+                trace.push_back(op->name + " finished");
+                fire(*op, due.input);
+                applyCollected();
+            } else impulse(due.op, due.input);
+        }
+        if (stack_.empty()) return;
+        if (++steps > executionLimit) {
             errors.push_back("kismet execution limit exceeded");
-            queue_.clear();
+            stack_.clear(); inputs_.clear(); collected_.clear();
             return;
         }
-        if (Op* op = findByIndex(impulse.op)) {
-            if (impulse.finish) { trace.push_back(op->name + " finished"); fire(*op, impulse.input); }
-            else execute(*op, impulse.input);
+        const int32_t index = stack_.back();
+        stack_.pop_back();
+        auto& pending = inputs_[index];
+        if (pending.empty()) continue;
+        const int input = pending.front();
+        pending.pop_front();
+        ++executed;
+        if (Op* op = findByIndex(index)) {
+            if (input == kEventInput) {
+                const auto* outputs = prop(*op, "OutputLinks");
+                const size_t count = outputs && outputs->kind == Value::Kind::Array ? outputs->elements().size() : 0;
+                for (size_t i = 0; i < count; ++i) fire(*op, int(i));
+            } else execute(*op, input);
         }
+        // A remaining activation queues the op again before its links are pushed on top (A4 steps 6-7).
+        if (!inputs_[index].empty() && std::find(stack_.begin(), stack_.end(), index) == stack_.end()) stack_.push_back(index);
+        applyCollected();
     }
 }
 
@@ -263,7 +341,7 @@ Kismet::LinkStats Kismet::linkStats() {
 }
 
 void Kismet::registerLogicOps() {
-    // Events entered through remote activation are fired by activateEvent; an impulse never targets them.
+    // Events entered through remote activation are fired by activateEvent; an impulse on an event's input fires its first output.
     handle("Engine.SequenceEvent", [](Kismet& k, Op& op, int) { k.fire(op, 0); });
 
     handle("Engine.SeqAct_ActivateRemoteEvent", [](Kismet& k, Op& op, int) {

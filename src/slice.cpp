@@ -25,13 +25,13 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     dummyName_ = dummyProviderPath.substr(dummyProviderPath.rfind('.') + 1);
     auto& d = *dummy_;
     d.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
-        mission_->completeObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
-        return std::optional<std::set<int>>();
+        mission_->updateObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
+        return std::vector<int>();
     });
     // Behavior_CompareObject runs through the provider's built-in handler (inputs from the variable data).
     d.handle("WillowGame.Behavior_AttemptStatusEffect", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
         events_.push_back({HostEvent::Kind::StatusEffect, refPath(p.runtime().property(*b.object, "StatusEffect")), "", ""});
-        return std::optional<std::set<int>>();
+        return std::vector<int>();
     });
     // World ops with no binding yet: reported with the decoded fields the host needs to run them.
     const auto contexts = enumNames(runtime, "Engine", "BehaviorBase.EBehaviorContext");
@@ -72,12 +72,12 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                                   {"Calls", "IBodyCompositionInstance.ChangeInstanceDataSwitch"}};
     });
     d.handle("GearboxFramework.Behavior_AIHold", [](BehaviorProvider&, BehaviorProvider::Behavior&, const std::string&) {
-        return std::optional<std::set<int>>();
+        return std::vector<int>();
     });
     d.handle("Engine.Behavior_RemoteEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
         const Value* name = p.runtime().property(*b.object, "EventName");
         events_.push_back({HostEvent::Kind::RemoteEvent, name ? name->s : "", "", ""});
-        return std::optional<std::set<int>>();
+        return std::vector<int>();
     });
     const auto actions = enumNames(runtime, "Engine", "ITargetable.EChangeStatus");
     d.handle("GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", [this, actions](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
@@ -87,7 +87,7 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
         if (components && components->s == dummyName_ && sequence)
             changeSequence(sequence->s, nameOf(actions, p.runtime().property(*b.object, "Action")));
         else p.errors.push_back("sequence change targets another provider: " + (components ? components->s : std::string()));
-        return std::optional<std::set<int>>();
+        return std::vector<int>();
     });
 }
 
@@ -167,6 +167,7 @@ bool FireMissionSlice::drainMission() {
         case K::StatusChanged: events_.push_back({HostEvent::Kind::Status, effect.a, "", ""}); break;
         case K::ObjectiveSetActive: events_.push_back({HostEvent::Kind::ObjectiveSet, effect.a, "", ""}); break;
         case K::ObjectiveComplete: events_.push_back({HostEvent::Kind::ObjectiveComplete, effect.a, "", ""}); break;
+        case K::ObjectiveUpdated: break;   // progress only; completion is reported separately
         }
     }
     return any;
@@ -186,12 +187,15 @@ void FireMissionSlice::pump() {
 bool FireMissionSlice::accept(const std::set<std::string>& completed) {
     completedMissions_ = completed;
     const bool ok = mission_->accept(completed);
+    // HOST STAND-IN: what plays the kickoff after acceptance was not identified (NATIVE_MISSION_DISPATCH.md B9); the
+    // slice plays it at once. Its dialog is not played, so its Finished output (which activates the first set) runs now.
+    if (ok) mission_->kickoff();
     pump();
     return ok;
 }
 
 bool FireMissionSlice::enterRange() {
-    const bool ok = mission_->completeObjective("RockPaper_GoToRange");
+    const bool ok = mission_->updateObjective("RockPaper_GoToRange");
     pump();
     return ok;
 }

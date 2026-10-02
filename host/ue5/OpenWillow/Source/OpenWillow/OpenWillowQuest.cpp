@@ -146,6 +146,8 @@ void UOpenWillowQuest::BeginPlay()
 
 void UOpenWillowQuest::EndPlay(const EEndPlayReason::Type Reason)
 {
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST save calls=%d writes=%d write time %.1f ms total (%.3f ms per write)"),
+        SaveCalls, SaveWrites, SaveWriteSeconds * 1000., SaveWrites ? SaveWriteSeconds * 1000. / SaveWrites : 0.);
     Impl.Reset();
     Super::EndPlay(Reason);
 }
@@ -189,8 +191,14 @@ void UOpenWillowQuest::Save()
     else if (SavedProgression) Data->SetObjectField(TEXT("progression"), SavedProgression);
     FString Text;
     FJsonSerializer::Serialize(Data, TJsonWriterFactory<>::Create(&Text));
+    ++SaveCalls;
+    if (Text == LastSavedText) return;   // unchanged since the last write
+    const double Started = FPlatformTime::Seconds();
     IFileManager::Get().MakeDirectory(*FPaths::GetPath(SavePath), true);
-    if (!FFileHelper::SaveStringToFile(Text, *SavePath)) UE_LOG(LogTemp, Error, TEXT("OWQUEST could not write %s"), *SavePath);
+    if (FFileHelper::SaveStringToFile(Text, *SavePath)) LastSavedText = Text;
+    else UE_LOG(LogTemp, Error, TEXT("OWQUEST could not write %s"), *SavePath);
+    ++SaveWrites;
+    SaveWriteSeconds += FPlatformTime::Seconds() - Started;
 }
 
 // ------------------------------------------------------------------------------------------- world actors
@@ -800,8 +808,10 @@ void UOpenWillowQuest::RunTest(float Delta)
         PlacePlayer(Data.TriggerCenter, Data.DummyLocation);
         break;
     case 7:
-        if (Waiting(Impl->ObjectiveState(Data.TriggerObjective) == "Complete", 3.f)) return;
-        Check(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
+        // The set follows the objective by the installed behavior's 0.5 s link delay (NATIVE_MISSION_DISPATCH.md).
+        if (Waiting(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, 3.f)) return;
+        Check(Impl->ObjectiveState(Data.TriggerObjective) == "Complete"
+            && Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
         Check(bWeaponLent, TEXT("mission_weapon_lent"));
         {
             const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();

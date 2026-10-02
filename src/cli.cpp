@@ -30,7 +30,7 @@ void usage() {
         "--run-batch <file> --cooked <directory> | "
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
-        "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name> | --originator <object-path>) | "
+        "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name> | --originator <object-path>) [--tick <s>]... | "
         "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
         "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
         "--slice-run <mission-path> --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
@@ -532,7 +532,8 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (mode == "--mission-run") {
-            // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | obj:<name> | custom:<name> | turnin | tick:<seconds>
+            // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
+            // turnin | tick:<seconds>
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
@@ -542,18 +543,23 @@ int main(int argc, char** argv) {
             for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
             std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
             bool first = true;
-            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed"};
+            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated"};
             for (int i = 6; i < argc; ++i) {
                 const std::string step = argv[i];
                 bool ok = true;
                 if (step == "accept") ok = mission.accept(completed);
                 else if (step == "turnin") ok = mission.turnInMission();
-                else if (step.rfind("obj:", 0) == 0) ok = mission.completeObjective(step.substr(4));
+                else if (step == "kickoff") ok = mission.kickoff();
+                else if (step.rfind("obj:", 0) == 0) {
+                    const std::string rest = step.substr(4);
+                    const auto colon = rest.find(':');
+                    ok = mission.updateObjective(rest.substr(0, colon), colon == std::string::npos ? 0 : std::stoi(rest.substr(colon + 1)));
+                }
                 else if (step.rfind("custom:", 0) == 0) ok = mission.customEvent(step.substr(7));
                 else if (step.rfind("tick:", 0) == 0) mission.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
-                          << ",\"set\":" << quote(mission.activeSet()) << ",\"effects\":[";
+                          << ",\"set\":" << quote(mission.activeSet()) << ",\"status\":" << int(mission.status()) << ",\"effects\":[";
                 first = false;
                 bool firstEffect = true;
                 for (const auto& effect : mission.drain()) {
@@ -634,7 +640,8 @@ int main(int argc, char** argv) {
         }
         if (mode == "--behavior-run") {
             // --behavior-run <provider-path> --cooked <dir> <step>...: one provider alone. Steps: enable:<seq> | disable:<seq> |
-            // tick:<s> | event:<name>[:<Property>=<object path>[,<Property>=<object path>...]] (event output values).
+            // tick:<s> | event:<name>[:<Property>=<object path>[,<Property>=<object path>...]] (event output values) |
+            // fire:<link id>:<name> (the event with a link-id filter; -1 = all links).
             // Behavior_CompareObject runs (built in); every other behavior class is reported at the boundary.
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
@@ -654,7 +661,12 @@ int main(int argc, char** argv) {
                 if (step.rfind("enable:", 0) == 0) provider.setSequenceEnabled(step.substr(7), true);
                 else if (step.rfind("disable:", 0) == 0) provider.setSequenceEnabled(step.substr(8), false);
                 else if (step.rfind("tick:", 0) == 0) provider.tick(std::stod(step.substr(5)));
-                else if (step.rfind("event:", 0) == 0) {
+                else if (step.rfind("fire:", 0) == 0) {
+                    const std::string rest = step.substr(5);
+                    const auto colon = rest.find(':');
+                    if (colon == std::string::npos) usage();
+                    provider.fireEvent(rest.substr(colon + 1), {}, std::stoi(rest.substr(0, colon)));
+                } else if (step.rfind("event:", 0) == 0) {
                     const std::string rest = step.substr(6);
                     const auto colon = rest.find(':');
                     std::map<std::string, std::string> outputs;
@@ -819,16 +831,21 @@ int main(int argc, char** argv) {
                 hostCalls.push_back(op.cls + ":" + op.name + " <- " + k.inputDesc(op, input));
             });
             const std::string entry = argv[6];
+            // Entry arguments, then optional `--tick <seconds>` steps (each advances time and runs what is due).
+            const int ticksAt = entry == "--mission" ? 9 : 8;
+            if (argc < ticksAt || (argc - ticksAt) % 2 != 0) usage();
+            for (int i = ticksAt; i < argc; i += 2) if (std::string(argv[i]) != "--tick") usage();
             size_t matched = 0;
-            if (entry == "--remote" && argc == 8) matched = kismet.remoteEvent(argv[7]);
-            else if (entry == "--mission" && argc == 9) matched = kismet.missionRemoteEvent(argv[7], argv[8]);
-            else if (entry == "--op" && argc == 8) {
+            if (entry == "--remote") matched = kismet.remoteEvent(argv[7]);
+            else if (entry == "--mission") matched = kismet.missionRemoteEvent(argv[7], argv[8]);
+            else if (entry == "--op") {
                 auto* op = kismet.find(argv[7]);
                 if (op) { kismet.activateEvent(*op); matched = 1; }
-            } else if (entry == "--originator" && argc == 8) {
+            } else if (entry == "--originator") {
                 for (auto* op : kismet.eventsForOriginator(argv[7])) { kismet.activateEvent(*op); ++matched; }
             } else usage();
             kismet.run();
+            for (int i = ticksAt; i < argc; i += 2) kismet.tick(std::stod(argv[i + 1]));
             std::cout << "{\"sequence\":" << quote(argv[3]) << ",\"ops\":" << kismet.ops().size()
                       << ",\"entry_matches\":" << matched << ",\"executed\":" << kismet.executed << ",\"trace\":[";
             bool first = true;
