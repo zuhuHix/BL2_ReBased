@@ -1,5 +1,6 @@
 """Synthetic tests for tools/weapon_stats.py attribute combination."""
 from pathlib import Path
+import json
 import math
 import sys
 import unittest
@@ -281,6 +282,14 @@ class NativeRuleTests(unittest.TestCase):
         self.assertEqual(s.present(2.5, 'ATTRROUNDING_IntRound'), 3)
         self.assertEqual(s.present(-2.5, 'ATTRROUNDING_IntFloor'), -3)
         self.assertEqual(s.present(5e-9, 'ATTRROUNDING_IntCeil'), 0)
+
+    def test_shared_card_rounding_cases(self):
+        # The same invented cases check the page's rounding (tests/inventory_navigation_test.js).
+        cases = json.loads((Path(__file__).parent / 'card_rounding_cases.json').read_text(encoding='utf-8'))['cases']
+        for case in cases:
+            shown = s.display({case['field']: case['value']})[case['field']]
+            decimals = 0 if isinstance(shown, int) else 1
+            self.assertEqual(f'{shown:.{decimals}f}', case['text'], case)
 
     def test_presentation_data_sets_the_display_rounding(self):
         objects = world()

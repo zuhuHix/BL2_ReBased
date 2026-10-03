@@ -18,7 +18,7 @@ const context = vm.createContext({console:{log:value=>logs.push(value), error(){
   performance:{now:()=>0}, innerWidth:1280, innerHeight:720,
   requestAnimationFrame(){}, setInterval(){}, setTimeout(){}, queueMicrotask(){},
   navigator:{}, location:{}, document:{getElementById:node,
-    querySelector:node, querySelectorAll:()=>[]},
+    querySelector:node, querySelectorAll:()=>[], addEventListener(){}, visibilityState:'visible'},
   window:{addEventListener(){}, RufflePlayer:{newest:()=>({createPlayer:()=>({
     ow(){}, ruffle:()=>({load:()=>new Promise(()=>{})})})})}}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/inventory.js'),'utf8'),context);
@@ -194,5 +194,16 @@ check('Only the current VM request can time out', () => {
   run('vmTimers[1]()');
   assert.equal(run('inventoryVm.failed'), true); assert.equal(run('inventoryVm.pending'), null);
   assert.equal(selected(), 'b0');
+});
+check('Weapon card numbers round like tools/weapon_stats.py (shared synthetic cases)', () => {
+  const pageKey = {damage:'damage', magazine:'magazine', fire_rate:'fireRate', reload_time:'reloadTime', accuracy:'accuracy'};
+  const {cases} = JSON.parse(fs.readFileSync(path.join(__dirname, 'card_rounding_cases.json'), 'utf8'));
+  for (const {field, value, text} of cases) {
+    const shown = run(`statValueText(cardStats({${pageKey[field]}:${JSON.stringify(value)}})[0])`);
+    assert.equal(shown, text, `${field} ${value}`);
+  }
+  // The compare delta is the difference of the printed numbers.
+  const delta = run(`statComparison(cardStats({damage:753.2})[0], cardStats({damage:648.9}))`);
+  assert.equal(delta.delta, '+105');
 });
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);

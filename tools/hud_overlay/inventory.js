@@ -55,15 +55,27 @@ const categories = [
   {key:'weapons', label:'WEAPONS', match:item => !gearSlotForItem(item)},
   ...gearSlots.map(slot => ({key:slot.key, label:`${slot.label.toUpperCase()}S`, match:item => item.itemType === slot.itemType}))
 ];
+// `rounding` is the stat's presentation rounding (docs/verification/NATIVE_WEAPON_RULES.md section 2,
+// read from native code and data; tools/weapon_stats.py present() is the reference): damage up, magazine
+// down, the rest half up to one decimal. The golden cards print accuracy with one decimal and no '%'.
 const weaponCardStats = [
-  {key:'damage', label:'Damage', decimals:0, higherIsBetter:true, icon:'weaponDamage'},
-  // Optional host field (percent, modelled by the host and not verified). The icon frame name is a
-  // guess, UNVERIFIED; an unknown frame just shows no icon.
-  {key:'accuracy', label:'Accuracy', decimals:0, suffix:'%', higherIsBetter:true, icon:'weaponAccuracy'},
-  {key:'fireRate', label:'Fire Rate', decimals:1, higherIsBetter:true, icon:'weaponFireRate'},
-  {key:'reloadTime', label:'Reload Speed', decimals:1, higherIsBetter:false, icon:'weaponsReloadSpeed'},
-  {key:'magazine', label:'Magazine Size', decimals:0, higherIsBetter:true, icon:'weaponClipSize'}
+  {key:'damage', label:'Damage', decimals:0, rounding:'ceil', higherIsBetter:true, icon:'weaponDamage'},
+  // Optional host field (the presentation remap of the evaluated spread).
+  {key:'accuracy', label:'Accuracy', decimals:1, rounding:'half', higherIsBetter:true, icon:'weaponAccuracy'},
+  {key:'fireRate', label:'Fire Rate', decimals:1, rounding:'half', higherIsBetter:true, icon:'weaponFireRate'},
+  {key:'reloadTime', label:'Reload Speed', decimals:1, rounding:'half', higherIsBetter:false, icon:'weaponsReloadSpeed'},
+  {key:'magazine', label:'Magazine Size', decimals:0, rounding:'floor', higherIsBetter:true, icon:'weaponClipSize'}
 ];
+// A stat as the card prints it, on the stored single-precision value (as present() in tools/weapon_stats.py):
+// sizes under 1e-8 print as 0; 'ceil' and 'floor' to an integer; 'half' half up to `decimals`.
+function cardRound(value, rounding, decimals) {
+  let stored = Math.fround(value);
+  if (Math.abs(stored) < 1e-8) stored = 0;
+  if (rounding === 'ceil') return Math.ceil(stored);
+  if (rounding === 'floor') return Math.floor(stored);
+  const scale = 10 ** decimals;
+  return Math.floor(stored * scale + 0.5) / scale;
+}
 const statIcons = new Map([
   ['capacity','shieldCapacity'], ['rechargerate','shieldRechargeRate'],
   ['rechargedelay','shieldRechargeDelay'], ['ampdamage','weaponDamage'],
@@ -641,8 +653,13 @@ function cardStats(item) {
       icon:stat.icon || statIcons.get(key)
     };
   });
+  // Weapon values arrive unrounded; the printed number (and so the compare delta) is the rounded one.
   return weaponCardStats.filter(stat => item?.[stat.key] !== undefined && item?.[stat.key] !== null)
-    .map(stat => ({...stat,value:item[stat.key]}));
+    .map(stat => {
+      const raw = item[stat.key];
+      const value = typeof raw === 'number' && Number.isFinite(raw) ? cardRound(raw, stat.rounding, stat.decimals) : raw;
+      return {...stat, value};
+    });
 }
 
 // Gear stat values arrive as display strings ("+88%", "6 m"); their number is compared as-is.

@@ -97,6 +97,7 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
     (*Card)->TryGetStringField(TEXT("element"), Item.Element);
     (*Card)->TryGetStringField(TEXT("damage_type"), Item.DamageType);
     Item.Rarity = int32(Number(*Card, TEXT("rarity"), 1));
+    (*Card)->TryGetStringField(TEXT("rarity_color"), Item.RarityColor);
     Item.Level = int32(Number(*Card, TEXT("level"), 1));
     Item.Damage = Number(*Card, TEXT("damage"), 0);
     Item.FireRate = FMath::Max(0.1f, Number(*Card, TEXT("fire_rate"), 1));
@@ -612,14 +613,18 @@ bool UOpenWillowInventory::SetAmmoCurrent(EOpenWillowAmmoType Type, int32 Curren
     return true;
 }
 
+// ShotCost and ClipSize are integer attributes: the game truncates their modifier stack toward zero
+// (docs/verification/NATIVE_WEAPON_RULES.md section 1, read from native code, UNVERIFIED in game). Recipes
+// evaluated before that rule still carry fractional values, so the host truncates them here as well.
 int32 UOpenWillowInventory::ShotCostRounds(const FOpenWillowWeaponItem& Item)
 {
-    return Item.ShotCost > 0.f ? FMath::Max(1, FMath::RoundToInt(Item.ShotCost)) : 0;
+    return FMath::Max(0, FMath::TruncToInt(Item.ShotCost));
 }
 
 int32 UOpenWillowInventory::MagazineSize(const FOpenWillowWeaponItem& Item)
 {
-    return FMath::Max(1, FMath::RoundToInt(Item.Magazine));
+    // The floor of one round is a host guard (a 0 clip could never fire), not a game rule.
+    return FMath::Max(1, FMath::TruncToInt(Item.Magazine));
 }
 
 int32 UOpenWillowInventory::MagazineLeft(const FOpenWillowWeaponItem& Item)
@@ -695,8 +700,10 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
         Value->SetStringField(TEXT("element"), Item.Element);
         Value->SetNumberField(TEXT("rarity"), Item.Rarity);
         Value->SetBoolField(TEXT("rarityKnown"), true);
+        if (!Item.RarityColor.IsEmpty()) Value->SetStringField(TEXT("rarityColor"), Item.RarityColor);
         Value->SetNumberField(TEXT("level"), Item.Level);
         Value->SetBoolField(TEXT("levelKnown"), true);
+        // Raw evaluated stats; the page rounds them as the card does (inventory.js cardRound).
         Value->SetNumberField(TEXT("damage"), Item.Damage);
         Value->SetNumberField(TEXT("fireRate"), Item.FireRate);
         Value->SetNumberField(TEXT("reloadTime"), Item.ReloadTime);
@@ -829,6 +836,13 @@ bool UOpenWillowInventory::RunSelfTest()
             TEXT("reload moves only what the pool holds"));
         Check(!Inv->CanReload(*Gun), TEXT("an empty pool cannot reload"));
     }
+    // Integer stats truncate toward zero (invented values).
+    FOpenWillowWeaponItem Fractional = Make(TEXT("f"), TEXT("Pistol"));
+    Fractional.Magazine = 10.9f;
+    Fractional.ShotCost = 1.9f;
+    Check(MagazineSize(Fractional) == 10 && ShotCostRounds(Fractional) == 1, TEXT("magazine and shot cost truncate"));
+    Fractional.ShotCost = 0.5f;
+    Check(ShotCostRounds(Fractional) == 0, TEXT("a shot cost below one truncates to no cost"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory self-test: %s"), Failures ? TEXT("FAILED") : TEXT("passed"));
     return Failures == 0;
 }

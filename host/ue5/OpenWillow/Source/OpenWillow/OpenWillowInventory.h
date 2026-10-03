@@ -47,6 +47,9 @@ struct FOpenWillowWeaponItem
     // Explicit UE mesh object path; empty means SK_<Id> in the rolled-item folders (LoadWeaponMesh).
     FString MeshPath;
     int32 Rarity = 1;      // 1 Common .. 5 Legendary
+    // Card "rarity_color" (#RRGGBB from GlobalsDefinition.RarityLevelColors, so E-tech gets its own colour);
+    // empty when the recipe predates that field, and the page then colours by Rarity.
+    FString RarityColor;
     int32 Level = 1;
     float Damage = 0;
     float FireRate = 1;    // shots per second
