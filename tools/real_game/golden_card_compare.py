@@ -172,7 +172,9 @@ def evaluate_entry(package, entry):
     record = entry['record']
     result = {'name': record['name'], 'balance': record['balance'], 'stratum': entry_stratum(record),
               'level': record['game_stage'], 'class': package.classes.get(record['balance'])}
-    recipe = {'manufacturer': record['manufacturer'], 'weapon_type': record['type'],
+    recipe = {'manufacturer': record['manufacturer'], 'weapon_type': record['type'], 'balance': record['balance'],
+              'prefix': {'part': record['prefix']} if record.get('prefix') else None,
+              'title': {'part': record['title']} if record.get('title') else None,
               'parts': {slot: {'part': path} for slot, path in record['parts'].items() if path}}
     try:
         evaluated = weapon_stats.evaluate(package, recipe, int(record['game_stage']))
@@ -182,7 +184,9 @@ def evaluate_entry(package, entry):
         result['unsupported'] = f'{type(error).__name__}: {error}'
         result['fields'] = {}
         return result
-    texts = render(model, record['game_stage'])
+    texts = render(model, model['level_requirement'])
+    if not model.get('level_line'):
+        texts['level_line'] = ''
     texts['name'] = name_from_parts(prefix, title)
     result['unresolved_attributes'] = evaluated['unresolved_attributes']
     result['sale_value_known'] = model.get('sale_value_known')
