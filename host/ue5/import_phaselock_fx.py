@@ -87,16 +87,24 @@ MODULATE_READINGS = {
     # Darkening by mask x (1 - alpha), colour unused. This one reading fits its three emitters: the loop and end
     # bubbles (alpha scaled to 0: a dark core) and the hand orb's (alpha 0 at spawn, 1 by 0.2 of its life), which
     # gives the large dark blob the 2026-10-02 game frames show around the raised hand at +0.27 s, gone by +0.45 s.
-    'Mat_SirenOrbBlackMOD': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0},
-    'Mat_SirenOrbBlackMOD_NoBias': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0},
+    # MaxWeight 0.9: in the matched-distance game capture (2026-10-03, an Adult Bullymong at 650 uu) the held target shows
+    # at about a third of its brightness in the 8-bit frames, which UE5's linear blending reaches at 0.9 darkness
+    # ((1/3)^2.2 is about 0.09). MaxWeightFar 0.96 = 1 - 0.1 / 2.5 for the interior, where the host's additive bubble
+    # layers sum to about 2.5 per channel before the black (see build()). Calibrated against that one capture
+    # (UNVERIFIED elsewhere).
+    'Mat_SirenOrbBlackMOD': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0, 'MaxWeight': 0.9, 'MaxWeightFar': 0.96},
+    'Mat_SirenOrbBlackMOD_NoBias': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0, 'MaxWeight': 0.9, 'MaxWeightFar': 0.96},
 }
 # Darkening modulates drawn with the 'darken' parent (translucent black, see build()).
 DARKEN_AS_TRANSLUCENT = {'Mat_SirenOrbBlackMOD', 'Mat_SirenOrbBlackMOD_NoBias', 'Mat_SirenOrbEnergySpikesMOD'}
-# The black orb has no texture parameter (UModel exports none and the graph is stripped). Host stand-in: a disc fully
-# dark out to half the quad's radius, then fading, so that the lock bubble's core reads near-black while the violet rim
-# (PhaseLockBubble_Dif_Tex, at about 0.88 of this quad's radius) and the core sprite's magenta edge show through as a
-# soft rim, as in the 2026-10-02 game frames (round 2 used 3, which left a hard blue ring).
-RADIAL_SHARPNESS = {'Mat_SirenOrbBlackMOD': 2.0, 'Mat_SirenOrbBlackMOD_NoBias': 2.0}
+# The black orb has no texture parameter (UModel exports none and the graph is stripped; its EmissiveColor is unconnected,
+# so it darkens toward black). Host stand-in: a disc fully dark out to 0.6 of the quad's radius, then fading to its edge.
+# Measured against the loop's other sprites at the same draw scale, the core sprite's bright magenta band
+# (EnergyOrbCoreColor_Dif_Tex, 0.4-0.6 of its larger quad) falls at 0.46-0.70 of this quad's radius and the bubble
+# texture's thin rim at about 0.70. The disc hides the band and leaves the rim at about a quarter of its brightness: a
+# thin dim purple edge around a near-black core, as in the 2026-10-02 game frames f034/f066. Round 3 used 2 (dark to 0.5),
+# which left a thick bright magenta ring.
+RADIAL_SHARPNESS = {'Mat_SirenOrbBlackMOD': 2.5, 'Mat_SirenOrbBlackMOD_NoBias': 2.5}
 
 
 def texture(name):
@@ -283,8 +291,25 @@ def build(name, blend, domain_fn=None):
         mel.connect_material_expressions(const(1.0, -200, 1950), '', gain, 'A')
         mel.connect_material_expressions(largest, '', gain, 'B')
         mel.connect_material_expressions(scalar('ColourGain', 0.0, -200, 2030), '', gain, 'Alpha')
-        weight = node(unreal.MaterialExpressionSaturate, 250, 1600)
-        mel.connect_material_expressions(op(M, op(M, brightest, '', alpha_term, '', 50, 1550), '', gain, '', 150, 1600), '', weight, '')
+        # MaxWeight caps the darkening where opaque geometry lies just behind the quad (within 40 uu, fading out by 80 uu:
+        # the lifted target under the depth-biased black orb), MaxWeightFar where the scene is further behind (the bubble
+        # interior over the background). Both 1 unless set per instance below. Reason: UE3 blended into an 8-bit target
+        # that clamps after every blend, so a darkening sprite acted on at most 1; UE5's float target lets the additive
+        # layers drawn before it sum above 1, so the same visible darkness needs more weight there.
+        depth_gap = op(S, node(unreal.MaterialExpressionSceneDepth, -350, 2200), '', node(unreal.MaterialExpressionPixelDepth, -350, 2300), '',
+                       -200, 2250)
+        far = node(unreal.MaterialExpressionSaturate, 100, 2250)
+        mel.connect_material_expressions(op(D, op(S, depth_gap, '', const(40.0, -200, 2350), '', -50, 2250), '', const(40.0, -50, 2350), '',
+                                            0, 2250), '', far, '')
+        cap = node(unreal.MaterialExpressionLinearInterpolate, 150, 2150)
+        mel.connect_material_expressions(scalar('MaxWeight', 1.0, 0, 2100), '', cap, 'A')
+        mel.connect_material_expressions(scalar('MaxWeightFar', 1.0, 0, 2180), '', cap, 'B')
+        mel.connect_material_expressions(far, '', cap, 'Alpha')
+        weight = op(unreal.MaterialExpressionMin, op(M, op(M, brightest, '', alpha_term, '', 50, 1550), '', gain, '', 150, 1600), '',
+                    cap, '', 250, 1600)
+        weight_s = node(unreal.MaterialExpressionSaturate, 350, 1600)
+        mel.connect_material_expressions(weight, '', weight_s, '')
+        weight = weight_s
         # HueOnly: the colour divided by its luminance (Rec. 709), a brightness-keeping tint instead of a plain multiply.
         colour_luminance = node(unreal.MaterialExpressionDotProduct, -50, -350)
         mel.connect_material_expressions(color_rgb, '', colour_luminance, 'A')

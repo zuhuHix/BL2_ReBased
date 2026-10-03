@@ -509,3 +509,49 @@ distance (about 650 uu), or the bullymong's bounds radius read from the game.
 - The 0.6 s white starburst (`Mat_SirenHandGlowShattered`, colour 1).
 - The lifted target's pose: the dummy has no `PhaseLock_*` clips in the stock data.
 - What `SphereCollapse` drives.
+
+### Round 4 (2026-10-03, against the matched-distance capture)
+
+The critic scored round 3 5.5/10. Round 4 compares the host with the matched-distance game capture, ignored
+`local/realgame/phaselock/matched_650/` (Ice_P, an Adult Bullymong 650 uu away, horizontal FOV 77.55 degrees, frames at
+fixed times after `SkillStartTime`). The host shots ran with `-owfov=62.15`, which the host's 4:3 conversion turns into
+77.55 degrees at 16:9, with its dummy also 650 uu away. Frames: ignored `local/phaselock/b2/*-20261003-195308.png`.
+Side-by-side at 0.25, 0.5, 0.8, 1.5, 3.0, 4.5, 4.8 and 5.0 s: `local/phaselock/compare/phaselock_host_vs_matched_r4_20261003-195308.jpg`.
+
+**FOV check.** In the capture's pre-cast frame the bullymong's feet sit about 252 px below the horizon. The cylinder
+bottom is 222 uu below the eye at 650 uu, which gives f of about 738 px (82 degrees horizontal). That is near the
+capture's 77.55 degrees (f 797) and far from the 93.9 degrees that the host's maintain-Y reading of `FOVAngle` 77.55
+would give. The host's default capture FOV (BL2 setting 90, 106 degrees at 16:9) is much wider than the game's. That
+default belongs to the host camera, not this lane, and was not changed.
+
+**Stock data found this round:**
+- `Mat_SirenOrbBlackMOD` carries a scalar parameter `DepthBias` (default -20); `_NoBias` (the hand fizzle's) has none.
+  `Mat_SirenGlowMOD` has `Bias` -15, and the smoke parent `Mat_Wispy_Smoke` has `DepthBias` -18.
+- Both black materials leave `EmissiveColor` unconnected (so they darken toward black) and wire `Opacity` from an
+  alpha channel. This supports round 3's reading (darkness from alpha, colour unused).
+
+**Changes (host stand-ins unless said):**
+
+| Critic item | Cause | Change |
+|---|---|---|
+| Thick bright ring, lit interior | The black disc was fully dark only to half its radius. Measured at the same draw scale, the core sprite's bright magenta band falls at 0.46-0.70 of the black quad's radius and the bubble texture's thin rim at about 0.70 | Black disc fully dark to 0.6 of its radius: the band is hidden and the rim stays as a thin, dim edge |
+| Target fully lit inside the bubble | The darkening quad sat at the target's centre, so the target's front half was in front of it | A material's negative `DepthBias` / `Bias` default (read from the template JSON, following parents) moves the sprite that many uu toward the camera and shrinks it by the same ratio: same outline, different depth test (UNVERIFIED reading of the parameter) |
+| How dark | The game keeps the target at about a third of its brightness and the interior deep violet (mean about (50, 52, 98)). UE3 blended into an 8-bit target that clamps after each blend; UE5's float target lets the additive bubble layers sum to about 2.5 before the black | Black darkness capped at 0.9 where opaque geometry lies within 40 uu behind the quad (the target: a third of the 8-bit brightness, since (1/3)^2.2 is about 0.09). Capped at 0.96 where the scene is more than 80 uu behind (the interior: 1 - 0.1 / 2.5). Calibrated against the one capture |
+| Release ring blue-violet | One reading of `Mat_SirenGlowMOD` cannot give both the game's cobalt cast flashes (needs the brightness-keeping tint) and its cyan-white ring (needs a plain multiply clipped per channel: violet rim x (0.4, 16, 30)). The colours and alpha curves do not separate the two | A labelled per-emitter override in `OpenWillowPhaselockFx.cpp` (`EmitterOverrides`): the end template's `Brighten` uses the plain multiply. The release is now a bright cyan-blue ring |
+
+**Bubble size: not changed, not confirmed.** The script reads `Pawn.Mesh.Bounds.SphereRadius` / `BubbleFXScale`
+(local script reading). With full-width sprites that puts this bullymong's rim (0.8 of the `Sphere` quad's half-width)
+at 1.18 x 300.8 = 356 uu. The capture measures 167-174 uu, 2.1 times less. Two readings reproduce about 178 uu and
+cannot be told apart here, because this bullymong's mesh radius (300.8) is twice its collision radius (150):
+- the mesh radius with half-width sprites, or an extra halving somewhere;
+- the collision radius with full-width sprites, which contradicts the script reading.
+
+The host hand orb's size relative to the palm favours full-width sprites.
+
+**Also seen in the matched frames, not changed:**
+- The release starts at 4.77 s in this capture and the bubble is gone by 5.0 s; the host's outro is at 4.60 s (the
+  10-02 timing) and its release ring is still up at 5.0 s.
+- A pale blue floor glow under the bubble, against round 1's light-channel stand-in (the light reaches only the
+  target).
+- The host interior leans magenta where the game's is blue-violet.
+- The 0.6 s white starburst.

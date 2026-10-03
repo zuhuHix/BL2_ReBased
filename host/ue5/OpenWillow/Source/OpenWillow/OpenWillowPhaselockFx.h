@@ -62,6 +62,10 @@ struct FOwFxEmitter
     FOwFxDistribution OrbitOffset, OrbitRotation, OrbitRotationRate, SphereRadius, SphereVelocityScale;
     FVector SizeMultiplyAxes = FVector::OneVector;
     bool bSphereSurface = false, bSphereVelocity = false;
+    // The stock material's depth-bias scalar parameter (DepthBias or Bias, its default; 0 when none), following
+    // material-instance parents. Host reading (UNVERIFIED): a negative bias pulls the sprite plane that many uu toward the
+    // camera, so that it covers geometry just in front of the particle (the lifted target inside the bubble).
+    float DepthBias = 0;
     TArray<FString> Unsupported;   // module classes read but not played
 };
 
