@@ -302,7 +302,9 @@ def main():
     cards = weapon_cards(rows)
     catalogue = Catalogue(package)
     offsets = [int(x) for x in args.level_offsets.split(',')]
-    results = [audit_card(package, catalogue, card, lambda c: [int(c['level']) + o for o in offsets], args.limit)
+    # A card without a level line is a weapon of item level 1 or a mission weapon (whose level the
+    # card does not show): weapon_stats.level_requirement. Such cards are audited at level 1.
+    results = [audit_card(package, catalogue, card, lambda c: [int(c['level'] or 1) + o for o in offsets], args.limit)
                for card in cards]
     summary = {'cards': len(cards), 'with_full_match': sum(1 for r in results if r['full_matches']),
                # A full match on the main four that also reproduces every other printed field.

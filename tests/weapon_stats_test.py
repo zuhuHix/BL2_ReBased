@@ -142,8 +142,14 @@ class WeaponStatsTests(unittest.TestCase):
                            'accuracy': 87.36, 'projectiles': 1})
         self.assertEqual(shown, {'damage': 6972, 'magazine': 30, 'fire_rate': 3.4, 'reload_time': 4.9,
                                  'accuracy': 87.4})
-        # The stored value is a float: 87.35 is 87.3499985 in single precision, so half up gives 87.3.
-        self.assertEqual(s.display({'accuracy': 87.35})['accuracy'], 87.3)
+        # Single precision throughout (invented values): 87.35 is stored as 87.3499985, but times 10
+        # in single precision it is 873.5 again, so it prints 87.4 (it printed 87.3 before the
+        # 2026-10-03 rule). A stored 33.349998 times 10 is an exact tie that rounds to the even
+        # 333.5 and prints 33.4; 1.7499998 times 10 stays under 17.5 and prints 1.7.
+        self.assertEqual(s.display({'accuracy': 87.35})['accuracy'], 87.4)
+        self.assertEqual(s.present(33.349998474121094, 'ATTRROUNDING_Float', 1), 33.4)
+        self.assertEqual(s.present(1.7499998807907104, 'ATTRROUNDING_Float', 1), 1.7)
+        self.assertEqual(s.present(1.7499998807907104, 'ATTRROUNDING_Float', 2), 1.75)
 
     def test_spin_mode_and_default_start_scale(self):
         objects = world()
@@ -285,8 +291,9 @@ class NativeRuleTests(unittest.TestCase):
 
     def test_shared_card_rounding_cases(self):
         # The same invented cases check the page's rounding (tests/inventory_navigation_test.js).
-        cases = json.loads((Path(__file__).parent / 'card_rounding_cases.json').read_text(encoding='utf-8'))['cases']
-        for case in cases:
+        # 'pending_page_change' holds the cases the page does not print this way yet (Python only).
+        data = json.loads((Path(__file__).parent / 'card_rounding_cases.json').read_text(encoding='utf-8'))
+        for case in data['cases'] + data.get('pending_page_change', []):
             shown = s.display({case['field']: case['value']})[case['field']]
             decimals = 0 if isinstance(shown, int) else 1
             self.assertEqual(f'{shown:.{decimals}f}', case['text'], case)
@@ -321,6 +328,34 @@ class NativeRuleTests(unittest.TestCase):
             {'MinLevel': 6, 'MaxLevel': 9, 'Color': {'R': 255, 'G': 0, 'B': 16}, 'RarityRating': 'RARITY_Legendary'}]}
         card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
         self.assertEqual((card['rarity_level'], card['rarity'], card['rarity_color']), (6, 5, '#FF0010'))
+
+    def test_plain_float_base_is_single_precision(self):
+        # Invented: a 2.1 s reload under a -20 % scale. As a float 2.1 is 2.0999999, so the stack
+        # lands just under 1.75 and the card prints 1.7; the double 2.1 would give 1.75 and 1.8.
+        objects = world()
+        objects['Type']['ReloadTime'] = 2.1
+        objects['Grip']['WeaponAttributeEffects'][1]['BaseModifierValue'] = const(-0.2)
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertLess(card['reload_time'], 1.75)
+        self.assertAlmostEqual(card['reload_time'], 1.75, places=6)
+        self.assertEqual(card['display']['reload_time'], 1.7)
+
+    def test_level_line_rule(self):
+        objects = world()
+        objects['Type']['bUsesPlayerLevelRequirement'] = True
+        package = FakePackage(objects)
+        package.classes = {'Bal.Mission': 'WillowGame.MissionWeaponBalanceDefinition',
+                           'Bal.Normal': 'WillowGame.WeaponBalanceDefinition'}
+
+        def card(level, balance='Bal.Normal', **kw):
+            return s.evaluate(package, dict(recipe(), balance=balance), level=level, **kw)['card']
+        self.assertEqual((card(8)['level_requirement'], card(8)['level_line']), (8, True))
+        self.assertEqual((card(1)['level_requirement'], card(1)['level_line']), (1, False))   # level 1: no line
+        self.assertEqual((card(8, 'Bal.Mission')['level_requirement'], card(8, 'Bal.Mission')['level_line']), (0, False))
+        self.assertEqual(card(8, level_bonus=2.7)['level_requirement'], 6)                      # floor of the bonus
+        self.assertEqual(card(2, level_bonus=5)['level_requirement'], 1)                        # at least 1
+        del objects['Type']['bUsesPlayerLevelRequirement']
+        self.assertEqual(card(8)['level_line'], False)
 
 
 if __name__ == '__main__':

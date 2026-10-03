@@ -16,7 +16,8 @@ until a running-game check confirms them; each output lists them.
 - Effect order (script WillowWeapon.InitializeInternal): type, parts in slot
   order, attribute slots, then prefix and title name parts. The type's
   WeaponAttributeEffects apply like a part's. Bases a type leaves unset come from
-  the class defaults (TYPE_DEFAULTS, WEAPON_DEFAULTS).
+  the class defaults (TYPE_DEFAULTS, WEAPON_DEFAULTS). Plain float bases enter
+  in single precision, like every other value in the stack.
 - A slot effect applies BaseModifierValue + PerGradeUpgrade * grade to slots
   some upgrade activated (bActivateSlot); the grade sums every GradeIncrease for
   that SlotName on the type and the parts. The game also adds the type's
@@ -39,6 +40,9 @@ Card fields beyond the five main stats (docs/verification/INVENTORY_CARD_STATS.m
   every part's MonetaryValueMod including the prefix and title name parts (the
   game recomputes the part value after choosing them) and the item level,
   truncated. See PRICE_CALCULATORS_CHECKED.
+- level_requirement / level_line (level_requirement()): mission balances 0,
+  else the item level minus the player's bonus, at least 1; the line is
+  printed only above 1. Read from script; pass the recipe's `balance`.
 - fun_stats: the red flavour line, the title part's CustomPresentations text.
   White stat lines (zoom, ammo per shot, ...) are not derived.
 """
@@ -116,8 +120,11 @@ PRESENTATIONS = {
     'reload_time': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponReloadSpeed', 'ATTRROUNDING_Float'),
     'accuracy': (ACCURACY_PRESENTATION, 'ATTRROUNDING_Float'),
 }
-# Not read from code: the status rows use their own presentation class; one decimal half up
-# matches every observed row.
+# The status rows' presentations (GD_AttributePresentation.Weapons_ElementalDamage, decoded locally):
+# AttrPresent_Weapon<Element>CombinedStatusEffectChance and ...StatusEffectDamage, both RoundingMode
+# Float with the default precision 1. The chance row remaps WeaponCombinedStatusEffectChanceModifier
+# from [0, 5] onto [0, 100] (slope 20, equal to the Generic BaseChance status_rows() uses for fire,
+# shock and corrosive; slag's is [0, 3.33], slope 30.03 against a BaseChance of 30, UNVERIFIED).
 STATUS_ROUNDING = 'ATTRROUNDING_Float'
 # How the activation base grade (type AttributeSlotBaseGrade, default 1) enters a slot's value
 # is not read. False: value = BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease), the form
@@ -335,16 +342,25 @@ def status_rows(package, damage_type, final, value):
 
 
 def half_up(number, digits=1):
-    scale = 10 ** digits
-    return math.floor(number * scale + 0.5) / scale
+    """floor(number * 10^digits + 0.5) / 10^digits with every step in single precision.
+
+    The game's rounding (NATIVE_WEAPON_RULES.md section 2) scales, adds 0.5 and floors on the x87
+    unit, which runs at single precision in the game (UNVERIFIED how it is set; Direct3D 9 sets it
+    so by default). So the scaled value is itself rounded to a float before the half is added:
+    a stored 33.349998 times 10 is a tie that rounds to the even 333.5 and prints 33.4 (seen on a
+    card), while a stored 1.7499998 times 10 stays below 17.5 and prints 1.7.
+    """
+    scale = f32(10.0 ** digits)
+    return math.floor(f32(f32(number * scale) + 0.5)) / scale
 
 
 def present(value, rounding, precision=1):
     """A stat as the card prints it (UAttributePresentationDefinition rounding, NATIVE_WEAPON_RULES.md section 2).
 
     Values under 1e-8 in size print as 0. ATTRROUNDING_Float rounds half up to
-    `precision` decimals (FloatPrecision, clamped to 0..10); IntRound half up;
-    IntFloor down; IntCeil up. The value is the stored single-precision float.
+    `precision` decimals (FloatPrecision, clamped to 0..10) in single precision
+    (half_up()); IntRound half up; IntFloor down; IntCeil up. The value is the
+    stored single-precision float.
     """
     value = f32(value)
     if abs(value) < 1e-8:
@@ -364,7 +380,7 @@ def display(card, rounding=None):
     `rounding` maps a card field to (rounding mode, precision); missing fields use
     the decoded presentation data in PRESENTATIONS (damage IntCeil, magazine
     IntFloor, fire rate/reload/accuracy Float with one decimal). Status rows use
-    one decimal half up (STATUS_ROUNDING; not read from code).
+    one decimal half up (STATUS_ROUNDING, from their presentation data).
     """
     rounding = rounding or {}
     shown = {}
@@ -412,6 +428,29 @@ def rarity_of(package, weapon_type, parts, value):
     return level, None, None
 
 
+MISSION_BALANCE_CLASS = 'MissionWeaponBalanceDefinition'
+
+
+def level_requirement(package, recipe, weapon_type, level, level_bonus=0.0):
+    """The level the item card asks for; the card prints its level line only when this is above 1.
+
+    Read from script (NATIVE_WEAPON_RULES.md section 4, "Level requirement"): a weapon whose
+    balance is a MissionWeaponBalanceDefinition requires 0; so does a type without
+    bUsesPlayerLevelRequirement (every base-game weapon type sets it). Otherwise the item level
+    minus floor(PlayerUseLevelBonus), at least 1. That bonus is evaluated on the player: in this
+    data it is the player's GearLevelRequirementBonus attribute, 0 unless a skill or item raises
+    it, so it is an argument here. The recipe's `balance` names the balance; without one the
+    mission rule cannot apply. Over-level (OP) lines and DLC-restricted messages are not modelled.
+    """
+    balance = recipe.get('balance')
+    balance_class = (getattr(package, 'classes', None) or {}).get(balance, '') if balance else ''
+    if balance_class.rsplit('.', 1)[-1] == MISSION_BALANCE_CLASS:
+        return 0
+    if not weapon_type.get('bUsesPlayerLevelRequirement'):
+        return 0
+    return max(int(level) - math.floor(level_bonus), 1)
+
+
 def name_part_path(entry):
     """A recipe's prefix/title entry ({'part': path} or a path) -> path or None."""
     if isinstance(entry, dict):
@@ -419,7 +458,7 @@ def name_part_path(entry):
     return entry or None
 
 
-def evaluate(package, recipe, level, localize=None):
+def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
     maker = (recipe.get('manufacturer') or '').rsplit('.', 1)[-1]
     known = {'D_Attributes.Weapon.WeaponLevel': float(level)}
     unresolved = set()
@@ -461,7 +500,10 @@ def evaluate(package, recipe, level, localize=None):
     base = {}
     for field, attribute in TYPE_BASES.items():
         raw = weapon_type.get(field, TYPE_DEFAULTS.get(field))
-        base[attribute] = value(raw) if isinstance(raw, dict) else raw
+        # A plain type field is a float property: its base enters the stack as a single-precision
+        # value (2.1 is 2.0999999). This decides a half: a 2.1 reload under a -20 % scale is
+        # 1.7499998 and prints 1.7, as the game prints it, where the double 2.1 gives 1.75 and 1.8.
+        base[attribute] = value(raw) if isinstance(raw, dict) else (f32(raw) if raw is not None else None)
     for attribute, default in WEAPON_DEFAULTS.items():
         if base.get(attribute) is None:
             base[attribute] = default
@@ -549,9 +591,13 @@ def evaluate(package, recipe, level, localize=None):
         rarity = RARITY_NUMBER[rarity_rating]
     else:  # no table (synthetic data) or a level outside it: the old 1..5 clamp
         rarity = max(1, min(5, rarity_level)) if rarity_level else None
+    required = level_requirement(package, recipe, weapon_type, level, level_bonus)
     card = {
         'name': recipe.get('name'),
         'level': level,
+        # The card's level line: shown only when the requirement is above 1 (script, section 4).
+        'level_requirement': required,
+        'level_line': required > 1,
         'damage': stat('WeaponDamage'),
         # The card shows 1 / FireInterval (the presentation's bDisplayAsInverse).
         'fire_rate': f32(1.0 / interval) if interval else None,
@@ -597,7 +643,10 @@ def evaluate(package, recipe, level, localize=None):
                              'sale value = trunc(price calculator(part and name-part MonetaryValueMod product, level))',
                              'white stat lines of the fun text are not derived',
                              'status chance = Generic BaseChance * base * chance modifiers; per-shot use is native',
-                             'display rounding from the presentation data (read); status rows one decimal (observed)',
+                             'display rounding from the presentation data (read), in single precision '
+                             '(x87 precision setting inferred from a card); status rows one decimal (data)',
+                             'level line: requirement = 0 for mission balances, else max(level - player bonus, 1); '
+                             'shown above 1 (read from script; player bonus assumed 0 unless given)',
                              'damage type and firing-mode precedence; projectile speed product'],
     }
 

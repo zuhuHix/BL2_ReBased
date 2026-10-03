@@ -9,7 +9,9 @@ the native code with `tools/ghidra/class_layout.py`; every field used below land
 
 **Every rule here is `UNVERIFIED` in game.** "Read" means read from native code or script, not confirmed by running the
 game. The only running-game evidence is the set of weapon cards in the local UI traces (section 8); each section ends
-with the in-game observation that would confirm it. Game-derived output (decompilation, audits, census) is under ignored
+with the in-game observation that would confirm it. Since 2026-10-03 the 69 golden cards
+([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md), exact rolled parts) are in-game evidence too: a rule that
+reproduces them is confirmed to the precision the card prints, and the counts are given where they apply. Game-derived output (decompilation, audits, census) is under ignored
 `local/weapons/` and `%USERPROFILE%\bl2-analysis\out\weapons`.
 
 Implemented in `tools/weapon_recipe.py`, `tools/weapon_stats.py`, `tools/weapon_card_audit.py` (section 9).
@@ -20,13 +22,15 @@ Implemented in `tools/weapon_recipe.py`, `tools/weapon_stats.py`, `tools/weapon_
 | 1 | Effect order: type, parts in slot order, attribute slots, prefix, title | script | high (read) |
 | 1 | Slot value = `BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease)` on activated slots | grade bookkeeping native; value formula not read | medium (form fits 9 of 9; adding the base grade fits 0 of 9) |
 | 2 | Card rounding from each stat's presentation data; Float = half up to `FloatPrecision` decimals | native + data | high (read; 9 of 9 cards) |
-| 2 | Status rows one decimal, half up | observed only | medium |
+| 2 | Float rounding scales and adds the half in single precision | native shape + one golden card | medium (x87 precision setting inferred; 69 of 69 golden cards) |
+| 2 | Status rows: their own presentations, Float, one decimal; chance = remap of the combined chance modifier | data | high for the rounding (16 of 16 golden rows); remap vs BaseChance differs only for slag (no slag card) |
+| 4 | Level line: requirement 0 on mission balances, else max(level - player bonus, 1); printed only above 1 | script + data | high (read; 69 of 69 golden cards) |
 | 3 | Part weight: empty `Manufacturers` list = flat 100; game-stage window on truncated bounds | native | high (read; no running-game check) |
 | 3 | Weighted pick: zero weights dropped, duplicates keep the later weight, running-interval walk | native | high (read; no running-game check) |
 | 4 | Item level = the game stage it spawned at (`bInterpolateExpLevel` default true) | native + data | high (read) |
 | 4 | Rarity level = sum of truncated part rarities; tier from `RarityLevelColors` | native + data | high (read) |
 | 5 | Prefix/title: deterministic, type lists first, then parts in slot order, highest priority, later wins ties | native | high (read; 9 of 9 card titles) |
-| 6 | Sale value: name parts' `MonetaryValueMod` in the part product; integer truncation | script order + data | medium (inferred; 2 launcher cards) |
+| 6 | Sale value: name parts' `MonetaryValueMod` in the part product; integer truncation | script order + data | high (value function not read; 69 of 69 golden cards, 4 of them launchers) |
 
 ## 1. The attribute modifier stack
 
@@ -55,7 +59,9 @@ has no effect either way.
    100), `MeleeDamage`, `BaseStatusEffectChanceModifier`, `StatusEffectDamage` and `ExtraShotDelay` through
    `AttributeInitializationDefinition.EvaluateInitializationData` with the weapon as context; `ShotCost`, `ClipSize`,
    `ProjectilesPerShot`, `Spread`, `FireRate` (into `FireInterval`), `ReloadTime`, `BurstInterval`,
-   `AutomaticBurstCount` and the rest copied from the type's plain fields.
+   `AutomaticBurstCount` and the rest copied from the type's plain fields. Those fields are float properties, so a base
+   such as the class default `ReloadTime` 2.1 enters the stack as the float 2.0999999 (2026-10-03; the tool had used the
+   double 2.1, which decided one card's half, section 7).
 2. Parts are chosen (section 3), then `CalculatePartDependentWeaponBaseValues` sets the barrel and body spin and flap
    durations.
 3. `ApplyAllWeaponAttributeEffects`: the type's `WeaponAttributeEffects`, then each part's, in slot order (Body, Grip,
@@ -100,6 +106,25 @@ The card's numbers come from each stat's `AttributePresentationDefinition`
 4. Rounding with the presentation's `RoundingMode` and `FloatPrecision` (clamped to 0..10): Float rounds half up to that
    many decimals; IntRound half up; IntFloor down; IntCeil up. The rounding works on the stored float.
 
+**Precision of the Float rounding (2026-10-03).** Re-read: the Float mode multiplies the stored value by `10^precision`
+(the power is computed once and kept as a float), adds 0.5, and floors with the usual x87 trick (round twice the value
+minus a half to the nearest even integer, then halve), then divides by the scale; the integer modes use the same trick.
+All of it runs on the x87 unit. The golden cards fix its precision: one status chance whose stored value is exactly
+33.349998 (a float tie, section 7) prints 33.4. That happens only when the scaled value is itself rounded to a float
+before the half is added: 333.49998 is halfway between two floats and rounds to the even one, 333.5. In double
+precision it would print 33.3. So the game's x87 unit evidently runs at single precision (Direct3D 9 sets it so by
+default; how this game sets it was **not read**). The tools model it as `floor(f32(f32(value * 10^p) + 0.5)) / 10^p`,
+which gives 69 of 69 golden cards on every printed stat with the live data. Stack evaluation in single-precision steps
+instead of extended precision changes no golden card either way, so section 1's order is left as it was.
+
+**Status rows.** Their presentations are data (`GD_AttributePresentation.Weapons_ElementalDamage`):
+`AttrPresent_Weapon<Element>CombinedStatusEffectChance` and `AttrPresent_Weapon<Element>StatusEffectDamage`, both Float
+with the default precision 1. The chance row remaps the attribute `WeaponCombinedStatusEffectChanceModifier` from
+[0, 5] onto [0, 100] and adds the `%` suffix. The slope 20 equals the Generic `BaseChance` (20) of the fire, shock and
+corrosive status effects, which is what the tools multiply. Slag's remap is [0, 3.33] (slope 30.03) against a
+`BaseChance` of 30; there is no slag card to tell the two apart (**UNVERIFIED**). How the combined modifier is computed,
+and which presentation the card picks per element, are native and **not read**.
+
 Class defaults (`Default__AttributePresentationDefinition`): `RoundingMode` IntRound, `FloatPrecision` 1. The weapon
 presentations in the data set: damage IntCeil; clip size IntFloor; fire rate inverse of `WeaponFireInterval`, Float;
 reload Float; accuracy = remap of `WeaponSpread` (0..15 onto 100..0), Float. So the card shows:
@@ -112,7 +137,7 @@ reload Float; accuracy = remap of `WeaponSpread` (0..15 onto 100..0), Float. So 
 | Fire Rate | `1 / FireInterval` | one decimal, half up |
 | Reload Speed | `ReloadTime` | one decimal, half up |
 | Magazine Size | `ClipSize` (already an integer) | down |
-| status chance and damage per second | status-effect rows | one decimal, half up (observed; their presentation class was not read) |
+| status chance and damage per second | status-effect rows | one decimal, half up (their presentation data, below) |
 
 Single precision matters at the ceiling: one observed launcher's damage is 140,522.014 in double precision (would print
 140,523) and just under 140,522 in single precision (prints 140,522, as the card does).
@@ -121,7 +146,8 @@ Card value: `ItemCardGFxObject.SetItemCardEx` prints an override price when one 
 `GetMonetaryValue` (section 6).
 
 **Confirmation:** a card whose damage lies within a few thousandths above an integer in double precision; any accuracy
-value ending in 5 in the second decimal (87.35 as a float is 87.3499985 and prints 87.3).
+value ending in 5 in the second decimal. The single-precision rounding predicts that 87.35 (stored 87.3499985) prints
+87.4, because times 10 it is 873.5 again; the earlier note predicted 87.3. No golden card has such a value yet.
 
 ## 3. The weighted part pick
 
@@ -179,6 +205,27 @@ whose `[MinLevel, MaxLevel]` contains the level; in this data 1 Common, 2 Uncomm
 6 Very Rare in E-tech colour, 7..10 Legendary. A legendary body (4) and legendary barrel (5) sum to 9, inside 7..10. The
 tools used the maximum part rarity before.
 
+**Level requirement and the card's level line (2026-10-03).** Read from script (`ItemCardGFxObject.SetItemCardEx`,
+`WillowInventory.IsLevelRequirementMet`, `WillowInventory.GetControllerPlayerExpLevelRequiredToUse`, and
+`WillowWeapon`'s override of the last) and data:
+
+- The required level of a weapon is **0** when its balance is a `MissionWeaponBalanceDefinition` (7 balances in
+  `Startup.upk`), and 0 when the type lacks `bUsesPlayerLevelRequirement` (all 33 base-game weapon types set it).
+- Otherwise it is the item's experience level minus `floor(PlayerUseLevelBonus)`, at least 1. The bonus is evaluated
+  with the player's controller as context. In this data every weapon type points it at
+  `Init_BaseGearLevelRequirementBonus`, which reads the player's `Attr_GearLevelRequirementBonus` attribute: 0 unless
+  something the player has raises it.
+- The card asks for that level and **shows the line only when it is greater than 1**. If the item's DLC requirement
+  is not met, the line shows the DLC message instead. When the requirement is above the highest possible player level,
+  or above the player's base level while the player's level for equipping still meets it, the line uses the
+  over-level ("OP") text with the difference. The level line does not otherwise depend on the player's level; only
+  its colour (met or not) does.
+
+So every mission weapon and every level-1 weapon prints no level line. That is exactly the 10 golden cards without
+one. With the rule, the line matches on 69 of 69 golden cards (it was 59 of 69 with an always-printed line). The OP
+text, the DLC message and a non-zero player bonus are not modelled (`weapon_stats.level_requirement` takes the bonus
+as an argument, default 0).
+
 **Confirmation:** the level requirement of an enemy drop equals the area's stage (with an enemy whose stage is known);
 an E-tech item reporting rarity level 6 in an sdk trace; a gun whose parts sum to a level that a max rule would place
 in another tier.
@@ -215,6 +262,15 @@ the item) was **not resolved**; what is known:
   Att_UniversalPriceIncreasePerLevelScaler ^ level * Att_BaseCost_Guns_<Type>`) reproduces both observed launcher cards,
   truncated to an integer. This closes the "launcher sale value" failure: it was the prefix's modifier.
 
+**Golden cards (2026-10-03).** The four launchers about 4 % high in the golden comparison (Maliwan, Torgue, Tediore,
+Vladof) had the same cause. `tools/real_game/golden_card_compare.py` builds its recipe without the recorded prefix and
+title, so their `MonetaryValueMod` (the Common rarity multiplier on every launcher prefix) was missing. The evaluator
+with the recorded name parts gives all four exactly, and all 69 golden sale values. A second attempt to read the value
+function failed the same way as the first. `ComputeMonetaryValue` and `ComputeValueOfParts` are exec thunks that call
+through the item's vtable. The project's vtable lookup finds no constructor pattern for `WillowInventory`,
+`WillowItem` or `WillowWeapon`. The stored value is the integer that `GetMonetaryValue` returns. The formula above is
+therefore confirmed by 69 of 69 cards, not read.
+
 Buying and selling: the card prints the value unless a shop passes an override; the buy-back list prices an item at its
 value; a vending machine's featured item costs `int(value * FeaturedItemCommerceMarkup)` (or a fixed cost) capped by the
 currency cap; the regular shop price goes through `GetSellingPriceForInventory`, an interface call that was not read.
@@ -247,11 +303,29 @@ but the source the game takes them from is not known.
 **Live read, 2026-10-03** (lane G, `tools/real_game/scripts/weapon_dump.py`, ignored
 `local/realgame/cards/live_weapon_data.json`): the live values equal OpenBLCMM's dump on all 78 values of the 61 objects
 in `runtime_changes_filtered.json`, so two independent sources agree. With the live overlay the evaluator matches the
-main four stats on 69/69 golden weapons (cooked data: 52/69), and every printed stat on 68/69. Still open for this lane:
-- rocket-launcher sale value about 4 % high on four weapons;
-- one status chance printed 33.4 against 33.3 here;
-- the level-line rule;
-- the stage-15 Maliwan pistol reload at exactly 1.75.
+main four stats on 69/69 golden weapons (cooked data: 52/69), and every printed stat on 68/69. The four items then
+open were settled on 2026-10-03:
+- **Launcher sale value**: the comparison tool left out the name parts (section 6). With them, 69/69.
+- **Status chance 33.4 against 33.3**: the stored chance is exactly 33.349998, a float tie. The game prints 33.4
+  because it scales and adds the half in single precision (section 2). This was not a special case for the card;
+  with that rounding all 16 golden status rows match.
+- **Level line**: read from script (section 4). With it, 69/69.
+- **Reload at exactly 1.75**: on cooked data the type leaves `ReloadTime` at the class default 2.1, which the tool
+  fed into the stack as a double. As a float it is 2.0999999, so the -20 % slot scale gives 1.7499998. That prints 1.7,
+  as the game does (section 1). The live data already carried the float value, which is why this card matched with
+  the overlay. A 1.25 fire rate is exact in single precision and still prints 1.3.
+
+With the evaluator as of 2026-10-03, the tracked comparison tool gives these counts:
+
+| data | main four | every printed stat |
+|---|---|---|
+| live overlay | 69/69 | 69/69 |
+| cooked | 53/69 | 53/69 |
+
+The every-field count is 54/69 live: sale value and level line still fail there because the tool does not pass the
+name parts and balance. A local copy that passes the recorded prefix, title and balance, and prints the level line
+from `card['level_line']`, gives every field on 68/69 live; the one left is the host's own slice name, not the
+evaluator. Cooked data gives 52/69 for every field.
 
 **Real-game check, 2026-10-02** ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)): the live weapon types do differ
 from the cooked decode (Bandit pistol `ClipSize` 36 vs 30, Dahl pistol 16 vs 12, Bandit shotgun 10 vs 9 and
@@ -262,7 +336,7 @@ content captured in the 2026-09-26 dump, are the open alternatives. On the 69 go
 cooked data) this commit's evaluator matches 52 in every printed stat (fire rate now 69/69). One card regressed:
 a stage-15 Maliwan pistol whose reload evaluates to exactly 1.75 prints 1.8 here and 1.7 in the game, while a Bandit
 shotgun's fire rate of 1.25 prints 1.3 in the game; the game's float operation order evidently puts one just below
-and the other just above the half (UNVERIFIED which order).
+and the other just above the half. Settled on 2026-10-03, above: the float base, not the order.
 
 ## 8. Card audit (oracle: 9 distinct cards in the local 2026-09-26 UI traces, levels 34-43)
 
@@ -297,6 +371,9 @@ Parts are inferred from stats in this audit; a match is evidence for the evaluat
 - `tools/weapon_card_audit.py`: predicted name parts per combination (effects, value and a `name` comparison),
   `--runtime-overlay`, counts of combinations reproducing every field.
 - `tools/weapon_balance.py`: docstring only (weights follow `entry_weight`).
+- 2026-10-03: `weapon_stats.py` reads plain float type bases as floats; `half_up` rounds in single precision; new
+  `level_requirement` and the card fields `level_requirement` and `level_line` (pass the recipe's `balance`).
+  `weapon_card_audit.py` audits a card without a level line at level 1 instead of failing.
 
 ## 10. Validation plan against real-game golden cards (W3, plan only)
 
@@ -338,7 +415,9 @@ manufacturer strata; 2,175,422 part combinations over all stages (base game only
 
 ## What was not read
 
-The slot modifier value computation; the value function (`ComputeMonetaryValue`) and the regular shop price; the per-type
-weight hook in the part pick; the grade choice and the stage cap in the pool's candidate list; the status rows'
-presentation; expression evaluation for name parts beyond the manufacturer form; the game's random sequence. Everything
+The slot modifier value computation; the value function (`ComputeMonetaryValue`, a vtable call not resolved twice) and
+the regular shop price; the per-type weight hook in the part pick; the grade choice and the stage cap in the pool's
+candidate list; how the combined status-chance modifier is computed and which status presentation a card picks; how
+the game sets the x87 precision; expression evaluation for name parts beyond the manufacturer form; the game's random
+sequence. Everything
 above is `UNVERIFIED` until a golden card or a trace confirms it.
