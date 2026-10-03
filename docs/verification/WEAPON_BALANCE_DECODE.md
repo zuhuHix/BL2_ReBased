@@ -12,7 +12,7 @@ are reported separately. **No in-game check was made in this pass** (the game wa
 card rounding comes from the presentation data; an entry without a `Manufacturers` list weighs a flat 100 and a zero
 slot stays empty (not a uniform pick); names are deterministic; rarity is a sum looked up in a table; the launcher value
 gap is the prefix's `MonetaryValueMod`. On the 9 cards in this machine's traces the tools now reproduce 9 of 9 in every
-printed field with the running game's (hotfixed) data, 5 of 9 on cooked data (section 8 there).
+printed field with the running game's live data, 5 of 9 on cooked data (section 8 there).
 
 Tools: `tools/weapon_balance.py` (legal parts, runtime part-list crosscheck),
 `tools/weapon_card_audit.py` (card audit), `tools/loot_pools.py` (pool expansion, display oracle,
@@ -79,8 +79,8 @@ dump**. The six:
 - `SMG_Maliwan_3_Rare`: Body. Cooked and dumped own lists agree (`VarC`), but the runtime list holds
   `VarC` with different stage indices plus `VarB`.
 
-Both kinds of difference are in data the running game changed, not in our merge; the likely cause is
-Gearbox's online hotfixes being active when the dumps were taken (**UNVERIFIED cause**). The merge
+Both kinds of difference are in data the running game changed, not in our merge. This was first put down to
+Gearbox's online hotfixes; the 2026-10-03 live read rules that out (NATIVE_WEAPON_RULES.md section 7), and the cause is **UNVERIFIED**. The merge
 rule (root first; Selective replaces enabled slots, Additive appends) is therefore checked on 243
 balances. `EPRM_Complete` does not occur in this package (209 Selective, 40 Additive lists), so its
 reading stays **UNVERIFIED**.

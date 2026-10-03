@@ -222,9 +222,15 @@ currency cap; the regular shop price goes through `GetSellingPriceForInventory`,
 **Confirmation:** a launcher whose prefix is known, value on the card versus the formula; the shop price of a known gun
 next to its card value.
 
-## 7. Runtime data (Gearbox hotfixes)
+## 7. Runtime data (origin open; not an online hotfix)
 
-The 2026-09-26 traces were captured on a game with online hotfixes active. OpenBLCMM's copy of the game's own `obj dump`
+**Correction (2026-10-03).** This section first called the runtime differences Gearbox's online hotfixes. Lane G's live
+read disproves that ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md), "Live weapon data"). The differing values are
+present 0.01 s after the SDK loads, before the `Micropatch` configuration exists, and none of its entries touches a
+weapon. They are also not a package override or an installed mod. Where they come from is **UNVERIFIED**. Below,
+"hotfixed" is kept only as the earlier label for the objects that differ.
+
+The 2026-09-26 traces were captured on the running game. OpenBLCMM's copy of the game's own `obj dump`
 (local; `tools/blcmm_dumps.py`, `docs/verification/BLCMM_DUMP_CROSSCHECK.md`) shows the running state. Census over the
 1,439 weapon parts, types and name parts of `Startup.upk` (local `local/weapons/runtime_changes_filtered.json`), after
 discarding class defaults that cooked data omits: 39 objects differ from the cooked data in stat-relevant properties
@@ -235,7 +241,17 @@ equals the whole damage gap the audit saw.
 
 The tools therefore treat runtime data as an **input**, not a rule: `tools/weapon_card_audit.py --runtime-overlay`
 replaces the stat-relevant properties of weapon parts, types and name parts with the dumped values. Whether the port
-should apply hotfix data (and from where; the game downloads it, it is not in the packages) is a maintainer decision.
+should use the live values instead of the cooked ones is a maintainer decision. They are what the running game evaluates,
+but the source the game takes them from is not known.
+
+**Live read, 2026-10-03** (lane G, `tools/real_game/scripts/weapon_dump.py`, ignored
+`local/realgame/cards/live_weapon_data.json`): the live values equal OpenBLCMM's dump on all 78 values of the 61 objects
+in `runtime_changes_filtered.json`, so two independent sources agree. With the live overlay the evaluator matches the
+main four stats on 69/69 golden weapons (cooked data: 52/69), and every printed stat on 68/69. Still open for this lane:
+- rocket-launcher sale value about 4 % high on four weapons;
+- one status chance printed 33.4 against 33.3 here;
+- the level-line rule;
+- the stage-15 Maliwan pistol reload at exactly 1.75.
 
 **Real-game check, 2026-10-02** ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)): the live weapon types do differ
 from the cooked decode (Bandit pistol `ClipSize` 36 vs 30, Dahl pistol 16 vs 12, Bandit shotgun 10 vs 9 and
