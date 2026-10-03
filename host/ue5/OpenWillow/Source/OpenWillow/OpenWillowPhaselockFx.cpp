@@ -560,8 +560,10 @@ bool UOpenWillowFxComponent::Simulate(FEmitterState& S, float Dt)
         S.Time += Dt;
         if (S.Time >= 0.f)
         {
-            // Bursts at Time x EmitterDuration (fraction of the duration: Cascade convention, UNVERIFIED here).
-            while (E.Bursts.IsValidIndex(S.NextBurst) && E.Bursts[S.NextBurst].Time * E.Duration <= S.Time)
+            // Bursts at Time seconds of emitter time (UNVERIFIED). Round 2 read Time as a fraction of EmitterDuration; only
+            // Part_PhaseLockScreenEffect's burst (0.7 in a 1.5 s emitter) moves noticeably, and the 2026-10-02 game frames
+            // show its blue tint about 0.82 s after the lift starts, which fits 0.7 s better than 1.05 s.
+            while (E.Bursts.IsValidIndex(S.NextBurst) && E.Bursts[S.NextBurst].Time <= S.Time)
             {
                 const auto& B = E.Bursts[S.NextBurst++];
                 Spawn(S, B.CountLow >= 0 ? Random.RandRange(FMath::Min(B.CountLow, B.Count), FMath::Max(B.CountLow, B.Count)) : B.Count);

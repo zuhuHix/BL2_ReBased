@@ -12,8 +12,8 @@
 //  - data: spawn rate x rate scale, bursts, emitter duration/delay/loops, lifetimes (constant, uniform or instance
 //    parameter), start size/colour/alpha/rotation/rotation rate/velocity/location, colour/alpha/size curves over life,
 //    sub-image layout, dynamic parameter 0, mesh type data, the template materials' blend modes (in the imported MIs);
-//  - host readings of UE3 Cascade conventions: rotations in turns, sprite size = full quad width, burst Time = fraction
-//    of the emitter duration, a curve table sampled linearly between entries, modules applied in a fixed order
+//  - host readings of UE3 Cascade conventions: rotations in turns, sprite size = full quad width, burst Time in
+//    seconds of emitter time, a curve table sampled linearly between entries, modules applied in a fixed order
 //    (colour over life replaces the start colour, scale-over-life multiplies), sprites aligned to the view plane,
 //    spawn-time distributions sampled at the emitter's time in its loop, a linear sub-image layout following the
 //    SubUV module's SubImageIndex over the particle's life (an even sweep when it has none);

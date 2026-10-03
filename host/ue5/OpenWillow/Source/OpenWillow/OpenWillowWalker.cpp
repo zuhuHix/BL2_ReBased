@@ -1050,7 +1050,7 @@ int32 AOpenWillowWalker::ScreenFxParticles() const { return ScreenFx ? ScreenFx-
 void AOpenWillowWalker::RunPhaselockShots(float Now)
 {
     // Captures of the cast at fixed times after it (screen space, no UI), then a miss for the fizzle hand effect.
-    static const float HitShots[] = {0.12f, 0.25f, 0.35f, 0.5f, 0.6f, 0.8f, 1.2f, 1.5f, 2.0f, 3.0f, 3.6f, 4.2f, 4.5f, 4.8f, 5.3f, 6.2f};
+    static const float HitShots[] = {0.12f, 0.25f, 0.35f, 0.5f, 0.6f, 0.8f, 1.2f, 1.5f, 2.0f, 3.0f, 3.6f, 4.2f, 4.5f, 4.8f, 5.0f, 5.3f, 6.2f};
     static const float MissShots[] = {0.08f, 0.2f, 0.4f, 0.7f};
     auto Shot = [this, Now](const TCHAR* Kind, float At)
     {

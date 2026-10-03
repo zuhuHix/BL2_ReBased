@@ -473,3 +473,39 @@ white band (the `Mat_SirenHandGlow` rectangle, colour (0.5, 0.8, 20), tone-maps 
 starting at 1.05 s instead of about 0.82 s; what `SphereCollapse` does in the stripped graph (the host draws nothing
 from it). The modulate readings in `MODULATE_READINGS` and `DARKEN_AS_TRANSLUCENT`, the black orb's disc and the light
 channel are host choices.
+
+### Round 3 (2026-10-03, later)
+
+An independent critic scored the round-2 side-by-side 4.5/10 (it was 2.5 before). Round 3 worked on its three items
+and checked first whether one host-side cause explains several of them. Frames: ignored `local/phaselock/b2/*-20261003-184336.png`.
+Side-by-sides: `local/phaselock/compare/phaselock_host_vs_real_r3_20261003-184336.jpg` (0.25, 0.5, 1.5, 3.0 and 4.8 s)
+and `..._r3_extra_...` (0.35, 0.8, 1.2, 4.5 and 5.0 s).
+
+**One common cause: the tone curve, not exposure.** Auto-exposure is already off project-wide, so exposure was not
+adapting. What differs is the tone curve. UE3 shows each channel of the final colour clipped at 1, so an HDR particle
+colour such as (0.5, 0.8, 20) at opacity 0.25 reads as saturated cobalt (0.125, 0.2, 1). UE5's filmic curve maps the
+same value to near white. Host stand-in (UNVERIFIED; BL2's PC tone pipeline was not checked): the additive parent caps
+each channel of a layer's contribution at 1, which is exact for one additive layer over the scene. The translucent
+parent caps it at 1 / opacity. The global tone mapper is unchanged.
+
+| Critic item | Cause found | Change (host stand-ins unless said) |
+|---|---|---|
+| Screen grade grey-brown at 1.5 and 3 s | Round 2's modulate divided the particle colour by its largest channel, which darkens the scene | Divide by its luminance (Rec. 709) instead: the tint keeps the scene's brightness and pushes it to blue. Burst `Time` is now read as seconds of emitter time (UNVERIFIED); only the screen burst moves (1.05 s -> 0.70 s), which fits the game's tint onset of about 0.82 s after the lift starts |
+| Cast flashes white | The `Mat_SirenGlowMOD` flashes multiply the view by (3, 6, 12). Even UE3's clip would give near white there, while the game shows cobalt at 0.8 s (f018-f020) | `Mat_SirenGlowMOD` reads its colour as a brightness-keeping tint (colour / luminance, `HueOnly`). The 0.8 s frame is now a cobalt flash with radial streaks |
+| No dark burst at +0.27 s | Under the colour-only reading the hand orb's `ModulateBlack` (colour 1) did nothing | One reading of `Mat_SirenOrbBlackMOD` fits all three of its emitters: darkness = mask x (1 - alpha), towards black, colour unused. The bubble emitters have alpha scaled to 0 (dark core, as before). The hand emitter has alpha 0 at spawn (0.25 s) and 1 by 0.2 of its life: a large dark blob around the raised hand at 0.25-0.35 s, gone by 0.5 s, as in game f007-f009 |
+| Faint palm orb | The 0.5 s flash washed out the orb sprite (`Mat_SirenHandInnerOrb`, blue on `EnergyOrbCenter2_Dif_Tex`, 15 x size-over-life about 2 x hand scale 0.35, about 11 uu) | No size change. With the flash and clip changes a blue orb shows in the palm at 0.5 s. It looks smaller than the game's because the whole hand is about 2.5x smaller on screen in the host (arms placement or FOV, not the effect). Relative to the palm, the host orb is close to the game's |
+| Hard blue rim | Round 2's black disc (full to two thirds of the radius) also darkened the core sprite's magenta edge | Black disc full to half the radius (`RadialSharpness` 2): the hold shows a near-black core with a soft violet-magenta rim |
+
+**Bubble size: not changed.** The draw scale is the stock rule: the pawn's mesh bounds radius / `BubbleFXScale` 66.7,
+which is 104-109 uu for the host dummy. The game's bullymong stands much further from the camera, so apparent size
+cannot be compared, and its bounds radius is not known here. Checking the size needs a game capture at a matched
+distance (about 650 uu), or the bullymong's bounds radius read from the game.
+
+**Still different:**
+- The release ring is blue-violet. The game's ring is cyan-white at 4.9-5.0 s. The same `HueOnly` reading that fixes
+  the cast flashes reduces the end template's `Brighten` (0.4, 16, 30) to about x2 blue. Round 2's plain multiply
+  gave cyan-white there, but white cast flashes. One material reading does not fit both emitters, so neither was
+  tuned per emitter.
+- The 0.6 s white starburst (`Mat_SirenHandGlowShattered`, colour 1).
+- The lifted target's pose: the dummy has no `PhaseLock_*` clips in the stock data.
+- What `SphereCollapse` drives.
