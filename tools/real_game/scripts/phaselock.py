@@ -30,7 +30,10 @@ def _vec(v):
 
 def lift_skill():
     skills = [s for s in unrealsdk.find_all("LiftActionSkill") if "Default__" not in s._path_name()]
-    return skills[-1] if skills else None
+    # Two instances can be listed (the GD_Siren_Skills data object and a world-instanced copy); the one the
+    # player runs is the one whose SkillStartTime moves, so prefer the largest (2026-10-03: picking by list
+    # position or by name sampled state 0 through a whole cast).
+    return max(skills, key=lambda s: s.SkillStartTime) if skills else None
 
 
 # GetStateName() reads None through the SDK on weapons, so ask IsInState for the states that matter.
