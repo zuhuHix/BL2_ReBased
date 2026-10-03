@@ -112,8 +112,9 @@ the game filled it (`ItemCardGFxObject` calls) and a screenshot. `tools/real_gam
 - **Runtime type values differ from the cooked `Startup.upk` decode:** reading the live objects gave
   `WeaponType_Bandit_Pistol.ClipSize` 36 (host decode 30), `WeaponType_Dahl_Pistol` 16 (12), `WT_Bandit_Shotgun`
   10 (9) and its `ReloadTime` 4.1 (4.4). None of the 23 live `Micropatch` (hotfix) entries touches a weapon type, so
-  the source of the difference is **open** (another package overriding, or a decode gap). The magazine, reload and
-  most damage mismatches above follow these type-level differences.
+  the source of the difference is **open** (see "Live weapon data" below: not an online hotfix, not a package
+  override, not an installed mod). The magazine, reload and most damage mismatches above follow these type-level
+  differences.
 - Fire rate: 1.25 printed as 1.3; the host's 1.2499999 (double) prints 1.2. Single-precision evaluation fixes it.
 - Name: when no part title applies the game uses the weapon type's title (the host's title-less slice SMG
   "Inspiring" is "Inspiring Projectile Convergence" in the game).
@@ -126,6 +127,40 @@ damage 65/69, fire rate 69/69, reload 63/69, magazine 57/69, every printed stat 
 Maliwan pistol's reload: exactly 1.75 in the new evaluation, printed 1.8 by the host and 1.7 by the game (while the
 game prints a 1.25 fire rate as 1.3), so the game's operation order matters at the half. The weapon lane (W) owns the
 evaluator; these are inputs for it, not changes to it.
+
+## Live weapon data (2026-10-03)
+
+`tools/real_game/scripts/weapon_dump.py` reads every `WeaponPartDefinition` (887), `WeaponNamePartDefinition` (877) and
+`WeaponTypeDefinition` (39 including buzzaxe, turret and vehicle types) from the running game at the main menu and
+writes the properties the evaluator and the name rule read (`OVERLAY_KEYS` in `tools/weapon_card_audit.py`, plus the
+external and zoom attribute effects) to ignored `local/realgame/cards/live_weapon_data.json`. `tools/real_game/live_overlay.py`
+turns that file into a `weapon_recipe.Package` overlay and `golden_card_compare.py --live-data` uses it. Confirmed in game
+on 2026-10-03 by reading the live objects through the SDK, game at the main menu, saving blocked, saves restored:
+
+- **Live data agrees with OpenBLCMM's static dump** for all 78 property values of the 61 objects in W's
+  `runtime_changes_filtered.json` (the only differences are `BaseValueScaleConstant` 1.0, the default, which one source
+  writes and the other omits). Two independent sources, same values.
+- **Against the cooked decode** 1,803 live objects compared (364 are not in `Startup.upk`): 37 have genuinely different
+  values (ClipSize on 7 types, ReloadTime on 5, InstantHitDamage on 2, and 24 part effect lists, mostly a
+  `MT_PreAdd` modifier that is `MT_Scale` live and the other way round); every one is in W's list. The rest of the
+  differences are defaults the cooked packages leave out (for example `InstantHitDamage.BaseValueConstant` 20 and
+  `ProjectilesPerShot` 1, which the live game reports).
+- **Effect on the golden set** (same 69 weapons, exact parts): evaluator on cooked data 52/69 weapons match the main four
+  stats (damage, fire rate, reload, magazine); with the live overlay **69/69**, and every printed stat 68/69. Per
+  field: damage 65 to 69/69, reload 63 to 69/69, magazine 57 to 69/69.
+- **Still open after the overlay:** sale value 65/69 (four rocket launchers, model 5 to 7 points high, about 4 %); status
+  chance 15/16 (33.3 % against 33.4 %, one Pyroclastic launcher); the level line (10 cards where the game prints none:
+  all mission-balance weapons and game-stage-1 weapons, which a rule on the player's level could explain; UNVERIFIED);
+  the stage-15 Maliwan pistol reload printed 1.8 by the host and 1.7 by the game.
+- **Where the live values come from is still not explained.** They are present 0.01 s after the SDK loads (7.8 s before
+  the `Micropatch` configuration exists), `Startup.upk` is the only one of the 2,010 installed packages (DLC included)
+  that defines these objects, and nothing in `sdk_mods`, the zipped mods or the config files sets them, so it is not an
+  online hotfix, not a package override and not an installed mod. Remaining hypotheses: something the game or its executable applies at
+  load, or a gap in the cooked decode (both UNVERIFIED). The correction to NATIVE_WEAPON_RULES section 7, which
+  attributes the differences to hotfixes, is for the weapon lane's owner. `tools/real_game/openwillow_valuewatch/`
+  (the load-time watcher, local use only) produced the timing.
+- Note for the port: the live values are what the player's game uses, so they are the oracle for stats, but they are game
+  data: the file stays under `local/` and a port reading them needs a decision on where its values come from.
 
 ## Gun skins
 

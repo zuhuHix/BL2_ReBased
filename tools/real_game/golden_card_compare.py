@@ -31,6 +31,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live_overlay  # noqa: E402
 
 FIELDS = ('damage', 'projectiles', 'accuracy', 'fire_rate', 'reload_time', 'magazine', 'status_dps',
           'status_chance', 'sale_value', 'name', 'host_name', 'level_line')
@@ -214,6 +216,7 @@ def main():
     parser.add_argument('--package', required=True, help='.../CookedPCConsole/Startup.upk')
     parser.add_argument('--golden', type=Path, default=ROOT / 'local/realgame/cards/golden_cards.json')
     parser.add_argument('--output', type=Path, default=ROOT / 'local/realgame/cards/golden_compare.json')
+    parser.add_argument('--live-data', type=Path, help='live_weapon_data.json from scripts/weapon_dump.py: overlay the values read from the running game')
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to((ROOT / 'local').resolve()):
         parser.error('--output must stay under local/')
@@ -221,7 +224,9 @@ def main():
     schema = args.output.parent / 'golden_compare.schema'
     schema.parent.mkdir(parents=True, exist_ok=True)
     schema.write_text('\n'.join(weapon_stats.SCHEMA_LINES) + '\n', encoding='utf-8')
-    package = weapon_recipe.Package(str(Path(args.reader).resolve()), Path(args.package), str(schema.resolve()))
+    reader, schema_path = str(Path(args.reader).resolve()), str(schema.resolve())
+    package = (live_overlay.LivePackage(reader, Path(args.package), schema_path, args.live_data) if args.live_data
+               else weapon_recipe.Package(reader, Path(args.package), schema_path))
     entries = json.loads(args.golden.read_text(encoding='utf-8'))
     results = [evaluate_entry(package, entry) for entry in entries]
     by_stratum, overall = summarize(results, lambda r: r['stratum']), summarize(results)

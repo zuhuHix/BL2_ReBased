@@ -904,6 +904,8 @@ Invoke-Burst 'phaselock/cast' 7 40 { Send-Key F } 0.75            # QPC-stamped 
 Remove-Driver; Exit-RunLock
 python tools/real_game/golden_cards.py               # join records, card trace and screenshots
 python tools/real_game/golden_card_compare.py        # evaluator on the exact rolled parts vs the cards
+Invoke-GamePyFile tools/real_game/scripts/weapon_dump.py cards     # every weapon part/type/name part value, live
+python tools/real_game/golden_card_compare.py --live-data local/realgame/cards/live_weapon_data.json ...  # with the overlay
 ```
 
 Input is scan-code keys (`Send-Key`, arrows included), `Send-ClickAt`, `Send-Wheel` and `Send-Drag`; it takes the
