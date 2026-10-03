@@ -73,8 +73,9 @@ function cardRound(value, rounding, decimals) {
   if (Math.abs(stored) < 1e-8) stored = 0;
   if (rounding === 'ceil') return Math.ceil(stored);
   if (rounding === 'floor') return Math.floor(stored);
-  const scale = 10 ** decimals;
-  return Math.floor(stored * scale + 0.5) / scale;
+  // Half up with every step in single precision, as the game's rounding does (weapon_stats.half_up).
+  const scale = Math.fround(10 ** decimals);
+  return Math.floor(Math.fround(Math.fround(stored * scale) + 0.5)) / scale;
 }
 const statIcons = new Map([
   ['capacity','shieldCapacity'], ['rechargerate','shieldRechargeRate'],

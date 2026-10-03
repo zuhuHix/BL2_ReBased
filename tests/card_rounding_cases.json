@@ -15,10 +15,7 @@
   {"field": "reload_time", "value": 1.7499998807907104, "text": "1.7"},
   {"field": "reload_time", "value": 1.75, "text": "1.8"},
   {"field": "accuracy", "value": 87.36, "text": "87.4"},
-  {"field": "accuracy", "value": 94.00000016, "text": "94.0"}
- ],
- "pending_page_change_note": "Cases where tools/weapon_stats.py (single-precision rounding, NATIVE_WEAPON_RULES.md section 2, 2026-10-03) prints differently from the current inventory.js cardRound. tests/weapon_stats_test.py checks them; move them into cases once cardRound scales and adds the half in single precision.",
- "pending_page_change": [
+  {"field": "accuracy", "value": 94.00000016, "text": "94.0"},
   {"field": "accuracy", "value": 87.35, "text": "87.4"}
  ]
 }
