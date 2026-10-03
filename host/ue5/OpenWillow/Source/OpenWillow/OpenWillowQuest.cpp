@@ -96,7 +96,7 @@ void UOpenWillowQuest::BeginPlay()
             UE_LOG(LogTemp, Display, TEXT("OWQUEST FIXTURE (save-state stand-in, not stock data): dependency %hs treated as complete"), Path.c_str());
         Impl->StationCounters.Init(0, Impl->Data.Stations.Num());
         // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the
-        // gear was rolled at, used here as the mission level (an UNVERIFIED slice choice; the native pick is not decoded).
+        // gear was rolled at (an UNVERIFIED slice choice; the mission level is the region stage, see FixRegionStage).
         if (!FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir) || ItemDir.IsEmpty())
             throw std::runtime_error("-owquest needs -owitems=<local/items/slice> (tools/weapon_slice_gear.py)");
         const FString WeaponDefinition = UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str());
@@ -110,11 +110,17 @@ void UOpenWillowQuest::BeginPlay()
         FString GearText;
         TSharedPtr<FJsonObject> Gear;
         if (!FFileHelper::LoadFileToString(GearText, *FPaths::Combine(ItemDir, TEXT("slice_manifest.json")))
-            || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(GearText), Gear) || !Gear || !Gear->TryGetNumberField(TEXT("level"), MissionLevel))
+            || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(GearText), Gear) || !Gear || !Gear->TryGetNumberField(TEXT("level"), GearLevel))
             throw std::runtime_error("slice_manifest.json (level) missing under -owitems");
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon %s -> recipe %s \"%s\" level %d, %.2f damage, %.2f/s, magazine %.2f, damage type %s, mesh %s; mission level %d (slice choice, UNVERIFIED)"),
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon %s -> recipe %s \"%s\" level %d, %.2f damage, %.2f/s, magazine %.2f, damage type %s, mesh %s; gear level %d (slice choice, UNVERIFIED)"),
             *WeaponDefinition, *MissionWeapon.Id, *MissionWeapon.Name, MissionWeapon.Level, MissionWeapon.Damage, MissionWeapon.FireRate,
-            MissionWeapon.Magazine, *MissionWeapon.DamageType, *MissionWeapon.MeshPath, MissionLevel);
+            MissionWeapon.Magazine, *MissionWeapon.DamageType, *MissionWeapon.MeshPath, GearLevel);
+        const auto& D = Impl->Data;
+        TArray<FString> Overrides;
+        for (const auto& O : D.StageOverrides) Overrides.Add(FString::Printf(TEXT("%s %d..%d"), *O.Mission, O.Min, O.Max));
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST region stage table %s (%s): default %d..%d, boost %d, %d overrides [%s]"), *D.StageRegion,
+            D.bRegionStageFromData ? TEXT("from world.json values.xp.region_stage") : TEXT("STAND-IN bounds, manifest has no region_stage"),
+            D.StageDefaultMin, D.StageDefaultMax, D.StageBoost, D.StageOverrides.Num(), *FString::Join(Overrides, TEXT(", ")));
         // Both world-data objectives must belong to the installed mission.
         if (Impl->ObjectiveState(Impl->Data.TriggerObjective).empty() || Impl->ObjectiveState(Impl->Data.DummyObjective).empty())
             throw std::runtime_error("slice manifest objectives are not objectives of the installed mission");
@@ -134,6 +140,19 @@ void UOpenWillowQuest::BeginPlay()
             // RestoreProgression once her skill tree and start level are set.
             const TSharedPtr<FJsonObject>* Progression = nullptr;
             if (Data->TryGetObjectField(TEXT("progression"), Progression)) SavedProgression = *Progression;
+            // The region stage fixed in an earlier session (added 2026-10-02; older saves have none and fix it anew).
+            const TSharedPtr<FJsonObject>* Stage = nullptr;
+            if (Data->TryGetObjectField(TEXT("region_stage"), Stage)) {
+                FString Region;
+                int32 Value = 0, Level = 0;
+                if (!(*Stage)->TryGetStringField(TEXT("region"), Region) || Region != Impl->Data.StageRegion
+                    || !(*Stage)->TryGetNumberField(TEXT("stage"), Value) || !(*Stage)->TryGetNumberField(TEXT("player_level"), Level) || Value < 1)
+                    throw std::runtime_error("quest save region_stage is not a stage of the mission's region");
+                RegionStage = Value;
+                RegionStageLevel = Level;
+                bRegionStageFromSave = true;
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST region stage from save: %s stage %d (fixed at player level %d)"), *Region, Value, Level);
+            }
             UE_LOG(LogTemp, Display, TEXT("OWQUEST loaded save: status=%d rewards=%d respawns=%d progression=%s"), Status(), Rewards, Respawns,
                 SavedProgression ? TEXT("yes") : TEXT("none (older save)"));
         }
@@ -146,6 +165,8 @@ void UOpenWillowQuest::BeginPlay()
 
 void UOpenWillowQuest::EndPlay(const EEndPlayReason::Type Reason)
 {
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST save calls=%d writes=%d write time %.1f ms total (%.3f ms per write)"),
+        SaveCalls, SaveWrites, SaveWriteSeconds * 1000., SaveWrites ? SaveWriteSeconds * 1000. / SaveWrites : 0.);
     Impl.Reset();
     Super::EndPlay(Reason);
 }
@@ -187,10 +208,25 @@ void UOpenWillowQuest::Save()
     const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     if (Walker && Walker->IsMayaActive() && Walker->GetSkills()) Data->SetObjectField(TEXT("progression"), Walker->GetSkills()->ProgressionJson());
     else if (SavedProgression) Data->SetObjectField(TEXT("progression"), SavedProgression);
+    // The region stage stays fixed for this player and playthrough once computed (NATIVE_PROGRESSION.md section 2).
+    if (RegionStage > 0) {
+        TSharedRef<FJsonObject> Stage = MakeShared<FJsonObject>();
+        Stage->SetStringField(TEXT("region"), Impl->Data.StageRegion);
+        Stage->SetNumberField(TEXT("playthrough"), 1);
+        Stage->SetNumberField(TEXT("stage"), RegionStage);
+        Stage->SetNumberField(TEXT("player_level"), RegionStageLevel);
+        Data->SetObjectField(TEXT("region_stage"), Stage);
+    }
     FString Text;
     FJsonSerializer::Serialize(Data, TJsonWriterFactory<>::Create(&Text));
+    ++SaveCalls;
+    if (Text == LastSavedText) return;   // unchanged since the last write
+    const double Started = FPlatformTime::Seconds();
     IFileManager::Get().MakeDirectory(*FPaths::GetPath(SavePath), true);
-    if (!FFileHelper::SaveStringToFile(Text, *SavePath)) UE_LOG(LogTemp, Error, TEXT("OWQUEST could not write %s"), *SavePath);
+    if (FFileHelper::SaveStringToFile(Text, *SavePath)) LastSavedText = Text;
+    else UE_LOG(LogTemp, Error, TEXT("OWQUEST could not write %s"), *SavePath);
+    ++SaveWrites;
+    SaveWriteSeconds += FPlatformTime::Seconds() - Started;
 }
 
 // ------------------------------------------------------------------------------------------- world actors
@@ -500,15 +536,30 @@ void UOpenWillowQuest::GrantExperience()
     auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
     if (!Skills) return;
-    // CANDIDATE amount (UNVERIFIED: GetExperienceReward is native) at the slice's mission level.
-    LastXpAmount = Impl->Data.MissionXp(MissionLevel);
+    // MissionDefinition.GetExperienceReward as read from native code (UNVERIFIED in game): the mission level is its
+    // region's game stage, normally fixed at session start already.
+    FixRegionStage(Skills->GetLevel());
+    LastXpAmount = Impl->Data.MissionXp(RegionStage);
     ExperienceBeforeReward = Skills->GetExperience();
     LevelBeforeReward = Skills->GetLevel();
     Skills->AddExperience(LastXpAmount);
     Walker->RefreshHealthForLevel();   // a level-up from this reward sets the new level's health at once
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: %.4f x span at mission level %d = %d XP (candidate rule, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
-        *Impl->Data.XpRewardAttribute, Impl->Data.XpPercentage, MissionLevel, LastXpAmount, ExperienceBeforeReward,
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: trunc(%.4f x span) at region stage %d = %d XP (native reading, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
+        *Impl->Data.XpRewardAttribute, Impl->Data.XpPercentage, RegionStage, LastXpAmount, ExperienceBeforeReward,
         Skills->GetExperience(), LevelBeforeReward, Skills->GetLevel(), Skills->AvailablePoints());
+}
+
+void UOpenWillowQuest::FixRegionStage(int32 PlayerLevel)
+{
+    if (!Impl || RegionStage > 0) return;
+    // WillowRegionDefinition.GetRegionGameStage: a stage already stored for this region and playthrough is returned
+    // unchanged, so only the first ask computes it. Mission completion comes from the quest's completed set (the
+    // dependency fixture plus missions completed here).
+    const auto& Completed = Impl->Completed;
+    RegionStage = Impl->Data.RegionStage(PlayerLevel, [&Completed](const FString& Mission) { return Completed.count(TCHAR_TO_UTF8(*Mission)) > 0; });
+    RegionStageLevel = PlayerLevel;
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST region stage fixed: %s stage %d from player level %d (%s; rule read from native code, UNVERIFIED)"),
+        *Impl->Data.StageRegion, RegionStage, PlayerLevel, Impl->Data.bRegionStageFromData ? TEXT("bounds from data") : TEXT("STAND-IN bounds"));
 }
 
 void UOpenWillowQuest::NotifyRespawn()
@@ -527,14 +578,19 @@ bool UOpenWillowQuest::PlayerMaxHealth(int32 Level, float& Out) const
 
 bool UOpenWillowQuest::RestoreProgression(UOpenWillowSkills& Skills)
 {
-    if (!Impl || bFailed || !SavedProgression) return false;
-    const int32 StartLevel = Skills.GetLevel();
-    FString Error;
-    if (!Skills.RestoreProgression(*SavedProgression, Error)) { Fail(TEXT("quest save progression was rejected: ") + Error); return false; }
-    bProgressionRestored = true;
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST progression from save: level %d (start level %d replaced), experience %lld, action grade %d, skill points %d"),
-        Skills.GetLevel(), StartLevel, Skills.GetExperience(), Skills.GetActionGrade(), Skills.AvailablePoints());
-    return true;
+    if (!Impl || bFailed) return false;
+    if (SavedProgression) {
+        const int32 StartLevel = Skills.GetLevel();
+        FString Error;
+        if (!Skills.RestoreProgression(*SavedProgression, Error)) { Fail(TEXT("quest save progression was rejected: ") + Error); return false; }
+        bProgressionRestored = true;
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST progression from save: level %d (start level %d replaced), experience %lld, action grade %d, skill points %d"),
+            Skills.GetLevel(), StartLevel, Skills.GetExperience(), Skills.GetActionGrade(), Skills.AvailablePoints());
+    }
+    // The walker calls this once Maya's level is known at session start: the first time Sanctuary's stage is asked for
+    // in the host (a stage kept in the save wins).
+    FixRegionStage(Skills.GetLevel());
+    return bProgressionRestored;
 }
 
 bool UOpenWillowQuest::IsRegisteredTargetable(const AActor* Actor) const
@@ -749,7 +805,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         }
         // Player side: the mission's own MissionWeapon recipe and mesh exist, it is not carried yet, and Maya starts
         // armed (slice gear at her level) with the arms shown.
-        Check(MissionWeapon.Balance == UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str()) && MissionWeapon.Level == MissionLevel
+        Check(MissionWeapon.Balance == UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str()) && MissionWeapon.Level == GearLevel
             && !MissionWeapon.DamageType.IsEmpty() && UOpenWillowInventory::LoadWeaponMesh(MissionWeapon), TEXT("mission_weapon_recipe_and_mesh_found"));
         Check(Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE, TEXT("mission_weapon_not_carried_before_lend"));
         Check(Walker->HasWeaponOut() && Walker->AreArmsShown(), TEXT("maya_starts_armed_with_arms_shown"));
@@ -800,8 +856,10 @@ void UOpenWillowQuest::RunTest(float Delta)
         PlacePlayer(Data.TriggerCenter, Data.DummyLocation);
         break;
     case 7:
-        if (Waiting(Impl->ObjectiveState(Data.TriggerObjective) == "Complete", 3.f)) return;
-        Check(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
+        // The set follows the objective by the installed behavior's 0.5 s link delay (NATIVE_MISSION_DISPATCH.md).
+        if (Waiting(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, 3.f)) return;
+        Check(Impl->ObjectiveState(Data.TriggerObjective) == "Complete"
+            && Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
         Check(bWeaponLent, TEXT("mission_weapon_lent"));
         {
             const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
@@ -921,7 +979,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (TestWait < 0.5f) return;
         // Test fixture: top Maya's experience up so that this reward must cross the next level's requirement.
         UOpenWillowSkills* Skills = Walker->GetSkills();
-        const int64 Gap = UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel() + 1) - Skills->GetExperience() - Data.MissionXp(MissionLevel);
+        const int64 Gap = UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel() + 1) - Skills->GetExperience() - Data.MissionXp(RegionStage);
         if (Gap > 0) Skills->AddExperience(Gap);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
         PointsBeforeReward = Skills->AvailablePoints();
@@ -937,9 +995,10 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Status() == 3, TEXT("use_key_turns_in_mission"));
         Check(Rewards == 1, TEXT("xp_reward_granted_once"));
         const UOpenWillowSkills* Skills = Walker->GetSkills();
-        const int32* Oracle = Data.XpCandidateByLevel.Find(MissionLevel);
+        // The tool's own amount at the same stage (tools/slice_values.py evaluates the same truncation rule apart).
+        const int32* Oracle = Data.XpCandidateByLevel.Find(RegionStage);
         Check(Oracle && LastXpAmount == *Oracle && LastXpAmount > 0 && Skills->GetExperience() == ExperienceBeforeReward + LastXpAmount,
-            TEXT("xp_amount_is_candidate_formula_at_mission_level"));
+            TEXT("xp_amount_is_truncated_rule_at_region_stage"));
         Check(Skills->GetLevel() == LevelBeforeReward + 1 && Skills->GetExperience() >= UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel())
             && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Skills->GetLevel()), 0.01f)
@@ -992,6 +1051,29 @@ void UOpenWillowQuest::RunTest(float Delta)
                 && Saved && Saved->TryGetObjectField(TEXT("progression"), Progression);
             UE_LOG(LogTemp, Display, TEXT("OWQUEST saved progression: %s"), bRead ? *JsonText(*Progression) : TEXT("none"));
             Check(bRead && JsonText(*Progression) == JsonText(Walker->GetSkills()->ProgressionJson()), TEXT("save_holds_final_progression"));
+            // Mission level: Sanctuary's stage from the data bounds (no stand-in), fixed at session start from the
+            // -owlevel start level, unchanged by the later level-ups, and kept in the save.
+            int32 StartLevel = 0, SavedStage = 0;
+            FParse::Value(FCommandLine::Get(), TEXT("owlevel="), StartLevel);
+            const TSharedPtr<FJsonObject>* Stage = nullptr;
+            if (bRead && Saved->TryGetObjectField(TEXT("region_stage"), Stage)) (*Stage)->TryGetNumberField(TEXT("stage"), SavedStage);
+            const auto& Completed = Impl->Completed;
+            const int32 Expected = Data.RegionStage(StartLevel, [&Completed](const FString& Mission) { return Completed.count(TCHAR_TO_UTF8(*Mission)) > 0; });
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST region stage %d (fixed at level %d, now level %d), expected %d, saved %d, data bounds %d"),
+                RegionStage, RegionStageLevel, Walker->GetSkills()->GetLevel(), Expected, SavedStage, Data.bRegionStageFromData);
+            Check(Data.bRegionStageFromData && !bRegionStageFromSave && RegionStageLevel == StartLevel && RegionStage == Expected
+                && RegionStage >= Data.StageDefaultMin && RegionStage <= Data.StageDefaultMax && SavedStage == RegionStage,
+                TEXT("mission_level_is_region_stage_fixed_at_start"));
+        }
+        {
+            // Level curve: the compiled-in curve and the one evaluated from world.json's formula both equal the tool's
+            // independent float evaluation (values.xp.required_points_by_level).
+            const auto& Points = Data.XpRequiredPointsByLevel;
+            bool bSame = Points.Num() >= 10;
+            for (const auto& Pair : Points)
+                bSame &= UOpenWillowSkills::ExperienceForLevel(Pair.Key) == Pair.Value && UOpenWillowSkills::RequiredExperience(
+                    float(Data.XpMultiplier), float(Data.XpPower), float(Data.XpOffset), Pair.Key) == Pair.Value;
+            Check(bSame, TEXT("level_curve_matches_tool_integer_curve"));
         }
         UE_LOG(LogTemp, Display, TEXT("OWQUESTTEST SUMMARY result=%s checks=%d errors=%d mode=first_run"), Errors ? TEXT("FAIL") : TEXT("PASS"), Checks, Errors);
         FPlatformMisc::RequestExit(false);
@@ -1006,6 +1088,15 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Status() == 3 && Rewards == 1, TEXT("resume_completed_mission_cannot_be_reaccepted"));
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f), TEXT("resume_health_from_formula"));
         Check(!Dummy && !bDummySpawned, TEXT("resume_no_dummy_for_completed_mission"));
+        {
+            // The stage fixed in the first run comes back from the save; it is not recomputed from the resumed level.
+            const auto& Completed = Impl->Completed;
+            auto IsComplete = [&Completed](const FString& Mission) { return Completed.count(TCHAR_TO_UTF8(*Mission)) > 0; };
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST resumed region stage %d (fixed at level %d); a fresh computation at level %d would give %d"),
+                RegionStage, RegionStageLevel, Walker->GetSkills()->GetLevel(), Data.RegionStage(Walker->GetSkills()->GetLevel(), IsComplete));
+            Check(bRegionStageFromSave && RegionStage >= 1 && RegionStage == Data.RegionStage(RegionStageLevel, IsComplete),
+                TEXT("resume_region_stage_from_save"));
+        }
         UE_LOG(LogTemp, Display, TEXT("OWQUESTTEST SUMMARY result=%s checks=%d errors=%d mode=resume"), Errors ? TEXT("FAIL") : TEXT("PASS"), Checks, Errors);
         FPlatformMisc::RequestExit(false);
         bTesting = false;
@@ -1148,6 +1239,18 @@ bool UOpenWillowQuest::RunPhaselockTest()
         Check(Room < P.HeightFromGround && End < P.HeightFromGround && Gap >= -0.5f && Gap <= 2.5f, TEXT("phaselock_lift_stays_below_ceiling"));
         // While locked the target is at the lift end plus the bob (at most its amplitude).
         Check(FMath::Abs(Height - End) <= P.BobAmplitude + 1.f, TEXT("phaselock_height_is_lift_end_plus_bob"));
+        // Stock presentation from tools/prepare_phaselock_fx.py and the imported FX (host playback of the decoded
+        // templates): at this time the bubble loop runs (intro at the lock, loop after BubbleFXIntroTime), the light is at
+        // full brightness (locked), the hand orb (from the arms clip's notify) and the screen particle (burst inside its
+        // duration) have live particles. Presence and timing only; the look is checked by screenshots.
+        {
+            const FOpenWillowPhaselockFxData& Fx = Walker->GetPhaselockFx();
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock presentation at %.2f s: fx manifest %d, bubble stage %d, collapse %.3f, light %.2f (data %.2f), hand particles %d, screen particles %d"),
+                PhaselockWait, Fx.bLoaded, PhaselockDummy->BubbleStage(), PhaselockDummy->BubbleCollapse(),
+                PhaselockDummy->PhaselockLightIntensity(), Fx.LightBrightness, Walker->HandFxParticles(), Walker->ScreenFxParticles());
+            Check(Fx.bLoaded && PhaselockDummy->BubbleStage() == 2 && FMath::IsNearlyEqual(PhaselockDummy->PhaselockLightIntensity(), Fx.LightBrightness, 1e-3f)
+                && Walker->HandFxParticles() > 0 && Walker->ScreenFxParticles() > 0, TEXT("phaselock_stock_presentation_running"));
+        }
         if (PhaselockCeiling) PhaselockCeiling->Destroy();
         PhaselockCeiling = nullptr;
         Shot(TEXT("4_Phaselock"));
@@ -1171,16 +1274,27 @@ bool UOpenWillowQuest::RunPhaselockTest()
     case 6: {
         // After the release the pool drains at the base rate: wait until it is empty.
         if (Walker->PhaselockRemaining() > 0.f && PhaselockWait < P.CooldownSeconds / FMath::Max(P.CooldownRate, KINDA_SMALL_NUMBER) + 1.f) return false;
-        // Cast gate from Skill_Phaselock.SkillConstraints: open in Maya's current state; the host readings of the
-        // weapon-action and health constraints refuse a cast (GateOpen with test inputs; Maya's state is not changed).
-        FString Why, Busy, Hurt;
+        // Cast gate from Skill_Phaselock.SkillConstraints: open in Maya's current state; the readings of the native
+        // evaluators (GateOpen with test inputs derived from Maya's state; her state is not changed): a reload does not
+        // refuse the cast, a holstered (inactive) weapon does, and so does a pawn that is not alive and well.
+        FString Why, ReloadWhy, Busy, Hurt;
         const bool bOpen = Walker->CanCastPhaselock(Why);
-        const bool bBusyRefused = !P.GateOpen(true, Walker->GetHealth(), Busy);
-        const bool bDeadRefused = !P.GateOpen(false, 0.f, Hurt);
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock gate: open=%d %s; reloading refused by %s; health 0 refused by %s; not evaluated [%s]"),
-            bOpen, *Why, *Busy, *Hurt, *FString::Join(P.GateNotEvaluated, TEXT(", ")));
+        FOpenWillowPhaselockGateState Reloading = Walker->PhaselockGateState();
+        Reloading.bReloading = true;
+        FOpenWillowPhaselockGateState Holstered = Walker->PhaselockGateState();
+        Holstered.bHoldsWeapon = Holstered.bWeaponInactive = true;
+        FOpenWillowPhaselockGateState Down = Walker->PhaselockGateState();
+        Down.bAlive = false;
+        const bool bReloadAllowed = P.GateOpen(Reloading, true, ReloadWhy);
+        const bool bHolsterRefused = !P.GateOpen(Holstered, true, Busy);
+        const bool bDeadRefused = !P.GateOpen(Down, true, Hurt);
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock gate: open=%d %s; reloading open=%d %s; holstered refused by %s; not alive refused by %s; not evaluated [%s]"),
+            bOpen, *Why, bReloadAllowed, *ReloadWhy, *Busy, *Hurt, *FString::Join(P.GateNotEvaluated, TEXT(", ")));
         Check(bOpen, TEXT("phaselock_cast_gate_open_when_constraints_met"));
-        Check(bBusyRefused && Busy.Contains(TEXT("WeaponActionAvailable")), TEXT("phaselock_weapon_action_constraint_refuses_cast"));
+        // Replaces the earlier phaselock_weapon_action_constraint_refuses_cast, whose host reading (reloading blocks) the
+        // native evaluator contradicts: the weapon-action constraint is now checked with a holstered weapon.
+        Check(bReloadAllowed, TEXT("phaselock_reload_does_not_refuse_cast"));
+        Check(bHolsterRefused && Busy.Contains(TEXT("WeaponActionAvailable")), TEXT("phaselock_holstered_weapon_refuses_cast"));
         Check(bDeadRefused && Hurt.Contains(TEXT("HealthState")), TEXT("phaselock_health_constraint_refuses_cast"));
         // Blocked target: clear the host property that stands for Flag_Skills_CanPhaseLock, then cast at it.
         PhaselockDummy->SetCanPhaseLockFlag(false);
@@ -1203,6 +1317,53 @@ bool UOpenWillowQuest::RunPhaselockTest()
         Next();
         return false;
     case 9: {
+        // Screen-space magnetism (native auto-aim reading): turn the view sideways until the target's centre sits at 70-90%
+        // of its magnetism radius, so the crosshair ray passes beside it, then cast: the target is still preferred.
+        if (Walker->PhaselockRemaining() > 0.f && PhaselockWait < P.CooldownSeconds / FMath::Max(P.CooldownRate, KINDA_SMALL_NUMBER) + 1.f) return false;
+        Aim(PhaselockDummy->AimPoint());
+        AController* Controller = Walker->GetController();
+        AOpenWillowWalker::FPhaselockAimScore Score;
+        for (int32 I = 0; Controller && I < 200; ++I)
+        {
+            Score = Walker->ScorePhaselockTarget(PhaselockDummy);
+            if (Score.MagnetRadius > 0.f && Score.ScreenOffset >= 0.7f * Score.MagnetRadius) break;
+            Controller->SetControlRotation(Controller->GetControlRotation() + FRotator(0, 0.25f, 0));
+        }
+        // Distance of the target's centre from the view ray (how far a plain crosshair trace would pass beside it).
+        FVector Centre;
+        float Half = 0.f;
+        PhaselockDummy->CollisionCentre(Centre, Half);
+        const FVector Eye = Walker->GetActorLocation() + FVector(0, 0, 70);
+        const float Beside = FMath::PointDistToLine(Centre, Walker->GetViewRotation().Vector(), Eye);
+        Walker->UsePhaselock();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock magnetism: depth %.0f, offset %.3f of magnet radius %.3f (own %.3f), ray passes %.0f uu from the centre (radius %.1f); hit=%d"),
+            Score.Depth, Score.ScreenOffset, Score.MagnetRadius, Score.TargetRadius, Beside, PhaselockDummy->AutoAimRadius(), Walker->LastPhaselockHit());
+        Check(Score.ScreenOffset >= 0.7f * Score.MagnetRadius && Score.ScreenOffset < Score.MagnetRadius && Beside > PhaselockDummy->AutoAimRadius()
+            && Walker->LastPhaselockHit() && PhaselockDummy->IsPhaselocked(), TEXT("phaselock_magnetism_prefers_target_off_the_crosshair"));
+        PhaselockCastSeen = Walker->LastPhaselockCastAt();
+        Next();
+        return false;
+    }
+    case 10: {
+        // Going down while the target is held: the while-active HealthState constraint deactivates the skill.
+        if (PhaselockWait < P.LiftDuration + 0.3f) return false;
+        FHitResult Hit;
+        UGameplayStatics::ApplyPointDamage(Walker, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+        Next();
+        return false;
+    }
+    case 11: {
+        if (PhaselockWait < 0.2f) return false;
+        const float Released = PhaselockDummy->PhaselockReleasedAt() - PhaselockCastSeen;
+        const FOpenWillowPhaselockTimeline& T = Walker->LastPhaselockTimeline();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST Phaselock after going down: released %.2f s after the cast (timeline %.2f), reason '%s', active %d"),
+            Released, T.ReleasedAt, *Walker->LastPhaselockEndReason(), Walker->IsPhaselockActive());
+        Check(!PhaselockDummy->IsPhaselocked() && !Walker->IsPhaselockActive() && Released < T.ReleasedAt - 0.5f
+            && Walker->LastPhaselockEndReason().Contains(TEXT("HealthState")), TEXT("phaselock_going_down_ends_the_lock"));
+        Next();
+        return false;
+    }
+    case 12: {
         // Suspension: the action point, a full lower Motion tier, then one Suspension grade (1 + 5 + 1 points).
         // Test fixture: raise the level so that many points exist (one per level from 5).
         TArray<FString> SpendOrder;

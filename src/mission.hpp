@@ -1,7 +1,9 @@
 #pragma once
 #include "vm.hpp"
 
+#include <deque>
 #include <functional>
+#include <map>
 #include <set>
 
 namespace vm {
@@ -14,26 +16,23 @@ namespace vm {
 // objective sets and objectives, and a BehaviorProviderDefinition whose sequences hold named events,
 // behavior objects and packed output links. This class is the native executor for that data.
 //
-// What is recovered from the packages and checked structurally (tools and docs/verification):
-//  - events are named "Default" (mission activation), after an objective set when it becomes active,
-//    after an objective when it completes, or by a custom event; 2,277 events over all 133 missions,
-//    1,490 match those names exactly;
-//  - packed link ranges (ArrayIndexAndLength = index << 16 | length) tile the consolidated link array
-//    exactly, and every linked behavior index is in range.
-// What is NOT verified (UNVERIFIED, needs a paired original-game trace): the meaning of the high byte of
-// LinkIdAndLinkedBehavior (ignored here, which is only safe for single-input behaviors), delivery order of
-// simultaneous links, when an objective set auto-advances to NextSet, and the status names/transitions.
+// Recovered from the packages and checked structurally (tools and docs/verification): event names ("Default", set
+// names, objective names, custom names) and the packed link ranges. The tracker rules (which link id each event is
+// fired with, objective progress, set completion, AdvanceObjectiveSet's target rule, status transitions) follow the
+// behaviour note docs/verification/NATIVE_MISSION_DISPATCH.md section B, read from native code: all UNVERIFIED in the
+// running game. Not modelled: RequiredObjectivesComplete and Failed, bRepeatable, collection/branching sets, the
+// level-load replay (B5), blocking sets, the mission weapon at status Active/Complete (kept on its objective).
 class MissionSystem {
 public:
     enum class Status { NotStarted, Active, ReadyToTurnIn, Complete };
 
     // Everything the host must do or show, in order. Nothing here has been executed by this class.
     struct Effect {
-        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved };
+        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated };
         Kind kind;
         std::string a, b, c;        // RemoteEvent: a=event; Dialog: a=event tag, b=group, c=name tag;
                                     // SetSequence: a=provider path, b=sequence, c=action (CHANGE_Enable/Disable/Toggle);
-                                    // ObjectiveSet*: a=name;
+                                    // ObjectiveSet*: a=name; ObjectiveUpdated: a=name, b=new count;
                                     // StatusChanged: a=status; Reward: a=XP attribute path;
                                     // MissionWeapon*: a=MissionWeaponBalanceDefinition path
         double time = 0;
@@ -51,16 +50,21 @@ public:
     std::string description() const { return description_; }
     std::vector<std::string> dependencies() const { return dependencies_; }
     bool objectiveComplete(const std::string& objectiveName) const { return completedObjectives_.count(objectiveName) != 0; }
+    int objectiveProgress(const std::string& objectiveName) const;   // the count (distinct bits for a bit-mask objective)
     // "NotStarted", "Active" (in the active objective set, not complete) or "Complete", for an objective path of this
     // mission; "" when the path is not one of its objectives. The mapping onto the game's objective states is UNVERIFIED.
     std::string objectiveState(const std::string& objectivePath) const;
 
-    // True when every dependency mission is in `completed` (paths).
-    bool available(const std::set<std::string>& completed) const;
-    // ActivateMission: NotStarted -> Active, then the "Default" event.
+    // Every dependency mission is in `completed` (paths), and the ObjectiveDependency, if any, holds: `objectiveStates`
+    // maps objective paths of other missions to "Complete" / "Active" (B6).
+    bool available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates = {}) const;
+    // ActivateMission: NotStarted -> Active ("Default" id 7), then the initial set only when bActivateInitialObjectiveSet.
     bool accept(const std::set<std::string>& completed);
-    bool completeObjective(const std::string& objectiveName);
-    bool completeObjectiveByPath(const std::string& objectivePath);   // what Behavior_UpdateMissionObjective names
+    // PlayKickoff / PlayKickoffDialogOnly: "Default" with id 12 / 13. What calls it after acceptance is not known.
+    bool kickoff(bool dialogOnly = false);
+    // MissionTracker.UpdateObjective: one queued update (+1, or the bit OR-ed in for a bit-mask objective).
+    bool updateObjective(const std::string& objectiveName, int bit = 0);
+    bool updateObjectiveByPath(const std::string& objectivePath, int bit = 0);   // what Behavior_UpdateMissionObjective names
     bool customEvent(const std::string& name);
     // Turn-in: ReadyToTurnIn -> Complete and a Reward effect.
     bool turnInMission();
@@ -77,22 +81,36 @@ private:
     std::shared_ptr<const Package> package_;
     std::string missionPath_, missionName_, giver_, turnIn_, weapon_, description_, xpAttribute_;
     std::vector<std::string> dependencies_;
-    struct ObjectiveSet { std::string path, name, next; std::vector<std::string> objectives, objectivePaths; };
+    struct ObjectiveSet {
+        std::string path, name, next, cls;
+        bool canCompleteMission = true, autoEnableNext = false;
+        std::vector<std::string> objectives, objectivePaths;
+    };
+    struct Objective { std::string path; int count = 1; bool mask = false, optional = false; };
     std::vector<ObjectiveSet> sets_;
-    std::string initialSet_, weaponObjective_;
+    std::map<std::string, Objective> objectives_;    // by objective name
+    std::string initialSet_, weaponObjective_, dependencyObjective_;
+    bool activateInitialSet_ = true, dependencyActive_ = false;
     Status status_ = Status::NotStarted;
     std::string activeSet_;
+    std::map<std::string, int> progress_;            // count, or bit mask for bRememberItemsWithinObjective
     std::set<std::string> completedObjectives_;
     std::set<std::string> completedSets_;
+    std::deque<std::pair<std::string, int>> updates_;
+    bool draining_ = false;
     struct Impl;
     std::shared_ptr<Impl> impl_;
     std::vector<Effect> effects_;
     double now_ = 0;
 
     void emit(Effect::Kind kind, std::string a = "", std::string b = "", std::string c = "");
-    void fireEvent(const std::string& name);
-    void setStatus(Status status);
-    bool advanceSet(const std::string& setPath);
+    void fireEvent(const std::string& name, int linkId);
+    bool setStatus(Status status);
+    const ObjectiveSet* findSet(const std::string& path) const;
+    bool activateSet(const std::string& setPath);
+    void requestAdvance(const std::string& target);
+    void evaluateSet();
+    bool applyUpdate(const std::string& objectiveName, int bit);
     void collectProviderErrors();
 };
 

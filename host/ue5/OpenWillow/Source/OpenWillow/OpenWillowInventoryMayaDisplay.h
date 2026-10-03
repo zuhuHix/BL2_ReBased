@@ -37,6 +37,9 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 
     bool HasMeshes() const { return bHasMeshes; }
+    // Loads the meshes, materials and animations BeginPlay/SetPreviewWeapon use, so the caller can
+    // hold them and the menu's first open does not load them synchronously (measured 40-115 ms).
+    static void PreloadAssets(TArray<TObjectPtr<UObject>>& Out);
     void UpdateView(const FVector& CameraLocation, const FRotator& CameraRotation);
 
     // Framing. The camera FOV is locked while the menu is open so Maya can be

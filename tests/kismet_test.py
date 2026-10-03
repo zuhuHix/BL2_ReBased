@@ -5,6 +5,10 @@ packages plus a toy sequence package with hand-assembled tagged property data, r
 Nothing here comes from the game: every class, property, struct, op and event name is either the public UE3
 vocabulary the executor reads by name (SequenceOp, SeqOpOutputLink, ...) or an invented toy name.
 
+Scheduling follows docs/verification/NATIVE_MISSION_DISPATCH.md A4 (UNVERIFIED in the game): queued ops form a stack,
+the first link's target runs next (depth-first), a link's delay is the target input's plus the output's, a disabled
+input receives nothing, an input hit twice runs its op twice, at most 1,000 ops per run (frame).
+
 Key regression pinned here: arrays inside structs (SeqOpOutputLink.Links) must decode through the declaring
 struct's reflection even when the sequence package does not import that struct by name. If they decode as empty,
 nothing propagates and every trace below collapses to the event line.
@@ -93,6 +97,8 @@ def build_engine():
 
     s_in = struct_('SeqOpInputLink')
     prop('Str', s_in, 'LinkDesc')
+    prop('Bool', s_in, 'bDisabled')
+    prop('Float', s_in, 'ActivateDelay')
     s_link = struct_('SeqOpOutputInputLink')
     prop('Object', s_link, 'LinkedOp')
     prop('Int', s_link, 'InputLinkIdx')
@@ -229,7 +235,12 @@ def build_sequence(ops, variables=(), sequence_class=('Engine', 'Sequence')):
         body = w32(0)                                                        # net-index prefix, as the executor expects
         for kind, name, value in o['scalars']: body += scalar[kind](name, value)
         if o['inputs']:
-            body += t_array('InputLinks', len(o['inputs']), b''.join(t_str('LinkDesc', d) + none for d in o['inputs']))
+            # an input is a LinkDesc, or (LinkDesc, bDisabled, ActivateDelay)
+            def input_link(d):
+                desc, disabled, delay = (d, False, 0.0) if isinstance(d, str) else d
+                return t_str('LinkDesc', desc) + (t_bool('bDisabled', True) if disabled else b'') \
+                    + (t_float('ActivateDelay', delay) if delay else b'') + none
+            body += t_array('InputLinks', len(o['inputs']), b''.join(input_link(d) for d in o['inputs']))
         if o['outs']:
             elements = b''
             for link in o['outs']:
@@ -297,15 +308,16 @@ with tempfile.TemporaryDirectory() as folder:
                   'Act1 <- In', 'Act2 <- In'],
            host_boundary=[HOST + 'Act1 <- In', HOST + 'Act2 <- In'])
 
-    # (1b) ActivateRemoteEvent re-enters the sequence: the matched event runs before the activator's own Out.
+    # (1b) ActivateRemoteEvent re-enters the sequence: the matched event is queued; the activator's own Out links are
+    # pushed on top of it, so Act1 runs before the event's outputs (stack order).
     code, got, _ = kismet(root, [event('Ev', 'Go', ('Hop', 0)),
                                  op('Hop', 'SeqAct_ActivateRemoteEvent', ['In'], [out('Out', ('Act1', 0))],
                                     scalars=[('name', 'EventName', 'Pong')]),
                                  event('Ev2', 'Pong', ('Act2', 0)), world('Act1'), world('Act2')], '--remote', 'Go')
     expect('1b remote re-entry', got, code, 0, ops=5, executed=5,
            trace=['event Ev', 'Ev output 0 -> 1 link(s)', 'Hop <- In', "Hop remote 'Pong'", 'event Ev2',
-                  'Ev2 output 0 -> 1 link(s)', 'Hop output 0 -> 1 link(s)', 'Act2 <- In', 'Act1 <- In'],
-           host_boundary=[HOST + 'Act2 <- In', HOST + 'Act1 <- In'])
+                  'Hop output 0 -> 1 link(s)', 'Act1 <- In', 'Ev2 output 0 -> 1 link(s)', 'Act2 <- In'],
+           host_boundary=[HOST + 'Act1 <- In', HOST + 'Act2 <- In'])
 
     # --op enters the same event directly, and the full sequence path (with package prefix) resolves too.
     code, got, _ = kismet(root, chain_ops, '--op', 'Ev', seq='TestSeq.Seq')
@@ -351,10 +363,11 @@ with tempfile.TemporaryDirectory() as folder:
               ['G <- Toggle', 'G <- In'], 0, 3)
     gate_case('3f2 Toggle twice reopens it', gate('G', through, open_=True), [TOGGLE, TOGGLE, IN],
               ['G <- Toggle', 'G <- Toggle', 'G <- In', 'G output 0 -> 1 link(s)', 'Act <- In'], 1, 5)
-    # AutoCloseCount (UNVERIFIED against the game in src/kismet.cpp): closes after N passes.
+    # AutoCloseCount (UNVERIFIED against the game in src/kismet.cpp): closes after N passes. G is hit three times; each
+    # pass's link is pushed above G's next activation, so Act runs between them (depth-first).
     gate_case('3g AutoCloseCount=2 closes after two passes', gate('G', through, open_=True, auto=2), [IN, IN, IN],
-              ['G <- In', 'G output 0 -> 1 link(s)', 'G <- In', 'G output 0 -> 1 link(s)', 'G <- In',
-               'Act <- In', 'Act <- In'], 2, 6)
+              ['G <- In', 'G output 0 -> 1 link(s)', 'Act <- In', 'G <- In', 'G output 0 -> 1 link(s)', 'Act <- In',
+               'G <- In'], 2, 6)
 
     # (4) SetBool writes its Target (from a linked Value, else DefaultValue); CompareBool routes by that value.
     def setbool_case(label, link_value, default, target_initial, expected_true):
@@ -418,15 +431,15 @@ with tempfile.TemporaryDirectory() as folder:
     code, got, _ = kismet(root, chain_ops, '--remote', 'Nobody')
     expect('8 unknown remote event', got, code, 1, ops=6, entry_matches=0, executed=0)
 
-    # (9) a two-op ring stops at the execution limit instead of hanging.
+    # (9) a two-op ring stops at the per-run limit (1,000 ops) instead of hanging.
     ring = [event('Ev', 'Ping', ('GA', IN)),
             gate('GA', [out('Out', ('GB', IN))], open_=True), gate('GB', [out('Out', ('GA', IN))], open_=True)]
     code, got, _ = kismet(root, ring, '--remote', 'Ping')
     check('9 ring: exit code', code == 1, code)
     check('9 ring: error', got['errors'] == ['kismet execution limit exceeded'], got['errors'])
-    # event(1) + 9,999 completed impulses, then the 10,000th pop makes `executed` 10,001 and aborts unexecuted.
-    check('9 ring: executed', got['executed'] == 10001, got['executed'])
-    check('9 ring: trace length', len(got['trace']) == 2 + 2 * 9999, len(got['trace']))
+    # the event and 999 gate runs; the 1,001st pop aborts unexecuted. Trace: 'event Ev', its output, then 2 lines per gate.
+    check('9 ring: executed', got['executed'] == 1000, got['executed'])
+    check('9 ring: trace length', len(got['trace']) == 2 + 2 * 999, len(got['trace']))
     check('9 ring: trace shape', got['trace'][:6] == ['event Ev', 'Ev output 0 -> 1 link(s)', 'GA <- In', 'GA output 0 -> 1 link(s)',
                                                       'GB <- In', 'GB output 0 -> 1 link(s)'], got['trace'][:6])
     check('9 ring: log clean', got['log'] == [], got['log'])
@@ -483,14 +496,42 @@ with tempfile.TemporaryDirectory() as folder:
                   op('NotEvent', 'SeqAct_ToyWorldAction', ['In'], [], scalars=[('obj', 'Originator', elsewhere)]),
                   world('Act1'), world('Act2'), world('Act3')]
     code, got, _ = kismet(root, origin_ops, '--originator', 'Elsewhere')
+    # Both events are queued before the run; the most recently queued (P2) runs first.
     expect('13a originator events', got, code, 0, ops=7, entry_matches=2, executed=4,
-           trace=['event P1', 'P1 output 0 -> 1 link(s)', 'event P2', 'P2 output 0 -> 1 link(s)', 'Act1 <- In', 'Act2 <- In'],
-           host_boundary=[HOST + 'Act1 <- In', HOST + 'Act2 <- In'])
+           trace=['event P1', 'event P2', 'P2 output 0 -> 1 link(s)', 'Act2 <- In', 'P1 output 0 -> 1 link(s)', 'Act1 <- In'],
+           host_boundary=[HOST + 'Act2 <- In', HOST + 'Act1 <- In'])
     code, got, _ = kismet(root, origin_ops, '--originator', 'ToyGroup.ToyMission')
     expect('13b other originator', got, code, 0, ops=7, executed=2,
            trace=['event P3', 'P3 output 0 -> 1 link(s)', 'Act3 <- In'], host_boundary=[HOST + 'Act3 <- In'])
     code, got, _ = kismet(root, origin_ops, '--originator', 'Nowhere')
     expect('13c unknown originator', got, code, 1, ops=7, entry_matches=0, executed=0)
+
+    # (14) NATIVE_MISSION_DISPATCH.md acceptance test 7 (invented data).
+    # 14a: delay = output ActivateDelay 1.0 + target input ActivateDelay 0.5: not due at 1.4 s, due at 1.6 s.
+    delayed = [op('Ev', 'SeqEvent_RemoteEvent', [], [out('Out', ('Act', 0), delay=1.0)], scalars=[('name', 'EventName', 'Ping')]),
+               op('Act', 'SeqAct_ToyWorldAction', [('In', False, 0.5)])]
+    code, got, _ = kismet(root, delayed, '--remote', 'Ping', '--tick', '1.4')
+    expect('14a input delay adds to output delay (1.4 s)', got, code, 0, ops=2, executed=1, trace=['event Ev', 'Ev output 0 -> 1 link(s)'])
+    code, got, _ = kismet(root, delayed, '--remote', 'Ping', '--tick', '1.4', '--tick', '0.2')
+    expect('14a input delay adds to output delay (1.6 s)', got, code, 0, ops=2, executed=2,
+           trace=['event Ev', 'Ev output 0 -> 1 link(s)', 'Act <- In'], host_boundary=[HOST + 'Act <- In'])
+    # 14b: a disabled input receives nothing.
+    code, got, _ = kismet(root, [event('Ev', 'Ping', ('Act', 0)), op('Act', 'SeqAct_ToyWorldAction', [('In', True, 0.0)])],
+                          '--remote', 'Ping')
+    expect('14b disabled input', got, code, 0, ops=2, executed=1, trace=['event Ev', 'Ev output 0 -> 1 link(s)', 'Act input 0 disabled'])
+    # 14c: links A, B -> A's whole subtree runs before B (depth-first in link order).
+    code, got, _ = kismet(root, [event('Ev', 'Ping', ('GA', IN), ('GB', IN)),
+                                 gate('GA', [out('Out', ('A2', 0))], open_=True), gate('GB', [out('Out', ('B2', 0))], open_=True),
+                                 world('A2'), world('B2')], '--remote', 'Ping')
+    expect('14c depth-first in link order', got, code, 0, ops=5, executed=5,
+           trace=['event Ev', 'Ev output 0 -> 2 link(s)', 'GA <- In', 'GA output 0 -> 1 link(s)', 'A2 <- In',
+                  'GB <- In', 'GB output 0 -> 1 link(s)', 'B2 <- In'], host_boundary=[HOST + 'A2 <- In', HOST + 'B2 <- In'])
+    # 14d: an input hit twice before its op runs makes the op run twice (G's pass reaches Act while Act is still queued).
+    code, got, _ = kismet(root, [event('Ev', 'Ping', ('G', IN), ('Act', 0)), gate('G', [out('Out', ('Act', 0))], open_=True),
+                                 world('Act')], '--remote', 'Ping')
+    expect('14d input hit twice runs twice', got, code, 0, ops=3, executed=4,
+           trace=['event Ev', 'Ev output 0 -> 2 link(s)', 'G <- In', 'G output 0 -> 1 link(s)', 'Act <- In', 'Act <- In'],
+           host_boundary=[HOST + 'Act <- In'] * 2)
 
     # (12) a sequence path that does not exist is a hard error, not an empty run.
     missing = subprocess.run([reader, str(root / 'TestSeq.upk'), '--kismet-run', 'NoSuchSeq', '--cooked', str(root),

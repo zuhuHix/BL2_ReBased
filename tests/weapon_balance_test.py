@@ -73,10 +73,20 @@ class LegalPartsTests(unittest.TestCase):
         self.assertEqual(result['chain'], ['Root', 'Leaf'])
         self.assertTrue(result['slots']['Body']['fixed'])
         self.assertFalse(result['slots']['Grip']['fixed'])
-        self.assertTrue(result['slots']['Grip']['all_zero_weight'])  # weight index 2 -> 0
+        # No Manufacturers list: the game's flat weight 100, whatever DefaultWeightIndex says (index 2 -> 0).
+        self.assertFalse(result['slots']['Grip']['all_zero_weight'])
+        self.assertEqual([c['share'] for c in result['slots']['Grip']['candidates']], [0.5, 0.5])
         self.assertEqual([c['part'] for c in result['slots']['Sight']['candidates']], ['Sight.B', 'Sight.C'])
-        self.assertEqual([c['share'] for c in result['slots']['Sight']['candidates']], [0.5, 0.5])
+        # Sight.B lists only Manufacturer=None (not a wildcard): its DefaultWeightIndex 3 -> 10; Sight.C -> 100.
+        self.assertEqual([c['weight'] for c in result['slots']['Sight']['candidates']], [10, 100])
         self.assertEqual(result['combinations'], 1 * 2 * 2)
+
+    def test_listed_manufacturer_with_zero_weight_empties_the_slot(self):
+        package = world()
+        package.objects['Root.PartList']['GripPartData']['WeightedParts'] = [
+            part('Grip.A', 2, [('Maker', 2)]), part('Grip.B', 2, [('Other', 3)])]
+        result = B.legal_parts(package, 'Leaf')
+        self.assertTrue(result['slots']['Grip']['all_zero_weight'])
 
 
 class CrosscheckTests(unittest.TestCase):
@@ -120,7 +130,7 @@ class CardAuditTests(unittest.TestCase):
         self.assertEqual(len(cards), 1)
         observed = A.observed(cards[0])
         self.assertEqual(observed, {'damage': 120.0, 'fire_rate': 2.5, 'projectiles': 3, 'status_dps': 10.5,
-                                    'status_chance': 12.0, 'sale_value': 99})
+                                    'status_chance': 12.0, 'sale_value': 99, 'name': 'Test Gun'})
         self.assertEqual((cards[0]['type_icon'], cards[0]['element'], cards[0]['level']), ('pistol', 'fire', 7.0))
 
     def test_agreement_uses_the_printed_rounding(self):

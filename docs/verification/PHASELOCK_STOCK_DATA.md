@@ -236,3 +236,370 @@ python research/script_disasm.py WillowGame.upk LiftActionSkill.PhaseLockTarget 
 python tests/prepare_action_skill_test.py
 python tests/skill_stats_test.py
 ```
+
+## Stock presentation census (2026-10-02)
+
+AI-assisted (Claude). Read-only census of what the installed data and script say Phaselock *shows*: the bubble,
+the effects, the lifted target's animation and Maya's first-person cast. **No game capture, no UE run.** Sources:
+`ow-package --properties` (tagged reader, with a local array schema), `--behavior-dump`, and `research/script_disasm.py`
+on `LiftActionSkill`, `SpecialMove_PhaseLock` and `SpecialMove_FirstPerson`. Listings, dumps and exports stay under
+ignored `local/phaselock/census/` and `local/phaselock/umodel-test/`. Script behaviour is summarised in our own words.
+Every reading below is `UNVERIFIED` until a game capture confirms it. All objects are in `GD_Siren_Streaming_SF.upk`
+unless noted; a few FX assets are imports exported by `Startup.upk`.
+
+### What the archetype names
+
+`ActionSkill_Phaselock` (with `Default__LiftActionSkill` in `WillowGame.upk` for anything it does not override)
+names every presentation piece:
+
+| Piece | Object / value |
+|---|---|
+| First-person hand effect | `FX_CHAR_Siren.Particles.Part_SirenASHandOrb` (miss: `Part_SirenASHandFizzle`), socket `LilithMeleeFX` on the arms, small offset, scale 0.35 (class defaults) |
+| Third-person hand effect | the same templates at bone `Bip01_L_Hand` |
+| Bubble | `Part_SirenASEnemyOrbBegin` -> `Part_SirenASEnemyOrb` (loop) -> `Part_SirenASEnemyOrbEnd`; `BubbleFXScale` 66.7, intro 0.2 s, outro overlap 0.2 s |
+| Bubble parameters | particle parameters `PhaselockLifeTime` (loop lifetime) and `SphereCollapse` (0 -> `MaxCollapseValue` 0.75 over `CollapseDuration` 2 s) |
+| Light | `PhaselockLight` (a `PointLightComponent`; class default radius 500, brightness 4, blue-violet, no shadows) |
+| Maya's animation | `PhaselockSMD_Hit` `Misc.Phaselock_1st3rd_SM` (third person `AA_PhaseLock`, first person `Misc.Anim_Phaselock` = arms sequence `Phase_Lock_Lift`); miss: `Phaselock_Fizzle_1st3rd_SM` (`AA_PhaseLock_Fail` / `Phase_Lock_Fail`); both block weapon actions |
+| Target animation | `PhaseLockDef_Default` (`HeightFromGround` 200, `DropTime` 0.5) with `SpecialMove_PhaseLock` names `PhaseLock_Lift` (blend-in 0.4 s), `PhaseLock_Loop` (loops), `PhaseLock_Fall` (stops on last frame), `PhaseLock_Land` |
+
+The provider's own effects (see the event table above) add `Part_PhaseLockScreenEffect` (a screen particle shown on
+`OnSelectedTarget`, hidden on `OnActionSkillDeactivated`), `Part_PhaseLock_Miss_Impact` on a miss,
+`Part_PhaseLock_EnemyCannotBeLocked` on a blocked target, and sounds (names only):
+`Ak_Play_FX_Player_Phaselock_Activate`, `_Loop`, `_Collapse`, `Ak_Play_FX_Maya_Phaselock_False_Start`.
+
+### Bubble chain (script, our summary)
+
+- Nothing is drawn around the target during the 0.7 s lift except the light. `LockTarget` spawns the bubble.
+- `SpawnBubbleFX` spawns an emitter at the lift end point with the intro template. Its draw scale is the lifted
+  pawn's mesh bounds sphere radius divided by `BubbleFXScale`, so the bubble follows the body size. After
+  `BubbleFXIntroTime` it changes to the loop template.
+- The loop emitter's life span and its `PhaselockLifeTime` parameter are the locked state's duration plus the
+  overlap. Each tick `UpdateEffects` raises `SphereCollapse` toward 0.75. The rise is timed to end with the lock, over
+  the last `CollapseDuration`.
+- `StartOutro` destroys the loop and spawns the end template, which holds the twirls, smoke and a closing flash.
+- `UpdatePhaselockLight` attaches the light to the lifted pawn. It ramps the light up over the lift, holds it while
+  locked and ramps it down over the outro.
+- Loop template emitters: two 4-frame sprite "spikey" sheets (additive and modulated), a core-colour sprite, a
+  sprite named `Sphere` using `Mat_SirenEnemyOrb` (texture `PhaseLockBubble_Dif_Tex`, its dynamic parameter driven by
+  `SphereCollapse`), a modulate-black sprite, and an orbiting twirl sprite (`FX_CHAR_Lilith.Materials.Mat_PowerUpTwirls`).
+  So the stock bubble is **camera-facing sprites with a bubble texture, not a mesh sphere**. Sizes read from the baked
+  tables are in the 200-500 range before the draw scale (layout fitted, below).
+
+### Target-side animation chain (script, our summary)
+
+- `LiftTarget` picks the `PhaseLockDefinition`: the body class's own definition, then the `LiftBodyMap` body tag
+  (Loader, Probe, Rakk, Gyrocopter), else `PhaseLockDef_Default`. It plays the lift special move, queues the loop and
+  switches the pawn to a flying physics mode with world collision off.
+- `UpdateLiftedPawnMeshOffset` runs after the snap part of the lift. It eases the mesh translation (VInterp speed 5)
+  so that the mesh's bounds centre moves onto the pawn's location, which centres the body in the bubble.
+- `DropTarget` restores default physics, zeroes velocity and plays the drop move stretched to `DropTime`. If the
+  target cannot play drop animations, it stops the loop instead. `CheckLandTarget` plays the land move once the pawn
+  walks again.
+- These names resolve per enemy AnimSet. Seen with `ow-package`: `Anim_Psycho.Base_Pyscho` (Lift 0.87 s, Loop 3.03 s,
+  Fall 0.2 s, Land 0.83 s), `Anim_Nomad.Base_Nomad`, `Anim_Goliath.Base_Goliath` and `Anim_Spiderant_NEW.Shared_Spiderant`
+  (`SouthernShelf_Dynamic.upk`, `IceCanyon_Combat.upk`). 77 packages carry the names.
+- **The Sanctuary target dummy has none of them.** `GD_TargetDummy.Character.Pawn_TargetDummy`'s mesh component uses
+  only `Anim_Sanctuary.Anim_Fink`, and no sequence in `Sanctuary_Dynamic.upk` is named `PhaseLock_*`. Its body class
+  (`BodyTag_Psycho`) has no own `PhaseLockDef`. So the stock data would ask for the default names and find no clip on
+  the slice's dummy. What the engine then shows (probably the idle pose kept), and whether the dummy is liftable at
+  all (`Flag_Skills_CanPhaseLock`), is `UNVERIFIED`. The Psycho-shaped `GD_PsychoShared.Anims.PhaseLockAnim_PsychoShared_*`
+  moves exist in the same package but nothing found here references them.
+
+### Maya's first-person cast: what is attached to the arms
+
+- `Phase_Lock_Lift` (arms AnimSet `Anim_Siren.Siren_1st`, 26 frames, 0.87 s) has one notify at 0.25 s. It is an
+  `AnimNotify_UseBehavior` that fires the custom event `PlayPhaselockHandFXFirstPerson` on the action skill.
+  `Phase_Lock_Fail` fires the same event at 0.05 s.
+- `LiftActionSkill.RunCustomEvent` handles that event. It creates a particle component on the arms at socket
+  `LilithMeleeFX`, with the first-person offset and scale. It sets the component to foreground depth and owner-only
+  visibility, and activates `Part_SirenASHandOrb` (fizzle template on a miss). The component is removed when the
+  system finishes.
+- The socket is on `Char_Siren.Hands_Siren`, bone `L_Weapon_Bone`, a few units out.
+- Hand-orb emitters: three mesh-particle ribbons (`FX_CHAR_Siren.Meshes.Smesh_Twirly_01/02/03` with
+  `Mat_SirenEnergyRibbons`), an energy swirl, a suction sprite, a modulate-black sprite, an inner-orb sprite
+  (`Mat_SirenHandInnerOrb`), a short sub-UV "after smoke" burst and three glow/flash sprites.
+- `Skill_Phaselock`'s `OnActivated` enables `GD_Siren_Skills.CoordinatedEffects.Phaselock_TatooGlow`. That effect
+  drives the material scalar `p_EnablePowerEmissive` over 1 s (rises to about 0.8 near the middle, back to 0). The
+  four curve keys are stored out of time order and are read as stored.
+- `Char_Siren.Mati_Siren_Hands` (parent `Common_Materials.Player.Master_Player`) carries that parameter at 0 and an
+  HDR cyan `p_PowerEmissiveColor`. So the arms' tattoo is expected to flash cyan during the cast. That the coordinated
+  effect reaches the first-person arms mesh is native and `UNVERIFIED`. Which mask channel limits it to the tattoo was
+  not read.
+- **Likely "missing something":** the hand orb at `LilithMeleeFX` from 0.25 s into the arm clip, plus the 1 s cyan
+  tattoo glow on the arm material. The full-screen `Part_PhaseLockScreenEffect` also starts when the target is
+  selected. The host draws a violet beam from `L_Hand` instead, and has no tattoo glow and no screen effect.
+
+### Online references (local only)
+
+On 2026-10-02 the maintainer allowed looking online. The images and their sources are under ignored
+`local/phaselock/ref_online/` (`sources.txt`). Promotional renders show the tattooed left arm glowing cyan with a
+violet orb and orbiting ribbons in the hand, which fits `Part_SirenASHandOrb` plus `Phaselock_TatooGlow`. YouTube
+auto-frames show, in first person, an enemy inside a violet sphere with a dark core (through a scope) and a lifted
+Bullymong with limbs spread while the frame is washed out pale. These are third-party, low-resolution frames. They
+support which effects are visible but are not a capture and verify no timing or value.
+
+### Data layout lead: baked distributions (fitted, UNVERIFIED)
+
+Cooked emitter modules keep no distribution objects (`Distribution` is None). The values are only in each
+`RawDistributionFloat/Vector.LookupTable` (read as a float array). The tables fit this pattern: two leading values
+(the minimum and maximum over all entries), then samples of 1 (float) or 3 (vector) values, or min/max pairs for
+uniform distributions, spaced by `LookupTableTimeScale`. Example: a 23-entry alpha table with time scale 20 is 2
+range values plus 21 samples over the particle's life. The tagged reader shows no `Op`, entry count or chunk size,
+so constant, curve and uniform tables cannot be told apart from the data alone yet. Spawn rates are 0 in the bubble
+emitters, so the particles come from `BurstList`, which the reader does not decode. `ParticleModuleParameterDynamic.DynamicParams`
+and `ParticleSystem.LODSettings` are not decoded either.
+
+*Update 2026-10-02:* the "Particle template reader" section below supersedes this lead: the header bytes are ordinary delta-serialized tags and `BurstList` and `DynamicParams` are decoded by `research/particle_system.py`.
+
+### What UModel build 1590 exports here (timed, 2026-10-02)
+
+| Command | Time | Result |
+|---|---|---|
+| `-export -game=border -uncook -groups -png -gltf GD_Siren_Streaming_SF.upk` | 3.3 s | 158/158 supported objects: 107 textures, 33 materials and 8 material instances (`.mat` heuristic), 7 static meshes, 3 skeletal meshes. `ParticleSystem` (36 in the package) is an unknown class and is not exported; AnimSets are skipped in glTF mode. 12 import warnings (textures and materials outside the package, for example `PhaseLockScreenMask02_Dif_Tex`, `EnergyOrbReflect_Cube`) |
+| Targeted from `Startup.upk`: `Mat_EnemyOrbCoreColor`, `Mat_SirenSuction`, `Mat_SirenGlowMOD`, `Mat_SirenHandGlow`, `Smesh_Twirly_01` | 0.1-0.2 s each | all exported with their textures |
+| `Mat_SirenOrbBlackMOD` | 0.1 s | skipped ("empty parameters": a material with no texture parameter) |
+| `Part_SirenASEnemyOrb ParticleSystem` | 0.1 s | "no supported objects" |
+| `-md5 ... Siren_1st AnimSet`; `-md5 SouthernShelf_Dynamic.upk Base_Pyscho AnimSet` | 0.1 s; 1.3 s | exported, including `Phase_Lock_Lift`/`_Fail` and the four Psycho `PhaseLock_*` clips |
+
+So UModel provides the bubble's and hand orb's textures, the twirl meshes, the arms and Psycho clips, and heuristic
+material slots. It provides no emitter structure, module values or material graphs. The material `.mat` files name
+textures only (for example `Mat_SirenEnemyOrb`: `PhaseLockBubble_Dif_Tex`). They do not show blend modes, the
+`SphereCollapse` dynamic-parameter wiring or depth bias.
+
+### Bounded host plan (not started)
+
+1. **Can be imported now (UModel plus the existing glTF/md5 tools):** the bubble and hand-orb textures, the
+   `Smesh_Twirly_01-03` meshes, the Psycho `PhaseLock_*` clips (for a Psycho-shaped target; the slice dummy has none),
+   and the arms are already imported.
+2. **Arm effect, smallest step:** play a host stand-in for the hand orb on `LilithMeleeFX` at 0.25 s into
+   `Phase_Lock_Lift`. It would be a Niagara or mesh assembly with the imported textures and twirl meshes, foreground
+   and owner-only. Separately, drive a cyan emissive pulse on the arms material with the decoded 1 s curve.
+   Both use only numbers read above. The look of the emitters stays a host approximation until step 4.
+3. **Bubble:** replace the 220 cm `M_OW_FxAdditive` sphere with camera-facing sprites using
+   `PhaseLockBubble_Dif_Tex` and the spike sheets. Scale them by mesh bounds radius / 66.7. Spawn them at the lock
+   (not at the cast), with an intro of 0.2 s, an end burst at the outro and the collapse parameter over the last 2 s.
+   The point light (radius 500, brightness 4) was removed earlier for pooling under Lumen; re-adding it needs a
+   Lumen-aware choice.
+4. **Needs decoding first, for anything closer:** the `RawDistribution` table header (op, element count, chunk size)
+   and `BurstList` (spawn counts), `ParticleModuleParameterDynamic.DynamicParams`, the remaining module properties
+   (`Required` sub-UV and alignment are already read), and the material graphs of the FX materials
+   (blend mode, how `SphereCollapse` and the dynamic parameter are used). A `research/` reader for these was
+   the bounded next step and now exists (`research/particle_system.py`, section below); the FX material graphs remain stripped. A converter to Niagara is a separate, larger task.
+5. **Target animation:** use the `PhaseLockDefinition` chain (lift with blend-in, queued loop, drop stretched to
+   0.5 s, land on walking) and the mesh-centring rule. For the slice dummy, decide with the maintainer whether a
+   Psycho-shaped dummy borrows the Psycho clips: stock data gives the dummy no clips.
+
+## Particle template reader (2026-10-02)
+
+AI-assisted (Claude). `research/particle_system.py` (synthetic tests: `tests/particle_system_test.py`, 16 pass) reads
+cooked `ParticleSystem` templates with the pure-Python package loader of `research/behavior_census.py` and writes one
+JSON per template under ignored `local/phaselock/emitters/` (`python research/particle_system.py --oracle`). Each
+JSON holds every emitter, every LOD, every module's properties, the particle parameters, the effect materials'
+tagged properties and a per-emitter digest of LOD 0. No values are recorded here; they stay in the local JSON.
+Nothing was run in the game or in UE.
+
+**How values are resolved.** Cooked templates are delta-serialized: a property equal to the archetype's is not
+written. The reader merges own tags over the archetype chain. That is the export's `ArchetypeIndex`, else the same-named
+child of its outer's archetype, else `Engine.Default__<Class>`, whose own chain is followed to `Core`. Structs merge
+field by field and arrays are replaced whole. Without the class defaults the baked tables look headerless (the
+2026-10-02 census above): `Op`, `LookupTableNumElements` and `LookupTableChunkSize` are ordinary byte tags that are
+only written when they differ from the class default.
+
+**Layouts and what checks them.**
+
+| Item | Reading | Status |
+|---|---|---|
+| Tag streams of all particle and distribution exports | Every tag's value uses exactly its declared size, and the stream ends exactly at the export end. Prefix: 4 bytes, or 8 or 16 for distribution subobjects. Engine 347, GD_Siren_Streaming_SF 2437, Startup 15608, WillowGame 1244 exports; 0 failures | proven structurally; the extra prefix words are not understood |
+| `RawDistribution` table | `[range_a, range_b]` then entries of `ChunkSize` floats, `ChunkSize = NumElements x width` (width 1 float, 3 vector; `NumElements` 2 = low/high pair). Constants and pairs are stored as exactly 2 entries with `TimeScale` 0. Curves store entries at `StartTime + k / TimeScale` | layout: all 17,506 non-empty tables in the four packages pass. Constants and pairs: proven against 171 Engine tables whose uncooked distribution objects are kept, all matching. **Curve sampling: FITTED** (435 of 535 curve tables in the Phaselock package end exactly at time 1.0; no kept curve object has a curve table to compare with) |
+| Range header | Pair tables: (min of the lows, max of the highs), or the range over both halves when `Type` has bit 0x80 (19 Startup tables). Single-value tables: bounds the entries, sometimes wider than the samples (a key between samples) | fitted; `Type` meaning UNVERIFIED |
+| `Op` | 1 for a single value, 2 for a uniform pair; 3 also occurs on pair tables (19 in the Phaselock package). A uniform with low = high is baked as `Op` 1 (15 Engine cases) | values observed; meaning of 2 vs 3 UNVERIFIED |
+| `BurstList` | Tagged structs: `Count`, `CountLow`, `Time`, `CountDistribution`. All four fields are written in every element (192 + 1355 + 155 lists) | layout proven. Whether `Time` is a fraction of the emitter duration is UNVERIFIED |
+| `DynamicParams` | Tagged structs: `ParamName`, `ValueMethod`, `bUseEmitterTime`, `bSpawnTimeOnly`, `bScaleVelocityByParamValue`, `ParamValue` (a raw distribution). All fields are always written | layout proven; the slot-to-material wiring is not in the tags |
+| Particle parameters | `Distribution*ParticleParameter` objects are kept and their table is empty (45 here). They carry `ParameterName`, input and output ranges, and `Constant` (defaults from the class chain) | decoded. The mapping (clamp input, map to output, `Constant` when the parameter is unset) is UE3 general knowledge and UNVERIFIED |
+| Enums | An enum export is a count followed by that many FNames, ending exactly at the export end. Used to name the default (first) value of absent enum properties | fitted on Engine enums |
+| Materials | `BlendMode`, `LightingModel`, `TwoSided` and usage flags read from tags. The expression list survives only as mostly empty object slots plus parameter expressions. Graphs, dynamic-parameter use and texture wiring are not in the tags | as stored |
+
+Names of the template parameters: the bubble loop reads `PhaselockLifeTime` (all six emitters' lifetimes) and
+`SphereCollapse` (the `Sphere` emitter's dynamic parameter 0, input range 0 to 0.75). The intro and the miss effects
+read `PhaseLockIntroLifetime`, which the script summarised above never sets, so they would fall back to the
+parameter's `Constant` (UNVERIFIED engine behaviour). Material blend modes: the bubble's `Sphere`, the core colour and
+the ribbons are additive and unlit. The spike sheets come as one translucent and one modulate copy. The black
+sprites and the `GlowMOD` flashes are modulate. The inner orb, suction, swirl, hand glow and screen effect are
+translucent and unlit.
+
+**Not decoded:** semantic units (rotation in turns, sizes in UU, colour as HDR multipliers) are standard UE3
+knowledge and are not checked here. Orbit chaining, the location primitives and the mesh type-data defaults
+(alignment) are read but not interpreted. The `ow-package` C++ reader needs no change for these structs:
+`BurstList=StructProperty:ParticleBurst` and `DynamicParams=StructProperty:EmitterDynamicParameter` in an
+`--array-schema` file would let it list them too, since their elements are ordinary tag streams.
+
+## Host presentation pass, second round (2026-10-03)
+
+AI-assisted (Claude). Host and tooling only; no parser change. Compared against the 2026-10-02 game captures
+(`REALGAME_GROUND_TRUTH.md`, frames under ignored `local/realgame/phaselock/`, a bullymong in Three Horns) on the
+host's Sanctuary dummy: the effect is compared, not the scene. Frames, logs and the side-by-side stay under ignored
+`local/phaselock/`.
+
+**Capture clock.** The `cast_close` SDK samples put the lift start 0.21 s after the key press. Times below are from the
+lift start, which is the host's cast time.
+
+**What the defects turned out to be.**
+
+| Seen in the 2026-10-03 host frames | Cause | Status |
+|---|---|---|
+| No bubble from 0.98 s to about 4 s, then a bubble appearing | The host materials are recreated by every import, and the import runs with `-nullrhi`, so the first game run compiled their shaders on first draw; translucent quads are not drawn until then. An unchanged rerun showed the bubble from the loop start | fixed: `FOwFxTemplate::Preload` loads every template's materials and meshes when the manifest loads and compiles the parents' shaders synchronously (editor builds). The first run after an import now draws everything on time |
+| Hand orb "size 0x0", arm swinging down by 0.35 s | The mesh-particle sizes are mesh scales (0.12-0.7), which the log printed with no decimals. The early arm came from the capture clock: the first screenshot stalls a frame by 0.36 s and later ones by about 0.13 s, so the "0.25 s" frame was taken at +0.52 s | fixed in the log (`mesh scale`, actual time per shot) and in the capture (game time advances at most 1/60 s per frame in `-owphaselockshots`). With correct times the arm stays raised to about 0.6 s, as in the game |
+| No dark core during the hold; pink-white sphere | UE5 applies modulate materials apart from the additive layer, even in the before-DOF pass, so `Mat_SirenOrbBlackMOD` never darkened the additive core sprites drawn before it | host stand-in: the darkening modulates are drawn as translucent black with opacity equal to the modulate weight (exact for a black target), in emitter order. The black orb has no texture parameter, so its mask is a host disc (full to two thirds of the radius). The hold now shows a near-black core with the violet rim of `PhaseLockBubble_Dif_Tex` |
+| Black wedge at the collapse | The end template's smoke ran its sub-images the wrong way (the host ignored the SubUV module's `SubImageIndex`, which runs 15 -> 0) | fixed: `SubImageIndex` drives linear sub-image layouts; spawn-time distributions are read at the emitter's time (the smoke's `StartSize` curve) |
+| Violet pool on the floor | `PhaselockLight` data (radius 500, brightness 4, falloff 0.5, `LAC_DYNAMIC_AND_STATIC_AFFECTING`) drawn as a UE5 unitless light | host stand-in: the light reaches only the lifted target (lighting channel 1). The data says it should light the floor too; the capture shows no pool. The UE3 -> UE5 brightness mapping stays open |
+| White full-screen wash at 1.2-2.0 s | The screen material drew its mask texture's brightest channel x colour (4, 6, 30) | host stand-in: a modulate of the view by the colour's hue, weighted by alpha and the mask's green streaks. It reads as the game's strong blue tint |
+
+**Cast animation data (no host change).** `Phase_Lock_Lift` has no `RateScale`, and `Anim_Phaselock`
+(`SpecialMove_FirstPerson`) names only the clip and a behavior provider. `Default__GearboxAnimDefinition` has
+`PlayRate` 1, `BlendInTime` and `BlendOutTime` 0.1 and `EC_OnBlendOut`. `SpecialMove_FirstPerson.PlayAnim` (script,
+our summary) takes the play rate from the caller's `SpecialMoveData` (`PlayRateScale`, or clip length / `Duration` when
+a duration is given); those values were not resolved. With the corrected capture clock the host's arm timing
+matches the game's to the eye.
+
+**Burst `Time` convention (open).** Only `Part_PhaseLockScreenEffect` has a burst whose time depends on the convention
+(`Time` 0.7 in a 1.5 s emitter). In game the blue tint starts about 0.82 s after the lift starts. That fits 0.7 s
+better than 0.7 x 1.5 = 1.05 s (the host's convention), if `OnSelectedTarget` fires at the lift start. Not changed;
+UNVERIFIED either way.
+
+**Still different from the game (UNVERIFIED stand-ins or open):** the real dark blob around the raised hand at about
+0.27 s (none of the decoded hand emitters explains it under the host's modulate reading); the solid blue palm orb at
+0.45-0.6 s (the host shows white-blue flashes and swirls there); the intro's 0.8 s burst, which the host draws as a
+white band (the `Mat_SirenHandGlow` rectangle, colour (0.5, 0.8, 20), tone-maps to white in UE5); the screen tint
+starting at 1.05 s instead of about 0.82 s; what `SphereCollapse` does in the stripped graph (the host draws nothing
+from it). The modulate readings in `MODULATE_READINGS` and `DARKEN_AS_TRANSLUCENT`, the black orb's disc and the light
+channel are host choices.
+
+### Round 3 (2026-10-03, later)
+
+An independent critic scored the round-2 side-by-side 4.5/10 (it was 2.5 before). Round 3 worked on its three items
+and checked first whether one host-side cause explains several of them. Frames: ignored `local/phaselock/b2/*-20261003-184336.png`.
+Side-by-sides: `local/phaselock/compare/phaselock_host_vs_real_r3_20261003-184336.jpg` (0.25, 0.5, 1.5, 3.0 and 4.8 s)
+and `..._r3_extra_...` (0.35, 0.8, 1.2, 4.5 and 5.0 s).
+
+**One common cause: the tone curve, not exposure.** Auto-exposure is already off project-wide, so exposure was not
+adapting. What differs is the tone curve. UE3 shows each channel of the final colour clipped at 1, so an HDR particle
+colour such as (0.5, 0.8, 20) at opacity 0.25 reads as saturated cobalt (0.125, 0.2, 1). UE5's filmic curve maps the
+same value to near white. Host stand-in (UNVERIFIED; BL2's PC tone pipeline was not checked): the additive parent caps
+each channel of a layer's contribution at 1, which is exact for one additive layer over the scene. The translucent
+parent caps it at 1 / opacity. The global tone mapper is unchanged.
+
+| Critic item | Cause found | Change (host stand-ins unless said) |
+|---|---|---|
+| Screen grade grey-brown at 1.5 and 3 s | Round 2's modulate divided the particle colour by its largest channel, which darkens the scene | Divide by its luminance (Rec. 709) instead: the tint keeps the scene's brightness and pushes it to blue. Burst `Time` is now read as seconds of emitter time (UNVERIFIED); only the screen burst moves (1.05 s -> 0.70 s), which fits the game's tint onset of about 0.82 s after the lift starts |
+| Cast flashes white | The `Mat_SirenGlowMOD` flashes multiply the view by (3, 6, 12). Even UE3's clip would give near white there, while the game shows cobalt at 0.8 s (f018-f020) | `Mat_SirenGlowMOD` reads its colour as a brightness-keeping tint (colour / luminance, `HueOnly`). The 0.8 s frame is now a cobalt flash with radial streaks |
+| No dark burst at +0.27 s | Under the colour-only reading the hand orb's `ModulateBlack` (colour 1) did nothing | One reading of `Mat_SirenOrbBlackMOD` fits all three of its emitters: darkness = mask x (1 - alpha), towards black, colour unused. The bubble emitters have alpha scaled to 0 (dark core, as before). The hand emitter has alpha 0 at spawn (0.25 s) and 1 by 0.2 of its life: a large dark blob around the raised hand at 0.25-0.35 s, gone by 0.5 s, as in game f007-f009 |
+| Faint palm orb | The 0.5 s flash washed out the orb sprite (`Mat_SirenHandInnerOrb`, blue on `EnergyOrbCenter2_Dif_Tex`, 15 x size-over-life about 2 x hand scale 0.35, about 11 uu) | No size change. With the flash and clip changes a blue orb shows in the palm at 0.5 s. It looks smaller than the game's because the whole hand is about 2.5x smaller on screen in the host (arms placement or FOV, not the effect). Relative to the palm, the host orb is close to the game's |
+| Hard blue rim | Round 2's black disc (full to two thirds of the radius) also darkened the core sprite's magenta edge | Black disc full to half the radius (`RadialSharpness` 2): the hold shows a near-black core with a soft violet-magenta rim |
+
+**Bubble size: not changed.** The draw scale is the stock rule: the pawn's mesh bounds radius / `BubbleFXScale` 66.7,
+which is 104-109 uu for the host dummy. The game's bullymong stands much further from the camera, so apparent size
+cannot be compared, and its bounds radius is not known here. Checking the size needs a game capture at a matched
+distance (about 650 uu), or the bullymong's bounds radius read from the game.
+
+**Still different:**
+- The release ring is blue-violet. The game's ring is cyan-white at 4.9-5.0 s. The same `HueOnly` reading that fixes
+  the cast flashes reduces the end template's `Brighten` (0.4, 16, 30) to about x2 blue. Round 2's plain multiply
+  gave cyan-white there, but white cast flashes. One material reading does not fit both emitters, so neither was
+  tuned per emitter.
+- The 0.6 s white starburst (`Mat_SirenHandGlowShattered`, colour 1).
+- The lifted target's pose: the dummy has no `PhaseLock_*` clips in the stock data.
+- What `SphereCollapse` drives.
+
+### Round 4 (2026-10-03, against the matched-distance capture)
+
+The critic scored round 3 5.5/10. Round 4 compares the host with the matched-distance game capture, ignored
+`local/realgame/phaselock/matched_650/` (Ice_P, an Adult Bullymong 650 uu away, horizontal FOV 77.55 degrees, frames at
+fixed times after `SkillStartTime`). The host shots ran with `-owfov=62.15`, which the host's 4:3 conversion turns into
+77.55 degrees at 16:9, with its dummy also 650 uu away. Frames: ignored `local/phaselock/b2/*-20261003-195308.png`.
+Side-by-side at 0.25, 0.5, 0.8, 1.5, 3.0, 4.5, 4.8 and 5.0 s: `local/phaselock/compare/phaselock_host_vs_matched_r4_20261003-195308.jpg`.
+
+**FOV check.** In the capture's pre-cast frame the bullymong's feet sit about 252 px below the horizon. The cylinder
+bottom is 222 uu below the eye at 650 uu, which gives f of about 738 px (82 degrees horizontal). That is near the
+capture's 77.55 degrees (f 797) and far from the 93.9 degrees that the host's maintain-Y reading of `FOVAngle` 77.55
+would give. The host's default capture FOV (BL2 setting 90, 106 degrees at 16:9) is much wider than the game's. That
+default belongs to the host camera, not this lane, and was not changed.
+
+**Stock data found this round:**
+- `Mat_SirenOrbBlackMOD` carries a scalar parameter `DepthBias` (default -20); `_NoBias` (the hand fizzle's) has none.
+  `Mat_SirenGlowMOD` has `Bias` -15, and the smoke parent `Mat_Wispy_Smoke` has `DepthBias` -18.
+- Both black materials leave `EmissiveColor` unconnected (so they darken toward black) and wire `Opacity` from an
+  alpha channel. This supports round 3's reading (darkness from alpha, colour unused).
+
+**Changes (host stand-ins unless said):**
+
+| Critic item | Cause | Change |
+|---|---|---|
+| Thick bright ring, lit interior | The black disc was fully dark only to half its radius. Measured at the same draw scale, the core sprite's bright magenta band falls at 0.46-0.70 of the black quad's radius and the bubble texture's thin rim at about 0.70 | Black disc fully dark to 0.6 of its radius: the band is hidden and the rim stays as a thin, dim edge |
+| Target fully lit inside the bubble | The darkening quad sat at the target's centre, so the target's front half was in front of it | A material's negative `DepthBias` / `Bias` default (read from the template JSON, following parents) moves the sprite that many uu toward the camera and shrinks it by the same ratio: same outline, different depth test (UNVERIFIED reading of the parameter) |
+| How dark | The game keeps the target at about a third of its brightness and the interior deep violet (mean about (50, 52, 98)). UE3 blended into an 8-bit target that clamps after each blend; UE5's float target lets the additive bubble layers sum to about 2.5 before the black | Black darkness capped at 0.9 where opaque geometry lies within 40 uu behind the quad (the target: a third of the 8-bit brightness, since (1/3)^2.2 is about 0.09). Capped at 0.96 where the scene is more than 80 uu behind (the interior: 1 - 0.1 / 2.5). Calibrated against the one capture |
+| Release ring blue-violet | One reading of `Mat_SirenGlowMOD` cannot give both the game's cobalt cast flashes (needs the brightness-keeping tint) and its cyan-white ring (needs a plain multiply clipped per channel: violet rim x (0.4, 16, 30)). The colours and alpha curves do not separate the two | A labelled per-emitter override in `OpenWillowPhaselockFx.cpp` (`EmitterOverrides`): the end template's `Brighten` uses the plain multiply. The release is now a bright cyan-blue ring |
+
+**Bubble size: not changed, not confirmed.** The script reads `Pawn.Mesh.Bounds.SphereRadius` / `BubbleFXScale`
+(local script reading). With full-width sprites that puts this bullymong's rim (0.8 of the `Sphere` quad's half-width)
+at 1.18 x 300.8 = 356 uu. The capture measures 167-174 uu, 2.1 times less. Two readings reproduce about 178 uu and
+cannot be told apart here, because this bullymong's mesh radius (300.8) is twice its collision radius (150):
+- the mesh radius with half-width sprites, or an extra halving somewhere;
+- the collision radius with full-width sprites, which contradicts the script reading.
+
+The host hand orb's size relative to the palm favours full-width sprites.
+
+**Also seen in the matched frames, not changed:**
+- The release starts at 4.77 s in this capture and the bubble is gone by 5.0 s; the host's outro is at 4.60 s (the
+  10-02 timing) and its release ring is still up at 5.0 s.
+- A pale blue floor glow under the bubble, against round 1's light-channel stand-in (the light reaches only the
+  target).
+- The host interior leans magenta where the game's is blue-violet.
+- The 0.6 s white starburst.
+
+### Round 5 (2026-10-03): bubble size rule confirmed in game, host calibrated to it
+
+**Size rule: confirmed in game on 2026-10-03.** Source: the real-game lane's SDK reads of the spawned bubble emitters plus
+frames, on three bullymong variants (baby, adult, ranged) at 650-668 uu (ignored `local/realgame/phaselock/size_rule/`).
+This supersedes round 4's "two readings":
+- Each bubble emitter's `DrawScale` = the lifted pawn's `Mesh.Bounds.SphereRadius` at that emitter's own spawn /
+  `BubbleFXScale` (66.7). The intro at the lock and the loop 0.2 s later get different values as the pose changes
+  (adult 4.28 then 3.90). Intro `DrawScale` x 66.7 is within 1-2 % of the mesh sphere radius read at +0.72 s on all three.
+- The collision radius plays no part (150 / 150 / 64, constant).
+- `DrawScale3D`, the component's `Scale` and `Scale3D` are 1 and its translation 0, so `DrawScale` is the only size input.
+- The loop's visible rim (the blue-minus-red ridge on the frames) is 47.6 / 48.6 / 49.5 uu per `DrawScale` unit
+  (mean 48.6, 0.73 x 66.7): a template constant.
+- It changes little as the collapse rises (adult 47.8 / 48.6 / 44.7 at 1.5 / 3.0 / 4.5 s).
+
+**Host before:** one draw scale, taken at the lock, for all three templates. The rim ridge measured on host frames
+(same detector) fell at 0.88 of the `Sphere` emitter's half-width; `PhaseLockBubble_Dif_Tex`'s own rim peaks at 0.8 and
+the surrounding glow moves the ridge out. That is 86.9 uu per unit, about 1.8 times the game's.
+
+**Host now:**
+- Each template takes the mesh-bounds draw scale at its own spawn (`AOpenWillowCombatTarget::BubbleDrawScale`).
+- All three bubble templates are drawn at 48.6 / (0.44 x the `Sphere` StartSize) of that draw scale, about 0.56. This
+  is a host calibration: the cause of the difference was not found (a sprite-size convention, or the stripped
+  `Mat_SirenEnemyOrb` graph). The scale is uniform because the game's dark interior and streaks scale with its rim.
+
+**Size check (host frames at the matched FOV, dummy at 668 uu, same detector):**
+- The dummy's mesh radius is 109.4, so its stock `DrawScale` is 1.640 and the expected rim is 48.6 x 1.640 = 79.7 uu.
+- Measured rim radius: 79.7 / 79.7 / 79.7 uu at 1.5 / 3.0 / 4.5 s (190 px rim to rim), ratio 0.999.
+
+**Other changes (stand-ins, UNVERIFIED):**
+- **Floor light restored.** The lock light reaches the floor as its data says. Every 10-03 game frame shows a pale blue
+  pool under the bubble; round 1's target-only stand-in came from the 10-02 snow frames, where it was not noticed.
+- **Interior colour.** The bubble's black orb (the loop and end `ModulateBlack` emitters only, per emitter) blends toward
+  a deep blue-violet, linear (0.022, 0.022, 0.06), instead of black. This stands in for UE3's clamp after every blend,
+  which saturated the additive layers to near-white before the orb darkened them. UE5's float target left a magenta
+  interior instead.
+- **Interior result.** At 3.0 s the host interior measures (38, 37, 84), against the game's (39-48, 38-45, 88-100).
+  The hand orb's emitter (same material, nothing additive under it) stays black.
+
+**Timing.** The real-game lane's three first locks put the release at 4.608 s after `SkillStartTime`, which matches the
+host's 4.60 s. Its frames show the cyan-blue release ring still up at 5.0 s; matched_650's earlier disappearance was a
+second lock of the same pawn (0.175 s longer hold, cause unknown; not modelled). No timing change.
+
+**Still different:**
+- The host dummy stays lit in front of the smaller bubble. Its front lies further than the 20 uu depth bias in front
+  of the quad; in game the bullymong shows at about a third of its brightness.
+- The floor pool is fainter on Sanctuary's dark asphalt than the game's pool on snow and sand.
+- The 0.6 s starburst at the hand.

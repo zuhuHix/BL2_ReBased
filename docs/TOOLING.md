@@ -887,6 +887,34 @@ proof of a flat transform. Native post-hook output timing remains to be checked
 in a fresh original-game capture. Synthetic callback checks:
 `python tests/ui_trace_returns_test.py`.
 
+## Driving the real game (ground-truth captures)
+
+`tools/real_game/realgame.ps1` (dot-source it) launches the installed game for captures and talks to it through
+`tools/real_game/openwillow_realgame/`, our own Library mod for the community mod SDK (THIRD_PARTY.md). The mod runs
+`*.py` command files on the game thread and writes `.out` replies; command scripts share one namespace. Needs
+`$env:OPENWILLOW_BL2`. Everything it writes goes under ignored `local/realgame/`.
+
+```powershell
+. tools/real_game/realgame.ps1
+Enter-RunLock; Backup-Saves; Install-Driver          # lock shared with UE runs; copy saves first
+Start-Game @('-windowed','-ResX=1280','-ResY=720','-nostartupmovies')
+Invoke-GamePy 'print(block_saves(), get_pc())'       # at the main menu, before loading a character
+Invoke-GamePyFile tools/real_game/scripts/weapon_cards.py cards   # helpers: spawn, record, card trace
+Invoke-Burst 'phaselock/cast' 7 40 { Send-Key F } 0.75            # QPC-stamped frames around a key press
+Remove-Driver; Exit-RunLock
+python tools/real_game/golden_cards.py               # join records, card trace and screenshots
+python tools/real_game/golden_card_compare.py        # evaluator on the exact rolled parts vs the cards
+Invoke-GamePyFile tools/real_game/scripts/weapon_dump.py cards     # every weapon part/type/name part value, live
+python tools/real_game/golden_card_compare.py --live-data local/realgame/cards/live_weapon_data.json ...  # with the overlay
+```
+
+Input is scan-code keys (`Send-Key`, arrows included), `Send-ClickAt`, `Send-Wheel` and `Send-Drag`; it takes the
+screen and keyboard, so only run it when nobody is using the machine. Rules learned the hard way: look objects up
+again in every command (a stale weapon reference crashed the game), keep spawned items in memory and remove them
+before any travel or quit, and compare the save folder with the backup afterwards. `scripts/phaselock.py` samples the
+lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-down calls. Results:
+`docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
+
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 
 `research/script_disasm.py` (Python, read-only) turns every script function in the code
@@ -961,6 +989,55 @@ tooling notes are in [NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md) (policy:
 [LEGAL.md](LEGAL.md), "Analysing the executable"). `tools/private_sync.ps1` mirrors
 non-regenerable game-derived files (such as an analysis database under `local/analysis`)
 to a store outside the repository; see "Working on two machines" in that page.
+
+## Tools added 2026-10-01 and 2026-10-02 (one line each)
+
+Everything here writes game-derived output only under ignored `local/` (or, for Ghidra, `%OPENWILLOW_ANALYSIS%`), and
+every reading it supports stays `UNVERIFIED` until it is compared with the running game.
+
+Native analysis of the executable (local only; policy in [LEGAL.md](LEGAL.md), workflow in
+[NATIVE_ANALYSIS.md](NATIVE_ANALYSIS.md), "Native registration and queries"; DECISIONS 2026-10-02):
+
+| Tool | What it does | Command |
+|---|---|---|
+| `tools/ghidra/run.ps1` | Drives the imported Ghidra project headlessly; `-Tables` builds the native tables, `-Query` decompiles by name, native number, string, callers or vtable slot | `powershell -File tools/ghidra/run.ps1 -Tables -Apply` / `... -Query MissionTracker.UpdateObjective,native:114 -Callees 1 -Label` |
+| `tools/ghidra/OwNativeTables.java` | Ghidra script (run by `-Tables`): reads the registration tables, writes `natives.tsv` and `gnatives.tsv` and labels each native | via `run.ps1 -Tables` |
+| `tools/ghidra/OwNativeQuery.java` | Ghidra script (run by `-Query`): resolves queries, writes decompilation under the analysis output folder; its header lists every query form | via `run.ps1 -Query '@<file>'` |
+| `tools/ghidra/script_natives.py` | Lists every native `UFunction` of the code packages with its `iNative` number (input to the join above) | `python tools/ghidra/script_natives.py <out.tsv> [--cooked <CookedPCConsole>]` |
+| `tools/ghidra/class_layout.py` | Computes 32-bit field offsets of a script class from the packages so a native's field read can be named (oracle: `Core.Object` = 0x3C) | `python tools/ghidra/class_layout.py WillowGame.MissionTracker` |
+| `research/mission_event_link_ids.py` | Structural oracle: counts the link ids on mission events and reports any outside the ranges the dispatch note predicts; aggregate counts only | `python research/mission_event_link_ids.py [--packages Startup ...] [--examples]` (needs `OPENWILLOW_BL2`) |
+
+`ow-package` modes added for the slice and the paint work (none changes the install; the executor modes run installed data through our own code, not the game):
+
+| Mode | What it does | Command |
+|---|---|---|
+| `--payload-file` | Writes an export's raw bytes to a file (a shader cache is too large for `--payload`'s JSON) | `ow-package "$cooked\RefShaderCache-PC-D3D-SM3.upk" --payload-file 1 local/paint_research/refcache.bin` |
+| `--names` | Prints the package name table in index order as JSON | `ow-package "$cooked\RefShaderCache-PC-D3D-SM3.upk" --names > local/paint_research/ref_names.json` |
+| `--mission-run` | Runs one mission's native executor over installed data; steps `accept`, `kickoff`, `obj:<name>[:<bit>]`, `custom:<name>`, `turnin`, `tick:<s>` | `ow-package "$cooked\Startup.upk" --mission-run GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire --cooked $cooked accept kickoff obj:RockPaper_GoToRange turnin` |
+| `--behavior-run` | Runs one behavior provider alone; steps `enable:`, `disable:`, `tick:`, `event:<name>[:...]` and `fire:<link id>:<event>` (link-id filter, -1 = all links) | `ow-package "$cooked\Sanctuary_Dynamic.upk" --behavior-run <provider-path> --cooked $cooked fire:-1:OnTakeDamage` |
+| `--kismet-run ... --tick` | Runs a Kismet sequence from an entry point (`--remote`, `--mission`, `--op`, `--originator`); trailing `--tick <s>` pairs advance time and run what is due | `ow-package "$cooked\Sanctuary_Dynamic.upk" --kismet-run TheWorld.PersistentLevel.Main_Sequence.RocksPaperGenocide --cooked $cooked --remote RE_Ep14_OpenMarcusDoor --tick 1 --tick 3` |
+
+The step and event names above are examples from the verification records; the rules the executors follow are the
+`UNVERIFIED` notes in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATCH.md).
+
+Weapon paint and effects (detail in "Weapon paint: where the Master_Gun reading comes from" above):
+
+| Tool | What it does | Command |
+|---|---|---|
+| `tools/material_static_parameters.py` | Decodes the static parameter set a cooked MIC keeps after its properties (631 of 631 in `Startup.upk` consume their bytes exactly) | `python tools/material_static_parameters.py --reader build/Release/ow-package.exe --package "$cooked\Startup.upk" --mic <name>... --output local/paint_research/static_params.json` |
+| `tools/weapon_paint_model.py` | Library: our own-words reading of Master_Gun's colour model, shared by the preparer, the thumbnail renderer and the tests (not a command) | `python tests/weapon_paint_test.py` |
+| `research/d3d9_bytecode.py` | Library: our own SM3 (vs_3_0 / ps_3_0) token reader, written from Microsoft's public D3D9 bytecode description; `disassemble(code)` prints a plain register listing; listings are game-derived and stay under `local/` | imported by the paint research; checked in `python tests/weapon_paint_test.py` |
+| `research/particle_system.py` | Reads cooked `ParticleSystem` templates (emitters, LODs, modules, baked distributions, `BurstList`, `DynamicParams`) to JSON under `local/phaselock/emitters/`; reads only, renders nothing | `python research/particle_system.py [Part_SirenASHandOrb ...] [--package GD_Siren_Streaming_SF] [--oracle]`, tests `python tests/particle_system_test.py` |
+
+Inventory open-time benchmark (DECISIONS 2026-10-02; results in the 2026-10-02 section of
+[INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md); one PC, no original-game figure):
+
+- `-owinvopenbench=<N>` and `-owinvopenbenchdelay=<s>` (UE command line) open the inventory N times and log `OWINVTIME`
+  lines per open; `-owinvnopreload` turns off the level-start preloads for an A/B comparison (it is not a test default).
+- `powershell -File tools/test_inventory_actions.ps1 -OpenBench 5 [-OpenBenchDelay 20] [-Items local/items/slice]
+  [-NoInventoryMovie]` runs the benchmark instead of the action suite and prints one row per open. Pass
+  `-Extra @('-ddc=InstalledNoZenLocalFallback','-d3d11','-owinvnopreload')` for the no-preload run; `-Extra` replaces the
+  default list, so repeat the defaults.
 
 ## Independent oracles: umodel and the game's own object dumps
 
@@ -1194,9 +1271,49 @@ powershell -File tools/seed_slice_player_assets.ps1 -Steps paint -Paint local/it
 `--reader/--package` lets the paint tool fill scalar and vector parameters that no MIC sets from the base
 Material's own parameter expressions (they survive in the cooked package although the graph is stripped) and
 records each value's source; without them a chain that leaves a zone colour to the base material fails rather
-than guessing. The decal layer the importer draws is an `UNVERIFIED` reading (UV1 x scale + offset, zone weights
-times decal alpha, multiply or replace); `p_DecalRotate` and the flip switch are not applied. `tools/slice_npc_assets.py`
-needs numpy and Pillow in the Python that runs it.
+than guessing. With them it also reads the leaf MIC's static parameters, which choose the detail, pattern and
+decal channels. The colour model is described in the next section. `tools/slice_npc_assets.py` needs numpy and
+Pillow in the Python that runs it.
+
+### Weapon paint: where the Master_Gun reading comes from
+
+Master_Gun's expression graph is stripped from the cooked packages, so the paint model was recovered from compiled
+data instead (2026-10-02, AI-assisted, `UNVERIFIED` against the running game):
+
+```powershell
+# Static parameter sets of every MaterialInstanceConstant with a static permutation (exact-consumption oracle)
+python tools/material_static_parameters.py --reader build/Release/ow-package.exe `
+  --package "$cooked\Startup.upk" --mic Mati_MaliwanUncommon Mati_JakobsCommonPistol `
+  --output local/paint_research/static_params.json
+# Raw shader cache object for local study (220 MB, stays under local/)
+build/Release/ow-package.exe "$cooked\RefShaderCache-PC-D3D-SM3.upk" --payload-file 1 local/paint_research/refcache.bin
+build/Release/ow-package.exe "$cooked\RefShaderCache-PC-D3D-SM3.upk" --names > local/paint_research/ref_names.json
+# Preview the reading on a prepared gun (pure Python thumbnail renderer)
+python tools/render_weapon_previews.py slice_pistol --items local/items/slice `
+  --paint local/items/paint/slice_guns.json --output local/paint_research/thumbs --jobs 1
+```
+
+- `tools/material_static_parameters.py` decodes the bytes a cooked MIC keeps after its properties: its own
+  compiled resource block, then its static parameter set. 631 of 631 such MICs in `Startup.upk` consume their
+  bytes exactly. A MIC stores its resolved set, so the leaf MIC alone gives the channels.
+- In the shader cache each Master_Gun shader map is keyed by such a static set and carries its uniform expression
+  set (which parameter feeds which pixel constant and sampler) and the compiled D3D9 SM3 shaders.
+  `research/d3d9_bytecode.py` is our own token reader, written from Microsoft's public description of the
+  format; it is not a disassembler from a third party. Its output is game-derived and stays under `local/`.
+- What the base-pass pixel shader says is written down, in our own words, in `tools/weapon_paint_model.py`. The
+  short form: `p_Masks` stacks a light/dark map (upper half) over the zone mask (lower half); zone tones go from
+  Midtone towards Hilight and Shadow by those maps; zones are blended over `p_DColor`; pattern and decal multiply
+  (or replace) by squared mask weights; the result is multiplied by one detail atlas channel.
+- `host/ue5/import_weapon_paint.py` draws the same model in a Custom node, including the `P_SimpleReflect`
+  environment term (sampled at the tangent-space reflection vector, as the compiled shader does). Emissive and the
+  game's lighting are not reproduced. Shading inputs (pass 3, `UNVERIFIED`): the compiled base and light passes
+  multiply the material colour by 0.4 before lighting and take no specular from the material (only
+  `pow(R·L, 15)` times the engine's override), so the importer uses base colour 0.4 × colour, metallic 0,
+  specular 0, roughness 1. Under the host's current scene lighting this renders much darker than pass 2.
+- Colour space (pass 2): each texture follows its installed `SRGB` flag, which `prepare_weapon_paint.py --reader`
+  records in `srgb`. `Engine.upk`'s `Default__Texture` serialises SRGB on; only `p_Masks` and the normal maps
+  turn it off, so the detail atlas, patterns, decals and environment maps are sRGB. Pass 1 had imported the
+  detail atlas as linear, which flattened grime and rust contrast. Vector parameters are linear colours.
 
 `tools/seed_slice_player_assets.ps1` holds `local/ue_run.lock` for each editor launch and never deletes
 `Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when

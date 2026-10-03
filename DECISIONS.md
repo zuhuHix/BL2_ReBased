@@ -3334,3 +3334,640 @@ plan, that forbade disassembling or decompiling `Borderlands2.exe`.
   All time-to-completion estimates were removed from ROADMAP.md, README.md and the plan documents; ROADMAP.md now has a
   "How it's going" section stating what was done in what elapsed time, with no forecast.
 - **Still open:** no native function has been analysed yet, and no analysis result is confirmed against the game.
+
+## 2026-10-02: weapon paint from Master_Gun's compiled shader data; MIC static parameters decoded
+
+AI-assisted. Tooling, editor importer and two read-only CLI modes (`src/cli.cpp`: `--payload-file <index> <out>`,
+`--names`); no change to `src/package.cpp`, the container code or `CMakeLists.txt`, no bounds check changed. Nothing
+compared against the running game.
+
+- **Static parameters.** The bytes after a MaterialInstanceConstant's properties are its fully resolved static
+  parameter set; `tools/material_static_parameters.py` decodes them exactly (sizes meet) in 631 of 631 MICs in
+  `Startup.upk`. On the slice chains they only pick channels: `p_WeapClassSelect` the detail atlas channel (B for
+  pistols, matching the earlier guess), `p_PatternChannel` and `p_DecalChannel` the pattern and decal channels;
+  `sw_FlipDecalOnRightSide` is off. The hypothesis that undecoded static overrides caused the blotches is refuted.
+- **Shader data.** `RefShaderCache-PC-D3D-SM3.upk` keeps, per static permutation of Master_Gun, the uniform expression
+  set (which parameter feeds which constant and sampler) and the compiled ps_3_0 shaders. A small token reader written
+  from Microsoft's public D3D9 bytecode description (`research/d3d9_bytecode.py`; its listings are game-derived and stay
+  under `local/`) and a diff of three permutations give the colour model described in our own words in
+  `tools/weapon_paint_model.py`: `p_Masks` holds two stacked maps (lower half zone mask, upper half highlight/shadow
+  map); zone tones go Midtone -> Hilight -> Shadow and are blended over `p_DColor`; pattern and decal multiply or
+  replace by squared mask weights; the decal UV is shifted, rotated by `p_DecalRotate` x pi and scaled about the
+  centre; the result is multiplied by the selected detail channel.
+- **The bug:** the previous reading sampled `p_Masks` over its full height, so the light/dark map became zone weights
+  (the camouflage blotches). Also fixed: detail used as a tone selector, `p_DColor` and the two intensities ignored,
+  decal placement and rotation, the single-channel decal path.
+- UNVERIFIED: the whole reading until compared with the running game; `DISPLAY_SCALE` (0.4) chosen by eye; the
+  environment reflection (`P_SimpleReflect`), emissive, digistruct and lighting are not modelled; the material
+  resource words before the static parameters are not interpreted.
+- Checks: `tests/weapon_paint_test.py` 25 passed (invented values), CTest 10/10, packages 9/9, six guns re-imported
+  with 0 errors, quest suite 73/73 and resume 10/10 afterwards (`run-first-20261002-005221`). Visual: an independent
+  critic agent compared host stills with in-game inspect screenshots from the Borderlands wiki (kept under ignored
+  `local/paint_research/ref_online/` with sources): Maliwan uncommon pistol **6.5/10** (was 4), Jakobs common pistol
+  **4.5/10** (was 2). Its remaining findings: a cool blue cast on bare metal and on the Jakobs wood (wood reads grey,
+  not brown), the Maliwan barrel looks painted rather than chrome (no reflection term), orange slightly too wide on
+  the Maliwan grip. No real-game capture yet (the game would not launch under the logged-in Steam account).
+
+## 2026-10-02: weapon paint pass 2: texture colour space from data, reflection term; albedo checked against screenshots
+
+AI-assisted. Tooling and editor importer only; nothing compared against the running game.
+
+- Textures default to sRGB (`Default__Texture`); only `p_Masks` and the normal maps switch it off. The detail atlas was
+  imported as linear, which washed out grime and rust. The preparer now reads each texture's SRGB flag and the
+  importer and thumbnail renderer follow it. The by-eye `DISPLAY_SCALE` is removed; the shader colour is used unscaled
+  (clamped to 1, keeping hue).
+- The environment term (`P_SimpleReflect`, `p_ReflectColor`, `p_ReflectionChannelScale`, `p_ReflectColorScale`) is
+  drawn as the compiled shader combines it: it brightens surfaces that are already bright and cannot turn a dark base
+  silver.
+- Re-checked from the compiled shader: the shadow amount is the clamped product of the light/dark map's green and
+  `p_ShadowsIntensity`, moving the tone from Midtone toward Shadow; the zone mask is the lower half of `p_Masks`
+  (97% of its texels are flat, against 74% in the upper half).
+- Numeric check (unlit model albedo against in-game wiki inspect screenshots, median sRGB of matching regions; the
+  references include the game's lighting): Jakobs wood (97, 90, 74) vs (91, 82, 67), Jakobs frame (173, 175, 179) vs
+  (168, 166, 167), Maliwan barrel (88, 99, 109) vs (148, 160, 171) (same tint, about 40% darker; reflection and
+  lighting omitted in the render). So the blue cast seen in first person most likely comes from the host's lighting
+  and its fixed metallic 0.35 / roughness 0.55, not from the paint formula (UNVERIFIED).
+- Checks: `tests/weapon_paint_test.py` 29 passed, six guns re-imported with 0 errors, quest suite 73/73 and resume 10/10
+  (`run-first-20261002-010701`). Critic (in-game stills and thumbnails vs wiki screenshots): Maliwan 6.5/10 (same),
+  Jakobs 5.0/10 (was 4.5).
+
+## 2026-10-02: first native analysis: registration tables, query tooling, mission and behavior dispatch notes
+
+AI-assisted. Tooling and behaviour notes only; no executor or parsing change yet. Policy: LEGAL.md "Analysing the
+executable". Raw output stays in the ignored analysis folder; nothing here is listing or address.
+
+- **Machinery** (`tools/ghidra/`, method in `docs/NATIVE_ANALYSIS.md` "Native registration and queries"): each native
+  class has a table of name/function pairs (`<Class>exec<Function>`); fixed script native numbers bind by name. The
+  table scan finds 6,877 natives in 770 tables, and all 199 numbered script natives resolve. A batch query names and
+  decompiles functions by registered name, native number, string, callers or virtual slot (virtual natives such as
+  `Behavior_*.ApplyBehaviorToContext` share one exec function and are reached through the class's virtual table).
+  `tools/ghidra/class_layout.py` computes 32-bit field offsets from the packages (oracle: `Core.Object` 0x3C).
+  About 15 s per run.
+- **Behaviour notes** (`docs/verification/NATIVE_MISSION_DISPATCH.md`, all UNVERIFIED, read from native code, not
+  confirmed in the game):
+  - Behavior link id byte: a signed occasion selector; the event caller passes a filter (-1 = all links); a behavior
+    chooses outputs by id, and the default output is followed only when `bSupportsDefaultOutputLink` is set. There
+    is no once-per-event deduplication (a behavior reached by two links runs twice); events honour `bEnabled`,
+    `MaxTriggerCount` and `ReTriggerDelay`; threads run depth-first.
+  - Kismet: ops run from a stack, at most 1,000 per frame; a link's delay is the input's plus the output's; an input
+    hit twice runs the op twice; an activated event fires all its outputs.
+  - MissionTracker: updates are queued; an objective completes when progress reaches `ObjectiveCount`; a completed
+    set makes the mission ready to turn in when `bCanCompleteMission`, else activates the next set when
+    `bAutoEnableNextSet`, else waits for a behavior; `AdvanceObjectiveSet` only moves to `NextSet`. Mission event link
+    ids: a census over 133 missions puts all 3,420 links in the predicted id ranges (structural only).
+  - Consequence for the slice: the host fires every `Default` link on accept, which is why `TargetBack` appears 3 s
+    after accepting; natively the first set is activated by the kickoff dialog's Finished output.
+- Not yet implemented in `src/`; the host behaviour is unchanged. Checks: CTest 10/10, packages 9/9.
+
+## 2026-10-02: weapon paint pass 3: shading inputs read from the shader, kept behind a flag
+
+AI-assisted. Importer and notes only. The compiled base and light passes of Master_Gun multiply the material colour
+by 0.4 (a factor most other shaders in the cache do not have) and take no specular from the material (the light
+pass's specular is the engine override only). Mapped to UE5 that is base colour 0.4 x colour, metallic 0, specular
+0, roughness 1 (`USE_SHADER_SHADING` in `host/ue5/import_weapon_paint.py`, UNVERIFIED). With the host's uncalibrated
+Sanctuary lighting those inputs render the guns 4-7x darker than the reference screenshots, and the red-down/blue-up
+tint measured on the stills (about x0.8-0.9 red, x1.1-1.27 blue against the unlit albedo) is unchanged by them, so the
+tint comes from the host scene lighting. Maintainer-facing choice made by the orchestrator: the importer keeps the
+pass-2 host stand-in (scale 1, metallic 0.35, roughness 0.55) until the scene lighting is calibrated; the six guns were
+re-imported with it (0 errors).
+
+## 2026-10-02: native dispatch rules implemented in the behavior, Kismet and mission executors (UNVERIFIED)
+
+AI-assisted. Executor change; the rules are those of `docs/verification/NATIVE_MISSION_DISPATCH.md` (read from native
+code, written in our own words; nothing here comes from a listing). **Every rule below is UNVERIFIED against the running
+game**: synthetic tests check that the executors do what the note says, not that the note is right.
+
+- **Behavior kernel** (`src/behavior.*`): the link id byte is read signed; `fireEvent` takes a link-id filter (-1 = all);
+  every matching event entry is gated by `bEnabled`, `MaxTriggerCount` and `ReTriggerDelay` with per-process
+  `TriggerCount`/`LastTriggerTime`; threads run depth-first (the first selected link continues the thread, the others
+  start first); handlers return the recorded output ids (duplicates kept) and -1 is added only when
+  `Context.bSupportsDefaultOutputLink` is set (read with class defaults: true on most behaviors, false on
+  TriggerDialogEvent/CompareObject); the once-per-event deduplication is gone; at most 60 behaviors per thread per call
+  (a capped thread resumes on the next tick: what the game does was not read). Not modelled: `FilterObject`, latent
+  behaviors, the "sequence still enabled" condition on running threads.
+- **Kismet** (`src/kismet.*`): queued ops form a stack (the first link's target runs next; an op already queued keeps
+  its place); link delay = target input's `ActivateDelay` + output's; disabled inputs receive nothing; an input hit
+  twice runs its op twice; an activated event fires all its outputs; at most 1,000 ops per `run()` (was 10,000 impulses
+  over the instance's life). Not modelled: one op seeing several inputs at once, event `MaxTriggerCount` /
+  `ReTriggerDelay`.
+- **Mission tracker** (`src/mission.*`): mission events carry the note's link ids (status change `Default` 6 + status:
+  accept 7, ReadyToTurnIn 9, Complete 10; kickoff 12/13; set activated 4 / completed 5; objective progress 3 and
+  completed 2 after the set check; custom events 0, refused only when Complete). Accept no longer fires every `Default`
+  link. `UpdateObjective` is one queued +1 (or a bit OR-ed in; the count of a bit mask is its number of set bits, a
+  guess for `TranslateObjectiveCount`); completion at `ObjectiveCount`. Set completion: `bCanCompleteMission` ->
+  ReadyToTurnIn, else `bAutoEnableNextSet` -> next set, else wait; `AdvanceObjectiveSet` only to the active set's
+  `NextSet` (or the initial set while none is active); `bActivateInitialObjectiveSet`; `ObjectiveDependency` in
+  `available()`. Status transitions ReadyToTurnIn only from Active, Complete only from ReadyToTurnIn. Not modelled:
+  RequiredObjectivesComplete, Failed, `bRepeatable`, collection/branching sets (an error if activated), blocking sets,
+  the level-load replay, the mission weapon at status Active/Complete (still lent with its objective, because the
+  host's checks expect that and `IsValidMissionWeapon` was not read).
+- **Host stand-ins** (`src/slice.cpp`, `src/mission.cpp`): the slice plays the kickoff (`Default` id 12) right after
+  acceptance (what does this in the game is unknown), and a `Behavior_TriggerDialogEvent` selects both its outputs at
+  once (Out, then Finished) because no dialog is played. CLI: `--mission-run` gains `kickoff` and `obj:<name>:<bit>`;
+  `--behavior-run` gains `fire:<id>:<event>`; `--kismet-run` gains trailing `--tick <s>` steps.
+- **Real data (local only)**: the Fire mission now runs as the note predicts in its section B9: no set until the
+  kickoff dialog finishes, `RocksPaper_FinalObj` 0.5 s after `RockPaper_GoToRange`, `Targetable` 1 s later, no
+  `RocksPaper_TargetBack` after accepting, two `TargetBack` 3 s after `Fire`, Active -> ReadyToTurnIn directly, no
+  errors. Its dialog lines are the same set as before. All 28 events of the range's Kismet sequence reach the same
+  host ops in the same order as before. Link-id census: 0 links outside the predicted sets.
+- Checks: CTest 10/10 (new: behavior acceptance tests 1-6, Kismet test 7; changed expectations follow the stack
+  order and the per-frame cap), packages 9/9. The quest suite's step 7 (`OpenWillowQuest.cpp`) now waits for the
+  FinalObj set (0.5 s after the touch) instead of the objective's completion; with that change, on a clean rebuild of
+  `ow-core` and the UE module: quest 73/73 first run and 10/10 resume, mover 16/16, inventory actions 45 PASS / 0 FAIL /
+  2 NOT_RUN / 2 KNOWN_DIVERGENCE (unchanged baseline).
+
+## 2026-10-02: inventory open time measured and the one-time work moved to level start
+
+AI-assisted. Host change, no parsing change. Measured on one PC (1280x720, `-d3d11`), key press to the page showing
+the open inventory: first open with the page loaded 443 ms (358-488, 4 launches) -> 234 ms (213-252, 3 launches);
+repeat opens about 60 ms (unchanged); first preview of each starting weapon about 32 ms with spikes up to 1036 ms ->
+about 1 ms. The cost was the inventory VM build (about 120 ms) and Maya's menu meshes (45-115 ms) in the open frame,
+plus each weapon mesh loading on first preview; these now preload at level start (about 140-270 ms added there;
+`-owinvnopreload` turns it off for comparisons; `-owinvopenbench` and `OWINVTIME` log lines measure it). Not fixed:
+pressing open in the first ~5 s of play still takes about 5.5 s, which is Ruffle booting the converted movie and its
+shared libraries (two fetched more than once); a 60 Hz page frame rate and HTTP caching made no measurable difference
+and were reverted. Also: page hover selects a cell only when the pointer actually moves (UE resent an unchanged position
+about 500 times per open, which re-selected an equipped cell and broke the suite), and the quest save is written only
+when its text changes. No real-game open time exists yet, so nothing here is compared with the game. Details:
+`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (2026-10-02 section).
+
+## 2026-10-02: native progression and Phaselock targeting notes (UNVERIFIED)
+
+AI-assisted. Notes only, no code change apart from `tools/ghidra/class_layout.py` sizing Gearbox attribute properties
+(it stopped at the first one before). Read locally from `Borderlands2.exe` in Ghidra and from script, written in our
+own words; every rule is UNVERIFIED and each section of the notes names the in-game check that would confirm it.
+
+- `docs/verification/NATIVE_PROGRESSION.md`: balance formulas evaluate `Multiplier x (Level^Power + Offset)`
+  (`tools/weapon_recipe.py` and `tools/weapon_stats.py` put the offset outside; no slice number changes, a census is
+  pending); mission XP is truncated, not rounded (395 at level 8 where the host gives 396) and the mission level is
+  Sanctuary's region game stage (clamp(player level, 7, 9) on playthrough 1); the level curve is
+  `max(0, trunc(60 x (n^2.8 + 7.33)) - 499)` (it reproduces the one real-game threshold on record, 2,715,586 at level
+  46; the host is one point low at most levels), level cap 50; skill points `max(0, L - 4)` match the host; max health
+  `max(20, 80 x 1.13^L)` matches the host (the 94 constant is never used).
+- `docs/verification/NATIVE_PHASELOCK_TARGETING.md`: Phaselock takes the auto-aim strategy's instantaneous best
+  target (screen-space magnetism cone, score favouring the crosshair then distance, line of sight to the aim point),
+  where the host uses a view ray and a 30 cm sweep; reloading does not block the cast but putting a weapon away does;
+  an injured Maya cannot cast and going down ends the lock; the lift bob is timed from the cast and smoothed by
+  `VInterpTo` at speed 1 (about 16 units visible, not 30).
+
+## 2026-10-02: progression rules from the native notes in the tools and the host (UNVERIFIED in game)
+
+AI-assisted. Implements `docs/verification/NATIVE_PROGRESSION.md` sections 1-4. Those rules were read from native code,
+and none has been confirmed by running the game. Package parsing is unchanged: `src/` and `CMakeLists.txt` were not
+touched.
+
+- **Formula order.** `tools/weapon_recipe.py` (`formula_value`), `tools/weapon_stats.py` and `tools/loot_pools.py` now
+  evaluate `Multiplier x (Level^Power + Offset)`. Before, they added the offset outside the multiplier.
+  - A census of the base-game packages (local only) found 228 distinct enabled formulas. 19 of them have both a
+    non-zero Offset and a Multiplier other than 1: enemy health and damage, enemy and world-discovery XP, melee damage,
+    class-mod bonuses, three Soldier/Mercenary skill formulas, vehicle damage and the XP curve. DLC packages were not
+    included.
+  - No slice number changes. The slice gear recipes and manifest are byte-identical before and after. The loot display
+    check is unchanged (2,505 of 2,554 agree). Maya's health formula has no offset, and the XP curve's offset cancels
+    in the reward span.
+- **Level curve and cap.** `UOpenWillowSkills::ExperienceForLevel` is now `max(0, trunc(60 x (n^2.8 + 7.33)) - 499)`,
+  evaluated in single precision. It was `floor(60 n^2.8 - 60)`.
+  - Changed thresholds: level 2 357 -> 358, level 5 5,375 -> 5,376, level 8 20,207 -> 20,208, level 9 28,125 -> 28,126.
+    Level 46 stays 2,715,586, the one real-game threshold on record.
+  - The level cap of 50 applies in `AddExperience`, `SetLevel` and save restore. DLC cap increments are a TODO.
+  - Float and double evaluation differ by one point at levels 17, 22, 33, 42, 45, 47 and 49. Which value the game
+    gives at those levels is not known.
+- **Mission XP.** `MissionXp` is now `trunc(span x percentage)` on the integer curve. Before, it rounded a span computed
+  on unrounded doubles.
+  - Changed amounts: stage 8 396 -> 395, 9 484 -> 483, 10 579 -> 578, 11 682 -> 681. Stage 7 stays 316.
+  - The mission level is now Sanctuary's region game stage, not the slice gear level. `tools/slice_values.py` decodes
+    the playthrough-1 `RegionBalanceData` entry into `world.json` `values.xp.region_stage` (default 7..9,
+    WelcomeToSanctuary 8..11, later overrides).
+  - The host fixes the stage as `clamp(level + boost, min, max)`, using the largest completed override or else the
+    default. It does this when the walker sets Maya's level at session start and keeps the value in the quest save.
+  - A manifest without the block gets a logged STAND-IN with the note's bounds.
+  - The suite's Maya starts at level 8, so the stage is 8 and the reward is 395.
+- **Max health** already matched the note. `SLICE_WORLD_PLACEMENT.md` 2b now records that the 94 constant is never
+  used (native reading).
+- **Checks.**
+  - CTest 10/10 and packages 9/9 pass.
+  - Synthetic Python tests pass: weapon_recipe 8, weapon_stats 19, loot_pools 9, slice_world 17.
+  - The `OpenWillow.Skills` automation test passes (curve values, synthetic order and truncation cases, cap).
+  - Quest suite: 75/75 first run and 11/11 resume. New checks are `mission_level_is_region_stage_fixed_at_start`,
+    `level_curve_matches_tool_integer_curve` and `resume_region_stage_from_save` (the stored stage 8 is kept where a
+    fresh computation at the resumed level 11 would give 9). `xp_amount_is_candidate_formula_at_mission_level` is
+    renamed `xp_amount_is_truncated_rule_at_region_stage`.
+  - Door suite 16/16.
+  - Every rule above is still unverified in game. The note lists the confirmations: turn-in XP 395 at stage 8,
+    "next level at" 358 at level 2, and the first skill point at level 5.
+
+## 2026-10-02: ParticleSystem template reader (research)
+
+AI-assisted. Research prototype only (`research/particle_system.py`, `tests/particle_system_test.py`, 16 synthetic
+tests; not registered in CTest). Templates are delta-serialized against their archetype chain; baked distribution
+tables are read as two range values plus entries of `ChunkSize` floats; `BurstList` and dynamic parameters are tagged
+structs. All 17,506 non-empty baked tables in four packages fit that layout (structural oracle). Curve sampling between
+table entries is fitted, UNVERIFIED. Record: `docs/verification/PHASELOCK_STOCK_DATA.md`, "Particle template reader".
+
+## 2026-10-02: Phaselock stock presentation and targeting in the host (work in progress, no suite run)
+
+AI-assisted. Host and tooling; no parsing change. Written but **not verified by any suite**: after the module was
+rebuilt at 09:18, Windows Application Control (Smart App Control) blocked `UnrealEditor-OpenWillow.dll`
+(`GetLastError=4551`, Code Integrity events 3033/3077). Per project rules nothing was done to get around it; UE work
+stops until the maintainer clears it.
+
+- Presentation (`OpenWillowPhaselockFx.*`, `OpenWillowCombatTarget.*`, `OpenWillowWalker.*`): the decoded emitter
+  templates are played with plane/mesh components (no Niagara, no new module dependency). From data: hand orb at the
+  0.25 s notify on `L_Weapon_Bone` with the socket offset and scale 0.35; bubble scaled by bounds radius / 66.7, 0.2 s
+  intro, collapse 0 -> 0.75 over the last 2 s; point light radius 500, brightness 4, colour (96,128,255); tattoo glow
+  curve over 1 s. Host stand-ins (UNVERIFIED): what each stripped material does with its textures, the tattoo mask
+  channel, the screen effect as a full-view quad, UE3 brightness -> UE5 intensity, burst timing, the dummy's auto-aim
+  radius/aim point. The dummy keeps its idle (it has no PhaseLock clips).
+- Rules from `NATIVE_PHASELOCK_TARGETING.md` (UNVERIFIED): screen-space magnetism target choice replaces the view
+  ray and 30 cm sweep; reloading no longer refuses the cast, a holstered weapon does; going down ends the lock; the
+  bob is timed from the cast and smoothed.
+- Tooling: `tools/prepare_phaselock_fx.py` (manifest from installed data), `host/ue5/import_phaselock_fx.py` with
+  `tools/import_phaselock_fx.ps1` (textures and meshes from UModel output under `local/`), `tools/run_phaselock_shots.ps1`.
+- One in-engine capture run (before the block) showed the lift, the smoothed bob (about +/-16 uu), the collapse
+  reaching 0.749 and the light ramp; defects seen: an overexposed white-pink core where web screenshots show a
+  violet sphere with a dark core, a large violet light pool, loop sprites not showing, and first-use texture
+  compilation delaying the hand orb to +0.53 s. Fixes for some of these are written and not run.
+- Quest suite: check 65's reload refusal is replaced by "reload does not refuse" and "holstered refuses"; new checks
+  for the presentation, an off-crosshair target and going down. Not run. Expected totals once it can run: 79 first-run
+  checks (75 baseline + 4) and 11 resume checks (unchanged).
+- Resumed later the same day under the maintainer's one-rebuild rule. A normal rebuild with no source change did not
+  relink (the 09:18 DLL stayed, still blocked). After the one requested source change (the stale targeting comment in
+  `OpenWillowQuest.h`), the module was relinked at 10:01 and Smart App Control blocked that DLL as well
+  (`GetLastError=4551`, Code Integrity events 3033/3077/3118 at 10:01:40). UE work stopped again; nothing was done to
+  get around the block.
+
+## 2026-10-02: weapon generation rules read from native code; card audit 9 of 9 with runtime data (UNVERIFIED in game)
+
+AI-assisted. Tools and notes only: no host C++, no `src/`, no `CMakeLists.txt` change; package parsing is unchanged.
+Read locally from `Borderlands2.exe` in Ghidra and from script, written in our own words in
+`docs/verification/NATIVE_WEAPON_RULES.md`; every rule is UNVERIFIED in game and each section names its confirmation.
+
+- **Attribute stack (settles the fitted rule).** The game sums PreAdd, PostAdd, positive and non-positive Scales in
+  single precision and computes `(base + PreAdd) * (1 + up) / (1 - down) + PostAdd`, with no clamp; integer stats (clip,
+  projectiles, shot cost, burst count) truncate. The 2026-10-01 "split" rule was right; its clamp at 0 was not. Enum
+  orders and class defaults were decoded from the packages.
+- **Effect order** (script): type, parts in slot order, attribute slots (activated ones; grades count every increase),
+  then prefix and title. **Card rounding** comes from the presentation data (damage up, clip down, the rest half up to
+  `FloatPrecision`); single precision decides the damage ceiling on one observed launcher.
+- **Part pick.** An entry without a `Manufacturers` list weighs a flat 100 (1,572 of 2,473 weapon entries); stage
+  windows use truncated bounds; zero weights are dropped, a duplicate keeps its later weight, and a slot with nothing
+  left stays empty (not a uniform pick). **Names** are deterministic (type lists first, then parts in slot order, highest
+  priority, later wins ties; class defaults priority 1, level window 1..100). **Level** = the spawn game stage
+  (`bInterpolateExpLevel` default true). **Rarity** = sum of truncated part rarities looked up in
+  `RarityLevelColors` (was: max). **Value**: the prefix's `MonetaryValueMod` is in the part product; this was the
+  launcher value gap (inferred from script order and data; the value function itself was not resolved).
+- **Runtime data.** The observed cards were captured with Gearbox hotfixes active; OpenBLCMM's dumps of the running game
+  show 39 weapon objects with changed stat data, which explain the four hotfixed legendaries. `weapon_card_audit.py
+  --runtime-overlay` reads them locally as an oracle input; whether the port applies hotfix data is a maintainer decision.
+- **Card audit** (9 distinct cards in this machine's 2026-09-26 traces; the record's 6-card set is not on this PC):
+  before (HEAD) 4 of 9 cards on the main four stats and on every printed field; HEAD rules with runtime data 8 / 7 of 9;
+  read rules on cooked data 5 of 9; read rules with runtime data **9 of 9 on every printed field, name included**.
+  Ablation: without single precision 8 of 9; without name parts 7 of 9 numerically; adding the slot base grade 0 of 9.
+- **Changes:** `tools/weapon_recipe.py` (evaluator order and precision, `entry_weight`, `pick`,
+  `choose_name_parts`), `tools/weapon_stats.py` (`combine`, effect order, slots, `rarity_of`, `present`/`display`, name
+  parts in the value, launchers' calculator checked; new card fields `rarity_level`, `rarity_rating`, `rarity_color`),
+  `tools/weapon_card_audit.py` (name parts and `name` check, `--runtime-overlay`, every-field counts),
+  `tools/weapon_balance.py` (docstring), tests, `WEAPON_BALANCE_DECODE.md` pointer. Regenerating `local/items/slice`
+  changes the slice guns' parts and names (new pick sampler and name rule); it was not regenerated in place.
+- **Checks:** weapon_recipe 14, weapon_stats 25, weapon_balance 7, loot_pools 9, weapon_paint, skill_stats, slice_world
+  and golden_card_compare tests pass; CTest and packages in the lane report. Not done: any in-game check, the host
+  changes listed in the lane report (magazine and shot-cost truncation, HUD card rounding, E-tech colour).
+
+## 2026-10-02: real-game ground truth: driver tooling and the first capture session
+
+AI-assisted. Tooling (`tools/real_game/`) and records; no change to `src/`, `CMakeLists.txt`, the reader or the
+host. The maintainer allowed unattended launches of the installed game for captures (orchestrator brief, 2026-10-02).
+Details and method: `docs/verification/REALGAME_GROUND_TRUTH.md`; everything recorded stays under ignored
+`local/realgame/`.
+
+- **Tooling.** `tools/real_game/realgame.ps1` (run lock shared with UE runs, save backup, launch, window capture,
+  scan-code keys including arrows, click/wheel/drag, QPC-stamped burst capture, `Invoke-GamePy[File]`) and
+  `openwillow_realgame`, our own Library mod for the community SDK that runs command files on the game thread, with
+  `block_saves()`. Command scripts: `scripts/weapon_cards.py` (spawn by balance or exact definition, weapon record,
+  card trace in the uitrace row format), `scripts/phaselock.py` (per-frame lift-skill sampler, cast and weapon-call
+  marks, damage immunity, `face`). `golden_cards.py` joins records, card trace and screenshots;
+  `golden_card_compare.py` (written by a subagent, reviewed) evaluates `tools/weapon_stats.py` on the exact rolled
+  parts; `tests/golden_card_compare_test.py` 12 synthetic tests. Smoke test: the channel answered at the main menu
+  15 s after launch and the driver was removed afterwards.
+- **Saves.** Backed up first; all 22 save files are byte-identical to the backup after the session (four files the
+  game had written at start, character selection and one load, while the first hook version was broken, were restored
+  from it). One game crash came from a command reusing an invalidated weapon reference; nothing was written.
+- **Confirmed in game** (each with how; the notes' other rules stay `UNVERIFIED`):
+  - level curve: `GetExpPointsRequiredForLevel` for 1-80 matches the single-precision formula at every level 1-59;
+  - "next level at" and skill points `max(0, L − 4)` at levels 2, 8, 17, 70;
+  - max health base `80 × 1.13^L` (health pool base value) at levels 2, 8, 17, 70; the HUD adds the Badass Rank;
+  - Fire mission XP 395 at stage 8 (`MissionDefinition.GetExperienceReward`);
+  - Phaselock bob: the note's sine-from-cast plus `VInterpTo` speed 1 reproduces a lifted enemy over 435 frames to
+    0.001 units RMS; a cast during a manual reload starts and aborts the reload; a cast during a swap put-down is
+    refused (2/2, with controls).
+- **Observed, for the lanes:**
+  - Phaselock presentation timings (hand orb ≈ 0.45 s after the key, not 0.25 s; dark-cored violet bubble; cast
+    vignette, target burst and cyan release ring that the host lacks); skill 5.7 s = 0.7 + 3.9 + 1.1 at level 8.
+  - Weapon cards (69, exact parts): every printed stat matches on 53/69 with the evaluator before `bb2a444` and 52/69 after it (fire rate fixed; one 1.75 reload now prints 1.8, the game 1.7); damage prints rounded up;
+    the live weapon-type objects differ from the cooked `Startup.upk` decode (Bandit pistol magazine 36 vs 30, Dahl
+    pistol 16 vs 12, Bandit shotgun 10 vs 9 and reload 4.1 vs 4.4) and no live hotfix entry touches them (source
+    open); single precision fixes the 1.25 fire-rate display; the game falls back to the type's title; no level line
+    at stage 1 or on mission weapons.
+  - Paint: an independent critic agent scored the host 4.5/10 (Maliwan) and 3/10 (Jakobs) against real inspect
+    captures (earlier 6.5 and 5.0 were against wiki screenshots): too dark even unlit, wrong Maliwan orange hue,
+    no element glow.
+  - Inventory open in the original game: ~126-156 ms to the first page frame (screen capture, upper bound).
+- **Not done:** downed/injured Phaselock checks, the auto-aim radius thresholds, a real mission turn-in, the
+  level-54 save. No UE suite was run (Smart App Control blocks the module DLL; no rebuild attempted).
+
+## 2026-10-03: Phaselock presentation compared with the game: shader warm-up, capture clock, dark bubble core
+
+AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or package parsing. Smart App Control was
+off and the module built and loaded. The host's Sanctuary dummy was compared with the 2026-10-02 game captures (a
+bullymong in Three Horns). Details, causes and the remaining differences are in `docs/verification/PHASELOCK_STOCK_DATA.md`,
+"Host presentation pass, second round". Frames and the side-by-side stay under ignored `local/phaselock/`.
+
+- **Invisible hold bubble: a first-draw shader compile, not the effect data.** Every import recreates the host
+  materials and compiles nothing (`-nullrhi`), so the next game run compiled them on first draw and skipped the
+  translucent quads for about 2.5 s. An unchanged rerun drew the bubble on time. `FOwFxTemplate::Preload` now loads all
+  Phaselock materials and meshes when the manifest loads and compiles the parent materials synchronously in editor
+  builds. The first run after a fresh import then drew every effect on time (checked once, 17:55 run).
+- **Capture clock.** Screenshot stalls (0.36 s, then about 0.13 s per shot) had moved the labelled shots late (the
+  "0.25 s" frame was at +0.52 s). That made the arm look twice as fast as in the game and the hand orb look absent.
+  `-owphaselockshots` now caps game time at 1/60 s per frame and logs each shot's actual time. With that, the arm
+  timing matches the game to the eye. The stock data gives the cast clip `PlayRate` 1 (no `RateScale`); the caller's
+  `SpecialMoveData` was not resolved.
+- **Emitter playback (UE3 conventions, UNVERIFIED here):** spawn-time distributions are read at the emitter's time in its
+  loop, and a linear sub-image layout follows the SubUV module's `SubImageIndex`. The second change removed the black
+  wedge at the collapse: the end smoke now runs its frames 15 -> 0 instead of 0 -> 15.
+- **Host stand-ins, chosen against the capture (UNVERIFIED):** all host FX parents render before DOF. The darkening
+  modulates (`Mat_SirenOrbBlackMOD`, `_NoBias`, `Mat_SirenOrbEnergySpikesMOD`) are drawn as translucent black, because
+  UE5 applies modulate apart from the additive layer. The textureless black orb uses a disc mask. `Mat_SirenGlowMOD`
+  weights by alpha. The screen particle is a modulate by the colour's hue. The lock light reaches only the target,
+  although its data (`LAC_DYNAMIC_AND_STATIC_AFFECTING`) says it lights the floor; the capture shows no pool. The
+  hold now reads as a near-black core with a violet rim, the release as a cyan-white ring that shrinks, and
+  1.2-1.5 s as a blue screen tint.
+- **Open:** the game's dark blob around the raised hand at about 0.27 s and its solid blue palm orb (the host shows
+  flashes and swirls); the 0.8 s intro burst draws as a white band; the screen tint starts at 1.05 s, against about
+  0.82 s in game (a burst `Time` in seconds would fit; not changed); what `SphereCollapse` drives in the stripped graph.
+- Also: the `OpenWillowPhaselock.h` lock-duration comment now cites the modifier stack read from native code instead
+  of the old fitted rule; FX logs print mesh-particle scales with decimals and each quad's blend, sort priority and
+  visibility.
+- **Checks (automated):** quest suite first run PASS 79 checks / 0 errors and resume PASS 11 / 0; mover PASS 16 / 0;
+  inventory actions PASS 45, FAIL 0, NOT_RUN 2, KNOWN_DIVERGENCE 2 (exit 1 from the NOT_RUN rows, as before); CTest
+  10/10; `verify_packages.py` 9/9. **In-game check:** host frames compared by eye with the game captures only; no new
+  game capture was made.
+
+## 2026-10-03: host card rounding and integer truncation follow the native weapon rules (UNVERIFIED in game)
+
+AI-assisted (Claude). Host and page only; no change to `src/`, `CMakeLists.txt`, package parsing or `tools/weapon_stats.py`.
+This closes the host items the 2026-10-02 weapon-rules entry left open. The rules come from
+`docs/verification/NATIVE_WEAPON_RULES.md` sections 1 and 2, which were read from native code and presentation data. The
+only in-game evidence is the golden-card set in `REALGAME_GROUND_TRUTH.md`. Those cards show damage rounded up and
+accuracy printed with one decimal and no `%`. They do not test this host code.
+
+- **Truncation.** `UOpenWillowInventory::MagazineSize` and `ShotCostRounds` now truncate toward zero instead of rounding to
+  nearest, because `ClipSize` and `ShotCost` are integer attributes. The slice recipes were evaluated before that rule
+  and still carry fractional magazines (10.5 and 13.8 now give 10 and 13, not 11 and 14). The magazine's floor of one
+  round is a host guard, not a game rule. A shot cost below 1 now truncates to 0, meaning no ammo cost; no local recipe
+  has one.
+- **Card numbers.** The host still sends raw stats. `inventory.js` `cardRound` rounds the stored single-precision value
+  the way `present()` does: damage up, magazine down, and fire rate, reload and accuracy half up to one decimal. The
+  accuracy line drops its `%`. Compare deltas are now differences of the printed numbers. The page does not print the
+  recipes' `stats.card.display`, because the local slice's copy predates single precision (it holds 1.2 for a 1.25 fire
+  rate that the game prints as 1.3).
+- **Rarity colour.** Weapons now forward the card's `rarity_color` as `rarityColor` when the recipe has it. The page
+  already prefers it, so E-tech gets its own colour. The local slice predates the field, so nothing changes until it is
+  regenerated; that regeneration is still a separate decision.
+- **Tests.** `tests/card_rounding_cases.json` holds invented cases. Both `tests/weapon_stats_test.py` (Python
+  `display`) and `tests/inventory_navigation_test.js` (the page) check them, so the two implementations must agree.
+  The navigation test was already failing at HEAD because its `document` stub lacked `addEventListener` (since
+  `988b0b9`); the stub now has it. The inventory self-test checks truncation on invented values.
+- **Changed card text in the suite:** the demo Infinity pistol with damage 753.22 now prints 754 (was 753), and the
+  compare delta follows (+105 against 649, was +104). This was seen in the `backpack_transfer_changes_destination`
+  frame. The 780.44 pistol would print 781 (was 780), but no captured frame shows it. Its other stats print as before.
+  Suite frames from before and after are under ignored `local/card_rounding/`.
+- **Checks (automated):** inventory actions PASS 45, FAIL 0, NOT_RUN 2, KNOWN_DIVERGENCE 2 (exit 1 from the NOT_RUN
+  rows, as before); inventory self-test passed; quest first run PASS 79 / 0 errors and resume PASS 11 / 0; CTest 10/10;
+  `verify_packages.py` 9/9; navigation test 23/23; weapon_stats 26, weapon_recipe 14, weapon_balance 7 and weapon_paint
+  29 tests OK. **In-game:** none. The host widget fallback (`OpenWillowInventoryWidget.cpp`) still formats unrounded
+  values.
+
+## 2026-10-03: Phaselock presentation round 3: LDR-like clip, brightening screen tint, burst time in seconds
+
+AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or package parsing. This round follows an
+independent critic's score of 4.5/10 for the round-2 side-by-side. Details are in `docs/verification/PHASELOCK_STOCK_DATA.md`,
+"Round 3". Frames and side-by-sides stay under ignored `local/phaselock/`.
+
+- **Common cause checked first.** Auto-exposure is already off project-wide; the difference is UE5's filmic tone curve
+  against UE3's per-channel clip. Host stand-in (UNVERIFIED): additive FX layers cap each channel at 1, translucent ones
+  at 1 / opacity, so that HDR particle colours stay saturated instead of turning white. The global tone mapper is
+  unchanged.
+- **Screen effect.** Its tint now divides the colour by its luminance, so it brightens toward blue instead of darkening
+  to grey-brown (stand-in). Burst `Time` is now read as seconds of emitter time (UNVERIFIED). Only the screen burst
+  moves (1.05 s -> 0.70 s), matching the game's tint onset of about 0.82 s.
+- **Modulate readings (stand-ins).** `Mat_SirenGlowMOD` reads its colour as a brightness-keeping tint (cobalt cast
+  flashes, as in the game frames). `Mat_SirenOrbBlackMOD` reads darkness as mask x (1 - alpha), the one reading that
+  fits its three emitters. It adds the game's dark blob around the raised hand at about 0.27 s and keeps the bubble's
+  dark core. Its host disc is softer (full to half the radius), so the hold rim reads violet-magenta.
+- **Not changed:** the bubble size (stock draw-scale rule; a matched-distance game capture or the bullymong's bounds
+  radius is needed to compare) and the palm orb size (it follows the hand, which is about 2.5x smaller on screen in
+  the host: arms placement or FOV). The shots add a 5.0 s capture.
+- **Open:** the release ring is blue-violet where the game's is cyan-white (the same `Mat_SirenGlowMOD` reading that
+  fixes the cast flashes weakens it); the 0.6 s white starburst; the dummy's lifted pose (no stock clips);
+  `SphereCollapse`.
+- **Checks (automated):** quest suite first run PASS 79 checks / 0 errors and resume PASS 11 / 0; mover PASS 16 / 0;
+  inventory actions PASS 45, FAIL 0, NOT_RUN 2, KNOWN_DIVERGENCE 2 (exit 1 from the NOT_RUN rows, as before); CTest
+  10/10; `verify_packages.py` 9/9. **In-game check:** host frames compared by eye with the 2026-10-02 game captures
+  only; no new game capture.
+
+## 2026-10-03: Live weapon data read from the running game (real-game lane)
+
+- **What.** `tools/real_game/scripts/weapon_dump.py` reads the stat properties of every weapon part, name part and type from
+  the running game (SDK, main menu, saving blocked, saves restored byte for byte) into ignored `local/realgame/cards/`.
+  `tools/real_game/live_overlay.py` and `golden_card_compare.py --live-data` use it as an overlay;
+  `tools/real_game/openwillow_valuewatch/` logs chosen values from SDK load (local developer tools).
+- **Confirmed in game (2026-10-03, method above).** The live values equal OpenBLCMM's static dump on all 78 values of W's
+  61 changed objects; 37 objects carry real value differences against the cooked decode (ClipSize 7 types, ReloadTime 5,
+  InstantHitDamage 2, 24 part effect lists), all in W's list. On the 69 golden weapons with exact parts the main four
+  stats match 52/69 on cooked data and 69/69 with the live overlay.
+- **Correction.** The source is not an online hotfix: the values exist 0.01 s after SDK load, before the `Micropatch`
+  configuration, and its 23 entries touch no weapon. Not a package override (only `Startup.upk` defines the objects among 2,010
+  packages) and not an installed mod. The origin is UNVERIFIED (load-time change by the game, or a decode gap). The wording in
+  NATIVE_WEAPON_RULES section 7 still says "hotfix"; the weapon lane's owner should change it.
+- **Open after the overlay.** Rocket launcher sale value about 4 % high (4 weapons), one status chance 33.3 vs 33.4, the
+  level line rule, the stage-15 Maliwan pistol reload rounding (1.8 vs 1.7).
+- **Not done / needs the maintainer.** The dump is game data and stays in `local/`; whether the port may read live values or
+  must carry them some other way is the maintainer's call. No sensitive files touched; no tests rerun (no code under src/ or host/).
+
+## 2026-10-03: Phaselock at a matched 650 uu in the real game (real-game lane)
+
+- **What.** A requested capture for the Phaselock lane: the real game (Ice_P, level 8 Maya, saving blocked, saves restored byte for
+  byte afterwards) casting Phaselock at one Adult Bullymong placed 650.0 uu away (horizontal; 652.9 in 3-D), every other enemy
+  held still at least 2,500 uu off. New `tools/real_game/scripts/phaselock_matched.py` (list, bounds, isolate, place, measure,
+  mark_lock); `phaselock.py` now samples the skill instance that moves (see below). Frames, sampler lines and a notes file stay in
+  ignored `local/realgame/phaselock/matched_650/`.
+- **Measured in game (one enemy type, one level, one cast pair; not a rule).** The bubble is 404-427 px across on the 1280x720
+  frame, about 0.32 of the width: radius 167-174 uu at 650 uu depth (horizontal FOV 77.55 degrees, focal length 796.7 px). That is
+  about 1.1 times the target's collision radius (150) and 0.55-0.58 times its mesh bounding sphere (300.8; the sphere moves with
+  the animation: 241.9 and 315.3 on other reads). Inside the rim the view is deep violet-blue (mean about RGB 50/52/98, darkest tenth
+  about 8 of 255); the held target stays visible at roughly a third of its normal brightness. Timeline from the per-frame
+  sampler, measured from the skill start (15 ms after the key): lift to 0.70 s (target 190 uu higher), hold to 4.77 s, release to
+  5.88 s; the screen vignette is up at 0.25 s, the hand orb at 0.5 s, a cyan-white burst at 0.8 s, the bubble from about 1.5 s,
+  gone by 5.0 s. A second cast of the same setup (run1) agrees by eye.
+- **Method findings.** `SetLocation()` returned False for AI pawns and for Maya and moved nothing; assigning `Location` moves
+  her (the capture uses that) and `Destroy()` removed nothing. A target whose AI controller was detached was not locked: the
+  skill ended at once and the target took damage (cause not read from script). Freezing pawns with `CustomTimeDilation = 0`
+  held them only for a while. What worked: detach the controllers of every other pawn, keep the target's controller and set its
+  `GroundSpeed` to 0. The sampler's `lift_skill()` took the last listed `LiftActionSkill`, which was the idle data object; it now
+  takes the instance whose `SkillStartTime` is largest (the world instance moves; the `GD_Siren_Skills` object stays at 0).
+- **Not done.** No host run compared with these frames; other enemy sizes and distances; a cast at other levels.
+- **Checks.** None automated (game captures only; no code under src/ or host/). No sensitive files touched.
+
+## 2026-10-03: Phaselock presentation round 4: matched-distance comparison, depth-biased darkening, release override
+
+AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or package parsing. The host is compared
+with the matched-distance game capture (an Adult Bullymong at 650 uu, horizontal FOV 77.55 degrees) at the same
+distance and FOV (`-owfov=62.15`). Details are in `docs/verification/PHASELOCK_STOCK_DATA.md`, "Round 4".
+
+- **Stock data:** `Mat_SirenOrbBlackMOD` has a `DepthBias` parameter (-20), `Mat_SirenGlowMOD` a `Bias` (-15) and the
+  smoke a `DepthBias` (-18). The host reads a negative bias as a camera-ward offset of the sprite plane, with the size
+  scaled to keep the outline (UNVERIFIED). The black orb now covers the lifted target's front.
+- **Darkness, calibrated against the one capture (stand-in):** the black orb is fully dark to 0.6 of its radius (thin,
+  dim rim), with darkness capped at 0.9 on opaque geometry just behind it (the game keeps the target at about a third of
+  its brightness) and at 0.96 over the background. The second cap compensates for UE5's float target, where the
+  additive layers sum to about 2.5 before the black, against UE3's clamped 8-bit target.
+- **Release:** a labelled per-emitter override gives the end template's `Brighten` the plain multiply. The release is a
+  cyan-blue ring; the cast flashes keep the brightness-keeping tint.
+- **Size: not changed, not confirmed.** The stock rule (mesh bounds sphere radius / 66.7, full-width sprites) puts this
+  bullymong's rim at about 356 uu, while the capture measures 167-174 uu. Two readings fit and cannot be separated with
+  this enemy, so the report carries a capture request for a second enemy type with an SDK read of the bubble emitter's
+  draw scale.
+- **Open:** the release timing (game 4.77 s in this capture, host 4.60 s; not changed); the floor glow seen in the
+  matched frames against the light-channel stand-in; the magenta-leaning interior; the 0.6 s starburst; the host's
+  default capture FOV (106 degrees against the game's 77.55).
+- **Checks (automated):** quest suite first run PASS 79 checks / 0 errors and resume PASS 11 / 0; mover PASS 16 / 0;
+  inventory actions PASS 45, FAIL 0, NOT_RUN 2, KNOWN_DIVERGENCE 2 (exit 1 from the NOT_RUN rows, as before); CTest
+  10/10; `verify_packages.py` 9/9. **In-game check:** host frames compared by eye with the matched-distance game capture
+  only.
+
+## 2026-10-03: Phaselock bubble size rule read from the game's emitters (real-game lane)
+
+- **What.** A follow-up to the matched 650 uu capture, requested by the Phaselock lane: read the spawned bubble emitters at lock
+  time on three enemies (Baby, Adult and Ranged Bullymong, Ice_P, level 8 Maya, saving blocked, saves restored byte for byte) and
+  measure the rim in frames. New `tools/real_game/scripts/phaselock_size_rule.py` (probe), `tools/real_game/bubble_frames.py`
+  (frames at chosen times and a rim width), `aim()` in `phaselock_matched.py`. Frames, probe lines and notes stay in ignored
+  `local/realgame/phaselock/size_rule/`.
+- **Measured in game (one map, level and skill build).** The two bubble emitters of one pawn (`Part_SirenASEnemyOrbBegin` at lock,
+  `Part_SirenASEnemyOrb` 0.2 s later) have different `DrawScale` values (adult 4.2825 and 3.9026, ranged 4.3144 and 3.7926, baby
+  1.8181 and 1.9218) while the collision radius never changes (150, 150, 64). The intro value times `BubbleFXScale` (66.7) is within
+  1 to 2.3 percent of the pawn's mesh bounds sphere radius read at +0.72 s (285.6 against 290.3, 287.8 against 290.0, 121.3 against
+  124.1). So the size input is the mesh bounds sphere at spawn time, not the collision radius. `DrawScale3D` and the particle
+  component's scale are 1 on every emitter. The visible rim radius per unit of the loop emitter's `DrawScale` is 47.6, 48.6 and 49.5
+  uu on the baby, adult and ranged runs (about 0.73 times 66.7): a constant of the particle template, not of the enemy.
+- **Limit.** All three pawns have mesh sphere over collision radius of 1.93 to 1.94 at the lock pose (the same animation), and no
+  enemy with a very different ratio (a Skag, a Brut) was on the map, so size ratios alone do not separate the readings; the
+  emitters changing with the pose and the baby's half-size bubble following its 0.5 mesh scale do.
+- **Timing, game clock.** Lift 0.70 s, hold 3.9 s, release 1.1 s (`LockFadeOutTime`), duration 5.7 s; release began 4.608 s after the
+  skill start in all three casts. The earlier matched capture read 4.786 s (hold 0.175 s longer, on a second lock of the same pawn;
+  cause not read, the skill's tick rate is 0). `LockDurationFormula` is a 7.0 constant plus the designer attribute
+  `Att_Phaselock_Duration` (its value was not read).
+- **Method findings.** A cast at pitch 0 did not lock a baby at 650 uu (no target within the auto-aim); aiming the crosshair at the
+  target's origin did. Several pawns were found dead or gone after their neighbours' controllers had been detached (cause not
+  read), so one capture needs its setup and cast within seconds.
+- **Not done.** No host comparison; a Skag or Brut; other levels; the duration attribute's value.
+- **Checks.** None automated (game captures only; no code under src/ or host/). No sensitive files touched.
+
+## 2026-10-03: weapon card rules: level line, single-precision rounding, float bases; golden cards 69/69 (weapon lane)
+
+AI-assisted (Claude). Tools, tests and notes only: no `src/`, no `CMakeLists.txt`, no host or page code; package
+parsing is unchanged. The rules are written in our own words in `docs/verification/NATIVE_WEAPON_RULES.md`. Raw
+decompiler output stayed in the analysis store. Evidence: the 69 golden cards (exact rolled parts) recorded by the
+real-game lane.
+
+- **Level line** (read from script and data, section 4). A mission-balance weapon requires level 0. Any other weapon
+  requires its item level minus the floor of the player's level-requirement bonus (0 in this data unless the player has
+  something that raises it), at least 1. The card prints the line only when the requirement is above 1, so every
+  mission weapon and every level-1 weapon prints none. New `weapon_stats.level_requirement` and the card fields
+  `level_requirement` and `level_line`. Not modelled: the over-level text and the DLC message.
+- **Rounding precision** (section 2). The Float rounding scales, adds the half and floors on the x87 unit. A golden
+  status chance that is exactly a float tie (stored 33.349998, printed 33.4) shows the unit runs at single precision.
+  `half_up` now rounds `f32(value * 10^p)` before adding the half. How the game sets the x87 precision was not read
+  (UNVERIFIED; Direct3D 9's default). Consequence: an invented 87.35 accuracy now prints 87.4, not 87.3.
+- **Float bases** (section 1). Plain weapon-type fields enter the stack as floats. The class-default 2.1 reload is
+  2.0999999, so a -20 % scale gives 1.7499998, which prints 1.7 as in the game, not exactly 1.75 printed as 1.8.
+- **Launcher sale value** (section 6). The evaluator was right. The golden comparison tool does not pass the recorded
+  prefix and title, so the launcher prefixes' price multiplier was missing. The value function itself is still not
+  read: its vtable could not be resolved, a second time.
+- **Status rows** come from their own presentation data: Float, one decimal. The chance row is a remap whose slope equals
+  the Generic BaseChance, except for slag (30.03 against 30; no slag card, UNVERIFIED).
+- **Golden counts**, tracked comparison tool, main four / every printed stat / every field:
+
+  | data | before | after |
+  |---|---|---|
+  | live | 69 / 68 / 54 | 69 / 69 / 54 |
+  | cooked | 52 / 52 / 40 | 53 / 53 / 41 |
+
+  Per field (live), status chance went from 15/16 to 16/16. On cooked data reload went from 63 to 64/69.
+  A local copy of the tool that passes prefix, title and balance and uses `card['level_line']` gives every field on
+  68/69 live (sale value 69/69, level line 69/69) and 52/69 on cooked data. The one remaining live miss is the host's
+  own slice name. That tool change belongs to the real-game lane.
+- **Tests and shared cases.** `tests/card_rounding_cases.json` gains two reload cases at the half (1.7499998 prints
+  1.7; 1.75 prints 1.8). Its 87.35 accuracy case moves to `pending_page_change` with the new text 87.4, which only the
+  Python test reads. `inventory.js` `cardRound` still prints 87.3 for it. To match, the page would round
+  `Math.fround(Math.fround(stored * scale) + 0.5)` before the floor, with `scale = Math.fround(10 ** decimals)`. That
+  change needs the in-engine suite and was not made. `weapon_card_audit.py` audits cards without a level line at level 1
+  instead of failing.
+- **Checks:** weapon_stats 28, weapon_recipe 14, weapon_balance 7, weapon_paint 29, golden_card_compare 12 tests OK;
+  navigation 23/23; CTest 10/10; `verify_packages.py` 9/9. **In-game:** none beyond the golden cards above. No
+  sensitive files touched.
+
+## 2026-10-03: Golden card compare passes the balance and name parts (real-game lane)
+
+- **What.** `tools/real_game/golden_card_compare.py` now gives the evaluator the record's balance and its prefix and title name
+  parts, renders the level line from the evaluated `level_requirement` instead of the spawn stage, and blanks it when the model
+  says there is no level line. Requested by the weapon lane, whose commit `13d9e87` made the rules need these inputs for sale
+  value, the name and the level line.
+- **Result (automated, golden-card evidence; the rules stay UNVERIFIED).** On the 69 golden weapons with exact parts: cooked data
+  alone 53 matching the main four stats, 53 every printed stat, 52 every field; with the live-data overlay 69 / 69 / 68. The one
+  miss is the host slice's own display name (`host_name`, 5 of 6). `tests/golden_card_compare_test.py` passes (12 tests).
+- **Not done.** No new in-game capture; the rules behind the level line and rounding are still read from native code and
+  confirmed only against the golden cards.
+- **Checks.** Compare tool run twice as above; no sensitive files touched.
+
+## 2026-10-03: Phaselock presentation round 5: bubble size from the confirmed rule, floor light, interior colour
+
+AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or package parsing. Details are in
+`docs/verification/PHASELOCK_STOCK_DATA.md`, "Round 5".
+
+- **Size rule, confirmed in game on 2026-10-03** (the real-game lane's SDK reads of the bubble emitters' `DrawScale` plus
+  frames, three bullymong variants):
+  - each bubble emitter's `DrawScale` = the lifted pawn's mesh bounds sphere radius at its own spawn / 66.7;
+  - the loop's visible rim sits 48.6 uu per `DrawScale` unit.
+- **Host calibration (UNVERIFIED cause):**
+  - each template now takes its own draw scale at spawn;
+  - all three bubble templates are drawn at 48.6 / (0.44 x the `Sphere` StartSize) of it, because the host drew the rim
+    ridge at 0.88 of the `Sphere` half-width (about 1.8 times the game's size);
+  - size check on host frames at the matched FOV: rim radius 79.7 uu at 1.5, 3.0 and 4.5 s against the expected
+    48.6 x 1.640 = 79.7 uu.
+- **Floor light:** it reaches the floor again, as its data says. The 10-03 game frames show a pale blue pool, which
+  undoes the round-1 stand-in.
+- **Interior (stand-in, calibrated against one capture):** the bubble's black orb blends toward a deep blue-violet
+  instead of black, standing in for UE3's clamp after every blend. Host interior (38, 37, 84) against the game's
+  (39-48, 38-45, 88-100). The hand orb stays black.
+- **Timing:** first locks in game release at 4.608 s, which the host matches; no change.
+- **Open:** the dummy stays lit in front of the smaller bubble; the floor pool is fainter on dark asphalt; the 0.6 s
+  starburst.
+- **Checks (automated):** quest suite first run PASS 79 checks / 0 errors and resume PASS 11 / 0; mover PASS 16 / 0;
+  inventory actions PASS 45, FAIL 0, NOT_RUN 2, KNOWN_DIVERGENCE 2 (exit 1 from the NOT_RUN rows, as before); CTest
+  10/10; `verify_packages.py` 9/9. **In-game check:** host frames compared with the matched-distance and size-rule game
+  captures only.
+
+## 2026-10-03: Maintainer README/plan edits, written stop conditions dropped, worktree provisioning from a source worktree
+
+Maintainer decision. Docs and tooling only; no change to `src/`, `CMakeLists.txt`, the reader or package parsing.
+
+- **Maintainer edits kept as written:** the README intro, status-table notes for Phases 1, 3 and 4, the FAQ and
+  "Who's making this" wording, and the plan's opening/credit lines. The Phase 3 and Phase 4 notes ("working well",
+  "roughly 6/10 parity") are the maintainer's own testing and have no verification record; they are worded as such.
+- **Stop conditions dropped:** the plan's section 9 (now "Commitment") and ROADMAP's "Kill criteria" section no longer
+  list stop conditions. Links and descriptions that pointed at them were updated (README FAQ, document table, the
+  Phase 1 gate sentence in ROADMAP). Verification rules are unchanged.
+- **Worktree provisioning:** `tools/provision_worktree_assets.ps1 -SourceWorktree <path>` copies missing files from
+  a populated worktree's Content and every `local/` folder (the shared seed only holds four folders and goes stale).
+  Documented in AGENTS.md and `tools/worktree-assets.md`. Parse-checked only; not run in a new worktree.

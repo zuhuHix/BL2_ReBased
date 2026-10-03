@@ -4,7 +4,7 @@ Working title ("Willow" is Gearbox's internal name for the BL2 engine branch). C
 `BL2_REMASTER_ANALYSIS.md`, the research this plan is built on.
 
 **What this is:** a new engine that runs Borderlands 2 from the player's own, legitimately purchased install.
-It reads Gearbox's files. It ships none of them. It contains no Gearbox code.
+It reads Gearbox's files. It ships none of them
 
 **What it unlocks:** every item on the analysis's "blocked" list, new maps, modern renderer, relighting, 64-bit,
 ultrawide, split-screen, *your own co-op netcode* (the #1 complaint), platform freedom, preservation, plus The
@@ -64,7 +64,7 @@ Gearbox's own `.uncompressed_size` files byte-for-byte. That is the seed of the 
 6. **License hygiene for references.** Legendary Explorer is GPL-3 (copying its code makes your project GPL);
    umodel's source has its own terms; check every license before copying a single line. Referencing a *format* is
    always fine; copying *code* depends on the license.
-7. **Credit and transparency.** State plainly that the project is AI-assisted. It's a strength, not a secret.
+7. **Credit and transparency.** I'll be transparent about anything I do and why and I'll credit all the tools i ever use.
 
 This list isn't original. It's how OpenMW, OpenRCT2, Daggerfall Unity, OpenGothic and Ship of Harkinian all stayed alive long enough to finish, so it's how this one runs too.
 
@@ -155,7 +155,7 @@ Rule: a native without a golden file is a guess. Guesses are labelled `// UNVERI
 
 1. **The 3,803 undocumented Gearbox natives.** No spec except the running game. Every one needs instrumentation,
    golden data, implementation, comparison. This is 60% of the project's total effort and almost all of its calendar
-   time. Concentration helps (200 classes carry 78%), but the long tail is long.
+   time. Concentration helps (200 classes carry 78%), but the long tail is long. fucking long unfortunately and it's gonna be a pain in the ass even with a decompiler....
 2. **Script VM correctness in the corners.** The opcode set is documented, but states, latent functions, struct
    copy semantics, delegates, `out` parameters, default-property loading from CDOs, and replication flags are
    where interpreters go subtly wrong, and subtle VM bugs surface as inexplicable gameplay weirdness far away.
@@ -166,7 +166,7 @@ Rule: a native without a golden file is a guess. Guesses are labelled `// UNVERI
 5. **Animation fidelity.** ~30 AnimNode types, blend timing, root motion, physics assets and ragdoll. Data is
    inherited; making it *move* identically is not.
 6. **AI feel.** GearboxFramework's `AIComponent`, `GearboxMind`, `GearboxCoverStateManager`, navmesh, cover.
-   Enemies that shoot back is M3; enemies that *behave like BL2 enemies* is M4.
+   Enemies that shoot back is M3; enemies that *behave like BL2 enemies* is M4. We might even have a hotfix available on launch to fix a lot of micro problems npcs have in bl2
 7. **Scaleform.** The entire UI is Flash (AS2) running Gearbox's ActionScript, plus 512 bridge natives. Needs an
    SWF VM (Ruffle-class) and handling of Scaleform's `.gfx` extensions. Skippable early (debug UI), unavoidable
    for M4.
@@ -175,7 +175,7 @@ Rule: a native without a golden file is a guess. Guesses are labelled `// UNVERI
    below and by shipping M1 publicly.
 10. **Fidelity vs modernisation tension.** Every system has a choice: replicate SM3 lightmaps or use Lumen?
     Replicate Cascade or approximate with Niagara? Rule: **fidelity first where it defines feel (guns, movement,
-    skills); modernisation first where it defines look (lighting, resolution).**
+    skills); modernisation first where it defines look (lighting, resolution).** 
 
 ---
 
@@ -414,16 +414,9 @@ No durations are given. Status and dates so far: ROADMAP.md.
 
 ---
 
-## 9. Kill criteria: be honest with yourself
+## 9. Commitment
 
-- Phase 0 never gets gated → the environment/tooling loop isn't working; fix that before anything else.
-  *(Passed 2026-09-10.)*
-- M1 cannot load a single map → the loop isn't holding for this project. Stop, reassess honestly,
-  and don't keep pushing on hope alone. *(Passed: three maps load.)*
-- Nobody but you has contributed by **M2** → still fine, but stop planning M5 and plan M3 only.
-- You stop reading the code → the project has become something you can't maintain. Pause and fix that.
-
----
+- I'll never give up, you really thought huh hahahha
 
 ## 10. This week: the first ten tasks
 

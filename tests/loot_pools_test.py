@@ -30,6 +30,9 @@ def world():
         'W.Mod': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(0, 'D.CommonMod'),
                                    'Level': const(0, init='W.Common'), 'Power': const(1)}},
         'D.CommonMod': {'BaseValue': const(1)},
+        # Invented values: 2 x (3^2 + 1) = 20 (19 with the offset outside the multiplier).
+        'W.Offset': {'ValueFormula': {'bEnabled': True, 'Multiplier': const(2), 'Level': const(3), 'Power': const(2),
+                                      'Offset': const(1)}},
         'Odds': {}, 'Odds.Cond_0': {'ValueExpressions': {'ConditionalExpressionList': [
             {'BaseValueIfTrue': const(0.5), 'Expressions': [
                 {'AttributeOperand1': L.NUMBER_OF_PLAYERS, 'ComparisonOperator': 'OPERATOR_EqualTo',
@@ -74,6 +77,9 @@ class ValuesTests(unittest.TestCase):
         self.assertEqual(values.init(const(0, init='W.Rare')), 1.0)   # MinValue 100 not enabled
         self.assertEqual(values.init(const(0, init='W.Mod')), 100.0)  # designer BaseValue 1 * 100
         self.assertEqual(L.Values(world(), editor=True).init(const(0, init='W.Mod')), 0.0)
+
+    def test_formula_offset_inside_the_multiplier(self):
+        self.assertEqual(L.Values(world()).init(const(0, init='W.Offset')), 20.0)
 
     def test_conditional_resolver_uses_player_count(self):
         self.assertEqual(L.Values(world()).init(const(0, 'Odds')), 0.5)

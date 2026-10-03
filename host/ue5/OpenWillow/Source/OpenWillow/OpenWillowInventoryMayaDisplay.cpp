@@ -21,6 +21,8 @@ const TCHAR* BodyPath = TEXT("/Game/OpenWillow/Characters/Maya/Meshes/Skel_Siren
 const TCHAR* HeadPath = TEXT("/Game/OpenWillow/Characters/Maya/Meshes/Skel_Siren000/SkeletalMeshes/Skel_Siren000.Skel_Siren000");
 // Ink outline from host/ue5/import_character_menu_look.py (absent: no outline).
 const TCHAR* OutlinePath = TEXT("/Game/OpenWillow/Characters/Maya/M_OW_CharacterOutline.M_OW_CharacterOutline");
+const TCHAR* MenuHeadPath = TEXT("/Game/OpenWillow/Characters/Maya/Materials/MI_InventorySirenHead.MI_InventorySirenHead");
+const TCHAR* BackdropPath = TEXT("/Game/OpenWillow/Characters/Maya/M_OW_MenuBackdrop.M_OW_MenuBackdrop");
 
 UDirectionalLightComponent* MakeMayaOnlyLight(AActor* Owner, USceneComponent* Root, const TCHAR* Name, int32 ForwardPriority)
 {
@@ -75,6 +77,19 @@ AOpenWillowInventoryMayaDisplay::AOpenWillowInventoryMayaDisplay()
     RimLight = MakeMayaOnlyLight(this, SceneRoot, TEXT("MayaRimLight"), 1);
 }
 
+void AOpenWillowInventoryMayaDisplay::PreloadAssets(TArray<TObjectPtr<UObject>>& Out)
+{
+    const AOpenWillowInventoryMayaDisplay* Defaults = GetDefault<AOpenWillowInventoryMayaDisplay>();
+    auto Keep = [&Out](UObject* Asset) { if (Asset) Out.Add(Asset); };
+    Keep(LoadObject<USkeletalMesh>(nullptr, BodyPath));
+    Keep(LoadObject<USkeletalMesh>(nullptr, HeadPath));
+    Keep(LoadObject<UMaterialInterface>(nullptr, MenuHeadPath));
+    Keep(LoadObject<UMaterialInterface>(nullptr, BackdropPath));
+    if (Defaults->OutlineThicknessCm > 0.f) Keep(LoadObject<UMaterialInterface>(nullptr, OutlinePath));
+    Keep(LoadObject<UAnimSequence>(nullptr, *Defaults->IdleAnimation));
+    Keep(LoadObject<UAnimSequence>(nullptr, *Defaults->WeaponIdleAnimation));
+}
+
 void AOpenWillowInventoryMayaDisplay::SetPreviewWeapon(const FOpenWillowWeaponItem* Item)
 {
     const FString RecipeId = Item ? Item->Id : FString();
@@ -103,8 +118,7 @@ void AOpenWillowInventoryMayaDisplay::ApplyBackdrop()
 {
     FPostProcessSettings& S = Backdrop->Settings;
     // Grade only visible world pixels; Maya and her ink hull keep their colour.
-    if (UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr,
-        TEXT("/Game/OpenWillow/Characters/Maya/M_OW_MenuBackdrop.M_OW_MenuBackdrop")))
+    if (UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, BackdropPath))
     {
         UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Material, this);
         Instance->SetVectorParameterValue(TEXT("BackdropGain"), BackdropGain);
@@ -140,8 +154,7 @@ void AOpenWillowInventoryMayaDisplay::BeginPlay()
     Body->SetSkeletalMesh(BodyMesh);
     Head->SetSkeletalMesh(HeadMesh);
     // Preview-specific palette correction; the gameplay mesh/material stays separate.
-    if (UMaterialInterface* MenuHead = LoadObject<UMaterialInterface>(nullptr,
-        TEXT("/Game/OpenWillow/Characters/Maya/Materials/MI_InventorySirenHead.MI_InventorySirenHead")))
+    if (UMaterialInterface* MenuHead = LoadObject<UMaterialInterface>(nullptr, MenuHeadPath))
     {
         Head->SetMaterial(0, MenuHead);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory Maya preview head palette loaded"));

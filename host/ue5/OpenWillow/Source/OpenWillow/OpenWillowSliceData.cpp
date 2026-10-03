@@ -1,4 +1,5 @@
 #include "OpenWillowSliceData.h"
+#include "OpenWillowSkills.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -98,8 +99,24 @@ float FOpenWillowSliceData::HealthForLevel(int32 Level) const
 
 int32 FOpenWillowSliceData::MissionXp(int32 MissionLevel) const
 {
-    auto Required = [this](int32 L) { return XpMultiplier * FMath::Pow(double(L), XpPower) + XpOffset; };
-    return int32(FMath::RoundToDouble(XpPercentage * (Required(MissionLevel + 1) - Required(MissionLevel))));
+    // The span between two integer curve points, times the float percentage, stored as a float and truncated.
+    auto Required = [this](int32 L) { return UOpenWillowSkills::RequiredExperience(float(XpMultiplier), float(XpPower), float(XpOffset), L); };
+    const int64 Span = Required(MissionLevel + 1) - Required(MissionLevel);
+    return int32(FMath::TruncToDouble(double(float(double(Span) * double(float(XpPercentage))))));
+}
+
+int32 FOpenWillowSliceData::RegionStage(int32 PlayerLevel, TFunctionRef<bool(const FString&)> IsComplete) const
+{
+    const int32 Level = PlayerLevel + StageBoost;
+    int32 Best = 0;
+    bool bOverride = false;
+    for (const FStageOverride& Override : StageOverrides)
+        if (IsComplete(Override.Mission))
+        {
+            Best = bOverride ? FMath::Max(Best, FMath::Clamp(Level, Override.Min, Override.Max)) : FMath::Clamp(Level, Override.Min, Override.Max);
+            bOverride = true;
+        }
+    return bOverride ? Best : FMath::Clamp(Level, StageDefaultMin, StageDefaultMax);
 }
 
 void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile, const FString& AudioFile)
@@ -231,6 +248,37 @@ void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile
     XpOffset = Num(Obj(Required, TEXT("Offset")), TEXT("BaseValueConstant"));
     for (const auto& Pair : Obj(Xp, TEXT("candidate_amount_by_mission_level"))->Values)
         XpCandidateByLevel.Add(FCString::Atoi(*Pair.Key), int32(Pair.Value->AsNumber()));
+    const TSharedPtr<FJsonObject>* CurvePoints = nullptr;
+    if (Xp->TryGetObjectField(TEXT("required_points_by_level"), CurvePoints) && CurvePoints && *CurvePoints)
+        for (const auto& Pair : (*CurvePoints)->Values) XpRequiredPointsByLevel.Add(FCString::Atoi(*Pair.Key), int64(Pair.Value->AsNumber()));
+    // Region game stage table (values.xp.region_stage). Without it: STAND-IN bounds, logged by the quest.
+    const TSharedPtr<FJsonObject>* Stage = nullptr;
+    if (Xp->TryGetObjectField(TEXT("region_stage"), Stage) && Stage && *Stage)
+    {
+        const auto S = *Stage;
+        StageRegion = Str(S, TEXT("region"));
+        if (StageRegion != Str(Xp, TEXT("game_stage_region"))) Missing(TEXT("region_stage is not the mission's GameStageRegion"));
+        if (int32(Num(S, TEXT("playthrough"))) != 1) Missing(TEXT("region_stage is not the playthrough-1 entry"));
+        StageBoost = int32(Num(S, TEXT("boost_above_player")));
+        StageDefaultMin = int32(Num(Obj(S, TEXT("default")), TEXT("min")));
+        StageDefaultMax = int32(Num(Obj(S, TEXT("default")), TEXT("max")));
+        for (const auto& Value : Arr(S, TEXT("overrides")))
+        {
+            const auto O = Value->AsObject();
+            StageOverrides.Add({Str(O, TEXT("mission")), int32(Num(O, TEXT("min"))), int32(Num(O, TEXT("max")))});
+        }
+        bRegionStageFromData = true;
+    }
+    else
+    {
+        // STAND-IN (not read from this manifest): Sanctuary's playthrough-1 bounds as quoted in
+        // docs/verification/NATIVE_PROGRESSION.md section 2. Rerun tools/prepare_slice_world.py to read them from data.
+        StageRegion = Str(Xp, TEXT("game_stage_region"));
+        StageDefaultMin = 7;
+        StageDefaultMax = 9;
+        StageOverrides = {{TEXT("GD_Episode04.M_Ep4_WelcomeToSanctuary"), 8, 11}};
+    }
+    if (StageDefaultMin < 1 || StageDefaultMax < StageDefaultMin) Missing(TEXT("region_stage default bounds are invalid"));
 
     // NPC assets (UE paths) and the pawns' mesh-component translations from the identity manifest beside it.
     const auto Npcs = Obj(ReadJson(NpcFile), TEXT("use"));

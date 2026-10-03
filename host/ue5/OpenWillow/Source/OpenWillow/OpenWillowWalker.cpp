@@ -2,6 +2,7 @@
 #include "OpenWillowMover.h"
 #include "OpenWillowQuest.h"
 #include "Engine/DamageEvents.h"
+#include "GameFramework/WorldSettings.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
@@ -27,6 +28,8 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/Texture2D.h"
 #include "GameFramework/PlayerController.h"
 #include "UnrealClient.h"
 
@@ -78,6 +81,11 @@ float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& Dama
     const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
     Health -= Applied;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.0f damage, health %.0f/%.0f"), Applied, Health, MaxHealth);
+    // Going down while a target is held: Skill_Phaselock's while-active HealthState constraint fails and deactivates the
+    // skill, which ends the lock (native reading, UNVERIFIED). The host has no injured state: health 0 is death.
+    FString Failed;
+    if (Health <= 0.f && IsPhaselockActive() && !Phaselock.GateOpen(PhaselockGateState(), false, Failed))
+        EndPhaselockEarly(TEXT("skill constraint ") + Failed);
     if (Health <= 0.f) Respawn();
     return Applied;
 }
@@ -161,6 +169,32 @@ void AOpenWillowWalker::BeginPlay()
             Phaselock.TargetMinDistance, Phaselock.TargetMaxDistance, *Phaselock.CanLiftFlag,
             *FString::Join(Phaselock.GateEvaluators, TEXT(", ")), *FString::Join(Phaselock.GateNotEvaluated, TEXT(", ")));
     }
+    // Phaselock presentation numbers (tools/prepare_phaselock_fx.py); without them no stock effect is drawn.
+    FString FxFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/phaselock/fx_manifest.json")));
+    FParse::Value(FCommandLine::Get(), TEXT("owphaselockfx="), FxFile);
+    FString FxError;
+    if (!PhaselockFx.Load(FxFile, FxError))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock presentation unavailable: %s"), *FxError);
+    }
+    else
+    {
+        // Load every template's materials and meshes now (and wait for their shaders in editor builds) so that the first
+        // cast neither hitches nor draws its translucent quads late (FOwFxTemplate::Preload).
+        int32 Materials = 0;
+        for (const FString& Name : {PhaselockFx.HandHitTemplate, PhaselockFx.HandMissTemplate, PhaselockFx.ScreenTemplate,
+                 PhaselockFx.BubbleFadeIn, PhaselockFx.BubbleLoop, PhaselockFx.BubbleFadeOut})
+        {
+            FString TemplateError;
+            if (const FOwFxTemplate* Template = FOwFxTemplate::Load(PhaselockFx.EmitterDir, Name, TemplateError))
+                Materials += Template->Preload(PhaselockFxAssets);
+            else UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock presentation: %s"), *TemplateError);
+        }
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock presentation: hand %s at %s+%.2f s (miss %.2f s), bubble /%.1f collapse %.2f over %.1f s, light r%.0f b%.1f, glow %d keys over %.1f s, screen %s; %d emitter materials preloaded"),
+            *PhaselockFx.HandHitTemplate, *PhaselockFx.HandBone.ToString(), PhaselockFx.LiftNotifyTime, PhaselockFx.FailNotifyTime,
+            PhaselockFx.BubbleScaleDivisor, PhaselockFx.MaxCollapse, PhaselockFx.CollapseDuration, PhaselockFx.LightRadius,
+            PhaselockFx.LightBrightness, PhaselockFx.GlowPoints.Num(), PhaselockFx.GlowDuration, *PhaselockFx.ScreenTemplate, Materials);
+    }
     // GD_Siren_Streaming.Pawn_Siren: CylinderComponent CollisionRadius 42,
     // CollisionHeight 80 (UE3 half-height) and BaseEyeHeight 70 above the
     // pawn centre, so a 150 cm standing eye. Its serialized EyeHeight is 77;
@@ -173,6 +207,7 @@ void AOpenWillowWalker::BeginPlay()
     // 90 default matches a maintainer capture by eye, not a read setting.
     float Bl2Fov = 90;
     FParse::Value(FCommandLine::Get(), TEXT("owfov="), Bl2Fov);
+    Bl2FovSetting = Bl2Fov;
     float Aspect = 16.f / 9.f;
     if (GEngine && GEngine->GameViewport)
     {
@@ -369,12 +404,13 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         Arms->SetRelativeRotation(FRotator(Sway.Y, Sway.X, 0));
         LookInput = FVector2D::ZeroVector;
     }
-    if (bMayaActive && Now < PhaselockBeamUntil && PhaselockTarget.IsValid()
-        && Arms->GetBoneIndex(TEXT("L_Hand")) != INDEX_NONE)
+    if (bMayaActive)
     {
-        const float Fade = FMath::Clamp((PhaselockBeamUntil - Now) / 0.3f, 0.f, 1.f);
-        AOpenWillowShotFx::Tracer(GetWorld(), Arms->GetBoneLocation(TEXT("L_Hand")) + Camera->GetForwardVector() * 8.f,
-            PhaselockTarget->AimPoint(), FLinearColor(0.6f, 0.2f, 1.f) * Fade, 0.9f, 0.02f);
+        // Skill constraints flagged while active (healthy, on foot) end a running Phaselock when they fail.
+        FString Failed;
+        if (IsPhaselockActive() && !Phaselock.GateOpen(PhaselockGateState(), false, Failed))
+            EndPhaselockEarly(TEXT("skill constraint ") + Failed);
+        UpdatePhaselockPresentation(Now);
     }
     if (bMayaActive && !bBarrelAxisLogged && Now > 6.f && WeaponVisual->GetSkinnedAsset())
     {
@@ -389,6 +425,8 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     // numbered captures, so presentation reviews use repeatable views.
     static const bool bCombatShots = FParse::Param(FCommandLine::Get(), TEXT("owcombatshots"));
     if (bCombatShots && bMayaActive && Controller) RunCombatShots(Now);
+    static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
+    if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
     FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
     if (bReloading && Now >= ReloadEndsAt)
     {
@@ -744,15 +782,110 @@ bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
     // WillowPlayerController.ServerStartActionSkill (script): the action skill must be in the skill tree (host:
     // Phaselock bought, as traced in the Skills tab), not on cooldown (IsActionSkillOnCooldown: pool value above 0) and
     // not active (here covered by the cooldown, which is full while a target is held). Ladders and vehicle rider seats,
-    // which the script also refuses, do not exist in the host. The native ActivateSkill then applies
-    // Skill_Phaselock.SkillConstraints marked for activation (inferred from the data's flags, not shown by script).
-    // Constraints marked while-active (on foot, healthy) would also end a running skill: not modelled.
+    // which the script also refuses, do not exist in the host. The native activation then applies the
+    // Skill_Phaselock.SkillConstraints flagged for activation (GateOpen; native readings, UNVERIFIED).
     if (!Phaselock.bLoaded) { OutReason = TEXT("no Phaselock manifest"); return false; }
     if (!Skills || Skills->GetActionGrade() < 1) { OutReason = TEXT("Phaselock not bought"); return false; }
     if (PhaselockRemaining() > 0.f) { OutReason = TEXT("on cooldown"); return false; }
     FString Failed;
-    if (!Phaselock.GateOpen(bReloading, Health, Failed)) { OutReason = TEXT("skill constraint ") + Failed; return false; }
+    if (!Phaselock.GateOpen(PhaselockGateState(), true, Failed)) { OutReason = TEXT("skill constraint ") + Failed; return false; }
     return true;
+}
+FOpenWillowPhaselockGateState AOpenWillowWalker::PhaselockGateState() const
+{
+    // Host mapping (UNVERIFIED): a weapon in any slot is the pawn's WillowWeapon; holstered (no weapon drawn) is its
+    // Inactive state; the host's weapon swaps have no put-away phase, and it has no melee, grenade, weapon
+    // restriction, injured state or vehicle, so those inputs stay false. A reload is reported but does not block.
+    FOpenWillowPhaselockGateState State;
+    for (int32 Slot = 0; Inventory && Slot < UOpenWillowInventory::SlotCount; ++Slot)
+        State.bHoldsWeapon |= Inventory->SlotItem(Slot) != nullptr;
+    State.bWeaponInactive = State.bHoldsWeapon && !bWeaponOut;
+    State.bReloading = bReloading;
+    State.bAlive = Health > 0.f;
+    return State;
+}
+bool AOpenWillowWalker::IsPhaselockActive() const
+{
+    if (!bPhaselockHit || !GetWorld() || PhaselockEndedEarlyAt >= PhaselockCastAt) return false;
+    return GetWorld()->GetTimeSeconds() < PhaselockCastAt + PhaselockTimeline.EndSkillAt;
+}
+void AOpenWillowWalker::EndPhaselockEarly(const FString& Reason)
+{
+    const float Now = GetWorld()->GetTimeSeconds();
+    PhaselockEndedEarlyAt = Now;
+    PhaselockEndReason = Reason;
+    // The skill ends: the target is released now (OnReleasedTarget turns the cooldown manager off, so the pool drains
+    // from here) and the screen particle is hidden (OnActionSkillDeactivated).
+    if (AOpenWillowCombatTarget* Target = PhaselockTarget.Get()) Target->EndPhaselockNow(Now);
+    PhaselockHeldUntil = FMath::Min(PhaselockHeldUntil, Now);
+    if (ScreenFx) ScreenFx->StopEmitting();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock deactivated %.2f s after the cast: %s"), Now - PhaselockCastAt, *Reason);
+}
+AOpenWillowWalker::FPhaselockAimScore AOpenWillowWalker::ScorePhaselockTarget(const AOpenWillowCombatTarget* Target) const
+{
+    // NATIVE_PHASELOCK_TARGETING.md section 3, in our own words. Projection: the host camera with BL2's FOV handling
+    // (vertical FOV kept from the 4:3 setting), so x and y are fractions of the half-screen height; depth is the
+    // view-space distance along the view direction. The target's "location" is its collision centre and its auto-aim
+    // radius and aim point are host stand-ins (AOpenWillowCombatTarget::AutoAimRadius / AimPoint).
+    FPhaselockAimScore R;
+    const FVector View = Camera->GetComponentLocation();
+    const FRotationMatrix Axes(GetViewRotation());   // the control rotation: current even right after an aim change
+    FVector Centre;
+    float Half = 0.f;
+    Target->CollisionCentre(Centre, Half);
+    const FVector Delta = Centre - View;
+    R.Depth = float(FVector::DotProduct(Delta, Axes.GetUnitAxis(EAxis::X)));
+    if (R.Depth <= 0.f) { R.Rejected = TEXT("behind the view plane"); return R; }
+    const float TanHalfFov = FMath::Tan(FMath::DegreesToRadians(Bl2FovSetting) * 0.5f);
+    const float TanHalfVertical = TanHalfFov * 0.75f;
+    const float X = float(FVector::DotProduct(Delta, Axes.GetUnitAxis(EAxis::Y))) / R.Depth / TanHalfVertical;
+    const float Y = float(FVector::DotProduct(Delta, Axes.GetUnitAxis(EAxis::Z))) / R.Depth / TanHalfVertical;
+    R.ScreenOffset = FMath::Sqrt(X * X + Y * Y);
+    R.TargetRadius = Target->AutoAimRadius() * Phaselock.RadiusMultiplier / (R.Depth * TanHalfFov);
+    // Magnetism radius on a log2 scale of the depth past DistanceOffset; never narrower than the target itself.
+    const float LogMax = FMath::Log2(Phaselock.TargetMaxDistance);
+    const float Reach = 1.f + LogMax - FMath::Log2(FMath::Max(1.f, R.Depth - Phaselock.DistanceOffset));
+    R.MagnetRadius = FMath::Max(Phaselock.MaxSnapAngle * FMath::Max(0.f, Reach) / LogMax, R.TargetRadius);
+    if (R.MagnetRadius <= 0.f || R.ScreenOffset > R.MagnetRadius) { R.Rejected = TEXT("outside the magnetism radius"); return R; }
+    const float Score = 0.5f * ((2.f - R.Depth / Phaselock.TargetMaxDistance) - R.ScreenOffset / R.MagnetRadius);
+    if (R.Depth < Phaselock.TargetMinDistance || R.Depth > Phaselock.TargetMaxDistance) { R.Rejected = TEXT("outside the distance range"); return R; }
+    // Line of sight to the aim point: clear, the target itself, or something hard-attached to it.
+    FHitResult Hit;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPhaselockSight), true, this);
+    if (GetWorld()->LineTraceSingleByChannel(Hit, View, Target->AimPoint(), ECC_Visibility, Query))
+    {
+        const AActor* Blocker = Hit.GetActor();
+        while (Blocker && Blocker != Target) Blocker = Blocker->GetAttachParentActor();
+        if (Blocker != Target)
+        {
+            R.Rejected = FString::Printf(TEXT("no line of sight (%s)"), Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("world"));
+            return R;
+        }
+    }
+    R.Score = Score;
+    return R;
+}
+AOpenWillowCombatTarget* AOpenWillowWalker::PreferredPhaselockTarget(FString* OutLog) const
+{
+    AOpenWillowCombatTarget* Best = nullptr;
+    float BestScore = 0.f;
+    for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It)
+    {
+        // Candidates: live targets in the targetable list. The stock dummy joins it through its installed
+        // Behavior_RegisterTargetable (UOpenWillowQuest); host-made targets count as registered (host stand-in).
+        if (!It->IsAutoAimTarget()) continue;
+        if (It->IsStockPawn() && Quest && Quest->Enabled() && !Quest->IsRegisteredTargetable(*It))
+        {
+            if (OutLog) *OutLog += FString::Printf(TEXT("%s not in the targetable list; "), *It->GetName());
+            continue;
+        }
+        const FPhaselockAimScore S = ScorePhaselockTarget(*It);
+        if (OutLog)
+            *OutLog += FString::Printf(TEXT("%s score %.3f (depth %.0f, offset %.3f, magnet %.3f, own %.3f)%s%s; "), *It->GetName(), S.Score,
+                S.Depth, S.ScreenOffset, S.MagnetRadius, S.TargetRadius, S.Rejected.IsEmpty() ? TEXT("") : TEXT(" "), *S.Rejected);
+        if (S.Score > BestScore) { BestScore = S.Score; Best = *It; }
+    }
+    return Best;
 }
 void AOpenWillowWalker::UsePhaselock()
 {
@@ -769,21 +902,14 @@ void AOpenWillowWalker::UsePhaselock()
     PhaselockCastAt = Now;
     PhaselockTimeline = FOpenWillowPhaselockTimeline();
     bPhaselockBlocked = false;
-    const FVector Start = Camera->GetComponentLocation();
-    FHitResult Hit;
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPhaselock), true, this);
-    // Target choice is native in the game: WillowPlayerController.StartActionSkill asks its auto-aim strategy
-    // (GD_Autoaim.Default) for GetPreferredTarget and takes the result when it is a WillowPawn. Host stand-in
-    // (UNVERIFIED): the view ray, else a 30 cm sphere sweep for some aim assist (host radius; a sweep that starts inside
-    // nearby geometry, such as the range's low beams, is ignored), between the strategy's Min/MaxTargetDistance.
-    const FVector End = Start + Camera->GetForwardVector() * Phaselock.TargetMaxDistance;
-    AOpenWillowCombatTarget* Target = nullptr;
-    if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query))
-        Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
-    if (!Target && GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(30.f), Query)
-        && !Hit.bStartPenetrating)
-        Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
-    if (Target && Hit.Distance < Phaselock.TargetMinDistance) Target = nullptr;
+    PhaselockEndReason.Reset();
+    // Skill_Phaselock's OnActivated enables the Phaselock_TatooGlow coordinated effect (arms material curve).
+    GlowStartedAt = Now;
+    // Target choice is native in the game: WillowPlayerController.StartActionSkill asks its auto-aim strategy for the
+    // instantaneous preferred target (host reading above).
+    FString Candidates;
+    AOpenWillowCombatTarget* Target = PreferredPhaselockTarget(&Candidates);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock targeting: %s"), Candidates.IsEmpty() ? TEXT("no candidates") : *Candidates);
     // LiftActionSkill.SelectTarget (script): a target that passes CanPhaseLockTarget is lifted when CanLiftTargetIf
     // (Flag_Skills_CanPhaseLock) holds and it drives no vehicle (the host has none), else blocked; no target, or one
     // that fails CanPhaseLockTarget, fizzles (FizzleOut below).
@@ -792,7 +918,7 @@ void AOpenWillowWalker::UsePhaselock()
         // TargetBlocked fires OnTargetBlocked: no lift and no LiftActionSkill timers. That event's Behavior_CauseDamage
         // (Phaselock_Impact) is NOT applied here: its amount is not recovered. Nothing resets the cooldown (no
         // Fizzled), so the pool refilled at activation drains at the base rate from the cast (read from script and
-        // data, never run: UNVERIFIED).
+        // data, never run: UNVERIFIED). Its effects (Part_PhaseLock_EnemyCannotBeLocked) are not drawn by the host.
         bPhaselockHit = false;
         bPhaselockBlocked = true;
         PhaselockTarget = nullptr;
@@ -807,18 +933,20 @@ void AOpenWillowWalker::UsePhaselock()
     const int32 Grade = Skills->GradeOf(Phaselock.DurationSkill);
     if (Target)
         PhaselockTimeline = Phaselock.Timeline(Phaselock.LockDuration(Grade), Target->PhaselockTimeScale(Now, Phaselock));
-    if (!Target || !Target->BeginPhaselock(Now, Phaselock, PhaselockTimeline))
+    if (!Target || !Target->BeginPhaselock(Now, Phaselock, PhaselockTimeline, &PhaselockFx))
     {
-        // FizzleOut: no lift; after ReleaseBufferTime Fizzled resets the cooldown and ends the skill.
+        // FizzleOut: no lift; after ReleaseBufferTime Fizzled resets the cooldown and ends the skill. The fail clip's
+        // notify plays the fizzle hand effect.
         bPhaselockHit = false;
         PhaselockTarget = nullptr;
         PhaselockTimeline = FOpenWillowPhaselockTimeline();
         PhaselockHeldUntil = Now;
         PhaselockResetAt = Now + Phaselock.ReleaseBufferTime;
         if (ArmsAnim && PhaselockFailAnim) ArmsAnim->PlayAction(PhaselockFailAnim);
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock missed (sweep hit %s/%s at %.0f uu; cooldown resets after %.1f s)"),
-            Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("nothing"), Hit.GetComponent() ? *Hit.GetComponent()->GetName() : TEXT("-"),
-            Hit.Distance, Phaselock.ReleaseBufferTime);
+        HandFxAt = PhaselockFx.bLoaded ? Now + PhaselockFx.FailNotifyTime : -1.f;
+        bHandFxMiss = true;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock missed (%s; cooldown resets after %.1f s)"),
+            Target ? TEXT("target cannot be phaselocked") : TEXT("no preferred target"), Phaselock.ReleaseBufferTime);
         return;
     }
     bPhaselockHit = true;
@@ -827,13 +955,166 @@ void AOpenWillowWalker::UsePhaselock()
     PhaselockHeldUntil = Now + PhaselockTimeline.ReleasedAt;
     PhaselockResetAt = TNumericLimits<float>::Max();
     if (ArmsAnim && PhaselockAnim) ArmsAnim->PlayAction(PhaselockAnim);
-    // Host cast cue: Tick draws a violet beam from Maya's raised left hand to
-    // the target for the lift, so it follows the Phase_Lock_Lift pose.
-    PhaselockBeamUntil = Now + Phaselock.LiftDuration + 0.2f;
+    // Phase_Lock_Lift's AnimNotify_UseBehavior fires PlayPhaselockHandFXFirstPerson at its time into the clip.
+    HandFxAt = PhaselockFx.bLoaded ? Now + PhaselockFx.LiftNotifyTime : -1.f;
+    bHandFxMiss = false;
+    // OnSelectedTarget shows the screen particle (Behavior_ScreenParticle); OnActionSkillDeactivated hides it.
+    if (PhaselockFx.bLoaded)
+    {
+        FString Error;
+        if (const FOwFxTemplate* Screen = FOwFxTemplate::Load(PhaselockFx.EmitterDir, PhaselockFx.ScreenTemplate, Error))
+        {
+            if (ScreenFx) ScreenFx->DestroyComponent();
+            ScreenFx = NewObject<UOpenWillowFxComponent>(this);
+            ScreenFx->SetupAttachment(Camera);
+            ScreenFx->bFillScreen = true;
+            ScreenFx->SortPriorityBase = 100;
+            ScreenFx->RegisterComponent();
+            ScreenFx->Play(Screen, 1.f);
+        }
+        else UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock screen effect: %s"), *Error);
+    }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock activated on %s: %s grade %d, skill %.2f s (locked %.2f, outro %.2f, release %.2f, end %.2f), cooldown ready at +%.2f s"),
         *Target->GetName(), *Phaselock.DurationSkill, Grade, PhaselockTimeline.SkillDuration, PhaselockTimeline.LockedAt,
         PhaselockTimeline.OutroAt, PhaselockTimeline.ReleasedAt, PhaselockTimeline.EndSkillAt,
         PhaselockTimeline.ReleasedAt + Phaselock.CooldownSeconds / FMath::Max(Phaselock.CooldownRate, KINDA_SMALL_NUMBER));
+}
+void AOpenWillowWalker::UpdatePhaselockPresentation(float Now)
+{
+    if (!PhaselockFx.bLoaded) return;
+    // Hand orb: LiftActionSkill.RunCustomEvent attaches the template to the arms socket (FirstPersonAttachmentName) with
+    // the first-person translation (in the socket's frame) and scale, owner-only and in the foreground; the component is
+    // removed when the system finishes. The socket's UE3 bone-space offset is used as is (UNVERIFIED axis convention).
+    if (HandFxAt >= 0.f && Now >= HandFxAt)
+    {
+        HandFxAt = -1.f;
+        if (HandFx) HandFx->DestroyComponent();
+        HandFx = nullptr;
+        FString Error;
+        const FOwFxTemplate* Template = FOwFxTemplate::Load(PhaselockFx.EmitterDir,
+            bHandFxMiss ? PhaselockFx.HandMissTemplate : PhaselockFx.HandHitTemplate, Error);
+        if (!Template)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock hand effect: %s"), *Error);
+        }
+        else if (Arms->GetBoneIndex(PhaselockFx.HandBone) == INDEX_NONE)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock hand effect: arms have no bone %s"), *PhaselockFx.HandBone.ToString());
+        }
+        else
+        {
+            HandFx = NewObject<UOpenWillowFxComponent>(this);
+            HandFx->SetupAttachment(Arms, PhaselockFx.HandBone);
+            const FTransform Socket(PhaselockFx.HandSocketRotation, PhaselockFx.HandSocketLocation);
+            HandFx->SetRelativeLocationAndRotation(Socket.TransformPosition(PhaselockFx.HandTranslation), PhaselockFx.HandSocketRotation);
+            HandFx->SortPriorityBase = 50;
+            HandFx->RegisterComponent();
+            HandFx->Play(Template, PhaselockFx.HandScale);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock hand effect %s at +%.2f s (%d emitters skipped)"), *Template->Name,
+                Now - PhaselockCastAt, HandFx->SkippedEmitters());
+        }
+    }
+    if (HandFx && HandFx->IsFinished()) { HandFx->DestroyComponent(); HandFx = nullptr; }
+    // Screen particle: hidden when the skill deactivates (EndSkill) and removed once its particles are gone.
+    if (ScreenFx && bPhaselockHit && Now >= PhaselockCastAt + PhaselockTimeline.EndSkillAt) ScreenFx->StopEmitting();
+    if (ScreenFx && ScreenFx->IsFinished()) { ScreenFx->DestroyComponent(); ScreenFx = nullptr; }
+    // Tattoo glow: the coordinated effect's p_EnablePowerEmissive curve over EffectDuration, drawn as an additive
+    // overlay on the arms masked to the tattoo (host material stand-in for Master_Player's power emissive).
+    const float GlowTime = Now - GlowStartedAt;
+    if (GlowTime >= 0.f && GlowTime <= PhaselockFx.GlowDuration)
+    {
+        TattooGlow = FOpenWillowPhaselockFxData::EvalStored(PhaselockFx.GlowPoints, GlowTime);
+        if (!TattooGlowMaterial)
+            if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr,
+                TEXT("/Game/OpenWillow/Phaselock/Materials/M_OW_PlTattooGlow.M_OW_PlTattooGlow"), nullptr, LOAD_NoWarn | LOAD_Quiet))
+            {
+                TattooGlowMaterial = UMaterialInstanceDynamic::Create(Base, this);
+                TattooGlowMaterial->SetVectorParameterValue(TEXT("GlowColor"), PhaselockFx.GlowColor);
+                if (UTexture* Masks = LoadObject<UTexture2D>(nullptr, *FString::Printf(TEXT("%s/Textures/SirenHands_Msk.SirenHands_Msk"), MayaRoot)))
+                    TattooGlowMaterial->SetTextureParameterValue(TEXT("Masks"), Masks);
+            }
+        if (TattooGlowMaterial)
+        {
+            TattooGlowMaterial->SetScalarParameterValue(TEXT("Enable"), TattooGlow);
+            if (Arms->GetOverlayMaterial() != TattooGlowMaterial) Arms->SetOverlayMaterial(TattooGlowMaterial);
+        }
+    }
+    else if (GlowStartedAt > -100.f && (TattooGlow != 0.f || Arms->GetOverlayMaterial()))
+    {
+        TattooGlow = 0.f;
+        Arms->SetOverlayMaterial(nullptr);
+    }
+}
+int32 AOpenWillowWalker::HandFxParticles() const { return HandFx ? HandFx->LiveParticles() : 0; }
+int32 AOpenWillowWalker::ScreenFxParticles() const { return ScreenFx ? ScreenFx->LiveParticles() : 0; }
+void AOpenWillowWalker::RunPhaselockShots(float Now)
+{
+    // Captures of the cast at fixed times after it (screen space, no UI), then a miss for the fizzle hand effect.
+    static const float HitShots[] = {0.12f, 0.25f, 0.35f, 0.5f, 0.6f, 0.8f, 1.2f, 1.5f, 2.0f, 3.0f, 3.6f, 4.2f, 4.5f, 4.8f, 5.0f, 5.3f, 6.2f};
+    static const float MissShots[] = {0.08f, 0.2f, 0.4f, 0.7f};
+    auto Shot = [this, Now](const TCHAR* Kind, float At)
+    {
+        const FString Name = FString::Printf(TEXT("OWPhaselock_%s_%04d.png"), Kind, FMath::RoundToInt(At * 1000.f));
+        FScreenshotRequest::RequestScreenshot(Name, false, false);
+        const AOpenWillowCombatTarget* T = PhaselockTarget.Get();
+        // The name carries the scheduled time; a long frame can take the shot later, so the actual time is logged too.
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s at +%.3f s: glow %.3f, hand particles %d, screen particles %d, bubble stage %d, collapse %.3f, light %.2f, lift %.1f"),
+            *Name, Now - PhaselockShotCastAt, TattooGlow, HandFxParticles(), ScreenFxParticles(), T ? T->BubbleStage() : -1,
+            T ? T->BubbleCollapse() : 0.f, T ? T->PhaselockLightIntensity() : 0.f, T ? T->LiftedHeight() : 0.f);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s emitters: hand [%s] screen [%s] bubble %s"), *Name,
+            HandFx ? *HandFx->Describe() : TEXT("-"), ScreenFx ? *ScreenFx->Describe() : TEXT("-"), T ? *T->PresentationReport() : TEXT("-"));
+    };
+    const int32 HitCount = UE_ARRAY_COUNT(HitShots), MissCount = UE_ARRAY_COUNT(MissShots);
+    if (PhaselockShotStep == 0)
+    {
+        // Captures only: game time advances at most 1/60 s per frame, so that a screenshot's write stall (0.1-0.4 s,
+        // up to the default 0.4 s clamp) does not move the effect on and each shot lands on its scheduled time.
+        // (FApp's fixed time step is compiled out in this engine build.)
+        if (AWorldSettings* Settings = GetWorld()->GetWorldSettings()) Settings->MaxUndilatedFrameTime = 1.f / 60.f;
+        if (Now < 7.f || !CombatTarget.IsValid()) return;
+        AimAt(CombatTarget->AimPoint() - FVector(0, 0, 20));
+        ++PhaselockShotStep;
+    }
+    else if (PhaselockShotStep == 1)
+    {
+        if (Now < 8.f) return;
+        UsePhaselock();
+        PhaselockShotCastAt = Now;
+        ++PhaselockShotStep;
+    }
+    else if (PhaselockShotStep < 2 + HitCount)
+    {
+        const float At = HitShots[PhaselockShotStep - 2];
+        if (Now - PhaselockShotCastAt < At) return;
+        Shot(TEXT("hit"), At);
+        ++PhaselockShotStep;
+    }
+    else if (PhaselockShotStep == 2 + HitCount)
+    {
+        // Wait for the cooldown, then cast with the view well above the target: no preferred target, a fizzle.
+        if (PhaselockRemaining() > 0.f) return;
+        Controller->SetControlRotation(Controller->GetControlRotation() + FRotator(50.f, 0, 0));
+        ++PhaselockShotStep;
+    }
+    else if (PhaselockShotStep == 3 + HitCount)
+    {
+        UsePhaselock();
+        PhaselockShotCastAt = Now;
+        ++PhaselockShotStep;
+    }
+    else if (PhaselockShotStep < 4 + HitCount + MissCount)
+    {
+        const float At = MissShots[PhaselockShotStep - 4 - HitCount];
+        if (Now - PhaselockShotCastAt < At) return;
+        Shot(TEXT("miss"), At);
+        ++PhaselockShotStep;
+    }
+    else if (PhaselockShotStep == 4 + HitCount + MissCount)
+    {
+        if (Now - PhaselockShotCastAt < 2.f) return;
+        if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+        ++PhaselockShotStep;
+    }
 }
 float AOpenWillowWalker::PhaselockRemaining() const
 {

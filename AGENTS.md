@@ -81,7 +81,7 @@ path is being used, what remains owned by this project and what acceptance
 check will prove the slice. Then execute that bounded slice without reopening
 settled architecture decisions.
 
-## Where things stand (updated 2026-10-01)
+## Where things stand (updated 2026-10-02)
 
 Read this first when picking work up; it is the short version of ROADMAP.md.
 
@@ -122,8 +122,33 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive
   screen/keyboard); open items (native auto-aim, constraint evaluation, weapon paint and decal readings, audio) are in
   `docs/verification/SANCTUARY_RPG_MISSION.md`. Hand play: `tools/run_quest.ps1 -Fresh`.
+- **Native analysis and dispatch rules (2026-10-02):** Ghidra drives the local analysis of the executable
+  (`tools/ghidra/`, `docs/NATIVE_ANALYSIS.md`; raw output stays under ignored `local/analysis/` or the private store).
+  Three own-words note sets exist, all `UNVERIFIED`: mission/behavior/Kismet dispatch
+  (`docs/verification/NATIVE_MISSION_DISPATCH.md`), progression and Phaselock targeting
+  (`NATIVE_PROGRESSION.md`, `NATIVE_PHASELOCK_TARGETING.md`). The dispatch notes are implemented in
+  `src/behavior.*`, `src/kismet.*` and `src/mission.*` (the host fires link ids per the note; the Fire mission's first set
+  now starts from the kickoff, not from accept). After the dispatch change: quest 73/73 and resume 10/10, door 16/16, CTest
+  10/10, packages 9/9, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE (regenerated worktree). The
+  progression notes are implemented in the tools and host (mission XP 395 at stage 8, single-precision level curve,
+  cap 50; quest 75/75 and resume 11/11). The Phaselock targeting/constraint rules and the stock presentation are written
+  in the host but have not passed a suite: a rebuilt module DLL was blocked by Windows Application Control on
+  2026-10-02 (DECISIONS 2026-10-02).
+- **Weapon paint (2026-10-01/02):** the slice guns are painted from Master_Gun's recovered colour model
+  (`tools/weapon_paint_model.py`, `tools/material_static_parameters.py`, our own SM3 token reader
+  `research/d3d9_bytecode.py`; listings stay under `local/`). Three passes recorded in DECISIONS; the whole reading and the
+  shading stand-ins are `UNVERIFIED`. First real captures (2026-10-02): an independent critic agent scored the host guns
+  3-4.5/10 against them (far too dark, wrong Maliwan orange hue; `docs/verification/REALGAME_GROUND_TRUTH.md`).
+- **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
+  about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
+  shows its page ~126-156 ms after the key press (screen capture, different method;
+  `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`, 2026-10-02 sections).
+- **Phaselock effects:** `research/particle_system.py` reads cooked `ParticleSystem` templates (layouts checked by
+  oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. The Sanctuary dummy stands on the lane
+  floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
-  `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, and the
+  `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, `python tests/weapon_paint_test.py`,
+  `python tests/particle_system_test.py`, and the
   in-engine suites `tools/test_inventory_actions.ps1`, `tools/test_mover.ps1` (door) and
   `tools/test_quest.ps1` (Fire mission slice); all need a seeded worktree, see below.
 
@@ -135,7 +160,10 @@ Ignored data (`host/ue5/OpenWillow/Content`, `local/`) does not come from git. S
 `tools/prepare_skill_tree.py`. The slice needs further local data: `tools/prepare_mover.py`,
 `tools/prepare_slice_world.py`, `tools/prepare_action_skill.py`, `tools/seed_slice_npc_assets.ps1` and
 `tools/seed_slice_player_assets.ps1` (see `docs/TOOLING.md` and the verification records they name).
-Check what already exists before re-seeding. Two machine notes from regenerating the slice on a second PC
+Check what already exists before re-seeding. Preferred for a new worktree that continues earlier work:
+`tools/provision_worktree_assets.ps1 -SourceWorktree <previous worktree>` copies Content and all of `local/`
+(missing files only; see `tools/worktree-assets.md`), then build `build/` and run the suites so the new
+worktree is ready to test and screenshot without redoing decodes. Two machine notes from regenerating the slice on a second PC
 (2026-10-01): configure CMake with the MSVC toolset Unreal uses (`cmake -S . -B build -T version=14.50` for UE 5.8
 there; a newer default toolset made the UE module fail to link against `ow-core.lib`), and
 `tools/slice_npc_assets.py` needs a Python with both numpy and Pillow.

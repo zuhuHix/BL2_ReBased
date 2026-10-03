@@ -24,10 +24,18 @@ public:
     void AddBranch(const TArray<FTier>& Tiers) { Branches.Add(Tiers); }
     void SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees);
 
-    // Experience needed to reach Level (UNVERIFIED curve; see DECISIONS.md).
+    // WillowPlayerController.GetMaxExpLevel without DLC: 50 (docs/verification/NATIVE_PROGRESSION.md section 3,
+    // UNVERIFIED in game). TODO: each licensed level-cap DLC adds its increment (clamped to 50 + all increments);
+    // no DLC is modelled.
+    static constexpr int32 MaxLevel = 50;
+    // Experience needed to reach Level: R(n) = max(0, trunc(f(n)) - trunc(f(1))) with
+    // f(n) = Multiplier x (n ^ Power + Offset) evaluated in single precision (NATIVE_PROGRESSION.md section 3).
+    static int64 RequiredExperience(float Multiplier, float Power, float Offset, int32 Level);
+    // R(n) with GlobalsDefinition.ExpPointsRequiredForLevel's constants (60, 2.8, 7.33); UNVERIFIED except level 46.
     static int64 ExperienceForLevel(int32 Level);
-    // Sets the level and puts experience at that level's threshold.
+    // Sets the level (1..MaxLevel) and puts experience at that level's threshold.
     void SetLevel(int32 NewLevel);
+    // Adds experience and levels up while the next threshold is met, up to MaxLevel (experience keeps counting there).
     void AddExperience(int64 Amount);
     int32 GetLevel() const { return Level; }
     int64 GetExperience() const { return Experience; }

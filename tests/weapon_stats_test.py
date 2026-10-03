@@ -1,5 +1,7 @@
 """Synthetic tests for tools/weapon_stats.py attribute combination."""
 from pathlib import Path
+import json
+import math
 import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
@@ -58,8 +60,9 @@ class WeaponStatsTests(unittest.TestCase):
 
     def test_negative_scales_divide_and_manufacturer_operands(self):
         card = s.evaluate(FakePackage(world()), recipe(), level=1)['card']
-        # Default 'split' rule: foreign-maker +3 is 0; 10 / (1 + 1000), then PostAdd +1.
-        self.assertAlmostEqual(card['magazine'], 10 / 1001 + 1)
+        # Default 'split' rule: foreign-maker +3 is 0; 10 / (1 + 1000), then PostAdd +1 = 1.00999;
+        # the clip size is an integer attribute, so the game truncates it to 1.
+        self.assertEqual(card['magazine'], 1.0)
         self.assertAlmostEqual(card['reload_time'], 2.0 / 1.5)  # own-maker -50% divides
         self.assertEqual(card['display']['magazine'], 1)      # the card rounds the magazine down
 
@@ -108,9 +111,10 @@ class WeaponStatsTests(unittest.TestCase):
         card = s.evaluate(FakePackage(objects), item, level=1)['card']
         self.assertEqual(card['element'], 'Fire')
         self.assertEqual(card['status_effect'], 'STATUS_EFFECT_Ignite')
-        self.assertAlmostEqual(card['status_chance'], 20 * 0.6 * 1.5)  # Generic chance * base * modifier
-        self.assertAlmostEqual(card['status_chance_by_surface']['flesh'], 30 * 0.6 * 1.5)
-        self.assertAlmostEqual(card['status_dps'], 100.2)
+        # Generic chance * base * modifier (single precision, hence places=5).
+        self.assertAlmostEqual(card['status_chance'], 20 * 0.6 * 1.5, places=5)
+        self.assertAlmostEqual(card['status_chance_by_surface']['flesh'], 30 * 0.6 * 1.5, places=5)
+        self.assertAlmostEqual(card['status_dps'], 100.2, places=4)
         self.assertEqual(card['display']['status_dps'], 100.2)
         self.assertEqual(card['status_duration'], 5)
         objects['Status.Burn']['bDoesDamageOverTime'] = False
@@ -135,9 +139,17 @@ class WeaponStatsTests(unittest.TestCase):
 
     def test_display_rounding(self):
         shown = s.display({'damage': 6971.38, 'magazine': 30.8, 'fire_rate': 3.3613, 'reload_time': 4.86,
-                           'accuracy': 87.35, 'projectiles': 1})
+                           'accuracy': 87.36, 'projectiles': 1})
         self.assertEqual(shown, {'damage': 6972, 'magazine': 30, 'fire_rate': 3.4, 'reload_time': 4.9,
                                  'accuracy': 87.4})
+        # Single precision throughout (invented values): 87.35 is stored as 87.3499985, but times 10
+        # in single precision it is 873.5 again, so it prints 87.4 (it printed 87.3 before the
+        # 2026-10-03 rule). A stored 33.349998 times 10 is an exact tie that rounds to the even
+        # 333.5 and prints 33.4; 1.7499998 times 10 stays under 17.5 and prints 1.7.
+        self.assertEqual(s.display({'accuracy': 87.35})['accuracy'], 87.4)
+        self.assertEqual(s.present(33.349998474121094, 'ATTRROUNDING_Float', 1), 33.4)
+        self.assertEqual(s.present(1.7499998807907104, 'ATTRROUNDING_Float', 1), 1.7)
+        self.assertEqual(s.present(1.7499998807907104, 'ATTRROUNDING_Float', 2), 1.75)
 
     def test_spin_mode_and_default_start_scale(self):
         objects = world()
@@ -151,7 +163,7 @@ class WeaponStatsTests(unittest.TestCase):
 
 
 CALC = 'GD_Economy.PriceCalc.Init_Gun_Shotguns_PriceCalculator'
-UNCHECKED_CALC = 'GD_Economy.PriceCalc.Init_Gun_Launchers_PriceCalculator'
+UNCHECKED_CALC = 'Invented.PriceCalc.Init_Unchecked_PriceCalculator'
 
 
 def card_world():
@@ -189,13 +201,15 @@ class CardFieldTests(unittest.TestCase):
 
     def test_accuracy_is_the_presentation_remap_of_spread(self):
         card = self.card()
-        self.assertAlmostEqual(card['accuracy'], 100 * (1 - 2.0 / 15))  # spread 2.0
+        self.assertAlmostEqual(card['accuracy'], 100 * (1 - 2.0 / 15), places=4)  # spread 2.0
         self.assertTrue(card['accuracy_known'])  # known only under the default 'split' rule
 
     def test_accuracy_clamps_and_is_absent_without_the_presentation(self):
         objects = card_world()
         objects['Type']['Spread'] = 20.0
-        self.assertEqual(self.card(objects)['accuracy'], 0.0)
+        # The input clamps to 15; the single-precision slope leaves 2.4e-6, which prints as 0.0.
+        self.assertAlmostEqual(self.card(objects)['accuracy'], 0.0, places=4)
+        self.assertEqual(self.card(objects)['display']['accuracy'], 0.0)
         del objects[s.ACCURACY_PRESENTATION]
         self.assertIsNone(self.card(objects)['accuracy'])
 
@@ -204,6 +218,14 @@ class CardFieldTests(unittest.TestCase):
         card = self.card()
         self.assertEqual(card['sale_value'], 1132)
         self.assertTrue(card['sale_value_known'])  # Shotguns calculator was checked
+
+    def test_price_formula_adds_the_offset_before_the_multiplier(self):
+        objects = card_world()
+        objects['Init.Offset'] = {'ValueFormula': {'bEnabled': True, 'Multiplier': const(2), 'Level': const(3),
+                                                   'Power': const(2), 'Offset': const(1)}}
+        unresolved = set()
+        self.assertEqual(s.price_init(FakePackage(objects), const(0, init='Init.Offset'), {}, unresolved), 20)
+        self.assertEqual(unresolved, set())
 
     def test_unchecked_calculator_is_flagged_not_hidden(self):
         objects = card_world()
@@ -230,11 +252,110 @@ class CardFieldTests(unittest.TestCase):
         card = self.card(title={'part': 'Title'})
         self.assertEqual(card['fun_stats'], 'Red, line')  # ';' would split the HUD line
 
+    def test_name_parts_add_effects_and_their_value_modifier(self):
+        objects = card_world()
+        objects['Prefix.Cheap'] = {'PartName': 'Cheap', 'MonetaryValueMod': 'ModC', 'WeaponAttributeEffects': [
+            {'AttributeToModify': A + 'WeaponDamage', 'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0.5)}]}
+        objects.update({'ModC': {}, 'ModC.ConstantAttributeValueResolver_0': {'ConstantValue': 0.5}})
+        plain = self.card(objects)
+        named = self.card(objects, prefix={'part': 'Prefix.Cheap'})
+        # 120 * (1 + 0.3 slot + 0.5 prefix) at level 3 vs 120 * 1.3; the value halves (1132.5 -> 566.25).
+        self.assertAlmostEqual(plain['damage'], 120 * 1.3, places=3)
+        self.assertAlmostEqual(named['damage'], 120 * 1.8, places=3)
+        self.assertEqual((plain['sale_value'], named['sale_value']), (1132, 566))
+
     def test_fun_stats_uses_the_localized_override(self):
         objects = card_world()
         stats = s.evaluate(FakePackage(objects), dict(recipe(), title={'part': 'Title'}), level=1,
                            localize=lambda path, default: 'Overridden' if path == 'Title.Red' else default)
         self.assertEqual(stats['card']['fun_stats'], 'Overridden')
+
+
+class NativeRuleTests(unittest.TestCase):
+    """Rules read from the game's code (NATIVE_WEAPON_RULES.md), on invented values."""
+
+    def test_combine_has_no_clamp_and_integers_truncate(self):
+        self.assertAlmostEqual(s.combine(10.0, {'MT_PreAdd': -20.0}), -10.0)       # not clamped at 0
+        self.assertEqual(s.combine(10.0, {'MT_PostAdd': 0.99}, integer=True), 10.0)
+        self.assertEqual(s.combine(10.0, {'MT_PostAdd': -10.5}, integer=True), 0.0)  # -0.5 truncates toward 0
+        bucket = {'scale_up': 0.5, 'scale_down': 0.25}
+        self.assertEqual(s.combine(7.9, bucket, integer=True), 8.0)                 # base 7: 7 * 1.5 / 1.25 = 8.4 -> 8
+
+    def test_single_precision_decides_the_ceiling(self):
+        self.assertEqual(s.present(100.000001, 'ATTRROUNDING_IntCeil'), 100)  # f32 is exactly 100
+        self.assertEqual(s.present(100.01, 'ATTRROUNDING_IntCeil'), 101)
+        self.assertEqual(s.present(2.45, 'ATTRROUNDING_Float', 1), 2.5)
+        self.assertEqual(s.present(2.5, 'ATTRROUNDING_IntRound'), 3)
+        self.assertEqual(s.present(-2.5, 'ATTRROUNDING_IntFloor'), -3)
+        self.assertEqual(s.present(5e-9, 'ATTRROUNDING_IntCeil'), 0)
+
+    def test_shared_card_rounding_cases(self):
+        # The same invented cases check the page's rounding (tests/inventory_navigation_test.js).
+        # 'pending_page_change' holds the cases the page does not print this way yet (Python only).
+        data = json.loads((Path(__file__).parent / 'card_rounding_cases.json').read_text(encoding='utf-8'))
+        for case in data['cases'] + data.get('pending_page_change', []):
+            shown = s.display({case['field']: case['value']})[case['field']]
+            decimals = 0 if isinstance(shown, int) else 1
+            self.assertEqual(f'{shown:.{decimals}f}', case['text'], case)
+
+    def test_presentation_data_sets_the_display_rounding(self):
+        objects = world()
+        objects[s.PRESENTATIONS['damage'][0]] = {'RoundingMode': 'ATTRROUNDING_IntFloor'}
+        objects[s.PRESENTATIONS['reload_time'][0]] = {'RoundingMode': 'ATTRROUNDING_Float', 'FloatPrecision': 2}
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        # level 1: 10 * 2 * 1.5 = 30, * 1.3 = 39.0 (floor keeps 38 if f32 lands below 39)
+        self.assertEqual(card['display']['damage'], math.floor(card['damage']))
+        self.assertEqual(card['display']['reload_time'], round(card['reload_time'], 2))
+
+    def test_slot_effects_need_activation_and_count_every_increase(self):
+        objects = world()
+        objects['Grip']['AttributeSlotUpgrades'] = [{'SlotName': 'WeaponDamage', 'GradeIncrease': 2}]
+        card = s.evaluate(FakePackage(objects), recipe(), level=3)['card']
+        self.assertAlmostEqual(card['damage'], 120 * 1.5, places=3)  # grade 3 + 2 (not activating)
+        objects['Barrel']['AttributeSlotUpgrades'][0]['bActivateSlot'] = False
+        card = s.evaluate(FakePackage(objects), recipe(), level=3)['card']
+        self.assertAlmostEqual(card['damage'], 120.0, places=3)      # nothing activated the slot
+
+    def test_rarity_is_a_sum_looked_up_in_the_globals_table(self):
+        objects = world()
+        objects['Barrel']['Rarity'] = const(4.9)
+        objects['Grip']['Rarity'] = const(2.0)
+        objects['Type']['BaseRarity'] = const(0.5)
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual((card['rarity_level'], card['rarity_rating'], card['rarity']), (6, None, 5))  # no table
+        objects[s.GLOBALS] = {'RarityLevelColors': [
+            {'MinLevel': 1, 'MaxLevel': 5, 'Color': {'R': 1, 'G': 2, 'B': 3}, 'RarityRating': 'RARITY_Uncommon'},
+            {'MinLevel': 6, 'MaxLevel': 9, 'Color': {'R': 255, 'G': 0, 'B': 16}, 'RarityRating': 'RARITY_Legendary'}]}
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual((card['rarity_level'], card['rarity'], card['rarity_color']), (6, 5, '#FF0010'))
+
+    def test_plain_float_base_is_single_precision(self):
+        # Invented: a 2.1 s reload under a -20 % scale. As a float 2.1 is 2.0999999, so the stack
+        # lands just under 1.75 and the card prints 1.7; the double 2.1 would give 1.75 and 1.8.
+        objects = world()
+        objects['Type']['ReloadTime'] = 2.1
+        objects['Grip']['WeaponAttributeEffects'][1]['BaseModifierValue'] = const(-0.2)
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertLess(card['reload_time'], 1.75)
+        self.assertAlmostEqual(card['reload_time'], 1.75, places=6)
+        self.assertEqual(card['display']['reload_time'], 1.7)
+
+    def test_level_line_rule(self):
+        objects = world()
+        objects['Type']['bUsesPlayerLevelRequirement'] = True
+        package = FakePackage(objects)
+        package.classes = {'Bal.Mission': 'WillowGame.MissionWeaponBalanceDefinition',
+                           'Bal.Normal': 'WillowGame.WeaponBalanceDefinition'}
+
+        def card(level, balance='Bal.Normal', **kw):
+            return s.evaluate(package, dict(recipe(), balance=balance), level=level, **kw)['card']
+        self.assertEqual((card(8)['level_requirement'], card(8)['level_line']), (8, True))
+        self.assertEqual((card(1)['level_requirement'], card(1)['level_line']), (1, False))   # level 1: no line
+        self.assertEqual((card(8, 'Bal.Mission')['level_requirement'], card(8, 'Bal.Mission')['level_line']), (0, False))
+        self.assertEqual(card(8, level_bonus=2.7)['level_requirement'], 6)                      # floor of the bonus
+        self.assertEqual(card(2, level_bonus=5)['level_requirement'], 1)                        # at least 1
+        del objects['Type']['bUsesPlayerLevelRequirement']
+        self.assertEqual(card(8)['level_line'], False)
 
 
 if __name__ == '__main__':

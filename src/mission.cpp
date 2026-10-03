@@ -18,6 +18,23 @@ ObjectPtr load(Runtime& runtime, const Value* reference) {
     if (!reference || reference->kind != Value::Kind::Object || !reference->o || !reference->o->resourcePackage) return nullptr;
     return runtime.instantiateExport(reference->o->resourcePackage, reference->o->resourceIndex, 4);
 }
+// A flag with its class default; `fallback` only when the class does not declare it.
+bool flag(Runtime& runtime, Object& object, const char* name, bool fallback) {
+    const Value* value = runtime.property(object, name);
+    return value ? value->truth() : fallback;
+}
+int bits(int mask) {
+    int count = 0;
+    for (unsigned v = unsigned(mask); v; v &= v - 1) ++count;
+    return count;
+}
+// EMissionStatus numbers (NotStarted 0, Active 1, RequiredObjectivesComplete 2, ReadyToTurnIn 3, Complete 4, Failed 5).
+int nativeStatus(MissionSystem::Status status) {
+    static const int numbers[] = {0, 1, 3, 4};
+    return numbers[int(status)];
+}
+// Mission event link ids (NATIVE_MISSION_DISPATCH.md B7, UNVERIFIED).
+enum LinkId { ObjectiveCompleted = 2, ObjectiveProgress = 3, SetActivated = 4, SetCompleted = 5, StatusBase = 6, Kickoff = 12, KickoffDialogOnly = 13 };
 }
 
 struct MissionSystem::Impl {
@@ -36,6 +53,13 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     turnIn_ = text(runtime_, *mission, "MissionTurnInLocation");
     weapon_ = refPath(runtime_.property(*mission, "MissionWeapon"));
     initialSet_ = refPath(runtime_.property(*mission, "InitialObjectiveSet"));
+    activateInitialSet_ = flag(runtime_, *mission, "bActivateInitialObjectiveSet", true);
+    // ObjectiveDependency { Objective, Status: EODS_Complete 0 / EODS_Active 1 } (B6).
+    if (const Value* dependency = runtime_.property(*mission, "ObjectiveDependency"); dependency && dependency->kind == Value::Kind::Struct) {
+        dependencyObjective_ = refPath(dependency->field("Objective"));
+        const Value* status = dependency->field("Status");
+        dependencyActive_ = status && status->integer() == 1;
+    }
     // The lent mission weapon is tied to one objective by its definition.
     if (const Value* weapon = runtime_.property(*mission, "MissionWeapon"); weapon && weapon->o)
         if (auto definition = load(runtime_, weapon)) weaponObjective_ = refPath(runtime_.property(*definition, "MissionObjective"));
@@ -55,13 +79,22 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
             set.name = text(runtime_, *object, "ObjectiveSetName");
             if (set.name.empty()) set.name = object->name;
             set.next = refPath(runtime_.property(*object, "NextSet"));
+            set.cls = object->cls->path;
+            set.canCompleteMission = flag(runtime_, *object, "bCanCompleteMission", true);
+            set.autoEnableNext = flag(runtime_, *object, "bAutoEnableNextSet", false);
             if (const Value* objectives = runtime_.property(*object, "ObjectiveDefinitions"); objectives && objectives->kind == Value::Kind::Array) {
                 for (const auto& objectiveRef : objectives->elements()) {
                     auto objective = load(runtime_, &objectiveRef);
                     if (!objective) throw RuntimeError("unresolved objective in " + set.path);
                     std::string objectiveName = text(runtime_, *objective, "ObjectiveName");
-                    set.objectives.push_back(objectiveName.empty() ? objective->name : objectiveName);
+                    if (objectiveName.empty()) objectiveName = objective->name;
+                    set.objectives.push_back(objectiveName);
                     set.objectivePaths.push_back(refPath(&objectiveRef));
+                    Objective parsed{refPath(&objectiveRef)};
+                    if (const Value* count = runtime_.property(*objective, "ObjectiveCount")) parsed.count = int(count->integer());
+                    parsed.mask = flag(runtime_, *objective, "bRememberItemsWithinObjective", false);
+                    parsed.optional = flag(runtime_, *objective, "bObjectiveIsOptional", false);
+                    objectives_[objectiveName] = parsed;
                 }
             }
             sets_.push_back(std::move(set));
@@ -73,18 +106,24 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
         impl_->provider = std::make_unique<BehaviorProvider>(runtime_, reference->o->resourcePackage, reference->o->resourceIndex);
         auto& provider = *impl_->provider;
         provider.handle("WillowGame.Behavior_AdvanceObjectiveSet", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
-            advanceSet(refPath(p.runtime().property(*b.object, "ObjectiveSetToAdvanceTo")));
-            return std::nullopt;
+            requestAdvance(refPath(p.runtime().property(*b.object, "ObjectiveSetToAdvanceTo")));
+            return std::vector<int>();
         });
         provider.handle("WillowGame.Behavior_MissionRemoteEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
             emit(Effect::Kind::RemoteEvent, text(p.runtime(), *b.object, "EventName"));
-            return std::nullopt;
+            return std::vector<int>();
         });
+        provider.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+            updateObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
+            return std::vector<int>();
+        });
+        // Outputs ETriggerDialogEventOutputLinks: Out 0, Finished 1. HOST STAND-IN: no dialog is played, so the dialog
+        // counts as finished at once and both outputs are selected (Out, then Finished).
         provider.handle("GearboxFramework.Behavior_TriggerDialogEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
             Runtime& r = p.runtime();
             emit(Effect::Kind::Dialog, refPath(r.property(*b.object, "EventTag")), refPath(r.property(*b.object, "Group")),
                  refPath(r.property(*b.object, "NameTag")));
-            return std::nullopt;
+            return std::vector<int>{0, 1};
         });
         // Action is an ITargetable.EChangeStatus (CHANGE_Toggle, CHANGE_Enable, CHANGE_Disable; class default Enable).
         const auto actions = enumNames(runtime_, "Engine", "ITargetable.EChangeStatus");
@@ -95,15 +134,19 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
             const int64_t index = action ? action->integer() : -1;
             emit(Effect::Kind::SetSequence, components ? components->s : "", text(p.runtime(), *b.object, "SequenceName"),
                  index >= 0 && size_t(index) < actions.size() ? actions[size_t(index)] : "");
-            return std::nullopt;
+            return std::vector<int>();
         });
     }
 }
 
-bool MissionSystem::available(const std::set<std::string>& completed) const {
+bool MissionSystem::available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates) const {
     for (const auto& dependency : dependencies_)
         if (!completed.count(dependency)) return false;
-    return true;
+    if (dependencyObjective_.empty()) return true;
+    // B6 (UNVERIFIED): the objective complete, or, for an Active dependency, the objective currently updatable.
+    const auto state = objectiveStates.find(dependencyObjective_);
+    if (state == objectiveStates.end()) return false;
+    return state->second == "Complete" || (dependencyActive_ && state->second == "Active");
 }
 
 void MissionSystem::emit(Effect::Kind kind, std::string a, std::string b, std::string c) {
@@ -116,15 +159,23 @@ std::vector<MissionSystem::Effect> MissionSystem::drain() {
     return result;
 }
 
-void MissionSystem::setStatus(Status status) {
-    if (status == status_) return;
+// B4 (UNVERIFIED): ReadyToTurnIn only from Active, Complete only from ReadyToTurnIn; every accepted change fires
+// "Default" with id 6 + the EMissionStatus number.
+bool MissionSystem::setStatus(Status status) {
+    const bool allowed = (status == Status::Active && status_ == Status::NotStarted) ||
+                         (status == Status::ReadyToTurnIn && status_ == Status::Active) ||
+                         (status == Status::Complete && status_ == Status::ReadyToTurnIn);
+    if (!allowed) return false;
     status_ = status;
+    if (status == Status::Complete) activeSet_.clear();
     static const char* names[] = {"NotStarted", "Active", "ReadyToTurnIn", "Complete"};
     emit(Effect::Kind::StatusChanged, names[int(status)]);
+    fireEvent("Default", StatusBase + nativeStatus(status));
+    return true;
 }
 
-void MissionSystem::fireEvent(const std::string& name) {
-    if (impl_->provider) impl_->provider->fireEvent(name);
+void MissionSystem::fireEvent(const std::string& name, int linkId) {
+    if (impl_->provider) impl_->provider->fireEvent(name, {}, linkId);
 }
 
 void MissionSystem::tick(double seconds) {
@@ -139,57 +190,140 @@ void MissionSystem::collectProviderErrors() {
         if (std::find(errors.begin(), errors.end(), line) == errors.end()) errors.push_back(line);
 }
 
-bool MissionSystem::advanceSet(const std::string& setPath) {
-    const auto found = std::find_if(sets_.begin(), sets_.end(), [&](const ObjectiveSet& s) { return s.path == setPath; });
-    if (found == sets_.end()) { errors.push_back("advance to unknown objective set " + setPath); return false; }
-    if (setPath == activeSet_ || completedSets_.count(setPath)) return false;
+const MissionSystem::ObjectiveSet* MissionSystem::findSet(const std::string& path) const {
+    const auto found = std::find_if(sets_.begin(), sets_.end(), [&](const ObjectiveSet& s) { return s.path == path; });
+    return found == sets_.end() ? nullptr : &*found;
+}
+
+// B3 (UNVERIFIED): only the active set's NextSet, or the InitialObjectiveSet while no set is active; anything else is
+// ignored silently.
+void MissionSystem::requestAdvance(const std::string& target) {
+    if (target.empty()) return;
+    const ObjectiveSet* active = findSet(activeSet_);
+    if ((active && active->next == target) || (activeSet_.empty() && target == initialSet_)) activateSet(target);
+}
+
+// B3 (UNVERIFIED): refused when ReadyToTurnIn or Complete; set event id 4; then the B2 evaluation when the new set
+// can complete the mission.
+bool MissionSystem::activateSet(const std::string& setPath) {
+    if (status_ == Status::ReadyToTurnIn || status_ == Status::Complete) return false;
+    const ObjectiveSet* set = findSet(setPath);
+    if (!set) { errors.push_back("advance to unknown objective set " + setPath); return false; }
+    if (set->cls != "WillowGame.MissionObjectiveSetDefinition") {
+        errors.push_back("unsupported objective set class " + set->cls + " (" + set->name + ")");
+        return false;
+    }
     activeSet_ = setPath;
-    emit(Effect::Kind::ObjectiveSetActive, found->name);
-    // UNVERIFIED: the mission weapon is lent while the objective it belongs to is active.
-    if (!weapon_.empty() && std::find(found->objectivePaths.begin(), found->objectivePaths.end(), weaponObjective_) != found->objectivePaths.end())
+    emit(Effect::Kind::ObjectiveSetActive, set->name);
+    // UNVERIFIED: the mission weapon is lent while the objective it belongs to is active (the native reading grants it
+    // at status Active and removes it at Complete; not adopted yet, see DECISIONS.md 2026-10-02).
+    if (!weapon_.empty() && std::find(set->objectivePaths.begin(), set->objectivePaths.end(), weaponObjective_) != set->objectivePaths.end())
         emit(Effect::Kind::MissionWeaponGranted, weapon_);
-    fireEvent(found->name);
+    const std::string name = set->name;
+    const bool evaluate = set->canCompleteMission;
+    fireEvent(name, SetActivated);
+    if (evaluate && activeSet_ == setPath) evaluateSet();
     return true;
+}
+
+// B2 (UNVERIFIED): a complete set fires id 5, then bCanCompleteMission -> ReadyToTurnIn, else bAutoEnableNextSet -> NextSet,
+// else nothing (a behavior must advance it). Only optional objectives left in a bCanCompleteMission set: ReadyToTurnIn.
+void MissionSystem::evaluateSet() {
+    const ObjectiveSet* set = findSet(activeSet_);
+    if (!set) return;
+    bool all = true, required = true;
+    for (const auto& objective : set->objectives) {
+        if (completedObjectives_.count(objective)) continue;
+        all = false;
+        const auto found = objectives_.find(objective);
+        if (!set->canCompleteMission || found == objectives_.end() || !found->second.optional) required = false;
+    }
+    if (all) {
+        if (!completedSets_.insert(set->path).second) return;
+        const std::string name = set->name, next = set->next;
+        const bool canComplete = set->canCompleteMission, autoNext = set->autoEnableNext;
+        fireEvent(name, SetCompleted);
+        if (canComplete) setStatus(Status::ReadyToTurnIn);
+        else if (autoNext && !next.empty()) activateSet(next);
+    } else if (required && status_ == Status::Active) setStatus(Status::ReadyToTurnIn);
 }
 
 bool MissionSystem::accept(const std::set<std::string>& completed) {
     if (status_ != Status::NotStarted || !available(completed)) return false;
+    // B4 (UNVERIFIED): which runs first, the status event or the initial set, was not settled; status first here.
     setStatus(Status::Active);
-    fireEvent("Default");
+    if (activateInitialSet_ && activeSet_.empty() && !initialSet_.empty()) activateSet(initialSet_);
     collectProviderErrors();
     return true;
 }
 
-bool MissionSystem::completeObjective(const std::string& objectiveName) {
-    if (status_ != Status::Active || completedObjectives_.count(objectiveName)) return false;
-    const auto set = std::find_if(sets_.begin(), sets_.end(), [&](const ObjectiveSet& s) { return s.path == activeSet_; });
-    if (set == sets_.end() || std::find(set->objectives.begin(), set->objectives.end(), objectiveName) == set->objectives.end()) return false;
+bool MissionSystem::kickoff(bool dialogOnly) {
+    if (status_ != Status::Active) return false;
+    fireEvent("Default", dialogOnly ? KickoffDialogOnly : Kickoff);
+    collectProviderErrors();
+    return true;
+}
+
+int MissionSystem::objectiveProgress(const std::string& objectiveName) const {
+    const auto value = progress_.find(objectiveName);
+    if (value == progress_.end()) return 0;
+    const auto objective = objectives_.find(objectiveName);
+    // UNVERIFIED: TranslateObjectiveCount of a bit mask is taken as its number of set bits.
+    return objective != objectives_.end() && objective->second.mask ? bits(value->second) : value->second;
+}
+
+// B1 (UNVERIFIED): updates are queued; one raised while another is applied waits its turn instead of nesting.
+bool MissionSystem::updateObjective(const std::string& objectiveName, int bit) {
+    updates_.push_back({objectiveName, bit});
+    if (draining_) return true;
+    draining_ = true;
+    bool first = true, result = false;
+    try {
+        while (!updates_.empty()) {
+            const auto [name, value] = updates_.front();
+            updates_.pop_front();
+            const bool applied = applyUpdate(name, value);
+            if (first) { result = applied; first = false; }
+        }
+    } catch (...) {
+        draining_ = false;
+        updates_.clear();
+        throw;
+    }
+    draining_ = false;
+    collectProviderErrors();
+    return result;
+}
+
+// B1 (UNVERIFIED): id 3 on every accepted update; complete when the count equals ObjectiveCount; then the set evaluation,
+// and only then id 2.
+bool MissionSystem::applyUpdate(const std::string& objectiveName, int bit) {
+    if (status_ != Status::Active) return false;
+    const ObjectiveSet* set = findSet(activeSet_);
+    if (!set || std::find(set->objectives.begin(), set->objectives.end(), objectiveName) == set->objectives.end()) return false;
+    const auto found = objectives_.find(objectiveName);
+    if (found == objectives_.end()) return false;
+    const Objective objective = found->second;
+    if (objectiveProgress(objectiveName) >= objective.count) return false;
+    if (objective.mask) {
+        if (bit == 0) return false;
+        progress_[objectiveName] |= bit;
+    } else ++progress_[objectiveName];
+    const int count = objectiveProgress(objectiveName);
+    emit(Effect::Kind::ObjectiveUpdated, objectiveName, std::to_string(count));
+    fireEvent(objectiveName, ObjectiveProgress);
+    if (count != objective.count) return true;
     completedObjectives_.insert(objectiveName);
     emit(Effect::Kind::ObjectiveComplete, objectiveName);
-    if (!weapon_.empty()) {
-        const auto position = std::find(set->objectives.begin(), set->objectives.end(), objectiveName) - set->objectives.begin();
-        if (set->objectivePaths[size_t(position)] == weaponObjective_) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
-    }
-    const std::string setPath = set->path, next = set->next;
-    const bool all = std::all_of(set->objectives.begin(), set->objectives.end(), [&](const std::string& o) { return completedObjectives_.count(o) != 0; });
-    fireEvent(objectiveName);
-    collectProviderErrors();
-    if (all) {
-        completedSets_.insert(setPath);
-        // A behavior may already have advanced the set (the common case); otherwise follow NextSet, else the
-        // mission is ready to turn in. When this auto-advance happens in the original game is UNVERIFIED.
-        if (activeSet_ == setPath) {
-            if (!next.empty()) advanceSet(next);
-            else setStatus(Status::ReadyToTurnIn);
-        }
-    }
+    if (!weapon_.empty() && objective.path == weaponObjective_) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
+    evaluateSet();
+    fireEvent(objectiveName, ObjectiveCompleted);
     return true;
 }
 
-bool MissionSystem::completeObjectiveByPath(const std::string& objectivePath) {
-    for (const auto& set : sets_)
-        for (size_t i = 0; i < set.objectivePaths.size(); ++i)
-            if (set.objectivePaths[i] == objectivePath) return completeObjective(set.objectives[i]);
+bool MissionSystem::updateObjectiveByPath(const std::string& objectivePath, int bit) {
+    for (const auto& [name, objective] : objectives_)
+        if (objective.path == objectivePath) return updateObjective(name, bit);
     errors.push_back("objective is not part of this mission: " + objectivePath);
     return false;
 }
@@ -204,16 +338,18 @@ std::string MissionSystem::objectiveState(const std::string& objectivePath) cons
     return "";
 }
 
+// RunMissionCustomEvent: id 0, unless the mission is Complete (B4, UNVERIFIED).
 bool MissionSystem::customEvent(const std::string& name) {
-    if (status_ != Status::Active) return false;
-    fireEvent(name);
+    if (status_ == Status::Complete) return false;
+    fireEvent(name, 0);
+    collectProviderErrors();
     return true;
 }
 
 bool MissionSystem::turnInMission() {
-    if (status_ != Status::ReadyToTurnIn) return false;
-    setStatus(Status::Complete);
+    if (!setStatus(Status::Complete)) return false;
     emit(Effect::Kind::Reward, xpAttribute_);
+    collectProviderErrors();
     return true;
 }
 
@@ -221,6 +357,8 @@ std::string MissionSystem::saveState() const {
     std::ostringstream out;
     out << "status=" << int(status_) << "\nactive=" << activeSet_ << '\n';
     for (const auto& o : completedObjectives_) out << "objective=" << o << '\n';
+    for (const auto& [o, value] : progress_)
+        if (!completedObjectives_.count(o)) out << "progress=" << o << ':' << value << '\n';
     for (const auto& s : completedSets_) out << "set=" << s << '\n';
     return out.str();
 }
@@ -231,6 +369,7 @@ bool MissionSystem::loadState(const std::string& state) {
     Status status = Status::NotStarted;
     std::string active;
     std::set<std::string> objectives, setsDone;
+    std::map<std::string, int> progress;
     bool sawStatus = false;
     while (std::getline(in, line)) {
         const auto eq = line.find('=');
@@ -242,11 +381,21 @@ bool MissionSystem::loadState(const std::string& state) {
         } else if (key == "active") active = value;
         else if (key == "objective") objectives.insert(value);
         else if (key == "set") setsDone.insert(value);
+        else if (key == "progress") {
+            const auto colon = value.rfind(':');
+            if (colon == std::string::npos || colon + 1 == value.size()) return false;
+            try { progress[value.substr(0, colon)] = std::stoi(value.substr(colon + 1)); } catch (const std::exception&) { return false; }
+        }
         else return false;
     }
     if (!sawStatus) return false;
     if (!active.empty() && std::none_of(sets_.begin(), sets_.end(), [&](const ObjectiveSet& s) { return s.path == active; })) return false;
-    status_ = status; activeSet_ = active; completedObjectives_ = objectives; completedSets_ = setsDone;
+    // A completed objective's progress is its count (an older save lists completed objectives only).
+    for (const auto& o : objectives) {
+        const auto found = objectives_.find(o);
+        progress[o] = found == objectives_.end() ? 1 : found->second.mask ? (1 << found->second.count) - 1 : found->second.count;
+    }
+    status_ = status; activeSet_ = active; completedObjectives_ = objectives; completedSets_ = setsDone; progress_ = progress;
     return true;
 }
 

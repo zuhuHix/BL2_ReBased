@@ -66,21 +66,37 @@ struct FOpenWillowSliceData
     FVector OracleDeathLocation = FVector::ZeroVector, OracleRespawnLocation = FVector::ZeroVector;
     double HealthMultiplier = 0, HealthScaler = 0, HealthMin = 0;
     // Mission XP (values.xp): the reward attribute and its playthrough-1 percentage, the experience-required formula
-    // required(L) = Multiplier x L^Power + Offset, and the tool's own candidate amounts (an oracle for MissionXp).
+    // f(L) = Multiplier x (L^Power + Offset), and the tool's own amounts and integer curve (oracles for MissionXp and
+    // UOpenWillowSkills::ExperienceForLevel; the curve table is absent from manifests written before 2026-10-02).
     FString XpRewardAttribute;
     double XpPercentage = 0, XpMultiplier = 0, XpPower = 0, XpOffset = 0;
     TMap<int32, int32> XpCandidateByLevel;
+    TMap<int32, int64> XpRequiredPointsByLevel;
+    // The mission's GameStageRegion entry of GlobalsDefinition.RegionBalanceData, playthrough 1
+    // (values.xp.region_stage, tools/slice_values.py). Manifests written before 2026-10-02 lack it: the host then uses
+    // a labelled STAND-IN with the bounds NATIVE_PROGRESSION.md section 2 quotes (bRegionStageFromData false).
+    struct FStageOverride { FString Mission; int32 Min = 0, Max = 0; };
+    FString StageRegion;
+    int32 StageBoost = 0, StageDefaultMin = 0, StageDefaultMax = 0;
+    TArray<FStageOverride> StageOverrides;
+    bool bRegionStageFromData = false;
     // Imported NPC assets and the audio lookup (key -> entry).
     FOpenWillowNpcAssets Marcus, Dummy;
     FString PistolMesh;                 // imported rolled sample of the lent Maliwan pistol (npc_assets use.MaliwanPistol)
     TMap<FString, TSharedPtr<FJsonObject>> Audio;
 
     void Load(const FString& WorldFile, const FString& NpcFile, const FString& AudioFile);
-    // health(L) = max(min, multiplier x scaler^L); see SLICE_WORLD_PLACEMENT.md 2b (94-constant reading UNVERIFIED).
+    // health(L) = max(min, multiplier x scaler^L); the attributes replace the 94 constant (NATIVE_PROGRESSION.md
+    // section 4, read from native code, UNVERIFIED in game).
     float HealthForLevel(int32 Level) const;
-    // CANDIDATE mission XP at mission level L: percentage x (required(L+1) - required(L)), rounded.
-    // MissionDefinition.GetExperienceReward is native, so this rule is UNVERIFIED (tools/slice_values.py).
+    // Mission XP at mission level L (the region game stage): trunc(percentage x (R(L+1) - R(L))) on the integer curve
+    // R from the manifest's formula, playthrough multiplier 1 (playthrough 1 below level 50). Read from native code
+    // (NATIVE_PROGRESSION.md section 2), UNVERIFIED in game.
     int32 MissionXp(int32 MissionLevel) const;
+    // Region game stage for a player level: the largest clamp(level + boost, min, max) over the mission overrides whose
+    // mission is complete, else clamp(level + boost, default min, default max) (NATIVE_PROGRESSION.md section 2,
+    // UNVERIFIED in game). Fixing the value the first time it is asked for is the caller's job.
+    int32 RegionStage(int32 PlayerLevel, TFunctionRef<bool(const FString&)> IsComplete) const;
     // "Sanctuary_Dynamic:TheWorld.PersistentLevel.X" -> "TheWorld.PersistentLevel.X"; op name = last path part.
     static FString ObjectPath(const FString& Value);
     static FString OpName(const FString& Value);

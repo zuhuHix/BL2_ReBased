@@ -10,10 +10,10 @@ Inputs (all ignored local/ payloads, nothing here is committed):
 
 The cooked Master_Gun shader graph is stripped (UModel logs "Ignoring
 Material3'Master_Gun' due to empty parameters"), so the paint model below is
-the same UNVERIFIED approximation that host/ue5/import_infinity_proxy.py uses
-in UE5: p_Masks R/G/B select paint regions A/B/C, one p_Diffuse channel picks
-each region's shadow/midtone/highlight colour, unpainted texels fall back to
-gunmetal. It is a look-alike for a thumbnail, not the game's shader.
+the UNVERIFIED reading in tools/weapon_paint_model.py, recovered from the
+compiled Master_Gun shaders in the install's shader cache. Without --paint the
+base-Material defaults and the static channel choices are unknown, so missing
+values fall back to neutral ones. Lighting here is a look-alike, not the game's.
 
 Pure Python + Pillow (no numpy is installed): a small orthographic z-buffer
 rasteriser, deferred per-pixel shading, supersampling, ink outlines.
@@ -34,6 +34,8 @@ from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter
+
+from weapon_paint_model import PAINT_PARAMETERS, albedo, decal_uv, mask_uvs, pattern_uv, srgb_to_linear
 
 ROOT = Path(__file__).resolve().parents[1]
 ITEMS = ROOT / "local" / "items"
@@ -272,23 +274,41 @@ def resolve_material(mic_name, roots, base_defaults=None):
 
 
 def load_channels(path, size=None):
-    """Return (width, [bytes per channel]) for an RGB(A) PNG."""
-    image = Image.open(path).convert("RGB")
+    """Return (width, height, [bytes per channel]) for a PNG; RGBA keeps its alpha channel."""
+    image = Image.open(path)
+    image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
     if size and max(image.size) > size:
-        image = image.resize((size, size), Image.BOX)
+        image = image.resize((min(size, image.width), min(size, image.height)), Image.BOX)
     return image.width, image.height, [c.tobytes() for c in image.split()]
 
 
+SRGB_DECODE = [srgb_to_linear(i / 255.0) for i in range(256)]
+
+
 class Texture:
-    def __init__(self, path, size=2048):
+    def __init__(self, path, size=2048, address=None, srgb=False):
         self.width, self.height, self.channels = load_channels(path, size)
         self.pixels = None
+        self.clamp = [mode == "TA_Clamp" for mode in (address or ["TA_Wrap", "TA_Wrap"])]
+        # sRGB textures decode their colour channels to linear when sampled (alpha stays linear).
+        self.decode = SRGB_DECODE if srgb else None
 
     def rgb(self):
         if self.pixels is None:
             self.pixels = Image.merge("RGB", [Image.frombytes("L", (self.width, self.height), c)
-                                              for c in self.channels]).tobytes()
+                                              for c in self.channels[:3]]).tobytes()
         return self.pixels
+
+    def sample(self, u, v):
+        """Nearest texel as floats 0..1, (r, g, b, a); alpha is 1 without an alpha channel."""
+        def index(value, size, clamp):
+            value = min(max(value, 0.0), 0.999999) if clamp else value % 1.0
+            return int(value * size)
+        i = index(v, self.height, self.clamp[1]) * self.width + index(u, self.width, self.clamp[0])
+        values = [c[i] / 255.0 for c in self.channels]
+        if self.decode:
+            values[:3] = [self.decode[c[i]] for c in self.channels[:3]]
+        return tuple(values) + ((1.0,) if len(values) == 3 else ())
 
 
 def weapon_class(recipe, mic_params):
@@ -302,45 +322,85 @@ def weapon_class(recipe, mic_params):
 
 
 class Paint:
-    """Master_Gun look-alike. Everything here is UNVERIFIED (see module doc)."""
+    """Master_Gun reading of tools/weapon_paint_model.py. UNVERIFIED (see that module).
 
-    def __init__(self, recipe, materials_roots, detail_override=None, patterns=True):
+    Built from a recipe and UModel exports (thumbnails: no base-Material defaults and no static
+    parameters, so missing values fall back to neutral ones and the detail channel to the
+    DETAIL_CHANNELS guess) or, with `prepared`, from prepare_weapon_paint.py's output, which carries
+    the base defaults and the channels the MIC's static parameters select.
+    """
+
+    def __init__(self, recipe, materials_roots, detail_override=None, patterns=True, prepared=None):
         self.ok = False
         self.note = ""
-        mic = str(recipe.get("material") or "").split(".")[-1]
-        resolved = resolve_material(mic, materials_roots) if mic else None
-        if resolved is None:
-            self.note = f"no UModel export of {mic or 'material'}"
-            return
-        params, texdir, chain = resolved  # thumbnails: no base defaults, white zone fallback below
+        if prepared is not None:
+            params, chain = prepared["params"], prepared["parent_chain"]
+            paths = prepared["textures"]
+            flags = prepared.get("srgb") or {}
+            texture = lambda name, address=None: Texture(Path(paths[name]), address=address,
+                                                         srgb=bool(flags.get(name))) if name in paths else None
+            decal = prepared.get("decal") or {}
+            self.detail_channel = prepared["detail_channel"]
+            self.pattern_channels = prepared.get("pattern_channels", "RGB")
+            self.decal_channels = prepared.get("decal_channels", "RGB")
+            decal_address = decal.get("address") if decal.get("used") else None
+        else:
+            mic = str(recipe.get("material") or "").split(".")[-1]
+            resolved = resolve_material(mic, materials_roots) if mic else None
+            if resolved is None:
+                self.note = f"no UModel export of {mic or 'material'}"
+                return
+            params, texdir, chain = resolved
+            leaf = params["texture"]
+
+            def texture(name, address=None):
+                path = texdir / f"{leaf.get(name)}.png"
+                return Texture(path, address=address) if leaf.get(name) and path.is_file() else None
+            klass = weapon_class(recipe, params)
+            self.detail_channel = DETAIL_CHANNELS.get((leaf.get("p_Diffuse"), klass), 2)
+            self.pattern_channels = self.decal_channels = "RGB"
+            decal_address = None
+        if detail_override is not None:
+            self.detail_channel = detail_override
         self.chain = chain
-        vec, tex, sca = params["vector"], params["texture"], params["scalar"]
-
-        def texture(name):
-            path = texdir / f"{name}.png"
-            return Texture(path) if name and path.is_file() else None
-
-        self.masks = texture(tex.get("p_Masks"))
-        self.detail = texture(tex.get("p_Diffuse"))
-        self.normal = texture(tex.get("p_NormalScopesEmissive"))
-        self.pattern = texture(tex.get("p_Pattern"))
+        self.masks = texture("p_Masks")
+        self.detail = texture("p_Diffuse")
+        self.normal = texture("p_NormalScopesEmissive")
+        self.pattern = texture("p_Pattern") if patterns else None
+        self.decal = texture("p_Decal", decal_address) if prepared is not None and decal_address else None
         if self.masks is None:
-            self.note = f"missing p_Masks texture for {mic}"
+            self.note = "missing p_Masks texture"
             return
-        klass = weapon_class(recipe, params)
-        self.detail_channel = detail_override
-        if self.detail_channel is None:
-            self.detail_channel = DETAIL_CHANNELS.get((tex.get("p_Diffuse"), klass), 2)
-        white = (1.0, 1.0, 1.0)
-        self.regions = []
-        for letter in "ABC":
-            self.regions.append(tuple(vec.get(f"p_{letter}Color{tone}", white)[:3]
-                                      for tone in ("Shadow", "Midtone", "Hilight")))
-        self.pattern_color = vec.get("p_PatternColor", white)[:3]
-        self.pattern_scale = vec.get("p_PatternScalePosition", (1, 1, 0, 0))
-        self.pattern_weight = vec.get("p_PatternChannelScale", (0, 0, 0, 0))[:3]
-        self.pattern_used = patterns and self.pattern is not None and any(w > 0 for w in self.pattern_weight)
+        vec, sca = dict(params["vector"]), dict(params["scalar"])
+        white, neutral = (1.0, 1.0, 1.0, 1.0), {"p_HighlightsIntensity": 0.0, "p_ShadowsIntensity": 0.0}
+        for name in PAINT_PARAMETERS["vector"]:
+            vec.setdefault(name, white)
+        for name, value in neutral.items():
+            sca.setdefault(name, value)
+        self.params = {"vector": vec, "scalar": sca, "pattern_channels": self.pattern_channels,
+                       "decal_channels": self.decal_channels}
+        names = lambda group: all(n in vec for n in PAINT_PARAMETERS[group + "_vector"]) and all(
+            n in sca for n in PAINT_PARAMETERS[group + "_scalar"])
+        if self.pattern is not None and not names("pattern"):
+            self.pattern = None
+        if self.decal is not None and not names("decal"):
+            self.decal = None
         self.ok = True
+
+    def texel(self, u0, v0, u1, v1):
+        """(r, g, b, zone coverage) for one point; linear and possibly above 1."""
+        (lu, lv), (mu, mv) = mask_uvs(u0, v0)
+        light = self.masks.sample(lu, lv)
+        mask = self.masks.sample(mu, mv)[:3]
+        detail = self.detail.sample(u0, v0)[self.detail_channel] if self.detail else 0.5
+        vec, sca = self.params["vector"], self.params["scalar"]
+        pattern = decal = None
+        if self.pattern is not None:
+            pattern = self.pattern.sample(*pattern_uv(u1, v1, vec["p_PatternScalePosition"]))[:3]
+        if self.decal is not None:
+            decal = self.decal.sample(*decal_uv(u1, v1, vec["p_DecalScalePosition"], sca["p_DecalRotate"]))
+        colour = albedo(light, mask, detail, self.params, pattern, decal)
+        return colour + (min(1.0, sum(mask)),)
 
 
 def srgb(value):
@@ -486,20 +546,9 @@ def shade_pixels(mesh, screen, ids, width, height, paint, basis, grade=None):
 
     ok = paint is not None and paint.ok
     if ok:
-        mtex, mw, mh = paint.masks.rgb(), paint.masks.width, paint.masks.height
-        dch = paint.detail.channels[paint.detail_channel] if paint.detail else None
-        dw = paint.detail.width if paint.detail else 1
-        dh = paint.detail.height if paint.detail else 1
         ntex = paint.normal.rgb() if paint.normal else None
         nw = paint.normal.width if paint.normal else 1
         nh = paint.normal.height if paint.normal else 1
-        regions = paint.regions
-        use_pattern = paint.pattern_used
-        if use_pattern:
-            ptex, pw, ph = paint.pattern.rgb(), paint.pattern.width, paint.pattern.height
-            psx, psy, pox, poy = paint.pattern_scale
-            pcol = paint.pattern_color
-            pwt = paint.pattern_weight
     for idx, tid in enumerate(ids):
         if tid < 0:
             continue
@@ -529,59 +578,15 @@ def shade_pixels(mesh, screen, ids, width, height, paint, basis, grade=None):
         if ok:
             u %= 1.0
             v %= 1.0
-            mi = (int(v * mh) * mw + int(u * mw)) * 3
-            mr, mg, mb = mtex[mi] / 255.0, mtex[mi + 1] / 255.0, mtex[mi + 2] / 255.0
-            d = dch[int(v * dh) * dw + int(u * dw)] / 255.0 if dch else 0.5
-            low = min(1.0, d * 2.0)
-            high = min(1.0, max(0.0, d * 2.0 - 1.0))
-            coverage = mr + mg + mb
-            if coverage > 1.0:
-                mr, mg, mb = mr / coverage, mg / coverage, mb / coverage
-                coverage = 1.0
-            for weight, (shadow, mid, hilite) in zip((mr, mg, mb), regions):
-                if weight <= 0.004:
-                    continue
-                for c in range(3):
-                    tone = shadow[c] + (mid[c] - shadow[c]) * low
-                    tone = tone + (hilite[c] - tone) * high
-                    tone = tone * weight
-                    if c == 0:
-                        albedo_r += tone
-                    elif c == 1:
-                        albedo_g += tone
-                    else:
-                        albedo_b += tone
-            if use_pattern:
-                u1 = uv1[ia][0] * l0 + uv1[ib][0] * l1 + uv1[ic][0] * l2
-                v1 = uv1[ia][1] * l0 + uv1[ib][1] * l1 + uv1[ic][1] * l2
-                pu = (u1 * psx + pox) % 1.0
-                pv = (v1 * psy + poy) % 1.0
-                pi = (int(pv * ph) * pw + int(pu * pw)) * 3
-                alpha = min(1.0, mr * pwt[0] + mg * pwt[1] + mb * pwt[2])
-                shade = 0.35 + d
-                for c in range(3):
-                    pat = ptex[pi + c] / 255.0 * pcol[c] * shade
-                    cur = (albedo_r, albedo_g, albedo_b)[c]
-                    val = cur + (pat - cur) * alpha
-                    if c == 0:
-                        albedo_r = val
-                    elif c == 1:
-                        albedo_g = val
-                    else:
-                        albedo_b = val
-            # HDR region colours (> 1) keep their hue: divide by the peak instead of clamping each
-            # channel (the clamp bleached gold (2.1, 1.44, 0.47) and yellow-green (5, 5.7, 1.9) to white).
+            u1 = uv1[ia][0] * l0 + uv1[ib][0] * l1 + uv1[ic][0] * l2
+            v1 = uv1[ia][1] * l0 + uv1[ib][1] * l1 + uv1[ic][1] * l2
+            albedo_r, albedo_g, albedo_b, coverage = paint.texel(u, v, u1, v1)
+            # HDR colours (> 1) keep their hue: divide by the peak instead of clamping each channel.
             peak = max(albedo_r, albedo_g, albedo_b)
             if peak > 1.0:
                 norm = peak ** HDR_PEAK_POWER
                 albedo_r, albedo_g, albedo_b = albedo_r / norm, albedo_g / norm, albedo_b / norm
-            # texels no region claims are bare metal
             bare = 1.0 - coverage
-            if bare > 0.0:
-                gun = (0.11 + 0.33 * d) * bare
-                albedo_r += gun * 0.95
-                albedo_g += gun * 0.97
-                albedo_b += gun * 1.05
             metal = 0.25 + 0.6 * bare
             rough = 0.55 - 0.25 * bare
             if ntex is not None:
@@ -680,12 +685,12 @@ def tight_crop(image, margin):
 
 def render_item(item_id, materials_roots, max_size=(512, 256), ss=3, yaw=14.0, pitch=7.0,
                 side=-1, margin=6, detail_override=None, flat=False, patterns=True,
-                grade=None, final_margin=4):
+                grade=None, final_margin=4, prepared=None):
     started = time.time()
     mesh = Mesh(item_id)
     recipe_path = ITEMS / f"{item_id}.json"
     recipe = json.loads(recipe_path.read_text(encoding="utf-8")) if recipe_path.is_file() else {}
-    paint = None if flat else Paint(recipe, materials_roots, detail_override, patterns)
+    paint = None if flat else Paint(recipe, materials_roots, detail_override, patterns, prepared)
     note = "flat neutral" if paint is None else ("textured" if paint.ok else f"neutral ({paint.note})")
     basis = view_basis(yaw, pitch, side)
     eye, right, up = basis
@@ -719,7 +724,11 @@ def render_item(item_id, materials_roots, max_size=(512, 256), ss=3, yaw=14.0, p
 
 def _job(args):
     item_id, kwargs = args
+    kwargs = dict(kwargs)
     try:
+        global ITEMS
+        ITEMS = kwargs.pop("items", ITEMS)
+        kwargs["prepared"] = kwargs.pop("prepared_by_id", {}).get(item_id)
         return render_item(item_id, **kwargs)
     except Exception as error:  # report per item, keep going
         return item_id, None, None, f"{type(error).__name__}: {error}", 0.0
@@ -770,6 +779,9 @@ def main():
     parser.add_argument("--detail-channel", type=int, choices=(0, 1, 2))
     parser.add_argument("--no-pattern", action="store_true", help="skip the UNVERIFIED p_Pattern layer")
     parser.add_argument("--flat", action="store_true", help="old untextured neutral shading")
+    parser.add_argument("--paint", type=Path, help="prepare_weapon_paint.py output: use its parameters, "
+                        "base defaults and static channels instead of the UModel-only fallback")
+    parser.add_argument("--items", type=Path, help="folder holding <id>.gltf/.json (default local/items)")
     parser.add_argument("--exposure", type=float, default=GRADE["exposure"], help="display grade (UNVERIFIED look)")
     parser.add_argument("--saturation", type=float, default=GRADE["saturation"])
     parser.add_argument("--contrast", type=float, default=GRADE["contrast"], help="0 = none")
@@ -782,6 +794,13 @@ def main():
     parser.add_argument("--cooked", type=Path, default=os.environ.get("OPENWILLOW_COOKED"),
                         help="Borderlands 2 WillowGame/CookedPCConsole directory")
     args = parser.parse_args()
+    global ITEMS
+    if args.items:
+        ITEMS = args.items
+    prepared = {}
+    if args.paint:
+        loaded = json.loads(args.paint.read_text(encoding="utf-8"))
+        prepared = {entry["recipe_id"]: entry for entry in (loaded if isinstance(loaded, list) else [loaded])}
     ids = args.ids or [path.stem for path in sorted(ITEMS.glob("*.gltf"))]
     if not ids or any(not ID_PATTERN.fullmatch(item_id) for item_id in ids):
         parser.error("provide valid item IDs backed by local/items/*.gltf")
@@ -797,7 +816,7 @@ def main():
                   detail_override=args.detail_channel, flat=args.flat, patterns=not args.no_pattern,
                   grade={"exposure": args.exposure, "white": args.white,
                          "saturation": args.saturation, "contrast": args.contrast},
-                  final_margin=args.margin)
+                  final_margin=args.margin, items=ITEMS, prepared_by_id=prepared)
     started = time.time()
     rendered, failed, written = 0, 0, []
     jobs = [(item_id, kwargs) for item_id in ids]

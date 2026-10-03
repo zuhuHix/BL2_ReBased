@@ -33,9 +33,11 @@ INIT_DEFAULTS = {'BaseValueConstant': 0.0, 'BaseValueAttribute': None, 'Initiali
 def legal_parts(package, balance, stage=None):
     """{balance, chain, weapon_type, manufacturer, slots: {slot: {fixed, candidates}}}.
 
-    stage None keeps parts of every game stage. Shares are weight / slot total;
-    an all-zero slot is reported with share None (the uniform pick in
-    weapon_recipe.roll is UNVERIFIED).
+    stage None keeps parts of every game stage. Weights follow
+    weapon_recipe.entry_weight (an entry without a Manufacturers list weighs a
+    flat 100). Shares are weight / slot total; an all-zero slot is reported with
+    share None (the game's pick leaves such a slot empty; read from native code,
+    UNVERIFIED in game).
     """
     result = weapon_recipe.merge(package, balance, stage)
     slots = {}

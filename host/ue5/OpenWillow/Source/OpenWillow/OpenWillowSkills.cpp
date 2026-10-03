@@ -47,24 +47,38 @@ void UOpenWillowSkills::SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees
     ActionPointsToUnlockTrees = FMath::Max(0, PointsToUnlockTrees);
 }
 
+int64 UOpenWillowSkills::RequiredExperience(float Multiplier, float Power, float Offset, int32 InLevel)
+{
+    // The balance formula adds the offset before the multiplier, and every step is a float, as the native
+    // evaluator stores it. The curve point is truncated, then the level-1 point is subtracted so level 1 needs 0.
+    auto Point = [&](int32 N)
+    {
+        const float Raised = FMath::Pow(float(N), Power);
+        const float Value = Multiplier * (Raised + Offset);
+        return int64(FMath::TruncToDouble(double(Value)));
+    };
+    return FMath::Max<int64>(0, Point(InLevel) - Point(1));
+}
+
 int64 UOpenWillowSkills::ExperienceForLevel(int32 InLevel)
 {
-    // floor(60 * L^2.8 - 60): 0 at level 1. It matches the one threshold a
-    // real-game trace shows (2,715,586 for level 46); UNVERIFIED elsewhere.
-    return InLevel <= 1 ? 0 : int64(FMath::FloorToDouble(60.0 * FMath::Pow(double(InLevel), 2.8) - 60.0));
+    // The constants of GD_Balance_Experience.Formulas.Init_ExperienceRequiredForLevel. The result matches the one
+    // threshold a real-game trace shows (2,715,586 for level 46); UNVERIFIED elsewhere. The quest suite checks this
+    // against the formula decoded into world.json (values.xp.required_points_by_level).
+    return RequiredExperience(60.f, 2.8f, 7.33f, InLevel);
 }
 
 void UOpenWillowSkills::SetLevel(int32 NewLevel)
 {
-    Level = FMath::Max(1, NewLevel);
+    Level = FMath::Clamp(NewLevel, 1, MaxLevel);
     Experience = ExperienceForLevel(Level);
 }
 
 void UOpenWillowSkills::AddExperience(int64 Amount)
 {
-    // No level cap is modelled yet.
+    // ExperienceResourcePool.ApplyExpPointsToExpLevel: several levels may come from one grant; none past the cap.
     Experience += FMath::Max<int64>(0, Amount);
-    while (Experience >= ExperienceForLevel(Level + 1)) ++Level;
+    while (Level < MaxLevel && Experience >= ExperienceForLevel(Level + 1)) ++Level;
 }
 
 float UOpenWillowSkills::LevelProgress() const
@@ -186,7 +200,9 @@ bool UOpenWillowSkills::RestoreProgression(const FJsonObject& Data, FString& Out
         OutError = TEXT("level, experience, actionGrade or grades missing");
         return false;
     }
-    if (NewLevel < 1 || NewExperience < ExperienceForLevel(NewLevel) || NewExperience >= ExperienceForLevel(NewLevel + 1))
+    // At the cap experience keeps counting, so there is no upper bound there.
+    if (NewLevel < 1 || NewLevel > MaxLevel || NewExperience < ExperienceForLevel(NewLevel)
+        || (NewLevel < MaxLevel && NewExperience >= ExperienceForLevel(NewLevel + 1)))
     {
         OutError = FString::Printf(TEXT("experience %lld does not belong to level %d"), NewExperience, NewLevel);
         return false;

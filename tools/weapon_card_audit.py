@@ -13,6 +13,17 @@ other main stats also matches it.
 This is an oracle for the evaluator, not for the roll: the parts are inferred,
 and a match is evidence only to the precision the card prints. Generated
 reports are game-derived and go under ignored local/.
+
+Each combination also gets its prefix and title from the game's name rule
+(weapon_recipe.choose_name_parts at the card's level); their effects and
+monetary modifiers enter the evaluation, and the predicted name is compared with
+the card's title ('name', reported but not part of the main four).
+
+--runtime-overlay replaces stat-relevant properties of weapon parts, types and
+name parts with the running game's values from OpenBLCMM's copy of the game's
+own `obj dump` (local; tools/blcmm_dumps.py). The cards were captured on a game
+whose online hotfixes changed some of them (NATIVE_WEAPON_RULES.md, "Runtime
+data"); the overlay is a local oracle input, never written to the repository.
 """
 import argparse
 import html
@@ -28,6 +39,52 @@ import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+# Classes and properties the runtime overlay may replace (what the evaluator and name rule read).
+OVERLAY_CLASSES = ('WillowGame.WeaponPartDefinition', 'WillowGame.WeaponTypeDefinition',
+                   'WillowGame.WeaponNamePartDefinition')
+OVERLAY_KEYS = ('WeaponAttributeEffects', 'AttributeSlotEffects', 'AttributeSlotUpgrades', 'ClipSize', 'ReloadTime',
+                'FireRate', 'Spread', 'InstantHitDamage', 'StatusEffectDamage', 'BaseStatusEffectChanceModifier',
+                'ProjectilesPerShot', 'MonetaryValueMod', 'Rarity', 'Priority', 'TitleList', 'PrefixList',
+                'CustomDamageTypeDefinition', 'CustomFiringModeDefinition', 'MinExpLevelRequirement',
+                'MaxExpLevelRequirement')
+
+
+def dumped_value(value):
+    """tools/blcmm_dumps parsed value -> the shape weapon_recipe's decoder produces (object refs become paths)."""
+    if isinstance(value, dict):
+        if set(value) == {'class', 'path'}:
+            return value['path']
+        return {k: dumped_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [dumped_value(v) for v in value]
+    return value
+
+
+class RuntimeOverlayPackage(weapon_recipe.Package):
+    """weapon_recipe.Package whose weapon parts/types/name parts carry the running game's values (local dumps)."""
+
+    def __init__(self, reader, path, schema, dumps):
+        super().__init__(reader, path, schema)
+        self.dumps = dumps
+        self.overlaid = {}
+        self.replaced = {}
+
+    def props(self, path):
+        if path in self.overlaid:
+            return self.overlaid[path]
+        props = super().props(path)
+        if self.classes.get(path) in OVERLAY_CLASSES:
+            dumped = self.dumps.dump(path)
+            if dumped:
+                props = dict(props)
+                for key in OVERLAY_KEYS:
+                    if key in dumped['properties']:
+                        runtime = dumped_value(dumped['properties'][key])
+                        if runtime != props.get(key):
+                            self.replaced.setdefault(path, []).append(key)
+                        props[key] = runtime
+        self.overlaid[path] = props
+        return props
 # Card ElementalIcon -> elemental part name suffix (GD_Weap_*.elemental.*_Elemental_<suffix>).
 ELEMENT_SUFFIX = {'none': 'None', 'fire': 'Fire', 'shock': 'Shock', 'corrosive': 'Corrosive', 'amp': 'Slag',
                   'explosive': 'Explosive'}
@@ -100,11 +157,15 @@ def observed(card):
             out['status_dps'] = stat['value']
     if card.get('value') is not None:
         out['sale_value'] = card['value']
+    if card.get('title'):
+        out['name'] = card['title']
     return out
 
 
 def agrees(field, card, real):
     """The model's card, rounded as the real card prints it (weapon_stats.display), equals the observation."""
+    if field == 'name':
+        return card.get('name') == real
     shown = card.get('display') or {}
     model = shown.get(field, card.get(field))
     if field == 'projectiles':
@@ -165,6 +226,8 @@ def audit_card(package, catalogue, card, levels, limit):
     real = observed(card)
     report = {'card': {k: card[k] for k in ('title', 'type_icon', 'manufacturer', 'element', 'level', 'value')},
               'observed': real, 'balances': [], 'evaluated': 0, 'full_matches': 0, 'examples': [],
+              # one combination reproducing every printed field (numeric ones, and also the name)
+              'every_numeric_field_matches': 0, 'every_field_matches': 0,
               # field -> [agreeing, disagreeing] over the combinations that reproduce the main stats
               'extras_with_main_match': {}}
     stat_any = {field: False for field in real}
@@ -174,14 +237,23 @@ def audit_card(package, catalogue, card, levels, limit):
             if report['evaluated'] >= limit:
                 report['truncated'] = True
                 break
-            recipe = {'manufacturer': merged['manufacturer'], 'weapon_type': merged['weapon_type'],
-                      'parts': {slot: {'part': part} for slot, part in parts.items()}}
             for level in levels(card):
                 report['evaluated'] += 1
+                # The game's name rule at the item level (= the card's level requirement).
+                prefix, title = weapon_recipe.choose_name_parts(package, merged['weapon_type'], parts,
+                                                                merged['manufacturer'], level)
+                recipe = {'manufacturer': merged['manufacturer'], 'weapon_type': merged['weapon_type'],
+                          'parts': {slot: {'part': part} for slot, part in parts.items()},
+                          'prefix': prefix and {'part': prefix}, 'title': title and {'part': title}}
                 model = weapon_stats.evaluate(package, recipe, level)['card']
+                model['name'] = ' '.join(package.props(p).get('PartName') for p in (prefix, title) if p)
                 hits = {field: agrees(field, model, value) for field, value in real.items()}
                 for field, ok in hits.items():
                     stat_any[field] = stat_any[field] or ok
+                if all(ok for f, ok in hits.items() if f != 'name'):
+                    report['every_numeric_field_matches'] += 1
+                    if hits.get('name', True):
+                        report['every_field_matches'] += 1
                 if all(hits.get(f, True) for f in MAIN):
                     report['full_matches'] += 1
                     for field, ok in hits.items():
@@ -191,6 +263,7 @@ def audit_card(package, catalogue, card, levels, limit):
                         report['examples'].append({'balance': balance, 'level': level,
                                                    'parts': {s: p.rsplit('.', 1)[-1] for s, p in parts.items()},
                                                    'model': {f: model.get(f) for f in real},
+                                                   'name_parts': [p for p in (prefix, title) if p],
                                                    'display': model.get('display'),
                                                    'agrees': hits})
     report['each_stat_reproduced_somewhere'] = stat_any
@@ -205,13 +278,22 @@ def main():
     parser.add_argument('--level-offsets', default='0', help='item level = card level requirement + each offset')
     parser.add_argument('--limit', type=int, default=400000, help='evaluations per card')
     parser.add_argument('--output', type=Path, default=ROOT / 'local/weapon_audit/card_audit.json')
+    parser.add_argument('--runtime-overlay', action='store_true',
+                        help="use the running game's values from OpenBLCMM's obj dumps (local) for weapon parts and types")
+    parser.add_argument('--blcmm-jar', type=Path, help='blcmm_data_BL2-*.jar (default: tools/blcmm_dumps.py lookup)')
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to((ROOT / 'local').resolve()):
         parser.error('--output must stay under local/')
     schema = ROOT / 'local/weapon_audit/weapon_audit.schema'
     schema.parent.mkdir(parents=True, exist_ok=True)
     schema.write_text('\n'.join(weapon_stats.SCHEMA_LINES) + '\n', encoding='utf-8')
-    package = weapon_recipe.Package(str(Path(args.reader).resolve()), Path(args.package), str(schema.resolve()))
+    reader, package_path = str(Path(args.reader).resolve()), Path(args.package)
+    if args.runtime_overlay:
+        import blcmm_dumps
+        dumps = blcmm_dumps.Dumps(jar=args.blcmm_jar) if args.blcmm_jar else blcmm_dumps.Dumps()
+        package = RuntimeOverlayPackage(reader, package_path, str(schema.resolve()), dumps)
+    else:
+        package = weapon_recipe.Package(reader, package_path, str(schema.resolve()))
     started = time.perf_counter()
     rows = []
     for path in args.trace:
@@ -220,15 +302,26 @@ def main():
     cards = weapon_cards(rows)
     catalogue = Catalogue(package)
     offsets = [int(x) for x in args.level_offsets.split(',')]
-    results = [audit_card(package, catalogue, card, lambda c: [int(c['level']) + o for o in offsets], args.limit)
+    # A card without a level line is a weapon of item level 1 or a mission weapon (whose level the
+    # card does not show): weapon_stats.level_requirement. Such cards are audited at level 1.
+    results = [audit_card(package, catalogue, card, lambda c: [int(c['level'] or 1) + o for o in offsets], args.limit)
                for card in cards]
     summary = {'cards': len(cards), 'with_full_match': sum(1 for r in results if r['full_matches']),
+               # A full match on the main four that also reproduces every other printed field.
+               'with_every_field': sum(1 for r in results if r['every_field_matches']),
+               'with_every_numeric_field': sum(1 for r in results if r['every_numeric_field_matches']),
+               'runtime_overlay': bool(args.runtime_overlay),
                'elapsed_seconds': round(time.perf_counter() - started, 1)}
+    if args.runtime_overlay:
+        # Objects where some dumped key differs from the cooked decode; includes class defaults the
+        # cooked data omits, so it over-counts real runtime changes (NATIVE_WEAPON_RULES.md section 7).
+        summary['objects_with_differing_keys'] = len(package.replaced)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({'summary': summary, 'cards': results}, indent=1), encoding='utf-8')
     for r in results:
         print(json.dumps({'title': r['card']['title'], 'balances': len(r['balances']), 'evaluated': r['evaluated'],
-                          'full_matches': r['full_matches'], 'each_stat': r['each_stat_reproduced_somewhere'],
+                          'full_matches': r['full_matches'], 'every_numeric': r['every_numeric_field_matches'],
+                          'every_field': r['every_field_matches'], 'each_stat': r['each_stat_reproduced_somewhere'],
                           'extras': r['extras_with_main_match']}))
     print(json.dumps(summary))
 

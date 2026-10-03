@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audio_census as ac  # noqa: E402
 
 MISSION = 'GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire'
-MISSION_STEPS = ['accept', 'tick:1', 'tick:3', 'obj:RockPaper_GoToRange', 'tick:5', 'obj:Fire', 'turnin']
+# `kickoff` plays the kickoff (Default id 12) after acceptance, as the slice host does (NATIVE_MISSION_DISPATCH.md B9).
+MISSION_STEPS = ['accept', 'kickoff', 'tick:1', 'tick:3', 'obj:RockPaper_GoToRange', 'tick:5', 'obj:Fire', 'turnin']
 DOOR_TRACKS = ['TheWorld.PersistentLevel.Main_Sequence.RocksPaperGenocide.InterpData_2.InterpGroup_0.InterpTrackAkEvent_0',
                'TheWorld.PersistentLevel.Main_Sequence.RocksPaperGenocide.InterpData_2.InterpGroup_0.InterpTrackAkEvent_1']
 WEAPON_TYPE = 'GD_Weap_Pistol.A_Weapons.WeaponType_Maliwan_Pistol'

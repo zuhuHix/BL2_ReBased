@@ -89,33 +89,40 @@ bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
     Read(*Cooldown, TEXT("baseConsumptionRate"), CooldownRate);
     Read(*AimSettings, TEXT("MinTargetDistance"), TargetMinDistance);
     Read(*AimSettings, TEXT("MaxTargetDistance"), TargetMaxDistance);
+    Read(*AimSettings, TEXT("MaxSnapAngle"), MaxSnapAngle);
+    Read(*AimSettings, TEXT("RadiusMultiplier"), RadiusMultiplier);
+    Read(*AimSettings, TEXT("DistanceOffset"), DistanceOffset);
     if (!bOk) { OutError = TEXT("a Phaselock number is missing from the manifest"); return false; }
-    if (TargetMaxDistance <= TargetMinDistance)
+    if (TargetMaxDistance <= TargetMinDistance || TargetMaxDistance <= 1.f || MaxSnapAngle <= 0.f)
     {
-        OutError = TEXT("auto-aim MaxTargetDistance is not above MinTargetDistance");
+        OutError = TEXT("auto-aim MaxTargetDistance is not above MinTargetDistance and 1, or MaxSnapAngle is not positive");
         return false;
     }
 
-    // Activation constraints. Only the evaluator classes and property shapes present in this data are mapped; any
-    // other constraint is listed as not evaluated rather than guessed.
-    const TArray<TSharedPtr<FJsonValue>>* Constraints = nullptr;
-    if (!(*Skill)->TryGetArrayField(TEXT("constraintEvaluators"), Constraints))
+    // Constraints. Only the evaluator classes and property shapes present in this data are mapped; any other constraint
+    // is listed as not evaluated rather than guessed. When each applies is the data's own flags.
+    const TArray<TSharedPtr<FJsonValue>>* ConstraintRows = nullptr;
+    if (!(*Skill)->TryGetArrayField(TEXT("constraintEvaluators"), ConstraintRows))
     {
         OutError = TEXT("manifest lacks skill.constraintEvaluators");
         return false;
     }
-    for (const auto& Value : *Constraints)
+    for (const auto& Value : *ConstraintRows)
     {
         const auto Row = Value->AsObject();
-        bool bOnActivation = false;
-        if (!Row->TryGetBoolField(TEXT("onActivation"), bOnActivation) || !bOnActivation) continue;
+        bool bOnActivation = false, bWhileActive = false;
+        Row->TryGetBoolField(TEXT("onActivation"), bOnActivation);
+        Row->TryGetBoolField(TEXT("whileActive"), bWhileActive);
+        if (!bOnActivation && !bWhileActive) continue;
         const FString Class = Row->GetStringField(TEXT("class"));
         const auto Properties = Row->GetObjectField(TEXT("properties"));
         bool bFlag = false;
         const bool bMapped = (Class == WeaponActionEvaluator && Properties->Values.Num() == 0)
             || (Class == HealthStateEvaluator && Properties->Values.Num() == 1 && Properties->TryGetBoolField(TEXT("bHealthy"), bFlag) && bFlag)
             || (Class == VehiclePassengerEvaluator && Properties->TryGetBoolField(TEXT("bNotInVehicle"), bFlag) && bFlag);
-        (bMapped ? GateEvaluators : GateNotEvaluated).Add(Class);
+        if (!bMapped) { GateNotEvaluated.Add(Class); continue; }
+        Constraints.Add({Class, bOnActivation, bWhileActive});
+        if (bOnActivation) GateEvaluators.Add(Class);
     }
 
     // CanLiftTargetIf: one FLAG_IsTrue test of Flag_Skills_CanPhaseLock in this data; any other shape is not modelled.
@@ -168,18 +175,25 @@ bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
     return true;
 }
 
-bool FOpenWillowPhaselockData::GateOpen(bool bWeaponActionBusy, float Health, FString& OutFailed) const
+bool FOpenWillowPhaselockData::EvaluatorHolds(const FString& Class, const FOpenWillowPhaselockGateState& State)
 {
-    for (const FString& Class : GateEvaluators)
+    // Readings of the native Evaluate() functions (NATIVE_PHASELOCK_TARGETING.md section 4; UNVERIFIED).
+    if (Class == WeaponActionEvaluator)
+        return !State.bWeaponsRestricted && !State.bSharedWeaponAction
+            && (!State.bHoldsWeapon || (!State.bWeaponPuttingDown && !State.bWeaponInactive));
+    if (Class == HealthStateEvaluator) return State.bHasPawn && State.bAlive && !State.bInjured;
+    if (Class == VehiclePassengerEvaluator) return !State.bInVehicle;
+    return true;
+}
+
+bool FOpenWillowPhaselockData::GateOpen(const FOpenWillowPhaselockGateState& State, bool bActivation, FString& OutFailed) const
+{
+    for (const FConstraint& C : Constraints)
     {
-        // Host readings of native evaluators (UNVERIFIED): a reload is the only timed weapon action the host has; health
-        // above 0 stands for "healthy" (the host has no injured state); the host has no vehicles, so Maya is on foot.
-        const bool bMet = Class == WeaponActionEvaluator ? !bWeaponActionBusy
-            : Class == HealthStateEvaluator ? Health > 0.f
-            : true;
-        if (!bMet)
+        if (!(bActivation ? C.bOnActivation : C.bWhileActive)) continue;
+        if (!EvaluatorHolds(C.Class, State))
         {
-            OutFailed = Class;
+            OutFailed = C.Class;
             return false;
         }
     }
