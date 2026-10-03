@@ -555,3 +555,51 @@ The host hand orb's size relative to the palm favours full-width sprites.
   target).
 - The host interior leans magenta where the game's is blue-violet.
 - The 0.6 s white starburst.
+
+### Round 5 (2026-10-03): bubble size rule confirmed in game, host calibrated to it
+
+**Size rule: confirmed in game on 2026-10-03.** Source: the real-game lane's SDK reads of the spawned bubble emitters plus
+frames, on three bullymong variants (baby, adult, ranged) at 650-668 uu (ignored `local/realgame/phaselock/size_rule/`).
+This supersedes round 4's "two readings":
+- Each bubble emitter's `DrawScale` = the lifted pawn's `Mesh.Bounds.SphereRadius` at that emitter's own spawn /
+  `BubbleFXScale` (66.7). The intro at the lock and the loop 0.2 s later get different values as the pose changes
+  (adult 4.28 then 3.90). Intro `DrawScale` x 66.7 is within 1-2 % of the mesh sphere radius read at +0.72 s on all three.
+- The collision radius plays no part (150 / 150 / 64, constant).
+- `DrawScale3D`, the component's `Scale` and `Scale3D` are 1 and its translation 0, so `DrawScale` is the only size input.
+- The loop's visible rim (the blue-minus-red ridge on the frames) is 47.6 / 48.6 / 49.5 uu per `DrawScale` unit
+  (mean 48.6, 0.73 x 66.7): a template constant.
+- It changes little as the collapse rises (adult 47.8 / 48.6 / 44.7 at 1.5 / 3.0 / 4.5 s).
+
+**Host before:** one draw scale, taken at the lock, for all three templates. The rim ridge measured on host frames
+(same detector) fell at 0.88 of the `Sphere` emitter's half-width; `PhaseLockBubble_Dif_Tex`'s own rim peaks at 0.8 and
+the surrounding glow moves the ridge out. That is 86.9 uu per unit, about 1.8 times the game's.
+
+**Host now:**
+- Each template takes the mesh-bounds draw scale at its own spawn (`AOpenWillowCombatTarget::BubbleDrawScale`).
+- All three bubble templates are drawn at 48.6 / (0.44 x the `Sphere` StartSize) of that draw scale, about 0.56. This
+  is a host calibration: the cause of the difference was not found (a sprite-size convention, or the stripped
+  `Mat_SirenEnemyOrb` graph). The scale is uniform because the game's dark interior and streaks scale with its rim.
+
+**Size check (host frames at the matched FOV, dummy at 668 uu, same detector):**
+- The dummy's mesh radius is 109.4, so its stock `DrawScale` is 1.640 and the expected rim is 48.6 x 1.640 = 79.7 uu.
+- Measured rim radius: 79.7 / 79.7 / 79.7 uu at 1.5 / 3.0 / 4.5 s (190 px rim to rim), ratio 0.999.
+
+**Other changes (stand-ins, UNVERIFIED):**
+- **Floor light restored.** The lock light reaches the floor as its data says. Every 10-03 game frame shows a pale blue
+  pool under the bubble; round 1's target-only stand-in came from the 10-02 snow frames, where it was not noticed.
+- **Interior colour.** The bubble's black orb (the loop and end `ModulateBlack` emitters only, per emitter) blends toward
+  a deep blue-violet, linear (0.022, 0.022, 0.06), instead of black. This stands in for UE3's clamp after every blend,
+  which saturated the additive layers to near-white before the orb darkened them. UE5's float target left a magenta
+  interior instead.
+- **Interior result.** At 3.0 s the host interior measures (38, 37, 84), against the game's (39-48, 38-45, 88-100).
+  The hand orb's emitter (same material, nothing additive under it) stays black.
+
+**Timing.** The real-game lane's three first locks put the release at 4.608 s after `SkillStartTime`, which matches the
+host's 4.60 s. Its frames show the cyan-blue release ring still up at 5.0 s; matched_650's earlier disappearance was a
+second lock of the same pawn (0.175 s longer hold, cause unknown; not modelled). No timing change.
+
+**Still different:**
+- The host dummy stays lit in front of the smaller bubble. Its front lies further than the 20 uu depth bias in front
+  of the quad; in game the bullymong shows at about a third of its brightness.
+- The floor pool is fainter on Sanctuary's dark asphalt than the game's pool on snow and sand.
+- The 0.6 s starburst at the hand.

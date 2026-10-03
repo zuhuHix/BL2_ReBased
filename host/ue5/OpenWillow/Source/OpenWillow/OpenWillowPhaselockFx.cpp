@@ -35,6 +35,16 @@ struct FOwFxEmitterOverride { const TCHAR* Template; const TCHAR* Emitter; const
 const FOwFxEmitterOverride EmitterOverrides[] = {
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("Brighten"), TEXT("HueOnly"), 0.f},
 };
+// Host stand-in (UNVERIFIED, calibrated against the 2026-10-03 matched-distance capture): the bubble's black orb blends
+// toward a deep blue-violet instead of black. UE3 clamped after every blend, so the additive layers under the orb
+// saturated to near-white lavender before it darkened them, leaving a neutral blue-violet interior (green about equal to
+// red; mean about (27-48, 26-45, 72-100) at 1.5-3.0 s). UE5's float target keeps red and blue above 1 and green low,
+// which left a magenta interior. The hand orb's emitter (same material, nothing additive under it) stays black.
+struct FOwFxEmitterColour { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; FLinearColor Value; };
+const FOwFxEmitterColour EmitterColours[] = {
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkColor"), FLinearColor(0.022f, 0.022f, 0.06f)},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkColor"), FLinearColor(0.022f, 0.022f, 0.06f)},
+};
 
 FString ShortName(const FString& Path)
 {
@@ -685,6 +695,9 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
         for (const FOwFxEmitterOverride& Override : EmitterOverrides)
             if (Template && Template->Name == Override.Template && E.Name == Override.Emitter)
                 Mid->SetScalarParameterValue(Override.Parameter, Override.Value);
+        for (const FOwFxEmitterColour& Override : EmitterColours)
+            if (Template && Template->Name == Override.Template && E.Name == Override.Emitter)
+                Mid->SetVectorParameterValue(Override.Parameter, Override.Value);
         for (int32 Slot = 0; Slot < FMath::Max(1, C->GetNumMaterials()); ++Slot) C->SetMaterial(Slot, Mid);
         C->RegisterComponent();
         S.Pool.Add(C);

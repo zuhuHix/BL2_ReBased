@@ -92,8 +92,10 @@ MODULATE_READINGS = {
     # ((1/3)^2.2 is about 0.09). MaxWeightFar 0.96 = 1 - 0.1 / 2.5 for the interior, where the host's additive bubble
     # layers sum to about 2.5 per channel before the black (see build()). Calibrated against that one capture
     # (UNVERIFIED elsewhere).
-    'Mat_SirenOrbBlackMOD': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0, 'MaxWeight': 0.9, 'MaxWeightFar': 0.96},
-    'Mat_SirenOrbBlackMOD_NoBias': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0, 'MaxWeight': 0.9, 'MaxWeightFar': 0.96},
+    # MaxWeightFar 1 (round 5): over the bubble's additive layers the darkness is full and the bubble emitters blend
+    # toward a calibrated deep blue-violet instead of black (per-emitter DarkColor in OpenWillowPhaselockFx.cpp).
+    'Mat_SirenOrbBlackMOD': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0, 'MaxWeight': 0.9, 'MaxWeightFar': 1.0},
+    'Mat_SirenOrbBlackMOD_NoBias': {'UseAlpha': 1.0, 'AlphaInvert': 1.0, 'Darken': 1.0, 'MaxWeight': 0.9, 'MaxWeightFar': 1.0},
 }
 # Darkening modulates drawn with the 'darken' parent (translucent black, see build()).
 DARKEN_AS_TRANSLUCENT = {'Mat_SirenOrbBlackMOD', 'Mat_SirenOrbBlackMOD_NoBias', 'Mat_SirenOrbEnergySpikesMOD'}
@@ -334,7 +336,9 @@ def build(name, blend, domain_fn=None):
             opacity = node(unreal.MaterialExpressionSaturate, 850, 1800)
             mel.connect_material_expressions(op(M, weight, '', remaining, '', 700, 1800), '', opacity, '')
             mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
-            emissive = const(0.0, 850, 0)
+            # DarkColor: the colour the darkening blends toward (black unless set per emitter by the host).
+            emissive = mask(node(unreal.MaterialExpressionVectorParameter, 700, 0, parameter_name='DarkColor',
+                                 default_value=unreal.LinearColor(0.0, 0.0, 0.0, 1.0)), '', 'RGB', 850, 0)
         else:
             emissive = node(unreal.MaterialExpressionLinearInterpolate, 400, 0)
             mel.connect_material_expressions(const(1.0, 100, -100), '', emissive, 'A')

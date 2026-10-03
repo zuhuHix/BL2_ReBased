@@ -167,6 +167,26 @@ float AOpenWillowCombatTarget::PhaselockLightIntensity() const
     return LockLight ? LockLight->Intensity : 0.f;
 }
 
+float AOpenWillowCombatTarget::BubbleDrawScale() const
+{
+    // Confirmed in game on 2026-10-03 (SDK reads of the bubble emitters' DrawScale and frames, three bullymong variants):
+    // each bubble emitter takes DrawScale = the lifted pawn's Mesh.Bounds.SphereRadius at its own spawn / BubbleFXScale,
+    // and the loop's visible rim (the blue-minus-red ridge on the frames) sits 48.6 uu out per DrawScale unit. Measured
+    // with the same detector on host frames, the host draws that ridge at 0.88 of the Sphere emitter's half-width
+    // (PhaseLockBubble_Dif_Tex's own rim peaks at 0.8; the glow around it moves the ridge out), which put it 1.8 times
+    // further out than the game. The cause was not found (sprite-size convention or the stripped Mat_SirenEnemyOrb graph);
+    // host calibration (UNVERIFIED cause): all three bubble templates are drawn at 48.6 / (0.44 x StartSize) of the draw
+    // scale, since the game's dark interior and streaks scale with its rim.
+    constexpr float GameRimPerDrawScale = 48.6f, TextureRim = 0.88f;
+    float Calibration = 1.f;
+    FString Error;
+    if (const FOwFxTemplate* Loop = FOwFxTemplate::Load(Fx.EmitterDir, Fx.BubbleLoop, Error))
+        for (const FOwFxEmitter& E : Loop->Emitters)
+            if (E.Material == TEXT("Mat_SirenEnemyOrb") && E.StartSize.Kind == FOwFxDistribution::EKind::Constant && E.StartSize.Low.X > 0.0)
+                Calibration = GameRimPerDrawScale / (0.5f * TextureRim * float(E.StartSize.Low.X));
+    return MeshBoundsRadius() / Fx.BubbleScaleDivisor * Calibration;
+}
+
 UOpenWillowFxComponent* AOpenWillowCombatTarget::SpawnBubble(const FString& TemplateName, float Now)
 {
     FString Error;
@@ -182,9 +202,11 @@ UOpenWillowFxComponent* AOpenWillowCombatTarget::SpawnBubble(const FString& Temp
     C->SetupAttachment(Pivot);
     C->SetRelativeLocation(BubbleOffset);
     C->RegisterComponent();
+    BubbleScale = BubbleDrawScale();
     C->Play(Template, BubbleScale);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock bubble %s at %.2f s, draw scale %.3f (radius %.1f / %.1f), %d emitters skipped"),
-        *TemplateName, Now - LockStartedAt, BubbleScale, MeshBoundsRadius(), Fx.BubbleScaleDivisor, C->SkippedEmitters());
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock bubble %s at %.2f s, draw scale %.3f calibrated (stock %.1f / %.1f = %.3f, game rim %.1f uu), %d emitters skipped"),
+        *TemplateName, Now - LockStartedAt, BubbleScale, MeshBoundsRadius(), Fx.BubbleScaleDivisor, MeshBoundsRadius() / Fx.BubbleScaleDivisor,
+        48.6f * MeshBoundsRadius() / Fx.BubbleScaleDivisor, C->SkippedEmitters());
     return C;
 }
 
@@ -204,7 +226,6 @@ void AOpenWillowCombatTarget::UpdatePresentation(float Now, float Held)
     if (Held >= T.LockedAt && BubbleStageNow == 0)
     {
         // LockTarget -> SpawnBubbleFX: the intro template, scaled from the pawn's mesh bounds at this moment.
-        BubbleScale = MeshBoundsRadius() / Fx.BubbleScaleDivisor;
         BubbleIntro = SpawnBubble(Fx.BubbleFadeIn, Now);
         BubbleStageNow = 1;
     }
@@ -223,9 +244,12 @@ void AOpenWillowCombatTarget::UpdatePresentation(float Now, float Held)
             BubbleLoop->RegisterComponent();
             BubbleLoop->SetFloatParameter(Fx.LifeTimeParam, StateDuration + Fx.BubbleOutroOverlap);
             BubbleLoop->SetFloatParameter(Fx.CollapseParam, 0.f);
+            // The loop takes its own draw scale from the mesh bounds at its spawn (confirmed in game, see BubbleDrawScale).
+            BubbleScale = BubbleDrawScale();
             BubbleLoop->Play(Template, BubbleScale);
-            UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock bubble loop at %.2f s: life %.2f s, collapse from %.2f s"),
-                Held, StateDuration + Fx.BubbleOutroOverlap, CollapseStartAt - LockStartedAt);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock bubble loop at %.2f s: life %.2f s, collapse from %.2f s, draw scale %.3f calibrated (stock %.3f, game rim %.1f uu)"),
+                Held, StateDuration + Fx.BubbleOutroOverlap, CollapseStartAt - LockStartedAt, BubbleScale, MeshBoundsRadius() / Fx.BubbleScaleDivisor,
+                48.6f * MeshBoundsRadius() / Fx.BubbleScaleDivisor);
         }
         else UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock bubble: %s"), *Error);
         BubbleStageNow = 2;
@@ -353,14 +377,9 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
         LockLight->SetCastShadows(Fx.bLightShadows);
         LockLight->SetIndirectLightingIntensity(0.f);
         LockLight->SetIntensity(0.f);
-        // Host stand-in (UNVERIFIED): the data says the light affects static and dynamic primitives
-        // (LAC_DYNAMIC_AND_STATIC_AFFECTING), yet the 2026-10-02 game capture shows no pool under a lifted bullymong,
-        // while UE5 draws a strong violet one on Sanctuary's floor. Until the UE3 -> UE5 brightness mapping is known,
-        // the light reaches only this target (lighting channel 1, which the target's primitives join).
-        LockLight->SetLightingChannels(false, true, false);
-        TInlineComponentArray<UPrimitiveComponent*> Primitives(this);
-        for (UPrimitiveComponent* Primitive : Primitives)
-            Primitive->SetLightingChannels(Primitive->LightingChannels.bChannel0, true, Primitive->LightingChannels.bChannel2);
+        // The light reaches the floor, as its data says (LAC_DYNAMIC_AND_STATIC_AFFECTING): the 2026-10-03 matched-distance
+        // and size-rule game captures show a pale blue pool under every lifted bullymong. (Rounds 1-4 limited it to the
+        // target after the 2026-10-02 captures, where the pool was not noticed on snow.)
         LockLight->RegisterComponent();
     }
     if (StockMesh && LiftClip)

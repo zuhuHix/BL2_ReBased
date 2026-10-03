@@ -105,6 +105,8 @@ private:
     UPROPERTY() TObjectPtr<class UAnimSequence> FallClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> LandClip;
     UOpenWillowFxComponent* SpawnBubble(const FString& TemplateName, float Now);
+    // Draw scale for a bubble emitter spawned now (mesh bounds / BubbleFXScale, with the host's size calibration).
+    float BubbleDrawScale() const;
     void UpdatePresentation(float Now, float Held);
     void ClearPresentation();
     FOpenWillowPhaselockFxData Fx;
