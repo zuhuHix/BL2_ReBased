@@ -160,7 +160,10 @@ Ignored data (`host/ue5/OpenWillow/Content`, `local/`) does not come from git. S
 `tools/prepare_skill_tree.py`. The slice needs further local data: `tools/prepare_mover.py`,
 `tools/prepare_slice_world.py`, `tools/prepare_action_skill.py`, `tools/seed_slice_npc_assets.ps1` and
 `tools/seed_slice_player_assets.ps1` (see `docs/TOOLING.md` and the verification records they name).
-Check what already exists before re-seeding. Two machine notes from regenerating the slice on a second PC
+Check what already exists before re-seeding. Preferred for a new worktree that continues earlier work:
+`tools/provision_worktree_assets.ps1 -SourceWorktree <previous worktree>` copies Content and all of `local/`
+(missing files only; see `tools/worktree-assets.md`), then build `build/` and run the suites so the new
+worktree is ready to test and screenshot without redoing decodes. Two machine notes from regenerating the slice on a second PC
 (2026-10-01): configure CMake with the MSVC toolset Unreal uses (`cmake -S . -B build -T version=14.50` for UE 5.8
 there; a newer default toolset made the UE module fail to link against `ow-core.lib`), and
 `tools/slice_npc_assets.py` needs a Python with both numpy and Pillow.

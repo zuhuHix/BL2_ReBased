@@ -26,6 +26,19 @@ Provisioning copies missing files only, so it preserves worktree-specific
 generated assets. To repair a worktree manually, run
 `tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree-path>`.
 
+The shared seed only holds Content, `local/items`, `local/character` and `local/ui`, and it is only as fresh
+as the last time it was refreshed. For a worktree that continues earlier work, copy everything from the most
+recent populated worktree instead (Content plus every `local/` folder: slice data, weapon tables, real-game
+captures, Phaselock data, analysis notes). Existing files are kept:
+
+```powershell
+tools/provision_worktree_assets.ps1 -SourceWorktree <previous-worktree-path>
+```
+
+`build/` is not copied; configure and build it in the new worktree (`cmake -S . -B build -T version=14.50`
+on a machine whose UE needs that toolset). Then run the checks in AGENTS.md before regenerating anything:
+regenerate only what is missing or older than the code that produces it.
+
 The hook and seed are local to this clone. The scripts are tracked, but no
 game-derived assets are added to Git.
 

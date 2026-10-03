@@ -433,8 +433,7 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 verified against the real game → work moves on to Phase 2 for the vertical
 slice (Sanctuary + one Vault Hunter). Full 82/82 map coverage remains the
 eventual completion target for this phase but is deferred until the Phase 4
-vertical-slice gate is met; see Phase 5. Kill criterion unchanged: if no map
-loads, stop and reassess. *(Passed: three maps already load.)*
+vertical-slice gate is met; see Phase 5. *(Three maps already load.)*
 
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
@@ -584,18 +583,8 @@ This is the vertical slice; once met, broad map and character coverage
 
 ---
 
-## Kill criteria
+## Commitment
 
-Stated up front so nobody has to guess whether the project is alive:
-
-- Phase 0 never gets gated → tooling loop isn't working. *(Passed
-  2026-09-10.)*
-- The Phase 0.5 exporter spike does not produce a repeatable, attributable
-  representative export → keep it as an inspection oracle and continue the
-  bounded OpenWillow importer path; do not stall the project on a community
-  tool.
-- M1 cannot load a single map → the loop isn't holding for this approach; stop
-  and reassess honestly rather than push on hope. *(Passed: three maps already
-  load.)*
-- Nobody but the author has contributed by M2 → fine, but plan M3 only.
-- The author stops reading the code → pause and fix that.
+The maintainer decided (2026-10-03) to drop the written stop conditions: the project continues. See
+[docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md#9-commitment). Verification rules are unchanged:
+nothing counts until it has been checked and the result is written down.

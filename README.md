@@ -26,7 +26,7 @@ Borderlands 2 runs on Unreal Engine 3, a decade-old engine that Gearbox modified
 
 Borderlands 2 is basically two separate things. There's *the stuff*: maps, guns, characters, sounds, the story, the skill trees, the files sitting in your game folder right now, and honestly they're brilliant, 14 years later people still love this game. And there's *the machine*: `Borderlands2.exe`, the 2012 program that loads all of that and turns it into a game. It's old, 32-bit, and locked. Nobody outside Gearbox can touch it.
 
-Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawide, no level editor) lives in the machine, not the stuff. Mods can change the stuff. They can't touch the machine.
+Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawide, no level editor) lives in the machine, not the stuff. Mods can change the stuff. They can't touch the machine. Hence why this project should give this game a third life ! can you imagine unlimited modding, new npc's ,new maps, new characters, new UI, reworked anything. Litteraly endless possibilites
 
 So this project builds a new machine: something that reads BL2's original files straight out of your game folder, exactly as they shipped, and runs them on UE5. Nothing of Gearbox's ships with it.
 
@@ -120,10 +120,10 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | Phase | What you'll be able to do | So far (dates from git) | Status |
 |:--|:--|:--|:--|
 | **0 · Read the files** | The engine can open every BL2 file | Reads all 2,008 packages; gated 2026-09-10 | Done |
-| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now) |
+| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now). 2026-10-02: the centre monolith is done; it has animations and state changes, which proves the approach further. Sanctuary looks close to the real game, still missing some lighting and NPCs |
 | **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | Prototype since 2026-09-30: C++ bytecode loader, interpreter and Core natives; drives backpack navigation in UE5 since 2026-10-01 | In progress (prototype) |
-| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Only the placeholder UE5 walking controller | Not started |
-| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host with labelled stand-ins: Maya (2026-09-23), Phaselock (2026-09-25), the stock Fire mission loop (2026-10-01); none compared with the original game | In progress (slice pieces) |
+| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Only the placeholder UE5 walking controller | Maintainer-tested 2026-10-02: walking, jumping and collision work well (no verification record yet) |
+| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host with labelled stand-ins: Maya (2026-09-23), Phaselock (2026-09-25), the stock Fire mission loop (2026-10-01); compared with the actual game by the maintainer, roughly 6/10 for parity (no verification record) | In progress (slice pieces) |
 | **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
 | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
@@ -157,13 +157,13 @@ Full policy: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE). Covers my 
 <br>
 
 **Can I play Borderlands 2 in this?**
-No. The first thing you'll be able to do is fly around the maps (Phase 1). Shooting things is Phase 4. The full campaign is Phase 5.
+No. The first thing you'll be able to do is fly around the maps (Phase 1). Shooting things is Phase 4. The full campaign is Phase 5. It's gonna be a while...
 
 **Is this a remaster? A remake?**
-Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. This keeps the original stuff untouched and replaces only the *machine* that runs it.
+Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. This keeps the original stuff untouched and replaces only the *machine* that runs it. Remasters will follow later on when people enjoy their new modding capabilities.
 
 **Will my mods work?**
-That's the plan. Text mods edit the same game data this loads, so they should carry over once gameplay runs (Phase 4–5). SDK mods will need a compatibility layer later.
+That's the plan. Text mods edit the same game data this loads, so they should carry over once gameplay runs (Phase 4–5). SDK mods will need a compatibility layer later. It won't be hard and most mods will keep working.
 
 **Will my saves work?**
 Yes. Reading real save files is a Phase 5 task. The save format is already documented by the community.
@@ -172,13 +172,15 @@ Yes. Reading real save files is a Phase 5 task. The save format is already docum
 Borderlands 2 is Unreal Engine *3*. UE3's systems (materials, animation, particles, cutscenes, scripting) all have direct descendants in UE5, so we translate into them instead of inventing replacements. That's a much smaller problem.
 
 **Who's making this?**
-One person, and I say plainly how: ChatGPT (Astra and Luna) does the grunt work: decoding formats, chasing down smaller one-off tasks. Claude keeps the project organized, and when I've burned through the usage on my €20/month plan, it's also who writes code as a last resort. None of that is a secret and none of it changes the actual rule: nothing counts until it's been run against the real game and the result is written down. Judge the evidence trail, not the tool list. If you want to help cover that €20/month, or just support the hours going into this, there's a [Buy Me a Coffee](https://buymeacoffee.com/zuhu), completely optional.
+Me and AI, ChatGPT (Astra and Luna), Claude aswell (opus 5.5 and sonnet 5.5) they do the grunt work: decoding formats, chasing down smaller one-off tasks. If you want to help cover my monthly sub, or just support the hours going into this, there's a [Buy Me a Coffee](https://buymeacoffee.com/zuhu), Thank you so much to my current supporter (George) ! <3
 
 **Why "ReBased"?**
-Because that's literally what it is: Borderlands 2, re-based onto a new engine. (The code still uses the working title *OpenWillow* in identifiers like `ow-package`; "Willow" is Gearbox's internal name for the BL2 engine.)
+Come on guys, it's obvious hahaha. (The code still uses the working title *OpenWillow* in identifiers like `ow-package`; "Willow" is Gearbox's internal name for the BL2 engine.)
 
 **What if it fails?**
-I wrote down the conditions under which I stop, [in the plan](docs/OPENWILLOW_ENGINE_PLAN.md#9-kill-criteria--be-honest-with-yourself). If it fails, the repo says so, and the research and tools stay useful to the modding community.
+I don't plan to stop ([the plan's commitment](docs/OPENWILLOW_ENGINE_PLAN.md#9-commitment)). If it ever does fail, the repo will say so, and the research and tools stay useful to the modding community.
+
+but to be fair like cmon, there is no way this fails and I'll push through the whole way. also with newer and better AIs it's gonna get faster and easier everyday ! 
 
 </details>
 
@@ -278,7 +280,7 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Checkbox-level tracker: done, next, blocked |
 | [DECISIONS.md](DECISIONS.md) | Dated log of every architectural and parsing decision and its evidence |
-| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, kill criteria |
+| [docs/OPENWILLOW_ENGINE_PLAN.md](docs/OPENWILLOW_ENGINE_PLAN.md) | The plan: numbers, architecture, sources of truth, phases, commitment |
 | [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
 | [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
 | [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |

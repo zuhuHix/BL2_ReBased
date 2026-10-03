@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$WorktreeRoot
+    [string]$WorktreeRoot,
+    # Copy missing ignored data from another populated worktree (Content and every local/ folder)
+    # instead of the older shared seed. Existing files are never overwritten.
+    [string]$SourceWorktree
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,7 +60,18 @@ $SeedPairs = @(
     @{ Name = 'local/ui';   Source = (Join-Path $SeedRoot 'ui');          Destination = (Join-Path $WorktreeRoot 'local\ui') }
 )
 
-if (!(Test-Path -LiteralPath (Join-Path $SeedRoot 'Content') -PathType Container)) {
+if ($SourceWorktree) {
+    $SourceWorktree = [IO.Path]::GetFullPath($SourceWorktree)
+    if ($SourceWorktree -eq $WorktreeRoot) { throw 'SourceWorktree is the worktree being provisioned.' }
+    $SeedPairs = @(@{ Name = 'Content'; Source = (Join-Path $SourceWorktree 'host\ue5\OpenWillow\Content'); Destination = (Join-Path $WorktreeRoot 'host\ue5\OpenWillow\Content') })
+    $SourceLocal = Join-Path $SourceWorktree 'local'
+    if (Test-Path -LiteralPath $SourceLocal -PathType Container) {
+        foreach ($Dir in Get-ChildItem -LiteralPath $SourceLocal -Directory -Force) {
+            if ($Dir.Name -eq 'worktree-seed') { continue }
+            $SeedPairs += @{ Name = "local/$($Dir.Name)"; Source = $Dir.FullName; Destination = (Join-Path $WorktreeRoot "local\$($Dir.Name)") }
+        }
+    }
+} elseif (!(Test-Path -LiteralPath (Join-Path $SeedRoot 'Content') -PathType Container)) {
     throw "OpenWillow asset seed is missing at $SeedRoot; run tools/install_worktree_assets_hook.ps1 from a populated worktree."
 }
 
