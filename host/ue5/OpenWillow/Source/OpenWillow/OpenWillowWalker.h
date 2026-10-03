@@ -173,6 +173,7 @@ private:
     // Stock presentation (tools/prepare_phaselock_fx.py manifest, -owphaselockfx=): hand orb at the arms clip's notify,
     // tattoo glow on the arms, screen particle while the skill runs.
     FOpenWillowPhaselockFxData PhaselockFx;
+    UPROPERTY() TArray<TObjectPtr<UObject>> PhaselockFxAssets;   // preloaded emitter materials and meshes (GC roots)
     UPROPERTY() TObjectPtr<class UOpenWillowFxComponent> HandFx;
     UPROPERTY() TObjectPtr<class UOpenWillowFxComponent> ScreenFx;
     UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> TattooGlowMaterial;

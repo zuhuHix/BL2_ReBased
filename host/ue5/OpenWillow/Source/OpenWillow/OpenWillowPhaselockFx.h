@@ -14,7 +14,9 @@
 //    sub-image layout, dynamic parameter 0, mesh type data, the template materials' blend modes (in the imported MIs);
 //  - host readings of UE3 Cascade conventions: rotations in turns, sprite size = full quad width, burst Time = fraction
 //    of the emitter duration, a curve table sampled linearly between entries, modules applied in a fixed order
-//    (colour over life replaces the start colour, scale-over-life multiplies), sprites aligned to the view plane;
+//    (colour over life replaces the start colour, scale-over-life multiplies), sprites aligned to the view plane,
+//    spawn-time distributions sampled at the emitter's time in its loop, a linear sub-image layout following the
+//    SubUV module's SubImageIndex over the particle's life (an even sweep when it has none);
 //  - host stand-ins: what each material does with its texture and dynamic parameter (the cooked graphs are stripped),
 //    the screen particle drawn as a full-view quad, orbit and sphere-location modules approximated.
 struct FOwFxDistribution
@@ -56,7 +58,7 @@ struct FOwFxEmitter
     FOwFxDistribution Lifetime, StartSize, StartColor, StartAlpha, ColorOverLife, AlphaOverLife, ColorScale, AlphaScale;
     FOwFxDistribution SizeMultiply, StartRotation, RotationRate, RotationRateMultiply, MeshRotation;
     TArray<FOwFxDistribution> StartVelocities;   // every Velocity module adds its own sample
-    FOwFxDistribution VelocityOverLife, DynamicParam0, StartLocation;
+    FOwFxDistribution VelocityOverLife, DynamicParam0, StartLocation, SubImageIndex;
     FOwFxDistribution OrbitOffset, OrbitRotation, OrbitRotationRate, SphereRadius, SphereVelocityScale;
     FVector SizeMultiplyAxes = FVector::OneVector;
     bool bSphereSurface = false, bSphereVelocity = false;
@@ -69,6 +71,11 @@ struct FOwFxTemplate
     TArray<FOwFxEmitter> Emitters;
     // Loads <Dir>/<Name>.json (digest of LOD 0). Cached per path.
     static const FOwFxTemplate* Load(const FString& Dir, const FString& Name, FString& OutError);
+    // Loads the materials and meshes the template draws into OutKeep (GC roots for the caller) and, in editor builds,
+    // waits for their shaders. Without it the first draw of a freshly imported host material compiles its shaders
+    // asynchronously and the translucent quads are skipped until that finishes (the 2026-10-03 runs showed the bubble
+    // about 2.5 s late, and the loads hitched the cast by up to 0.6 s). Returns the number of materials loaded.
+    int32 Preload(TArray<TObjectPtr<UObject>>& OutKeep) const;
 };
 
 // The non-particle numbers of fx_manifest.json.

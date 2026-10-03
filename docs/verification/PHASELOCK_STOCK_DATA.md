@@ -432,3 +432,44 @@ knowledge and are not checked here. Orbit chaining, the location primitives and 
 (alignment) are read but not interpreted. The `ow-package` C++ reader needs no change for these structs:
 `BurstList=StructProperty:ParticleBurst` and `DynamicParams=StructProperty:EmitterDynamicParameter` in an
 `--array-schema` file would let it list them too, since their elements are ordinary tag streams.
+
+## Host presentation pass, second round (2026-10-03)
+
+AI-assisted (Claude). Host and tooling only; no parser change. Compared against the 2026-10-02 game captures
+(`REALGAME_GROUND_TRUTH.md`, frames under ignored `local/realgame/phaselock/`, a bullymong in Three Horns) on the
+host's Sanctuary dummy: the effect is compared, not the scene. Frames, logs and the side-by-side stay under ignored
+`local/phaselock/`.
+
+**Capture clock.** The `cast_close` SDK samples put the lift start 0.21 s after the key press. Times below are from the
+lift start, which is the host's cast time.
+
+**What the defects turned out to be.**
+
+| Seen in the 2026-10-03 host frames | Cause | Status |
+|---|---|---|
+| No bubble from 0.98 s to about 4 s, then a bubble appearing | The host materials are recreated by every import, and the import runs with `-nullrhi`, so the first game run compiled their shaders on first draw; translucent quads are not drawn until then. An unchanged rerun showed the bubble from the loop start | fixed: `FOwFxTemplate::Preload` loads every template's materials and meshes when the manifest loads and compiles the parents' shaders synchronously (editor builds). The first run after an import now draws everything on time |
+| Hand orb "size 0x0", arm swinging down by 0.35 s | The mesh-particle sizes are mesh scales (0.12-0.7), which the log printed with no decimals. The early arm came from the capture clock: the first screenshot stalls a frame by 0.36 s and later ones by about 0.13 s, so the "0.25 s" frame was taken at +0.52 s | fixed in the log (`mesh scale`, actual time per shot) and in the capture (game time advances at most 1/60 s per frame in `-owphaselockshots`). With correct times the arm stays raised to about 0.6 s, as in the game |
+| No dark core during the hold; pink-white sphere | UE5 applies modulate materials apart from the additive layer, even in the before-DOF pass, so `Mat_SirenOrbBlackMOD` never darkened the additive core sprites drawn before it | host stand-in: the darkening modulates are drawn as translucent black with opacity equal to the modulate weight (exact for a black target), in emitter order. The black orb has no texture parameter, so its mask is a host disc (full to two thirds of the radius). The hold now shows a near-black core with the violet rim of `PhaseLockBubble_Dif_Tex` |
+| Black wedge at the collapse | The end template's smoke ran its sub-images the wrong way (the host ignored the SubUV module's `SubImageIndex`, which runs 15 -> 0) | fixed: `SubImageIndex` drives linear sub-image layouts; spawn-time distributions are read at the emitter's time (the smoke's `StartSize` curve) |
+| Violet pool on the floor | `PhaselockLight` data (radius 500, brightness 4, falloff 0.5, `LAC_DYNAMIC_AND_STATIC_AFFECTING`) drawn as a UE5 unitless light | host stand-in: the light reaches only the lifted target (lighting channel 1). The data says it should light the floor too; the capture shows no pool. The UE3 -> UE5 brightness mapping stays open |
+| White full-screen wash at 1.2-2.0 s | The screen material drew its mask texture's brightest channel x colour (4, 6, 30) | host stand-in: a modulate of the view by the colour's hue, weighted by alpha and the mask's green streaks. It reads as the game's strong blue tint |
+
+**Cast animation data (no host change).** `Phase_Lock_Lift` has no `RateScale`, and `Anim_Phaselock`
+(`SpecialMove_FirstPerson`) names only the clip and a behavior provider. `Default__GearboxAnimDefinition` has
+`PlayRate` 1, `BlendInTime` and `BlendOutTime` 0.1 and `EC_OnBlendOut`. `SpecialMove_FirstPerson.PlayAnim` (script,
+our summary) takes the play rate from the caller's `SpecialMoveData` (`PlayRateScale`, or clip length / `Duration` when
+a duration is given); those values were not resolved. With the corrected capture clock the host's arm timing
+matches the game's to the eye.
+
+**Burst `Time` convention (open).** Only `Part_PhaseLockScreenEffect` has a burst whose time depends on the convention
+(`Time` 0.7 in a 1.5 s emitter). In game the blue tint starts about 0.82 s after the lift starts. That fits 0.7 s
+better than 0.7 x 1.5 = 1.05 s (the host's convention), if `OnSelectedTarget` fires at the lift start. Not changed;
+UNVERIFIED either way.
+
+**Still different from the game (UNVERIFIED stand-ins or open):** the real dark blob around the raised hand at about
+0.27 s (none of the decoded hand emitters explains it under the host's modulate reading); the solid blue palm orb at
+0.45-0.6 s (the host shows white-blue flashes and swirls there); the intro's 0.8 s burst, which the host draws as a
+white band (the `Mat_SirenHandGlow` rectangle, colour (0.5, 0.8, 20), tone-maps to white in UE5); the screen tint
+starting at 1.05 s instead of about 0.82 s; what `SphereCollapse` does in the stripped graph (the host draws nothing
+from it). The modulate readings in `MODULATE_READINGS` and `DARKEN_AS_TRANSLUCENT`, the black orb's disc and the light
+channel are host choices.

@@ -80,8 +80,9 @@ struct FOpenWillowPhaselockData
     bool GateOpen(const FOpenWillowPhaselockGateState& State, bool bActivation, FString& OutFailed) const;
     // One evaluator's reading (true = holds).
     static bool EvaluatorHolds(const FString& Class, const FOpenWillowPhaselockGateState& State);
-    // Lock duration attribute at that grade of DurationSkill: (base + PreAdd) x (1 + Scale) + PostAdd, the rule fitted
-    // for weapons (UNVERIFIED for skills). Only a PostAdd exists on this path.
+    // Lock duration attribute at that grade of DurationSkill. The modifier stack read from native code
+    // (docs/verification/NATIVE_WEAPON_RULES.md: (base + PreAdd) x (1 + up) / (1 - down) + PostAdd, no clamp) is
+    // UNVERIFIED in game and for skills; only a PostAdd exists on this path, so it reduces to base + PostAdd.
     float LockDuration(int32 DurationSkillGrade) const;
     FOpenWillowPhaselockTimeline Timeline(float LockDuration, float TargetTimeScale) const;
     // The target's time scale with or without the diminishing-returns modifier.

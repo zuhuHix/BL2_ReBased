@@ -5,8 +5,12 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "MaterialShaderPrecompileMode.h"
+#include "MaterialShared.h"
+#include "RHIShaderPlatform.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -62,6 +66,20 @@ TMap<FString, TUniquePtr<FOwFxTemplate>>& TemplateCache()
 {
     static TMap<FString, TUniquePtr<FOwFxTemplate>> Cache;
     return Cache;
+}
+
+// The host material instance and mesh (the sprite quad unless the emitter has mesh type data) for an emitter; null when
+// not imported.
+UMaterialInterface* EmitterMaterial(const FOwFxEmitter& E)
+{
+    const FString Path = FString::Printf(TEXT("%s/MI_%s.MI_%s"), MaterialFolder, *E.Material, *E.Material);
+    return LoadObject<UMaterialInterface>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+}
+
+UStaticMesh* EmitterMesh(const FOwFxEmitter& E)
+{
+    return E.Mesh.IsEmpty() ? LoadObject<UStaticMesh>(nullptr, SpriteQuad)
+        : LoadObject<UStaticMesh>(nullptr, *FString::Printf(TEXT("%s/%s.%s"), MeshFolder, *E.Mesh, *E.Mesh), nullptr, LOAD_NoWarn | LOAD_Quiet);
 }
 }
 
@@ -242,13 +260,47 @@ const FOwFxTemplate* FOwFxTemplate::Load(const FString& Dir, const FString& Name
                 E.OrbitRotation = Field(M, TEXT("RotationAmount"));
                 E.OrbitRotationRate = Field(M, TEXT("RotationRateAmount"));
             }
-            else if (Class != TEXT("SubUV")) E.Unsupported.Add(Class);
+            else if (Class == TEXT("SubUV")) E.SubImageIndex = Field(M, TEXT("SubImageIndex"));
+            else E.Unsupported.Add(Class);
         }
         Template->Emitters.Add(MoveTemp(E));
     }
     const FOwFxTemplate* Result = Template.Get();
     TemplateCache().Add(File, MoveTemp(Template));
     return Result;
+}
+
+int32 FOwFxTemplate::Preload(TArray<TObjectPtr<UObject>>& OutKeep) const
+{
+    int32 Count = 0;
+    for (const FOwFxEmitter& E : Emitters)
+    {
+        UMaterialInterface* Material = EmitterMaterial(E);
+        UStaticMesh* Mesh = EmitterMesh(E);
+        if (Mesh) OutKeep.AddUnique(Mesh);
+        if (!Material) continue;
+        OutKeep.AddUnique(Material);
+        ++Count;
+#if WITH_EDITOR
+        // Host materials are recreated by every import, so their shaders may not be in the DDC yet. Waiting on the
+        // loaded resource alone was not enough (the first run after an import still drew the hand effect late): the
+        // shader map is compiled synchronously here, once per parent material.
+        UMaterial* Base = Material->GetMaterial();
+        if (Base && !OutKeep.Contains(Base))
+        {
+            OutKeep.Add(Base);
+            Base->CacheShaders(EMaterialShaderPrecompileMode::Synchronous);
+            if (FMaterialResource* Resource = Base->GetMaterialResource(GMaxRHIShaderPlatform))
+            {
+                Resource->FinishCompilation();
+                // A material that fails to compile draws nothing at all here (no default-material quad either).
+                for (const FString& Error : Resource->GetCompileErrors())
+                    UE_LOG(LogTemp, Warning, TEXT("OpenWillow FX material %s does not compile: %s"), *Base->GetName(), *Error);
+            }
+        }
+#endif
+    }
+    return Count;
 }
 
 bool FOpenWillowPhaselockFxData::Load(const FString& File, FString& OutError)
@@ -373,10 +425,8 @@ void UOpenWillowFxComponent::Play(const FOwFxTemplate* InTemplate, float DrawSca
         FEmitterState& S = States.AddDefaulted_GetRef();
         S.Data = &E;
         S.Time = -E.Delay;
-        const FString MaterialPath = FString::Printf(TEXT("%s/MI_%s.MI_%s"), MaterialFolder, *E.Material, *E.Material);
-        S.Material = LoadObject<UMaterialInterface>(nullptr, *MaterialPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
-        S.Mesh = E.Mesh.IsEmpty() ? LoadObject<UStaticMesh>(nullptr, SpriteQuad)
-            : LoadObject<UStaticMesh>(nullptr, *FString::Printf(TEXT("%s/%s.%s"), MeshFolder, *E.Mesh, *E.Mesh), nullptr, LOAD_NoWarn | LOAD_Quiet);
+        S.Material = EmitterMaterial(E);
+        S.Mesh = EmitterMesh(E);
         if (!S.Material || !S.Mesh)
         {
             // Not imported (a distortion material the host does not draw, or an asset UModel did not export).
@@ -412,9 +462,22 @@ FString UOpenWillowFxComponent::Describe() const
         if (!S.Material || !S.Mesh) Out += TEXT(" (not drawn)");
         else if (S.Particles.Num())
         {
+            // Sprites: quad size in uu; mesh particles: the mesh scale (fractions, hence two decimals).
             const FParticle& P = S.Particles[0];
-            Out += FString::Printf(TEXT(" (size %.0fx%.0f colour %.2f %.2f %.2f alpha %.2f age %.2f/%.2f dyn %.2f)"), P.Size.X * Scale,
-                P.Size.Y * Scale, P.Color.X, P.Color.Y, P.Color.Z, P.Alpha, P.Age, P.Life, P.Dynamic);
+            Out += S.Data->Mesh.IsEmpty() ? FString::Printf(TEXT(" (size %.0fx%.0f"), P.Size.X * Scale, P.Size.Y * Scale)
+                : FString::Printf(TEXT(" (mesh scale %.2fx%.2f"), P.Size.X * Scale, P.Size.Y * Scale);
+            Out += FString::Printf(TEXT(" colour %.2f %.2f %.2f alpha %.2f age %.2f/%.2f dyn %.2f)"), P.Color.X, P.Color.Y, P.Color.Z,
+                P.Alpha, P.Age, P.Life, P.Dynamic);
+            // The first quad as drawn: blend mode, translucency sort priority, visibility, distance to the first player's view.
+            if (S.Pool.Num() && S.Pool[0])
+            {
+                const UStaticMeshComponent* C = S.Pool[0];
+                const UMaterialInterface* M = C->GetMaterial(0);
+                const APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+                const float Distance = PC && PC->PlayerCameraManager ? float(FVector::Dist(PC->PlayerCameraManager->GetCameraLocation(), C->GetComponentLocation())) : -1.f;
+                Out += FString::Printf(TEXT(" [blend %d prio %d %s dist %.0f]"), M ? int32(M->GetBlendMode()) : -1, C->TranslucencySortPriority,
+                    C->IsVisible() ? TEXT("visible") : TEXT("hidden"), Distance);
+            }
         }
     }
     return Out;
@@ -431,32 +494,35 @@ void UOpenWillowFxComponent::Spawn(FEmitterState& S, int32 Count)
 {
     const FOwFxEmitter& E = *S.Data;
     const FTransform Frame = GetComponentTransform();
+    // Spawn-time distributions are read at the emitter's time in its current loop (UE3 Cascade convention, UNVERIFIED
+    // here); it only matters for curves such as the end template's smoke StartSize.
+    const float T = FMath::Max(S.Time, 0.f);
     for (int32 I = 0; I < Count; ++I)
     {
         FParticle P;
-        P.Life = E.Lifetime.IsSet() ? E.Lifetime.SampleFloat(0, Random, Parameters) : 1.f;
+        P.Life = E.Lifetime.IsSet() ? E.Lifetime.SampleFloat(T, Random, Parameters) : 1.f;
         if (P.Life <= 0.f) P.Life = 1e6f;   // a zero lifetime never expires (UE3 convention, UNVERIFIED)
-        P.BaseSize = E.StartSize.IsSet() ? E.StartSize.Sample(0, Random, Parameters) : FVector::OneVector;
-        P.BaseColor = E.StartColor.IsSet() ? E.StartColor.Sample(0, Random, Parameters) : FVector::OneVector;
-        P.BaseAlpha = E.StartAlpha.IsSet() ? E.StartAlpha.SampleFloat(0, Random, Parameters) : 1.f;
-        P.Rotation = E.StartRotation.IsSet() ? E.StartRotation.SampleFloat(0, Random, Parameters) : 0.f;
-        P.RotationRate = E.RotationRate.IsSet() ? E.RotationRate.SampleFloat(0, Random, Parameters) : 0.f;
-        P.MeshRotation = E.MeshRotation.IsSet() ? E.MeshRotation.Sample(0, Random, Parameters) : FVector::ZeroVector;
-        for (const FOwFxDistribution& V : E.StartVelocities) P.Velocity += V.Sample(0, Random, Parameters);
-        P.Position = E.StartLocation.IsSet() ? E.StartLocation.Sample(0, Random, Parameters) : FVector::ZeroVector;
+        P.BaseSize = E.StartSize.IsSet() ? E.StartSize.Sample(T, Random, Parameters) : FVector::OneVector;
+        P.BaseColor = E.StartColor.IsSet() ? E.StartColor.Sample(T, Random, Parameters) : FVector::OneVector;
+        P.BaseAlpha = E.StartAlpha.IsSet() ? E.StartAlpha.SampleFloat(T, Random, Parameters) : 1.f;
+        P.Rotation = E.StartRotation.IsSet() ? E.StartRotation.SampleFloat(T, Random, Parameters) : 0.f;
+        P.RotationRate = E.RotationRate.IsSet() ? E.RotationRate.SampleFloat(T, Random, Parameters) : 0.f;
+        P.MeshRotation = E.MeshRotation.IsSet() ? E.MeshRotation.Sample(T, Random, Parameters) : FVector::ZeroVector;
+        for (const FOwFxDistribution& V : E.StartVelocities) P.Velocity += V.Sample(T, Random, Parameters);
+        P.Position = E.StartLocation.IsSet() ? E.StartLocation.Sample(T, Random, Parameters) : FVector::ZeroVector;
         if (E.SphereRadius.IsSet())
         {
             const FVector Direction = Random.GetUnitVector();
-            const float Radius = E.SphereRadius.SampleFloat(0, Random, Parameters) * (E.bSphereSurface ? 1.f : Random.FRand());
+            const float Radius = E.SphereRadius.SampleFloat(T, Random, Parameters) * (E.bSphereSurface ? 1.f : Random.FRand());
             P.Position += Direction * Radius;
             if (E.bSphereVelocity)
-                P.Velocity += Direction * Radius * (E.SphereVelocityScale.IsSet() ? E.SphereVelocityScale.SampleFloat(0, Random, Parameters) : 1.f);
+                P.Velocity += Direction * Radius * (E.SphereVelocityScale.IsSet() ? E.SphereVelocityScale.SampleFloat(T, Random, Parameters) : 1.f);
         }
         if (E.OrbitOffset.IsSet())
         {
-            P.OrbitOffset = E.OrbitOffset.Sample(0, Random, Parameters);
-            P.OrbitRotation = E.OrbitRotation.IsSet() ? E.OrbitRotation.Sample(0, Random, Parameters) : FVector::ZeroVector;
-            P.OrbitRate = E.OrbitRotationRate.IsSet() ? E.OrbitRotationRate.Sample(0, Random, Parameters) : FVector::ZeroVector;
+            P.OrbitOffset = E.OrbitOffset.Sample(T, Random, Parameters);
+            P.OrbitRotation = E.OrbitRotation.IsSet() ? E.OrbitRotation.Sample(T, Random, Parameters) : FVector::ZeroVector;
+            P.OrbitRate = E.OrbitRotationRate.IsSet() ? E.OrbitRotationRate.Sample(T, Random, Parameters) : FVector::ZeroVector;
         }
         if (E.bSubRandom) P.Frame = float(Random.RandHelper(E.SubH * E.SubV));
         if (!E.bLocalSpace)
@@ -533,7 +599,13 @@ bool UOpenWillowFxComponent::Simulate(FEmitterState& S, float Dt)
         const FVector VelocityScale = E.VelocityOverLife.IsSet() ? E.VelocityOverLife.Sample(T, Random, Parameters) : FVector::OneVector;
         P.Position += P.Velocity * VelocityScale * Dt;
         P.OrbitRotation += P.OrbitRate * Dt;
-        if (E.bSubLinear) P.Frame = FMath::Min(float(E.SubH * E.SubV - 1), FMath::FloorToFloat(T * E.SubH * E.SubV));
+        if (E.bSubLinear)
+        {
+            // SubUV module: SubImageIndex over the particle's life (the end smoke runs 15 -> 0); without one, an even sweep.
+            const float Last = float(E.SubH * E.SubV - 1);
+            P.Frame = E.SubImageIndex.IsSet() ? FMath::Clamp(FMath::FloorToFloat(E.SubImageIndex.SampleFloat(T, Random, Parameters)), 0.f, Last)
+                : FMath::Min(Last, FMath::FloorToFloat(T * E.SubH * E.SubV));
+        }
         P.Dynamic = E.DynamicParam0.IsSet() ? E.DynamicParam0.SampleFloat(T, Random, Parameters) : 0.f;
     }
     return S.bSpawning || S.Particles.Num() > 0;

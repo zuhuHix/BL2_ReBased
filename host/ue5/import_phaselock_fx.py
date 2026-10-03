@@ -19,8 +19,12 @@ pass"):
   whose PNG has no alpha channel use the texture's brightest channel as opacity; a second *_Mirror texture in the slot
   list multiplies colour and opacity as a soft mask over the quad.
 - host materials: additive = texture x colour x alpha; translucent = texture x colour with opacity = mask x alpha;
-  modulate = lerp(1, colour, mask) with mask = the texture's brightest channel (UE3 modulate ignores opacity);
-  dynamic parameter 0 pans U on the mesh-particle material (the energy ribbons) and is unused elsewhere.
+  modulate = lerp(1, colour, mask) with mask = the texture's brightest channel (UE3 modulate ignores opacity), with
+  per-material readings of alpha and darkening (MODULATE_READINGS); the darkening ones are drawn as translucent black
+  (DARKEN_AS_TRANSLUCENT) so that they darken earlier emitters; the screen particle = a modulate of the view by the
+  colour's hue, weighted by alpha and the mask's green streaks; dynamic parameter 0 pans U on the mesh-particle
+  material (the energy ribbons) and is unused elsewhere (the bubble's SphereCollapse included); every parent renders
+  in the before-DOF translucency pass.
 """
 import json
 import os
@@ -69,6 +73,23 @@ def png_has_alpha(path):
 
 textures = {}
 
+# What each stock modulate material is read to do with the particle colour and alpha (host readings, UNVERIFIED; the
+# graphs are stripped). Not listed: lerp(1, colour, mask), alpha ignored. That fits Mat_SirenOrbBlackMOD, whose bubble
+# emitter has colour and alpha both scaled to 0, so only a colour-driven darkening makes the emitter do anything.
+MODULATE_READINGS = {
+    # Its emitters author alpha curves (the end template's Brighten ramps from 0), so alpha weights the blend.
+    'Mat_SirenGlowMOD': {'UseAlpha': 1.0},
+    # Its emitter in the end template is named BlackSpikeys while its colour is 5: read as darkening by
+    # mask x alpha x colour rather than brightening five times.
+    'Mat_SirenOrbEnergySpikesMOD': {'UseAlpha': 1.0, 'Darken': 1.0},
+}
+# Darkening modulates drawn with the 'darken' parent (translucent black, see build()).
+DARKEN_AS_TRANSLUCENT = {'Mat_SirenOrbBlackMOD', 'Mat_SirenOrbBlackMOD_NoBias', 'Mat_SirenOrbEnergySpikesMOD'}
+# The black orb has no texture parameter (UModel exports none and the graph is stripped). Host stand-in: a disc fully
+# dark out to two thirds of the quad's radius, then fading, so that the lock bubble's core reads near-black with the
+# violet rim (PhaseLockBubble_Dif_Tex, at about 0.88 of this quad's radius) mostly kept, as in the 2026-10-02 game frames.
+RADIAL_SHARPNESS = {'Mat_SirenOrbBlackMOD': 3.0, 'Mat_SirenOrbBlackMOD_NoBias': 3.0}
+
 
 def texture(name):
     if name in textures:
@@ -96,6 +117,10 @@ def build(name, blend, domain_fn=None):
     material.set_editor_property('blend_mode', blend)
     material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
     material.set_editor_property('two_sided', True)
+    # One translucency pass before depth of field, so that modulate sprites multiply what earlier emitters drew, in
+    # emitter order (sort priority), as Cascade draws a system. In UE5's default after-DOF pass a modulate is applied to
+    # the scene separately and the additive layer is added over it, which lost the bubble's dark core (host choice).
+    material.set_editor_property('translucency_pass', unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF)
     nodes = []
 
     def node(cls, x, y, **props):
@@ -170,8 +195,10 @@ def build(name, blend, domain_fn=None):
     radius = op(M, distance, '', const(2.0, -1250, 1000), '', -1100, 900)
     radial = node(unreal.MaterialExpressionOneMinus, -950, 900)
     mel.connect_material_expressions(radius, '', radial, '')
+    # x RadialSharpness (default 1: a linear falloff; > 1: a disc that stays full out to 1 - 1/sharpness of the radius).
+    radial_s = op(M, radial, '', scalar('RadialSharpness', 1.0, -950, 1000), '', -900, 950)
     radial_c = node(unreal.MaterialExpressionSaturate, -800, 900)
-    mel.connect_material_expressions(radial, '', radial_c, '')
+    mel.connect_material_expressions(radial_s, '', radial_c, '')
     use_radial = scalar('Radial', 0.0, -350, 400)
     rgb = node(unreal.MaterialExpressionLinearInterpolate, -150, 100)
     mel.connect_material_expressions(tex, 'RGB', rgb, 'A')
@@ -196,20 +223,70 @@ def build(name, blend, domain_fn=None):
                    mask(rgb, '', 'B', 0, 460), '', 300, 300)
     if blend == unreal.BlendMode.BLEND_ADDITIVE:
         emissive = op(M, op(M, rgb, '', color_rgb, '', 100, 0), '', color_a, 'A', 250, 0)
-    elif blend == unreal.BlendMode.BLEND_MODULATE:
-        emissive = node(unreal.MaterialExpressionLinearInterpolate, 250, 0)
-        mel.connect_material_expressions(const(1.0, 100, -100), '', emissive, 'A')
-        mel.connect_material_expressions(color_rgb, '', emissive, 'B')
-        mel.connect_material_expressions(brightest, '', emissive, 'Alpha')
+    elif domain_fn == 'screen':
+        # Screen particle stand-in (a modulate quad over the view): the scene x the particle colour's hue (colour / its
+        # largest channel), weighted by alpha and, from 0.6 to 1, by the mask texture's green streaks. Chosen from the
+        # texture's name (a UV mask) and the 2026-10-02 game frames (a strong blue tint with radial streaks over a
+        # still visible scene), not from the stripped graph (UNVERIFIED).
+        largest = op(unreal.MaterialExpressionMax, op(unreal.MaterialExpressionMax, mask(color, '', 'R', 100, 1800), '',
+                                                      mask(color, '', 'G', 100, 1880), '', 250, 1800), '',
+                     mask(color, '', 'B', 100, 1960), '', 400, 1800)
+        hue = op(D, color_rgb, '', op(unreal.MaterialExpressionMax, largest, '', const(0.001, 400, 1950), '', 550, 1800), '', 700, 1700)
+        streaks = node(unreal.MaterialExpressionLinearInterpolate, 400, 1500)
+        mel.connect_material_expressions(const(0.6, 250, 1450), '', streaks, 'A')
+        mel.connect_material_expressions(const(1.0, 250, 1520), '', streaks, 'B')
+        mel.connect_material_expressions(mask(tex, 'RGB', 'G', 250, 1600), '', streaks, 'Alpha')
+        weight = node(unreal.MaterialExpressionSaturate, 700, 1500)
+        mel.connect_material_expressions(op(M, streaks, '', color, 'A', 550, 1500), '', weight, '')
+        emissive = node(unreal.MaterialExpressionLinearInterpolate, 850, 1500)
+        mel.connect_material_expressions(const(1.0, 700, 1400), '', emissive, 'A')
+        mel.connect_material_expressions(hue, '', emissive, 'B')
+        mel.connect_material_expressions(weight, '', emissive, 'Alpha')
+    elif blend == unreal.BlendMode.BLEND_MODULATE or domain_fn == 'darken':
+        # lerp(1, target, weight): weight = mask, x the particle alpha when UseAlpha, x the colour's largest channel when
+        # Darken (target black instead of the colour). Which materials use which is set per instance below. The 'darken'
+        # parent draws the same blend as translucent black at opacity weight x (1 - the target's largest channel), which
+        # equals the modulate for a black target and, unlike UE5's modulate (applied apart from the additive layer even
+        # before DOF), darkens what earlier emitters drew.
+        alpha_term = node(unreal.MaterialExpressionLinearInterpolate, -150, 1500)
+        mel.connect_material_expressions(const(1.0, -350, 1500), '', alpha_term, 'A')
+        mel.connect_material_expressions(color, 'A', alpha_term, 'B')
+        mel.connect_material_expressions(scalar('UseAlpha', 0.0, -350, 1580), '', alpha_term, 'Alpha')
+        darken = scalar('Darken', 0.0, -350, 1700)
+        largest = op(unreal.MaterialExpressionMax, op(unreal.MaterialExpressionMax, mask(color, '', 'R', -500, 1800), '',
+                                                      mask(color, '', 'G', -500, 1880), '', -350, 1800), '',
+                     mask(color, '', 'B', -500, 1960), '', -200, 1800)
+        gain = node(unreal.MaterialExpressionLinearInterpolate, -50, 1800)
+        mel.connect_material_expressions(const(1.0, -200, 1950), '', gain, 'A')
+        mel.connect_material_expressions(largest, '', gain, 'B')
+        mel.connect_material_expressions(darken, '', gain, 'Alpha')
+        weight = node(unreal.MaterialExpressionSaturate, 250, 1600)
+        mel.connect_material_expressions(op(M, op(M, brightest, '', alpha_term, '', 50, 1550), '', gain, '', 150, 1600), '', weight, '')
+        target = node(unreal.MaterialExpressionLinearInterpolate, 250, -200)
+        mel.connect_material_expressions(color_rgb, '', target, 'A')
+        mel.connect_material_expressions(const(0.0, 100, -250), '', target, 'B')
+        mel.connect_material_expressions(darken, '', target, 'Alpha')
+        if domain_fn == 'darken':
+            target_largest = op(unreal.MaterialExpressionMax, op(unreal.MaterialExpressionMax, mask(target, '', 'R', 250, 2000), '',
+                                                                 mask(target, '', 'G', 250, 2080), '', 400, 2000), '',
+                                mask(target, '', 'B', 250, 2160), '', 550, 2000)
+            remaining = node(unreal.MaterialExpressionOneMinus, 700, 2000)
+            mel.connect_material_expressions(target_largest, '', remaining, '')
+            opacity = node(unreal.MaterialExpressionSaturate, 850, 1800)
+            mel.connect_material_expressions(op(M, weight, '', remaining, '', 700, 1800), '', opacity, '')
+            mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
+            emissive = const(0.0, 850, 0)
+        else:
+            emissive = node(unreal.MaterialExpressionLinearInterpolate, 400, 0)
+            mel.connect_material_expressions(const(1.0, 100, -100), '', emissive, 'A')
+            mel.connect_material_expressions(target, '', emissive, 'B')
+            mel.connect_material_expressions(weight, '', emissive, 'Alpha')
     else:
-        source = brightest if domain_fn == 'screen' else rgb
-        emissive = op(M, source, '', color_rgb, '', 250, 0)
-        coverage = brightest
-        if domain_fn != 'screen':
-            coverage = node(unreal.MaterialExpressionLinearInterpolate, 400, 300)
-            mel.connect_material_expressions(alpha, '', coverage, 'A')
-            mel.connect_material_expressions(brightest, '', coverage, 'B')
-            mel.connect_material_expressions(scalar('LumAlpha', 0.0, 250, 400), '', coverage, 'Alpha')
+        emissive = op(M, rgb, '', color_rgb, '', 250, 0)
+        coverage = node(unreal.MaterialExpressionLinearInterpolate, 400, 300)
+        mel.connect_material_expressions(alpha, '', coverage, 'A')
+        mel.connect_material_expressions(brightest, '', coverage, 'B')
+        mel.connect_material_expressions(scalar('LumAlpha', 0.0, 250, 400), '', coverage, 'Alpha')
         opacity = node(unreal.MaterialExpressionSaturate, 700, 300)
         mel.connect_material_expressions(op(M, coverage, '', color_a, 'A', 550, 300), '', opacity, '')
         mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
@@ -267,7 +344,8 @@ parents = {
     'BLEND_Translucent': build('M_OW_PlTranslucent', unreal.BlendMode.BLEND_TRANSLUCENT),
     'BLEND_Modulate': build('M_OW_PlModulate', unreal.BlendMode.BLEND_MODULATE),
 }
-screen_parent = build('M_OW_PlScreen', unreal.BlendMode.BLEND_TRANSLUCENT, 'screen')
+screen_parent = build('M_OW_PlScreen', unreal.BlendMode.BLEND_MODULATE, 'screen')
+darken_parent = build('M_OW_PlDarken', unreal.BlendMode.BLEND_TRANSLUCENT, 'darken')
 tattoo_material()
 
 # Stock materials and meshes named by the decoded templates, with the emitter layouts that use them.
@@ -327,7 +405,7 @@ for name in sorted(uses):
     if not tex and mode != 'BLEND_Modulate':
         report['skipped'][name] = {**entry, 'reason': 'no texture listed (UModel skips materials without texture parameters)'}
         continue
-    parent = screen_parent if layout['screen'] else parents[mode]
+    parent = screen_parent if layout['screen'] else darken_parent if name in DARKEN_AS_TRANSLUCENT else parents[mode]
     instance = tools.create_asset(f'MI_{name}', f'{destination}/Materials', unreal.MaterialInstanceConstant,
                                   unreal.MaterialInstanceConstantFactoryNew())
     mel.set_material_instance_parent(instance, parent)
@@ -345,8 +423,12 @@ for name in sorted(uses):
         flags['LumAlpha'] = 0.0 if tex[1] else 1.0
     else:
         flags['Radial'] = 1.0
+        if name in RADIAL_SHARPNESS:
+            flags['RadialSharpness'] = RADIAL_SHARPNESS[name]
     if layout['mesh']:
         flags['PanScale'] = 1.0
+    if mode == 'BLEND_Modulate':
+        flags.update(MODULATE_READINGS.get(name, {}))
     for key, value in flags.items():
         mel.set_material_instance_scalar_parameter_value(instance, key, value)
     eal.save_loaded_asset(instance, only_if_is_dirty=False)

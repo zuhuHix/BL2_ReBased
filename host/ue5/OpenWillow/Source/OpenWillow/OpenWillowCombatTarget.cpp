@@ -353,6 +353,14 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
         LockLight->SetCastShadows(Fx.bLightShadows);
         LockLight->SetIndirectLightingIntensity(0.f);
         LockLight->SetIntensity(0.f);
+        // Host stand-in (UNVERIFIED): the data says the light affects static and dynamic primitives
+        // (LAC_DYNAMIC_AND_STATIC_AFFECTING), yet the 2026-10-02 game capture shows no pool under a lifted bullymong,
+        // while UE5 draws a strong violet one on Sanctuary's floor. Until the UE3 -> UE5 brightness mapping is known,
+        // the light reaches only this target (lighting channel 1, which the target's primitives join).
+        LockLight->SetLightingChannels(false, true, false);
+        TInlineComponentArray<UPrimitiveComponent*> Primitives(this);
+        for (UPrimitiveComponent* Primitive : Primitives)
+            Primitive->SetLightingChannels(Primitive->LightingChannels.bChannel0, true, Primitive->LightingChannels.bChannel2);
         LockLight->RegisterComponent();
     }
     if (StockMesh && LiftClip)

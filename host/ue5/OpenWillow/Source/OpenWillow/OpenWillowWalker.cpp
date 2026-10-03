@@ -2,6 +2,7 @@
 #include "OpenWillowMover.h"
 #include "OpenWillowQuest.h"
 #include "Engine/DamageEvents.h"
+#include "GameFramework/WorldSettings.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
@@ -177,10 +178,23 @@ void AOpenWillowWalker::BeginPlay()
         UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock presentation unavailable: %s"), *FxError);
     }
     else
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock presentation: hand %s at %s+%.2f s (miss %.2f s), bubble /%.1f collapse %.2f over %.1f s, light r%.0f b%.1f, glow %d keys over %.1f s, screen %s"),
+    {
+        // Load every template's materials and meshes now (and wait for their shaders in editor builds) so that the first
+        // cast neither hitches nor draws its translucent quads late (FOwFxTemplate::Preload).
+        int32 Materials = 0;
+        for (const FString& Name : {PhaselockFx.HandHitTemplate, PhaselockFx.HandMissTemplate, PhaselockFx.ScreenTemplate,
+                 PhaselockFx.BubbleFadeIn, PhaselockFx.BubbleLoop, PhaselockFx.BubbleFadeOut})
+        {
+            FString TemplateError;
+            if (const FOwFxTemplate* Template = FOwFxTemplate::Load(PhaselockFx.EmitterDir, Name, TemplateError))
+                Materials += Template->Preload(PhaselockFxAssets);
+            else UE_LOG(LogTemp, Warning, TEXT("OpenWillow Phaselock presentation: %s"), *TemplateError);
+        }
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock presentation: hand %s at %s+%.2f s (miss %.2f s), bubble /%.1f collapse %.2f over %.1f s, light r%.0f b%.1f, glow %d keys over %.1f s, screen %s; %d emitter materials preloaded"),
             *PhaselockFx.HandHitTemplate, *PhaselockFx.HandBone.ToString(), PhaselockFx.LiftNotifyTime, PhaselockFx.FailNotifyTime,
             PhaselockFx.BubbleScaleDivisor, PhaselockFx.MaxCollapse, PhaselockFx.CollapseDuration, PhaselockFx.LightRadius,
-            PhaselockFx.LightBrightness, PhaselockFx.GlowPoints.Num(), PhaselockFx.GlowDuration, *PhaselockFx.ScreenTemplate);
+            PhaselockFx.LightBrightness, PhaselockFx.GlowPoints.Num(), PhaselockFx.GlowDuration, *PhaselockFx.ScreenTemplate, Materials);
+    }
     // GD_Siren_Streaming.Pawn_Siren: CylinderComponent CollisionRadius 42,
     // CollisionHeight 80 (UE3 half-height) and BaseEyeHeight 70 above the
     // pawn centre, so a 150 cm standing eye. Its serialized EyeHeight is 77;
@@ -1038,20 +1052,25 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
     // Captures of the cast at fixed times after it (screen space, no UI), then a miss for the fizzle hand effect.
     static const float HitShots[] = {0.12f, 0.25f, 0.35f, 0.5f, 0.6f, 0.8f, 1.2f, 1.5f, 2.0f, 3.0f, 3.6f, 4.2f, 4.5f, 4.8f, 5.3f, 6.2f};
     static const float MissShots[] = {0.08f, 0.2f, 0.4f, 0.7f};
-    auto Shot = [this](const TCHAR* Kind, float At)
+    auto Shot = [this, Now](const TCHAR* Kind, float At)
     {
         const FString Name = FString::Printf(TEXT("OWPhaselock_%s_%04d.png"), Kind, FMath::RoundToInt(At * 1000.f));
         FScreenshotRequest::RequestScreenshot(Name, false, false);
         const AOpenWillowCombatTarget* T = PhaselockTarget.Get();
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s: glow %.3f, hand particles %d, screen particles %d, bubble stage %d, collapse %.3f, light %.2f, lift %.1f"),
-            *Name, TattooGlow, HandFxParticles(), ScreenFxParticles(), T ? T->BubbleStage() : -1, T ? T->BubbleCollapse() : 0.f,
-            T ? T->PhaselockLightIntensity() : 0.f, T ? T->LiftedHeight() : 0.f);
+        // The name carries the scheduled time; a long frame can take the shot later, so the actual time is logged too.
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s at +%.3f s: glow %.3f, hand particles %d, screen particles %d, bubble stage %d, collapse %.3f, light %.2f, lift %.1f"),
+            *Name, Now - PhaselockShotCastAt, TattooGlow, HandFxParticles(), ScreenFxParticles(), T ? T->BubbleStage() : -1,
+            T ? T->BubbleCollapse() : 0.f, T ? T->PhaselockLightIntensity() : 0.f, T ? T->LiftedHeight() : 0.f);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s emitters: hand [%s] screen [%s] bubble %s"), *Name,
             HandFx ? *HandFx->Describe() : TEXT("-"), ScreenFx ? *ScreenFx->Describe() : TEXT("-"), T ? *T->PresentationReport() : TEXT("-"));
     };
     const int32 HitCount = UE_ARRAY_COUNT(HitShots), MissCount = UE_ARRAY_COUNT(MissShots);
     if (PhaselockShotStep == 0)
     {
+        // Captures only: game time advances at most 1/60 s per frame, so that a screenshot's write stall (0.1-0.4 s,
+        // up to the default 0.4 s clamp) does not move the effect on and each shot lands on its scheduled time.
+        // (FApp's fixed time step is compiled out in this engine build.)
+        if (AWorldSettings* Settings = GetWorld()->GetWorldSettings()) Settings->MaxUndilatedFrameTime = 1.f / 60.f;
         if (Now < 7.f || !CombatTarget.IsValid()) return;
         AimAt(CombatTarget->AimPoint() - FVector(0, 0, 20));
         ++PhaselockShotStep;
