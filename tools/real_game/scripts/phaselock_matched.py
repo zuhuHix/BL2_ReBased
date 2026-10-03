@@ -11,6 +11,7 @@ from that file's namespace). Our own code; what it prints is game data and stays
 - mark_lock(name): mark every CanPhaseLockTarget result and the PhaseLockTarget call on the burst clock.
 - place(name, distance, bearing_deg): put Maya that far from the pawn, looking at it; measure(name) reads
   the resulting distances.
+- aim(name): pitch the view onto the target's origin (needed for small targets).
 - camera(): the field of view and eye height the capture is taken with.
 """
 import math
@@ -106,6 +107,16 @@ def place(name, distance=650.0, bearing_deg=180.0):
     yaw = math.atan2(t.Y - y, t.X - x)
     pc.Rotation = unrealsdk.make_struct("Rotator", Pitch=0, Yaw=int(yaw / math.pi * 32768) & 0xFFFF, Roll=0)
     return [round(x), round(y)]
+
+
+def aim(name):
+    """Pitch Maya's view so the crosshair is on the target's origin (yaw unchanged). Small or low targets
+    sit outside the cast's auto-aim cone at pitch 0 (a baby bullymong at 650 uu: no target, no lock)."""
+    pc = get_pc()
+    t, me = ai_pawn(name).Location, pc.Pawn.Location
+    pitch = math.degrees(math.atan2(t.Z - (me.Z + pc.Pawn.BaseEyeHeight), math.hypot(t.X - me.X, t.Y - me.Y)))
+    pc.Rotation = unrealsdk.make_struct("Rotator", Pitch=int(pitch * 65536 / 360) & 0xFFFF, Yaw=pc.Rotation.Yaw, Roll=0)
+    return round(pitch, 2)
 
 
 def measure(name):
