@@ -216,14 +216,23 @@ def mode_anims():
             controller.open_bracket(unreal.Text('OpenWillow slice MD5 import'))
             source_rate = float(clip['rate'])
             rate = int(round(source_rate))
-            if abs(source_rate - rate) > 0.001:
-                if abs(source_rate - 30.0) > 1.5:
-                    raise RuntimeError(f'{name}: unsupported noninteger frame rate {source_rate}')
-                rate = 30
-                unreal.log_warning(f'OW_SLICE {name}: source {source_rate} fps imported at 30 fps')
-            if rate != 30:
-                controller.set_frame_rate(unreal.FrameRate(math.lcm(30, rate), 1))
-            controller.set_frame_rate(unreal.FrameRate(rate, 1))
+            half_rate = int(round(source_rate * 2))
+            if abs(source_rate - rate) > 0.001 and abs(source_rate * 2 - half_rate) <= 0.001:
+                # Half-integer rates (7.5 fps perch clips) are exact as the rational half_rate / 2.
+                # The controller rejects a rate that is not a multiple or factor of 30 fps (22.5 fps); go through a common
+                # multiple first, as the integer branch below does.
+                controller.set_frame_rate(unreal.FrameRate(math.lcm(30, half_rate), 1))
+                controller.set_frame_rate(unreal.FrameRate(half_rate, 2))
+                rate = source_rate
+            else:
+                if abs(source_rate - rate) > 0.001:
+                    if abs(source_rate - 30.0) > 1.5:
+                        raise RuntimeError(f'{name}: unsupported noninteger frame rate {source_rate}')
+                    rate = 30
+                    unreal.log_warning(f'OW_SLICE {name}: source {source_rate} fps imported at 30 fps')
+                if rate != 30:
+                    controller.set_frame_rate(unreal.FrameRate(math.lcm(30, rate), 1))
+                controller.set_frame_rate(unreal.FrameRate(rate, 1))
             controller.set_number_of_frames(unreal.FrameNumber(max(1, clip['frames'] - 1)))
             for bone, track in clip['tracks'].items():
                 controller.add_bone_track(bone)

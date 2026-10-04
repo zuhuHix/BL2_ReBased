@@ -927,6 +927,21 @@ again in every command (a stale weapon reference crashed the game), keep spawned
 before any travel or quit, and compare the save folder with the backup afterwards. `scripts/phaselock.py` samples the
 lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-down calls. Results:
 `docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
+`scripts/ambient_npcs.py` (`Invoke-GamePyFile ... ambient_npcs.py ambient`) lists live pawns and dens (`amb_pawns`,
+`amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
+Sanctuary ambient NPC record.
+
+## Sanctuary ambient NPCs (host, behind a flag)
+
+Off by default. `-owambient=<manifest>` (or `OPENWILLOW_AMBIENT`) spawns the town's citizens and runs the stock perch
+cycle and node walks with stand-in rules (`docs/verification/SANCTUARY_AMBIENT_NPCS.md`, all movement rules UNVERIFIED).
+
+```powershell
+python tools/census_ambient_npcs.py                      # dens, points, node graph, perch definitions -> local/slice/
+powershell -File tools/seed_ambient_npc_assets.ps1       # UModel extraction, clip conversion, import (needs OPENWILLOW_UMODEL)
+python tools/prepare_ambient_world.py                    # host manifest local/slice/ambient_world.json (--observed copies a capture)
+powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
+```
 
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 
