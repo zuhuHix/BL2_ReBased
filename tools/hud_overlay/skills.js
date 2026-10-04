@@ -28,6 +28,18 @@ let selectedBranch = 1; // Harmony is in the middle on the movie's initial frame
 let hitTargets = [];
 let displayedStates = new Map();
 
+// Open-time instrumentation, the same "OWINVTIME js_<event> ..." lines inventory.js sends through the
+// console bridge. The host preloads this page hidden at level start (as it does the inventory page) and
+// calls owSkillsOpened(<Unix ms of the open request>) when the player opens it, so `populated` is true
+// at js_skills_open once the preload has finished. js_skills_painted is two animation frames later.
+const startupAt = performance.now();
+let openTiming = null, populatedAt = 0;
+function timeLog(event, extra = '') {
+  const since = openTiming ? Date.now() - openTiming.hostEpoch : -1;
+  console.log(`OWINVTIME js_${event} sinceOpen=${since} pageMs=${Math.round(performance.now() - startupAt)} epoch=${Date.now()} ready=${ready} ${extra}`);
+}
+timeLog('skills_page_start');
+
 function setGradeText(path, value, colour = null) {
   // Some movie text fields embed a digits-only WillowBody subset. Selecting
   // its full imported alias also renders the slash in ranks such as 0/5.
@@ -64,6 +76,22 @@ window.owSkills = state => {
   if (ready) refreshSelection();
 };
 window.owPlayer = player; // Useful for local inspection, not a game interface.
+
+// The host shows the (already loaded) page again. Open on the action skill and the middle tree, as a
+// fresh page does, then report when a frame of the populated screen has been composited.
+window.owSkillsOpened = hostEpoch => {
+  openTiming = { hostEpoch };
+  timeLog('skills_open', `populated=${ready} size=${innerWidth}x${innerHeight} visibility=${document.visibilityState}`);
+  if (ready) {
+    select(actionTarget());
+    updateBranch(1, true);
+    refreshSelection();
+  }
+  const timing = openTiming;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (timing === openTiming) timeLog('skills_painted', `populated=${ready}`);
+  }));
+};
 
 // A click on a skill, reported the way the movie's own extCellClicked
 // reports it: (branch, tier, cell), with -1, -1, -1 for the action skill
@@ -360,6 +388,8 @@ function populate() {
     loading.classList.add('finished');
     setTimeout(() => { loading.hidden = true; }, 300);
   }, 700);
+  populatedAt = performance.now() - startupAt;
+  timeLog('skills_populated', `branches=${data.branches.length} skills=${hitTargets.length}`);
   console.log(`OpenWillow Skills movie ready: ${data.branches.length} branches, ${hitTargets.length} skills`);
 }
 

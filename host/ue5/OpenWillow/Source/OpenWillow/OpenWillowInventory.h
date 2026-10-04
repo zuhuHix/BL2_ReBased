@@ -70,6 +70,12 @@ struct FOpenWillowWeaponItem
     bool bHasSaleValue = false;
     bool bSaleValueKnown = false;
     FString FunStats;      // red flavour line(s), '; ' separated like the gear schema
+    // Card rows beyond the five main stats (tools/weapon_stats.py): the projectile count printed after the damage
+    // ("21x7") and an elemental weapon's status damage per second and chance. Values are the evaluated, unrounded ones.
+    int32 Projectiles = 1;
+    bool bHasStatus = false;
+    float StatusDps = 0;
+    float StatusChance = 0; // percent
     TArray<FString> Fragments;
     bool bFavorite = false;
     bool bTrash = false;

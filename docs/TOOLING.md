@@ -865,6 +865,19 @@ switches: `-owslots=<2..4>` (unlocked weapon slots, default 4),
 `-owmoney=<n>`, `-owerid=<n>`, `-owinventoryselftest` (synthetic inventory
 round-trip checks, logged), **R** reloads in play.
 
+`-owinvshots` (2026-10-04) is a separate capture that drives the inventory page
+with the stock keys:
+- open, backpack focus and the five sort modes;
+- compare from either side;
+- Inspect;
+- the Skills tab, one second after the tab.
+
+It writes `OWCombat_D*.png` and is independent of `-owcombatshots`. The Skills
+page is now loaded hidden at level start. The page logs `OWINVTIME js_skills_*`
+lines with its open and paint times. `tools/test_inventory_actions.ps1` steps
+15/16 are now `pagedown_selects_first_item_of_types` and
+`pageup_returns_to_all_first_item`.
+
 ## Tracing the real game's UI code (golden files for menus)
 
 With the community mod SDK installed in the game (THIRD_PARTY.md), copy

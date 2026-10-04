@@ -89,10 +89,11 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
 - **Maya prototype:** in UE5 with Infinity and Phaselock as host prototypes (not stock logic).
 - **Inventory menu:** the real StatusMenu movie runs under Ruffle inside UE5 with a host adapter
   (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.
-  Open, in order: stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), selectable
-  empty backpack cells, full-screen Inspect, red `bad` cells in compare view. State and evidence:
-  `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last two sections). A partial, non-running
-  start of the sort list is on branch `t3code/wip-inventory-sort-list`.
+  Since 2026-10-04 the stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), the
+  backpack focus layout, red `bad` cells in compare view and a full-screen Inspect exist, and
+  the Skills page is preloaded hidden. Open: selectable empty backpack cells, gear compare
+  (not yet observed in the real game), the white flavour lines on cards, Q on the Skills page.
+  State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
   model, interpreter, Core natives, default-state sweep and scalar trace replay exist.

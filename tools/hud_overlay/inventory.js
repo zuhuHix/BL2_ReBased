@@ -7,6 +7,7 @@ window.owInventoryMovieReady = false;
 window.owInventoryReady = false;
 const player = window.RufflePlayer.newest().createPlayer();
 document.getElementById('presentation').prepend(player);
+document.getElementById('presentation').prepend(document.getElementById('inspect-backdrop')); // under the movie
 window.owPlayer = player;
 
 const ROOT = '_level1', INV = ROOT + '.inventory';
@@ -25,14 +26,22 @@ const RENDERED_ROWS = VISIBLE_ROWS + 1, PEEK_HEIGHT = 16;
 // choices, not decoded movie values or proof of original 3D projection parity.
 const COMPOSITION_SCALE = 1.09;
 const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 135;
-// This list is a host-side convenience. The original movie's full sort cycle
-// was not exercised in the local game trace, so these modes are not parity claims.
+// Backpack focus (cursor in the Backpack, no transfer): the original enlarges and centres the Backpack panel
+// (cell pitch about 65 px against 46) and lets the Equipped panel recede behind the card. Rectangles measured on
+// the 2026-10-04 capture, 1280x720: Backpack panel 520..772 x 80..642; the Equipped panel's remains show at
+// about 335..490 x 415..500. The movie does this with a Z tween that Ruffle ignores, so the host sets 2D scales.
+const FOCUS_PANEL = {scale:0.92, scaleY:1.0, left:520, top:75};
+const FOCUS_EQUIPPED = {scale:0.52, centreX:412, centreY:380};
+// The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
+// 2026-10-04; comparators, filters and headers are read from native code in
+// docs/verification/NATIVE_INVENTORY_SORT.md and stay UNVERIFIED beyond those captures). PageDown = +1,
+// PageUp = -1, wrapping; the index outlives the screen; every change selects the first item.
 const sortModes = [
-  {key:'default', label:'DEFAULT'},
-  {key:'name', label:'NAME'},
-  {key:'rarity', label:'RARITY'},
-  {key:'level', label:'LEVEL'},
-  {key:'damage', label:'DAMAGE'}
+  {key:'all', label:'ALL'},
+  {key:'types', label:'TYPES'},
+  {key:'brands', label:'BRANDS'},
+  {key:'items', label:'ITEMS'},
+  {key:'value', label:'VALUE'}
 ];
 // Recorded stock card positions/scales. The stock comparison capture confirms
 // that full-size cards intentionally overlay the upper equipment panels.
@@ -42,18 +51,12 @@ const comparePanelTweens = [
   ['Equipped',0.2,53,-25,0,-176,-25,-10000,-30,-25,-2650],
   ['Backpack',0.2,64,-45,-300,385,-70,-4950,390,-43,-2650]
 ];
-// Backpack filter (the original's "(ALL)" tag). Labels are the host's wording, not movie strings:
-// the converted movie only carries a placeholder header ("Assault Rifles").
+// Equipment gear slots, in the cells' order after the four weapon slots. Labels are the host's wording.
 const gearSlots = [
   {key:'shield', itemType:'shield', label:'Shield'},
   {key:'grenadeMod', itemType:'grenade_mod', label:'Grenade Mod'},
   {key:'classMod', itemType:'class_mod', label:'Class Mod'},
   {key:'relic', itemType:'relic', label:'Relic'}
-];
-const categories = [
-  {key:'all', label:'ALL', match:null},
-  {key:'weapons', label:'WEAPONS', match:item => !gearSlotForItem(item)},
-  ...gearSlots.map(slot => ({key:slot.key, label:`${slot.label.toUpperCase()}S`, match:item => item.itemType === slot.itemType}))
 ];
 // `rounding` is the stat's presentation rounding (docs/verification/NATIVE_WEAPON_RULES.md section 2,
 // read from native code and data; tools/weapon_stats.py present() is the reference): damage up, magazine
@@ -77,6 +80,15 @@ function cardRound(value, rounding, decimals) {
   const scale = Math.fround(10 ** decimals);
   return Math.floor(Math.fround(Math.fround(stored * scale) + 0.5)) / scale;
 }
+// An elemental weapon's card adds two rows after the five above: the status effect's damage per second and
+// its chance. Labels and icons are the ones the real cards printed for fire, shock and corrosive guns
+// (golden cards, 2026-10-03); the label of other elements (slag) was not seen, so they get no rows.
+// Both values are Float, one decimal, half up (docs/verification/NATIVE_WEAPON_RULES.md section 2).
+const statusRows = new Map([
+  ['fire', {dps:'Burn Damage / sec.', chance:'Ignite Chance', icon:'elementFire'}],
+  ['shock', {dps:'Shock Damage / sec.', chance:'Electrocute Chance', icon:'elementShock'}],
+  ['corrosive', {dps:'Corrode Damage / sec.', chance:'Corrode Chance', icon:'elementCorrosive'}]
+]);
 const statIcons = new Map([
   ['capacity','shieldCapacity'], ['rechargerate','shieldRechargeRate'],
   ['rechargedelay','shieldRechargeDelay'], ['ampdamage','weaponDamage'],
@@ -111,14 +123,15 @@ const MAX_DISPLAY_CREDITS = 99999999;
 // Card-local pixels of the flavour block the movie's own layout already leaves room for
 // (found empirically in the bench, so UNVERIFIED against the original).
 const FUN_STATS_OVERLAP = 6;
+const ARROW_VALUE_GAP = 2;
+const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
-let sortIndex = 0, categoryIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
+let sortIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
 let navigationPanel = 'equipped', lastBackpackId = null, lastEquippedIndex = 0;
 let transferFromEquipped = false;
-let transferCategoryBefore = 0;
 let compareStartedFromLeft = false;
 let lastMenuPreviewId = null;
 // Open-time instrumentation. The host calls owOpenTiming(<Unix ms of the open request>) on every
@@ -152,7 +165,6 @@ window.owRefreshMenuPreview = () => {
   if (transferSourceId) finishTransfer(true);
   if (ready && state) drawCard();
 };
-let headerPending = false, headerSerial = 0, headerName = '';
 let inspectMode = false;
 let inspectItemId = null, inspectYaw = 0, inspectPitch = 0, inspectImage = '', inspectFrameCount = 0;
 let inspectResolved = false;
@@ -189,8 +201,6 @@ function movieTypeIcon(item) {
   return weaponTypeIcons.get(type) || 'Pistol';
 }
 const gearSlotForItem = item => gearSlots.find(slot => slot.itemType === item?.itemType)?.key || null;
-const itemCategoryLabel = item => gearSlotForItem(item)
-  ? gearSlots.find(slot => slot.key === gearSlotForItem(item)).label.toUpperCase() + 'S' : 'WEAPONS';
 
 // UNVERIFIED PLACEHOLDER ART: the game's real gear icons are 3D renders that this host does
 // not produce yet, and a weapon whose mesh was not exported has no thumbnail either. Both get a
@@ -308,25 +318,106 @@ window.owInventory = snapshot => {
 };
 
 function text(path, value, size = 15, tint = 0xffffff, align = '') {
-  const body = `<font face="$WillowBody" size="${size}" color="#${tint.toString(16).padStart(6,'0')}">${escapeHtml(value)}</font>`;
+  richText(path, escapeHtml(value), size, tint, align);
+}
+// `html` must already be escaped.
+function richText(path, html, size = 15, tint = 0xffffff, align = '') {
+  const body = `<font face="$WillowBody" size="${size}" color="#${tint.toString(16).padStart(6,'0')}">${html}</font>`;
   set(path, 'htmlText', align ? `<p align="${align}">${body}</p>` : body);
 }
 
+// --- Stock backpack list ----------------------------------------------------------------------------
+// Rules: docs/verification/NATIVE_INVENTORY_SORT.md (read from native code, UNVERIFIED) and the captures of
+// 2026-09-30 / 2026-10-04 (PageDown cycle, header texts, ALL/TYPES/BRANDS/VALUE/ITEMS orders). Ties the game
+// leaves unordered (its quick sort is unstable) keep pickup order here: a host choice, not a game rule.
+const WEAPON_TYPE_KEYS = new Map([['assault rifle','ar'], ['ar','ar'], ['pistol','pistol'], ['shotgun','shotgun'],
+  ['sub-machine gun','smg'], ['smg','smg'], ['sniper rifle','sniper'], ['sniper','sniper'],
+  ['rocket launcher','rocket'], ['launcher','rocket'], ['rocket','rocket']]);
+const GEAR_CATEGORY_KEYS = {relic:'artifact', class_mod:'comm', grenade_mod:'mod', shield:'shield'};
+// WillowGame.int [CategoryLabels], uppercase in game. Seen in captures: ASSAULT RIFLES, PISTOLS, SHOTGUNS,
+// SUB-MACHINE GUNS, SNIPER RIFLES, WEAPONS, PERSONAL, SHIELDS, RELICS, CLASS MODS; the rest come from the note.
+const CATEGORY_LABELS = {ar:'ASSAULT RIFLES', pistol:'PISTOLS', repeater:'REPEATERS', revolver:'REVOLVERS',
+  rocket:'ROCKET LAUNCHERS', shotgun:'SHOTGUNS', smg:'SUB-MACHINE GUNS', sniper:'SNIPER RIFLES', artifact:'RELICS',
+  comm:'CLASS MODS', mod:'GRENADE MODS', shield:'SHIELDS', health:'MED KITS', sdu:'UPGRADES'};
+// Manufacturer header texts that differ from the card logo (the Bandit header read "BANDIT MADE").
+const BRAND_HEADERS = {bandit:'BANDIT MADE'};
+const isWeapon = item => !item?.itemType || item.itemType === 'weapon';
+function categoryKey(item) {
+  if (isWeapon(item)) return WEAPON_TYPE_KEYS.get(String(item.type || '').trim().toLowerCase()) || String(item.type || 'zz').toLowerCase();
+  return GEAR_CATEGORY_KEYS[item.itemType] || String(item.categoryKey || item.itemType || '').toLowerCase();
+}
+const rarityLevel = item => Number(item?.rarityLevel ?? item?.rarity ?? 0) || 0;
+// "L": the level tie-break only decides when either item is level 51 or higher.
+const levelTie = (a, b) => (Number(a.level) >= 51 || Number(b.level) >= 51) ? Number(b.level || 0) - Number(a.level || 0) : 0;
+const rarityThenLevel = (a, b) => (rarityLevel(b) - rarityLevel(a)) || levelTie(a, b);
+const compareKeys = (a, b) => String(a).localeCompare(String(b), 'en', {sensitivity:'base'});
+const sortComparators = {
+  // IST_MajorTypeThenRarityThenSubtype: weapons first (mission weapons before the rest, rarity, and the level
+  // rule only between equal types); other items by category key, then rarity.
+  all(a, b) {
+    if (isWeapon(a) !== isWeapon(b)) return isWeapon(a) ? -1 : 1;
+    if (isWeapon(a)) {
+      return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || (rarityLevel(b) - rarityLevel(a))
+        || (categoryKey(a) === categoryKey(b) ? levelTie(a, b) : 0);
+    }
+    return compareKeys(categoryKey(a), categoryKey(b)) || rarityThenLevel(a, b);
+  },
+  // IST_MajorTypeThenSubtypeThenRarity
+  types(a, b) {
+    if (isWeapon(a) !== isWeapon(b)) return isWeapon(a) ? -1 : 1;
+    return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || compareKeys(categoryKey(a), categoryKey(b)) || rarityThenLevel(a, b);
+  },
+  // IST_Manufacturer: the game reports "equal" for an item without a manufacturer, which is not a total order;
+  // the host puts those last.
+  brands(a, b) {
+    const left = String(a.manufacturer || ''), right = String(b.manufacturer || '');
+    if (!left || !right) return left === right ? 0 : left ? -1 : 1;
+    return compareKeys(left, right) || (Number(a.gradeIndex || 0) - Number(b.gradeIndex || 0)) || rarityThenLevel(a, b);
+  },
+  value: (a, b) => Number(b.value || 0) - Number(a.value || 0)
+};
+sortComparators.items = sortComparators.all;
+// The list mode in force: a transfer shows the stock Compare list (ordered like ALL) whatever the sort index is.
+const listMode = () => transferSourceId ? 'all' : sortModes[sortIndex].key;
 function backpackItems() {
   const equipped = equippedIds();
-  const category = categories[categoryIndex];
-  const items = state?.items.filter(item => !equipped.has(item.id) && (!category.match || category.match(item))) || [];
-  const mode = sortModes[sortIndex];
-  if (mode.key === 'default') return items;
-  const compareText = (left, right) => String(left ?? '').localeCompare(String(right ?? ''), undefined, {numeric:true, sensitivity:'base'});
-  return items.map((item, order) => ({item, order})).sort((a, b) => {
-    let order = 0;
-    if (mode.key === 'name') order = compareText(a.item.name, b.item.name);
-    else if (mode.key === 'rarity') order = Number(b.item.rarity || 0) - Number(a.item.rarity || 0);
-    else if (mode.key === 'level') order = Number(b.item.level || 0) - Number(a.item.level || 0);
-    else if (mode.key === 'damage') order = Number(b.item.damage || 0) - Number(a.item.damage || 0);
-    return order || a.order - b.order;
-  }).map(entry => entry.item);
+  let items = state?.items.filter(item => !equipped.has(item.id)) || [];
+  const mode = listMode();
+  const source = transferSourceId ? itemById(transferSourceId) : null;
+  if (source) items = items.filter(item => gearSlotForItem(item) === gearSlotForItem(source));
+  else if (mode === 'types') items = items.filter(isWeapon);
+  else if (mode === 'items') items = items.filter(item => !isWeapon(item));
+  return items.map((item, order) => ({item, order}))
+    .sort((a, b) => sortComparators[mode](a.item, b.item) || a.order - b.order).map(entry => entry.item);
+}
+// The sub-header an item sits under in a mode (undefined: no headers; '': no header for this item).
+function headerFor(item, mode) {
+  if (mode === 'value') return undefined;
+  if (mode === 'brands') {
+    const name = String(item.manufacturer || '').trim();
+    return name ? BRAND_HEADERS[name.toLowerCase()] || name.toUpperCase() : '';
+  }
+  if (mode === 'types') return CATEGORY_LABELS[categoryKey(item)] || categoryKey(item).toUpperCase();
+  if (isWeapon(item)) return item.missionWeapon ? 'MISSION WEAPONS' : 'WEAPONS';
+  return CATEGORY_LABELS[categoryKey(item)] || String(item.categoryLabel || categoryKey(item)).toUpperCase();
+}
+// The list as drawn: items with a header row wherever the group changes, then the empty cells (the movie's
+// trailing [EMPTY] cells: one per free backpack slot, selectable in the game, not selectable here yet).
+const HEADER_PITCH = Math.round(ROW_PITCH * 0.37), VIEW_HEIGHT = VISIBLE_ROWS * ROW_PITCH;
+const entryHeight = entry => entry.header !== undefined ? HEADER_PITCH : ROW_PITCH;
+function backpackEntries() {
+  const items = backpackItems(), mode = listMode(), entries = [];
+  let last;
+  for (const item of items) {
+    const label = headerFor(item, mode);
+    if (label && label !== last) entries.push({header:label});
+    last = label;
+    entries.push({item});
+  }
+  const capacity = Number.isFinite(state?.backpackCapacity) && state.backpackCapacity > 0 ? state.backpackCapacity : 0;
+  const empties = capacity ? Math.max(0, capacity - items.length) : Math.max(0, VISIBLE_ROWS + 1 - items.length);
+  for (let i = 0; i < empties; i++) entries.push({empty:true});
+  return entries;
 }
 
 function requestAction(action, fields = {}) {
@@ -459,9 +550,9 @@ function beginBackpackTransfer() {
   transferSourceId = source.id;
   transferFromEquipped = false;
   navigationPanel = 'equipped';
-  transferCategoryBefore = categoryIndex;
   targetGearSlot = gearSlotForItem(source);
   compareId = equippedIdFor(source);
+  firstRow = scrollForSelected(backpackEntries());
   render();
 }
 
@@ -476,13 +567,13 @@ function beginEquippedTransfer() {
   targetGearSlot = gearSlot;
   transferSourceId = source.id;
   transferFromEquipped = true;
-  transferCategoryBefore = categoryIndex;
   compareId = source.id;
-  categoryIndex = categories.findIndex(category => category.key === (gearSlot || 'weapons'));
-  selectedId = candidates[0].id;
+  // The compare list is the stock "uncomparable" filter: only items that fit the compared slot.
+  selectedId = backpackItems()[0]?.id || candidates[0].id;
   navigationPanel = 'backpack';
   lastBackpackId = selectedId;
-  firstRow = scrollForSelected(backpackItems());
+  firstRow = 0;
+  firstRow = scrollForSelected(backpackEntries());
   render();
 }
 function finishTransfer(cancel = false) {
@@ -491,8 +582,7 @@ function finishTransfer(cancel = false) {
   transferSourceId = compareId = null;
   transferFromEquipped = false;
   navigationPanel = equippedIds().has(selectedId) || !selectedId ? 'equipped' : 'backpack';
-  categoryIndex = transferCategoryBefore;
-  firstRow = scrollForSelected(backpackItems());
+  firstRow = scrollForSelected(backpackEntries());
   if (ready) render();
 }
 
@@ -655,12 +745,22 @@ function cardStats(item) {
     };
   });
   // Weapon values arrive unrounded; the printed number (and so the compare delta) is the rounded one.
-  return weaponCardStats.filter(stat => item?.[stat.key] !== undefined && item?.[stat.key] !== null)
+  const stats = weaponCardStats.filter(stat => item?.[stat.key] !== undefined && item?.[stat.key] !== null)
     .map(stat => {
       const raw = item[stat.key];
       const value = typeof raw === 'number' && Number.isFinite(raw) ? cardRound(raw, stat.rounding, stat.decimals) : raw;
-      return {...stat, value};
+      // A multi-projectile weapon prints its projectile count after the damage ("21x7").
+      const projectiles = stat.key === 'damage' && Number.isInteger(item.projectiles) && item.projectiles > 1 ? item.projectiles : 0;
+      return projectiles ? {...stat, value, projectiles} : {...stat, value};
     });
+  const status = statusRows.get(String(item?.element || '').toLowerCase());
+  if (status && Number.isFinite(item.statusDps) && Number.isFinite(item.statusChance)) {
+    stats.push({key:'statusdps', label:status.dps, value:cardRound(item.statusDps, 'half', 1), decimals:1,
+      higherIsBetter:true, icon:status.icon});
+    stats.push({key:'statuschance', label:status.chance, value:cardRound(item.statusChance, 'half', 1), decimals:1,
+      suffix:'%', higherIsBetter:true, icon:status.icon});
+  }
+  return stats;
 }
 
 // Gear stat values arrive as display strings ("+88%", "6 m"); their number is compared as-is.
@@ -675,21 +775,24 @@ function statDecimals(value) {
 function statValueText(stat) {
   if (typeof stat.value === 'string') return stat.value;
   const value = Number(stat.value);
-  if (stat.value !== '' && stat.value !== null && Number.isFinite(value)) return value.toFixed(stat.decimals) + (stat.suffix || '');
+  if (stat.value !== '' && stat.value !== null && Number.isFinite(value))
+    return value.toFixed(stat.decimals) + (stat.suffix || '') + (stat.projectiles ? `x${stat.projectiles}` : '');
   return String(stat.value ?? '');
 }
 
+// The compare arrow of one row. The real game shows an arrow only (green up = better, red down = worse,
+// none when equal) and no difference figure: every golden card's aux field is empty and the 2026-10-04
+// compare captures print none. A multi-projectile weapon's damage compares as damage times projectiles
+// (a 21x7 gun showed the better arrow against 25x2, which the per-projectile figures would not).
 function statComparison(stat, otherStats) {
   const other = otherStats.find(candidate => candidate.key === stat.key);
   if (!other) return null;
-  const value = statNumber(stat.value), otherValue = statNumber(other.value);
+  const value = statNumber(stat.value) * (stat.projectiles || 1), otherValue = statNumber(other.value) * (other.projectiles || 1);
   if (!Number.isFinite(value) || !Number.isFinite(otherValue)) return null;
   const delta = value - otherValue;
-  if (Math.abs(delta) < 1e-9) return {arrow:'blank', delta:''};
-  const deltaText = `${delta > 0 ? '+' : ''}${delta.toFixed(stat.decimals)}`;
-  if (typeof stat.higherIsBetter !== 'boolean') return {arrow:'blank', delta:deltaText};
+  if (Math.abs(delta) < 1e-9 || typeof stat.higherIsBetter !== 'boolean') return {arrow:'blank'};
   const better = stat.higherIsBetter ? delta > 0 : delta < 0;
-  return {arrow:better ? 'up' : 'down', delta:deltaText};
+  return {arrow:better ? 'up' : 'down'};
 }
 
 function setCompareLayout(active, fromLeft = false) {
@@ -719,7 +822,7 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     equippedIds().has(item.id));
   call(card, 'TurnOffAllTopStats');
   const stats = cardStats(item), otherStats = cardStats(compareItem || {});
-  for (let index=0; index<5; index++) {
+  for (let index=0; index<7; index++) {
     for (const field of ['mainField', 'auxField', 'arrow']) statVisibility.set(`${card}.stat${index+1}.${field}`, false);
     set(`${card}.stat${index+1}.arrow`, '_visible', false);
     set(`${card}.stat${index+1}.auxField`, '_visible', false);
@@ -728,21 +831,25 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     const formatted = statValueText(stat);
     const compare = compareItem ? statComparison(stat, otherStats) : null;
     const arrow = compare?.arrow || 'blank';
-    const delta = compare?.delta || '';
-    call(card, 'SetTopStat', index, stat.label, formatted, arrow, delta, stat.icon || 'none');
+    call(card, 'SetTopStat', index, stat.label, formatted, arrow, '', stat.icon || 'none');
     const row = `${card}.stat${index+1}`;
     text(`${row}.labelField`, stat.label, 14, 0xa4e8f3);
-    text(`${row}.mainField`, formatted, 14);
+    // Values print in the label colour; a projectile count follows the damage in gold at a smaller size
+    // (both measured on a real card, UNVERIFIED as exact game values).
+    const mainHtml = stat.projectiles
+      ? `${escapeHtml(formatted.slice(0, -`x${stat.projectiles}`.length))}<font size="${PROJECTILE_COUNT_SIZE}" color="${PROJECTILE_COUNT_COLOUR}">x${stat.projectiles}</font>`
+      : escapeHtml(formatted);
+    richText(`${row}.mainField`, mainHtml, 14, 0xa4e8f3);
     statVisibility.set(`${row}.mainField`, true);
-    statVisibility.set(`${row}.auxField`, Boolean(delta));
-    statVisibility.set(`${row}.arrow`, compare?.arrow === 'up' || compare?.arrow === 'down');
-    if (compare?.arrow === 'up' || compare?.arrow === 'down') set(`${row}.arrow`, '_visible', true);
-    if (delta) set(`${row}.auxField`, '_visible', true);
-    // The value and the delta are both right-aligned to the same edge, so with a delta showing
-    // the value moves left by the delta's width (its natural x is remembered per field).
+    const arrowShown = compare?.arrow === 'up' || compare?.arrow === 'down';
+    statVisibility.set(`${row}.auxField`, false);
+    statVisibility.set(`${row}.arrow`, arrowShown);
+    if (arrowShown) set(`${row}.arrow`, '_visible', true);
+    // The value is right-aligned to the same edge as the arrow, so with an arrow showing it moves left by
+    // the arrow's width (its natural x is remembered per field).
     if (!statMainX.has(`${row}.mainField`)) statMainX.set(`${row}.mainField`, Number(get(`${row}.mainField`, '_x')));
-    const deltaWidth = delta ? Number(get(`${row}.auxField`, 'textWidth')) : 0;
-    set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) - (deltaWidth > 0 ? deltaWidth + 6 : 0));
+    const arrowWidth = arrowShown ? Number(get(`${row}.arrow`, '_width')) : 0;
+    set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) - (arrowWidth > 0 ? arrowWidth + ARROW_VALUE_GAP : 0));
   });
   // Legacy plain-text payloads are '; '-joined. The weapon contract puts red
   // text first; observed gear formatting below overrides this fallback.
@@ -789,8 +896,13 @@ function drawCard() {
   }
   const compare = compareId && compareId !== selectedId ? itemById(compareId) : null;
   const fromLeft = Boolean(transferSourceId && transferFromEquipped && compare);
-  configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : compare);
-  configureCard(INV + '.compareCard', fromLeft ? item : compare, fromLeft ? compare : item, 'compare');
+  // Frames in a transfer, as the real game draws them (2026-10-04 captures, both origins): the card of the
+  // item being moved is green, the card it is compared with is yellow. The main card is the moved item.
+  // A backpack item with an equipped counterpart also shows arrows against it without a second card.
+  const arrowsAgainst = compare || (item && !equippedIds().has(item.id) ? itemById(equippedIdFor(item)) : null);
+  const movedStyle = transferSourceId ? 'compare' : 'highlight', otherStyle = transferSourceId ? 'highlight' : 'compare';
+  configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : arrowsAgainst, movedStyle);
+  configureCard(INV + '.compareCard', fromLeft ? item : compare, fromLeft ? compare : item, otherStyle);
   setCompareLayout(Boolean(compare) || Boolean(transferSourceId), fromLeft);
   const gearSlot = gearSlotForItem(item);
   const compareSlotLabel = gearSlot
@@ -804,11 +916,9 @@ function drawCard() {
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
     `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
-  set(ROOT + '.tooltips.tooltips', 'htmlText',
+  if (!inspectMode) set(ROOT + '.tooltips.tooltips', 'htmlText',
     `<p align="center"><font face="$WillowBody" size="15">${markup}</font></p>`);
   applyAmmoHighlight(item);
-  // While the inspect panel is open it stands in for the selected card.
-  if (inspectMode && item) call(INV + '.mainCard', 'SetVisible_', false);
   if (compare) announce(`Comparing ${item.name} with ${compareSlotLabel}: ${compare.name}`);
   updateInspect();
   applyCardOcclusion();
@@ -816,6 +926,7 @@ function drawCard() {
 
 function syncSelection() {
   if (!ready || !state) return;
+  if (backpackFocused() !== appliedFocus) { render(); return; }
   const equipped = INV + '.equippedPanel';
   const selectedCell = selectedSlotIndex();
   for (let i=0; i<8; i++) {
@@ -823,38 +934,59 @@ function syncSelection() {
     const cellButton = document.querySelector(`#controls [data-kind="slot"][data-slot="${i}"]`);
     if (cellButton) cellButton.setAttribute('aria-pressed', String(i === selectedCell));
   }
-  const rows = backpackItems();
-  for (let row=0; row<RENDERED_ROWS; row++) {
-    const item = rows[firstRow+row];
-    if (item) call(`${INV}.storagePanel.owRows.owRow${row}`, 'SetSelected', item.id === selectedId);
+  // Cell clips are numbered in draw order (headers have their own names), so walk the visible entries.
+  let cell = 0;
+  for (const entry of backpackEntries().slice(firstRow)) {
+    if (entry.header !== undefined) continue;
+    if (cell >= RENDERED_ROWS) break;
+    if (entry.item) call(`${INV}.storagePanel.owRows.owRow${cell}`, 'SetSelected', entry.item.id === selectedId);
+    cell++;
   }
   for (const button of document.querySelectorAll('#controls [data-kind="backpack"]'))
     button.setAttribute('aria-pressed', String(button.dataset.itemId === selectedId));
 }
 
-function scrollForSelected(rows) {
-  const index = rows.findIndex(item => item.id === selectedId);
-  const maximum = Math.max(0, rows.length - VISIBLE_ROWS);
-  const start = Math.max(0, Math.min(maximum, firstRow));
+// Scrolling is by list entry (headers and empty cells included). The last possible first entry is the one
+// after which the whole tail still fits the view.
+function maxFirstRow(entries) {
+  let index = entries.length, height = 0;
+  while (index > 0 && height + entryHeight(entries[index-1]) <= VIEW_HEIGHT) height += entryHeight(entries[--index]);
+  return index;
+}
+function scrollForSelected(entries) {
+  const index = entries.findIndex(entry => entry.item?.id === selectedId);
+  const maximum = maxFirstRow(entries);
+  let start = Math.max(0, Math.min(maximum, firstRow));
   if (index < 0) return start;
-  if (index < start) return index;
-  return index >= start + VISIBLE_ROWS ? Math.min(maximum, index - VISIBLE_ROWS + 1) : start;
+  // A group's header scrolls with its first item.
+  const top = index - (entries[index-1]?.header !== undefined ? 1 : 0);
+  if (top < start) return top;
+  let height = 0;
+  for (let i = start; i <= index; i++) height += entryHeight(entries[i]);
+  while (height > VIEW_HEIGHT && start < index) height -= entryHeight(entries[start++]);
+  return Math.min(start, Math.max(maximum, 0));
 }
 
 function scrollBackpack(delta) {
-  const rows = backpackItems();
-  const next = Math.max(0, Math.min(Math.max(0, rows.length-VISIBLE_ROWS), firstRow + delta));
+  const entries = backpackEntries();
+  const next = Math.max(0, Math.min(maxFirstRow(entries), firstRow + delta));
   if (next === firstRow) return;
   firstRow = next;
   render();
 }
 
+// PageDown / PageUp: the next / previous stock mode, wrapping. Every change selects the first item (observed).
+// Only the backpack sorts: with an equipped cell selected, or a transfer under way, nothing happens.
 function changeSort(direction = 1) {
-  if (transferSourceId) return;
+  if (transferSourceId || navigationPanel !== 'backpack') return;
   sortIndex = (sortIndex + direction + sortModes.length) % sortModes.length;
   const rows = backpackItems();
-  firstRow = scrollForSelected(rows);
+  selectedId = rows[0]?.id || null;
+  lastBackpackId = selectedId;
+  targetGearSlot = gearSlotForItem(itemById(selectedId));
+  firstRow = 0;
   render();
+  if (selectedId) focusItem(selectedId);
   announce(`Backpack sorted by ${sortModes[sortIndex].label.toLowerCase()}`);
 }
 
@@ -863,42 +995,88 @@ function announce(message) {
   if (status) status.textContent = message;
 }
 
+// Full-screen Inspect, as the original draws it (2026-10-04 capture): an opaque dark backdrop, the item card
+// at the top left, the item large in the middle and the hint line along the bottom; the rest of the menu is
+// hidden. The picture is the native 3D frame (it rotates with a drag); that frame has its own near-black
+// background, which the `lighten` blend lets the backdrop replace. A larger frame with a transparent
+// background would look better (needs a change to the preview actor, not made here).
+const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
+// The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
+const INSPECT_ZOOM = 1.3;
+const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
+const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
+  ['[Mouse-Wheel-Up/Mouse-Wheel-Down] Zoom', true], ['[P] Screenshot', false], ['[Escape] Close', true]];
+let inspectCardHome = null, inspectZoom = 1, inspectApplied = false, inspectShownImage = '';
+const INSPECT_HIDDEN_CLIPS = () => [INV+'.equippedPanel', INV+'.storagePanel', INV+'.ammo', INV+'.currencyPanel',
+  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header'];
+// Moves the main card to the top left (remembering where it was) or puts it back.
+function placeInspectCard(on) {
+  const card = INV + '.mainCard';
+  if (!on) {
+    if (inspectCardHome) { set(card, '_x', inspectCardHome.x); set(card, '_y', inspectCardHome.y); }
+    inspectCardHome = null;
+    return;
+  }
+  if (inspectCardHome) return;
+  const bounds = readBounds(card + '.bkgd');
+  if (!bounds) return;
+  inspectCardHome = {x:Number(get(card, '_x')), y:Number(get(card, '_y'))};
+  const scale = Number(get(INV, '_xscale')) / 100 || 1;
+  set(card, '_x', inspectCardHome.x + (INSPECT_CARD_LEFT - bounds.xMin) / scale);
+  set(card, '_y', inspectCardHome.y + (INSPECT_CARD_TOP - bounds.yMin) / scale);
+}
+// The converted movie also draws full-screen glow and scanline layers, which would sit over the opaque backdrop.
+// In Inspect only the card and the hint line are wanted, so the player is clipped to those two rectangles (one
+// polygon, joined by a zero-width bridge).
+function clipMovieToInspectParts() {
+  const pct = (x, y) => `${(100 * x / 1280).toFixed(3)}% ${(100 * y / 720).toFixed(3)}%`;
+  const rects = [readBounds(INV + '.mainCard.bkgd'), readBounds(ROOT + '.tooltips.tooltips') || readBounds(ROOT + '.tooltips')]
+    .filter(Boolean).map(b => [b.xMin - 6, b.yMin - 22, b.xMax + 6, b.yMax + 6]);
+  if (!rects.length) return;
+  const points = [];
+  for (const [x0, y0, x1, y1] of rects) points.push(pct(x0, y0), pct(x1, y0), pct(x1, y1), pct(x0, y1), pct(x0, y0));
+  for (let i = rects.length - 2; i >= 0; i--) points.push(pct(rects[i][0], rects[i][1]));
+  player.style.clipPath = `polygon(${points.join(',')})`;
+}
 function updateInspect() {
-  const inspect = document.getElementById('inspect-preview');
+  const inspect = document.getElementById('inspect-preview'), backdrop = document.getElementById('inspect-backdrop');
   const item = itemById(selectedId);
   if (!inspect) return;
-  if (!inspectMode || !item) { inspect.hidden = true; return; }
+  const on = Boolean(inspectMode && item);
+  if (on !== inspectApplied) {
+    inspectApplied = on;
+    backdrop.hidden = !on;
+    document.getElementById('controls').style.display = on ? 'none' : '';
+    for (const path of INSPECT_HIDDEN_CLIPS()) set(path, '_visible', !on);
+    placeInspectCard(on);
+    if (!on) { player.style.clipPath = ''; applyMovieVisibility(); }
+  }
+  if (on) clipMovieToInspectParts();
+  if (!on) { inspect.hidden = true; return; }
   if (inspectItemId !== item.id) {
     inspectItemId = item.id;
     inspectYaw = inspectPitch = 0;
-    inspectImage = '';
+    inspectImage = inspectShownImage = '';
     inspectResolved = false;
+    inspectZoom = INSPECT_ZOOM;
     requestInspectFrame();
   }
-  const bounds = readBounds(INV + '.mainCard.bkgd');
-  if (!bounds) { inspect.hidden = true; return; }
-  Object.assign(inspect.style, {
-    left:`${bounds.xMin / 12.8}%`, top:`${bounds.yMin / 7.2}%`,
-    width:`${(bounds.xMax-bounds.xMin) / 12.8}%`, height:`${(bounds.yMax-bounds.yMin) / 7.2}%`
-  });
   inspect.replaceChildren();
-  const title = document.createElement('strong');
-  title.textContent = item.name;
-  title.style.color = '#' + color(item).toString(16).padStart(6, '0');
-  inspect.appendChild(title);
+  inspect.style.setProperty('--zoom', String(inspectZoom));
   const picture = document.createElement('div');
   picture.className = 'inspect-picture';
   const image = document.createElement('img');
   image.alt = `${item.name} preview`;
   image.draggable = false;
   picture.appendChild(image);
-  if (inspectImage) image.src = inspectImage;
+  if (inspectShownImage && inspectItemId === item.id) image.src = inspectShownImage;
+  else if (inspectImage) image.remove();
   else { image.remove(); picture.textContent = inspectResolved || gearSlotForItem(item) ? '3D model unavailable' : 'Loading 3D model…'; }
   inspect.appendChild(picture);
-  const hint = document.createElement('span');
-  hint.textContent = 'Drag to rotate   [F] Close';
-  inspect.appendChild(hint);
   inspect.hidden = false;
+  const markup = INSPECT_HINTS.map(([label, enabled]) =>
+    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('  ');
+  set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="13">${markup}</font></p>`);
 }
 
 function toggleInspect() {
@@ -906,6 +1084,7 @@ function toggleInspect() {
   if (inspectMode) inspectItemId = null;
   // Leaving inspect brings the hidden card back through the normal draw path.
   drawCard();
+  if (!inspectMode) syncSelection(); // the panel arrangement may need to come back
 }
 
 function requestInspectFrame() {
@@ -913,11 +1092,44 @@ function requestInspectFrame() {
   inspectLastRequest = performance.now();
   console.log('OWINSPECT ' + JSON.stringify({id:inspectItemId, yaw:inspectYaw, pitch:inspectPitch}));
 }
+// The native frame is rendered on an opaque near-black clear colour with no alpha. Pixels connected to the border
+// that stay within INSPECT_KEY_TOLERANCE of the corner colour become transparent (flood fill, so the dark ink
+// inside the gun survives) and the picture can sit on the Inspect backdrop. The clear colour is constant, so the
+// tolerance is tight; a looser one ate the gun's black parts. Host choice, not game behaviour.
+const INSPECT_KEY_TOLERANCE = 9;
+function keyOutBackground(dataUrl, id) {
+  const source = new Image();
+  source.onload = () => {
+    if (!inspectMode || id !== inspectItemId || dataUrl !== inspectImage) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = source.naturalWidth; canvas.height = source.naturalHeight;
+    const context = canvas.getContext('2d', {willReadFrequently:true});
+    context.drawImage(source, 0, 0);
+    const image = context.getImageData(0, 0, canvas.width, canvas.height), px = image.data, w = canvas.width, h = canvas.height;
+    const base = [px[0], px[1], px[2]];
+    const near = i => Math.abs(px[i]-base[0]) + Math.abs(px[i+1]-base[1]) + Math.abs(px[i+2]-base[2]) <= INSPECT_KEY_TOLERANCE;
+    const seen = new Uint8Array(w*h), stack = [];
+    const push = (x, y) => { const k = y*w + x; if (!seen[k] && near(k*4)) { seen[k] = 1; stack.push(k); } };
+    for (let x = 0; x < w; x++) { push(x, 0); push(x, h-1); }
+    for (let y = 0; y < h; y++) { push(0, y); push(w-1, y); }
+    while (stack.length) {
+      const k = stack.pop(), x = k % w, y = (k - x) / w;
+      px[k*4+3] = 0;
+      if (x > 0) push(x-1, y); if (x < w-1) push(x+1, y); if (y > 0) push(x, y-1); if (y < h-1) push(x, y+1);
+    }
+    context.putImageData(image, 0, 0);
+    inspectShownImage = canvas.toDataURL('image/png');
+    console.log(`OWINSPECTKEY ${w}x${h} base=${base.join(',')}`);
+    updateInspect();
+  };
+  source.src = dataUrl;
+}
 window.owInspectFrame = reply => {
   if (!inspectMode || reply?.id !== inspectItemId) return;
   inspectImage = typeof reply.image === 'string' && reply.image.startsWith('data:image/png;base64,') ? reply.image : '';
   inspectFrameCount++;
   inspectResolved = true;
+  if (inspectImage) keyOutBackground(inspectImage, reply.id);
   updateInspect();
   if (!inspectImage) document.querySelector('#inspect-preview .inspect-picture').textContent = '3D model unavailable';
 };
@@ -940,6 +1152,11 @@ const endInspectDrag = event => {
   inspectPointer = null;
   requestInspectFrame();
 };
+inspectSurface.addEventListener('wheel', event => {
+  event.preventDefault();
+  inspectZoom = Math.max(0.6, Math.min(2, inspectZoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  inspectSurface.style.setProperty('--zoom', String(inspectZoom));
+}, {passive:false});
 inspectSurface.addEventListener('pointerup', endInspectDrag);
 inspectSurface.addEventListener('pointercancel', endInspectDrag);
 
@@ -1032,7 +1249,7 @@ function applyBackpackSelection(rows, index) {
   lastBackpackId = selectedId;
   targetGearSlot = gearSlotForItem(rows[index]);
   compareId = transferSourceId;
-  const nextFirstRow = scrollForSelected(rows);
+  const nextFirstRow = scrollForSelected(backpackEntries());
   if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
   else { syncSelection(); drawCard(); focusItem(selectedId); }
   announce(itemAriaLabel(itemById(selectedId)));
@@ -1106,9 +1323,10 @@ function equipmentNeighbour(index, direction) {
 }
 
 function enterBackpack() {
-  const rows = backpackItems();
-  const id = rows.find(item => item.id === lastBackpackId)?.id || rows[firstRow]?.id;
-  if (id) { select(id); firstRow = scrollForSelected(rows); render(); focusItem(id); }
+  const entries = backpackEntries();
+  const id = entries.find(entry => entry.item?.id === lastBackpackId)?.item.id
+    || entries.slice(firstRow).find(entry => entry.item)?.item.id;
+  if (id) { select(id); firstRow = scrollForSelected(backpackEntries()); render(); focusItem(id); }
 }
 
 function navigateInventory(direction) {
@@ -1200,20 +1418,24 @@ function applyStatus() {
 // The converted movie re-asserts some visibilities while its opening tween runs, so
 // these are re-applied on every layout poll and not only inside render().
 function applyMovieVisibility() {
-  if (!state) return;
+  if (!state || inspectMode) return;
   // The stock tween temporarily hides values; its native completion callback
   // is absent here. Restore the fields populated from the current snapshot.
   for (const [path, visible] of statVisibility)
     if (get(path, '_visible') !== visible) set(path, '_visible', visible);
   const hasMoney = displayCount(state.money) !== null, hasEridium = displayCount(state.eridium) !== null;
   set(INV+'.ammo', '_visible', hasAmmoField());
-  set(INV+'.currencyPanel', '_visible', hasMoney || hasEridium);
+  // With the cursor in the Backpack the purse gives way to the "BACKPACK used/capacity" plate (seen in the original).
+  const focusView = backpackFocused();
+  set(INV+'.currencyPanel', '_visible', !focusView && (hasMoney || hasEridium));
   set(INV+'.currencyPanel.credits', '_visible', hasMoney);
   set(INV+'.currencyPanel.eridiumCounter', '_visible', hasEridium);
+  set(INV+'.storageCount', '_visible', focusView);
   // Both panels are always reachable here, so only the original's "go to the
   // backpack" chevron is kept (as in the reference); the left one stays hidden.
-  set(INV+'.arrowLeft', '_visible', false);
-  set(INV+'.arrowRight', '_visible', true);
+  const focus = backpackFocused();
+  set(INV+'.arrowLeft', '_visible', focus);
+  set(INV+'.arrowRight', '_visible', !focus);
   // The two dual-wield link brackets are Gunzerker-only art; Maya has no slot pairs.
   set(INV+'.equippedPanel.gunzerker1', '_visible', false);
   set(INV+'.equippedPanel.gunzerker2', '_visible', false);
@@ -1227,89 +1449,91 @@ function applyAmmoHighlight(item) {
   player.ow(INV+'.ammo.highlight', 'gotoAndStop', frame);
 }
 
-// Backpack header: "BACKPACK (<filter>)" from the movie, plus a sub-label ("<category> (<count>)")
-// drawn with the movie's own header clip above the first row and category chevrons beside it.
-// The header clip is attached hidden and only shown once it has real bounds and text: a clip
-// left at its default spot would show the movie's placeholder "Assault Rifles" (seen while the
-// panels were mid-tween), so a failed attempt removes it and is retried by watchLayout().
-//
-// Every refresh attaches the clip under a fresh name and depth. Removing a clip and re-attaching
-// one with the same name in the same frame leaves that name pointing at the doomed clip, so the
-// text and position went to it and the survivor kept the movie's default "Assault Rifles" at the
-// panel origin (the stray label seen right of the Backpack in the engine captures).
-function refreshBackpackHeader(rowBounds = null, columnBounds = null) {
-  const panel = INV + '.storagePanel';
-  if (headerName) call(`${panel}.${headerName}`, 'removeMovieClip');
-  headerName = `owHeader${++headerSerial}`;
-  const path = `${panel}.${headerName}`;
-  const rows = backpackItems();
-  const category = categories[categoryIndex], mode = sortModes[sortIndex];
-  // Original label: "BACKPACK" with a small "(ALL)" filter tag; SetSortLabel accepts the html.
-  // The host-side sort mode takes the tag's place only for the unfiltered list.
-  const tag = category.key === 'all' && mode.key !== 'default' ? mode.label : category.label;
-  call(panel, 'SetSortLabel', `BACKPACK <font size="16">(${escapeHtml(tag)})</font>`);
-  document.querySelectorAll('#controls [data-kind="category"]').forEach(node => node.remove());
-  const panelBounds = readBounds(panel + '.bkgd'), firstRowBounds = rowBounds || readBounds(`${panel}.owRows.owRow0`);
-  headerPending = !panelBounds || !firstRowBounds;
-  if (headerPending) return;
-  // Only a single category can be named honestly for an unfiltered mixed list.
-  const names = [...new Set(rows.map(itemCategoryLabel))];
-  const name = category.match ? category.label : names.length === 1 ? names[0] : 'ALL ITEMS';
-  call(panel, 'attachMovie', 'inventory - storage panel - header', headerName, 2100 + headerSerial);
-  set(path, '_visible', false);
-  const bounds = readBounds(path);
-  if (!bounds || bounds.xMax <= bounds.xMin) { call(path, 'removeMovieClip'); headerPending = true; return; }
-  set(path+'.textField', 'htmlText',
-    `<p align="center"><font face="$WillowBody" size="14" color="#e2edf1">${escapeHtml(name)}</font></p>`);
-  const width = bounds.xMax - bounds.xMin, height = bounds.yMax - bounds.yMin;
-  const desiredX = (firstRowBounds.xMin + firstRowBounds.xMax - width) / 2;
-  const desiredY = firstRowBounds.yMin - height + 4;
-  set(path, '_x', Number(get(path, '_x') || 0) + (desiredX - bounds.xMin) / (PANEL_SCALE * COMPOSITION_SCALE));
-  set(path, '_y', Number(get(path, '_y') || 0) + (desiredY - bounds.yMin) / (PANEL_SCALE_Y * COMPOSITION_SCALE));
-  set(path, '_visible', true);
-  // Chevrons sit in the gutter between the visible cell column (the clip's own bounds include
-  // glow art out to the panel frame) and the panel frame, level with the sub-label.
-  const column = columnBounds || readBounds(`${panel}.owRows.owRow0.hitTestClip`) || firstRowBounds;
-  const shown = readBounds(path) || bounds;
-  const cy = (shown.yMin + shown.yMax) / 2, size = 24;
-  [[-1, '‹', 'Previous category', column.xMin - size - 3],
-   [1, '›', 'Next category', column.xMax + 3]].forEach(([delta, glyph, label, left]) => {
-    const button = overlayButton({xMin:left, xMax:left + size, yMin:cy - size / 2, yMax:cy + size / 2},
-      `${label} (${category.label})`, () => changeCategory(delta), 'category');
-    button.classList.add('chevron');
-    button.textContent = glyph;
-  });
+// Backpack header: "BACKPACK (<mode>)" from the movie. The sub-headers are rows of the list (renderList).
+function refreshBackpackHeader() {
+  // The tag is the sort mode; a transfer shows the Compare list, as the original does.
+  const tag = transferSourceId ? 'COMPARE' : sortModes[sortIndex].label;
+  call(INV + '.storagePanel', 'SetSortLabel', `BACKPACK <font size="16">(${escapeHtml(tag)})</font>`);
 }
 
-function changeCategory(delta) {
-  categoryIndex = (categoryIndex + delta + categories.length) % categories.length;
-  firstRow = 0;
-  const rows = backpackItems();
-  const selected = itemById(selectedId);
-  // Keep an equipped selection; a backpack selection that the filter hides moves to the first row.
-  if (selected && !equippedIds().has(selected.id) && !rows.some(item => item.id === selected.id)) {
-    selectedId = rows[0]?.id || itemById(state.slots[targetSlot])?.id || null;
-    targetGearSlot = gearSlotForItem(itemById(selectedId));
-    compareId = null;
-  }
-  firstRow = scrollForSelected(rows);
-  render();
-  announce(`Backpack category ${categories[categoryIndex].label.toLowerCase()}, ${rows.length} items`);
-}
+// Which of the two panel arrangements applies: the Backpack focus view, or the Equipped view (also used by the
+// compare view, which has its own card tween).
+const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceId && !inspectMode;
+let appliedFocus = false, equippedHome = null;
+const panelPose = () => backpackFocused() ? FOCUS_PANEL : {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:PANEL_LEFT, top:PANEL_TOP};
 
-// Scale and place the Backpack panel (see PANEL_SCALE). Idempotent: nothing is written once the clip
-// is within half a pixel of the target, so the layout watcher does not chase its own change.
+// Scale and place the Backpack panel (see PANEL_SCALE and FOCUS_PANEL). Idempotent: nothing is written once the
+// clip is within half a pixel of the target, so the layout watcher does not chase its own change.
 function placeStoragePanel() {
-  const panel = INV + '.storagePanel';
-  if (Math.abs(Number(get(panel, '_xscale')) - PANEL_SCALE * 100) > 0.5) {
-    set(panel, '_xscale', PANEL_SCALE * 100);
-    set(panel, '_yscale', PANEL_SCALE_Y * 100);
+  const panel = INV + '.storagePanel', pose = panelPose();
+  if (Math.abs(Number(get(panel, '_xscale')) - pose.scale * 100) > 0.5) {
+    set(panel, '_xscale', pose.scale * 100);
+    set(panel, '_yscale', pose.scaleY * 100);
   }
   const bounds = readBounds(panel + '.bkgd');
   if (!bounds) return;
-  const dx = PANEL_LEFT - bounds.xMin, dy = PANEL_TOP - bounds.yMin;
+  const dx = pose.left - bounds.xMin, dy = pose.top - bounds.yMin;
   if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
   if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
+  placeEquippedPanel();
+}
+
+// In the focus view the Equipped panel is shrunk and moved behind the card; the pose it had before is kept and
+// restored when the focus ends.
+function placeEquippedPanel() {
+  const panel = INV + '.equippedPanel', focus = backpackFocused();
+  if (focus) {
+    if (!equippedHome) equippedHome = {x:Number(get(panel, '_x')), y:Number(get(panel, '_y')),
+      xs:Number(get(panel, '_xscale')), ys:Number(get(panel, '_yscale'))};
+    if (Math.abs(Number(get(panel, '_xscale')) - equippedHome.xs * FOCUS_EQUIPPED.scale) > 0.5) {
+      set(panel, '_xscale', equippedHome.xs * FOCUS_EQUIPPED.scale);
+      set(panel, '_yscale', equippedHome.ys * FOCUS_EQUIPPED.scale);
+    }
+    const bounds = call(panel, 'getBounds', ROOT);
+    if (!bounds) return;
+    const dx = FOCUS_EQUIPPED.centreX - (bounds.xMin + bounds.xMax) / 2, dy = FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
+    if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
+    if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
+  } else if (equippedHome) {
+    set(panel, '_xscale', equippedHome.xs); set(panel, '_yscale', equippedHome.ys);
+    set(panel, '_x', equippedHome.x); set(panel, '_y', equippedHome.y);
+    equippedHome = null;
+  }
+  appliedFocus = focus;
+}
+// True when the compare view (a transfer in progress) is for an item the equipped cell `index` cannot take:
+// every gear cell for a weapon, anything but the matching cell for a gear item.
+function compareRefusesCell(index) {
+  const source = transferSourceId ? itemById(transferSourceId) : null;
+  if (!source) return false;
+  const gearSlot = gearSlotForItem(source);
+  return gearSlot ? index !== 4 + gearSlots.findIndex(slot => slot.key === gearSlot) : index >= 4;
+}
+
+// One sub-header row of the list, drawn with the movie's own header clip (the clip that carries the backpack's
+// sub-label) at list offset `y`, centred on the cell column once that column's width is known (placeListHeaders).
+// Its text size is a host choice measured on captures.
+const LIST_HEADER_TEXT_SIZE = 16;
+// Every render attaches headers under fresh names and depths: removing a clip and attaching another under the
+// same name in the same frame leaves the name on the doomed clip, which kept the movie's placeholder text.
+let listHeaderSerial = 0, listHeaderNames = [];
+function drawListHeader(rowGroup, label, y) {
+  const name = `owHdr${++listHeaderSerial}`, path = `${rowGroup}.${name}`;
+  listHeaderNames.push(name);
+  call(rowGroup, 'attachMovie', 'inventory - storage panel - header', name, 3000 + listHeaderSerial);
+  const bounds = call(path, 'getBounds', path);
+  if (!bounds) { call(path, 'removeMovieClip'); return null; }
+  set(path, '_xscale', ROW_SCALE * 100);
+  set(path, '_yscale', ROW_SCALE * 100);
+  richText(`${path}.textField`, escapeHtml(label), LIST_HEADER_TEXT_SIZE, 0xe2edf1, 'center');
+  return {path, y, bounds, centreY:(bounds.yMin + bounds.yMax) / 2 * ROW_SCALE};
+}
+function placeListHeaders(headers, rowWidth) {
+  for (const {path, y, bounds, centreY} of headers) {
+    const width = (bounds.xMax - bounds.xMin) * ROW_SCALE;
+    set(path, '_x', ((rowWidth || width) - width) / 2 - bounds.xMin * ROW_SCALE);
+    set(path, '_y', y + HEADER_PITCH / 2 - centreY);
+  }
 }
 
 function render() {
@@ -1335,10 +1559,12 @@ function render() {
     call(cell, 'SetEmptyCell', !item);
     // SetCellState switches the cell background frame (normal/locked/bad/...); the
     // locked frame carries the padlock art, so the "(EMPTY)" label is hidden there.
-    if (i < 4) {
-      call(cell, 'SetCellState', locked ? 'locked' : 'normal');
-      set(cell+'.emptyLabel', '_visible', !locked && !item);
-    }
+    // Compare view: a cell that cannot take the compared item is outlined red (frame `bad`, `lockedbad` for
+    // a padlocked one). Seen with a weapon compared from either origin: the four gear cells turn red. The
+    // gear-item case below applies the same rule and was not observed (UNVERIFIED).
+    const refused = compareRefusesCell(i);
+    call(cell, 'SetCellState', locked ? (refused ? 'lockedbad' : 'locked') : (refused ? 'bad' : 'normal'));
+    if (i < 4) set(cell+'.emptyLabel', '_visible', !locked && !item);
     call(cell, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     call(cell, 'SetSelected', !locked && i === selectedCell);
     const slot = i < 4 ? null : gearSlots[i-4];
@@ -1363,24 +1589,37 @@ function render() {
     addMarkControls(cell, item, slotButton);
   }
 
-  const rows = backpackItems();
-  firstRow = Math.max(0, Math.min(firstRow, Math.max(0, rows.length-VISIBLE_ROWS)));
+  const rows = backpackItems(), entries = backpackEntries(), maxStart = maxFirstRow(entries);
+  firstRow = Math.max(0, Math.min(firstRow, maxStart));
   const panel = INV + '.storagePanel';
   const panelBounds = call(panel+'.bkgd','getBounds',ROOT);
   const rowGroup = panel + '.owRows';
   if (!frameReady(rowGroup)) call(panel, 'createEmptyMovieClip', 'owRows', 2000);
   const localPanelBounds = call(panel+'.bkgd', 'getBounds', panel);
-  let rowWidth = 0;
+  let rowWidth = 0, firstCellY = null;
   if (panelBounds) {
     const zone = overlayButton(panelBounds, 'Return equipped item to backpack', () => {}, 'backpack-zone');
     zone.tabIndex = -1;
     zone.removeAttribute('title');
     zone.setAttribute('aria-hidden', 'true');
   }
-  for (let row=0; row<RENDERED_ROWS; row++) {
-    const path = `${panel}.owRows.owRow${row}`;
-    call(path, 'removeMovieClip');
-    const item = rows[firstRow+row];
+  // Clips from the previous render go first (same names and depths are reused below).
+  for (let i = 0; i < RENDERED_ROWS + 2; i++) call(`${rowGroup}.owRow${i}`, 'removeMovieClip');
+  for (const name of listHeaderNames) call(`${rowGroup}.${name}`, 'removeMovieClip');
+  listHeaderNames = [];
+  // Draw the visible entries top to bottom; cells are numbered owRow0.. in draw order.
+  let y = 0, row = 0;
+  const headers = [];
+  for (let k = firstRow; k < entries.length && y < VIEW_HEIGHT + PEEK_HEIGHT && row < RENDERED_ROWS + 1; k++) {
+    const entry = entries[k];
+    if (entry.header !== undefined) {
+      const header = drawListHeader(rowGroup, entry.header, y);
+      if (header) headers.push(header);
+      y += HEADER_PITCH;
+      continue;
+    }
+    const item = entry.item;
+    const path = `${rowGroup}.owRow${row}`;
     call(rowGroup, 'attachMovie', 'inventory - cell', `owRow${row}`, 2000+row);
     const localCell = call(path, 'getBounds', path);
     set(path, '_xscale', ROW_SCALE * 100);
@@ -1393,30 +1632,35 @@ function render() {
       set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2);
       set(rowGroup, '_y', localPanelBounds.yMin+75);
       set(path, '_x', -localCell.xMin * ROW_SCALE);
-      set(path, '_y', -localCell.yMin * ROW_SCALE + row*ROW_PITCH);
+      set(path, '_y', -localCell.yMin * ROW_SCALE + y);
     }
+    if (firstCellY === null) firstCellY = y;
     call(path, 'SetSoldOut', false);
     call(path, 'SetEmptyCell', !item);
     call(path, 'SetRarityColor', item ? color(item) : 0);
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     call(path, 'SetSelected', Boolean(item && item.id === selectedId));
+    const partial = y + ROW_PITCH > VIEW_HEIGHT + 1;
+    y += ROW_PITCH;
+    row++;
     if (!item) continue;
     const rowButton = hit(path, '', () => {
       select(item.id);
-      if (row >= VISIBLE_ROWS) { firstRow = scrollForSelected(rows); render(); }
-    }, row < VISIBLE_ROWS ? () => select(item.id) : null, color(item), item, 'backpack', `${path}.hitTestClip`);
-    if (row >= VISIBLE_ROWS && rowButton) rowButton.dataset.partial = 'true';
-    if (row < VISIBLE_ROWS) addMarkControls(path, item, rowButton);
+      if (partial) { firstRow = scrollForSelected(backpackEntries()); render(); }
+    }, partial ? null : () => select(item.id), color(item), item, 'backpack', `${path}.hitTestClip`);
+    if (partial && rowButton) rowButton.dataset.partial = 'true';
+    if (!partial) addMarkControls(path, item, rowButton);
     const button = [...layer.querySelectorAll('[data-item-id]')].find(node => node.dataset.itemId === item.id);
     if (button) button.addEventListener('dblclick', event => { event.preventDefault(); select(item.id); equip(); });
   }
+  placeListHeaders(headers, rowWidth);
   const headerRowBounds = readBounds(rowGroup+'.owRow0');
-  const headerColumnBounds = readBounds(rowGroup+'.owRow0.hitTestClip');
   if (rowWidth) {
     const height = VISIBLE_ROWS * ROW_PITCH + PEEK_HEIGHT;
-    const top = headerRowBounds;
+    // owRow0 may sit below the list origin when a header comes first.
+    const top = headerRowBounds ? headerRowBounds.yMin - (firstCellY || 0) * panelPose().scaleY * COMPOSITION_SCALE : null;
     set(rowGroup, 'scrollRect', {x:0, y:0, width:rowWidth, height});
-    const bottom = top?.yMin + height * PANEL_SCALE_Y * COMPOSITION_SCALE;
+    const bottom = top === null ? 0 : top + height * panelPose().scaleY * COMPOSITION_SCALE;
     const stage = document.getElementById('stage').getBoundingClientRect();
     for (const button of layer.querySelectorAll('[data-partial=true]')) {
       const bounds = button.getBoundingClientRect();
@@ -1431,13 +1675,19 @@ function render() {
     ? state.backpackCapacity : null;
   // The original feeds "used/capacity" to a hidden clip (INV.storageCount) and draws no
   // visible count, so the count stays out of the header (tooltip and screen readers only).
+  call(INV, 'SetStorageInfoCardTitle', 'BACKPACK');
   call(INV, 'SetStorageInfoCardData', capacity ? `${count}/${capacity}` : String(count));
-  refreshBackpackHeader(headerRowBounds, headerColumnBounds);
+  // The plate's number font is a digits-only subset without "/", so the text is set again with the imported font
+  // (the same fix the Skills badges use). Field name found by probing the movie (2026-10-04).
+  const plate = `${INV}.storageCount.capacity`;
+  set(plate, 'html', true);
+  set(plate, 'htmlText', `<font face="$WillowBody" size="${STORAGE_PLATE_SIZE}" color="#${(Number(get(plate, 'textColor')) || 0xe2edf1).toString(16).padStart(6, '0')}">${escapeHtml(capacity ? `${count}/${capacity}` : String(count))}</font>`);
+  refreshBackpackHeader();
   hit(ROOT+'.header.pcCloseButton', 'Close inventory', closeInventory, null, null, null, 'close');
   addHeaderTabs();
   const sortButton = hit(panel+'.pcSortButton', `Sort backpack by ${sortModes[sortIndex].label.toLowerCase()}`, () => changeSort(), null, null, null, 'sort');
   if (sortButton && capacity) sortButton.title = `Backpack ${count}/${capacity}`;
-  const morePrevious = firstRow > 0, moreNext = firstRow+VISIBLE_ROWS < rows.length;
+  const morePrevious = firstRow > 0, moreNext = firstRow < maxStart;
   // The scroll chevrons are only drawn when there is somewhere to scroll.
   set(panel+'.moreUp', '_visible', morePrevious);
   set(panel+'.moreDown', '_visible', moreNext);
@@ -1489,20 +1739,18 @@ function handleKey(event) {
   else if (key === 'q') { event.preventDefault(); dropSelected(); }
   else if (key === 't') { event.preventDefault(); toggleMark('trash'); }
   else if (key === 'f') { event.preventDefault(); toggleInspect(); }
-  else if (key === ']') { event.preventDefault(); changeCategory(1); }
-  else if (key === '[') { event.preventDefault(); changeCategory(-1); }
   else if (key === 'v') { event.preventDefault(); toggleMark('favorite'); }
   else if (key === 'delete' || key === 'backspace') { event.preventDefault(); unequip(); }
   else if (key === 'u') { event.preventDefault(); unequip(); }
   else if (key === 's') { event.preventDefault(); changeSort(); }
   else if (key.startsWith('arrow')) { event.preventDefault(); navigateInventory(key.slice(5)); }
-  else if (key === 'pageup') { event.preventDefault(); changeSort(1); }
-  else if (key === 'pagedown') { event.preventDefault(); changeSort(-1); }
+  else if (key === 'pagedown') { event.preventDefault(); changeSort(1); }
+  else if (key === 'pageup') { event.preventDefault(); changeSort(-1); }
 }
 window.addEventListener('keydown', handleKey);
 let wheelRows = 0;
 dragLayer.addEventListener('wheel', event => {
-  if (!ready || !state || inspectMode || !event.target.closest('[data-kind="backpack"], [data-kind="backpack-zone"], [data-kind="previous"], [data-kind="next"], [data-kind="category"], [data-kind="sort"]')) return;
+  if (!ready || !state || inspectMode || !event.target.closest('[data-kind="backpack"], [data-kind="backpack-zone"], [data-kind="previous"], [data-kind="next"], [data-kind="sort"]')) return;
   event.preventDefault();
   const amount = event.deltaY * (event.deltaMode === 1 ? 1 : event.deltaMode === 2 ? VISIBLE_ROWS : .01);
   if (Math.sign(amount) !== Math.sign(wheelRows)) wheelRows = 0;
@@ -1635,7 +1883,6 @@ function watchLayout() {
     }
     const card = cardSignature();
     if (card && card !== renderedCard) { renderedCard = card; updateInspect(); applyCardOcclusion(); }
-    if (headerPending) refreshBackpackHeader();
   } catch (error) {
     console.error('OpenWillow Inventory layout watch:', error);
   }

@@ -91,6 +91,9 @@ private:
     // Loaded once in the background so opening inventory does not reload SWFs.
     TSharedPtr<SWebBrowser> CachedInventoryBrowser;
     TSharedPtr<SBox> CachedInventoryRoot;
+    // The skills page the same way: loaded hidden at level start so K shows a populated tree at once.
+    TSharedPtr<SWebBrowser> CachedSkillsBrowser;
+    TSharedPtr<SBox> CachedSkillsRoot;
     bool bCloseSkillsRequested = false;
     // Header-tab clicks on either status page: 1 = inventory, 2 = skills (0 = none).
     int32 PendingTabSwitch = 0;
@@ -116,6 +119,14 @@ private:
     // -owinvopenbench=<runs> [-owinvopenbenchdelay=<s>]: open the inventory,
     // wait until the page reports it painted, hold, close, repeat; then quit.
     void TickOpenBench();
+    // -owinvshots: an unattended capture of the inventory page the way a player drives it (open, backpack,
+    // compare from either origin, inspect, tab to Skills one second after the tab), screenshots named
+    // OWCombat_D*.png. It is independent of -owcombatshots, whose key script predates the stock navigation.
+    void TickInvShots();
+    bool bInvShots = false;
+    bool bInventoryPageReady = false, bSkillsPagePopulated = false; // set from the pages' OWINVTIME lines
+    int32 InvShotStep = 0;
+    double InvShotAt = 0;
     int32 OpenBenchRuns = 0, OpenBenchDone = 0, OpenBenchPhase = 0;
     double OpenBenchAt = 0;
     float OpenBenchDelay = 20.f;

@@ -165,3 +165,30 @@ with `python tests/weapon_stats_test.py`.
 
 In-game checks: none by this change; a capture of the card with the new fields
 is a separate step.
+
+## What the page prints on a weapon card (2026-10-04)
+
+AI-assisted. Page and host forwarding only; `tools/weapon_stats.py` is unchanged. The page's printed text for the six
+local slice recipes (their `stats.card` rounded the way the page rounds, single precision) was compared with the real-game
+cards recorded for the same guns (`local/realgame/cards/golden_cards.json`, entries `slice_exact`): **damage, accuracy,
+fire rate, reload, magazine and sale value are equal for the SMG, the pistol, the rifle and the mission pistol; the two
+shotgun recipes differ** (slice shotgun: reload 4.4 against 4.1 and magazine 9 against 10; reward-roll shotgun: reload 3.7
+against 3.5 and magazine 13 against 14; re-running `weapon_stats.py` on the same recipe gives the same numbers, so the
+recipe's parts or a shotgun accessory term differ from the roll the game made, not the page). That belongs to the weapon
+lane. The page did not print some things the real cards have, and now does:
+
+- **Projectile count.** `card.projectiles` above 1 is forwarded as `projectiles`; the damage row prints "21" followed by a
+  smaller gold "x10" (size 10, `#e6d223`, both measured on a real capture and `UNVERIFIED` as exact values). The real
+  card's text carries a `[projectilecount]` tag; the page writes its own markup instead.
+- **Status rows.** `status_dps` and `status_chance` are forwarded as `statusDps`/`statusChance`; fire, shock and corrosive
+  weapons get two rows after the five ("Burn Damage / sec." and "Ignite Chance", "Shock Damage / sec." and "Electrocute
+  Chance", "Corrode Damage / sec." and "Corrode Chance"; icons `elementFire/Shock/Corrosive`), Float with one decimal, the
+  chance with a percent sign. Labels are the ones the golden cards carry; slag has no card, so no rows. The card movie has
+  rows for up to seven stats.
+- **Value colour.** Row values print in the label cyan (`#a4e8f3`), as the real card does; they were white.
+- **Compare arrows.** Arrow only, no difference figure; damage compares as damage x projectiles.
+
+Still not derived (weapon lane): the white flavour lines ("Consumes 2 ammo per shot.", "3.1x Weapon Zoom", "Sustained fire
+increases accuracy.", and the orange "Highly effective vs Flesh." line), so the slice SMG and shotgun cards carry fewer lines
+than the real ones. One more difference found by the golden comparison: the real game names the slice SMG "Inspiring
+Projectile Convergence", the host recipe says "Inspiring" (name composition, not a page matter).
