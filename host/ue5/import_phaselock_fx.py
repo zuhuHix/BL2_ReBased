@@ -615,11 +615,11 @@ return float4(min(4.0, amount * Col.rgb), 1.0);
 
 # Mat_SirenEnergySwirl (translucent): the vortex arcs. Colour = the texture's blue channel x particle colour; alpha = the
 # texture's alpha x particle alpha.
-# Host calibration (UNVERIFIED): alpha x0.5 and a bluer colour, because the host's swirl at 0.30-0.40 s is a thick white
+# Host calibration (UNVERIFIED; round 13 raised it to alpha x0.8 and a more saturated cyan for the first-person capture): alpha x0.5 and a bluer colour, because the host's swirl at 0.30-0.40 s is a thick white
 # vortex where the game's is thin, translucent blue ribbons.
 exact('Mat_SirenEnergySwirl', 'trans', ['EnergySwirl_Dif_Tex'], r"""
 float4 t = Texture2DSample(T0, T0Sampler, UV);
-return float4(min(4.0, t.b * Col.rgb * float3(0.5, 0.8, 1.2)), 0.5 * max(0.0, t.a * Col.a));
+return float4(min(4.0, t.b * Col.rgb * float3(0.25, 0.75, 1.3)), 0.8 * max(0.0, t.a * Col.a));
 """)
 
 # Mat_SirenHandGlow (translucent): a soft glow. A mirrored soft mask read at twice the UV is both the colour weight and the
@@ -659,10 +659,10 @@ float oneMinus = 1.0 - m2;
 float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
 float base = saturate(2.0 * m2);
 float k = base + mixWeight * (m1 - base);
-float3 blue = float3(0.2508, 0.6524, 0.9323);
+float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;   // host calibration (UNVERIFIED): deeper blue, as the game's palm orb
 // Host calibration (UNVERIFIED): the orb texture is scaled by 0.6 instead of the shader's 1.25. At 1.25 the orb's centre is
 // white-blue; the game's palm orb is a saturated deep blue with a bright highlight and thin arcs.
-float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.6;
+float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9;
 return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
 

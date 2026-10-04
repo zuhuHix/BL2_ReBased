@@ -872,3 +872,51 @@ Frames: `local/orch/A/round22/` (host, `-owbubbleradius=290,233,210`). Calibrati
 * **0.30 s void: not fixed.** The void is about 200 px against the game's 330. Two ways of enlarging it (the quad 1.6x, and widening the core inside
   the shader by 1.5x) both made the dark disc fade out to a faint blue ring instead of growing, although the disc's alpha and the darkening formula
   are unchanged; cause not found. The host keeps the shader's own size. Recorded as open together with the 0.80 s whiteout and the interior opacity.
+
+### Round 12 (2026-10-04, after a round 11 score of 6.3/10)
+
+Frames: `local/orch/A/round25/` (host, normal FOV) and `round25fp/` (host with `-owfpfov=45`), both `-owfov=62.15 -owbubbleradius=290,233,210`.
+Calibrations `UNVERIFIED`.
+
+* **Foreground FOV adoption.** With Lane C's `-owfpfov=<n>` the arms and gun use UE 5.8's first-person primitive FOV. The hand effect's pooled
+  sprite components (`UOpenWillowFxComponent`) now take the same first-person primitive type when the arms are first-person relevant
+  (`bFirstPersonSpace`, set in the hand-effect spawn code in `UpdatePhaselockPresentation`; Lane C's BeginPlay hunk is untouched). The tattoo
+  overlay is a material on the arms and follows them already. The bubble, the screen effect and the light stay in world space. Checked by
+  capture: with the flag the swirl, disc and orb stay on the hand, and the hand sheet is much closer to the game (`review7/hand_pairs_fp45.jpg`):
+  the void is large and black, the hand and orb are the right size. The effect is a separate decision for the maintainer (the flag is still opt-in).
+* **The 0.30 s void.** Diagnosis, with a run-time override (`-owfxscalar=Template:Emitter:Parameter:Value[;...]`, no rebuild or import) and a
+  dark-pixel measure over the region above the hand (fraction of pixels below 20/255):
+  * disabling the disc (`DarkCap` 0) removes the void entirely (0.6% dark): the void is that one emitter's, not another layer's;
+  * removing the depth fade (`FadeFloor` 1) with the core 1.5x wider changed little: the soft-particle fade is not the cause;
+  * the core 1.5x wider grew the dark area from about 10% to 25-33%. Round 11 had read this as "fading out" because the enlarged core is a gradient
+    the street shows through, not a solid black disc as in the game; **the cause was the shader's soft falloff, not the size**;
+  * the game's size is also what the narrower foreground FOV gives: with `-owfpfov=45` the unchanged disc is 21% dark and about the game's width.
+  Fix for the normal-FOV case: `CoreScale` 1.6 (wider core in the same quad) and `CoreSharp` 2.5 (steeper edge: coverage x2.5, saturated) on the
+  hand's black orb only; both are skipped when the hand effect is drawn in first-person space. The bubble's black orb keeps the shader's values.
+  The void is now solid and slightly larger than the game's.
+* **Rim weight.** Four more reads of the bubble ring, moved radially by +/-4% and +/-8%, are added as a violet-blue halo (x0.3, tint 0.7, 0.6,
+  1.3): the rim is a soft glow of roughly 12-15 px with a violet haze inside, against the texture ring's 5 px.
+* **Not done:** the wide horizontal blue shafts beside the bubble (150-250 px, lower priority), the frothy white-cyan rim at 4.50 s, the 0.80 s
+  whiteout, interior opacity, the other open items.
+
+### Round 13 (2026-10-04, after a round 12 score of 6/10)
+
+The blind A/B put round 12's thick rim worse than round 11's, and the normal-FOV void widening worse than round 11's hand; round 12's
+release and first-person support were kept.
+
+* **Reverted:** the bubble rim halo (round 11's rim is back) and the hand void's `CoreScale` / `CoreSharp` (in the shader and the table).
+  With first-person space on, the void is unchanged anyway and is the right size. Round 12's note above on the void's diagnosis (the soft falloff,
+  not the size) stands.
+* **Kept:** first-person space for the hand sprites (`bFirstPersonSpace`), the release changes, and the `-owfxscalar=Template:Emitter:Parameter:Value[;...]`
+  diagnostic (below).
+* **Hand, with `-owfpfov=45` (all captures this round use it):** the swirl was a pale ring about 170 px where the game has saturated cyan ribbons
+  with dark gaps about 280 px across. `Mat_SirenEnergySwirl` is back to alpha 0.8 and a more saturated cyan (0.25, 0.75, 1.3); the palm orb's blue
+  is deeper (x0.7) and its texture factor 0.9 (veins). With the first-person field of view these give the right ribbon size and a deep-blue orb. A
+  1.3x orb size table entry made the orb too large (about 90 px against 70) and was removed. The hand and arm remain smaller than the game's (arm
+  mesh and foreground FOV are not this lane's) and the forward fist (a different clip pose) was not attempted.
+* **Quest suite with the flag on:** run through a local copy of `tools/test_quest.ps1` that appends `-owfpfov=45` to both launches
+  (`local/orch/A/test_quest_fp.ps1`, ignored).
+
+`-owfxscalar` (diagnostic, host only): on the command line, `-owfxscalar=Part_SirenASHandOrb:ModulateBlack:DarkCap:0` sets that material scalar on
+every sprite of the named emitter of the named template at creation time, so a material or emitter hypothesis can be tested without a rebuild or an
+asset import. Several overrides are separated by `;`. It is read once and does nothing when absent.

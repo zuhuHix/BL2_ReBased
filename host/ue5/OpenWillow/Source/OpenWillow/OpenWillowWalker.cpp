@@ -1010,6 +1010,7 @@ void AOpenWillowWalker::UpdatePhaselockPresentation(float Now)
             const FTransform Socket(PhaselockFx.HandSocketRotation, PhaselockFx.HandSocketLocation);
             HandFx->SetRelativeLocationAndRotation(Socket.TransformPosition(PhaselockFx.HandTranslation), PhaselockFx.HandSocketRotation);
             HandFx->SortPriorityBase = 50;
+            HandFx->bFirstPersonSpace = Arms->IsFirstPersonRelevant();   // stays on the hand when -owfpfov puts the arms in first-person space
             HandFx->RegisterComponent();
             HandFx->Play(Template, PhaselockFx.HandScale);
             UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock hand effect %s at +%.2f s (%d emitters skipped)"), *Template->Name,

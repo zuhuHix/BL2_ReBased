@@ -1368,7 +1368,10 @@ runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains 
 - `tools/import_phaselock_fx.ps1` waits for `local/ue_run.lock` like the suite scripts. `host/ue5/import_phaselock_fx.py`
   builds the effect materials from own-words notes on their compiled shaders (PHASELOCK_STOCK_DATA.md, Round 6).
   `tools/run_phaselock_shots.ps1 -Extra '-owbubbleradius=<uu>'` overrides the bubble size's mesh-bounds radius, so the
-  small engine-shape dummy can stand in for a real enemy.
+  small engine-shape dummy can stand in for a real enemy. `-owfxscalar=<Template>:<Emitter>:<Parameter>:<Value>[;...]`
+  sets one material scalar on every sprite of that Phaselock emitter as it is created (unknown names do nothing), so an
+  effect hypothesis can be tested with one capture and no rebuild; write the values as literals, since a PowerShell
+  variable inside `-Extra` from a `-File` call is not expanded.
 
 Records: [behavior data](verification/BEHAVIOR_DATA_DECODE.md),
 [weapon balances](verification/WEAPON_BALANCE_DECODE.md),

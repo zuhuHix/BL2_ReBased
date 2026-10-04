@@ -11,7 +11,9 @@
 #include "MaterialShaderPrecompileMode.h"
 #include "MaterialShared.h"
 #include "RHIShaderPlatform.h"
+#include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -695,6 +697,22 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
         for (const FOwFxEmitterScalar& Scalar : EmitterScalars)
             if (Template && Template->Name == Scalar.Template && E.Name == Scalar.Emitter)
                 Mid->SetScalarParameterValue(Scalar.Parameter, Scalar.Value);
+        // Diagnostic override for experiments without a rebuild: -owfxscalar=Template:Emitter:Parameter:Value[;...]
+        {
+            static FString Overrides;
+            static bool bRead = false;
+            if (!bRead) { bRead = true; FParse::Value(FCommandLine::Get(), TEXT("owfxscalar="), Overrides, false); }
+            TArray<FString> Items;
+            Overrides.ParseIntoArray(Items, TEXT(";"));
+            for (const FString& Item : Items)
+            {
+                TArray<FString> Parts;
+                Item.ParseIntoArray(Parts, TEXT(":"));
+                if (Parts.Num() == 4 && Template && Template->Name == Parts[0] && E.Name == Parts[1])
+                    Mid->SetScalarParameterValue(FName(*Parts[2]), FCString::Atof(*Parts[3]));
+            }
+        }
+        if (bFirstPersonSpace) C->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
         for (int32 Slot = 0; Slot < FMath::Max(1, C->GetNumMaterials()); ++Slot) C->SetMaterial(Slot, Mid);
         C->RegisterComponent();
         S.Pool.Add(C);

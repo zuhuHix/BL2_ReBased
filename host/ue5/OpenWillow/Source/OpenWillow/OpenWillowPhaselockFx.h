@@ -130,6 +130,9 @@ public:
     bool IsFinished() const { return bPlaying && bFinished; }
     // Screen particle: each particle is drawn as a quad covering the camera's view (host stand-in).
     bool bFillScreen = false;
+    // Draw the sprites in the first-person primitive space (UE 5.8's first-person field of view), as the arms are when the walker
+    // runs with -owfpfov: effects attached to the hand then stay on it. Set before the first Render.
+    bool bFirstPersonSpace = false;
     // Translucency sort priority of the first emitter; later emitters draw above earlier ones (Cascade emitter order).
     int32 SortPriorityBase = 0;
     // Diagnostics for tests and logs.
