@@ -42,6 +42,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
 CENSUS = ROOT / 'local/slice/ambient_npcs.json'
 ASSETS = ROOT / 'local/slice/ambient/ambient_assets.json'
 OUT = ROOT / 'local/slice/ambient_world.json'
@@ -131,19 +132,30 @@ def observed_spawns(args, nodes, perches, kinds):
             mode = dict(wander=False, load_balanced=False, hold=True)     # standing where the Kismet left it: no node to use
         else:
             mode = dict(wander=True, load_balanced=True, hold=False)
+        spawn_loc, spawn_yaw, fixed_z = loc, (pawn['yaw'] or 0) * 360.0 / 65536.0, True
+        if mode['wander']:
+            fixed_z = False
+        elif on_perch:
+            # The game snaps an idle pawn onto its perch and the start clip's root motion then walks it to where it was found, so
+            # the host starts at the node (x, y, yaw) and keeps the observed height.
+            spawn_loc, spawn_yaw = [node['location'][0], node['location'][1], loc[2]], node['yaw']
         key = (kind, round(loc[0]), round(loc[1]))
         if key in seen:
             continue
         seen.add(key)
-        spawns.append({'id': f'obs{len(spawns):02d}_{kind}_{node["name"]}', 'den': 'observed in the real game', 'population': 'PopDef_NPC_*',
-                       'kind': kind, 'location': loc, 'yaw': (pawn['yaw'] or 0) * 360.0 / 65536.0, 'start_node': node['name'],
+        spawns.append({'pawn_path': pawn['path'], 'id': f'obs{len(spawns):02d}_{kind}_{node["name"]}', 'den': 'observed in the real game', 'population': 'PopDef_NPC_*',
+                       'kind': kind, 'location': spawn_loc, 'yaw': spawn_yaw, 'fixed_z': fixed_z, 'start_node': node['name'],
                        'route_source': f'real game t0: {"stood on the perch" if on_perch else "moved %.0f uu in the sample" % moved if moved > 150 else "stood"}',
                        **mode})
     return spawns
 
 
-def showcase_for(spawns, nodes_by_name):
-    """Up to 6 idle pawns on different perch definitions, then one walker (found when its turn comes)."""
+def showcase_for(spawns, nodes_by_name, stops=None):
+    """The round-1 stops when given, else up to 6 idle pawns on different perch definitions; then one walker (found by the host)."""
+    if stops:
+        female = next((s['id'] for s in spawns if s['kind'] == 'CitizenFemale' and not s['wander'] and not s.get('hold') and s['id'] not in stops
+                       and s['id'].startswith('obs')), None)
+        return list(stops) + ([female] if female else []) + ['@walker']
     chosen, used = [], set()
     for s in spawns:
         node = nodes_by_name[s['start_node']]
@@ -152,8 +164,109 @@ def showcase_for(spawns, nodes_by_name):
             chosen.append(s['id'])
         if len(chosen) == 6:
             break
-    chosen += ['@walker']             # resolved by the host to whichever walking pawn it finds
-    return chosen
+    return chosen + ['@walker']
+
+
+
+HAIR_GAIN = 1.5     # UNVERIFIED stand-in: hair tint = the pawn's zone-A midtone times this (the original shades three colour zones from p_Masks)
+
+
+def attachment_transforms(kind, bones):
+    """Relative transform of each bone's attachment frame in the UE5 skeleton, per bone: {bone: ([x, y, z], [qx, qy, qz, qw])}.
+
+    The static meshes are modelled in the UE3 bone frame; after UModel's glTF export and the UE5 import their vertices carry the same Y
+    mirror C as the skeletal mesh (md5 -> UE5 is the mirror, checked by slice_npc_assets.convert_subset). So the world transform in UE5
+    is C W C^-1 for the md5 bind world W of the bone, and relative to the imported bone's bind world T it is T^-1 C W C^-1.
+    UNVERIFIED until looked at on a head."""
+    import numpy as np
+    from prepare_character_anims import MIRROR, matrix, to_quat, ue_matrix
+    from prepare_character_pose import read_joints
+    from prepare_sanctuary_pillar import numbers  # noqa: F401  (imported for read_joints' dependencies)
+    md5 = next((ROOT / 'local/external/umodel/slice-npc' / f'Amb_{kind}').rglob('*.md5mesh'))
+    joints = {j[0]: j for j in read_joints(md5.read_text(encoding='utf-8'))}
+    ref = {b['name']: b for b in json.loads((ROOT / f'local/slice/ambient/ref_pose_{kind}.json').read_text(encoding='utf-8'))}
+    c = MIRROR
+    out = {}
+    for bone in bones:
+        _, _, position, orientation = joints[bone]
+        w = matrix(position, orientation)
+        t = ue_matrix(ref[bone]['loc'], ref[bone]['quat'])
+        rel = np.linalg.inv(t) @ c @ w @ np.linalg.inv(c)
+        out[bone] = ([round(float(v), 4) for v in rel[:3, 3]], [round(float(v), 6) for v in to_quat(rel[:3, :3])])
+    return out
+
+
+def annotate_looks(spawns, compose_file, kinds, report):
+    """Add head material and attachments (hair, hats, gear) to the observed spawns from an amb_compose capture."""
+    compose = {row['path']: row for row in json.loads(Path(compose_file).read_text(encoding='utf-8'))}
+    transforms = {kind: attachment_transforms(kind, {'Head', 'Jaw', 'Spine3'}) for kind in kinds}
+    missing = 0
+    for spawn in spawns:
+        row = compose.get(spawn.get('pawn_path'))
+        if not row:
+            missing += 1
+            continue
+        head = row['materials'][0] if row['materials'] else None
+        if head and head.get('textures', {}).get('p_Diffuse'):
+            key = f'{spawn["kind"]}_{head["textures"]["p_Diffuse"].rsplit(".", 1)[-1]}'
+            if key in report['heads']:
+                spawn['head_material'] = report['heads'][key]
+        items = []
+        for att in row['attachments']:
+            mesh = att.get('static_mesh')
+            info = report['meshes'].get(mesh.rsplit('.', 1)[-1]) if mesh else None
+            if not info or att['bone'] not in transforms[spawn['kind']]:
+                continue
+            mat = None
+            mats = [m for m in att.get('materials') or [] if m]
+            if mats and mats[0].get('parent'):
+                mat = report['materials'].get('MI_' + mats[0]['parent'].rsplit('.', 1)[-1])
+            mat = mat or report['materials'].get(f'MI_{mesh.rsplit(".", 1)[-1]}_0')
+            loc, quat = transforms[spawn['kind']][att['bone']]
+            item = {'mesh': info['asset'], 'bone': att['bone'], 'location': loc, 'quat': quat, 'material': mat}
+            if 'Hair' in mesh and mats and mats[0].get('vectors', {}).get('p_AColorMidtone'):
+                a = mats[0]['vectors']['p_AColorMidtone']
+                item['tint'] = [round(min(1.0, v * HAIR_GAIN), 4) for v in a[:3]]
+            items.append(item)
+        spawn['attachments'] = items
+    return missing
+
+
+# The stops of the round-1 review (same perches, so frames compare): (perch node, kind). The population of a later real-game session
+# does not repeat the earlier one, so when nobody stands on such a perch in the capture a pawn is added there at the pose the
+# first capture found (--stops-from), with the look (head, hair, hats) of an observed pawn of that kind, taken in turn.
+ROUND1_STOPS = [('Perch_66', 'CitizenMale'), ('Perch_186', 'CitizenMale'), ('Perch_115', 'CitizenMale'), ('Perch_166', 'CitizenFemale'),
+                ('Perch_4', 'CitizenMale')]
+
+
+def add_round1_stops(spawns, args, nodes_by_name):
+    first = json.loads(Path(args.stops_from).read_text(encoding='utf-8'))
+    added = []
+    donors = {}
+    for s in spawns:
+        if 'head_material' in s:
+            donors.setdefault(s['kind'], []).append(s)
+    for perch, kind in ROUND1_STOPS:
+        taken = next((s for s in spawns if s['start_node'] == perch and not s['wander'] and not s.get('hold') and s['kind'] == kind), None)
+        if not taken and any(s['start_node'] == perch and not s['wander'] and not s.get('hold') for s in spawns):
+            # Somebody of the other kind already stands here: that pawn is the stop (a second one would overlap it).
+            taken = next(s for s in spawns if s['start_node'] == perch and not s['wander'] and not s.get('hold'))
+        if taken:
+            added.append(taken['id'])
+            continue
+        node = nodes_by_name[perch]
+        live = [p for p in first['pawns'] if p.get('name') == 'Sanctuary Citizen' and p['loc'] != [0.0, 0.0, 0.0]
+                and math.dist(p['loc'][:2], node['location'][:2]) < 60.0]
+        z = live[0]['loc'][2] if live else node['location'][2] + 30.0
+        donor = donors[kind][len(added) % len(donors[kind])]
+        spawn = {'pawn_path': None, 'id': f'stop_{perch}', 'den': 'round-1 stop', 'population': 'PopDef_NPC_*', 'kind': kind,
+                 'location': [node['location'][0], node['location'][1], z], 'yaw': node['yaw'], 'fixed_z': True, 'start_node': perch,
+                 'route_source': f'round-1 stop: nobody on this perch in this capture; pose from the first capture, look borrowed from {donor["id"]}',
+                 'wander': False, 'load_balanced': False, 'hold': False, 'head_material': donor.get('head_material'),
+                 'attachments': donor.get('attachments', [])}
+        spawns.append(spawn)
+        added.append(spawn['id'])
+    return added
 
 
 def build(args):
@@ -171,7 +284,17 @@ def build(args):
         ai = ident['ai_class_properties']
         scale = patrol_speed_scale(args.reader, cooked, ident['pawn_properties']['bodyclass'])
         speed = float(ai['groundspeed']) * float(ai.get('walkingpct', 1)) * scale
-        kinds[name] = {'display_name': ai['defaultdisplayname'], 'mesh': use['skeletal_mesh'], 'mesh_offset': use['mesh_offset'],
+        tracks = json.loads((ROOT / f'local/slice/ambient/anim_tracks_{name}.json').read_text(encoding='utf-8'))
+        # Root-bone travel of each clip (last frame minus first, UE units, mesh frame): the stock perch clips walk the pawn onto its
+        # wall or counter and back (BangOnWall start +25.8 forward). The host moves the actor by this when a clip ends, so the next
+        # clip (whose root starts at zero) continues where the last one stopped.
+        root_end = {}
+        for role in use['anims']:
+            root = (tracks.get(role) or {}).get('tracks', {}).get('Root')
+            if root and root['pos']:
+                a, b = root['pos'][0], root['pos'][-1]
+                root_end[role] = [round(b[i] - a[i], 3) for i in range(3)]
+        kinds[name] = {'root_end': root_end, 'display_name': ai['defaultdisplayname'], 'mesh': use['skeletal_mesh'], 'mesh_offset': use['mesh_offset'],
                        'speed': round(speed, 3), 'speed_note': f'GroundSpeed {ai["groundspeed"]} x WalkingPct {ai.get("walkingpct", 1)} x patrol SpeedScale {scale} (the product equals the Velocity read from one live walking citizen in the real game, 150; the native SetPawnMovementSpeed was not read)',
                        'yaw_rate': float(ai['rotationrate']['Yaw']) * 360.0 / 65536.0, 'clips': dict(use['anims'])}
     if not kinds:
@@ -255,6 +378,11 @@ def build(args):
         nodes.append(entry)
     if args.observed:
         spawns = observed_spawns(args, nodes, perches, kinds)
+        if args.compose:
+            report = json.loads((ROOT / 'local/slice/ambient/editor_report_attach.json').read_text(encoding='utf-8'))
+            notes['compose_missing'] = annotate_looks(spawns, args.compose, kinds, report)
+            if args.stops_from:
+                notes['round1_stops'] = add_round1_stops(spawns, args, {n['name']: n for n in nodes})
         notes['points_realised'] = len(spawns)
     names = {n['name'] for n in nodes}
     missing = [s['id'] for s in spawns if s['start_node'] not in names]
@@ -263,7 +391,7 @@ def build(args):
 
     result = {'schema': 'ow-ambient-world-v1', 'tool': 'tools/prepare_ambient_world.py', 'generated': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
               'level': LEVEL, 'kinds': kinds, 'perches': perches, 'perch_definitions_dropped': dropped, 'nodes': nodes, 'spawns': spawns,
-              'views': views_for(spawns, {n['name']: n for n in nodes}), 'showcase': showcase_for(spawns, {n['name']: n for n in nodes}),
+              'views': views_for(spawns, {n['name']: n for n in nodes}), 'showcase': showcase_for(spawns, {n['name']: n for n in nodes}, notes.get('round1_stops')),
               'counts': notes, 'observed': bool(args.observed)}
     return result
 
@@ -323,6 +451,8 @@ def main():
     ap.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
     ap.add_argument('--observed', help='real-game dump (ambient_npcs.py amb_dump) whose live citizens become the spawns')
     ap.add_argument('--samples', help='real-game position samples (ambient_npcs.py amb_sample) used with --observed')
+    ap.add_argument('--compose', help='real-game amb_compose output (hair, hats, heads of the observed pawns); needs the attach step')
+    ap.add_argument('--stops-from', help='an earlier real-game dump: pose of pawns added at the round-1 review perches')
     ap.add_argument('--output', default=str(OUT))
     args = ap.parse_args()
     if not args.game:

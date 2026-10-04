@@ -930,7 +930,8 @@ lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-
 `docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
 `scripts/ambient_npcs.py` (`Invoke-GamePyFile ... ambient_npcs.py ambient`) lists live pawns and dens (`amb_pawns`,
 `amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
-Sanctuary ambient NPC record.
+Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials and attached meshes (hair, hats, gear);
+`amb_view_*`, `amb_cam` and `amb_aim_at` frame a pawn.
 
 ## Sanctuary ambient NPCs (host, behind a flag)
 
@@ -940,6 +941,7 @@ cycle and node walks with stand-in rules (`docs/verification/SANCTUARY_AMBIENT_N
 ```powershell
 python tools/census_ambient_npcs.py                      # dens, points, node graph, perch definitions -> local/slice/
 powershell -File tools/seed_ambient_npc_assets.ps1       # UModel extraction, clip conversion, import (needs OPENWILLOW_UMODEL)
+powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <amb_compose json>   # hair, hats, gear, head textures
 python tools/prepare_ambient_world.py                    # host manifest local/slice/ambient_world.json (--observed copies a capture)
 powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
 ```

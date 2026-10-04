@@ -2,6 +2,9 @@
 #include "OpenWillowWalker.h"
 #include "Animation/AnimSequence.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
@@ -97,7 +100,12 @@ void FOpenWillowAmbientWorld::Load(const FString& File)
         Out.MeshOffset = Vec(K, TEXT("mesh_offset"));
         Out.Speed = Num(K, TEXT("speed"));
         Out.YawRate = Num(K, TEXT("yaw_rate"));
+        double Ink = 0;
+        if (K->TryGetNumberField(TEXT("outline_cm"), Ink)) Out.OutlineCm = float(Ink);
         for (const auto& Clip : Obj(K, TEXT("clips"))->Values) Out.Clips.Add(FString(*Clip.Key), AssetPath(Clip.Value->AsString()));
+        const TSharedPtr<FJsonObject>* RootEnds = nullptr;
+        if (K->TryGetObjectField(TEXT("root_end"), RootEnds) && RootEnds && *RootEnds)
+            for (const auto& Entry : (*RootEnds)->Values) Out.RootEnd.Add(FString(*Entry.Key), Vec(*RootEnds, *Entry.Key));
         if (!Out.Clips.Contains(TEXT("idle")) || !Out.Clips.Contains(TEXT("walk"))) Missing(KindName + TEXT(" has no idle/walk clip"));
         Kinds.Add(KindName, Out);
     }
@@ -163,6 +171,30 @@ void FOpenWillowAmbientWorld::Load(const FString& File)
         Out.bWander = S->GetBoolField(TEXT("wander"));
         Out.bLoadBalanced = S->GetBoolField(TEXT("load_balanced"));
         S->TryGetBoolField(TEXT("hold"), Out.bHold);
+        S->TryGetBoolField(TEXT("fixed_z"), Out.bFixedZ);
+        S->TryGetStringField(TEXT("head_material"), Out.HeadMaterial);
+        const TArray<TSharedPtr<FJsonValue>>* Worn = nullptr;
+        if (S->TryGetArrayField(TEXT("attachments"), Worn) && Worn)
+            for (const auto& WornValue : *Worn)
+            {
+                const auto A = WornValue->AsObject();
+                FOpenWillowAmbientAttachment Att;
+                Att.Mesh = AssetPath(Str(A, TEXT("mesh")));
+                Att.Bone = Str(A, TEXT("bone"));
+                A->TryGetStringField(TEXT("material"), Att.Material);
+                Att.Material = AssetPath(Att.Material);
+                Att.Location = Vec(A, TEXT("location"));
+                const auto& Q = Arr(A, TEXT("quat"));
+                if (Q.Num() != 4) Missing(Out.Id + TEXT(": attachment quat is not 4 numbers"));
+                Att.Rotation = FQuat(Q[0]->AsNumber(), Q[1]->AsNumber(), Q[2]->AsNumber(), Q[3]->AsNumber()).GetNormalized();
+                const TArray<TSharedPtr<FJsonValue>>* Tint = nullptr;
+                if (A->TryGetArrayField(TEXT("tint"), Tint) && Tint && Tint->Num() == 3)
+                {
+                    Att.bTint = true;
+                    Att.Tint = FLinearColor((*Tint)[0]->AsNumber(), (*Tint)[1]->AsNumber(), (*Tint)[2]->AsNumber(), 1.f);
+                }
+                Out.Attachments.Add(Att);
+            }
         Spawns.Add(Out);
     }
     const TArray<TSharedPtr<FJsonValue>>* ShowList = nullptr;
@@ -190,6 +222,10 @@ AOpenWillowAmbientNpc::AOpenWillowAmbientNpc()
     Mesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("Mesh"));
     Mesh->SetupAttachment(Root);
     Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Outline = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("Outline"));
+    Outline->SetupAttachment(Mesh);
+    Outline->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Outline->SetCastShadow(false);
 }
 
 UAnimSequence* AOpenWillowAmbientNpc::Clip(const FString& RoleName) const
@@ -217,6 +253,46 @@ bool AOpenWillowAmbientNpc::Setup(TSharedPtr<const FOpenWillowAmbientWorld> InWo
         Loaded.Add(Clip.Key, Sequence);
     }
     if (!Clip(TEXT("idle")) || !Clip(TEXT("walk"))) return false;
+    if (!Spawn.HeadMaterial.IsEmpty())
+    {
+        if (UMaterialInterface* Head = LoadObject<UMaterialInterface>(nullptr, *AssetPath(Spawn.HeadMaterial))) Mesh->SetMaterial(0, Head);
+        else UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT %s: head material %s did not load"), *Spawn.Id, *Spawn.HeadMaterial);
+    }
+    // Ink line: a copy of the mesh that follows the body, back faces only, pushed out along the normal (the material is the
+    // inverted-hull one host/ue5/import_character_menu_look.py builds for Maya; the original's shader is not read, UNVERIFIED).
+    UMaterialInterface* Ink = Kind->OutlineCm > 0.f ? LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenWillow/Characters/Ambient/Attachments/M_OW_AmbientOutline.M_OW_AmbientOutline")) : nullptr;
+    Outline->SetVisibility(Ink != nullptr);
+    if (Ink)
+    {
+        Outline->SetSkeletalMesh(Skeletal);
+        for (int32 Slot = 0; Slot < Outline->GetNumMaterials(); ++Slot) Outline->SetMaterial(Slot, Ink);
+        Outline->SetScalarParameterValueOnMaterials(TEXT("ThicknessCm"), Kind->OutlineCm);
+        Outline->SetLeaderPoseComponent(Mesh);
+    }
+    for (const FOpenWillowAmbientAttachment& Att : Spawn.Attachments)
+    {
+        UStaticMesh* Piece = LoadObject<UStaticMesh>(nullptr, *AssetPath(Att.Mesh));
+        if (!Piece) { UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT %s: attachment %s did not load"), *Spawn.Id, *Att.Mesh); continue; }
+        UStaticMeshComponent* Component = NewObject<UStaticMeshComponent>(this);
+        Component->SetStaticMesh(Piece);
+        Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Component->SetCastShadow(true);
+        Component->SetupAttachment(Mesh, FName(*Att.Bone));
+        Component->SetRelativeLocationAndRotation(Att.Location, Att.Rotation.Rotator());
+        Component->RegisterComponent();
+        if (!Att.Material.IsEmpty())
+            if (UMaterialInterface* Look = LoadObject<UMaterialInterface>(nullptr, *Att.Material))
+            {
+                if (Att.bTint)
+                {
+                    UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Look, this);
+                    Dynamic->SetVectorParameterValue(TEXT("Tint"), Att.Tint);
+                    Component->SetMaterial(0, Dynamic);
+                }
+                else Component->SetMaterial(0, Look);
+            }
+        Worn.Add(Component);
+    }
     SetActorLocation(Spawn.Location);
     SetActorRotation(FRotator(0, Spawn.Yaw, 0));
     SnapToFloor(0, true);
@@ -232,7 +308,7 @@ bool AOpenWillowAmbientNpc::Setup(TSharedPtr<const FOpenWillowAmbientWorld> InWo
     {
         // Idle pawns ("Perch Only AI"): the scripted target is a perch, so the pawn is snapped onto it (script
         // Action_ScriptedNPC.IdleNPC) and starts the perch cycle at once.
-        SetActorLocation(World->Nodes[Target].Location);
+        SetActorLocation(FVector(World->Nodes[Target].Location.X, World->Nodes[Target].Location.Y, Spawn.bFixedZ ? Spawn.Location.Z : GetActorLocation().Z));
         SetActorRotation(FRotator(0, World->Nodes[Target].Yaw, 0));
         SnapToFloor(0, true);
         Arrive();
@@ -308,7 +384,17 @@ void AOpenWillowAmbientNpc::SnapToFloor(float DeltaSeconds, bool bImmediate)
         FloorZ = bImmediate || !bHaveFloor ? Hit.ImpactPoint.Z : FMath::FInterpTo(FloorZ, Hit.ImpactPoint.Z, DeltaSeconds, 12.f);
         bHaveFloor = true;
     }
-    if (bHaveFloor) SetActorLocation(FVector(At.X, At.Y, FloorZ - Kind->MeshOffset.Z));
+    if (bHaveFloor && !SpawnData.bFixedZ) SetActorLocation(FVector(At.X, At.Y, FloorZ - Kind->MeshOffset.Z));
+}
+
+void AOpenWillowAmbientNpc::ApplyRootEnd()
+{
+    // The stock perch clips carry root motion (the start clip steps the pawn onto its wall or counter). The mesh already shows it
+    // through the root bone while the clip plays; when the clip ends the actor takes the travel over, because the next clip starts
+    // its root at zero again.
+    const FVector* Travel = Kind->RootEnd.Find(PlayingRole);
+    if (!Travel) return;
+    SetActorLocation(GetActorLocation() + GetActorRotation().RotateVector(FVector(Travel->X, Travel->Y, 0)));
 }
 
 void AOpenWillowAmbientNpc::EaseOntoPerch()
@@ -450,6 +536,7 @@ void AOpenWillowAmbientNpc::Tick(float DeltaSeconds)
         else if (Node.bFaceNodeDirection) TurnToward(Node.Yaw, DeltaSeconds);
         if (PhaseTime >= PhaseLength)
         {
+            ApplyRootEnd();
             if (State == EPhase::PerchStart) BeginLoop();
             else AfterPerch();
         }
@@ -474,6 +561,7 @@ void AOpenWillowAmbientNpc::Tick(float DeltaSeconds)
         }
         else if (PhaseTime >= PhaseLength)
         {
+            ApplyRootEnd();
             const float Left = DwellLeft;
             BeginLoop();
             DwellLeft = Left;   // keep the dwell that is left; only the clip choice restarts
@@ -585,7 +673,15 @@ bool AOpenWillowAmbientDirector::ChooseCamera(const AOpenWillowAmbientNpc* Npc, 
             // The player must have floor under the spot, or she falls out of the level.
             FHitResult Floor;
             const bool bFloor = GetWorld()->LineTraceSingleByChannel(Floor, Spot, Spot - FVector(0, 0, 260.f), ECC_Visibility, Query);
-            if (bFloor && !GetWorld()->SweepSingleByChannel(Hit, Chest, Spot, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(35.f), Query))
+            // Another pawn standing on the camera's line of sight to this one would overlap it in the frame (round-1 stop 1: the
+            // neighbour at the next perch stood right behind the subject).
+            bool bBlockedByPawn = false;
+            for (const AOpenWillowAmbientNpc* Other : Pawns)
+            {
+                if (Other == Npc) continue;
+                if (FMath::PointDistToSegment(Other->GetActorLocation(), Spot, Chest) < 130.f) { bBlockedByPawn = true; break; }
+            }
+            if (!bBlockedByPawn && bFloor && !GetWorld()->SweepSingleByChannel(Hit, Chest, Spot, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(35.f), Query))
             {
                 OutCamera = Spot;
                 OutNote = FString::Printf(TEXT("distance %.0f turn %.0f"), Distance, Turn);
@@ -606,26 +702,41 @@ void AOpenWillowAmbientDirector::RunShots(float DeltaSeconds)
     constexpr float ViewSeconds = 12.f, ShotEvery = 2.5f, Settle = 2.5f;
     constexpr int32 ShotsPerView = 3;
     ShotClock += DeltaSeconds;
-    const int32 View = int32(ShotClock / ViewSeconds);
+    // A "@walker" stop gets 30 s: walkers pause at perches, and only one or two are loose in the observed population.
+    int32 View = 0;
+    float ViewStart = 0;
+    for (; View < World->Showcase.Num(); ++View)
+    {
+        const float Length = World->Showcase[View] == TEXT("@walker") ? 30.f : ViewSeconds;
+        if (ShotClock < ViewStart + Length) break;
+        ViewStart += Length;
+    }
     if (View >= World->Showcase.Num())
     {
         Summary();
         FPlatformMisc::RequestExit(false);
         return;
     }
-    const float InView = ShotClock - View * ViewSeconds;
+    const float InView = ShotClock - ViewStart;
     bool bNewView = false;
     if (View != ShotStep)
     {
         ShotStep = View;
         bNewView = true;
         Current.Reset();
+        bSkipView = false;
+    }
+    if (!Current.IsValid())
+    {
+        // Resolve the stop's pawn; a "@walker" stop keeps looking each tick until some walking pawn turns up (walkers pause at perches).
         const FString& Id = World->Showcase[View];
         for (AOpenWillowAmbientNpc* Npc : Pawns)
         {
             if (Id == TEXT("@walker") ? (Npc->Phase() == TEXT("walking") && !Npc->IsHeld() && Npc != PreviousWalker.Get()) : Npc->Label() == Id)
             {
                 Current = Npc;
+                ResolvedAt = InView;
+                bNewView = true;           // place the camera now
                 break;
             }
         }
@@ -633,35 +744,38 @@ void AOpenWillowAmbientDirector::RunShots(float DeltaSeconds)
     }
     if (!Current.IsValid())
     {
-        if (bNewView) UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT view %d %s: no such pawn"), View, *World->Showcase[View]);
+        if (bNewView) UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT view %d %s: no such pawn (yet)"), View, *World->Showcase[View]);
         return;
     }
     AOpenWillowAmbientNpc* Npc = Current.Get();
-    if (bNewView) bSkipView = false;
     const bool bFollow = World->Showcase[View] == TEXT("@walker");
     if (bNewView || (bFollow && FMath::FloorToInt(InView / 2.f) != FMath::FloorToInt((InView - DeltaSeconds) / 2.f)))
     {
         FVector Camera;
         FString Note;
-        if (!ChooseCamera(Npc, Camera, Note, bFollow))
+        const bool bPlaced = ChooseCamera(Npc, Camera, Note, bFollow);
+        if (!bPlaced && bNewView)
         {
             // No spot with floor and a clear line (a pawn at the edge of the map): leave this stop out rather than shoot a wall.
             UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT view %d %s skipped: no free camera spot with floor"), View, *Npc->Label());
             bSkipView = true;
             return;
         }
-        bSkipView = false;
-        Walker->SetActorLocation(Camera, false, nullptr, ETeleportType::TeleportPhysics);
-        Walker->GetCharacterMovement()->StopMovementImmediately();
-        const FVector P = Npc->GetActorLocation();
-        UE_LOG(LogTemp, Display, TEXT("OWAMBIENT view %d %s kind=%s phase=%s pawn %.0f %.0f %.0f yaw %.0f camera %.0f %.0f %.0f (%s)"), View, *Npc->Label(),
-            *Npc->KindName(), *Npc->Phase(), P.X, P.Y, P.Z, Npc->GetActorRotation().Yaw, Camera.X, Camera.Y, Camera.Z, *Note);
+        if (bPlaced)
+        {
+            bSkipView = false;
+            Walker->SetActorLocation(Camera, false, nullptr, ETeleportType::TeleportPhysics);
+            Walker->GetCharacterMovement()->StopMovementImmediately();
+            const FVector P = Npc->GetActorLocation();
+            UE_LOG(LogTemp, Display, TEXT("OWAMBIENT view %d %s kind=%s phase=%s pawn %.0f %.0f %.0f yaw %.0f camera %.0f %.0f %.0f (%s)"), View, *Npc->Label(),
+                *Npc->KindName(), *Npc->Phase(), P.X, P.Y, P.Z, Npc->GetActorRotation().Yaw, Camera.X, Camera.Y, Camera.Z, *Note);
+        }
     }
     if (bSkipView) return;
     const FVector Aim = Npc->GetActorLocation() + FVector(0, 0, 25.f);
     if (Walker->GetController()) Walker->GetController()->SetControlRotation((Aim - (Walker->GetActorLocation() + FVector(0, 0, 70))).Rotation());
-    const int32 Shot = int32((InView - Settle) / ShotEvery);
-    if (InView >= Settle && Shot >= 0 && Shot < ShotsPerView && (View * 8 + Shot) != LastShot)
+    const int32 Shot = int32((InView - ResolvedAt - Settle) / ShotEvery);
+    if (InView - ResolvedAt >= Settle && Shot >= 0 && Shot < ShotsPerView && (View * 8 + Shot) != LastShot)
     {
         LastShot = View * 8 + Shot;
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWAmbient_%02d_%s_%d.png"), View, *Npc->Label().Replace(TEXT("/"), TEXT("-")), Shot), false, false);

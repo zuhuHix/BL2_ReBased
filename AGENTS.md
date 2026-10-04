@@ -88,8 +88,10 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
 - **Phase 1 (Sanctuary):** loads and walks; visual parity still open.
 - **Maya prototype:** in UE5 with Infinity and Phaselock as host prototypes (not stock logic).
 - **Ambient citizens (2026-10-04):** male and female Sanctuary Citizens spawn behind `-owambient`, with stock perch
-  clips and node chains under stand-in movement rules (UNVERIFIED). There are no hats, hair or outfit variants, and
-  no Resistance patrols yet. See `docs/verification/SANCTUARY_AMBIENT_NPCS.md`.
+  clips and node chains under stand-in movement rules (UNVERIFIED). Round 2 added heads, hair and hats copied from
+  what the real game's live citizens carried, Maya's ink line and the perch clips' root motion (critic 5.5/10). Not
+  done: body garment variants, `Master_NPC` zone colours, Resistance patrols. See
+  `docs/verification/SANCTUARY_AMBIENT_NPCS.md`.
 - **Inventory menu:** the real StatusMenu movie runs under Ruffle inside UE5 with a host adapter
   (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.
   Since 2026-10-04 the stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), the

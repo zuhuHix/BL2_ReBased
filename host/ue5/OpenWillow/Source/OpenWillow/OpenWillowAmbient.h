@@ -5,6 +5,7 @@
 
 class UAnimSequence;
 class USkeletalMeshComponent;
+class UStaticMeshComponent;
 
 // Sanctuary ambient NPCs: the citizens, a Resistance fighter and others that stand at "perches" and walk the town's
 // move-node graph. Everything game-derived is read at run time from the ignored manifest written by
@@ -43,7 +44,18 @@ struct FOpenWillowAmbientKind
     FString DisplayName, Mesh;
     FVector MeshOffset = FVector::ZeroVector;
     float Speed = 294, YawRate = 90;
+    float OutlineCm = 0.5f;         // ThicknessCm of the ink-line material (0 = none)
     TMap<FString, FString> Clips;   // role -> UE AnimSequence path
+    TMap<FString, FVector> RootEnd; // role -> root-bone travel over the clip (mesh frame): applied to the actor when the clip ends
+};
+
+struct FOpenWillowAmbientAttachment
+{
+    FString Mesh, Bone, Material;   // UE asset paths; bone of the imported skeleton
+    FVector Location = FVector::ZeroVector;
+    FQuat Rotation = FQuat::Identity;
+    bool bTint = false;
+    FLinearColor Tint = FLinearColor::White;
 };
 
 struct FOpenWillowAmbientSpawn
@@ -53,6 +65,9 @@ struct FOpenWillowAmbientSpawn
     float Yaw = 0;
     int32 StartNode = INDEX_NONE;
     bool bWander = false;           // false = "Perch Only AI" (snapped to the first perch, stays there)
+    FString HeadMaterial;           // material for slot 0 (this pawn's head texture), empty = the kind's own
+    TArray<FOpenWillowAmbientAttachment> Attachments;   // hair, hats, gear seen on the live pawn
+    bool bFixedZ = false;           // the manifest's height is the pawn's real height (observed); no floor trace
     bool bHold = false;             // stand and idle where spawned (observed in the real game)
     bool bLoadBalanced = false;     // Action_ScriptedNPC variant with bLoadBalanceNPC: paths only when the balancer admits it
 };
@@ -104,6 +119,7 @@ private:
     void SnapToFloor(float DeltaSeconds, bool bImmediate);
     void TurnToward(float WantedYaw, float DeltaSeconds);
     void EaseOntoPerch();
+    void ApplyRootEnd();
     void Arrive();
     void BeginLoop();
     void AfterPerch();
@@ -112,6 +128,8 @@ private:
     float LoopSeconds() const;
     UPROPERTY() TObjectPtr<USceneComponent> Root;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> Mesh;
+    UPROPERTY() TObjectPtr<USkeletalMeshComponent> Outline;   // inverted-hull ink line, follows Mesh
+    UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Worn;
     UPROPERTY() TMap<FString, TObjectPtr<UAnimSequence>> Loaded;
     TSharedPtr<const FOpenWillowAmbientWorld> World;
     FOpenWillowAmbientSpawn SpawnData;
@@ -157,5 +175,6 @@ private:
     float ShotClock = 0;
     int32 LastShot = -1;
     bool bSkipView = false;
+    float ResolvedAt = 0;           // time in the stop at which its pawn was found
     TWeakObjectPtr<AOpenWillowAmbientNpc> Current, PreviousWalker;
 };

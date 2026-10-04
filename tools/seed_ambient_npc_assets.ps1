@@ -6,10 +6,12 @@ param(
     [string]$UModel = $env:OPENWILLOW_UMODEL,
     [string]$Python = 'python',
     # Any of: extract, import, preview, capture, manifest. 'all' runs them in order.
-    [ValidateSet('all', 'extract', 'import', 'preview', 'capture', 'manifest')][string[]]$Steps = @('all'),
+    [ValidateSet('all', 'extract', 'import', 'attach', 'preview', 'capture', 'manifest')][string[]]$Steps = @('all'),
     [int]$CaptureWaitSeconds = 40,
     # Keep the already imported meshes/materials and only redo the clip conversion and import (after an animation fix).
-    [switch]$AnimsOnly
+    [switch]$AnimsOnly,
+    # amb_compose output of the real game (tools/real_game/scripts/ambient_npcs.py) for the attach step.
+    [string]$Compose = ''
 )
 # AI-assisted (Claude), 2026-10-04. Seeds the ignored local inputs and UE content for the Sanctuary ambient NPCs (the
 # male and female generic citizens) with tools/ambient_npc_assets.py and the unchanged tools/slice_npc_editor.py run
@@ -18,6 +20,8 @@ param(
 #
 #   extract   tools/ambient_npc_assets.py: identity (our reader), UModel exports (mesh, textures, AnimSet)
 #   import    editor: meshes/textures/materials + reference poses; convert MD5 clips; editor: anim sequences
+#   attach    tools/ambient_npc_assets.py attachments (hair, hats, gear, head textures seen on the live citizens of a real-game capture,
+#             -Compose) + tools/ambient_npc_attach_editor.py (static meshes, materials, matte master, ink-line material)
 #   preview   editor (fresh session): reload every asset, record bounds/bone counts/anim lengths, build preview levels
 #   capture   -game launches of the preview levels, one screenshot each (window capture)
 #   manifest  merge everything into local/slice/ambient/ambient_assets.json
@@ -86,6 +90,26 @@ function Invoke-Editor([string]$Mode) {
     Select-String -LiteralPath $log -Pattern 'LogPython: OW_SLICE' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
 }
 
+function Invoke-AttachEditor {
+    $env:OPENWILLOW_AMBIENT_ATTACH_JOB = Join-Path $ambient 'attach_job.json'
+    $log = Join-Path $logs 'ambient-editor-attach.log'
+    $report = Join-Path $ambient 'editor_report_attach.json'
+    if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report -Force }
+    $script = Join-Path $PSScriptRoot 'ambient_npc_attach_editor.py'
+    Use-EditorLock {
+        $process = Start-Process -FilePath $cmd -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logs 'ambient-editor-attach.stdout.txt') -ArgumentList @(
+            "`"$project`"", '-run=pythonscript', "`"-script=$script`"", '-unattended', '-nullrhi', '-nosplash',
+            '-ddc=InstalledNoZenLocalFallback', "`"-abslog=$log`"")
+        $null = $process.Handle
+        try {
+            if (!$process.WaitForExit(1500000)) { throw 'attach editor timed out' }
+            $code = $process.ExitCode
+        } finally { if (!$process.HasExited) { Stop-Process -Id $process.Id -Force } }
+        if ($code -ne 0 -or !(Test-Path -LiteralPath $report)) { throw "attach editor failed (exit $code); see $log" }
+    }
+    Select-String -LiteralPath $log -Pattern 'LogPython: OW_ATTACH' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
+}
+
 Add-Type -AssemblyName System.Drawing
 if (-not ('OwAmbWin' -as [type])) {
 Add-Type @'
@@ -132,6 +156,11 @@ if (& $run 'import') {
     if (!$AnimsOnly) { Invoke-Editor 'npcs' }  # meshes, textures, materials, reference poses
     Invoke-Tool 'anims'                       # MD5 clips -> bone tracks, using the dumped reference poses
     Invoke-Editor 'anims'
+}
+if (& $run 'attach') {
+    if ($Compose) { & $Python $tool attachments --compose $Compose } else { & $Python $tool attachments }
+    if ($LASTEXITCODE -ne 0) { throw 'ambient_npc_assets.py attachments failed' }
+    Invoke-AttachEditor
 }
 if (& $run 'preview') { Invoke-Editor 'preview' }
 if (& $run 'capture') {

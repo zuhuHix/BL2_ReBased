@@ -256,3 +256,52 @@ def amb_aim_at(px, py, pz):
     dx, dy, dz = px - me.X, py - me.Y, (pz + 25.0) - (me.Z + 64.0)
     pc.SetRotation(unrealsdk.make_struct("Rotator", Pitch=int(math.degrees(math.atan2(dz, math.hypot(dx, dy))) * 65536 / 360),
                                          Yaw=int(math.degrees(math.atan2(dy, dx)) * 65536 / 360), Roll=0))
+
+
+def _mic_info(mic):
+    """Name, parent, texture and vector parameters of a (runtime) material instance."""
+    if mic is None:
+        return None
+    row = {"name": _name(mic), "class": mic.Class.Name}
+    try:
+        row["parent"] = _name(mic.Parent)
+    except Exception:
+        pass
+    try:
+        row["textures"] = {str(t.ParameterName): _name(t.ParameterValue) if t.ParameterValue else None for t in mic.TextureParameterValues}
+    except Exception:
+        pass
+    try:
+        row["vectors"] = {str(v.ParameterName): [round(v.ParameterValue.R, 4), round(v.ParameterValue.G, 4), round(v.ParameterValue.B, 4), round(v.ParameterValue.A, 4)]
+                          for v in mic.VectorParameterValues}
+    except Exception:
+        pass
+    return row
+
+
+def amb_compose(name):
+    """Per live citizen: skeletal-mesh materials (with parameters) and everything attached to its mesh (hats, hair, gear): component,
+    static mesh, its materials, bone and relative transform. Written to <RG_OUT>/<name>.json."""
+    out = []
+    for path, loc, yaw, speed in amb_live():
+        pawn = _find(path)
+        if pawn is None:
+            continue
+        row = {"path": path, "loc": loc, "yaw": yaw, "mesh": _name(pawn.Mesh.SkeletalMesh), "materials": [_mic_info(m) for m in pawn.Mesh.Materials], "attachments": []}
+        for a in pawn.Mesh.Attachments:
+            comp = a.Component
+            item = {"bone": str(a.BoneName), "loc": _vec(a.RelativeLocation),
+                    "rot": [a.RelativeRotation.Pitch, a.RelativeRotation.Yaw, a.RelativeRotation.Roll],
+                    "scale": [round(a.RelativeScale.X, 4), round(a.RelativeScale.Y, 4), round(a.RelativeScale.Z, 4)],
+                    "component": _name(comp), "class": comp.Class.Name if comp else None}
+            try:
+                item["static_mesh"] = _name(comp.StaticMesh)
+                item["hidden"] = bool(getattr(comp, "HiddenGame", False))
+                item["materials"] = [_mic_info(m) for m in comp.Materials]
+            except Exception as error:
+                item["error"] = repr(error)[:120]
+            row["attachments"].append(item)
+        out.append(row)
+    path = Path(RG_OUT) / (name + ".json")
+    path.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    return {"pawns": len(out), "attachments": sum(len(r["attachments"]) for r in out)}

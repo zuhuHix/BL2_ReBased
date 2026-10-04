@@ -291,6 +291,102 @@ def anims_step(args):
     S.write_json(AMBIENT / 'anims.json', report)
 
 
+# ---------------------------------------------------------------------------------------------------- attachments (hair, hats, heads)
+ATTACH_DEST = f'{DEST}/Attachments'
+
+
+def attachments_step(args):
+    """Hair, hats, gear and head variants seen on the live citizens of a real-game capture (tools/real_game/scripts/ambient_npcs.py
+    amb_compose): UModel exports of each static mesh and of the textures its material (and each head material) names, resolved with
+    our reader; writes local/slice/ambient/attach_job.json for tools/ambient_npc_attach_editor.py."""
+    game, cooked, reader_path = S.settings(args)
+    umodel = S.umodel_path(args)
+    reader = S.Reader(reader_path, cooked)
+    compose = json.loads(Path(args.compose).read_text(encoding='utf-8'))
+    group = 'Amb_Attach'
+    shutil.rmtree(S.UMODEL_OUT / group, ignore_errors=True)
+    records = []
+
+    def go(job_id, package, obj, cls, formats):
+        record = S.run_umodel(umodel, cooked, job_id, group, package, obj, cls, formats)
+        print(f'  {job_id}: {"ok" if record["success"] else "FAILED"} files={len(record["outputs"])}')
+        records.append(record)
+        return record
+
+    textures_done = {}
+
+    def texture_file(path):
+        """Export one Texture2D (png) once; return the file or None."""
+        if path in textures_done:
+            return textures_done[path]
+        home = home_package(reader, path)
+        file = None
+        if home:
+            r = go(f'{group}.texture.{S.leaf(path)}', home, S.leaf(path), 'Texture2D', ['png'])
+            hit = S.find_output(group, S.leaf(path), ['png', 'tga'])
+            file = str(hit) if hit and r['success'] else None
+        textures_done[path] = file
+        return file
+
+    def mic_textures(mic_path):
+        home = home_package(reader, mic_path)
+        if not home:
+            return {}
+        info = mic_parameters(reader_path, cooked, home, mic_path)
+        out = {}
+        for parameter, tex in info['textures'].items():
+            if parameter in ('p_Diffuse', 'p_Normal'):
+                f = texture_file(tex)
+                if f:
+                    out['Diffuse' if parameter == 'p_Diffuse' else 'Normal'] = f
+        return out
+
+    meshes, materials, heads = {}, {}, {}
+    for pawn in compose:
+        kind = {'Skel_GenericMale': 'CitizenMale', 'Skel_GenericFemale': 'CitizenFemale'}.get(pawn['mesh'].rsplit('.', 1)[-1])
+        head = pawn['materials'][0] if pawn['materials'] else None
+        if kind and head and head.get('textures', {}).get('p_Diffuse'):
+            key = (kind, head['textures']['p_Diffuse'])
+            if key not in heads:
+                heads[key] = {'kind': kind, 'id': f'{kind}_{S.leaf(head["textures"]["p_Diffuse"])}', 'parent': head.get('parent'),
+                              'textures': {'Diffuse': texture_file(head['textures']['p_Diffuse'])}}
+                if head['textures'].get('p_Normal'):
+                    heads[key]['textures']['Normal'] = texture_file(head['textures']['p_Normal'])
+        for att in pawn['attachments']:
+            mesh_path = att.get('static_mesh')
+            if not mesh_path or mesh_path in meshes:
+                pass
+            if mesh_path and mesh_path not in meshes:
+                package = home_package(reader, mesh_path)
+                if not package:
+                    meshes[mesh_path] = {'error': 'not in the town packages'}
+                    continue
+                r = go(f'{group}.mesh.{S.leaf(mesh_path)}', package, S.leaf(mesh_path), 'StaticMesh', ['gltf'])
+                gltf = S.find_output(group, S.leaf(mesh_path), ['gltf'])
+                default_mics = S.mesh_materials_from_log((ROOT / r['log']).read_text(encoding='utf-8')) if r['log'] else []
+                meshes[mesh_path] = {'id': S.leaf(mesh_path), 'package': package, 'gltf': str(gltf) if gltf and r['success'] else None,
+                                     'default_materials': [], 'bones': set()}
+                for name, mic_package in default_mics:
+                    row = reader.db.execute("select path from ex where name=? and pkg=? and class like '%MaterialInstanceConstant'", (name, mic_package)).fetchone()
+                    if row:
+                        meshes[mesh_path]['default_materials'].append({'name': name, 'path': row[0], 'textures': mic_textures(row[0])})
+            if mesh_path in meshes and 'bones' in meshes[mesh_path]:
+                meshes[mesh_path]['bones'].add(att['bone'])
+            for mat in att.get('materials') or []:
+                if mat and mat.get('parent') and mat['parent'] not in materials:
+                    materials[mat['parent']] = {'id': 'MI_' + S.leaf(mat['parent']), 'textures': mic_textures(mat['parent'])}
+    job = {'tool': TOOL, 'generated': S.now(), 'slice_dir': str(AMBIENT), 'dest': ATTACH_DEST,
+           'meshes': [{**m, 'bones': sorted(m['bones'])} for m in meshes.values() if m.get('gltf')],
+           'parent_materials': list(materials.values()),
+           'heads': list(heads.values()),
+           'missing_meshes': [k for k, m in meshes.items() if not m.get('gltf')]}
+    S.write_json(AMBIENT / 'attach_job.json', job)
+    S.write_json(AMBIENT / 'attach_extract.json', {'tool': TOOL, 'generated': S.now(), 'records': records})
+    failed = [r['id'] for r in records if not r['success']]
+    print(f'attachments: {len(job["meshes"])} meshes, {len(job["parent_materials"])} attachment materials, {len(job["heads"])} head variants, '
+          f'{len(records)} UModel jobs, failed {failed}, missing {job["missing_meshes"]}')
+
+
 # ---------------------------------------------------------------------------------------------------- editor job
 def editor_job_step(args):
     identity = S.read_json(AMBIENT / 'identity.json')
@@ -349,7 +445,7 @@ def manifest_step(args):
     print(f'manifest: wrote {AMBIENT / "ambient_assets.json"}')
 
 
-STEPS = {'identity': identity_step, 'extract': extract_step, 'anims': anims_step, 'editor-job': editor_job_step,
+STEPS = {'attachments': attachments_step, 'identity': identity_step, 'extract': extract_step, 'anims': anims_step, 'editor-job': editor_job_step,
          'manifest': manifest_step}
 
 
@@ -360,6 +456,7 @@ def main():
     parser.add_argument('--game', help='Borderlands 2 folder (default $OPENWILLOW_BL2)')
     parser.add_argument('--umodel', help='umodel.exe (default $OPENWILLOW_UMODEL)')
     parser.add_argument('--only', nargs='*', help='restrict extract/anims to these NPC ids')
+    parser.add_argument('--compose', default=str(ROOT / 'local/realgame/ambient/compose_t3.json'), help='real-game amb_compose output (attachments step)')
     args = parser.parse_args()
     if args.step == 'all':
         for step in ('identity', 'extract', 'editor-job'):

@@ -199,16 +199,16 @@ Automated, host (no original-game parity):
 Real game (observations, section 3a): enabled-den table, 33 live citizens, walking speeds, loop-following by the Resistance patrols.
 
 Visual: frames are in `local/ambient/` and `local/realgame/ambient/`; the independent critic's review request is
-`local/orch/B/review_request_1.md`. **I have not graded these frames.** Known visible differences from the real game: all host citizens
-are bald in one outfit (the real ones wear hats, hair and several body textures), the host map is lit by day while the real
+`local/orch/B/review_request_1.md` (round 2: `review_request_2.md`). **I have not graded these frames.** Known visible differences from the real
+game (round 1 text; round 2 added heads, hair, hats and an ink line, section 8): the body is one outfit (the real ones show several garments), hair colour is a stand-in tint, the host map is lit by day while the real
 capture was at night, the real citizens have a "Sanctuary Citizen" name tag, and the host has no Resistance patrols.
 
 
 ## 6. Not done / `UNVERIFIED`
 
-- Hair, hats, glasses and gear (`StaticMeshComponent`s chosen by instance-data switches), FaceFX, head-look, per-spawn head/body
-  variants (`GenericMaleHead02..05`, `Fat` bodies): one head and one body material per kind.
-- Colour-zone shading of `Master_NPC` (the MIC colour vectors are kept in the identity file but not applied), so Resistance
+- Since round 2 the observed pawns' heads, hair, hats and gear are applied (section 8). Still missing: FaceFX, head-look, body variants (the live body clones'
+  `p_HidePart` / `p_MuscleFat` and the garment layers of the body atlas), goggles/masks/beards other than those seen on the 33 captured pawns.
+- Colour-zone shading of `Master_NPC` (the live material clones' zone vectors are read but only used as a hair tint), so Resistance
   fighters and other recoloured bodies are not a separate kind.
 - Special moves on nodes (`SpecialMoves`, `HoldTime`: none are set on the 198 nodes of this level), Moxxi's bar `RunCustomEvent`
   chains and `LeavingMoveNode` events, the `ApplyBehavior`-only crowd points (poses applied by Kismet behaviours), talking and
@@ -225,3 +225,41 @@ tools\seed_ambient_npc_assets.ps1 -Steps all                                   #
 python tools/prepare_ambient_world.py                                          # local/slice/ambient_world.json
 # host: -owwalk -owmaya ... -owambient=local/slice/ambient_world.json  [-owambienttest | -owambientshots]
 ```
+
+## 8. Round 2 (2026-10-04): critic findings, causes and changes
+
+Round 1 scored 5/10 from the independent critic (mesh/outfit 4, poses 5, walk 6, scale 7). Findings and what was found:
+
+1. **"Duplicate pawn" at stop 1 (Perch_66) was two real pawns, not one placed twice.** Perch_66 and `Perch_140` are 240 uu apart and both
+   were occupied in the real game (two live `WillowAIPawn`s at 6113,4023 and 6358,4048); the round-1 camera stood on the line through
+   both. Each spawn point is realised once (the generator drops a second pawn with the same kind and position). Fix at the cause of the
+   overlap: the capture camera rejects any spot where another pawn is within 130 uu of its line of sight to the subject.
+2. **Perch alignment was a missing root motion plus a wrong floor, not the clips.** The stock perch clips carry root travel: the `Root`
+   bone of `Perch_BangOnWall_Start` moves +25.8 uu forward (toward the wall), `Perch_ArmsCrossed_Start` +11.1/-2.1, `Perch_PeerUnder`
+   starts 3.5/-3.2; the following loop clip starts its root at zero again. In the game the pawn is snapped onto the node and the travel
+   walks it to where it was found (observed pawn minus node: 24.1 uu at Perch_66 against the clip's 25.8, 14.6 at Perch_186, 19.9 at
+   Perch_4). Round 1 started the pawn at the observed point and then showed the start clip's own root travel on top, and snapped the
+   next clip back, so pawns hung away from walls. Now an idle pawn starts at the node (x, y, yaw) and the actor takes each clip's root travel when a clip ends (`root_end` per role in
+   the manifest, computed from the converted tracks). Height: the visibility floor trace differed from the real pawn height by more than 10 uu (-128 to +75) on
+   19 of 33 pawns (it hit counters, steps, the ground below); idle and held pawns now keep the **observed** height (`fixed_z`), walkers still trace. This is what cut the
+   lower legs off at stop 2 (the feet were below the counter-side floor) and floated stop 5.
+3. **Heads, hair, hats, gear.** A live pawn's mesh component carries its attachments (static meshes on the `Head`, `Jaw` or `Spine3` bone)
+   and its two materials are per-pawn clones whose parent and texture overrides are readable (`amb_compose`). 33 live citizens carried
+   88 attachments: 20 distinct static meshes (`GenericMale_Hair_01..04`, `GenericFemaleHairstyle_01..04`, `MaleGear1/4/5`, `FemaleGear1/2`, `Hardhat`, `PrisonerMask`,
+   `Scarf`, `SheriffHat`, `ScooterCap`, `BanditPsychoMohawk`, the Marauder pack on 17 of them) and 8 head textures (male 01-05, female 01-03). All are exported with UModel (glTF, PNG),
+   imported as static meshes and material instances (`Characters/Ambient/Attachments`), attached to the bone of the live pawn with the transform
+   that carries the UE3 bone frame to the imported bone (identity within 2e-4 for Head, Jaw, Spine3; UNVERIFIED by the eye except where a frame shows a head). Hair gets
+   a tint: the pawn's zone-A midtone times 1.5 (UNVERIFIED stand-in for the original's three-zone colour from `p_Masks`, whose shader was not read).
+   Body variants are not done: the body atlas holds several garments (white tee, tan vest, grey vest) and the live body clone's `p_HidePart` / `p_MuscleFat`
+   vectors pick which are shown; how they act on the mesh is unknown.
+4. **Shading and outline.** Marcus, the dummy and the citizens all use the same minimal `M_OW_NPC` (Diffuse, Normal, roughness 0.7, no ink line); the only ink line
+   in the project is Maya's inverted-hull material (`host/ue5/import_character_menu_look.py`, `M_OW_CharacterOutline`, not present in this worktree's Content).
+   The citizens now use that same recipe (`M_OW_AmbientOutline`, same nodes, `ThicknessCm` 0.5) on a leader-pose copy of the body, and Maya's matte
+   constants (specular 0.15, roughness 0.85) in `M_OW_NPC_Tint`. This is an art-direction approximation, as it is for Maya: the original shader is not read.
+5. **Female pawns do use the female mesh.** The female kind's manifest mesh is `.../CitizenFemale/Meshes/Skel_GenericFemale/...` (extent 16.9 x 73.7 x 93.1 against 18.1 x 74.9 x 93.1),
+   its materials `MI_GenericFemaleHead_Mati` / `MI_GenericFemaleBody_Mati`, and the host spawn log names the kind per pawn; the round-1 impression came from the bald head, the
+   shared outfit and the grey colour path. Female head textures 01-03 and `GenericFemaleHairstyle_01..04` are now applied.
+6. **Resistance patrols** and matched real-game close-ups: not done (Resistance needs the zone shading and their attachments; the matched close-up needs a population that stays put).
+
+Real-game capture used: 33 citizens (20 male + 13 female in the third session, 16 + 17 in the first); the population differs between sessions, so the review stops are
+the round-1 perches, filled with a pawn of the round-1 kind at the first capture's pose when nobody stands there (looks borrowed from an observed pawn).
