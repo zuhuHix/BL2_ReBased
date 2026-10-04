@@ -1334,6 +1334,10 @@ runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains 
 - `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
   yet; picking one is a maintainer decision (license and provenance entry first).
 - `tools/slice_npc_editor.py` imports `unreal` and only runs inside the editor.
+- `tools/import_phaselock_fx.ps1` waits for `local/ue_run.lock` like the suite scripts. `host/ue5/import_phaselock_fx.py`
+  builds the effect materials from own-words notes on their compiled shaders (PHASELOCK_STOCK_DATA.md, Round 6).
+  `tools/run_phaselock_shots.ps1 -Extra '-owbubbleradius=<uu>'` overrides the bubble size's mesh-bounds radius, so the
+  small engine-shape dummy can stand in for a real enemy.
 
 Records: [behavior data](verification/BEHAVIOR_DATA_DECODE.md),
 [weapon balances](verification/WEAPON_BALANCE_DECODE.md),

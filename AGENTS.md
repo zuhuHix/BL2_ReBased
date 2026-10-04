@@ -144,8 +144,9 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   shows its page ~126-156 ms after the key press (screen capture, different method;
   `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`, 2026-10-02 sections).
 - **Phaselock effects:** `research/particle_system.py` reads cooked `ParticleSystem` templates (layouts checked by
-  oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. The Sanctuary dummy stands on the lane
-  floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
+  oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. Since 2026-10-04 the effect materials
+  follow own-words notes on their compiled shaders (Round 6); an independent critic scored round 7 at 6/10. The
+  Sanctuary dummy stands on the lane floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, `python tests/weapon_paint_test.py`,
   `python tests/particle_system_test.py`, and the

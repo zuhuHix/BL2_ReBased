@@ -120,6 +120,8 @@ private:
     float BobHeight = 0;                // smoothed bob (VInterpTo state)
     bool bBobStarted = false;
     float AnimClipEndsAt = 0;
+    FVector StockMeshBaseOffset = FVector::ZeroVector;   // the stock mesh's rest offset in Pivot space
+    float MeshExtraZ = 0;               // LiftActionSkill.UpdateLiftedPawnMeshOffset: extra Z that centres the mesh bounds
     int32 AnimStage = 0;                // 0 none, 1 lift, 2 loop, 3 fall, 4 land
     FVector HomeLocation = FVector::ZeroVector;
     FVector2D Wobble = FVector2D::ZeroVector;
