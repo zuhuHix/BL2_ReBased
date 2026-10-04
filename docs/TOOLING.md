@@ -1356,6 +1356,18 @@ runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains 
 `-owitems=local/items/slice`, `-owactionskill=local/character/action_skill_siren.json` and Maya's level from
 `slice_manifest.json` (an UNVERIFIED slice choice; `run_quest.ps1 -Level N` overrides it).
 
+Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
+- `tools/weapon_refresh_fragments.py` rebuilds the fragment list (body variants, no `*_None` parts, hidden-bone
+  triangles cut) of existing local recipes; `tools/weapon_refresh_stats.py` re-evaluates their `stats`, optionally on
+  the live overlay; `host/ue5/import_gun_meshes.py` re-imports the meshes of named ids only.
+- `-owgunshots -owgunids=<id,id>` captures each gun in first person and from the side (`OWGun_<id>.png`,
+  `OWGun_<id>_side.png`); `tools/weapon_visual_compare.py` compares a real and a host frame cell by cell.
+- The arms play per-type clip sets: convert `Anim_1st_Person.<type>` with `tools/prepare_character_anims.py --clips
+  Idle Run_F Sprint Jump_Start Jump_Idle Jump_End Draw ADD_Fire_Recoil` (bones are matched by name, so the rifle set's
+  other bone order converts), then import with `OPENWILLOW_CHARACTER_ANIMS=AssaultRifle=...;SMG=...;Shotgun=...`.
+- The arms and gun use the game's foreground FOV 45 by default; `-owfpfov=0` restores the old single-FOV view,
+  `-owfpfov=<n>` sets another value.
+
 - `research/behavior_census.py` and `research/struct_defaults_census.py` are the structural
   oracles behind the behavior variable-data decode and the struct-default reader fix.
 - `ow-package --properties-batch` reads many objects from one package in one process; the weapon

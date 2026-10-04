@@ -116,6 +116,9 @@ private:
     // Arms are shown while a pose clip set is loaded (a drawn weapon, or Unarmed clips if imported) and no menu covers them.
     void UpdateArmsVisibility();
     void RunCombatShots(float Now);
+    // -owgunshots -owgunids=a,b,c: equips each named item in turn and writes a first-person frame and a side-view frame
+    // of it (lane C review captures; docs/verification/WEAPON_VISUALS.md).
+    void RunGunShots(float Now);
     void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
     void AimAt(const FVector& Point);
@@ -162,12 +165,19 @@ private:
     bool bFireHeld = false;
     int32 ShotCount = 0;
     int32 CombatShotStep = 0;
+    int32 GunShotStep = 0;
+    TWeakObjectPtr<class AOpenWillowInventoryPreviewActor> GunShotPreview;
     float NextShotAt = 0;
     bool bReloading = false;
     float ReloadEndsAt = 0;
     bool bOutOfAmmoLogged = false;
     float LandUntil = 0;
     float TargetHitAt = -10;
+    // Weapon glow after shots (native rule, UNVERIFIED: +0.25 per shot, cap 5, decay 3.5/s from 0.2 s after the shot; the
+    // emissive scale is the base times 1 + impulse). Drives the paint material's OW_Emissive.
+    float GlowImpulse = 0.f;
+    float LastGlowShotAt = -10.f;
+    float AppliedGlow = -1.f;
     FOpenWillowPhaselockData Phaselock;
     FString PhaselockFile;
     // Stock presentation (tools/prepare_phaselock_fx.py manifest, -owphaselockfx=): hand orb at the arms clip's notify,

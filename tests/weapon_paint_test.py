@@ -429,5 +429,53 @@ class BytecodeReaderTest(unittest.TestCase):
             disassemble(self.stream(end=False))
 
 
+class FragmentTests(unittest.TestCase):
+    """tools/weapon_recipe.part_fragments and static_arrays on invented reader records."""
+
+    class FakePackage:
+        def __init__(self, props, extra):
+            self._props, self.extra_names = props, extra
+
+        def props(self, path):
+            return self._props[path]
+
+    def test_static_array_elements_keep_order_and_all_values(self):
+        import weapon_recipe
+        data = {'properties': [
+            {'name': 'Names', 'array_index': 1, 'value': 'B'}, {'name': 'Names', 'array_index': 0, 'value': 'A'},
+            {'name': 'Gone', 'status': 'unsupported', 'value': None}, {'name': 'One', 'value': 5}]}
+        self.assertEqual(weapon_recipe.static_arrays(data), {'Names': ['A', 'B'], 'One': [5]})
+
+    def test_part_draws_its_fragment_and_the_additional_ones(self):
+        import weapon_recipe
+        package = self.FakePackage({'GD.Body.Body_X': {'GestaltModeSkeletalMeshName': 'Body_X'}},
+                                   {'GD.Body.Body_X': {'AdditionalGestaltModeSkeletalMeshNames': ['Body_X_Var1', 'None']}})
+        self.assertEqual(weapon_recipe.part_fragments(package, 'GD.Body.Body_X'), ['Body_X', 'Body_X_Var1'])
+
+    def test_none_parts_draw_nothing(self):
+        import weapon_recipe
+        package = self.FakePackage({'GD.Sight.Pistol_Sight_None': {'GestaltModeSkeletalMeshName': 'Pistol_Scope_Made'}}, {})
+        self.assertEqual(weapon_recipe.part_fragments(package, 'GD.Sight.Pistol_Sight_None'), [])
+
+
+class PartVectorTests(unittest.TestCase):
+    class FakeFacts:
+        def __init__(self, table):
+            self.table = table
+
+        def part_vectors(self, part):
+            return self.table.get(part, {})
+
+    def test_later_part_wins_and_order_is_the_native_slot_order(self):
+        recipe = {'parts': {'Material': {'part': 'M'}, 'Elemental': {'part': 'E'}, 'Body': {'part': 'B'}}}
+        facts = self.FakeFacts({'B': {'p_EmissiveColor': (1, 1, 1, 1)}, 'E': {'p_EmissiveColor': (4, 0, 0, 1)},
+                                'M': {'p_Other': (2, 2, 2, 1)}})
+        self.assertEqual(paint.part_vector_overrides(recipe, facts),
+                         {'p_EmissiveColor': (4, 0, 0, 1), 'p_Other': (2, 2, 2, 1)})
+
+    def test_without_reader_nothing_is_overridden(self):
+        self.assertEqual(paint.part_vector_overrides({'parts': {'Body': {'part': 'B'}}}, None), {})
+
+
 if __name__ == '__main__':
     unittest.main()

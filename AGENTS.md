@@ -148,6 +148,10 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   `research/d3d9_bytecode.py`; listings stay under `local/`). Three passes recorded in DECISIONS; the whole reading and the
   shading stand-ins are `UNVERIFIED`. First real captures (2026-10-02): an independent critic agent scored the host guns
   3-4.5/10 against them (far too dark, wrong Maliwan orange hue; `docs/verification/REALGAME_GROUND_TRUTH.md`).
+  Since 2026-10-04 the guns draw the parts the running game draws, the paint is an Unlit material that undoes UE5's
+  tone mapper (measured curve), the arms use per-type clip sets and the game's foreground FOV 45 is the default
+  (`-owfpfov=0` opts out); critic 7.2 then 6.8/10, round 2 closer on every pair
+  (`docs/verification/WEAPON_VISUALS.md`).
 - **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
   about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
   shows its page ~126-156 ms after the key press (screen capture, different method;

@@ -26,7 +26,23 @@ import re
 from pathlib import Path
 import unreal
 
-USE_SHADER_SHADING = False  # see the docstring: waits for calibrated scene lighting
+# Pass 4 (2026-10-04, UNVERIFIED): BL2_ANALYTIC_LIGHTING builds an Unlit material that evaluates the original pixel
+# shader's own lighting structure, albedo x 0.4 x (ambient + directional terms) + emissive, with constants instead of the
+# engine's light environment, so the gun looks the same in every scene (see docs/verification/WEAPON_VISUALS.md). The
+# constants are scalar/vector material parameters (OW_*) that OpenWillowGunLook.cpp overrides at run time.
+BL2_ANALYTIC_LIGHTING = True
+USE_SHADER_SHADING = False  # pass-3 PBR mapping, only used when BL2_ANALYTIC_LIGHTING is False
+# Unreal's film tone mapper darkens and desaturates what an Unlit material emits, so the material inverts it: the colour it computes
+# is the display colour wanted, and TONE_TABLE maps a display-linear grey (TT) to the scene-linear input (log2, LV) that the
+# 1280x720 SceneCapture shows as that grey. Measured 2026-10-04 with the material's own debug ramp (OW_Debug 3) on the shotgun
+# side capture; the world camera shows the same curve with the input 4 times smaller (OW_ViewScale 0.25 for the held weapon, 1
+# for the capture). Per-channel use of a grey curve is an approximation (the mapper also desaturates highlights).
+TONE_TT = [0.00061, 0.00353, 0.00888, 0.01665, 0.02685, 0.03947, 0.05451, 0.07197, 0.09186, 0.11416, 0.13889, 0.16605, 0.19562, 0.22762, 0.26205, 0.29889, 0.33816, 0.37985, 0.42396, 0.47050, 0.51945, 0.57084, 0.62464, 0.68087, 0.73952, 0.80059, 0.86408, 0.93000]
+TONE_LV = [-4.1475, -3.4133, -3.0216, -2.7209, -2.4994, -2.2961, -2.1260, -1.9740, -1.8255, -1.6893, -1.5518, -1.4120, -1.2732, -1.1270, -0.9764, -0.8275, -0.6710, -0.5069, -0.3299, -0.1453, 0.0399, 0.2507, 0.4874, 0.7636, 1.0711, 1.4202, 1.8823, 2.4892]
+LOOK_DEFAULTS = {'OW_ViewScale': 0.25, 'OW_Clip': 1.0,   # keep in step with OpenWillowGunLook.cpp (calibrated against real-game frames, see WEAPON_VISUALS.md)
+    'OW_Diffuse': 0.5, 'OW_Ambient': 1.6, 'OW_Key': 1.2, 'OW_Fill': 0.5, 'OW_Emissive': 1.0,
+    'OW_Debug': 0.0, 'OW_KeyDir': (-0.45, 0.55, -0.70), 'OW_FillDir': (0.70, -0.20, -0.40),
+}
 if USE_SHADER_SHADING:
     DIFFUSE_SCALE = 0.4  # read from the compiled Master_Gun passes (tools/weapon_paint_model.DIFFUSE_SCALE)
     SHADING = {'MP_METALLIC': 0.0, 'MP_SPECULAR': 0.0, 'MP_ROUGHNESS': 1.0}  # no material specular in the original
@@ -95,6 +111,9 @@ def apply(data):
         if normal:
             # TC_NORMALMAP keeps only red/green and rebuilds z, as the game's shader does (blue is not normal data).
             asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
+        else:
+            # A re-import keeps the old asset's settings; the packed normal/emissive texture used to be TC_NORMALMAP.
+            asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
         # Installed Texture2D AddressX/AddressY (e.g. ['TA_Clamp', 'TA_Wrap']), read by prepare_weapon_paint.py.
         for prop, mode in zip(('address_x', 'address_y'), address or []):
             asset.set_editor_property(prop, getattr(unreal.TextureAddress, mode.upper()))
@@ -130,6 +149,61 @@ def apply(data):
     def constant3(values):
         return node(unreal.MaterialExpressionConstant3Vector, constant=unreal.LinearColor(*values[:3], 1))
 
+    def build_analytic_shading(albedo, packed_texture, vector_values):
+        """Unlit surface = hue-clamped albedo x diffuse x (ambient + key N.L1 + fill N.L2), plus emissive.
+
+        The structure follows the compiled Master_Gun base pass (colour x 0.4 x lighting terms + an emissive term that is
+        added after lighting and clamped to 4). The lighting terms are constants in view space, not the game's light
+        environment (UNVERIFIED stand-in, calibrated against real frames). Emissive = p_EmissiveColor x the packed
+        texture's blue channel (UNVERIFIED reading of the pixel shader).
+        """
+        def scalar_param(name):
+            return node(unreal.MaterialExpressionScalarParameter, parameter_name=name, default_value=LOOK_DEFAULTS[name])
+
+        def vector_param(name):
+            x, y, z = LOOK_DEFAULTS[name]
+            return node(unreal.MaterialExpressionVectorParameter, parameter_name=name,
+                        default_value=unreal.LinearColor(x, y, z, 1))
+
+        to_view = view_normal
+        n_tone = len(TONE_TT)
+        tone = (f'float TT[{n_tone}]={{' + ','.join(f'{x:.5f}' for x in TONE_TT) + '};\n'
+                f'float LV[{n_tone}]={{' + ','.join(f'{x:.4f}' for x in TONE_LV) + '};\n')
+        shade = custom(
+            'float3 n=normalize(N);\n'
+            'float light=Amb+Key*saturate(dot(n,normalize(KD)))+Fill*saturate(dot(n,normalize(FD)));\n'
+            'float3 lit=A*Diff*light;\n'
+            'if (Clp>0.5) lit=saturate(lit); else lit/=max(1.0,max(lit.r,max(lit.g,lit.b)));  // OW_Clip 0: HDR zone colours keep their hue; 1: per-channel clip\n'
+            'float3 glow=min(Em*EC*EmGain, 4.0);\n'
+            'if (Dbg>0.5 && Dbg<1.5) return A/max(1.0,max(A.r,max(A.g,A.b)));\n'
+            'if (Dbg>2.5) { float v=exp2(lerp(-5.5,2.8,saturate((SP.x-0.33)/0.42))); return float3(v,v,v); }\n'
+            'if (Dbg>1.5) return glow;\n'
+            'float3 want=lit+glow;\n'
+            + tone +
+            'float3 outc=float3(0,0,0);\n'
+            'for (int ch=0; ch<3; ch++)\n'
+            '{\n'
+            '    float t=min(want[ch], TT[' + str(n_tone - 1) + ']);\n'
+            '    float v=0;\n'
+            '    for (int i=1; i<' + str(n_tone) + '; i++)\n'
+            '        if (t>TT[i-1]) v=exp2(lerp(LV[i-1],LV[i],saturate((t-TT[i-1])/(TT[i]-TT[i-1]))));\n'
+            '    outc[ch]=v;\n'
+            '}\n'
+            'return outc*VS;',
+            unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+            ['A', 'N', 'Diff', 'Amb', 'Key', 'Fill', 'KD', 'FD', 'Em', 'EC', 'EmGain', 'Dbg', 'SP', 'VS', 'Clp'])
+        links = {'A': (albedo, ''), 'N': (to_view, ''), 'Diff': (scalar_param('OW_Diffuse'), ''),
+                 'Amb': (scalar_param('OW_Ambient'), ''), 'Key': (scalar_param('OW_Key'), ''),
+                 'Fill': (scalar_param('OW_Fill'), ''), 'KD': (vector_param('OW_KeyDir'), ''),
+                 'FD': (vector_param('OW_FillDir'), ''), 'Em': (packed_texture, 'B'),
+                 'EC': (constant3(vector_values.get('p_EmissiveColor', (0, 0, 0))), ''),
+                 'EmGain': (scalar_param('OW_Emissive'), ''), 'Dbg': (scalar_param('OW_Debug'), ''),
+                 'SP': (node(unreal.MaterialExpressionScreenPosition), ''), 'VS': (scalar_param('OW_ViewScale'), ''), 'Clp': (scalar_param('OW_Clip'), '')}
+        for name, (source, output) in links.items():
+            mel.connect_material_expressions(source, output, shade, name)
+        material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+        mel.connect_material_property(shade, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+
     vectors, scalars = data['params']['vector'], data['params']['scalar']
     pattern = data.get('pattern_used', False)
     decal = data.get('decal') or {}
@@ -142,7 +216,19 @@ def apply(data):
     inputs['Mask'] = sample(masks)
     feed_uv(inputs['Mask'], 0, (1.0, 0.5), (0.0, 0.5))  # lower half: zone mask
     inputs['Detail'] = sample(import_texture('p_Diffuse'))
-    normal = sample(import_texture('p_NormalScopesEmissive', normal=True), normal=True)
+    # One linear texture: red/green are the tangent-space normal, blue the emissive mask (sparse; 0 on most texels).
+    # Importing it as TC_NORMALMAP would drop the blue channel, so the normal is rebuilt in the shader code below.
+    packed = sample(import_texture('p_NormalScopesEmissive'))
+    mel.connect_material_expressions(node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), '', packed, 'UVs')
+    view_normal = None
+    if BL2_ANALYTIC_LIGHTING:
+        unpack = custom('float2 xy=P.rg*2-1; return normalize(float3(xy, 0.8*sqrt(saturate(1-dot(xy,xy)))));',
+                        unreal.CustomMaterialOutputType.CMOT_FLOAT3, ['P'])
+        mel.connect_material_expressions(packed, 'RGB', unpack, 'P')
+        view_normal = node(unreal.MaterialExpressionTransform,
+                           transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_TANGENT,
+                           transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_VIEW)
+        mel.connect_material_expressions(unpack, '', view_normal, '')
     for zone in 'ABC':
         for tone in ['Shadow', 'Midtone', 'Hilight']:
             inputs[zone + tone] = constant3(vectors[f'p_{zone}Color{tone}'])
@@ -181,9 +267,16 @@ def apply(data):
                           transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
                           transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_TANGENT)
         mel.connect_material_expressions(node(unreal.MaterialExpressionReflectionVectorWS), '', to_tangent, '')
-        env_uv = custom('return R.xy + frac(O.xy * 0.001);', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['R', 'O'])
-        mel.connect_material_expressions(to_tangent, '', env_uv, 'R')
-        mel.connect_material_expressions(node(unreal.MaterialExpressionObjectPositionWS), '', env_uv, 'O')
+        if BL2_ANALYTIC_LIGHTING:
+            # The Unlit path has no usable reflection vector (it gave a flat purple wash over the Infinity), so the lookup uses the
+            # view-space reflection of the camera ray about the shaded normal, without the per-object offset (UNVERIFIED stand-in).
+            env_uv = custom('float3 n=normalize(N); float3 v=float3(0,0,-1); float3 r=2*dot(n,v)*n-v; return r.xy;',
+                            unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['N'])
+            mel.connect_material_expressions(view_normal, '', env_uv, 'N')
+        else:
+            env_uv = custom('return R.xy + frac(O.xy * 0.001);', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['R', 'O'])
+            mel.connect_material_expressions(to_tangent, '', env_uv, 'R')
+            mel.connect_material_expressions(node(unreal.MaterialExpressionObjectPositionWS), '', env_uv, 'O')
         mel.connect_material_expressions(env_uv, '', inputs['Env'], 'UVs')
         inputs['ReflectColor'] = constant3(reflection['p_ReflectColor'])
         inputs['ReflectWeight'] = constant3(reflection['p_ReflectionChannelScale'])
@@ -210,18 +303,27 @@ def apply(data):
         code += ('float rw=saturate(dot(Mask.rgb*ReflectWeight, Mask.rgb*ReflectWeight));\n'
                  'float3 R=Env.rgb*ReflectColor*rw;\n'
                  'c=c+lerp(R, R*c, ReflectScale);\n')
-    code += (f'c*={DIFFUSE_SCALE};\n'
-             '// Keep hue when the HDR colour exceeds 1.\n'
-             'return c/max(1,max(c.r,max(c.g,c.b)));')
+    if BL2_ANALYTIC_LIGHTING:
+        code += 'return c;\n'  # HDR albedo (zone colours reach 3.6); the 0.4 and the light are applied in the shade node
+    else:
+        code += (f'c*={DIFFUSE_SCALE};\n'
+                 '// Keep hue when the HDR colour exceeds 1.\n'
+                 'return c/max(1,max(c.r,max(c.g,c.b)));')
     effect = custom(code, unreal.CustomMaterialOutputType.CMOT_FLOAT3, list(inputs) + list(outputs))
     for name, value in inputs.items():
         mel.connect_material_expressions(value, '', effect, name)
     for name, (value, output) in outputs.items():
         mel.connect_material_expressions(value, output, effect, name)
-    mel.connect_material_property(effect, '', unreal.MaterialProperty.MP_BASE_COLOR)
-    mel.connect_material_property(normal, 'RGB', unreal.MaterialProperty.MP_NORMAL)
-    for prop, value in [(getattr(unreal.MaterialProperty, name), value) for name, value in SHADING.items()]:
-        mel.connect_material_property(node(unreal.MaterialExpressionConstant, r=value), '', prop)
+    if BL2_ANALYTIC_LIGHTING:
+        build_analytic_shading(effect, packed, vectors)
+    else:
+        mel.connect_material_property(effect, '', unreal.MaterialProperty.MP_BASE_COLOR)
+        normal_tangent = custom('float2 xy=P.rg*2-1; return float3(xy, sqrt(saturate(1-dot(xy,xy))));',
+                                unreal.CustomMaterialOutputType.CMOT_FLOAT3, ['P'])
+        mel.connect_material_expressions(packed, 'RGB', normal_tangent, 'P')
+        mel.connect_material_property(normal_tangent, '', unreal.MaterialProperty.MP_NORMAL)
+        for prop, value in [(getattr(unreal.MaterialProperty, name), value) for name, value in SHADING.items()]:
+            mel.connect_material_property(node(unreal.MaterialExpressionConstant, r=value), '', prop)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     slots = mesh.get_editor_property('materials')

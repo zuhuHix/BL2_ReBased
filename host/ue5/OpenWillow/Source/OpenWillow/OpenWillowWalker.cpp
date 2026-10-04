@@ -13,7 +13,12 @@
 #include "OpenWillowSkills.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
+#include "Misc/PackageName.h"
 #include "OpenWillowShotFx.h"
+#include "OpenWillowGunLook.h"
+#include "OpenWillowInventoryPreviewActor.h"
+#include "HAL/FileManager.h"
+#include "ShaderCompiler.h"
 #include "Animation/AnimSequence.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -218,6 +223,21 @@ void AOpenWillowWalker::BeginPlay()
     }
     Camera->SetFieldOfView(FMath::RadiansToDegrees(2 * FMath::Atan(
         FMath::Tan(FMath::DegreesToRadians(Bl2Fov) / 2) * Aspect / (4.f / 3.f))));
+    // The running game draws the arms and the gun with a separate foreground FOV: WillowPlayerController.ForegroundFOV read 45
+    // with bForegroundFOV true while FOVAngle read 77.55 (SDK, 1280x720, FOV setting 90; 2026-10-04). UE 5.8's first-person
+    // primitive FOV does the same job. Using it by default is a host choice (the read value 45 is the game's; the frames of the
+    // guns critic and the Phaselock critic both preferred it); the Phaselock hand effects are first-person primitives too, so they
+    // stay on the hand. -owfpfov=<4:3 setting> picks another value, -owfpfov=0 restores the old world-FOV view.
+    float ForegroundFov = 45.f;
+    FParse::Value(FCommandLine::Get(), TEXT("owfpfov="), ForegroundFov);
+    if (ForegroundFov > 1.f)
+    {
+        Camera->SetEnableFirstPersonFieldOfView(true);
+        Camera->SetFirstPersonFieldOfView(FMath::RadiansToDegrees(2 * FMath::Atan(
+            FMath::Tan(FMath::DegreesToRadians(ForegroundFov) / 2) * Aspect / (4.f / 3.f))));
+        Arms->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+        WeaponVisual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+    }
     const FString MeshPath = FString::Printf(TEXT("%s/Meshes/Hands_Siren/SkeletalMeshes/Hands_Siren.Hands_Siren"), MayaRoot);
     USkeletalMesh* ArmsMesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
     if (!ArmsMesh) { UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms mesh not found: %s"), *MeshPath); return; }
@@ -425,6 +445,8 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     // numbered captures, so presentation reviews use repeatable views.
     static const bool bCombatShots = FParse::Param(FCommandLine::Get(), TEXT("owcombatshots"));
     if (bCombatShots && bMayaActive && Controller) RunCombatShots(Now);
+    static const bool bGunShots = FParse::Param(FCommandLine::Get(), TEXT("owgunshots"));
+    if (bGunShots && bMayaActive && Controller) RunGunShots(Now);
     static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
     FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
@@ -448,6 +470,11 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
             bOutOfAmmoLogged = true;
             UE_LOG(LogTemp, Display, TEXT("OpenWillow %s: out of ammo"), *Weapon->Name);
         }
+    }
+    if (WeaponVisual && (GlowImpulse > 0.f || AppliedGlow != 0.f))
+    {
+        if (GlowImpulse > 0.f && Now - LastGlowShotAt > 0.2f) GlowImpulse = FMath::Max(0.f, GlowImpulse - 3.5f * DeltaSeconds);
+        if (!FMath::IsNearlyEqual(AppliedGlow, GlowImpulse, 1e-4f)) { OpenWillowGunLook::SetGlow(WeaponVisual, GlowImpulse); AppliedGlow = GlowImpulse; }
     }
     if (!ArmsAnim) return;
     // BL2's own AnimTree is not reproduced; the native arms instance blends
@@ -499,12 +526,26 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     if (!WeaponMesh) WeaponMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
     WeaponVisual->SetSkeletalMesh(WeaponMesh);
+    OpenWillowGunLook::Apply(WeaponVisual);
+    GlowImpulse = 0.f;
+    AppliedGlow = 0.f;
     WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr || bInventoryPresentation);
-    IdleAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Idle"));
-    RunAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Run_F"));
-    SprintAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Sprint"));
-    JumpAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Jump_Idle"));
-    LandAnim = LoadArmsAnim(TEXT("Pistol"), TEXT("Jump_End"));
+    // The arms play the clip set of the weapon's type (the running game's AnimSet Anim_1st_Person.<type>); a type whose
+    // clips were not imported keeps the pistol set. Imported by tools/prepare_character_anims.py + import_character_anims.py.
+    FString ArmsSet = TEXT("Pistol");
+    if (Item->Type == TEXT("Assault Rifle")) ArmsSet = TEXT("AssaultRifle");
+    else if (Item->Type == TEXT("Sub-Machine Gun")) ArmsSet = TEXT("SMG");
+    else if (Item->Type == TEXT("Shotgun")) ArmsSet = TEXT("Shotgun");
+    const bool bOwnSet = ArmsSet != TEXT("Pistol")
+        && FPackageName::DoesPackageExist(FString::Printf(TEXT("%s/FirstPerson/Anim_%s_Idle"), MayaRoot, *ArmsSet));
+    if (!bOwnSet) ArmsSet = TEXT("Pistol");
+    IdleAnim = LoadArmsAnim(*ArmsSet, TEXT("Idle"));
+    RunAnim = LoadArmsAnim(*ArmsSet, TEXT("Run_F"));
+    SprintAnim = LoadArmsAnim(*ArmsSet, TEXT("Sprint"));
+    JumpAnim = LoadArmsAnim(*ArmsSet, TEXT("Jump_Idle"));
+    LandAnim = LoadArmsAnim(*ArmsSet, TEXT("Jump_End"));
+    DrawPistolAnim = bOwnSet ? LoadArmsAnim(*ArmsSet, TEXT("Draw")) : LoadArmsAnim(TEXT("PistolCombat"), TEXT("Draw"));
+    FirePistolAnim = bOwnSet ? LoadArmsAnim(*ArmsSet, TEXT("ADD_Fire_Recoil")) : LoadArmsAnim(TEXT("PistolCombat"), TEXT("ADD_Fire_Recoil"));
     ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
     UpdateArmsVisibility();
     if (DrawPistolAnim) ArmsAnim->PlayAction(DrawPistolAnim);
@@ -734,6 +775,8 @@ void AOpenWillowWalker::FireWeapon()
 {
     // ADD_Fire_Recoil is a UE3 additive clip; layer it on the held pose.
     if (ArmsAnim && FirePistolAnim) ArmsAnim->PlayAdditive(FirePistolAnim, 0.45f);
+    GlowImpulse = FMath::Min(GlowImpulse + 0.25f, 5.f);
+    LastGlowShotAt = GetWorld()->GetTimeSeconds();
     // A deterministic figure-eight is a visual proxy for the installed
     // FiringPatternLines array, whose serialized elements remain unsupported.
     const float Phase = ShotCount++ * (PI / 8.f);
@@ -1203,6 +1246,88 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     default: return;
     }
     ++CombatShotStep;
+}
+void AOpenWillowWalker::RunGunShots(float Now)
+{
+    // Each gun takes 5 s: equip into slot 1 (swapping whatever is there), settle, one first-person frame, one side view.
+    static TArray<FString> Ids;
+    if (Ids.Num() == 0)
+    {
+        FString List;
+        FParse::Value(FCommandLine::Get(), TEXT("owgunids="), List);
+        List.ParseIntoArray(Ids, TEXT(","));
+        for (FString& Id : Ids) Id = Id.TrimStartAndEnd().Replace(TEXT("\""), TEXT(""));
+        if (Ids.Num() == 0) Ids.Add(TEXT("none"));
+    }
+    // New materials compile while the first frames render; -owgunsettle=<s> is the wait after each equip.
+    float Settle = 3.f;
+    FParse::Value(FCommandLine::Get(), TEXT("owgunsettle="), Settle);
+    const float Slice = Settle + 3.f;
+    auto EquipById = [this](const FString& Name)
+    {
+        for (int32 I = 0; I < Inventory->Items().Num(); ++I)
+            if (Inventory->Items()[I].Id == Name) return EquipItem(I, 0);
+        return false;
+    };
+    // Warm-up: show every gun once so their materials start compiling together, then wait for the shader compiler to drain.
+    static float Start = -1.f;
+    static int32 Warmed = 0;
+    if (Start < 0.f)
+    {
+        const float WarmBegin = 8.f;
+        if (Now >= WarmBegin && Warmed < Ids.Num() && Now >= WarmBegin + 0.7f * Warmed && Ids[0] != TEXT("none"))
+            EquipById(Ids[Warmed++]);
+        if (Warmed >= Ids.Num() && Now > WarmBegin + 0.7f * Ids.Num() + 3.f && GShaderCompilingManager && !GShaderCompilingManager->IsCompiling())
+        {
+            Start = Now + 1.f;
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots: shaders ready at %.1f s"), Now);
+        }
+        return;
+    }
+    const int32 Gun = GunShotStep / 3, Phase = GunShotStep % 3;
+    if (Ids[0] == TEXT("none") || Gun >= Ids.Num())
+    {
+        if (Now > Start + Slice * (Ids.Num() + 1) && Controller)
+            if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+        return;
+    }
+    const float T0 = Start + Slice * Gun;
+    const FString Id = Ids[Gun];
+    const FString Dir = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Screenshots/WindowsEditor"));
+    switch (Phase)
+    {
+    case 0:
+    {
+        if (Now < T0) return;
+        int32 Index = INDEX_NONE;
+        for (int32 I = 0; I < Inventory->Items().Num(); ++I)
+            if (Inventory->Items()[I].Id == Id) { Index = I; break; }
+        if (Index == INDEX_NONE || !EquipItem(Index, 0))
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow gunshots: cannot equip %s"), *Id);
+        Controller->SetControlRotation(FRotator(0.f, GetControlRotation().Yaw, 0.f));
+        break;
+    }
+    case 1:
+        if (Now < T0 + Settle) return;
+        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s.png"), *Id), true, false);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s first person"), *Id);
+        break;
+    case 2:
+    {
+        if (Now < T0 + Settle + 0.5f) return;
+        if (GunShotPreview.IsValid()) GunShotPreview->Destroy();  // a fresh actor per gun: the preview component never ticks
+        GunShotPreview = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(GetActorLocation() + FVector(0, 0, 4000), FRotator::ZeroRotator);
+        if (const FOpenWillowWeaponItem* Item = Inventory->SlotItem(0); Item && GunShotPreview.IsValid() && GunShotPreview->SetItemPreview(Item))
+        {
+            float Radius = Item->Type == TEXT("Pistol") ? 30.f : 45.f;  // framing in cm; the mesh bounds count the whole gestalt
+            FParse::Value(FCommandLine::Get(), TEXT("owgunradius="), Radius);
+            const bool bSaved = GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_side.png"), *Id), 0.f, 0.f, Radius, 1280, 720);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s side view %s"), *Id, bSaved ? TEXT("saved") : TEXT("FAILED"));
+        }
+        break;
+    }
+    }
+    ++GunShotStep;
 }
 void AOpenWillowWalker::SendInventoryKey(const TCHAR* Key)
 {
