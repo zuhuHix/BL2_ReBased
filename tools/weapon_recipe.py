@@ -77,6 +77,36 @@ def decoded(data):
     return {p['name']: None if p.get('status') == 'unsupported' else plain(p['value']) for p in data['properties']}
 
 
+def static_arrays(data):
+    """{name: [values in element order]} for every property; a fixed array reports one entry per element.
+
+    decoded() keeps one value per name, so a fixed array there keeps only its last element.
+    """
+    found = {}
+    for p in data['properties']:
+        if p.get('status') != 'unsupported':
+            found.setdefault(p['name'], []).append((p.get('array_index') or 0, plain(p['value'])))
+    return {name: [value for _, value in sorted(items, key=lambda item: item[0])] for name, items in found.items()}
+
+
+def part_fragments(package, part):
+    """Gestalt fragment names one part draws, in the order the game lists them.
+
+    The name in GestaltModeSkeletalMeshName plus the non-'None' AdditionalGestaltModeSkeletalMeshNames
+    (body variants such as Pistol_Body_Maliwan_Var1). A part whose definition is named *_None (no sight,
+    no elemental, no accessory) draws nothing even though its fields name a fragment.
+    Evidence 2026-10-04 (UNVERIFIED rule, matched on the 6 slice guns): the running game's gestalt data of
+    each spawned gun lists exactly these fragments and the triangle totals agree
+    (docs/verification/WEAPON_VISUALS.md).
+    """
+    if part.rsplit('.', 1)[-1].lower().endswith('_none'):
+        return []
+    props = package.props(part)
+    names = [props.get('GestaltModeSkeletalMeshName')]
+    names += getattr(package, 'extra_names', {}).get(part, {}).get('AdditionalGestaltModeSkeletalMeshNames', [])
+    return [n for n in names if n and n != 'None']
+
+
 class Package:
     def __init__(self, reader, path, schema):
         self.reader, self.path, self.schema = reader, path, schema
@@ -84,6 +114,7 @@ class Package:
         self.index = {e['path']: e['index'] for e in exports}
         self.classes = {e['path']: e['class'] for e in exports}
         self.cache = {}
+        self.extra_names = {}  # path -> {static-array property: [values in element order]}
 
     def run(self, *args):
         result = subprocess.run([self.reader, str(self.path), *map(str, args)], capture_output=True, text=True)
@@ -98,6 +129,7 @@ class Package:
             data = json.loads(self.run('--properties', self.index[path], '--property-offset', 4,
                                        '--array-schema', self.schema))
             self.cache[path] = decoded(data)
+            self.extra_names[path] = static_arrays(data)
         return self.cache[path]
 
     def preload(self, paths):
@@ -120,6 +152,7 @@ class Package:
             data = json.loads(line)
             if 'error' not in data:
                 self.cache[data['path']] = decoded(data)
+                self.extra_names[data['path']] = static_arrays(data)
 
     def crawl(self, roots, follow=lambda path, cls: True, limit=100000):
         """Preload `roots` and every export they reference (transitively) that `follow` accepts.
@@ -443,7 +476,7 @@ def roll(package, balance, seed, stage):
         return name_part and {'part': name_part, 'text': package.props(name_part).get('PartName'),
                               'priority': name_priority(package, name_part)}
 
-    fragments = {slot: package.props(p['part']).get('GestaltModeSkeletalMeshName') for slot, p in parts.items()}
+    fragments = {slot: part_fragments(package, p['part']) for slot, p in parts.items()}
     material = package.props(parts['Material']['part']).get('Material') if 'Material' in parts else None
     title, prefix = described(title), described(prefix)
     return {
@@ -453,7 +486,7 @@ def roll(package, balance, seed, stage):
         'title': title,
         'prefix': prefix,
         'parts': parts,
-        'gestalt_fragments': sorted({f for f in fragments.values() if f}),
+        'gestalt_fragments': sorted({f for names in fragments.values() for f in names}),
         'material': material,
         'merge': history,
         'notes': notes,
