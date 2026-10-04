@@ -94,8 +94,10 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.
   Since 2026-10-04 the stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), the
   backpack focus layout, red `bad` cells in compare view and a full-screen Inspect exist, and
-  the Skills page is preloaded hidden. Open: selectable empty backpack cells, gear compare
-  (not yet observed in the real game), the white flavour lines on cards, Q on the Skills page.
+  the Skills page is preloaded hidden. Round 10 added sub-header rows, a full-width selection
+  band, the narrowed compare layout and Q "Toggle Overview" on the Skills page (critic 6.6/10).
+  Open: the perspective tilt and glass sheen (3D transforms Ruffle ignores), selectable empty
+  backpack cells, gear compare (not yet observed in the real game), white flavour lines on cards.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object

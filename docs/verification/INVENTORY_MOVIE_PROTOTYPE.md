@@ -1098,3 +1098,13 @@ Observed (screen captures; **confirmed in game** only for what the frames show, 
   first capture attempt photographed the "Loading inventory..." screen (the pages load after the engine's first long frames).
 - **Open:** the empty backpack cells cannot be selected; a Q "toggle overview" view on the Skills page; a Phaselock eye sigil on the
   HUD movie (Lane A's observation; needs the HUD clip name and a host flag); white flavour lines on cards.
+
+### Round 10 (2026-10-04, after the critic's round-9 report)
+
+AI-assisted. Page-only changes in `inventory.js`, `inventory.html`, `skills.js`: sub-header rows centred on their text field; compare
+view with a narrowed Equipped panel (slots filled) and the Backpack panel moved right with the right-edge fade off; the movie's
+highlight symbol as a full-width selection band; cards rescaled to measured widths (`CARD_FIT`, `FRAME_INSET`, a fit, UNVERIFIED);
+Inspect clipped to the card frame and hint strip, movie `sway`/`scanlines` hidden; Skills `Q` overview (`OVERVIEW`, a fit; the installed
+`Gfx_SkillTree` defaults are OverviewOffset.X 235, OverviewGlobalOffset.X -50, OverviewScale 85). Suite after the changes: 49 PASS /
+0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Not reproduced: perspective tilt and curved glass (the movie's 3D transforms, ignored by
+Ruffle).

@@ -243,7 +243,18 @@ void AOpenWillowMayaHUD::TickInvShots()
     // has finished its movie and the skills page has populated its tree (a capture before that shows "Loading").
     if (!bInventoryPageReady || (!SkillsUrl.IsEmpty() && !bSkillsPagePopulated)) return;
     const double Now = FPlatformTime::Seconds();
-    if (InvShotAt == 0) InvShotAt = Now + 2.;
+    if (InvShotAt == 0)
+    {
+        InvShotAt = Now + 2.;
+        // Skills state of the real-game capture (Maya L8): Phaselock trained, three points in Mind's Eye, none left.
+        if (UOpenWillowSkills* Skills = Maya->GetSkills())
+        {
+            FString Why;
+            Skills->TrySpend(-1, -1, -1, Why);
+            for (int32 I = 0; I < 3; ++I) Skills->TrySpend(1, 0, 0, Why);
+        }
+        return;
+    }
     if (Now < InvShotAt) return;
     auto Shot = [this](const TCHAR* Name)
     {
@@ -266,6 +277,7 @@ void AOpenWillowMayaHUD::TickInvShots()
         {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D4_CompareFromEquipped"), .5}, // compare, equipped origin
         {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("f"), 2.}, {TEXT("shot"), TEXT("D5_Inspect"), .5},
         {TEXT("key"), TEXT("f"), .8}, {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
+        {TEXT("key"), TEXT("q"), 1.5}, {TEXT("shot"), TEXT("D7_SkillsOverview"), .5},
         {TEXT("closeSkills"), TEXT(""), 1.5}};
     if (InvShotStep >= UE_ARRAY_COUNT(Steps))
     {

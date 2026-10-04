@@ -871,6 +871,7 @@ with the stock keys:
 - compare from either side;
 - Inspect;
 - the Skills tab, one second after the tab.
+- Q "Toggle Overview" on the Skills page (`OWCombat_D7_SkillsOverview`).
 
 It writes `OWCombat_D*.png` and is independent of `-owcombatshots`. The Skills
 page is now loaded hidden at level start. The page logs `OWINVTIME js_skills_*`

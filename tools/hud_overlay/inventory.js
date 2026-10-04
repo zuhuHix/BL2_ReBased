@@ -30,6 +30,9 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 13
 // (cell pitch about 65 px against 46) and lets the Equipped panel recede behind the card. Rectangles measured on
 // the 2026-10-04 capture, 1280x720: Backpack panel 520..772 x 80..642; the Equipped panel's remains show at
 // about 335..490 x 415..500. The movie does this with a Z tween that Ruffle ignores, so the host sets 2D scales.
+// Where the list starts below the panel's top edge, in panel units: the small view leaves room for the sub-label row
+// the old category chevrons used; the focus view starts right under the title like the original.
+const LIST_TOP = 75, LIST_TOP_FOCUS = 40;
 const FOCUS_PANEL = {scale:0.92, scaleY:1.0, left:520, top:75};
 const FOCUS_EQUIPPED = {scale:0.52, centreX:412, centreY:380};
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
@@ -887,6 +890,47 @@ function fitFunStats(card, hasFunStats) {
   call(card, 'SetDirectHeight', height + extra);
 }
 
+// Card size and place. The original's cards are about 15% larger than the movie's own layout gives (it draws them
+// nearer the camera), so each visible card is rescaled to the widths measured on the 2026-10-04 captures: a single
+// card 307 px wide with its frame's top left at (215, 112); in the compare view the left card 273 wide ending at
+// x 483 (top 94) and the right one 253 wide starting at x 600 (top 118); in Inspect 292 wide at (60, 44). Only the
+// width is set, the card keeps its aspect ratio and its own height. Idempotent: a card within 1.5 px is left alone.
+// The numbers below are for the clip's `bkgd`, which is wider than the visible frame by FRAME_INSET (visible/bkgd, measured
+// 0.896 on the host captures): the visible frame widths wanted are 307, 273, 253 and 292.
+const FRAME_INSET = 0.896;
+const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
+const CARD_FIT = {single:fitTarget(307, 215, 112), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
+  inspect:fitTarget(292, 60, 44)};
+function fitCard(card, target) {
+  const bounds = readBounds(card + '.bkgd');
+  if (!bounds) return;
+  const width = bounds.xMax - bounds.xMin;
+  if (!(width > 20) || Math.abs(width - target.width) > 1.5) {
+    const factor = target.width / width;
+    if (!Number.isFinite(factor) || factor < 0.3 || factor > 3) return;
+    set(card, '_xscale', Number(get(card, '_xscale')) * factor);
+    set(card, '_yscale', Number(get(card, '_yscale')) * factor);
+  }
+  const fitted = readBounds(card + '.bkgd');
+  if (!fitted) return;
+  const left = target.x !== undefined ? target.x : target.right - target.width;
+  const scale = Number(get(INV, '_xscale')) / 100 || 1;
+  const dx = left - fitted.xMin, dy = target.y - fitted.yMin;
+  if (Math.abs(dx) > 1) set(card, '_x', Number(get(card, '_x')) + dx / scale);
+  if (Math.abs(dy) > 1) set(card, '_y', Number(get(card, '_y')) + dy / scale);
+}
+function fitCards() {
+  if (!ready) return;
+  const main = INV + '.mainCard', other = INV + '.compareCard';
+  if (inspectMode) { fitCard(main, CARD_FIT.inspect); return; }
+  if (!transferSourceId && !compareId) { fitCard(main, CARD_FIT.single); return; }
+  const mainBounds = readBounds(main + '.bkgd'), otherBounds = readBounds(other + '.bkgd');
+  if (!mainBounds || !otherBounds) return;
+  const mainIsLeft = mainBounds.xMin < otherBounds.xMin;
+  fitCard(main, mainIsLeft ? CARD_FIT.left : CARD_FIT.right);
+  fitCard(other, mainIsLeft ? CARD_FIT.right : CARD_FIT.left);
+}
+
 function drawCard() {
   const item = itemById(selectedId);
   const previewId = item?.id || '';
@@ -921,6 +965,7 @@ function drawCard() {
   applyAmmoHighlight(item);
   if (compare) announce(`Comparing ${item.name} with ${compareSlotLabel}: ${compare.name}`);
   updateInspect();
+  fitCards();
   applyCardOcclusion();
 }
 
@@ -1003,12 +1048,13 @@ function announce(message) {
 const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
 // The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
 const INSPECT_ZOOM = 1.3;
+const INSPECT_CARD_INSET_X = 0.06, INSPECT_CARD_INSET_TOP = 0.03, INSPECT_CARD_INSET_BOTTOM = 0.02; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
 const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
   ['[Mouse-Wheel-Up/Mouse-Wheel-Down] Zoom', true], ['[P] Screenshot', false], ['[Escape] Close', true]];
 let inspectCardHome = null, inspectZoom = 1, inspectApplied = false, inspectShownImage = '';
 const INSPECT_HIDDEN_CLIPS = () => [INV+'.equippedPanel', INV+'.storagePanel', INV+'.ammo', INV+'.currencyPanel',
-  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header'];
+  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header', ROOT+'.sway', ROOT+'.scanlines', ROOT+'.tooltips.scanlines'];
 // Moves the main card to the top left (remembering where it was) or puts it back.
 function placeInspectCard(on) {
   const card = INV + '.mainCard';
@@ -1031,7 +1077,14 @@ function placeInspectCard(on) {
 function clipMovieToInspectParts() {
   const pct = (x, y) => `${(100 * x / 1280).toFixed(3)}% ${(100 * y / 720).toFixed(3)}%`;
   const rects = [readBounds(INV + '.mainCard.bkgd'), readBounds(ROOT + '.tooltips.tooltips') || readBounds(ROOT + '.tooltips')]
-    .filter(Boolean).map(b => [b.xMin - 6, b.yMin - 22, b.xMax + 6, b.yMax + 6]);
+    .filter(Boolean);
+  // The card's clip is wider than its visible frame and the rest is the movie's own pale backdrop (the grey box seen
+  // behind the card on the round-9 frame), so the card rectangle is inset to the frame; the hint line keeps its soft ends.
+  const trimmed = rects.map((b, i) => i === 0
+    ? [b.xMin + (b.xMax - b.xMin) * INSPECT_CARD_INSET_X, b.yMin + (b.yMax - b.yMin) * INSPECT_CARD_INSET_TOP,
+       b.xMax - (b.xMax - b.xMin) * INSPECT_CARD_INSET_X, b.yMax - (b.yMax - b.yMin) * INSPECT_CARD_INSET_BOTTOM]
+    : [b.xMin - 50, b.yMin - 22, b.xMax + 50, b.yMax + 22]);
+  rects.length = 0; rects.push(...trimmed);
   if (!rects.length) return;
   const points = [];
   for (const [x0, y0, x1, y1] of rects) points.push(pct(x0, y0), pct(x1, y0), pct(x1, y1), pct(x0, y1), pct(x0, y0));
@@ -1048,10 +1101,9 @@ function updateInspect() {
     backdrop.hidden = !on;
     document.getElementById('controls').style.display = on ? 'none' : '';
     for (const path of INSPECT_HIDDEN_CLIPS()) set(path, '_visible', !on);
-    placeInspectCard(on);
     if (!on) { player.style.clipPath = ''; applyMovieVisibility(); }
   }
-  if (on) clipMovieToInspectParts();
+  if (on) { fitCards(); clipMovieToInspectParts(); }
   if (!on) { inspect.hidden = true; return; }
   if (inspectItemId !== item.id) {
     inspectItemId = item.id;
@@ -1179,7 +1231,7 @@ function applyCardOcclusion() {
     const covered = rects.some(rect => {
       const width = Math.min(box.right, rect.right) - Math.max(box.left, rect.left);
       const height = Math.min(box.bottom, rect.bottom) - Math.max(box.top, rect.top);
-      return width > 0 && height > 0 && width * height >= 0.2 * box.width * box.height;
+      return width > 0 && height > 0 && width * height >= (transferSourceId ? 0.5 : 0.2) * box.width * box.height;
     });
     button.classList.toggle('covered', covered);
   }
@@ -1459,8 +1511,14 @@ function refreshBackpackHeader() {
 // Which of the two panel arrangements applies: the Backpack focus view, or the Equipped view (also used by the
 // compare view, which has its own card tween).
 const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceId && !inspectMode;
+// Compare view (a transfer): the Equipped panel is narrowed into the gap between the two cards and the Backpack panel
+// moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
+// (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
+const COMPARE_BACKPACK = {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:864, top:PANEL_TOP};
+const COMPARE_EQUIPPED = {scale:0.62, scaleY:0.86, centreX:541, top:118};
 let appliedFocus = false, equippedHome = null;
-const panelPose = () => backpackFocused() ? FOCUS_PANEL : {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:PANEL_LEFT, top:PANEL_TOP};
+const panelPose = () => backpackFocused() ? FOCUS_PANEL : transferSourceId ? COMPARE_BACKPACK
+  : {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:PANEL_LEFT, top:PANEL_TOP};
 
 // Scale and place the Backpack panel (see PANEL_SCALE and FOCUS_PANEL). Idempotent: nothing is written once the
 // clip is within half a pixel of the target, so the layout watcher does not chase its own change.
@@ -1478,20 +1536,24 @@ function placeStoragePanel() {
   placeEquippedPanel();
 }
 
-// In the focus view the Equipped panel is shrunk and moved behind the card; the pose it had before is kept and
-// restored when the focus ends.
+// In the focus and compare views the Equipped panel is shrunk and moved (behind the card, or into the gap between the
+// two cards); the pose it had before is kept and restored when the view ends.
 function placeEquippedPanel() {
-  const panel = INV + '.equippedPanel', focus = backpackFocused();
-  if (focus) {
+  const panel = INV + '.equippedPanel', focus = backpackFocused(), compare = Boolean(transferSourceId);
+  if (focus || compare) {
     if (!equippedHome) equippedHome = {x:Number(get(panel, '_x')), y:Number(get(panel, '_y')),
       xs:Number(get(panel, '_xscale')), ys:Number(get(panel, '_yscale'))};
-    if (Math.abs(Number(get(panel, '_xscale')) - equippedHome.xs * FOCUS_EQUIPPED.scale) > 0.5) {
-      set(panel, '_xscale', equippedHome.xs * FOCUS_EQUIPPED.scale);
-      set(panel, '_yscale', equippedHome.ys * FOCUS_EQUIPPED.scale);
+    const xs = equippedHome.xs * (compare ? COMPARE_EQUIPPED.scale : FOCUS_EQUIPPED.scale);
+    const ys = equippedHome.ys * (compare ? COMPARE_EQUIPPED.scaleY : FOCUS_EQUIPPED.scale);
+    if (Math.abs(Number(get(panel, '_xscale')) - xs) > 0.5 || Math.abs(Number(get(panel, '_yscale')) - ys) > 0.5) {
+      set(panel, '_xscale', xs);
+      set(panel, '_yscale', ys);
     }
     const bounds = call(panel, 'getBounds', ROOT);
     if (!bounds) return;
-    const dx = FOCUS_EQUIPPED.centreX - (bounds.xMin + bounds.xMax) / 2, dy = FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
+    const centreX = compare ? COMPARE_EQUIPPED.centreX : FOCUS_EQUIPPED.centreX;
+    const dx = centreX - (bounds.xMin + bounds.xMax) / 2;
+    const dy = compare ? COMPARE_EQUIPPED.top - bounds.yMin : FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
     if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
     if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
   } else if (equippedHome) {
@@ -1501,6 +1563,7 @@ function placeEquippedPanel() {
   }
   appliedFocus = focus;
 }
+
 // True when the compare view (a transfer in progress) is for an item the equipped cell `index` cannot take:
 // every gear cell for a weapon, anything but the matching cell for a gear item.
 function compareRefusesCell(index) {
@@ -1514,6 +1577,32 @@ function compareRefusesCell(index) {
 // sub-label) at list offset `y`, centred on the cell column once that column's width is known (placeListHeaders).
 // Its text size is a host choice measured on captures.
 const LIST_HEADER_TEXT_SIZE = 16;
+// The text still read about 9 px high with the field's centre; measured on the 2026-10-04 frames (panel units).
+const HEADER_NUDGE = 8;
+// The selected row sits on a yellow band that runs to the panel's edges (2026-10-04 capture), wider than the cell. It is
+// the movie's own highlight symbol stretched across the panel, behind the cells (depth 1500, cells start at 2000).
+// The symbol's art is narrower than its bounds and sits right of centre; factors measured on the round-11 frame (host choice).
+const BAND_WIDEN = 1.13, BAND_SHIFT = 45;
+let bandSerial = 0, bandNames = [];
+function drawSelectionBands(rowGroup, ys, localPanelBounds, rowWidth) {
+  for (const name of bandNames) call(`${rowGroup}.${name}`, 'removeMovieClip');
+  bandNames = [];
+  if (!ys.length || !localPanelBounds || !rowWidth) return;
+  const name = `owBand${++bandSerial}`, path = `${rowGroup}.${name}`;
+  bandNames.push(name);
+  call(rowGroup, 'attachMovie', 'inventory - cell - highlight c', name, 1500 + (bandSerial % 100));
+  const bounds = call(path, 'getBounds', path);
+  if (!bounds || !(bounds.xMax > bounds.xMin) || !(bounds.yMax > bounds.yMin)) { call(path, 'removeMovieClip'); return; }
+  const groupX = (localPanelBounds.xMin + localPanelBounds.xMax - rowWidth) / 2;
+  const left = localPanelBounds.xMin + 4 - groupX, width = localPanelBounds.xMax - localPanelBounds.xMin - 8;
+  const height = ROW_PITCH * 1.2;
+  const sx = BAND_WIDEN * width / (bounds.xMax - bounds.xMin), sy = height / (bounds.yMax - bounds.yMin);
+  set(path, '_xscale', sx * 100);
+  set(path, '_yscale', sy * 100);
+  set(path, '_x', left - bounds.xMin * sx - BAND_SHIFT);
+  set(path, '_y', ys[0] + ROW_PITCH / 2 - height / 2 - bounds.yMin * sy);
+}
+
 // Every render attaches headers under fresh names and depths: removing a clip and attaching another under the
 // same name in the same frame leaves the name on the doomed clip, which kept the movie's placeholder text.
 let listHeaderSerial = 0, listHeaderNames = [];
@@ -1526,18 +1615,25 @@ function drawListHeader(rowGroup, label, y) {
   set(path, '_xscale', ROW_SCALE * 100);
   set(path, '_yscale', ROW_SCALE * 100);
   richText(`${path}.textField`, escapeHtml(label), LIST_HEADER_TEXT_SIZE, 0xe2edf1, 'center');
-  return {path, y, bounds, centreY:(bounds.yMin + bounds.yMax) / 2 * ROW_SCALE};
+  // The clip is taller than its text (the label sits at its top), so the row is centred on the text field, not
+  // on the clip's bounds: with the bounds' centre every header drew about half a row too high, over the card above.
+  const fieldY = Number(get(`${path}.textField`, '_y')), fieldHeight = Number(get(`${path}.textField`, '_height'));
+  const textCentre = Number.isFinite(fieldY) && Number.isFinite(fieldHeight) && fieldHeight > 0
+    ? fieldY + fieldHeight / 2 : bounds.yMin + 8;
+  return {path, y, bounds, centreY:textCentre * ROW_SCALE};
 }
 function placeListHeaders(headers, rowWidth) {
   for (const {path, y, bounds, centreY} of headers) {
     const width = (bounds.xMax - bounds.xMin) * ROW_SCALE;
     set(path, '_x', ((rowWidth || width) - width) / 2 - bounds.xMin * ROW_SCALE);
-    set(path, '_y', y + HEADER_PITCH / 2 - centreY);
+    set(path, '_y', y + HEADER_PITCH / 2 - centreY + HEADER_NUDGE);
   }
 }
 
 function render() {
   if (!ready || !state) return;
+  // The host's right-edge fade of the movie would cut the Backpack panel when it moves right for the compare view.
+  document.body.classList.toggle('compare-wide', Boolean(transferSourceId));
   const layer = document.getElementById('controls');
   // A rebuilt overlay would drop keyboard focus; remember it and restore it below.
   const focused = layer.contains(document.activeElement) ? document.activeElement : null;
@@ -1607,6 +1703,7 @@ function render() {
   for (let i = 0; i < RENDERED_ROWS + 2; i++) call(`${rowGroup}.owRow${i}`, 'removeMovieClip');
   for (const name of listHeaderNames) call(`${rowGroup}.${name}`, 'removeMovieClip');
   listHeaderNames = [];
+  const bands = [];
   // Draw the visible entries top to bottom; cells are numbered owRow0.. in draw order.
   let y = 0, row = 0;
   const headers = [];
@@ -1630,7 +1727,7 @@ function render() {
       // to a nonzero scrollRect origin; measuring during that transition made
       // repeated sort/filter/transfer renders accumulate a position offset.
       set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2);
-      set(rowGroup, '_y', localPanelBounds.yMin+75);
+      set(rowGroup, '_y', localPanelBounds.yMin + (backpackFocused() ? LIST_TOP_FOCUS : LIST_TOP));
       set(path, '_x', -localCell.xMin * ROW_SCALE);
       set(path, '_y', -localCell.yMin * ROW_SCALE + y);
     }
@@ -1640,6 +1737,7 @@ function render() {
     call(path, 'SetRarityColor', item ? color(item) : 0);
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     call(path, 'SetSelected', Boolean(item && item.id === selectedId));
+    if (item && item.id === selectedId) bands.push(y);
     const partial = y + ROW_PITCH > VIEW_HEIGHT + 1;
     y += ROW_PITCH;
     row++;
@@ -1654,12 +1752,16 @@ function render() {
     if (button) button.addEventListener('dblclick', event => { event.preventDefault(); select(item.id); equip(); });
   }
   placeListHeaders(headers, rowWidth);
+  drawSelectionBands(rowGroup, bands, localPanelBounds, rowWidth);
   const headerRowBounds = readBounds(rowGroup+'.owRow0');
   if (rowWidth) {
     const height = VISIBLE_ROWS * ROW_PITCH + PEEK_HEIGHT;
     // owRow0 may sit below the list origin when a header comes first.
     const top = headerRowBounds ? headerRowBounds.yMin - (firstCellY || 0) * panelPose().scaleY * COMPOSITION_SCALE : null;
-    set(rowGroup, 'scrollRect', {x:0, y:0, width:rowWidth, height});
+    // The selection highlight is a band wider than the cell (it bleeds to the panel's edges in the original), so the
+    // clip rectangle reaches almost to the panel's frame instead of ending at the cell.
+    const overhang = Math.max(0, ((localPanelBounds ? localPanelBounds.xMax - localPanelBounds.xMin : rowWidth) - rowWidth) / 2 - 6);
+    set(rowGroup, 'scrollRect', {x:-overhang, y:0, width:rowWidth + 2 * overhang, height});
     const bottom = top === null ? 0 : top + height * panelPose().scaleY * COMPOSITION_SCALE;
     const stage = document.getElementById('stage').getBoundingClientRect();
     for (const button of layer.querySelectorAll('[data-partial=true]')) {
@@ -1882,7 +1984,7 @@ function watchLayout() {
       pendingLayout = '';
     }
     const card = cardSignature();
-    if (card && card !== renderedCard) { renderedCard = card; updateInspect(); applyCardOcclusion(); }
+    if (card && card !== renderedCard) { fitCards(); renderedCard = cardSignature(); updateInspect(); applyCardOcclusion(); }
   } catch (error) {
     console.error('OpenWillow Inventory layout watch:', error);
   }
