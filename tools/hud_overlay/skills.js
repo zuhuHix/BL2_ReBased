@@ -33,6 +33,7 @@ let displayedStates = new Map();
 // OverviewScale 85); how the game combines them with the selected tree's X is not read, so the layout below is
 // a fit (UNVERIFIED) checked by eye against a third-party overview screenshot.
 let overview = false;
+const OVERVIEW_HINT_DROP = 15, OVERVIEW_LOCKED_ALPHA = 55; // host choices read off the overview screenshot
 const OVERVIEW = {offsetX:265, globalX:5, scale:95, y:50}; // offset/global/scale defaults are 235/-50/85; enlarged to the third-party overview screenshot (fit)
 
 // Open-time instrumentation, the same "OWINVTIME js_<event> ..." lines inventory.js sends through the
@@ -90,7 +91,7 @@ window.owSkillsOpened = hostEpoch => {
   openTiming = { hostEpoch };
   timeLog('skills_open', `populated=${ready} size=${innerWidth}x${innerHeight} visibility=${document.visibilityState}`);
   if (ready) {
-    if (overview) { overview = false; set(`${SKILLS}.InformationBox`, '_visible', true); }
+    if (overview) toggleOverview();
     select(actionTarget());
     updateBranch(1, true);
     refreshSelection();
@@ -148,7 +149,9 @@ function canSpend(target) {
 // Info box text (tools/hud_overlay/skill_info.js reproduces the traced
 // SetInfo HTML) and the footer, built from the install's own strings.
 function refreshSelection() {
-  if (!ready || !selected) return;
+  if (!ready) return;
+  applyInfoCard();
+  if (!selected) return;
   if (overview) { showTips(); return; }
   // The info box's embedded font is a subset without ' : + %. Scaleform falls
   // back to the imported font library for missing glyphs and Ruffle does not,
@@ -181,6 +184,9 @@ function toggleOverview() {
     selected = null;
   }
   set(`${SKILLS}.InformationBox`, '_visible', !overview);
+  // The footer sits clearly below the trees in the overview, and tiers that are not open yet are drawn dimmer.
+  set(`${ROOT}.tooltips`, '_y', Number(get(`${ROOT}.tooltips`, '_y')) + (overview ? OVERVIEW_HINT_DROP : -OVERVIEW_HINT_DROP));
+  for (const hit of hitTargets) set(hit.cell, '_alpha', overview && !tierOpen(hit.branch, hit.tier) ? OVERVIEW_LOCKED_ALPHA : 100);
   if (overview) updateOverview(); else { select(actionTarget()); updateBranch(selectedBranch); }
   showTips();
   layoutHits();
@@ -424,6 +430,7 @@ function populate() {
   call(SKILLS, 'SetCharacter', classModText, data.className, data.portrait);
   call(SKILLS, 'SetSkillPoints', points);
   call(SKILLS, 'SetAllSkillIconsInvisible');
+  applySkillsLayout();
   data.branches.forEach((branch, index) => drawBranch(index, branch));
   // The highlight clips start on their cyan "outline" frame; the original shows that only on the selected tile
   // (locked tiles have a plain dark border in the 2026-10-04 capture).
@@ -444,6 +451,54 @@ function populate() {
   populatedAt = performance.now() - startupAt;
   timeLog('skills_populated', `branches=${data.branches.length} skills=${hitTargets.length}`);
   console.log(`OpenWillow Skills movie ready: ${data.branches.length} branches, ${hitTargets.length} skills`);
+}
+
+// Placement measured on the 2026-10-04 real capture (1280x720): the header group is a little smaller and centred about
+// x 695; the trees column sits 130 px right of where the harness puts it; the Phaselock card is 320 px wide at (205, 140);
+// the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
+// at (225, 530); here it follows the card). Moves are done on the movie clips in
+// ROOT coordinates (a host fit; the original gets these from its 3D camera).
+const SKILLS_LAYOUT = {headerScale:0.88, headerCentreX:695, treesDX:130, treesDY:12, hintDY:45,
+  card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
+let layoutApplied = false;
+function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
+function moveClip(path, parent, dx, dy) {
+  const scale = Number(get(parent, '_xscale')) / 100 || 1;
+  set(path, '_x', Number(get(path, '_x')) + dx / scale);
+  set(path, '_y', Number(get(path, '_y')) + dy / scale);
+}
+// The Phaselock card (InformationBox) is fitted by the bounds of its background clip, whose margin around the visible frame is
+// known from the round-18/19 frames (the visible card is 0.867 of those bounds' width, starts 0.0685 of it from the left and
+// 0.0106 from the top). The movie resets this clip's scale and position when it tweens the trees, so the fit is applied
+// again on every selection and when the page opens; it changes nothing once the card is within a pixel.
+function applyInfoCard() {
+  const info = `${SKILLS}.InformationBox`, bkgd = `${info}.infoWrapper.DescriptionBkgd`, card = SKILLS_LAYOUT.card;
+  const b = boundsOf(bkgd);
+  if (!b) return;
+  const boundsWidth = card.width / card.boundsShare;
+  if (Math.abs((b.xMax - b.xMin) - boundsWidth) > 1.5) {
+    const factor = boundsWidth / (b.xMax - b.xMin);
+    if (!(factor > 0.3 && factor < 4)) return;
+    set(info, '_xscale', Number(get(info, '_xscale')) * factor);
+    set(info, '_yscale', Number(get(info, '_yscale')) * factor);
+  }
+  const f = boundsOf(bkgd);
+  if (!f) return;
+  const dx = card.left - card.insetLeft * boundsWidth - f.xMin, dy = card.top - card.insetTop * boundsWidth - f.yMin;
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moveClip(info, SKILLS, dx, dy);
+}
+function applySkillsLayout() {
+  if (layoutApplied) return;
+  layoutApplied = true;
+  const header = `${ROOT}.header`;
+  set(header, '_xscale', SKILLS_LAYOUT.headerScale * 100);
+  set(header, '_yscale', SKILLS_LAYOUT.headerScale * 100);
+  const hb = boundsOf(header);
+  if (hb) moveClip(header, ROOT, SKILLS_LAYOUT.headerCentreX - (hb.xMin + hb.xMax) / 2, 0);
+  moveClip(SKILLS, ROOT, SKILLS_LAYOUT.treesDX, SKILLS_LAYOUT.treesDY);
+  moveClip(`${ROOT}.tooltips`, ROOT, 0, SKILLS_LAYOUT.hintDY); // the real footer is at y 657, below the Siren plate
+  applyInfoCard();
+  setTimeout(applyInfoCard, 700); setTimeout(applyInfoCard, 1500);
 }
 
 async function boot() {

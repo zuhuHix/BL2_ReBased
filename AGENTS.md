@@ -97,7 +97,8 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   Since 2026-10-04 the stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), the
   backpack focus layout, red `bad` cells in compare view and a full-screen Inspect exist, and
   the Skills page is preloaded hidden. Round 10 added sub-header rows, a full-width selection
-  band, the narrowed compare layout and Q "Toggle Overview" on the Skills page (critic 6.6/10).
+  band, the narrowed compare layout and Q "Toggle Overview" on the Skills page; round 11 fixed the list's scroll
+  origin and the compare and Skills layout (critic 7.3/10).
   Open: the perspective tilt and glass sheen (3D transforms Ruffle ignores), selectable empty
   backpack cells, gear compare (not yet observed in the real game), white flavour lines on cards.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).

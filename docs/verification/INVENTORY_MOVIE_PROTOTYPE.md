@@ -1108,3 +1108,12 @@ Inspect clipped to the card frame and hint strip, movie `sway`/`scanlines` hidde
 `Gfx_SkillTree` defaults are OverviewOffset.X 235, OverviewGlobalOffset.X -50, OverviewScale 85). Suite after the changes: 49 PASS /
 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Not reproduced: perspective tilt and curved glass (the movie's 3D transforms, ignored by
 Ruffle).
+
+### Round 11 (2026-10-04)
+
+AI-assisted, page-only (`inventory.js`, `skills.js`). Cause found for the backpack rows sitting about 23 px right of the panel centre: the list's
+`scrollRect` had a negative x origin (added in round 10 for the selection band), and Ruffle shifts content right by that amount instead of revealing
+content to the left of the origin. The origin is zero again; the group starts further left and its contents are drawn further right. Backpack focus
+panel/rows (frame 520-775, rows 173 px), compare panels, equipped-origin highlight, Skills placement (the Phaselock card is fitted by its background clip because
+the movie resets the card clip's scale and position), Inspect level strip and the overview footer/dimming follow measured frames (fits, UNVERIFIED). Suite
+after the changes: 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Perspective tilt and glass sheen stay open.

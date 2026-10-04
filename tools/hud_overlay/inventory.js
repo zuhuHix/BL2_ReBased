@@ -33,7 +33,9 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 13
 // Where the list starts below the panel's top edge, in panel units: the small view leaves room for the sub-label row
 // the old category chevrons used; the focus view starts right under the title like the original.
 const LIST_TOP = 75, LIST_TOP_FOCUS = 40;
-const FOCUS_PANEL = {scale:0.92, scaleY:1.0, left:520, top:75};
+// VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
+const LIST_TOP_NO_HEADERS = 10;
+const FOCUS_PANEL = {scale:0.92, scaleY:1.0, left:497, top:75}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
 const FOCUS_EQUIPPED = {scale:0.52, centreX:412, centreY:380};
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
 // 2026-10-04; comparators, filters and headers are read from native code in
@@ -900,7 +902,7 @@ function fitFunStats(card, hasFunStats) {
 const FRAME_INSET = 0.896;
 const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
 const CARD_FIT = {single:fitTarget(307, 215, 112), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
-  inspect:fitTarget(292, 60, 44)};
+  inspect:fitTarget(310, 50, 44)};  // the level strip sits about 14 px above the frame's clip, so the frame is at 44 for a strip at 30
 function fitCard(card, target) {
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
@@ -1048,7 +1050,7 @@ function announce(message) {
 const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
 // The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
 const INSPECT_ZOOM = 1.3;
-const INSPECT_CARD_INSET_X = 0.06, INSPECT_CARD_INSET_TOP = 0.03, INSPECT_CARD_INSET_BOTTOM = 0.02; // measured on the round-12 frame
+const INSPECT_CARD_INSET_X = 0.03, INSPECT_CARD_INSET_TOP = -0.06, INSPECT_CARD_INSET_BOTTOM = -0.05; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
 const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
   ['[Mouse-Wheel-Up/Mouse-Wheel-Down] Zoom', true], ['[P] Screenshot', false], ['[Escape] Close', true]];
@@ -1083,7 +1085,7 @@ function clipMovieToInspectParts() {
   const trimmed = rects.map((b, i) => i === 0
     ? [b.xMin + (b.xMax - b.xMin) * INSPECT_CARD_INSET_X, b.yMin + (b.yMax - b.yMin) * INSPECT_CARD_INSET_TOP,
        b.xMax - (b.xMax - b.xMin) * INSPECT_CARD_INSET_X, b.yMax - (b.yMax - b.yMin) * INSPECT_CARD_INSET_BOTTOM]
-    : [b.xMin - 50, b.yMin - 22, b.xMax + 50, b.yMax + 22]);
+    : [b.xMin - 50, b.yMin - 10, b.xMax + 50, b.yMax + 8]);
   rects.length = 0; rects.push(...trimmed);
   if (!rects.length) return;
   const points = [];
@@ -1514,8 +1516,8 @@ const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceI
 // Compare view (a transfer): the Equipped panel is narrowed into the gap between the two cards and the Backpack panel
 // moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
 // (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
-const COMPARE_BACKPACK = {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:864, top:PANEL_TOP};
-const COMPARE_EQUIPPED = {scale:0.62, scaleY:0.86, centreX:541, top:118};
+const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:PANEL_TOP};
+const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, top:118};
 let appliedFocus = false, equippedHome = null;
 const panelPose = () => backpackFocused() ? FOCUS_PANEL : transferSourceId ? COMPARE_BACKPACK
   : {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:PANEL_LEFT, top:PANEL_TOP};
@@ -1582,8 +1584,11 @@ const HEADER_NUDGE = 8;
 // The selected row sits on a yellow band that runs to the panel's edges (2026-10-04 capture), wider than the cell. It is
 // the movie's own highlight symbol stretched across the panel, behind the cells (depth 1500, cells start at 2000).
 // The symbol's art is narrower than its bounds and sits right of centre; factors measured on the round-11 frame (host choice).
-const BAND_WIDEN = 1.13, BAND_SHIFT = 45;
-let bandSerial = 0, bandNames = [];
+const BAND_FRAME_PAD = 22;                      // panel bkgd minus visible frame, per side (measured)
+const BAND_ART_FRACTION = 0.686, BAND_ART_LEFT = 0.099; // visible art of the band symbol: its share of the symbol's width and where it starts (measured on the round-16 frame)
+let bandSerial = 0, bandNames = [], listOverhang = 0;
+const ROW_WIDTH_FOCUS = 173 / 158; // real rows are about 173 px wide in the focus view, the converted cell gives 158
+const ROW_CENTRE_FIX = -3.4;      // the cell's visible part sits 3.4 px left of its symbol's centre
 function drawSelectionBands(rowGroup, ys, localPanelBounds, rowWidth) {
   for (const name of bandNames) call(`${rowGroup}.${name}`, 'removeMovieClip');
   bandNames = [];
@@ -1593,13 +1598,16 @@ function drawSelectionBands(rowGroup, ys, localPanelBounds, rowWidth) {
   call(rowGroup, 'attachMovie', 'inventory - cell - highlight c', name, 1500 + (bandSerial % 100));
   const bounds = call(path, 'getBounds', path);
   if (!bounds || !(bounds.xMax > bounds.xMin) || !(bounds.yMax > bounds.yMin)) { call(path, 'removeMovieClip'); return; }
-  const groupX = (localPanelBounds.xMin + localPanelBounds.xMax - rowWidth) / 2;
-  const left = localPanelBounds.xMin + 4 - groupX, width = localPanelBounds.xMax - localPanelBounds.xMin - 8;
+  // Visible frame of the panel (its bkgd also covers a glow margin of FRAME_PAD screen px each side), in group coordinates.
+  const pad = BAND_FRAME_PAD / (panelPose().scale * COMPOSITION_SCALE);
+  const frameLeft = localPanelBounds.xMin + pad, frameWidth = localPanelBounds.xMax - localPanelBounds.xMin - 2 * pad;
+  const groupX = (localPanelBounds.xMin + localPanelBounds.xMax - rowWidth) / 2 - listOverhang;
+  const left = frameLeft - groupX, width = frameWidth / BAND_ART_FRACTION;   // symbol width; its art fills BAND_ART_FRACTION of it
   const height = ROW_PITCH * 1.2;
-  const sx = BAND_WIDEN * width / (bounds.xMax - bounds.xMin), sy = height / (bounds.yMax - bounds.yMin);
+  const sx = width / (bounds.xMax - bounds.xMin), sy = height / (bounds.yMax - bounds.yMin);
   set(path, '_xscale', sx * 100);
   set(path, '_yscale', sy * 100);
-  set(path, '_x', left - bounds.xMin * sx - BAND_SHIFT);
+  set(path, '_x', left - width * BAND_ART_LEFT - bounds.xMin * sx);
   set(path, '_y', ys[0] + ROW_PITCH / 2 - height / 2 - bounds.yMin * sy);
 }
 
@@ -1625,7 +1633,7 @@ function drawListHeader(rowGroup, label, y) {
 function placeListHeaders(headers, rowWidth) {
   for (const {path, y, bounds, centreY} of headers) {
     const width = (bounds.xMax - bounds.xMin) * ROW_SCALE;
-    set(path, '_x', ((rowWidth || width) - width) / 2 - bounds.xMin * ROW_SCALE);
+    set(path, '_x', listOverhang + ((rowWidth || width) - width) / 2 - bounds.xMin * ROW_SCALE);
     set(path, '_y', y + HEADER_PITCH / 2 - centreY + HEADER_NUDGE);
   }
 }
@@ -1719,16 +1727,19 @@ function render() {
     const path = `${rowGroup}.owRow${row}`;
     call(rowGroup, 'attachMovie', 'inventory - cell', `owRow${row}`, 2000+row);
     const localCell = call(path, 'getBounds', path);
-    set(path, '_xscale', ROW_SCALE * 100);
+    const rowScaleX = backpackFocused() ? ROW_SCALE * ROW_WIDTH_FOCUS : ROW_SCALE;
+    set(path, '_xscale', rowScaleX * 100);
     set(path, '_yscale', ROW_SCALE * 100);
     if (localPanelBounds && localCell) {
-      rowWidth = (localCell.xMax-localCell.xMin) * ROW_SCALE;
-      // Keep the mask origin at zero for every render. Ruffle defers changes
-      // to a nonzero scrollRect origin; measuring during that transition made
-      // repeated sort/filter/transfer renders accumulate a position offset.
-      set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2);
-      set(rowGroup, '_y', localPanelBounds.yMin + (backpackFocused() ? LIST_TOP_FOCUS : LIST_TOP));
-      set(path, '_x', -localCell.xMin * ROW_SCALE);
+      rowWidth = (localCell.xMax-localCell.xMin) * rowScaleX;
+      // The scrollRect origin must stay at zero: Ruffle does not reveal content left of a negative origin, it moves the
+      // content right by that amount (that moved every row 23 px off the panel's centre in round 10, and BAND_SHIFT was
+      // tuned to hide it). Room for the selection band beyond the cell is made by starting the group `overhang`
+      // further left and drawing everything `overhang` further right inside it.
+      listOverhang = Math.max(0, ((localPanelBounds.xMax - localPanelBounds.xMin) - rowWidth) / 2 - 6);
+      set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2 - listOverhang + ROW_CENTRE_FIX * rowScaleX);
+      set(rowGroup, '_y', localPanelBounds.yMin + (backpackFocused() ? LIST_TOP_FOCUS + (headerFor({}, listMode()) === undefined ? LIST_TOP_NO_HEADERS : 0) : LIST_TOP));
+      set(path, '_x', listOverhang - localCell.xMin * rowScaleX);
       set(path, '_y', -localCell.yMin * ROW_SCALE + y);
     }
     if (firstCellY === null) firstCellY = y;
@@ -1736,8 +1747,12 @@ function render() {
     call(path, 'SetEmptyCell', !item);
     call(path, 'SetRarityColor', item ? color(item) : 0);
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
-    call(path, 'SetSelected', Boolean(item && item.id === selectedId));
-    if (item && item.id === selectedId) bands.push(y);
+    // Equipped-origin compare (2026-10-04 capture): the chosen equipped slot carries the highlight, the backpack row only
+    // marks the candidate whose card is on the right, so it gets no band.
+    const rowSelected = Boolean(item && item.id === selectedId) && !(transferSourceId && transferFromEquipped);
+    call(path, 'SetSelected', rowSelected);
+    // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
+    if (rowSelected && backpackFocused()) bands.push(y);
     const partial = y + ROW_PITCH > VIEW_HEIGHT + 1;
     y += ROW_PITCH;
     row++;
@@ -1760,8 +1775,7 @@ function render() {
     const top = headerRowBounds ? headerRowBounds.yMin - (firstCellY || 0) * panelPose().scaleY * COMPOSITION_SCALE : null;
     // The selection highlight is a band wider than the cell (it bleeds to the panel's edges in the original), so the
     // clip rectangle reaches almost to the panel's frame instead of ending at the cell.
-    const overhang = Math.max(0, ((localPanelBounds ? localPanelBounds.xMax - localPanelBounds.xMin : rowWidth) - rowWidth) / 2 - 6);
-    set(rowGroup, 'scrollRect', {x:-overhang, y:0, width:rowWidth + 2 * overhang, height});
+    set(rowGroup, 'scrollRect', {x:0, y:0, width:rowWidth + 2 * listOverhang, height});
     const bottom = top === null ? 0 : top + height * panelPose().scaleY * COMPOSITION_SCALE;
     const stage = document.getElementById('stage').getBoundingClientRect();
     for (const button of layer.querySelectorAll('[data-partial=true]')) {
