@@ -494,8 +494,8 @@ float2 direction = float2(n2.y + n1.x, n2z + n1.x);
 float strength = lerp(0.15, 0.7, saturate(Dyn / 0.6));
 float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).rgb;
 // Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
-// reduced and blue raised.
-ring *= float3(0.7, 0.9, 1.3);
+// reduced and blue raised (round 8: red 0.7 to 0.55, blue 1.3 to 1.4, because a pink fringe remained on the rim).
+ring *= float3(0.55, 0.9, 1.4);
 float softFade = saturate((SD - PD) / 41.0);
 return float4(min(4.0, Col.a * ring) * softFade, 1.0);
 """, dyn=True)
@@ -515,7 +515,7 @@ float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
 // Host calibration (UNVERIFIED): x3 on the weight (the shader's own weights give a haze several times fainter than the
 // game frames show between core and rim) and a blue-violet tint (the texture is magenta, the game's band is blue-violet).
 float weight = 3.0 * core.r * Col.a * mask * dot(centred, centred);
-float3 colour = Col.rgb * core.rgb * float3(0.5, 0.6, 1.5);
+float3 colour = Col.rgb * core.rgb * float3(0.3, 0.5, 1.6);
 float softFade = saturate((SD - PD) / 41.0);
 return float4(min(4.0, colour) * weight * softFade, 1.0);
 """)
@@ -615,11 +615,11 @@ return float4(min(4.0, g * Col.rgb), g * Col.a * saturate((SD - PD) / 21.0));
 
 # Mat_SirenHandGlowShattered (translucent): the star-burst. The star texture (RGBA) times the particle colour; alpha = the
 # texture's alpha x particle alpha x soft fade over 21 units.
-# Host calibration (UNVERIFIED): alpha x0.4, because in the host the long rays swamp the hand at 0.55-0.75 s while the game
+# Host calibration (UNVERIFIED): alpha x0.2 (0.4 in round 7), because in the host the long rays swamp the hand at 0.55-0.75 s while the game
 # keeps a visible palm orb with a few thin white lines.
 exact('Mat_SirenHandGlowShattered', 'trans', ['EnergyShatter_Dif_Tex'], r"""
 float4 t = Texture2DSample(T0, T0Sampler, UV);
-return float4(min(4.0, Col.rgb * t.rgb), 0.4 * t.a * Col.a * saturate((SD - PD) / 21.0));
+return float4(min(4.0, Col.rgb * t.rgb), 0.2 * t.a * Col.a * saturate((SD - PD) / 21.0));
 """)
 
 # Mat_SirenHandInnerOrb (translucent): the blue palm orb. Four reads of a nebula texture in two rotating frames (0.18 rad/s
@@ -644,7 +644,9 @@ float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
 float base = saturate(2.0 * m2);
 float k = base + mixWeight * (m1 - base);
 float3 blue = float3(0.2508, 0.6524, 0.9323);
-float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 1.25;
+// Host calibration (UNVERIFIED): the orb texture is scaled by 0.6 instead of the shader's 1.25. At 1.25 the orb's centre is
+// white-blue; the game's palm orb is a saturated deep blue with a bright highlight and thin arcs.
+float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.6;
 return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
 

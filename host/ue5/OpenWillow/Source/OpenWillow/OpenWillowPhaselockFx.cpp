@@ -33,9 +33,9 @@ constexpr float ScreenQuadDistance = 15.f;
 // dark blob keeps the shader's values (pure black at 0.30 s in the game).
 struct FOwFxEmitterScalar { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; float Value; };
 const FOwFxEmitterScalar EmitterScalars[] = {
-    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.85f},
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.72f},
     {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
-    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.85f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.45f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
 };
 

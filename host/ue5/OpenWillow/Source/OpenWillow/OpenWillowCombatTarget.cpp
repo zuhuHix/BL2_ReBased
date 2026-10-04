@@ -21,7 +21,7 @@ const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 constexpr float RespawnSeconds = 3.f;
 // Host calibration (UNVERIFIED): factor between the data's light brightness and UE5's unitless intensity (see UpdatePresentation).
-constexpr float LockLightGain = 4.f;
+constexpr float LockLightGain = 3.f;
 
 // Pivot height at Held seconds into the lift from From to To (LiftActionSkill.UpdateLiftedPawn / GetLiftLocation,
 // read not run): up to SnapTimePct of the lift, From -> snap point (SnapHeightPct of the way) by a^2; then snap point ->
@@ -152,12 +152,24 @@ float AOpenWillowCombatTarget::AutoAimRadius() const
 
 float AOpenWillowCombatTarget::MeshBoundsRadius() const
 {
-    // Test aid for matched comparisons: -owbubbleradius=<uu> stands in for the lifted pawn's mesh bounds sphere radius
-    // (the game's adult bullymong reads 285-300 uu at the lock; the engine-shape dummy's is about 109 uu).
-    static float Override = -1.f;
+    // Test aid for matched comparisons: -owbubbleradius=<intro>,<loop>,<end> (uu) stands in for the lifted pawn's mesh
+    // bounds sphere radius at each bubble template's spawn. The game's pose changes the bounds: the SDK probe of the adult
+    // bullymong read 290 at the lock, a loop emitter scale equivalent to 260 0.2 s later, and 193 in the lifted pose that the
+    // end template is spawned in (size_rule/adult68). The engine-shape dummy's own radius is about 109 uu and constant.
+    static TArray<float> Override;
     static bool bRead = false;
-    if (!bRead) { bRead = true; FParse::Value(FCommandLine::Get(), TEXT("owbubbleradius="), Override); }
-    if (Override > 0.f) return Override;
+    if (!bRead)
+    {
+        bRead = true;
+        FString Text;
+        if (FParse::Value(FCommandLine::Get(), TEXT("owbubbleradius="), Text, false))
+        {
+            TArray<FString> Parts;
+            Text.ParseIntoArray(Parts, TEXT(","));
+            for (const FString& Part : Parts) Override.Add(FCString::Atof(*Part));
+        }
+    }
+    if (Override.Num() > 0) return Override[FMath::Clamp(BubbleStageNow, 0, Override.Num() - 1)] ;
     if (StockMesh) return StockMesh->Bounds.SphereRadius;
     FBoxSphereBounds Bounds = Post->Bounds;
     Bounds = Bounds + Torso->Bounds;
@@ -188,7 +200,7 @@ float AOpenWillowCombatTarget::BubbleDrawScale() const
     // so the sprite is drawn at 48.6 / (0.5 x 0.78 x StartSize) of the draw scale, about 0.63 (cause of the factor not
     // found: a sprite-size convention; UNVERIFIED). All three bubble templates use it, since the streaks' measured
     // thickness in game frames matches the same factor.
-    constexpr float GameRimPerDrawScale = 48.6f, TextureRim = 0.78f;
+    constexpr float GameRimPerDrawScale = 48.6f, TextureRim = 0.78f;   // (kept: the ring's own peak)
     float Calibration = 1.f;
     FString Error;
     if (const FOwFxTemplate* Loop = FOwFxTemplate::Load(Fx.EmitterDir, Fx.BubbleLoop, Error))
@@ -384,9 +396,11 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
         LockLight->SetRelativeLocation(BubbleOffset);
         LockLight->bUseInverseSquaredFalloff = false;
         LockLight->SetIntensityUnits(ELightUnits::Unitless);
-        LockLight->SetLightFalloffExponent(Fx.LightFalloffExponent);
-        LockLight->SetAttenuationRadius(Fx.LightRadius);
-        LockLight->SetLightColor(FLinearColor(Fx.LightColor));
+        // Host calibration (UNVERIFIED): a softer edge than the data's exponent gives (the pool is a hard-edged disc on dark asphalt;
+        // the game's is pale and soft), and a colour pulled halfway to white.
+        LockLight->SetLightFalloffExponent(FMath::Max(Fx.LightFalloffExponent, 3.f));
+        LockLight->SetAttenuationRadius(1.6f * Fx.LightRadius);   // host calibration (UNVERIFIED): wider, so the pool's edge is soft
+        LockLight->SetLightColor(FMath::Lerp(FLinearColor(Fx.LightColor), FLinearColor::White, 0.5f));
         LockLight->SetCastShadows(Fx.bLightShadows);
         LockLight->SetIndirectLightingIntensity(0.f);
         LockLight->SetIntensity(0.f);

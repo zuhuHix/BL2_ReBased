@@ -954,9 +954,14 @@ void AOpenWillowWalker::UsePhaselock()
     // The cooldown manager holds the pool from OnSelectedTarget (the cast) to OnReleasedTarget.
     PhaselockHeldUntil = Now + PhaselockTimeline.ReleasedAt;
     PhaselockResetAt = TNumericLimits<float>::Max();
-    if (ArmsAnim && PhaselockAnim) ArmsAnim->PlayAction(PhaselockAnim);
+    // Host calibration (UNVERIFIED): the cast clip plays at 0.85 speed and its hand effect starts 0.08 s before the clip's
+    // 0.25 s notify. The game frames show the arm dropping about 0.05 s later than the host's at full speed, and an opaque
+    // palm orb at 0.44 s, which the orb's alpha ramp (0.19-0.44 s after spawn) only allows if it spawned about 0.1 s early
+    // (0.12 s early put the orb ahead of the game's at 0.40 s, so 0.08 s is used).
+    const float HandFxLead = 0.08f;
+    if (ArmsAnim && PhaselockAnim) ArmsAnim->PlayAction(PhaselockAnim, 1.f, 0.85f);
     // Phase_Lock_Lift's AnimNotify_UseBehavior fires PlayPhaselockHandFXFirstPerson at its time into the clip.
-    HandFxAt = PhaselockFx.bLoaded ? Now + PhaselockFx.LiftNotifyTime : -1.f;
+    HandFxAt = PhaselockFx.bLoaded ? Now + FMath::Max(0.f, PhaselockFx.LiftNotifyTime / 0.85f - HandFxLead) : -1.f;
     bHandFxMiss = false;
     // OnSelectedTarget shows the screen particle (Behavior_ScreenParticle); OnActionSkillDeactivated hides it.
     if (PhaselockFx.bLoaded)

@@ -763,3 +763,44 @@ constants such as `/ 41.0` and prose comments):
 * Not changed: release shards (host rays are still thin; the game's are angular ribbons), the dummy's pole shape against the
   bullymong, the target's animation (no stock clips for the dummy), the oval look of the bubble (the host dummy's pose/camera).
 * A try with the aim point 40 uu higher missed the cast (outside the magnetism radius) and was reverted.
+
+### Round 8 (2026-10-04, after a round 7 score of 6/10)
+
+Frames: `local/orch/A/round15/` (host) against `matched_650/run2` and `size_rule/adult68` (game). Findings and changes; each host
+calibration is `UNVERIFIED`:
+
+* **The release "does not collapse" gap was a test-aid error, not an effect rule.** `SphereCollapse` is not read by any bubble
+  pixel shader, and the end template's sphere does not shrink until 0.8 of its life, so nothing in the effect data shrinks the
+  sphere. What shrinks it in the game is the draw scale, mesh bounds sphere radius at spawn / 66.7, and the pawn's bounds change
+  with its pose: the SDK probe read 290 uu at the lock and 193 uu once lifted (`size_rule/adult68`). The host's constant stand-in
+  radius gave the intro, loop and end templates the same scale. `-owbubbleradius=` now takes three values, one per template (290,
+  260, 185 for the adult bullymong: the loop's value from its measured draw scale, the end's from the 193 lifted pose and the
+  game's size at 4.8 s). The host's own dummy does not change pose, so its bubble does not shrink; the stock rule would shrink
+  it if its animation changed the bounds. `FParse::Value` stops at commas by default, which made the first try use 290 for all
+  three.
+* **Hand effect timing and arm pose.** The game's palm orb is opaque by 0.44 s. The orb's alpha scale ramps from 0 at 0.15 to 1
+  at 0.35 of its 1.25 s life (alpha 2, so opaque at about 0.25), which only allows that if the effect spawns about 0.1 s before
+  the clip's 0.25 s notify; the dark disc is gone by 0.39 s in the game, where the shader's own ramp would keep it to 0.6 s. The
+  host now starts the hand effect 0.08 s early (0.12 put the orb ahead of the game's at 0.40 s). Reading the orb's height from
+  the frames, the host arm dropped about 0.05-0.07 s before the game's, so the cast clip plays at 0.85 speed (a new rate argument
+  of `PlayAction`; the notify time is divided by the same rate). The cause (a blend-in on the game's special move, or a play-rate
+  scale from the caller's `SpecialMoveData`) was not found.
+* **Palm orb colour:** the shader's 1.25 x orb texture gives a white-blue core; the factor is 0.6 so the orb is the game's
+  saturated blue with a highlight. Star-burst alpha x0.2.
+* **Interior opacity, measured.** Method: take the annulus 0.45-0.8 of the rim radius (inside the rim, outside the target) and
+  the same pixels in the pre-cast frame, convert both to linear luminance, and report the mean ratio, the regression slope (how
+  much of the background's contrast gets through) and the correlation. Game (centre 645, 300, radius 205 px): ratio 0.44 / 0.47,
+  slope 0.26 / 0.21, correlation 0.45 / 0.37 at 1.5 / 3.0 s; mean colour (28, 32, 86) and (31, 35, 84) of 255. So the game
+  interior is neither opaque nor see-through: about a quarter of the background's contrast survives. Host with cap 0.85: slope
+  0.06 / 0.15. Host now (cap 0.72, round 15): ratio 0.57 / 0.51, slope 0.11 / 0.26, mean colour (36, 38, 122) / (41, 41, 91).
+  The host centre and radius used (640, 190, 195) are approximate, so these figures are rough. The script is
+  `local/orch/A/interior.py` (ignored).
+* **Pink fringe on the rim:** ring tint (0.55, 0.9, 1.4), haze tint (0.3, 0.5, 1.6).
+* **Floor pool:** attenuation radius x1.6, falloff exponent at least 3, light colour pulled halfway to white in RGB, gain 3
+  (an HSV blend turned the light pink).
+* **End template interior:** darkening cap 0.45 (the game's interior at release is light blue).
+* **Open:** the egg-shaped look at 3.0 s (the host dummy's pose and the camera; a re-aim after the lift missed the magnetism
+  radius); the angular ice-shard facets of the 0.75-0.8 s flash and its white bleach (the host has a smooth swirl); the release's
+  long straight shards (the host's ribbon meshes are curved swooshes, the game's shards are angular and thin; the mesh and
+  material that draws them was not identified); the fist clenching around the orb at 0.65 s (the arm clip is the same asset, so a
+  different clip or an additive layer is suspected, not checked).
