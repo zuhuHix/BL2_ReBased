@@ -21,7 +21,7 @@ const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 constexpr float RespawnSeconds = 3.f;
 // Host calibration (UNVERIFIED): factor between the data's light brightness and UE5's unitless intensity (see UpdatePresentation).
-constexpr float LockLightGain = 3.f;
+constexpr float LockLightGain = 6.5f;
 
 // Pivot height at Held seconds into the lift from From to To (LiftActionSkill.UpdateLiftedPawn / GetLiftLocation,
 // read not run): up to SnapTimePct of the lift, From -> snap point (SnapHeightPct of the way) by a^2; then snap point ->
@@ -187,7 +187,7 @@ FString AOpenWillowCombatTarget::PresentationReport() const
 
 float AOpenWillowCombatTarget::PhaselockLightIntensity() const
 {
-    return LockLight ? LockLight->Intensity / LockLightGain : 0.f;   // in the data's brightness units
+    return LockLight ? LockLightData : 0.f;   // in the data's brightness units, whatever gain the host applies
 }
 
 float AOpenWillowCombatTarget::BubbleDrawScale() const
@@ -196,11 +196,11 @@ float AOpenWillowCombatTarget::BubbleDrawScale() const
     // each bubble emitter takes DrawScale = the lifted pawn's Mesh.Bounds.SphereRadius at its own spawn / BubbleFXScale,
     // and the loop's visible rim (the blue-minus-red ridge on the frames) sits 48.6 uu out per DrawScale unit. Measured
     // with the same detector on host frames, the host draws that ridge at 0.88 of the Sphere emitter's half-width. Round 6
-    // (exact materials): the bubble texture's own ring peaks at 0.78 of its half-width (measured on the exported texture),
-    // so the sprite is drawn at 48.6 / (0.5 x 0.78 x StartSize) of the draw scale, about 0.63 (cause of the factor not
-    // found: a sprite-size convention; UNVERIFIED). All three bubble templates use it, since the streaks' measured
-    // thickness in game frames matches the same factor.
-    constexpr float GameRimPerDrawScale = 48.6f, TextureRim = 0.78f;   // (kept: the ring's own peak)
+    // used the bubble texture's own ring (0.78) instead, which drew the bubble about 13% too large (round 9: the ridge detector
+    // finds the rim's outer glow, at 0.88 with the blue tint, not the texture ring), so the sprite is drawn at
+    // 48.6 / (0.5 x 0.88 x StartSize) of the draw scale, about 0.56 (cause of the factor not found; UNVERIFIED). All three bubble
+    // templates use it, since the streaks' measured thickness in game frames matches the same factor.
+    constexpr float GameRimPerDrawScale = 48.6f, TextureRim = 0.88f;
     float Calibration = 1.f;
     FString Error;
     if (const FOwFxTemplate* Loop = FOwFxTemplate::Load(Fx.EmitterDir, Fx.BubbleLoop, Error))
@@ -244,9 +244,10 @@ void AOpenWillowCombatTarget::UpdatePresentation(float Now, float Held)
         float Fraction = 1.f;
         if (Held < T.LockedAt) Fraction = T.LockedAt > 0.f ? Held / T.LockedAt : 1.f;
         else if (Held >= T.OutroAt) Fraction = 1.f - (Held - T.OutroAt) / FMath::Max(T.ReleasedAt - T.OutroAt, KINDA_SMALL_NUMBER);
-        // Host calibration (UNVERIFIED): UE3 brightness 4 is used as UE5's unitless intensity times 4; at 1x the pool under the
+        // Host calibration (UNVERIFIED): the data's brightness times LockLightGain is UE5's unitless intensity; at 1x the pool under the
         // target is invisible on dark asphalt, where the game frames show a pale blue pool on snow and sand.
-        LockLight->SetIntensity(LockLightGain * Fx.LightBrightness * FMath::Clamp(Fraction, 0.f, 1.f));
+        LockLightData = Fx.LightBrightness * FMath::Clamp(Fraction, 0.f, 1.f);
+        LockLight->SetIntensity(LockLightGain * LockLightData);
     }
     if (Held >= T.LockedAt && BubbleStageNow == 0)
     {
@@ -303,6 +304,7 @@ void AOpenWillowCombatTarget::ClearPresentation()
     BubbleIntro = BubbleLoop = BubbleOutro = nullptr;
     if (LockLight) LockLight->DestroyComponent();
     LockLight = nullptr;
+    LockLightData = 0.f;
 }
 
 void AOpenWillowCombatTarget::EndPhaselockNow(float Now)
@@ -397,10 +399,10 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
         LockLight->bUseInverseSquaredFalloff = false;
         LockLight->SetIntensityUnits(ELightUnits::Unitless);
         // Host calibration (UNVERIFIED): a softer edge than the data's exponent gives (the pool is a hard-edged disc on dark asphalt;
-        // the game's is pale and soft), and a colour pulled halfway to white.
-        LockLight->SetLightFalloffExponent(FMath::Max(Fx.LightFalloffExponent, 3.f));
-        LockLight->SetAttenuationRadius(1.6f * Fx.LightRadius);   // host calibration (UNVERIFIED): wider, so the pool's edge is soft
-        LockLight->SetLightColor(FMath::Lerp(FLinearColor(Fx.LightColor), FLinearColor::White, 0.5f));
+        // the game's is pale and soft), and a colour pulled 20% toward white.
+        LockLight->SetLightFalloffExponent(FMath::Max(Fx.LightFalloffExponent, 1.75f));
+        LockLight->SetAttenuationRadius(0.85f * Fx.LightRadius);   // host calibration (UNVERIFIED): 0.85x the data radius, so the pool is about 300 px wide as in the game
+        LockLight->SetLightColor(FMath::Lerp(FLinearColor(Fx.LightColor), FLinearColor::White, 0.2f));
         LockLight->SetCastShadows(Fx.bLightShadows);
         LockLight->SetIndirectLightingIntensity(0.f);
         LockLight->SetIntensity(0.f);

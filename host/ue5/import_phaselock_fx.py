@@ -496,6 +496,10 @@ float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).r
 // Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
 // reduced and blue raised (round 8: red 0.7 to 0.55, blue 1.3 to 1.4, because a pink fringe remained on the rim).
 ring *= float3(0.55, 0.9, 1.4);
+// Host calibration (UNVERIFIED): a white-hot inner edge. The game's rim has one; the brightest part of the texture's ring is
+// pushed toward white-blue.
+float ringLuma = dot(ring, float3(0.3, 0.55, 0.15));
+ring += float3(0.6, 0.8, 1.0) * ringLuma * ringLuma;
 float softFade = saturate((SD - PD) / 41.0);
 return float4(min(4.0, Col.a * ring) * softFade, 1.0);
 """, dyn=True)
@@ -530,7 +534,16 @@ float smoke = Texture2DSample(T0, T0Sampler, uv + float2(frac(0.25 * GT), 0.0)).
 float3 spike = Texture2DSample(T1, T1Sampler, uv + smoke * 0.05).rgb;
 float cut = Texture2DSample(T2, T2Sampler, float2(2.0 * uv.x, 0.5 * uv.y + 0.76)).r;
 float alpha = saturate(spike.r * (1.0 - 3.0 * cut)) * Col.a * saturate((SD - PD) / 51.0);
-return float4(min(4.0, Col.rgb * spike), alpha);
+// Host calibration (UNVERIFIED): full alpha and the streak is read 1.15x compressed along its length (it ends at 0.07 and 0.93
+// of the sprite); round 10's first try (0.8 and 1.25x) was still faint. Round 8 (full strength) gave rays that were too many and reached the screen edge; round 9 (0.5 and 1.6x)
+// made them invisible, where the game has translucent streaks 100-150 px to each side of the bubble.
+// Round 11: the vertical axis is read at 0.55x so each streak is about 1.8x wider and only about two of the texture's four
+// streaks fit on a sprite (fewer, wider, softer wedges, as in the game).
+float2 shortUv = float2((uv.x - 0.5) * 1.15 + 0.5, (uv.y - 0.5) * 0.55 + 0.5);
+float inside = (shortUv.x >= 0.0 && shortUv.x <= 1.0) ? 1.0 : 0.0;
+float3 spikeShort = Texture2DSample(T1, T1Sampler, shortUv + smoke * 0.05).rgb;
+alpha = saturate(spikeShort.r * (1.0 - 3.0 * cut)) * Col.a * saturate((SD - PD) / 51.0) * inside * 1.0;
+return float4(min(4.0, Col.rgb * spikeShort), alpha);
 """)
 
 # Mat_SirenOrbEnergySpikesMOD (modulate): darkens the scene by (fade x particle colour x spike) per channel, a dark streak
@@ -553,14 +566,17 @@ return float4(0.0, 0.0, 0.0, saturate(softFade * (weight.r + weight.g + weight.b
 # soft fade has a floor so that the target's near surface is also dimmed (by the shader it would not be). The hand's
 # dark blob uses cap 1 and floor 0, which is what the game frames show (pure black at 0.30 s).
 exact('Mat_SirenOrbBlackMOD', 'dark', [], r"""
-float2 centred = UV - 0.5;
+// CoreScale (host calibration, UNVERIFIED; 1 = the shader's own): widens the dark core inside the same quad. Scaling the
+// quad itself 1.6x, or setting this to 1.5, made the hand's void fade out instead of grow (round 11, cause not found), so
+// no emitter sets it.
+float2 centred = (UV - 0.5) / CoreScale;
 float u = 1.0 - saturate(8.0 * dot(centred, centred));
 float A = 1.0 - saturate(1.5 * u * u);
 float softFade = max(saturate((SD - PD) / 21.0), FadeFloor);
 float coverage = (1.0 - A * A) * softFade;
 float keep = Col.a + (1.0 - Col.a) * (1.0 - coverage);
 return float4(0.0, 0.0, 0.0, min(DarkCap, saturate(1.0 - keep)));
-""", params=(('DarkCap', 1.0), ('FadeFloor', 0.0)))
+""", params=(('DarkCap', 1.0), ('FadeFloor', 0.0), ('CoreScale', 1.0)))
 # The hand fizzle's variant has no depth fade at all.
 exact('Mat_SirenOrbBlackMOD_NoBias', 'dark', [], r"""
 float2 centred = UV - 0.5;
@@ -784,11 +800,23 @@ def exact_material(name):
         entry.set_editor_property('input_name', 'C')
         clamped.set_editor_property('inputs', [entry])
         link(rgb, '', clamped, 'C')
-        mel.connect_material_property(clamped, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        # Gain: a host knob per emitter (set from OpenWillowPhaselockFx.cpp EmitterScalars, default 1) that scales the layer's
+        # brightness (additive) or opacity (translucent) after the range step.
+        gain = node(unreal.MaterialExpressionScalarParameter, 800, 300, parameter_name='Gain', default_value=1.0)
+        if blend == unreal.BlendMode.BLEND_ADDITIVE:
+            scaled = node(unreal.MaterialExpressionMultiply, 950, 0)
+            link(clamped, '', scaled, 'A')
+            link(gain, '', scaled, 'B')
+            mel.connect_material_property(scaled, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        else:
+            mel.connect_material_property(clamped, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     if blend == unreal.BlendMode.BLEND_TRANSLUCENT:
         alpha = node(unreal.MaterialExpressionComponentMask, 650, 150, r=False, g=False, b=False, a=True)
         link(custom, '', alpha, '')
-        mel.connect_material_property(alpha, '', unreal.MaterialProperty.MP_OPACITY)
+        scaled_alpha = node(unreal.MaterialExpressionMultiply, 800, 150)
+        link(alpha, '', scaled_alpha, 'A')
+        link(gain, '', scaled_alpha, 'B')
+        mel.connect_material_property(scaled_alpha, '', unreal.MaterialProperty.MP_OPACITY)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     instance = tools.create_asset(f'MI_{name}', f'{destination}/Materials', unreal.MaterialInstanceConstant,

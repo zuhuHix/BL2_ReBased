@@ -804,3 +804,71 @@ calibration is `UNVERIFIED`:
   long straight shards (the host's ribbon meshes are curved swooshes, the game's shards are angular and thin; the mesh and
   material that draws them was not identified); the fist clenching around the orb at 0.65 s (the arm clip is the same asset, so a
   different clip or an additive layer is suspected, not checked).
+
+### Round 9 (2026-10-04, after a round 8 score of 5.5/10; the blind A/B preferred round 8 on hand and release and tied the bubble)
+
+Frames: `local/orch/A/round16/` (host, `-owbubbleradius=290,233,167`) against `matched_650/run2` and `size_rule/adult68`. Host
+calibrations are `UNVERIFIED`.
+
+* **Bubble too large during the hold: the cause was a calibration mistake, plus a reference mix-up.** (1) Round 6 changed the
+  ring factor from the ridge detector's 0.88 of the sprite half-width to the texture ring's 0.78. The 48.6 uu per draw-scale
+  unit was measured with the ridge detector (the blue-minus-red ridge, which lies in the rim's outer glow), so the host must use
+  the same 0.88: with 0.78 the host's ridge, found by the same detector on the round 15 frame, was 254 px against a calculated
+  225 (centre 640, 140; the game's 202-214). `TextureRim` is back at 0.88 (factor 0.56). (2) The reference frames are the
+  `matched_650/run2` cast, whose loop scale (bubble radius 165-174 uu / 48.6 = 3.4-3.6, bounds equivalent about 227-233 uu) is
+  smaller than the `adult68` cast's (260). The loop stand-in is therefore 233 for these frames. The stand-ins remain per cast, because the pawn's
+  bounds at each template's spawn differ from cast to cast.
+* **Release size:** with the factor corrected, 167 uu for the end template gives a radius near the game's 70-75 px.
+* **Black sphere and swirl at 0.30-0.40 s: the round 8 change caused it.** Starting the whole hand effect 0.08 s early moved the
+  swirl (size curve 15x to 1x over a 0.2 s life) and the disc (2.8x to 1x) to later, smaller points on their curves at 0.30 s. Only the
+  palm orb ("Center") and the dark disc ("ModulateBlack") need to run ahead (their alpha ramps), so the effect starts at the
+  notify again and those two emitters start 0.1 s into their particles' life (`AgeShifts` in `OpenWillowPhaselockFx.cpp`). The
+  swirl and sphere sizes at 0.30 s and 0.40 s return to round 7's.
+* **Tattoos:** the glow colour is multiplied by 0.3 so the bands stay solid blue.
+* **Ray streaks:** the spikes' alpha is halved and each streak is read compressed 1.6x along its length (it ends at 0.31 and 0.69
+  of the sprite).
+* **Floor glow:** between rounds 7 and 8: gain 5, radius x1.2, falloff exponent at least 3, colour halfway to white. A faint pale
+  patch under the bubble that lights nearby ground.
+* **Release interior:** the end template's darkening cap is 0.65 (was 0.45), so the interior is less bright.
+* Open (unchanged): ice-shard flash, straight release shards, fist clench, target animation, egg shape.
+
+### Round 10 (2026-10-04, after a round 9 score of 5.5/10; the blind A/B kept round 9's hand and preferred round 8's bubble and release)
+
+Frames: `local/orch/A/round18/` (host, `-owbubbleradius=290,233,210`) against `matched_650/run2` and `size_rule/adult68`. Calibrations `UNVERIFIED`.
+
+* **Release size: round 9's "70-75 px radius" was wrong.** Re-measured with the ridge detector (`local/orch/A/ridge.py`: the annulus with
+  the highest mean blue-minus-red on a 4x downsampled 1280 px frame): adult68 at 4.80 s centre (648, 228) radius 112 px, at 5.00 s radius 176 px
+  (the hold frames of the same cast read 232 at 1.5 and 3.0 s). The critic's reading of the 640 px sheet (shell about 180 px across, radius about 90
+  there, 180 px of 1280) is the 4.80 s figure. The end-template stand-in is therefore 210 (round 8 used 185 with factor 0.63; the factor is now
+  0.56). The end template's dark cap stays 0.65 (the interior still reads as a void).
+* **Ray streaks:** between rounds 8 and 9: full alpha, read 1.15x compressed along their length (round 8 full strength and uncompressed; round 9
+  0.5 and 1.6x was invisible; 0.8 and 1.25x was still faint). Translucent blue streaks now show to the left and right of the bubble.
+* **Floor glow:** gain 8, radius x1 (the data's 500), falloff exponent at least 1.5, colour 35% toward white: a pale patch on the ground under
+  the target. Rounds 8-9 (gain 3-5, x1.2-1.6) were invisible and round 7's (gain 8, falloff 3, full radius) was a hard disc.
+* **Black hole at 0.30 s:** yes, the age shift did shrink it: shifting the disc's particle age moved its size curve (2.8x to 1x) too. The disc's
+  size curve is now read at the unshifted age (only its alpha runs ahead), and the orb shift is 0.05 s instead of 0.1 s (the orb was about 45 px
+  at 0.40 s where the game has none yet). The hole is about 280 px against 300 in the game.
+* **Rim:** a white-hot inner edge (the brightest part of the ring pushed toward white-blue).
+* Open (unchanged): interior opacity (the host shows the street through the bubble more than the game), ice-shard flash, straight release shards,
+  fist clench, target animation, egg shape.
+
+### Round 11 (2026-10-04, consolidation after round 10 scored 5.5/10; the blind A/B kept round 10's bubble and preferred round 8's hand and release)
+
+Frames: `local/orch/A/round22/` (host, `-owbubbleradius=290,233,210`). Calibrations `UNVERIFIED`.
+
+* **Which emitter makes the 0.65 s spikes:** the hand template's `EndBrightness` emitter (material `Mat_SirenHandGlowShattered`, the star-burst
+  texture on a rectangular sprite). It has a 0.25 s emitter delay, spawns 2 particles lasting 0.25-0.45 s, and its size multiplier runs from 0 to
+  15 over 1.5 life units, so it flashes at 0.5-0.95 s after the effect starts, i.e. at about 0.65 s in the frames. It fires because the stock
+  template has it. The game frames show no such rays, only a few sparks, and the cause of that difference was not found (the material may draw
+  something else in the game than the star texture). The host now multiplies that emitter's strength by 0.15 (`Gain`, a new per-emitter
+  material scalar set in `EmitterScalars`).
+* **Hand at 0.40 s:** the palm orb now starts 0.03 s into its life (was 0.05 s): no orb is visible at 0.40 s, the palm is open with wide arcs, and
+  the orb is solid by 0.45 s.
+* **Ground glow:** gain 6.5, radius 0.85 of the data's, falloff exponent at least 1.75, colour 20% toward white: a soft pale-blue patch rather than
+  round 10's hard white pool; a wide, soft streak replaces the thin ground rays (the spike texture is read at 0.55x on the vertical axis, so each
+  streak is about 1.8x wider and about two fit on a sprite).
+* **Release:** the end template's spikes are at half strength and its three ribbon meshes at 0.4, so fewer straight lines cross the interior.
+  The shards remain straight; making them curved ribbons outside the bubble was not done.
+* **0.30 s void: not fixed.** The void is about 200 px against the game's 330. Two ways of enlarging it (the quad 1.6x, and widening the core inside
+  the shader by 1.5x) both made the dark disc fade out to a faint blue ring instead of growing, although the disc's alpha and the darkening formula
+  are unchanged; cause not found. The host keeps the shader's own size. Recorded as open together with the 0.80 s whiteout and the interior opacity.

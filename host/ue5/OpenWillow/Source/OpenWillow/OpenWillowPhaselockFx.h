@@ -62,6 +62,10 @@ struct FOwFxEmitter
     FOwFxDistribution OrbitOffset, OrbitRotation, OrbitRotationRate, SphereRadius, SphereVelocityScale;
     FVector SizeMultiplyAxes = FVector::OneVector;
     bool bSphereSurface = false, bSphereVelocity = false;
+    // Host calibration (UNVERIFIED, table in the .cpp): particles of this emitter start this many seconds into their life.
+    float AgeShift = 0;
+    float SizeScale = 1;   // host calibration (UNVERIFIED, table in the .cpp): sprite size multiplier
+    bool bSizeIgnoresAgeShift = false;   // the size-over-life curve is read at the unshifted age (the disc keeps its size, only its alpha runs ahead)
     TArray<FString> Unsupported;   // module classes read but not played
 };
 

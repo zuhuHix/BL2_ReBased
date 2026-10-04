@@ -110,6 +110,7 @@ private:
     void UpdatePresentation(float Now, float Held);
     void ClearPresentation();
     FOpenWillowPhaselockFxData Fx;
+    float LockLightData = 0;            // the light's brightness in the data's units (the UE5 intensity is this x a host gain)
     bool bFx = false;
     FOpenWillowPhaselockTimeline LockTimeline;
     FVector BubbleOffset = FVector::ZeroVector;   // lift-end location in Pivot space

@@ -35,8 +35,32 @@ struct FOwFxEmitterScalar { const TCHAR* Template; const TCHAR* Emitter; const T
 const FOwFxEmitterScalar EmitterScalars[] = {
     {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.72f},
     {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
-    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.45f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.65f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
+    // Round 11 (UNVERIFIED): the release keeps its shards out of the interior and less bright: spikes and ribbons at half strength.
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("BlueSpikeys"), TEXT("Gain"), 0.5f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_01"), TEXT("Gain"), 0.4f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_02"), TEXT("Gain"), 0.4f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_03"), TEXT("Gain"), 0.4f},
+    // The star-burst at the fist (0.5-0.95 s): the game has no rays there; most of it is removed.
+    {TEXT("Part_SirenASHandOrb"), TEXT("EndBrightness"), TEXT("Gain"), 0.15f},
+};
+
+// Host calibration (UNVERIFIED): the hand effect's palm orb ("Center") and dark disc ("ModulateBlack") start 0.05 s (orb) and 0.1 s (disc) into their
+// life. The game's orb is opaque by 0.44 s, and the dark disc is gone by 0.39 s, which their alpha ramps (0.15-0.35 of their life)
+// only allow if they run ahead of the clip's 0.25 s notify; the swirl and the disc's size, however, match a spawn at 0.25 s,
+// so only these two emitters are shifted (round 7 shifted the whole effect and lost the swirl's size at 0.30 s).
+struct FOwFxAgeShift { const TCHAR* Template; const TCHAR* Emitter; float Seconds; };
+const FOwFxAgeShift AgeShifts[] = {
+    {TEXT("Part_SirenASHandOrb"), TEXT("Center"), 0.03f},
+    {TEXT("Part_SirenASHandOrb"), TEXT("ModulateBlack"), 0.10f},
+};
+
+// Host calibration (UNVERIFIED): sprite size multipliers (none in use). Scaling the hand's dark disc 1.6x, or widening its core 1.5x
+// in the shader, made the void fade out instead of grow (cause not found), so it stays at about 200 px against the game's 330.
+struct FOwFxSizeScale { const TCHAR* Template; const TCHAR* Emitter; float Scale; };
+const FOwFxSizeScale SizeScales[] = {
+    {TEXT("Part_SirenASHandOrb"), TEXT("ModulateBlack"), 1.0f},
 };
 
 FString ShortName(const FString& Path)
@@ -275,6 +299,14 @@ const FOwFxTemplate* FOwFxTemplate::Load(const FString& Dir, const FString& Name
             else if (Class == TEXT("SubUV")) E.SubImageIndex = Field(M, TEXT("SubImageIndex"));
             else E.Unsupported.Add(Class);
         }
+        for (const FOwFxSizeScale& Size : SizeScales)
+            if (Name == Size.Template && E.Name == Size.Emitter) E.SizeScale = Size.Scale;
+        for (const FOwFxAgeShift& Shift : AgeShifts)
+            if (Name == Shift.Template && E.Name == Shift.Emitter)
+            {
+                E.AgeShift = Shift.Seconds;
+                E.bSizeIgnoresAgeShift = FString(Shift.Emitter) == TEXT("ModulateBlack");
+            }
         Template->Emitters.Add(MoveTemp(E));
     }
     const FOwFxTemplate* Result = Template.Get();
@@ -542,6 +574,7 @@ void UOpenWillowFxComponent::Spawn(FEmitterState& S, int32 Count)
             P.Position = Frame.TransformPosition(P.Position * Scale);
             P.Velocity = Frame.TransformVectorNoScale(P.Velocity * Scale);
         }
+        P.Age = FMath::Min(E.AgeShift, 0.9f * P.Life);
         S.Particles.Add(P);
     }
 }
@@ -600,7 +633,10 @@ bool UOpenWillowFxComponent::Simulate(FEmitterState& S, float Dt)
         P.Size = P.BaseSize;
         if (E.SizeMultiply.IsSet())
         {
-            const FVector M = E.SizeMultiply.Sample(T, Random, Parameters);
+            // Host calibration (UNVERIFIED): the dark disc's alpha runs ahead of the clip (AgeShift) but its size curve does not,
+            // because the shifted curve made the disc 7% smaller than the game's at 0.30 s.
+            const float SizeT = E.bSizeIgnoresAgeShift ? FMath::Max(0.f, P.Age - E.AgeShift) / P.Life : T;
+            const FVector M = E.SizeMultiply.Sample(SizeT, Random, Parameters);
             for (int32 Axis = 0; Axis < 3; ++Axis)
                 if (E.SizeMultiplyAxes[Axis] != 0.0) P.Size[Axis] *= M[Axis];
         }
@@ -697,8 +733,8 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
             const float Angle = P.Rotation * 2.f * PI;
             const FVector Right = CamRight * FMath::Cos(Angle) + CamUp * FMath::Sin(Angle);
             const FVector Up = CamUp * FMath::Cos(Angle) - CamRight * FMath::Sin(Angle);
-            float SizeX = float(P.Size.X) * Scale;
-            float SizeY = (E.bRectangle ? float(P.Size.Y) : float(P.Size.X)) * Scale;
+            float SizeX = float(P.Size.X) * Scale * E.SizeScale;
+            float SizeY = (E.bRectangle ? float(P.Size.Y) : float(P.Size.X)) * Scale * E.SizeScale;
             Transform = FTransform(FMatrix(Right, Up, Right ^ Up, FVector::ZeroVector).Rotator(), Location,
                 FVector(FMath::Max(SizeX, 0.01f) / QuadSize, FMath::Max(SizeY, 0.01f) / QuadSize, 1.f));
         }
