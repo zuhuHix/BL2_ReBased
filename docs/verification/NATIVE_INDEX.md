@@ -87,3 +87,32 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Object.Enable | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | probe mask (Tick/Touch/Destroyed gating); VM currently no-op | UNVERIFIED | high | |
 | Object.Disable | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | probe mask; VM currently no-op | UNVERIFIED | high | |
 | Actor.Sleep | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | latent wait in state code (LatentFloat poll, half-delta wake) | UNVERIFIED | high | |
+| MissionTracker.RegisterMissionObserver | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: conditions and den aspect observe the Fire mission | UNVERIFIED | medium | |
+| MissionTracker.UnregisterMissionObserver | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: unlink of the dummy's conditions (not read separately) | UNVERIFIED | low | |
+| (tracker) NotifyMissionObservers kinds 0-5 | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: when observers are told (status, set, objective updated/cleared/complete, level load) | UNVERIFIED | high | |
+| BehaviorSequenceEnableByMission.MissionReactionLevelLoad | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: initial enable state of FireDamage on spawn | UNVERIFIED | high | |
+| BehaviorSequenceEnableByMission.MissionReactionStatusChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on accept / turn-in | UNVERIFIED | high | |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveSetChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation when RocksPaper_FinalObj activates | UNVERIFIED | high | |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveUpdated | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on progress | UNVERIFIED | high | |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveCleared | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on clear | UNVERIFIED | high | |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveComplete | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: FireDamage disables when Fire completes | UNVERIFIED | high | |
+| (BehaviorSequenceEnableByMission C++ virtuals: link/unlink/verdict/hooks) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: observer registration lifecycle, verdict rule | UNVERIFIED | medium | |
+| BehaviorKernel.ChangeBehaviorSequenceActivationStatus | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: enable(1)/disable(2)/toggle(0), sequence mutex, enabled/disabled events | UNVERIFIED | medium | |
+| BehaviorKernel.IntializeBehaviorProviderForConsumer | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: provider registration order (pass 1 enabled-on-spawn, pass 2 conditions) | UNVERIFIED | medium | |
+| SequenceEventEnableByMission.MissionReactionLevelLoad | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin: sets SequenceEvent.bEnabled, calls Toggled | UNVERIFIED | medium | |
+| SequenceEventEnableByMission.MissionReactionStatusChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
+| SequenceEventEnableByMission.MissionReactionObjectiveSetChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
+| SequenceEventEnableByMission.MissionReactionObjectiveUpdated | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
+| SequenceEventEnableByMission.MissionReactionObjectiveCleared | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
+| SequenceEventEnableByMission.MissionReactionObjectiveComplete | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
+| MissionPopulationAspect (script: Initialize, SetActivationFromMission, MissionReaction*, OnSpawnActor) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: den enabled while Fire objective active | UNVERIFIED | high | |
+| PopulationOpportunity.SetEnabledStatus | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: enabling the dummy's den (notifies aspects only) | UNVERIFIED | high | |
+| PopulationOpportunity.RespawnKilledActors (Den) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-arms the den total on (re)activation | UNVERIFIED | high | |
+| PopulationOpportunity.DoSpawning (Den) + master tick gate | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: one pawn per tick at WillowPopulationPoint_40 when a player is in range | UNVERIFIED | medium | |
+| PopulationMaster.SpawnPopulationControlledActor / SpawnActorFromOpportunity | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: pawn creation order (engine spawn -> controller -> providers -> OnSpawned -> setup -> aspect OnSpawnActor) | UNVERIFIED | medium | |
+| PopulationFactory.CanSpawn / GetSpawnProbabilityAtThisGameStage (BalancedAIPawn) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: candidate weight for PopDef_TargetDummy (always 1 for AIPawnBalanceDefinition) | UNVERIFIED | medium | |
+| WillowAIPawn.InitializeBehaviorProviders | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: registers consumer and the dummy's class provider (conditions applied there) | UNVERIFIED | medium | |
+| AIClassDefinition.OnSpawned | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: OnSpawned event to the dummy's class provider | UNVERIFIED | high | |
+| AIDefinition.OnSpawned | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: OnSpawned event to the AIDef provider | UNVERIFIED | high | |
+| BehaviorKernel thread runner (enabled check, context objects, latent copy) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: sequence-disable stops threads; context rule; latent waits | UNVERIFIED | medium | |
+| BehaviorKernel event activation FilterObject | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: filters are consulted only with a caller callback; none seen for tracker/OnSpawned | UNVERIFIED | medium | |
