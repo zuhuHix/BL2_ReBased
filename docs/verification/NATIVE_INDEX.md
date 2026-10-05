@@ -116,3 +116,30 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | AIDefinition.OnSpawned | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: OnSpawned event to the AIDef provider | UNVERIFIED | high | |
 | BehaviorKernel thread runner (enabled check, context objects, latent copy) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: sequence-disable stops threads; context rule; latent waits | UNVERIFIED | medium | |
 | BehaviorKernel event activation FilterObject | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: filters are consulted only with a caller callback; none seen for tracker/OnSpawned | UNVERIFIED | medium | |
+| WillowPlayerController.GetCurrentPlaythrough | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: every mission helper | UNVERIFIED | high | |
+| WillowPlayerController.NativeGetMissionIndex | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: accept/status update | UNVERIFIED | high | |
+| WillowPlayerController.UpdateLcdMissionStatus | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation only (LCD), no-op | UNVERIFIED | high | |
+| WillowPlayerController.PopulateMissionDataFromStatus | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none (LCD text) | UNVERIFIED | medium | |
+| WillowPlayerController.GetHUDMovie | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: HUD guards (None ok) | UNVERIFIED | high | |
+| WillowPlayerController.CanAffordToUseUsableObject | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: use of Marcus/objects | UNVERIFIED | medium-high | |
+| WillowPlayerController.PayForUsedObject | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: use path | UNVERIFIED | medium-high | |
+| WillowPlayerController.DoesObjectCostToUse | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | cost query behind Can/Pay | UNVERIFIED | medium-high | |
+| WillowPlayerReplicationInfo.GetCurrencyOnHand | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | pay path | UNVERIFIED | high | |
+| WillowPlayerReplicationInfo.AddCurrencyOnHand | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | pay path, rewards | UNVERIFIED | high | |
+| WillowPlayerController.GetPawnInventoryManager | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: weapon equip/reward | UNVERIFIED | high | |
+| WillowPlayerController.PlayUIAkEvent | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation (fanfare sound) | UNVERIFIED | high | |
+| WillowPlayerController.GetLevelForMission | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none | UNVERIFIED | low-medium | |
+| WillowPlayerController.LocalMissionDependenciesMet | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
+| WillowPlayerController.IsMissionObjectiveCompleteLocal | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
+| WillowPlayerController.IsMissionObjectiveActiveLocal | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
+| WillowPlayerController.GetActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | online status only | UNVERIFIED | medium | |
+| WillowPlayerController.GetLocalActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | save/online status only | UNVERIFIED | medium | |
+| PlayerController.IsPrimaryPlayer | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates (true standalone) | UNVERIFIED | medium-high | |
+| MissionTracker.IsDataValid | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates AddMission etc. | UNVERIFIED | high | |
+| WorldInfo.IsMenuLevel | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: false in Sanctuary | UNVERIFIED | high | |
+| GearboxGlobals.GetBehaviorKernel | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: behavior activation | UNVERIFIED | high | |
+| GearboxGlobals.GetGearboxGlobals | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | globals singleton | UNVERIFIED | high | |
+| WillowGlobals.GetWillowGlobals | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | globals singleton (338 sites) | UNVERIFIED | high | |
+| WillowAIPawn.IsComponentUsable | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: NPC use | UNVERIFIED | high | |
+| Object.Localize | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | all text; .int lookup, ?INT?..? placeholder | UNVERIFIED | high | |
+| Object.QueryInterface | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: IMissionDirector, behaviors | UNVERIFIED | medium-high | |
