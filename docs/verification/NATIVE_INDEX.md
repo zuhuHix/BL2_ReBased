@@ -197,3 +197,29 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowDialogGlobalsDefinition.Get / TriggerTemplateEvent / StaticTriggerTemplateEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | generic template events | UNVERIFIED | low-medium | |
 | GearboxSeqAct_TriggerDialogName (Kismet action) | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: dummy-reset line, latent until line end | UNVERIFIED | medium | |
 | BehaviorHelpers.IsBehaviorsV2 | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | true when KernelInfo carries a live kernel | UNVERIFIED | high | |
+| PlayerSkillTree.UpgradeSkill | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Fire mission: Maya spends a point (host TrySpend) | UNVERIFIED | high | |
+| PlayerSkillTree.SetSkillGrade | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Load / client mirror, tier unlock bookkeeping | UNVERIFIED | high | |
+| PlayerSkillTree.GetSkillState | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Grade/unlocked read by UI and activation | UNVERIFIED | high | |
+| PlayerSkillTree.GetBranchState | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Branch counters in the skill UI | UNVERIFIED | medium | |
+| PlayerSkillTree.GetTierState | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Tier unlocked / points in tier | UNVERIFIED | medium | |
+| PlayerSkillTree.GetSkillPointsSpentInTree | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Respec refund, earned-any-points | UNVERIFIED | high | |
+| PlayerSkillTree.GetActionSkill | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Phaselock lookup | UNVERIFIED | high | |
+| PlayerSkillTree.HasTrainedASkillOfType | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Skill-type queries | UNVERIFIED | medium | |
+| PlayerSkillTree.AllSkills | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Activation loop after reset | UNVERIFIED | medium | |
+| PlayerSkillTree.AllSkillsOfType | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Action-augment activation | UNVERIFIED | medium | |
+| PlayerSkillTree.Initialize | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Builds tree from SkillTreeDefinition | UNVERIFIED | medium | |
+| PlayerSkillTree.UpdateBranchProgression | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | UI progress bars only | UNVERIFIED | medium | |
+| PlayerSkillTree.SaveSkillSaveGameData | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Quest save of grades | UNVERIFIED | medium | |
+| PlayerSkillTree.ApplySkillSaveGameData | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Save replay (script loads per skill instead) | UNVERIFIED | medium | |
+| WillowPlayerController.InitPlayerSkillTree | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Tree creation at class change | UNVERIFIED | medium | |
+| WillowPlayerController.ResetSkillTree | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Respec / load reset, refund | UNVERIFIED | high | |
+| WillowPlayerController.HasPlayerEarnedAnySkillPoints | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Skill UI gating | UNVERIFIED | high | |
+| WillowPlayerController.GetActionSkillDuration | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Action skill active-ability time | UNVERIFIED | medium | |
+| SkillDefinition.DoesSkillPassMinGradeTest | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Passive needs grade >= 1 | UNVERIFIED | high | |
+| Skill.CalculateModifierValue | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Grade -> effect value formula | UNVERIFIED | high | |
+| Skill.CalculateModifierValueFromDefinitionEffectArray | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Same, by effect index | UNVERIFIED | high | |
+| Skill.AddSkillEffect | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Effect -> modifier object | UNVERIFIED | high | |
+| Skill.AdjustModifiers | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Apply/remove modifiers on attributes | UNVERIFIED | high | |
+| Skill.ForceRefresh | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate after grade change | UNVERIFIED | high | |
+| SkillEffectManager.RefreshSkillsForInstigator | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate a player's skills | UNVERIFIED | medium | |
+| SkillEffectManager.RefreshSkillsAffectingInstigator | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate skills affecting a player | UNVERIFIED | medium | |
