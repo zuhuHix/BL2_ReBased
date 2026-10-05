@@ -1125,3 +1125,9 @@ capture, x 532-763) instead of the movie's highlight symbol, whose glow tail ove
 0.965); the equipped-origin compare keeps the backpack tile highlight and the compare hint has no Sort entry; Skills tab group, footer and the Inventory tab
 group scale follow the real frames; card text is 16 with bold values; the clipped EQUIPPED label of the mini column is hidden in the focus view. Suite: 49 PASS /
 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. All placements are fits to captured frames (UNVERIFIED); tilt and glass stay open.
+
+### Round 13 (2026-10-05)
+
+AI-assisted, page-only. The focus view shows 7.6 rows (list to y 625), panel title 8 px higher, sub-header to tile gap about 12 px; the equipped-origin compare keeps the Sort
+hint, the backpack-origin compare does not and frames the moved tile in green; Skills footer, tab group and description size adjusted. Suite 49 PASS / 0 FAIL / 0 NOT_RUN /
+0 KNOWN_DIVERGENCE. Fits to captured frames, UNVERIFIED; tilt and glass stay open.

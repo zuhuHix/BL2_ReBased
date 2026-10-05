@@ -148,6 +148,8 @@ function canSpend(target) {
 
 // Info box text (tools/hud_overlay/skill_info.js reproduces the traced
 // SetInfo HTML) and the footer, built from the install's own strings.
+// The real description text is a little smaller than the movie's default as scaled by the card fit (critic round 12).
+const DESCRIPTION_SIZE = 15;
 function refreshSelection() {
   if (!ready) return;
   applyInfoCard();
@@ -157,9 +159,10 @@ function refreshSelection() {
   // back to the imported font library for missing glyphs and Ruffle does not,
   // so the page selects the imported $WillowBody alias itself (as for badges).
   const face = html => `<font face="$WillowBody">${html}</font>`;
+  const description = html => `<font face="$WillowBody" size="${DESCRIPTION_SIZE}">${html}</font>`;
   const name = selected.skill.name || '';
   call(SKILLS + '.InformationBox', 'SetInfo', name,
-    face(skillInfoHtml(selected.skill, skillState(selected), data.strings)));
+    description(skillInfoHtml(selected.skill, skillState(selected), data.strings)));
   // SetInfo writes the name as plain text; re-set it as HTML for the font.
   const escaped = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   set(`${SKILLS}.InformationBox.infoWrapper.SkillName`, 'htmlText', face(escaped));
@@ -458,7 +461,7 @@ function populate() {
 // the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
 // at (225, 530); here it follows the card). Moves are done on the movie clips in
 // ROOT coordinates (a host fit; the original gets these from its 3D camera).
-const SKILLS_LAYOUT = {headerScale:1.02, headerCentreX:707, treesDX:130, treesDY:12, hintDY:48, hintDX:175, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
+const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:12, hintDY:48, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
   card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
 let layoutApplied = false;
 function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
@@ -494,7 +497,7 @@ function applySkillsLayout() {
   set(header, '_xscale', SKILLS_LAYOUT.headerScale * 100);
   set(header, '_yscale', SKILLS_LAYOUT.headerScale * 100);
   const hb = boundsOf(header);
-  if (hb) moveClip(header, ROOT, SKILLS_LAYOUT.headerCentreX - (hb.xMin + hb.xMax) / 2, 0);
+  if (hb) moveClip(header, ROOT, SKILLS_LAYOUT.headerCentreX - (hb.xMin + hb.xMax) / 2, SKILLS_LAYOUT.headerDY);
   moveClip(SKILLS, ROOT, SKILLS_LAYOUT.treesDX, SKILLS_LAYOUT.treesDY);
   moveClip(`${ROOT}.tooltips`, ROOT, SKILLS_LAYOUT.hintDX, SKILLS_LAYOUT.hintDY); // the real footer is at y 657, below the Siren plate
   applyInfoCard();

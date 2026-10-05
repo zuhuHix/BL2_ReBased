@@ -32,10 +32,10 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 13
 // about 335..490 x 415..500. The movie does this with a Z tween that Ruffle ignores, so the host sets 2D scales.
 // Where the list starts below the panel's top edge, in panel units: the small view leaves room for the sub-label row
 // the old category chevrons used; the focus view starts right under the title like the original.
-const LIST_TOP = 75, LIST_TOP_FOCUS = 33;
+const LIST_TOP = 75, LIST_TOP_FOCUS = 40.5; // the focus panel moved up 8 px (title at y 100), the list stays where it was
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
-const FOCUS_PANEL = {scale:0.92, scaleY:0.965, left:497, top:75}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
+const FOCUS_PANEL = {scale:0.92, scaleY:0.979, left:497, top:67}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
 const FOCUS_EQUIPPED = {scale:0.59, centreX:412, centreY:395}; // row pitch 42 px like the real mini column (37 at 0.52)
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
 // 2026-10-04; comparators, filters and headers are read from native code in
@@ -411,7 +411,10 @@ function headerFor(item, mode) {
 }
 // The list as drawn: items with a header row wherever the group changes, then the empty cells (the movie's
 // trailing [EMPTY] cells: one per free backpack slot, selectable in the game, not selectable here yet).
-const HEADER_PITCH = Math.round(ROW_PITCH * 0.37), VIEW_HEIGHT = VISIBLE_ROWS * ROW_PITCH;
+// The focus view shows 7.6 rows (the list runs to y 625 of the real frame); the small view keeps 7.
+const VISIBLE_ROWS_FOCUS = 7.6;
+const HEADER_PITCH = Math.round(ROW_PITCH * 0.37);
+const viewHeight = () => (backpackFocused() ? VISIBLE_ROWS_FOCUS : VISIBLE_ROWS) * ROW_PITCH;
 const entryHeight = entry => entry.header !== undefined ? HEADER_PITCH : ROW_PITCH;
 function backpackEntries() {
   const items = backpackItems(), mode = listMode(), entries = [];
@@ -960,8 +963,9 @@ function drawCard() {
   // Match the observed stock tooltip line. Extra host keys remain available.
   const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
-  if (!transferSourceId && item && !equippedIds().has(item.id))
-    hints.push(['[Page Up]/[Page Down] Sort', true]);
+  // Seen in the real compare views: from the equipped item the Sort entry stays, from a backpack item it is gone.
+  if ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped))
+    hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
     `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
@@ -1000,7 +1004,7 @@ function syncSelection() {
 // after which the whole tail still fits the view.
 function maxFirstRow(entries) {
   let index = entries.length, height = 0;
-  while (index > 0 && height + entryHeight(entries[index-1]) <= VIEW_HEIGHT) height += entryHeight(entries[--index]);
+  while (index > 0 && height + entryHeight(entries[index-1]) <= viewHeight()) height += entryHeight(entries[--index]);
   return index;
 }
 function scrollForSelected(entries) {
@@ -1013,7 +1017,7 @@ function scrollForSelected(entries) {
   if (top < start) return top;
   let height = 0;
   for (let i = start; i <= index; i++) height += entryHeight(entries[i]);
-  while (height > VIEW_HEIGHT && start < index) height -= entryHeight(entries[start++]);
+  while (height > viewHeight() && start < index) height -= entryHeight(entries[start++]);
   return Math.min(start, Math.max(maximum, 0));
 }
 
@@ -1585,7 +1589,7 @@ function compareRefusesCell(index) {
 // Its text size is a host choice measured on captures.
 const LIST_HEADER_TEXT_SIZE = 16;
 // The text still read about 9 px high with the field's centre; measured on the 2026-10-04 frames (panel units).
-const HEADER_NUDGE = 8;
+const HEADER_NUDGE = 4; // 4 less than before: the real gap from sub-header to tile is 12 px, ours was 8
 // The selected row sits on a yellow band that runs to the panel's edges (2026-10-04 capture), wider than the cell. It is
 // the movie's own highlight symbol stretched across the panel, behind the cells (depth 1500, cells start at 2000).
 // The symbol's art is narrower than its bounds and sits right of centre; factors measured on the round-11 frame (host choice).
@@ -1619,6 +1623,17 @@ function drawSelectionBands(rowGroup, ys, localPanelBounds, rowWidth) {
   call(path, 'lineTo', x0, cy - half);
   call(path, 'endFill');
 }
+
+function drawTileFrame(path) {
+  const b = call(`${path}.hitTestClip`, 'getBounds', path);
+  if (!b || !(b.xMax > b.xMin)) return;
+  const frame = `${path}.owFrame`;
+  call(path, 'createEmptyMovieClip', 'owFrame', 4000);
+  call(frame, 'lineStyle', 3, TILE_FRAME_GREEN, 100);
+  call(frame, 'moveTo', b.xMin, b.yMin); call(frame, 'lineTo', b.xMax, b.yMin);
+  call(frame, 'lineTo', b.xMax, b.yMax); call(frame, 'lineTo', b.xMin, b.yMax); call(frame, 'lineTo', b.xMin, b.yMin);
+}
+const TILE_FRAME_GREEN = 0x4fd33f; // the compare card's green frame (host choice by eye)
 
 // Every render attaches headers under fresh names and depths: removing a clip and attaching another under the
 // same name in the same frame leaves the name on the doomed clip, which kept the movie's placeholder text.
@@ -1724,7 +1739,7 @@ function render() {
   // Draw the visible entries top to bottom; cells are numbered owRow0.. in draw order.
   let y = 0, row = 0;
   const headers = [];
-  for (let k = firstRow; k < entries.length && y < VIEW_HEIGHT + PEEK_HEIGHT && row < RENDERED_ROWS + 1; k++) {
+  for (let k = firstRow; k < entries.length && y < viewHeight() + PEEK_HEIGHT && row < RENDERED_ROWS + 1; k++) {
     const entry = entries[k];
     if (entry.header !== undefined) {
       const header = drawListHeader(rowGroup, entry.header, y);
@@ -1760,10 +1775,13 @@ function render() {
     // Equipped-origin compare (2026-10-04 capture): the chosen equipped slot carries the highlight, the backpack row only
     // marks the candidate whose card is on the right, so it gets no band.
     const rowSelected = Boolean(item && item.id === selectedId);
-    call(path, 'SetSelected', rowSelected);
+    // Backpack-origin compare: the moved item's tile has a green frame like its card, not the gold selection.
+    const greenFrame = rowSelected && transferSourceId && !transferFromEquipped;
+    call(path, 'SetSelected', rowSelected && !greenFrame);
+    if (greenFrame) drawTileFrame(path);
     // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
     if (rowSelected && backpackFocused()) bands.push(y);
-    const partial = y + ROW_PITCH > VIEW_HEIGHT + 1;
+    const partial = y + ROW_PITCH > viewHeight() + 1;
     y += ROW_PITCH;
     row++;
     if (!item) continue;
@@ -1780,7 +1798,7 @@ function render() {
   drawSelectionBands(rowGroup, bands, localPanelBounds, rowWidth);
   const headerRowBounds = readBounds(rowGroup+'.owRow0');
   if (rowWidth) {
-    const height = VISIBLE_ROWS * ROW_PITCH + PEEK_HEIGHT;
+    const height = viewHeight() + PEEK_HEIGHT;
     // owRow0 may sit below the list origin when a header comes first.
     const top = headerRowBounds ? headerRowBounds.yMin - (firstCellY || 0) * panelPose().scaleY * COMPOSITION_SCALE : null;
     // The selection highlight is a band wider than the cell (it bleeds to the panel's edges in the original), so the
