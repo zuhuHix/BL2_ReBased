@@ -122,6 +122,16 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
         (*Card)->TryGetBoolField(TEXT("sale_value_known"), Item.bSaleValueKnown);
     }
     (*Card)->TryGetStringField(TEXT("fun_stats"), Item.FunStats);
+    if ((*Card)->TryGetNumberField(TEXT("projectiles"), Extra) && FMath::IsFinite(Extra) && Extra >= 1 && Extra <= 1000)
+        Item.Projectiles = int32(Extra);
+    double StatusDps = 0, StatusChance = 0;
+    if ((*Card)->TryGetNumberField(TEXT("status_dps"), StatusDps) && (*Card)->TryGetNumberField(TEXT("status_chance"), StatusChance)
+        && FMath::IsFinite(StatusDps) && FMath::IsFinite(StatusChance) && StatusDps >= 0 && StatusChance >= 0)
+    {
+        Item.bHasStatus = true;
+        Item.StatusDps = float(StatusDps);
+        Item.StatusChance = float(StatusChance);
+    }
     Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
     const TSharedPtr<FJsonObject>* Provenance = nullptr;
     if (OutProvenanceKind)
@@ -715,6 +725,12 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
         if (Item.bHasSaleValue) Value->SetNumberField(TEXT("value"), Item.SaleValue);
         Value->SetBoolField(TEXT("valueKnown"), Item.bHasSaleValue && Item.bSaleValueKnown);
         if (!Item.FunStats.IsEmpty()) Value->SetStringField(TEXT("funStats"), Item.FunStats);
+        if (Item.Projectiles > 1) Value->SetNumberField(TEXT("projectiles"), Item.Projectiles);
+        if (Item.bHasStatus)
+        {
+            Value->SetNumberField(TEXT("statusDps"), Item.StatusDps);
+            Value->SetNumberField(TEXT("statusChance"), Item.StatusChance);
+        }
         Value->SetNumberField(TEXT("shotCost"), Item.ShotCost);
         Value->SetNumberField(TEXT("spinUp"), Item.SpinUp);
         Value->SetStringField(TEXT("spinMode"), Item.SpinMode);

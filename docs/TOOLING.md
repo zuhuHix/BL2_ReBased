@@ -865,6 +865,20 @@ switches: `-owslots=<2..4>` (unlocked weapon slots, default 4),
 `-owmoney=<n>`, `-owerid=<n>`, `-owinventoryselftest` (synthetic inventory
 round-trip checks, logged), **R** reloads in play.
 
+`-owinvshots` (2026-10-04) is a separate capture that drives the inventory page
+with the stock keys:
+- open, backpack focus and the five sort modes;
+- compare from either side;
+- Inspect;
+- the Skills tab, one second after the tab.
+- Q "Toggle Overview" on the Skills page (`OWCombat_D7_SkillsOverview`).
+
+It writes `OWCombat_D*.png` and is independent of `-owcombatshots`. The Skills
+page is now loaded hidden at level start. The page logs `OWINVTIME js_skills_*`
+lines with its open and paint times. `tools/test_inventory_actions.ps1` steps
+15/16 are now `pagedown_selects_first_item_of_types` and
+`pageup_returns_to_all_first_item`.
+
 ## Tracing the real game's UI code (golden files for menus)
 
 With the community mod SDK installed in the game (THIRD_PARTY.md), copy
@@ -914,6 +928,24 @@ again in every command (a stale weapon reference crashed the game), keep spawned
 before any travel or quit, and compare the save folder with the backup afterwards. `scripts/phaselock.py` samples the
 lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-down calls. Results:
 `docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
+`scripts/ambient_npcs.py` (`Invoke-GamePyFile ... ambient_npcs.py ambient`) lists live pawns and dens (`amb_pawns`,
+`amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
+Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials and attached meshes (hair, hats, gear);
+`amb_view_*`, `amb_cam` and `amb_aim_at` frame a pawn.
+
+## Sanctuary ambient NPCs (host, behind a flag)
+
+Off by default. `-owambient=<manifest>` (or `OPENWILLOW_AMBIENT`) spawns the town's citizens and runs the stock perch
+cycle and node walks with stand-in rules (`docs/verification/SANCTUARY_AMBIENT_NPCS.md`, all movement rules UNVERIFIED).
+
+```powershell
+python tools/census_ambient_npcs.py                      # dens, points, node graph, perch definitions -> local/slice/
+powershell -File tools/seed_ambient_npc_assets.ps1       # UModel extraction, clip conversion, import (needs OPENWILLOW_UMODEL)
+powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <amb_compose json>   # hair, hats, gear, head textures
+powershell -File tools/seed_ambient_npc_assets.ps1 -Steps outline   # rebuild only the ink-line material
+python tools/prepare_ambient_world.py                    # host manifest local/slice/ambient_world.json (--observed copies a capture)
+powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
+```
 
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 
@@ -1325,6 +1357,22 @@ runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains 
 `-owitems=local/items/slice`, `-owactionskill=local/character/action_skill_siren.json` and Maya's level from
 `slice_manifest.json` (an UNVERIFIED slice choice; `run_quest.ps1 -Level N` overrides it).
 
+Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
+- `tools/weapon_refresh_fragments.py` rebuilds the fragment list (body variants, no `*_None` parts, hidden-bone
+  triangles cut) of existing local recipes; `tools/weapon_refresh_stats.py` re-evaluates their `stats`, optionally on
+  the live overlay; `host/ue5/import_gun_meshes.py` re-imports the meshes of named ids only.
+- `-owgunshots -owgunids=<id,id>` captures each gun in first person and from the side (`OWGun_<id>.png`,
+  `OWGun_<id>_side.png`); `tools/weapon_visual_compare.py` compares a real and a host frame cell by cell.
+- The arms play per-type clip sets: convert `Anim_1st_Person.<type>` with `tools/prepare_character_anims.py --clips
+  Idle Run_F Sprint Jump_Start Jump_Idle Jump_End Draw ADD_Fire_Recoil` (bones are matched by name, so the rifle set's
+  other bone order converts), then import with `OPENWILLOW_CHARACTER_ANIMS=AssaultRifle=...;SMG=...;Shotgun=...`.
+- The arms and gun use the game's foreground FOV 45 by default; `-owfpfov=0` restores the old single-FOV view,
+  `-owfpfov=<n>` forces one horizontal value for every weapon.
+- `python tools/weapon_view_model.py --game <BL2 dir> --dir <items folder...>` writes `weapon_view.json` beside the
+  recipes: each recipe's weapon-type `PlayerViewOffset` and `FirstPersonMeshFOV`. The walker places the arms and sets the
+  foreground FOV from it when a gun is selected; rerun it when a recipe folder changes (a recipe without an entry gets
+  no offset and 45).
+
 - `research/behavior_census.py` and `research/struct_defaults_census.py` are the structural
   oracles behind the behavior variable-data decode and the struct-default reader fix.
 - `ow-package --properties-batch` reads many objects from one package in one process; the weapon
@@ -1334,6 +1382,13 @@ runs `import_weapon_paint.py`, which now accepts a `mesh` target and MIC chains 
 - `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
   yet; picking one is a maintainer decision (license and provenance entry first).
 - `tools/slice_npc_editor.py` imports `unreal` and only runs inside the editor.
+- `tools/import_phaselock_fx.ps1` waits for `local/ue_run.lock` like the suite scripts. `host/ue5/import_phaselock_fx.py`
+  builds the effect materials from own-words notes on their compiled shaders (PHASELOCK_STOCK_DATA.md, Round 6).
+  `tools/run_phaselock_shots.ps1 -Extra '-owbubbleradius=<uu>'` overrides the bubble size's mesh-bounds radius, so the
+  small engine-shape dummy can stand in for a real enemy. `-owfxscalar=<Template>:<Emitter>:<Parameter>:<Value>[;...]`
+  sets one material scalar on every sprite of that Phaselock emitter as it is created (unknown names do nothing), so an
+  effect hypothesis can be tested with one capture and no rebuild; write the values as literals, since a PowerShell
+  variable inside `-Extra` from a `-File` call is not expanded.
 
 Records: [behavior data](verification/BEHAVIOR_DATA_DECODE.md),
 [weapon balances](verification/WEAPON_BALANCE_DECODE.md),

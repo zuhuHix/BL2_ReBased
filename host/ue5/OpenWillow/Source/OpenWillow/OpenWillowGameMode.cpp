@@ -3,6 +3,7 @@
 #include "OpenWillowWalker.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMapSelector.h"
+#include "OpenWillowAmbient.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Camera/CameraComponent.h"
@@ -42,6 +43,9 @@ void AOpenWillowGameMode::BeginPlay()
         }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow landed walk hid %d outer-sublevel sections"), HiddenSections);
+    // Ambient town NPCs (stand-in movement over the stock perch/move-node data) when -owambient=<manifest> or the
+    // OPENWILLOW_AMBIENT environment variable names one; nothing is spawned otherwise.
+    AOpenWillowAmbientDirector::SpawnIfRequested(GetWorld());
 }
 
 AActor* AOpenWillowGameMode::ChoosePlayerStart_Implementation(AController* Player)

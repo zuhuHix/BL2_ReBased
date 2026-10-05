@@ -1,5 +1,6 @@
 #include "OpenWillowInventoryPreviewActor.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowGunLook.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/PointLightComponent.h"
@@ -7,6 +8,9 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "ImageUtils.h"
 #include "Misc/Base64.h"
+#include "Misc/FileHelper.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 AOpenWillowInventoryPreviewActor::AOpenWillowInventoryPreviewActor()
 {
@@ -81,6 +85,8 @@ bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FOpenWillowWeaponIte
         if (USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(*Item))
         {
             PreviewWeapon->SetSkeletalMesh(Mesh);
+            OpenWillowGunLook::Apply(PreviewWeapon, true);
+            PreviewWeapon->RefreshBoneTransforms();  // the component never ticks; a new mesh must not keep the old pose
             // Match the orientation used by the held weapon. Center the mesh
             // and frame it from its own imported bounds so different gun
             // lengths fit the same card.
@@ -116,4 +122,30 @@ FString AOpenWillowInventoryPreviewActor::InspectFrame(float Yaw, float Pitch)
     if (!FImageUtils::GetRenderTargetImage(RenderTarget, Image)
         || !FImageUtils::CompressImage(Png, TEXT("png"), Image, 0) || Png.IsEmpty()) return FString();
     return TEXT("data:image/png;base64,") + FBase64::Encode(Png.GetData(), Png.Num());
+}
+
+bool AOpenWillowInventoryPreviewActor::SaveFrame(const FString& Path, float Yaw, float Pitch, float Radius, int32 Width, int32 Height)
+{
+    if (!bHasPreview || !RenderTarget || !FMath::IsFinite(Yaw) || !FMath::IsFinite(Pitch) || Radius < 1.f || Width < 16 || Height < 16)
+        return false;
+    RenderTarget->ResizeTarget(Width, Height);
+    // Calibration switch: -owpreviewbias=<EV> sets the capture's exposure bias (the world camera and this capture do not share an
+    // exposure path; see docs/verification/WEAPON_VISUALS.md).
+    float Bias = 0.f;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owpreviewbias="), Bias))
+    {
+        Capture->PostProcessSettings.bOverride_AutoExposureBias = true;
+        Capture->PostProcessSettings.AutoExposureBias = Bias;
+    }
+    if (FParse::Param(FCommandLine::Get(), TEXT("owpreviewphys")))
+        Capture->PostProcessSettings.AutoExposureApplyPhysicalCameraExposure = true;
+    const FVector Offset = FRotator(FMath::Clamp(Pitch, -80.f, 80.f), FMath::Fmod(Yaw, 360.f), 0.f).RotateVector(FVector(0.f, -Radius * 6.f, 0.f));
+    Capture->SetRelativeLocation(Offset);
+    Capture->SetRelativeRotation((-Offset).Rotation());
+    Capture->CaptureScene();
+    FImage Image;
+    TArray64<uint8> Png;
+    if (!FImageUtils::GetRenderTargetImage(RenderTarget, Image) || !FImageUtils::CompressImage(Png, TEXT("png"), Image, 0) || Png.IsEmpty())
+        return false;
+    return FFileHelper::SaveArrayToFile(Png, *Path);
 }

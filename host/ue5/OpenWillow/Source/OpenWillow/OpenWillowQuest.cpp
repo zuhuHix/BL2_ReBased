@@ -1,4 +1,5 @@
 #include "OpenWillowQuest.h"
+#include "Misc/PackageName.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowMover.h"
@@ -102,7 +103,12 @@ void UOpenWillowQuest::BeginPlay()
         const FString WeaponDefinition = UTF8_TO_TCHAR(Impl->Slice->mission().weaponDefinition().c_str());
         if (!UOpenWillowInventory::FindRecipe(ItemDir, TEXT("mission_weapon"), WeaponDefinition, MissionWeapon))
             throw std::runtime_error(TCHAR_TO_UTF8(*FString::Printf(TEXT("no mission-weapon recipe for %s under %s"), *WeaponDefinition, *ItemDir)));
-        MissionWeapon.MeshPath = Impl->Data.PistolMesh;
+        // The corrected mesh of the recipe's own parts (tools/weapon_refresh_fragments.py, host/ue5/import_gun_meshes.py); the NPC lane's
+        // rolled sample (Data.PistolMesh) stays the fallback where that asset has not been imported.
+        {
+            const FString OwnMesh = FString::Printf(TEXT("/Game/OpenWillow/Weapons/SliceItems/SK_%s.SK_%s"), *MissionWeapon.Id, *MissionWeapon.Id);
+            MissionWeapon.MeshPath = FPackageName::DoesPackageExist(OwnMesh.Left(OwnMesh.Find(TEXT(".")))) ? OwnMesh : Impl->Data.PistolMesh;
+        }
         bHasReward = UOpenWillowInventory::FindRecipe(ItemDir, TEXT("reward_roll"), FString(), RewardItem);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in: %s"), bHasReward
             ? *FString::Printf(TEXT("%s \"%s\" (%s; host stand-in, the stock reward has no items)"), *RewardItem.Id, *RewardItem.Name, *RewardItem.Balance)

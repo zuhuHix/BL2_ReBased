@@ -12,12 +12,16 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 namespace
 {
 const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 constexpr float RespawnSeconds = 3.f;
+// Host calibration (UNVERIFIED): factor between the data's light brightness and UE5's unitless intensity (see UpdatePresentation).
+constexpr float LockLightGain = 6.5f;
 
 // Pivot height at Held seconds into the lift from From to To (LiftActionSkill.UpdateLiftedPawn / GetLiftLocation,
 // read not run): up to SnapTimePct of the lift, From -> snap point (SnapHeightPct of the way) by a^2; then snap point ->
@@ -100,6 +104,7 @@ bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FStrin
     StockMesh->SetupAttachment(Pivot);
     StockMesh->SetSkeletalMesh(Mesh);
     StockMesh->SetRelativeLocation(MeshOffset);
+    StockMeshBaseOffset = MeshOffset;
     StockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     StockMesh->RegisterComponent();
     StockMesh->PlayAnimation(Idle, true);
@@ -147,6 +152,24 @@ float AOpenWillowCombatTarget::AutoAimRadius() const
 
 float AOpenWillowCombatTarget::MeshBoundsRadius() const
 {
+    // Test aid for matched comparisons: -owbubbleradius=<intro>,<loop>,<end> (uu) stands in for the lifted pawn's mesh
+    // bounds sphere radius at each bubble template's spawn. The game's pose changes the bounds: the SDK probe of the adult
+    // bullymong read 290 at the lock, a loop emitter scale equivalent to 260 0.2 s later, and 193 in the lifted pose that the
+    // end template is spawned in (size_rule/adult68). The engine-shape dummy's own radius is about 109 uu and constant.
+    static TArray<float> Override;
+    static bool bRead = false;
+    if (!bRead)
+    {
+        bRead = true;
+        FString Text;
+        if (FParse::Value(FCommandLine::Get(), TEXT("owbubbleradius="), Text, false))
+        {
+            TArray<FString> Parts;
+            Text.ParseIntoArray(Parts, TEXT(","));
+            for (const FString& Part : Parts) Override.Add(FCString::Atof(*Part));
+        }
+    }
+    if (Override.Num() > 0) return Override[FMath::Clamp(BubbleStageNow, 0, Override.Num() - 1)] ;
     if (StockMesh) return StockMesh->Bounds.SphereRadius;
     FBoxSphereBounds Bounds = Post->Bounds;
     Bounds = Bounds + Torso->Bounds;
@@ -164,7 +187,7 @@ FString AOpenWillowCombatTarget::PresentationReport() const
 
 float AOpenWillowCombatTarget::PhaselockLightIntensity() const
 {
-    return LockLight ? LockLight->Intensity : 0.f;
+    return LockLight ? LockLightData : 0.f;   // in the data's brightness units, whatever gain the host applies
 }
 
 float AOpenWillowCombatTarget::BubbleDrawScale() const
@@ -172,11 +195,11 @@ float AOpenWillowCombatTarget::BubbleDrawScale() const
     // Confirmed in game on 2026-10-03 (SDK reads of the bubble emitters' DrawScale and frames, three bullymong variants):
     // each bubble emitter takes DrawScale = the lifted pawn's Mesh.Bounds.SphereRadius at its own spawn / BubbleFXScale,
     // and the loop's visible rim (the blue-minus-red ridge on the frames) sits 48.6 uu out per DrawScale unit. Measured
-    // with the same detector on host frames, the host draws that ridge at 0.88 of the Sphere emitter's half-width
-    // (PhaseLockBubble_Dif_Tex's own rim peaks at 0.8; the glow around it moves the ridge out), which put it 1.8 times
-    // further out than the game. The cause was not found (sprite-size convention or the stripped Mat_SirenEnemyOrb graph);
-    // host calibration (UNVERIFIED cause): all three bubble templates are drawn at 48.6 / (0.44 x StartSize) of the draw
-    // scale, since the game's dark interior and streaks scale with its rim.
+    // with the same detector on host frames, the host draws that ridge at 0.88 of the Sphere emitter's half-width. Round 6
+    // used the bubble texture's own ring (0.78) instead, which drew the bubble about 13% too large (round 9: the ridge detector
+    // finds the rim's outer glow, at 0.88 with the blue tint, not the texture ring), so the sprite is drawn at
+    // 48.6 / (0.5 x 0.88 x StartSize) of the draw scale, about 0.56 (cause of the factor not found; UNVERIFIED). All three bubble
+    // templates use it, since the streaks' measured thickness in game frames matches the same factor.
     constexpr float GameRimPerDrawScale = 48.6f, TextureRim = 0.88f;
     float Calibration = 1.f;
     FString Error;
@@ -221,7 +244,10 @@ void AOpenWillowCombatTarget::UpdatePresentation(float Now, float Held)
         float Fraction = 1.f;
         if (Held < T.LockedAt) Fraction = T.LockedAt > 0.f ? Held / T.LockedAt : 1.f;
         else if (Held >= T.OutroAt) Fraction = 1.f - (Held - T.OutroAt) / FMath::Max(T.ReleasedAt - T.OutroAt, KINDA_SMALL_NUMBER);
-        LockLight->SetIntensity(Fx.LightBrightness * FMath::Clamp(Fraction, 0.f, 1.f));
+        // Host calibration (UNVERIFIED): the data's brightness times LockLightGain is UE5's unitless intensity; at 1x the pool under the
+        // target is invisible on dark asphalt, where the game frames show a pale blue pool on snow and sand.
+        LockLightData = Fx.LightBrightness * FMath::Clamp(Fraction, 0.f, 1.f);
+        LockLight->SetIntensity(LockLightGain * LockLightData);
     }
     if (Held >= T.LockedAt && BubbleStageNow == 0)
     {
@@ -278,6 +304,7 @@ void AOpenWillowCombatTarget::ClearPresentation()
     BubbleIntro = BubbleLoop = BubbleOutro = nullptr;
     if (LockLight) LockLight->DestroyComponent();
     LockLight = nullptr;
+    LockLightData = 0.f;
 }
 
 void AOpenWillowCombatTarget::EndPhaselockNow(float Now)
@@ -371,9 +398,11 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
         LockLight->SetRelativeLocation(BubbleOffset);
         LockLight->bUseInverseSquaredFalloff = false;
         LockLight->SetIntensityUnits(ELightUnits::Unitless);
-        LockLight->SetLightFalloffExponent(Fx.LightFalloffExponent);
-        LockLight->SetAttenuationRadius(Fx.LightRadius);
-        LockLight->SetLightColor(FLinearColor(Fx.LightColor));
+        // Host calibration (UNVERIFIED): a softer edge than the data's exponent gives (the pool is a hard-edged disc on dark asphalt;
+        // the game's is pale and soft), and a colour pulled 20% toward white.
+        LockLight->SetLightFalloffExponent(FMath::Max(Fx.LightFalloffExponent, 1.75f));
+        LockLight->SetAttenuationRadius(0.85f * Fx.LightRadius);   // host calibration (UNVERIFIED): 0.85x the data radius, so the pool is about 300 px wide as in the game
+        LockLight->SetLightColor(FMath::Lerp(FLinearColor(Fx.LightColor), FLinearColor::White, 0.2f));
         LockLight->SetCastShadows(Fx.bLightShadows);
         LockLight->SetIndirectLightingIntensity(0.f);
         LockLight->SetIntensity(0.f);
@@ -432,6 +461,14 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         }
         UpdatePresentation(Now, Held);
         if (AnimStage == 1 && Now >= AnimClipEndsAt && StockMesh && LoopClip) { StockMesh->PlayAnimation(LoopClip, true); AnimStage = 2; }
+        // UpdateLiftedPawnMeshOffset (script, read not run; NATIVE_PHASELOCK_PRESENTATION.md): after the snap part of the
+        // lift the mesh is moved in Z so that its bounds centre sits on the pawn's location, eased by VInterpTo speed 5.
+        if (StockMesh && Held > Lock.LiftDuration * Lock.SnapTimePct)
+        {
+            const float Wanted = Pivot->GetComponentLocation().Z - (StockMesh->Bounds.Origin.Z - MeshExtraZ);
+            MeshExtraZ += (Wanted - MeshExtraZ) * FMath::Clamp(5.f * DeltaSeconds, 0.f, 1.f);
+            StockMesh->SetRelativeLocation(StockMeshBaseOffset + FVector(0, 0, MeshExtraZ));
+        }
         // The script moves the lifted pawn without rotating it; only hit wobble remains.
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
         FallVelocity = 0.f;
@@ -472,6 +509,11 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         FallVelocity = Height > 0.f ? FallVelocity - 500.f * DeltaSeconds : 0.f;
         Height = FMath::Max(0.f, Height + FallVelocity * DeltaSeconds);
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
+    }
+    if (StockMesh && !bPhaselocked && !FMath::IsNearlyZero(MeshExtraZ, 0.05f))
+    {
+        MeshExtraZ += (0.f - MeshExtraZ) * FMath::Clamp(5.f * DeltaSeconds, 0.f, 1.f);
+        StockMesh->SetRelativeLocation(StockMeshBaseOffset + FVector(0, 0, MeshExtraZ));
     }
     // CheckLandTarget: the land clip once the pawn is down again, then idle.
     if (AnimStage == 3 && Height <= 0.f && StockMesh)

@@ -102,7 +102,9 @@ treat an offset that does not fit the code as a reason to re-check the rule, not
 
 Timing on the analysis machine: about 15 s per run (Ghidra start-up and project open dominate); `-Tables -Apply`
 15 s; a 50-function query 20 to 60 s with decompilation; a whole-program `insn:` scan 30 to 100 s. First results
-are recorded in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATCH.md).
+are recorded in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATCH.md); later note sets (all
+`UNVERIFIED` in game) are the other `verification/NATIVE_*.md` files, including Phaselock presentation, weapon visuals,
+ambient NPC movement and the backpack sort (2026-10-04).
 
 ## Working on two machines
 

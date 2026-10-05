@@ -48,9 +48,10 @@ void UOpenWillowArmsAnimInstance::SetMovement(float InGroundSpeed, bool bInFalli
     bLanding = bInLanding;
 }
 
-void UOpenWillowArmsAnimInstance::PlayAction(UAnimSequence* InAction, float InWeight)
+void UOpenWillowArmsAnimInstance::PlayAction(UAnimSequence* InAction, float InWeight, float InRate)
 {
     Action = InAction;
+    ActionRate = InRate;
     ActionWeight = FMath::Clamp(InWeight, 0.f, 1.f);
     ++ActionSerial;
 }
@@ -81,6 +82,7 @@ void FOpenWillowArmsProxy::PreUpdate(UAnimInstance* Instance, float DeltaSeconds
     DesiredAction = Arms->Action;
     DesiredActionSerial = Arms->ActionSerial;
     DesiredActionWeight = Arms->ActionWeight;
+    DesiredActionRate = Arms->ActionRate;
     if (Arms->AdditiveSerial != ActiveAdditiveSerial)
     {
         // Restart on every shot so rapid fire keeps re-kicking the arms.
@@ -122,12 +124,13 @@ void FOpenWillowArmsProxy::UpdateAnimationNode(const FAnimationUpdateContext& Co
     {
         ActiveActionSerial = DesiredActionSerial;
         ActiveAction = DesiredAction;
+        ActionRateNow = DesiredActionRate;
         ActionTime = 0.f;
         ActionAlpha = 0.f;
     }
     if (ActiveAction)
     {
-        Advance(ActiveAction, ActionTime, DeltaSeconds, false);
+        Advance(ActiveAction, ActionTime, DeltaSeconds * ActionRateNow, false);
         const bool bEnded = ActionTime >= ActiveAction->GetPlayLength();
         ActionAlpha = FMath::FInterpConstantTo(ActionAlpha,
             bEnded ? 0.f : DesiredActionWeight, DeltaSeconds, 12.f);

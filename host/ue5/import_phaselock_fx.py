@@ -109,6 +109,23 @@ DARKEN_AS_TRANSLUCENT = {'Mat_SirenOrbBlackMOD', 'Mat_SirenOrbBlackMOD_NoBias', 
 RADIAL_SHARPNESS = {'Mat_SirenOrbBlackMOD': 2.5, 'Mat_SirenOrbBlackMOD_NoBias': 2.5}
 
 
+# Sampler state of the stock textures, read from the Texture2D exports (AddressX/AddressY, SRGB, CompressionSettings; an
+# absent address property is TA_Wrap, an absent SRGB is true). Only the textures that differ from the default are listed.
+# Nrm_Test and the screen-distortion map are signed normal maps in the game (the host stores them as raw colour and the
+# exact materials expand xy to -1..1 themselves).
+TEXTURE_OPTIONS = {
+    'PhaseLockBubble_Dif_Tex': {'address': 'CLAMP'},
+    'EnergyRibbon_Dif_Tex': {'address': 'CLAMP'},
+    'EnergySwirl_Dif_Tex': {'address': 'CLAMP'},
+    'Square_Mask_Dif': {'address': 'CLAMP'},
+    'Tex_Lens_Flare_Wide_Prime': {'address': 'CLAMP'},
+    'EnergyOrbCenter_Dif_Mirror': {'address': 'MIRROR'},
+    'EnergyOrbSoftMod_Dif_Mirror': {'address': 'MIRROR'},
+    'Nrm_Test': {'srgb': False},
+    'EnergyOrbScreenUVDistortion_Nrm_Tex': {'srgb': False},
+}
+
+
 def texture(name):
     if name in textures:
         return textures[name]
@@ -117,7 +134,13 @@ def texture(name):
         textures[name] = None
         return None
     asset = imported(path, 'Textures', unreal.Texture2D)
-    asset.set_editor_property('srgb', True)
+    options = TEXTURE_OPTIONS.get(name, {})
+    asset.set_editor_property('srgb', options.get('srgb', True))
+    if options.get('srgb', True) is False:
+        # Raw 8-bit data, no normal-map swizzle or block compression.
+        asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
+    for axis in ('address_x', 'address_y'):
+        asset.set_editor_property(axis, getattr(unreal.TextureAddress, 'TA_' + options.get('address', 'WRAP')))
     try:
         asset.set_editor_property('lod_group', unreal.TextureGroup.TEXTUREGROUP_EFFECTS)
     except Exception as error:  # enum spelling differs between engine versions; the group only affects streaming
@@ -364,40 +387,451 @@ def build(name, blend, domain_fn=None):
 
 
 def tattoo_material():
-    """Additive overlay for Maya's first-person arms: Masks.B on the left half of the mask texture (uv x (0.5, 1)),
-    times GlowColor x Enable. The channel/half was chosen by inspecting the exported mask (the tattoo shapes sit in B of
-    the left half); Master_Player's graph is stripped, so this is a host reading (UNVERIFIED)."""
+    """Additive overlay for Maya's first-person arms, the power-emissive term of Master_Player's compiled pixel shader
+    (Round 6; read from the shader cache, UNVERIFIED in game): glow = Enable x PowerEmissiveColor x (1 - f^2) x mask x
+    diffuse, where f is the red of a fire-tile texture read at 0.6 x UV plus a slow pan, mask is the B channel of p_Masks at
+    (0.5 u, 0.5 v + 0.5) (the tattoo shapes sit in that quadrant) and diffuse is p_Diffuse at the UV. The parameter names
+    are the host's (Masks, Diffuse, GlowColor, Enable)."""
     material = tools.create_asset('M_OW_PlTattooGlow', f'{destination}/Materials', unreal.Material,
                                   unreal.MaterialFactoryNew())
     material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_ADDITIVE)
     material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
     material.set_editor_property('used_with_skeletal_mesh', True)
-    uv = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -900, 0)
-    uv.set_editor_property('u_tiling', 0.5)
-    uv.set_editor_property('v_tiling', 1.0)
-    masks = mel.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, 0)
-    masks.set_editor_property('parameter_name', 'Masks')
-    masks.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
-    masks.set_editor_property('texture', unreal.load_asset('/Engine/EngineResources/Black'))
-    mel.connect_material_expressions(uv, '', masks, 'UVs')
-    colour = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -700, 300)
-    colour.set_editor_property('parameter_name', 'GlowColor')
-    enable = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 450)
-    enable.set_editor_property('parameter_name', 'Enable')
-    a = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -400, 100)
-    mel.connect_material_expressions(masks, 'B', a, 'A')
-    mel.connect_material_expressions(colour, '', a, 'B')
-    b = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -200, 200)
-    mel.connect_material_expressions(a, '', b, 'A')
-    mel.connect_material_expressions(enable, '', b, 'B')
-    rgb = mel.create_material_expression(material, unreal.MaterialExpressionComponentMask, -50, 200)
-    for c in 'rgb':
-        rgb.set_editor_property(c, True)
-    mel.connect_material_expressions(b, '', rgb, '')
-    mel.connect_material_property(rgb, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+
+    def node(cls, x, y, **props):
+        expression = mel.create_material_expression(material, cls, x, y)
+        for key, value in props.items():
+            expression.set_editor_property(key, value)
+        return expression
+
+    uv = node(unreal.MaterialExpressionTextureCoordinate, -900, 0)
+    time = node(unreal.MaterialExpressionTime, -900, 100)
+    colour = node(unreal.MaterialExpressionVectorParameter, -900, 200, parameter_name='GlowColor',
+                  default_value=unreal.LinearColor(0.0, 14.55, 20.0, 1.0))
+    enable = node(unreal.MaterialExpressionScalarParameter, -900, 300, parameter_name='Enable', default_value=0.0)
+    masks = node(unreal.MaterialExpressionTextureObjectParameter, -900, 400, parameter_name='Masks',
+                 texture=unreal.load_asset('/Engine/EngineResources/Black'), sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+    diffuse = node(unreal.MaterialExpressionTextureObjectParameter, -900, 500, parameter_name='Diffuse',
+                   texture=unreal.load_asset('/Engine/EngineResources/WhiteSquareTexture'))
+    fire = texture('Fire_Tile_Dif')
+    fire_object = node(unreal.MaterialExpressionTextureObject, -900, 600, texture=fire[0] if fire else unreal.load_asset('/Engine/EngineResources/Black'))
+    custom = node(unreal.MaterialExpressionCustom, -400, 0, description='tattoo glow',
+                  output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3, code="""
+// Slow drift of the fire-tile read: one tile per 300 s sideways, one per 30 s the other way.
+float2 pan = float2(frac(GT / 300.0), frac(-GT / 30.0));
+float f = Texture2DSample(Fire, FireSampler, 0.6 * UV + pan).r;
+float mask = Texture2DSample(Masks, MasksSampler, float2(0.5 * UV.x, 0.5 * UV.y + 0.5)).b;
+float3 base = Texture2DSample(Diffuse, DiffuseSampler, UV).rgb;
+return Enable * GlowColor * (1.0 - f * f) * mask * base;
+""")
+    names = ['UV', 'GT', 'GlowColor', 'Enable', 'Masks', 'Diffuse', 'Fire']
+    entries = []
+    for name in names:
+        entry = unreal.CustomInput()
+        entry.set_editor_property('input_name', name)
+        entries.append(entry)
+    custom.set_editor_property('inputs', entries)
+    colour_rgb = node(unreal.MaterialExpressionComponentMask, -700, 200, r=True, g=True, b=True, a=False)
+    mel.connect_material_expressions(colour, '', colour_rgb, '')
+    for name, source in (('UV', uv), ('GT', time), ('GlowColor', colour_rgb), ('Enable', enable), ('Masks', masks),
+                         ('Diffuse', diffuse), ('Fire', fire_object)):
+        mel.connect_material_expressions(source, '', custom, name)
+    mel.connect_material_property(custom, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     return material
+
+
+# --- exact stock materials -------------------------------------------------------------------------------------------
+# Round 6/7: the cooked material graphs of the effect materials are stripped, but the shader cache keeps each material's
+# compiled pixel shader and uniform-expression set (docs/verification/PHASELOCK_STOCK_DATA.md, "Round 6"). Each snippet below
+# is written from what that shader computes, in our own words; numbers are the shaders' own constants unless a comment says
+# "host calibration". Common inputs of every snippet:
+#   Col   particle colour (rgb) and alpha (a)         UV   sprite UV, 0..1 across the quad
+#   GT    material time in seconds                   SD   scene depth behind the pixel      PD   depth of the sprite plane
+#   T0..  the material's textures, in the order the game lists them (sampler state comes from the Texture2D exports)
+# "Soft fade" = saturate((SD - PD) / D): 1 where the scene is at least D units behind the sprite plane, 0 where the scene is at
+# or in front of it. D is 1 - DepthBias for materials that have a DepthBias/Bias parameter and a fixed number otherwise.
+# What stays a host reading (UNVERIFIED): the blend (UE5 draws modulate after the translucent pass, so the darkening
+# modulates are translucent black with the darkening as opacity), the tangent-space view vector one material uses for a
+# small parallax (taken as zero: the sprites face the camera), fog, and every line marked "host calibration".
+# OWSPIN rotates the 2-D vector q by the angle a (radians), counter-clockwise.
+SPIN = "#define OWSPIN(q, a) float2(cos(a) * (q).x - sin(a) * (q).y, sin(a) * (q).x + cos(a) * (q).y)\n"
+
+EXACT = {}
+
+
+def exact(name, blend, textures, code, subuv=False, dyn=False, params=()):
+    EXACT[name] = {'blend': blend, 'textures': textures, 'code': SPIN + code, 'subuv': subuv, 'dyn': dyn, 'params': params}
+
+
+# Mat_SirenEnemyOrb (additive): the bubble's rim sphere. The bubble texture (a thin glowing ring on a dark disc) is read at a
+# UV pushed around by animated noise, so the ring wobbles. Noise: two reads of a smoke texture that rotate and drift (one
+# gives the horizontal push, one the vertical). The push is zero inside 0.245 of the quad, ramps up by 0.316, and fades to
+# nothing at the quad's corner. Direction: two reads of a flat normal map that rotate faster, giving mostly "up" with a small
+# sideways part. Result = texture x particle alpha x soft fade over 41 units; the particle colour is not used.
+exact('Mat_SirenEnemyOrb', 'add', ['Smoke2_GP_Dif', 'Nrm_Test', 'PhaseLockBubble_Dif_Tex'], r"""
+float2 uv = UV;
+float t = GT;
+float2 centred = uv - 0.5;
+float r2 = dot(centred, centred);
+// Two drifting, rotating reads of the smoke map: its red and its blue channel are the two push amounts.
+float2 smokeA = OWSPIN(2.0 * uv - 0.5, 0.58 * t) + float2(frac(0.2 * t), frac(0.1 * t)) + 0.5;
+float2 smokeB = OWSPIN(2.0 * uv, -0.75 * t) + float2(frac(-0.4 * t), frac(0.1 * t));
+float pushX = Texture2DSample(T0, T0Sampler, smokeA).r;
+float pushY = Texture2DSample(T0, T0Sampler, smokeB).b;
+// Where the push applies: nothing inside radius 0.245, full from 0.316, fading to zero at the corner (r2 = 0.5).
+float ramp = (r2 <= 0.1) ? (25.0 * r2 - 1.5) : 1.0;
+float edgeFade = 1.0 - 2.0 * r2;
+float2 push = (ramp >= 0.0 && edgeFade >= 0.0) ? ramp * edgeFade * float2(pushX, pushY) : float2(0.0, 0.0);
+// Direction of the push from two rotating normal-map reads (stored signed: the game's format is two signed bytes).
+float2 n1 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 3.0 * t) + 0.5).xy * 2.0 - 1.0;
+float2 n2 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 1.5 * t) + 0.5).xy * 2.0 - 1.0;
+float n2z = sqrt(saturate(1.0 - dot(n2, n2)));
+float2 direction = float2(n2.y + n1.x, n2z + n1.x);
+// Host calibration (UNVERIFIED): the full push frills the rim on every frame, but the game's rim is a clean ring at 1.5 and
+// 3.0 s and frayed at 4.5 s. The strength therefore grows with the collapse value (Dyn, 0 at the start, 0.75 at the end).
+float strength = lerp(0.15, 0.7, saturate(Dyn / 0.6));
+float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).rgb;
+// Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
+// reduced and blue raised (round 8: red 0.7 to 0.55, blue 1.3 to 1.4, because a pink fringe remained on the rim).
+// Round 14 (UNVERIFIED): the dim part of the ring texture (its navy disc, which fills the bubble's interior) is tinted violet and the
+// bright rim keeps the white-blue tint, because the interior reads royal blue where the game's is violet-black.
+float ringBright = saturate(dot(ring, float3(0.3, 0.55, 0.15)) * 6.0);
+ring *= lerp(float3(0.9, 0.35, 1.0), float3(0.55, 0.9, 1.4), ringBright);
+// Host calibration (UNVERIFIED): a white-hot inner edge. The game's rim has one; the brightest part of the texture's ring is
+// pushed toward white-blue.
+float ringLuma = dot(ring, float3(0.3, 0.55, 0.15));
+ring += float3(0.6, 0.8, 1.0) * ringLuma * ringLuma;
+float softFade = saturate((SD - PD) / 41.0);
+return float4(min(4.0, Col.a * ring) * softFade, 1.0);
+""", dyn=True)
+
+# Mat_EnemyOrbCoreColor (additive): the haze between the dark core and the rim. Colour: the core-colour texture times the
+# particle colour, read at a UV nudged along the view direction by a scrolling noise (a small parallax, zero here). Weight:
+# the texture's red x particle alpha x a mirrored mask read at twice the UV x the squared distance from the centre, so the
+# haze is nil in the middle and strongest toward the edge. Soft fade over 41 units.
+exact('Mat_EnemyOrbCoreColor', 'add', ['Tiling_GenericSmoke4_Dif', 'EnergyOrbCoreColor_Dif_Tex', 'EnergyOrbCenter_Dif_Mirror'], r"""
+float2 uv = UV;
+float t = GT;
+float parallax = Texture2DSample(T0, T0Sampler, uv + float2(frac(0.4 * t), frac(0.5 * t))).r - 0.1;
+float2 viewXY = float2(0.0, 0.0);
+float4 core = Texture2DSample(T1, T1Sampler, uv + parallax * viewXY);
+float2 centred = uv - 0.5;
+float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
+// Host calibration (UNVERIFIED): x3 on the weight (the shader's own weights give a haze several times fainter than the
+// game frames show between core and rim) and a blue-violet tint (the texture is magenta, the game's band is blue-violet).
+float weight = 3.0 * core.r * Col.a * mask * dot(centred, centred);
+float3 colour = Col.rgb * core.rgb * float3(0.3, 0.5, 1.6);
+float softFade = saturate((SD - PD) / 41.0);
+return float4(min(4.0, colour) * weight * softFade, 1.0);
+""")
+
+# Mat_SirenOrbEnergySpikes (translucent): the blue streaks around the bubble. A horizontally scrolling smoke read (0.25 per
+# second) nudges the spike texture's UV by 0.05 x smoke in both axes. Colour = spike texture x particle colour. Alpha = the
+# spike's red, cut by a mirrored mask read at (2u, 0.5v + 0.76) (that removes the middle of the sprite) x particle alpha x
+# soft fade over 51 units.
+exact('Mat_SirenOrbEnergySpikes', 'trans', ['Smoke2_GP_Dif', 'EnergyOrbSpikeys_Dif_Tex', 'EnergyOrbSoftMod_Dif_Mirror'], r"""
+float2 uv = UV;
+float smoke = Texture2DSample(T0, T0Sampler, uv + float2(frac(0.25 * GT), 0.0)).r;
+float3 spike = Texture2DSample(T1, T1Sampler, uv + smoke * 0.05).rgb;
+float cut = Texture2DSample(T2, T2Sampler, float2(2.0 * uv.x, 0.5 * uv.y + 0.76)).r;
+float alpha = saturate(spike.r * (1.0 - 3.0 * cut)) * Col.a * saturate((SD - PD) / 51.0);
+// Host calibration (UNVERIFIED): full alpha and the streak is read 1.15x compressed along its length (it ends at 0.07 and 0.93
+// of the sprite); round 10's first try (0.8 and 1.25x) was still faint. Round 8 (full strength) gave rays that were too many and reached the screen edge; round 9 (0.5 and 1.6x)
+// made them invisible, where the game has translucent streaks 100-150 px to each side of the bubble.
+// Round 11: the vertical axis is read at 0.55x so each streak is about 1.8x wider and only about two of the texture's four
+// streaks fit on a sprite (fewer, wider, softer wedges, as in the game).
+float2 shortUv = float2((uv.x - 0.5) * 1.15 + 0.5, (uv.y - 0.5) * 0.55 + 0.5);
+float inside = (shortUv.x >= 0.0 && shortUv.x <= 1.0) ? 1.0 : 0.0;
+float3 spikeShort = Texture2DSample(T1, T1Sampler, shortUv + smoke * 0.05).rgb;
+alpha = saturate(spikeShort.r * (1.0 - 3.0 * cut)) * Col.a * saturate((SD - PD) / 51.0) * inside * 1.0;
+return float4(min(4.0, Col.rgb * spikeShort), alpha);
+""")
+
+# Mat_SirenOrbEnergySpikesMOD (modulate): darkens the scene by (fade x particle colour x spike) per channel, a dark streak
+# under each blue one. The particle colour is (5, 5, 5), so the darkening is the same in all channels; it is drawn as
+# translucent black with that amount as opacity. NOT DRAWN by the host (see NOT_DRAWN): the game frames show no dark streaks.
+exact('Mat_SirenOrbEnergySpikesMOD', 'dark', ['Smoke2_GP_Dif', 'EnergyOrbSpikeys_Dif_Tex'], r"""
+float2 uv = UV;
+float smoke = Texture2DSample(T0, T0Sampler, uv + float2(frac(0.25 * GT), 0.0)).r;
+float3 spike = Texture2DSample(T1, T1Sampler, uv + smoke * 0.05).rgb;
+float3 weight = Col.rgb * spike;
+float softFade = saturate((SD - PD) / 51.0);
+return float4(0.0, 0.0, 0.0, saturate(softFade * (weight.r + weight.g + weight.b) / 3.0));
+""")
+
+# Mat_SirenOrbBlackMOD (modulate): a round hole in the world. Darkness = (1 - particle alpha) x (1 - A^2) x soft fade over 21
+# units (DepthBias -20), where A is 0 out to 0.15 of the quad and 1 from 0.354 of it. The bubble loop scales the particle
+# alpha to 0, so the bubble's core is full black in the middle and clear at the rim.
+# Host calibration (UNVERIFIED), bubble only (DarkCap < 1 is set per emitter by the host): the game's interior is a
+# translucent navy-violet and the target shows at about a third of its brightness, so the darkening is capped, and the
+# soft fade has a floor so that the target's near surface is also dimmed (by the shader it would not be). The hand's
+# dark blob uses cap 1 and floor 0, which is what the game frames show (pure black at 0.30 s).
+exact('Mat_SirenOrbBlackMOD', 'dark', [], r"""
+// CoreScale (host calibration, UNVERIFIED; 1 = the shader's own): widens the dark core inside the same quad. Scaling the
+// quad itself 1.6x, or setting this to 1.5, made the hand's void fade out instead of grow (round 11, cause not found), so
+// no emitter sets it.
+float2 centred = (UV - 0.5) / CoreScale;
+float u = 1.0 - saturate(8.0 * dot(centred, centred));
+float A = 1.0 - saturate(1.5 * u * u);
+float softFade = max(saturate((SD - PD) / 21.0), FadeFloor);
+float coverage = (1.0 - A * A) * softFade;
+float keep = Col.a + (1.0 - Col.a) * (1.0 - coverage);
+return float4(0.0, 0.0, 0.0, min(DarkCap, saturate(1.0 - keep)));
+""", params=(('DarkCap', 1.0), ('FadeFloor', 0.0), ('CoreScale', 1.0)))
+# The hand fizzle's variant has no depth fade at all.
+exact('Mat_SirenOrbBlackMOD_NoBias', 'dark', [], r"""
+float2 centred = UV - 0.5;
+float u = 1.0 - saturate(8.0 * dot(centred, centred));
+float A = 1.0 - saturate(1.5 * u * u);
+float keep = Col.a + (1.0 - Col.a) * (A * A);
+return float4(0.0, 0.0, 0.0, saturate(1.0 - keep));
+""")
+
+# Mat_PowerUpTwirls (translucent, sub-image sprites): twirling wisps. The twirl atlas is read at a UV bent by two slowly
+# rotating reads of a scrolling-energy texture (0.02 x). Colour = (sqrt(t) - t) x particle colour x (0.6, 0, 0.8); alpha =
+# saturate(4 t.r^2) x particle alpha. The loop template gives it a near-black particle colour, so these are dark wisps.
+# Host calibration (UNVERIFIED): alpha x0.5, because the host's wisps read as hard black cracks where the game's are soft
+# purple clouds.
+exact('Mat_PowerUpTwirls', 'trans', ['Scrolling_Energy', 'LilithPowerUp_D'], r"""
+float2 uv = UV;
+float t = GT;
+float bendX = Texture2DSample(T0, T0Sampler, OWSPIN(0.5 * uv - 0.25, 0.2 * t) + 0.25).r * 0.02;
+float bendY = Texture2DSample(T0, T0Sampler, OWSPIN(uv - 0.5, 0.2 * t) + 0.5).b * 0.02;
+float3 twirl = saturate(Texture2DSample(T1, T1Sampler, uv + float2(bendX, bendY)).rgb * 10.0);
+// These wisps are the bubble's purple mottling (colour x (0.6, 0, 0.8)). Host calibration (UNVERIFIED): rounds 7-13 drew them at alpha
+// x0.5 and the shader's own colour (x1), which left black cracks; round 14 draws them at alpha x0.6 and colour x5, soft purple clouds. A
+// first round 14 try at the shader's own alpha (x1, colour x1) was hard black cracks too.
+float alpha = 0.6 * saturate(4.0 * twirl.r * twirl.r) * Col.a;
+return float4(min(4.0, 5.0 * (sqrt(twirl) - twirl) * Col.rgb * float3(0.6, 0.0, 0.8)), alpha);
+""", subuv=True)
+
+# --- hand and release materials ---------------------------------------------------------------------------------------
+
+# Mat_SirenEnergyRibbons (additive, mesh particles): the ribbons around the hand. The ribbon texture is read at
+# (2u - dynamic parameter 0, v), so emitters scroll it along the mesh. Colour = saturate(u - 0.05) x blue^2 x particle alpha
+# x particle colour.
+exact('Mat_SirenEnergyRibbons', 'add', ['EnergyRibbon_Dif_Tex'], r"""
+float2 uv = UV;
+float b = Texture2DSample(T0, T0Sampler, float2(2.0 * uv.x - Dyn, uv.y)).b;
+float amount = saturate(uv.x - 0.05) * b * (b * Col.a);
+return float4(min(4.0, amount * Col.rgb), 1.0);
+""", dyn=True)
+
+# Mat_SirenEnergySwirl (translucent): the vortex arcs. Colour = the texture's blue channel x particle colour; alpha = the
+# texture's alpha x particle alpha.
+# Host calibration (UNVERIFIED; round 13 raised it to alpha x0.8 and a more saturated cyan for the first-person capture): alpha x0.5 and a bluer colour, because the host's swirl at 0.30-0.40 s is a thick white
+# vortex where the game's is thin, translucent blue ribbons.
+exact('Mat_SirenEnergySwirl', 'trans', ['EnergySwirl_Dif_Tex'], r"""
+float4 t = Texture2DSample(T0, T0Sampler, UV);
+return float4(min(4.0, t.b * Col.rgb * float3(0.25, 0.75, 1.3)), 0.8 * max(0.0, t.a * Col.a));
+""")
+
+# Mat_SirenHandGlow (translucent): a soft glow. A mirrored soft mask read at twice the UV is both the colour weight and the
+# alpha weight; soft fade over 21 units.
+exact('Mat_SirenHandGlow', 'trans', ['EnergyOrbSoftMod_Dif_Mirror'], r"""
+float g = Texture2DSample(T0, T0Sampler, 2.0 * UV).r;
+return float4(min(4.0, g * Col.rgb), g * Col.a * saturate((SD - PD) / 21.0));
+""")
+
+# Mat_SirenHandGlowShattered (translucent): the star-burst. The star texture (RGBA) times the particle colour; alpha = the
+# texture's alpha x particle alpha x soft fade over 21 units.
+# Host calibration (UNVERIFIED): alpha x0.2 (0.4 in round 7), because in the host the long rays swamp the hand at 0.55-0.75 s while the game
+# keeps a visible palm orb with a few thin white lines.
+exact('Mat_SirenHandGlowShattered', 'trans', ['EnergyShatter_Dif_Tex'], r"""
+float4 t = Texture2DSample(T0, T0Sampler, UV);
+return float4(min(4.0, Col.rgb * t.rgb), 0.2 * t.a * Col.a * saturate((SD - PD) / 21.0));
+""")
+
+# Mat_SirenHandInnerOrb (translucent): the blue palm orb. Four reads of a nebula texture in two rotating frames (0.18 rad/s
+# about 0.5 and -0.25 rad/s about 0.8, each with its own drift) are combined as (n3 - n4) + (n1 - n2) + 2; that number
+# shifts a read m1 of a mirrored centre texture at twice the UV. With the unshifted read m2, a blend weight
+# 12 (1 - m2)^6 m2 mixes saturate(2 m2) toward m1, giving k. Colour = lerp(blue, 1.25 x orb texture, k) with the blue
+# (0.2508, 0.6524, 0.9323); alpha = saturate(k) x particle alpha. The particle colour is not used.
+exact('Mat_SirenHandInnerOrb', 'trans', ['EnergyOrbCenter2_Dif_Tex', 'EnergyOrbCenter_Dif_Mirror', 'Tiling_Nebulous_Dif'], r"""
+float2 uv = UV;
+float t = GT;
+float2 frameP = OWSPIN(uv - 0.5, 0.18 * t) + 0.5;
+float2 frameQ = OWSPIN(uv - 0.8, -0.25 * t) + 0.8;
+float n3 = Texture2DSample(T2, T2Sampler, frameP + float2(0.0, frac(0.35 * t))).r;
+float n1 = Texture2DSample(T2, T2Sampler, frameP + float2(frac(0.04 * t), frac(0.5 * t))).r;
+float n4 = Texture2DSample(T2, T2Sampler, frameQ + float2(frac(-0.15 * t), frac(0.15 * t))).r;
+float n2 = Texture2DSample(T2, T2Sampler, frameQ + float2(frac(-0.05 * t), frac(0.7 * t))).r;
+float shift = (n3 - n4) + (n1 - n2) + 2.0;
+float m1 = Texture2DSample(T1, T1Sampler, 2.0 * uv + shift).r;
+float m2 = Texture2DSample(T1, T1Sampler, 2.0 * uv).r;
+float oneMinus = 1.0 - m2;
+float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
+float base = saturate(2.0 * m2);
+float k = base + mixWeight * (m1 - base);
+float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;   // host calibration (UNVERIFIED): deeper blue, as the game's palm orb
+// Host calibration (UNVERIFIED): the orb texture is scaled by 0.6 instead of the shader's 1.25. At 1.25 the orb's centre is
+// white-blue; the game's palm orb is a saturated deep blue with a bright highlight and thin arcs.
+float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9;
+return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
+""")
+
+# Mat_SirenHandPowerDiffuse (translucent): the smoke after the orb leaves. Colour is just the particle colour. Alpha = 35 x
+# a nebula read drifting upward x (1 - (1 - 0.1 x second smoke read)(1 - mask))^2 x particle alpha x soft fade over 16 units.
+exact('Mat_SirenHandPowerDiffuse', 'trans', ['Tiling_Nebulous_Dif', 'Tiling_GenericSmoke4_Dif', 'SubUV_2X2_GenericSmoke2_Dif'], r"""
+float2 uv = UV;
+float t = GT;
+float nebula = Texture2DSample(T0, T0Sampler, uv + float2(0.0, frac(0.2 * t))).r * 35.0;
+float smoke = Texture2DSample(T1, T1Sampler, uv + float2(frac(0.15 * t), frac(0.2 * t))).r;
+float mask = Texture2DSample(T2, T2Sampler, uv).r;
+float blend = 1.0 - (1.0 - 0.1 * smoke) * (1.0 - mask);
+return float4(min(4.0, Col.rgb), nebula * blend * blend * Col.a * saturate((SD - PD) / 16.0));
+""")
+
+# Mati_Wispy_Smoke_Cloud_SubUV (translucent, sub-image sprites; parent Mat_Wispy_Smoke): the sub-image alpha is both the
+# colour weight and, with the particle alpha, the opacity; soft fade over 19 units (DepthBias -18). The game blends two
+# sub-images by the particle's frame fraction; the host shows one.
+exact('Mati_Wispy_Smoke_Cloud_SubUV', 'trans', ['Tex_Wispy_Smoke_SubUV'], r"""
+float a = Texture2DSample(T0, T0Sampler, UV).a;
+return float4(min(4.0, a * Col.rgb), saturate(a * Col.a) * saturate((SD - PD) / 19.0));
+""", subuv=True)
+
+# Mat_SirenGlowMOD (modulate, overbright): the scene is multiplied by 1 + min(3, soft fade over 16 x particle alpha x a
+# mirrored soft mask at twice the UV x particle colour). UE5 draws modulate after the translucent layers, not in emitter
+# order. Host calibration (UNVERIFIED): the overbright is scaled by 0.4, because at 0.55 s the host's whole street is washed
+# out while the game frame keeps its contrast (the game's wash comes at 0.72 s).
+exact('Mat_SirenGlowMOD', 'mod', ['EnergyOrbSoftMod_Dif_Mirror'], r"""
+float g = Texture2DSample(T0, T0Sampler, 2.0 * UV).r;
+float3 boost = min(3.0, saturate((SD - PD) / 16.0) * Col.a * g * Col.rgb);
+return float4(1.0 + 0.4 * boost, 1.0);
+""")
+
+
+def exact_material(name):
+    spec = EXACT[name]
+    blend = {'add': unreal.BlendMode.BLEND_ADDITIVE, 'mod': unreal.BlendMode.BLEND_MODULATE}.get(
+        spec['blend'], unreal.BlendMode.BLEND_TRANSLUCENT)
+    material = tools.create_asset(f'M_PL_{name}', f'{destination}/Materials', unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property('blend_mode', blend)
+    material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property('two_sided', True)
+    material.set_editor_property('translucency_pass', unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF)
+
+    def node(cls, x, y, **props):
+        expression = mel.create_material_expression(material, cls, x, y)
+        for key, value in props.items():
+            expression.set_editor_property(key, value)
+        return expression
+
+    def link(a, a_pin, b, b_pin):
+        mel.connect_material_expressions(a, a_pin, b, b_pin)
+
+    color = node(unreal.MaterialExpressionVectorParameter, -900, -300, parameter_name='Color',
+                 default_value=unreal.LinearColor(1, 1, 1, 1))
+    color_rgb = node(unreal.MaterialExpressionComponentMask, -700, -300, r=True, g=True, b=True, a=False)
+    link(color, '', color_rgb, '')
+    color4 = node(unreal.MaterialExpressionAppendVector, -500, -300)
+    link(color_rgb, '', color4, 'A')
+    link(color, 'A', color4, 'B')
+    uv = node(unreal.MaterialExpressionTextureCoordinate, -900, 0)
+    uv_out = uv
+    if spec['subuv']:
+        # Sub-image atlas UV: (uv + (column, row)) / (columns, rows), the frame index in SubUV.B (set per particle).
+        sub = node(unreal.MaterialExpressionVectorParameter, -900, 150, parameter_name='SubUV',
+                   default_value=unreal.LinearColor(1, 1, 0, 0))
+        columns = node(unreal.MaterialExpressionComponentMask, -700, 150, r=True, g=False, b=False, a=False)
+        rows = node(unreal.MaterialExpressionComponentMask, -700, 220, r=False, g=True, b=False, a=False)
+        frame = node(unreal.MaterialExpressionComponentMask, -700, 290, r=False, g=False, b=True, a=False)
+        for m in (columns, rows, frame):
+            link(sub, '', m, '')
+        column = node(unreal.MaterialExpressionFmod, -500, 150)
+        link(frame, '', column, 'A')
+        link(columns, '', column, 'B')
+        row_raw = node(unreal.MaterialExpressionDivide, -500, 250)
+        link(frame, '', row_raw, 'A')
+        link(columns, '', row_raw, 'B')
+        row = node(unreal.MaterialExpressionFloor, -350, 250)
+        link(row_raw, '', row, '')
+        offset = node(unreal.MaterialExpressionAppendVector, -200, 200)
+        link(column, '', offset, 'A')
+        link(row, '', offset, 'B')
+        size = node(unreal.MaterialExpressionAppendVector, -200, 300)
+        link(columns, '', size, 'A')
+        link(rows, '', size, 'B')
+        shifted = node(unreal.MaterialExpressionAdd, -50, 100)
+        link(uv, '', shifted, 'A')
+        link(offset, '', shifted, 'B')
+        atlas = node(unreal.MaterialExpressionDivide, 100, 100)
+        link(shifted, '', atlas, 'A')
+        link(size, '', atlas, 'B')
+        uv_out = atlas
+    time = node(unreal.MaterialExpressionTime, -900, 450)
+    scene_depth = node(unreal.MaterialExpressionSceneDepth, -900, 550)
+    pixel_depth = node(unreal.MaterialExpressionPixelDepth, -900, 650)
+    inputs = [('Col', color4), ('UV', uv_out), ('GT', time), ('SD', scene_depth), ('PD', pixel_depth)]
+    for param_name, default in spec['params']:
+        inputs.append((param_name, node(unreal.MaterialExpressionScalarParameter, -900, 1200, parameter_name=param_name,
+                                        default_value=default)))
+    if spec['dyn']:
+        dyn = node(unreal.MaterialExpressionScalarParameter, -900, 750, parameter_name='DynParam', default_value=0.0)
+        inputs.append(('Dyn', dyn))
+    for index, texture_name in enumerate(spec['textures']):
+        asset = texture(texture_name)
+        if not asset:
+            raise RuntimeError(f'{name}: texture {texture_name} not in the UModel output')
+        options = TEXTURE_OPTIONS.get(texture_name, {})
+        sampler = (unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if options.get('srgb', True)
+                   else unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+        tex = node(unreal.MaterialExpressionTextureObject, -900, 850 + 100 * index, texture=asset[0], sampler_type=sampler)
+        inputs.append((f'T{index}', tex))
+    custom = node(unreal.MaterialExpressionCustom, 400, 0, code=spec['code'], description=name,
+                  output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT4)
+    custom_inputs = []
+    for input_name, _source in inputs:
+        entry = unreal.CustomInput()
+        entry.set_editor_property('input_name', input_name)
+        custom_inputs.append(entry)
+    custom.set_editor_property('inputs', custom_inputs)
+    for input_name, source in inputs:
+        link(source, '', custom, input_name)
+    rgb = node(unreal.MaterialExpressionComponentMask, 650, 0, r=True, g=True, b=True, a=False)
+    link(custom, '', rgb, '')
+    if blend == unreal.BlendMode.BLEND_MODULATE:
+        # The overbright modulate (scene x (1 + c)) is drawn as UE5's modulate with the factor unclamped.
+        mel.connect_material_property(rgb, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    else:
+        # The shaders write colours up to 4 (min(c, 4)). Host reading (UNVERIFIED): a layer's colour is brought into range
+        # by dividing by its largest channel when that exceeds 1, which keeps the hue. A per-channel clip turned the spikes'
+        # blue (1.6, 13, 40) x texture into cyan-white, and no clip made them white lines; the game frames show deep blue.
+        clamped = node(unreal.MaterialExpressionCustom, 800, 0, description='hue-keeping range', code=
+                       'float m = max(1.0, max(C.r, max(C.g, C.b))); return C / m;',
+                       output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+        entry = unreal.CustomInput()
+        entry.set_editor_property('input_name', 'C')
+        clamped.set_editor_property('inputs', [entry])
+        link(rgb, '', clamped, 'C')
+        # Gain: a host knob per emitter (set from OpenWillowPhaselockFx.cpp EmitterScalars, default 1) that scales the layer's
+        # brightness (additive) or opacity (translucent) after the range step.
+        gain = node(unreal.MaterialExpressionScalarParameter, 800, 300, parameter_name='Gain', default_value=1.0)
+        if blend == unreal.BlendMode.BLEND_ADDITIVE:
+            scaled = node(unreal.MaterialExpressionMultiply, 950, 0)
+            link(clamped, '', scaled, 'A')
+            link(gain, '', scaled, 'B')
+            mel.connect_material_property(scaled, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        else:
+            mel.connect_material_property(clamped, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    if blend == unreal.BlendMode.BLEND_TRANSLUCENT:
+        alpha = node(unreal.MaterialExpressionComponentMask, 650, 150, r=False, g=False, b=False, a=True)
+        link(custom, '', alpha, '')
+        scaled_alpha = node(unreal.MaterialExpressionMultiply, 800, 150)
+        link(alpha, '', scaled_alpha, 'A')
+        link(gain, '', scaled_alpha, 'B')
+        mel.connect_material_property(scaled_alpha, '', unreal.MaterialProperty.MP_OPACITY)
+    mel.recompile_material(material)
+    eal.save_loaded_asset(material, only_if_is_dirty=False)
+    instance = tools.create_asset(f'MI_{name}', f'{destination}/Materials', unreal.MaterialInstanceConstant,
+                                  unreal.MaterialInstanceConstantFactoryNew())
+    mel.set_material_instance_parent(instance, material)
+    eal.save_loaded_asset(instance, only_if_is_dirty=False)
+    report['materials'][name] = {'instance': instance.get_path_name(), 'parent': material.get_name(), 'exact': True,
+                                 'textures': spec['textures'], 'blend': spec['blend']}
+    log(f'{name}: exact {spec["blend"]} textures {spec["textures"]}')
 
 
 # --- run -------------------------------------------------------------------------------------------------------------
@@ -443,7 +877,22 @@ for template in sorted(emitter_dir.glob('Part_*.json')):
             meshes.add(mesh.rsplit('.', 1)[-1])
         blend[name] = blend_of(path)
 
+# Mat_SirenGlowMOD multiplies the scene by 1 + min(3, c), which an 8-bit target clamps to 1 (UNVERIFIED reading of the
+# target format): not drawn. Its emitters are reported as skipped and left out by the host.
+NOT_DRAWN = {
+    'Mat_SirenOrbEnergySpikesMOD': 'dark streaks under the blue spikes: the shader darkens (1 - fade x 5 x spike) but the game frames show no dark streaks, cause not found; not drawn (UNVERIFIED)',
+}
+# The slot guess of UModel's .mat names the wrong mask for the screen effect: the shader reads the second referenced
+# texture, PhaseLockScreenMask02_Dif_Tex (WillowGame.upk).
+TEXTURE_CHOICE = {'Mat_PhaseLockScreenEffect': 'PhaseLockScreenMask02_Dif_Tex'}
+
 for name in sorted(uses):
+    if name in NOT_DRAWN:
+        report['skipped'][name] = {'reason': NOT_DRAWN[name]}
+        continue
+    if name in EXACT:
+        exact_material(name)
+        continue
     layout = uses[name]
     slots = {}
     mat_file = find(name, '.mat')
@@ -452,7 +901,7 @@ for name in sorted(uses):
             if '=' in line:
                 key, value = line.split('=', 1)
                 slots[key.strip()] = value.strip()
-    chosen = slots.get('Diffuse')
+    chosen = TEXTURE_CHOICE.get(name) or slots.get('Diffuse')
     if layout['subimages']:
         chosen = next((v for v in slots.values() if 'SubUV' in v), chosen)
     mode = blend.get(name)

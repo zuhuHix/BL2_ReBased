@@ -11,7 +11,9 @@
 #include "MaterialShaderPrecompileMode.h"
 #include "MaterialShared.h"
 #include "RHIShaderPlatform.h"
+#include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -27,23 +29,40 @@ constexpr float QuadSize = 100.f;
 // Screen particle quad distance in front of the camera (host stand-in; beyond the 10 uu near plane).
 constexpr float ScreenQuadDistance = 15.f;
 
-// Host stand-in (UNVERIFIED): per-emitter material parameters where one reading of a stripped material does not fit all
-// of its emitters. Mat_SirenGlowMOD is read as a brightness-keeping tint (HueOnly, host/ue5/import_phaselock_fx.py),
-// which matches the game's cobalt cast flashes. The release's Brighten (colour (0.4, 16, 30)) only turns the violet rim
-// cyan-white, as the game frames show at 4.9-5.0 s, as a plain multiply that UE3 clips per channel.
-struct FOwFxEmitterOverride { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; float Value; };
-const FOwFxEmitterOverride EmitterOverrides[] = {
-    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("Brighten"), TEXT("HueOnly"), 0.f},
+// Host calibration (UNVERIFIED): per-emitter material scalars. The bubble's black orb (Mat_SirenOrbBlackMOD) is capped and
+// has a soft-fade floor because the game's interior is a translucent navy-violet in which the target shows at about a third
+// of its brightness, where the shader alone would make a black hole that spares the target's near surface. The hand's
+// dark blob keeps the shader's values (pure black at 0.30 s in the game).
+struct FOwFxEmitterScalar { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; float Value; };
+const FOwFxEmitterScalar EmitterScalars[] = {
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.8f},
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.65f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.65f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
+    // Round 11 (UNVERIFIED): the release keeps its shards out of the interior and less bright: spikes and ribbons at half strength.
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("BlueSpikeys"), TEXT("Gain"), 0.5f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_01"), TEXT("Gain"), 0.4f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_02"), TEXT("Gain"), 0.4f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_03"), TEXT("Gain"), 0.4f},
+    // The star-burst at the fist (0.5-0.95 s): the game has no rays there; most of it is removed.
+    {TEXT("Part_SirenASHandOrb"), TEXT("EndBrightness"), TEXT("Gain"), 0.15f},
 };
-// Host stand-in (UNVERIFIED, calibrated against the 2026-10-03 matched-distance capture): the bubble's black orb blends
-// toward a deep blue-violet instead of black. UE3 clamped after every blend, so the additive layers under the orb
-// saturated to near-white lavender before it darkened them, leaving a neutral blue-violet interior (green about equal to
-// red; mean about (27-48, 26-45, 72-100) at 1.5-3.0 s). UE5's float target keeps red and blue above 1 and green low,
-// which left a magenta interior. The hand orb's emitter (same material, nothing additive under it) stays black.
-struct FOwFxEmitterColour { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; FLinearColor Value; };
-const FOwFxEmitterColour EmitterColours[] = {
-    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkColor"), FLinearColor(0.022f, 0.022f, 0.06f)},
-    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkColor"), FLinearColor(0.022f, 0.022f, 0.06f)},
+
+// Host calibration (UNVERIFIED): the hand effect's palm orb ("Center") and dark disc ("ModulateBlack") start 0.05 s (orb) and 0.1 s (disc) into their
+// life. The game's orb is opaque by 0.44 s, and the dark disc is gone by 0.39 s, which their alpha ramps (0.15-0.35 of their life)
+// only allow if they run ahead of the clip's 0.25 s notify; the swirl and the disc's size, however, match a spawn at 0.25 s,
+// so only these two emitters are shifted (round 7 shifted the whole effect and lost the swirl's size at 0.30 s).
+struct FOwFxAgeShift { const TCHAR* Template; const TCHAR* Emitter; float Seconds; };
+const FOwFxAgeShift AgeShifts[] = {
+    {TEXT("Part_SirenASHandOrb"), TEXT("Center"), 0.03f},
+    {TEXT("Part_SirenASHandOrb"), TEXT("ModulateBlack"), 0.10f},
+};
+
+// Host calibration (UNVERIFIED): sprite size multipliers (none in use). Scaling the hand's dark disc 1.6x, or widening its core 1.5x
+// in the shader, made the void fade out instead of grow (cause not found), so it stays at about 200 px against the game's 330.
+struct FOwFxSizeScale { const TCHAR* Template; const TCHAR* Emitter; float Scale; };
+const FOwFxSizeScale SizeScales[] = {
+    {TEXT("Part_SirenASHandOrb"), TEXT("ModulateBlack"), 1.0f},
 };
 
 FString ShortName(const FString& Path)
@@ -85,34 +104,6 @@ TMap<FString, TUniquePtr<FOwFxTemplate>>& TemplateCache()
 {
     static TMap<FString, TUniquePtr<FOwFxTemplate>> Cache;
     return Cache;
-}
-
-// The default of the material's DepthBias / Bias scalar parameter in the template JSON's "materials" table (tagged
-// parameter expressions), following Parent for material instances; 0 when it has none.
-float MaterialDepthBias(const TSharedPtr<FJsonObject>& Root, FString Path)
-{
-    const TSharedPtr<FJsonObject>* Materials = nullptr;
-    if (!Root->TryGetObjectField(TEXT("materials"), Materials)) return 0.f;
-    for (int32 Depth = 0; Depth < 4 && !Path.IsEmpty(); ++Depth)
-    {
-        const TSharedPtr<FJsonObject>* Material = nullptr;
-        if (!(*Materials)->TryGetObjectField(Path, Material)) return 0.f;
-        const TArray<TSharedPtr<FJsonValue>>* Expressions = nullptr;
-        if ((*Material)->TryGetArrayField(TEXT("parameter_expressions"), Expressions))
-            for (const auto& Value : *Expressions)
-            {
-                const auto Expression = Value->AsObject();
-                FString Parameter;
-                double Default = 0.0;
-                if (Expression->TryGetStringField(TEXT("ParameterName"), Parameter) && (Parameter == TEXT("DepthBias") || Parameter == TEXT("Bias"))
-                    && Expression->TryGetNumberField(TEXT("DefaultValue"), Default))
-                    return float(Default);
-            }
-        const TSharedPtr<FJsonObject>* Properties = nullptr;
-        Path.Reset();
-        if ((*Material)->TryGetObjectField(TEXT("properties"), Properties)) (*Properties)->TryGetStringField(TEXT("Parent"), Path);
-    }
-    return 0.f;
 }
 
 // The host material instance and mesh (the sprite quad unless the emitter has mesh type data) for an emitter; null when
@@ -227,7 +218,6 @@ const FOwFxTemplate* FOwFxTemplate::Load(const FString& Dir, const FString& Name
         E.Name = Row->GetStringField(TEXT("name"));
         const auto Required = Row->GetObjectField(TEXT("required"));
         E.Material = ShortName(Required->GetStringField(TEXT("Material")));
-        E.DepthBias = MaterialDepthBias(Root, Required->GetStringField(TEXT("Material")));
         E.bRectangle = Required->GetStringField(TEXT("ScreenAlignment")).StartsWith(TEXT("PSA_Rectangle"));
         E.bLocalSpace = JsonBool(Required, TEXT("bUseLocalSpace"));
         E.bKillOnDeactivate = JsonBool(Required, TEXT("bKillOnDeactivate"));
@@ -311,6 +301,14 @@ const FOwFxTemplate* FOwFxTemplate::Load(const FString& Dir, const FString& Name
             else if (Class == TEXT("SubUV")) E.SubImageIndex = Field(M, TEXT("SubImageIndex"));
             else E.Unsupported.Add(Class);
         }
+        for (const FOwFxSizeScale& Size : SizeScales)
+            if (Name == Size.Template && E.Name == Size.Emitter) E.SizeScale = Size.Scale;
+        for (const FOwFxAgeShift& Shift : AgeShifts)
+            if (Name == Shift.Template && E.Name == Shift.Emitter)
+            {
+                E.AgeShift = Shift.Seconds;
+                E.bSizeIgnoresAgeShift = FString(Shift.Emitter) == TEXT("ModulateBlack");
+            }
         Template->Emitters.Add(MoveTemp(E));
     }
     const FOwFxTemplate* Result = Template.Get();
@@ -578,6 +576,7 @@ void UOpenWillowFxComponent::Spawn(FEmitterState& S, int32 Count)
             P.Position = Frame.TransformPosition(P.Position * Scale);
             P.Velocity = Frame.TransformVectorNoScale(P.Velocity * Scale);
         }
+        P.Age = FMath::Min(E.AgeShift, 0.9f * P.Life);
         S.Particles.Add(P);
     }
 }
@@ -636,7 +635,10 @@ bool UOpenWillowFxComponent::Simulate(FEmitterState& S, float Dt)
         P.Size = P.BaseSize;
         if (E.SizeMultiply.IsSet())
         {
-            const FVector M = E.SizeMultiply.Sample(T, Random, Parameters);
+            // Host calibration (UNVERIFIED): the dark disc's alpha runs ahead of the clip (AgeShift) but its size curve does not,
+            // because the shifted curve made the disc 7% smaller than the game's at 0.30 s.
+            const float SizeT = E.bSizeIgnoresAgeShift ? FMath::Max(0.f, P.Age - E.AgeShift) / P.Life : T;
+            const FVector M = E.SizeMultiply.Sample(SizeT, Random, Parameters);
             for (int32 Axis = 0; Axis < 3; ++Axis)
                 if (E.SizeMultiplyAxes[Axis] != 0.0) P.Size[Axis] *= M[Axis];
         }
@@ -692,12 +694,25 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
         C->TranslucencySortPriority = SortPriorityBase + EmitterIndex;
         C->bReceivesDecals = false;
         UMaterialInstanceDynamic* Mid = UMaterialInstanceDynamic::Create(S.Material, this);
-        for (const FOwFxEmitterOverride& Override : EmitterOverrides)
-            if (Template && Template->Name == Override.Template && E.Name == Override.Emitter)
-                Mid->SetScalarParameterValue(Override.Parameter, Override.Value);
-        for (const FOwFxEmitterColour& Override : EmitterColours)
-            if (Template && Template->Name == Override.Template && E.Name == Override.Emitter)
-                Mid->SetVectorParameterValue(Override.Parameter, Override.Value);
+        for (const FOwFxEmitterScalar& Scalar : EmitterScalars)
+            if (Template && Template->Name == Scalar.Template && E.Name == Scalar.Emitter)
+                Mid->SetScalarParameterValue(Scalar.Parameter, Scalar.Value);
+        // Diagnostic override for experiments without a rebuild: -owfxscalar=Template:Emitter:Parameter:Value[;...]
+        {
+            static FString Overrides;
+            static bool bRead = false;
+            if (!bRead) { bRead = true; FParse::Value(FCommandLine::Get(), TEXT("owfxscalar="), Overrides, false); }
+            TArray<FString> Items;
+            Overrides.ParseIntoArray(Items, TEXT(";"));
+            for (const FString& Item : Items)
+            {
+                TArray<FString> Parts;
+                Item.ParseIntoArray(Parts, TEXT(":"));
+                if (Parts.Num() == 4 && Template && Template->Name == Parts[0] && E.Name == Parts[1])
+                    Mid->SetScalarParameterValue(FName(*Parts[2]), FCString::Atof(*Parts[3]));
+            }
+        }
+        if (bFirstPersonSpace) C->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
         for (int32 Slot = 0; Slot < FMath::Max(1, C->GetNumMaterials()); ++Slot) C->SetMaterial(Slot, Mid);
         C->RegisterComponent();
         S.Pool.Add(C);
@@ -736,18 +751,8 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
             const float Angle = P.Rotation * 2.f * PI;
             const FVector Right = CamRight * FMath::Cos(Angle) + CamUp * FMath::Sin(Angle);
             const FVector Up = CamUp * FMath::Cos(Angle) - CamRight * FMath::Sin(Angle);
-            float SizeX = float(P.Size.X) * Scale;
-            float SizeY = (E.bRectangle ? float(P.Size.Y) : float(P.Size.X)) * Scale;
-            // Material depth bias (FOwFxEmitter::DepthBias, host reading): the quad moves toward the camera and shrinks
-            // by the same ratio, so its outline on screen is unchanged and only its depth test differs.
-            const float Distance = float(FVector::Dist(CamLocation, Location));
-            if (E.DepthBias < 0.f && Distance > -E.DepthBias * 2.f)
-            {
-                const float Ratio = (Distance + E.DepthBias) / Distance;
-                Location = CamLocation + (Location - CamLocation) * Ratio;
-                SizeX *= Ratio;
-                SizeY *= Ratio;
-            }
+            float SizeX = float(P.Size.X) * Scale * E.SizeScale;
+            float SizeY = (E.bRectangle ? float(P.Size.Y) : float(P.Size.X)) * Scale * E.SizeScale;
             Transform = FTransform(FMatrix(Right, Up, Right ^ Up, FVector::ZeroVector).Rotator(), Location,
                 FVector(FMath::Max(SizeX, 0.01f) / QuadSize, FMath::Max(SizeY, 0.01f) / QuadSize, 1.f));
         }

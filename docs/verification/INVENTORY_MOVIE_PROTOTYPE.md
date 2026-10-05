@@ -1006,3 +1006,140 @@ running game (1280x720 windowed, about 20 ms per frame, key press to frame): fir
 first page frame, 272 ms to 90 % of the opening animation; repeat opens 126-150 ms and 236-258 ms (3 opens). The
 capture's own latency is included, so these are upper bounds. The host's numbers above are measured differently
 (log events to `js_painted`), so the two are side by side, not a parity result.
+
+## Skills preload, real-game comparison and the stock sort list: 2026-10-04
+
+AI-assisted (Claude). Lane D of the 2026-10-04 orchestration. Frames, traces and lists named below stay under ignored
+`local/` (`local/realgame/d_session/`, `local/orch/D/`); item names and numbers in them belong to the player's save and are
+not copied here.
+
+### Skills page: why it was still loading, and the fix
+
+`OWCombat_8_Skills.png` of the baseline run (`local/orch/baseline`) showed "Loading Maya's skill tree..." because the page
+was created when K was pressed and needed about **3.4 s** (log: `OpenWillow Skills page loaded` 23:08:37.5, three
+`tree initialized` lines at 23:08:40.7-40.9) to load the StatusMenu movie, its shared imports and the icon movies, while the
+scripted capture looked 2.7 s after the key. The inventory page never had this problem because it is loaded hidden at level
+start. The host now does the same for the skills page (`CachedSkillsBrowser`/`CachedSkillsRoot` in
+`OpenWillowMayaHUD.cpp`; `skills.js` gains `owSkillsOpened` and `OWINVTIME js_skills_*` lines).
+Measured (same machine, `-game -windowed` 1280x720): preload populated 5.2 s after page start (both pages booting at once;
+the inventory page's own boot grew from 4.4 s to 6.1 s while they share the CPU); **from the key to a composited,
+populated page 49 ms** (`js_skills_open` populated=true, `js_skills_painted` sinceOpen=49) and **one second after the Skills
+header tab, populated** (`OWCombat_D6_SkillsOneSecondAfterTab.png`). The real game shows the page about 0.28 s after K
+and settled by 0.65-0.85 s (burst frames, `local/realgame/d_session/skills_burst`, 50 ms steps, quarter scale). A press in
+the first ~6 s of play still waits for the preload.
+
+### Real-game session (Maya L8 in Sanctuary; saves backed up, driver removed, game stopped by us)
+
+Method: `tools/real_game/realgame.ps1` (lock, `Backup-Saves`, `Install-Driver`, `block_saves()`), scan-code keys, window
+captures, plus a throw-away GFx bridge-call hook (`local/orch/D/rg/gfx_trace.py`) around single key presses. Saves: two
+files differed after the session (`Save000A.sav.bak`, `WillowEngine.ini`, both written by game start and character
+select); both were restored from the backup and the whole `SaveData`/`Config` folders compared equal. **The install runs
+community mods** (`BetterUIControls`, `PythonPartNotifier`, `ItemLights` ...): the "Accessory:/Barrel:/Grip:" part lines on
+cards come from `PythonPartNotifier`, and `BetterUIControls` equips a shield/class mod/grenade mod/relic at once on E, so
+**gear compare was not observed**. Everything below was seen with those mods present.
+
+Observed (screen captures; **confirmed in game** only for what the frames show, not for the native rules behind them):
+
+- **Compare frames.** The card of the item being moved has the green frame, the card it is compared with the yellow one,
+  in both origins (equipped origin: equipped card left and green, candidate right and yellow; backpack origin: equipped card
+  left and yellow, backpack card right and green). The host had both inverted.
+- **Compare numbers.** Each row shows the value and an arrow only (green up better, red down worse, none when equal);
+  no difference figure (every golden card's `aux` field is empty too). The damage arrow of a 21x7 gun against 25x2 was
+  "better", so it compares damage times projectile count. Reload compares lower-is-better. The host printed "+14"-style
+  deltas; it no longer does.
+- **Backpack panel arrows.** With the cursor on a backpack item (no compare view) the card already carries arrows against the
+  equipped item of the slot last used.
+- **Card text.** Values use the label cyan, not white; a projectile count prints as a smaller gold "x7" after the damage;
+  an elemental weapon adds two rows (damage per second, chance) with the labels already in the golden cards.
+- **Compare view.** The four gear cells are outlined red (`bad` frame), the backpack header reads "(COMPARE)", the list is
+  weapons only under one WEAPONS header.
+- **Backpack focus layout.** With the cursor in the Backpack the Backpack panel is enlarged and centred (cell pitch about 65 px
+  against 46 px in the equipped view), the Equipped panel recedes behind the card and a "BACKPACK 13/12" plate appears at the
+  bottom right. The movie does it from `SetActivePanelByName("Backpack"|"Equipped")` (bridge trace); the host does not
+  reproduce it yet (Ruffle ignores the Z tween).
+- **Stock sort (one backpack of 13 items; ids not recorded).** PageDown cycles ALL, TYPES, BRANDS, ITEMS, VALUE; every change
+  selects the first item. TYPES: ASSAULT RIFLES, PISTOLS, SHOTGUNS, SUB-MACHINE GUNS, SNIPER RIFLES (category key order);
+  BRANDS: header per manufacturer in alphabetical order ("BANDIT MADE" for Bandit), an item without a manufacturer last;
+  ITEMS: PERSONAL, SHIELDS; ALL: WEAPONS, PERSONAL, SHIELDS; VALUE: no headers, dearest first. Items of equal rarity keep no
+  recognisable order (the game's quick sort is unstable); the first weapon in ALL and TYPES was the only uncommon one.
+  This agrees with `NATIVE_INVENTORY_SORT.md` on every point it can be tested on; mission weapons, manufacturer grades,
+  launchers and level >= 51 ties were not in the pack.
+- **Inspect (F).** A full-screen opaque dark backdrop with a faint vignette, the card at the top left, the item large in the
+  middle (static: no auto-rotation in 2 s) and the hints "[Mouse-1] Rotate  [Mouse-2] Pan (grey)  [Mouse-Wheel-Up/Down] Zoom
+  [P] Screenshot  [Escape] Close".
+
+### Host changes (`tools/hud_overlay/inventory.js`, `OpenWillowInventory.*`, `OpenWillowMayaHUD.*`)
+
+- Stock sort list replaces the DEFAULT/NAME/RARITY/LEVEL/DAMAGE modes and the `[ ]` category filter: comparators and
+  headers of `NATIVE_INVENTORY_SORT.md` (ties: pickup order, a host choice), PageDown +1 / PageUp -1 with wrap, first item
+  selected after each change, only while the cursor is in the Backpack, headers drawn with the movie's header clip inside the
+  scrolling list, trailing empty cells (one per free slot), list scrolled by entry. A transfer shows the Compare list.
+  Not done: selecting the empty cells.
+- Weapon cards: projectile count, status rows, value colour, arrow-only compare with the real frame roles, the red `bad`
+  gear cells in a weapon transfer (the same rule for a gear transfer is **UNVERIFIED**).
+- Full-screen Inspect (host layout: the native 3D frame, 512x320 with its own dark background, is shown with a `lighten`
+  blend; a larger transparent frame needs a change to `OpenWillowInventoryPreviewActor`, which is another lane's file).
+- Suite: steps 15/16 are now `pagedown_selects_first_item_of_types` and `pageup_returns_to_all_first_item`; four synthetic
+  filler weapons make the wheel steps runnable; `cat` and the category-control anchoring are gone from the page report.
+
+### Backpack focus, plate and Inspect refinements (same day)
+
+- **Backpack focus layout** is in the page: with the cursor in the Backpack (and no transfer) the Backpack panel is drawn at
+  scale 0.92 x 1.0 at (520, 75), the Equipped panel shrinks to 0.52 and sits behind the card, the purse gives way to the
+  "BACKPACK used/capacity" plate (movie clip `storageCount`, text field `capacity`; the movie's digit font has no "/", so the text
+  is set again with the imported font at size 24, matched by eye). The constants are measured on the real capture, not read from
+  the movie, which does this with a Z tween Ruffle ignores. Real capture: panel 520-775 x 75-640.
+- **Inspect** clips the movie to the card and the hint line so the opaque backdrop is not covered by the movie's glow layers; the
+  3D frame is requested at 1024x640 (render target resized from the HUD) and the black background is removed by a border flood
+  fill with a tight tolerance (the frame's clear colour is exactly black, `OWINSPECTKEY` log line). Parts of a gun that render as
+  pure black and touch the border can still be removed; a clean fix needs an alpha capture in the preview actor (Lane C's file).
+- **Capture sequence.** `-owinvshots` (HUD) drives the page through open, backpack, the five sorts, both compares, Inspect and the
+  Skills tab; it starts when the inventory page has logged `js_movie_ready` and the skills page `js_skills_populated`, because the
+  first capture attempt photographed the "Loading inventory..." screen (the pages load after the engine's first long frames).
+- **Open:** the empty backpack cells cannot be selected; a Q "toggle overview" view on the Skills page; a Phaselock eye sigil on the
+  HUD movie (Lane A's observation; needs the HUD clip name and a host flag); white flavour lines on cards.
+
+### Round 10 (2026-10-04, after the critic's round-9 report)
+
+AI-assisted. Page-only changes in `inventory.js`, `inventory.html`, `skills.js`: sub-header rows centred on their text field; compare
+view with a narrowed Equipped panel (slots filled) and the Backpack panel moved right with the right-edge fade off; the movie's
+highlight symbol as a full-width selection band; cards rescaled to measured widths (`CARD_FIT`, `FRAME_INSET`, a fit, UNVERIFIED);
+Inspect clipped to the card frame and hint strip, movie `sway`/`scanlines` hidden; Skills `Q` overview (`OVERVIEW`, a fit; the installed
+`Gfx_SkillTree` defaults are OverviewOffset.X 235, OverviewGlobalOffset.X -50, OverviewScale 85). Suite after the changes: 49 PASS /
+0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Not reproduced: perspective tilt and curved glass (the movie's 3D transforms, ignored by
+Ruffle).
+
+### Round 11 (2026-10-04)
+
+AI-assisted, page-only (`inventory.js`, `skills.js`). Cause found for the backpack rows sitting about 23 px right of the panel centre: the list's
+`scrollRect` had a negative x origin (added in round 10 for the selection band), and Ruffle shifts content right by that amount instead of revealing
+content to the left of the origin. The origin is zero again; the group starts further left and its contents are drawn further right. Backpack focus
+panel/rows (frame 520-775, rows 173 px), compare panels, equipped-origin highlight, Skills placement (the Phaselock card is fitted by its background clip because
+the movie resets the card clip's scale and position), Inspect level strip and the overview footer/dimming follow measured frames (fits, UNVERIFIED). Suite
+after the changes: 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Perspective tilt and glass sheen stay open.
+
+### Round 12 (2026-10-05)
+
+AI-assisted, page-only (`inventory.js`, `skills.js`). The focus view's selection band is now a plain filled rectangle (colour sampled from a real
+capture, x 532-763) instead of the movie's highlight symbol, whose glow tail overran the panel by about 20 px; the focus panel is 15 px shorter (Y scale
+0.965); the equipped-origin compare keeps the backpack tile highlight and the compare hint has no Sort entry; Skills tab group, footer and the Inventory tab
+group scale follow the real frames; card text is 16 with bold values; the clipped EQUIPPED label of the mini column is hidden in the focus view. Suite: 49 PASS /
+0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. All placements are fits to captured frames (UNVERIFIED); tilt and glass stay open.
+
+### Round 13 (2026-10-05)
+
+AI-assisted, page-only. The focus view shows 7.6 rows (list to y 625), panel title 8 px higher, sub-header to tile gap about 12 px; the equipped-origin compare keeps the Sort
+hint, the backpack-origin compare does not and frames the moved tile in green; Skills footer, tab group and description size adjusted. Suite 49 PASS / 0 FAIL / 0 NOT_RUN /
+0 KNOWN_DIVERGENCE. Fits to captured frames, UNVERIFIED; tilt and glass stay open.
+
+### Round 14 (2026-10-05)
+
+AI-assisted, page-only. The stray yellow rectangle beside the moved tile in the backpack-origin compare was the focus ring of the HTML hit box (`inventory.html`), now off; the
+green tile frame is thicker and tinted. Small and compare views start their lists about 30 px higher; the focus view hint and plate shift a few pixels; Skills trees sit 20 px lower. Suite 49 PASS /
+0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits to captured frames, UNVERIFIED.
+
+### Round 15 (2026-10-05)
+
+AI-assisted, page-only. Equipped-view panel title moved up 13 px so it no longer collides with the "WEAPONS" sub-header; compare lists show 7.6 rows; the moved tile has a translucent lime fill;
+Skills trees, card height, plate and description size adjusted; the Inspect hint strip is moved right and unfaded. Suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits, UNVERIFIED.
+Final open items are listed in the lane handoff (tilt/glass, Skills pitch and tile brightness, Inspect card height and keyed holes, empty cells, gear compare, Phaselock HUD sigil).

@@ -80,6 +80,10 @@ prototypes, so the repository's clock started a little after the work did.
   (Phase 0 entries, 2026-09-10). Scripts: 12,968 of 12,978 functions decode
   structurally ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)). Both are
   structural agreement, not runtime compatibility.
+- Suites after the Phaselock, ambient-citizen, gun and menu rounds (DECISIONS 2026-10-05): CTest 10/10,
+  packages 9/9, quest suite 79/79 first run and 11/11 resume, door suite 16/16, inventory suite 49 PASS /
+  0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE, navigation 27/27. Automated checks only; the visual state is in the
+  critic records (blind A/B between rounds), not a parity claim.
 - Suites after the dispatch-rule change (DECISIONS 2026-10-02): CTest 10/10,
   packages 9/9, quest suite 73/73 first run and 10/10 resume, door suite
   16/16, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE

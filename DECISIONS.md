@@ -3971,3 +3971,516 @@ Maintainer decision. Docs and tooling only; no change to `src/`, `CMakeLists.txt
 - **Worktree provisioning:** `tools/provision_worktree_assets.ps1 -SourceWorktree <path>` copies missing files from
   a populated worktree's Content and every `local/` folder (the shared seed only holds four folders and goes stale).
   Documented in AGENTS.md and `tools/worktree-assets.md`. Parse-checked only; not run in a new worktree.
+
+## 2026-10-04: native analysis notes: Phaselock presentation, weapon visuals, ambient NPC movement, backpack sort
+
+AI-assisted (Claude). Docs only; no change to `src/`, `CMakeLists.txt`, the reader or package parsing. Four own-words
+notes under `docs/verification/`, read from the installed script (`research/script_disasm.py`), installed class
+defaults and a local Ghidra 12.1.4 reading of the executable (`tools/ghidra/`). Raw output stays under ignored
+`local/analysis/E/`; the notes contain no listings or pseudo-code.
+
+- **Phaselock presentation** (`NATIVE_PHASELOCK_PRESENTATION.md`): the lifted target plays four stock special moves
+  (lift, loop, fall, land) from its own AnimSets, starting at the cast; the fall clip is stretched to `DropTime`
+  (0.5 s); the first-person hand effect comes from a notify 0.25 s into the cast clip, attached at an arms socket; the
+  only bubble instance parameters are `PhaselockLifeTime` (once) and `SphereCollapse` (every tick).
+- **Weapon visuals** (`NATIVE_WEAPON_VISUALS.md`): the weapon material is a new instance over the Material part's MIC
+  with the parts' vector parameters applied as linear colours (only elemental parts carry any); a per-shot impulse drives
+  the emissive scale; the first-person mesh attaches to the arms' weapon socket; foreground FOV 45 with a weapon, 60
+  without.
+- **Ambient NPC movement** (`NATIVE_AMBIENT_NPC.md`): script and data driven (scripted-NPC actions walking move-node
+  chains, perches with weighted idle variants); a native load balancer admits at most 7 walkers, one per 0.5 s. Next-node
+  choice and speed rule not read.
+- **Backpack sort** (`NATIVE_INVENTORY_SORT.md`): the five modes are data; comparator chains, filters and header rules;
+  reproduces every 2026-09-30 observation. Ties are unordered in the engine's sort.
+- **All rules UNVERIFIED in game;** each note names the capture that would confirm it.
+- **Checks:** none needed (docs only).
+
+## 2026-10-04: Phaselock presentation rounds 6-7: effect materials from own-words notes on the compiled shaders
+
+AI-assisted (Claude). Host and tooling only; no change to `src/`, `CMakeLists.txt`, the reader or package parsing.
+Details: `docs/verification/PHASELOCK_STOCK_DATA.md`, "Round 6" and "Round 7".
+
+- **Method:** the cooked effect-material graphs are stripped. Their compiled pixel shaders in
+  `RefShaderCache-PC-D3D-SM3.upk` were read with `research/d3d9_bytecode.py`, the same method as the weapon paint model
+  (2026-10-02). What each one computes was written down in our own words, and the 17 effect materials in
+  `host/ue5/import_phaselock_fx.py` were written from those notes as UE Custom nodes, with plain constants and prose
+  comments. The listings stay under ignored `local/`.
+- **Findings that replace earlier rounds** (UNVERIFIED in game unless compared below):
+  - `DepthBias` is a soft-particle fade distance, not a camera-ward shift.
+  - The bubble sphere is a warped read of the bubble texture.
+  - The tattoo mask is the B channel of one quadrant of the mask texture; rounds 1-5 lit the whole sleeve.
+  - The bubble ring sits at 0.78 of the sprite half-width.
+  - The sigil under the target is HUD, not an effect.
+- **Host calibrations (UNVERIFIED):**
+  - bubble warp strength driven by the collapse value;
+  - core haze ×3;
+  - layer colours above 1 normalised;
+  - blue tints on the rim and haze;
+  - a per-emitter darkening cap and fade floor;
+  - floor light gain ×4 (the data's brightness is still what `PhaselockLightIntensity()` reports);
+  - lighter swirl, star-burst and brighten.
+- **Visual review:** an independent critic agent compared matched host and real-game frames. It scored round 6 at 5/10
+  and round 7 at 6/10 (hand 6, bubble 7, release 5). Largest remaining gaps:
+  - the release does not collapse the sphere;
+  - the palm orb is lost around 0.55 s;
+  - the interior is more see-through than the game's.
+- **Target animation:** the stock clips exist only on enemy AnimSets and the dummy has none, so it is still not
+  exercised.
+- **Checks:**
+  - CTest 10/10; `verify_packages` 9/9 match; `particle_system_test` OK.
+  - Quest suite first run PASS 79/0, resume PASS 11/0 on the round-7 build.
+  - Mover and inventory suites not run for this lane (untouched areas); the end-of-session run covers them.
+
+## 2026-10-04: inventory and Skills pages: Skills preload, stock sort list, backpack focus layout, compare frames from real-game captures
+
+AI-assisted (Claude). Host page, host forwarding and the suite only; no change to `src/`, `CMakeLists.txt` or package
+parsing. Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` ("Skills preload, real-game comparison and the stock
+sort list: 2026-10-04") and `docs/verification/INVENTORY_CARD_STATS.md` ("What the page prints on a weapon card").
+
+- **Skills page:** in the baseline frame it still said "Loading Maya's skill tree...". The page was created on the key
+  press and took about 3.4 s. It is now loaded hidden at level start, like the inventory page:
+  - key to a populated page: 49 ms (page log lines);
+  - cost: the inventory page's own boot grows from 4.4 s to 6.1 s;
+  - real game: page visible about 0.28 s after K, settled by 0.65-0.85 s. No timing parity is claimed.
+- **Real-game session (Maya L8):**
+  - Saves were backed up and compared byte-for-byte afterwards, and the driver was removed.
+  - The install runs community mods: part-name lines on cards and instant gear equip are theirs, so gear compare was
+    not observed.
+  - Confirmed in these captures:
+    - compare frames: the moved item is green, the other yellow (the host had them inverted);
+    - compare rows show arrows only;
+    - red gear cells appear in a weapon compare;
+    - backpack focus layout: enlarged centred panel, receded equipped panel, "BACKPACK used/capacity" plate;
+    - the lists of all five sort modes;
+    - the full-screen Inspect.
+- **Stock sort list:**
+  - ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers replace the host's own modes and category filter, following the
+    comparators of `NATIVE_INVENTORY_SORT.md`. Those rules stay UNVERIFIED; every point the capture could test agreed.
+  - PageDown and PageUp step through the modes, and the first item is selected on each change.
+  - Ties keep pickup order. This is a host choice: the game's sort is unstable.
+- **Cards:**
+  - They now show the projectile count, the status rows for elemental guns, and values in the label colour.
+  - For the six slice recipes the page text matches the golden cards, except the two shotgun recipes (reload and
+    magazine one step off). That is a recipe/evaluator question, not a page one.
+- **Inspect:** now full screen. The picture is the 3D preview keyed against black, so black gun parts can show as holes.
+- **Slot art:** the slots now show item art, from previews rendered locally for the slice guns (local data only).
+- **Visual review:** an independent critic agent scored 11 matched host/real-game pairs at 5.6/10 overall. Main gaps:
+  - flat panels against the movie's tilted glass (Ruffle ignores the movie's 3D transforms);
+  - card text about 20% smaller;
+  - sort sub-headers overlapping cards;
+  - the inset selection fill;
+  - the compare layout;
+  - the Skills tiles.
+- **Open:** selectable empty backpack cells, gear compare in the real game, white flavour lines on cards, Q on the
+  Skills page, and the Phaselock eye sigil on the HUD.
+- **Checks:**
+  - `tools/test_inventory_actions.ps1`: 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE (baseline 45/0/2/2).
+    - Steps 15/16 now assert the stock sort.
+    - The two wheel steps run because the test adds four synthetic filler weapons.
+    - Slate keys only; the suite does not judge visuals.
+  - `node tests/inventory_navigation_test.js`: 27/27.
+  - CTest 10/10 and `verify_packages` 9/9 on the same tree.
+
+## 2026-10-04: Phaselock presentation round 8: release size, hand timing, interior measured against the game
+
+AI-assisted (Claude). Host only; no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/PHASELOCK_STOCK_DATA.md`, "Round 8".
+
+- **Release "does not collapse":** this was a test-aid error, not an effect rule.
+  - No bubble shader reads the collapse value. The game sizes each bubble template from the pawn's mesh bounds at that
+    template's spawn, and the bounds shrink as the pawn is lifted: 290 uu at the lock and 193 uu lifted, read with the
+    SDK driver in the real game.
+  - `-owbubbleradius` now takes one value per template (`290,260,185` stands in for an adult bullymong).
+- **Hand (host calibrations, UNVERIFIED):**
+  - The effect starts 0.08 s before the clip's notify.
+  - The cast clip plays at 0.85 speed (`PlayAction` gained a rate argument).
+  - Orb texture ×0.6 and star-burst alpha ×0.2.
+  - Basis: the game frames show an opaque palm orb at 0.44 s and the arm dropping about 0.05 s later than the host's.
+- **Interior opacity, measured on the game frames:** about a quarter of the background's contrast survives inside the
+  bubble (regression slope 0.26 at 1.5 s, 0.21 at 3.0 s).
+  - The host darkening caps (0.72 loop, 0.45 end) bring the host to 0.11 / 0.26.
+  - The host bubble centre in the measurement is approximate.
+  - The method and its script are kept local.
+- **Floor light:** wider, softer and paler (UNVERIFIED calibration).
+- **Visual review:**
+  - An independent critic gave an absolute score of 5.5/10, against 6/10 for round 7.
+  - A blind A/B critic, judging against the same game frames, preferred round 8 on the hand and release sheets and called
+    the bubble sheet a tie.
+  - Absolute scores from separate critic runs vary by about a point, so the A/B result decided the commit.
+  - Remaining gaps:
+    - the bubble is about 20% large and sits high-left;
+    - the floor glow is now too faint;
+    - the 0.30-0.40 s black sphere and swirl are small;
+    - the tattoos are overexposed after 0.55 s;
+    - no ice-shard flash facets;
+    - straight release shards;
+    - no fist clench;
+    - no target animation.
+- **Checks:** quest suite first run PASS 79/0 and resume PASS 11/0 on the round-8 build; CTest and `verify_packages`
+  were not rerun for this commit (no `src/` change).
+
+## 2026-10-04: Sanctuary ambient citizens: census, assets, host perch cycle and node walks behind a flag
+
+AI-assisted (Claude). Host and tools only; no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/SANCTUARY_AMBIENT_NPCS.md`; native reading in `NATIVE_AMBIENT_NPC.md` (UNVERIFIED).
+
+- **Census (our reader):** the civilians come from four population definitions in `Sanctuary_Combat` and two pawn
+  archetypes, male and female Sanctuary Citizen. Their routes are decoded data: initial destinations, weighted next
+  nodes, perch start/idle/stop clips, loop and lerp times, and Kismet scripted moves. Counts are in the record.
+- **Real-game observations (SDK driver; Maya level 8 at mission Plan B):**
+  - Saves were backed up and blocked in game. The game rewrote two files, which were restored, and the folders then
+    compared identical.
+  - 33 live citizens; 36 of 52 dens and encounters enabled, none of the 7 crowd dens.
+  - A walking citizen's velocity read 150.
+  - The town-wide patrols are Resistance fighters, not citizens: 94-95 uu/s by displacement, along the data's node
+    circuits for 3 of 7 sampled.
+- **Host:**
+  - Both kinds are imported through the Marcus pipeline pattern: 112 bones and 42 clips each. Textures are bound by
+    UModel's guess and the clip mapping is UNVERIFIED.
+  - `-owambient=<manifest>` spawns them. Otherwise nothing spawns.
+  - Stand-ins, all UNVERIFIED:
+    - The live set is copied from one real-game moment.
+    - Walking is in straight lines at 150 uu/s, with the floor taken from a trace.
+    - A load balancer follows lane E's note.
+    - There are no hats, hair or outfit variants, no Resistance fighters, and no talking or look-at.
+- **Visual review:** an independent critic scored the host citizens 5/10 against real-game frames (mesh/outfit 4,
+  poses 5, walk 6, scale 7). Main gaps:
+  - bald identical heads;
+  - no ink outline and washed-out colours;
+  - the female reads as male;
+  - a duplicated pawn at one perch;
+  - several perch poses misaligned with their props.
+
+  The real frames are matched by activity, not position: the population could not be held for close-ups.
+- **Checks:**
+  - `tools/test_ambient.ps1`: PASS (33 pawns, 33 reached a node, 3 walked, 24 at a perch).
+  - Quest suite with ambient on: 79/0 and 11/0. One earlier first run failed check 61 on a Phaselock light reading; the
+    repeat passed and the flake is with the Phaselock lane.
+  - Quest suite without ambient: 79/0 and 11/0.
+  - CTest 10/10; `verify_packages` 9/9.
+
+## 2026-10-04: Inventory and Skills pages round 10: sub-header rows, compare layout, selection band, card fit, Inspect clip, Q overview
+
+AI-assisted (Claude). Page and HUD capture sequence only; no change to `src/`, `CMakeLists.txt` or package parsing.
+Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` ("Round 10").
+
+- **Sort sub-headers:** each sits on its own row between groups. They were centred on the header clip's bounds, which
+  are taller than the text, so every header sat about half a row high over the previous card.
+- **Compare view:** the Equipped panel is narrowed into the gap between the cards with slots 1-4 drawn, the Backpack
+  panel moves right so "(COMPARE)" stays readable, and both cards carry the price chip and Accuracy row (the synthetic
+  test variants lacked those fields).
+- **Selection:** the movie's own highlight symbol is stretched to the panel width behind the selected row (width and
+  shift set by eye).
+- **Card size:** cards are rescaled to visible widths measured on the real captures. A fit, UNVERIFIED.
+- **Inspect:** the movie is clipped to the card frame and hint strip, so the backdrop box is gone.
+- **Skills:** Q toggles an overview of the three trees. The layout numbers start from the installed `Gfx_SkillTree`
+  defaults and are enlarged by eye; how the game combines them was not read, so UNVERIFIED.
+- **Visual review:** an independent critic scored round 10 6.6/10 against real-game frames (round 9: 5.6) and judged
+  round 10 closer than round 9 on all ten inventory pairs. Main gaps: the perspective tilt and curved glass (3D
+  transforms, which Ruffle ignores), backpack-focus list geometry, compare panel positions and padlocks, Inspect card
+  level strip, Skills page layout.
+- **Checks:** `node tests/inventory_navigation_test.js` 27/27; `tools/test_inventory_actions.ps1` 49 PASS / 0 FAIL /
+  0 NOT_RUN / 0 KNOWN_DIVERGENCE, rerun after the weapon lane's preview and stat changes with the same result.
+
+## 2026-10-04: Sanctuary ambient citizens round 2: heads, hair and hats from live pawns, ink line, perch root motion
+
+AI-assisted (Claude). Host and tools only; no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/SANCTUARY_AMBIENT_NPCS.md` section 8.
+
+- **Causes of the round-1 defects:**
+  - The "duplicate pawn" was two real neighbouring citizens (`Perch_66` and `Perch_140`, 240 uu apart) on the camera's
+    line. The capture camera now rejects lines that pass within 130 uu of another pawn.
+  - Lean, legs and squat: the stock perch clips carry root motion (the observed pawn-to-node offset matches the start
+    clip's travel, e.g. 24.1 vs 25.8 uu at `Perch_66`), and the floor trace missed the real pawn height by more than
+    10 uu on 19 of 33 pawns. The host now applies each clip's root travel when it ends and keeps the observed height
+    for idle and held pawns.
+- **Observed in the real game** (third SDK session, saves blocked, byte-identical afterwards): each live citizen's
+  materials and attached static meshes are readable. 33 pawns carried 88 attachments (20 meshes, 8 head textures).
+- **Host:** those heads and attachments, bone-attached; Maya's inverted-hull ink line and matte constants for the
+  citizens. UNVERIFIED: the attachment transform (judged by eye), the hair tint stand-in, the outline thickness and the
+  shader. Not done: `Master_NPC` zone colours, body garment variants, Resistance patrols, matched real-game close-ups.
+- **Visual review:** an independent critic scored round 2 5.5/10 (round 1: 5), judged better than before, no
+  overlapping pawns. Main gaps: the female still reads as male (face patch, hair), a mis-parented hat at one stop, scalp
+  showing through blonde hair, one bald untextured head, the bang-on-wall fist not meeting the wall, a squat clipping
+  a pipe.
+- **Checks:** quest suite with ambient on 79/0 and 11/0, with ambient off 79/0 and 11/0; `test_ambient.ps1 -Shots`
+  PASS (36 pawns, 36 reached a node); CTest 10/10; `verify_packages` 9/9.
+
+## 2026-10-04: Phaselock presentation rounds 9-11: ring factor, release size, soft streaks and ground wash, hand spikes, check-61 fix
+
+AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/PHASELOCK_STOCK_DATA.md` ("Round 9" to "Round 11"). All calibrations UNVERIFIED.
+
+- **Bubble too large (cause):** round 6 had replaced the ridge detector's ring factor (0.88) with the bubble texture's
+  own ring (0.78), which drew the bubble about 13% too large. Restored; the per-template stand-in radii are 290, 233
+  and 210. The release shell was re-measured on the game frames (112 px radius at 4.80 s, 176 px at 5.00 s); round 9's
+  smaller figure was a mis-measure.
+- **Hand timing:** round 8's whole-effect early start shrank the swirl and disc. Now only the palm orb (0.03 s) and the
+  disc's alpha (0.1 s) run ahead; the disc's size curve is read at its unshifted age. The hand effect starts at the
+  cast clip's notify; the clip still plays at 0.85.
+- **0.65 s spike rays:** they come from the hand template's star-burst emitter; the game frames show none, and why was
+  not found. The host scales that emitter to 0.15 (a new per-emitter gain).
+- **Look:** soft pale-blue ground wash (light gain 6.5, radius 0.85x, colour 20% toward white), wider and softer
+  streaks, release spikes and ribbons at reduced strength, tattoo glow x0.3.
+- **Quest check 61 flake** (light 32 vs 4 once): traced to an intermediate build that reported UE5's intensity rather
+  than the data value (32 = 4 x a gain of 8). The light's data-unit brightness is now stored when it is set, so the
+  check no longer depends on the host gain. The check itself is unchanged.
+- **Visual review:** independent critics scored rounds 9, 10 and 11 at 5.5, 5.5 and 6.3. Blind A/B against round 8:
+  round 9 and round 10 each won one sheet of three; round 11 won bubble and release and tied hand, so it is committed.
+- **Open:** the 0.30 s dark void (about 200 px against the game's 330; two enlargements made it fade, cause not found),
+  the 0.80 s whiteout, interior opacity, rim weight, ice-shard flash facets, straight release shards, fist clench, target
+  animation (no stock clips on the dummy), slight egg shape.
+- **Checks:** quest suite first run 79/0, resume 11/0 on the final build. CTest and `verify_packages` in the final pass.
+
+## 2026-10-04: Inventory and Skills pages round 11: list scroll origin, compare and Skills layout, Inspect strip
+
+AI-assisted (Claude). Page code only (`inventory.js`, `skills.js`); no change to `src/`, `CMakeLists.txt` or package
+parsing. Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (round 11).
+
+- **Cause of the off-centre selection band:** round 10 gave the row list a scroll rectangle with a negative x origin.
+  Ruffle shifts the content right by that amount instead of revealing it, so every row sat about 23 px right of the
+  panel centre and a band shift constant hid it. The origin is zero now and the shift constant is gone; the band is
+  sized from the panel frame.
+- **Compare:** the Equipped panel is wider and the Backpack panel moved left; padlocks show on locked slots (checked
+  with `-owslots=2`, the real session's count, only). Compare from equipped keeps the highlight on the chosen
+  equipped slot (drawing only; behaviour unchanged).
+- **Skills:** tab group and trees moved right, Phaselock card refitted after each tree tween, overview footer below
+  the panels and locked tiers dimmed. **Inspect:** level strip and price chip restored, thinner hint strip.
+- All placements are fits read off the captured frames (UNVERIFIED).
+- **Visual review:** an independent critic scored round 11 7.3/10 (round 10: 6.6) and judged it closer than round 10
+  on every pair, except that compare-from-equipped lost the highlight on the focused backpack tile. Main gaps: the
+  perspective tilt and glass (not reproduced; Ruffle ignores the movie's 3D transforms), band overrun at the panel's
+  right edge, card text about 15 px against 17 px, Skills plate colliding with the footer hint.
+- **Checks:** `node tests/inventory_navigation_test.js` 27/27; `tools/test_inventory_actions.ps1` 49 PASS / 0 FAIL /
+  0 NOT_RUN / 0 KNOWN_DIVERGENCE.
+
+## 2026-10-04: Phaselock presentation rounds 12-13: hand effects in first-person space, saturated swirl, deeper orb
+
+AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/PHASELOCK_STOCK_DATA.md` ("Round 12", "Round 13"). All calibrations UNVERIFIED.
+
+- **First-person space:** with the weapon lane's `-owfpfov` (the game's separate foreground FOV for arms and gun) the
+  hand sprites render as first-person primitives, so they stay on the hand; the bubble, screen effect and light stay in
+  world space. With it the swirl, disc and orb are about game-sized.
+- **Round 12's "enlarging the void fades it"** was a misreading: the wider core did grow, but its soft gradient let
+  the street show through. The normal-FOV widening and a thick rim halo were tried and reverted after a blind A/B.
+- **Hand look:** energy swirl alpha 0.8 with a more saturated cyan; palm orb a deeper blue with its texture veins.
+- **Diagnostic:** `-owfxscalar` sets one effect material scalar per emitter at run time (TOOLING).
+- **Visual review:** round 12 6/10, round 13 6/10. Blind A/B: round 13's hand beat round 12's (both close); the bubble
+  and release were close to ties with rounds 11 and 12. Scores have stayed between 5.5 and 6.3 since round 7.
+- **Open:** near-black violet void and interior, a compact ground disc, side streaks, thick release ribbons, orb vein
+  cracks, the forward fist, the 0.80 s whiteout, ice-shard facets, target animation.
+- **Checks:** quest suite with `-owfpfov=45` 79/0 and 11/0 (via a local copy of `tools/test_quest.ps1` that adds the
+  flag).
+
+## 2026-10-04: Guns: parts and card stats from the running game, a tone-mapper-aware gun material, first-person foreground FOV
+
+AI-assisted (Claude). Host, tools and tests; no change to `src/`, `CMakeLists.txt` or package parsing. Numbers and
+paths: `docs/verification/WEAPON_VISUALS.md`.
+
+- **Real-game session** (SDK driver, saves backed up, blocked and byte-identical afterwards, guns in memory only):
+  six exact-part guns captured in first person and in the Inspect view; live part mesh lists and material instances read.
+- **Part assembly (confirmed in game):** the host used only the main gestalt mesh. Adding the body-variant meshes and
+  drawing nothing for `*_None` parts makes all six fragment lists equal the live part mesh names, with exactly equal
+  triangle totals. The Jakobs pistol's hidden-bone triangles (moon clip, bullet) are cut. Not confirmed: that the
+  `*_None` name is the game's own test.
+- **Colour, round 1:** with the right meshes the existing paint model was largely right (Maliwan colours within 0.82x
+  median and 2.7 degrees of hue of the real Inspect view). The material became an Unlit evaluation of the base pass's
+  structure with stand-in lights (UNVERIFIED) and the part's elemental emissive vectors.
+- **Colour, round 2 (cause):** the oversaturation, crushed blacks, red-for-orange accents and hot Infinity shroud came
+  from UE5's film tone mapper acting on the Unlit output (scene-linear 0.18 displays 0.03, 1.0 displays 0.51; measured
+  with a grey ramp in the material). The material now applies the inverse of the measured curve (a 28-point table used
+  per channel; an approximation) and clips per channel. Median linear ratio host/real against the Inspect view:
+  Maliwan 1.06, Jakobs 0.69, Infinity 1.01, SMG 1.16, rifle 1.05, shotgun 0.86 (round 1: 0.77, 0.72, 1.06, 0.93,
+  1.08, 0.64).
+- **First person:** the game draws arms and gun with a foreground FOV of 45 (read through the SDK; world FOV 77.55
+  with the config's 90). UE 5.8's first-person FOV now does the same by default; making it the default is a host
+  choice, `-owfpfov=0` opts out. The Phaselock hand effects follow it (rounds 12-13). The SMG, rifle and shotgun were
+  held in the pistol clips; their own clip sets are imported and chosen by weapon type. The weapon socket and its
+  90-degree yaw, and the arms mesh and material, are the game's own data.
+- **Shotgun cards (lane D's report):** 4.4/9 and 3.7/13 came from stats stored by an older evaluator and from the
+  cooked weapon type differing from the running game's. Re-evaluated on the live overlay: 4.1/10 and 3.5/14, matching
+  the game's Inspect card for the exact parts. Where the live values come from is still unexplained.
+- **Mission pistol:** the quest lends the recipe's own corrected mesh where it is imported, with the earlier rolled
+  sample as the fallback (one block in `OpenWillowQuest.cpp`).
+- **Visual review:** independent critics scored round 1 7.2/10 and round 2 6.8/10; round 2 was judged closer than round
+  1 on all six Inspect pairs and on five of six first-person pairs (one tie). Main gaps: guns about 20% large with too
+  little cant in first person, the Infinity shroud still too pink, the fire pistol's barrel too light, no ink outlines.
+- **Checks:** CTest 10/10; `tests/weapon_paint_test.py` 34 OK, `tests/weapon_recipe_test.py` 14 OK,
+  `tests/weapon_stats_test.py` 28 OK; quest suite with the foreground FOV default 79/0 and 11/0. Inventory suite in the
+  final pass.
+
+## 2026-10-05: Inventory and Skills pages round 12: flat selection band, focus-view extents, compare highlight, Skills chrome
+
+AI-assisted (Claude). Page code only (`inventory.js`, `skills.js`); no change to `src/`, `CMakeLists.txt` or package
+parsing. Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (round 12).
+
+- **Band overrun:** the movie's highlight symbol has a glow tail that ran about 20 px past the panel's right edge. The
+  focus view now draws a plain filled band (colour sampled from a real capture) inside the panel frame.
+- **Extents:** the focus panel is 15 px shorter, the list starts 7 px higher, the hint line is lifted 9 px and the
+  Inventory tab group shrinks 7%. Compare from equipped keeps the backpack tile highlight (clipped at the tile) and
+  the compare hint has no Sort entry. Skills tab group and footer re-placed so the hint clears the Siren plate. Card
+  text is 16 with bold values; the Inspect card is narrower with a hint strip clipped to its text; the mini equipped
+  column hides its clipped title.
+- All placements are fits read off the 2026-10-04 captures (UNVERIFIED).
+- **Visual review:** a blind A/B critic preferred round 12 over round 11 on 11 of 12 screens (one could not be judged),
+  means 7.0 against 5.5 (absolute scores drift about a point between critics). Main gaps: the list clips about one row
+  early, compare from equipped should still show the Sort hint, the selected tile in compare from backpack should be
+  green, Skills hint about 38 px right of the game's, perspective tilt and glass not reproduced.
+- **Checks:** `node tests/inventory_navigation_test.js` 27/27; `tools/test_inventory_actions.ps1` 49 PASS / 0 FAIL /
+  0 NOT_RUN / 0 KNOWN_DIVERGENCE (run with the gun lane's preview and paint changes in place).
+
+## 2026-10-05: Phaselock presentation rounds 14-15: why the bubble interior read navy, violet interior
+
+AI-assisted (Claude). Host and import script only (`OpenWillowPhaselockFx.cpp`, `import_phaselock_fx.py`); no change to
+`src/`, `CMakeLists.txt` or package parsing. Details: `docs/verification/PHASELOCK_STOCK_DATA.md` (Round 14).
+
+- **Cause:** blend mode, draw order and the colour the template feeds the dark layer all match the game (checked
+  with `-owfxscalar` and against the own-words shader notes). The navy, see-through interior came from the host's own
+  round 5-8 compensations (dark-layer cap and fade floor, a blue-tinted haze, a blue ring tint).
+- **Changes (UNVERIFIED calibrations):** the ring texture's dim disc is tinted violet while its bright rim keeps the
+  white-blue tint; dark-layer cap 0.8 and fade floor 0.65; the purple wisps at alpha x0.6 and colour x5. A compact
+  ground light (round 14) made the ground disc disappear and was reverted in round 15.
+- **Visual review:** a blind A/B critic preferred round 14's interior but not its missing ground disc; round 15 against
+  round 13 was a tie on the bubble and release sheets and narrowly better on the hand sheet (about 6/10). This lane
+  stops here. Open: interior still too translucent, side streaks (the streak sprites take a random rotation whose
+  rule was not read), the 0.80 s whiteout, straight release shards, ice-shard flash, fist clench, target animation.
+- **Checks:** quest suite with the foreground FOV default 79/0 and 11/0; CTest and `verify_packages` unaffected
+  (no `src/` change) and green in this session.
+
+## 2026-10-05: Sanctuary ambient citizens round 3: attachment transforms, zone colours, the grey stand-ins
+
+AI-assisted (Claude). Host and tools (`OpenWillowAmbient.cpp/.h`, `ambient_npc_assets.py`, `ambient_npc_attach_editor.py`,
+`prepare_ambient_world.py`, the real-game `ambient_npcs.py` script); no change to `src/`, `CMakeLists.txt` or package
+parsing. Details: `docs/verification/SANCTUARY_AMBIENT_NPCS.md` section 9.
+
+- **Hats, hair and gear:** their placement lives on the attached mesh component itself (translation, rotation, scale),
+  not on the attachment entry; rounds 1-2 ignored it. Observed on live pawns through the SDK script, now applied.
+- **Zone colours:** a host material mixes the diffuse with the pawn's own zone colours through its light map and zone
+  mask. The mixing formula is applied by analogy with the weapon master reading and is `UNVERIFIED` for the NPC master.
+- **Grey citizens in the 2026-10-04 showcase:** the first version of that material failed to compile (a linear sampler
+  given an sRGB default), so UE drew the default material. Fixed; the shot tour log has no compile failure and 35 of
+  35 pawns render textured.
+- **Visual review:** a blind A/B critic judged round 3 a little closer than round 2 (about 5.9 against 5.6 per stop;
+  the female now reads as female). Main gaps: packs float beside the shoulder, some heads read as flat discs, the
+  palette is warmer than the game's night-lit blue-grey, the wall-bang and kick idles do not read, weak face cues.
+- **Checks:** `tools/test_ambient.ps1 -Seconds 60` PASS (35 pawns, 35 reached a node, 24 at a perch); quest suite with
+  ambient on and off 79/0 and 11/0; CTest 10/10.
+
+## 2026-10-05: Inventory and Skills pages round 13: list height, compare hints, focus spacing, Skills footer
+
+AI-assisted (Claude). Page code only (`inventory.js`, `skills.js`); no change to `src/`, `CMakeLists.txt` or package
+parsing. Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (round 13).
+
+- The focus view shows 7.6 rows, ending near y 625 like the game (was 6.5); the panel title sits 8 px higher and the
+  sub-header-to-tile gap is about 12 px. The Sort hint shows in compare from equipped and not in compare from backpack,
+  as observed. Skills footer moved 38 px left, tab group 5 px down, description text one size smaller.
+- The moved tile in compare from backpack gets a host-drawn green frame (colour chosen by eye); the critic did not see
+  it in the frames, so it is an open item.
+- All placements are fits read off the 2026-10-04 captures (UNVERIFIED).
+- **Visual review:** a blind A/B critic preferred round 13 over round 12 on 9 of 12 screens (3 ties), means 6.8 against
+  5.8. Main gaps: compare-from-backpack tile frame and list position, Skills card height and line wrap, Inspect card
+  height (no part or flavour lines), perspective tilt and glass.
+- **Checks:** `node tests/inventory_navigation_test.js` 27/27; `tools/test_inventory_actions.ps1` 49 PASS / 0 FAIL /
+  0 NOT_RUN / 0 KNOWN_DIVERGENCE.
+
+## 2026-10-05: Inventory and Skills pages round 14: compare tile frame, list positions, Skills tree height
+
+AI-assisted (Claude). Page code only (`inventory.js`, `inventory.html`, `skills.js`); no change to `src/`,
+`CMakeLists.txt` or package parsing. Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (round 14).
+
+- The stray yellow rectangle in compare view was the HTML hit box's browser focus ring, drawn around the larger hit
+  box; it is off (the movie draws the selection). The moved tile's green frame is thicker with a light tint.
+- Compare and equipped lists start about 30-34 px higher ("WEAPONS" near y 170 as in the game); Skills trees, action
+  bar and HARMONY label 20 px lower, the card 2.5% taller; focus hint and backpack plate nudged.
+- All placements are fits read off the 2026-10-04 captures (UNVERIFIED).
+- **Visual review:** a blind A/B critic preferred round 14 over round 13 on 10 of 11 scored screens (1 tie), means 7.2
+  against 7.0. Main gaps: Skills vertical layout (icon pitch 67 against 72 px, plate low), Skills card wraps to five
+  lines against six, equipped-view header collision, compare lists one row short, the game's solid lime fill on the
+  moved tile, perspective tilt and glass.
+- **Checks:** `node tests/inventory_navigation_test.js` 27/27; `tools/test_inventory_actions.ps1` 49 PASS / 0 FAIL /
+  0 NOT_RUN / 0 KNOWN_DIVERGENCE.
+
+## 2026-10-05: Sanctuary ambient citizens round 4: the attachment frame, read from a live sample
+
+AI-assisted (Claude). Tools and a synthetic test (`prepare_ambient_world.py`, the real-game `ambient_npcs.py` script,
+`tests/ambient_transform_test.py`); no change to `src/`, `CMakeLists.txt`, package parsing or host C++. Details:
+`docs/verification/SANCTUARY_AMBIENT_NPCS.md` section 10.
+
+- **Cause of floating packs, disc heads and sideways hats:** the bone frame and the worn piece's own transform were
+  combined in the wrong convention. One live sample (bone world matrices of two bones on 33 pawns, saves backed up
+  and restored, driver removed) showed that the extracted bone frames are the live ones turned 180 degrees about the
+  bone's X axis, and that imported static meshes keep the original coordinates while the imported skeleton is
+  mirrored. Only the new composition puts the pack behind the middle of the back with the live matrices. The result
+  is a reflection, carried as one negative scale; the synthetic test checks the decomposition (4 OK, needs numpy).
+  `UNVERIFIED` beyond that one capture and two bones; the helper's attempt to read the pieces' own world matrices
+  failed, so the live bounds were not captured.
+- Palette and idles unchanged (palette still `UNVERIFIED`; the night-lit blue-grey in some real frames is lighting).
+- **Visual review:** a blind A/B critic preferred round 4 over round 3 on six of seven stops (one tie), about 6.6
+  against 4.4 per stop. Main gaps: a hair bun floating behind one head, a background pawn's mask, flat faces from
+  above, weak ink outline, packs unconfirmed on front-facing pawns.
+- **Checks:** `tools/test_ambient.ps1 -Seconds 60` PASS (35 pawns); quest suite with ambient on and off 79/0 and
+  11/0; CTest 10/10; `verify_packages` all packages matched.
+
+## 2026-10-05: Inventory and Skills pages round 15: equipped header, compare rows, Skills plate and wrap, Inspect hint
+
+AI-assisted (Claude). Page code only (`inventory.js`, `inventory.html`, `skills.js`); no change to `src/`,
+`CMakeLists.txt` or package parsing. Details: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (round 15).
+
+- Equipped view: the panel title sits 13 px higher, so it no longer collides with the first sub-header. Compare
+  views show 7.6 rows like the focus view; the moved tile has a translucent lime fill (solid would hide the gun art).
+- Skills: trees 7 px higher, the SIREN plate 22 px higher with the card kept in place, description text one size
+  larger so it wraps to six lines like the game, MOTION name label hidden as in the game. Inspect: hint strip moved
+  right and the right-edge fade is off while inspecting.
+- All placements are fits read off the 2026-10-04 captures (UNVERIFIED). This lane stops here.
+- **Visual review:** a blind A/B critic preferred round 15 over round 14 on 5 of 12 screens and tied the rest, means
+  7.4 against 6.9. Open: perspective tilt and glass (Ruffle ignores the movie's 3D transforms), Skills action plate
+  about 25 px low and line pitch 25 against 22 px, Inspect card height (no part or flavour lines) and watermark,
+  black gun parts keyed out as holes in Inspect, selectable empty cells, gear compare not observed in the real game,
+  the Phaselock HUD sigil.
+- **Checks:** `node tests/inventory_navigation_test.js` 27/27; `tools/test_inventory_actions.ps1` 49 PASS / 0 FAIL /
+  0 NOT_RUN / 0 KNOWN_DIVERGENCE.
+
+## 2026-10-05: Guns rounds 3-4: first-person placement from the weapon type's view offset and mesh FOV
+
+AI-assisted (Claude). Host and tools (`OpenWillowWalker.cpp/.h`, new `tools/weapon_view_model.py`, a debug mode in
+`import_weapon_paint.py`); no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/WEAPON_VISUALS.md` sections 9-10.
+
+- **Round 3** read the foreground FOV 45 as a vertical angle. A blind A/B split by type: better pistols, worse long
+  guns. Not committed on its own.
+- **Round 4, cause:** the host never placed the arms as the game does. Read through the SDK on five held weapons:
+  the arms origin is the view point plus the weapon type's `PlayerViewOffset`, and the controller's foreground FOV is
+  the type's `FirstPersonMeshFOV` (45; SMG 50). The cooked values are read from the weapon types by the new script
+  into an ignored `weapon_view.json`; the walker applies them on weapon select, plus the idle clip's Camera-bone
+  offset. Host bone positions then match the live ones to about 0.1 cm. With that placement the 45 fits as a
+  horizontal angle on all six guns (silhouette widths within 3-12% of the real frames). The data values and the live
+  equality are read facts; how the engine applies them and the angle's axis are `UNVERIFIED`.
+- **Exposure:** the maintainer saw all-white guns. Those were the lane's solid-white silhouette runs
+  (`OW_Debug` 4, measurement only). In normal runs the in-silhouette brightness is within about 25 levels of the real
+  frames; the real Jakobs metal is near-white too and the real frames are lit blue. No exposure change.
+- **Visual review:** a blind A/B critic preferred round 4 over the committed round 2 on five of six guns (one tie),
+  about 7.0 against 5.3 per gun. Main gaps: paint too warm (Infinity, rifle and shotgun barrels), the plain pistol
+  slightly low and large, long-gun bodies running a little far right, the rifles' forearm tint.
+- **Checks:** CTest 10/10; `tests/weapon_paint_test.py` 34 OK, `weapon_recipe_test` 14 OK, `weapon_stats_test` 28 OK;
+  `verify_packages` OK; quest suite 79/0 and 11/0. The Phaselock cast hand moves with the arms; re-checked separately.
+
+## 2026-10-05: Sanctuary ambient citizens round 5: ink line sized in pixels and on worn pieces
+
+AI-assisted (Claude). Host and tools (`OpenWillowAmbient.cpp/.h`, `prepare_ambient_world.py`,
+`ambient_npc_attach_editor.py`, `seed_ambient_npc_assets.ps1`); no change to `src/`, `CMakeLists.txt` or package
+parsing. Details: `docs/verification/SANCTUARY_AMBIENT_NPCS.md` section 11.
+
+- The ink hull was a fixed 0.5 cm, about 1 px at tour distance; the real game's line looks 2-3 px at any distance
+  (by eye on one frame). The hull thickness now follows the camera distance for a target of 3 px (`UNVERIFIED`), and
+  hats, hair and packs get their own hull. `-Steps outline` rebuilds only the ink material (a failed editor run had
+  deleted it during this round; rebuilt).
+- The floating "hair bun" at stop 00 is the raised fist of the wall-bang clip seen behind the head, not a worn piece.
+  Whether the fist meets the wall depends on the real perch's wall distance (`UNVERIFIED`). Packs confirmed on the
+  back from behind.
+- **Visual review:** a blind A/B critic preferred round 5 over round 4 on every stop, about 6.0 against 3.4 (absolute
+  scores drift between critics). This lane stops here. Open: line width still uneven (1.3-5 px) and navy rather than
+  black, a gap between the line and the body on thick lines, creases drawn inside the silhouette, a flat untextured
+  cap and a featureless face from above, body garment variants, Resistance patrols, matched real close-ups.
+- **Checks:** `tools/test_ambient.ps1 -Seconds 60` PASS (35 pawns); quest suite with ambient on and off 79/0 and
+  11/0; CTest 10/10; `verify_packages` exit 0; `tests/ambient_transform_test.py` OK; module build exit 0.

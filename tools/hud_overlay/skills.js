@@ -27,6 +27,26 @@ let selected = null; // the highlighted skill: { skill, branch, tier, cell, high
 let selectedBranch = 1; // Harmony is in the middle on the movie's initial frame.
 let hitTargets = [];
 let displayedStates = new Map();
+// Q toggles the overview: the three trees side by side at one size, no selection and no info box (the
+// original's SkillTreeGFxObject.ToggleOverviewMode; arrows and Enter do nothing there). The numbers are the
+// installed UI_SkillTree.Definitions.Gfx_SkillTree defaults (OverviewOffset.X 235, OverviewGlobalOffset.X -50,
+// OverviewScale 85); how the game combines them with the selected tree's X is not read, so the layout below is
+// a fit (UNVERIFIED) checked by eye against a third-party overview screenshot.
+let overview = false;
+const OVERVIEW_HINT_DROP = 15, OVERVIEW_LOCKED_ALPHA = 55; // host choices read off the overview screenshot
+const OVERVIEW = {offsetX:265, globalX:5, scale:95, y:50}; // offset/global/scale defaults are 235/-50/85; enlarged to the third-party overview screenshot (fit)
+
+// Open-time instrumentation, the same "OWINVTIME js_<event> ..." lines inventory.js sends through the
+// console bridge. The host preloads this page hidden at level start (as it does the inventory page) and
+// calls owSkillsOpened(<Unix ms of the open request>) when the player opens it, so `populated` is true
+// at js_skills_open once the preload has finished. js_skills_painted is two animation frames later.
+const startupAt = performance.now();
+let openTiming = null, populatedAt = 0;
+function timeLog(event, extra = '') {
+  const since = openTiming ? Date.now() - openTiming.hostEpoch : -1;
+  console.log(`OWINVTIME js_${event} sinceOpen=${since} pageMs=${Math.round(performance.now() - startupAt)} epoch=${Date.now()} ready=${ready} ${extra}`);
+}
+timeLog('skills_page_start');
 
 function setGradeText(path, value, colour = null) {
   // Some movie text fields embed a digits-only WillowBody subset. Selecting
@@ -64,6 +84,23 @@ window.owSkills = state => {
   if (ready) refreshSelection();
 };
 window.owPlayer = player; // Useful for local inspection, not a game interface.
+
+// The host shows the (already loaded) page again. Open on the action skill and the middle tree, as a
+// fresh page does, then report when a frame of the populated screen has been composited.
+window.owSkillsOpened = hostEpoch => {
+  openTiming = { hostEpoch };
+  timeLog('skills_open', `populated=${ready} size=${innerWidth}x${innerHeight} visibility=${document.visibilityState}`);
+  if (ready) {
+    if (overview) toggleOverview();
+    select(actionTarget());
+    updateBranch(1, true);
+    refreshSelection();
+  }
+  const timing = openTiming;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (timing === openTiming) timeLog('skills_painted', `populated=${ready}`);
+  }));
+};
 
 // A click on a skill, reported the way the movie's own extCellClicked
 // reports it: (branch, tier, cell), with -1, -1, -1 for the action skill
@@ -111,21 +148,60 @@ function canSpend(target) {
 
 // Info box text (tools/hud_overlay/skill_info.js reproduces the traced
 // SetInfo HTML) and the footer, built from the install's own strings.
+// The real description text is a little smaller than the movie's default as scaled by the card fit (critic round 12).
+const DESCRIPTION_SIZE = 16;
 function refreshSelection() {
-  if (!ready || !selected) return;
+  if (!ready) return;
+  applyInfoCard();
+  if (!selected) return;
+  if (overview) { showTips(); return; }
   // The info box's embedded font is a subset without ' : + %. Scaleform falls
   // back to the imported font library for missing glyphs and Ruffle does not,
   // so the page selects the imported $WillowBody alias itself (as for badges).
   const face = html => `<font face="$WillowBody">${html}</font>`;
+  const description = html => `<font face="$WillowBody" size="${DESCRIPTION_SIZE}">${html}</font>`;
   const name = selected.skill.name || '';
   call(SKILLS + '.InformationBox', 'SetInfo', name,
-    face(skillInfoHtml(selected.skill, skillState(selected), data.strings)));
+    description(skillInfoHtml(selected.skill, skillState(selected), data.strings)));
   // SetInfo writes the name as plain text; re-set it as HTML for the font.
   const escaped = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   set(`${SKILLS}.InformationBox.infoWrapper.SkillName`, 'htmlText', face(escaped));
-  const tips = [canSpend(selected) ? data.strings.spendPoint : '', data.strings.close].filter(Boolean);
+  showTips();
+}
+
+// Footer: the original reads "[Q] Toggle Overview   [Escape] Close" (2026-10-04 capture); the spend hint is the
+// host's addition while a point can be spent.
+function showTips() {
+  const tips = [!overview && selected && canSpend(selected) ? data.strings.spendPoint : '', '[Q] Toggle Overview',
+    data.strings.close].filter(Boolean);
   set(`${ROOT}.tooltips.tooltips`, 'htmlText',
     `<font face="$WillowBody" size="15" color="#a4e8f3">${tips.join('   ')}</font>`);
+}
+
+function toggleOverview() {
+  if (!ready) return;
+  overview = !overview;
+  if (overview && selected) {
+    player.ow(selected.highlight, 'gotoAndStop', 'up');
+    call(selected.cell, 'TweenZPos', 0, 0.2);
+    selected = null;
+  }
+  set(`${SKILLS}.InformationBox`, '_visible', !overview);
+  // The footer sits clearly below the trees in the overview, and tiers that are not open yet are drawn dimmer.
+  set(`${ROOT}.tooltips`, '_y', Number(get(`${ROOT}.tooltips`, '_y')) + (overview ? OVERVIEW_HINT_DROP : -OVERVIEW_HINT_DROP));
+  for (const hit of hitTargets) set(hit.cell, '_alpha', overview && !tierOpen(hit.branch, hit.tier) ? OVERVIEW_LOCKED_ALPHA : 100);
+  if (overview) updateOverview(); else { select(actionTarget()); updateBranch(selectedBranch); }
+  showTips();
+  layoutHits();
+  setTimeout(layoutHits, 600);
+}
+
+function updateOverview(immediate = false) {
+  call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
+  data.branches.forEach((_, i) => {
+    const x = 15 + OVERVIEW.globalX + OVERVIEW.offsetX * (i - 1);
+    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, x, OVERVIEW.y, 0, OVERVIEW.scale, OVERVIEW.scale, 100);
+  });
 }
 
 function spendSelected() {
@@ -257,10 +333,13 @@ function updateBranch(which, immediate = false) {
   // The trace never pressed an arrow at either end, so whether the row wraps
   // there is unobserved (UNVERIFIED); a row with a fixed order suggests not.
   selectedBranch = Math.max(0, Math.min(data.branches.length - 1, which));
+  if (overview) return;
   call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
   data.branches.forEach((_, i) => {
     const t = branchTween(i - selectedBranch);
     call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, t.x, t.y, 0, t.scale, t.scale, t.alpha);
+    // The tree left of the selected one has its name behind the Siren plate in the original.
+    set(`${SKILLS}.Tree${i + 1}.TreeName`, '_visible', !(i < selectedBranch));
   });
   setTimeout(layoutHits, immediate ? 50 : 600);
 }
@@ -293,15 +372,22 @@ function layoutHits() {
   // Hover selects (the movie reports extCellRolledOver in the game); a click
   // spends, as the traced extCellClicked on release does.
   const action = actionTarget();
-  addHit(action.cell, () => select(action), () => { select(action); spendSelected(); },
-    data.actionSkill.name, layer);
-  for (const hit of hitTargets.filter(hit => hit.branch === selectedBranch))
-    addHit(hit.cell, () => select(hit), () => { select(hit); spendSelected(); },
-      hit.skill.name, layer, 'skill-hit');
-  addHit(`${SKILLS}.arrowLeft`, null, () => updateBranch(selectedBranch - 1),
-    'Previous skill tree', layer);
-  addHit(`${SKILLS}.arrowRight`, null, () => updateBranch(selectedBranch + 1),
-    'Next skill tree', layer);
+  if (!overview) {
+    addHit(action.cell, () => select(action), () => { select(action); spendSelected(); },
+      data.actionSkill.name, layer);
+    for (const hit of hitTargets.filter(hit => hit.branch === selectedBranch))
+      addHit(hit.cell, () => select(hit), () => { select(hit); spendSelected(); },
+        hit.skill.name, layer, 'skill-hit');
+  }
+  // The tree arrows are hidden in the overview, as in the original.
+  set(`${SKILLS}.arrowLeft`, '_visible', !overview);
+  set(`${SKILLS}.arrowRight`, '_visible', !overview);
+  if (!overview) {
+    addHit(`${SKILLS}.arrowLeft`, null, () => updateBranch(selectedBranch - 1),
+      'Previous skill tree', layer);
+    addHit(`${SKILLS}.arrowRight`, null, () => updateBranch(selectedBranch + 1),
+      'Next skill tree', layer);
+  }
   // This route is intercepted by the UE browser before it navigates.
   addHit(`${ROOT}.header.pcCloseButton`, null, closeSkills, 'Close skills', layer);
   // Header tabs (nav1..nav5 = Missions, Map, Inventory, Skills, Challenges). Only Inventory is another
@@ -318,18 +404,21 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape' || event.key.toLowerCase() === 'k' || event.key === 'Tab') {
     event.preventDefault();
     closeSkills();
+  } else if (event.key.toLowerCase() === 'q') {
+    event.preventDefault();
+    toggleOverview();
   } else if (event.key.toLowerCase() === 'i') {
     event.preventDefault();
     location.href = '/__ow_tab_inventory';
   } else if (event.key === 'Enter') {
     event.preventDefault();
-    spendSelected();
+    if (!overview) spendSelected();
   } else if (event.key === 'ArrowLeft') {
     event.preventDefault();
-    updateBranch(selectedBranch - 1);
+    if (!overview) updateBranch(selectedBranch - 1);
   } else if (event.key === 'ArrowRight') {
     event.preventDefault();
-    updateBranch(selectedBranch + 1);
+    if (!overview) updateBranch(selectedBranch + 1);
   }
 });
 window.addEventListener('resize', () => { if (ready) layoutHits(); });
@@ -346,7 +435,11 @@ function populate() {
   call(SKILLS, 'SetCharacter', classModText, data.className, data.portrait);
   call(SKILLS, 'SetSkillPoints', points);
   call(SKILLS, 'SetAllSkillIconsInvisible');
+  applySkillsLayout();
   data.branches.forEach((branch, index) => drawBranch(index, branch));
+  // The highlight clips start on their cyan "outline" frame; the original shows that only on the selected tile
+  // (locked tiles have a plain dark border in the 2026-10-04 capture).
+  for (const hit of hitTargets) player.ow(hit.highlight, 'gotoAndStop', 'up');
   call(`${SKILLS}.InformationBox`, 'SetRemainingPointsTitle', data.pointsTitle);
   ready = true;
   renderRanks();
@@ -360,7 +453,66 @@ function populate() {
     loading.classList.add('finished');
     setTimeout(() => { loading.hidden = true; }, 300);
   }, 700);
+  populatedAt = performance.now() - startupAt;
+  timeLog('skills_populated', `branches=${data.branches.length} skills=${hitTargets.length}`);
   console.log(`OpenWillow Skills movie ready: ${data.branches.length} branches, ${hitTargets.length} skills`);
+}
+
+// Placement measured on the 2026-10-04 real capture (1280x720): the header group is a little smaller and centred about
+// x 695; the trees column sits 130 px right of where the harness puts it; the Phaselock card is 320 px wide at (205, 140);
+// the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
+// at (225, 530); here it follows the card). Moves are done on the movie clips in
+// ROOT coordinates (a host fit; the original gets these from its 3D camera).
+const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:25, hintDY:56, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
+  card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
+let layoutApplied = false;
+function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
+function moveClip(path, parent, dx, dy) {
+  const scale = Number(get(parent, '_xscale')) / 100 || 1;
+  set(path, '_x', Number(get(path, '_x')) + dx / scale);
+  set(path, '_y', Number(get(path, '_y')) + dy / scale);
+}
+// The Phaselock card (InformationBox) is fitted by the bounds of its background clip, whose margin around the visible frame is
+// known from the round-18/19 frames (the visible card is 0.867 of those bounds' width, starts 0.0685 of it from the left and
+// 0.0106 from the top). The movie resets this clip's scale and position when it tweens the trees, so the fit is applied
+// again on every selection and when the page opens; it changes nothing once the card is within a pixel.
+const CARD_Y_STRETCH = 1.045; const PLATE_UP = 22; // the card ended at y 380 against 390 in the real frame
+let wrapperHomeY = null;
+function applyInfoCard() {
+  const info = `${SKILLS}.InformationBox`, wrapper = `${info}.infoWrapper`, bkgd = `${wrapper}.DescriptionBkgd`, card = SKILLS_LAYOUT.card;
+  // The Siren plate is a sibling of the card (infoWrapper) inside the clip, 18-33 px lower than the real one; the card is moved down
+  // inside the clip by PLATE_UP and the clip up by the same amount, so the card stays and the plate rises.
+  if (wrapperHomeY === null) { const y = Number(get(wrapper, '_y')); if (Number.isFinite(y)) wrapperHomeY = y; }
+  if (wrapperHomeY !== null) {
+    const unit = (Number(get(info, '_yscale')) / 100 || 1) * (Number(get(SKILLS, '_xscale')) / 100 || 1);
+    set(wrapper, '_y', wrapperHomeY + PLATE_UP / unit);
+  }
+  const b = boundsOf(bkgd);
+  if (!b) return;
+  const boundsWidth = card.width / card.boundsShare;
+  if (Math.abs((b.xMax - b.xMin) - boundsWidth) > 1.5) {
+    const factor = boundsWidth / (b.xMax - b.xMin);
+    if (!(factor > 0.3 && factor < 4)) return;
+    set(info, '_xscale', Number(get(info, '_xscale')) * factor);
+    set(info, '_yscale', Number(get(info, '_yscale')) * factor * CARD_Y_STRETCH);
+  }
+  const f = boundsOf(bkgd);
+  if (!f) return;
+  const dx = card.left - card.insetLeft * boundsWidth - f.xMin, dy = card.top - card.insetTop * boundsWidth - f.yMin;
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moveClip(info, SKILLS, dx, dy);
+}
+function applySkillsLayout() {
+  if (layoutApplied) return;
+  layoutApplied = true;
+  const header = `${ROOT}.header`;
+  set(header, '_xscale', SKILLS_LAYOUT.headerScale * 100);
+  set(header, '_yscale', SKILLS_LAYOUT.headerScale * 100);
+  const hb = boundsOf(header);
+  if (hb) moveClip(header, ROOT, SKILLS_LAYOUT.headerCentreX - (hb.xMin + hb.xMax) / 2, SKILLS_LAYOUT.headerDY);
+  moveClip(SKILLS, ROOT, SKILLS_LAYOUT.treesDX, SKILLS_LAYOUT.treesDY);
+  moveClip(`${ROOT}.tooltips`, ROOT, SKILLS_LAYOUT.hintDX, SKILLS_LAYOUT.hintDY); // the real footer is at y 657, below the Siren plate
+  applyInfoCard();
+  setTimeout(applyInfoCard, 700); setTimeout(applyInfoCard, 1500);
 }
 
 async function boot() {

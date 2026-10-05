@@ -13,6 +13,7 @@
 #include "CanvasItem.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Engine/Font.h"
 #include "Engine/SkeletalMesh.h"
 #include "EngineUtils.h"
@@ -21,6 +22,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "UnrealClient.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -99,6 +101,7 @@ void AOpenWillowMayaHUD::BeginPlay()
     FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryUrl);
     FParse::Value(FCommandLine::Get(), TEXT("owinvopenbench="), OpenBenchRuns);
     FParse::Value(FCommandLine::Get(), TEXT("owinvopenbenchdelay="), OpenBenchDelay);
+    bInvShots = FParse::Param(FCommandLine::Get(), TEXT("owinvshots"));
     // -owinvnopreload: measurement A/B only; skips the menu preloads below.
     const bool bPreload = !FParse::Param(FCommandLine::Get(), TEXT("owinvnopreload"));
     bWeaponMeshesPreloaded = !bPreload;
@@ -121,6 +124,18 @@ void AOpenWillowMayaHUD::BeginPlay()
         TimeLog(TEXT("preload_menu_work"), FString::Printf(TEXT("assets=%d assetsDur=%.1fms vmDur=%.1fms"),
             PreloadedMenuAssets.Num(), AssetsMs, (FPlatformTime::Seconds() - Mark) * 1000.));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow Inventory movie preloading: %s"), *InventoryUrl);
+    }
+    // The skills page took about 3.4 s from the key press to a populated tree when it was created on
+    // demand (StatusMenu plus shared imports and the icon movies), longer than a quick capture or a
+    // player waits. Load it hidden at level start like the inventory page.
+    if (bPreload && !SkillsUrl.IsEmpty() && GEngine && GEngine->GameViewport
+        && IWebBrowserModule::Get().IsWebModuleAvailable())
+    {
+        CachedSkillsBrowser = CreateStatusBrowser(SkillsUrl);
+        CachedSkillsRoot = SNew(SBox).Visibility(EVisibility::Hidden)[CachedSkillsBrowser.ToSharedRef()];
+        GEngine->GameViewport->AddViewportWidgetContent(CachedSkillsRoot.ToSharedRef(), 20);
+        TimeLog(TEXT("skills_preload_browser_created"));
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills movie preloading: %s"), *SkillsUrl);
     }
     FString Url;
     if (!FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url) || !GEngine || !GEngine->GameViewport) return;
@@ -219,6 +234,70 @@ void AOpenWillowMayaHUD::TickOpenBench()
     }
 }
 
+void AOpenWillowMayaHUD::TickInvShots()
+{
+    if (!bInvShots || !PlayerOwner) return;
+    AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
+    if (!Maya) return;
+    // Both pages load after the engine's first long frames, so the timeline starts only once the inventory page
+    // has finished its movie and the skills page has populated its tree (a capture before that shows "Loading").
+    if (!bInventoryPageReady || (!SkillsUrl.IsEmpty() && !bSkillsPagePopulated)) return;
+    const double Now = FPlatformTime::Seconds();
+    if (InvShotAt == 0)
+    {
+        InvShotAt = Now + 2.;
+        // Skills state of the real-game capture (Maya L8): Phaselock trained, three points in Mind's Eye, none left.
+        if (UOpenWillowSkills* Skills = Maya->GetSkills())
+        {
+            FString Why;
+            Skills->TrySpend(-1, -1, -1, Why);
+            for (int32 I = 0; I < 3; ++I) Skills->TrySpend(1, 0, 0, Why);
+        }
+        return;
+    }
+    if (Now < InvShotAt) return;
+    auto Shot = [this](const TCHAR* Name)
+    {
+        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), true, false);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory capture %s"), Name);
+    };
+    double Wait = 1.5;
+    // One entry per step: {action, argument, wait after}. Actions: key, shot, open, tab, closeSkills.
+    struct FInvShotStep { const TCHAR* Action; const TCHAR* Arg; double Wait; };
+    static const FInvShotStep Steps[] = {
+        {TEXT("open"), TEXT(""), 4.}, {TEXT("shot"), TEXT("D1_Inventory"), .6},
+        {TEXT("key"), TEXT("ArrowRight"), 1.5}, {TEXT("shot"), TEXT("D2_Backpack"), .5},
+        {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2b_SortTypes"), .5},
+        {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2c_SortBrands"), .5},
+        {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2d_SortItems"), .5},
+        {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2e_SortValue"), .5},
+        {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2f_SortAllAgain"), .5},
+        {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D3_CompareFromBackpack"), .5},   // compare, backpack origin
+        {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("ArrowLeft"), 1.2},
+        {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D4_CompareFromEquipped"), .5}, // compare, equipped origin
+        {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("f"), 2.}, {TEXT("shot"), TEXT("D5_Inspect"), .5},
+        {TEXT("key"), TEXT("f"), .8}, {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
+        {TEXT("key"), TEXT("q"), 1.5}, {TEXT("shot"), TEXT("D7_SkillsOverview"), .5},
+        {TEXT("closeSkills"), TEXT(""), 1.5}};
+    if (InvShotStep >= UE_ARRAY_COUNT(Steps))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory capture done"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        bInvShots = false;
+        return;
+    }
+    const FInvShotStep& Step = Steps[InvShotStep];
+    const FString Action(Step.Action);
+    if (Action == TEXT("open")) Maya->ToggleInventory();
+    else if (Action == TEXT("key")) SendPageKey(Step.Arg);
+    else if (Action == TEXT("shot")) Shot(Step.Arg);
+    else if (Action == TEXT("tab")) PendingTabSwitch = 2; // header tab to Skills, then capture one second later
+    else if (Action == TEXT("closeSkills")) RequestSkillsCloseFromPage();
+    Wait = Step.Wait;
+    ++InvShotStep;
+    InvShotAt = Now + Wait;
+}
+
 void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
 {
     const FString& MenuUrl = bInventory ? InventoryUrl : SkillsUrl;
@@ -229,14 +308,15 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         return;
     }
     bInventoryOpen = bInventory;
+    OpenStartedAt = FPlatformTime::Seconds();
+    OpenFrame = GFrameCounter;
     if (bInventory)
     {
-        OpenStartedAt = FPlatformTime::Seconds();
-        OpenFrame = GFrameCounter;
         bOpenFrameLogged = bOpenPushLogged = bOpenPreviewLogged = false;
         TimeLog(TEXT("open_request"), FString::Printf(TEXT("preloaded=%d sincePreload=%.0fms"),
             CachedInventoryBrowser.IsValid(), PreloadCreatedAt > 0 ? (OpenStartedAt - PreloadCreatedAt) * 1000. : -1.));
     }
+    else TimeLog(TEXT("skills_open_request"), FString::Printf(TEXT("preloaded=%d"), CachedSkillsBrowser.IsValid()));
     double Mark = FPlatformTime::Seconds();
     auto Lap = [&Mark]() { const double Now = FPlatformTime::Seconds(), Ms = (Now - Mark) * 1000.; Mark = Now; return Ms; };
     double PresentationMs = 0, DisplayMs = 0, BrowserMs = 0, VmMs = 0;
@@ -257,6 +337,15 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         SkillsBrowser = CachedInventoryBrowser;
         SkillsRoot = CachedInventoryRoot;
         CachedInventoryRoot->SetVisibility(EVisibility::Visible);
+    }
+    else if (!bInventory && CachedSkillsBrowser && CachedSkillsRoot)
+    {
+        SkillsBrowser = CachedSkillsBrowser;
+        SkillsRoot = CachedSkillsRoot;
+        CachedSkillsRoot->SetVisibility(EVisibility::Visible);
+        OpenEpoch = int64((FDateTime::UtcNow() - FDateTime(1970, 1, 1)).GetTotalMilliseconds()
+            - (FPlatformTime::Seconds() - OpenStartedAt) * 1000.);
+        SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owSkillsOpened && window.owSkillsOpened(%lld)"), OpenEpoch));
     }
     else
     {
@@ -355,6 +444,8 @@ void AOpenWillowMayaHUD::CloseSkills()
     }
     if (bInventoryOpen && CachedInventoryRoot)
         CachedInventoryRoot->SetVisibility(EVisibility::Hidden);
+    else if (SkillsRoot && SkillsRoot == CachedSkillsRoot)
+        CachedSkillsRoot->SetVisibility(EVisibility::Hidden);
     else if (SkillsRoot && GEngine && GEngine->GameViewport)
         GEngine->GameViewport->RemoveViewportWidgetContent(SkillsRoot.ToSharedRef());
     SkillsRoot.Reset();
@@ -382,6 +473,8 @@ void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
         if (Message.Len() <= 1024) TimeLog(TEXT("page"), Message.Mid(10));
         if (Message.StartsWith(TEXT("OWINVTIME js_painted "), ESearchCase::CaseSensitive)) bOpenBenchPainted = true;
         if (Message.StartsWith(TEXT("OWINVTIME js_open "), ESearchCase::CaseSensitive)) bOpenTimingAcked = true;
+        if (Message.StartsWith(TEXT("OWINVTIME js_movie_ready "), ESearchCase::CaseSensitive)) bInventoryPageReady = true;
+        if (Message.StartsWith(TEXT("OWINVTIME js_skills_populated "), ESearchCase::CaseSensitive)) bSkillsPagePopulated = true;
         return;
     }
     if (bInventoryOpen)
@@ -510,13 +603,13 @@ void AOpenWillowMayaHUD::RequestPageReport()
     // it accepted); a page that has not loaded yet reports the error instead.
     SkillsBrowser->ExecuteJavascript(TEXT(
         "try{console.log('OWINVPAGE '+JSON.stringify({ready:!!ready,hasState:!!state,"
-        "sel:selectedId,target:targetSlot,gear:targetGearSlot,cat:categoryIndex,sort:sortIndex,"
+        "sel:selectedId,target:targetSlot,gear:targetGearSlot,sort:sortIndex,"
         "inspect:inspectMode,inspectFrames:inspectFrameCount,inspectImageBytes:inspectImage.length,inspectYaw:inspectYaw,"
         "vm:{enabled:inventoryVm.enabled,calls:inventoryVm.calls,errors:inventoryVm.errors,steps:inventoryVm.steps,discarded:inventoryVm.discarded},"
         "transfer:transferSourceId,transferFromEquipped:transferFromEquipped,compare:compareId,"
         "backpack:backpackItems().map(i=>i.id),firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
-        "backpackHeaderAnchored:(function(){var row=document.querySelector('[data-kind=backpack]');var buttons=Array.from(document.querySelectorAll('[data-kind=category]'));"
-        "return !!row&&buttons.length===2&&buttons.every(function(n){var b=n.getBoundingClientRect(),r=row.getBoundingClientRect();return b.bottom<=r.top+2&&b.top>=r.top-60})})(),"
+        "listEntries:backpackEntries().map(function(e){return e.header!==undefined?'#'+e.header:e.empty?'_':e.item.id}),"
+        "visibleHeaders:Array.from(new Set(listHeaderNames)).length,"
         "backpackRowsAligned:(function(){var stage=document.getElementById('stage').getBoundingClientRect(),scale=stage.width/1280;"
         "return Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).every(function(n,i){"
         "var a=readBounds(INV+'.storagePanel.owRows.owRow'+i+'.hitTestClip'),b=n.getBoundingClientRect();"
@@ -583,6 +676,10 @@ void AOpenWillowMayaHUD::EndPlay(const EEndPlayReason::Type Reason)
         GEngine->GameViewport->RemoveViewportWidgetContent(CachedInventoryRoot.ToSharedRef());
     CachedInventoryRoot.Reset();
     CachedInventoryBrowser.Reset();
+    if (CachedSkillsRoot && GEngine && GEngine->GameViewport)
+        GEngine->GameViewport->RemoveViewportWidgetContent(CachedSkillsRoot.ToSharedRef());
+    CachedSkillsRoot.Reset();
+    CachedSkillsBrowser.Reset();
     if (FlashHudRoot && GEngine && GEngine->GameViewport)
         GEngine->GameViewport->RemoveViewportWidgetContent(FlashHudRoot.ToSharedRef());
     FlashHudRoot.Reset();
@@ -644,6 +741,7 @@ void AOpenWillowMayaHUD::DrawHUD()
 {
     Super::DrawHUD();
     TickOpenBench();
+    TickInvShots();
     if (!bWeaponMeshesPreloaded && PlayerOwner)
         if (const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()))
             if (const UOpenWillowInventory* Held = Walker->GetInventory())
@@ -695,8 +793,16 @@ void AOpenWillowMayaHUD::DrawHUD()
             FString InspectPng;
             if (Item)
             {
-                if (!IsValid(InspectActor)) InspectActor = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(
-                    AOpenWillowInventoryPreviewActor::StaticClass(), FVector(0, 0, -100000), FRotator::ZeroRotator);
+                if (!IsValid(InspectActor))
+                {
+                    InspectActor = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(
+                        AOpenWillowInventoryPreviewActor::StaticClass(), FVector(0, 0, -100000), FRotator::ZeroRotator);
+                    // Full-screen Inspect shows this frame large; the actor's default 512x320 target is for the small card.
+                    if (InspectActor && InspectActor->GetRenderTarget())
+                    {
+                        InspectActor->GetRenderTarget()->ResizeTarget(1024, 640);
+                    }
+                }
                 if (InspectActor && InspectActor->SetItemPreview(Item))
                     InspectPng = InspectActor->InspectFrame(FMath::Fmod(Yaw, 360.0), FMath::Clamp(Pitch, -80.0, 80.0));
             }

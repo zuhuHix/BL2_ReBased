@@ -62,10 +62,10 @@ struct FOwFxEmitter
     FOwFxDistribution OrbitOffset, OrbitRotation, OrbitRotationRate, SphereRadius, SphereVelocityScale;
     FVector SizeMultiplyAxes = FVector::OneVector;
     bool bSphereSurface = false, bSphereVelocity = false;
-    // The stock material's depth-bias scalar parameter (DepthBias or Bias, its default; 0 when none), following
-    // material-instance parents. Host reading (UNVERIFIED): a negative bias pulls the sprite plane that many uu toward the
-    // camera, so that it covers geometry just in front of the particle (the lifted target inside the bubble).
-    float DepthBias = 0;
+    // Host calibration (UNVERIFIED, table in the .cpp): particles of this emitter start this many seconds into their life.
+    float AgeShift = 0;
+    float SizeScale = 1;   // host calibration (UNVERIFIED, table in the .cpp): sprite size multiplier
+    bool bSizeIgnoresAgeShift = false;   // the size-over-life curve is read at the unshifted age (the disc keeps its size, only its alpha runs ahead)
     TArray<FString> Unsupported;   // module classes read but not played
 };
 
@@ -130,6 +130,9 @@ public:
     bool IsFinished() const { return bPlaying && bFinished; }
     // Screen particle: each particle is drawn as a quad covering the camera's view (host stand-in).
     bool bFillScreen = false;
+    // Draw the sprites in the first-person primitive space (UE 5.8's first-person field of view), as the arms are when the walker
+    // runs with -owfpfov: effects attached to the hand then stay on it. Set before the first Render.
+    bool bFirstPersonSpace = false;
     // Translucency sort priority of the first emitter; later emitters draw above earlier ones (Cascade emitter order).
     int32 SortPriorityBase = 0;
     // Diagnostics for tests and logs.

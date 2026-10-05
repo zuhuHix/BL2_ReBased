@@ -7,7 +7,8 @@ param(
     [string]$Emitters = 'local/phaselock/emitters',
     # Optional: export the FX materials UModel's package-wide run did not reach (smoke, lens flare) before importing.
     [string]$UModel = $env:OPENWILLOW_UMODEL,
-    [string]$Game = $env:OPENWILLOW_BL2
+    [string]$Game = $env:OPENWILLOW_BL2,
+    [int]$WaitForEditorSeconds = 1800
 )
 # AI-assisted. Imports Phaselock's effect textures and meshes and builds host materials with
 # host/ue5/import_phaselock_fx.py (recreates /Game/OpenWillow/Phaselock only). Holds local/ue_run.lock for the editor
@@ -32,10 +33,19 @@ $env:OPENWILLOW_PHASELOCK_UMODEL = $roots
 $env:OPENWILLOW_PHASELOCK_EMITTERS = (Resolve-Path -LiteralPath (Join-Path $repo $Emitters)).Path
 $env:OPENWILLOW_PHASELOCK_REPORT = Join-Path $repo 'local/phaselock/fx_import.json'
 
-if (Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
-    throw 'An Unreal editor process is already running; leaving it untouched.'
+# Waits for the shared run lock (another lane's editor, a capture or a suite) and for no Unreal editor process, then claims
+# the lock atomically; it never touches another editor.
+$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
+$stream = $null
+while (!$stream) {
+    if (!(Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) -and !(Test-Path -LiteralPath $lock)) {
+        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
+    }
+    if (!$stream) {
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        Start-Sleep -Seconds 5
+    }
 }
-$stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
 $bytes = [System.Text.Encoding]::UTF8.GetBytes("import_phaselock_fx $((Get-Date).ToString('o'))")
 $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
 try {

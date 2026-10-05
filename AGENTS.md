@@ -87,12 +87,25 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
 
 - **Phase 1 (Sanctuary):** loads and walks; visual parity still open.
 - **Maya prototype:** in UE5 with Infinity and Phaselock as host prototypes (not stock logic).
+- **Ambient citizens (2026-10-04):** male and female Sanctuary Citizens spawn behind `-owambient`, with stock perch
+  clips and node chains under stand-in movement rules (UNVERIFIED). Round 2 added heads, hair and hats copied from
+  what the real game's live citizens carried, Maya's ink line and the perch clips' root motion (critic 5.5/10). Round 3
+  applied the attachments' own component transforms and zone colours (`UNVERIFIED` formula); a blind A/B judged it a
+  little closer than round 2; round 4 fixed the worn pieces' frame from a live sample (preferred on six of seven
+  stops); round 5 sized the ink line in pixels and gave worn pieces their own (preferred on every stop). Not done: body garment variants, Resistance patrols. See
+  `docs/verification/SANCTUARY_AMBIENT_NPCS.md`.
 - **Inventory menu:** the real StatusMenu movie runs under Ruffle inside UE5 with a host adapter
   (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.
-  Open, in order: stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), selectable
-  empty backpack cells, full-screen Inspect, red `bad` cells in compare view. State and evidence:
-  `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last two sections). A partial, non-running
-  start of the sort list is on branch `t3code/wip-inventory-sort-list`.
+  Since 2026-10-04 the stock sort list (ALL/TYPES/BRANDS/ITEMS/VALUE with sub-headers), the
+  backpack focus layout, red `bad` cells in compare view and a full-screen Inspect exist, and
+  the Skills page is preloaded hidden. Round 10 added sub-header rows, a full-width selection
+  band, the narrowed compare layout and Q "Toggle Overview" on the Skills page; round 11 fixed the list's scroll
+  origin and the compare and Skills layout (critic 7.3/10); rounds 12-15 the selection band, focus-view extents,
+  list height, compare hints and frames and the Skills plate (each preferred over the previous round in a blind A/B;
+  round 15 about 7.4/10).
+  Open: the perspective tilt and glass sheen (3D transforms Ruffle ignores), selectable empty
+  backpack cells, gear compare (not yet observed in the real game), white flavour lines on cards.
+  State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
   model, interpreter, Core natives, default-state sweep and scalar trace replay exist.
@@ -139,13 +152,20 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   `research/d3d9_bytecode.py`; listings stay under `local/`). Three passes recorded in DECISIONS; the whole reading and the
   shading stand-ins are `UNVERIFIED`. First real captures (2026-10-02): an independent critic agent scored the host guns
   3-4.5/10 against them (far too dark, wrong Maliwan orange hue; `docs/verification/REALGAME_GROUND_TRUTH.md`).
+  Since 2026-10-04 the guns draw the parts the running game draws, the paint is an Unlit material that undoes UE5's
+  tone mapper (measured curve), the arms use per-type clip sets and the game's foreground FOV 45 is the default
+  (`-owfpfov=0` opts out); critic 7.2 then 6.8/10, round 2 closer on every pair. Since 2026-10-05 the arms sit at the
+  weapon type's `PlayerViewOffset` with its `FirstPersonMeshFOV` (read live and from the cooked types; how the engine
+  applies them is `UNVERIFIED`); a blind A/B preferred that on five of six guns (`docs/verification/WEAPON_VISUALS.md`).
 - **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
   about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
   shows its page ~126-156 ms after the key press (screen capture, different method;
   `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md`, 2026-10-02 sections).
 - **Phaselock effects:** `research/particle_system.py` reads cooked `ParticleSystem` templates (layouts checked by
-  oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. The Sanctuary dummy stands on the lane
-  floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
+  oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. Since 2026-10-04 the effect materials
+  follow own-words notes on their compiled shaders (Round 6); an independent critic scored round 11 at 6.3/10 and round 13 at
+  6/10; round 15 (violet interior) tied or edged round 13 in a blind A/B. The Sanctuary dummy
+  stands on the lane floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, `python tests/weapon_paint_test.py`,
   `python tests/particle_system_test.py`, and the

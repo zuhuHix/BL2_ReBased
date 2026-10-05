@@ -175,9 +175,11 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         Page->TryGetBoolField(TEXT("ready"), bReady);
         Page->TryGetBoolField(TEXT("hasState"), bHasState);
         if (!bReady || !bHasState) { D = FString::Printf(TEXT("page ready=%d state=%d"), bReady, bHasState); return false; }
-        bool bHeaderAnchored = false;
-        Page->TryGetBoolField(TEXT("backpackHeaderAnchored"), bHeaderAnchored);
-        if (!bHeaderAnchored) { D = TEXT("backpack category controls are not above the first row"); return false; }
+        // The stock list opens with a sub-header row ("WEAPONS" in ALL) whenever the backpack holds an item.
+        const TArray<TSharedPtr<FJsonValue>>* ListEntries = nullptr;
+        if (!Page->TryGetArrayField(TEXT("listEntries"), ListEntries)) { D = TEXT("page reports no list entries"); return false; }
+        if (ListEntries->Num() && (*ListEntries)[0]->AsString() != TEXT("#WEAPONS") && !(*ListEntries)[0]->AsString().StartsWith(TEXT("_")))
+        { D = FString::Printf(TEXT("backpack list does not start with the WEAPONS sub-header (starts '%s')"), *(*ListEntries)[0]->AsString()); return false; }
         FString Shown;
         for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
         {
@@ -202,7 +204,8 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         Steps.Last().Precondition = MoveTemp(Check);
         Steps.Last().bPreReport = bFreshReport;
     };
-    auto Diverges = [this](const TCHAR* Reason) { Steps.Last().DivergenceReason = Reason; };
+    // (no step is a KNOWN_DIVERGENCE any more; DivergenceReason stays for the next one)
+    [[maybe_unused]]     auto Diverges = [this](const TCHAR* Reason) { Steps.Last().DivergenceReason = Reason; };
     auto PageOrWhy = [this](FString& Why)
     {
         TSharedPtr<FJsonObject> Page = PageObject();
@@ -285,6 +288,18 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         UOpenWillowInventory* Inv = Walker->GetInventory();
         if (Inv->AddGearToBackpack(MoveTemp(Shield))) ShieldId = Inv->GearItemList().Last().Id;
         UE_LOG(LogTemp, Display, TEXT("OWINVTEST fixture synthetic shield id='%s' (empty means it could not be added)"), *ShieldId);
+        // Four synthetic filler weapons (copies of a seeded one under a TEST FILLER name) so a short seeded backpack
+        // still has the nine rows the wheel steps need. Nothing here is game data.
+        int32 Added = 0;
+        for (int32 N = 1; N <= 4 && Inv->Items().Num() && Inv->CanAddToBackpack(); ++N)
+        {
+            FOpenWillowWeaponItem Copy = Inv->Items()[0];
+            Copy.InstanceId.Reset();
+            Copy.Name = FString::Printf(TEXT("TEST FILLER %d (SYNTHETIC)"), N);
+            Copy.bFavorite = Copy.bTrash = false;
+            if (Inv->AddToBackpack(Copy)) ++Added;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWINVTEST fixture synthetic filler weapons added=%d backpack=%d"), Added, Inv->BackpackCount());
     }
 
     // Tab is the primary key (the controller forwards it to Maya); I is exercised at the reopen step.
@@ -324,14 +339,16 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             auto Page = Snapshot(D);
             const TArray<TSharedPtr<FJsonValue>>* Visible = nullptr;
             double First = -1;
+            // The list scrolls by entry: the first one is the WEAPONS sub-header, so one step uncovers the
+            // first item's row and the seventh item (partly hidden before) becomes fully visible.
             if (!Page || !Page->TryGetNumberField(TEXT("firstRow"), First) || First != 1
                 || !Page->TryGetArrayField(TEXT("visibleBackpack"), Visible)
-                || VisibleBeforeScroll.Num() != 7 || Visible->Num() != 7)
-            { D = TEXT("wheel did not advance exactly one visible row"); return false; }
-            for (int32 I = 0; I < 6; ++I)
-                if ((*Visible)[I]->AsString() != VisibleBeforeScroll[I+1])
-                { D = TEXT("wheel skipped/reordered the retained six rows"); return false; }
-            D = TEXT("one row advanced; six previous items retained in order"); return true;
+                || VisibleBeforeScroll.Num() < 6 || Visible->Num() < VisibleBeforeScroll.Num())
+            { D = TEXT("wheel did not advance exactly one list entry"); return false; }
+            for (int32 I = 0; I < VisibleBeforeScroll.Num(); ++I)
+                if ((*Visible)[I]->AsString() != VisibleBeforeScroll[I])
+                { D = TEXT("wheel skipped/reordered the retained rows"); return false; }
+            D = FString::Printf(TEXT("one list entry advanced (header off); %d visible items before, %d after, same order"), VisibleBeforeScroll.Num(), Visible->Num()); return true;
         });
     Pre([this, PageOrWhy](FString& Why)
         {
@@ -546,7 +563,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             if (!Page) return false;
             if (PageHasString(Page, TEXT("transfer"))) { Why = TEXT("a transfer is still active"); return false; }
             if (HostSlotId(0).IsEmpty() || PageString(Page, TEXT("sel")) != HostSlotId(0)) return Needed(Why, TEXT("page selection"), PageString(Page, TEXT("sel")), HostSlotId(0));
-            if (PageNumber(Page, TEXT("cat")) != 0 || PageNumber(Page, TEXT("sort")) != 0) { Why = TEXT("backpack category/sort is not the default"); return false; }
+            if (PageNumber(Page, TEXT("sort")) != 0) { Why = TEXT("backpack sort is not ALL"); return false; }
             return true;
         });
 
@@ -612,45 +629,62 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             });
     }
 
-    Add(TEXT("pageup_sorts_preserving_selection"), false,
-        [this] { PressKey(TEXT("PageUp")); },
-        [this, Snapshot](FString& D)
+    // Stock sort (observed 2026-09-30 and 2026-10-04): PageDown moves ALL > TYPES > BRANDS > ITEMS > VALUE, PageUp
+    // reverses, and every change selects the first item of the new list. TYPES lists weapons only, so its list starts
+    // with a sub-header row. The two steps leave the page in ALL with its first item selected, which becomes the working
+    // weapon (SelId) for the steps after them.
+    auto FirstListedItem = [](const TSharedPtr<FJsonObject>& Page)
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
+        if (Page && Page->TryGetArrayField(TEXT("listEntries"), Entries))
+            for (const auto& Entry : *Entries)
+            {
+                const FString Id = Entry->AsString();
+                if (!Id.StartsWith(TEXT("#")) && !Id.StartsWith(TEXT("_"))) return Id;
+            }
+        return FString();
+    };
+    Add(TEXT("pagedown_selects_first_item_of_types"), false,
+        [this] { PressKey(TEXT("PageDown")); },
+        [this, Snapshot, FirstListedItem](FString& D)
         {
             auto Page = Snapshot(D);
-            double Sort = -1;
+            const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
             bool RowsAligned = false;
-            if (!Page || !Page->TryGetNumberField(TEXT("sort"), Sort) || Sort != 1
-                || PageString(Page, TEXT("sel")) != SelId
+            if (!Page || PageNumber(Page, TEXT("sort")) != 1 || !Page->TryGetArrayField(TEXT("listEntries"), Entries) || !Entries->Num()
+                || !(*Entries)[0]->AsString().StartsWith(TEXT("#")) || (*Entries)[0]->AsString() == TEXT("#WEAPONS")
+                || FirstListedItem(Page).IsEmpty() || PageString(Page, TEXT("sel")) != FirstListedItem(Page)
                 || !Page->TryGetBoolField(TEXT("backpackRowsAligned"), RowsAligned) || !RowsAligned)
-            { D = TEXT("PageUp failed to advance the host sort mode while retaining the selected instance"); return false; }
-            D = TEXT("host: PageUp advanced to host sort mode 1 and kept the selected stable ID"); return true;
+            { D = TEXT("PageDown did not move to the TYPES list with its first item selected"); return false; }
+            D = FString::Printf(TEXT("TYPES: first sub-header %s, first item %s selected"), *(*Entries)[0]->AsString(), *PageString(Page, TEXT("sel"))); return true;
         });
-    Diverges(TEXT("stock PageDown is forward (ALL>TYPES>BRANDS>ITEMS>VALUE, PageUp reverses) and every step selects the first cell; the host's PageUp is forward over its own DEFAULT/NAME/RARITY/LEVEL/DAMAGE modes and keeps the selection. The stock sort list is a separate unfinished feature"));
-    Pre([this, PageOrWhy, Needed](FString& Why)
+    Pre([this, PageOrWhy, Needed, FirstListedItem](FString& Why)
         {
             auto Page = PageOrWhy(Why);
             if (!Page) return false;
             if (PageString(Page, TEXT("sel")) != SelId || SelId.IsEmpty()) return Needed(Why, TEXT("page selection"), PageString(Page, TEXT("sel")), SelId);
-            if (PageNumber(Page, TEXT("sort")) != 0 || PageHasString(Page, TEXT("transfer"))) { Why = TEXT("sort is not 0 or a transfer is active"); return false; }
+            if (PageNumber(Page, TEXT("sort")) != 0 || PageHasString(Page, TEXT("transfer"))) { Why = TEXT("sort is not ALL or a transfer is active"); return false; }
             return true;
         });
-    Add(TEXT("pagedown_reverses_sort"), false,
-        [this] { PressKey(TEXT("PageDown")); },
-        [this, Snapshot](FString& D)
+    Add(TEXT("pageup_returns_to_all_first_item"), false,
+        [this] { PressKey(TEXT("PageUp")); },
+        [this, Snapshot, FirstListedItem](FString& D)
         {
             auto Page = Snapshot(D);
-            double Sort = -1;
-            if (!Page || !Page->TryGetNumberField(TEXT("sort"), Sort) || Sort != 0
-                || PageString(Page, TEXT("sel")) != SelId)
-            { D = TEXT("PageDown failed to restore the host sort mode while retaining the selected instance"); return false; }
-            D = TEXT("host: PageDown stepped back to host sort mode 0 and kept the selected stable ID"); return true;
+            const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
+            if (!Page || PageNumber(Page, TEXT("sort")) != 0 || !Page->TryGetArrayField(TEXT("listEntries"), Entries) || !Entries->Num()
+                || (*Entries)[0]->AsString() != TEXT("#WEAPONS") || FirstListedItem(Page).IsEmpty()
+                || PageString(Page, TEXT("sel")) != FirstListedItem(Page)
+                || !Walker->GetInventory()->FindItemById(FirstListedItem(Page)) || HostEquipped(FirstListedItem(Page)))
+            { D = TEXT("PageUp did not return to ALL with the first item selected"); return false; }
+            SelId = FirstListedItem(Page);
+            D = FString::Printf(TEXT("ALL again: WEAPONS sub-header first, first item %s selected (now the working weapon)"), *SelId); return true;
         });
-    Diverges(TEXT("stock PageDown advances the sort (ALL>TYPES>BRANDS>ITEMS>VALUE) and selects the first cell; the host's PageDown steps back through its own modes and keeps the selection. The stock sort list is a separate unfinished feature"));
     Pre([this, PageOrWhy](FString& Why)
         {
             auto Page = PageOrWhy(Why);
             if (!Page) return false;
-            if (PageNumber(Page, TEXT("sort")) != 1) { Why = TEXT("sort mode is not 1, so there is nothing to step back from"); return false; }
+            if (PageNumber(Page, TEXT("sort")) != 1) { Why = TEXT("sort is not TYPES, so there is nothing to step back from"); return false; }
             return true;
         });
     Add(TEXT("backpack_select_starts_transfer_without_equipping"), false,
@@ -1160,7 +1194,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             if (ShieldId.IsEmpty() || !Walker->GetInventory()->FindGearById(ShieldId)) { Why = TEXT("the synthetic shield fixture is not in the host inventory"); return false; }
             if (!PageHasItem(Page, ShieldId)) { Why = TEXT("the page does not list the synthetic shield"); return false; }
             if (PageHasString(Page, TEXT("transfer"))) { Why = TEXT("a transfer is active"); return false; }
-            if (PageNumber(Page, TEXT("cat")) != 0) { Why = TEXT("backpack category filter is not ALL"); return false; }
+            if (PageNumber(Page, TEXT("sort")) != 0) { Why = TEXT("backpack sort is not ALL"); return false; }
             return true;
         });
 

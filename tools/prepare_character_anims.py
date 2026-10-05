@@ -63,15 +63,20 @@ def to_quat(r):
 def frames(path, joints):
     text = Path(path).read_text(encoding='utf-8')
     names = [line.split('"')[1] for line in block(text, 'hierarchy').splitlines() if line.strip()]
-    if names != [joint[0] for joint in joints]:
+    mesh_names = [joint[0] for joint in joints]
+    if sorted(names) != sorted(mesh_names):
         raise ValueError(f'{path}: animation bones differ from the mesh')
+    # The assault-rifle set lists the same bones in another order. The locals are looked up by bone name and composed along
+    # the mesh's own parents, exactly as before for the sets whose order already matched.
     count = int(re.search(r'\bnumFrames\s+(\d+)', text).group(1))
     rate = float(re.search(r'\bframeRate\s+(\S+)', text).group(1))
     result = []
     for index in range(count):
         values = [numbers(line) for line in block(text, f'frame {index}').splitlines() if line.strip()]
+        local_by_name = dict(zip(names, values))
         world = []
-        for (_, parent, _, _), local in zip(joints, values):
+        for (name, parent, _, _) in joints:
+            local = local_by_name[name]
             position, orientation = local[:3], quaternion(local[3:])
             if parent >= 0:
                 parent_position, parent_rotation = world[parent]

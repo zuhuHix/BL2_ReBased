@@ -36,6 +36,27 @@ DECAL_READING = ('UNVERIFIED: p_Decal at UV1 shifted by zw of p_DecalScalePositi
 STATIC_DEFAULTS = {'p_WeapClassSelect': None, 'p_PatternChannel': 'RGB', 'p_DecalChannel': 'RGB'}
 
 
+# Part slots in the order the native weapon-material builder walks them (docs/verification/NATIVE_WEAPON_VISUALS.md): each
+# part's MaterialVectorParameterValues is applied, unchanged and linear, over the Material part's MIC; a later part wins.
+PART_ORDER = ['Body', 'Grip', 'Barrel', 'Sight', 'Stock', 'Elemental', 'Accessory1', 'Accessory2', 'Material']
+
+
+def part_vector_overrides(recipe, facts):
+    """{parameter name: (r, g, b, a)} from the recipe's parts, in slot order. Needs --reader (empty without it).
+
+    Only elemental parts carry any in the install, one p_EmissiveColor each (Fire 4.02, 0.27, 0; read from the cooked part and
+    seen on the live weapon's material instance on 2026-10-04, so two sources agree).
+    """
+    found = {}
+    if facts is None:
+        return found
+    for slot in PART_ORDER:
+        part = ((recipe.get('parts') or {}).get(slot) or {}).get('part')
+        if part:
+            found.update(facts.part_vectors(part))
+    return found
+
+
 def as_value(kind, value):
     return float(value) if kind == 'scalar' else tuple(float(value[c]) for c in 'RGBA')
 
@@ -112,6 +133,27 @@ class InstalledFacts:
         self.package = PackageReader(reader, package)
         self.engine = PackageReader(reader, Path(package).parent / 'Engine.upk')
         self.cache = {}
+
+    def part_vectors(self, part_path):
+        """MaterialVectorParameterValues of one weapon part export, {name: (r, g, b, a)}; {} when it has none."""
+        match = [e for e in self.package.exports if e['path'] == part_path]
+        if not match:
+            return {}
+        with tempfile.TemporaryDirectory() as folder:
+            schema = Path(folder) / 'part.schema'
+            schema.write_text('MaterialVectorParameterValues=StructProperty:VectorParameterValue\n')
+            record = json.loads(self.package.run('--properties', str(match[0]['index']), '--property-offset', '4',
+                                                 '--array-schema', str(schema)))
+        values = {}
+        for prop in record['properties']:
+            if prop['name'] != 'MaterialVectorParameterValues' or prop.get('status') != 'decoded':
+                continue
+            for element in prop['value']:
+                fields = {f['name']: f for f in element}
+                name = fields['ParameterName']['value']
+                colour = fields['ParameterValue']['value']
+                values[name] = tuple(float(colour[c]) for c in 'RGBA')
+        return values
 
     def class_defaults(self):
         values = {}
@@ -265,6 +307,9 @@ def prepare(recipe_path, materials, mesh=None, facts=None):
         raise ValueError(f'No local export of {identity}')
     params, texture_dir, chain = resolved
     kind = weapon_class(recipe, params)
+    for name, value in part_vector_overrides(recipe, facts).items():
+        params['vector'][name] = value
+        params.setdefault('source', {}).setdefault('vector', {})[name] = 'part MaterialVectorParameterValues (native BuildWeaponMaterial)'
     channel, pattern_channels, decal_channels, channel_source = static_choices(chain, params, kind, facts)
     weights = params['vector'].get('p_PatternChannelScale')
     pattern_used = bool(params['texture'].get('p_Pattern')) and isinstance(weights, (tuple, list)) and any(

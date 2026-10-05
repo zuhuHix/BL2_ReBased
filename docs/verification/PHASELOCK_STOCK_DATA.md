@@ -603,3 +603,349 @@ second lock of the same pawn (0.175 s longer hold, cause unknown; not modelled).
   of the quad; in game the bullymong shows at about a third of its brightness.
 - The floor pool is fainter on Sanctuary's dark asphalt than the game's pool on snow and sand.
 - The 0.6 s starburst at the hand.
+
+## Round 6 (2026-10-04): the effect materials read from the shader cache
+
+AI-assisted (Claude). The cooked material graphs of the effect materials are stripped (rounds 1-5 guessed what each one does
+with its textures), but the game keeps each material's compiled pixel shader and uniform-expression set in
+`RefShaderCache-PC-D3D-SM3.upk` (the same cache the weapon paint model was read from, `DECISIONS.md` 2026-10-02). This round
+reads those shaders for every material the Phaselock templates use. Listings, shader maps and the working scripts stay under
+ignored `local/orch/A/shader/`; nothing below is a listing. Formulas and constants are recorded because the host needs them;
+each reading is `UNVERIFIED` against the running game except where a comparison says otherwise.
+
+### How a material is found (own words)
+
+1. A cooked `Material` export ends with the material's compiled-resource block: a 16-byte id (it is also the key of the shader
+   map), a count and the referenced textures (negative = import, positive = export number). The id is the window in that tail
+   that occurs 3 or more times in the cache, one hit preceded by 16 zero bytes (the map start) and one preceded by the
+   material's own name as a length-prefixed string (the copy that is followed by the uniform expressions).
+2. The map start is a static parameter set (id, four empty counts for a plain material), then the engine and licensee versions
+   (832, 46), a count and a table of 32-byte records (shader type name, shader id, name again), then one table per vertex
+   factory. The base-pass pixel shader for the sprite factories is the entry whose type name starts with
+   `TBasePassPixelShader`; its code is found by the shader id (a record with the id, 6 bytes, a size, then the code, which
+   starts with the version token).
+3. The uniform expressions (vectors, scalars, textures; parameters with their defaults, sums of `Time`, rotations of the form
+   cos/sin of time x speed, `Periodic` = frac) follow the name copy. The pixel shader's constant table names which register
+   holds which expression, so each constant in the code maps to a parameter or a time function.
+4. `research/d3d9_bytecode.py` (written from Microsoft's public description of the token format) prints the code; the
+   interpretation below was done by hand.
+
+Checks: each material's texture list agrees with UModel's reading of `ReferencedTextures` wherever UModel prints one; the
+uniform-expression parser consumes its arrays exactly; the black orb's scalar is `DepthBias` -20, the same value round 4 read
+from the tagged data.
+
+### What every pixel shader has in common
+
+* Particle colour (RGB) and alpha arrive as vertex data; most materials use only the alpha or only the colour. The sprite UV
+  runs 0..1 over the quad. Time is the material time in seconds.
+* **Soft-particle fade.** The scene depth is decoded from the alpha of the scene-colour copy (8192 x sqrt(w) for w > 0); the
+  fade is `saturate((scene depth - sprite depth) / D)`, with `D = 1 - DepthBias` for materials that have a `DepthBias` or `Bias`
+  parameter and a literal constant otherwise (41 for the bubble sphere and core, 51 for the spikes, 21 for the hand glows and
+  the black orb, 16 for the brighten modulate, 19 for the wispy smoke). It is 1 where the scene is far behind the sprite plane
+  and 0 where the scene is at or in front of it. **This replaces round 4's reading of `DepthBias` as a camera-ward shift of the
+  sprite**, which was wrong: the parameter is the fade distance.
+* The shaders write colours up to 4 (`min(c, 4)`); the host clamps every layer to 0..1 before blending, as an 8-bit target
+  would (UNVERIFIED reading of the game's target format; see "Host" below).
+* The vertex shader is the ordinary camera-facing billboard (rotation about the view axis; velocity alignment is a switch). It
+  has no depth bias. The dynamic-parameter vertex factory carries `SphereCollapse` as vertex data, but **no bubble pixel shader
+  reads it**, so whatever that parameter does lives in a vertex shader that was not read.
+
+### Material models (formulas and constants)
+
+Notation: `uv` is the sprite UV; `R(a, q)` rotates `q` by `a` radians; `P(x)` = frac(x); `t` = time; `alpha`/`col` = particle
+alpha/colour; `fade(D)` as above.
+
+| Material (blend) | Reading |
+|---|---|
+| `Mat_SirenEnemyOrb` (additive), the bubble sphere | Texture 0 is a smoke map, texture 1 a flat signed normal map (values within +/-0.2 of zero), texture 2 `PhaseLockBubble_Dif_Tex`. Two rotating, panning reads of the smoke map, `R(0.58t, 2uv - 0.5) + (P(0.2t), P(0.1t)) + 0.5` (its red) and `R(-0.75t, 2uv) + (P(-0.4t), P(0.1t))` (its blue), make a displacement `(a, b)`. With `d2 = abs(uv - 0.5)^2` the displacement is scaled by `ring x (1 - 2 d2)`, `ring = 25 d2 - 1.5` for `d2 <= 0.1` and 1 beyond, and is zero where `ring < 0` (inside radius 0.245) or `1 - 2 d2 < 0`. Two reads of the normal map at `R(3t, uv - 0.5) + 0.5` and `R(1.5t, uv - 0.5) + 0.5` (n1, n2) give a direction `(n2.y + n1.x, sqrt(1 - n2.x^2 - n2.y^2) + n1.x)`. The bubble texture is read at `uv + displacement x direction`; result `alpha x texel x fade(41)`. The particle colour is unused. |
+| `Mat_EnemyOrbCoreColor` (additive), the violet haze | Colour `col x core`, `core` = `EnergyOrbCoreColor_Dif_Tex` read at `uv + (noise - 0.1) x (tangent-space view direction)` (a small parallax; noise is a scrolling smoke read at `uv + (P(0.4t), P(0.5t))`). Weight `core.r x alpha x mask x d2 x fade(41)`, `mask` = `EnergyOrbCenter_Dif_Mirror` read at `2uv`. The haze is zero in the middle and brightest toward the quad's edge. |
+| `Mat_SirenOrbEnergySpikes` (translucent), the blue streaks | Smoke red at `uv + (P(0.25t), 0)` shifts the spike texture's UV by `0.05 x smoke` in both axes; colour `col x spike`; alpha `saturate(spike.r x (1 - 3 m)) x alpha x fade(51)` with `m` the soft mirror mask read at `(2u, 0.5v + 0.76)`, which cuts the middle of the sprite out. |
+| `Mat_SirenOrbEnergySpikesMOD` (modulate) | Scene multiplied by `1 - fade(51) x col x spike` per channel (the particle colour is (5, 5, 5)): dark streaks under the blue ones. |
+| `Mat_SirenOrbBlackMOD` (modulate), the dark core | Scene multiplied by `1 - darkness`, `darkness = (1 - alpha) x (1 - A^2) x fade(21)`, `A = 1 - saturate(1.5 (1 - saturate(8 d2))^2)` (0 out to 0.15 of the quad, 1 from 0.354). The bubble loop scales the particle alpha to 0, so the core is a hole that is full black in the middle and clear at 0.354 of the quad. `_NoBias` (hand fizzle) has no depth fade. Because of the fade it darkens scenery behind the sprite plane, **not the lifted target's near surface**. |
+| `Mat_PowerUpTwirls` (translucent, sub-image) | The twirl atlas is read at a UV bent by two slowly rotating scroll-map reads (0.02 x); colour `(sqrt(t) - t) x col x (0.6, 0, 0.8)`, alpha `saturate(4 t.r^2) x alpha`. The loop template gives it a particle colour of about (0, 0.02, 0.04), so these are dark wisps. |
+| `Mat_SirenEnergyRibbons` (additive, mesh) | Ribbon texture read at `(2u - dynamic parameter 0, v)`; colour `saturate(u - 0.05) x b^2 x alpha x col`, `b` its blue channel. |
+| `Mat_SirenEnergySwirl` (translucent) | Colour `blue x col`, alpha `texture alpha x alpha`. |
+| `Mat_SirenHandGlow` (translucent) | `g` = the soft mirror mask at `2uv`; colour `g x col`, alpha `g x alpha x fade(21)`. |
+| `Mat_SirenHandGlowShattered` (translucent) | The star-burst texture times `col`, alpha `texture alpha x alpha x fade(21)`. |
+| `Mat_SirenHandInnerOrb` (translucent), the blue palm orb | Four reads of a nebula map in two rotating frames (0.18t about 0.5 and -0.25t about 0.8, each with pans) combine as `(n3 - n4) + (n1 - n2) + 2` and shift a read of the mirrored centre map at `2uv` (m1); with the unshifted read `m2`, `k = sat(2 m2) + 12 (1 - m2)^6 m2 (m1 - sat(2 m2))`. Colour `lerp((0.2508, 0.6524, 0.9323), 1.25 x orb texture, k)`, alpha `saturate(k) x alpha`. The particle colour is unused. |
+| `Mat_SirenHandPowerDiffuse` (translucent) | Colour is the particle colour; alpha `35 x nebula(uv + (0, P(0.2t))) x (1 - (1 - 0.1 smoke(uv + (P(0.15t), P(0.2t)))) (1 - mask))^2 x alpha x fade(16)`. |
+| `Mati_Wispy_Smoke_Cloud_SubUV` (translucent, sub-image) | Colour `a x col`, alpha `saturate(a x alpha) x fade(19)`, `a` the sub-image alpha (two frames blended by the particle's frame fraction). |
+| `Mat_SirenGlowMOD` (modulate) | Scene multiplied by `1 + min(3, fade(16) x alpha x mask(2uv) x col)`: an overbright modulate. |
+| `Mat_PhaseLockScreenEffect` (translucent, full-view) | Replaces the view by `saturate(scene^2 x col x mask)` blended by the particle alpha; the mask is `PhaseLockScreenMask02_Dif_Tex` (the second referenced texture; rounds 2-5 used the first, a UV mask). |
+| `Mat_SirenSuction` | A refraction: the scene colour read at the screen UV offset by a distortion map, alpha `sat(15 x mask x alpha) x sat((depth - 20) / 512) x fade(26) x square mask`. Not drawn by the host. |
+
+Textures (sampler state from the `Texture2D` exports): wrap addressing and sRGB unless listed. Clamp: `PhaseLockBubble_Dif_Tex`,
+`EnergyRibbon_Dif_Tex`, `EnergySwirl_Dif_Tex`, `Square_Mask_Dif`, `Tex_Lens_Flare_Wide_Prime`. Mirror: `EnergyOrbCenter_Dif_Mirror`,
+`EnergyOrbSoftMod_Dif_Mirror`. Not sRGB: `Nrm_Test` (a signed two-channel format in the game) and
+`EnergyOrbScreenUVDistortion_Nrm_Tex`. `Smoke2_GP_Dif` and `PhaseLockScreenMask02_Dif_Tex` live in `WillowGame.upk`.
+
+### The arms' tattoo glow (Master_Player, read the same way)
+
+`Mati_Siren_Hands` is an instance of `Master_Player` with both static switches off; the cache holds that permutation (id and
+switch values match). The power-emissive term of its base-pass pixel shader is, in our words: glow colour `p_PowerEmissiveColor`
+(0, 14.55, 20) x `p_EnablePowerEmissive` x `(1 - f^2)` x mask x the diffuse texture, where `f` is the red channel of a fire-tile
+texture read at `0.6 x uv + (P(0.00333 t), P(-0.0333 t))`, `mask` is the **B channel of `p_Masks` at (0.5 u, 0.5 v + 0.5)** and
+the diffuse is `p_Diffuse` at the UV. A second, always-on term uses `p_EmissiveColor` and the B channel at (0.5 u, 0.5 v).
+Rounds 1-5 read the mask at (0.5 u, v), the full-height left half, which also contains the glove silhouettes in B; that
+lit the whole sleeve. The tattoo shapes sit in the lower-left quadrant (u < 0.5, v > 0.5) of the B channel.
+
+### Not an effect of the skill: the sigil under the target
+
+The game frames show a magenta/teal eye sigil low in the view from about 0.76 s to the end of the skill. It stays at the same
+screen position in two captures with different targets and camera, so it is HUD (the action-skill indicator), not a world
+effect. This record's earlier note that it is a ground decal (`matched_650/NOTES.txt`) is wrong; it belongs to the HUD owner.
+
+### Target animation (stock chain)
+
+Read in `NATIVE_PHASELOCK_PRESENTATION.md` (Lane E, `UNVERIFIED`): the lifted pawn plays `PhaseLock_Lift` (blend-in 0.4 s) at the
+cast, then `PhaseLock_Loop`, then `PhaseLock_Fall` stretched to 0.5 s on release, then `PhaseLock_Land`; its mesh is re-centred
+in Z after 0.35 s (VInterpTo speed 5). Clip lengths for the sets that carry them are in `local/phaselock/census/target_anims.txt`.
+The Sanctuary target dummy's AnimSet has none of the four clips, so the stock data gives it no lifted animation. The host
+already looks the clips up next to the imported idle clip and plays them when they exist; round 6 added the mesh re-centring.
+No enemy with these clips is hosted yet (the slice has Marcus and the dummy), so the animation path has not been exercised.
+
+### Host (round 6)
+
+* `host/ue5/import_phaselock_fx.py` builds the models above as materials with one HLSL node each (`EXACT`), sprite UV, time,
+  scene and sprite depth and the particle colour as inputs. The brighten modulate is a UE5 modulate with an unclamped factor.
+  Host readings (all `UNVERIFIED`): each additive or translucent layer's colour is divided by its largest channel when that is
+  above 1 (keeps the hue; a per-channel clip made the spikes cyan, no clip made them white); the bubble warp is scaled by 0.3
+  (full strength frills the rim on every frame, the game's rim is clean at 1.5 and 3.0 s and frilled at 4.5 s); the violet haze
+  is multiplied by 3 (the shader's own weights give a haze several times fainter than the frames); the dark streaks under the
+  spikes (`Mat_SirenOrbEnergySpikesMOD`) are not drawn, because the shader darkens but no frame shows dark streaks; the
+  distortion `Mat_SirenSuction` is not drawn.
+* `OpenWillowPhaselockFx.cpp`: the depth-bias shift, the per-emitter colour and `HueOnly` overrides are gone (they belonged to
+  the readings above that were wrong). `OpenWillowCombatTarget.cpp`: the bubble's size calibration uses the measured texture
+  ring (0.78 of the half-width) so the factor is 0.63; the mesh re-centring; `-owbubbleradius=<uu>` stands in for the pawn's
+  mesh bounds radius so that a small test target can be compared with the game's bullymong. `OpenWillowWalker.cpp`: the
+  tattoo overlay gets the diffuse texture; more capture times (0.30-0.75 s).
+* Capture commands: `tools/run_phaselock_shots.ps1 -Out local/orch/A/roundN -Extra '-owfov=62.15','-owbubbleradius=255'`.
+
+### Round 6 comparison (matched 650 uu frames) and what is still different
+
+Host frames: `-owfov=62.15` (77.55 degrees at 16:9) and `-owbubbleradius=255` (the engine-shape dummy is much smaller than the
+adult bullymong, so its bounds radius is replaced for the comparison). Game frames: `local/realgame/phaselock/matched_650/run2`
+(0.25-4.5 s) and `size_rule/adult68` (release). Ranked by how visible the difference is, after round 6:
+
+1. **Bubble interior haze colour:** the game's band between the dark core and the rim is blue-violet (mean about (54, 56, 119)
+   at 0.6-0.85 of the rim radius); the host's is pink-violet even with the x3 calibration. The core texture is magenta; what
+   turns it blue in the game is not found.
+2. **The lifted target is not dimmer inside the bubble.** In the game the adult bullymong shows at about a third of its
+   brightness. The black orb's depth fade says it should not darken the target's near surface, and no other layer explains
+   it. Open.
+3. **Streaks are thinner than the game's soft fans** (the game's are about 40-50 px thick at 1.5 s; the shader gives a similar
+   figure for the spike texture, but the host's visible part is thinner). Dark streaks under them are not drawn.
+4. **The target's animation:** none (no stock clips for the dummy; no enemy with clips is hosted).
+5. **Hand:** the swirl arcs are heavier and whiter than the game's thin blue arcs at 0.30-0.45 s; the palm orb is a little
+   smaller; at 0.6-0.7 s the host shows the star-burst fan while the game keeps the orb in the palm.
+6. **HUD sigil** (not mine): see above.
+7. Floor pool on dark asphalt is fainter than on snow; release ring at 5.0 s is brighter in the host.
+
+### Round 7 (2026-10-04, after an independent score of 5/10 for round 6)
+
+The critic's ranked gaps were: an opaque black bubble interior with a thin pink rim; a hand orb lost behind a white star-burst at
+0.55-0.75 s; no floor pool or blue scene light; a swirl too heavy and white at 0.30-0.40 s; thin straight release rays. Changes
+(all host calibrations are `UNVERIFIED` and are marked as such in `host/ue5/import_phaselock_fx.py`, whose HLSL now uses plain
+constants such as `/ 41.0` and prose comments):
+
+* **Interior.** The black orb's darkening is capped at 0.85 and its soft fade has a floor of 0.5, set per emitter for the
+  bubble templates only (`EmitterScalars` in `OpenWillowPhaselockFx.cpp`); the hand's dark blob keeps the shader's values. The
+  game shows a translucent navy-violet interior with the target at about a third of its brightness, which the shader's own
+  fade would not give (it spares the target's near surface); the cause stays open.
+* **Rim and haze colour.** The bubble ring is tinted (0.7, 0.9, 1.3) and the haze (0.5, 0.6, 1.5): the texture is pink-violet,
+  the game's rim and band are blue. The ring's wobble now grows with the collapse value (0.15 to 0.7 of the shader's push), so the
+  rim is clean early and frayed before release, as in the 4.5 s frame.
+* **Light.** The lock light's brightness is multiplied by 4 for UE5's unitless units, which gives the pale blue floor pool
+  (`PhaselockLightIntensity()` still reports the data's units). 8 gave a hard-edged disc.
+* **Hand.** Swirl alpha x0.5 and bluer; star-burst alpha x0.4; the brighten modulate x0.4. The palm orb now reads at 0.45 and
+  0.65 s; at 0.55 s the host's hand is still partly hidden by the flash.
+* **Dark wisps** (`Mat_PowerUpTwirls`) alpha x0.5.
+* Not changed: release shards (host rays are still thin; the game's are angular ribbons), the dummy's pole shape against the
+  bullymong, the target's animation (no stock clips for the dummy), the oval look of the bubble (the host dummy's pose/camera).
+* A try with the aim point 40 uu higher missed the cast (outside the magnetism radius) and was reverted.
+
+### Round 8 (2026-10-04, after a round 7 score of 6/10)
+
+Frames: `local/orch/A/round15/` (host) against `matched_650/run2` and `size_rule/adult68` (game). Findings and changes; each host
+calibration is `UNVERIFIED`:
+
+* **The release "does not collapse" gap was a test-aid error, not an effect rule.** `SphereCollapse` is not read by any bubble
+  pixel shader, and the end template's sphere does not shrink until 0.8 of its life, so nothing in the effect data shrinks the
+  sphere. What shrinks it in the game is the draw scale, mesh bounds sphere radius at spawn / 66.7, and the pawn's bounds change
+  with its pose: the SDK probe read 290 uu at the lock and 193 uu once lifted (`size_rule/adult68`). The host's constant stand-in
+  radius gave the intro, loop and end templates the same scale. `-owbubbleradius=` now takes three values, one per template (290,
+  260, 185 for the adult bullymong: the loop's value from its measured draw scale, the end's from the 193 lifted pose and the
+  game's size at 4.8 s). The host's own dummy does not change pose, so its bubble does not shrink; the stock rule would shrink
+  it if its animation changed the bounds. `FParse::Value` stops at commas by default, which made the first try use 290 for all
+  three.
+* **Hand effect timing and arm pose.** The game's palm orb is opaque by 0.44 s. The orb's alpha scale ramps from 0 at 0.15 to 1
+  at 0.35 of its 1.25 s life (alpha 2, so opaque at about 0.25), which only allows that if the effect spawns about 0.1 s before
+  the clip's 0.25 s notify; the dark disc is gone by 0.39 s in the game, where the shader's own ramp would keep it to 0.6 s. The
+  host now starts the hand effect 0.08 s early (0.12 put the orb ahead of the game's at 0.40 s). Reading the orb's height from
+  the frames, the host arm dropped about 0.05-0.07 s before the game's, so the cast clip plays at 0.85 speed (a new rate argument
+  of `PlayAction`; the notify time is divided by the same rate). The cause (a blend-in on the game's special move, or a play-rate
+  scale from the caller's `SpecialMoveData`) was not found.
+* **Palm orb colour:** the shader's 1.25 x orb texture gives a white-blue core; the factor is 0.6 so the orb is the game's
+  saturated blue with a highlight. Star-burst alpha x0.2.
+* **Interior opacity, measured.** Method: take the annulus 0.45-0.8 of the rim radius (inside the rim, outside the target) and
+  the same pixels in the pre-cast frame, convert both to linear luminance, and report the mean ratio, the regression slope (how
+  much of the background's contrast gets through) and the correlation. Game (centre 645, 300, radius 205 px): ratio 0.44 / 0.47,
+  slope 0.26 / 0.21, correlation 0.45 / 0.37 at 1.5 / 3.0 s; mean colour (28, 32, 86) and (31, 35, 84) of 255. So the game
+  interior is neither opaque nor see-through: about a quarter of the background's contrast survives. Host with cap 0.85: slope
+  0.06 / 0.15. Host now (cap 0.72, round 15): ratio 0.57 / 0.51, slope 0.11 / 0.26, mean colour (36, 38, 122) / (41, 41, 91).
+  The host centre and radius used (640, 190, 195) are approximate, so these figures are rough. The script is
+  `local/orch/A/interior.py` (ignored).
+* **Pink fringe on the rim:** ring tint (0.55, 0.9, 1.4), haze tint (0.3, 0.5, 1.6).
+* **Floor pool:** attenuation radius x1.6, falloff exponent at least 3, light colour pulled halfway to white in RGB, gain 3
+  (an HSV blend turned the light pink).
+* **End template interior:** darkening cap 0.45 (the game's interior at release is light blue).
+* **Open:** the egg-shaped look at 3.0 s (the host dummy's pose and the camera; a re-aim after the lift missed the magnetism
+  radius); the angular ice-shard facets of the 0.75-0.8 s flash and its white bleach (the host has a smooth swirl); the release's
+  long straight shards (the host's ribbon meshes are curved swooshes, the game's shards are angular and thin; the mesh and
+  material that draws them was not identified); the fist clenching around the orb at 0.65 s (the arm clip is the same asset, so a
+  different clip or an additive layer is suspected, not checked).
+
+### Round 9 (2026-10-04, after a round 8 score of 5.5/10; the blind A/B preferred round 8 on hand and release and tied the bubble)
+
+Frames: `local/orch/A/round16/` (host, `-owbubbleradius=290,233,167`) against `matched_650/run2` and `size_rule/adult68`. Host
+calibrations are `UNVERIFIED`.
+
+* **Bubble too large during the hold: the cause was a calibration mistake, plus a reference mix-up.** (1) Round 6 changed the
+  ring factor from the ridge detector's 0.88 of the sprite half-width to the texture ring's 0.78. The 48.6 uu per draw-scale
+  unit was measured with the ridge detector (the blue-minus-red ridge, which lies in the rim's outer glow), so the host must use
+  the same 0.88: with 0.78 the host's ridge, found by the same detector on the round 15 frame, was 254 px against a calculated
+  225 (centre 640, 140; the game's 202-214). `TextureRim` is back at 0.88 (factor 0.56). (2) The reference frames are the
+  `matched_650/run2` cast, whose loop scale (bubble radius 165-174 uu / 48.6 = 3.4-3.6, bounds equivalent about 227-233 uu) is
+  smaller than the `adult68` cast's (260). The loop stand-in is therefore 233 for these frames. The stand-ins remain per cast, because the pawn's
+  bounds at each template's spawn differ from cast to cast.
+* **Release size:** with the factor corrected, 167 uu for the end template gives a radius near the game's 70-75 px.
+* **Black sphere and swirl at 0.30-0.40 s: the round 8 change caused it.** Starting the whole hand effect 0.08 s early moved the
+  swirl (size curve 15x to 1x over a 0.2 s life) and the disc (2.8x to 1x) to later, smaller points on their curves at 0.30 s. Only the
+  palm orb ("Center") and the dark disc ("ModulateBlack") need to run ahead (their alpha ramps), so the effect starts at the
+  notify again and those two emitters start 0.1 s into their particles' life (`AgeShifts` in `OpenWillowPhaselockFx.cpp`). The
+  swirl and sphere sizes at 0.30 s and 0.40 s return to round 7's.
+* **Tattoos:** the glow colour is multiplied by 0.3 so the bands stay solid blue.
+* **Ray streaks:** the spikes' alpha is halved and each streak is read compressed 1.6x along its length (it ends at 0.31 and 0.69
+  of the sprite).
+* **Floor glow:** between rounds 7 and 8: gain 5, radius x1.2, falloff exponent at least 3, colour halfway to white. A faint pale
+  patch under the bubble that lights nearby ground.
+* **Release interior:** the end template's darkening cap is 0.65 (was 0.45), so the interior is less bright.
+* Open (unchanged): ice-shard flash, straight release shards, fist clench, target animation, egg shape.
+
+### Round 10 (2026-10-04, after a round 9 score of 5.5/10; the blind A/B kept round 9's hand and preferred round 8's bubble and release)
+
+Frames: `local/orch/A/round18/` (host, `-owbubbleradius=290,233,210`) against `matched_650/run2` and `size_rule/adult68`. Calibrations `UNVERIFIED`.
+
+* **Release size: round 9's "70-75 px radius" was wrong.** Re-measured with the ridge detector (`local/orch/A/ridge.py`: the annulus with
+  the highest mean blue-minus-red on a 4x downsampled 1280 px frame): adult68 at 4.80 s centre (648, 228) radius 112 px, at 5.00 s radius 176 px
+  (the hold frames of the same cast read 232 at 1.5 and 3.0 s). The critic's reading of the 640 px sheet (shell about 180 px across, radius about 90
+  there, 180 px of 1280) is the 4.80 s figure. The end-template stand-in is therefore 210 (round 8 used 185 with factor 0.63; the factor is now
+  0.56). The end template's dark cap stays 0.65 (the interior still reads as a void).
+* **Ray streaks:** between rounds 8 and 9: full alpha, read 1.15x compressed along their length (round 8 full strength and uncompressed; round 9
+  0.5 and 1.6x was invisible; 0.8 and 1.25x was still faint). Translucent blue streaks now show to the left and right of the bubble.
+* **Floor glow:** gain 8, radius x1 (the data's 500), falloff exponent at least 1.5, colour 35% toward white: a pale patch on the ground under
+  the target. Rounds 8-9 (gain 3-5, x1.2-1.6) were invisible and round 7's (gain 8, falloff 3, full radius) was a hard disc.
+* **Black hole at 0.30 s:** yes, the age shift did shrink it: shifting the disc's particle age moved its size curve (2.8x to 1x) too. The disc's
+  size curve is now read at the unshifted age (only its alpha runs ahead), and the orb shift is 0.05 s instead of 0.1 s (the orb was about 45 px
+  at 0.40 s where the game has none yet). The hole is about 280 px against 300 in the game.
+* **Rim:** a white-hot inner edge (the brightest part of the ring pushed toward white-blue).
+* Open (unchanged): interior opacity (the host shows the street through the bubble more than the game), ice-shard flash, straight release shards,
+  fist clench, target animation, egg shape.
+
+### Round 11 (2026-10-04, consolidation after round 10 scored 5.5/10; the blind A/B kept round 10's bubble and preferred round 8's hand and release)
+
+Frames: `local/orch/A/round22/` (host, `-owbubbleradius=290,233,210`). Calibrations `UNVERIFIED`.
+
+* **Which emitter makes the 0.65 s spikes:** the hand template's `EndBrightness` emitter (material `Mat_SirenHandGlowShattered`, the star-burst
+  texture on a rectangular sprite). It has a 0.25 s emitter delay, spawns 2 particles lasting 0.25-0.45 s, and its size multiplier runs from 0 to
+  15 over 1.5 life units, so it flashes at 0.5-0.95 s after the effect starts, i.e. at about 0.65 s in the frames. It fires because the stock
+  template has it. The game frames show no such rays, only a few sparks, and the cause of that difference was not found (the material may draw
+  something else in the game than the star texture). The host now multiplies that emitter's strength by 0.15 (`Gain`, a new per-emitter
+  material scalar set in `EmitterScalars`).
+* **Hand at 0.40 s:** the palm orb now starts 0.03 s into its life (was 0.05 s): no orb is visible at 0.40 s, the palm is open with wide arcs, and
+  the orb is solid by 0.45 s.
+* **Ground glow:** gain 6.5, radius 0.85 of the data's, falloff exponent at least 1.75, colour 20% toward white: a soft pale-blue patch rather than
+  round 10's hard white pool; a wide, soft streak replaces the thin ground rays (the spike texture is read at 0.55x on the vertical axis, so each
+  streak is about 1.8x wider and about two fit on a sprite).
+* **Release:** the end template's spikes are at half strength and its three ribbon meshes at 0.4, so fewer straight lines cross the interior.
+  The shards remain straight; making them curved ribbons outside the bubble was not done.
+* **0.30 s void: not fixed.** The void is about 200 px against the game's 330. Two ways of enlarging it (the quad 1.6x, and widening the core inside
+  the shader by 1.5x) both made the dark disc fade out to a faint blue ring instead of growing, although the disc's alpha and the darkening formula
+  are unchanged; cause not found. The host keeps the shader's own size. Recorded as open together with the 0.80 s whiteout and the interior opacity.
+
+### Round 12 (2026-10-04, after a round 11 score of 6.3/10)
+
+Frames: `local/orch/A/round25/` (host, normal FOV) and `round25fp/` (host with `-owfpfov=45`), both `-owfov=62.15 -owbubbleradius=290,233,210`.
+Calibrations `UNVERIFIED`.
+
+* **Foreground FOV adoption.** With Lane C's `-owfpfov=<n>` the arms and gun use UE 5.8's first-person primitive FOV. The hand effect's pooled
+  sprite components (`UOpenWillowFxComponent`) now take the same first-person primitive type when the arms are first-person relevant
+  (`bFirstPersonSpace`, set in the hand-effect spawn code in `UpdatePhaselockPresentation`; Lane C's BeginPlay hunk is untouched). The tattoo
+  overlay is a material on the arms and follows them already. The bubble, the screen effect and the light stay in world space. Checked by
+  capture: with the flag the swirl, disc and orb stay on the hand, and the hand sheet is much closer to the game (`review7/hand_pairs_fp45.jpg`):
+  the void is large and black, the hand and orb are the right size. The effect is a separate decision for the maintainer (the flag is still opt-in).
+* **The 0.30 s void.** Diagnosis, with a run-time override (`-owfxscalar=Template:Emitter:Parameter:Value[;...]`, no rebuild or import) and a
+  dark-pixel measure over the region above the hand (fraction of pixels below 20/255):
+  * disabling the disc (`DarkCap` 0) removes the void entirely (0.6% dark): the void is that one emitter's, not another layer's;
+  * removing the depth fade (`FadeFloor` 1) with the core 1.5x wider changed little: the soft-particle fade is not the cause;
+  * the core 1.5x wider grew the dark area from about 10% to 25-33%. Round 11 had read this as "fading out" because the enlarged core is a gradient
+    the street shows through, not a solid black disc as in the game; **the cause was the shader's soft falloff, not the size**;
+  * the game's size is also what the narrower foreground FOV gives: with `-owfpfov=45` the unchanged disc is 21% dark and about the game's width.
+  Fix for the normal-FOV case: `CoreScale` 1.6 (wider core in the same quad) and `CoreSharp` 2.5 (steeper edge: coverage x2.5, saturated) on the
+  hand's black orb only; both are skipped when the hand effect is drawn in first-person space. The bubble's black orb keeps the shader's values.
+  The void is now solid and slightly larger than the game's.
+* **Rim weight.** Four more reads of the bubble ring, moved radially by +/-4% and +/-8%, are added as a violet-blue halo (x0.3, tint 0.7, 0.6,
+  1.3): the rim is a soft glow of roughly 12-15 px with a violet haze inside, against the texture ring's 5 px.
+* **Not done:** the wide horizontal blue shafts beside the bubble (150-250 px, lower priority), the frothy white-cyan rim at 4.50 s, the 0.80 s
+  whiteout, interior opacity, the other open items.
+
+### Round 13 (2026-10-04, after a round 12 score of 6/10)
+
+The blind A/B put round 12's thick rim worse than round 11's, and the normal-FOV void widening worse than round 11's hand; round 12's
+release and first-person support were kept.
+
+* **Reverted:** the bubble rim halo (round 11's rim is back) and the hand void's `CoreScale` / `CoreSharp` (in the shader and the table).
+  With first-person space on, the void is unchanged anyway and is the right size. Round 12's note above on the void's diagnosis (the soft falloff,
+  not the size) stands.
+* **Kept:** first-person space for the hand sprites (`bFirstPersonSpace`), the release changes, and the `-owfxscalar=Template:Emitter:Parameter:Value[;...]`
+  diagnostic (below).
+* **Hand, with `-owfpfov=45` (all captures this round use it):** the swirl was a pale ring about 170 px where the game has saturated cyan ribbons
+  with dark gaps about 280 px across. `Mat_SirenEnergySwirl` is back to alpha 0.8 and a more saturated cyan (0.25, 0.75, 1.3); the palm orb's blue
+  is deeper (x0.7) and its texture factor 0.9 (veins). With the first-person field of view these give the right ribbon size and a deep-blue orb. A
+  1.3x orb size table entry made the orb too large (about 90 px against 70) and was removed. The hand and arm remain smaller than the game's (arm
+  mesh and foreground FOV are not this lane's) and the forward fist (a different clip pose) was not attempted.
+* **Quest suite with the flag on:** run through a local copy of `tools/test_quest.ps1` that appends `-owfpfov=45` to both launches
+  (`local/orch/A/test_quest_fp.ps1`, ignored).
+
+`-owfxscalar` (diagnostic, host only): on the command line, `-owfxscalar=Part_SirenASHandOrb:ModulateBlack:DarkCap:0` sets that material scalar on
+every sprite of the named emitter of the named template at creation time, so a material or emitter hypothesis can be tested without a rebuild or an
+asset import. Several overrides are separated by `;`. It is read once and does nothing when absent.
+
+### Round 14 (2026-10-05): why the bubble interior read navy and translucent
+
+Question from every critic since round 8: the interior and the 0.30 s void read navy/royal blue and translucent where the game's are near-black
+violet. Method: the four hypotheses were checked with `-owfxscalar` (no rebuild), fp45 captures (`local/orch/A/dg_*`), interior colour sampled on
+the 0.2-0.45 / 0.45-0.8 / 0.8-0.95 annuli of the rim (the rim found by a blue-minus-red ridge search; the game's from `matched_650`).
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| The dark layer is the wrong blend (additive or modulate-vs-translucent) | Read the compiled shader again: it multiplies the scene by `1 - darkness`; the host draws it as translucent black at that opacity | equivalent for a black target; not the cause |
+| The dark layer is drawn behind the blue layers | Sort priorities: ring 3, dark layer 4 in both the game's emitter order and the host's | dark layer is drawn after the ring and the haze, as in the game; not the cause |
+| The dark layer is drawn additively | Material blend mode in the import report: translucent | not the cause |
+| The particle colour/alpha it is fed is wrong | The loop template scales its alpha to 0 and colour to 0, so darkness = full coverage; the host reads the same values | not the cause |
+| **The host's own compensations** | `ModulateBlack` with the shader's values (`DarkCap` 1, `FadeFloor` 1) gives a near-black interior (annulus mean (13, 16, 55) against the game's (28, 32, 86)); the compensations (cap 0.72, floor 0.5, haze x3 with a blue tint, ring tint (0.55, 0.9, 1.4)) had left (26, 32, 108) | **the cause**: three calibrations of rounds 5-8, made when the interior was magenta, together made it navy and see-through |
+
+Also found: with the ring layer removed (`Sphere` gain 0) the interior is (27, 29, 84), i.e. the ring texture's navy disc is what fills the interior in
+both the game and the host; the game's near-black comes from the dark layer darkening it, with the purple from the twirl wisps (`ShockFlash`).
+
+Changes (all `UNVERIFIED` calibrations):
+* The ring texture's dim part (its navy disc) is tinted violet (0.9, 0.35, 1.0) and its bright part keeps the white-blue tint, by ring luminance.
+* The dark layer's cap 0.8 and fade floor 0.65 (were 0.72 and 0.5).
+* The wisps (`Mat_PowerUpTwirls`) are the purple mottling: rounds 7-13 drew them at alpha x0.5 with the shader's own colour (x1); round 14 draws
+  them at alpha x0.6 with colour x5 (soft purple clouds). A first try at the shader's own alpha and colour (x1, x1) gave hard black cracks.
+* Ground wash: **reverted in round 15.** Round 14's compact light (radius 0.55x, gain 8, falloff at least 1.25) made the disc disappear in every bubble
+  frame (blind A/B). A 0.7x radius (gain 6.5, falloff 1.75) kept the disc at 1.5 s but nearly lost it at 3.0 and 4.5 s, so the round 11-13 light
+  (gain 6.5, radius 0.85x, falloff at least 1.75) is back; the disc stays wider than the game's 250x110 px.
+* The 0.30 s void: not changed; with first-person space on it is solid black (the hand's black orb uses the shader's values).
+* Not done: side streaks 80-100 px left and right of the sphere (the streak sprites take the template's random rotation; orienting them
+  horizontally needs a rotation rule that was not read).
