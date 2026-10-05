@@ -335,13 +335,17 @@ def attachments_step(args):
         info = mic_parameters(reader_path, cooked, home, mic_path)
         out = {}
         for parameter, tex in info['textures'].items():
-            if parameter in ('p_Diffuse', 'p_Normal'):
+            if parameter in ('p_Diffuse', 'p_Normal', 'p_Masks'):
                 f = texture_file(tex)
                 if f:
-                    out['Diffuse' if parameter == 'p_Diffuse' else 'Normal'] = f
+                    out[{'p_Diffuse': 'Diffuse', 'p_Normal': 'Normal', 'p_Masks': 'Masks'}[parameter]] = f
         return out
 
-    meshes, materials, heads = {}, {}, {}
+    def mic_vectors(mic_path):
+        home = home_package(reader, mic_path)
+        return mic_parameters(reader_path, cooked, home, mic_path)['vectors'] if home else {}
+
+    meshes, materials, heads, bodies = {}, {}, {}, {}
     for pawn in compose:
         kind = {'Skel_GenericMale': 'CitizenMale', 'Skel_GenericFemale': 'CitizenFemale'}.get(pawn['mesh'].rsplit('.', 1)[-1])
         head = pawn['materials'][0] if pawn['materials'] else None
@@ -352,6 +356,14 @@ def attachments_step(args):
                               'textures': {'Diffuse': texture_file(head['textures']['p_Diffuse'])}}
                 if head['textures'].get('p_Normal'):
                     heads[key]['textures']['Normal'] = texture_file(head['textures']['p_Normal'])
+                if head['textures'].get('p_Masks'):
+                    heads[key]['textures']['Masks'] = texture_file(head['textures']['p_Masks'])
+                if head.get('parent'):
+                    heads[key]['vectors'] = mic_vectors(head['parent'])
+        body = pawn['materials'][1] if len(pawn['materials']) > 1 else None
+        if kind and body and body.get('parent') and kind not in bodies:
+            bodies[kind] = {'kind': kind, 'id': kind, 'parent': body['parent'], 'textures': mic_textures(body['parent']),
+                            'vectors': mic_vectors(body['parent'])}
         for att in pawn['attachments']:
             mesh_path = att.get('static_mesh')
             if not mesh_path or mesh_path in meshes:
@@ -369,16 +381,18 @@ def attachments_step(args):
                 for name, mic_package in default_mics:
                     row = reader.db.execute("select path from ex where name=? and pkg=? and class like '%MaterialInstanceConstant'", (name, mic_package)).fetchone()
                     if row:
-                        meshes[mesh_path]['default_materials'].append({'name': name, 'path': row[0], 'textures': mic_textures(row[0])})
+                        meshes[mesh_path]['default_materials'].append({'name': name, 'path': row[0], 'textures': mic_textures(row[0]),
+                                                                        'vectors': mic_vectors(row[0])})
             if mesh_path in meshes and 'bones' in meshes[mesh_path]:
                 meshes[mesh_path]['bones'].add(att['bone'])
             for mat in att.get('materials') or []:
                 if mat and mat.get('parent') and mat['parent'] not in materials:
-                    materials[mat['parent']] = {'id': 'MI_' + S.leaf(mat['parent']), 'textures': mic_textures(mat['parent'])}
+                    materials[mat['parent']] = {'id': 'MI_' + S.leaf(mat['parent']), 'textures': mic_textures(mat['parent']),
+                                                'vectors': mic_vectors(mat['parent'])}
     job = {'tool': TOOL, 'generated': S.now(), 'slice_dir': str(AMBIENT), 'dest': ATTACH_DEST,
            'meshes': [{**m, 'bones': sorted(m['bones'])} for m in meshes.values() if m.get('gltf')],
            'parent_materials': list(materials.values()),
-           'heads': list(heads.values()),
+           'heads': list(heads.values()), 'bodies': list(bodies.values()),
            'missing_meshes': [k for k, m in meshes.items() if not m.get('gltf')]}
     S.write_json(AMBIENT / 'attach_job.json', job)
     S.write_json(AMBIENT / 'attach_extract.json', {'tool': TOOL, 'generated': S.now(), 'records': records})

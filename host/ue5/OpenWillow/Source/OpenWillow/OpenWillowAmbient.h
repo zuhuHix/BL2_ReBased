@@ -54,6 +54,8 @@ struct FOpenWillowAmbientAttachment
     FString Mesh, Bone, Material;   // UE asset paths; bone of the imported skeleton
     FVector Location = FVector::ZeroVector;
     FQuat Rotation = FQuat::Identity;
+    FVector Scale = FVector::OneVector;
+    TMap<FString, FLinearColor> Vectors;   // this pawn's material-clone colours for the zone material
     bool bTint = false;
     FLinearColor Tint = FLinearColor::White;
 };
@@ -65,6 +67,8 @@ struct FOpenWillowAmbientSpawn
     float Yaw = 0;
     int32 StartNode = INDEX_NONE;
     bool bWander = false;           // false = "Perch Only AI" (snapped to the first perch, stays there)
+    FString BodyMaterial;           // slot 1 (zone material of the kind's body), empty = the kind's own
+    TMap<FString, FLinearColor> HeadVectors, BodyVectors;
     FString HeadMaterial;           // material for slot 0 (this pawn's head texture), empty = the kind's own
     TArray<FOpenWillowAmbientAttachment> Attachments;   // hair, hats, gear seen on the live pawn
     bool bFixedZ = false;           // the manifest's height is the pawn's real height (observed); no floor trace

@@ -89,8 +89,9 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
 - **Maya prototype:** in UE5 with Infinity and Phaselock as host prototypes (not stock logic).
 - **Ambient citizens (2026-10-04):** male and female Sanctuary Citizens spawn behind `-owambient`, with stock perch
   clips and node chains under stand-in movement rules (UNVERIFIED). Round 2 added heads, hair and hats copied from
-  what the real game's live citizens carried, Maya's ink line and the perch clips' root motion (critic 5.5/10). Not
-  done: body garment variants, `Master_NPC` zone colours, Resistance patrols. See
+  what the real game's live citizens carried, Maya's ink line and the perch clips' root motion (critic 5.5/10). Round 3
+  applied the attachments' own component transforms and zone colours (`UNVERIFIED` formula); a blind A/B judged it a
+  little closer than round 2. Not done: body garment variants, Resistance patrols. See
   `docs/verification/SANCTUARY_AMBIENT_NPCS.md`.
 - **Inventory menu:** the real StatusMenu movie runs under Ruffle inside UE5 with a host adapter
   (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.
@@ -160,7 +161,8 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
 - **Phaselock effects:** `research/particle_system.py` reads cooked `ParticleSystem` templates (layouts checked by
   oracles, nothing rendered yet); see `docs/verification/PHASELOCK_STOCK_DATA.md`. Since 2026-10-04 the effect materials
   follow own-words notes on their compiled shaders (Round 6); an independent critic scored round 11 at 6.3/10 and round 13 at
-  6/10; round 15 (violet interior) tied or edged round 13 in a blind A/B. The Sanctuary dummy stands on the lane floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
+  6/10; round 15 (violet interior) tied or edged round 13 in a blind A/B. The Sanctuary dummy
+  stands on the lane floor; the earlier "kneeling" was an origin-placement error (DECISIONS 2026-10-01).
 - **Tests:** `ctest --test-dir build -C Release`, `python tools/verify_packages.py ...`,
   `node tests/inventory_navigation_test.js`, `python tests/script_disasm_test.py`, `python tests/weapon_paint_test.py`,
   `python tests/particle_system_test.py`, and the

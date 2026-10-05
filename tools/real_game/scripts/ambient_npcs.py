@@ -182,7 +182,7 @@ def amb_reaim():
         return None
     pc = get_pc()
     me = pc.Pawn.Location
-    dx, dy, dz = pawn.Location.X - me.X, pawn.Location.Y - me.Y, pawn.Location.Z - (me.Z + 64.0) - 20.0
+    dx, dy, dz = pawn.Location.X - me.X, pawn.Location.Y - me.Y, pawn.Location.Z + 40.0 - (me.Z + 64.0)
     yaw = math.degrees(math.atan2(dy, dx))
     pitch = math.degrees(math.atan2(dz, math.hypot(dx, dy)))
     pc.SetRotation(unrealsdk.make_struct("Rotator", Pitch=int(pitch * 65536 / 360), Yaw=int(yaw * 65536 / 360), Roll=0))
@@ -295,6 +295,12 @@ def amb_compose(name):
                     "scale": [round(a.RelativeScale.X, 4), round(a.RelativeScale.Y, 4), round(a.RelativeScale.Z, 4)],
                     "component": _name(comp), "class": comp.Class.Name if comp else None}
             try:
+                # The component's own placement relative to its bone (the Attachments entry's RelativeLocation is zero): translation,
+                # rotation (rotator units), uniform Scale and per-axis Scale3D.
+                item["comp_translation"] = _vec(comp.Translation)
+                item["comp_rotation"] = [comp.Rotation.Pitch, comp.Rotation.Yaw, comp.Rotation.Roll]
+                item["comp_scale"] = round(float(comp.Scale), 5)
+                item["comp_scale3d"] = [round(comp.Scale3D.X, 5), round(comp.Scale3D.Y, 5), round(comp.Scale3D.Z, 5)]
                 item["static_mesh"] = _name(comp.StaticMesh)
                 item["hidden"] = bool(getattr(comp, "HiddenGame", False))
                 item["materials"] = [_mic_info(m) for m in comp.Materials]

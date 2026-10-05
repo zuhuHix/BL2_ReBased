@@ -196,6 +196,44 @@ def attachment_transforms(kind, bones):
     return out
 
 
+def rotator_matrix(pitch, yaw, roll):
+    """UE rotator (65536 units per turn) to a column-convention rotation matrix: v' = R v (FRotationMatrix, transposed)."""
+    import numpy as np
+    p, y, r = (v * 2.0 * math.pi / 65536.0 for v in (pitch, yaw, roll))
+    sp, cp, sy, cy, sr, cr = math.sin(p), math.cos(p), math.sin(y), math.cos(y), math.sin(r), math.cos(r)
+    m = np.array([[cp * cy, cp * sy, sp],
+                  [sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, -sr * cp],
+                  [-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp]])
+    return m.T
+
+
+def component_transform(bone_rel, att):
+    """Bone-relative placement of one attached static mesh: the bone attachment frame (bone_rel, from attachment_transforms) followed by
+    the component's own Translation / Rotation / Scale x Scale3D (UE3, in the bone frame). The component transform is carried into the
+    imported (Y-mirrored) frame by conjugation with the mirror; older captures without those fields keep the bone frame alone."""
+    import numpy as np
+    from prepare_character_anims import MIRROR, to_quat
+    rel = np.eye(4)
+    loc, quat = bone_rel
+    x, y, z, w = quat
+    rel[:3, :3] = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                   [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                   [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    rel[:3, 3] = loc
+    if 'comp_translation' not in att:
+        return list(loc), list(quat), [1.0, 1.0, 1.0]
+    t3 = np.eye(4)
+    scale = [att['comp_scale'] * v for v in att['comp_scale3d']]
+    t3[:3, :3] = rotator_matrix(*att['comp_rotation']) @ np.diag(scale)
+    t3[:3, 3] = att['comp_translation']
+    t5 = MIRROR @ t3 @ MIRROR
+    total = rel @ t5
+    columns = total[:3, :3]
+    sizes = np.linalg.norm(columns, axis=0)
+    rotation = columns / sizes
+    return [round(float(v), 4) for v in total[:3, 3]], [round(float(v), 6) for v in to_quat(rotation)], [round(float(v), 5) for v in sizes]
+
+
 def annotate_looks(spawns, compose_file, kinds, report):
     """Add head material and attachments (hair, hats, gear) to the observed spawns from an amb_compose capture."""
     compose = {row['path']: row for row in json.loads(Path(compose_file).read_text(encoding='utf-8'))}
@@ -207,10 +245,17 @@ def annotate_looks(spawns, compose_file, kinds, report):
             missing += 1
             continue
         head = row['materials'][0] if row['materials'] else None
+        body = row['materials'][1] if len(row['materials']) > 1 else None
         if head and head.get('textures', {}).get('p_Diffuse'):
             key = f'{spawn["kind"]}_{head["textures"]["p_Diffuse"].rsplit(".", 1)[-1]}'
             if key in report['heads']:
                 spawn['head_material'] = report['heads'][key]
+                if report['zone'].get('head:' + key):
+                    spawn['head_vectors'] = {k: v[:3] for k, v in (head.get('vectors') or {}).items()}
+        if body and report.get('bodies', {}).get(spawn['kind']):
+            spawn['body_material'] = report['bodies'][spawn['kind']]
+            if report['zone'].get('body:' + spawn['kind']):
+                spawn['body_vectors'] = {k: v[:3] for k, v in (body.get('vectors') or {}).items()}
         items = []
         for att in row['attachments']:
             mesh = att.get('static_mesh')
@@ -222,9 +267,12 @@ def annotate_looks(spawns, compose_file, kinds, report):
             if mats and mats[0].get('parent'):
                 mat = report['materials'].get('MI_' + mats[0]['parent'].rsplit('.', 1)[-1])
             mat = mat or report['materials'].get(f'MI_{mesh.rsplit(".", 1)[-1]}_0')
-            loc, quat = transforms[spawn['kind']][att['bone']]
-            item = {'mesh': info['asset'], 'bone': att['bone'], 'location': loc, 'quat': quat, 'material': mat}
-            if 'Hair' in mesh and mats and mats[0].get('vectors', {}).get('p_AColorMidtone'):
+            loc, quat, scale = component_transform(transforms[spawn['kind']][att['bone']], att)
+            item = {'mesh': info['asset'], 'bone': att['bone'], 'location': loc, 'quat': quat, 'scale': scale, 'material': mat}
+            zone = bool(mat) and report['zone'].get(mat.rsplit('/', 1)[-1], False)
+            if zone and mats and mats[0].get('vectors'):
+                item['vectors'] = {k: v[:3] for k, v in mats[0]['vectors'].items()}
+            if not zone and 'Hair' in mesh and mats and mats[0].get('vectors', {}).get('p_AColorMidtone'):
                 a = mats[0]['vectors']['p_AColorMidtone']
                 item['tint'] = [round(min(1.0, v * HAIR_GAIN), 4) for v in a[:3]]
             items.append(item)

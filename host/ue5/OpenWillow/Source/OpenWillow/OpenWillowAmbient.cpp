@@ -77,6 +77,29 @@ FString AssetPath(const FString& Path)
     return Path + TEXT(".") + FPaths::GetBaseFilename(Path);
 }
 
+TMap<FString, FLinearColor> ReadColours(const TSharedPtr<FJsonObject>& J, const TCHAR* Key)
+{
+    TMap<FString, FLinearColor> Out;
+    const TSharedPtr<FJsonObject>* Object = nullptr;
+    if (J->TryGetObjectField(Key, Object) && Object && *Object)
+        for (const auto& Pair : (*Object)->Values)
+        {
+            const TArray<TSharedPtr<FJsonValue>>* V = nullptr;
+            if (Pair.Value->TryGetArray(V) && V && V->Num() >= 3)
+                Out.Add(FString(*Pair.Key), FLinearColor((*V)[0]->AsNumber(), (*V)[1]->AsNumber(), (*V)[2]->AsNumber(), 1.f));
+        }
+    return Out;
+}
+
+// The pawn's own material-clone colours on a zone material instance (a dynamic instance per pawn).
+UMaterialInterface* Dress(UMaterialInterface* Base, const TMap<FString, FLinearColor>& Colours, UObject* Outer)
+{
+    if (!Base || Colours.Num() == 0) return Base;
+    UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Base, Outer);
+    for (const auto& Pair : Colours) Dynamic->SetVectorParameterValue(FName(*Pair.Key), Pair.Value);
+    return Dynamic;
+}
+
 // Fixed seed per pawn so that a capture run repeats (the original's random choices are native and not reproduced).
 FRandomStream MakeStream(const FString& Id) { return FRandomStream(int32(GetTypeHash(Id) & 0x7fffffff)); }
 }
@@ -173,6 +196,9 @@ void FOpenWillowAmbientWorld::Load(const FString& File)
         S->TryGetBoolField(TEXT("hold"), Out.bHold);
         S->TryGetBoolField(TEXT("fixed_z"), Out.bFixedZ);
         S->TryGetStringField(TEXT("head_material"), Out.HeadMaterial);
+        S->TryGetStringField(TEXT("body_material"), Out.BodyMaterial);
+        Out.HeadVectors = ReadColours(S, TEXT("head_vectors"));
+        Out.BodyVectors = ReadColours(S, TEXT("body_vectors"));
         const TArray<TSharedPtr<FJsonValue>>* Worn = nullptr;
         if (S->TryGetArrayField(TEXT("attachments"), Worn) && Worn)
             for (const auto& WornValue : *Worn)
@@ -184,9 +210,13 @@ void FOpenWillowAmbientWorld::Load(const FString& File)
                 A->TryGetStringField(TEXT("material"), Att.Material);
                 Att.Material = AssetPath(Att.Material);
                 Att.Location = Vec(A, TEXT("location"));
+                Att.Vectors = ReadColours(A, TEXT("vectors"));
                 const auto& Q = Arr(A, TEXT("quat"));
                 if (Q.Num() != 4) Missing(Out.Id + TEXT(": attachment quat is not 4 numbers"));
                 Att.Rotation = FQuat(Q[0]->AsNumber(), Q[1]->AsNumber(), Q[2]->AsNumber(), Q[3]->AsNumber()).GetNormalized();
+                const TArray<TSharedPtr<FJsonValue>>* ScaleList = nullptr;
+                if (A->TryGetArrayField(TEXT("scale"), ScaleList) && ScaleList && ScaleList->Num() == 3)
+                    Att.Scale = FVector((*ScaleList)[0]->AsNumber(), (*ScaleList)[1]->AsNumber(), (*ScaleList)[2]->AsNumber());
                 const TArray<TSharedPtr<FJsonValue>>* Tint = nullptr;
                 if (A->TryGetArrayField(TEXT("tint"), Tint) && Tint && Tint->Num() == 3)
                 {
@@ -255,8 +285,13 @@ bool AOpenWillowAmbientNpc::Setup(TSharedPtr<const FOpenWillowAmbientWorld> InWo
     if (!Clip(TEXT("idle")) || !Clip(TEXT("walk"))) return false;
     if (!Spawn.HeadMaterial.IsEmpty())
     {
-        if (UMaterialInterface* Head = LoadObject<UMaterialInterface>(nullptr, *AssetPath(Spawn.HeadMaterial))) Mesh->SetMaterial(0, Head);
+        if (UMaterialInterface* Head = LoadObject<UMaterialInterface>(nullptr, *AssetPath(Spawn.HeadMaterial))) Mesh->SetMaterial(0, Dress(Head, Spawn.HeadVectors, this));
         else UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT %s: head material %s did not load"), *Spawn.Id, *Spawn.HeadMaterial);
+    }
+    if (!Spawn.BodyMaterial.IsEmpty())
+    {
+        if (UMaterialInterface* Body = LoadObject<UMaterialInterface>(nullptr, *AssetPath(Spawn.BodyMaterial))) Mesh->SetMaterial(1, Dress(Body, Spawn.BodyVectors, this));
+        else UE_LOG(LogTemp, Warning, TEXT("OWAMBIENT %s: body material %s did not load"), *Spawn.Id, *Spawn.BodyMaterial);
     }
     // Ink line: a copy of the mesh that follows the body, back faces only, pushed out along the normal (the material is the
     // inverted-hull one host/ue5/import_character_menu_look.py builds for Maya; the original's shader is not read, UNVERIFIED).
@@ -279,11 +314,13 @@ bool AOpenWillowAmbientNpc::Setup(TSharedPtr<const FOpenWillowAmbientWorld> InWo
         Component->SetCastShadow(true);
         Component->SetupAttachment(Mesh, FName(*Att.Bone));
         Component->SetRelativeLocationAndRotation(Att.Location, Att.Rotation.Rotator());
+        Component->SetRelativeScale3D(Att.Scale);
         Component->RegisterComponent();
         if (!Att.Material.IsEmpty())
             if (UMaterialInterface* Look = LoadObject<UMaterialInterface>(nullptr, *Att.Material))
             {
-                if (Att.bTint)
+                if (Att.Vectors.Num() > 0) Component->SetMaterial(0, Dress(Look, Att.Vectors, this));
+                else if (Att.bTint)
                 {
                     UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Look, this);
                     Dynamic->SetVectorParameterValue(TEXT("Tint"), Att.Tint);

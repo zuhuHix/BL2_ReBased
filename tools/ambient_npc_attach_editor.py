@@ -10,6 +10,11 @@ AI-assisted (Claude), 2026-10-04. Reads OPENWILLOW_AMBIENT_ATTACH_JOB (local/sli
 * ``M_OW_AmbientOutline`` the inverted-hull ink line of ``import_character_menu_look.py`` (same nodes: unlit near-black, back faces only,
                         pushed out along the vertex normal by ``ThicknessCm``). It is the only ink-line material in the project
                         (Marcus and the dummy have none).
+* ``M_OW_NPC_Zone``     the citizens' colour path: ``p_Masks`` is two maps side by side (left half light/dark, right half zone mask,
+                        read from the textures; the weapon master stacks them vertically), the zone colours come from the nine
+                        ``p_?Color{Hilight,Midtone,Shadow}`` vectors and ``p_ColorD`` exactly as the live pawn's material clone holds them. The
+                        mixing rule is copied from the weapon-paint reading of Master_Gun and applied to Master_NPC by analogy:
+                        UNVERIFIED (Master_NPC's shader was not read).
 * textures, material instances, one StaticMesh per hair/hat/gear mesh and one head material per head texture set.
 
 It also moves the citizens' own body and head material instances (``Ambient/<Kind>/Materials``) onto ``M_OW_NPC_Tint`` so they
@@ -26,7 +31,7 @@ tools = unreal.AssetToolsHelpers.get_asset_tools()
 eal = unreal.EditorAssetLibrary
 mel = unreal.MaterialEditingLibrary
 MP = unreal.MaterialProperty
-report = {'meshes': {}, 'materials': {}, 'heads': {}, 'warnings': []}
+report = {'meshes': {}, 'materials': {}, 'heads': {}, 'bodies': {}, 'zone': {}, 'warnings': []}
 
 
 def log(message):
@@ -62,6 +67,8 @@ def texture(file, parameter):
         return _textures[file]
     asset = import_one(file, f'{dest}/Textures', unreal.Texture2D)
     asset.set_editor_property('srgb', parameter == 'Diffuse')
+    if parameter == 'Masks':
+        asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_MASKS)
     if parameter == 'Normal':
         asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
     eal.save_loaded_asset(asset, only_if_is_dirty=False)
@@ -126,6 +133,90 @@ def outline_master():
     return material
 
 
+ZONE_CODE = """
+float3 zoneA = lerp(lerp(InAM, InAH, saturate(InLight.r)), InAS, saturate(InLight.g));
+float3 zoneB = lerp(lerp(InBM, InBH, saturate(InLight.r)), InBS, saturate(InLight.g));
+float3 zoneC = lerp(lerp(InCM, InCH, saturate(InLight.r)), InCS, saturate(InLight.g));
+float3 mixed = InBase;
+mixed = lerp(mixed, zoneA, saturate(InZone.r));
+mixed = lerp(mixed, zoneB, saturate(InZone.g));
+mixed = lerp(mixed, zoneC, saturate(InZone.b));
+return mixed * InTex;
+"""
+
+
+def zone_master():
+    path = f'{dest}/M_OW_NPC_Zone'
+    if eal.does_asset_exist(path):
+        eal.delete_asset(path)
+    material = tools.create_asset('M_OW_NPC_Zone', dest, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property('used_with_skeletal_mesh', True)
+    material.set_editor_property('two_sided', True)
+
+    # The default texture is sRGB, so every sampler is declared Color (a Linear Color sampler with it fails to compile and the game
+    # falls back to the grey default material). The imported Masks texture itself has sRGB off, which is what the GPU honours.
+    def sampler(name, x, y, linear):
+        return node(material, unreal.MaterialExpressionTextureSampleParameter2D, x, y, parameter_name=name,
+                    texture=unreal.load_asset('/Engine/EngineResources/DefaultTexture'),
+                    sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+
+    def uv(scale_u, offset_u, y):
+        coordinate = node(material, unreal.MaterialExpressionTextureCoordinate, -1300, y, coordinate_index=0, u_tiling=scale_u, v_tiling=1.0)
+        shift = node(material, unreal.MaterialExpressionAdd, -1100, y)
+        offset = node(material, unreal.MaterialExpressionConstant2Vector, -1300, y + 120, r=offset_u, g=0.0)
+        mel.connect_material_expressions(coordinate, '', shift, 'A')
+        mel.connect_material_expressions(offset, '', shift, 'B')
+        return shift
+
+    diffuse = sampler('Diffuse', -700, 0, False)
+    light = sampler('Masks', -700, 300, True)           # left half of the same texture: light / dark
+    zones = node(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, 600, parameter_name='Masks',
+                 texture=unreal.load_asset('/Engine/EngineResources/DefaultTexture'),
+                 sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+    mel.connect_material_expressions(uv(0.5, 0.0, 300), '', light, 'UVs')
+    mel.connect_material_expressions(uv(0.5, 0.5, 600), '', zones, 'UVs')
+    names = ['InTex', 'InLight', 'InZone', 'InBase', 'InAH', 'InAM', 'InAS', 'InBH', 'InBM', 'InBS', 'InCH', 'InCM', 'InCS']
+    effect = node(material, unreal.MaterialExpressionCustom, -200, 0, code=ZONE_CODE, output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    entries = []
+    for name in names:
+        entry = unreal.CustomInput()
+        entry.set_editor_property('input_name', name)
+        entries.append(entry)
+    effect.set_editor_property('inputs', entries)
+    mel.connect_material_expressions(diffuse, 'RGB', effect, 'InTex')
+    mel.connect_material_expressions(light, 'RGB', effect, 'InLight')
+    mel.connect_material_expressions(zones, 'RGB', effect, 'InZone')
+    params = {'InBase': 'p_ColorD', 'InAH': 'p_AColorHilight', 'InAM': 'p_AColorMidtone', 'InAS': 'p_AColorShadow', 'InBH': 'p_BColorHilight',
+              'InBM': 'p_BColorMidtone', 'InBS': 'p_BColorShadow', 'InCH': 'p_CColorHilight', 'InCM': 'p_CColorMidtone', 'InCS': 'p_CColorShadow'}
+    for i, (input_name, parameter) in enumerate(params.items()):
+        vec = node(material, unreal.MaterialExpressionVectorParameter, -700, 900 + 120 * i, parameter_name=parameter,
+                   default_value=unreal.LinearColor(1, 1, 1, 1))
+        mel.connect_material_expressions(vec, 'RGB', effect, input_name)
+    mel.connect_material_property(effect, '', MP.MP_BASE_COLOR)
+    normal = node(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, 2300, parameter_name='Normal',
+                  sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, texture=unreal.load_asset('/Engine/EngineMaterials/DefaultNormal'))
+    mel.connect_material_property(normal, 'RGB', MP.MP_NORMAL)
+    rough = node(material, unreal.MaterialExpressionConstant, -400, 2500, r=0.85)
+    mel.connect_material_property(rough, '', MP.MP_ROUGHNESS)
+    spec = node(material, unreal.MaterialExpressionConstant, -400, 2600, r=0.15)
+    mel.connect_material_property(spec, '', MP.MP_SPECULAR)
+    mel.recompile_material(material)
+    eal.save_loaded_asset(material, only_if_is_dirty=False)
+    return material
+
+
+def instance_zone(name, folder, parent, files, vectors):
+    asset = tools.create_asset(name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mel.set_material_instance_parent(asset, parent)
+    for parameter, file in files.items():
+        mel.set_material_instance_texture_parameter_value(asset, parameter, texture(file, parameter))
+    for parameter, value in (vectors or {}).items():
+        if parameter.startswith('p_') and parameter.endswith(('Hilight', 'Midtone', 'Shadow', 'D')) and value:
+            mel.set_material_instance_vector_parameter_value(asset, parameter, unreal.LinearColor(*[float(v) for v in value]))
+    eal.save_loaded_asset(asset, only_if_is_dirty=False)
+    return asset
+
+
 def instance(name, folder, parent, files):
     asset = tools.create_asset(name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
     mel.set_material_instance_parent(asset, parent)
@@ -135,24 +226,36 @@ def instance(name, folder, parent, files):
     return asset
 
 
+def make(name, folder, files, vectors, tint_parent, zone_parent):
+    """Zone instance when the material has a mask texture, else a plain tinted instance."""
+    if files.get('Masks'):
+        return instance_zone(name, folder, zone_parent, files, vectors), True
+    return instance(name, folder, tint_parent, files), False
+
+
 def main():
     if eal.does_directory_exist(dest):
         eal.delete_directory(dest)
     parent = tint_master()
+    zone = zone_master()
     outline_master()
-    default_white = None
-    # Attachment materials the live pawns named (by parent), and the mesh defaults UModel reported.
     for m in job['parent_materials']:
         if not m['textures']:
             continue
-        asset = instance(m['id'], f'{dest}/Materials', parent, m['textures'])
+        asset, is_zone = make(m['id'], f'{dest}/Materials', m['textures'], m.get('vectors'), parent, zone)
         report['materials'][m['id']] = asset.get_path_name().split('.')[0]
+        report['zone'][m['id']] = is_zone
     for h in job['heads']:
         if not h['textures'].get('Diffuse'):
             report['warnings'].append(f'head {h["id"]} has no diffuse')
             continue
-        asset = instance('MI_Head_' + h['id'], f'{dest}/Materials', parent, {k: v for k, v in h['textures'].items() if v})
+        asset, is_zone = make('MI_Head_' + h['id'], f'{dest}/Materials', {k: v for k, v in h['textures'].items() if v}, h.get('vectors'), parent, zone)
         report['heads'][h['id']] = asset.get_path_name().split('.')[0]
+        report['zone']['head:' + h['id']] = is_zone
+    for body in job.get('bodies', []):
+        asset, is_zone = make('MI_Body_' + body['id'], f'{dest}/Materials', body['textures'], body.get('vectors'), parent, zone)
+        report['bodies'][body['kind']] = asset.get_path_name().split('.')[0]
+        report['zone']['body:' + body['kind']] = is_zone
     for m in job['meshes']:
         mesh = import_one(m['gltf'], f'{dest}/Meshes', unreal.StaticMesh)
         slots = mesh.get_editor_property('static_materials')
@@ -162,9 +265,10 @@ def main():
             files = default['textures'] if default else {}
             if files.get('Diffuse'):
                 key = f'MI_{m["id"]}_{i}'
-                mi = instance(key, f'{dest}/Materials', parent, files)
+                mi, is_zone = make(key, f'{dest}/Materials', files, default.get('vectors'), parent, zone)
                 mesh.set_material(i, mi)
                 report['materials'][key] = mi.get_path_name().split('.')[0]
+                report['zone'][key] = is_zone
             else:
                 report['warnings'].append(f'{m["id"]} slot {i}: no diffuse texture, default material kept')
             names.append(str(slots[i].get_editor_property('material_slot_name')))

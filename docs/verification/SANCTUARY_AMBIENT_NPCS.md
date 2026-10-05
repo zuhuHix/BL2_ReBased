@@ -263,3 +263,24 @@ Round 1 scored 5/10 from the independent critic (mesh/outfit 4, poses 5, walk 6,
 
 Real-game capture used: 33 citizens (20 male + 13 female in the third session, 16 + 17 in the first); the population differs between sessions, so the review stops are
 the round-1 perches, filled with a pawn of the round-1 kind at the first capture's pose when nobody stands there (looks borrowed from an observed pawn).
+
+## 9. Round 3 (2026-10-04): attachment transforms, zone colours, the grey stand-ins
+
+AI-assisted (Claude). Frames: `local/orch/B/review3/` (local only).
+
+1. **Cause of the wrong-looking heads, hats and hair (items 1 to 3 of the critic list).** The attachments' own placement is not on the
+   `SkeletalMeshComponent.Attachments` entry (its relative location and rotation are zero) but on the static mesh component itself: `Translation`, `Rotation`
+   (65536 per turn), `Scale` and `Scale3D`. Rounds 1 and 2 ignored them, so hats and hair sat at the bone origin at mesh scale 1 (green blob on the neck, scalp showing
+   under a hair piece that was too small, a pack and a mask at the wrong size). `amb_compose` now records the four fields, `prepare_ambient_world.py` converts them with the
+   Y mirror (component transform carried by conjugation) into a bone-relative location, quaternion and scale, and the host applies them.
+2. **Zone colours (item 7, Master_NPC).** The citizens' `p_Masks` texture is two maps side by side: the left half is a light/dark map (R highlight, G shadow), the right half the zone
+   mask (R, G, B for zones A, B, C). `M_OW_NPC_Zone` mixes the diffuse with each zone colour as lerp(lerp(midtone, hilight, light R), shadow, light G), then lerps by the zone mask.
+   The formula is applied by analogy with the weapon master reading and is `UNVERIFIED` for the NPC master; the vectors are the live pawn's own (head and body clones, per spawn).
+   Hair without a zone mask keeps the round-2 stand-in tint (zone A midtone times 1.5, `UNVERIFIED`).
+3. **Why the showcase tour showed grey citizens.** The first version of `M_OW_NPC_Zone` did not compile (a Linear Color sampler given the sRGB default texture), so UE used the default
+   material for every pawn that referenced a zone instance (log line "Failed to compile Material ... Default Material will be used in game"). Only the pawns on the old tint master looked fine.
+   Fixed (all samplers Color; the imported Masks texture has sRGB off, which is what the GPU uses). Check: no such line in the r3d run log; 35 of 35 pawns textured in the tour.
+4. **Stop 03 bald head.** The pawn does have its head texture; in the live data it carries no hair mesh (only a pack), so the scalp is correct for that data. The camera looks down onto it.
+5. **Stop 00 and 04 poses.** Poses are the stock clips (root travel applied since round 2). The squat clipping the wall and the stiff legs at the counter are clip and geometry limits; whether the
+   original shows the same is `UNVERIFIED`.
+6. **Not done:** garment variants from `p_HidePart` / `p_MuscleFat` (how they act is unknown), Resistance patrols, matched real close-ups.
