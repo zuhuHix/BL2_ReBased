@@ -233,6 +233,21 @@ def make(inventory=False, mover=False, broken_mover=False):
     p.add_export(foo, 'Default__Foo', w32(0) + tagged_int('Count', 7) + none)
     p.add_export(bar, 'Default__Bar', w32(0) + tagged_int('Count', 9) + none)
 
+    # ObjectConst of a class export. Class exports carry class reference 0 (as in the real packages), so the constant
+    # must be a class and a call through it must run against the class default object: Util.Level defaults to 31.
+    util = class_ids['Util'] = p.add_export(0, 'Util', w32(0) * 4, super_ref=obj)
+    level = prop('IntProperty', util, 'Level')
+    def get_level(ids):
+        a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x01); a.ref(level); a.end(); return a
+    util_get = make_function(util, 'GetLevel', [], get_level)['__self__']
+    p.add_export(util, 'Default__Util', w32(0) + p.fname('Level') + p.fname('IntProperty') + w32(4, 0) + w32(31) + none)
+    def level_through_class(ids):
+        a = Asm(); a.stmt(); a.raw(0x04)
+        a.raw(0x19); a.raw(0x20); a.ref(util); a.w(0); a.ref(0); a.raw(0)       # Context(ObjectConst(Util), ...)
+        a.raw(0x1C); a.ref(util_get); a.raw(0x16)                                  # FinalFunction GetLevel()
+        a.end(); return a
+    make_function(foo, 'LevelThroughClass', [], level_through_class)
+
     # Optional parameter with a default: Foo.Opt(int a, optional int b = 5) = a + b
     def opt(ids):
         a = Asm()
@@ -362,6 +377,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert run(root, 'Core.Foo.CallGet', self_class='Core.Bar')['result'] == '2'                # virtual dispatch
     assert run(root, 'Core.Foo.GetCount', self_class='Core.Foo')['result'] == '7'               # class default
     assert run(root, 'Core.Foo.GetCount', self_class='Core.Bar')['result'] == '9'               # subclass default
+    through = run(root, 'Core.Foo.LevelThroughClass')
+    assert through['result'] == '31', through                                                    # class ObjectConst, class default
     assert run(root, 'Core.Foo.Opt', 'i:1')['result'] == '6'                                     # default b = 5
     assert run(root, 'Core.Foo.Opt', 'i:1', 'i:10')['result'] == '11'
     bumped = run(root, 'Core.Foo.Bump', 'i:41')

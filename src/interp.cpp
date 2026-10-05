@@ -260,8 +260,10 @@ struct Interp {
             const auto resolved = rt.resolveRef(f.function->package, e.refs.at(0));
             if (resolved) {
                 const auto& exportObject = resolved.package->exports[size_t(resolved.index) - 1];
+                // A class export has class reference 0 (its own class is implicit), the same rule vm.cpp's
+                // classNameOf uses; an export that names "Class" explicitly is accepted too.
                 try {
-                    if (resolved.package->object(exportObject.cls).name == "Class")
+                    if (!exportObject.cls || resolved.package->object(exportObject.cls).name == "Class")
                         return Value::makeClass(rt.classAt(resolved.package, resolved.index));
                 } catch (const std::exception&) {}
             }
