@@ -223,3 +223,21 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Skill.ForceRefresh | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate after grade change | UNVERIFIED | high | |
 | SkillEffectManager.RefreshSkillsForInstigator | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate a player's skills | UNVERIFIED | medium | |
 | SkillEffectManager.RefreshSkillsAffectingInstigator | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate skills affecting a player | UNVERIFIED | medium | |
+| WillowPlayerController per-frame usable evaluation (no script name; sets CurrentUsableObject) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: choosing Marcus (camera ray 350 uu) | UNVERIFIED | medium-high | |
+| WillowPlayerController.UpdateInteractionIcon | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | prompt presentation | UNVERIFIED | high | |
+| IUsable native virtuals of WillowAIPawn (icon, can-be-used, prompt, usable-by-user) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: Marcus is usable | UNVERIFIED | medium-high | |
+| WillowAIPawn.SetUsable | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: gates the talk prompt | UNVERIFIED | high | |
+| WillowAIPawn.SetInteractionIcon | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | prompt icon | UNVERIFIED | high | |
+| WillowAIPawn.GetPrimaryUser | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | talk state | UNVERIFIED | high | |
+| WillowAIPawn.HasAnyMissionsForPlayer | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director table, compass icon | UNVERIFIED | high | |
+| WillowAIPawn.GetMissionDirectorLocation | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director table | UNVERIFIED | high | |
+| WillowAIPawn.GetAllDirectorData | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director data read | UNVERIFIED | high | |
+| MissionTracker.RegisterMissionDirector | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director table (presentation) | UNVERIFIED | medium | |
+| MissionTracker.UnregisterMissionDirector | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director table (presentation) | UNVERIFIED | medium | |
+| MissionTracker.ProcessDynamicMissionDirectives | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | client refresh of the director table | UNVERIFIED | medium-low | |
+| MissionTracker.GetCompletedBranch | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | redeemable filter (Fire: branch None) | UNVERIFIED | medium-high | |
+| AIClassDefinition.OnUsed (and OnSecondaryUsed, OnUserCouldNotAfford, OnUserCouldNotAffordSecondary) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: starts Marcus's behavior chain | UNVERIFIED | high | |
+| AIDefinition.OnUsed (and the three twins) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: starts Marcus's behavior chain | UNVERIFIED | high | |
+| WillowAIPawn.UpdateLookAtTarget | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | talk state (look-at target) | UNVERIFIED | medium-low | |
+| WillowAIPawn.GetFocusLocation / GetFocusRadius / GetFocusScreenOffset | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | talk camera | UNVERIFIED | medium-high | |
+| WillowAIPawn.CanTalk / WillowMind.ShouldLookAtPlayer | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | thin front ends, not on the use path | UNVERIFIED | low | |
