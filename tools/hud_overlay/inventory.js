@@ -25,7 +25,7 @@ const RENDERED_ROWS = VISIBLE_ROWS + 1, PEEK_HEIGHT = 16;
 // the host places/sizes Backpack beside Equipped. These are presentation
 // choices, not decoded movie values or proof of original 3D projection parity.
 const COMPOSITION_SCALE = 1.09;
-const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 135;
+const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 122; // title at y 147 like the real frame (was 160, over "WEAPONS")
 // Backpack focus (cursor in the Backpack, no transfer): the original enlarges and centres the Backpack panel
 // (cell pitch about 65 px against 46) and lets the Equipped panel recede behind the card. Rectangles measured on
 // the 2026-10-04 capture, 1280x720: Backpack panel 520..772 x 80..642; the Equipped panel's remains show at
@@ -34,7 +34,7 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 13
 // the old category chevrons used; the focus view starts right under the title like the original.
 // The small and compare views start the list lower than the real frames did by 34 and 30 px ("WEAPONS" at y 205/213 against 171/170),
 // which is where the old category chevrons' sub-label used to sit.
-const LIST_TOP = 30, LIST_TOP_COMPARE = 40, LIST_TOP_FOCUS = 38; // the focus panel moved up 8 px (title at y 100), the list stays where it was
+const LIST_TOP = 47, LIST_TOP_COMPARE = 40, LIST_TOP_FOCUS = 38; // the focus panel moved up 8 px (title at y 100), the list stays where it was
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
 const FOCUS_PANEL = {scale:0.92, scaleY:0.979, left:497, top:67}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
@@ -416,7 +416,7 @@ function headerFor(item, mode) {
 // The focus view shows 7.6 rows (the list runs to y 625 of the real frame); the small view keeps 7.
 const VISIBLE_ROWS_FOCUS = 7.6;
 const HEADER_PITCH = Math.round(ROW_PITCH * 0.37);
-const viewHeight = () => (backpackFocused() ? VISIBLE_ROWS_FOCUS : VISIBLE_ROWS) * ROW_PITCH;
+const viewHeight = () => (backpackFocused() || transferSourceId ? VISIBLE_ROWS_FOCUS : VISIBLE_ROWS) * ROW_PITCH;
 const entryHeight = entry => entry.header !== undefined ? HEADER_PITCH : ROW_PITCH;
 function backpackEntries() {
   const items = backpackItems(), mode = listMode(), entries = [];
@@ -1059,6 +1059,7 @@ function announce(message) {
 const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
 // The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
 const INSPECT_ZOOM = 1.3;
+const INSPECT_HINT_DX = 53;
 const INSPECT_CARD_INSET_X = 0.03, INSPECT_CARD_INSET_TOP = -0.06, INSPECT_CARD_INSET_BOTTOM = -0.05; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
 const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
@@ -1110,8 +1111,11 @@ function updateInspect() {
   if (on !== inspectApplied) {
     inspectApplied = on;
     backdrop.hidden = !on;
+    document.body.classList.toggle('inspect-wide', on); // no right-edge fade: the hint strip reaches x 1030
     document.getElementById('controls').style.display = on ? 'none' : '';
     for (const path of INSPECT_HIDDEN_CLIPS()) set(path, '_visible', !on);
+    // The real hint strip is centred about 53 px right of where the movie puts it.
+    set(ROOT + '.tooltips', '_x', Number(get(ROOT + '.tooltips', '_x')) + (on ? INSPECT_HINT_DX : -INSPECT_HINT_DX));
     if (!on) { player.style.clipPath = ''; applyMovieVisibility(); }
   }
   if (on) { fitCards(); clipMovieToInspectParts(); }
@@ -1525,7 +1529,7 @@ const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceI
 // Compare view (a transfer): the Equipped panel is narrowed into the gap between the two cards and the Backpack panel
 // moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
 // (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
-const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:PANEL_TOP - 13}; // title at y 150 like the real frame
+const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:135 - 13}; // title at y 150 like the real frame
 const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, top:118};
 let appliedFocus = false, equippedHome = null;
 const panelPose = () => backpackFocused() ? FOCUS_PANEL : transferSourceId ? COMPARE_BACKPACK
@@ -1631,12 +1635,14 @@ function drawTileFrame(path) {
   if (!b || !(b.xMax > b.xMin)) return;
   const frame = `${path}.owFrame`;
   call(path, 'createEmptyMovieClip', 'owFrame', 4000);
-  call(frame, 'beginFill', TILE_FRAME_GREEN, 28);
+  call(frame, 'beginFill', TILE_FILL_LIME, TILE_FILL_ALPHA);
   call(frame, 'lineStyle', 4, TILE_FRAME_GREEN, 100);
   call(frame, 'moveTo', b.xMin, b.yMin); call(frame, 'lineTo', b.xMax, b.yMin);
   call(frame, 'lineTo', b.xMax, b.yMax); call(frame, 'lineTo', b.xMin, b.yMax); call(frame, 'lineTo', b.xMin, b.yMin);
   call(frame, 'endFill');
 }
+// The real moved tile is a solid lime-yellow fill with a lime frame; the fill is kept translucent so the gun art stays readable (host choice).
+const TILE_FILL_LIME = 0xb4dc28, TILE_FILL_ALPHA = 62;
 const TILE_FRAME_GREEN = 0x4fd33f; // the compare card's green frame (host choice by eye)
 
 // Every render attaches headers under fresh names and depths: removing a clip and attaching another under the

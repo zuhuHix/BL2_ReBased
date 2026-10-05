@@ -149,7 +149,7 @@ function canSpend(target) {
 // Info box text (tools/hud_overlay/skill_info.js reproduces the traced
 // SetInfo HTML) and the footer, built from the install's own strings.
 // The real description text is a little smaller than the movie's default as scaled by the card fit (critic round 12).
-const DESCRIPTION_SIZE = 15;
+const DESCRIPTION_SIZE = 16;
 function refreshSelection() {
   if (!ready) return;
   applyInfoCard();
@@ -338,6 +338,8 @@ function updateBranch(which, immediate = false) {
   data.branches.forEach((_, i) => {
     const t = branchTween(i - selectedBranch);
     call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, t.x, t.y, 0, t.scale, t.scale, t.alpha);
+    // The tree left of the selected one has its name behind the Siren plate in the original.
+    set(`${SKILLS}.Tree${i + 1}.TreeName`, '_visible', !(i < selectedBranch));
   });
   setTimeout(layoutHits, immediate ? 50 : 600);
 }
@@ -461,7 +463,7 @@ function populate() {
 // the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
 // at (225, 530); here it follows the card). Moves are done on the movie clips in
 // ROOT coordinates (a host fit; the original gets these from its 3D camera).
-const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:32, hintDY:56, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
+const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:25, hintDY:56, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
   card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
 let layoutApplied = false;
 function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
@@ -474,9 +476,17 @@ function moveClip(path, parent, dx, dy) {
 // known from the round-18/19 frames (the visible card is 0.867 of those bounds' width, starts 0.0685 of it from the left and
 // 0.0106 from the top). The movie resets this clip's scale and position when it tweens the trees, so the fit is applied
 // again on every selection and when the page opens; it changes nothing once the card is within a pixel.
-const CARD_Y_STRETCH = 1.025; // the card ended at y 380 against 390 in the real frame
+const CARD_Y_STRETCH = 1.045; const PLATE_UP = 22; // the card ended at y 380 against 390 in the real frame
+let wrapperHomeY = null;
 function applyInfoCard() {
-  const info = `${SKILLS}.InformationBox`, bkgd = `${info}.infoWrapper.DescriptionBkgd`, card = SKILLS_LAYOUT.card;
+  const info = `${SKILLS}.InformationBox`, wrapper = `${info}.infoWrapper`, bkgd = `${wrapper}.DescriptionBkgd`, card = SKILLS_LAYOUT.card;
+  // The Siren plate is a sibling of the card (infoWrapper) inside the clip, 18-33 px lower than the real one; the card is moved down
+  // inside the clip by PLATE_UP and the clip up by the same amount, so the card stays and the plate rises.
+  if (wrapperHomeY === null) { const y = Number(get(wrapper, '_y')); if (Number.isFinite(y)) wrapperHomeY = y; }
+  if (wrapperHomeY !== null) {
+    const unit = (Number(get(info, '_yscale')) / 100 || 1) * (Number(get(SKILLS, '_xscale')) / 100 || 1);
+    set(wrapper, '_y', wrapperHomeY + PLATE_UP / unit);
+  }
   const b = boundsOf(bkgd);
   if (!b) return;
   const boundsWidth = card.width / card.boundsShare;

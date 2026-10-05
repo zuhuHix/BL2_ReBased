@@ -100,8 +100,9 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   backpack focus layout, red `bad` cells in compare view and a full-screen Inspect exist, and
   the Skills page is preloaded hidden. Round 10 added sub-header rows, a full-width selection
   band, the narrowed compare layout and Q "Toggle Overview" on the Skills page; round 11 fixed the list's scroll
-  origin and the compare and Skills layout (critic 7.3/10); rounds 12-14 the selection band, focus-view extents,
-  list height, compare hints and frames (each preferred over the previous round in a blind A/B; round 14 about 7.2/10).
+  origin and the compare and Skills layout (critic 7.3/10); rounds 12-15 the selection band, focus-view extents,
+  list height, compare hints and frames and the Skills plate (each preferred over the previous round in a blind A/B;
+  round 15 about 7.4/10).
   Open: the perspective tilt and glass sheen (3D transforms Ruffle ignores), selectable empty
   backpack cells, gear compare (not yet observed in the real game), white flavour lines on cards.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).

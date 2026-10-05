@@ -1137,3 +1137,9 @@ hint, the backpack-origin compare does not and frames the moved tile in green; S
 AI-assisted, page-only. The stray yellow rectangle beside the moved tile in the backpack-origin compare was the focus ring of the HTML hit box (`inventory.html`), now off; the
 green tile frame is thicker and tinted. Small and compare views start their lists about 30 px higher; the focus view hint and plate shift a few pixels; Skills trees sit 20 px lower. Suite 49 PASS /
 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits to captured frames, UNVERIFIED.
+
+### Round 15 (2026-10-05)
+
+AI-assisted, page-only. Equipped-view panel title moved up 13 px so it no longer collides with the "WEAPONS" sub-header; compare lists show 7.6 rows; the moved tile has a translucent lime fill;
+Skills trees, card height, plate and description size adjusted; the Inspect hint strip is moved right and unfaded. Suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits, UNVERIFIED.
+Final open items are listed in the lane handoff (tilt/glass, Skills pitch and tile brightness, Inspect card height and keyed holes, empty cells, gear compare, Phaselock HUD sigil).
