@@ -172,27 +172,30 @@ HAIR_GAIN = 1.5     # UNVERIFIED stand-in: hair tint = the pawn's zone-A midtone
 
 
 def attachment_transforms(kind, bones):
-    """Relative transform of each bone's attachment frame in the UE5 skeleton, per bone: {bone: ([x, y, z], [qx, qy, qz, qw])}.
+    """Frame that carries a piece attached to a bone (modelled in the UE3 bone frame) into the imported skeleton's bone frame, per bone:
+    {bone: 4x4 numpy matrix}.
 
-    The static meshes are modelled in the UE3 bone frame; after UModel's glTF export and the UE5 import their vertices carry the same Y
-    mirror C as the skeletal mesh (md5 -> UE5 is the mirror, checked by slice_npc_assets.convert_subset). So the world transform in UE5
-    is C W C^-1 for the md5 bind world W of the bone, and relative to the imported bone's bind world T it is T^-1 C W C^-1.
-    UNVERIFIED until looked at on a head."""
+    Two facts, both read from a live sample on 2026-10-05 (local/realgame/ambient/truth_r4.json, UNVERIFIED beyond that one capture):
+    (1) the md5 export's bone frames are the live bone frames turned 180 degrees about the local X axis (Y and Z flipped, checked on Spine3
+    and Head of one pawn), so the UE3 bone frame is W (md5 bind world) times diag(1, -1, -1); (2) the UE5 static meshes keep the UE3 vertex
+    coordinates (no Y mirror; a pack placed this way lands on the middle of the back, the other conventions put it 35 units to the side),
+    while the imported skeleton is the Y mirror C of the md5 one (the ref pose equals C W C^-1, checked). A piece at UE3 world position
+    W t3 p is therefore at C W flip t3 p in the imported frame, and relative to the imported bone frame T: T^-1 C W flip t3. This is a
+    reflection when t3 is a rotation (the mirror image of the piece), so the result can need one negative scale."""
     import numpy as np
-    from prepare_character_anims import MIRROR, matrix, to_quat, ue_matrix
+    from prepare_character_anims import MIRROR, matrix, ue_matrix
     from prepare_character_pose import read_joints
     from prepare_sanctuary_pillar import numbers  # noqa: F401  (imported for read_joints' dependencies)
     md5 = next((ROOT / 'local/external/umodel/slice-npc' / f'Amb_{kind}').rglob('*.md5mesh'))
     joints = {j[0]: j for j in read_joints(md5.read_text(encoding='utf-8'))}
     ref = {b['name']: b for b in json.loads((ROOT / f'local/slice/ambient/ref_pose_{kind}.json').read_text(encoding='utf-8'))}
-    c = MIRROR
+    flip = np.diag([1.0, -1.0, -1.0, 1.0])
     out = {}
     for bone in bones:
         _, _, position, orientation = joints[bone]
         w = matrix(position, orientation)
         t = ue_matrix(ref[bone]['loc'], ref[bone]['quat'])
-        rel = np.linalg.inv(t) @ c @ w @ np.linalg.inv(c)
-        out[bone] = ([round(float(v), 4) for v in rel[:3, 3]], [round(float(v), 6) for v in to_quat(rel[:3, :3])])
+        out[bone] = np.linalg.inv(t) @ MIRROR @ w @ flip
     return out
 
 
@@ -208,29 +211,24 @@ def rotator_matrix(pitch, yaw, roll):
 
 
 def component_transform(bone_rel, att):
-    """Bone-relative placement of one attached static mesh: the bone attachment frame (bone_rel, from attachment_transforms) followed by
-    the component's own Translation / Rotation / Scale x Scale3D (UE3, in the bone frame). The component transform is carried into the
-    imported (Y-mirrored) frame by conjugation with the mirror; older captures without those fields keep the bone frame alone."""
+    """Bone-relative placement of one attached static mesh: the bone frame from attachment_transforms times the component's own
+    Translation / Rotation / Scale x Scale3D (UE3, in the bone frame, no conjugation: the mesh keeps its UE3 coordinates). Returns
+    location, quaternion and scale; the scale carries a negative Z when the result is a reflection. Older captures without the
+    component fields keep the bone frame alone."""
     import numpy as np
-    from prepare_character_anims import MIRROR, to_quat
-    rel = np.eye(4)
-    loc, quat = bone_rel
-    x, y, z, w = quat
-    rel[:3, :3] = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                   [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                   [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
-    rel[:3, 3] = loc
-    if 'comp_translation' not in att:
-        return list(loc), list(quat), [1.0, 1.0, 1.0]
+    from prepare_character_anims import to_quat
     t3 = np.eye(4)
-    scale = [att['comp_scale'] * v for v in att['comp_scale3d']]
-    t3[:3, :3] = rotator_matrix(*att['comp_rotation']) @ np.diag(scale)
-    t3[:3, 3] = att['comp_translation']
-    t5 = MIRROR @ t3 @ MIRROR
-    total = rel @ t5
+    if 'comp_translation' in att:
+        scale = [att['comp_scale'] * v for v in att['comp_scale3d']]
+        t3[:3, :3] = rotator_matrix(*att['comp_rotation']) @ np.diag(scale)
+        t3[:3, 3] = att['comp_translation']
+    total = bone_rel @ t3
     columns = total[:3, :3]
     sizes = np.linalg.norm(columns, axis=0)
     rotation = columns / sizes
+    if np.linalg.det(rotation) < 0:
+        rotation = rotation @ np.diag([1.0, 1.0, -1.0])
+        sizes = sizes * np.array([1.0, 1.0, -1.0])
     return [round(float(v), 4) for v in total[:3, 3]], [round(float(v), 6) for v in to_quat(rotation)], [round(float(v), 5) for v in sizes]
 
 

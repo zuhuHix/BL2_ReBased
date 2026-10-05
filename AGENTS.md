@@ -91,7 +91,8 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   clips and node chains under stand-in movement rules (UNVERIFIED). Round 2 added heads, hair and hats copied from
   what the real game's live citizens carried, Maya's ink line and the perch clips' root motion (critic 5.5/10). Round 3
   applied the attachments' own component transforms and zone colours (`UNVERIFIED` formula); a blind A/B judged it a
-  little closer than round 2. Not done: body garment variants, Resistance patrols. See
+  little closer than round 2; round 4 fixed the worn pieces' frame from a live sample (preferred on six of seven
+  stops). Not done: body garment variants, Resistance patrols. See
   `docs/verification/SANCTUARY_AMBIENT_NPCS.md`.
 - **Inventory menu:** the real StatusMenu movie runs under Ruffle inside UE5 with a host adapter
   (`tools/hud_overlay/inventory.js`). Keyboard traversal follows observation of the real game.

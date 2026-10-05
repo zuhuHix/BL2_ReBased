@@ -284,3 +284,26 @@ AI-assisted (Claude). Frames: `local/orch/B/review3/` (local only).
 5. **Stop 00 and 04 poses.** Poses are the stock clips (root travel applied since round 2). The squat clipping the wall and the stiff legs at the counter are clip and geometry limits; whether the
    original shows the same is `UNVERIFIED`.
 6. **Not done:** garment variants from `p_HidePart` / `p_MuscleFat` (how they act is unknown), Resistance patrols, matched real close-ups.
+
+## 10. Round 4 (2026-10-05): the attachment frame, read from a live sample
+
+AI-assisted (Claude). Frames: `local/orch/B/review4/` (local only).
+
+1. **Cause of the floating packs, the disc heads and the sideways hats (round-3 critic gaps 1 and 2).** The live game was asked for the world matrices of
+   `Spine3` and `Head` of one citizen (`amb_truth` in `tools/real_game/scripts/ambient_npcs.py`; one capture of 33 pawns, `UNVERIFIED` beyond that capture). Findings:
+   (a) the bone frames of the md5 export are the live bone frames turned 180 degrees about the bone's X axis (local Y and Z flipped; the few-degree residual is the
+   pose), so a piece modelled in the UE3 bone frame needs `W x diag(1, -1, -1)`; (b) the imported static meshes keep the UE3 vertex coordinates (no Y mirror),
+   while the imported skeleton is the Y mirror of the md5 one (the ref pose equals `C W C^-1`, checked). The old composition conjugated the component transform with the mirror,
+   which is only right for pieces close to the bone origin (symmetric hair and caps looked fine) and put a rotated, offset piece such as the pack about 35 units to the side.
+   The check that picked the convention: with the live bone matrix and the component's own Translation / Rotation / Scale, the pack's mesh centre lands
+   behind the middle of the back at shoulder height (about 19 units behind, 1 to the side) only for the unmirrored mesh; the mirrored reading puts it 33 units to the side.
+   New composition: `T^-1 C W diag(1,-1,-1) t3` (T the imported bone frame, C the Y mirror). It is a reflection (the mirror image of the piece), so one scale component is negative;
+   `tests/ambient_transform_test.py` checks the decomposition. Result in the tour: packs sit on the back, the hard hat and caps sit on the head, and the "disc heads"
+   were the displaced hat, mohawk and gear pieces, not a missing scalp.
+2. **Palette (gap 3).** Not changed, `UNVERIFIED`. The zone mix (midtone, hilight, shadow, with `p_ColorD` as the base multiplier) stays applied by analogy. A day-lit real frame
+   of a citizen (`review4/real/real_citizen_counter_Perch186.png`) shows olive-tan skin and a tan jacket, so the base multiplier is not obviously wrong; the blue-grey
+   night look in other real frames comes from the time of day and the lighting, which the host does not reproduce, not from the material.
+3. **Wall bang and kick (optional).** The kick clip does lift the foot in the tour frames (stop 02, shots 0 and 2); the bang is seen from the side with the wall behind the pawn.
+   Not changed.
+4. **Real-game session.** Saves backed up (`local/realgame/save-backup-20261005-022935`), `Save000A.sav.bak` restored afterwards, saves identical to the backup,
+   `sdk_mods/openwillow_realgame` removed, lock released.

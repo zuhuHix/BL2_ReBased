@@ -311,3 +311,57 @@ def amb_compose(name):
     path = Path(RG_OUT) / (name + ".json")
     path.write_text(json.dumps(out, indent=1), encoding="utf-8")
     return {"pawns": len(out), "attachments": sum(len(r["attachments"]) for r in out)}
+
+
+def _mat(m):
+    """Rows of an FMatrix as [x, y, z, w] per plane (UE3 row-vector convention: WPlane is the translation)."""
+    return [[round(getattr(p, c), 3) for c in "XYZW"] for p in (m.XPlane, m.YPlane, m.ZPlane, m.WPlane)]
+
+
+def amb_truth(name, bones=("Spine3", "Head", "Jaw")):
+    """Where the engine really puts each attached piece: per live citizen the actor and mesh component transform, bone world
+    matrices, and for every attachment its LocalToWorld matrix and world bounds. Used to check our composition of the component
+    Translation / Rotation / Scale with the bone frame. Written to <RG_OUT>/<name>.json."""
+    out = []
+    for path, loc, yaw, speed in amb_live():
+        pawn = _find(path)
+        if pawn is None:
+            continue
+        mesh = pawn.Mesh
+        row = {"path": path, "loc": loc, "yaw": yaw, "rot": [pawn.Rotation.Pitch, pawn.Rotation.Yaw, pawn.Rotation.Roll], "bones": {}, "attachments": []}
+        for field in ("DrawScale", "Scale", "Scale3D", "Translation"):
+            for owner, tag in ((pawn, "pawn_"), (mesh, "mesh_")):
+                try:
+                    v = getattr(owner, field)
+                    row[tag + field] = _vec(v) if hasattr(v, "X") else round(float(v), 4)
+                except Exception:
+                    pass
+        try:
+            row["mesh_l2w"] = _mat(mesh.LocalToWorld)
+        except Exception as error:
+            row["mesh_l2w_error"] = repr(error)[:100]
+        for bone in bones:
+            try:
+                row["bones"][bone] = _mat(mesh.GetBoneMatrix(mesh.MatchRefBone(bone)))
+            except Exception as error:
+                row["bones"][bone] = repr(error)[:100]
+        for a in mesh.Attachments:
+            comp = a.Component
+            item = {"bone": str(a.BoneName), "static_mesh": None}
+            try:
+                item["static_mesh"] = _name(comp.StaticMesh)
+                item["l2w"] = _mat(comp.LocalToWorld)
+                b = comp.Bounds
+                item["bounds_origin"] = _vec(b.Origin)
+                item["bounds_extent"] = _vec(b.BoxExtent)
+                item["translation"] = _vec(comp.Translation)
+                item["rotation"] = [comp.Rotation.Pitch, comp.Rotation.Yaw, comp.Rotation.Roll]
+                item["scale"] = round(float(comp.Scale), 5)
+                item["scale3d"] = _vec(comp.Scale3D)
+            except Exception as error:
+                item["error"] = repr(error)[:100]
+            row["attachments"].append(item)
+        out.append(row)
+    path = Path(RG_OUT) / (name + ".json")
+    path.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    return {"pawns": len(out), "attachments": sum(len(r["attachments"]) for r in out)}
