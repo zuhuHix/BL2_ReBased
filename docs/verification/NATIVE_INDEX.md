@@ -241,3 +241,20 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowAIPawn.UpdateLookAtTarget | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | talk state (look-at target) | UNVERIFIED | medium-low | |
 | WillowAIPawn.GetFocusLocation / GetFocusRadius / GetFocusScreenOffset | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | talk camera | UNVERIFIED | medium-high | |
 | WillowAIPawn.CanTalk / WillowMind.ShouldLookAtPlayer | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | thin front ends, not on the use path | UNVERIFIED | low | |
+| Engine touch dispatch (actor overlap update, begin/end touch; no script name) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: GoToRange (Touch raised on the waypoint/player pair) | UNVERIFIED | medium (dispatch), low (shape test, pair order) | |
+| WillowWaypoint.PostBeginPlay/Touch/ProcessPlayerTouch/MissionReactionObjectiveSetChanged (script) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: GoToRange completion rule | UNVERIFIED | high | |
+| Actor.IsPlayerOwned | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: filters Marcus out of GoToRange | UNVERIFIED | medium | |
+| MissionTracker.IsMissionObjectiveActive | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: waypoint gate, update gate, enable condition | UNVERIFIED | high | |
+| MissionTracker.IsObjectiveSetActive | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: waypoint set restrictions (empty here) | UNVERIFIED | high | |
+| MissionTracker.IsMissionObjectiveComplete | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: enable conditions, HUD | UNVERIFIED | high | |
+| MissionTracker.UpdateObjective (fan-out to players, additions to B1) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: GoToRange and Fire progress | UNVERIFIED | high | |
+| Behavior_UpdateMissionObjective.ApplyBehaviorToContext (script) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: Fire objective from the dummy provider | UNVERIFIED | high | |
+| Behavior_AdvanceObjectiveSet.ApplyBehaviorToContext (self object must be the tracker) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: set transitions | UNVERIFIED | high | |
+| Behavior_MissionRemoteEvent.ApplyBehaviorToContext | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: Marcus walk, dummy moves (mission-matched Kismet events) | UNVERIFIED | high | |
+| Behavior_ClearObjective.ApplyBehaviorToContext | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | not on the Fire route | UNVERIFIED | medium | |
+| Behavior_DecrementObjective.ApplyBehaviorToContext / MissionTracker.DecrementObjective | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | not on the Fire route | UNVERIFIED | medium | |
+| MissionTracker.RegisterWaypoint / UnregisterWaypoint | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: objective markers (presentation) | UNVERIFIED | medium | |
+| MissionObjectiveWaypointComponent.RemoveWaypoint (and its refresh) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: objective markers (presentation) | UNVERIFIED | medium | |
+| WillowPlayerController.UpdateMissionObjective (script hook) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: HUD progress text and fanfare | UNVERIFIED | high | |
+| AIClassDefinition.OnTakeDamage (and the Pawn.NotifyTakeHit / WillowMind.NotifyTakeHit chain) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: Fire objective trigger | UNVERIFIED | medium | |
+| AIDefinition.OnTakeDamage (read only as the first of the event pair) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: not used by the dummy | UNVERIFIED | low | |
