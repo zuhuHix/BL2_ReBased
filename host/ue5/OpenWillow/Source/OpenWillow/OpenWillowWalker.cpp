@@ -14,6 +14,9 @@
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
 #include "Misc/PackageName.h"
+#include "Misc/FileHelper.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
 #include "OpenWillowShotFx.h"
 #include "OpenWillowGunLook.h"
 #include "OpenWillowInventoryPreviewActor.h"
@@ -224,17 +227,21 @@ void AOpenWillowWalker::BeginPlay()
     Camera->SetFieldOfView(FMath::RadiansToDegrees(2 * FMath::Atan(
         FMath::Tan(FMath::DegreesToRadians(Bl2Fov) / 2) * Aspect / (4.f / 3.f))));
     // The running game draws the arms and the gun with a separate foreground FOV: WillowPlayerController.ForegroundFOV read 45
-    // with bForegroundFOV true while FOVAngle read 77.55 (SDK, 1280x720, FOV setting 90; 2026-10-04). UE 5.8's first-person
-    // primitive FOV does the same job. Using it by default is a host choice (the read value 45 is the game's; the frames of the
-    // guns critic and the Phaselock critic both preferred it); the Phaselock hand effects are first-person primitives too, so they
-    // stay on the hand. -owfpfov=<4:3 setting> picks another value, -owfpfov=0 restores the old world-FOV view.
+    // with bForegroundFOV true while FOVAngle read 77.55 (SDK, 1280x720, FOV setting 90; 2026-10-04), and it equals the held
+    // weapon type's FirstPersonMeshFOV (SMG 50). UE 5.8's first-person primitive FOV does the same job. Using it by default is a
+    // host choice. Read as a HORIZONTAL angle on the view axis, together with the weapon type's PlayerViewOffset placement
+    // (ApplyViewModel), the six slice guns match the real first-person frames in size, lean and glove (WEAPON_VISUALS.md
+    // section 10); without that placement no single value fitted both pistols and long guns. The axis is UNVERIFIED native
+    // behaviour; the match against the frames is the evidence.
+    // -owfpfov=<horizontal degrees> forces one value for every weapon, -owfpfov=0 restores the old world-FOV view.
     float ForegroundFov = 45.f;
-    FParse::Value(FCommandLine::Get(), TEXT("owfpfov="), ForegroundFov);
+    bViewFovForced = FParse::Value(FCommandLine::Get(), TEXT("owfpfov="), ForegroundFov);
+    ViewFovDefault = ForegroundFov;
+    bViewModelActive = ForegroundFov > 1.f;
     if (ForegroundFov > 1.f)
     {
         Camera->SetEnableFirstPersonFieldOfView(true);
-        Camera->SetFirstPersonFieldOfView(FMath::RadiansToDegrees(2 * FMath::Atan(
-            FMath::Tan(FMath::DegreesToRadians(ForegroundFov) / 2) * Aspect / (4.f / 3.f))));
+        Camera->SetFirstPersonFieldOfView(ForegroundFov);
         Arms->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
         WeaponVisual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     }
@@ -268,6 +275,7 @@ void AOpenWillowWalker::BeginPlay()
     FParse::Value(FCommandLine::Get(), TEXT("owbackpack="), DemoBackpack);
     Inventory->SetBackpackCapacity(DemoBackpack);
     const int32 Loaded = Inventory->LoadRecipes(ItemDir);
+    LoadViewModels(ItemDir);
     // Skill tree from tools/prepare_skill_tree.py, the same file the Skills
     // page shows (-owskilltree=<file>). The host earns no XP yet, so
     // -owlevel=<N> sets Maya's starting level (default 1, no skill points).
@@ -510,6 +518,39 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWFire"), IE_Released, this, &AOpenWillowWalker::FireReleased);
     Input->BindAction(TEXT("OWPhaselock"), IE_Pressed, this, &AOpenWillowWalker::UsePhaselock);
 }
+void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
+{
+    FString Text;
+    if (!FFileHelper::LoadFileToString(Text, *FPaths::Combine(ItemDir, TEXT("weapon_view.json")))) return;
+    TSharedPtr<FJsonObject> Root;
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid()) return;
+    for (const auto& Pair : Root->Values)
+    {
+        const TSharedPtr<FJsonObject>* Entry = nullptr;
+        if (!Pair.Value.IsValid() || !Pair.Value->TryGetObject(Entry) || !Entry) continue;
+        FViewModel Model;
+        const TArray<TSharedPtr<FJsonValue>>* Offset = nullptr;
+        if ((*Entry)->TryGetArrayField(TEXT("player_view_offset"), Offset) && Offset->Num() == 3)
+            Model.Offset = FVector((*Offset)[0]->AsNumber(), (*Offset)[1]->AsNumber(), (*Offset)[2]->AsNumber());
+        double Fov = 0.0;
+        if ((*Entry)->TryGetNumberField(TEXT("first_person_fov"), Fov)) Model.Fov = float(Fov);
+        ViewModels.FindOrAdd(FString(Pair.Key)) = Model;  // the key type of FJsonObject::Values is not FString in 5.8
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow view models: %d recipes from %s"), ViewModels.Num(), *ItemDir);
+}
+void AOpenWillowWalker::ApplyViewModel(const FString& ItemId)
+{
+    // The running game puts the arms mesh at the view point plus the held weapon type's PlayerViewOffset (forward, right, up) and
+    // draws it with that type's FirstPersonMeshFOV as the foreground FOV (SDK probe 2026-10-04: five weapons, exact). In the idle
+    // clip the arms' Camera bone sits (9.42, -2.15, -0.36) from the arms origin; the host's clips pin the Camera bone to the
+    // component origin, so that offset is added here. The native attribution is UNVERIFIED; the live equality is the evidence.
+    if (!bViewModelActive || !Arms || !Camera) return;
+    static const FVector CameraBoneOffset(9.42, -2.15, -0.36);
+    FViewModel Model;
+    if (const FViewModel* Found = ViewModels.Find(ItemId)) Model = *Found;
+    Arms->SetRelativeLocation(Model.Offset + CameraBoneOffset);
+    Camera->SetFirstPersonFieldOfView(bViewFovForced || Model.Fov <= 1.f ? ViewFovDefault : Model.Fov);  // horizontal degrees
+}
 void AOpenWillowWalker::SelectSlot(int32 Slot)
 {
     if (!bMayaActive || !ArmsAnim) return;
@@ -527,6 +568,7 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
     WeaponVisual->SetSkeletalMesh(WeaponMesh);
     OpenWillowGunLook::Apply(WeaponVisual);
+    ApplyViewModel(Item->Id);
     GlowImpulse = 0.f;
     AppliedGlow = 0.f;
     WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr || bInventoryPresentation);
@@ -1311,6 +1353,20 @@ void AOpenWillowWalker::RunGunShots(float Now)
         if (Now < T0 + Settle) return;
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s.png"), *Id), true, false);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s first person"), *Id);
+        {
+            // Camera-space (forward, right, up in cm) positions of the arms' weapon bone and the gun's bones, for comparison with the
+            // SDK probe of the running game (docs/verification/WEAPON_VISUALS.md section 10).
+            const FVector Eye = Camera->GetComponentLocation();
+            auto Rel = [&](const FVector& World)
+            {
+                const FVector D = World - Eye;
+                return FString::Printf(TEXT("(%.2f, %.2f, %.2f)"), FVector::DotProduct(D, Camera->GetForwardVector()),
+                    FVector::DotProduct(D, Camera->GetRightVector()), FVector::DotProduct(D, Camera->GetUpVector()));
+            };
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s R_Weapon_Bone %s WeaponOffset %s Barrel %s Camera bone %s"), *Id,
+                *Rel(Arms->GetBoneLocation(TEXT("R_Weapon_Bone"))), *Rel(WeaponVisual->GetBoneLocation(TEXT("WeaponOffset"))),
+                *Rel(WeaponVisual->GetBoneLocation(TEXT("Barrel"))), *Rel(Arms->GetBoneLocation(TEXT("Camera"))));
+        }
         break;
     case 2:
     {

@@ -173,6 +173,15 @@ private:
     bool bOutOfAmmoLogged = false;
     float LandUntil = 0;
     float TargetHitAt = -10;
+    // First-person view model (lane C, docs/verification/WEAPON_VISUALS.md section 10). Per recipe id, from weapon_view.json beside the
+    // recipes (tools/weapon_view_model.py): the weapon type's PlayerViewOffset and FirstPersonMeshFOV. Applied in SelectSlot.
+    struct FViewModel { FVector Offset = FVector::ZeroVector; float Fov = 0.f; };
+    TMap<FString, FViewModel> ViewModels;
+    bool bViewModelActive = false;      // foreground FOV on (the default; -owfpfov=0 turns it and the offsets off)
+    bool bViewFovForced = false;        // -owfpfov=<n> given: that value for every weapon
+    float ViewFovDefault = 45.f;        // horizontal degrees
+    void LoadViewModels(const FString& ItemDir);
+    void ApplyViewModel(const FString& ItemId);
     // Weapon glow after shots (native rule, UNVERIFIED: +0.25 per shot, cap 5, decay 3.5/s from 0.2 s after the shot; the
     // emissive scale is the base times 1 + impulse). Drives the paint material's OW_Emissive.
     float GlowImpulse = 0.f;

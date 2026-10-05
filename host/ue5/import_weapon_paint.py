@@ -178,7 +178,7 @@ def apply(data):
             'if (Dbg>0.5 && Dbg<1.5) return A/max(1.0,max(A.r,max(A.g,A.b)));\n'
             'if (Dbg>2.5) { float v=exp2(lerp(-5.5,2.8,saturate((SP.x-0.33)/0.42))); return float3(v,v,v); }\n'
             'if (Dbg>1.5) return glow;\n'
-            'float3 want=lit+glow;\n'
+            'float3 want=(Dbg>3.5) ? float3(1,1,1) : lit+glow;\n'
             + tone +
             'float3 outc=float3(0,0,0);\n'
             'for (int ch=0; ch<3; ch++)\n'

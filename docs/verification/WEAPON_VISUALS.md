@@ -214,3 +214,71 @@ Other round-2 changes:
 - First person: with the foreground FOV (now the default; in each strip `local/orch/C/review2/fp_<id>.png` the middle panel is the default, the right one the old view with `-owfpfov=0`) all six guns sit at about the real scale and the pistols lean left as in the real frames
   (`local/orch/C/review2/fp_<id>.png`, right panel); long guns are held in their own clip sets. Remaining: guns about 10 percent large, the
   muzzle flash, and the lighting differing by scene. The foreground FOV is the default in round 2 (see section 7).
+
+## 9. Round 3 (2026-10-05): the first-person scale, cant and glove had one cause
+
+Round 2's critic found the pistols about 20 percent too large and leaning 10 degrees where the game leans 25 to 30, the dark glove
+missing and the long guns off. The candidates (FOV value, arms idle pose, camera offset) were tried in the cheapest order: the FOV.
+Unreal's first-person FOV is a horizontal angle on the scene's axis (`FMinimalViewInfo::CalculateFirstPersonFOVCorrectionFactor`, a ratio of
+half-tangents), so the question is what the game's `ForegroundFOV` 45 is an angle of. Three values were rendered for all six guns
+(`local/orch/C/shots/u2` = 45 read as horizontal at 4:3, i.e. 57.9 degrees at 16:9; `fp_52`; `fp_57.9` = 45 read as the vertical angle, i.e.
+57.9 degrees at 4:3 and 72.6 degrees at 16:9) and set beside the real frames (`local/orch/C/fpvar_a.png`, `fpvar_b.png`). Only the vertical
+reading matches: gun size and screen position equal the real frame's on all six guns, the pistols lean toward the centre as the real ones
+do (a wider FOV leans an off-centre barrel more), the left forearm of the long guns is in frame, and the dark glove appears at the bottom
+edge. The glove was not culled and no material slot was wrong: with the narrower horizontal reading the hand simply sat below the bottom
+of the frame (the legacy world-FOV view shows the same black glove). The arms idle pose and the camera offset were not changed. This is
+`UNVERIFIED` as a statement about the game's code (a rotation test of the real world FOV, `local/orch/C/rg2.ps1`, was never run); it is
+the reading under which the frames agree. By the same reading the world `FOVAngle` 77.55 would be a vertical angle too (110 degrees
+horizontal at 16:9, where the host uses 106 from its by-eye 90); the world FOV was not changed.
+
+`-owfpfov=<vertical degrees>` took the vertical angle in round 3. Superseded by section 10: with the real placement the 45 reads as a horizontal angle.
+
+Colour claims of round 2's critic that the numbers do not support (side view, `local/orch/C/cells.py`, cell medians; hex is sRGB):
+
+- Fire pistol barrel and slide: real `#474c59`, `#43454f`, `#3d404d`, `#343f4c`; host `#4a505e`, `#3d424d`, `#3e444d`, `#424751`. The critic's
+  "light steel #8d9aa6" is the top highlight row only (real `#6b7a83`, host `#7c8a99`). The orange area as a fraction of the squared gun height is
+  0.0425 real against 0.0409 host and the mean orange run across the grip is 0.046 against 0.0435 of the gun height: the stripes are not
+  twice as wide; the review composite scales the host crop up. The Infinity shroud cells match within 25 percent (real `#583742`, `#492c33`,
+  `#54323e`, `#4b2e3e`, host `#5b495d`, `#482b31`, `#58343d`, `#5f3a4e`), brightest toward the receiver.
+- Hyperion SMG yellow: host cells are 10 to 15 percent lighter and warmer than the real (`#d4c684` against `#f9dd92`), not duller.
+- Jakobs pistol metal matches (`#b6b3b4` against `#b7b9bd`); the wood cells are about 30 percent darker in the host with the right hue
+  (`#8e8371` against `#615a50`). Not tuned: one global look, no per-gun correction; the different signs on different guns point at the albedo
+  reading of each material (detail channel colour space), not at the light.
+
+## 10. Round 4 (2026-10-05): what places the long guns differently from the pistols
+
+Round 3's blind A/B (vertical-45 against the older horizontal reading) split by weapon type: the vertical reading was better on the two
+pistols, the horizontal one on the SMG, rifle and shotgun. A single FOV value was the wrong thing to vary: the host never placed the arms
+the way the game does, and the placement differs by weapon type.
+
+Read from the live game (SDK driver, 1280x720, five weapons held in turn; 2026-10-04, `local/realgame/orchC/`) and from the cooked data:
+
+- The arms mesh origin equals the view point plus the held weapon type's `PlayerViewOffset` (forward, right, up), exact for all five weapons
+  probed. Values from `WeaponTypeDefinition` in Startup.upk: Vladof infinity pistol (20, 4, 2), Jakobs pistol and the Maliwan mission pistol
+  (15, 4, 2), Bandit shotgun (12.5, 4, 2), Jakobs assault rifle (12, 2, 2), Hyperion SMG (10, 3, 0). Pistols sit about 3 to 8 cm further
+  forward than the long guns, which is what moved the long guns 40 to 85 px in round 3.
+- `ForegroundFOV` on the player controller equals the type's `FirstPersonMeshFOV`: 45 for five of them, 50 for the SMG.
+- In the idle clip the arms' `Camera` bone sits (9.42, -2.15, -0.36) from the arms origin. The host's clips pin that bone to the component
+  origin, so the host adds this offset. After adding both, the host's `R_Weapon_Bone`, weapon offset and barrel positions agree with the
+  live ones to about 0.1 cm (`gunprobe` log lines from `-owgunshots`).
+- With the placement right, the vertical-45 reading draws every gun too small (about half the area). Sweeping the foreground FOV for all six
+  guns, an effective 25 degrees vertical (about 43 to 45 horizontal at 16:9) matches size, lean, glove and the long guns' left forearm on all
+  six (`local/orch/C/fp5_a.png`, `fp5_b.png`); silhouette widths (solid-white renders, `-owgundebug=4`) at 25 degrees against the
+  critic-measured real boxes: Infinity 200 against 205 px, Jakobs pistol 223 against 230, Maliwan pistol 239 against 270. At 35 degrees they
+  are 103, 133 and 136 px. So the 45 is a HORIZONTAL angle on the view axis, and round 3's vertical reading was a compensation for the missing
+  placement. One rule fits all six: foreground FOV = the type's `FirstPersonMeshFOV` as a horizontal angle, arms placed at
+  `PlayerViewOffset` plus the Camera-bone offset.
+- Status: the data values and the live equality are read facts; that the engine applies them this way is `UNVERIFIED` native behaviour; that a
+  45-degree horizontal foreground FOV is the right projection is confirmed only by the frames agreeing, not by a code read.
+
+Host: `tools/weapon_view_model.py` writes `weapon_view.json` (ignored, per items folder) from the cooked weapon types; `AOpenWillowWalker::
+LoadViewModels` reads it and `ApplyViewModel` (called from `SelectSlot`) sets the arms location and the foreground FOV per weapon. A recipe
+without an entry gets offset 0 plus the Camera-bone offset and 45. `-owfpfov=<horizontal degrees>` forces one value for every weapon;
+`0` restores the old world-FOV view and the old unoffset arms. Frames: `local/orch/C/shots/u4`, composite `fp6_a.png`.
+
+Exposure check (the maintainer saw all-white guns): inside the gun silhouette the 90th percentile luminance of the host against the real
+first-person frames is 126/116 (Infinity), 209/211 (Jakobs pistol), 230/228 (Maliwan), 219/222 (SMG), 199/213 (rifle) and 114/127 (shotgun); the
+99th percentile is 5 to 25 levels higher in the host on the pale guns (243 against 233 on the Jakobs pistol). The real Jakobs metal is also
+near-white (cell median `#b7b9bd`), and the real first-person frames are lit blue where the host's Sanctuary street is neutral, so a pale
+metal reads whiter next to a grey street. No exposure error found; a small highlight excess on the Maliwan pistol (6 percent of pixels at
+250 or more, none in the real frame) is left alone. Light constants stay `UNVERIFIED`.

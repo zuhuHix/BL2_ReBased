@@ -1366,7 +1366,11 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   Idle Run_F Sprint Jump_Start Jump_Idle Jump_End Draw ADD_Fire_Recoil` (bones are matched by name, so the rifle set's
   other bone order converts), then import with `OPENWILLOW_CHARACTER_ANIMS=AssaultRifle=...;SMG=...;Shotgun=...`.
 - The arms and gun use the game's foreground FOV 45 by default; `-owfpfov=0` restores the old single-FOV view,
-  `-owfpfov=<n>` sets another value.
+  `-owfpfov=<n>` forces one horizontal value for every weapon.
+- `python tools/weapon_view_model.py --game <BL2 dir> --dir <items folder...>` writes `weapon_view.json` beside the
+  recipes: each recipe's weapon-type `PlayerViewOffset` and `FirstPersonMeshFOV`. The walker places the arms and sets the
+  foreground FOV from it when a gun is selected; rerun it when a recipe folder changes (a recipe without an entry gets
+  no offset and 45).
 
 - `research/behavior_census.py` and `research/struct_defaults_census.py` are the structural
   oracles behind the behavior variable-data decode and the struct-default reader fix.
