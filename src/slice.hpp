@@ -89,8 +89,12 @@ private:
     void pump();
     void drainExperience();
     bool drainMission();
-    bool syncSequences();                    // applies the dummy's enable conditions; true if a sequence changed
+    // The dummy's enable conditions (NATIVE_BEHAVIOR_POPULATION.md section B, UNVERIFIED): the verdict of one condition from the
+    // tracker's current state, and the application of every condition's verdict (what each mission notification does).
     bool conditionHolds(Object& condition);
+    void applyConditions();
+    bool dummyRegistered_ = false;           // the dummy has been spawned: its provider is a consumer and its conditions observe the mission
+    int notifyDepth_ = 0;
     void changeSequence(const std::string& sequence, const std::string& action);
 };
 

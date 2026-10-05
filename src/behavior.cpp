@@ -99,6 +99,8 @@ BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Packa
         const int sequenceIndex = int(sequences_.size());
         if (const Value* name = data.field("BehaviorSequenceName")) sequence.name = name->s;
         if (const Value* enabled = data.field("bEnabledOnSpawn")) sequence.enabled = enabled->truth();
+        sequence.enabledOnSpawn = sequence.enabled;
+        if (const Value* mutex = data.field("bSequenceEnabledMutex")) sequence.mutex = mutex->truth();
         if (const Value* condition = data.field("CustomEnableCondition"); condition && condition->o && condition->o->resourcePackage)
             sequence.condition = runtime_.instantiateExport(condition->o->resourcePackage, condition->o->resourceIndex, 4);
         if (const Value* links = data.field("ConsolidatedOutputLinkData"))
@@ -289,12 +291,30 @@ bool BehaviorProvider::setSequenceEnabled(const std::string& name, bool enabled)
         if (sequence.name != name) continue;
         found = true;
         if (sequence.enabled == enabled) continue;
-        sequence.enabled = enabled;
         // Sequence events fire for the changed sequence only.
         Call call(*this);
-        fireIn(size_t(&sequence - sequences_.data()), enabled ? "OnBehaviorSequenceEnabled" : "OnBehaviorSequenceDisabled", {}, -1);
+        const size_t index = size_t(&sequence - sequences_.data());
+        if (enabled) {
+            if (sequence.mutex)
+                for (auto& other : sequences_)
+                    if (&other != &sequence && other.enabled && other.mutex) { setSequenceEnabled(other.name, false); break; }
+            sequence.enabled = true;       // the enabled event is delivered after the bit is set ...
+            fireIn(index, "OnBehaviorSequenceEnabled", {}, -1);
+        } else {
+            fireIn(index, "OnBehaviorSequenceDisabled", {}, -1);      // ... the disabled event before it is cleared
+            sequence.enabled = false;
+        }
     }
     return found;
+}
+
+void BehaviorProvider::registerConsumer() {
+    if (registered_) return;
+    registered_ = true;
+    for (auto& sequence : sequences_) sequence.enabled = false;
+    std::vector<std::string> onSpawn;
+    for (const auto& sequence : sequences_) if (sequence.enabledOnSpawn) onSpawn.push_back(sequence.name);
+    for (const auto& name : onSpawn) setSequenceEnabled(name, true);
 }
 
 void BehaviorProvider::fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs, int linkId) {

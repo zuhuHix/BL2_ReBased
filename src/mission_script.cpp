@@ -18,12 +18,15 @@ Value& required(Runtime& runtime, Object& object, const char* name) {
 MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime_(runtime), mission_(mission), evaluator_(runtime) {
     // The graph the script reads: Role and WorldInfo on the controller, WorldInfo.GRI, GRI.MissionTracker.
     tracker_ = runtime.instantiate(runtime.findClass("WillowGame.MissionTracker"));
-    auto replication = runtime.instantiate(runtime.findClass("WillowGame.WillowGameReplicationInfo"));
-    required(runtime, *replication, "MissionTracker") = Value::makeObject(tracker_);
-    auto world = runtime.instantiate(runtime.findClass("Engine.WorldInfo"));
-    required(runtime, *world, "GRI") = Value::makeObject(replication);
+    replication_ = runtime.instantiate(runtime.findClass("WillowGame.WillowGameReplicationInfo"));
+    required(runtime, *replication_, "MissionTracker") = Value::makeObject(tracker_);
+    world_ = runtime.instantiate(runtime.findClass("Engine.WorldInfo"));
+    required(runtime, *world_, "GRI") = Value::makeObject(replication_);
     controller_ = runtime.instantiate(runtime.findClass("WillowGame.WillowPlayerController"));
-    required(runtime, *controller_, "WorldInfo") = Value::makeObject(world);
+    required(runtime, *controller_, "WorldInfo") = Value::makeObject(world_);
+    // The one globals instance every GetWillowGlobals / GetGearboxGlobals call returns (NATIVE_CONTROLLER_HELPERS.md); the game
+    // creates it at world start from the configured class WillowGame.WillowGlobals.
+    globals_ = runtime.instantiate(runtime.findClass("WillowGame.WillowGlobals"));
     // The replication info that holds the experience level (ExpLevelUp reads and raises it, OnExpLevelChange sets the next requirement).
     pri_ = runtime.instantiate(runtime.findClass("WillowGame.WillowPlayerReplicationInfo"));
     required(runtime, *controller_, "PlayerReplicationInfo") = Value::makeObject(pri_);
@@ -61,21 +64,72 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         if (c.self != tracker_) return outsideBinding(c);
         return Value::makeByte(isMission(c.in(0)) ? mission_.statusNumber() : 0);   // no record: NotStarted
     });
-    // UNVERIFIED reading of the name: the tracker's data is valid. The installed mission data is what MissionSystem runs.
-    bind("WillowGame.MissionTracker.IsDataValid", [this](NativeCall& c) {
-        if (c.self != tracker_) return outsideBinding(c);
-        return Value::makeBool(true);
-    });
-    // The controller's own list lookup (inferred from how the script uses it, no native note): the index of the record
-    // whose MissionDef is the mission in the current playthrough's list, -1 when there is none.
+    // The controller's own list lookup (NATIVE_CONTROLLER_HELPERS.md): the index of the first record of the current playthrough's list
+    // whose MissionDef is that object, -1 when the playthrough index is out of range or there is none.
     bind("WillowGame.WillowPlayerController.NativeGetMissionIndex", [this](NativeCall& c) {
         if (c.self != controller_) return outsideBinding(c);
         if (const Value* list = missionList())
             for (size_t i = 0; i < list->elements().size(); ++i) {
                 const Value* definition = list->elements()[i].field("MissionDef");
-                if (definition && definition->o && definition->o == c.in(0).o) return Value::makeInt(int64_t(i));
+                if (definition && definition->o == c.in(0).o) return Value::makeInt(int64_t(i));
             }
         return Value::makeInt(-1);
+    });
+    // GetCurrentPlaythrough: CurrentPlaythrough of the world's replication info (0 when absent); no side effects.
+    bind("WillowGame.WillowPlayerController.GetCurrentPlaythrough", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        return Value::makeInt(currentPlaythrough());
+    });
+    // IsPrimaryPlayer: true for the sole local controller of a standalone game.
+    bind("Engine.PlayerController.IsPrimaryPlayer", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        return Value::makeBool(true);
+    });
+    // GetHUDMovie: the HUD's movie, None without a WillowHUD (the VM graph has no HUD, so the script skips its HUD branches).
+    bind("WillowGame.WillowPlayerController.GetHUDMovie", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        return Value::makeObject(nullptr);
+    });
+    // Presentation only (hardware LCD text, UI sound): documented no-ops.
+    bind("WillowGame.WillowPlayerController.UpdateLcdMissionStatus", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        return Value();
+    });
+    bind("WillowGame.WillowPlayerController.PlayUIAkEvent", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        return Value();
+    });
+    // IsMenuLevel (no-argument form): the world's bIsMenuLevel bit, false when absent.
+    bind("Engine.WorldInfo.IsMenuLevel", [this](NativeCall&) {
+        const Value* menu = runtime_.property(*world_, "bIsMenuLevel");
+        return Value::makeBool(menu && menu->truth());
+    });
+    // The globals: one instance behind all of them; GetBehaviorKernel reads its TheBehaviorKernel field (the kernel itself is not
+    // modelled: None). GetGlobalsDefinition returns the configured data object GD_Globals.General.Globals from the mission package
+    // (named in the note's prose; it has no native section of its own).
+    bind("WillowGame.WillowGlobals.GetWillowGlobals", [this](NativeCall&) { return Value::makeObject(globals_); });
+    bind("GearboxFramework.GearboxGlobals.GetGearboxGlobals", [this](NativeCall&) { return Value::makeObject(globals_); });
+    bind("GearboxFramework.GearboxGlobals.GetBehaviorKernel", [this](NativeCall&) {
+        const Value* kernel = runtime_.property(*globals_, "TheBehaviorKernel");
+        return kernel ? *kernel : Value::makeObject(nullptr);
+    });
+    bind("WillowGame.WillowGlobals.GetGlobalsDefinition", [this](NativeCall&) {
+        if (!globalsDefinition_) {
+            const auto package = mission_.definition()->resourcePackage;
+            const int32_t index = package ? runtime_.findExport(*package, "GD_Globals.General.Globals") : 0;
+            if (index > 0) globalsDefinition_ = runtime_.instantiateExport(package, index, 4);
+        }
+        return Value::makeObject(globalsDefinition_);
+    });
+    // IsDataValid reports the tracker's bDataValidated flag; ValidateData, the only writer, sets it (NATIVE_CONTROLLER_HELPERS.md).
+    bind("WillowGame.MissionTracker.IsDataValid", [this](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeBool(required(runtime_, *tracker_, "bDataValidated").truth());
+    });
+    bind("WillowGame.MissionTracker.ValidateData", [this](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        required(runtime_, *tracker_, "bDataValidated") = Value::makeBool(true);
+        return Value();
     });
     // ExpEarn (bridge note): Exp x the type's scale x ExpAllPointsScale added to the pool, never below 0, never above the experience
     // the maximum level needs, and only when it raises the pool. The scales are attributes on the pool whose base values were not
@@ -163,6 +217,12 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         return Value();
     });
 
+    // The mission data validation. In the game the flag is set when the reply to a mission data request arrives (the script
+    // ClientValidateMissionData calls ValidateData, then does per-controller work); how a standalone run triggers that request
+    // was not read. Here the reply is delivered once, when the VM graph is built: the installed script runs on the controller
+    // (a shortcut for the trigger, the effect is the game's).
+    run([this] { runtime_.callByName(controller_, "ClientValidateMissionData"); });
+
     mission_.onStatusChanged = [this](int status) { updateMissionStatus(status); };
     mission_.onKickoffTick = [this] { run([this] { runtime_.callByName(controller_, "IsMissionMoviePlaying"); }); };
 }
@@ -223,10 +283,16 @@ bool MissionScript::turnIn() {
     return mission_.status() == MissionSystem::Status::Complete;
 }
 
+int MissionScript::currentPlaythrough() {
+    const Value* current = runtime_.property(*replication_, "CurrentPlaythrough");
+    return current ? int(current->integer()) : 0;
+}
+
 Value* MissionScript::missionList() {
     Value* playthroughs = runtime_.property(*controller_, "MissionPlaythroughs");
-    if (!playthroughs || playthroughs->kind != Value::Kind::Array || playthroughs->elements().empty()) return nullptr;
-    return playthroughs->elements()[0].field("MissionList");
+    const int index = currentPlaythrough();
+    if (!playthroughs || playthroughs->kind != Value::Kind::Array || index < 0 || size_t(index) >= playthroughs->elements().size()) return nullptr;
+    return playthroughs->elements()[size_t(index)].field("MissionList");
 }
 
 void MissionScript::syncRestored() {

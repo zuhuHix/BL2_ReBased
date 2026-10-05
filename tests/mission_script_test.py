@@ -18,6 +18,11 @@ The invented data: the experience curve f(n) = 2 x (n^2 + 1) (the level comes fr
 R(2) 6, R(3) 16, R(4) 30, R(5) 48, R(50) 4998; the reward percentage is an attribute chain, constant 0.5 times a conditional
 (playthrough count == 2 gives 4, else 3), so 1.5 on the first playthrough. At game stage 4 the reward is
 trunc((R(5) - R(4)) x 1.5) = trunc(18 x 1.5) = 27.
+
+The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
+with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
+OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
+status gating, ObjectiveSetRestrictions, mission-level conditions and bSequenceEnabledMutex.
 """
 
 import json
@@ -84,6 +89,7 @@ class Tags:
         return self.p.fname(name) + self.p.fname(kind) + w32(size, 0) + detail + body
 
     def int(self, name, v): return self.tag(name, 'IntProperty', 4, w32(v))
+    def name_(self, name, v): return self.tag(name, 'NameProperty', 8, self.p.fname(v))
     def float(self, name, v): return self.tag(name, 'FloatProperty', 4, struct.pack('<f', v))
     def byte(self, name, v): return self.tag(name, 'ByteProperty', 1, bytes([v]), self.p.fname('None'))
     def struct_(self, name, type_, body): return self.tag(name, 'StructProperty', len(body), body, self.p.fname(type_))
@@ -145,8 +151,8 @@ class Toy:
         self.prop(inner_kind, index, name, type_ref=inner_ref)
         return index
 
-    def struct_(self, owner, name):
-        return self.p.add_export(self.imp['ScriptStruct'], name, w32(0) * 4, outer=owner)
+    def struct_(self, owner, name, defaults=None):
+        return self.p.add_export(self.imp['ScriptStruct'], name, w32(0) * 4 if defaults is None else bytes(52) + defaults, outer=owner)
 
     def function(self, owner, name, declared, body=None, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, result=None, native=0, friendly=None):
         """declared: [(kind, name, extra flags)]; `body(ids)` returns an Asm (None for a native). Children are exported
@@ -173,14 +179,25 @@ COMPARISONS = ['OPERATOR_EqualTo', 'OPERATOR_NotEqualTo', 'OPERATOR_GreaterThan'
 
 
 def build_engine():
-    toy = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct'))
+    toy = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Str', 'Name'))
     p, T = toy.p, toy
     t = Tags(p)
+    changes = ['CHANGE_Toggle', 'CHANGE_Enable', 'CHANGE_Disable']
+    p.add_export(toy.imp['Enum'], 'EChangeStatus', w32(0) + toy.none + w32(0) + w32(len(changes)) + b''.join(p.fname(c) for c in changes),
+                 outer=T.cls('ITargetable'))
+    T.prop('Name', T.cls('Behavior_RemoteEvent'), 'EventName')
+    contexts = ['BCONTEXT_Self', 'BCONTEXT_Instigator']
+    p.add_export(toy.imp['Enum'], 'EBehaviorContext', w32(0) + toy.none + w32(0) + w32(len(contexts)) + b''.join(p.fname(c) for c in contexts),
+                 outer=T.cls('BehaviorBase'))
     actor = T.cls('Actor')
+    T.function(T.cls('PlayerController', super_ref=actor), 'IsPrimaryPlayer', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Bool')
     T.prop('Byte', actor, 'Role')
     T.prop('Object', actor, 'WorldInfo')
     p.add_export(toy.imp['Enum'], 'ENetRole', w32(0) + toy.none + w32(0) + w32(len(ROLES)) + b''.join(p.fname(r) for r in ROLES), outer=actor)
-    T.prop('Object', T.cls('WorldInfo'), 'GRI')
+    world = T.cls('WorldInfo')
+    T.prop('Object', world, 'GRI')
+    T.prop('Bool', world, 'bIsMenuLevel')
+    T.function(world, 'IsMenuLevel', [('Str', 'MapName', CPF_OPT)], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Bool')
     # AttributeInitializationData: its own default makes BaseValueScaleConstant 1 (a field the data omits keeps that).
     aid = p.add_export(toy.imp['ScriptStruct'], 'AttributeInitializationData', bytes(52) + t.float('BaseValueScaleConstant', 1.0) + toy.none)
     T.prop('Float', aid, 'BaseValueConstant')
@@ -216,10 +233,15 @@ def build_engine():
 
 
 def build_gearbox():
-    toy = Toy(('Float', 'Struct', 'Byte'))
+    toy = Toy(('Float', 'Struct', 'Byte', 'Object', 'Int', 'Bool', 'Name', 'Array'))
     p, T = toy.p, toy
+    t = Tags(p)
     engine = p.add_import_full('Package', 0, 'Engine')
     aid = p.add_import_full('ScriptStruct', engine, 'AttributeInitializationData')
+    globals_ = T.cls('GearboxGlobals')
+    T.prop('Object', globals_, 'TheBehaviorKernel')
+    T.function(globals_, 'GetGearboxGlobals', [], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Object')
+    T.function(globals_, 'GetBehaviorKernel', [], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Object')
     T.cls('NoContextNeededAttributeContextResolver')
     T.prop('Float', T.cls('ConstantAttributeValueResolver'), 'ConstantValue')
     math = T.cls('SimpleMathValueResolver')
@@ -227,6 +249,50 @@ def build_gearbox():
     T.prop('Byte', math, 'Operand')
     p.add_export(toy.imp['Enum'], 'EMathValueResolverOperand', w32(0) + toy.none + w32(0) + w32(len(OPERANDS)) + b''.join(p.fname(o) for o in OPERANDS),
                  outer=math)
+    # The behavior provider vocabulary (tests/behavior_test.py has the commented version): sequences, events, behaviors, links.
+    bpd = T.cls('BehaviorProviderDefinition')
+    var_types = ['BVAR_None', 'BVAR_Object', 'BVAR_Int', 'BVAR_Float', 'BVAR_InstanceData', 'BVAR_NamedVariable', 'BVAR_Mystery']
+    link_types = ['BVARLINK_Unknown', 'BVARLINK_Input', 'BVARLINK_Output']
+    p.add_export(toy.imp['Enum'], 'EBehaviorVariableType', w32(0) + toy.none + w32(0) + w32(len(var_types)) + b''.join(p.fname(v) for v in var_types), outer=bpd)
+    p.add_export(toy.imp['Enum'], 'EBehaviorVariableLinkType', w32(0) + toy.none + w32(0) + w32(len(link_types)) + b''.join(p.fname(v) for v in link_types), outer=bpd)
+    sub = T.struct_(0, 'SubarrayData')
+    T.prop('Int', sub, 'ArrayIndexAndLength')
+    user = T.struct_(0, 'BehaviorEventUserData', t.bool('bEnabled', True) + toy.none)
+    T.prop('Name', user, 'EventName')
+    T.prop('Bool', user, 'bEnabled')
+    T.prop('Int', user, 'MaxTriggerCount')
+    T.prop('Float', user, 'ReTriggerDelay')
+    event = T.struct_(0, 'BehaviorEventData2')
+    T.prop('Struct', event, 'UserData', type_ref=user)
+    T.prop('Struct', event, 'OutputVariables', type_ref=sub)
+    T.prop('Struct', event, 'OutputLinks', type_ref=sub)
+    data = T.struct_(0, 'BehaviorData2')
+    T.prop('Object', data, 'Behavior')
+    T.prop('Struct', data, 'LinkedVariables', type_ref=sub)
+    T.prop('Struct', data, 'OutputLinks', type_ref=sub)
+    link = T.struct_(0, 'BehaviorOutputLinkData')
+    T.prop('Int', link, 'LinkIdAndLinkedBehavior')
+    T.prop('Float', link, 'ActivateDelay')
+    var = T.struct_(0, 'BehaviorVariableData')
+    T.prop('Name', var, 'Name')
+    T.prop('Byte', var, 'Type')
+    vlink = T.struct_(0, 'BehaviorVariableLinkData2')
+    T.prop('Name', vlink, 'PropertyName')
+    T.prop('Byte', vlink, 'VariableLinkType')
+    T.prop('Byte', vlink, 'ConnectionIndex')
+    T.prop('Struct', vlink, 'LinkedVariables', type_ref=sub)
+    seq = T.struct_(0, 'BehaviorSequenceData')
+    T.prop('Name', seq, 'BehaviorSequenceName')
+    T.prop('Bool', seq, 'bEnabledOnSpawn')
+    T.prop('Bool', seq, 'bSequenceEnabledMutex')
+    T.prop('Object', seq, 'CustomEnableCondition')
+    T.array_of(seq, 'EventData2', 'Struct', event)
+    T.array_of(seq, 'BehaviorData2', 'Struct', data)
+    T.array_of(seq, 'VariableData', 'Struct', var)
+    T.array_of(seq, 'ConsolidatedOutputLinkData', 'Struct', link)
+    T.array_of(seq, 'ConsolidatedVariableLinkData', 'Struct', vlink)
+    T.array_of(seq, 'ConsolidatedLinkedVariables', 'Int')
+    T.array_of(bpd, 'BehaviorSequences', 'Struct', seq)
     return p
 
 
@@ -236,6 +302,9 @@ def build_willowgame():
     engine = p.add_import_full('Package', 0, 'Engine')
     aid = p.add_import_full('ScriptStruct', engine, 'AttributeInitializationData')
     actor = p.add_import_full('Class', engine, 'Actor')
+    player_controller = p.add_import_full('Class', engine, 'PlayerController')
+    gearbox = p.add_import_full('Package', 0, 'GearboxFramework')
+    gearbox_globals = p.add_import_full('Class', gearbox, 'GearboxGlobals')
     world_info, gri = (p.add_import_full('ObjectProperty', actor, 'WorldInfo'),
                        p.add_import_full('ObjectProperty', p.add_import_full('Class', engine, 'WorldInfo'), 'GRI'))
     native = FUNC_NATIVE | FUNC_PUBLIC
@@ -248,6 +317,24 @@ def build_willowgame():
     T.prop('Byte', reward, 'CurrencyRewardType')
     T.array_of(reward, 'RewardItems', 'Object')
     T.array_of(reward, 'RewardItemPools', 'Object')
+    # what FireMissionSlice reads at construction, and the dummy's enable condition class
+    transforms = ['AIT_None', 'AIT_Transformed']
+    p.add_export(toy.imp['Enum'], 'EAITransformed', w32(0) + toy.none + w32(0) + w32(len(transforms)) + b''.join(p.fname(x) for x in transforms),
+                 outer=T.cls('AIPawnBalanceDefinition'))
+    maths = ['MATH_Add', 'MATH_Sub']
+    p.add_export(toy.imp['Enum'], 'EBinaryMathOperation', w32(0) + toy.none + w32(0) + w32(len(maths)) + b''.join(p.fname(x) for x in maths),
+                 outer=T.cls('Behavior_SimpleMath'))
+    mission_states = T.struct_(0, 'MissionStatesToLinkTo')
+    for field in ('bNotStarted', 'bActive', 'bRequiredObjectivesComplete', 'bReadyToTurnIn', 'bComplete', 'bFailed'): T.prop('Bool', mission_states, field)
+    objective_states = T.struct_(0, 'ObjectiveStatesToLinkTo')
+    for field in ('bNotStarted', 'bActive', 'bComplete'): T.prop('Bool', objective_states, field)
+    condition = T.cls('BehaviorSequenceEnableByMission')
+    T.prop('Object', condition, 'LinkedMission')
+    T.prop('Struct', condition, 'MissionStatesToLinkTo', type_ref=mission_states)
+    T.prop('Bool', condition, 'bIsObjectiveSpecific')
+    T.prop('Object', condition, 'LinkedObjective')
+    T.prop('Struct', condition, 'ObjectiveStatesToLinkTo', type_ref=objective_states)
+    T.array_of(condition, 'ObjectiveSetRestrictions', 'Object')
     mission = T.cls('MissionDefinition')
     T.prop('Struct', mission, 'Reward', type_ref=reward)
     T.prop('Struct', mission, 'AlternativeReward', type_ref=reward)
@@ -276,7 +363,9 @@ def build_willowgame():
     complete = T.function(tracker, 'CompleteMission', pair, None, native)['__self__']
     play_turn_in = T.function(tracker, 'PlayTurnIn', [('Object', 'InMission', 0)], None, native)['__self__']
     T.function(tracker, 'GetMissionStatus', [('Object', 'InMission', 0)], None, native, 'Byte')
-    T.function(tracker, 'IsDataValid', [], None, native, 'Bool')
+    is_valid = T.function(tracker, 'IsDataValid', [], None, native, 'Bool')['__self__']
+    validate = T.function(tracker, 'ValidateData', [], None, native)['__self__']
+    T.prop('Bool', tracker, 'bDataValidated')
     def no_delegates(ids):
         a = Asm()
         a.return_nothing(); a.end(); return a
@@ -284,6 +373,10 @@ def build_willowgame():
 
     replication = T.cls('WillowGameReplicationInfo')
     tracker_prop = T.prop('Object', replication, 'MissionTracker')
+    T.prop('Int', replication, 'CurrentPlaythrough')
+    globals_ = T.cls('WillowGlobals', super_ref=gearbox_globals)
+    T.function(globals_, 'GetWillowGlobals', [], None, native | 0x2000, 'Object')
+    T.function(globals_, 'GetGlobalsDefinition', [], None, native, 'Object')
 
     status_owner = T.cls('IMission')
     status = T.struct_(status_owner, 'MissionStatusPlayerData')
@@ -293,7 +386,11 @@ def build_willowgame():
     pri = T.cls('WillowPlayerReplicationInfo')
     exp_level = T.prop('Int', pri, 'ExpLevel')
     next_at = T.prop('Int', pri, 'ExpPointsNextLevelAt')
-    controller = T.cls('WillowPlayerController', super_ref=actor)
+    controller = T.cls('WillowPlayerController', super_ref=player_controller)
+    T.function(controller, 'GetCurrentPlaythrough', [], None, native, 'Int')
+    T.function(controller, 'GetHUDMovie', [], None, native, 'Object')
+    T.function(controller, 'UpdateLcdMissionStatus', [], None, native)
+    T.function(controller, 'PlayUIAkEvent', [('Object', 'Event', 0)], None, native)
     pri_prop = T.prop('Object', controller, 'PlayerReplicationInfo')
     T.function(controller, 'GetMaxExpLevel', [], None, native, 'Int')
     required = T.function(controller, 'GetExpPointsRequiredForLevel', [('Int', 'Level', 0)], None, native, 'Int')['__self__']
@@ -301,6 +398,8 @@ def build_willowgame():
     T.array_of(playthrough, 'MissionList', 'Struct', status)
     T.array_of(controller, 'MissionPlaythroughs', 'Struct', playthrough)
     T.function(controller, 'NativeGetMissionIndex', [('Object', 'InMission', 0)], None, native, 'Int')
+    is_primary = p.add_import_full('Function', player_controller, 'IsPrimaryPlayer')
+    is_menu = p.add_import_full('Function', p.add_import_full('Class', engine, 'WorldInfo'), 'IsMenuLevel')
     exp_earn = T.function(controller, 'ExpEarn', [('Int', 'Exp', 0), ('Byte', 'Source', 0), ('Byte', 'ExpType', CPF_OPT)], None, native)['__self__']
 
     def on_tracker(a, body):         # Self.WorldInfo.GRI.MissionTracker.<body>
@@ -310,6 +409,12 @@ def build_willowgame():
     def accept(ids):
         a = Asm()
         on_tracker(a, lambda: a.call(activate, lambda: a.local(ids, 'Mission'), a.self_))
+        def marker(condition, yes, no):       # ExpEarn(0, condition ? yes : no): the recorded Source says what the native answered
+            a.call(exp_earn, lambda: a.int_const(0),
+                   lambda: (a.raw(0x45), condition(), a.w(0), a.byte_const(yes), a.w(0), a.byte_const(no)))
+        marker(lambda: on_tracker(a, lambda: a.call(is_valid)), 101, 102)
+        marker(lambda: a.call(is_primary), 103, 104)
+        marker(lambda: a.context(lambda: a.instance(world_info), lambda: a.call(is_menu)), 105, 106)
         a.return_nothing(); a.end(); return a
     T.function(controller, 'AcceptMission', [('Object', 'Mission', 0), ('Object', 'MissionDirector', 0)], accept)
 
@@ -322,6 +427,12 @@ def build_willowgame():
                lambda: a.byte_const(5))
         a.return_nothing(); a.end(); return a
     T.function(controller, 'ServerCompleteMission', [('Object', 'Mission', 0), ('Object', 'MissionDirector', 0)], complete_mission)
+
+    def validate_reply(ids):
+        a = Asm()
+        on_tracker(a, lambda: a.call(validate))
+        a.return_nothing(); a.end(); return a
+    T.function(controller, 'ClientValidateMissionData', [], validate_reply)
 
     def update(ids):
         a = Asm()
@@ -350,7 +461,7 @@ def build_willowgame():
 
 
 def build_mission():
-    """ToyMission: one set SetA {Only (count 1)} with bCanCompleteMission, activated at acceptance; a reward percentage that is an
+    """ToyMission: one set SetA {RockPaper_GoToRange (count 1)} (and an unused SetB) with bCanCompleteMission, activated at acceptance; a reward percentage that is an
     attribute chain (constant 0.5 x a conditional on the playthrough count) and the experience curve definition at its stock path."""
     p = Package()
     t = Tags(p)
@@ -364,7 +475,7 @@ def build_mission():
 
     none = t.none()
     mission = p.add_export(chain('WillowGame', 'MissionDefinition'), 'ToyMission', b'')
-    only = p.add_export(chain('WillowGame', 'MissionObjectiveDefinition'), 'Only', w32(0) + t.int('ObjectiveCount', 1) + none, outer=mission)
+    only = p.add_export(chain('WillowGame', 'MissionObjectiveDefinition'), 'RockPaper_GoToRange', w32(0) + t.int('ObjectiveCount', 1) + none, outer=mission)
     set_a = p.add_export(chain('WillowGame', 'MissionObjectiveSetDefinition'), 'SetA',
                          w32(0) + t.array('ObjectiveDefinitions', 1, w32(only)) + t.bool('bCanCompleteMission', True) + none, outer=mission)
 
@@ -406,9 +517,73 @@ def build_mission():
                               w32(0) + t.array('ContextResolverChain', 1, w32(context))
                               + t.array('ValueResolverChain', 2, w32(constant_resolver, math_resolver)) + none)
     reward = t.struct_('Reward', 'MissionRewardData', data('ExperienceRewardPercentage', attribute=percentage) + none)
+    set_b = p.add_export(chain('WillowGame', 'MissionObjectiveSetDefinition'), 'SetB', w32(0) + none, outer=mission)
     cls_, sup, outer, name, _ = p.exports[mission - 1]
-    p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 1, w32(set_a))
+    p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
                               + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + none)
+    return p
+
+
+def build_dynamic():
+    """Sanctuary_Dynamic: a provider at the stock path whose sequences exercise the enable conditions. Each sequence has an
+    OnBehaviorSequenceEnabled and OnBehaviorSequenceDisabled event with a Behavior_RemoteEvent that names the transition."""
+    p = Package()
+    t = Tags(p)
+    chains = {}
+
+    def chain(*path):
+        if path in chains: return chains[path]
+        outer = chain(*path[:-1]) if len(path) > 1 else 0
+        chains[path] = p.add_import_full('Package' if len(path) == 1 else 'Class', outer, path[-1])
+        return chains[path]
+
+    none = t.none()
+    package_class = chain('Core', 'Package')
+    outer = 0
+    for part in ('GD_TargetDummy', 'Character', 'CharClass_TargetDummy'):
+        outer = p.add_export(package_class, part, w32(0) + none, outer=outer)
+    provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'BehaviorProviderDefinition_5', b'', outer=outer)
+    mission, objective = chain('Startup', 'ToyMission'), chain('Startup', 'ToyMission', 'RockPaper_GoToRange')
+    set_a, set_b = chain('Startup', 'ToyMission', 'SetA'), chain('Startup', 'ToyMission', 'SetB')
+
+    def states(name, type_, **bits): return t.struct_(name, type_, b''.join(t.bool(k, v) for k, v in bits.items()) + none)
+
+    def condition(name, specific, mission_states=None, objective_states=None, restrictions=()):
+        body = t.obj('LinkedMission', mission) + t.bool('bIsObjectiveSpecific', specific)
+        if mission_states: body += states('MissionStatesToLinkTo', 'MissionStatesToLinkTo', **mission_states)
+        if specific: body += t.obj('LinkedObjective', objective) + states('ObjectiveStatesToLinkTo', 'ObjectiveStatesToLinkTo', **objective_states)
+        if restrictions: body += t.array('ObjectiveSetRestrictions', len(restrictions), w32(*restrictions))
+        return p.add_export(chain('WillowGame', 'BehaviorSequenceEnableByMission'), name, w32(0) + body + none, outer=provider)
+
+    def sub(name, first, length): return t.struct_(name, 'SubarrayData', t.int('ArrayIndexAndLength', (first << 16) | length) + none)
+
+    def sequence(name, on_spawn=False, mutex=False, cond=None):
+        behaviors, links, events = [], [], b''
+        for event, remote in (('OnBehaviorSequenceEnabled', name + 'On'), ('OnBehaviorSequenceDisabled', name + 'Off')):
+            behaviors.append(p.add_export(chain('Engine', 'Behavior_RemoteEvent'), f'{name}_{remote}', w32(0) + t.name_('EventName', remote) + none, outer=provider))
+            events += (t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', event) + none)
+                       + sub('OutputVariables', 0, 0) + sub('OutputLinks', len(links), 1) + none)
+            links.append(len(behaviors) - 1)
+        behavior_data = b''.join(t.obj('Behavior', ref) + sub('LinkedVariables', 0, 0) + sub('OutputLinks', 0, 0) + none for ref in behaviors)
+        link_data = b''.join(t.int('LinkIdAndLinkedBehavior', index | (0 << 24)) + t.float('ActivateDelay', 0.0) + none for index in links)
+        return (t.name_('BehaviorSequenceName', name) + t.bool('bEnabledOnSpawn', on_spawn) + t.bool('bSequenceEnabledMutex', mutex)
+                + (t.obj('CustomEnableCondition', cond) if cond else b'')
+                + t.array('EventData2', 2, events) + t.array('BehaviorData2', len(behaviors), behavior_data)
+                + t.array('ConsolidatedOutputLinkData', len(links), link_data) + none)
+    active = dict(bActive=True)
+    sequences = [
+        sequence('Idle', on_spawn=True),
+        # the objective's state: Active while it can be progressed, Complete once its count is reached (status gating included)
+        sequence('ObjSeq', cond=condition('ObjCondition', True, active, active)),
+        sequence('RestrictA', cond=condition('RestrictACondition', True, active, active, [set_a])),
+        sequence('RestrictB', cond=condition('RestrictBCondition', True, active, active, [set_b])),
+        sequence('MissionLevel', cond=condition('MissionLevelCondition', False, dict(bComplete=True))),
+        # two sequences of one mutex group: enabling the second disables the first
+        sequence('MutexA', mutex=True, cond=condition('MutexACondition', False, dict(bActive=True, bReadyToTurnIn=True))),
+        sequence('MutexB', mutex=True, cond=condition('MutexBCondition', False, dict(bReadyToTurnIn=True))),
+    ]
+    cls_, sup, outer_, name_, _ = p.exports[provider - 1]
+    p.exports[provider - 1] = (cls_, sup, outer_, name_, w32(0) + t.array('BehaviorSequences', len(sequences), b''.join(sequences)) + none)
     return p
 
 
@@ -438,7 +613,7 @@ with tempfile.TemporaryDirectory() as folder:
 
     # Scenario A: stage 4 at acceptance (locked then: the later stage:9 changes nothing), a level-3 player at the curve point R(3) = 16.
     code, got = mission_run(root, 'stage:4', 'player:3:16', 'script:accept', 'script:accept', 'stage:9', 'tick:0.5', 'tick:0.5',
-                            'obj:Only', 'script:turnin', 'pool')
+                            'obj:RockPaper_GoToRange', 'script:turnin', 'pool')
     check('A exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
     steps = [step for step in got['steps'] if not step['step'].startswith(('stage:', 'player:'))]
     check('A steps reported', len(steps) == 7, len(steps))
@@ -459,7 +634,10 @@ with tempfile.TemporaryDirectory() as folder:
     if script:
         # hook Active (1), kickoff tick (IsMissionMoviePlaying, once), hook ReadyToTurnIn (3), hook Complete (4), then the reward:
         # trunc(18 x 1.5) = 27 at the stage locked at acceptance (4), not the later 9
-        want = [(0, 1, -1), (0, 100, -1), (0, 3, -1), (0, 4, -1), (27, 5, -1)]
+        # AcceptMission (twice: the second is refused by the native but the script still runs its probes) probes IsDataValid (the
+        # flag the validation reply set at construction: 101), IsPrimaryPlayer (true: 103) and IsMenuLevel (false: 106)
+        probes = [(0, 101, -1), (0, 103, -1), (0, 106, -1)]
+        want = [(0, 1, -1)] + probes + probes + [(0, 100, -1), (0, 3, -1), (0, 4, -1), (27, 5, -1)]
         check('A recorded ExpEarn calls in order', earned_of(script) == want, earned_of(script))
         # 16 + 27 = 43 in the pool; the pool update ran ExpLevelUp from level 3 to 4 (R(4) = 30 <= 43 < R(5) = 48) and stopped
         check('A pool and level', script['experience_pool'] == 43 and script['player_level'] == 4, (script['experience_pool'], script['player_level']))
@@ -468,16 +646,43 @@ with tempfile.TemporaryDirectory() as folder:
         check('A no VM notes', script['notes'] == [], script['notes'])
 
     # Scenario B: the pool never passes the experience of the maximum level (R(50) = 4998); the level-up loop stops at 50.
-    code, got = mission_run(root, 'stage:4', 'player:3:4990', 'script:accept', 'obj:Only', 'script:turnin', 'pool')
+    code, got = mission_run(root, 'stage:4', 'player:3:4990', 'script:accept', 'obj:RockPaper_GoToRange', 'script:turnin', 'pool')
     check('B exit', code == 0 and got['errors'] == [], (code, got['errors']))
     check('B clamp and cap', got['script']['experience_pool'] == 4998 and got['script']['player_level'] == 50,
           (got['script']['experience_pool'], got['script']['player_level']))
 
     # Scenario C: no region stage supplied: stage 0, so the span R(1) - R(0) is 0 and the reward is 0: the pool stays put.
-    code, got = mission_run(root, 'player:3:16', 'script:accept', 'obj:Only', 'script:turnin', 'pool')
+    code, got = mission_run(root, 'player:3:16', 'script:accept', 'obj:RockPaper_GoToRange', 'script:turnin', 'pool')
     check('C exit', code == 0 and got['errors'] == [], (code, got['errors']))
     check('C no region stage', got['script']['experience_pool'] == 16 and got['script']['player_level'] == 3,
           (got['script']['experience_pool'], got['script']['player_level']))
+
+    # Scenario D: the dummy's enable conditions through --slice-run (src/slice.cpp), NATIVE_BEHAVIOR_POPULATION.md sections A-C.
+    (root / 'Startup.upk').write_bytes((root / 'TestMission.upk').read_bytes())
+    (root / 'Sanctuary_Dynamic.upk').write_bytes(build_dynamic().build())
+
+    def slice_run(*steps):
+        proc = subprocess.run([reader, str(root / 'Sanctuary_Dynamic.upk'), '--slice-run', 'ToyMission', '--cooked', str(root), *steps],
+                              capture_output=True, text=True, encoding='utf-8')
+        assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
+        return proc.returncode, json.loads(proc.stdout)
+
+    def remote(step): return [e['a'] for e in step['events'] if e['kind'] == 'remote_event']
+    code, got = slice_run('accept', 'spawn', 'range', 'turnin')
+    check('D exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    steps = {step['step']: step for step in got['steps']}
+    # before the spawn the provider is not a consumer: the accept (Active) notifications reach no condition
+    check('D accept: no sequence events', remote(steps['accept']) == [], remote(steps['accept']))
+    # registration: pass 1 enables Idle, then each condition's verdict is applied in sequence order (objective Active in the active set,
+    # RestrictA's set is active, RestrictB's is not, mission not Complete, MutexA's {Active} holds, MutexB's {ReadyToTurnIn} does not)
+    check('D spawn registration', remote(steps['spawn']) == ['IdleOn', 'ObjSeqOn', 'RestrictAOn', 'MutexAOn'], remote(steps['spawn']))
+    # the objective's progress write already makes it Complete (status Active, progress = count): ObjSeq and RestrictA turn off at the
+    # progress notification; the set completion makes the mission ReadyToTurnIn: MutexB enables and disables MutexA first (the mutex)
+    check('D range', remote(steps['range']) == ['ObjSeqOff', 'RestrictAOff', 'MutexAOff', 'MutexBOn'], remote(steps['range']))
+    # Complete: the mission-level condition turns on, MutexB's {ReadyToTurnIn} no longer holds
+    check('D turn-in', remote(steps['turnin']) == ['MissionLevelOn', 'MutexBOff'], remote(steps['turnin']))
+    # transitions only: the sequences end in the state the last verdicts left
+    check('D final enabled sequences', sorted(got['dummy_enabled_sequences']) == ['Idle', 'MissionLevel'], got['dummy_enabled_sequences'])
 
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')

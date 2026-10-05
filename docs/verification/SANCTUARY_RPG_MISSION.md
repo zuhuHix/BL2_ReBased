@@ -779,3 +779,73 @@ host's table (`values.xp.region_stage`), not evaluated from `RegionBalanceData` 
 - `ctest` **11/11**, `tools/verify_packages.py` 9/9, UE module `Result: Succeeded`.
 - **`tools/test_quest.ps1`: first run PASS checks=81 errors=0 (80 before), resume PASS checks=11 errors=0.** New check
   `script_pool_update_levels_up_to_host_level`; all existing XP, level, skill-point and health checks unchanged and green.
+
+## Script swap 3: the dummy's enable conditions and the controller helpers (2026-10-05)
+
+AI-assisted (Claude), lane I1. Rules from [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) (sections A-C) and
+[NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md), **all UNVERIFIED in the running game**.
+
+### 1. The dummy's sequence enable conditions (`src/slice.*`, `src/mission.*`, `src/behavior.*`)
+
+Replaced the old rule (a re-sync of every condition after each host call) with the note's:
+
+- **When:** `MissionSystem` raises the tracker's observer notifications after it changed its own state: the status changed (after the
+  script hook, before the `Default` event), the active set switched, an objective's progress written, an objective completed
+  (before the set evaluation). `FireMissionSlice` applies **every** condition on **each** one (the notification's arguments are
+  ignored); `setSequenceEnabled` changes nothing, and fires no event, for a sequence already in that state, so events come only from real
+  transitions. `ObjectiveCleared` is not modelled; a loaded mission (`loadState`) is announced once (the LevelLoad kind).
+- **The verdict:** not objective-specific: the mission status bit of `MissionStatesToLinkTo`. Objective-specific: no `LinkedObjective`
+  gives false, else the objective is classified by `MissionSystem::objectiveState` (Complete when the mission is Active, ReadyToTurnIn
+  or Complete and the progress equals the count; else Active when the mission is Active, the objective is in the active set and its
+  progress is below the count; else NotStarted) and the verdict is that bit of `ObjectiveStatesToLinkTo` (the mission-state bits are
+  not consulted). A non-empty `ObjectiveSetRestrictions` keeps a true verdict only while one listed set is the active set. Another
+  mission counts as Complete when in the completed set, else NotStarted; its objectives NotStarted.
+- **Registration** (`spawnDummy`): the provider is a consumer only from the spawn. `BehaviorProvider::registerConsumer` is pass 1 (every
+  sequence disabled, then each `bEnabledOnSpawn` sequence enabled in order, its `OnBehaviorSequenceEnabled` firing); the conditions
+  are then applied (pass 2, the immediate LevelLoad verdict) and only then `OnSpawned` fires. Before the spawn no condition observes
+  anything (the old rule changed the unspawned provider's sequences from the accept on).
+- **Kernel enable/disable:** `bSequenceEnabledMutex` (enabling a mutex sequence first disables one other enabled mutex sequence of the
+  provider) and the event order (enabled event after the bit is set, disabled event before it is cleared). The dummy's data has the
+  flag false on all nine sequences (read with `--object-dump`), so the mutex is exercised only by the synthetic test.
+- **Synthetic test** (`tests/mission_script_test.py`, scenario D, `--slice-run` on invented `Startup` and `Sanctuary_Dynamic` packages
+  with the stock provider path): no sequence event before the spawn; registration order `Idle`, then the conditions in sequence order;
+  the progress notification already turns the objective's sequences off; set restrictions (one listed set active, one not);
+  ReadyToTurnIn enables the second mutex sequence after disabling the first; Complete turns the mission-level condition on.
+- **Real data** (`--slice-run ... accept tick:5 range spawn tick:6 damage:Shock damage:Incendiary tick:5 turnin`): the 22 host events are
+  **identical** to the previous rule's, in the same order, and the enabled sequences at the end are the same (`Default`, `Idle`,
+  `Targetable`). Differences, all from the note: (1) pass 1 now fires `Idle`'s `OnBehaviorSequenceEnabled`, which reaches
+  `GearboxFramework.Behavior_SpecialMove` (an animation request; no animation system, so it is listed at the boundary and logged by the host
+  as "not run by host"; it was never reached before and without the boundary entry it would have been an unsupported-class error);
+  (2) the verdicts are applied at the notification points instead of after the whole host call (no host-visible effect here);
+  (3) an objective-specific condition no longer also requires its mission-state bit (class default {Active}; equal for the Fire
+  conditions); (4) the objective classification gates Complete on the mission status.
+- Not modelled: per-instance objectives (`bRememberItemsWithinObjective` consumers), `bInstanced`, the waypoint hooks, the multi-condition class,
+  the Kismet twin, `RequiredObjectivesComplete` and `Failed` statuses (MissionSystem has neither).
+
+### 2. Controller helper natives (`src/mission_script.cpp`)
+
+Implemented only those the slice's script reaches, per NATIVE_CONTROLLER_HELPERS.md:
+
+| Native | VM behaviour |
+|---|---|
+| `MissionTracker.IsDataValid` / `ValidateData` | the tracker's `bDataValidated` flag; `ValidateData` is its only writer. **Trigger (a choice, UNVERIFIED):** the game sets it when the reply to a mission data request reaches `ClientValidateMissionData`; how a standalone run triggers that request was not read, so the installed script `ClientValidateMissionData` runs once on the controller when the VM graph is built (its effect is the game's: `ValidateData`, then a per-controller loop over an engine iterator, which the VM does not run (listed as a stub), and the script's two refresh calls) |
+| `WillowPlayerController.GetCurrentPlaythrough` | `CurrentPlaythrough` of the VM replication info (0), also used by `NativeGetMissionIndex` (now range-checked against `MissionPlaythroughs`, first match) |
+| `PlayerController.IsPrimaryPlayer` | true for the sole local controller |
+| `WillowPlayerController.GetHUDMovie` | None (no HUD in the graph; the script then skips its HUD branches) |
+| `WorldInfo.IsMenuLevel` | the VM world's `bIsMenuLevel`, false |
+| `WillowGlobals.GetWillowGlobals`, `GearboxGlobals.GetGearboxGlobals` / `GetBehaviorKernel` | one VM `WillowGlobals` instance (the kernel field: None) |
+| `WillowGlobals.GetGlobalsDefinition` | the installed `GD_Globals.General.Globals` object (named in the note's prose; no section of its own) |
+| `UpdateLcdMissionStatus`, `PlayUIAkEvent` | documented no-ops (presentation only) |
+
+**Turn-in stub count (real data, `accept` to turn-in): 14 before, 12 after.** Removed: `GetCurrentPlaythrough`, `IsPrimaryPlayer`,
+`GetHUDMovie`, `PlayUIAkEvent`, `UpdateLcdMissionStatus`, `GetWillowGlobals`, `IsMenuLevel` (7). Newly reached because the script now gets real
+answers (a real globals definition, a menu-level answer, the validation run): `Object.Localize` x3, `MissionTracker.AllExpansionSideMissionsComplete`,
+`PlayerController.IsLocalPlayerController`, `function ?.SpawnPlayerMovie` (a call on a data-object stand-in without a class) and the engine
+iterator (x2). Remaining from before: `Actor.SetTimer`, `MissionTracker.GetActivePrimaryObjectiveSet` / `GetAllMissions` / `GetObjectivesProgress`,
+`WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`, `RefreshBalanceDataFromMissionCompletion`, `UnlockAchievementIfConditionsMet`.
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+
+- `ctest` 11/11 (`mission-script-synthetic` gained the helper probes and scenario D), `tools/verify_packages.py` 9/9.
+- **`tools/test_quest.ps1`: first run PASS checks=81 errors=0, resume PASS checks=11 errors=0** (unchanged counts).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0** (rerun because `src/behavior.*` changed).

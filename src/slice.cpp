@@ -18,6 +18,7 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                    const std::string& dummyProviderPath)
     : runtime_(runtime) {
     mission_ = std::make_unique<MissionSystem>(runtime, "Startup", missionPath);
+    mission_->onNotification = [this](MissionSystem::Notification) { applyConditions(); };
     script_ = std::make_unique<MissionScript>(runtime, *mission_);
     auto package = runtime.package(dummyProviderPackage);
     const int32_t index = runtime.findExport(*package, dummyProviderPath);
@@ -72,6 +73,9 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                                   {"Context", context(p, b)},
                                                   {"Calls", "IBodyCompositionInstance.ChangeInstanceDataSwitch"}};
     });
+    // Reached since the provider registers like the stock one (the bEnabledOnSpawn sequences fire OnBehaviorSequenceEnabled, section C of
+    // NATIVE_BEHAVIOR_POPULATION.md): a special-move (animation) request on the pawn; no animation system here, listed at the boundary.
+    d.reportAtBoundary("GearboxFramework.Behavior_SpecialMove");
     d.handle("GearboxFramework.Behavior_AIHold", [](BehaviorProvider&, BehaviorProvider::Behavior&, const std::string&) {
         return std::vector<int>();
     });
@@ -101,38 +105,53 @@ void FireMissionSlice::changeSequence(const std::string& sequence, const std::st
     else errors_.push_back("unknown sequence change action '" + action + "' for " + sequence);
 }
 
-// BehaviorSequenceEnableByMission. The data: LinkedMission, MissionStatesToLinkTo (bNotStarted, bActive,
-// bRequiredObjectivesComplete, bReadyToTurnIn, bComplete, bFailed; class default {bActive}), bIsObjectiveSpecific,
-// LinkedObjective, ObjectiveStatesToLinkTo (bNotStarted, bActive, bComplete; class default {bActive}),
-// ObjectiveSetRestrictions. Its evaluation is native; this rule is UNVERIFIED. A mission other than the slice's
-// is Complete when it is in the completed set, else NotStarted.
+// BehaviorSequenceEnableByMission (NATIVE_BEHAVIOR_POPULATION.md section B, read from native code: UNVERIFIED). Data: LinkedMission,
+// MissionStatesToLinkTo (bNotStarted, bActive, bRequiredObjectivesComplete, bReadyToTurnIn, bComplete, bFailed), bIsObjectiveSpecific,
+// LinkedObjective, ObjectiveStatesToLinkTo (bNotStarted, bActive, bComplete), ObjectiveSetRestrictions. The verdict: a mission that
+// is not objective-specific looks up its status bit; an objective-specific one has no linked objective -> false, else classifies the
+// objective (MissionSystem::objectiveState: Complete / Active / NotStarted, with the status gating) and looks up that bit; then a
+// non-empty ObjectiveSetRestrictions keeps a true verdict only while one listed set is the active set. A mission other than the
+// slice's counts as Complete when it is in the completed set, else NotStarted, and its objectives as NotStarted. RequiredObjectivesComplete
+// and Failed are not modelled by MissionSystem. Not modelled: per-instance objectives (bRememberItemsWithinObjective consumers).
 bool FireMissionSlice::conditionHolds(Object& condition) {
     Runtime& r = runtime_;
     const std::string mission = refPath(r.property(condition, "LinkedMission"));
     const bool own = mission == mission_->path();
     static const char* statusFields[] = {"bNotStarted", "bActive", "bReadyToTurnIn", "bComplete"};
-    const std::string missionState = own ? statusFields[int(mission_->status())]
-                                         : (completedMissions_.count(mission) ? "bComplete" : "bNotStarted");
-    const Value* missionStates = r.property(condition, "MissionStatesToLinkTo");
-    const Value* missionMatch = missionStates ? missionStates->field(missionState) : nullptr;
-    if (!missionMatch || !missionMatch->truth()) return false;
-    if (const Value* restrictions = r.property(condition, "ObjectiveSetRestrictions");
-        restrictions && restrictions->kind == Value::Kind::Array && !restrictions->elements().empty()) {
-        errors_.push_back("unsupported ObjectiveSetRestrictions on " + condition.name);
-        return false;
-    }
+    bool verdict;
     const Value* specific = r.property(condition, "bIsObjectiveSpecific");
-    if (!specific || !specific->truth()) return true;
-    const std::string objective = refPath(r.property(condition, "LinkedObjective"));
-    const std::string state = own ? mission_->objectiveState(objective) : "NotStarted";
-    if (state.empty()) { errors_.push_back("enable condition names an objective outside its mission: " + objective); return false; }
-    const Value* objectiveStates = r.property(condition, "ObjectiveStatesToLinkTo");
-    const Value* objectiveMatch = objectiveStates ? objectiveStates->field("b" + state) : nullptr;
-    return objectiveMatch && objectiveMatch->truth();
+    if (!specific || !specific->truth()) {
+        const std::string missionState = own ? statusFields[int(mission_->status())]
+                                             : (completedMissions_.count(mission) ? "bComplete" : "bNotStarted");
+        const Value* missionStates = r.property(condition, "MissionStatesToLinkTo");
+        const Value* match = missionStates ? missionStates->field(missionState) : nullptr;
+        verdict = match && match->truth();
+    } else {
+        const std::string objective = refPath(r.property(condition, "LinkedObjective"));
+        if (objective.empty()) return false;
+        const std::string state = own ? mission_->objectiveState(objective) : "NotStarted";
+        if (state.empty()) { errors_.push_back("enable condition names an objective outside its mission: " + objective); return false; }
+        const Value* objectiveStates = r.property(condition, "ObjectiveStatesToLinkTo");
+        const Value* match = objectiveStates ? objectiveStates->field("b" + state) : nullptr;
+        verdict = match && match->truth();
+    }
+    if (verdict)
+        if (const Value* restrictions = r.property(condition, "ObjectiveSetRestrictions");
+            restrictions && restrictions->kind == Value::Kind::Array && !restrictions->elements().empty()) {
+            verdict = false;
+            if (own)
+                for (const auto& set : restrictions->elements())
+                    if (mission_->setActive(refPath(&set))) { verdict = true; break; }
+        }
+    return verdict;
 }
 
-bool FireMissionSlice::syncSequences() {
-    bool changed = false;
+// What every mission notification does to the registered dummy: recompute each condition's verdict from the tracker's current state
+// and apply it to its sequence (the notification's own arguments are ignored). setSequenceEnabled changes nothing, and fires no
+// event, when the sequence already is in that state, so events come only from real transitions.
+void FireMissionSlice::applyConditions() {
+    if (!dummyRegistered_) return;
+    if (++notifyDepth_ > 16) { errors_.push_back("mission notifications did not settle"); --notifyDepth_; return; }
     for (const auto& name : dummy_->sequenceNames()) {
         auto condition = dummy_->enableCondition(name);
         if (!condition) continue;
@@ -141,12 +160,9 @@ bool FireMissionSlice::syncSequences() {
             if (std::find(errors_.begin(), errors_.end(), line) == errors_.end()) errors_.push_back(line);
             continue;
         }
-        const bool enabled = conditionHolds(*condition);
-        if (dummy_->sequenceEnabled(name) == enabled) continue;
-        dummy_->setSequenceEnabled(name, enabled);
-        changed = true;
+        dummy_->setSequenceEnabled(name, conditionHolds(*condition));
     }
-    return changed;
+    --notifyDepth_;
 }
 
 bool FireMissionSlice::drainMission() {
@@ -183,13 +199,10 @@ void FireMissionSlice::drainExperience() {
 
 void FireMissionSlice::pump() {
     drainExperience();
-    // Mission state changes can toggle dummy sequences, whose behaviors can change mission state again: repeat
-    // until both are quiet (bounded).
-    for (int round = 0; round < 16; ++round) {
-        const bool drained = drainMission();
-        const bool changed = syncSequences();
-        if (!drained && !changed) return;
-    }
+    // Dummy sequence changes (made by the mission's notifications) can fire behaviors that change mission state again: repeat
+    // until the effects are quiet (bounded).
+    for (int round = 0; round < 16; ++round)
+        if (!drainMission()) return;
     errors_.push_back("mission/dummy state did not settle");
 }
 
@@ -214,7 +227,16 @@ bool FireMissionSlice::damageDummy(const std::string& damageTypePath, const std:
     return true;
 }
 
+// The stock spawn registers the dummy's provider on its pawn before OnSpawned (IntializeBehaviorProviderForConsumer: the
+// bEnabledOnSpawn sequences are enabled, then each condition observes the mission and delivers its verdict at once), so
+// FireDamage is already enabled when OnSpawned arrives. The provider is not a consumer, and observes nothing, before that.
 bool FireMissionSlice::spawnDummy() {
+    if (!dummyRegistered_) {
+        dummy_->registerConsumer();
+        dummyRegistered_ = true;
+        notifyDepth_ = 0;
+        applyConditions();                    // the LevelLoad verdict
+    }
     dummy_->fireEvent("OnSpawned");
     pump();
     return true;
@@ -227,6 +249,7 @@ bool FireMissionSlice::hitDummy(bool fireDamage) {
 bool FireMissionSlice::loadState(const std::string& state) {
     if (!mission_->loadState(state)) return false;
     script_->syncRestored();
+    applyConditions();                        // a loaded mission is announced to its observers (LevelLoad)
     pump();
     return true;
 }

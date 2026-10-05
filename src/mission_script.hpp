@@ -26,6 +26,10 @@ namespace vm {
 // MissionDefinition.GetExperienceReward, GetGameStage, GetCurrencyRewardType, GetCurrencyReward, ShouldGrantAlternateReward,
 // GetItemRewardsForPlayer (empty rewards only). The experience pool and its level-up (ApplyExpPointsToExpLevel, run from
 // updateExperiencePool) live here as C++ state with the VM controller's PlayerReplicationInfo as the level's home.
+// Swap 3 (NATIVE_CONTROLLER_HELPERS.md): MissionTracker.IsDataValid (the bDataValidated flag) and ValidateData;
+// WillowPlayerController.GetCurrentPlaythrough, GetHUDMovie, UpdateLcdMissionStatus and PlayUIAkEvent (presentation: no-ops),
+// PlayerController.IsPrimaryPlayer, WorldInfo.IsMenuLevel, GetWillowGlobals / GetGearboxGlobals / GetBehaviorKernel /
+// GetGlobalsDefinition (one VM globals object).
 // Every other native the script reaches stays a logged stub, listed by stubs().
 class MissionScript {
 public:
@@ -70,7 +74,7 @@ public:
 private:
     Runtime& runtime_;
     MissionSystem& mission_;
-    ObjectPtr controller_, tracker_;
+    ObjectPtr controller_, tracker_, world_, replication_, globals_, globalsDefinition_;
     std::set<std::string> completed_;
     std::map<std::string, size_t> stubs_;
     std::vector<std::string> notes_;
@@ -88,6 +92,7 @@ private:
     void run(const std::function<void()>& script);     // outermost script run: collects stubs, catches VM errors
     void updateMissionStatus(int nativeStatus);
     Value* missionList();
+    int currentPlaythrough();
     ExperienceCurve& curve();
     int gameStage() const { return lockedStage_ ? lockedStage_ : regionStage_; }
     int experienceReward(bool alternate);

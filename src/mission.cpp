@@ -182,6 +182,7 @@ bool MissionSystem::setStatus(Status status) {
     if (status == Status::Active && !heardKickoff_ && !kickoffPending_) { kickoffPending_ = true; kickoffFromActivation_ = true; }
     static const char* names[] = {"NotStarted", "Active", "ReadyToTurnIn", "Complete"};
     emit(Effect::Kind::StatusChanged, names[int(status)]);
+    if (onNotification) onNotification(Notification::StatusChanged);
     fireEvent("Default", StatusBase + nativeStatus(status));
     return true;
 }
@@ -243,6 +244,7 @@ bool MissionSystem::activateSet(const std::string& setPath) {
         emit(Effect::Kind::MissionWeaponGranted, weapon_);
     const std::string name = set->name;
     const bool evaluate = set->canCompleteMission;
+    if (onNotification) onNotification(Notification::ObjectiveSetChanged);
     fireEvent(name, SetActivated);
     if (evaluate && activeSet_ == setPath) evaluateSet();
     return true;
@@ -341,11 +343,13 @@ bool MissionSystem::applyUpdate(const std::string& objectiveName, int bit) {
     } else ++progress_[objectiveName];
     const int count = objectiveProgress(objectiveName);
     emit(Effect::Kind::ObjectiveUpdated, objectiveName, std::to_string(count));
+    if (onNotification) onNotification(Notification::ObjectiveUpdated);
     fireEvent(objectiveName, ObjectiveProgress);
     if (count != objective.count) return true;
     completedObjectives_.insert(objectiveName);
     emit(Effect::Kind::ObjectiveComplete, objectiveName);
     if (!weapon_.empty() && objective.path == weaponObjective_) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
+    if (onNotification) onNotification(Notification::ObjectiveComplete);
     evaluateSet();
     fireEvent(objectiveName, ObjectiveCompleted);
     return true;
@@ -358,14 +362,27 @@ bool MissionSystem::updateObjectiveByPath(const std::string& objectivePath, int 
     return false;
 }
 
+// NATIVE_BEHAVIOR_POPULATION.md section B (UNVERIFIED), the tracker's own classification: Complete when the mission is Active, ReadyToTurnIn
+// or Complete and the progress equals the count exactly; else Active when the mission is Active, the objective is in the active
+// set and the progress is below the count; else NotStarted. "" when the path is not one of the mission's objectives.
 std::string MissionSystem::objectiveState(const std::string& objectivePath) const {
+    bool known = false, inActiveSet = false;
+    std::string name;
     for (const auto& set : sets_)
         for (size_t i = 0; i < set.objectivePaths.size(); ++i) {
             if (set.objectivePaths[i] != objectivePath) continue;
-            if (completedObjectives_.count(set.objectives[i])) return "Complete";
-            return status_ == Status::Active && set.path == activeSet_ ? "Active" : "NotStarted";
+            known = true;
+            name = set.objectives[i];
+            if (set.path == activeSet_) inActiveSet = true;
         }
-    return "";
+    if (!known) return "";
+    const auto objective = objectives_.find(name);
+    if (objective == objectives_.end()) return "";
+    const int progress = objectiveProgress(name);
+    if ((status_ == Status::Active || status_ == Status::ReadyToTurnIn || status_ == Status::Complete) && progress == objective->second.count)
+        return "Complete";
+    if (status_ == Status::Active && inActiveSet && progress < objective->second.count) return "Active";
+    return "NotStarted";
 }
 
 // RunMissionCustomEvent: id 0, unless the mission is Complete (B4, UNVERIFIED).

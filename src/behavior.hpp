@@ -73,7 +73,13 @@ public:
     void reportAtBoundary(const std::string& classPath, Describe describe = nullptr);
     // Sequences whose bEnabledOnSpawn is false start disabled. Enabling/disabling fires OnBehaviorSequenceEnabled /
     // OnBehaviorSequenceDisabled on that sequence.
+    // NATIVE_BEHAVIOR_POPULATION.md section C (UNVERIFIED): enabling a sequence with bSequenceEnabledMutex first disables one other enabled
+    // sequence of the provider that also has it (at most one); the disabled event is delivered before the enabled bit is cleared.
     bool setSequenceEnabled(const std::string& name, bool enabled);
+    // Registering the provider on a consumer (IntializeBehaviorProviderForConsumer pass 1): every sequence starts disabled, then every
+    // sequence with bEnabledOnSpawn is enabled in order (its OnBehaviorSequenceEnabled event fires). The caller then applies the
+    // enable conditions (pass 2) and only then fires OnSpawned. Once per provider.
+    void registerConsumer();
     bool sequenceEnabled(const std::string& name) const;
     std::vector<std::string> sequenceNames() const;
     // The sequence's CustomEnableCondition object (e.g. a BehaviorSequenceEnableByMission), or null.
@@ -113,6 +119,7 @@ private:
     struct Sequence {
         std::string name;
         bool enabled = true;
+        bool enabledOnSpawn = true, mutex = false;      // bEnabledOnSpawn, bSequenceEnabledMutex
         ObjectPtr condition;
         std::vector<Event> events;
         std::vector<Behavior> behaviors;
@@ -132,6 +139,7 @@ private:
     size_t budget_ = 0;                                // behaviors left in the outermost call (runaway guard)
     int depth_ = 0;
     bool valuesDecoded_ = false;
+    bool registered_ = false;
 
     void decodeValues();
     bool unexpectedLink(const Behavior& behavior, const std::string& property);

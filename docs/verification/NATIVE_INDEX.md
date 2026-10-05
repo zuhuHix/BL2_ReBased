@@ -87,18 +87,18 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Object.Enable | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | probe mask (Tick/Touch/Destroyed gating); VM currently no-op | UNVERIFIED | high | |
 | Object.Disable | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | probe mask; VM currently no-op | UNVERIFIED | high | |
 | Actor.Sleep | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | latent wait in state code (LatentFloat poll, half-delta wake) | UNVERIFIED | high | |
-| MissionTracker.RegisterMissionObserver | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: conditions and den aspect observe the Fire mission | UNVERIFIED | medium | |
+| MissionTracker.RegisterMissionObserver | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: conditions and den aspect observe the Fire mission | UNVERIFIED | medium | src/slice.cpp FireMissionSlice::spawnDummy (the dummy only; the immediate LevelLoad verdict) |
 | MissionTracker.UnregisterMissionObserver | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: unlink of the dummy's conditions (not read separately) | UNVERIFIED | low | |
-| (tracker) NotifyMissionObservers kinds 0-5 | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: when observers are told (status, set, objective updated/cleared/complete, level load) | UNVERIFIED | high | |
-| BehaviorSequenceEnableByMission.MissionReactionLevelLoad | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: initial enable state of FireDamage on spawn | UNVERIFIED | high | |
-| BehaviorSequenceEnableByMission.MissionReactionStatusChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on accept / turn-in | UNVERIFIED | high | |
-| BehaviorSequenceEnableByMission.MissionReactionObjectiveSetChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation when RocksPaper_FinalObj activates | UNVERIFIED | high | |
-| BehaviorSequenceEnableByMission.MissionReactionObjectiveUpdated | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on progress | UNVERIFIED | high | |
-| BehaviorSequenceEnableByMission.MissionReactionObjectiveCleared | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on clear | UNVERIFIED | high | |
-| BehaviorSequenceEnableByMission.MissionReactionObjectiveComplete | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: FireDamage disables when Fire completes | UNVERIFIED | high | |
-| (BehaviorSequenceEnableByMission C++ virtuals: link/unlink/verdict/hooks) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: observer registration lifecycle, verdict rule | UNVERIFIED | medium | |
-| BehaviorKernel.ChangeBehaviorSequenceActivationStatus | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: enable(1)/disable(2)/toggle(0), sequence mutex, enabled/disabled events | UNVERIFIED | medium | |
-| BehaviorKernel.IntializeBehaviorProviderForConsumer | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: provider registration order (pass 1 enabled-on-spawn, pass 2 conditions) | UNVERIFIED | medium | |
+| (tracker) NotifyMissionObservers kinds 0-5 | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: when observers are told (status, set, objective updated/cleared/complete, level load) | UNVERIFIED | high | src/mission.cpp MissionSystem::Notification (kinds 1-3 and 5; cleared not modelled; 0 raised at registration) |
+| BehaviorSequenceEnableByMission.MissionReactionLevelLoad | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: initial enable state of FireDamage on spawn | UNVERIFIED | high | src/slice.cpp conditionHolds/applyConditions (one shared verdict for all six) |
+| BehaviorSequenceEnableByMission.MissionReactionStatusChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on accept / turn-in | UNVERIFIED | high | src/slice.cpp conditionHolds/applyConditions (one shared verdict for all six) |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveSetChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation when RocksPaper_FinalObj activates | UNVERIFIED | high | src/slice.cpp conditionHolds/applyConditions (one shared verdict for all six) |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveUpdated | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on progress | UNVERIFIED | high | src/slice.cpp conditionHolds/applyConditions (one shared verdict for all six) |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveCleared | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: re-evaluation on clear | UNVERIFIED | high | src/slice.cpp conditionHolds/applyConditions (one shared verdict for all six) |
+| BehaviorSequenceEnableByMission.MissionReactionObjectiveComplete | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: FireDamage disables when Fire completes | UNVERIFIED | high | src/slice.cpp conditionHolds/applyConditions (one shared verdict for all six) |
+| (BehaviorSequenceEnableByMission C++ virtuals: link/unlink/verdict/hooks) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: observer registration lifecycle, verdict rule | UNVERIFIED | medium | src/slice.cpp (verdict, objective states and restrictions; waypoints and bInstanced not modelled) |
+| BehaviorKernel.ChangeBehaviorSequenceActivationStatus | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: enable(1)/disable(2)/toggle(0), sequence mutex, enabled/disabled events | UNVERIFIED | medium | src/behavior.cpp setSequenceEnabled (transitions only, mutex, event order); the Behavior_ChangeRemoteBehaviorSequenceState handler calls it |
+| BehaviorKernel.IntializeBehaviorProviderForConsumer | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: provider registration order (pass 1 enabled-on-spawn, pass 2 conditions) | UNVERIFIED | medium | src/behavior.cpp registerConsumer (pass 1) + src/slice.cpp spawnDummy (pass 2, then OnSpawned) |
 | SequenceEventEnableByMission.MissionReactionLevelLoad | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin: sets SequenceEvent.bEnabled, calls Toggled | UNVERIFIED | medium | |
 | SequenceEventEnableByMission.MissionReactionStatusChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
 | SequenceEventEnableByMission.MissionReactionObjectiveSetChanged | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Kismet twin | UNVERIFIED | medium | |
@@ -116,30 +116,30 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | AIDefinition.OnSpawned | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: OnSpawned event to the AIDef provider | UNVERIFIED | high | |
 | BehaviorKernel thread runner (enabled check, context objects, latent copy) | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: sequence-disable stops threads; context rule; latent waits | UNVERIFIED | medium | |
 | BehaviorKernel event activation FilterObject | [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) | Fire: filters are consulted only with a caller callback; none seen for tracker/OnSpawned | UNVERIFIED | medium | |
-| WillowPlayerController.GetCurrentPlaythrough | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: every mission helper | UNVERIFIED | high | |
-| WillowPlayerController.NativeGetMissionIndex | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: accept/status update | UNVERIFIED | high | |
-| WillowPlayerController.UpdateLcdMissionStatus | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation only (LCD), no-op | UNVERIFIED | high | |
+| WillowPlayerController.GetCurrentPlaythrough | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: every mission helper | UNVERIFIED | high | src/mission_script.cpp |
+| WillowPlayerController.NativeGetMissionIndex | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: accept/status update | UNVERIFIED | high | src/mission_script.cpp |
+| WillowPlayerController.UpdateLcdMissionStatus | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation only (LCD), no-op | UNVERIFIED | high | src/mission_script.cpp (no-op) |
 | WillowPlayerController.PopulateMissionDataFromStatus | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none (LCD text) | UNVERIFIED | medium | |
-| WillowPlayerController.GetHUDMovie | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: HUD guards (None ok) | UNVERIFIED | high | |
+| WillowPlayerController.GetHUDMovie | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: HUD guards (None ok) | UNVERIFIED | high | src/mission_script.cpp (None: no HUD in the VM graph) |
 | WillowPlayerController.CanAffordToUseUsableObject | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: use of Marcus/objects | UNVERIFIED | medium-high | |
 | WillowPlayerController.PayForUsedObject | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: use path | UNVERIFIED | medium-high | |
 | WillowPlayerController.DoesObjectCostToUse | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | cost query behind Can/Pay | UNVERIFIED | medium-high | |
 | WillowPlayerReplicationInfo.GetCurrencyOnHand | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | pay path | UNVERIFIED | high | |
 | WillowPlayerReplicationInfo.AddCurrencyOnHand | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | pay path, rewards | UNVERIFIED | high | |
 | WillowPlayerController.GetPawnInventoryManager | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: weapon equip/reward | UNVERIFIED | high | |
-| WillowPlayerController.PlayUIAkEvent | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation (fanfare sound) | UNVERIFIED | high | |
+| WillowPlayerController.PlayUIAkEvent | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation (fanfare sound) | UNVERIFIED | high | src/mission_script.cpp (no-op) |
 | WillowPlayerController.GetLevelForMission | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none | UNVERIFIED | low-medium | |
 | WillowPlayerController.LocalMissionDependenciesMet | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
 | WillowPlayerController.IsMissionObjectiveCompleteLocal | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
 | WillowPlayerController.IsMissionObjectiveActiveLocal | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
 | WillowPlayerController.GetActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | online status only | UNVERIFIED | medium | |
 | WillowPlayerController.GetLocalActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | save/online status only | UNVERIFIED | medium | |
-| PlayerController.IsPrimaryPlayer | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates (true standalone) | UNVERIFIED | medium-high | |
-| MissionTracker.IsDataValid | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates AddMission etc. | UNVERIFIED | high | |
-| WorldInfo.IsMenuLevel | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: false in Sanctuary | UNVERIFIED | high | |
-| GearboxGlobals.GetBehaviorKernel | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: behavior activation | UNVERIFIED | high | |
-| GearboxGlobals.GetGearboxGlobals | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | globals singleton | UNVERIFIED | high | |
-| WillowGlobals.GetWillowGlobals | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | globals singleton (338 sites) | UNVERIFIED | high | |
+| PlayerController.IsPrimaryPlayer | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates (true standalone) | UNVERIFIED | medium-high | src/mission_script.cpp (true for the sole local controller) |
+| MissionTracker.IsDataValid | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates AddMission etc. | UNVERIFIED | high | src/mission_script.cpp (bDataValidated; set by ValidateData through the script ClientValidateMissionData run once at graph build: a shortcut for the trigger) |
+| WorldInfo.IsMenuLevel | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: false in Sanctuary | UNVERIFIED | high | src/mission_script.cpp (bIsMenuLevel of the VM world, false) |
+| GearboxGlobals.GetBehaviorKernel | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: behavior activation | UNVERIFIED | high | src/mission_script.cpp (TheBehaviorKernel of the globals object: None) |
+| GearboxGlobals.GetGearboxGlobals | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | globals singleton | UNVERIFIED | high | src/mission_script.cpp (one VM globals object) |
+| WillowGlobals.GetWillowGlobals | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | globals singleton (338 sites) | UNVERIFIED | high | src/mission_script.cpp (one VM globals object) |
 | WillowAIPawn.IsComponentUsable | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: NPC use | UNVERIFIED | high | |
 | Object.Localize | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | all text; .int lookup, ?INT?..? placeholder | UNVERIFIED | high | |
 | Object.QueryInterface | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: IMissionDirector, behaviors | UNVERIFIED | medium-high | |

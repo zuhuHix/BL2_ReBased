@@ -56,6 +56,8 @@ public:
     // "NotStarted", "Active" (in the active objective set, not complete) or "Complete", for an objective path of this
     // mission; "" when the path is not one of its objectives. The mapping onto the game's objective states is UNVERIFIED.
     std::string objectiveState(const std::string& objectivePath) const;
+    // Whether this objective set (by path) is the mission's active set (collection sets and sub-sets are not modelled).
+    bool setActive(const std::string& setPath) const { return !setPath.empty() && setPath == activeSet_; }
 
     // Every dependency mission is in `completed` (paths), and the ObjectiveDependency, if any, holds: `objectiveStates`
     // maps objective paths of other missions to "Complete" / "Active" (B6).
@@ -77,6 +79,12 @@ public:
     // IsMissionMoviePlaying on the accepting controller when it consumes the pending kickoff. Empty = no script runs.
     std::function<void(int nativeStatus)> onStatusChanged;
     std::function<void()> onKickoffTick;
+    // The tracker's observer notifications (NATIVE_BEHAVIOR_POPULATION.md section A, UNVERIFIED), raised after the tracker changed its
+    // own state: the status changed (after the script hook, before the Default event), the active set switched (before the set's
+    // event), an objective's progress was written (before its id-3 event) and an objective completed (before the set evaluation).
+    // LevelLoad is the immediate call an observer gets when it registers, raised by the observer's owner. ObjectiveCleared is not modelled.
+    enum class Notification { LevelLoad, StatusChanged, ObjectiveSetChanged, ObjectiveUpdated, ObjectiveCleared, ObjectiveComplete };
+    std::function<void(Notification)> onNotification;
     // MissionTracker.UpdateObjective: one queued update (+1, or the bit OR-ed in for a bit-mask objective).
     bool updateObjective(const std::string& objectiveName, int bit = 0);
     bool updateObjectiveByPath(const std::string& objectivePath, int bit = 0);   // what Behavior_UpdateMissionObjective names
