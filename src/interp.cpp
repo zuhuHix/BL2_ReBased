@@ -121,7 +121,7 @@ struct Interp {
         }
         case script::EX_Context: case script::EX_ClassContext: {
             ObjectPtr target = contextTarget(e, f, ctx);
-            if (!target) return &(scratch = zeroFor(f, e.refs.at(0)));
+            if (!target) { noteNoneContext(f); return &(scratch = zeroFor(f, e.refs.at(0))); }
             return lval(e.kids.at(1), f, target);
         }
         default:
@@ -139,6 +139,11 @@ struct Interp {
     }
 
     void log(const std::string& text) { rt.log.push_back(text); }
+
+    // Census only: a Context expression whose object was None silently yields a zero value; remember where.
+    void noteNoneContext(const Frame& f) {
+        if (rt.countCalls) ++rt.noneContexts[f.function->path];
+    }
 
     // ---------------------------------------------------------------------------------- expressions
     Value constant(const Expr& e) {
@@ -282,7 +287,7 @@ struct Interp {
         }
         case script::EX_Context: case script::EX_ClassContext: {
             ObjectPtr target = contextTarget(e, f, ctx);
-            if (!target) return zeroFor(f, e.refs.at(0));
+            if (!target) { noteNoneContext(f); return zeroFor(f, e.refs.at(0)); }
             return eval(e.kids.at(1), f, target);
         }
         case script::EX_InterfaceContext: return eval(e.kids.at(0), f, ctx);
@@ -568,6 +573,12 @@ struct Interp {
     // Runs `function` with bound arguments; natives call their implementation, script functions get a frame.
     Value invoke(Function& function, const ObjectPtr& target, std::vector<NativeCall::Arg> args) {
         tick();
+        if (rt.countCalls) {
+            rt.countedFunctions.emplace(function.path, &function);
+            if (!function.isNative()) ++rt.scriptCalls[function.path];
+            else if (function.native) ++rt.nativeCalls[function.path];
+            else ++rt.stubCalls[function.path];
+        }
         if (function.isNative()) {
             if (function.native) {
                 NativeCall call{rt, function, target, std::move(args)};

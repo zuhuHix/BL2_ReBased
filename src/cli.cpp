@@ -1,4 +1,5 @@
 #include "assets.hpp"
+#include "census.hpp"
 #include "natives.hpp"
 #include "script.hpp"
 #include "vm.hpp"
@@ -28,6 +29,7 @@ void usage() {
         "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
         "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
         "--run-batch <file> --cooked <directory> | "
+        "--native-census <entry-file> --cooked <directory> [--steps <n>] [--no-static] | "
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
         "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name> | --originator <object-path>) [--tick <s>]... | "
@@ -465,6 +467,30 @@ int main(int argc, char** argv) {
                     if (entry.rfind("UNIMPLEMENTED ", 0) == 0) { std::cout << (first ? "" : ",") << quote(entry.substr(14)); first = false; }
                 std::cout << "]}" << '\n';
             }
+            return 0;
+        }
+
+        if (mode == "--native-census") {
+            // Which natives do these script entry points reach? Runs the entry file on the VM (counting every call) and
+            // walks the bytecode they reach; format in src/census.hpp. Prints one JSON report.
+            if (argc < 6) usage();
+            vm::CensusOptions options;
+            std::filesystem::path cooked;
+            for (int i = 4; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--steps") options.stepLimit = unsignedNumber(nextValue(i, argc, argv, "--steps"));
+                else if (option == "--no-static") options.staticClosure = false;
+                else usage();
+            }
+            if (cooked.empty()) usage();
+            std::ifstream entries(argv[3], std::ios::binary);
+            if (!entries) throw std::runtime_error("cannot open entry file");
+            const std::string text{std::istreambuf_iterator<char>(entries), std::istreambuf_iterator<char>()};
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            std::cout << vm::nativeCensus(runtime, text, options) << '\n';
             return 0;
         }
 

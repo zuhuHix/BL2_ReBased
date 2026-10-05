@@ -270,6 +270,11 @@ def make(inventory=False, mover=False, broken_mover=False):
         a.stmt(); a.raw(0x04); a.raw(0x36); local(a, ids, 'Items')
         a.end(); return a
     make_function(foo, 'Arr', [], arr, locals_=[('Array', 'Items', 0)])
+
+    # Context on a None object: Foo.NoneCtx() = Context(None, 0) (yields a zero value; the census counts it)
+    def none_ctx(ids):
+        a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x19, 0x2A); a.w(1); a.ref(0); a.raw(0); a.raw(0x25); a.end(); return a
+    make_function(foo, 'NoneCtx', [], none_ctx)
     if inventory:
         # Entirely synthetic interface fixture: its MoveDelta deliberately returns
         # source-kind + list-length - 5, rather than implementing stock navigation.
@@ -365,6 +370,57 @@ with tempfile.TemporaryDirectory() as folder:
     mystery = run(root, 'Core.Foo.CallMystery')
     assert mystery['result'] == '0' and any('UNIMPLEMENTED Object.Mystery(int)' in l for l in mystery['log']), mystery
     assert run(root, 'Core.Foo.Arr')['result'] == '2'
+
+    # Native census (--native-census): per-entry call counters (implemented natives, logged stubs, script functions,
+    # Context on None) plus the static closure, all on the synthetic package.
+    entries = root / 'census.txt'
+    entries.write_text("""# comment
+new foo Core.Foo
+new bar Core.Bar
+run Core.Foo.SumTo - i:3
+run Core.Foo.CallGet $foo
+run Core.Foo.CallGet $bar
+run Core.Foo.CallMystery $foo
+run Core.Foo.NoneCtx $foo
+runclass Core.Bar
+""", encoding='utf-8')
+    census_cmd = [reader, str(root / 'Core.upk'), '--native-census', str(entries), '--cooked', str(root)]
+    done = subprocess.run(census_cmd, capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    census = json.loads(done.stdout)
+    assert [e['status'] for e in census['entries']] == ['completed'] * 6, census['entries']
+    sum_to, get_foo, get_bar, mystery_run, none_run, bar_get = census['entries']
+    # SumTo(3): the loop test runs 4 times, the two additions 3 times each; one script function entered once.
+    assert sum_to['script_calls'] == 1 and sum_to['native_calls_implemented'] == 10 and sum_to['native_calls_stub'] == 0, sum_to
+    assert sum_to['result'] == '6', sum_to
+    # Virtual dispatch: the receiver's own Get runs.
+    assert get_foo['script_functions_entered'] == 2 and get_bar['script_functions_entered'] == 2, (get_foo, get_bar)
+    natives, scripts = census['natives'], census['script_functions']
+    assert natives['Core.Object.LessEq_IntInt']['dynamic_calls'] == 4 and natives['Core.Object.LessEq_IntInt']['implemented'], natives
+    assert natives['Core.Object.Add_IntInt']['dynamic_calls'] == 6, natives
+    assert scripts['Core.Foo.Get']['dynamic_calls'] == 1 and scripts['Core.Bar.Get']['dynamic_calls'] == 2, scripts   # Bar.Get: runclass too
+    # An unimplemented native is counted as a stub, not as an implemented call, and appears once in the table.
+    assert mystery_run['native_calls_stub'] == 1 and mystery_run['native_calls_implemented'] == 0, mystery_run
+    stub = natives['Core.Object.Mystery']
+    assert stub['dynamic_calls'] == 1 and not stub['implemented'] and stub['dynamic_by_entry'] == {'3': 1}, stub
+    # A Context whose object is None is recorded against the function that evaluated it.
+    assert none_run['none_contexts'] == {'Core.Foo.NoneCtx': 1}, none_run
+    # Static closure A follows the method visible at the receiver's class, B adds the subclass override.
+    assert scripts['Core.Foo.Get']['static_closure'] == 'A' and scripts['Core.Bar.Get']['static_closure'] in 'AB', scripts
+    assert get_foo['static_a_script_functions'] == 2 and get_foo['static_b_script_functions'] == 3, get_foo   # CallGet, Foo.Get (+ Bar.Get)
+    assert stub['static_sites_a'] == 1 and stub['static_entries_a'] == [3], stub
+    assert natives['Core.Object.Add_IntInt']['static_sites_a'] == 2 and natives['Core.Object.LessEq_IntInt']['static_sites_a'] == 1, natives
+    assert census['static']['dynamic_outside_static'] == [] and census['static']['unresolved_virtual'] == {}, census['static']
+    # Counters reset per entry; a step limit stops an entry and says so.
+    limited = subprocess.run(census_cmd + ['--steps', '30'], capture_output=True, text=True, encoding='utf-8')
+    assert limited.returncode == 0, limited.stderr
+    first = json.loads(limited.stdout)['entries'][0]
+    assert first['status'] == 'stopped' and first['stop_reason'] == 'step limit', first
+    # Static-only run keeps the dynamic entries but skips the closure.
+    quick = json.loads(subprocess.run(census_cmd + ['--no-static'], capture_output=True, text=True, encoding='utf-8').stdout)
+    assert 'static' not in quick and quick['natives']['Core.Object.Add_IntInt']['dynamic_calls'] == 6, quick
+    bad = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(root / 'missing.txt'), '--cooked', str(root)], capture_output=True, text=True)
+    assert bad.returncode != 0
     # Complete the interrupted batch-replay path: named inputs, optional defaults,
     # strict malformed-input rejection, case ordering and per-case log isolation.
     batch = root / 'cases.tsv'

@@ -1,0 +1,232 @@
+# Entry list for tools/slice_native_census.py: the script the Fire mission ("Rock, Paper, Genocide: Fire Weapons!", giver
+# Marcus) reaches on the player controller, the mission tracker's script side, the giver's director functions, the
+# accept/turn-in screen, mission population and the Behavior and Kismet classes of the mission's data. Names only; the
+# format is documented in src/census.hpp. Every entry runs on objects built from class defaults, with each native that has
+# no implementation as a logged zero-result stub, so many entries stop short on a None or zero result (reported, not hidden).
+# Entries run in file order on the same objects. Struct-typed arguments (mission data, rewards) are left at their zero value.
+
+# --- the objects the player-controller functions reach through (links the real game's startup establishes) -------------
+new wi Engine.WorldInfo
+new gri WillowGame.WillowGameReplicationInfo
+new tracker WillowGame.MissionTracker
+new pri WillowGame.WillowPlayerReplicationInfo
+new pc WillowGame.WillowPlayerController
+new pawn WillowGame.WillowPlayerPawn
+new marcus WillowGame.WillowAIPawn
+new invman WillowGame.WillowInventoryManager
+export mission Startup GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire
+export goto Startup GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire.RockPaper_GoToRange
+export fire Startup GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire.Fire
+export gotoset Startup GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire.GoToRange_ObjSet
+export finalset Startup GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire.RocksPaper_FinalObj
+set $gri.MissionTracker $tracker
+set $wi.GRI $gri
+set $pc.WorldInfo $wi
+set $pawn.WorldInfo $wi
+set $marcus.WorldInfo $wi
+set $pc.PlayerReplicationInfo $pri
+set $pc.Pawn $pawn
+set $pawn.Controller $pc
+set $pc.CurrentUsableObject $marcus
+set $pri.ExpLevel i:5
+# one playthrough holding one mission record (the controller's mission list; natives that would fill it are stubs here)
+add $pc.MissionPlaythroughs struct:WillowGame.WillowPlayerController.MissionPlaythroughData
+add $pc.MissionPlaythroughs[0].MissionList struct:WillowGame.IMission.MissionStatusPlayerData
+set $pc.MissionPlaythroughs[0].MissionList[0].MissionDef $mission
+
+# --- talking to the giver, accepting, turning in ------------------------------------------------------------------------
+run WillowGame.WillowPlayerController.Use $pc
+run WillowGame.WillowPlayerController.PerformedUseAction $pc
+run WillowGame.WillowPlayerController.ServerUse $pc
+run WillowGame.WillowPlayerController.ServerUseWithoutConfirmation $pc
+run WillowGame.WillowPlayerController.AcceptMission $pc $mission $marcus
+run WillowGame.WillowPlayerController.ServerAcceptMission $pc $mission $marcus
+run WillowGame.WillowPlayerController.ServerCompleteMission $pc $mission $marcus
+run WillowGame.WillowPlayerController.ServerGrantMissionRewards $pc $mission b:0
+run WillowGame.WillowPlayerController.ServerGrantMissionRewards $pc $mission b:1
+
+# --- mission state on the controller: status, objectives, notifications ----------------------------------------------------
+run WillowGame.WillowPlayerController.UpdateMissionStatus $pc $mission y:1
+run WillowGame.WillowPlayerController.UpdateMissionStatus $pc $mission y:3
+run WillowGame.WillowPlayerController.UpdateMissionStatus $pc $mission y:4
+run WillowGame.WillowPlayerController.UpdateMissionObjective $pc $goto i:0
+run WillowGame.WillowPlayerController.UpdateMissionObjective $pc $fire i:0
+run WillowGame.WillowPlayerController.UpdateActiveObjectiveSet $pc $gotoset
+run WillowGame.WillowPlayerController.UpdateActiveObjectiveSet $pc $finalset
+run WillowGame.WillowPlayerController.SubObjectiveSetAdvanced $pc $finalset
+run WillowGame.WillowPlayerController.ClientSubObjectiveSetAdvanced $pc $finalset
+run WillowGame.WillowPlayerController.ClearMissionObjective $pc $fire $finalset
+run WillowGame.WillowPlayerController.DecrementMissionObjective $pc $fire $finalset
+run WillowGame.WillowPlayerController.AddMission $pc $mission
+run WillowGame.WillowPlayerController.UpdateActiveMission $pc $mission
+run WillowGame.WillowPlayerController.ServerSetActiveMission $pc $mission
+run WillowGame.WillowPlayerController.IsMissionAvailableToTrack $pc $mission
+run WillowGame.WillowPlayerController.IsEligibleForMission $pc $mission $tracker
+run WillowGame.WillowPlayerController.GetPlayersMissionStatus $pc $mission
+run WillowGame.WillowPlayerController.GetMissionIndex $pc $mission
+run WillowGame.WillowPlayerController.GetPlayerAllMissions $pc
+run WillowGame.WillowPlayerController.GetPlayerActiveMissionIndex $pc
+run WillowGame.WillowPlayerController.IsMissionFiltered $pc $mission
+run WillowGame.WillowPlayerController.SetMissionFiltered $pc $mission b:1
+run WillowGame.WillowPlayerController.ToggleMissionFiltered $pc $mission
+run WillowGame.WillowPlayerController.AddMissionPlaythrough $pc i:0
+run WillowGame.WillowPlayerController.SetMissionKickoffHeard $pc $mission
+run WillowGame.WillowPlayerController.ClientReceivedMissionKickoffHeard $pc $mission
+run WillowGame.WillowPlayerController.ClientReceiveMissionData $pc
+run WillowGame.WillowPlayerController.ClientReceiveMissionStatus $pc
+run WillowGame.WillowPlayerController.ClientReceiveMissionActiveObjectiveSet $pc $gotoset
+run WillowGame.WillowPlayerController.ClientReceiveMissionObjective $pc
+run WillowGame.WillowPlayerController.ClientReceiveMissionFiltered $pc
+run WillowGame.WillowPlayerController.ClientReceiveMissionTimerStarted $pc $mission
+run WillowGame.WillowPlayerController.ClientReceiveMissionTimerStopped $pc $mission
+run WillowGame.WillowPlayerController.ClientReceiveMissionTimerChanged $pc $mission f:5
+run WillowGame.WillowPlayerController.ClientReceiveClearedMissionObjective $pc $fire
+run WillowGame.WillowPlayerController.ClientReceiveDecrementedMissionObjective $pc $fire
+run WillowGame.WillowPlayerController.ClientDoMissionStatusFanfare $pc y:1 b:1 $mission none
+run WillowGame.WillowPlayerController.ClientDoMissionStatusFanfare $pc y:6 b:1 $mission none
+run WillowGame.WillowPlayerController.ClientUpdateUIMissionList $pc $mission
+run WillowGame.WillowPlayerController.ClientShowNoRewardScreen $pc $mission y:3
+run WillowGame.WillowPlayerController.RefreshHUDMissionWidget $pc
+run WillowGame.WillowPlayerController.InitializeWorldMissionState $pc
+run WillowGame.WillowPlayerController.SetPlayersMissionProgressToWorldsMissionProgress $pc $tracker $mission
+run WillowGame.WillowPlayerController.RequestMissionData $pc
+run WillowGame.WillowPlayerController.ServerRequestMissionData $pc
+run WillowGame.WillowPlayerController.ClientValidateMissionData $pc
+run WillowGame.WillowPlayerController.SaveMissionSaveGameData $pc
+run WillowGame.WillowPlayerController.ApplyMissionSaveGameData $pc none b:1
+run WillowGame.WillowPlayerController.PopulateGameMissionDataFromSavegame $pc
+run WillowGame.WillowPlayerController.GetMissionDescriptionForUI $pc $mission b:1 b:1 b:1
+run WillowGame.WillowPlayerController.IsMissionMoviePlaying $pc
+run WillowGame.WillowPlayerController.ShowMissionWeaponTraining $pc none
+run WillowGame.WillowPlayerController.UpdateMissionWeaponRestrictionContextualPrompt $pc
+
+# --- rewards: credits, experience, items after turn-in ---------------------------------------------------------------------
+run WillowGame.WillowPlayerController.ClientSpawnMissionRewardUI $pc
+run WillowGame.WillowPlayerController.AcceptOrSaveUnclaimedReward $pc
+run WillowGame.WillowPlayerController.GetNumRewardChoices $pc
+run WillowGame.WillowPlayerController.ReceiveWeaponReward $pc $mission
+run WillowGame.WillowPlayerController.ReceiveItemReward $pc $mission
+run WillowGame.WillowPlayerController.MissionRewardsReceived $pc $mission
+run WillowGame.WillowInventoryManager.AddBackpackWeaponFromDefinitionData $invman
+run WillowGame.WillowInventoryManager.AddBackpackItemFromDefinitionData $invman
+run WillowGame.WillowGameInfo.AwardCombatExperience - $pc none i:100
+run WillowGame.WillowPlayerController.ExpLevelUp $pc b:0
+run WillowGame.WillowPlayerController.OnExpLevelChange $pc b:1 b:1
+run WillowGame.WillowPlayerController.ClientOnExpLevelChange $pc i:6
+run WillowGame.WillowPlayerController.DoLevelUpNotifications $pc i:6
+run WillowGame.WillowPlayerController.OnAllyLevelChange $pc $pri
+run WillowGame.WillowPlayerReplicationInfo.NotifyPlayerExpLevelUpdated $pri
+run WillowGame.WillowPlayerReplicationInfo.OnCurrencyChanged $pri y:0
+run WillowGame.WillowPlayerReplicationInfo.OnLevelUpCountIncremented $pri
+run WillowGame.WillowPlayerReplicationInfo.NotifyCurrencyDelegates $pri
+run WillowGame.WillowGameReplicationInfo.NotifyPlayerExpLevelUpdated $gri $pri
+run WillowGame.WillowGameReplicationInfo.NotifyPlaythroughChanged $gri
+run WillowGame.WillowGameReplicationInfo.SetCurrentPlaythrough $gri $pc i:0
+run WillowGame.WillowGameReplicationInfo.NotifyMissionTrackerCinematicModeChanged $gri
+run WillowGame.WillowPawn.GetNextExpLevelPoints $pawn
+run WillowGame.WillowPlayerPawn.GetNextExpLevelPoints $pawn
+
+# --- the player pawn's use path -----------------------------------------------------------------------------------------------
+run WillowGame.WillowPawn.UseObject $pawn $pc none y:0
+run WillowGame.WillowPawn.NotifyUserCouldNotAffordAttemptedUse $pawn $pc none y:0
+run WillowGame.WillowPlayerPawn.ServerPlayerBeginUseNPC $pawn $marcus
+run WillowGame.WillowPlayerPawn.ServerPlayerEndUseNPC $pawn $marcus
+
+# --- the giver: a WillowAIPawn implementing IMissionDirector (which class Marcus is in the level is not checked here) --------
+run WillowGame.WillowAIPawn.RegisterMissionDirector $marcus
+run WillowGame.WillowAIPawn.AddMissionDirective $marcus none b:1
+run WillowGame.WillowAIPawn.GetRedeemableMissions $marcus
+run WillowGame.WillowAIPawn.GetEligibleMissions $marcus
+run WillowGame.WillowAIPawn.GetInProgressMissions $marcus
+run WillowGame.WillowAIPawn.CountMyMissionsByState $marcus $pc
+run WillowGame.WillowAIPawn.OnPlayerAcceptedMission $marcus $pc $mission
+run WillowGame.WillowAIPawn.OnPlayerTurnedInMission $marcus $pc $mission
+run WillowGame.WillowAIPawn.MissionStatusChanged $marcus
+run WillowGame.WillowAIPawn.SetMissionDirectorParticle $marcus
+run WillowGame.WillowAIPawn.DeactivateMissionDirectorParticle $marcus
+run WillowGame.WillowAIPawn.UseObject $marcus $pawn none y:0
+run WillowGame.WillowAIPawn.FireOnUsedBehaviors $marcus none $pawn none y:0
+run WillowGame.WillowAIPawn.BeginUse $marcus $pawn
+run WillowGame.WillowAIPawn.EndUse $marcus $pawn
+run WillowGame.WillowAIPawn.OnNewPrimaryUser $marcus
+run WillowGame.WillowAIPawn.ClearMissionsAcceptedByPrimaryUser $marcus
+run WillowGame.WillowAIPawn.OnUsersAreLingering $marcus
+run WillowGame.WillowAIPawn.PlayOnUseDialog $marcus b:1
+run WillowGame.WillowAIPawn.PlayMissionTurnedInDialog $marcus $pc $mission
+run WillowGame.WillowAIPawn.GetAcceptedMissionToPlayDismissalDialogFor $marcus
+run WillowGame.WillowAIPawn.OnPlayerOpenedMissionUI $marcus $pc
+run WillowGame.WillowAIPawn.OnPlayerClosedMissionUI $marcus $pc
+
+# --- the tracker's script side (delegate triggers, replication), the accept/turn-in screen, mission population, the giver's walk and dialog ---
+runclass WillowGame.MissionTracker
+runclass WillowGame.QuestAcceptGFxMovie
+runclass WillowGame.MissionPopulationAspect
+runclass WillowGame.Action_GoToScriptedDestination
+runclass WillowGame.WillowDialogAct_Talk
+
+# --- Behavior and Kismet classes in the mission's data (closure and Kismet graph; the script functions each class declares) ---
+runclass Engine.Behavior_ChangeParticleSystemActiveState
+runclass Engine.Behavior_ChangeSpin
+runclass Engine.Behavior_Destroy
+runclass Engine.Behavior_RemoteEvent
+runclass Engine.Behavior_RunBehaviorCollection
+runclass Engine.Behavior_SetSkelControlActive
+runclass Engine.SeqAct_ActivateRemoteEvent
+runclass Engine.SeqAct_ApplyBehavior
+runclass Engine.SeqAct_AttachToActor
+runclass Engine.SeqAct_Delay
+runclass Engine.SeqAct_Destroy
+runclass Engine.SeqAct_Gate
+runclass Engine.SeqAct_Interp
+runclass Engine.SeqAct_SetBool
+runclass Engine.SeqAct_SetPhysics
+runclass Engine.SeqAct_Switch
+runclass Engine.SeqAct_Toggle
+runclass Engine.SeqCond_CompareBool
+runclass Engine.SeqEvent_RemoteEvent
+runclass Engine.SeqVar_Bool
+runclass Engine.SeqVar_Named
+runclass Engine.SeqVar_Object
+runclass Engine.Sequence
+runclass GearboxFramework.Behavior_AIHold
+runclass GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState
+runclass GearboxFramework.Behavior_CustomEvent
+runclass GearboxFramework.Behavior_Gate
+runclass GearboxFramework.Behavior_PostAkEvent
+runclass GearboxFramework.Behavior_SetFloatParam
+runclass GearboxFramework.Behavior_SetObjectParam
+runclass GearboxFramework.Behavior_SetVectorParam
+runclass GearboxFramework.Behavior_SpecialMove
+runclass GearboxFramework.Behavior_TriggerDialogEvent
+runclass GearboxFramework.GearboxSeqAct_ResetPopulationCount
+runclass GearboxFramework.GearboxSeqAct_TriggerDialogName
+runclass GearboxFramework.SeqEvent_ArrivedAtMoveNode
+runclass GearboxFramework.SeqEvent_PopulatedActor
+runclass GearboxFramework.SeqEvent_PopulatedPoint
+runclass WillowGame.Behavior_ActivateSkill
+runclass WillowGame.Behavior_AddInstanceData
+runclass WillowGame.Behavior_AdvanceObjectiveSet
+runclass WillowGame.Behavior_AttemptStatusEffect
+runclass WillowGame.Behavior_ChangeInstanceDataSwitch
+runclass WillowGame.Behavior_ChangeUsability
+runclass WillowGame.Behavior_CompareFloat
+runclass WillowGame.Behavior_CompareObject
+runclass WillowGame.Behavior_ConvertInstanceDataIntoPhysicsActor
+runclass WillowGame.Behavior_CoordinatedEffect
+runclass WillowGame.Behavior_CreateImpactEffect
+runclass WillowGame.Behavior_DeactivateSkill
+runclass WillowGame.Behavior_Explode
+runclass WillowGame.Behavior_IntMath
+runclass WillowGame.Behavior_MissionRemoteEvent
+runclass WillowGame.Behavior_RandomBranch
+runclass WillowGame.Behavior_RegisterTargetable
+runclass WillowGame.Behavior_SetAIFlag
+runclass WillowGame.Behavior_SimpleMath
+runclass WillowGame.Behavior_SpawnDecal
+runclass WillowGame.Behavior_SpawnParticleSystem
+runclass WillowGame.Behavior_SpawnProjectile
+runclass WillowGame.Behavior_Transform
+runclass WillowGame.Behavior_UpdateMissionObjective
+runclass WillowGame.Behavior_WeaponGlowEffect
+runclass WillowGame.WillowSeqAct_AIScripted
+runclass WillowGame.WillowSeqEvent_MissionRemoteEvent

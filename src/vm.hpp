@@ -195,6 +195,15 @@ public:
     size_t stepLimit = 5'000'000;       // executed expressions per top-level call (guards runaway scripts)
     size_t steps = 0;
 
+    // Call census, off unless `countCalls` is set (see Interp::invoke, the one place every call goes through).
+    // Keys are function paths (Package.Class.Function). Counters accumulate until the caller clears them.
+    bool countCalls = false;
+    std::map<std::string, size_t> scriptCalls;      // script functions entered
+    std::map<std::string, size_t> nativeCalls;      // natives that ran an implementation
+    std::map<std::string, size_t> stubCalls;        // natives with no implementation (logged stub, zero result)
+    std::map<std::string, size_t> noneContexts;     // script function -> Context expressions whose object was None
+    std::map<std::string, Function*> countedFunctions;   // path -> function, for every key in the counters above
+
     // Loading. Class paths are "Package.Class"; function paths "Package.Class.Function".
     std::shared_ptr<const Package> package(const std::string& name);
     Class* findClass(const std::string& path);
@@ -208,6 +217,8 @@ public:
     // exist in the installed packages (some imports name engine-native objects that have no export).
     Resolved resolveRef(const std::shared_ptr<const Package>& package, int32_t ref);
     const PackageIndex& indexOf(const Package& package);
+    PropertyDecl declAt(const std::shared_ptr<const Package>& package, int32_t ref);   // a property export, by reference
+    std::vector<std::shared_ptr<const Package>> codePackages();                        // the loaded script packages
     int32_t findExport(const Package& package, const std::string& objectPath);   // fast Package::findExport
 
     // Objects and values.

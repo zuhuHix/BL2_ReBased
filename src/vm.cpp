@@ -512,6 +512,17 @@ Function* Runtime::functionAt(const std::shared_ptr<const Package>& package, int
     return raw;
 }
 
+PropertyDecl Runtime::declAt(const std::shared_ptr<const Package>& package, int32_t ref) {
+    const auto resolved = resolveRef(package, ref);
+    if (!resolved) throw RuntimeError("unresolved property reference " + std::to_string(ref));
+    return readProperty(resolved.package, resolved.index);
+}
+
+std::vector<std::shared_ptr<const Package>> Runtime::codePackages() {
+    buildNativeIndex();
+    return codePackages_;
+}
+
 Function* Runtime::findFunction(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("function path must be Package.Class.Function: " + path);
