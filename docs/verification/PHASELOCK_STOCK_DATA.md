@@ -920,3 +920,32 @@ release and first-person support were kept.
 `-owfxscalar` (diagnostic, host only): on the command line, `-owfxscalar=Part_SirenASHandOrb:ModulateBlack:DarkCap:0` sets that material scalar on
 every sprite of the named emitter of the named template at creation time, so a material or emitter hypothesis can be tested without a rebuild or an
 asset import. Several overrides are separated by `;`. It is read once and does nothing when absent.
+
+### Round 14 (2026-10-05): why the bubble interior read navy and translucent
+
+Question from every critic since round 8: the interior and the 0.30 s void read navy/royal blue and translucent where the game's are near-black
+violet. Method: the four hypotheses were checked with `-owfxscalar` (no rebuild), fp45 captures (`local/orch/A/dg_*`), interior colour sampled on
+the 0.2-0.45 / 0.45-0.8 / 0.8-0.95 annuli of the rim (the rim found by a blue-minus-red ridge search; the game's from `matched_650`).
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| The dark layer is the wrong blend (additive or modulate-vs-translucent) | Read the compiled shader again: it multiplies the scene by `1 - darkness`; the host draws it as translucent black at that opacity | equivalent for a black target; not the cause |
+| The dark layer is drawn behind the blue layers | Sort priorities: ring 3, dark layer 4 in both the game's emitter order and the host's | dark layer is drawn after the ring and the haze, as in the game; not the cause |
+| The dark layer is drawn additively | Material blend mode in the import report: translucent | not the cause |
+| The particle colour/alpha it is fed is wrong | The loop template scales its alpha to 0 and colour to 0, so darkness = full coverage; the host reads the same values | not the cause |
+| **The host's own compensations** | `ModulateBlack` with the shader's values (`DarkCap` 1, `FadeFloor` 1) gives a near-black interior (annulus mean (13, 16, 55) against the game's (28, 32, 86)); the compensations (cap 0.72, floor 0.5, haze x3 with a blue tint, ring tint (0.55, 0.9, 1.4)) had left (26, 32, 108) | **the cause**: three calibrations of rounds 5-8, made when the interior was magenta, together made it navy and see-through |
+
+Also found: with the ring layer removed (`Sphere` gain 0) the interior is (27, 29, 84), i.e. the ring texture's navy disc is what fills the interior in
+both the game and the host; the game's near-black comes from the dark layer darkening it, with the purple from the twirl wisps (`ShockFlash`).
+
+Changes (all `UNVERIFIED` calibrations):
+* The ring texture's dim part (its navy disc) is tinted violet (0.9, 0.35, 1.0) and its bright part keeps the white-blue tint, by ring luminance.
+* The dark layer's cap 0.8 and fade floor 0.65 (were 0.72 and 0.5).
+* The wisps (`Mat_PowerUpTwirls`) are the purple mottling: rounds 7-13 drew them at alpha x0.5 with the shader's own colour (x1); round 14 draws
+  them at alpha x0.6 with colour x5 (soft purple clouds). A first try at the shader's own alpha and colour (x1, x1) gave hard black cracks.
+* Ground wash: **reverted in round 15.** Round 14's compact light (radius 0.55x, gain 8, falloff at least 1.25) made the disc disappear in every bubble
+  frame (blind A/B). A 0.7x radius (gain 6.5, falloff 1.75) kept the disc at 1.5 s but nearly lost it at 3.0 and 4.5 s, so the round 11-13 light
+  (gain 6.5, radius 0.85x, falloff at least 1.75) is back; the disc stays wider than the game's 250x110 px.
+* The 0.30 s void: not changed; with first-person space on it is solid black (the hand's black orb uses the shader's values).
+* Not done: side streaks 80-100 px left and right of the sphere (the streak sprites take the template's random rotation; orienting them
+  horizontally needs a rotation rule that was not read).

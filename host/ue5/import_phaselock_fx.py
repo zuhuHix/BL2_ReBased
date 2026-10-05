@@ -495,7 +495,10 @@ float strength = lerp(0.15, 0.7, saturate(Dyn / 0.6));
 float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).rgb;
 // Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
 // reduced and blue raised (round 8: red 0.7 to 0.55, blue 1.3 to 1.4, because a pink fringe remained on the rim).
-ring *= float3(0.55, 0.9, 1.4);
+// Round 14 (UNVERIFIED): the dim part of the ring texture (its navy disc, which fills the bubble's interior) is tinted violet and the
+// bright rim keeps the white-blue tint, because the interior reads royal blue where the game's is violet-black.
+float ringBright = saturate(dot(ring, float3(0.3, 0.55, 0.15)) * 6.0);
+ring *= lerp(float3(0.9, 0.35, 1.0), float3(0.55, 0.9, 1.4), ringBright);
 // Host calibration (UNVERIFIED): a white-hot inner edge. The game's rim has one; the brightest part of the texture's ring is
 // pushed toward white-blue.
 float ringLuma = dot(ring, float3(0.3, 0.55, 0.15));
@@ -597,8 +600,11 @@ float t = GT;
 float bendX = Texture2DSample(T0, T0Sampler, OWSPIN(0.5 * uv - 0.25, 0.2 * t) + 0.25).r * 0.02;
 float bendY = Texture2DSample(T0, T0Sampler, OWSPIN(uv - 0.5, 0.2 * t) + 0.5).b * 0.02;
 float3 twirl = saturate(Texture2DSample(T1, T1Sampler, uv + float2(bendX, bendY)).rgb * 10.0);
-float alpha = 0.5 * saturate(4.0 * twirl.r * twirl.r) * Col.a;
-return float4(min(4.0, (sqrt(twirl) - twirl) * Col.rgb * float3(0.6, 0.0, 0.8)), alpha);
+// These wisps are the bubble's purple mottling (colour x (0.6, 0, 0.8)). Host calibration (UNVERIFIED): rounds 7-13 drew them at alpha
+// x0.5 and the shader's own colour (x1), which left black cracks; round 14 draws them at alpha x0.6 and colour x5, soft purple clouds. A
+// first round 14 try at the shader's own alpha (x1, colour x1) was hard black cracks too.
+float alpha = 0.6 * saturate(4.0 * twirl.r * twirl.r) * Col.a;
+return float4(min(4.0, 5.0 * (sqrt(twirl) - twirl) * Col.rgb * float3(0.6, 0.0, 0.8)), alpha);
 """, subuv=True)
 
 # --- hand and release materials ---------------------------------------------------------------------------------------

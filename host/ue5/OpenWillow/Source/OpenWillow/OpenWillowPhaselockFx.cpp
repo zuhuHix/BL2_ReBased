@@ -35,8 +35,8 @@ constexpr float ScreenQuadDistance = 15.f;
 // dark blob keeps the shader's values (pure black at 0.30 s in the game).
 struct FOwFxEmitterScalar { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; float Value; };
 const FOwFxEmitterScalar EmitterScalars[] = {
-    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.72f},
-    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.8f},
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.65f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.65f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
     // Round 11 (UNVERIFIED): the release keeps its shards out of the interior and less bright: spikes and ribbons at half strength.
