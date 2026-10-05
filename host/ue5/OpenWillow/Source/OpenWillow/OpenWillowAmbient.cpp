@@ -1,11 +1,13 @@
 #include "OpenWillowAmbient.h"
 #include "OpenWillowWalker.h"
 #include "Animation/AnimSequence.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -125,6 +127,7 @@ void FOpenWillowAmbientWorld::Load(const FString& File)
         Out.YawRate = Num(K, TEXT("yaw_rate"));
         double Ink = 0;
         if (K->TryGetNumberField(TEXT("outline_cm"), Ink)) Out.OutlineCm = float(Ink);
+        if (K->TryGetNumberField(TEXT("outline_px"), Ink)) Out.OutlinePx = float(Ink);
         for (const auto& Clip : Obj(K, TEXT("clips"))->Values) Out.Clips.Add(FString(*Clip.Key), AssetPath(Clip.Value->AsString()));
         const TSharedPtr<FJsonObject>* RootEnds = nullptr;
         if (K->TryGetObjectField(TEXT("root_end"), RootEnds) && RootEnds && *RootEnds)
@@ -329,6 +332,20 @@ bool AOpenWillowAmbientNpc::Setup(TSharedPtr<const FOpenWillowAmbientWorld> InWo
                 else Component->SetMaterial(0, Look);
             }
         Worn.Add(Component);
+        if (Ink)
+        {
+            // The same piece again with the ink material (back faces only, pushed out along the normal), so hats and hair carry the line too.
+            UStaticMeshComponent* Hull = NewObject<UStaticMeshComponent>(this);
+            Hull->SetStaticMesh(Piece);
+            Hull->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Hull->SetCastShadow(false);
+            Hull->SetupAttachment(Mesh, FName(*Att.Bone));
+            Hull->SetRelativeLocationAndRotation(Att.Location, Att.Rotation.Rotator());
+            Hull->SetRelativeScale3D(Att.Scale);
+            Hull->RegisterComponent();
+            for (int32 Slot = 0; Slot < Hull->GetNumMaterials(); ++Slot) Hull->SetMaterial(Slot, Ink);
+            WornInk.Add(Hull);
+        }
     }
     SetActorLocation(Spawn.Location);
     SetActorRotation(FRotator(0, Spawn.Yaw, 0));
@@ -539,9 +556,30 @@ void AOpenWillowAmbientNpc::AfterPerch()
     BeginTravel();
 }
 
+void AOpenWillowAmbientNpc::UpdateInk()
+{
+    // The original's line is a few pixels wide whatever the distance; the hull is a world-space offset, so its thickness follows the
+    // camera distance: pixels * distance / focal length in pixels (horizontal FOV, viewport width).
+    if (!Outline || !Outline->IsVisible() || !Kind) return;
+    APlayerCameraManager* Camera = UGameplayStatics::GetPlayerCameraManager(this, 0);
+    FVector2D View(0, 0);
+    if (Camera && GEngine && GEngine->GameViewport) GEngine->GameViewport->GetViewportSize(View);
+    float Cm = Kind->OutlineCm;
+    if (Camera && View.X > 1.f && Kind->OutlinePx > 0.f)
+    {
+        const float Focal = View.X * 0.5f / FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(Camera->GetFOVAngle(), 20.f, 150.f) * 0.5f));
+        Cm = FMath::Clamp(FVector::Dist(Camera->GetCameraLocation(), GetActorLocation() + FVector(0, 0, 90.f)) * Kind->OutlinePx / Focal, 0.1f, 8.f);
+    }
+    if (FMath::Abs(Cm - InkCm) < 0.03f * FMath::Max(InkCm, 0.1f)) return;
+    InkCm = Cm;
+    Outline->SetScalarParameterValueOnMaterials(TEXT("ThicknessCm"), Cm);
+    for (UStaticMeshComponent* Hull : WornInk) Hull->SetScalarParameterValueOnMaterials(TEXT("ThicknessCm"), Cm);
+}
+
 void AOpenWillowAmbientNpc::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    UpdateInk();
     if (!World.IsValid() || Target == INDEX_NONE || !Kind) return;
     const FOpenWillowAmbientNode& Node = World->Nodes[Target];
     switch (State)

@@ -6,7 +6,7 @@ param(
     [string]$UModel = $env:OPENWILLOW_UMODEL,
     [string]$Python = 'python',
     # Any of: extract, import, preview, capture, manifest. 'all' runs them in order.
-    [ValidateSet('all', 'extract', 'import', 'attach', 'preview', 'capture', 'manifest')][string[]]$Steps = @('all'),
+    [ValidateSet('all', 'extract', 'import', 'attach', 'outline', 'preview', 'capture', 'manifest')][string[]]$Steps = @('all'),
     [int]$CaptureWaitSeconds = 40,
     # Keep the already imported meshes/materials and only redo the clip conversion and import (after an animation fix).
     [switch]$AnimsOnly,
@@ -110,6 +110,27 @@ function Invoke-AttachEditor {
     Select-String -LiteralPath $log -Pattern 'LogPython: OW_ATTACH' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
 }
 
+function Invoke-OutlineEditor {
+    # Only the ink-line material is rebuilt (the attach report and every other asset stay as they are).
+    $env:OPENWILLOW_AMBIENT_ATTACH_JOB = Join-Path $ambient 'attach_job.json'
+    $env:OPENWILLOW_AMBIENT_OUTLINE_ONLY = '1'
+    $log = Join-Path $logs 'ambient-editor-outline.log'
+    $script = Join-Path $PSScriptRoot 'ambient_npc_attach_editor.py'
+    try {
+        Use-EditorLock {
+            $process = Start-Process -FilePath $cmd -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logs 'ambient-editor-outline.stdout.txt') -ArgumentList @(
+                "`"$project`"", '-run=pythonscript', "`"-script=$script`"", '-unattended', '-nullrhi', '-nosplash',
+                '-ddc=InstalledNoZenLocalFallback', "`"-abslog=$log`"")
+            $null = $process.Handle
+            try {
+                if (!$process.WaitForExit(900000)) { throw 'outline editor timed out' }
+                $code = $process.ExitCode
+            } finally { if (!$process.HasExited) { Stop-Process -Id $process.Id -Force } }
+            if ($code -ne 0 -or !(Select-String -LiteralPath $log -Pattern 'OW_ATTACH outline material rebuilt' -Quiet)) { throw "outline editor failed (exit $code); see $log" }
+        }
+    } finally { Remove-Item Env:OPENWILLOW_AMBIENT_OUTLINE_ONLY -ErrorAction SilentlyContinue }
+}
+
 Add-Type -AssemblyName System.Drawing
 if (-not ('OwAmbWin' -as [type])) {
 Add-Type @'
@@ -162,6 +183,7 @@ if (& $run 'attach') {
     if ($LASTEXITCODE -ne 0) { throw 'ambient_npc_assets.py attachments failed' }
     Invoke-AttachEditor
 }
+if ($Steps -contains 'outline') { Invoke-OutlineEditor }
 if (& $run 'preview') { Invoke-Editor 'preview' }
 if (& $run 'capture') {
     $shots = Join-Path $ambient 'screenshots'

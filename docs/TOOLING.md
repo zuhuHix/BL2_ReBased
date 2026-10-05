@@ -942,6 +942,7 @@ cycle and node walks with stand-in rules (`docs/verification/SANCTUARY_AMBIENT_N
 python tools/census_ambient_npcs.py                      # dens, points, node graph, perch definitions -> local/slice/
 powershell -File tools/seed_ambient_npc_assets.ps1       # UModel extraction, clip conversion, import (needs OPENWILLOW_UMODEL)
 powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <amb_compose json>   # hair, hats, gear, head textures
+powershell -File tools/seed_ambient_npc_assets.ps1 -Steps outline   # rebuild only the ink-line material
 python tools/prepare_ambient_world.py                    # host manifest local/slice/ambient_world.json (--observed copies a capture)
 powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
 ```

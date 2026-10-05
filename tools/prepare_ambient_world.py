@@ -168,6 +168,7 @@ def showcase_for(spawns, nodes_by_name, stops=None):
 
 
 
+OUTLINE_PX = 3.0     # UNVERIFIED: width of the real game's black outline on a citizen in a 1280x720 frame, measured by eye on one frame
 HAIR_GAIN = 1.5     # UNVERIFIED stand-in: hair tint = the pawn's zone-A midtone times this (the original shades three colour zones from p_Masks)
 
 
@@ -342,7 +343,9 @@ def build(args):
                 root_end[role] = [round(b[i] - a[i], 3) for i in range(3)]
         kinds[name] = {'root_end': root_end, 'display_name': ai['defaultdisplayname'], 'mesh': use['skeletal_mesh'], 'mesh_offset': use['mesh_offset'],
                        'speed': round(speed, 3), 'speed_note': f'GroundSpeed {ai["groundspeed"]} x WalkingPct {ai.get("walkingpct", 1)} x patrol SpeedScale {scale} (the product equals the Velocity read from one live walking citizen in the real game, 150; the native SetPawnMovementSpeed was not read)',
-                       'yaw_rate': float(ai['rotationrate']['Yaw']) * 360.0 / 65536.0, 'clips': dict(use['anims'])}
+                       'yaw_rate': float(ai['rotationrate']['Yaw']) * 360.0 / 65536.0, 'clips': dict(use['anims']),
+                       # Ink line width on screen, pixels (read off a 1280x720 real-game frame: about 2 px at any distance). UNVERIFIED.
+                       'outline_px': OUTLINE_PX}
     if not kinds:
         sys.exit('no imported ambient kind in ambient_assets.json (run tools/seed_ambient_npc_assets.ps1)')
 

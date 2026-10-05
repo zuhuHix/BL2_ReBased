@@ -307,3 +307,19 @@ AI-assisted (Claude). Frames: `local/orch/B/review4/` (local only).
    Not changed.
 4. **Real-game session.** Saves backed up (`local/realgame/save-backup-20261005-022935`), `Save000A.sav.bak` restored afterwards, saves identical to the backup,
    `sdk_mods/openwillow_realgame` removed, lock released.
+
+## 11. Round 5 (2026-10-05): the "bun", the mask, the ink line
+
+AI-assisted (Claude). Frames: `local/orch/B/review5/` (local only).
+
+1. **The brown "bun" behind the head at stop 00, shot 2 is not an attached piece.** The pawn on that perch plays the BangOnWall loop. Reading the clip's bone tracks
+   (forward kinematics over the extracted skeleton), the right hand rises to about 15 units above the head centre and 2 to 30 units forward of it during the loop; in the frame
+   the blob is about 15 units above and 9 in front of the head centre at the camera distance used. It is the skin-coloured fist with the sleeve cuff below it; the forearm and elbow
+   are hidden behind the head and the white cap seen from this side, so the fist reads as floating. Nothing in that pawn's attachment list (cap and goggles only) can be it. Not
+   changed; whether the real fist touches the wall depends on the wall distance of the real perch (`UNVERIFIED`).
+2. **Stop 02 background man.** In the round-4 build his mask and goggles sit on the face (crop in `review5`); the strap the critic saw dangling at the back of the head belonged to the round-3 build.
+3. **Ink line.** The real game's black outline is a few pixels wide at any distance. The hull is a world-space offset, so its thickness now follows the camera distance:
+   `pixels x distance / focal length in pixels` (manifest `outline_px`, set to 3.0; measured by eye as about 2 to 3 pixels in one 1280x720 real frame, `UNVERIFIED`). Hats, hair and packs get
+   their own hull (the same piece again with the ink material), so they carry the line as well. The ink colour is unchanged (near black) and stays softer than the original's crisp line.
+   A side finding: a failed editor run had deleted `M_OW_AmbientOutline` for the first half of this round; `seed_ambient_npc_assets.ps1 -Steps outline` rebuilds only that material.
+4. **Packs from behind.** The walker at stop 06 (seen from behind) and the stop-05 pawn show the pack on the middle of the back with its own outline.

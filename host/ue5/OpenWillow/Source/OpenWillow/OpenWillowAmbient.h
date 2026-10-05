@@ -44,7 +44,8 @@ struct FOpenWillowAmbientKind
     FString DisplayName, Mesh;
     FVector MeshOffset = FVector::ZeroVector;
     float Speed = 294, YawRate = 90;
-    float OutlineCm = 0.5f;         // ThicknessCm of the ink-line material (0 = none)
+    float OutlineCm = 0.5f;         // ThicknessCm of the ink-line material when no camera is known (0 = no ink line)
+    float OutlinePx = 2.f;          // width of the ink line on screen in pixels, kept by scaling the thickness with the camera distance (manifest outline_px; UNVERIFIED value)
     TMap<FString, FString> Clips;   // role -> UE AnimSequence path
     TMap<FString, FVector> RootEnd; // role -> root-bone travel over the clip (mesh frame): applied to the actor when the clip ends
 };
@@ -134,6 +135,9 @@ private:
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> Mesh;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> Outline;   // inverted-hull ink line, follows Mesh
     UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Worn;
+    UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> WornInk;   // inverted hulls of the worn pieces
+    float InkCm = -1.f;             // thickness last given to the ink materials
+    void UpdateInk();
     UPROPERTY() TMap<FString, TObjectPtr<UAnimSequence>> Loaded;
     TSharedPtr<const FOpenWillowAmbientWorld> World;
     FOpenWillowAmbientSpawn SpawnData;

@@ -292,6 +292,11 @@ def main():
     eal.save_directory(dest, only_if_is_dirty=False, recursive=True)
 
 
-main()
-Path(job['slice_dir'], 'editor_report_attach.json').write_text(json.dumps(report, indent=1), encoding='utf-8')
-log(f'complete: {len(report["meshes"])} meshes, {len(report["materials"])} materials, {len(report["heads"])} heads, {len(report["warnings"])} warnings')
+if os.environ.get('OPENWILLOW_AMBIENT_OUTLINE_ONLY'):
+    # Only the ink-line material (seed_ambient_npc_assets.ps1 -Steps outline): nothing else is touched or reported.
+    outline_master()
+    log('outline material rebuilt')
+else:
+    main()
+    Path(job['slice_dir'], 'editor_report_attach.json').write_text(json.dumps(report, indent=1), encoding='utf-8')
+    log(f'complete: {len(report["meshes"])} meshes, {len(report["materials"])} materials, {len(report["heads"])} heads, {len(report["warnings"])} warnings')
