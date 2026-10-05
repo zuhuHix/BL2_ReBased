@@ -239,6 +239,8 @@ level 5, 212 at level 8 (displayed rounding unknown).
 
 ## What was not read
 
+> Update (2026-10-05): the script side of the turn-in, `ExpEarn` and the level-up trigger are now read in [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) (it also corrects the `ExpLevelUp` parameter name to `bCheated`).
+
 The script side of the turn-in (who calls `GetExperienceReward` and adds the amount to the experience pool); how
 `ExpPointsNextLevelAt` is refreshed; the UVHM stage function; the enum names of `BaseValueMode` 1..3; health refill on
 level-up; attribute modifiers on pools.

@@ -183,6 +183,8 @@ start or stop mission blocking; finally the B2 evaluation runs if the new set ha
 
 ### B4. Mission status
 
+> Correction and completion (2026-10-05): the order of the script hooks, the kickoff scheduling and the turn-in chain are in [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md).
+
 - **Active** (`ActivateMission`): allowed from NotStarted or Failed, or from Complete when `bRepeatable`, and only
   when dependencies are met (B6), and a mission with more than 20 objectives (or objectives but no
   `InitialObjectiveSet`) is refused. Progress is reset, the game stage is locked, the mission weapon is granted
