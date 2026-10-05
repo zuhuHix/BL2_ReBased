@@ -19,6 +19,11 @@ R(2) 6, R(3) 16, R(4) 30, R(5) 48, R(50) 4998; the reward percentage is an attri
 (playthrough count == 2 gives 4, else 3), so 1.5 on the first playthrough. At game stage 4 the reward is
 trunc((R(5) - R(4)) x 1.5) = trunc(18 x 1.5) = 27.
 
+The dialog scenario (--mission-run, scenario E) uses a toy mission whose provider runs Behavior_TriggerDialogEvent behaviors over a toy
+dialog group (invented tags, priorities, acts, a talker name tag): Out on the first run, the dialog one kernel wake later, Finished when
+the live line ends, the priority arbitration with the tracked-mission floor, the last enabled entry for a tag, a template act through the
+link table, a registered pawn against the echo caller, and bForcePlayImmediate.
+
 The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
 with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
 OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
@@ -249,6 +254,47 @@ def build_gearbox():
     T.prop('Byte', math, 'Operand')
     p.add_export(toy.imp['Enum'], 'EMathValueResolverOperand', w32(0) + toy.none + w32(0) + w32(len(OPERANDS)) + b''.join(p.fname(o) for o in OPERANDS),
                  outer=math)
+    # Dialog vocabulary (names as the dialog code reads them)
+    trigger = T.cls('Behavior_TriggerDialogEvent')
+    T.prop('Object', trigger, 'EventTag')
+    T.prop('Object', trigger, 'Group')
+    T.prop('Object', trigger, 'NameTag')
+    T.prop('Bool', trigger, 'bForcePlayImmediate')
+    priority = T.cls('GearboxDialogPriority')
+    tag = T.cls('GearboxDialogEventTag')
+    T.prop('Object', tag, 'Priority')
+    T.prop('Bool', tag, 'bSoundEffect')
+    T.prop('Bool', tag, 'bGroupEvent')
+    node = T.cls('GearboxDialogNode')
+    T.prop('Int', node, 'NodeID')
+    act = T.cls('GearboxDialogAct_Talk', super_ref=node)
+    talk = T.struct_(0, 'GearboxDialogTalkData')
+    T.prop('Object', talk, 'NameTag')
+    T.prop('Object', talk, 'TalkAkEvent')
+    T.prop('Int', talk, 'AkAudioUniqueID')
+    T.prop('Float', talk, 'Pitch')
+    T.array_of(act, 'TalkData', 'Struct', talk)
+    T.prop('Bool', act, 'bInstigatorTalker')
+    T.prop('Float', act, 'OutputDelay')
+    event_data = T.struct_(0, 'DialogEventData')
+    T.prop('Object', event_data, 'Tag')
+    T.prop('Bool', event_data, 'bEnabled')
+    T.prop('Object', event_data, 'OutputAction')
+    talk_act = T.struct_(0, 'TalkActData')
+    T.prop('Float', talk_act, 'OutputDelay')
+    T.array_of(talk_act, 'TalkData', 'Struct', talk)
+    T.prop('Object', talk_act, 'TalkerVariable')
+    T.prop('Object', talk_act, 'OutputAction')
+    T.prop('Bool', talk_act, 'bInstigatorTalker')
+    link_struct = T.struct_(0, 'OutputLinkToStruct')
+    for field in ('FromNodeID', 'LinkNumber', 'ToNodeID'): T.prop('Int', link_struct, field)
+    group = T.cls('GearboxDialogGroup')
+    T.array_of(group, 'DialogEvents', 'Struct', event_data)
+    T.array_of(group, 'TalkActs', 'Struct', talk_act)
+    T.array_of(group, 'OutputLinksToStructs', 'Struct', link_struct)
+    T.array_of(group, 'Nodes', 'Object')
+    T.prop('Object', group, 'ParentGroup')
+
     # The behavior provider vocabulary (tests/behavior_test.py has the commented version): sequences, events, behaviors, links.
     bpd = T.cls('BehaviorProviderDefinition')
     var_types = ['BVAR_None', 'BVAR_Object', 'BVAR_Int', 'BVAR_Float', 'BVAR_InstanceData', 'BVAR_NamedVariable', 'BVAR_Mystery']
@@ -297,7 +343,7 @@ def build_gearbox():
 
 
 def build_willowgame():
-    toy = Toy(('Int', 'Bool', 'Byte', 'Object', 'Array', 'Struct'))
+    toy = Toy(('Int', 'Bool', 'Byte', 'Object', 'Array', 'Struct', 'Name'))
     p, T = toy.p, toy
     engine = p.add_import_full('Package', 0, 'Engine')
     aid = p.add_import_full('ScriptStruct', engine, 'AttributeInitializationData')
@@ -335,7 +381,19 @@ def build_willowgame():
     T.prop('Object', condition, 'LinkedObjective')
     T.prop('Struct', condition, 'ObjectiveStatesToLinkTo', type_ref=objective_states)
     T.array_of(condition, 'ObjectiveSetRestrictions', 'Object')
+    gearbox_tag = p.add_import_full('Class', gearbox, 'GearboxDialogEventTag')
+    gearbox_act = p.add_import_full('Class', gearbox, 'GearboxDialogAct_Talk')
+    willow_tag = T.cls('WillowDialogEventTag', super_ref=gearbox_tag)
+    for field in ('bOncePerSession', 'bMultiplayerOnly', 'bDoesNotOverrideSamePriority', 'bIsEchoEvent'): T.prop('Bool', willow_tag, field)
+    T.prop('Object', T.cls('WillowDialogAct_Talk', super_ref=gearbox_act), 'Emote')
+    globals_definition = T.cls('WillowDialogGlobalsDefinition')
+    T.array_of(globals_definition, 'Priorities', 'Object')
+    for field in ('ActiveMissionMinPriorityStart', 'ActiveSideMissionMinPriority', 'ActivePlotMissionMinPriority'): T.prop('Object', globals_definition, field)
+    T.cls('WillowDialogNameTag')
+    T.prop('Name', T.cls('Behavior_MissionRemoteEvent'), 'EventName')
     mission = T.cls('MissionDefinition')
+    T.prop('Object', mission, 'MissionDialogGroup')
+    T.prop('Bool', mission, 'bPlotCritical')
     T.prop('Struct', mission, 'Reward', type_ref=reward)
     T.prop('Struct', mission, 'AlternativeReward', type_ref=reward)
     T.array_of(mission, 'ObjectiveSetDefs', 'Object')
@@ -587,6 +645,97 @@ def build_dynamic():
     return p
 
 
+def build_dialog_mission():
+    """DialogMission: ToyMission's shape (SetA {RockPaper_GoToRange}) plus a behavior provider and a dialog group. Default id 12 (the
+    kickoff) -> K1 (tag A); custom events Chatter, Template and Immediate -> K2 (tag B), K3 (tag C), K4 (tag D, bForcePlayImmediate).
+    Every K has Out (id 0) -> <name>Out and Finished (id 1) -> <name>Done remote events."""
+    p = Package()
+    t = Tags(p)
+    chains = {}
+
+    def chain(*path):
+        if path in chains: return chains[path]
+        outer = chain(*path[:-1]) if len(path) > 1 else 0
+        chains[path] = p.add_import_full('Package' if len(path) == 1 else 'Class', outer, path[-1])
+        return chains[path]
+
+    none = t.none()
+    mission = p.add_export(chain('WillowGame', 'MissionDefinition'), 'DialogMission', b'')
+    only = p.add_export(chain('WillowGame', 'MissionObjectiveDefinition'), 'RockPaper_GoToRange', w32(0) + t.int('ObjectiveCount', 1) + none, outer=mission)
+    set_a = p.add_export(chain('WillowGame', 'MissionObjectiveSetDefinition'), 'SetA',
+                         w32(0) + t.array('ObjectiveDefinitions', 1, w32(only)) + t.bool('bCanCompleteMission', True) + none, outer=mission)
+    package_class = chain('Core', 'Package')
+    # priorities: index 0 is the most important
+    names = ['P100', 'P70', 'P35', 'P30', 'P20', 'P10']
+    priority_package = p.add_export(package_class, 'GD_Globals', w32(0) + none)
+    dialog_package = p.add_export(package_class, 'Dialog', w32(0) + none, outer=priority_package)
+    prio = {n: p.add_export(chain('GearboxFramework', 'GearboxDialogPriority'), 'DialogPriority_' + n[1:], w32(0) + none, outer=dialog_package) for n in names}
+    p.add_export(chain('WillowGame', 'WillowDialogGlobalsDefinition'), 'DialogGlobals',
+                 w32(0) + t.array('Priorities', len(names), w32(*[prio[n] for n in names])) + t.obj('ActiveMissionMinPriorityStart', prio['P20'])
+                 + t.obj('ActiveSideMissionMinPriority', prio['P35']) + t.obj('ActivePlotMissionMinPriority', prio['P100']) + none, outer=dialog_package)
+    marcus = p.add_export(chain('WillowGame', 'WillowDialogNameTag'), 'DialogName_Marcus', w32(0) + none)
+    ak = {n: p.add_export(chain('Engine', 'AkEvent'), 'Ak_' + n, w32(0) + none) for n in 'ABCD'}
+
+    def event_tag(name, priority_name, echo):
+        return p.add_export(chain('WillowGame', 'WillowDialogEventTag'), 'Tag' + name,
+                            w32(0) + t.obj('Priority', prio[priority_name]) + t.bool('bIsEchoEvent', echo) + none)
+    tags = {'A': event_tag('A', 'P70', True), 'B': event_tag('B', 'P30', False), 'C': event_tag('C', 'P10', False), 'D': event_tag('D', 'P70', True)}
+    group = p.add_export(chain('GearboxFramework', 'GearboxDialogGroup'), 'DialogGroup', b'')
+
+    def talk_data(ak_name):
+        return t.array('TalkData', 1, t.obj('NameTag', marcus) + t.obj('TalkAkEvent', ak[ak_name]) + none)
+
+    def act(name, node_id, ak_name):
+        return p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), name, w32(0) + t.int('NodeID', node_id) + talk_data(ak_name) + none, outer=group)
+    acts = {'A': act('ActA', 41, 'A'), 'B1': act('ActB1', 42, 'A'), 'B2': act('ActB2', 43, 'B'), 'B3': act('ActB3', 44, 'A'), 'D': act('ActD', 45, 'D')}
+    # events (1-based ids): 1 A, 2 B (first), 3 C (no inline act: the link table), 4 B (last enabled wins), 5 B (disabled), 6 D
+    entries = [('A', True, acts['A']), ('B', True, acts['B1']), ('C', True, 0), ('B', True, acts['B2']), ('B', False, acts['B3']), ('D', True, acts['D'])]
+    event_bodies = b''.join(t.obj('Tag', tags[n]) + t.bool('bEnabled', on) + (t.obj('OutputAction', a) if a else b'') + none for n, on, a in entries)
+    template = t.array('TalkActs', 1, talk_data('C') + none)
+    links = t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 3) + t.int('LinkNumber', 0) + t.int('ToNodeID', 7) + none)
+    cls_, sup, outer, name, _ = p.exports[group - 1]
+    p.exports[group - 1] = (cls_, sup, outer, name, w32(0) + t.array('DialogEvents', len(entries), event_bodies) + template + links + none)
+
+    provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'DialogBpd', b'', outer=mission)
+    behaviors, refs = [], {}
+
+    def behavior(name, cls_name, tags_):
+        refs[name] = len(behaviors)
+        behaviors.append(p.add_export(chain(*cls_name), name, w32(0) + tags_ + none, outer=provider))
+    for k, tag_name, immediate in (('Kick', 'A', False), ('Chat', 'B', False), ('Tmpl', 'C', False), ('Imm', 'D', True)):
+        behavior('K' + k, ('GearboxFramework', 'Behavior_TriggerDialogEvent'),
+                 t.obj('EventTag', tags[tag_name]) + t.obj('Group', group) + (t.bool('bForcePlayImmediate', True) if immediate else b''))
+        behavior(k + 'Out', ('WillowGame', 'Behavior_MissionRemoteEvent'), t.name_('EventName', k + 'Out'))
+        behavior(k + 'Done', ('WillowGame', 'Behavior_MissionRemoteEvent'), t.name_('EventName', k + 'Done'))
+    # consolidated links: the events' links first, then each K behavior's Out (id 0) and Finished (id 1) links to its two remote events
+    link_list = []
+
+    def sub(name, first, length): return t.struct_(name, 'SubarrayData', t.int('ArrayIndexAndLength', (first << 16) | length) + none)
+    events = [('Default', [(12, refs['KKick'])]), ('Chatter', [(0, refs['KChat'])]), ('Template', [(0, refs['KTmpl'])]), ('Immediate', [(0, refs['KImm'])])]
+    event_data_bytes = b''
+    for name, targets in events:
+        event_data_bytes += (t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', name) + none) + sub('OutputVariables', 0, 0)
+                             + sub('OutputLinks', len(link_list), len(targets)) + none)
+        link_list.extend(targets)
+    behavior_bytes = b''
+    for index, ref in enumerate(behaviors):
+        is_trigger = index % 3 == 0
+        behavior_bytes += (t.obj('Behavior', ref) + sub('LinkedVariables', 0, 0)
+                           + (sub('OutputLinks', len(link_list), 2) if is_trigger else sub('OutputLinks', 0, 0)) + none)
+        if is_trigger: link_list.extend([(0, index + 1), (1, index + 2)])
+    link_bytes = b''.join(t.int('LinkIdAndLinkedBehavior', index | (link_id << 24)) + t.float('ActivateDelay', 0.0) + none for link_id, index in link_list)
+    seq = (t.name_('BehaviorSequenceName', 'Main') + t.bool('bEnabledOnSpawn', True)
+           + t.array('EventData2', len(events), event_data_bytes) + t.array('BehaviorData2', len(behaviors), behavior_bytes)
+           + t.array('ConsolidatedOutputLinkData', len(link_list), link_bytes) + none)
+    cls_, sup, outer, name, _ = p.exports[provider - 1]
+    p.exports[provider - 1] = (cls_, sup, outer, name, w32(0) + t.array('BehaviorSequences', 1, seq) + none)
+    cls_, sup, outer, name, _ = p.exports[mission - 1]
+    p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 1, w32(set_a)) + t.obj('InitialObjectiveSet', set_a)
+                              + t.obj('BehaviorProvider', provider) + t.obj('MissionDialogGroup', group)
+                              + t.bool('bActivateInitialObjectiveSet', True) + none)
+    return p
+
+
 failures = []
 
 
@@ -683,6 +832,58 @@ with tempfile.TemporaryDirectory() as folder:
     check('D turn-in', remote(steps['turnin']) == ['MissionLevelOn', 'MutexBOff'], remote(steps['turnin']))
     # transitions only: the sequences end in the state the last verdicts left
     check('D final enabled sequences', sorted(got['dummy_enabled_sequences']) == ['Idle', 'MissionLevel'], got['dummy_enabled_sequences'])
+
+    # Scenario E: Behavior_TriggerDialogEvent through --mission-run (src/dialog.*), NATIVE_DIALOG.md.
+    (root / 'DialogMission.upk').write_bytes(build_dialog_mission().build())
+
+    def dialog_run(*steps):
+        proc = subprocess.run([reader, str(root / 'DialogMission.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), *steps],
+                              capture_output=True, text=True, encoding='utf-8')
+        assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
+        return proc.returncode, json.loads(proc.stdout)
+
+    def seen(step): return [e['a'] for e in step['effects'] if e['kind'] == 'remote_event']
+    def lines(step): return [dict(item.split('=', 1) for item in e['detail'].split(';')) | {'tag': e['a'].split('.')[-1], 'talker_tag': e['c']}
+                             for e in step['effects'] if e['kind'] == 'dialog']
+
+    # E1: no line player (no audio device): Out on the first run, the dialog one wake later, Finished in the same run (nothing started)
+    code, got = dialog_run('accept', 'tick:0', 'tick:0.02')
+    check('E1 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    kick, wake = got['steps'][1], got['steps'][2]
+    check('E1 Out first, before any dialog', seen(kick) == ['KickOut'] and lines(kick) == [], (seen(kick), lines(kick)))
+    check('E1 dialog on the next wake, Finished at once', [l['outcome'] for l in lines(wake)] == ['no audio device'] and seen(wake) == ['KickDone'], (lines(wake), seen(wake)))
+    check('E1 the line names its act, AkEvent and an echo talker', lines(wake)[0]['ak'].endswith('Ak_A') and lines(wake)[0]['talker'] == 'echo'
+          and lines(wake)[0]['act'].endswith('ActA') and lines(wake)[0]['tag'] == 'TagA', lines(wake))
+
+    # E2: a line player (every line lasts 0.55 s) and a registered pawn: Finished waits for the end of the line (polls every 0.1 s);
+    # the chatter event B (non-echo, priority index 3) is blocked while A (index 1) is live and finishes at once
+    code, got = dialog_run('lines:0.55', 'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02', 'custom:Chatter',
+                           'tick:0.02', *(['tick:0.1'] * 6))
+    check('E2 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    steps = got['steps'][2:]          # after lines: / talker:
+    check('E2 line A starts with a pawn talker, no Finished yet', [l['outcome'] for l in lines(steps[2])] == ['started'] and lines(steps[2])[0]['talker'] == 'pawn'
+          and seen(steps[2]) == [], (lines(steps[2]), seen(steps[2])))
+    check('E2 chatter: Out at once, blocked by priority on its wake, Finished at once', seen(steps[3]) == ['ChatOut']
+          and [l['outcome'] for l in lines(steps[4])] == ['blocked by priority'] and seen(steps[4]) == ['ChatDone'], (steps[3], steps[4]))
+    done_at = [i for i, step in enumerate(steps[5:]) if 'KickDone' in seen(step)]
+    # A starts at about 0.0167 s (the first wake) and lasts 0.55 s (ends at 0.5667 s); the polls are 0.1 s apart from 0.1167 s: the first one
+    # after the end is 0.6167 s, reached by the sixth 0.1 s tick (t = 0.64 s), and not by the fifth (t = 0.54 s), whose last poll (0.5167 s)
+    # still sees the line live
+    check('E2 Finished at the first poll after the line ended', done_at == [5], done_at)
+
+    # E3: after the line ended, the same chatter event plays; a template event (no inline act) resolves through the link table;
+    # a forced-immediate trigger selects Finished and Out in its first run
+    code, got = dialog_run('lines:0.55', 'talker:DialogName_Marcus', 'accept', 'tick:1', 'custom:Chatter', 'tick:0.1', 'tick:0.7', 'custom:Template',
+                           'tick:0.1', 'custom:Immediate')
+    check('E3 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    steps = got['steps'][2:]
+    chat = lines(steps[3])
+    # tag B: the last enabled entry (ActB2, AkEvent B) wins over the first and the disabled one
+    check('E3 chatter uses the last enabled entry', len(chat) == 1 and chat[0]['outcome'] == 'started' and chat[0]['act'].endswith('ActB2') and chat[0]['ak'].endswith('Ak_B'), chat)
+    template = lines(steps[6])
+    check('E3 template act through the link table', len(template) == 1 and template[0]['act'].endswith('TalkActs[0]') and template[0]['ak'].endswith('Ak_C'), template)
+    immediate = steps[7]
+    check('E3 immediate: Finished and Out in the first run (Out thread first)', seen(immediate) == ['ImmOut', 'ImmDone'] and len(lines(immediate)) == 1, (seen(immediate), lines(immediate)))
 
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')

@@ -65,6 +65,20 @@ public:
 
     BehaviorProvider(Runtime& runtime, std::shared_ptr<const Package> package, int32_t exportIndex);
 
+    // A behavior's view of its current run (the kernel's call information, NATIVE_BEHAVIOR_POPULATION.md G2, UNVERIFIED). A handler
+    // that sets `wait` becomes latent: its outputs selected in this call are followed (on new threads) and the behavior runs again
+    // after max(wait, 1/60) s, with initialRun false and the same `state`. Not set (negative): the behavior is finished.
+    struct RunInfo {
+        bool initialRun = true;               // the first run of this behavior in its thread
+        bool hasLinkedOutputs = false;        // the behavior has any output link
+        double wait = -1;
+        std::shared_ptr<void> state;          // survives the wait (the game copies the behavior per thread for this)
+    };
+    RunInfo& run() { return run_; }
+    // Called with the provider's time each time tick() advances it (to a thread's due time, and to the end of the call), before the thread
+    // runs: lets the owner keep other per-frame state (the dialog components) in step with the kernel.
+    std::function<void(double)> onTime;
+
     void handle(const std::string& classPath, Handler handler);
     // The class acts on the world and has no binding yet: each execution is listed in `boundary` and
     // `boundaryCalls` (not run, not an error, never counted as implemented); it selects no output, so only its
@@ -126,7 +140,8 @@ private:
         std::vector<Link> links;
         std::vector<Variable> variables;
     };
-    struct Thread { double due; uint64_t order; int sequence; int behavior; std::string event; };
+    struct Thread { double due; uint64_t order; int sequence; int behavior; std::string event; bool resumed = false; std::shared_ptr<void> state; };
+    RunInfo run_;
     Runtime& runtime_;
     std::shared_ptr<const Package> package_;
     int32_t index_ = 0;
@@ -145,7 +160,7 @@ private:
     bool unexpectedLink(const Behavior& behavior, const std::string& property);
     void fireIn(size_t sequence, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId);
     void start(int sequence, int behavior, double delay, const std::string& event);
-    void runThread(int sequence, int behavior, const std::string& event);
+    void runThread(int sequence, int behavior, const std::string& event, bool resumed = false, std::shared_ptr<void> state = nullptr);
     // One public call; the outermost refills the runaway budget.
     struct Call {
         BehaviorProvider& p;

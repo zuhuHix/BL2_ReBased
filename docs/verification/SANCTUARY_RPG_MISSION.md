@@ -849,3 +849,66 @@ iterator (x2). Remaining from before: `Actor.SetTimer`, `MissionTracker.GetActiv
 - `ctest` 11/11 (`mission-script-synthetic` gained the helper probes and scenario D), `tools/verify_packages.py` 9/9.
 - **`tools/test_quest.ps1`: first run PASS checks=81 errors=0, resume PASS checks=11 errors=0** (unchanged counts).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0** (rerun because `src/behavior.*` changed).
+
+## Script swap 4: Marcus's dialog (2026-10-05)
+
+AI-assisted (Claude), lane I1. Rules from [NATIVE_DIALOG.md](NATIVE_DIALOG.md) and
+[NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) (section G2, latent waits), **all UNVERIFIED in the running game**.
+The stand-in in `MissionSystem` (every `Behavior_TriggerDialogEvent` selected Out and Finished at once and emitted a "dialog" effect
+for the behavior's own tag) is gone. New `src/dialog.hpp/.cpp` (`DialogSystem`, owned by `MissionSystem`).
+
+### The behavior and the kernel wait (`src/behavior.*`)
+- A handler may now make its behavior **latent**: `BehaviorProvider::run().wait` (minimum 1/60 s) parks the thread with per-thread
+  `state`; the behavior runs again later with `initialRun` false. The links selected in the latent call start new threads while this one waits.
+  A waiting thread whose sequence was disabled ends without running (the note's per-behavior check inside a running thread is not applied).
+- `tick()` now **advances time to each due thread** instead of jumping to the end of the call, so a long frame (the CLI's `tick:5`) passes
+  through every wake and poll; `onTime` keeps the dialog components in step with it. (the behavior suite is unchanged; the host
+  ticks at frame rate.)
+- `Behavior_TriggerDialogEvent` (`DialogSystem::behavior`): first run: **Out (id 0) selected at once**, latent for 0.001 s (so one
+  kernel wake, 1/60 s); the next run triggers the dialog; while the event's talk act is live it polls every **0.1 s**; **Finished (id 1)**
+  on the first poll where it is no longer live (the same run when nothing started, or the pooled event data was reused);
+  `bForcePlayImmediate` triggers in the first run and selects Finished, then Out; no `EventTag` selects Finished at once.
+
+### The dialog (`DialogSystem`)
+- **Event:** the group's **last enabled** `DialogEvents` entry for the tag. **Act:** its inline `OutputAction`, else the target of the group's
+  link table for (the entry's 1-based id, link 0): a `TalkActs` template (ids after the events) or a node by `NodeID`. The Fire group's
+  seven link-table events resolve to `TalkActs[0..6]` as the note's structural check says. Unsupported (throws "dialog: not implemented"):
+  talker variables, chance/compare/switch/trigger/random-branch nodes, sound-effect events, output links on a talk act, talker-owned events (no group).
+- **Talker:** an act with no audio in any TalkData passes through (nothing is chosen); `bInstigatorTalker` -> the instigator is the mission,
+  never an actor, so **no talker** (reported as "no talker"); otherwise a random TalkData entry (seeded, deterministic) resolved by its **exact**
+  name tag to a registered pawn (`registerTalker`), else, for an echo event, an **echo caller** (created when absent).
+- **Audio device:** Talk does nothing without one. The host's line player is `DialogSystem::setLinePlayer` (told when a line starts,
+  `lineEnded(id)` when it ends); `setTestLineLength(s)` is a test player (every line lasts `s`). **Default: no player = no device = no line
+  starts**, so Finished follows on the wake that triggered the dialog (the note's "within one poll" is the same run here).
+- **Priority arbitration** before a line starts: the tag's index in the globals' `Priorities` (`GD_Globals.Dialog.DialogGlobals`; lower = more
+  important), floored for the tracked mission's `MissionDialogGroup` (`ActiveSideMissionMinPriority`, plot: `ActivePlotMissionMinPriority`,
+  unless the base is already at least `ActiveMissionMinPriorityStart`); blocked when the group's current event (keyed by the root group) or the
+  talker's own live line has an index `<=` the new one (`<` for an echo event without `bDoesNotOverrideSamePriority`). A started echo/group
+  event silences the group (stops its live lines) and interrupts the talker's own line.
+- **Line end** (the component update): audio end + `OutputDelay`, no audio -> the next update; the event data is then inactive.
+- **What the host sees:** a `Dialog` effect/event per chosen line: a = event tag, b = group, c = the talker's name tag, detail =
+  `act=...;ak=<AkEvent>;talker=echo|pawn;outcome=started|no audio device|blocked by priority|no audio event|no talker;line=<id>`.
+  The host logs it, resolves the event in its audio manifest, **compares the VM's AkEvent with the manifest's** (new quest check
+  `dialog_lines_name_the_manifest_ak_events`) and registers Marcus as a pawn talker (the most common talker name tag of the manifest: a host
+  choice). CLI steps: `lines:<s>`, `talker:<name tag path>`; events print `detail`.
+
+### Timeline on real data
+- Host, no line player: the tracker tick plays the kickoff the frame after the accept, `Default` id 12 reaches `_1185` (Out), and one kernel wake
+  (1/60 s) later the dialog is triggered ("no audio device") and **Finished** starts `GoToRange_ObjSet` and `RocksPaper_MoveMarcusToRange`:
+  in the quest run 17 ms (3 frames) after `mission status -> Active`. Before this swap the set started inside the accept call.
+- With a test line player (`lines:2.0`) the first objective set starts only **after the kickoff line ends** (the second `tick:1` step), as the
+  note predicts; with the real 17.7 s kickoff audio that would be about 17.7 s plus up to 0.1 s.
+- `--slice-run` (the same steps as before): the 16 non-dialog host events are identical and in the same order. Dialog lines: the six the stand-in
+  listed (01, 02, 03b, 03a, 04, 05) are reported again: four "no audio device", and **03b and 03a as "no talker"** (their acts name the
+  instigator as talker, and the mission context is no actor; the real game's context object for mission behaviors was not read, so whether those
+  two lines play there is open).
+- **Quest suite timing change, per the note:** `installed_kismet_starts_marcus_walk` and `marcus_walk_clip_playing` used to be checked in the frame
+  after the use key; Marcus's walk now starts a few frames later (kickoff tick + kernel wake), so step 4 first records `use_key_accepts_mission`
+  (unchanged, immediate) and then waits up to 2 s for the walk to start before the two checks, whose conditions are unchanged.
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+- `ctest` 11/11 (`mission-script-synthetic` scenario E: Out first, dialog on the next wake, Finished at once without a player; with a 0.55 s test
+  player Finished on the first poll after the end; blocked chatter; the last enabled entry; a template act through the link table; a pawn
+  against the echo caller; `bForcePlayImmediate`), `tools/verify_packages.py` 9/9.
+- **`tools/test_quest.ps1`: first run PASS checks=82 errors=0, resume PASS checks=11 errors=0** (81 before; the new check is the AkEvent comparison).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0** (behavior and kernel code changed).

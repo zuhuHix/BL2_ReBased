@@ -177,7 +177,7 @@ bool FireMissionSlice::drainMission() {
             else errors_.push_back("mission sequence change targets an unbound provider: " + effect.a);
             break;
         case K::RemoteEvent: events_.push_back({HostEvent::Kind::RemoteEvent, effect.a, mission_->path(), ""}); break;
-        case K::Dialog: events_.push_back({HostEvent::Kind::Dialog, effect.a, effect.b, effect.c}); break;
+        case K::Dialog: events_.push_back({HostEvent::Kind::Dialog, effect.a, effect.b, effect.c, effect.detail}); break;
         case K::MissionWeaponGranted: events_.push_back({HostEvent::Kind::MissionWeaponGranted, effect.a, "", ""}); break;
         case K::MissionWeaponRemoved: events_.push_back({HostEvent::Kind::MissionWeaponRemoved, effect.a, "", ""}); break;
         case K::Reward: events_.push_back({HostEvent::Kind::Reward, effect.a, "", ""}); break;
@@ -193,8 +193,8 @@ bool FireMissionSlice::drainMission() {
 // What the script's experience natives did since the last call, as host events: ExpEarn's pool gains and the levels the pool update reached.
 void FireMissionSlice::drainExperience() {
     for (const auto& gain : script_->takeGains())
-        events_.push_back(gain.level > 0 ? HostEvent{HostEvent::Kind::Level, std::to_string(gain.level), "", ""}
-                                         : HostEvent{HostEvent::Kind::Experience, std::to_string(gain.amount), "", ""});
+        events_.push_back(gain.level > 0 ? HostEvent{HostEvent::Kind::Level, std::to_string(gain.level), "", "", ""}
+                                         : HostEvent{HostEvent::Kind::Experience, std::to_string(gain.amount), "", "", ""});
 }
 
 void FireMissionSlice::pump() {

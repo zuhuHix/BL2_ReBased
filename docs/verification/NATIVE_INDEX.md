@@ -169,34 +169,34 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | GearboxGFxMovie.GetInstanceContextObject / GetLocalPlayer / InitFromDefinition | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: QuestAccept Start | UNVERIFIED | medium | |
 | WillowGFxMovie3D.FocusOn | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: accept screen SetFocus (no-op safe) | UNVERIFIED | low-medium | |
 | QuestAcceptGFxMovie.UpdateMissionTextList | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: list category headers (available / turn-in) | UNVERIFIED | medium | |
-| Behavior_TriggerDialogEvent.ApplyBehaviorToContext (script) | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: Out at first run, Finished at line end (poll 0.1 s) | UNVERIFIED | high | |
-| Behavior_TriggerDialogEvent.TriggerDialogEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: group event trigger, instigator = context object | UNVERIFIED | medium-high | |
-| GearboxDialogManager.TriggerGroupEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: event node lookup (last enabled match), chain runs synchronously, pooled event data | UNVERIFIED | high | |
+| Behavior_TriggerDialogEvent.ApplyBehaviorToContext (script) | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: Out at first run, Finished at line end (poll 0.1 s) | UNVERIFIED | high | src/dialog.cpp DialogSystem::behavior (first run Out + latent 0.001 s, trigger on the wake, 0.1 s poll, Finished, bForcePlayImmediate) |
+| Behavior_TriggerDialogEvent.TriggerDialogEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: group event trigger, instigator = context object | UNVERIFIED | medium-high | src/dialog.cpp trigger (group path only; talker-owned events not implemented) |
+| GearboxDialogManager.TriggerGroupEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: event node lookup (last enabled match), chain runs synchronously, pooled event data | UNVERIFIED | high | src/dialog.cpp trigger/findAct (last enabled entry, link table, event data pool) |
 | GearboxDialogGroup.SimpleEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | sound-effect tags (one-shot play, no live state) | UNVERIFIED | medium | |
 | GearboxDialogComponent.TriggerEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | talker-owned events, client forwarding | UNVERIFIED | medium | |
 | GearboxDialogComponent.GetMatchingEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | group search with ParentGroup fallback | UNVERIFIED | medium | |
-| GearboxDialogComponent.Talk | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: starts Wwise event, live-line state, TalkStarted | UNVERIFIED | medium-high | |
-| GearboxDialogComponent.StopTalking | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | interrupt / end of line, TalkFinished | UNVERIFIED | medium-high | |
-| GearboxDialogComponent.IsTalking | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | live-line test | UNVERIFIED | high | |
-| GearboxDialogComponent.TalkReplicated | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | client side (not needed single-player) | UNVERIFIED | low | |
+| GearboxDialogComponent.Talk | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: starts Wwise event, live-line state, TalkStarted | UNVERIFIED | medium-high | src/dialog.cpp talk (device gate, priority gate, live state, group silence, interrupt) |
+| GearboxDialogComponent.StopTalking | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | interrupt / end of line, TalkFinished | UNVERIFIED | medium-high | src/dialog.cpp stopTalking (no TalkFinished script event) |
+| GearboxDialogComponent.IsTalking | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | live-line test | UNVERIFIED | high | src/dialog.cpp (event data live state) |
+| GearboxDialogComponent.TalkReplicated | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | client side (not needed single-player) | UNVERIFIED | low | src/dialog.cpp talk (device gate, priority gate, live state, group silence, interrupt) |
 | GearboxDialogComponent.GetDialogInterface | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | interface accessor | UNVERIFIED | medium | |
-| GearboxDialogEventData.IsActive | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: true while a talk act is live (what the behavior polls) | UNVERIFIED | high | |
+| GearboxDialogEventData.IsActive | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: true while a talk act is live (what the behavior polls) | UNVERIFIED | high | src/dialog.cpp active() |
 | GearboxDialogNode.ActivateOutput | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | direct link first, then group link table; shared template nodes | UNVERIFIED | medium-high | |
-| GearboxDialogAct_Talk.Activate / WillowDialogAct_Talk.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: no-audio pass-through, talker choice, Talk call, no-match output | UNVERIFIED | medium-high | |
+| GearboxDialogAct_Talk.Activate / WillowDialogAct_Talk.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: no-audio pass-through, talker choice, Talk call, no-match output | UNVERIFIED | medium-high | src/dialog.cpp talk (talker choice: instigator -> none, random TalkData by exact name tag, echo caller) |
 | GearboxDialogAct_Chance.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | chance + quiet time | UNVERIFIED | high | |
 | GearboxDialogAct_Compare.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | talker-set intersection | UNVERIFIED | medium | |
 | GearboxDialogAct_ObjectParameterSwitch.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | switch on event ObjectParameter | UNVERIFIED | medium-high | |
 | GearboxDialogAct_Trigger.Activate / ActivateOutput | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | template call, continues on line end | UNVERIFIED | medium | |
 | WillowDialogAct_MissionSwitch.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | output = mission status | UNVERIFIED | low-medium | |
 | WillowDialogAct_RandomBranch.Activate | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | weighted pick, quiet time, repeat avoidance (weights not decoded) | UNVERIFIED | low-medium | |
-| GearboxDialogManager.RegisterTalker / UnregisterTalker / EnableTalker / DisableTalker | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | talker registry | UNVERIFIED | medium | |
+| GearboxDialogManager.RegisterTalker / UnregisterTalker / EnableTalker / DisableTalker | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | talker registry | UNVERIFIED | medium | src/dialog.cpp registerTalker (register only) |
 | GearboxDialogManager.AddGroup / SilenceGroup / GetGroupEventTag / SetGroupEventTag | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | group state keyed by root group | UNVERIFIED | medium | |
-| GearboxDialogManager.GetPriority / GetEventTagForEventInfo / Cleanup | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | priority index = position in globals Priorities array | UNVERIFIED | high | |
+| GearboxDialogManager.GetPriority / GetEventTagForEventInfo / Cleanup | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | priority index = position in globals Priorities array | UNVERIFIED | high | src/dialog.cpp indexOf/floor (the priority index and the tracked-mission floor) |
 | WillowDialogManager.PlayEchoDialog | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | echo caller creation and trigger | UNVERIFIED | medium | |
 | WillowDialogManager.IsMissionKickoffPlaying / GetPriorityForEchoActor | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | kickoff priority comparison | UNVERIFIED | medium | |
 | WillowDialogGlobalsDefinition.Get / TriggerTemplateEvent / StaticTriggerTemplateEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | generic template events | UNVERIFIED | low-medium | |
 | GearboxSeqAct_TriggerDialogName (Kismet action) | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: dummy-reset line, latent until line end | UNVERIFIED | medium | |
-| BehaviorHelpers.IsBehaviorsV2 | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | true when KernelInfo carries a live kernel | UNVERIFIED | high | |
+| BehaviorHelpers.IsBehaviorsV2 | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | true when KernelInfo carries a live kernel | UNVERIFIED | high | src/behavior.cpp (always true: every behavior runs under the thread kernel here) |
 | PlayerSkillTree.UpgradeSkill | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Fire mission: Maya spends a point (host TrySpend) | UNVERIFIED | high | |
 | PlayerSkillTree.SetSkillGrade | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Load / client mirror, tier unlock bookkeeping | UNVERIFIED | high | |
 | PlayerSkillTree.GetSkillState | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Grade/unlocked read by UI and activation | UNVERIFIED | high | |

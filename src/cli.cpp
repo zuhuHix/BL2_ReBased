@@ -580,7 +580,8 @@ int main(int argc, char** argv) {
         }
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
-            // turnin | tick:<seconds> | script:accept | script:turnin | stage:<n> | player:<level>:<experience> | pool
+            // turnin | tick:<seconds> | script:accept | script:turnin | stage:<n> | player:<level>:<experience> | pool |
+            // lines:<seconds> (a test line player: every dialog line lasts that long) | talker:<name tag path> (a pawn that can talk)
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
@@ -613,6 +614,8 @@ int main(int argc, char** argv) {
                     script->setPlayerExperience(std::stoi(step.substr(7, colon - 7)), std::stoll(step.substr(colon + 1)));
                 }
                 else if (step == "pool" && script) script->updateExperiencePool();
+                else if (step.rfind("lines:", 0) == 0) mission.dialog().setTestLineLength(std::stod(step.substr(6)));   // every dialog line lasts <s>
+                else if (step.rfind("talker:", 0) == 0) mission.dialog().registerTalker(step.substr(7));              // a pawn with this name tag
                 else if (step == "turnin") ok = mission.turnInMission();
                 else if (step == "kickoff") ok = mission.kickoff();
                 else if (step.rfind("obj:", 0) == 0) {
@@ -630,7 +633,7 @@ int main(int argc, char** argv) {
                 bool firstEffect = true;
                 for (const auto& effect : mission.drain()) {
                     std::cout << (firstEffect ? "" : ",") << "{\"t\":" << effect.time << ",\"kind\":" << quote(kinds[int(effect.kind)])
-                              << ",\"a\":" << quote(effect.a) << ",\"b\":" << quote(effect.b) << ",\"c\":" << quote(effect.c) << "}";
+                              << ",\"a\":" << quote(effect.a) << ",\"b\":" << quote(effect.b) << ",\"c\":" << quote(effect.c) << ",\"detail\":" << quote(effect.detail) << "}";
                     firstEffect = false;
                 }
                 std::cout << "]}";
@@ -675,6 +678,8 @@ int main(int argc, char** argv) {
                 else if (step == "hit:other") ok = slice.hitDummy(false);
                 else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
                 else if (step == "turnin") ok = slice.turnIn();
+                else if (step.rfind("lines:", 0) == 0) slice.mission().dialog().setTestLineLength(std::stod(step.substr(6)));
+                else if (step.rfind("talker:", 0) == 0) slice.mission().dialog().registerTalker(step.substr(7));
                 else if (step.rfind("stage:", 0) == 0) slice.setRegionGameStage(std::stoi(step.substr(6)));
                 else if (step.rfind("player:", 0) == 0) {     // player:<level>:<experience>
                     const auto colon = step.find(':', 7);
@@ -688,7 +693,7 @@ int main(int argc, char** argv) {
                 bool firstEvent = true;
                 for (const auto& event : slice.drain()) {
                     std::cout << (firstEvent ? "" : ",") << "{\"kind\":" << quote(kinds[int(event.kind)]) << ",\"a\":" << quote(event.a)
-                              << ",\"b\":" << quote(event.b) << ",\"c\":" << quote(event.c) << "}";
+                              << ",\"b\":" << quote(event.b) << ",\"c\":" << quote(event.c) << ",\"detail\":" << quote(event.detail) << "}";
                     firstEvent = false;
                 }
                 std::cout << "]}";

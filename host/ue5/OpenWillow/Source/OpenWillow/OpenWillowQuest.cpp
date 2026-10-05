@@ -96,6 +96,23 @@ void UOpenWillowQuest::BeginPlay()
         for (const auto& Path : Impl->Fixture)
             UE_LOG(LogTemp, Display, TEXT("OWQUEST FIXTURE (save-state stand-in, not stock data): dependency %hs treated as complete"), Path.c_str());
         Impl->StationCounters.Init(0, Impl->Data.Stations.Num());
+        {
+            // Marcus can talk: the most common talker name tag of the manifest's dialog entries (HOST CHOICE; the quest has one giver).
+            // Without a registered pawn the stock dialog would use an echo caller.
+            TMap<FString, int32> Counts;
+            for (const auto& Pair : Impl->Data.Audio) {
+                const TSharedPtr<FJsonObject>* Trigger = nullptr;
+                FString NameTag;
+                if (Pair.Key.StartsWith(TEXT("dialog:")) && Pair.Value->TryGetObjectField(TEXT("trigger"), Trigger) && (*Trigger)->TryGetStringField(TEXT("name_tag"), NameTag) && !NameTag.IsEmpty())
+                    ++Counts.FindOrAdd(NameTag);
+            }
+            FString Best;
+            for (const auto& Pair : Counts) if (Best.IsEmpty() || Pair.Value > Counts[Best]) Best = Pair.Key;
+            if (!Best.IsEmpty()) {
+                Impl->Slice->mission().dialog().registerTalker(TCHAR_TO_UTF8(*Best));
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog talker registered: %s (host choice from the audio manifest)"), *Best);
+            }
+        }
         // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the
         // gear was rolled at (an UNVERIFIED slice choice; the mission level is the region stage, see FixRegionStage).
         if (!FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir) || ItemDir.IsEmpty())
@@ -386,20 +403,34 @@ void UOpenWillowQuest::Pump()
                 Event.b.empty() ? TEXT("dummy provider") : TEXT("mission"), Mover ? Mover->LastEventMatched : -1);
             break;
         case K::Dialog: {
-            // Dialog hook: stock event -> audio manifest entry. Nothing is decoded, so nothing plays.
+            // A line the stock dialog chose (NATIVE_DIALOG.md, UNVERIFIED): event tag, the talk act's AkEvent, the talker and what became of
+            // it. No audio device is modelled, so no line plays ("no audio device"); the audio manifest resolves the event to its files.
             ++DialogLookups;
+            auto Field = [&Event](const char* Key) {
+                const FString Detail = UTF8_TO_TCHAR(Event.detail.c_str());
+                TArray<FString> Parts;
+                Detail.ParseIntoArray(Parts, TEXT(";"));
+                for (const FString& Part : Parts) if (Part.StartsWith(FString(Key) + TEXT("="))) return Part.Mid(FCString::Strlen(UTF8_TO_TCHAR(Key)) + 1);
+                return FString();
+            };
+            const FString Ak = Field("ak"), Outcome = Field("outcome");
             const TSharedPtr<FJsonObject>* Entry = Impl->Data.Audio.Find(TEXT("dialog:") + A);
             if (!Entry) {
                 ++DialogMisses;
                 UE_LOG(LogTemp, Warning, TEXT("OWQUEST dialog %s: no audio manifest entry"), *A);
                 break;
             }
+            // The VM's chosen AkEvent against the manifest's (derived separately from the data): they must name the same event.
+            const TSharedPtr<FJsonObject>* ManifestAk = nullptr;
+            FString ManifestPath;
+            if ((*Entry)->TryGetObjectField(TEXT("ak_event"), ManifestAk)) (*ManifestAk)->TryGetStringField(TEXT("ue3_path"), ManifestPath);
+            if (Ak != ManifestPath) { ++DialogAkMismatches; UE_LOG(LogTemp, Warning, TEXT("OWQUEST dialog %s: VM AkEvent %s differs from the manifest's %s"), *A, *Ak, *ManifestPath); }
             TArray<FString> Sources;
             for (const auto& Media : (*Entry)->GetArrayField(TEXT("media")))
                 Sources.Add(FString::Printf(TEXT("%.0f"), Media->AsObject()->GetNumberField(TEXT("source"))));
             const FString State = (*Entry)->GetStringField(TEXT("state"));
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog %s talker=%hs -> source %s state=%s (not played: no decoded audio)"),
-                *A, Event.c.c_str(), *FString::Join(Sources, TEXT(",")), *State);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog line %s ak=%s talker=%hs (%s) outcome=%s -> source %s state=%s (not played: no audio device)"),
+                *A, *Ak, Event.c.c_str(), *Field("talker"), *Outcome, *FString::Join(Sources, TEXT(",")), *State);
             break;
         }
         case K::StatusEffect: UE_LOG(LogTemp, Display, TEXT("OWQUEST status effect %s on dummy (not applied: no effect system)"), *A); break;
@@ -868,7 +899,11 @@ void UOpenWillowQuest::RunTest(float Delta)
         PressUse();
         break;
     case 4:
-        Check(Status() == 1, TEXT("use_key_accepts_mission"));
+        // Marcus's walk starts when the kickoff dialog behavior finishes: the tracker tick plays the kickoff (one tick after the accept) and
+        // the dialog is triggered one kernel wake after that (NATIVE_DIALOG.md); with no audio device the behavior finishes on that wake.
+        // So the walk begins a few frames after the use key, not in the frame of it (swap 4); the checks themselves are unchanged.
+        if (!bAcceptChecked) { bAcceptChecked = true; Check(Status() == 1, TEXT("use_key_accepts_mission")); }
+        if (Waiting(MissionEventsMatched >= 1 && bWalkStarted && Marcus->IsWalking(), 2.f)) return;
         Check(MissionEventsMatched >= 1 && bWalkStarted && Marcus->IsWalking(), TEXT("installed_kismet_starts_marcus_walk"));
         Check(Marcus->IsPlaying(Marcus->WalkClip()), TEXT("marcus_walk_clip_playing"));
         break;
@@ -1091,6 +1126,8 @@ void UOpenWillowQuest::RunTest(float Delta)
     case 23:
         UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog lookups=%d misses=%d played=%d"), DialogLookups, DialogMisses, DialogPlayed);
         Check(DialogLookups > 0 && DialogMisses == 0 && DialogPlayed == 0, TEXT("dialog_hook_finds_every_line_and_plays_nothing"));
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog AkEvent mismatches=%d"), DialogAkMismatches);
+        Check(DialogAkMismatches == 0, TEXT("dialog_lines_name_the_manifest_ak_events"));
         Check(FPaths::FileExists(SavePath), TEXT("save_file_written"));
         // The Phaselock steps' fixture raised the level with SetLevel; this frame's tick has applied it to health.
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f),

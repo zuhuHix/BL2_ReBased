@@ -1,4 +1,5 @@
 #pragma once
+#include "dialog.hpp"
 #include "vm.hpp"
 
 #include <deque>
@@ -30,12 +31,14 @@ public:
     struct Effect {
         enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated };
         Kind kind;
-        std::string a, b, c;        // RemoteEvent: a=event; Dialog: a=event tag, b=group, c=name tag;
+        std::string a, b, c;        // RemoteEvent: a=event; Dialog (a line chosen by Behavior_TriggerDialogEvent): a=event tag, b=group,
+                                    // c=the talker's name tag, detail = "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>";
                                     // SetSequence: a=provider path, b=sequence, c=action (CHANGE_Enable/Disable/Toggle);
                                     // ObjectiveSet*: a=name; ObjectiveUpdated: a=name, b=new count;
                                     // StatusChanged: a=status; Reward: a=XP attribute path;
                                     // MissionWeapon*: a=MissionWeaponBalanceDefinition path
         double time = 0;
+        std::string detail;
     };
 
     MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath);
@@ -72,6 +75,8 @@ public:
     bool kickoffPending() const { return kickoffPending_; }
     // PlayTurnIn: "Default" with id 14 (the script ServerCompleteMission calls it after CompleteMission).
     void playTurnIn();
+    // Behavior_TriggerDialogEvent's dialog (NATIVE_DIALOG.md): the host sets a line player or a test line length, registers its talkers.
+    DialogSystem& dialog() { return dialog_; }
     // The MissionDefinition object the script functions take as their Mission argument.
     ObjectPtr definition() const { return definition_; }
     // Script hooks of the bridge (src/mission_script.*): the native status routine calls UpdateMissionStatus on the local
@@ -122,6 +127,8 @@ private:
     std::deque<std::pair<std::string, int>> updates_;
     bool draining_ = false;
     ObjectPtr definition_;
+    DialogSystem dialog_;
+    void updateTrackedMission();
     // The tracker's PendingMissionKickoff record (SetActiveMission writes it while the mission becomes Active) and the
     // mission's bHeardKickoff flag. Plot-critical missions overwrite a pending record; the Fire mission does not (not modelled).
     bool kickoffPending_ = false, kickoffFromActivation_ = false, heardKickoff_ = false;

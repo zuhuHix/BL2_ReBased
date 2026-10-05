@@ -35,6 +35,7 @@ public:
                           Experience, Level };   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
         Kind kind;
         std::string a, b, c;
+        std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)
     };
 
     FireMissionSlice(Runtime& runtime, const std::string& missionPath, const std::string& dummyProviderPackage,

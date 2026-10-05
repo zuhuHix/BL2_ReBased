@@ -42,7 +42,12 @@ struct MissionSystem::Impl {
 };
 
 MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath)
-    : runtime_(runtime), package_(runtime.package(package)), missionPath_(missionPath), impl_(std::make_shared<Impl>()) {
+    : runtime_(runtime), package_(runtime.package(package)), missionPath_(missionPath), impl_(std::make_shared<Impl>()), dialog_(runtime, package_) {
+    dialog_.onLine = [this](const DialogSystem::Line& line, const std::string& outcome) {
+        emit(Effect::Kind::Dialog, line.eventTag, line.group, line.talker);
+        effects_.back().detail = "act=" + line.talkAct + ";ak=" + line.akEvent + ";talker=" + (line.echo ? "echo" : "pawn") + ";outcome=" + outcome +
+                                 ";line=" + std::to_string(line.id);
+    };
     const int32_t index = runtime_.findExport(*package_, missionPath);
     if (index <= 0) throw RuntimeError("mission not found: " + missionPath);
     auto mission = runtime_.instantiateExport(package_, index, 4);
@@ -106,6 +111,7 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     if (const Value* reference = runtime_.property(*mission, "BehaviorProvider"); reference && reference->o && reference->o->resourcePackage) {
         impl_->provider = std::make_unique<BehaviorProvider>(runtime_, reference->o->resourcePackage, reference->o->resourceIndex);
         auto& provider = *impl_->provider;
+        provider.onTime = [this](double time) { dialog_.advanceTo(time); };
         provider.handle("WillowGame.Behavior_AdvanceObjectiveSet", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
             requestAdvance(refPath(p.runtime().property(*b.object, "ObjectiveSetToAdvanceTo")));
             return std::vector<int>();
@@ -118,13 +124,10 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
             updateObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
             return std::vector<int>();
         });
-        // Outputs ETriggerDialogEventOutputLinks: Out 0, Finished 1. HOST STAND-IN: no dialog is played, so the dialog
-        // counts as finished at once and both outputs are selected (Out, then Finished).
+        // Outputs ETriggerDialogEventOutputLinks: Out 0, Finished 1. Out on the first run, the dialog one kernel wake later, Finished
+        // when the live line ends (at once when no line starts): src/dialog.* (NATIVE_DIALOG.md, UNVERIFIED).
         provider.handle("GearboxFramework.Behavior_TriggerDialogEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
-            Runtime& r = p.runtime();
-            emit(Effect::Kind::Dialog, refPath(r.property(*b.object, "EventTag")), refPath(r.property(*b.object, "Group")),
-                 refPath(r.property(*b.object, "NameTag")));
-            return std::vector<int>{0, 1};
+            return dialog_.behavior(p, b);
         });
         // Action is an ITargetable.EChangeStatus (CHANGE_Toggle, CHANGE_Enable, CHANGE_Disable; class default Enable).
         const auto actions = enumNames(runtime_, "Engine", "ITargetable.EChangeStatus");
@@ -142,6 +145,14 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
 
 bool MissionSystem::hasOptionalObjective() const {
     return std::any_of(objectives_.begin(), objectives_.end(), [](const auto& entry) { return entry.second.optional; });
+}
+
+// The tracked mission (its tracker's ActiveMission) while Active or ReadyToTurnIn: its MissionDialogGroup gives dialog its priority floor.
+void MissionSystem::updateTrackedMission() {
+    const bool tracked = status_ == Status::Active || status_ == Status::ReadyToTurnIn;
+    const Value* group = runtime_.property(*definition_, "MissionDialogGroup");
+    const Value* plot = runtime_.property(*definition_, "bPlotCritical");
+    dialog_.setTrackedMission(tracked ? refPath(group) : "", plot && plot->truth());
 }
 
 int MissionSystem::statusNumber() const { return nativeStatus(status_); }
@@ -177,6 +188,7 @@ bool MissionSystem::setStatus(Status status) {
     if (!allowed) return false;
     status_ = status;
     if (status == Status::Complete) activeSet_.clear();
+    updateTrackedMission();
     if (onStatusChanged) onStatusChanged(nativeStatus(status));
     // SetActiveMission(mission, fromActivation): a record is written only when the kickoff was not heard and none is pending.
     if (status == Status::Active && !heardKickoff_ && !kickoffPending_) { kickoffPending_ = true; kickoffFromActivation_ = true; }
@@ -203,7 +215,8 @@ void MissionSystem::tick(double seconds) {
         heardKickoff_ = true;
         kickoffPending_ = false;
     }
-    if (impl_->provider) impl_->provider->tick(seconds);
+    // The dialog components' per-frame update follows the kernel's time (each wake of a thread), or the frame's without a provider.
+    if (impl_->provider) impl_->provider->tick(seconds); else dialog_.tick(seconds);
     collectProviderErrors();
 }
 
@@ -446,6 +459,7 @@ bool MissionSystem::loadState(const std::string& state) {
     // A restored mission has played its kickoff (bHeardKickoff is not saved; this is an assumption, UNVERIFIED).
     kickoffPending_ = false;
     heardKickoff_ = status != Status::NotStarted;
+    updateTrackedMission();
     return true;
 }
 

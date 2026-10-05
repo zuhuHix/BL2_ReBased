@@ -406,30 +406,40 @@ std::optional<int32_t> BehaviorProvider::intInput(Behavior& behavior, const std:
     return own ? int32_t(own->integer()) : 0;
 }
 
+// Due threads run in due-time order and time advances to each due time, so a thread that parks during the call and falls due before the
+// end of it runs in the same call (a long frame passes through every wake). A thread parked at the current time (the 60-behavior
+// cap) waits for the next call.
 void BehaviorProvider::tick(double seconds) {
-    now_ += seconds;
+    const double target = now_ + seconds;
     Call call(*this);
-    // Due threads in due-time order; a thread parked during this call (order >= horizon) waits for the next tick.
     const uint64_t horizon = order_;
     while (true) {
         auto next = waiting_.end();
         for (auto it = waiting_.begin(); it != waiting_.end(); ++it)
-            if (it->due <= now_ && it->order < horizon &&
+            if (it->due <= target && (it->order < horizon || it->due > now_) &&
                 (next == waiting_.end() || it->due < next->due || (it->due == next->due && it->order < next->order))) next = it;
         if (next == waiting_.end()) break;
         const Thread thread = *next;
         waiting_.erase(next);
-        runThread(thread.sequence, thread.behavior, thread.event);
+        now_ = std::max(now_, thread.due);
+        if (onTime) onTime(now_);
+        // A latent thread whose sequence was disabled while it waited ends without running (NATIVE_BEHAVIOR_POPULATION.md G1; the check
+        // before each behavior of a running thread is not applied here).
+        if (thread.resumed && !sequences_[size_t(thread.sequence)].enabled) continue;
+        runThread(thread.sequence, thread.behavior, thread.event, thread.resumed, thread.state);
     }
+    now_ = target;
+    if (onTime) onTime(now_);
 }
 
 // NATIVE_MISSION_DISPATCH.md A2 (UNVERIFIED): run behaviors until the thread ends or waits; at most 60 per call (what the
 // game does with a capped thread was not read: here it waits for the next tick). Selected links: for each recorded id in
 // order, the behavior's links with that id in data order; the first continues this thread, the others start new threads
-// first. No deduplication. Latent behaviors are not modelled (no handler asks to wait).
-void BehaviorProvider::runThread(int s, int b, const std::string& event) {
+// first. No deduplication. A handler may make its behavior latent through run().wait (the thread parks and the behavior runs
+// again later; its selected links then all start new threads while this one waits).
+void BehaviorProvider::runThread(int s, int b, const std::string& event, bool resumed, std::shared_ptr<void> state) {
     for (int ran = 0;; ++ran) {
-        if (ran == 60) { waiting_.push_back({now_, order_++, s, b, event}); return; }
+        if (ran == 60) { waiting_.push_back({now_, order_++, s, b, event, resumed, state}); return; }
         if (budget_ == 0) {
             if (std::find(errors.begin(), errors.end(), "behavior execution limit exceeded in " + path_) == errors.end())
                 errors.push_back("behavior execution limit exceeded in " + path_);
@@ -445,12 +455,25 @@ void BehaviorProvider::runThread(int s, int b, const std::string& event) {
             errors.push_back("unsupported behavior class " + behavior.cls + " (" + behavior.name + ")");
             return;
         }
+        run_ = RunInfo();
+        run_.initialRun = !resumed;
+        run_.hasLinkedOutputs = behavior.length > 0;
+        run_.state = state;
         auto ids = handler->second(*this, behavior, event);
+        const double wait = run_.wait;
+        state = run_.state;
         if (behavior.defaultOutput) ids.push_back(-1);
         std::vector<Link> selected;
         for (const int id : ids)
             for (int i = 0; i < behavior.length; ++i)
                 if (sequence.links[size_t(behavior.start + i)].id == id) selected.push_back(sequence.links[size_t(behavior.start + i)]);
+        if (wait >= 0) {                                     // latent: every selected link starts a new thread, this one waits
+            for (const auto& link : selected) start(s, link.behavior, link.delay, event);
+            waiting_.push_back({now_ + std::max(wait, 1.0 / 60.0), order_++, s, b, event, true, state});
+            return;
+        }
+        resumed = false;
+        state = nullptr;
         if (selected.empty()) return;
         for (size_t i = 1; i < selected.size(); ++i) start(s, selected[i].behavior, selected[i].delay, event);
         if (selected[0].delay > 0) { waiting_.push_back({now_ + selected[0].delay, order_++, s, selected[0].behavior, event}); return; }

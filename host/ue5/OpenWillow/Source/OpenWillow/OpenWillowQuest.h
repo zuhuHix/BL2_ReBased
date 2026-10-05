@@ -149,7 +149,8 @@ private:
     bool bDummyDestroyedBySequence = false;
     bool bSendBackFromProvider = false;
     int32 MissionEventsMatched = 0;
-    int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0;
+    bool bAcceptChecked = false;        // test: the use_key_accepts_mission check ran (step 4 may wait for the walk)
+    int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0, DialogAkMismatches = 0;
     TArray<int32> ArrivalMotions;       // door motion requested by each entered ArrivedAtMoveNode event
     FVector DummySpawnedAt = FVector::ZeroVector;
     FVector DummyAttachedAt = FVector::ZeroVector;   // dummy location right after the attach op ran
