@@ -53,3 +53,37 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | ItemPool.ToggleAllItemTypesDebug / IsAllItemTypesDebugEnabled | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Debug only | UNVERIFIED | medium | |
 | InteractiveObjectBalanceDefinition.SetupInteractiveObjectLoot | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Chests and lockers (summary) | UNVERIFIED | low | |
 | WillowItem.ChooseRandomParts (weight rule only) | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Shields, grenade mods, class mods | UNVERIFIED | low-medium | |
+| Actor.SetTimer | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Fire mission: UI/save/HUD timers (41 WillowGame sites), mover | UNVERIFIED | high (data model), medium (firing) | |
+| Actor.ClearTimer | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 30 WillowGame sites | UNVERIFIED | high | |
+| Actor.ClearAllTimers | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 1 site | UNVERIFIED | high | |
+| Actor.PauseTimer | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.IsTimerActive | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 13 sites | UNVERIFIED | high | |
+| Actor.GetTimerCount | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.GetTimerRate | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.ModifyTimerTimeDilation | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.ResetTimerTimeDilation | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.Spawn | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | every dynamic actor (70 sites); event order PreBeginPlay/PostBeginPlay/SetInitialState | UNVERIFIED | medium | |
+| Actor.SpawnForMap | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | ISpawnActor; not seen in script | UNVERIFIED | medium | |
+| Actor.Destroy | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 105 sites; EndState/Destroyed/UnTouch/LostChild order | UNVERIFIED | medium | |
+| Actor.AllActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 17 foreach sites | UNVERIFIED | high | |
+| Actor.DynamicActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 11 foreach sites | UNVERIFIED | high | |
+| Actor.ChildActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.BasedActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.TouchingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 5 sites | UNVERIFIED | high | |
+| Actor.VisibleActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | medium | |
+| Actor.VisibleCollidingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | low | |
+| Actor.CollidingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 6 sites | UNVERIFIED | medium | |
+| Actor.OverlappingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | medium | |
+| Actor.LocalPlayerControllers | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 69 sites; HUD/menu code iterates it | UNVERIFIED | high | |
+| Actor.AllOwnedComponents | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
+| Actor.GetALocalPlayerController | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 7 sites | UNVERIFIED | high | |
+| WorldInfo.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | persistent level WorldInfo; Kismet/behavior lookups | UNVERIFIED | high | |
+| SequenceObject.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Kismet sequence ops; shared with BehaviorBase.GetWorldInfo | UNVERIFIED | high | |
+| Object.GotoState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 125 sites; state frame, EndState/BeginState, default label Begin | UNVERIFIED | medium | |
+| Object.PushState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 4 sites; Paused/Pushed events | UNVERIFIED | medium | |
+| Object.PopState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Popped/Continued events | UNVERIFIED | medium | |
+| Object.IsInState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 21 sites | UNVERIFIED | high | |
+| Object.GetStateName | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 20 sites | UNVERIFIED | high | |
+| Object.Enable | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | probe mask (Tick/Touch/Destroyed gating); VM currently no-op | UNVERIFIED | high | |
+| Object.Disable | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | probe mask; VM currently no-op | UNVERIFIED | high | |
+| Actor.Sleep | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | latent wait in state code (LatentFloat poll, half-delta wake) | UNVERIFIED | high | |
