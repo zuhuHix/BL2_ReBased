@@ -32,7 +32,9 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 13
 // about 335..490 x 415..500. The movie does this with a Z tween that Ruffle ignores, so the host sets 2D scales.
 // Where the list starts below the panel's top edge, in panel units: the small view leaves room for the sub-label row
 // the old category chevrons used; the focus view starts right under the title like the original.
-const LIST_TOP = 75, LIST_TOP_FOCUS = 40.5; // the focus panel moved up 8 px (title at y 100), the list stays where it was
+// The small and compare views start the list lower than the real frames did by 34 and 30 px ("WEAPONS" at y 205/213 against 171/170),
+// which is where the old category chevrons' sub-label used to sit.
+const LIST_TOP = 30, LIST_TOP_COMPARE = 40, LIST_TOP_FOCUS = 38; // the focus panel moved up 8 px (title at y 100), the list stays where it was
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
 const FOCUS_PANEL = {scale:0.92, scaleY:0.979, left:497, top:67}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
@@ -131,7 +133,7 @@ const FUN_STATS_OVERLAP = 6;
 const ARROW_VALUE_GAP = 2;
 // Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
 const CARD_TEXT_SIZE = 16;
-const HEADER_SHRINK = 0.93, HINT_LIFT = 9;
+const HEADER_SHRINK = 0.93, HINT_LIFT = 13, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint 10 px right and 4 low, plate 3 low (critic round 13)
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
@@ -1523,7 +1525,7 @@ const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceI
 // Compare view (a transfer): the Equipped panel is narrowed into the gap between the two cards and the Backpack panel
 // moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
 // (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
-const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:PANEL_TOP};
+const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:PANEL_TOP - 13}; // title at y 150 like the real frame
 const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, top:118};
 let appliedFocus = false, equippedHome = null;
 const panelPose = () => backpackFocused() ? FOCUS_PANEL : transferSourceId ? COMPARE_BACKPACK
@@ -1629,9 +1631,11 @@ function drawTileFrame(path) {
   if (!b || !(b.xMax > b.xMin)) return;
   const frame = `${path}.owFrame`;
   call(path, 'createEmptyMovieClip', 'owFrame', 4000);
-  call(frame, 'lineStyle', 3, TILE_FRAME_GREEN, 100);
+  call(frame, 'beginFill', TILE_FRAME_GREEN, 28);
+  call(frame, 'lineStyle', 4, TILE_FRAME_GREEN, 100);
   call(frame, 'moveTo', b.xMin, b.yMin); call(frame, 'lineTo', b.xMax, b.yMin);
   call(frame, 'lineTo', b.xMax, b.yMax); call(frame, 'lineTo', b.xMin, b.yMax); call(frame, 'lineTo', b.xMin, b.yMin);
+  call(frame, 'endFill');
 }
 const TILE_FRAME_GREEN = 0x4fd33f; // the compare card's green frame (host choice by eye)
 
@@ -1763,7 +1767,7 @@ function render() {
       // Room for the focus view's wider band only; elsewhere the movie's own highlight is clipped at the cell, as in the original.
       listOverhang = backpackFocused() ? Math.max(0, ((localPanelBounds.xMax - localPanelBounds.xMin) - rowWidth) / 2 - 6) : 0;
       set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2 - listOverhang + ROW_CENTRE_FIX * rowScaleX);
-      set(rowGroup, '_y', localPanelBounds.yMin + (backpackFocused() ? LIST_TOP_FOCUS + (headerFor({}, listMode()) === undefined ? LIST_TOP_NO_HEADERS : 0) : LIST_TOP));
+      set(rowGroup, '_y', localPanelBounds.yMin + (backpackFocused() ? LIST_TOP_FOCUS + (headerFor({}, listMode()) === undefined ? LIST_TOP_NO_HEADERS : 0) : (transferSourceId ? LIST_TOP_COMPARE : LIST_TOP)));
       set(path, '_x', listOverhang - localCell.xMin * rowScaleX);
       set(path, '_y', -localCell.yMin * ROW_SCALE + y);
     }
@@ -2082,6 +2086,8 @@ function pollReady() {
     const headerAfter = readBounds(headerPath);
     if (headerBefore && headerAfter) set(headerPath, '_x', Number(get(headerPath, '_x')) + (headerBefore.xMin - headerAfter.xMin));
     set(ROOT + '.tooltips', '_y', Number(get(ROOT + '.tooltips', '_y')) - HINT_LIFT);
+    set(ROOT + '.tooltips', '_x', Number(get(ROOT + '.tooltips', '_x')) + HINT_SHIFT_X);
+    set(INV + '.storageCount', '_y', Number(get(INV + '.storageCount', '_y')) - PLATE_LIFT);
     ready = true;
     window.owInventoryMovieReady = true;
     window.owInventoryMovieReadyAt = performance.now();

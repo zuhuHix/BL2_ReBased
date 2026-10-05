@@ -21,7 +21,9 @@ body.compare-wide ruffle-player{-webkit-mask-image:none;mask-image:none}
  filter:drop-shadow(0 1px 2px #07111a);}
 .cell.weapon-preview .gear-icon{width:74%;height:74%}
 .cell.weapon-preview.gear-item img{width:76%;height:76%}
-.cell:focus-visible{outline:2px solid #ffe25b}
+/* No focus ring: the movie draws the selection itself, and a ring around the (larger) hit box showed as a stray yellow rectangle
+   offset from the tile (critic round 13). Keyboard focus is unchanged. */
+.cell:focus-visible{outline:none}
 .cell.tab-current{cursor:default}.cell:disabled{cursor:not-allowed}
 /* A visible item card overlaps this cell: its thumbnail must not bleed over the card text. */
 .cell.covered{pointer-events:none;visibility:hidden}

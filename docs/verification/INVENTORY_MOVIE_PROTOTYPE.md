@@ -1131,3 +1131,9 @@ group scale follow the real frames; card text is 16 with bold values; the clippe
 AI-assisted, page-only. The focus view shows 7.6 rows (list to y 625), panel title 8 px higher, sub-header to tile gap about 12 px; the equipped-origin compare keeps the Sort
 hint, the backpack-origin compare does not and frames the moved tile in green; Skills footer, tab group and description size adjusted. Suite 49 PASS / 0 FAIL / 0 NOT_RUN /
 0 KNOWN_DIVERGENCE. Fits to captured frames, UNVERIFIED; tilt and glass stay open.
+
+### Round 14 (2026-10-05)
+
+AI-assisted, page-only. The stray yellow rectangle beside the moved tile in the backpack-origin compare was the focus ring of the HTML hit box (`inventory.html`), now off; the
+green tile frame is thicker and tinted. Small and compare views start their lists about 30 px higher; the focus view hint and plate shift a few pixels; Skills trees sit 20 px lower. Suite 49 PASS /
+0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits to captured frames, UNVERIFIED.

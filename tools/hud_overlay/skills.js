@@ -461,7 +461,7 @@ function populate() {
 // the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
 // at (225, 530); here it follows the card). Moves are done on the movie clips in
 // ROOT coordinates (a host fit; the original gets these from its 3D camera).
-const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:12, hintDY:48, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
+const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:32, hintDY:56, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
   card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
 let layoutApplied = false;
 function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
@@ -474,6 +474,7 @@ function moveClip(path, parent, dx, dy) {
 // known from the round-18/19 frames (the visible card is 0.867 of those bounds' width, starts 0.0685 of it from the left and
 // 0.0106 from the top). The movie resets this clip's scale and position when it tweens the trees, so the fit is applied
 // again on every selection and when the page opens; it changes nothing once the card is within a pixel.
+const CARD_Y_STRETCH = 1.025; // the card ended at y 380 against 390 in the real frame
 function applyInfoCard() {
   const info = `${SKILLS}.InformationBox`, bkgd = `${info}.infoWrapper.DescriptionBkgd`, card = SKILLS_LAYOUT.card;
   const b = boundsOf(bkgd);
@@ -483,7 +484,7 @@ function applyInfoCard() {
     const factor = boundsWidth / (b.xMax - b.xMin);
     if (!(factor > 0.3 && factor < 4)) return;
     set(info, '_xscale', Number(get(info, '_xscale')) * factor);
-    set(info, '_yscale', Number(get(info, '_yscale')) * factor);
+    set(info, '_yscale', Number(get(info, '_yscale')) * factor * CARD_Y_STRETCH);
   }
   const f = boundsOf(bkgd);
   if (!f) return;
