@@ -143,3 +143,29 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowAIPawn.IsComponentUsable | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: NPC use | UNVERIFIED | high | |
 | Object.Localize | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | all text; .int lookup, ?INT?..? placeholder | UNVERIFIED | high | |
 | Object.QueryInterface | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: IMissionDirector, behaviors | UNVERIFIED | medium-high | |
+| GFxMoviePlayer.ActionScript / ActionScriptVoid | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: SetQuestTitle, SetPlayerXP, all HUD/reward Set* (sends the calling function's parameters) | UNVERIFIED | high | |
+| GFxMoviePlayer.ActionScriptInt / Float / String / Object | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | HUD and menu getters (result typed by the caller's return property) | UNVERIFIED | high | |
+| GFxObject.ActionScriptVoid / Int / Float / String / Object / Array | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: reward cards, HUD widgets | UNVERIFIED | high | |
+| GFxMoviePlayer.ActionScriptSetFunction / GFxObject.ActionScriptSetFunction / ActionScriptSetFunctionOn | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | delegate binding into movies | UNVERIFIED | medium | |
+| GFxObject.SetFunction | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | binds ext* callbacks (95 sites) | UNVERIFIED | high | |
+| ExternalInterface callback and function handlers (AS to script, ext* binding) | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: every QuestAcceptGFxMovie ext* function | UNVERIFIED | medium-high | |
+| GFxMoviePlayer.Invoke | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | callers needing a result | UNVERIFIED | high | |
+| GFxObject.Invoke | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | rare | UNVERIFIED | medium | |
+| GFxMoviePlayer.SetVariable / SetVariableBool / Number / String / Object | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: InitForPC (missions.pcCloseButton._visible) | UNVERIFIED | high | |
+| GFxMoviePlayer.GetVariable / GetVariableBool / Number / String | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | menus | UNVERIFIED | high | |
+| GFxMoviePlayer.GetVariableObject | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: SetFocus | UNVERIFIED | high | |
+| GFxMoviePlayer.Get/SetVariableArray (Int, Float, String variants) | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | not read | UNVERIFIED | low | |
+| GFxMoviePlayer.CreateObject / CreateArray | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | list data | UNVERIFIED | high | |
+| GFxMoviePlayer.Start / Advance / SetPause / Close | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: open/close of the accept screen | UNVERIFIED | medium-high | |
+| GFxMoviePlayer.GetPC / GetLP | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: Start, extAcceptConfirmed | UNVERIFIED | high | |
+| GFxMoviePlayer.RegisterGFxObject / UnregisterGFxObject | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | wrapper lifetime | UNVERIFIED | medium | |
+| GFxMoviePlayer.ResolveDataStoreMarkup | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | not seen in mission screens | UNVERIFIED | low | |
+| GFxMoviePlayer.SetWidgetPathBinding | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | CLIK widget init | UNVERIFIED | low | |
+| GFxObject.Get / GetBool / GetFloat / GetString / GetObject | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | reward cards | UNVERIFIED | medium-high | |
+| GFxObject.Set / SetBool / SetFloat / SetString / SetObject / SetText | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | reward cards, list text (htmlText rule) | UNVERIFIED | high | |
+| GFxObject.TranslateString (Font/Color markup) | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | text markup | UNVERIFIED | medium-high | |
+| GearboxGFxMovie.PlayUISound | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: MenuOpen, accept_mission, MenuClose | UNVERIFIED | medium-high | |
+| GearboxGFxMovie.SingleArgInvokeS / F / B | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | HUD (54 / 8 / 2 sites) | UNVERIFIED | medium | |
+| GearboxGFxMovie.GetInstanceContextObject / GetLocalPlayer / InitFromDefinition | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: QuestAccept Start | UNVERIFIED | medium | |
+| WillowGFxMovie3D.FocusOn | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: accept screen SetFocus (no-op safe) | UNVERIFIED | low-medium | |
+| QuestAcceptGFxMovie.UpdateMissionTextList | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: list category headers (available / turn-in) | UNVERIFIED | medium | |
