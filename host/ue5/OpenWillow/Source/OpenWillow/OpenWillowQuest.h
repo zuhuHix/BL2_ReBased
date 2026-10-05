@@ -122,6 +122,7 @@ private:
     int32 RegionStage = 0, RegionStageLevel = 0;
     bool bRegionStageFromSave = false;
     void FixRegionStage(int32 PlayerLevel);
+    void LogScriptStubs(const TCHAR* When) const;   // the natives the mission script reached that have no implementation
     int32 LastXpAmount = 0;
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;

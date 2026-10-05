@@ -34,7 +34,7 @@ int nativeStatus(MissionSystem::Status status) {
     return numbers[int(status)];
 }
 // Mission event link ids (NATIVE_MISSION_DISPATCH.md B7, UNVERIFIED).
-enum LinkId { ObjectiveCompleted = 2, ObjectiveProgress = 3, SetActivated = 4, SetCompleted = 5, StatusBase = 6, Kickoff = 12, KickoffDialogOnly = 13 };
+enum LinkId { ObjectiveCompleted = 2, ObjectiveProgress = 3, SetActivated = 4, SetCompleted = 5, StatusBase = 6, Kickoff = 12, KickoffDialogOnly = 13, TurnIn = 14 };
 }
 
 struct MissionSystem::Impl {
@@ -46,6 +46,7 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     const int32_t index = runtime_.findExport(*package_, missionPath);
     if (index <= 0) throw RuntimeError("mission not found: " + missionPath);
     auto mission = runtime_.instantiateExport(package_, index, 4);
+    definition_ = mission;
     if (mission->cls->path != "WillowGame.MissionDefinition") throw RuntimeError("not a MissionDefinition: " + missionPath);
     missionName_ = text(runtime_, *mission, "MissionName");
     description_ = text(runtime_, *mission, "MissionDescription");
@@ -139,6 +140,8 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     }
 }
 
+int MissionSystem::statusNumber() const { return nativeStatus(status_); }
+
 bool MissionSystem::available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates) const {
     for (const auto& dependency : dependencies_)
         if (!completed.count(dependency)) return false;
@@ -160,7 +163,9 @@ std::vector<MissionSystem::Effect> MissionSystem::drain() {
 }
 
 // B4 (UNVERIFIED): ReadyToTurnIn only from Active, Complete only from ReadyToTurnIn; every accepted change fires
-// "Default" with id 6 + the EMissionStatus number.
+// "Default" with id 6 + the EMissionStatus number. Bridge note ("MissionTracker.SetMissionStatus"): the script hook
+// UpdateMissionStatus runs inside the status branch, before the observers and the "Default" event, and the Active branch
+// writes the pending kickoff (SetActiveMission) before that tail.
 bool MissionSystem::setStatus(Status status) {
     const bool allowed = (status == Status::Active && status_ == Status::NotStarted) ||
                          (status == Status::ReadyToTurnIn && status_ == Status::Active) ||
@@ -168,6 +173,9 @@ bool MissionSystem::setStatus(Status status) {
     if (!allowed) return false;
     status_ = status;
     if (status == Status::Complete) activeSet_.clear();
+    if (onStatusChanged) onStatusChanged(nativeStatus(status));
+    // SetActiveMission(mission, fromActivation): a record is written only when the kickoff was not heard and none is pending.
+    if (status == Status::Active && !heardKickoff_ && !kickoffPending_) { kickoffPending_ = true; kickoffFromActivation_ = true; }
     static const char* names[] = {"NotStarted", "Active", "ReadyToTurnIn", "Complete"};
     emit(Effect::Kind::StatusChanged, names[int(status)]);
     fireEvent("Default", StatusBase + nativeStatus(status));
@@ -178,8 +186,18 @@ void MissionSystem::fireEvent(const std::string& name, int linkId) {
     if (impl_->provider) impl_->provider->fireEvent(name, {}, linkId);
 }
 
+// The tracker tick consumes the pending kickoff record (bridge note): the accepting controller's IsMissionMoviePlaying
+// runs (its result is not used), then PlayKickoff (id 12) when the record came from an activation, else
+// PlayKickoffDialogOnly (13); the mission's bHeardKickoff is set and the record cleared. UNVERIFIED. Not modelled: the
+// "Loader" level wait, the tracked-mission switch and the dialog request (the Fire mission lists no DialogEvent).
 void MissionSystem::tick(double seconds) {
     now_ += seconds;
+    if (kickoffPending_) {
+        if (onKickoffTick) onKickoffTick();
+        fireEvent("Default", kickoffFromActivation_ ? Kickoff : KickoffDialogOnly);
+        heardKickoff_ = true;
+        kickoffPending_ = false;
+    }
     if (impl_->provider) impl_->provider->tick(seconds);
     collectProviderErrors();
 }
@@ -260,8 +278,16 @@ bool MissionSystem::accept(const std::set<std::string>& completed) {
 bool MissionSystem::kickoff(bool dialogOnly) {
     if (status_ != Status::Active) return false;
     fireEvent("Default", dialogOnly ? KickoffDialogOnly : Kickoff);
+    heardKickoff_ = true;
+    kickoffPending_ = false;
     collectProviderErrors();
     return true;
+}
+
+// PlayTurnIn with a mission: the "Default" event, id 14, and nothing else (bridge note).
+void MissionSystem::playTurnIn() {
+    fireEvent("Default", TurnIn);
+    collectProviderErrors();
 }
 
 int MissionSystem::objectiveProgress(const std::string& objectiveName) const {
@@ -396,6 +422,9 @@ bool MissionSystem::loadState(const std::string& state) {
         progress[o] = found == objectives_.end() ? 1 : found->second.mask ? (1 << found->second.count) - 1 : found->second.count;
     }
     status_ = status; activeSet_ = active; completedObjectives_ = objectives; completedSets_ = setsDone; progress_ = progress;
+    // A restored mission has played its kickoff (bHeardKickoff is not saved; this is an assumption, UNVERIFIED).
+    kickoffPending_ = false;
+    heardKickoff_ = status != Status::NotStarted;
     return true;
 }
 

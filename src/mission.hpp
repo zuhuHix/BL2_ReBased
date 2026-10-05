@@ -41,6 +41,7 @@ public:
     MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath);
 
     Status status() const { return status_; }
+    int statusNumber() const;               // the EMissionStatus number the script sees (Active 1, ReadyToTurnIn 3, Complete 4)
     const std::string& activeSet() const { return activeSet_; }
     const std::string& path() const { return missionPath_; }
     const std::string& name() const { return missionName_; }
@@ -59,9 +60,22 @@ public:
     // maps objective paths of other missions to "Complete" / "Active" (B6).
     bool available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates = {}) const;
     // ActivateMission: NotStarted -> Active ("Default" id 7), then the initial set only when bActivateInitialObjectiveSet.
+    // Acceptance also writes the pending kickoff record (SetActiveMission), which the next tick() consumes.
     bool accept(const std::set<std::string>& completed);
-    // PlayKickoff / PlayKickoffDialogOnly: "Default" with id 12 / 13. What calls it after acceptance is not known.
+    // PlayKickoff / PlayKickoffDialogOnly: "Default" with id 12 / 13. The tracker's tick calls it for the pending record
+    // (bridge note, "Kickoff after acceptance"); calling it here plays it at once and consumes the record, the test path
+    // (--mission-run "accept kickoff ...") used before the tick existed.
     bool kickoff(bool dialogOnly = false);
+    bool kickoffPending() const { return kickoffPending_; }
+    // PlayTurnIn: "Default" with id 14 (the script ServerCompleteMission calls it after CompleteMission).
+    void playTurnIn();
+    // The MissionDefinition object the script functions take as their Mission argument.
+    ObjectPtr definition() const { return definition_; }
+    // Script hooks of the bridge (src/mission_script.*): the native status routine calls UpdateMissionStatus on the local
+    // controller after the status changed and before the observers and the "Default" event, and the tracker tick calls
+    // IsMissionMoviePlaying on the accepting controller when it consumes the pending kickoff. Empty = no script runs.
+    std::function<void(int nativeStatus)> onStatusChanged;
+    std::function<void()> onKickoffTick;
     // MissionTracker.UpdateObjective: one queued update (+1, or the bit OR-ed in for a bit-mask objective).
     bool updateObjective(const std::string& objectiveName, int bit = 0);
     bool updateObjectiveByPath(const std::string& objectivePath, int bit = 0);   // what Behavior_UpdateMissionObjective names
@@ -98,6 +112,10 @@ private:
     std::set<std::string> completedSets_;
     std::deque<std::pair<std::string, int>> updates_;
     bool draining_ = false;
+    ObjectPtr definition_;
+    // The tracker's PendingMissionKickoff record (SetActiveMission writes it while the mission becomes Active) and the
+    // mission's bHeardKickoff flag. Plot-critical missions overwrite a pending record; the Fire mission does not (not modelled).
+    bool kickoffPending_ = false, kickoffFromActivation_ = false, heardKickoff_ = false;
     struct Impl;
     std::shared_ptr<Impl> impl_;
     std::vector<Effect> effects_;

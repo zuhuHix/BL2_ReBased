@@ -18,6 +18,7 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                    const std::string& dummyProviderPath)
     : runtime_(runtime) {
     mission_ = std::make_unique<MissionSystem>(runtime, "Startup", missionPath);
+    script_ = std::make_unique<MissionScript>(runtime, *mission_);
     auto package = runtime.package(dummyProviderPackage);
     const int32_t index = runtime.findExport(*package, dummyProviderPath);
     if (index <= 0) throw RuntimeError("dummy behavior provider not found: " + dummyProviderPath);
@@ -184,12 +185,11 @@ void FireMissionSlice::pump() {
     errors_.push_back("mission/dummy state did not settle");
 }
 
+// WillowPlayerController.AcceptMission runs as script; its native ActivateMission drives MissionSystem. The kickoff is the
+// pending record that the next tick() plays (bridge note); the mission's first objective set follows from it.
 bool FireMissionSlice::accept(const std::set<std::string>& completed) {
     completedMissions_ = completed;
-    const bool ok = mission_->accept(completed);
-    // HOST STAND-IN: what plays the kickoff after acceptance was not identified (NATIVE_MISSION_DISPATCH.md B9); the
-    // slice plays it at once. Its dialog is not played, so its Finished output (which activates the first set) runs now.
-    if (ok) mission_->kickoff();
+    const bool ok = script_->accept(completed);
     pump();
     return ok;
 }
@@ -218,12 +218,16 @@ bool FireMissionSlice::hitDummy(bool fireDamage) {
 
 bool FireMissionSlice::loadState(const std::string& state) {
     if (!mission_->loadState(state)) return false;
+    script_->syncRestored();
     pump();
     return true;
 }
 
+// WillowPlayerController.ServerCompleteMission runs as script (CompleteMission, then PlayTurnIn). The real turn-in screen
+// offers it only when MissionTracker.CanEndMission holds, so a mission that is not ready is refused here, before the script.
 bool FireMissionSlice::turnIn() {
-    const bool ok = mission_->turnInMission();
+    if (mission_->status() != MissionSystem::Status::ReadyToTurnIn) return false;
+    const bool ok = script_->turnIn();
     pump();
     return ok;
 }
@@ -243,6 +247,7 @@ std::vector<FireMissionSlice::HostEvent> FireMissionSlice::drain() {
 std::vector<std::string> FireMissionSlice::errors() const {
     std::vector<std::string> all = errors_;
     for (const auto& line : mission_->errors) all.push_back(line);
+    for (const auto& line : script_->errors) all.push_back(line);
     for (const auto& line : dummy_->errors) all.push_back(line);
     return all;
 }

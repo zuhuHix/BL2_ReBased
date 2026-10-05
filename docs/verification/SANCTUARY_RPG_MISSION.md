@@ -590,3 +590,92 @@ data reproduced the recorded baseline: quest suite 57/57 and resume 7/7, door su
 - The parking-lot floor in front of Scooter's garage was not checked: it needs a hand run on the machine that holds
   the hand-patched content.
 - Audio is unchanged (lookup only; the decoder choice is the maintainer's).
+
+## Script swap 1: accept and turn-in run the game's script (2026-10-05)
+
+AI-assisted (Claude), lane I1. First stand-in swap of the Phase 2 Fire-mission plan. Source of every rule below is the own-words
+note [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) (read from native code, **UNVERIFIED in the running
+game**); the script itself is the installed WillowGame bytecode. Nothing here was compared with the real game's behaviour.
+
+### What now runs as script
+
+- **Accept** (`FireMissionSlice::accept`): the installed `WillowPlayerController.AcceptMission(Mission, MissionDirector = None)` on a
+  VM controller. It reads `Role`, `WorldInfo.GRI` (a `WillowGameReplicationInfo`) and its `MissionTracker` (a VM `MissionTracker`
+  object) and calls the native `MissionTracker.ActivateMission`. Before, `MissionSystem::accept` was called directly and the
+  kickoff was played at once (a labelled host stand-in).
+- **Turn-in** (`FireMissionSlice::turnIn`): `WillowPlayerController.ServerCompleteMission(Mission, None)`, which calls the native
+  `CompleteMission`, then `PlayTurnIn`. The slice still refuses a turn-in while the mission is not ReadyToTurnIn (the real UI
+  offers it only when `CanEndMission` holds; the native `CompleteMission` itself would still chain and untrack).
+- **Every status change** (also the ReadyToTurnIn that the host's objectives cause) calls the installed
+  `UpdateMissionStatus(Mission, NewStatus)` on the controller from `MissionSystem::setStatus`, **before** the observers and the
+  `Default` event, then `MissionTracker.TriggerMissionStatusChangedDelegates`. On Complete the script's old-status check passes
+  (the controller's record went Active -> ReadyToTurnIn), so it runs `ServerGrantMissionRewards`: currency type and amount, then
+  `GetExperienceReward` and `ExpEarn`, the reward struct, the reward UI path (`AcceptOrSaveUnclaimedReward`, which for the empty
+  reward ends in `MissionRewardsReceived`, clearing `bNeedsRewards`).
+- **Kickoff** is now the tracker's pending record: `setStatus(Active)` writes it (the `SetActiveMission` rule: kickoff not heard,
+  none pending); the next `tick()` consumes it (`IsMissionMoviePlaying` runs on the controller, `Default` id 12, heard flag set,
+  record cleared). The mission's first set therefore starts one tick after acceptance instead of inside `accept`. The explicit
+  `MissionSystem::kickoff()` stays as the test path (`--mission-run accept kickoff ...`) and consumes the record too.
+  `PlayTurnIn` fires `Default` id 14 (the Fire mission has nothing on that link).
+
+### Natives that are ours (all UNVERIFIED; `src/mission_script.*`, scoped to the bridge's objects like `src/mover.cpp`)
+
+| Native | Implementation | Note section |
+|---|---|---|
+| `MissionTracker.ActivateMission` | `MissionSystem::accept` (refuses silently: not NotStarted, dependencies unmet); role ignored | MissionTracker.ActivateMission |
+| `MissionTracker.CompleteMission` | `MissionSystem::turnInMission` (Complete from ReadyToTurnIn). **Not modelled:** `NextMissionInChain`, untracking, the unlock queue, the fast-forward prompt | MissionTracker.CompleteMission |
+| `MissionTracker.PlayTurnIn` | `Default` id 14 | Kickoff after acceptance |
+| `MissionTracker.GetMissionStatus` | the status number (Active 1, ReadyToTurnIn 3, Complete 4); another mission: NotStarted | Availability queries |
+| `MissionTracker.IsDataValid` | true (reading of the name; no native note) | none |
+| `WillowPlayerController.NativeGetMissionIndex` | index of the record whose `MissionDef` is the mission in the controller's playthrough-0 list, else -1 (inferred from how the script uses it; no native note) | none |
+| `WillowPlayerController.ExpEarn` | **records** `(amount, source, type)` and does nothing else | WillowPlayerController.ExpEarn |
+| `MissionDefinition.GetExperienceReward` | **HOST STAND-IN:** returns the amount the host set (`FireMissionSlice::setExperienceReward`); the formula (NATIVE_PROGRESSION section 2) is not in `src/` yet | MissionDefinition.GetExperienceReward |
+
+XP is unchanged for the host: `OpenWillowQuest` still grants it from the `Reward` effect with its own amount. At turn-in the host
+supplies that same amount to the stand-in native, so the script reaches `ExpEarn`; the host logs `script ExpEarn calls=1
+amount=395 source=4 (host amount 395: same)`. The amounts agree by construction, so what this proves is the **path**: one
+`ExpEarn` call, source 4 (SideMissionAward, because the Fire mission is not plot-critical), type omitted, after the status
+callback. The XP swap (formula in `src/`, `ExpEarn` raising the pool) is the next step.
+
+### Stubs the script hits (logged, never fail the quest; `FireMissionSlice::scriptStubs()`)
+
+All return the zero value of their result. The host logs the list after accept and after turn-in
+(`OWQUEST script stubs after ...`); `--slice-run` prints it in its `script.stubs` field. From the real-data run (`accept` to
+`turnin`, 19 entries):
+
+- status callbacks: `WillowPlayerController.GetCurrentPlaythrough` (0 is the right answer for one playthrough),
+  `GetHUDMovie`, `Actor.SetTimer` (the contextual prompt's retry, because there is no HUD movie), `UpdateLcdMissionStatus`,
+  `PlayerController.IsPrimaryPlayer`, `PlayUIAkEvent`, `WorldInfo.IsMenuLevel`,
+  `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer` (telemetry), `MissionDefinition.GetGameStage`,
+  `MissionTracker.GetActivePrimaryObjectiveSet`, `GetObjectivesProgress`, `GetAllMissions`, `WillowGlobals.GetWillowGlobals`
+  (a static call through a class constant, which step 0 made reach its native; not checked without step 0);
+- reward path: `MissionDefinition.GetCurrencyRewardType`, `GetCurrencyReward`, `ShouldGrantAlternateReward`,
+  `GetItemRewardsForPlayer` (their zero results happen to equal the Fire mission's data: no credits, normal reward, no items),
+  `RefreshBalanceDataFromMissionCompletion`, `UnlockAchievementIfConditionsMet`.
+
+Other VM notes (`script.notes`): reads of the reward struct's static arrays (`WeaponRewards[0..1]`, `ItemRewards[0..1]`) report
+"accessed array out of bounds": a struct's zero value does not materialise its static-array fields. Reproduced with
+`--run WillowGame.WillowPlayerController.GetNumRewardChoices` and no argument. It does not change the Fire result (no
+items, 0 choices) but it is a VM gap for missions with item rewards.
+
+### Not modelled yet (differences from the note that this step leaves)
+
+`ClientReceiveMissionStatus` (remote players), the mission weapon at Active/Complete (the slice still lends it with the objective
+set), timed and defend missions, `RequiredObjectivesComplete` and `Failed`, the `SetActiveMission` early-exit gate and tracked-mission
+choice, the "Loader" level wait, the kickoff's dialog request, and the note's order **initial objective set before the `Default`
+event** for `bActivateInitialObjectiveSet` missions (the Fire mission has it false; `MissionSystem::accept` keeps the old order for
+the toy data). The controller's mission record is rebuilt from the restored status after `loadState` (a restored mission has
+played its kickoff: an assumption).
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+
+- `ctest`: **11/11** (new: `mission-script-synthetic`, invented `Engine`/`WillowGame`/mission packages with hand-assembled
+  controller/tracker script: status hooks in order, kickoff consumed by the tick, refused second accept, reward call with the
+  host amount, no stubs); `vm-synthetic` gained the class-constant case (step 0). `tools/verify_packages.py`: 9/9 match.
+- Real-data CLI (`--slice-run ... accept tick:5 range spawn tick:6 damage:... turnin`): the 22 host events are identical to the run
+  before the swap; the three kickoff events (dialog, set, remote event) moved from the `accept` step to the next `tick`.
+  With `xp:395` before `turnin`: `exp_earned` = one call (395, source 4, type omitted), controller record status 4,
+  `bNeedsRewards` false.
+- **`tools/test_quest.ps1`: first run PASS checks=80 errors=0, resume PASS checks=11 errors=0** (before: 79 and 11). The one new
+  check is `turn_in_script_calls_exp_earn_side_mission_award`; no existing check changed, including
+  `installed_kismet_starts_marcus_walk` right after the use key (the kickoff now plays on the next tick of the same session).

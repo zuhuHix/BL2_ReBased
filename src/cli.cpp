@@ -7,6 +7,7 @@
 #include "mover.hpp"
 #include "kismet.hpp"
 #include "mission.hpp"
+#include "mission_script.hpp"
 #include "slice.hpp"
 
 #include <fstream>
@@ -80,6 +81,25 @@ void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
         break;
     }
     }
+}
+
+// The mission script bridge's report, shared by --mission-run and --slice-run (src/mission_script.hpp): the controller's own
+// record of the mission, every ExpEarn call, the natives without an implementation that the script reached, VM notes.
+void printScriptReport(int playerStatus, bool needsRewards, const std::vector<vm::MissionScript::ExpEarn>& earned,
+                       const std::vector<std::string>& stubs, const std::vector<std::string>& notes) {
+    std::cout << "{\"player_status\":" << playerStatus << ",\"needs_rewards\":" << (needsRewards ? "true" : "false") << ",\"exp_earned\":[";
+    bool first = true;
+    for (const auto& earn : earned) {
+        std::cout << (first ? "" : ",") << "{\"amount\":" << earn.amount << ",\"source\":" << earn.source << ",\"type\":" << earn.type << "}";
+        first = false;
+    }
+    std::cout << "],\"stubs\":[";
+    first = true;
+    for (const auto& line : stubs) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+    std::cout << "],\"notes\":[";
+    first = true;
+    for (const auto& line : notes) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+    std::cout << "]}";
 }
 
 int32_t signedNumber(const std::string& value) {
@@ -559,12 +579,21 @@ int main(int argc, char** argv) {
         }
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
-            // turnin | tick:<seconds>
+            // turnin | tick:<seconds> | script:accept | script:turnin | xp:<amount>
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
             runtime.registerCoreNatives();
             vm::MissionSystem mission(runtime, package->packageName, argv[3]);
+            // script:accept | script:turnin | xp:<amount> run the installed controller script through the bridge
+            // (src/mission_script.hpp); the bridge is built only when one of them is asked for, and then every status change
+            // calls UpdateMissionStatus.
+            std::unique_ptr<vm::MissionScript> script;
+            for (int i = 6; i < argc; ++i)
+                if (std::string(argv[i]).rfind("script:", 0) == 0 || std::string(argv[i]).rfind("xp:", 0) == 0) {
+                    script = std::make_unique<vm::MissionScript>(runtime, mission);
+                    break;
+                }
             std::set<std::string> completed;
             for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
             std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
@@ -574,6 +603,9 @@ int main(int argc, char** argv) {
                 const std::string step = argv[i];
                 bool ok = true;
                 if (step == "accept") ok = mission.accept(completed);
+                else if (step == "script:accept" && script) ok = script->accept(completed);
+                else if (step == "script:turnin" && script) ok = script->turnIn();
+                else if (step.rfind("xp:", 0) == 0 && script) script->setExperienceReward(std::stoi(step.substr(3)));
                 else if (step == "turnin") ok = mission.turnInMission();
                 else if (step == "kickoff") ok = mission.kickoff();
                 else if (step.rfind("obj:", 0) == 0) {
@@ -585,7 +617,8 @@ int main(int argc, char** argv) {
                 else if (step.rfind("tick:", 0) == 0) mission.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
-                          << ",\"set\":" << quote(mission.activeSet()) << ",\"status\":" << int(mission.status()) << ",\"effects\":[";
+                          << ",\"set\":" << quote(mission.activeSet()) << ",\"status\":" << int(mission.status())
+                          << ",\"kickoff_pending\":" << (mission.kickoffPending() ? "true" : "false") << ",\"effects\":[";
                 first = false;
                 bool firstEffect = true;
                 for (const auto& effect : mission.drain()) {
@@ -598,12 +631,20 @@ int main(int argc, char** argv) {
             std::cout << "],\"status\":" << int(mission.status()) << ",\"errors\":[";
             first = true;
             for (const auto& line : mission.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
-            std::cout << "]}\n";
-            return mission.errors.empty() ? 0 : 1;
+            if (script) for (const auto& line : script->errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]";
+            if (script) {
+                std::cout << ",\"script\":";
+                printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->expEarned(), script->stubs(), script->notes());
+            }
+            std::cout << "}\n";
+            return mission.errors.empty() && (!script || script->errors.empty()) ? 0 : 1;
         }
         if (mode == "--slice-run") {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
-            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s>. Package argument is Sanctuary_Dynamic.
+            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s> | xp:<amount> (the XP the script's
+            // GetExperienceReward returns, a host stand-in). accept and turnin run the installed controller script.
+            // Package argument is Sanctuary_Dynamic.
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
@@ -626,6 +667,7 @@ int main(int argc, char** argv) {
                 else if (step == "hit:other") ok = slice.hitDummy(false);
                 else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
                 else if (step == "turnin") ok = slice.turnIn();
+                else if (step.rfind("xp:", 0) == 0) slice.setExperienceReward(std::stoi(step.substr(3)));
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false") << ",\"events\":[";
@@ -641,7 +683,9 @@ int main(int argc, char** argv) {
             std::cout << "],\"status\":" << int(slice.mission().status()) << ",\"errors\":[";
             first = true;
             for (const auto& line : slice.errors()) { std::cout << (first ? "" : ",") << quote(line); first = false; }
-            std::cout << "],\"dummy_boundary\":[";
+            std::cout << "],\"script\":";
+            printScriptReport(slice.scriptPlayerStatus(), slice.scriptPlayerNeedsRewards(), slice.expEarned(), slice.scriptStubs(), slice.scriptNotes());
+            std::cout << ",\"dummy_boundary\":[";
             first = true;
             for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "],\"dummy_boundary_calls\":[";

@@ -463,10 +463,21 @@ void UOpenWillowQuest::Pump()
     Save();
 }
 
+// Accept and turn-in run the installed controller script (AcceptMission, ServerCompleteMission; UNVERIFIED natives, see
+// docs/verification/SANCTUARY_RPG_MISSION.md "Script swap 1"). Natives the script reaches without an implementation are
+// logged stubs and never fail the quest.
+void UOpenWillowQuest::LogScriptStubs(const TCHAR* When) const
+{
+    TArray<FString> Stubs;
+    for (const auto& Stub : Impl->Slice->scriptStubs()) Stubs.Add(UTF8_TO_TCHAR(Stub.c_str()));
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST script stubs after %s: %d [%s]"), When, Stubs.Num(), *FString::Join(Stubs, TEXT("; ")));
+}
+
 bool UOpenWillowQuest::Accept()
 {
     if (!Impl || bFailed) return false;
     const bool bOk = Impl->Slice->accept(Impl->Completed);
+    LogScriptStubs(TEXT("accept"));
     Pump();
     return bOk;
 }
@@ -474,7 +485,15 @@ bool UOpenWillowQuest::Accept()
 bool UOpenWillowQuest::TurnIn()
 {
     if (!Impl || bFailed) return false;
+    // HOST STAND-IN: the script's MissionDefinition.GetExperienceReward returns the host's own amount (the formula is not
+    // in src/ yet); the script then reaches ExpEarn, which only records its call. The host still grants the XP itself.
+    if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner()))
+        if (UOpenWillowSkills* Skills = Walker->GetSkills()) {
+            FixRegionStage(Skills->GetLevel());
+            Impl->Slice->setExperienceReward(Impl->Data.MissionXp(RegionStage));
+        }
     const bool bOk = Impl->Slice->turnIn();
+    LogScriptStubs(TEXT("turn-in"));
     Pump();
     return bOk;
 }
@@ -548,6 +567,13 @@ void UOpenWillowQuest::GrantExperience()
     LastXpAmount = Impl->Data.MissionXp(RegionStage);
     ExperienceBeforeReward = Skills->GetExperience();
     LevelBeforeReward = Skills->GetLevel();
+    // The script's ExpEarn call (recorded only, this step): its amount is the host's own through the stand-in
+    // GetExperienceReward, so only the path (one call, source 4 = SideMissionAward for a mission that is not plot-critical)
+    // is compared, not the formula.
+    const auto& Earned = Impl->Slice->expEarned();
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST script ExpEarn calls=%d amount=%d source=%d (host amount %d: %s)"), int32(Earned.size()),
+        Earned.empty() ? 0 : Earned.back().amount, Earned.empty() ? -1 : Earned.back().source, LastXpAmount,
+        !Earned.empty() && Earned.back().amount == LastXpAmount ? TEXT("same") : TEXT("DIFFERENT"));
     Skills->AddExperience(LastXpAmount);
     Walker->RefreshHealthForLevel();   // a level-up from this reward sets the new level's health at once
     UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: trunc(%.4f x span) at region stage %d = %d XP (native reading, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
@@ -1005,6 +1031,13 @@ void UOpenWillowQuest::RunTest(float Delta)
         const int32* Oracle = Data.XpCandidateByLevel.Find(RegionStage);
         Check(Oracle && LastXpAmount == *Oracle && LastXpAmount > 0 && Skills->GetExperience() == ExperienceBeforeReward + LastXpAmount,
             TEXT("xp_amount_is_truncated_rule_at_region_stage"));
+        {
+            // The turn-in ran ServerCompleteMission: UpdateMissionStatus(Complete) -> ServerGrantMissionRewards -> ExpEarn once,
+            // source 4 (SideMissionAward; the Fire mission is not plot-critical), ExpType omitted (UNVERIFIED, bridge note).
+            const auto& Earned = Impl->Slice->expEarned();
+            Check(Earned.size() == 1 && Earned[0].amount == LastXpAmount && Earned[0].source == 4 && Earned[0].type == -1
+                && Impl->Slice->scriptPlayerStatus() == 4, TEXT("turn_in_script_calls_exp_earn_side_mission_award"));
+        }
         Check(Skills->GetLevel() == LevelBeforeReward + 1 && Skills->GetExperience() >= UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel())
             && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Skills->GetLevel()), 0.01f)
