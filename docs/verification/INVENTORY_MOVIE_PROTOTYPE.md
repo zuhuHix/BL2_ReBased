@@ -1117,3 +1117,11 @@ content to the left of the origin. The origin is zero again; the group starts fu
 panel/rows (frame 520-775, rows 173 px), compare panels, equipped-origin highlight, Skills placement (the Phaselock card is fitted by its background clip because
 the movie resets the card clip's scale and position), Inspect level strip and the overview footer/dimming follow measured frames (fits, UNVERIFIED). Suite
 after the changes: 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Perspective tilt and glass sheen stay open.
+
+### Round 12 (2026-10-05)
+
+AI-assisted, page-only (`inventory.js`, `skills.js`). The focus view's selection band is now a plain filled rectangle (colour sampled from a real
+capture, x 532-763) instead of the movie's highlight symbol, whose glow tail overran the panel by about 20 px; the focus panel is 15 px shorter (Y scale
+0.965); the equipped-origin compare keeps the backpack tile highlight and the compare hint has no Sort entry; Skills tab group, footer and the Inventory tab
+group scale follow the real frames; card text is 16 with bold values; the clipped EQUIPPED label of the mini column is hidden in the focus view. Suite: 49 PASS /
+0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. All placements are fits to captured frames (UNVERIFIED); tilt and glass stay open.

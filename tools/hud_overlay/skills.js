@@ -458,7 +458,7 @@ function populate() {
 // the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
 // at (225, 530); here it follows the card). Moves are done on the movie clips in
 // ROOT coordinates (a host fit; the original gets these from its 3D camera).
-const SKILLS_LAYOUT = {headerScale:0.88, headerCentreX:695, treesDX:130, treesDY:12, hintDY:45,
+const SKILLS_LAYOUT = {headerScale:1.02, headerCentreX:707, treesDX:130, treesDY:12, hintDY:48, hintDX:175, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
   card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
 let layoutApplied = false;
 function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
@@ -496,7 +496,7 @@ function applySkillsLayout() {
   const hb = boundsOf(header);
   if (hb) moveClip(header, ROOT, SKILLS_LAYOUT.headerCentreX - (hb.xMin + hb.xMax) / 2, 0);
   moveClip(SKILLS, ROOT, SKILLS_LAYOUT.treesDX, SKILLS_LAYOUT.treesDY);
-  moveClip(`${ROOT}.tooltips`, ROOT, 0, SKILLS_LAYOUT.hintDY); // the real footer is at y 657, below the Siren plate
+  moveClip(`${ROOT}.tooltips`, ROOT, SKILLS_LAYOUT.hintDX, SKILLS_LAYOUT.hintDY); // the real footer is at y 657, below the Siren plate
   applyInfoCard();
   setTimeout(applyInfoCard, 700); setTimeout(applyInfoCard, 1500);
 }

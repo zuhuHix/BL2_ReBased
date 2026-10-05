@@ -32,11 +32,11 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 13
 // about 335..490 x 415..500. The movie does this with a Z tween that Ruffle ignores, so the host sets 2D scales.
 // Where the list starts below the panel's top edge, in panel units: the small view leaves room for the sub-label row
 // the old category chevrons used; the focus view starts right under the title like the original.
-const LIST_TOP = 75, LIST_TOP_FOCUS = 40;
+const LIST_TOP = 75, LIST_TOP_FOCUS = 33;
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
-const FOCUS_PANEL = {scale:0.92, scaleY:1.0, left:497, top:75}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
-const FOCUS_EQUIPPED = {scale:0.52, centreX:412, centreY:380};
+const FOCUS_PANEL = {scale:0.92, scaleY:0.965, left:497, top:75}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
+const FOCUS_EQUIPPED = {scale:0.59, centreX:412, centreY:395}; // row pitch 42 px like the real mini column (37 at 0.52)
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
 // 2026-10-04; comparators, filters and headers are read from native code in
 // docs/verification/NATIVE_INVENTORY_SORT.md and stay UNVERIFIED beyond those captures). PageDown = +1,
@@ -129,6 +129,9 @@ const MAX_DISPLAY_CREDITS = 99999999;
 // (found empirically in the bench, so UNVERIFIED against the original).
 const FUN_STATS_OVERLAP = 6;
 const ARROW_VALUE_GAP = 2;
+// Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
+const CARD_TEXT_SIZE = 16;
+const HEADER_SHRINK = 0.93, HINT_LIFT = 9;
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
@@ -838,13 +841,13 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     const arrow = compare?.arrow || 'blank';
     call(card, 'SetTopStat', index, stat.label, formatted, arrow, '', stat.icon || 'none');
     const row = `${card}.stat${index+1}`;
-    text(`${row}.labelField`, stat.label, 14, 0xa4e8f3);
+    text(`${row}.labelField`, stat.label, CARD_TEXT_SIZE, 0xa4e8f3);
     // Values print in the label colour; a projectile count follows the damage in gold at a smaller size
     // (both measured on a real card, UNVERIFIED as exact game values).
     const mainHtml = stat.projectiles
       ? `${escapeHtml(formatted.slice(0, -`x${stat.projectiles}`.length))}<font size="${PROJECTILE_COUNT_SIZE}" color="${PROJECTILE_COUNT_COLOUR}">x${stat.projectiles}</font>`
       : escapeHtml(formatted);
-    richText(`${row}.mainField`, mainHtml, 14, 0xa4e8f3);
+    richText(`${row}.mainField`, `<b>${mainHtml}</b>`, CARD_TEXT_SIZE, 0xa4e8f3);
     statVisibility.set(`${row}.mainField`, true);
     const arrowShown = compare?.arrow === 'up' || compare?.arrow === 'down';
     statVisibility.set(`${row}.auxField`, false);
@@ -902,7 +905,7 @@ function fitFunStats(card, hasFunStats) {
 const FRAME_INSET = 0.896;
 const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
 const CARD_FIT = {single:fitTarget(307, 215, 112), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
-  inspect:fitTarget(310, 50, 44)};  // the level strip sits about 14 px above the frame's clip, so the frame is at 44 for a strip at 30
+  inspect:fitTarget(285, 55, 44)};  // the level strip sits about 14 px above the frame's clip, so the frame is at 44 for a strip at 30
 function fitCard(card, target) {
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
@@ -957,8 +960,8 @@ function drawCard() {
   // Match the observed stock tooltip line. Extra host keys remain available.
   const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
-  if (transferSourceId || (item && !equippedIds().has(item.id)))
-    hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
+  if (!transferSourceId && item && !equippedIds().has(item.id))
+    hints.push(['[Page Up]/[Page Down] Sort', true]);
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
     `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
@@ -1085,7 +1088,7 @@ function clipMovieToInspectParts() {
   const trimmed = rects.map((b, i) => i === 0
     ? [b.xMin + (b.xMax - b.xMin) * INSPECT_CARD_INSET_X, b.yMin + (b.yMax - b.yMin) * INSPECT_CARD_INSET_TOP,
        b.xMax - (b.xMax - b.xMin) * INSPECT_CARD_INSET_X, b.yMax - (b.yMax - b.yMin) * INSPECT_CARD_INSET_BOTTOM]
-    : [b.xMin - 50, b.yMin - 10, b.xMax + 50, b.yMax + 8]);
+    : [b.xMin - 20, b.yMin - 4, b.xMax + 20, b.yMax + 2]);
   rects.length = 0; rects.push(...trimmed);
   if (!rects.length) return;
   const points = [];
@@ -1542,6 +1545,8 @@ function placeStoragePanel() {
 // two cards); the pose it had before is kept and restored when the view ends.
 function placeEquippedPanel() {
   const panel = INV + '.equippedPanel', focus = backpackFocused(), compare = Boolean(transferSourceId);
+  // The mini column behind the card shows no title in the original (a clipped "QUIPPED" peeked out below short cards).
+  set(panel + '.equippedLabel', '_visible', !focus);
   if (focus || compare) {
     if (!equippedHome) equippedHome = {x:Number(get(panel, '_x')), y:Number(get(panel, '_y')),
       xs:Number(get(panel, '_xscale')), ys:Number(get(panel, '_yscale'))};
@@ -1584,8 +1589,9 @@ const HEADER_NUDGE = 8;
 // The selected row sits on a yellow band that runs to the panel's edges (2026-10-04 capture), wider than the cell. It is
 // the movie's own highlight symbol stretched across the panel, behind the cells (depth 1500, cells start at 2000).
 // The symbol's art is narrower than its bounds and sits right of centre; factors measured on the round-11 frame (host choice).
+// The real band spans x 532-765 with the panel frame at 520-775: 12 px in on the left, 10 on the right.
+const BAND_INSET_LEFT = 12, BAND_INSET_RIGHT = 12, BAND_HEIGHT = 78, BAND_COLOUR = 0xb9ab46;
 const BAND_FRAME_PAD = 22;                      // panel bkgd minus visible frame, per side (measured)
-const BAND_ART_FRACTION = 0.686, BAND_ART_LEFT = 0.099; // visible art of the band symbol: its share of the symbol's width and where it starts (measured on the round-16 frame)
 let bandSerial = 0, bandNames = [], listOverhang = 0;
 const ROW_WIDTH_FOCUS = 173 / 158; // real rows are about 173 px wide in the focus view, the converted cell gives 158
 const ROW_CENTRE_FIX = -3.4;      // the cell's visible part sits 3.4 px left of its symbol's centre
@@ -1595,20 +1601,23 @@ function drawSelectionBands(rowGroup, ys, localPanelBounds, rowWidth) {
   if (!ys.length || !localPanelBounds || !rowWidth) return;
   const name = `owBand${++bandSerial}`, path = `${rowGroup}.${name}`;
   bandNames.push(name);
-  call(rowGroup, 'attachMovie', 'inventory - cell - highlight c', name, 1500 + (bandSerial % 100));
-  const bounds = call(path, 'getBounds', path);
-  if (!bounds || !(bounds.xMax > bounds.xMin) || !(bounds.yMax > bounds.yMin)) { call(path, 'removeMovieClip'); return; }
-  // Visible frame of the panel (its bkgd also covers a glow margin of FRAME_PAD screen px each side), in group coordinates.
-  const pad = BAND_FRAME_PAD / (panelPose().scale * COMPOSITION_SCALE);
-  const frameLeft = localPanelBounds.xMin + pad, frameWidth = localPanelBounds.xMax - localPanelBounds.xMin - 2 * pad;
+  call(rowGroup, 'createEmptyMovieClip', name, 1500 + (bandSerial % 100));
+  // A plain filled rectangle in the band's measured colour. The movie's own highlight symbol has a soft glow tail that ran
+  // 20 px past the panel and a thin white inner outline the original lacks (critic round 11); the original's band is a
+  // flat gold bar, x 532-763 and 78 px tall against the 66 px row pitch (2026-10-04 capture), brighter beside the tile.
+  const scale = panelPose().scale * COMPOSITION_SCALE;
+  const pad = BAND_FRAME_PAD / scale;
   const groupX = (localPanelBounds.xMin + localPanelBounds.xMax - rowWidth) / 2 - listOverhang;
-  const left = frameLeft - groupX, width = frameWidth / BAND_ART_FRACTION;   // symbol width; its art fills BAND_ART_FRACTION of it
-  const height = ROW_PITCH * 1.2;
-  const sx = width / (bounds.xMax - bounds.xMin), sy = height / (bounds.yMax - bounds.yMin);
-  set(path, '_xscale', sx * 100);
-  set(path, '_yscale', sy * 100);
-  set(path, '_x', left - width * BAND_ART_LEFT - bounds.xMin * sx);
-  set(path, '_y', ys[0] + ROW_PITCH / 2 - height / 2 - bounds.yMin * sy);
+  const x0 = localPanelBounds.xMin + pad + BAND_INSET_LEFT / scale - groupX;
+  const x1 = localPanelBounds.xMax - pad - BAND_INSET_RIGHT / scale - groupX;
+  const cy = ys[0] + ROW_PITCH / 2, half = BAND_HEIGHT / panelPose().scaleY / COMPOSITION_SCALE / 2;
+  call(path, 'beginFill', BAND_COLOUR, 100);
+  call(path, 'moveTo', x0, cy - half);
+  call(path, 'lineTo', x1, cy - half);
+  call(path, 'lineTo', x1, cy + half);
+  call(path, 'lineTo', x0, cy + half);
+  call(path, 'lineTo', x0, cy - half);
+  call(path, 'endFill');
 }
 
 // Every render attaches headers under fresh names and depths: removing a clip and attaching another under the
@@ -1736,7 +1745,8 @@ function render() {
       // content right by that amount (that moved every row 23 px off the panel's centre in round 10, and BAND_SHIFT was
       // tuned to hide it). Room for the selection band beyond the cell is made by starting the group `overhang`
       // further left and drawing everything `overhang` further right inside it.
-      listOverhang = Math.max(0, ((localPanelBounds.xMax - localPanelBounds.xMin) - rowWidth) / 2 - 6);
+      // Room for the focus view's wider band only; elsewhere the movie's own highlight is clipped at the cell, as in the original.
+      listOverhang = backpackFocused() ? Math.max(0, ((localPanelBounds.xMax - localPanelBounds.xMin) - rowWidth) / 2 - 6) : 0;
       set(rowGroup, '_x', (localPanelBounds.xMin+localPanelBounds.xMax-rowWidth)/2 - listOverhang + ROW_CENTRE_FIX * rowScaleX);
       set(rowGroup, '_y', localPanelBounds.yMin + (backpackFocused() ? LIST_TOP_FOCUS + (headerFor({}, listMode()) === undefined ? LIST_TOP_NO_HEADERS : 0) : LIST_TOP));
       set(path, '_x', listOverhang - localCell.xMin * rowScaleX);
@@ -1749,7 +1759,7 @@ function render() {
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     // Equipped-origin compare (2026-10-04 capture): the chosen equipped slot carries the highlight, the backpack row only
     // marks the candidate whose card is on the right, so it gets no band.
-    const rowSelected = Boolean(item && item.id === selectedId) && !(transferSourceId && transferFromEquipped);
+    const rowSelected = Boolean(item && item.id === selectedId);
     call(path, 'SetSelected', rowSelected);
     // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
     if (rowSelected && backpackFocused()) bands.push(y);
@@ -2046,6 +2056,14 @@ function pollReady() {
       set(path, '_xscale', Number(get(path, '_xscale')) * COMPOSITION_SCALE);
       set(path, '_yscale', Number(get(path, '_yscale')) * COMPOSITION_SCALE);
     }
+    // The tab group came out about 8% too wide and the hint line 9 px low against the real frame (critic round 11): shrink the
+    // group about its left edge and lift the hint.
+    const headerPath = ROOT + '.header', headerBefore = readBounds(headerPath);
+    set(headerPath, '_xscale', Number(get(headerPath, '_xscale')) * HEADER_SHRINK);
+    set(headerPath, '_yscale', Number(get(headerPath, '_yscale')) * HEADER_SHRINK);
+    const headerAfter = readBounds(headerPath);
+    if (headerBefore && headerAfter) set(headerPath, '_x', Number(get(headerPath, '_x')) + (headerBefore.xMin - headerAfter.xMin));
+    set(ROOT + '.tooltips', '_y', Number(get(ROOT + '.tooltips', '_y')) - HINT_LIFT);
     ready = true;
     window.owInventoryMovieReady = true;
     window.owInventoryMovieReadyAt = performance.now();
