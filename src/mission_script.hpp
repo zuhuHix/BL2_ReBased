@@ -1,9 +1,11 @@
 #pragma once
 #include "mission.hpp"
+#include "progression.hpp"
 #include "vm.hpp"
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -18,9 +20,12 @@ namespace vm {
 // whose MissionTracker is a VM tracker object, the installed MissionDefinition) and binds those natives, scoped to this
 // object like src/mover.cpp, onto the existing MissionSystem, which stays the single owner of the mission's state.
 //
-// Natives implemented here (all UNVERIFIED, read from native code in the bridge note): MissionTracker.ActivateMission,
-// CompleteMission, PlayTurnIn, GetMissionStatus, IsDataValid; WillowPlayerController.NativeGetMissionIndex and ExpEarn
-// (ExpEarn only records its arguments); MissionDefinition.GetExperienceReward (returns the amount the host supplied).
+// Natives implemented here (all UNVERIFIED, read from native code in the bridge note and NATIVE_PROGRESSION.md):
+// MissionTracker.ActivateMission, CompleteMission, PlayTurnIn, GetMissionStatus, IsDataValid;
+// WillowPlayerController.NativeGetMissionIndex, ExpEarn, GetMaxExpLevel, GetExpPointsRequiredForLevel;
+// MissionDefinition.GetExperienceReward, GetGameStage, GetCurrencyRewardType, GetCurrencyReward, ShouldGrantAlternateReward,
+// GetItemRewardsForPlayer (empty rewards only). The experience pool and its level-up (ApplyExpPointsToExpLevel, run from
+// updateExperiencePool) live here as C++ state with the VM controller's PlayerReplicationInfo as the level's home.
 // Every other native the script reaches stays a logged stub, listed by stubs().
 class MissionScript {
 public:
@@ -37,10 +42,21 @@ public:
     // level-load replay would leave it (the script's old-status check needs the record).
     void syncRestored();
 
-    // What GetExperienceReward returns. HOST STAND-IN: the formula (NATIVE_PROGRESSION section 2) is not in src/ yet, the host
-    // supplies its own amount; 0 (the default) makes the script skip ExpEarn.
-    void setExperienceReward(int amount) { experienceReward_ = amount; experienceRewardSet_ = true; }
+    // Inputs the host owns. The region's game stage (what WillowRegionDefinition.GetRegionGameStage answers now: fixed per
+    // player and playthrough by the host); the Active status locks it into the mission, as the status routine does.
+    void setRegionGameStage(int stage) { regionStage_ = stage; }
+    // The player's experience level and experience pool value (the host's Maya), read before the pool is updated.
+    void setPlayerExperience(int level, int64_t experience);
+    // ApplyExpPointsToExpLevel, called from the pool's per-frame update: while the pool has reached the next level's
+    // requirement and the level is below the cap, the script ExpLevelUp(bCheated = false) runs on the controller.
+    void updateExperiencePool();
+    // What ExpEarn added to the pool (amount > 0) and the level the pool update raised the player to (level > 0), in order.
+    // The host applies them to its own experience state and level display.
+    struct Gain { int amount = 0; int level = 0; };
+    std::vector<Gain> takeGains() { auto result = std::move(gains_); gains_.clear(); return result; }
     const std::vector<ExpEarn>& expEarned() const { return expEarned_; }
+    float experiencePool() const { return pool_; }
+    int playerLevel();
 
     // The controller's record of the mission (MissionPlaythroughs[0].MissionList[...].Status), -1 when it has none.
     int controllerStatus();
@@ -59,8 +75,12 @@ private:
     std::map<std::string, size_t> stubs_;
     std::vector<std::string> notes_;
     std::vector<ExpEarn> expEarned_;
-    int experienceReward_ = 0;
-    bool experienceRewardSet_ = false;
+    std::vector<Gain> gains_;
+    AttributeEvaluator evaluator_;
+    std::unique_ptr<ExperienceCurve> curve_;
+    ObjectPtr pri_;
+    float pool_ = 0;                       // the experience resource pool's CurrentValue
+    int regionStage_ = 0, lockedStage_ = 0, playThroughCount_ = 1, maxLevel_ = 50;
     unsigned depth_ = 0;
 
     void bind(const char* path, NativeFn fn);
@@ -68,6 +88,13 @@ private:
     void run(const std::function<void()>& script);     // outermost script run: collects stubs, catches VM errors
     void updateMissionStatus(int nativeStatus);
     Value* missionList();
+    ExperienceCurve& curve();
+    int gameStage() const { return lockedStage_ ? lockedStage_ : regionStage_; }
+    int experienceReward(bool alternate);
+    void expEarn(int amount, int source, int type);
+    const Value& rewardData(bool alternate);
+    ObjectPtr loadRef(const Value& reference);
+    void notImplemented(const std::string& what);   // a labelled not-implemented path: listed with the stubs
 };
 
 } // namespace vm

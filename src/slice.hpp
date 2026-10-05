@@ -23,12 +23,16 @@ namespace vm {
 // Accepting and turning in run the installed script (WillowPlayerController.AcceptMission / ServerCompleteMission, see
 // src/mission_script.hpp and docs/verification/NATIVE_MISSION_SCRIPT_BRIDGE.md, UNVERIFIED); the kickoff after acceptance is
 // a pending record that the next tick() consumes.
-// Still host stand-ins: the damage type of the host's shot, the world ops listed in dummy().boundaryCalls, the XP amount
-// the script's GetExperienceReward returns (setExperienceReward).
+// Experience also runs the script path (docs/verification/NATIVE_PROGRESSION.md, UNVERIFIED): the turn-in script reaches
+// GetExperienceReward (formula in src/progression.*) and ExpEarn (raises the VM-side pool), and tick() runs the pool update that
+// calls ExpLevelUp. The host supplies what it owns (region stage, the player's level and experience) and applies the Experience
+// and Level events to its own state.
+// Still host stand-ins: the damage type of the host's shot, the world ops listed in dummy().boundaryCalls.
 class FireMissionSlice {
 public:
     struct HostEvent {
-        enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete };
+        enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete,
+                          Experience, Level };   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
         Kind kind;
         std::string a, b, c;
     };
@@ -51,9 +55,13 @@ public:
     // damageDummy with the stock damage type of the shot.
     bool hitDummy(bool fireDamage);
     bool turnIn();
-    // The XP amount the script's GetExperienceReward returns (HOST STAND-IN, the formula is not in src/): set it before
-    // turnIn() so the script reaches ExpEarn. expEarned() is what ExpEarn was called with (recorded, no other effect).
-    void setExperienceReward(int amount) { script_->setExperienceReward(amount); }
+    // Inputs the host owns (see MissionScript): the region's game stage (set before accept, it is locked when the mission becomes
+    // Active) and the player's level and experience (set before turnIn and whenever the host changes them).
+    void setRegionGameStage(int stage) { script_->setRegionGameStage(stage); }
+    void setPlayerExperience(int level, int64_t experience) { script_->setPlayerExperience(level, experience); }
+    int scriptPlayerLevel() { return script_->playerLevel(); }
+    float scriptExperiencePool() const { return script_->experiencePool(); }
+    // expEarned() is what ExpEarn was called with.
     const std::vector<MissionScript::ExpEarn>& expEarned() const { return script_->expEarned(); }
     // The natives the mission script reached that have no implementation ("name xN") and other VM diagnostics.
     std::vector<std::string> scriptStubs() const { return script_->stubs(); }
@@ -79,6 +87,7 @@ private:
     std::string dummyName_;
     std::vector<std::string> errors_;
     void pump();
+    void drainExperience();
     bool drainMission();
     bool syncSequences();                    // applies the dummy's enable conditions; true if a sequence changed
     bool conditionHolds(Object& condition);

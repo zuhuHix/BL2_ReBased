@@ -74,6 +74,15 @@ std::vector<std::string> enumNames(Runtime& runtime, const std::string& packageN
     return names;
 }
 
+std::string providerPathLeaf(const Value* components) {
+    if (!components) return "";
+    if (components->kind != Value::Kind::Array) return components->s;
+    std::string leaf;
+    for (const auto& element : components->elements())
+        if (!element.s.empty() && element.s != "None") leaf = element.s;
+    return leaf;
+}
+
 BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Package> package, int32_t exportIndex)
     : runtime_(runtime), package_(package), index_(exportIndex), path_(package->path(exportIndex)) {
     auto provider = runtime_.instantiateExport(package, exportIndex, 4);

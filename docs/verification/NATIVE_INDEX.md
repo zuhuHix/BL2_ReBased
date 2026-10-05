@@ -13,26 +13,26 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 
 | Native | Note | Slice use | Status | Confidence | Implemented |
 |---|---|---|---|---|---|
-| MissionTracker.ActivateMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: accept (entry checks, then the status routine) | UNVERIFIED | high / medium | |
-| MissionTracker.CompleteMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: turn-in (status, chain, untrack, unlock queue, fast-forward prompt) | UNVERIFIED | high / medium | |
-| MissionTracker.SetMissionStatus | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | shared status routine, script hooks and Default event | UNVERIFIED | medium | |
-| MissionTracker.PlayKickoff | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: fires Default id 12 (called from the tracker tick) | UNVERIFIED | high | |
-| MissionTracker.PlayKickoffDialogOnly | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | fires Default id 13 | UNVERIFIED | high | |
-| MissionTracker.PlayTurnIn | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: fires Default id 14 after turn-in | UNVERIFIED | high | |
-| MissionTracker.SetActiveMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: writes the pending kickoff record | UNVERIFIED | medium | |
+| MissionTracker.ActivateMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: accept (entry checks, then the status routine) | UNVERIFIED | high / medium | src/mission_script.cpp (calls MissionSystem::accept); Fire case |
+| MissionTracker.CompleteMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: turn-in (status, chain, untrack, unlock queue, fast-forward prompt) | UNVERIFIED | high / medium | src/mission_script.cpp (MissionSystem::turnInMission); chain, untrack, unlock queue and fast-forward not modelled |
+| MissionTracker.SetMissionStatus | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | shared status routine, script hooks and Default event | UNVERIFIED | medium | src/mission.cpp MissionSystem::setStatus (Active, ReadyToTurnIn, Complete; script hook before the Default event) |
+| MissionTracker.PlayKickoff | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: fires Default id 12 (called from the tracker tick) | UNVERIFIED | high | src/mission.cpp MissionSystem::tick (pending record) |
+| MissionTracker.PlayKickoffDialogOnly | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | fires Default id 13 | UNVERIFIED | high | src/mission.cpp MissionSystem::tick (pending record) |
+| MissionTracker.PlayTurnIn | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: fires Default id 14 after turn-in | UNVERIFIED | high | src/mission_script.cpp (MissionSystem::playTurnIn) |
+| MissionTracker.SetActiveMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: writes the pending kickoff record | UNVERIFIED | medium | src/mission.cpp (the pending kickoff record only; tracked-mission choice and gate not modelled) |
 | MissionTracker.SetKickoffHeard | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | sets bHeardKickoff | UNVERIFIED | high | |
-| MissionTracker.GetMissionStatus | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | status lookup | UNVERIFIED | high | |
+| MissionTracker.GetMissionStatus | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | status lookup | UNVERIFIED | high | src/mission_script.cpp |
 | MissionTracker.MissionDependenciesMet | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | availability | UNVERIFIED | high | |
 | MissionTracker.CanStartMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | availability incl. blocked test | UNVERIFIED | high | |
 | MissionTracker.CanEndMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | turn-in availability | UNVERIFIED | high | |
-| MissionDefinition.GetCurrencyRewardType | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: reward currency type | UNVERIFIED | high | |
-| MissionDefinition.GetCurrencyReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: credits (0) | UNVERIFIED | medium | |
+| MissionDefinition.GetCurrencyRewardType | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: reward currency type | UNVERIFIED | high | src/mission_script.cpp |
+| MissionDefinition.GetCurrencyReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: credits (0) | UNVERIFIED | medium | src/mission_script.cpp (multiplier 0 and other currencies; credits formula not implemented) |
 | MissionDefinition.GetOptionalCreditReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | none for Fire | UNVERIFIED | medium | |
-| MissionDefinition.GetExperienceReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) (formula in NATIVE_PROGRESSION.md) | Fire: XP 395 at stage 8 | amount confirmed in game 2026-10-02; call order UNVERIFIED | high | |
-| MissionDefinition.ShouldGrantAlternateReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: false, normal reward | UNVERIFIED | low-medium | |
-| MissionDefinition.GetItemRewardsForPlayer | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: empty (pool rolling is lane G1) | UNVERIFIED | medium | |
-| WillowPlayerController.ExpEarn | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: XP into the pool | UNVERIFIED | high | |
-| ExperienceResourcePool.ApplyExpPointsToExpLevel | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: level-up on the pool tick | UNVERIFIED | high | |
+| MissionDefinition.GetExperienceReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) (formula in NATIVE_PROGRESSION.md) | Fire: XP 395 at stage 8 | amount confirmed in game 2026-10-02; call order UNVERIFIED | high | src/mission_script.cpp + src/progression.* (formula, first playthrough below level 50) |
+| MissionDefinition.ShouldGrantAlternateReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: false, normal reward | UNVERIFIED | low-medium | src/mission_script.cpp (exercised only with the empty progress the stubbed GetObjectivesProgress gives) |
+| MissionDefinition.GetItemRewardsForPlayer | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: empty (pool rolling is lane G1) | UNVERIFIED | medium | src/mission_script.cpp (empty rewards only; pool rolls not implemented) |
+| WillowPlayerController.ExpEarn | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: XP into the pool | UNVERIFIED | high | src/mission_script.cpp (VM-side pool; scales taken as 1) |
+| ExperienceResourcePool.ApplyExpPointsToExpLevel | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: level-up on the pool tick | UNVERIFIED | high | src/mission_script.cpp MissionScript::updateExperiencePool (C++ state, run from FireMissionSlice::tick) |
 | ItemPool.SpawnBalancedInventoryFromPool | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Every enemy drop, chest and mission reward roll; Fire has no stock drop | UNVERIFIED | high | |
 | ItemPool.SpawnBalancedInventoryFromInventoryBalanceDefinition | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Lent mission pistol, reward balances | UNVERIFIED | high | |
 | (internal) balance candidate expansion (grade window, modifier interpolation) | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Weight and level of every dropped item | UNVERIFIED | high | |
@@ -44,7 +44,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | AIPawnBalanceDefinition.SetupPawnItemPoolList | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Which pools a spawned enemy rolls | UNVERIFIED | high | |
 | AIPawnBalanceDefinition.GetPlayThroughIndex | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Playthrough entry (0 in the slice) | UNVERIFIED | medium | |
 | MissionDefinition.GetItemRewardPools | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Fire mission: empty | UNVERIFIED | high | |
-| MissionDefinition.GetItemRewardsForPlayer | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Reward choices: first two rolls; Fire: none | UNVERIFIED | medium | |
+| MissionDefinition.GetItemRewardsForPlayer | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Reward choices: first two rolls; Fire: none | UNVERIFIED | medium | src/mission_script.cpp (empty rewards only; pool rolls not implemented) |
 | AMissionTracker.GrantMissionWeapon (pool-roll side) | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Level and roll of the lent Maliwan pistol | UNVERIFIED | medium | |
 | WillowPawn.GetGameStageForSpawnedInventory / SetGameStageForSpawnedInventory | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Enemy loot level (script rule read, accessors not) | UNVERIFIED | low | |
 | BalanceModifierDefinition.GetAmmoDropsPerPlayerMultiplier | [NATIVE_LOOT.md](NATIVE_LOOT.md) | 1.0 in the slice | UNVERIFIED | medium | |

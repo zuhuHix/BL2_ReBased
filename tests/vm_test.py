@@ -86,11 +86,11 @@ def build_package():
     p = Package()
     imp = {n: p.add_import('Class', n) for n in
            ('Class', 'Function', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty', 'ArrayProperty',
-            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty')}
+            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty', 'ScriptStruct', 'StructProperty')}
     none = p.fname('None')
 
-    def prop(kind, owner, name, flags=0):
-        payload = w32(0) + none + w32(0) + u32(1) + u64(flags) + none + w32(0)
+    def prop(kind, owner, name, flags=0, dim=1, type_ref=None):
+        payload = w32(0) + none + w32(0) + u32(dim) + u64(flags) + none + w32(0) + (w32(type_ref) if type_ref else b'')
         return p.add_export(imp[kind], name, payload, outer=owner)
 
     def func(owner, name, params, body, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None, ret='Int'):
@@ -111,7 +111,7 @@ def make(inventory=False, mover=False, broken_mover=False):
     p, imp, none, prop, _ = build_package()
 
     def make_function(owner, name, declared, asm_fn, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None,
-                      result='Int', locals_=()):
+                      result='Int', locals_=(), result_ref=None):
         """declared: [(kind, name, extraflags)] in declaration order. asm_fn(ids) -> Asm (or None for natives)."""
         # Children first, in reverse declaration order (the real packages export them that way).
         first_child = len(p.exports) + 1
@@ -124,7 +124,7 @@ def make(inventory=False, mover=False, broken_mover=False):
         ordered = [(result_kind, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET) for result_kind in ([result] if result else [])] + children
         func_index = first_child + len(ordered)
         for kind, pname, flags_ in ordered:
-            ids[pname] = prop(kind + 'Property', func_index, pname, flags_)
+            ids[pname] = prop(kind + 'Property', func_index, pname, flags_, type_ref=result_ref if pname == 'ReturnValue' else None)
         asm = asm_fn(ids) if asm_fn else None
         script = bytes(asm.b) if asm else b''
         memory = (len(script) + 4 * asm.refs) if asm else 0
@@ -247,6 +247,18 @@ def make(inventory=False, mover=False, broken_mover=False):
         a.raw(0x1C); a.ref(util_get); a.raw(0x16)                                  # FinalFunction GetLevel()
         a.end(); return a
     make_function(foo, 'LevelThroughClass', [], level_through_class)
+
+    # A struct with a static array field (ArrayDim 2) whose default tags set one element each (array index 0 and 1):
+    # a zero struct must hold a two-element array with those defaults, not one scalar overwritten by the last tag.
+    pair = p.add_export(imp['ScriptStruct'], 'Pair', b'')
+    prop('IntProperty', pair, 'Tag')
+    prop('IntProperty', pair, 'Slots', dim=2)
+    def indexed(name, index, value): return p.fname(name) + p.fname('IntProperty') + w32(4, index) + w32(value)
+    cls_, sup, outer, nm, _ = p.exports[pair - 1]
+    p.exports[pair - 1] = (cls_, sup, outer, nm, bytes(52) + indexed('Slots', 0, 5) + indexed('Slots', 1, 9) + none)
+    def make_pair(ids):
+        a = Asm(); a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+    make_function(foo, 'MakePair', [], make_pair, result='Struct', result_ref=pair)
 
     # Optional parameter with a default: Foo.Opt(int a, optional int b = 5) = a + b
     def opt(ids):
@@ -379,6 +391,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert run(root, 'Core.Foo.GetCount', self_class='Core.Bar')['result'] == '9'               # subclass default
     through = run(root, 'Core.Foo.LevelThroughClass')
     assert through['result'] == '31', through                                                    # class ObjectConst, class default
+    made = run(root, 'Core.Foo.MakePair')
+    assert 'Slots=[5,9]' in made['result'], made                              # static array field, per-element tags
     assert run(root, 'Core.Foo.Opt', 'i:1')['result'] == '6'                                     # default b = 5
     assert run(root, 'Core.Foo.Opt', 'i:1', 'i:10')['result'] == '11'
     bumped = run(root, 'Core.Foo.Bump', 'i:41')

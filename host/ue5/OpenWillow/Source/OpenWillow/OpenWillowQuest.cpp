@@ -417,9 +417,17 @@ void UOpenWillowQuest::Pump()
         case K::Reward:
             ++Rewards;
             if (A != Impl->Data.XpRewardAttribute) { Fail(TEXT("reward attribute differs from world.json values.xp: ") + A); return; }
-            GrantExperience();
             DropReward();
             break;
+        case K::Experience: ApplyScriptExperience(FCString::Atoi(*A)); break;   // what the script's ExpEarn put into the VM pool
+        case K::Level: {
+            // The pool update ran ExpLevelUp / OnExpLevelChange on the VM controller; the host's own level display follows from the
+            // experience it applied, so the two are compared (skill points and health stay the host's, the script stubs them).
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up: VM level %s, host level %d (%s)"), *A, Skills ? Skills->GetLevel() : -1,
+                Skills && Skills->GetLevel() == FCString::Atoi(*A) ? TEXT("same") : TEXT("DIFFERENT"));
+            break;
+        }
         case K::Status: UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A); break;
         case K::ObjectiveSet: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective set active: %s"), *A); break;
         case K::ObjectiveComplete: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective complete: %s"), *A); break;
@@ -473,9 +481,22 @@ void UOpenWillowQuest::LogScriptStubs(const TCHAR* When) const
     UE_LOG(LogTemp, Display, TEXT("OWQUEST script stubs after %s: %d [%s]"), When, Stubs.Num(), *FString::Join(Stubs, TEXT("; ")));
 }
 
+// What the host owns and the script reads: the region's game stage (fixed per player and playthrough, locked into the mission when it
+// becomes Active) and Maya's level and experience (the VM-side pool starts from them).
+void UOpenWillowQuest::SyncScriptInputs()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+    if (!Skills) return;
+    FixRegionStage(Skills->GetLevel());
+    Impl->Slice->setRegionGameStage(RegionStage);
+    Impl->Slice->setPlayerExperience(Skills->GetLevel(), Skills->GetExperience());
+}
+
 bool UOpenWillowQuest::Accept()
 {
     if (!Impl || bFailed) return false;
+    SyncScriptInputs();
     const bool bOk = Impl->Slice->accept(Impl->Completed);
     LogScriptStubs(TEXT("accept"));
     Pump();
@@ -485,13 +506,7 @@ bool UOpenWillowQuest::Accept()
 bool UOpenWillowQuest::TurnIn()
 {
     if (!Impl || bFailed) return false;
-    // HOST STAND-IN: the script's MissionDefinition.GetExperienceReward returns the host's own amount (the formula is not
-    // in src/ yet); the script then reaches ExpEarn, which only records its call. The host still grants the XP itself.
-    if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner()))
-        if (UOpenWillowSkills* Skills = Walker->GetSkills()) {
-            FixRegionStage(Skills->GetLevel());
-            Impl->Slice->setExperienceReward(Impl->Data.MissionXp(RegionStage));
-        }
+    SyncScriptInputs();   // the script's GetExperienceReward and ExpEarn read the stage and Maya's experience
     const bool bOk = Impl->Slice->turnIn();
     LogScriptStubs(TEXT("turn-in"));
     Pump();
@@ -556,28 +571,23 @@ void UOpenWillowQuest::DropReward()
     UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in dropped: %s \"%s\" at %s (press E to pick up)"), *RewardItem.Id, *RewardItem.Name, *At.ToString());
 }
 
-void UOpenWillowQuest::GrantExperience()
+// The experience the script's ExpEarn put into the VM pool (MissionDefinition.GetExperienceReward: NATIVE_PROGRESSION section 2,
+// UNVERIFIED except the amount 395 at stage 8, confirmed in game): the host applies it to Maya's level and experience display.
+void UOpenWillowQuest::ApplyScriptExperience(int32 Amount)
 {
     auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
     if (!Skills) return;
-    // MissionDefinition.GetExperienceReward as read from native code (UNVERIFIED in game): the mission level is its
-    // region's game stage, normally fixed at session start already.
-    FixRegionStage(Skills->GetLevel());
-    LastXpAmount = Impl->Data.MissionXp(RegionStage);
+    LastXpAmount = Amount;
     ExperienceBeforeReward = Skills->GetExperience();
     LevelBeforeReward = Skills->GetLevel();
-    // The script's ExpEarn call (recorded only, this step): its amount is the host's own through the stand-in
-    // GetExperienceReward, so only the path (one call, source 4 = SideMissionAward for a mission that is not plot-critical)
-    // is compared, not the formula.
     const auto& Earned = Impl->Slice->expEarned();
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST script ExpEarn calls=%d amount=%d source=%d (host amount %d: %s)"), int32(Earned.size()),
-        Earned.empty() ? 0 : Earned.back().amount, Earned.empty() ? -1 : Earned.back().source, LastXpAmount,
-        !Earned.empty() && Earned.back().amount == LastXpAmount ? TEXT("same") : TEXT("DIFFERENT"));
-    Skills->AddExperience(LastXpAmount);
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST script ExpEarn calls=%d amount=%d source=%d; pool gained %d"), int32(Earned.size()),
+        Earned.empty() ? 0 : Earned.back().amount, Earned.empty() ? -1 : Earned.back().source, Amount);
+    Skills->AddExperience(Amount);
     Walker->RefreshHealthForLevel();   // a level-up from this reward sets the new level's health at once
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: trunc(%.4f x span) at region stage %d = %d XP (native reading, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
-        *Impl->Data.XpRewardAttribute, Impl->Data.XpPercentage, RegionStage, LastXpAmount, ExperienceBeforeReward,
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s from the script at region stage %d = %d XP (UNVERIFIED rules, amount at stage 8 confirmed); experience %lld -> %lld, level %d -> %d, skill points %d"),
+        *Impl->Data.XpRewardAttribute, RegionStage, LastXpAmount, ExperienceBeforeReward,
         Skills->GetExperience(), LevelBeforeReward, Skills->GetLevel(), Skills->AvailablePoints());
 }
 
@@ -1032,11 +1042,15 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Oracle && LastXpAmount == *Oracle && LastXpAmount > 0 && Skills->GetExperience() == ExperienceBeforeReward + LastXpAmount,
             TEXT("xp_amount_is_truncated_rule_at_region_stage"));
         {
-            // The turn-in ran ServerCompleteMission: UpdateMissionStatus(Complete) -> ServerGrantMissionRewards -> ExpEarn once,
-            // source 4 (SideMissionAward; the Fire mission is not plot-critical), ExpType omitted (UNVERIFIED, bridge note).
+            // The turn-in ran ServerCompleteMission: UpdateMissionStatus(Complete) -> ServerGrantMissionRewards -> ExpEarn once, with
+            // GetExperienceReward's own amount (the host applied exactly that), source 4 (SideMissionAward; the Fire mission is not
+            // plot-critical), ExpType omitted (UNVERIFIED, bridge note).
             const auto& Earned = Impl->Slice->expEarned();
             Check(Earned.size() == 1 && Earned[0].amount == LastXpAmount && Earned[0].source == 4 && Earned[0].type == -1
                 && Impl->Slice->scriptPlayerStatus() == 4, TEXT("turn_in_script_calls_exp_earn_side_mission_award"));
+            // The pool update ran the script ExpLevelUp on the VM controller: its level is the host's after the same experience.
+            Check(Impl->Slice->scriptPlayerLevel() == Skills->GetLevel() && Skills->GetLevel() == LevelBeforeReward + 1,
+                TEXT("script_pool_update_levels_up_to_host_level"));
         }
         Check(Skills->GetLevel() == LevelBeforeReward + 1 && Skills->GetExperience() >= UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel())
             && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));

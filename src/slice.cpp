@@ -85,9 +85,9 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
         const Value* path = p.runtime().property(*b.object, "ProviderDefinitionPathName");
         const Value* components = path ? path->field("PathComponentNames") : nullptr;
         const Value* sequence = p.runtime().property(*b.object, "SequenceName");
-        if (components && components->s == dummyName_ && sequence)
+        if (components && providerPathLeaf(components) == dummyName_ && sequence)
             changeSequence(sequence->s, nameOf(actions, p.runtime().property(*b.object, "Action")));
-        else p.errors.push_back("sequence change targets another provider: " + (components ? components->s : std::string()));
+        else p.errors.push_back("sequence change targets another provider: " + providerPathLeaf(components));
         return std::vector<int>();
     });
 }
@@ -174,7 +174,15 @@ bool FireMissionSlice::drainMission() {
     return any;
 }
 
+// What the script's experience natives did since the last call, as host events: ExpEarn's pool gains and the levels the pool update reached.
+void FireMissionSlice::drainExperience() {
+    for (const auto& gain : script_->takeGains())
+        events_.push_back(gain.level > 0 ? HostEvent{HostEvent::Kind::Level, std::to_string(gain.level), "", ""}
+                                         : HostEvent{HostEvent::Kind::Experience, std::to_string(gain.amount), "", ""});
+}
+
 void FireMissionSlice::pump() {
+    drainExperience();
     // Mission state changes can toggle dummy sequences, whose behaviors can change mission state again: repeat
     // until both are quiet (bounded).
     for (int round = 0; round < 16; ++round) {
@@ -234,6 +242,7 @@ bool FireMissionSlice::turnIn() {
 
 void FireMissionSlice::tick(double seconds) {
     mission_->tick(seconds);
+    script_->updateExperiencePool();       // the experience pool update, every frame (ApplyExpPointsToExpLevel)
     dummy_->tick(seconds);
     pump();
 }

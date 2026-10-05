@@ -629,7 +629,7 @@ game**); the script itself is the installed WillowGame bytecode. Nothing here wa
 | `MissionTracker.IsDataValid` | true (reading of the name; no native note) | none |
 | `WillowPlayerController.NativeGetMissionIndex` | index of the record whose `MissionDef` is the mission in the controller's playthrough-0 list, else -1 (inferred from how the script uses it; no native note) | none |
 | `WillowPlayerController.ExpEarn` | **records** `(amount, source, type)` and does nothing else | WillowPlayerController.ExpEarn |
-| `MissionDefinition.GetExperienceReward` | **HOST STAND-IN:** returns the amount the host set (`FireMissionSlice::setExperienceReward`); the formula (NATIVE_PROGRESSION section 2) is not in `src/` yet | MissionDefinition.GetExperienceReward |
+| `MissionDefinition.GetExperienceReward` | **HOST STAND-IN (replaced in swap 2 below):** returned the amount the host set (`FireMissionSlice::setExperienceReward`); the formula (NATIVE_PROGRESSION section 2) is not in `src/` yet | MissionDefinition.GetExperienceReward |
 
 XP is unchanged for the host: `OpenWillowQuest` still grants it from the `Reward` effect with its own amount. At turn-in the host
 supplies that same amount to the stand-in native, so the script reaches `ExpEarn`; the host logs `script ExpEarn calls=1
@@ -679,3 +679,103 @@ played its kickoff: an assumption).
 - **`tools/test_quest.ps1`: first run PASS checks=80 errors=0, resume PASS checks=11 errors=0** (before: 79 and 11). The one new
   check is `turn_in_script_calls_exp_earn_side_mission_award`; no existing check changed, including
   `installed_kismet_starts_marcus_walk` right after the use key (the kickoff now plays on the next tick of the same session).
+
+## Script swap 2: experience (2026-10-05)
+
+AI-assisted (Claude), lane I1. Second stand-in swap. The host no longer computes the mission XP: the amount, the pool and the level-up
+come from the script path and the natives under it, written from [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) (sections 1-3) and
+[NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md). **Every rule stays UNVERIFIED in the running game except the one
+amount confirmed on 2026-10-02: 395 at stage 8.**
+
+### What runs now
+
+1. `UpdateMissionStatus(Complete)` (script) reaches `ServerGrantMissionRewards` (script), which calls, in this order and all from
+   `src/mission_script.cpp`: `GetCurrencyRewardType`, `GetCurrencyReward`, `GetExperienceReward`, `ExpEarn(amount, 4)`,
+   `GetItemRewardsForPlayer`. Source 4 is SideMissionAward (the Fire mission is not plot-critical).
+2. **`MissionDefinition.GetExperienceReward`** (native, ours): `trunc(float(span x percentage x m))`, `span = R(L+1) - R(L)` over the
+   mission's game stage `L`, `m = 1` (first playthrough, player below level 50; other cases throw "not implemented" rather than
+   guess). The percentage is read from the installed data: `Reward.ExperienceRewardPercentage` is an attribute whose value chain is a
+   constant (0.05) times a conditional on `PlayThroughCount` (1 here), evaluated by `src/progression.*` (below). The curve is read
+   from `GD_Balance_Experience.Formulas.Init_ExperienceRequiredForLevel` (`60 x (n ^ 2.8 + 7.33)`, the level through a global-slot
+   attribute), `R(n) = max(0, trunc f(n) - trunc f(1))`, single precision.
+3. **`MissionDefinition.GetGameStage`** (native, ours): the stage locked into the mission when it became Active (the status routine
+   does that before the script hook), else the region's current stage. The region stage is the host's input
+   (`FireMissionSlice::setRegionGameStage`; the host keeps fixing it per player and playthrough and saving it).
+4. **`WillowPlayerController.ExpEarn`** (native, ours): `Exp x scale` added to a VM-side pool (`CurrentValue`, a float), clamped to
+   `[0, R(max level)]`, only when it raises the pool; it does not level up. The scales (`ExpCombatPointsScale`,
+   `ExpMissionPointsScale`, `ExpAllPointsScale`) are attributes whose base values the note did not decode: **taken as 1**. The call is
+   still recorded (`expEarned()`).
+5. **The pool update** (`ExperienceResourcePool.ApplyExpPointsToExpLevel(false)`, implemented as `MissionScript::updateExperiencePool`
+   and run from `FireMissionSlice::tick`, standing in for the pool's per-frame update): while the pool has reached
+   `ExpPointsNextLevelAt` (> 0) and the level is below `GetMaxExpLevel` (native, ours: 50), the installed script
+   `WillowPlayerController.ExpLevelUp(false)` runs on the VM controller. It raises `PlayerReplicationInfo.ExpLevel`, then
+   `OnExpLevelChange` (script) sets `ExpPointsNextLevelAt` through `GetExpPointsRequiredForLevel` (native, ours, the same curve).
+   Skill points, health and the HUD stay stubbed in the script (the globals' skill-point formula is not evaluated); `LevelUpCount` is not
+   kept.
+6. **Where the state lives:** the VM holds the pool value and the level (the controller's `PlayerReplicationInfo`), the host keeps
+   Maya's `UOpenWillowSkills` (level and experience display, skill points, health, save). Simplest design that keeps the host's UI and
+   save untouched: before accept and turn-in the host copies its inputs in (`setRegionGameStage`, `setPlayerExperience(level,
+   experience)`), and the slice hands back two events, `Experience` (what ExpEarn added) and `Level` (the level the pool update
+   reached). The host applies `Experience` with its own `AddExperience` and compares the `Level` event with its own level
+   (`OWQUEST script level-up: VM level 9, host level 9 (same)`; a quest-suite check). `GrantExperience` and its use of the
+   manifest's `MissionXp` are gone from the grant path; `MissionXp` and the manifest's `candidate_amount_by_mission_level` remain only
+   as the suite's oracle.
+
+### `src/progression.*`: a subset of the attribute evaluator (NATIVE_PROGRESSION section 1)
+
+`AttributeEvaluator` evaluates an `AttributeInitializationData`: the constant, an attribute whose context chain is the no-context
+resolver and whose value chain is constant / simple-math (Add, Sub, Mul, Div) / global-slot resolvers, a definition's `ValueFormula`
+(offset added before the multiplier, power skipped at 1) or `ConditionalInitialization` (expressions on `PlayThroughCount`, all must
+hold: UNVERIFIED), the base-value modes (numbers 1..3 as the note lists them, which name is which not checked), scale, range
+restriction and rounding, in single precision. Random variance, other resolvers, other context resolvers and other condition
+attributes throw `unsupported ...`: a mission that needs them stops with a script error instead of a guessed value.
+
+### Other reward natives implemented from the bridge note
+
+- `GetCurrencyRewardType`: `Reward.CurrencyRewardType` (or the alternative's).
+- `GetCurrencyReward`: other currencies from `OtherCurrencyReward`; credits only when the multiplier is exactly 0 (the Fire mission;
+  the note's `MissionCreditRewardFormula` attribute values were not decoded, so any other multiplier logs a "not implemented" entry in the
+  stub list and returns 0). Optional-objective currency is likewise a "not implemented" entry.
+- `ShouldGrantAlternateReward`: the last objective set of the `NextSet` chain, its objectives' indices in `ObjectiveDefs`, the passed
+  progress; **exercised only with the empty progress that the stubbed `MissionTracker.GetObjectivesProgress` returns**, so it answers false;
+  for a bit-mask objective the required progress is its full mask (UNVERIFIED).
+- `GetItemRewardsForPlayer`: the empty case (the Fire mission). Non-empty `RewardItems` or `RewardItemPools` log a "not implemented"
+  entry: item generation and pool rolls belong to the loot lane (`NATIVE_LOOT.md`).
+- `MissionDefinition.GetGameStage` as above.
+
+### VM fix: static-array fields of structs
+
+A struct's default tags set a static array (`ArrayDim > 1`) one element per tag, selected by the tag's array index. The VM overwrote the
+whole array with the last element, so `PendingMissionRewardData.WeaponRewards/ItemRewards` read "out of bounds" and, more
+visibly, `ProviderDefinitionPathName.PathComponentNames` was a scalar holding the last component. Both now are two-element / name arrays.
+`providerPathLeaf` (`src/behavior.*`) takes the provider's own name from that array for the two callers that used the scalar. The
+dummy provider's sequence changes still route (22 host events identical to before). Synthetic check: `vm_test.py` `MakePair`.
+
+### Stubs still hit on the Fire turn-in (real data, 14 up to the turn-in, 18 with a level-up)
+
+`Actor.SetTimer`, `MissionTracker.GetActivePrimaryObjectiveSet` / `GetAllMissions` / `GetObjectivesProgress`,
+`PlayerController.IsPrimaryPlayer`, `WillowGlobals.GetWillowGlobals`, `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`,
+`WillowPlayerController.GetCurrentPlaythrough` / `GetHUDMovie` / `PlayUIAkEvent` / `RefreshBalanceDataFromMissionCompletion` /
+`UnlockAchievementIfConditionsMet` / `UpdateLcdMissionStatus`, `WorldInfo.IsMenuLevel`; the level-up adds
+`AttributeInitializationDefinition.EvaluateInitializationData` (the skill-point formula), `WillowLeviathanService.RecordPlayerCharacterGainedLevelEventForPlayer`,
+`RecordPointsEarnedEventForPlayer` and `WillowPlayerController.RecalculateAttributeInitializedState`. Removed from the list by this swap:
+`MissionDefinition.GetGameStage`, `GetCurrencyReward`, `GetCurrencyRewardType`, `ShouldGrantAlternateReward`, `GetItemRewardsForPlayer`.
+
+### Not modelled / uncertain
+
+Playthrough 2 and later and level 50+ (the playthrough multiplier m), optional objectives' own XP, the experience scales (1),
+DLC level caps, `LevelUpCount`, HUD updates and telemetry in `ExpEarn`, the order in which the real pool updates relative to other
+per-frame work (here: once per `tick`, after the mission tick), and everything the note calls open. The region stage is still the
+host's table (`values.xp.region_stage`), not evaluated from `RegionBalanceData` in `src/`.
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+
+- **Real-data CLI** (`--slice-run ... stage:8 player:8:20208 accept ... turnin tick:1`): one `Experience` event of **395**, `exp_earned`
+  `(395, 4, -1)`, pool 20,603, no level change; with `player:8:27900` the pool reaches 28,295, the script `ExpLevelUp` runs and the
+  `Level` event says 9. At `stage:7` the amount is 316 (the table in NATIVE_PROGRESSION).
+- Synthetic `mission_script_test.py` (invented curve `2 x (n^2 + 1)`, percentage `0.5 x (conditional 3)`): reward `trunc(18 x 1.5) = 27`
+  at stage 4, the later `stage:9` does not change it (locked at accept), pool 16 + 27 = 43 gives level 3 -> 4 by the script `ExpLevelUp`
+  and stops, the pool clamps at R(50) = 4998 and the level at 50, no region stage gives 0.
+- `ctest` **11/11**, `tools/verify_packages.py` 9/9, UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=81 errors=0 (80 before), resume PASS checks=11 errors=0.** New check
+  `script_pool_update_levels_up_to_host_level`; all existing XP, level, skill-point and health checks unchanged and green.

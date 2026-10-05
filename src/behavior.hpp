@@ -148,5 +148,8 @@ private:
 
 // Names of an Enum export ([NetIndex][None][Next][count][FName * count]), e.g. to name a decoded enum byte.
 std::vector<std::string> enumNames(Runtime& runtime, const std::string& package, const std::string& enumPath);
+// The last component of a ProviderDefinitionPathName's PathComponentNames: the provider's own name. The field is a static array
+// of names (the last non-empty element); an older reading kept only the last tagged element, which is the same name.
+std::string providerPathLeaf(const Value* components);
 
 } // namespace vm

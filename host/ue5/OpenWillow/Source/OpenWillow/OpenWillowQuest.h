@@ -104,7 +104,8 @@ private:
     void PressUse();
     void Shot(const TCHAR* Name);
     void LendMissionWeapon();
-    void GrantExperience();
+    void ApplyScriptExperience(int32 Amount);
+    void SyncScriptInputs();
     bool RunPhaselockTest();            // the Phaselock steps after the mission; false while waiting
     bool PhaselockTableMatchesManifest() const;
 

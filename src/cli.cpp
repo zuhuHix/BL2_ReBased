@@ -85,9 +85,10 @@ void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
 
 // The mission script bridge's report, shared by --mission-run and --slice-run (src/mission_script.hpp): the controller's own
 // record of the mission, every ExpEarn call, the natives without an implementation that the script reached, VM notes.
-void printScriptReport(int playerStatus, bool needsRewards, const std::vector<vm::MissionScript::ExpEarn>& earned,
+void printScriptReport(int playerStatus, bool needsRewards, int playerLevel, float pool, const std::vector<vm::MissionScript::ExpEarn>& earned,
                        const std::vector<std::string>& stubs, const std::vector<std::string>& notes) {
-    std::cout << "{\"player_status\":" << playerStatus << ",\"needs_rewards\":" << (needsRewards ? "true" : "false") << ",\"exp_earned\":[";
+    std::cout << "{\"player_status\":" << playerStatus << ",\"needs_rewards\":" << (needsRewards ? "true" : "false")
+              << ",\"player_level\":" << playerLevel << ",\"experience_pool\":" << pool << ",\"exp_earned\":[";
     bool first = true;
     for (const auto& earn : earned) {
         std::cout << (first ? "" : ",") << "{\"amount\":" << earn.amount << ",\"source\":" << earn.source << ",\"type\":" << earn.type << "}";
@@ -579,7 +580,7 @@ int main(int argc, char** argv) {
         }
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
-            // turnin | tick:<seconds> | script:accept | script:turnin | xp:<amount>
+            // turnin | tick:<seconds> | script:accept | script:turnin | stage:<n> | player:<level>:<experience> | pool
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
@@ -590,7 +591,7 @@ int main(int argc, char** argv) {
             // calls UpdateMissionStatus.
             std::unique_ptr<vm::MissionScript> script;
             for (int i = 6; i < argc; ++i)
-                if (std::string(argv[i]).rfind("script:", 0) == 0 || std::string(argv[i]).rfind("xp:", 0) == 0) {
+                if (std::string(argv[i]).rfind("script:", 0) == 0 || std::string(argv[i]).rfind("stage:", 0) == 0 || std::string(argv[i]).rfind("player:", 0) == 0) {
                     script = std::make_unique<vm::MissionScript>(runtime, mission);
                     break;
                 }
@@ -605,7 +606,13 @@ int main(int argc, char** argv) {
                 if (step == "accept") ok = mission.accept(completed);
                 else if (step == "script:accept" && script) ok = script->accept(completed);
                 else if (step == "script:turnin" && script) ok = script->turnIn();
-                else if (step.rfind("xp:", 0) == 0 && script) script->setExperienceReward(std::stoi(step.substr(3)));
+                else if (step.rfind("stage:", 0) == 0 && script) script->setRegionGameStage(std::stoi(step.substr(6)));
+                else if (step.rfind("player:", 0) == 0 && script) {     // player:<level>:<experience>
+                    const auto colon = step.find(':', 7);
+                    if (colon == std::string::npos) usage();
+                    script->setPlayerExperience(std::stoi(step.substr(7, colon - 7)), std::stoll(step.substr(colon + 1)));
+                }
+                else if (step == "pool" && script) script->updateExperiencePool();
                 else if (step == "turnin") ok = mission.turnInMission();
                 else if (step == "kickoff") ok = mission.kickoff();
                 else if (step.rfind("obj:", 0) == 0) {
@@ -635,15 +642,16 @@ int main(int argc, char** argv) {
             std::cout << "]";
             if (script) {
                 std::cout << ",\"script\":";
-                printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->expEarned(), script->stubs(), script->notes());
+                printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->playerLevel(), script->experiencePool(), script->expEarned(), script->stubs(), script->notes());
             }
             std::cout << "}\n";
             return mission.errors.empty() && (!script || script->errors.empty()) ? 0 : 1;
         }
         if (mode == "--slice-run") {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
-            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s> | xp:<amount> (the XP the script's
-            // GetExperienceReward returns, a host stand-in). accept and turnin run the installed controller script.
+            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
+            // owns) | player:<level>:<experience> (the player's state). accept and turnin run the installed controller script;
+            // tick also runs the experience pool update.
             // Package argument is Sanctuary_Dynamic.
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
@@ -654,7 +662,7 @@ int main(int argc, char** argv) {
             std::set<std::string> completed;
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
-                                          "reward", "status", "objective_set", "objective_complete"};
+                                          "reward", "status", "objective_set", "objective_complete", "experience", "level"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {
@@ -667,7 +675,12 @@ int main(int argc, char** argv) {
                 else if (step == "hit:other") ok = slice.hitDummy(false);
                 else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
                 else if (step == "turnin") ok = slice.turnIn();
-                else if (step.rfind("xp:", 0) == 0) slice.setExperienceReward(std::stoi(step.substr(3)));
+                else if (step.rfind("stage:", 0) == 0) slice.setRegionGameStage(std::stoi(step.substr(6)));
+                else if (step.rfind("player:", 0) == 0) {     // player:<level>:<experience>
+                    const auto colon = step.find(':', 7);
+                    if (colon == std::string::npos) usage();
+                    slice.setPlayerExperience(std::stoi(step.substr(7, colon - 7)), std::stoll(step.substr(colon + 1)));
+                }
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false") << ",\"events\":[";
@@ -684,7 +697,7 @@ int main(int argc, char** argv) {
             first = true;
             for (const auto& line : slice.errors()) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "],\"script\":";
-            printScriptReport(slice.scriptPlayerStatus(), slice.scriptPlayerNeedsRewards(), slice.expEarned(), slice.scriptStubs(), slice.scriptNotes());
+            printScriptReport(slice.scriptPlayerStatus(), slice.scriptPlayerNeedsRewards(), slice.scriptPlayerLevel(), slice.scriptExperiencePool(), slice.expEarned(), slice.scriptStubs(), slice.scriptNotes());
             std::cout << ",\"dummy_boundary\":[";
             first = true;
             for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }

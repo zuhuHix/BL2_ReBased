@@ -41,6 +41,7 @@ public:
     MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath);
 
     Status status() const { return status_; }
+    bool hasOptionalObjective() const;
     int statusNumber() const;               // the EMissionStatus number the script sees (Active 1, ReadyToTurnIn 3, Complete 4)
     const std::string& activeSet() const { return activeSet_; }
     const std::string& path() const { return missionPath_; }

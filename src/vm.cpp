@@ -858,7 +858,13 @@ void TagReader::tagged(Store& target, const std::unordered_map<std::string, Prop
         reader.limit = savedLimit;
         reader.pos = end;
         if (!ok) continue;
-        if (Value* slot = target.field(propertyName)) *slot = std::move(value);
+        if (Value* slot = target.field(propertyName)) {
+            // A static array field (ArrayDim > 1) holds one tag per element, selected by the tag's array index.
+            if (found != declared.end() && found->second.arrayDim > 1 && found->second.type != "ArrayProperty") {
+                if (slot->kind == Value::Kind::Array && size_t(arrayIndex) < slot->elements().size())
+                    slot->elements()[size_t(arrayIndex)] = std::move(value);
+            } else *slot = std::move(value);
+        }
     }
 }
 

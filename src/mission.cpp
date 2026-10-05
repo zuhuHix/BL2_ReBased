@@ -133,11 +133,15 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
             const Value* components = path ? path->field("PathComponentNames") : nullptr;
             const Value* action = p.runtime().property(*b.object, "Action");
             const int64_t index = action ? action->integer() : -1;
-            emit(Effect::Kind::SetSequence, components ? components->s : "", text(p.runtime(), *b.object, "SequenceName"),
+            emit(Effect::Kind::SetSequence, providerPathLeaf(components), text(p.runtime(), *b.object, "SequenceName"),
                  index >= 0 && size_t(index) < actions.size() ? actions[size_t(index)] : "");
             return std::vector<int>();
         });
     }
+}
+
+bool MissionSystem::hasOptionalObjective() const {
+    return std::any_of(objectives_.begin(), objectives_.end(), [](const auto& entry) { return entry.second.optional; });
 }
 
 int MissionSystem::statusNumber() const { return nativeStatus(status_); }
