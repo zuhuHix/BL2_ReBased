@@ -94,6 +94,8 @@ private:
     void Save();
     void RunTest(float Delta);
     bool PlayerTouchesTrigger() const;
+    bool TouchesTrigger(const class AActor* Actor) const;
+    bool bPlayerInRange = false, bMarcusInRange = false;     // the waypoint cylinder overlap last reported to the slice
     bool InTalkReach() const;
     void SpawnMarcus();
     void SpawnDummy();

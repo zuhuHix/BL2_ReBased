@@ -326,7 +326,7 @@ struct Interp {
         case script::EX_DynamicCast: case script::EX_InterfaceCast: {
             Value v = eval(e.kids.at(0), f, ctx);
             Class* want = rt.classAt(f.function->package, e.refs.at(0));
-            if (v.kind == K::Object && v.o && v.o->cls && want && v.o->cls->isChildOf(want)) return v;
+            if (v.kind == K::Object && v.o && v.o->cls && want && (v.o->cls->isChildOf(want) || rt.implements(v.o->cls, want))) return v;
             return Value::makeObject(nullptr);
         }
         case script::EX_MetaCast: {

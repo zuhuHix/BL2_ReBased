@@ -62,6 +62,18 @@ public:
     float experiencePool() const { return pool_; }
     int playerLevel();
 
+    // The stock waypoint actor of the GoToRange objective (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED): the placed WillowWaypoint of `package`
+    // at `path` runs its own script on the VM (PostBeginPlay at placement, Touch, the observer reaction over its Touching list). The host
+    // owns the overlap test and reports it: touch / untouch of the player pawn or of Marcus. False when the package has no such actor.
+    enum class Toucher { Player, Marcus };
+    bool placeWaypoint(const std::shared_ptr<const Package>& package, const std::string& path);
+    bool hasWaypoint() const { return waypoint_ != nullptr; }
+    int objectiveUpdates() const { return objectiveUpdates_; }
+    void touch(Toucher who);
+    void untouch(Toucher who);
+    // The tracker's observer notifications reach the VM observers (a registered waypoint) as their MissionReaction* script events.
+    void notify(MissionSystem::Notification kind);
+
     // The controller's record of the mission (MissionPlaythroughs[0].MissionList[...].Status), -1 when it has none.
     int controllerStatus();
     bool controllerNeedsRewards();
@@ -75,6 +87,9 @@ private:
     Runtime& runtime_;
     MissionSystem& mission_;
     ObjectPtr controller_, tracker_, world_, replication_, globals_, globalsDefinition_;
+    ObjectPtr waypoint_, playerPawn_, marcusPawn_;
+    int objectiveUpdates_ = 0;
+    std::vector<ObjectPtr> observers_;                 // IMission observers registered with the tracker (the waypoint)
     std::set<std::string> completed_;
     std::map<std::string, size_t> stubs_;
     std::vector<std::string> notes_;
@@ -93,6 +108,9 @@ private:
     void updateMissionStatus(int nativeStatus);
     Value* missionList();
     int currentPlaythrough();
+    ObjectPtr pawnFor(Toucher who);
+    Value objectiveValue(const std::string& objectivePath);
+    void objectiveUpdated(const std::string& objectivePath, int bit);
     ExperienceCurve& curve();
     int gameStage() const { return lockedStage_ ? lockedStage_ : regionStage_; }
     int experienceReward(bool alternate);

@@ -912,3 +912,38 @@ for the behavior's own tag) is gone. New `src/dialog.hpp/.cpp` (`DialogSystem`, 
   against the echo caller; `bForcePlayImmediate`), `tools/verify_packages.py` 9/9.
 - **`tools/test_quest.ps1`: first run PASS checks=82 errors=0, resume PASS checks=11 errors=0** (81 before; the new check is the AkEvent comparison).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0** (behavior and kernel code changed).
+
+## Script swap 5: GoToRange through the stock waypoint script (2026-10-06)
+
+AI-assisted (Claude), lane I1 then the orchestrator (both worked from [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) only; neither
+opened analysis output). **All rules UNVERIFIED in the running game.** Replaces the stand-in where the host called `enterRange()` (a direct
+`UpdateObjective(RockPaper_GoToRange)`) when the player capsule overlapped the cylinder while the objective was active.
+
+- **What runs as script now:** the placed `WillowWaypoint_9` of `Sanctuary_Dynamic` is instantiated on the VM with authority and the world's
+  replication info. Its own `PostBeginPlay` registers it with the tracker as a mission observer; its own `Touch` filters with `IsPlayerOwned`,
+  asks `IsMissionObjectiveActive` and calls `UpdateObjective(LinkedObjective)`; its own "objective set changed" reaction re-checks every actor in
+  its `Touching` list, so a player already standing in the range completes the objective when `GoToRange_ObjSet` becomes active.
+- **New natives (src/mission_script.cpp):** `Actor.IsPlayerOwned` (owner chain to its root, the root's controller; true only for the player's
+  controller), `MissionTracker.IsMissionObjectiveActive` / `IsMissionObjectiveComplete` / `IsObjectiveSetActive` (MissionSystem's own
+  classification, the same predicate as its update gate), `UpdateObjective` (queued into MissionSystem), `RegisterMissionObserver` (VM
+  observers get the `MissionReaction*` events; LevelLoad at registration). After each applied update the VM controller hears
+  `UpdateMissionObjective(objective, bit)` and the tracker runs `TriggerMissionObjectivesChangedDelegates`, after the observers and before the
+  objective's own events, as the note orders them.
+- **VM:** interface casts (`EX_InterfaceCast`, `EX_DynamicCast` to an interface class) now succeed when the object's class defines every
+  function the interface declares (`Runtime::implements`). The packages' implemented-interface tables are not decoded; this is a structural
+  stand-in, UNVERIFIED, and an open item.
+- **Host:** the host still owns the shape test (actor cylinder vs the waypoint cylinder, now for any actor via its simple collision cylinder) and
+  reports begin/end of overlap for the player pawn and for Marcus (`touchWaypoint`); it no longer looks at the objective state. Marcus's touch
+  reaches the script and is ignored there. `enterRange()` stays as a thin wrapper (a player touch).
+- **Not yet swapped:** the dummy's `Behavior_UpdateMissionObjective` (Fire) is still the slice's own handler, not the script behavior; it is the
+  next step. `RequiredObjectivesComplete` is still not modelled (the note's gate also accepts it). New stubs reached at level start, all
+  harmless for the slice: `Actor.AttachComponent`, `MissionTracker.RegisterWaypoint`, `Trigger.TriggerDetachSprites`.
+- **CLI:** each `--slice-run` step record now carries the mission status after it; new steps `touch:` / `untouch:` `player` / `marcus`.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11 (`mission-script-synthetic` scenario F on a toy waypoint: Marcus ignored, one update for the player, a touch while not updatable
+  does nothing, a player inside at set activation completes it without re-entry, the `range` wrapper; scenario A now also records the
+  controller's `UpdateMissionObjective`), `tools/verify_packages.py` 9/9.
+- **`tools/test_quest.ps1`: first run PASS checks=83 errors=0, resume PASS checks=11 errors=0** (82 before; new check
+  `objective_completed_through_waypoint_script_once`). The log shows Marcus's touch delivered and ignored, then the player's touch.
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

@@ -220,6 +220,9 @@ public:
     PropertyDecl declAt(const std::shared_ptr<const Package>& package, int32_t ref);   // a property export, by reference
     std::vector<std::shared_ptr<const Package>> codePackages();                        // the loaded script packages
     int32_t findExport(const Package& package, const std::string& objectPath);   // fast Package::findExport
+    // Whether `cls` implements the interface class `iface` (named I<Upper>...): the class chain defines every function the interface
+    // declares. The packages' interface tables were not decoded; UnrealScript requires an implementer to define them (UNVERIFIED).
+    bool implements(Class* cls, const Class* iface);
 
     // Objects and values.
     ObjectPtr instantiate(Class* cls, const std::string& name = "");

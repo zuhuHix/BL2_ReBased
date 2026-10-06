@@ -19,6 +19,11 @@ R(2) 6, R(3) 16, R(4) 30, R(5) 48, R(50) 4998; the reward percentage is an attri
 (playthrough count == 2 gives 4, else 3), so 1.5 on the first playthrough. At game stage 4 the reward is
 trunc((R(5) - R(4)) x 1.5) = trunc(18 x 1.5) = 27.
 
+The waypoint scenario (--slice-run, scenario F) puts a toy WillowWaypoint at the stock placed-actor path of the toy `Sanctuary_Dynamic`
+package; its toy script (Touch, ProcessPlayerTouch, the set-changed reaction over its Touching list, PostBeginPlay registering it as a
+mission observer) mirrors the stock one in structure, over invented classes. The controller's toy UpdateMissionObjective records the
+marker ExpEarn(0, 210), so the number of such records is the number of applied objective updates the controller was told about.
+
 The dialog scenario (--mission-run, scenario E) uses a toy mission whose provider runs Behavior_TriggerDialogEvent behaviors over a toy
 dialog group (invented tags, priorities, acts, a talker name tag): Out on the first run, the dialog one kernel wake later, Finished when
 the live line ends, the priority arbitration with the tracked-mission floor, the last enabled entry for a tag, a template act through the
@@ -129,6 +134,10 @@ class Asm:
     def self_(self): self.raw(0x17)
     def false(self): self.raw(0x28)
     def return_nothing(self): self.raw(0x04, 0x0B)
+    def jump_if_not(self, cond):                # JumpIfNot(<target>, cond); returns the position to patch with the target statement
+        self.raw(0x07); at = len(self.b); self.w(0); cond(); return at
+    def patch(self, at): struct.pack_into('<H', self.b, at, self.here())   # the target is the next statement's in-memory offset
+    def here(self): return len(self.b) + 4 * self.refs
 
 
 FUNC_NATIVE, FUNC_FINAL, FUNC_DEFINED, FUNC_PUBLIC = 0x400, 0x1, 0x2, 0x20000
@@ -159,11 +168,11 @@ class Toy:
     def struct_(self, owner, name, defaults=None):
         return self.p.add_export(self.imp['ScriptStruct'], name, w32(0) * 4 if defaults is None else bytes(52) + defaults, outer=owner)
 
-    def function(self, owner, name, declared, body=None, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, result=None, native=0, friendly=None):
+    def function(self, owner, name, declared, body=None, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, result=None, native=0, friendly=None, locals_=()):
         """declared: [(kind, name, extra flags)]; `body(ids)` returns an Asm (None for a native). Children are exported
         first, in reverse declaration order, the return value before them (as in the real packages)."""
         ordered = ([(result, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET)] if result else []) + \
-                  [(k, n, CPF_PARM | extra) for k, n, extra in reversed(declared)]
+                  [(k, n, CPF_PARM | extra) for k, n, extra in reversed(declared)] + [(k, n, 0) for k, n in locals_]
         func_index = len(self.p.exports) + 1 + len(ordered)
         ids = {}
         for kind, pname, pflags in ordered: ids[pname] = self.prop(kind, func_index, pname, pflags)
@@ -191,13 +200,19 @@ def build_engine():
     p.add_export(toy.imp['Enum'], 'EChangeStatus', w32(0) + toy.none + w32(0) + w32(len(changes)) + b''.join(p.fname(c) for c in changes),
                  outer=T.cls('ITargetable'))
     T.prop('Name', T.cls('Behavior_RemoteEvent'), 'EventName')
+    behavior_base = T.cls('BehaviorBase')
+    T.function(behavior_base, 'GetWorldInfo', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Object')
     contexts = ['BCONTEXT_Self', 'BCONTEXT_Instigator']
     p.add_export(toy.imp['Enum'], 'EBehaviorContext', w32(0) + toy.none + w32(0) + w32(len(contexts)) + b''.join(p.fname(c) for c in contexts),
-                 outer=T.cls('BehaviorBase'))
+                 outer=behavior_base)
     actor = T.cls('Actor')
     T.function(T.cls('PlayerController', super_ref=actor), 'IsPrimaryPlayer', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Bool')
     T.prop('Byte', actor, 'Role')
     T.prop('Object', actor, 'WorldInfo')
+    T.prop('Object', actor, 'Owner')
+    T.array_of(actor, 'Touching', 'Object')
+    T.function(actor, 'IsPlayerOwned', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Bool')
+    T.prop('Object', T.cls('Pawn', super_ref=actor), 'Controller')
     p.add_export(toy.imp['Enum'], 'ENetRole', w32(0) + toy.none + w32(0) + w32(len(ROLES)) + b''.join(p.fname(r) for r in ROLES), outer=actor)
     world = T.cls('WorldInfo')
     T.prop('Object', world, 'GRI')
@@ -415,7 +430,22 @@ def build_willowgame():
     T.prop('Int', objective, 'ObjectiveCount')
     T.prop('Bool', objective, 'bRememberItemsWithinObjective')
 
+    engine_pawn = p.add_import_full('Class', engine, 'Pawn')
+    T.cls('WillowPlayerPawn', super_ref=engine_pawn)
+    T.cls('WillowAIPawn', super_ref=engine_pawn)
+    reactions = ['MissionReactionLevelLoad', 'MissionReactionStatusChanged', 'MissionReactionObjectiveSetChanged',
+                 'MissionReactionObjectiveUpdated', 'MissionReactionObjectiveCleared', 'MissionReactionObjectiveComplete']
+    imission = T.cls('IMission')
+    # LevelLoad also names the mission (as the stock observers' does); the others take the tracker here
+    def reaction_params(name): return [('Object', 'Tracker', 0)] + ([('Object', 'Mission', 0)] if name == 'MissionReactionLevelLoad' else [])
+    for name in reactions: T.function(imission, name, reaction_params(name), None, native)
     tracker = T.cls('MissionTracker')
+    for name, result in (('IsMissionObjectiveActive', 'Bool'), ('IsMissionObjectiveComplete', 'Bool'), ('IsObjectiveSetActive', 'Bool')):
+        T.function(tracker, name, [('Object', 'Objective', 0)], None, native, result)
+    update_objective = T.function(tracker, 'UpdateObjective', [('Object', 'Objective', 0), ('Int', 'ObjectiveBit', CPF_OPT)], None, native)['__self__']
+    register_observer = T.function(tracker, 'RegisterMissionObserver', [('Object', 'Observer', 0), ('Object', 'Mission', 0)], None, native)['__self__']
+    T.function(tracker, 'TriggerMissionObjectivesChangedDelegates', [('Object', 'Mission', 0)],
+               lambda ids: (lambda a: (a.return_nothing(), a.end(), a)[2])(Asm()))
     pair = [('Object', 'InMission', 0), ('Object', 'WillowPC', CPF_OPT)]
     activate = T.function(tracker, 'ActivateMission', pair, None, native)['__self__']
     complete = T.function(tracker, 'CompleteMission', pair, None, native)['__self__']
@@ -460,6 +490,12 @@ def build_willowgame():
     is_menu = p.add_import_full('Function', p.add_import_full('Class', engine, 'WorldInfo'), 'IsMenuLevel')
     exp_earn = T.function(controller, 'ExpEarn', [('Int', 'Exp', 0), ('Byte', 'Source', 0), ('Byte', 'ExpType', CPF_OPT)], None, native)['__self__']
 
+    def update_hook(ids):
+        a = Asm()
+        a.call(exp_earn, lambda: a.int_const(0), lambda: a.byte_const(210))
+        a.return_nothing(); a.end(); return a
+    T.function(controller, 'UpdateMissionObjective', [('Object', 'MissionObjective', 0), ('Int', 'ObjectiveBit', 0)], update_hook)
+
     def on_tracker(a, body):         # Self.WorldInfo.GRI.MissionTracker.<body>
         a.context(lambda: a.context(lambda: a.context(lambda: a.instance(world_info), lambda: a.instance(gri)),
                                     lambda: a.instance(tracker_prop)), body)
@@ -485,6 +521,53 @@ def build_willowgame():
                lambda: a.byte_const(5))
         a.return_nothing(); a.end(); return a
     T.function(controller, 'ServerCompleteMission', [('Object', 'Mission', 0), ('Object', 'MissionDirector', 0)], complete_mission)
+
+    # The toy waypoint: Touch -> ProcessPlayerTouch; the set-changed reaction re-checks every actor in Touching; PostBeginPlay registers it.
+    waypoint = T.cls('WillowWaypoint', super_ref=actor)
+    linked = T.prop('Object', waypoint, 'LinkedObjective')
+    T.prop('Bool', waypoint, 'bUpdateObjectiveOnPlayerTouch')
+    touching_prop = p.add_import_full('ArrayProperty', actor, 'Touching')
+    is_owned = p.add_import_full('Function', actor, 'IsPlayerOwned')
+
+    def process(ids):
+        a = Asm()
+        at = a.jump_if_not(lambda: on_tracker(a, lambda: a.call(active_fn, lambda: a.instance(linked))))
+        on_tracker(a, lambda: a.call(update_objective, lambda: a.instance(linked)))
+        a.patch(at)
+        a.return_nothing(); a.end(); return a
+    active_fn = [e for e in p.exports if e[3] == p.fname('IsMissionObjectiveActive')]
+    active_fn = p.exports.index(active_fn[0]) + 1
+    process_ids = T.function(waypoint, 'ProcessPlayerTouch', [], process)['__self__']
+
+    def touch(ids):
+        a = Asm()
+        at = a.jump_if_not(lambda: a.context(lambda: a.local(ids, 'Other'), lambda: a.call(is_owned)))
+        a.call(process_ids)
+        a.patch(at)
+        a.return_nothing(); a.end(); return a
+    T.function(waypoint, 'Touch', [('Object', 'Other', 0)], touch)
+
+    def set_changed(ids):
+        a = Asm()
+        a.raw(0x58); a.instance(touching_prop); a.local(ids, 'Item'); a.raw(0); a.raw(0x4A); end_at = len(a.b); a.w(0)
+        at = a.jump_if_not(lambda: a.context(lambda: a.local(ids, 'Item'), lambda: a.call(is_owned)))
+        a.call(process_ids)
+        a.patch(at)
+        a.raw(0x31)                                  # IteratorNext
+        struct.pack_into('<H', a.b, end_at, a.here())
+        a.raw(0x30)                                  # IteratorPop
+        a.return_nothing(); a.end(); return a
+    for name in reactions:
+        if name == 'MissionReactionObjectiveSetChanged':
+            T.function(waypoint, name, [('Object', 'Tracker', 0)], set_changed, locals_=[('Object', 'Item')])
+        else:
+            T.function(waypoint, name, reaction_params(name), lambda ids: (lambda a: (a.return_nothing(), a.end(), a)[2])(Asm()))
+
+    def begin_play(ids):
+        a = Asm()
+        on_tracker(a, lambda: a.call(register_observer, lambda: (a.raw(0x52), a.ref(imission), a.self_()), lambda: a.raw(0x2A)))
+        a.return_nothing(); a.end(); return a
+    T.function(waypoint, 'PostBeginPlay', [], begin_play)
 
     def validate_reply(ids):
         a = Asm()
@@ -601,6 +684,11 @@ def build_dynamic():
     for part in ('GD_TargetDummy', 'Character', 'CharClass_TargetDummy'):
         outer = p.add_export(package_class, part, w32(0) + none, outer=outer)
     provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'BehaviorProviderDefinition_5', b'', outer=outer)
+    # the placed waypoint at the stock path (a placed actor: 26 bytes before its tags)
+    world = p.add_export(package_class, 'TheWorld', w32(0) + none)
+    level = p.add_export(package_class, 'PersistentLevel', w32(0) + none, outer=world)
+    p.add_export(chain('WillowGame', 'WillowWaypoint'), 'WillowWaypoint_9',
+                 bytes(26) + t.obj('LinkedObjective', chain('Startup', 'ToyMission', 'RockPaper_GoToRange')) + t.bool('bUpdateObjectiveOnPlayerTouch', True) + none, outer=level)
     mission, objective = chain('Startup', 'ToyMission'), chain('Startup', 'ToyMission', 'RockPaper_GoToRange')
     set_a, set_b = chain('Startup', 'ToyMission', 'SetA'), chain('Startup', 'ToyMission', 'SetB')
 
@@ -782,11 +870,12 @@ with tempfile.TemporaryDirectory() as folder:
     check('A script report present', script is not None, got)
     if script:
         # hook Active (1), kickoff tick (IsMissionMoviePlaying, once), hook ReadyToTurnIn (3), hook Complete (4), then the reward:
-        # trunc(18 x 1.5) = 27 at the stage locked at acceptance (4), not the later 9
+        # trunc(18 x 1.5) = 27 at the stage locked at acceptance (4), not the later 9; the objective update tells the controller
+        # UpdateMissionObjective (210) before the ReadyToTurnIn hook
         # AcceptMission (twice: the second is refused by the native but the script still runs its probes) probes IsDataValid (the
         # flag the validation reply set at construction: 101), IsPrimaryPlayer (true: 103) and IsMenuLevel (false: 106)
         probes = [(0, 101, -1), (0, 103, -1), (0, 106, -1)]
-        want = [(0, 1, -1)] + probes + probes + [(0, 100, -1), (0, 3, -1), (0, 4, -1), (27, 5, -1)]
+        want = [(0, 1, -1)] + probes + probes + [(0, 100, -1), (0, 210, -1), (0, 3, -1), (0, 4, -1), (27, 5, -1)]
         check('A recorded ExpEarn calls in order', earned_of(script) == want, earned_of(script))
         # 16 + 27 = 43 in the pool; the pool update ran ExpLevelUp from level 3 to 4 (R(4) = 30 <= 43 < R(5) = 48) and stopped
         check('A pool and level', script['experience_pool'] == 43 and script['player_level'] == 4, (script['experience_pool'], script['player_level']))
@@ -884,6 +973,28 @@ with tempfile.TemporaryDirectory() as folder:
     check('E3 template act through the link table', len(template) == 1 and template[0]['act'].endswith('TalkActs[0]') and template[0]['ak'].endswith('Ak_C'), template)
     immediate = steps[7]
     check('E3 immediate: Finished and Out in the first run (Out thread first)', seen(immediate) == ['ImmOut', 'ImmDone'] and len(lines(immediate)) == 1, (seen(immediate), lines(immediate)))
+
+    # Scenario F: the GoToRange waypoint script through --slice-run (src/mission_script.*, src/slice.*), NATIVE_OBJECTIVE_TRIGGERS.md.
+    def updates(got): return sum(1 for e in got['script']['exp_earned'] if e['source'] == 210)
+
+    # F1: Marcus's touch is ignored; the player's completes the objective (the toy set can complete the mission) with exactly one update;
+    # touching again after it completed changes nothing
+    code, got = slice_run('touch:marcus', 'accept', 'touch:marcus', 'touch:player', 'untouch:player', 'touch:player')
+    check('F1 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    status = [step['status'] for step in got['steps']]
+    check('F1 Marcus ignored, the player completes it once', status == [0, 1, 1, 2, 2, 2] and updates(got) == 1, (status, updates(got)))
+
+    # F2: not updatable (the mission is not started): a touch changes nothing; the player already inside when the set activates completes the
+    # objective at that moment, without leaving and re-entering
+    code, got = slice_run('touch:player', 'accept')
+    check('F2 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    status = [step['status'] for step in got['steps']]
+    check('F2 no update while not updatable, then the set-changed reaction completes it', status == [0, 2] and updates(got) == 1
+          and [e['kind'] for e in got['steps'][0]['events']] == [], (status, updates(got)))
+
+    # F3: the Fire-style direct wrapper (range) goes through the waypoint too
+    code, got = slice_run('accept', 'range')
+    check('F3 range wrapper', code == 0 and [step['status'] for step in got['steps']] == [1, 2] and updates(got) == 1, [step['status'] for step in got['steps']])
 
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')

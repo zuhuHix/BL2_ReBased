@@ -217,6 +217,59 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         return Value();
     });
 
+    // Objective progress through the tracker (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED). IsMissionObjectiveActive is "can this objective be
+    // updated now" (mission Active, objective in the active set, progress below the count): MissionSystem's Active classification, also the
+    // gate of its own update. UpdateObjective only queues the request (first in, first out) in MissionSystem, which applies it, tells the
+    // observers and then calls onObjectiveUpdated.
+    const auto pathOf = [](const Value& reference) -> std::string {
+        if (reference.kind != Value::Kind::Object || !reference.o || !reference.o->resourcePackage) return "";
+        return reference.o->resourcePackage->path(reference.o->resourceIndex);
+    };
+    bind("WillowGame.MissionTracker.IsMissionObjectiveActive", [this, pathOf](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeBool(mission_.objectiveState(pathOf(c.in(0))) == "Active");
+    });
+    bind("WillowGame.MissionTracker.IsMissionObjectiveComplete", [this, pathOf](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeBool(mission_.objectiveState(pathOf(c.in(0))) == "Complete");
+    });
+    bind("WillowGame.MissionTracker.IsObjectiveSetActive", [this, pathOf](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeBool(mission_.setActive(pathOf(c.in(0))));
+    });
+    bind("WillowGame.MissionTracker.UpdateObjective", [this, pathOf](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        const std::string path = pathOf(c.in(0));
+        if (!path.empty()) mission_.updateObjectiveByPath(path, c.has(1) ? int(c.in(1).integer()) : 0);
+        return Value();
+    });
+    // RegisterMissionObserver: the observer is told "level load" at once (the waypoint's reaction does nothing) and then every
+    // notification the tracker raises. Only the VM's own observers are kept here; the dummy's conditions are the slice's.
+    bind("WillowGame.MissionTracker.RegisterMissionObserver", [this](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        if (c.in(0).kind == Value::Kind::Object && c.in(0).o) {
+            observers_.push_back(c.in(0).o);
+            runtime_.callByName(c.in(0).o, "MissionReactionLevelLoad", {Value::makeObject(tracker_), Value::makeObject(mission_.definition())});
+        }
+        return Value();
+    });
+    // IsPlayerOwned: the owner chain's root, its controller (a pawn's Controller, a controller itself), and whether that controller is the
+    // player's: a player pawn is, an AI pawn (no player controller) or a bare actor is not.
+    bind("Engine.Actor.IsPlayerOwned", [this](NativeCall& c) {
+        ObjectPtr root = c.self;
+        for (int depth = 0; root && depth < 16; ++depth) {
+            const Value* owner = runtime_.property(*root, "Owner");
+            if (!owner || owner->kind != Value::Kind::Object || !owner->o) break;
+            root = owner->o;
+        }
+        ObjectPtr owner = root;
+        if (root && root != controller_) {
+            const Value* control = runtime_.property(*root, "Controller");
+            owner = control && control->kind == Value::Kind::Object ? control->o : nullptr;
+        }
+        return Value::makeBool(owner && owner == controller_);
+    });
+
     // The mission data validation. In the game the flag is set when the reply to a mission data request arrives (the script
     // ClientValidateMissionData calls ValidateData, then does per-controller work); how a standalone run triggers that request
     // was not read. Here the reply is delivered once, when the VM graph is built: the installed script runs on the controller
@@ -224,6 +277,7 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     run([this] { runtime_.callByName(controller_, "ClientValidateMissionData"); });
 
     mission_.onStatusChanged = [this](int status) { updateMissionStatus(status); };
+    mission_.onObjectiveUpdated = [this](const std::string& path, int bit) { objectiveUpdated(path, bit); };
     mission_.onKickoffTick = [this] { run([this] { runtime_.callByName(controller_, "IsMissionMoviePlaying"); }); };
 }
 
@@ -324,6 +378,80 @@ bool MissionScript::controllerNeedsRewards() {
             if (definition && definition->o == mission_.definition() && needs) return needs->truth();
         }
     return false;
+}
+
+// The objective as the script sees it: the same stand-in object the mission data's own references resolve to.
+Value MissionScript::objectiveValue(const std::string& objectivePath) {
+    const auto package = mission_.definition()->resourcePackage;
+    const int32_t index = package ? runtime_.findExport(*package, objectivePath) : 0;
+    return Value::makeObject(index > 0 ? runtime_.resource(package, index) : nullptr);
+}
+
+// After an applied objective update (NATIVE_OBJECTIVE_TRIGGERS.md): the single local controller hears UpdateMissionObjective(objective, bit)
+// and the tracker its objectives-changed delegates; once per applied update, after the observers and before the objective's events.
+void MissionScript::objectiveUpdated(const std::string& objectivePath, int bit) {
+    ++objectiveUpdates_;
+    run([this, &objectivePath, bit] {
+        const Value objective = objectiveValue(objectivePath);
+        runtime_.callByName(controller_, "UpdateMissionObjective", {objective, Value::makeInt(bit)});
+        runtime_.callByName(tracker_, "TriggerMissionObjectivesChangedDelegates", {Value::makeObject(mission_.definition())});
+    });
+}
+
+ObjectPtr MissionScript::pawnFor(Toucher who) {
+    ObjectPtr& pawn = who == Toucher::Player ? playerPawn_ : marcusPawn_;
+    if (!pawn) {
+        pawn = runtime_.instantiate(runtime_.findClass(who == Toucher::Player ? "WillowGame.WillowPlayerPawn" : "WillowGame.WillowAIPawn"));
+        // The player's pawn is controlled by the player's controller; Marcus has no player controller.
+        if (who == Toucher::Player) required(runtime_, *pawn, "Controller") = Value::makeObject(controller_);
+    }
+    return pawn;
+}
+
+bool MissionScript::placeWaypoint(const std::shared_ptr<const Package>& package, const std::string& path) {
+    const int32_t index = package ? runtime_.findExport(*package, path) : 0;
+    if (index <= 0) return false;
+    waypoint_ = runtime_.instantiateExport(package, index, 26);
+    const auto roles = enumNames(runtime_, "Engine", "Actor.ENetRole");
+    required(runtime_, *waypoint_, "Role") = Value::makeByte(std::find(roles.begin(), roles.end(), "ROLE_Authority") - roles.begin());
+    required(runtime_, *waypoint_, "WorldInfo") = Value::makeObject(world_);
+    run([this] { runtime_.callByName(waypoint_, "PostBeginPlay"); });       // level start: registers the waypoint as an observer
+    return true;
+}
+
+// Touch / UnTouch: the engine keeps the actor's Touching list and raises the script event once per overlapping pair (the host reports the
+// overlap; its shape test is the host's).
+void MissionScript::touch(Toucher who) {
+    if (!waypoint_) return;
+    ObjectPtr actor = pawnFor(who);
+    Value& touching = required(runtime_, *waypoint_, "Touching");
+    if (touching.kind != Value::Kind::Array) touching = Value::makeArray();
+    for (const auto& other : touching.elements()) if (other.o == actor) return;
+    touching.elements().push_back(Value::makeObject(actor));
+    run([this, actor] { runtime_.callByName(waypoint_, "Touch", {Value::makeObject(actor)}); });
+}
+
+void MissionScript::untouch(Toucher who) {
+    if (!waypoint_) return;
+    ObjectPtr actor = pawnFor(who);
+    Value& touching = required(runtime_, *waypoint_, "Touching");
+    if (touching.kind != Value::Kind::Array) return;
+    auto& items = touching.elements();
+    const auto found = std::find_if(items.begin(), items.end(), [&](const Value& v) { return v.o == actor; });
+    if (found == items.end()) return;
+    items.erase(found);
+    if (runtime_.findMethod(waypoint_->cls, "UnTouch")) run([this, actor] { runtime_.callByName(waypoint_, "UnTouch", {Value::makeObject(actor)}); });
+}
+
+// The observer reactions, by kind (arguments beyond the tracker are not passed: the waypoint's reaction ignores them).
+void MissionScript::notify(MissionSystem::Notification kind) {
+    using K = MissionSystem::Notification;
+    const char* names[] = {"MissionReactionLevelLoad", "MissionReactionStatusChanged", "MissionReactionObjectiveSetChanged",
+                           "MissionReactionObjectiveUpdated", "MissionReactionObjectiveCleared", "MissionReactionObjectiveComplete"};
+    const std::string name = names[int(kind)];
+    (void)K::LevelLoad;
+    for (const ObjectPtr& observer : std::vector<ObjectPtr>(observers_))
+        run([this, observer, name] { runtime_.callByName(observer, name, {Value::makeObject(tracker_)}); });
 }
 
 ObjectPtr MissionScript::loadRef(const Value& reference) {

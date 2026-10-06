@@ -357,6 +357,7 @@ bool MissionSystem::applyUpdate(const std::string& objectiveName, int bit) {
     const int count = objectiveProgress(objectiveName);
     emit(Effect::Kind::ObjectiveUpdated, objectiveName, std::to_string(count));
     if (onNotification) onNotification(Notification::ObjectiveUpdated);
+    if (onObjectiveUpdated) onObjectiveUpdated(objective.path, bit);
     fireEvent(objectiveName, ObjectiveProgress);
     if (count != objective.count) return true;
     completedObjectives_.insert(objectiveName);

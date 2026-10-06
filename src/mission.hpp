@@ -90,6 +90,10 @@ public:
     // LevelLoad is the immediate call an observer gets when it registers, raised by the observer's owner. ObjectiveCleared is not modelled.
     enum class Notification { LevelLoad, StatusChanged, ObjectiveSetChanged, ObjectiveUpdated, ObjectiveCleared, ObjectiveComplete };
     std::function<void(Notification)> onNotification;
+    // An objective update was applied (not refused by the tracker's own gate): called after the observers' "objective updated" reaction and
+    // before the objective's id-3 event, with the objective's path and the bit. The script bridge tells the local controller here
+    // (NATIVE_OBJECTIVE_TRIGGERS.md, UpdateObjective fan-out, UNVERIFIED).
+    std::function<void(const std::string& objectivePath, int bit)> onObjectiveUpdated;
     // MissionTracker.UpdateObjective: one queued update (+1, or the bit OR-ed in for a bit-mask objective).
     bool updateObjective(const std::string& objectiveName, int bit = 0);
     bool updateObjectiveByPath(const std::string& objectivePath, int bit = 0);   // what Behavior_UpdateMissionObjective names

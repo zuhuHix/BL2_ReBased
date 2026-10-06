@@ -44,7 +44,11 @@ public:
     MissionSystem& mission() { return *mission_; }
     BehaviorProvider& dummy() { return *dummy_; }
     bool accept(const std::set<std::string>& completedMissions);
-    bool enterRange();                       // the GoToRange objective
+    bool enterRange();                       // the GoToRange objective: the player enters the waypoint's cylinder (touchWaypoint)
+    // The host's overlap of the waypoint's cylinder with the player pawn (or Marcus): begin / end. The stock WillowWaypoint script runs on
+    // the VM: Touch for a player-owned pawn updates GoToRange when it is updatable, and the set-changed reaction re-checks the actors
+    // already inside (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED).
+    void touchWaypoint(bool player, bool begin);
     // OnSpawned on the dummy: call when the host spawns it (the stock spawn is a population den tied to the Fire
     // objective; not decoded here). With FireDamage enabled it emits RocksPaper_MoveTargetForward.
     bool spawnDummy();
@@ -60,6 +64,7 @@ public:
     // Active) and the player's level and experience (set before turnIn and whenever the host changes them).
     void setRegionGameStage(int stage) { script_->setRegionGameStage(stage); }
     void setPlayerExperience(int level, int64_t experience) { script_->setPlayerExperience(level, experience); }
+    int scriptObjectiveUpdates() const { return script_->objectiveUpdates(); }   // applied objective updates the VM controller was told about
     int scriptPlayerLevel() { return script_->playerLevel(); }
     float scriptExperiencePool() const { return script_->experiencePool(); }
     // expEarned() is what ExpEarn was called with.

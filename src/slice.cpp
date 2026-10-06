@@ -18,12 +18,15 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                    const std::string& dummyProviderPath)
     : runtime_(runtime) {
     mission_ = std::make_unique<MissionSystem>(runtime, "Startup", missionPath);
-    mission_->onNotification = [this](MissionSystem::Notification) { applyConditions(); };
+    // The tracker's observers in registration order: the VM's own (the waypoint, registered at level start) first, then the dummy's conditions.
+    mission_->onNotification = [this](MissionSystem::Notification kind) { script_->notify(kind); applyConditions(); };
     script_ = std::make_unique<MissionScript>(runtime, *mission_);
     auto package = runtime.package(dummyProviderPackage);
     const int32_t index = runtime.findExport(*package, dummyProviderPath);
     if (index <= 0) throw RuntimeError("dummy behavior provider not found: " + dummyProviderPath);
     dummy_ = std::make_unique<BehaviorProvider>(runtime, package, index);
+    // The stock GoToRange waypoint (placed in the same level package), if the package has it.
+    script_->placeWaypoint(package, "TheWorld.PersistentLevel.WillowWaypoint_9");
     dummyName_ = dummyProviderPath.substr(dummyProviderPath.rfind('.') + 1);
     auto& d = *dummy_;
     d.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
@@ -215,10 +218,20 @@ bool FireMissionSlice::accept(const std::set<std::string>& completed) {
     return ok;
 }
 
-bool FireMissionSlice::enterRange() {
-    const bool ok = mission_->updateObjective("RockPaper_GoToRange");
+// The host reports the overlap of an actor with the waypoint's cylinder; the waypoint's own script decides what it means.
+void FireMissionSlice::touchWaypoint(bool player, bool begin) {
+    using W = MissionScript::Toucher;
+    if (begin) script_->touch(player ? W::Player : W::Marcus); else script_->untouch(player ? W::Player : W::Marcus);
     pump();
-    return ok;
+}
+
+// The old direct call, kept as a thin wrapper: the player enters the cylinder. Without the stock waypoint (data without it) the objective
+// is updated directly as before.
+bool FireMissionSlice::enterRange() {
+    const auto before = mission_->objectiveProgress("RockPaper_GoToRange");
+    if (script_->hasWaypoint()) touchWaypoint(true, true);
+    else { mission_->updateObjective("RockPaper_GoToRange"); pump(); }
+    return mission_->objectiveProgress("RockPaper_GoToRange") != before;
 }
 
 bool FireMissionSlice::damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath) {

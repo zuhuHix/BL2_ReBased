@@ -707,17 +707,21 @@ bool UOpenWillowQuest::RespawnPoint(const FVector& DeathLocation, FTransform& Ou
     return true;
 }
 
+bool UOpenWillowQuest::TouchesTrigger(const AActor* Actor) const
+{
+    // The overlap of an actor's collision cylinder with the waypoint's (planar distance within the sum of radii, vertical gap within the
+    // sum of half heights). UE3's touch shape test: UNVERIFIED. The host owns this test; the slice's waypoint script decides what a touch means.
+    if (!Actor) return false;
+    const auto& Data = Impl->Data;
+    float Radius = 0.f, HalfHeight = 0.f;
+    Actor->GetSimpleCollisionCylinder(Radius, HalfHeight);
+    const FVector P = Actor->GetActorLocation();
+    return FVector::Dist2D(P, Data.TriggerCenter) <= Data.TriggerRadius + Radius && FMath::Abs(P.Z - Data.TriggerCenter.Z) <= Data.TriggerHalfHeight + HalfHeight;
+}
+
 bool UOpenWillowQuest::PlayerTouchesTrigger() const
 {
-    // WillowWaypoint.Touch with a cylinder: the player's capsule overlaps it (planar distance within the sum of
-    // radii, vertical gap within the sum of half heights). UE3 touch semantics in the host: UNVERIFIED.
-    const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
-    if (!Walker) return false;
-    const auto& Data = Impl->Data;
-    const UCapsuleComponent* Capsule = Walker->GetCapsuleComponent();
-    const FVector P = Walker->GetActorLocation();
-    return FVector::Dist2D(P, Data.TriggerCenter) <= Data.TriggerRadius + Capsule->GetScaledCapsuleRadius()
-        && FMath::Abs(P.Z - Data.TriggerCenter.Z) <= Data.TriggerHalfHeight + Capsule->GetScaledCapsuleHalfHeight();
+    return TouchesTrigger(Cast<AOpenWillowWalker>(GetOwner()));
 }
 
 void UOpenWillowQuest::UpdateHints()
@@ -769,11 +773,24 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
     Pump();
     ProcessArrivals();
     if (bFailed) return;
-    // GoToRange: a player pawn touching the stock waypoint cylinder while its objective is active.
-    if (Impl->ObjectiveState(Impl->Data.TriggerObjective) == "Active" && PlayerTouchesTrigger()) {
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST player touched %s"), *Impl->Data.TriggerObject);
-        Impl->Slice->enterRange();
-        Pump();
+    // GoToRange: the stock WillowWaypoint script runs on the VM (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED). The host reports when the player
+    // pawn's and Marcus's collision begins or ends overlapping its cylinder, at any time; the script ignores Marcus, and for the player
+    // asks the tracker whether the objective is updatable (also when the set becomes active while the player stands inside).
+    {
+        const bool bPlayerIn = PlayerTouchesTrigger();
+        if (bPlayerIn != bPlayerInRange) {
+            bPlayerInRange = bPlayerIn;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST player %s %s"), bPlayerIn ? TEXT("touched") : TEXT("left"), *Impl->Data.TriggerObject);
+            Impl->Slice->touchWaypoint(true, bPlayerIn);
+            Pump();
+        }
+        const bool bMarcusIn = TouchesTrigger(Marcus);
+        if (bMarcusIn != bMarcusInRange) {
+            bMarcusInRange = bMarcusIn;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST Marcus %s %s (ignored by the waypoint script)"), bMarcusIn ? TEXT("touched") : TEXT("left"), *Impl->Data.TriggerObject);
+            Impl->Slice->touchWaypoint(false, bMarcusIn);
+            Pump();
+        }
     }
     // The Fire den spawns its dummy when the Fire objective is active (MissionPopulationAspect is native: UNVERIFIED).
     if (!bDummySpawned && Impl->ObjectiveState(Impl->Data.DummyObjective) == "Active") SpawnDummy();
@@ -937,6 +954,8 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Waiting(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, 3.f)) return;
         Check(Impl->ObjectiveState(Data.TriggerObjective) == "Complete"
             && Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
+        // Completed through the waypoint script: one applied update reached the VM controller (UpdateMissionObjective), none for Marcus's touches.
+        Check(Impl->Slice->scriptObjectiveUpdates() == 1, TEXT("objective_completed_through_waypoint_script_once"));
         Check(bWeaponLent, TEXT("mission_weapon_lent"));
         {
             const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();

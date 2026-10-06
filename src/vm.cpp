@@ -395,6 +395,14 @@ Class* Runtime::classAt(const std::shared_ptr<const Package>& package, int32_t i
     return loadClass(target.package, target.index);
 }
 
+bool Runtime::implements(Class* cls, const Class* iface) {
+    if (!cls || !iface || iface->name.size() < 2 || iface->name[0] != 'I' || !std::isupper(static_cast<unsigned char>(iface->name[1]))) return false;
+    if (iface->functions.empty()) return false;
+    for (const auto& entry : iface->functions)
+        if (!findMethod(cls, entry.first)) return false;
+    return true;
+}
+
 Class* Runtime::findClass(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("class path must be Package.Class: " + path);

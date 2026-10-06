@@ -652,7 +652,8 @@ int main(int argc, char** argv) {
         }
         if (mode == "--slice-run") {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
-            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
+            // Each step's record carries the mission status after it.
+            // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
             // owns) | player:<level>:<experience> (the player's state). accept and turnin run the installed controller script;
             // tick also runs the experience pool update.
             // Package argument is Sanctuary_Dynamic.
@@ -673,6 +674,8 @@ int main(int argc, char** argv) {
                 bool ok = true;
                 if (step == "accept") ok = slice.accept(completed);
                 else if (step == "range") ok = slice.enterRange();
+                else if (step == "touch:player" || step == "touch:marcus") slice.touchWaypoint(step == "touch:player", true);      // overlap begins
+                else if (step == "untouch:player" || step == "untouch:marcus") slice.touchWaypoint(step == "untouch:player", false);
                 else if (step == "spawn") ok = slice.spawnDummy();
                 else if (step == "hit:fire") ok = slice.hitDummy(true);
                 else if (step == "hit:other") ok = slice.hitDummy(false);
@@ -688,7 +691,8 @@ int main(int argc, char** argv) {
                 }
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
-                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false") << ",\"events\":[";
+                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
+                          << ",\"status\":" << int(slice.mission().status()) << ",\"events\":[";   // the mission status after the step
                 first = false;
                 bool firstEvent = true;
                 for (const auto& event : slice.drain()) {
