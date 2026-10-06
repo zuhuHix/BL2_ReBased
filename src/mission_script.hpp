@@ -99,6 +99,9 @@ public:
         // pawn's GearboxDialogComponent.TriggerEvent (the global VO_NPC_OnUse_* tag), the speaker (the component's owner, Marcus) and the other object
         // (the player pawn's class). Empty when the dialog stayed silent. Playing the line needs the two-step group dispatch and is not done.
         std::string onUseTag, onUseSpeaker, onUseTarget;
+        // The speaker's list of dialog groups (WillowPawn.GetDialogGroups, NATIVE_DIALOG_GROUPS.md, UNVERIFIED): its size and its first and last entries.
+        size_t onUseGroupCount = 0;
+        std::string onUseFirstGroup, onUseLastGroup;
     };
     // `completed` is what MissionDependenciesMet sees (as for accept()).
     MarcusUse useMarcus(const std::set<std::string>& completed);

@@ -338,6 +338,7 @@ def build_gearbox():
     T.array_of(group, 'OutputLinksToStructs', 'Struct', link_struct)
     T.array_of(group, 'Nodes', 'Object')
     T.prop('Object', group, 'ParentGroup')
+    T.cls('GearboxDialogTemplateGroup', super_ref=group)
 
     # The behavior provider vocabulary (tests/behavior_test.py has the commented version): sequences, events, behaviors, links.
     bpd = T.cls('BehaviorProviderDefinition')
@@ -480,7 +481,15 @@ def build_willowgame():
     globals_definition = T.cls('WillowDialogGlobalsDefinition')
     T.array_of(globals_definition, 'Priorities', 'Object')
     for field in ('ActiveMissionMinPriorityStart', 'ActiveSideMissionMinPriority', 'ActivePlotMissionMinPriority'): T.prop('Object', globals_definition, field)
-    T.cls('WillowDialogNameTag')
+    # a pawn's dialog groups (NATIVE_DIALOG_GROUPS.md): the globals' NPC groups and default template group, the body class, the name tag's expansion
+    T.array_of(globals_definition, 'NPCDialogGroups', 'Object')
+    T.prop('Object', globals_definition, 'DefaultTemplateGroup')
+    T.prop('Object', T.cls('WillowDialogNameTag'), 'DlcExpansion')
+    T.array_of(T.cls('DlcExpansionDefinition'), 'NPCDialogGroups', 'Object')       # synthetic class name
+    body_class = T.cls('BodyClassDefinition')
+    T.array_of(body_class, 'DialogGroups', 'Object')
+    T.prop('Bool', body_class, 'bNPCDialog')
+    T.prop('Object', body_class, 'DialogName')
     T.prop('Name', T.cls('Behavior_MissionRemoteEvent'), 'EventName')
     mission = T.cls('MissionDefinition')
     T.prop('Object', mission, 'MissionDialogGroup')
@@ -1109,9 +1118,9 @@ def build_dialog_mission():
     priority_package = p.add_export(package_class, 'GD_Globals', w32(0) + none)
     dialog_package = p.add_export(package_class, 'Dialog', w32(0) + none, outer=priority_package)
     prio = {n: p.add_export(chain('GearboxFramework', 'GearboxDialogPriority'), 'DialogPriority_' + n[1:], w32(0) + none, outer=dialog_package) for n in names}
-    p.add_export(chain('WillowGame', 'WillowDialogGlobalsDefinition'), 'DialogGlobals',
-                 w32(0) + t.array('Priorities', len(names), w32(*[prio[n] for n in names])) + t.obj('ActiveMissionMinPriorityStart', prio['P20'])
-                 + t.obj('ActiveSideMissionMinPriority', prio['P35']) + t.obj('ActivePlotMissionMinPriority', prio['P100']) + none, outer=dialog_package)
+    globals_export = p.add_export(chain('WillowGame', 'WillowDialogGlobalsDefinition'), 'DialogGlobals',
+                                  w32(0) + t.array('Priorities', len(names), w32(*[prio[n] for n in names])) + t.obj('ActiveMissionMinPriorityStart', prio['P20'])
+                                  + t.obj('ActiveSideMissionMinPriority', prio['P35']) + t.obj('ActivePlotMissionMinPriority', prio['P100']) + none, outer=dialog_package)
     marcus = p.add_export(chain('WillowGame', 'WillowDialogNameTag'), 'DialogName_Marcus', w32(0) + none)
     ak = {n: p.add_export(chain('Engine', 'AkEvent'), 'Ak_' + n, w32(0) + none) for n in 'ABCD'}
 
@@ -1168,6 +1177,45 @@ def build_dialog_mission():
                 + t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 2) + t.int('LinkNumber', 0) + t.int('ToNodeID', 3) + none) + none)
     set_payload(speaker, w32(0) + t.array('DialogEvents', 1, t.obj('Tag', stag) + t.bool('bEnabled', True) + t.obj('OutputAction', speaker_act) + none)
                 + t.obj('ParentGroup', generic) + none)
+
+    # A pawn's dialog groups (NATIVE_DIALOG_GROUPS.md; every name and value here is invented). Groups: OwnGroup (the body classes' own), NpcGroup (the
+    # globals' generic NPC group), DlcGroup (an expansion's NPC group), TemplateGroup (the globals' default template group, a GearboxDialogTemplateGroup),
+    # ParentOnly (the parent of ChildA and ChildB, in no talker's list). Each event holds an inline talk act for a speaker name tag and an audio event.
+    dlc_name = p.add_export(chain('WillowGame', 'WillowDialogNameTag'), 'DialogName_Dlc', b'')
+    group_class, template_class = ('GearboxFramework', 'GearboxDialogGroup'), ('GearboxFramework', 'GearboxDialogTemplateGroup')
+    pg = {name: p.add_export(chain(*(template_class if name == 'TemplateGroup' else group_class)), name, b'')
+          for name in ('OwnGroup', 'NpcGroup', 'DlcGroup', 'TemplateGroup', 'ParentOnly', 'ChildA', 'ChildB')}
+    ptags = {n: event_tag(n, 'P30', False) for n in 'NOKTHPU'}
+
+    def pawn_act(group_name, tag_name, speaker, ak_name):
+        return p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), group_name + '_' + tag_name, w32(0) + t.int('NodeID', 1)
+                            + t.array('TalkData', 1, t.obj('NameTag', speaker) + t.obj('TalkAkEvent', ak[ak_name]) + none) + none, outer=pg[group_name])
+
+    def pawn_group(group_name, entries, parent=''):
+        body = b''.join(t.obj('Tag', ptags[tag_name]) + t.bool('bEnabled', True) + t.obj('OutputAction', act_) + none for tag_name, act_ in entries)
+        set_payload(pg[group_name], w32(0) + t.array('DialogEvents', len(entries), body) + (t.obj('ParentGroup', pg[parent]) if parent else b'') + none)
+    # TagH: a generic NPC event whose talk act has no entry for the speaker; its no-match output fires TagT (a template event) on the instigator
+    h_act = p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), 'NpcGroup_H', b'', outer=pg['NpcGroup'])
+    h_trigger = p.add_export(chain('WillowGame', 'WillowDialogAct_Trigger'), 'NpcGroup_HTrigger', b'', outer=pg['NpcGroup'])
+    set_payload(h_act, w32(0) + t.int('NodeID', 2) + t.array('TalkData', 1, t.obj('NameTag', other) + t.obj('TalkAkEvent', ak['A']) + none)
+                + t.bool('bInstigatorTalker', True) + t.bool('bEnableNoMatch', True) + t.array('OutputLinks', 2, link_struct() + link_struct(h_trigger)) + none)
+    set_payload(h_trigger, w32(0) + t.int('NodeID', 3) + t.obj('DialogEvent', ptags['T']) + t.array('VariableLinks', 1, link_struct(instigator_var)) + none)
+    pawn_group('OwnGroup', [('O', pawn_act('OwnGroup', 'O', marcus, 'A'))])
+    pawn_group('NpcGroup', [('N', pawn_act('NpcGroup', 'N', marcus, 'A')), ('K', pawn_act('NpcGroup', 'K', marcus, 'A')), ('H', h_act)])
+    pawn_group('DlcGroup', [('K', pawn_act('DlcGroup', 'K', dlc_name, 'B'))])
+    pawn_group('TemplateGroup', [('T', pawn_act('TemplateGroup', 'T', marcus, 'C')), ('P', pawn_act('TemplateGroup', 'P', marcus, 'C'))])
+    pawn_group('ParentOnly', [('P', pawn_act('ParentOnly', 'P', marcus, 'D')), ('U', pawn_act('ParentOnly', 'U', marcus, 'D'))])
+    pawn_group('ChildA', [], 'ParentOnly')
+    pawn_group('ChildB', [], 'ParentOnly')
+    expansion = p.add_export(chain('WillowGame', 'DlcExpansionDefinition'), 'DlcExpansion', w32(0) + t.array('NPCDialogGroups', 1, w32(pg['DlcGroup'])) + none)
+    set_payload(dlc_name, w32(0) + t.obj('DlcExpansion', expansion) + none)
+    for body_name, own, npc, speaker in (('BodyNpc', ['OwnGroup'], True, marcus), ('BodyPlain', ['OwnGroup'], False, marcus), ('BodyDlc', ['OwnGroup'], True, dlc_name),
+                                         ('BodyDlcPlain', ['OwnGroup'], False, dlc_name), ('BodyParent', ['ChildA', 'ChildB'], False, marcus)):
+        p.add_export(chain('WillowGame', 'BodyClassDefinition'), body_name,
+                     w32(0) + t.array('DialogGroups', len(own), w32(*[pg[g] for g in own])) + t.bool('bNPCDialog', npc) + t.obj('DialogName', speaker) + none)
+    set_payload(globals_export, w32(0) + t.array('Priorities', len(names), w32(*[prio[n] for n in names])) + t.obj('ActiveMissionMinPriorityStart', prio['P20'])
+                + t.obj('ActiveSideMissionMinPriority', prio['P35']) + t.obj('ActivePlotMissionMinPriority', prio['P100'])
+                + t.array('NPCDialogGroups', 1, w32(pg['NpcGroup'])) + t.obj('DefaultTemplateGroup', pg['TemplateGroup']) + none)
 
     provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'DialogBpd', b'', outer=mission)
     behaviors, refs = [], {}
@@ -1485,6 +1533,36 @@ with tempfile.TemporaryDirectory() as folder:
         check('E2 an act without audio is silent', lines_of(rows[3]) == [], rows[3])
         # Q: no group has an enabled event for the tag
         check('E2 no matching event, nothing happens', lines_of(rows[4]) == [] and not rows[4]['ok'], rows[4])
+
+    # Scenario E3 (a pawn's dialog groups, NATIVE_DIALOG_GROUPS.md): the body class decides the list and the search runs through it
+    steps_e3 = []
+    for body, tag_name in (('BodyNpc', 'TagN'), ('BodyPlain', 'TagN'), ('BodyDlc', 'TagK'), ('BodyDlcPlain', 'TagK'), ('BodyNpc', 'TagT'), ('BodyNpc', 'TagH'),
+                           ('BodyParent', 'TagP'), ('BodyParent', 'TagU')):
+        steps_e3 += [f'pawn:{body}|{tag_name}', 'tick:6']
+    code, got = component(*steps_e3)
+    check('E3 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    rows = [step for step in got['steps'] if step['step'].startswith('pawn:')]
+    if len(rows) == 8:
+        def info(row): return row['pawn']['groups'], row['pawn']['searched']
+
+        def played(row, ak_name): return len(lines_of(row)) == 1 and 'ak=' + ak_name in lines_of(row)[0][2] and 'outcome=started' in lines_of(row)[0][2]
+        # an NPC body: its own group, the globals' NPC group, then the default template group; a non-NPC body: its own group and the template group only
+        check('E3 NPC body list', info(rows[0])[0] == ['OwnGroup', 'NpcGroup', 'TemplateGroup'], info(rows[0]))
+        check('E3 NPC body plays a generic NPC event', played(rows[0], 'Ak_A') and rows[0]['ok'] and info(rows[0])[1] == ['OwnGroup', 'NpcGroup'], rows[0])
+        check('E3 non-NPC body has no NPC groups', info(rows[1])[0] == ['OwnGroup', 'TemplateGroup'] and lines_of(rows[1]) == [] and not rows[1]['ok'], rows[1])
+        # a name tag with an expansion: its NPC groups between the body's groups and the globals' (only for an NPC body)
+        check('E3 expansion list', info(rows[2])[0] == ['OwnGroup', 'DlcGroup', 'NpcGroup', 'TemplateGroup'], info(rows[2]))
+        check('E3 expansion group answers first', played(rows[2], 'Ak_B') and 'talker=pawn' in lines_of(rows[2])[0][2] and info(rows[2])[1] == ['OwnGroup', 'DlcGroup'], rows[2])
+        check('E3 expansion needs an NPC body', info(rows[3])[0] == ['OwnGroup', 'TemplateGroup'] and lines_of(rows[3]) == [], rows[3])
+        # the template group is last, searched by a fresh trigger and skipped when a Trigger act reuses the event data
+        check('E3 template group searched by a fresh trigger', played(rows[4], 'Ak_C') and info(rows[4])[1] == ['OwnGroup', 'NpcGroup', 'TemplateGroup'], rows[4])
+        check('E3 template group skipped when event data is reused', lines_of(rows[5]) == [] and 'TemplateGroup' not in info(rows[5])[1] and 'NpcGroup' in info(rows[5])[1], rows[5])
+        # a parent group is appended at the end of the search (after the template group), once although two groups name it
+        check('E3 parent searched after every listed group', info(rows[6])[0] == ['ChildA', 'ChildB', 'TemplateGroup'] and info(rows[6])[1] == ['ChildA', 'ChildB', 'TemplateGroup']
+              and played(rows[6], 'Ak_C'), rows[6])
+        check('E3 parent appended once at the end', info(rows[7])[1] == ['ChildA', 'ChildB', 'TemplateGroup', 'ParentOnly'] and played(rows[7], 'Ak_D'), rows[7])
+    else:
+        check('E3 rows', False, len(rows))
 
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')

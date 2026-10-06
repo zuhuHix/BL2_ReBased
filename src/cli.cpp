@@ -102,7 +102,8 @@ std::string missionListsJson(const vm::MissionScript::MissionLists& lists) {
 std::string useJson(const vm::MissionScript::MarcusUse& use) {
     std::string out = "{\"interface_opened\":" + std::string(use.interfaceOpened ? "true" : "false") + ",\"movie\":" + quote(use.movie) +
                       ",\"director\":" + quote(use.director) + ",\"on_use_tag\":" + quote(use.onUseTag) + ",\"on_use_speaker\":" + quote(use.onUseSpeaker) +
-                      ",\"on_use_target\":" + quote(use.onUseTarget) + ",\"cascade\":[";
+                      ",\"on_use_target\":" + quote(use.onUseTarget) + ",\"on_use_groups\":{\"count\":" + std::to_string(use.onUseGroupCount) +
+                      ",\"first\":" + quote(use.onUseFirstGroup) + ",\"last\":" + quote(use.onUseLastGroup) + "},\"cascade\":[";
     for (size_t i = 0; i < use.cascade.size(); ++i) out += (i ? "," : "") + quote(use.cascade[i]);
     return out + "]}";
 }
@@ -647,6 +648,12 @@ int main(int argc, char** argv) {
             std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
             bool first = true;
             static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated"};
+            const auto object = [&](const std::string& path) {      // an object of the mission's package, by path
+                auto owner = runtime.package(package->packageName);
+                const int32_t found = runtime.findExport(*owner, path);
+                if (found <= 0) throw std::runtime_error("no such object: " + path);
+                return vm::Value::makeObject(runtime.instantiateExport(owner, found, 4));
+            };
             for (int i = 6; i < argc; ++i) {
                 const std::string step = argv[i];
                 bool ok = true;
@@ -674,12 +681,6 @@ int main(int argc, char** argv) {
                     const std::string rest = step.substr(10);
                     const auto bar1 = rest.find('|'), bar2 = rest.find('|', bar1 + 1);
                     if (bar1 == std::string::npos || bar2 == std::string::npos) usage();
-                    auto owner = runtime.package(package->packageName);
-                    const auto object = [&](const std::string& path) {
-                        const int32_t found = runtime.findExport(*owner, path);
-                        if (found <= 0) throw std::runtime_error("no such object: " + path);
-                        return vm::Value::makeObject(runtime.instantiateExport(owner, found, 4));
-                    };
                     std::vector<vm::Value> groups;
                     for (size_t from = bar2 + 1; from <= rest.size();) {
                         const auto comma = rest.find(',', from);
@@ -688,6 +689,19 @@ int main(int argc, char** argv) {
                         from = comma + 1;
                     }
                     ok = mission.dialog().triggerOnComponent(rest.substr(0, bar1), groups, object(rest.substr(bar1 + 1, bar2 - bar1 - 1)));
+                }
+                else if (step.rfind("pawn:", 0) == 0) {          // pawn:<body class>|<event tag>: the component TriggerEvent of a pawn with that body class (its dialog groups)
+                    const std::string rest = step.substr(5);
+                    const auto bar = rest.find('|');
+                    if (bar == std::string::npos) usage();
+                    const auto pawn = mission.dialog().pawnDialog(object(rest.substr(0, bar)));
+                    ok = !pawn.nameTag.empty() && mission.dialog().triggerOnComponent(pawn.nameTag, pawn.groups, object(rest.substr(bar + 1)));
+                    screenKey = "pawn";
+                    screenJson = "{\"name_tag\":" + quote(pawn.nameTag) + ",\"groups\":[";
+                    for (size_t g = 0; g < pawn.groups.size(); ++g) screenJson += (g ? "," : "") + quote(vm::DialogSystem::objectPath(pawn.groups[g]));
+                    screenJson += "],\"searched\":[";
+                    for (size_t g = 0; g < mission.dialog().lastSearch().size(); ++g) screenJson += (g ? "," : "") + quote(mission.dialog().lastSearch()[g]);
+                    screenJson += "]}";
                 }
                 else if (step == "turnin") ok = mission.turnInMission();
                 else if (step == "kickoff") ok = mission.kickoff();

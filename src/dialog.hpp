@@ -48,8 +48,18 @@ public:
     void lineEnded(int lineId);
     // A pawn that can talk (its name tag, e.g. "GD_Dialog_NPC.Names.DialogName_Marcus"); without one the talker is an echo caller.
     void registerTalker(const std::string& nameTagPath);
+    // WillowPawn.GetDialogGroups and the lazily filled dialog name tag (NATIVE_DIALOG_GROUPS.md, UNVERIFIED), recomputed on every call from a pawn's body
+    // class: no body class gives an empty list and no name tag; else the body class's DialogGroups, then, only when its bNPCDialog is set, the name tag's
+    // DlcExpansion.NPCDialogGroups (if any) and the dialog globals' NPCDialogGroups, then (always, when the globals exist) the globals' DefaultTemplateGroup
+    // as one entry. No de-duplication; entries are kept as they are (None included). The name tag is BodyClass.DialogName (path "" when none).
+    struct PawnDialog { std::vector<Value> groups; std::string nameTag; };
+    PawnDialog pawnDialog(const Value& bodyClass);
+    static std::string objectPath(const Value& value);
+    // The groups looked at by the searches of the last triggerOnComponent, in order (None and skipped template groups are not listed).
+    const std::vector<std::string>& lastSearch() const { return search_; }
     // A pawn's dialog component (NATIVE_DIALOG.md "Component TriggerEvent / GetMatchingEvent", UNVERIFIED): the speaker is registered as a talker with
-    // its own dialog groups (the interface's DialogGroups, in order; a group without a match adds its ParentGroup to the search), and `tag` is triggered
+    // its own dialog groups (the interface's list, see pawnDialog; a group without a match adds its ParentGroup to the end of the search, once; template
+    // groups are searched here, where no event data is reused, and not when a Trigger act fires on the same event data), and `tag` is triggered
     // on it with the speaker as the event's instigator. The first group with an enabled event for the tag runs it; a Talk act with no entry for the
     // speaker and bEnableNoMatch takes its output 1 (a Trigger act, which fires its DialogEvent on the instigator's own groups with the same event
     // data); the speaker's own Talk act then plays its line as for any dialog (priority gate, audio). Returns whether a line started.
@@ -87,6 +97,8 @@ private:
     std::vector<Talker> talkers_;
     std::map<std::string, int> groupIndex_;          // root group path -> effective priority index of its current event
     std::map<std::string, ObjectPtr> loaded_;
+    ObjectPtr globals_;                              // the dialog globals object (null when the package has none)
+    std::vector<std::string> search_;                // see lastSearch()
     std::set<std::string> played_;                   // bOncePerSession tags already played
     std::vector<std::string> priorities_;
     bool globalsLoaded_ = false;
@@ -106,8 +118,10 @@ private:
     Handle trigger(const Value& group, const Value& tag);
     // The event data of `reuse` (or a new one) bound to the event of `tag` found in `group`; runs its act chain. `reuse` keeps its use count.
     Handle run(Handle reuse, const Value& group, const Tag& tag);
-    // GetMatchingEvent over a talker's groups (parents appended); a null Value when none has an enabled event for the tag.
-    Value matchingGroup(const std::vector<Value>& groups, const Tag& tag);
+    // GetMatchingEvent over a talker's groups (parents appended once, at the end); a null Value when none has an enabled event for the tag.
+    // Template groups are skipped (and add no parent) unless `allowTemplates`.
+    Value matchingGroup(const std::vector<Value>& groups, const Tag& tag, bool allowTemplates);
+    std::string identityOf(const Value& group) const;                 // the key load() uses: the identity compare of the search
     void followNoMatch(Handle handle, const Act& act);                // output 1 of a talk act: a Trigger act
     void runTrigger(Handle handle, const ObjectPtr& node);
     int findAct(const Value& group, const Tag& info, Act& act);       // -1 no event, 0 an event with no act, 1 an act

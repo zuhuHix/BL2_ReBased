@@ -256,13 +256,15 @@ This is the answer to "what decides the duration". It is a component update, not
   was not confirmed). `PlayEchoDialog(Tag, NameTag, bOnlyPure)` does exactly: find the real talker (unless `bOnlyPure`),
   else find/create the echo actor, then `TriggerEvent(Tag)` on its component.
 - **RegisterTalker(actor):** takes the interface's `DialogGroups`, calls `AddGroup` for each (unique add), and (reading) adds
-  the actor to `Talkers`. **UnregisterTalker:** removes from `Talkers`/`DisabledTalkers`, tells every group node to drop the
+  the actor to `Talkers`. (Correction 2026-10-06, from NATIVE_DIALOG_GROUPS.md: the groups' parents are **not** registered.) **UnregisterTalker:** removes from `Talkers`/`DisabledTalkers`, tells every group node to drop the
   actor, and clears it from pooled event data (`Instigator`, `Other`, `LastTalker`). **DisableTalker:** if registered,
   stops its line and adds it to `DisabledTalkers`; **EnableTalker** removes it. **SilenceGroup(group):** stops every talker
   that owns the group. **Get/SetGroupEventTag:** map keyed by the root group. **GetEventTagForEventInfo:** the event's tag
   (for a shared event node the tag of the bound `DialogEvents` entry). **Cleanup:** clears the current context, event
   data and lists (Willow also destroys the echo actors).
 - **Component events are gated by the manager's `bEnabled`** (component `TriggerEvent` only); `TriggerGroupEvent` is not.
+  Correction (2026-10-06, from NATIVE_DIALOG_GROUPS.md): the bit is false in the class defaults and is set to true once, at the end of the manager's
+  initialisation (after the event-data pool is built); no later clearing was found.
 - **`IsMissionKickoffPlaying`:** true if the echo actor currently has a live event whose priority index is `<=` the index of
   `SideMissionKickoffPriority` (installed `DialogPriority_70`). `GetPriorityForEchoActor`: that live event's index, or INT_MAX.
 
@@ -270,6 +272,11 @@ This is the answer to "what decides the duration". It is a component update, not
 - **GetMatchingEvent(Tag, out Event, out Group, bAllowTemplates, ...):** over the talker interface's `DialogGroups`, in order,
   the first group with a matching event; a group without a match appends its `ParentGroup` to the search; template groups are
   skipped unless allowed. As a side effect it registers the talker with the manager when it had groups.
+- **Correction (2026-10-06, from NATIVE_DIALOG_GROUPS.md):** the `ParentGroup` is appended at the **end** of the talker's group list (after every group the
+  talker had, unique by identity, chains upward), and only for a group without a matching enabled entry; a skipped template group adds no parent. The
+  component's `TriggerEvent` allows template groups exactly when the caller supplied **no** event data to reuse (a re-trigger on the same event data, such
+  as a Trigger act firing the talker's own tag, does not). The parent fallback is in this search only, not in `FindEvent`, `RegisterTalker`, `AddGroup` or
+  `TriggerGroupEvent`.
 - **TriggerEvent(Tag, Other, ObjectParameter, Reuse):** needs an enabled manager, an interface, a valid tag. On a client with a
   non-effect tag it forwards to the server (`ServerDialog_TriggerEvent`) once (re-entry guarded) and returns None. Otherwise as
   `TriggerGroupEvent` with **Instigator := the component's owner**. Effect tags use the group's `SimpleEvent`: play the

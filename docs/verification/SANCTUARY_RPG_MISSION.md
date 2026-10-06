@@ -1147,11 +1147,19 @@ code, not confirmed in the running game). `GearboxDialogComponent.TriggerEvent` 
   - the **Trigger act**: its Instigator variable gives the talkers, those with a group holding an enabled entry for its `DialogEvent` can talk it, and the event
     is triggered on that talker's own groups with the **same event data**. The act's own output 0 (after the line) has no link in the stock data and is not
     followed. Any other dialog variable class throws "not implemented".
-- **How Marcus reaches it (bridge):** the component's speaker is read from his body class (`GD_Marcus.Character.BodyClass_Marcus`): `DialogName` (the name tag),
-  `DialogGroups` (his own group `DialogGroup_NPC_Marcus`) and `bNPCDialog`, then the dialog globals' `NPCDialogGroups` (the generic NPC group first). **That last step
-  is a labelled stand-in:** the native `WillowPawn.GetDialogGroups` (what a pawn's interface returns) has no note; the data names the list, and without it the tag
-  `VO_NPC_OnUse_*` is in no group of his and the line would stay silent. Marcus is registered as the talker when the component is triggered (so the mission's
-  own lines, which the host registers him for, are unaffected).
+- **How Marcus reaches it (bridge):** the component's speaker is read from his body class (`GD_Marcus.Character.BodyClass_Marcus`) by `DialogSystem::pawnDialog`: the
+  name tag is its `DialogName`, and the group list follows the rule of `NATIVE_DIALOG_GROUPS.md` (UNVERIFIED, read from native code; replaces the earlier labelled
+  stand-in "body class `DialogGroups` + globals `NPCDialogGroups`"): the body class's `DialogGroups`; then, **only if its `bNPCDialog` is set**, the name tag's
+  `DlcExpansion.NPCDialogGroups` (if any) and the dialog globals' `NPCDialogGroups`; then **always** the globals' `DefaultTemplateGroup`; no de-duplication; an empty
+  list with no body class. For Marcus that is **127 entries**: his own group `DialogGroup_NPC_Marcus`, the 125 generic NPC groups (first `GD_Dialog_NPC.Groups.DialogGroup_NPC`;
+  `GD_VOSQ_ThisJustIn` appears twice, as in the data), then `GD_Dialog_Templates.Groups.DialogGroup_TemplateDefault` (checked on the real data: `--slice-run ... use`
+  prints `on_use_groups` count 127 with that first and last entry, and entries 105 and 119 are `ThisJustIn`). Without the generic group the tag `VO_NPC_OnUse_*` is in no group of his and the
+  line would stay silent. Marcus is registered as the talker when the component is triggered (so the mission's own lines, which the host registers him for, are unaffected).
+- **What changed against the 6e code of the same day (following `NATIVE_DIALOG_GROUPS.md`):** (1) the list now ends with the default template group (and takes the
+  name tag's expansion groups before the globals' ones); (2) `matchingGroup` appends a parent group **once, unique by identity** (it was appended unconditionally, with a
+  32-entry cap on the search that a 127-group list would have hit); (3) template groups are skipped unless the caller allows them: `triggerOnComponent` (a fresh
+  trigger, no event data reused) allows them, the Trigger act that fires on the same event data does not; a skipped template group adds no parent; (4) an import that
+  no installed package file resolves (the body class's name tag, `GD_Dialog_NPC...`) is looked up by path among the dialog package's exports. No on-use line changes.
 - **The four states (stock data, read with `ow-package --object-dump`):** `VO_NPC_OnUse_MissionsAvailable`, `..._AllMissionsInProgress` and `..._NoMissions` sit in the
   generic group `GD_Dialog_NPC.Groups.DialogGroup_NPC` with Talk acts (`Talk_24`, `Talk_33`, `Talk_4`) that have **no Marcus entry** and `bEnableNoMatch`; output 1 goes to
   Trigger acts (`Trigger_8`, `_7`, `_9`) whose `DialogEvent` is Marcus's `DET_NPC_OnUse_*` tag, whose talker variable is the event's Instigator; his group answers with
@@ -1168,14 +1176,25 @@ code, not confirmed in the running game). `GearboxDialogComponent.TriggerEvent` 
   the press after completion chooses Quest_No_New.
 - **Stubs:** none newly reached (quest log 9 after accept, 15 after turn-in).
 - **Not modelled / open:** the `ParentTag` ancestor test of the talker validity; the manager `bEnabled` gate (assumed enabled); the priority gate is the existing
-  one (the DET tags are `DialogPriority_20`); `WillowPawn.GetDialogGroups` (stand-in above); sound-effect tags; Act_Chance / MissionSwitch / ObjectParameterSwitch in the
+  one (the DET tags are `DialogPriority_20`); `WillowPawn.SetDialogNameTag` (the name tag override; the tag is `BodyClass.DialogName`); the manager's registered group list and `bEnabled` (the pawn's list is stored on the talker); sound-effect tags; Act_Chance / MissionSwitch / ObjectParameterSwitch in the
   generic group (not on the four on-use routes); a no-match output into anything but a Trigger act. A failed `no talker` line still consumes a line id.
 - **Tests:** `mission-script-synthetic` scenario E2 (`--mission-run ... component:<speaker name tag>|<tag>|<groups>`; toy generic group, no-match output, Trigger act and a
   speaker group with a `ParentGroup`): the no-match chain plays the speaker's line (tag S, his AkEvent, a pawn talker); his own tag plays directly; a talker that cannot
   talk the event stays silent; an act without audio is silent; a tag in no group does nothing. Quest suite: `use_chain_plays_on_use_line`, `use_chain_plays_in_progress_line`,
   `use_chain_mission_complete_is_silent`, `use_chain_plays_no_missions_line` added; every earlier name unchanged.
+  Scenario E3 (a pawn's dialog groups; `--mission-run ... pawn:<body class>|<event tag>`, invented body classes, groups, name tags and a template group): an NPC body gets
+  [own, NPC group, template]; a non-NPC body [own, template] and no generic event; an NPC body whose name tag has an expansion [own, expansion group, NPC group, template]
+  and the expansion group answers first, a non-NPC body with that name tag gets no expansion group; the template group is searched by a fresh trigger and skipped by the
+  Trigger act on reused event data; a parent is searched after the template group and once although two groups name it.
 
 ### Checks (2026-10-06, CMake Release and UE module rebuilt first)
 - `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE build Succeeded.
 - **`tools/test_quest.ps1`: first run PASS checks=96 errors=0, resume PASS checks=11 errors=0** (92 before, four new on-use line checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+### Checks for the dialog-group rule (2026-10-06, CMake Release and UE module rebuilt first)
+Rule: `NATIVE_DIALOG_GROUPS.md` (UNVERIFIED, not confirmed in the running game). Real data: Marcus's list is 127 entries (first `DialogGroup_NPC_Marcus`, last
+`DialogGroup_TemplateDefault`); the on-use lines are unchanged (NotStarted Quest_New, Active Quest_During, after completion Quest_No_New, ReadyToTurnIn silent).
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=96 errors=0, resume PASS checks=11 errors=0** (unchanged); stubs unchanged (9 after accept, 15 after turn-in).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

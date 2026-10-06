@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <set>
 
 namespace vm {
 namespace {
@@ -16,10 +17,16 @@ void DialogSystem::notImplemented(const std::string& what) const { throw Runtime
 
 ObjectPtr DialogSystem::load(const Value& reference) {
     if (reference.kind != Value::Kind::Object || !reference.o || !reference.o->resourcePackage) throw RuntimeError("dialog: unresolved object reference");
-    const std::string key = pathOf(&reference) + "@" + reference.o->resourcePackage->packageName;
+    std::shared_ptr<const Package> owner = reference.o->resourcePackage;
+    int32_t index = reference.o->resourceIndex;
+    if (index <= 0 && package_) {      // an import that no installed package file resolves (e.g. a body class's name tag): the same path among the dialog package's exports
+        index = runtime_.findExport(*package_, pathOf(&reference));
+        owner = package_;
+    }
+    if (index <= 0) throw RuntimeError("dialog: unresolved object reference " + pathOf(&reference));
+    const std::string key = pathOf(&reference) + "@" + owner->packageName;
     auto found = loaded_.find(key);
-    if (found == loaded_.end())
-        found = loaded_.emplace(key, runtime_.instantiateExport(reference.o->resourcePackage, reference.o->resourceIndex, 4)).first;
+    if (found == loaded_.end()) found = loaded_.emplace(key, runtime_.instantiateExport(owner, index, 4)).first;
     return found->second;
 }
 
@@ -31,6 +38,7 @@ void DialogSystem::loadGlobals() {
     const int32_t index = package_ ? runtime_.findExport(*package_, "GD_Globals.Dialog.DialogGlobals") : 0;
     if (index <= 0) return;
     ObjectPtr globals = runtime_.instantiateExport(package_, index, 4);
+    globals_ = globals;
     if (const Value* list = runtime_.property(*globals, "Priorities"))
         for (const auto& priority : list->elements()) priorities_.push_back(pathOf(&priority));
     startIndex_ = indexOf(pathOf(runtime_.property(*globals, "ActiveMissionMinPriorityStart")));
@@ -85,17 +93,56 @@ void DialogSystem::registerTalker(const std::string& nameTagPath) {
     talkers_.push_back(talker);
 }
 
-// GetMatchingEvent (no group given): the talker's groups in order; the first with an enabled entry for the tag wins; a group without one appends its
-// ParentGroup to the search (bAllowTemplates is not modelled: no template groups are involved here).
-Value DialogSystem::matchingGroup(const std::vector<Value>& groups, const Tag& tag) {
+std::string DialogSystem::objectPath(const Value& value) { return pathOf(&value); }
+
+std::string DialogSystem::identityOf(const Value& group) const {
+    return group.o && group.o->resourcePackage ? pathOf(&group) + "@" + group.o->resourcePackage->packageName : "";
+}
+
+// WillowPawn.GetDialogGroups (NATIVE_DIALOG_GROUPS.md, UNVERIFIED): see the declaration. The globals steps are skipped when the globals cannot be reached.
+DialogSystem::PawnDialog DialogSystem::pawnDialog(const Value& bodyClass) {
+    PawnDialog result;
+    if (bodyClass.kind != Value::Kind::Object || !bodyClass.o || !bodyClass.o->resourcePackage || bodyClass.o->resourceIndex <= 0) return result;
+    ObjectPtr body = load(bodyClass);
+    const Value* name = runtime_.property(*body, "DialogName");
+    result.nameTag = pathOf(name);
+    const auto append = [&](const Value* list) {
+        if (list) for (const Value& group : list->elements()) result.groups.push_back(group);
+    };
+    append(runtime_.property(*body, "DialogGroups"));
+    loadGlobals();
+    if (flag(runtime_.property(*body, "bNPCDialog"))) {
+        if (name && name->o && name->o->resourcePackage)
+            if (const Value* expansion = runtime_.property(*load(*name), "DlcExpansion"); expansion && expansion->o && expansion->o->resourcePackage)
+                append(runtime_.property(*load(*expansion), "NPCDialogGroups"));
+        if (globals_) append(runtime_.property(*globals_, "NPCDialogGroups"));
+    }
+    if (globals_) {
+        const Value* defaultTemplate = runtime_.property(*globals_, "DefaultTemplateGroup");
+        result.groups.push_back(defaultTemplate ? *defaultTemplate : Value());   // one entry, even when the field is None
+    }
+    return result;
+}
+
+// GetMatchingEvent (no group given; NATIVE_DIALOG_GROUPS.md, UNVERIFIED): the talker's groups in order; the first with an enabled entry for the tag wins; a
+// group without one appends its ParentGroup to the END of the search unless it is already in it (identity). Template groups (GearboxDialogTemplateGroup) are
+// skipped, adding no parent, unless the caller allows them.
+Value DialogSystem::matchingGroup(const std::vector<Value>& groups, const Tag& tag, bool allowTemplates) {
     std::vector<Value> queue = groups;
-    for (size_t i = 0; i < queue.size() && i < 32; ++i) {
+    std::set<std::string> seen;
+    for (const Value& group : queue) seen.insert(identityOf(group));
+    for (size_t i = 0; i < queue.size(); ++i) {
         if (!queue[i].o || !queue[i].o->resourcePackage) continue;
         ObjectPtr group = load(queue[i]);
+        bool templateGroup = false;
+        for (const Class* cls = group->cls; cls; cls = cls->super) if (cls->name == "GearboxDialogTemplateGroup") templateGroup = true;
+        if (templateGroup && !allowTemplates) continue;
+        search_.push_back(pathOf(&queue[i]));
         if (const Value* events = runtime_.property(*group, "DialogEvents"))
             for (const auto& entry : events->elements())
                 if (pathOf(entry.field("Tag")) == tag.path && flag(entry.field("bEnabled"))) return queue[i];
-        if (const Value* parent = runtime_.property(*group, "ParentGroup"); parent && parent->o && parent->o->resourcePackage) queue.push_back(*parent);
+        if (const Value* parent = runtime_.property(*group, "ParentGroup"); parent && parent->o && parent->o->resourcePackage && seen.insert(identityOf(*parent)).second)
+            queue.push_back(*parent);
     }
     return Value();
 }
@@ -108,7 +155,8 @@ bool DialogSystem::triggerOnComponent(const std::string& speakerNameTag, const s
     for (size_t i = 0; i < talkers_.size(); ++i)
         if (!talkers_[i].echo && talkers_[i].nameTag == speakerNameTag) speaker = int(i);
     talkers_[size_t(speaker)].groups = groups;
-    const Value group = matchingGroup(groups, tag);
+    search_.clear();
+    const Value group = matchingGroup(groups, tag, true);      // a fresh trigger (no event data reused): template groups are searched
     if (!group.o) return false;                          // no group has an event for the tag: nothing happens
     const int savedInstigator = instigator_;
     instigator_ = speaker;                               // TriggerEvent: Instigator := the component's owner
@@ -294,7 +342,7 @@ void DialogSystem::runTrigger(Handle handle, const ObjectPtr& node) {
     const Tag tag = tagOf(*eventRef);
     if (!tagValid(tag)) return;
     for (const int talker : talkers) {
-        const Value group = matchingGroup(talkers_[size_t(talker)].groups, tag);
+        const Value group = matchingGroup(talkers_[size_t(talker)].groups, tag, false);   // reused event data: no template groups
         if (!group.o) continue;                          // this talker cannot talk the event
         run(handle, group, tag);                         // the component's TriggerEvent, reusing the same event data
         return;
