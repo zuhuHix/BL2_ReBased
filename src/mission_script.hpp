@@ -28,6 +28,10 @@ class BehaviorProvider;
 // MissionDefinition.GetExperienceReward, GetGameStage, GetCurrencyRewardType, GetCurrencyReward, ShouldGrantAlternateReward,
 // GetItemRewardsForPlayer (empty rewards only). The experience pool and its level-up (ApplyExpPointsToExpLevel, run from
 // updateExperiencePool) live here as C++ state with the VM controller's PlayerReplicationInfo as the level's home.
+// Swap 7 (NATIVE_PROGRESSION.md, NATIVE_SKILLS.md section 1, NATIVE_ATTRIBUTES.md): AttributeInitializationDefinition.EvaluateInitializationData
+// (the evaluator of src/progression.*, with the player controller as the context source), so the installed ExpLevelUp awards its skill points
+// from GlobalsDefinition.GeneralSkillPointsPerLevelUp; WillowPlayerController.RecalculateAttributeInitializedState as a host-boundary stand-in that
+// re-evaluates the player's health pool base maximum (see recalculateMaxHealth).
 // Swap 3 (NATIVE_CONTROLLER_HELPERS.md): MissionTracker.IsDataValid (the bDataValidated flag) and ValidateData;
 // WillowPlayerController.GetCurrentPlaythrough, GetHUDMovie, UpdateLcdMissionStatus and PlayUIAkEvent (presentation: no-ops),
 // PlayerController.IsPrimaryPlayer, WorldInfo.IsMenuLevel, GetWillowGlobals / GetGearboxGlobals / GetBehaviorKernel /
@@ -57,9 +61,15 @@ public:
     // ApplyExpPointsToExpLevel, called from the pool's per-frame update: while the pool has reached the next level's
     // requirement and the level is below the cap, the script ExpLevelUp(bCheated = false) runs on the controller.
     void updateExperiencePool();
-    // What ExpEarn added to the pool (amount > 0) and the level the pool update raised the player to (level > 0), in order.
-    // The host applies them to its own experience state and level display.
-    struct Gain { int amount = 0; int level = 0; };
+    // What the script's level-up path produced, in order, for the host: what ExpEarn added to the pool (Experience), the level the pool
+    // update raised the player to (Level), the unspent skill points that level-up awarded (SkillPoints: GeneralSkillPoints after minus before,
+    // sent with a level change even when 0) and the new maximum health (MaxHealth: the health pool's base maximum, evaluated by the
+    // RecalculateAttributeInitializedState stand-in). The host applies the experience and compares the rest with its own numbers.
+    struct Gain {
+        enum class Kind { Experience, Level, SkillPoints, MaxHealth } kind = Kind::Experience;
+        int amount = 0;          // Experience: the amount, Level: the level, SkillPoints: the count
+        float health = 0;        // MaxHealth
+    };
     std::vector<Gain> takeGains() { auto result = std::move(gains_); gains_.clear(); return result; }
     const std::vector<ExpEarn>& expEarned() const { return expEarned_; }
     float experiencePool() const { return pool_; }
@@ -144,6 +154,9 @@ private:
     std::unique_ptr<ExperienceCurve> curve_;
     ObjectPtr pri_;
     float pool_ = 0;                       // the experience resource pool's CurrentValue
+    ObjectPtr playerClass_;                // the player's class definition (the host's Maya): the health pool's data (a stand-in for the controller's PlayerClass)
+    float maxHealth_ = 0;                  // the last base maximum health RecalculateAttributeInitializedState evaluated
+    bool healthRecalculated_ = false;      // set by it, cleared by the pool update
     int regionStage_ = 0, lockedStage_ = 0, playThroughCount_ = 1, maxLevel_ = 50;
     unsigned depth_ = 0;
 
@@ -161,6 +174,8 @@ private:
     int gameStage() const { return lockedStage_ ? lockedStage_ : regionStage_; }
     int experienceReward(bool alternate);
     void expEarn(int amount, int source, int type);
+    AttributeContext attributeContext(const Value& source);   // what EvaluateInitializationData reads for this context source
+    void recalculateMaxHealth();
     const Value& rewardData(bool alternate);
     ObjectPtr loadRef(const Value& reference);
     void notImplemented(const std::string& what);   // a labelled not-implemented path: listed with the stubs

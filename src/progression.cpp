@@ -53,14 +53,23 @@ float AttributeEvaluator::evaluateDefinition(Object& definition, const Attribute
     return restricted(definition, combined(definition, 0.f, context), context);
 }
 
-// The attribute's value: with an empty context chain the attribute yields no value and the constant stands; every context
-// resolver must be the no-context one; each value resolver gets the previous value (NATIVE_PROGRESSION.md section 1).
+// The attribute's value: with an empty context chain the attribute yields no value and the constant stands; the context resolvers are
+// the no-context one (always succeeds) and the player replication info one (succeeds when the context has one); each value resolver
+// gets the previous value (NATIVE_PROGRESSION.md section 1, NATIVE_ATTRIBUTES.md sections 5 and 6, UNVERIFIED).
 std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const AttributeContext& context) {
     const Value* contexts = runtime_.property(attribute, "ContextResolverChain");
     if (!contexts || contexts->elements().empty()) return std::nullopt;
-    for (const auto& resolver : contexts->elements())
-        if (load(resolver)->cls->path != "GearboxFramework.NoContextNeededAttributeContextResolver")
-            throw RuntimeError("unsupported attribute context resolver " + load(resolver)->cls->path);
+    ObjectPtr owner;          // the object the chain resolved (none for the no-context resolver)
+    for (const auto& reference : contexts->elements()) {
+        const std::string& type = load(reference)->cls->path;
+        if (type == "GearboxFramework.NoContextNeededAttributeContextResolver") continue;
+        if (type == "WillowGame.PlayerReplicationInfoAttributeContextResolver") {
+            if (!context.replicationInfo) return std::nullopt;      // the context does not resolve
+            owner = context.replicationInfo;
+            continue;
+        }
+        throw RuntimeError("unsupported attribute context resolver " + type);
+    }
     float value = 0;
     const Value* chain = runtime_.property(attribute, "ValueResolverChain");
     if (!chain) throw RuntimeError("unsupported attribute: no value resolver chain");
@@ -80,6 +89,12 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
             else throw RuntimeError("unsupported math resolver operand " + operand);
         } else if (type == "WillowGame.GlobalAttributeValueResolver") {
             value = context.level;      // global slot 0 (the experience curve sets it to the level it asks for)
+        } else if (type == "Engine.ObjectPropertyAttributeValueResolver") {
+            // the named property of the resolved context object (the player's ExpLevel for PlayerExperienceLevel)
+            const Value* name = runtime_.property(*resolver, "PropertyName");
+            const Value* property = owner && name ? runtime_.property(*owner, name->s) : nullptr;
+            if (!property) throw RuntimeError("unsupported object property attribute: no such property on the resolved context");
+            value = float(property->number());
         } else {
             throw RuntimeError("unsupported attribute value resolver " + type);
         }
@@ -120,31 +135,34 @@ float AttributeEvaluator::combined(Object& definition, float base, const Attribu
     }
 }
 
-// An entry's expressions are taken to all have to hold (UNVERIFIED). The only attribute they may name is PlayThroughCount.
+// An entry's expressions are taken to all have to hold (UNVERIFIED). The attributes they may name are PlayThroughCount and
+// PlayerExperienceLevel; an operand that does not resolve makes the expression false (NATIVE_ATTRIBUTES.md section 11).
 bool AttributeEvaluator::expressionsHold(const Value& expressions, const AttributeContext& context) {
     const auto operators = enumNames(runtime_, "Engine", "AttributeExpression.EComparisonOperator");
     for (const auto& expression : expressions.elements()) {
-        const float left = operandValue(need(expression.field("AttributeOperand1"), "AttributeOperand1"), context);
+        const auto left = operandValue(need(expression.field("AttributeOperand1"), "AttributeOperand1"), context);
         const Value* attribute2 = expression.field("AttributeOperand2");
-        const float right = attribute2 && attribute2->o ? operandValue(*attribute2, context) : number(expression.field("ConstantOperand2"));
+        const auto right = attribute2 && attribute2->o ? operandValue(*attribute2, context) : std::optional<float>(number(expression.field("ConstantOperand2")));
+        if (!left || !right) return false;
         const std::string op = enumSuffix(operators, need(expression.field("ComparisonOperator"), "ComparisonOperator").integer());
         bool holds;
-        if (op == "EqualTo") holds = left == right;
-        else if (op == "NotEqualTo") holds = left != right;
-        else if (op == "GreaterThan") holds = left > right;
-        else if (op == "GreaterThanOrEqual") holds = left >= right;
-        else if (op == "LessThan") holds = left < right;
-        else if (op == "LessThanOrEqual") holds = left <= right;
+        if (op == "EqualTo") holds = *left == *right;
+        else if (op == "NotEqualTo") holds = *left != *right;
+        else if (op == "GreaterThan") holds = *left > *right;
+        else if (op == "GreaterThanOrEqual") holds = *left >= *right;
+        else if (op == "LessThan") holds = *left < *right;
+        else if (op == "LessThanOrEqual") holds = *left <= *right;
         else throw RuntimeError("unsupported comparison operator " + op);
         if (!holds) return false;
     }
     return true;
 }
 
-float AttributeEvaluator::operandValue(const Value& attribute, const AttributeContext& context) {
+std::optional<float> AttributeEvaluator::operandValue(const Value& attribute, const AttributeContext& context) {
     const std::string path = pathOf(attribute);
-    if (!endsWith(path, "PlayThroughCount")) throw RuntimeError("unsupported condition attribute " + path);
-    return float(context.playThroughCount);
+    if (endsWith(path, "PlayThroughCount")) return float(context.playThroughCount);
+    if (endsWith(path, "PlayerExperienceLevel")) return attributeValue(*load(attribute), context);     // the player's ExpLevel, when there is a player
+    throw RuntimeError("unsupported condition attribute " + path);
 }
 
 // Only when a definition is set (the caller checks): minimum, then maximum; then RoundingMode 0 none, 1 nearest, 2 floor, 3 ceiling.

@@ -26,7 +26,7 @@ namespace vm {
 // Experience also runs the script path (docs/verification/NATIVE_PROGRESSION.md, UNVERIFIED): the turn-in script reaches
 // GetExperienceReward (formula in src/progression.*) and ExpEarn (raises the VM-side pool), and tick() runs the pool update that
 // calls ExpLevelUp. The host supplies what it owns (region stage, the player's level and experience) and applies the Experience
-// and Level events to its own state.
+// event to its own state; it compares the Level, SkillPoints and MaxHealth events (what the script's level-up awarded and set) with its own.
 // Still host stand-ins: the damage type of the host's shot, the world ops listed in dummy().boundaryCalls.
 class FireMissionSlice {
 public:
@@ -34,7 +34,9 @@ public:
         enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete,
                           Experience, Level,   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
                           MissionInterface,    // the mission screen was opened (ClientGFxPlayMovie): a = movie definition path, b = the director's path
-                          OnUseDialog };       // the on-use dialog's TriggerEvent: a = the global VO_NPC_OnUse_* tag path, b = the speaker (Marcus), c = the other object's class
+                          OnUseDialog,         // the on-use dialog's TriggerEvent: a = the global VO_NPC_OnUse_* tag path, b = the speaker (Marcus), c = the other object's class
+                          SkillPoints,         // a = the unspent skill points the script's level-up awarded (the data's per-level formula; sent with a Level event, 0 included)
+                          MaxHealth };         // a = the new maximum health (the health pool's base maximum, a stand-in trigger: RecalculateAttributeInitializedState)
         Kind kind;
         std::string a, b, c;
         std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)

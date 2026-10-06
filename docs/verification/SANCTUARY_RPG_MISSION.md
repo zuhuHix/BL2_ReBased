@@ -710,8 +710,8 @@ amount confirmed on 2026-10-02: 395 at stage 8.**
    `ExpPointsNextLevelAt` (> 0) and the level is below `GetMaxExpLevel` (native, ours: 50), the installed script
    `WillowPlayerController.ExpLevelUp(false)` runs on the VM controller. It raises `PlayerReplicationInfo.ExpLevel`, then
    `OnExpLevelChange` (script) sets `ExpPointsNextLevelAt` through `GetExpPointsRequiredForLevel` (native, ours, the same curve).
-   Skill points, health and the HUD stay stubbed in the script (the globals' skill-point formula is not evaluated); `LevelUpCount` is not
-   kept.
+   Skill points, health and the HUD stay stubbed in the script (the globals' skill-point formula is not evaluated; swap 7 below evaluates it
+   and the new maximum health); `LevelUpCount` is not kept.
 6. **Where the state lives:** the VM holds the pool value and the level (the controller's `PlayerReplicationInfo`), the host keeps
    Maya's `UOpenWillowSkills` (level and experience display, skill points, health, save). Simplest design that keeps the host's UI and
    save untouched: before accept and turn-in the host copies its inputs in (`setRegionGameStage`, `setPlayerExperience(level,
@@ -1197,4 +1197,96 @@ Rule: `NATIVE_DIALOG_GROUPS.md` (UNVERIFIED, not confirmed in the running game).
 `DialogGroup_TemplateDefault`); the on-use lines are unchanged (NotStarted Quest_New, Active Quest_During, after completion Quest_No_New, ReadyToTurnIn silent).
 - `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE build Succeeded.
 - **`tools/test_quest.ps1`: first run PASS checks=96 errors=0, resume PASS checks=11 errors=0** (unchanged); stubs unchanged (9 after accept, 15 after turn-in).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 7: the level-up's skill points and maximum health from the data (2026-10-06)
+
+AI-assisted (Claude), lane I4. Rules from [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) (sections 1, 3 and 4), [NATIVE_SKILLS.md](NATIVE_SKILLS.md) (section 1) and
+[NATIVE_ATTRIBUTES.md](NATIVE_ATTRIBUTES.md) (sections 1, 5, 6, 8 and 11); the save rule of [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) is only the host's oracle
+(`max(0, L - 4)` minus points spent). **Every rule stays UNVERIFIED in the running game** except what the notes say was confirmed on 2026-10-02: the points
+`max(0, L - 4)` and the health pool's base maximum `80 x 1.13^L`.
+
+### The traced path of one level-up (what is script, what is native, what is a stub)
+
+`FireMissionSlice::tick` runs the pool update, which runs the installed script `WillowPlayerController.ExpLevelUp(false)` on the VM controller while the pool has
+reached `ExpPointsNextLevelAt`. Traced with `research/script_disasm.py` and the VM's stub list (`--slice-run ... stage:8 player:8:27900 ... turnin tick:1`):
+
+| Step of `ExpLevelUp` / `OnExpLevelChange` | Kind | Before swap 7 | Now |
+|---|---|---|---|
+| `GetWillowGlobals`, `GetGlobalsDefinition`, `GetMaxExpLevel` | native | implemented (swaps 2 and 3) | unchanged |
+| `ExpLevel` + 1 | script | runs | unchanged |
+| skill points: `GeneralSkillPoints += int(EvaluateInitializationData(GlobalsDefinition.GeneralSkillPointsPerLevelUp, Self))` | script + native | **stub** (returned 0: no points) | **implemented**: the `src/progression.*` evaluator on the installed `INI_SkillPointsPerLevelUp` (a conditional: 1 when `PlayerExperienceLevel >= 5`, default 0) |
+| `SpecialistSkillPoints += int(EvaluateInitializationData(SpecialistSkillPointsPerLevelUp, Self))` | script + native | stub (0) | the same native; the data has no such definition, so an empty initialization (0) |
+| `FireSkillPointsChangedDelegates` | script | runs (no delegates registered in the VM graph) | unchanged |
+| first-skill-point stats, `BroadcastLocalizedMessage`, `RecordPointsEarnedEventForPlayer` | script / telemetry native | stat object absent; telemetry stub | unchanged: telemetry stays a stub (no rule to implement) |
+| `OnExpLevelChange`: `ExpPointsNextLevelAt` from `GetExpPointsRequiredForLevel` | script + native | implemented (swap 2) | unchanged |
+| `OnExpLevelChange`: `RecalculateAttributeInitializedState` | native thunk | **stub** | **host-boundary stand-in** (below) |
+| `OnExpLevelChange`: the pawn branch (`SetGameStage`, intrinsic armour, the class's `OnLevelUp` behaviors) | script | skipped: the VM controller has no pawn | unchanged (so the health top-up of `PlayerBehavior_LevelUp` is not run) |
+| `ClientOnExpLevelChange` (HUD queue, achievements, LCD, `RecordPlayerCharacterGainedLevelEventForPlayer`) | script | HUD absent; stubs | unchanged |
+
+The health pool's maximum is **not** written anywhere by the level-up script. The notes do not say which native recomputes it: `RecalculateAttributeInitializedState`
+is "a thin native thunk to a virtual method whose body was not reached" (NATIVE_ATTRIBUTES section 8) and `ResourcePoolManager.RecalculateBaseValues` is low
+confidence. So that step is the one that needed a stand-in; it did not need the whole attribute and resource-pool system.
+
+### What was implemented
+
+- **`AttributeInitializationDefinition.EvaluateInitializationData`** (`src/mission_script.cpp`, static native, three arguments): evaluates the data with the existing
+  `AttributeEvaluator`. The context source is the VM player controller, which resolves to its `PlayerReplicationInfo` (the player resolvers, NATIVE_ATTRIBUTES section 5).
+  No source gives no player (a condition on the player's level is then false); any other source object, and a non-None override source, are listed as "not implemented"
+  entries in the stub list.
+- **`src/progression.*`** gained, inside the evaluator and for the two shapes the data needs: the context resolver `PlayerReplicationInfoAttributeContextResolver` (resolves
+  when the context has a replication info, otherwise the attribute does not resolve), the value resolver `ObjectPropertyAttributeValueResolver` (get: the named property of the
+  resolved context, `ExpLevel` for `PlayerExperienceLevel`), and the condition attribute `PlayerExperienceLevel` next to `PlayThroughCount`. A comparison whose operand does not
+  resolve is false (NATIVE_ATTRIBUTES section 11). Any other resolver or condition attribute still throws "unsupported ..." rather than guess.
+- **`WillowPlayerController.RecalculateAttributeInitializedState`: HOST-BOUNDARY STAND-IN.** It evaluates the health pool's base maximum for the new level
+  (`GD_Siren.Character.CharClass_Siren.HealthPoolDefinition` -> `BaseMaxValue` -> `Init_PlayerHealth`, found by its stock path: Maya is the host's player class, the VM
+  controller's own `PlayerClass` stays unset) and keeps it for the pool update. **What the real native recomputes, and that it is the one that does this, is not established;
+  only the data and the formula (NATIVE_PROGRESSION section 4) are from the notes.** Missing class data is a "not implemented" stub entry, not an error.
+- **The slice reports the result** (`MissionScript::updateExperiencePool`, after the loop): when the level changed, the events `Level` (as before), then `SkillPoints`
+  (`GeneralSkillPoints` after minus before: the points the level-up awarded, sent even when 0) and `MaxHealth` (the pool's base maximum for the new level). Several levels in one
+  update give one event each, with the summed points and the last level's health. `--slice-run` prints them as `skill_points` and `max_health` (`a` is the value).
+
+### Host side (`OpenWillowQuest.cpp`)
+
+The host's `UOpenWillowSkills` derives the unspent points from the level (`EarnedPointsAt`) and holds no counter, and its maximum health is `HealthForLevel` at the new
+level, so there is nothing to apply for the two new events: they are **compared** with the host's own numbers, as the `Level` event is. Log lines:
+`OWQUEST script level-up skill points: VM awarded 1, host 1 (same)` and `OWQUEST script level-up max health: VM 240.323 at level 9, host 240.323 (same)`. Two new suite
+checks, `script_level_up_awards_skill_points` (one event, equal to the host's change of available points, a point at level 9) and `script_level_up_sets_max_health` (the VM's
+number equals the walker's maximum health and `Data.HealthForLevel`); no existing check was renamed. The host's formulas (`EarnedPointsAt`, `HealthForLevel`) stay as the
+oracle. The host's UI and save are untouched; the VM's numbers do not replace the host's displayed ones yet (open below).
+
+### Real data and what it shows
+
+`--slice-run ... stage:8 player:<level>:<experience> accept ... turnin tick:1` on the installed packages:
+
+| Level-up | `skill_points` | `max_health` | Check |
+|---|---|---|---|
+| 8 -> 9 (pool 27,900 + 395) | 1 | 240.3233 | `80 x 1.13^9` |
+| 4 -> 5 (pool 5,300 + 395) | 1 | 147.3948 | `80 x 1.13^5` (the note's 147.4) |
+| 3 -> 4 -> 5 (pool 5,300; 4 happens in the first tick) | 0, then 1 | 130.4379, then 147.3948 | level 4 is below 5 |
+
+Stubs removed from the real run: `AttributeInitializationDefinition.EvaluateInitializationData` (x2) and `WillowPlayerController.RecalculateAttributeInitializedState`. Still hit on
+the level-up path, all with no rule to implement: `WillowLeviathanService.RecordPointsEarnedEventForPlayer`, `RecordPlayerCharacterGainedLevelEventForPlayer` (telemetry),
+and the HUD side of `ClientOnExpLevelChange` (no HUD). No stub is newly reached.
+
+### Not modelled / open
+
+- The host still displays its own points and health; adopting the VM's numbers needs a points counter in the host (the save recomputes points from the level, NATIVE_SAVE_LOAD:
+  `max(0, L - 4)` minus points spent, and must keep doing so) and a health setter, and is a UI/save change.
+- Which native writes the health pool's base maximum in the game; whether a level-up refills current health (the host does; the class's `OnLevelUp` behavior is a pawn branch the VM skips).
+- The VM's `GeneralSkillPoints` starts at 0 each run (the host owns the unspent count), so the script's "first skill point" stat branch (old 0, new above 0) is reached with no stats object
+  and does nothing; the spent-points and respec paths are not run.
+- Evaluation is single precision with `std::pow`; the game's `pow` may differ in the last bit (see NATIVE_PROGRESSION section 3 for the same question on the curve).
+- Playthroughs above 1 and the skill-point definitions of DLC are not modelled (the evaluator throws on shapes it does not know).
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+
+- Synthetic `tests/mission_script_test.py` scenario S7 (`--slice-run` on invented packages: a conditional `PlayerExperienceLevel >= 5` gives 1 point else 0, a health formula
+  `10 x 1.5^level`; the toy `ExpLevelUp` mirrors the installed one's two extra steps): 4 -> 5 awards 1 point and 75.9375 health, 5 -> 6 awards 1 and 113.90625, 3 -> 4 awards 0 and
+  50.625, 4 -> 6 in one update awards 2 once with the last level's health, a reward that does not cross a level sends neither event; no stubs and no notes. (The existing toy's
+  `Expressions` array element lacked its `None` terminator, so its conditional list decoded as empty; fixed, the playthrough branch it models is still the default one.)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=98 errors=0 (96 before, two new: `script_level_up_awards_skill_points`, `script_level_up_sets_max_health`), resume PASS checks=11 errors=0.**
+  The log lines: `OWQUEST script level-up skill points: VM awarded 1, host 1 (same)`, `OWQUEST script level-up max health: VM 240.323 at level 9, host 240.323 (same)`. Stubs unchanged
+  at the points the suite logs them: 9 after accept, 15 after turn-in (the level-up runs in the next frame, after that line).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

@@ -153,6 +153,22 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         expEarn(int(c.in(0).integer()), int(c.in(1).integer()), c.has(2) ? int(c.in(2).integer()) : -1);
         return Value();
     });
+    // AttributeInitializationDefinition.EvaluateInitializationData(Data, ContextSource, Override) (NATIVE_PROGRESSION section 1, NATIVE_ATTRIBUTES): the
+    // evaluator of src/progression.*; the installed ExpLevelUp reaches it for the skill points per level (GlobalsDefinition.GeneralSkillPointsPerLevelUp,
+    // a conditional on the player's level: 1 from level 5). Static: no self. Only the player controller is a known context source.
+    bind("Engine.AttributeInitializationDefinition.EvaluateInitializationData", [this](NativeCall& c) {
+        if (c.has(2) && c.in(2).kind == Value::Kind::Object && c.in(2).o) notImplemented("EvaluateInitializationData: an override context source");
+        return Value::makeFloat(evaluator_.evaluate(c.in(0), attributeContext(c.in(1))));
+    });
+    // RecalculateAttributeInitializedState: HOST-BOUNDARY STAND-IN. The note says only that it is a thin thunk to a virtual method whose body was not
+    // read, called by OnExpLevelChange after the level has risen; it does not say what it recomputes. The slice needs the new maximum health, so
+    // this evaluates the health pool's base maximum for the new level (NATIVE_PROGRESSION section 4: the data's Init_PlayerHealth; confirmed in game
+    // as the pool's MaxValueBaseValue) and hands it to the host as the MaxHealth event. Which native does this in the game is not established.
+    bind("WillowGame.WillowPlayerController.RecalculateAttributeInitializedState", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        recalculateMaxHealth();
+        return Value();
+    });
     // Level limits and the curve (NATIVE_PROGRESSION section 3): 50 without DLC; R(n) from the formula in the installed data.
     bind("WillowGame.WillowPlayerController.GetMaxExpLevel", [this](NativeCall& c) {
         if (c.self != controller_) return outsideBinding(c);
@@ -761,6 +777,37 @@ int MissionScript::experienceReward(bool alternate) {
     return int(std::trunc(amount));
 }
 
+// The context an EvaluateInitializationData call reads: the player controller as the source resolves to its PlayerReplicationInfo (the player
+// resolvers, NATIVE_ATTRIBUTES section 5); a None source has no player, any other object is not modelled.
+AttributeContext MissionScript::attributeContext(const Value& source) {
+    AttributeContext context;
+    context.playThroughCount = playThroughCount_;
+    if (source.kind == Value::Kind::Object && source.o == controller_) context.replicationInfo = pri_;
+    else if (source.kind == Value::Kind::Object && source.o) notImplemented("EvaluateInitializationData: a context source other than the player controller");
+    return context;
+}
+
+// The player's health pool base maximum for the current level: PlayerClassDefinition.HealthPoolDefinition -> ResourcePoolDefinition.BaseMaxValue, the
+// attribute initialization data the evaluator reads (80 x 1.13^level with a minimum of 20 in the game's data). The class is the host's Maya, found by
+// its stock path in the mission package; the VM controller's own PlayerClass stays unset. UNVERIFIED (see the binding).
+void MissionScript::recalculateMaxHealth() {
+    if (!playerClass_) {
+        const auto package = mission_.definition()->resourcePackage;
+        const int32_t index = package ? runtime_.findExport(*package, "GD_Siren.Character.CharClass_Siren") : 0;
+        if (index > 0) playerClass_ = runtime_.instantiateExport(package, index, 4);
+    }
+    const Value* pool = playerClass_ ? runtime_.property(*playerClass_, "HealthPoolDefinition") : nullptr;
+    if (!pool || pool->kind != Value::Kind::Object || !pool->o) {
+        notImplemented("WillowPlayerController.RecalculateAttributeInitializedState: the player class's health pool data is not in the mission package");
+        return;
+    }
+    const ObjectPtr definition = loadRef(*pool);
+    const Value* base = runtime_.property(*definition, "BaseMaxValue");
+    if (!base) throw RuntimeError("mission script bridge: the health pool definition has no BaseMaxValue");
+    maxHealth_ = evaluator_.evaluate(*base, attributeContext(Value::makeObject(controller_)));
+    healthRecalculated_ = true;
+}
+
 void MissionScript::expEarn(int amount, int source, int type) {
     expEarned_.push_back({amount, source, type});
     const float cap = float(curve().required(maxLevel_));
@@ -768,16 +815,19 @@ void MissionScript::expEarn(int amount, int source, int type) {
     const float scale = 1.f;       // ExpCombatPointsScale / ExpMissionPointsScale (by type) x ExpAllPointsScale, taken as 1 (UNVERIFIED)
     const float next = std::clamp(pool_ + float(amount) * scale, 0.f, cap);
     if (next > pool_) {
-        gains_.push_back({int(next - pool_), 0});
+        gains_.push_back({Gain::Kind::Experience, int(next - pool_)});
         pool_ = next;
     }
 }
 
 // ExperienceResourcePool.ApplyExpPointsToExpLevel(false), run by the pool per-frame update (bridge note): while the pool
 // has reached ExpPointsNextLevelAt (> 0) and the level is below the maximum, the script ExpLevelUp runs, which raises ExpLevel
-// and (OnExpLevelChange) sets the next requirement. The LevelUpCount bookkeeping after it is not implemented.
+// and (OnExpLevelChange) sets the next requirement. The LevelUpCount bookkeeping after it is not implemented. The script also adds the skill points
+// (the data's per-level formula) and calls RecalculateAttributeInitializedState: what they changed is reported with the level (see Gain).
 void MissionScript::updateExperiencePool() {
     const int before = playerLevel();
+    const int pointsBefore = int(required(runtime_, *pri_, "GeneralSkillPoints").integer());
+    healthRecalculated_ = false;
     for (int guard = 0; guard < 200; ++guard) {
         const Value& next = required(runtime_, *pri_, "ExpPointsNextLevelAt");
         const int level = playerLevel();
@@ -785,7 +835,10 @@ void MissionScript::updateExperiencePool() {
         run([this] { runtime_.callByName(controller_, "ExpLevelUp", {Value::makeBool(false)}); });
         if (playerLevel() == level) { notes_.push_back("ExpLevelUp did not raise ExpLevel"); break; }
     }
-    if (playerLevel() != before) gains_.push_back({0, playerLevel()});
+    if (playerLevel() == before) return;
+    gains_.push_back({Gain::Kind::Level, playerLevel()});
+    gains_.push_back({Gain::Kind::SkillPoints, int(required(runtime_, *pri_, "GeneralSkillPoints").integer()) - pointsBefore});
+    if (healthRecalculated_) gains_.push_back({Gain::Kind::MaxHealth, 0, maxHealth_});
 }
 
 std::vector<std::string> MissionScript::stubs() const {

@@ -198,11 +198,18 @@ bool FireMissionSlice::drainMission() {
     return any;
 }
 
-// What the script's experience natives did since the last call, as host events: ExpEarn's pool gains and the levels the pool update reached.
+// What the script's experience natives did since the last call, as host events: ExpEarn's pool gains, the levels the pool update reached and
+// what its level-up awarded (skill points) and set (maximum health).
 void FireMissionSlice::drainExperience() {
-    for (const auto& gain : script_->takeGains())
-        events_.push_back(gain.level > 0 ? HostEvent{HostEvent::Kind::Level, std::to_string(gain.level), "", "", ""}
-                                         : HostEvent{HostEvent::Kind::Experience, std::to_string(gain.amount), "", "", ""});
+    using Kind = MissionScript::Gain::Kind;
+    for (const auto& gain : script_->takeGains()) {
+        switch (gain.kind) {
+        case Kind::Experience: events_.push_back({HostEvent::Kind::Experience, std::to_string(gain.amount), "", "", ""}); break;
+        case Kind::Level: events_.push_back({HostEvent::Kind::Level, std::to_string(gain.amount), "", "", ""}); break;
+        case Kind::SkillPoints: events_.push_back({HostEvent::Kind::SkillPoints, std::to_string(gain.amount), "", "", ""}); break;
+        case Kind::MaxHealth: events_.push_back({HostEvent::Kind::MaxHealth, std::to_string(gain.health), "", "", ""}); break;
+        }
+    }
 }
 
 void FireMissionSlice::pump() {

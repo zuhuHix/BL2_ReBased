@@ -455,10 +455,31 @@ void UOpenWillowQuest::Pump()
         case K::Experience: ApplyScriptExperience(FCString::Atoi(*A)); break;   // what the script's ExpEarn put into the VM pool
         case K::Level: {
             // The pool update ran ExpLevelUp / OnExpLevelChange on the VM controller; the host's own level display follows from the
-            // experience it applied, so the two are compared (skill points and health stay the host's, the script stubs them).
+            // experience it applied, so the two are compared (the skill points and maximum health come as their own events, below).
             const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
             UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up: VM level %s, host level %d (%s)"), *A, Skills ? Skills->GetLevel() : -1,
                 Skills && Skills->GetLevel() == FCString::Atoi(*A) ? TEXT("same") : TEXT("DIFFERENT"));
+            break;
+        }
+        case K::SkillPoints: {
+            // ExpLevelUp added int(GeneralSkillPointsPerLevelUp) per level, evaluated from the installed data (1 from level 5: NATIVE_SKILLS.md section 1,
+            // UNVERIFIED). The host's points are derived from the level (EarnedPointsAt), so this is compared with its own count for the same level change.
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            ScriptSkillPoints = FCString::Atoi(*A);
+            ++ScriptSkillPointEvents;
+            const int32 HostPoints = Skills ? UOpenWillowSkills::EarnedPointsAt(Skills->GetLevel()) - UOpenWillowSkills::EarnedPointsAt(LevelBeforeReward) : -1;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up skill points: VM awarded %d, host %d (%s)"), ScriptSkillPoints, HostPoints,
+                ScriptSkillPoints == HostPoints ? TEXT("same") : TEXT("DIFFERENT"));
+            break;
+        }
+        case K::MaxHealth: {
+            // The health pool's base maximum for the new level, evaluated from the installed data (80 x 1.13^level: NATIVE_PROGRESSION.md section 4; the base
+            // was confirmed in game, the trigger is a stand-in). The host's own formula (HealthForLevel) set its maximum health; the two are compared.
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            ScriptMaxHealth = FCString::Atof(*A);
+            const float HostHealth = Walker ? Walker->GetMaxHealth() : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up max health: VM %.3f at level %d, host %.3f (%s)"), ScriptMaxHealth, Skills ? Skills->GetLevel() : -1,
+                HostHealth, FMath::IsNearlyEqual(ScriptMaxHealth, HostHealth, 0.01f) ? TEXT("same") : TEXT("DIFFERENT"));
             break;
         }
         case K::OnUseDialog:   // PlayOnUseDialog's TriggerEvent on Marcus's dialog component: reported, not played (two-step group dispatch not implemented)
@@ -1210,6 +1231,12 @@ void UOpenWillowQuest::RunTest(float Delta)
             && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Skills->GetLevel()), 0.01f)
             && Walker->GetMaxHealth() > MaxHealthBeforeReward, TEXT("level_up_sets_formula_max_health"));
+        // Swap 7: the script's own numbers (the host's formulas above are the oracle). One SkillPoints event, equal to what the host's level change earned
+        // (a point at level 9: the data's "1 from level 5"); the VM's maximum health for the new level, from the health pool's data, equals the host's.
+        Check(ScriptSkillPointEvents == 1 && ScriptSkillPoints == Skills->AvailablePoints() - PointsBeforeReward && ScriptSkillPoints == (Skills->GetLevel() >= 5 ? 1 : 0),
+            TEXT("script_level_up_awards_skill_points"));
+        Check(ScriptMaxHealth > 0.f && FMath::IsNearlyEqual(ScriptMaxHealth, Walker->GetMaxHealth(), 0.01f)
+            && FMath::IsNearlyEqual(ScriptMaxHealth, Data.HealthForLevel(Skills->GetLevel()), 0.01f), TEXT("script_level_up_sets_max_health"));
         Check(HealthBeforeReward < MaxHealthBeforeReward && Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("level_up_refills_current_health"));
         Check(bHasReward && RewardPickup && RewardPickup->DisplayName() == RewardItem.Name
             && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) == INDEX_NONE, TEXT("turn_in_drops_loot_stand_in_pickup"));

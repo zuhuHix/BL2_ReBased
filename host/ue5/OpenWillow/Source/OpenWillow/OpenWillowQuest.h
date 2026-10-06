@@ -142,6 +142,10 @@ private:
     void FixRegionStage(int32 PlayerLevel);
     void LogScriptStubs(const TCHAR* When) const;   // the natives the mission script reached that have no implementation
     int32 LastXpAmount = 0;
+    // What the script's level-up reported (swap 7): the skill points its ExpLevelUp awarded (the data's per-level formula; -1 until one arrives, the
+    // number of such events) and the new maximum health (the health pool's base maximum, a stand-in trigger). The host compares them with its own.
+    int32 ScriptSkillPoints = -1, ScriptSkillPointEvents = 0;
+    float ScriptMaxHealth = -1.f;
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;

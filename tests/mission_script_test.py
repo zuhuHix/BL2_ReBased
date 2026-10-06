@@ -43,6 +43,12 @@ dialog group (invented tags, priorities, acts, a talker name tag): Out on the fi
 the live line ends, the priority arbitration with the tracked-mission floor, the last enabled entry for a tag, a template act through the
 link table, a registered pawn against the echo caller, and bForcePlayImmediate.
 
+The level-up scenario (--slice-run, scenario S7, swap 7) gives the toy ExpLevelUp the installed script's two further steps, in miniature: it adds
+int(EvaluateInitializationData(GlobalsDefinition.GeneralSkillPointsPerLevelUp, Self)) to PRI.GeneralSkillPoints (invented data: a conditional on the
+attribute PlayerExperienceLevel, whose chain is the player replication info context resolver and an object-property resolver of ExpLevel: 1 from level 5,
+else 0, the note's rule) and calls RecalculateAttributeInitializedState, which the bridge answers with the health pool's base maximum (invented
+Init_PlayerHealth: 10 x 1.5 ^ level, so 50.625 at level 4, 75.9375 at 5, 113.90625 at 6). The slice reports them as skill_points and max_health events.
+
 The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
 with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
 OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
@@ -185,13 +191,13 @@ class Toy:
         return self.p.add_export(self.imp['ScriptStruct'], name, w32(0) * 4 if defaults is None else bytes(52) + defaults, outer=owner)
 
     def function(self, owner, name, declared, body=None, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, result=None, native=0, friendly=None, locals_=()):
-        """declared: [(kind, name, extra flags)]; `body(ids)` returns an Asm (None for a native). Children are exported
+        """declared: [(kind, name, extra flags[, type ref])]; `body(ids)` returns an Asm (None for a native). Children are exported
         first, in reverse declaration order, the return value before them (as in the real packages)."""
-        ordered = ([(result, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET)] if result else []) + \
-                  [(k, n, CPF_PARM | extra) for k, n, extra in reversed(declared)] + [(k, n, 0) for k, n in locals_]
+        ordered = ([(result, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET, 0)] if result else []) + \
+                  [(d[0], d[1], CPF_PARM | d[2], d[3] if len(d) > 3 else 0) for d in reversed(declared)] + [(k, n, 0, 0) for k, n in locals_]
         func_index = len(self.p.exports) + 1 + len(ordered)
         ids = {}
-        for kind, pname, pflags in ordered: ids[pname] = self.prop(kind, func_index, pname, pflags)
+        for kind, pname, pflags, type_ref in ordered: ids[pname] = self.prop(kind, func_index, pname, pflags, type_ref)
         asm = body(ids) if body else None
         script = bytes(asm.b) if asm else b''
         memory = len(script) + 4 * asm.refs if asm else 0
@@ -268,6 +274,10 @@ def build_engine():
     T.prop('Struct', definition, 'ValueFormula', type_ref=formula)
     T.prop('Struct', definition, 'ConditionalInitialization', type_ref=conditional)
     T.prop('Byte', definition, 'BaseValueMode')
+    T.function(definition, 'EvaluateInitializationData', [('Struct', 'InitializationData', 0, aid), ('Object', 'ContextSource', 0),
+                                                         ('Object', 'OptionalOverrideContextSource', CPF_OPT)], None,
+               FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Float')
+    T.prop('Name', T.cls('ObjectPropertyAttributeValueResolver'), 'PropertyName')
     attribute = T.cls('AttributeDefinition')
     T.array_of(attribute, 'ContextResolverChain', 'Object')
     T.array_of(attribute, 'ValueResolverChain', 'Object')
@@ -434,6 +444,7 @@ def build_willowgame():
     player_controller = p.add_import_full('Class', engine, 'PlayerController')
     gearbox = p.add_import_full('Package', 0, 'GearboxFramework')
     gearbox_globals = p.add_import_full('Class', gearbox, 'GearboxGlobals')
+    evaluate = p.add_import_full('Function', p.add_import_full('Class', engine, 'AttributeInitializationDefinition'), 'EvaluateInitializationData')
     world_info, gri = (p.add_import_full('ObjectProperty', actor, 'WorldInfo'),
                        p.add_import_full('ObjectProperty', p.add_import_full('Class', engine, 'WorldInfo'), 'GRI'))
     native = FUNC_NATIVE | FUNC_PUBLIC
@@ -556,10 +567,15 @@ def build_willowgame():
     tracker_prop = T.prop('Object', replication, 'MissionTracker')
     T.prop('Int', replication, 'CurrentPlaythrough')
     globals_ = T.cls('WillowGlobals', super_ref=gearbox_globals)
-    T.function(globals_, 'GetWillowGlobals', [], None, native | 0x2000, 'Object')
-    T.function(globals_, 'GetGlobalsDefinition', [], None, native, 'Object')
+    get_willow_globals = T.function(globals_, 'GetWillowGlobals', [], None, native | 0x2000, 'Object')['__self__']
+    get_globals_definition = T.function(globals_, 'GetGlobalsDefinition', [], None, native, 'Object')['__self__']
     globals_definition = T.cls('GlobalsDefinition')
     T.prop('Float', globals_definition, 'PlayerInteractionDistance')
+    points_per_level = T.prop('Struct', globals_definition, 'GeneralSkillPointsPerLevelUp', type_ref=aid)
+    # the player's class and its health pool (the data the RecalculateAttributeInitializedState stand-in reads)
+    T.prop('Object', T.cls('PlayerClassDefinition'), 'HealthPoolDefinition')
+    T.prop('Struct', T.cls('ResourcePoolDefinition'), 'BaseMaxValue', type_ref=aid)
+    T.cls('PlayerReplicationInfoAttributeContextResolver')
 
     status_owner = T.cls('IMission')
     status = T.struct_(status_owner, 'MissionStatusPlayerData')
@@ -569,8 +585,10 @@ def build_willowgame():
     pri = T.cls('WillowPlayerReplicationInfo')
     exp_level = T.prop('Int', pri, 'ExpLevel')
     next_at = T.prop('Int', pri, 'ExpPointsNextLevelAt')
+    general_points = T.prop('Int', pri, 'GeneralSkillPoints')
     controller = T.cls('WillowPlayerController', super_ref=player_controller)
     T.function(controller, 'GetCurrentPlaythrough', [], None, native, 'Int')
+    recalculate = T.function(controller, 'RecalculateAttributeInitializedState', [], None, native)['__self__']
     T.function(controller, 'GetHUDMovie', [], None, native, 'Object')
     T.function(controller, 'UpdateLcdMissionStatus', [], None, native)
     T.function(controller, 'PlayUIAkEvent', [('Object', 'Event', 0)], None, native)
@@ -846,6 +864,14 @@ def build_willowgame():
         a.raw(146); level_of_pri(a, exp_level); a.int_const(1); a.raw(0x16)
         a.raw(0x0F); level_of_pri(a, next_at)
         a.call(required, lambda: (a.raw(146), level_of_pri(a, exp_level), a.int_const(1), a.raw(0x16)))
+        # GeneralSkillPoints += int(EvaluateInitializationData(GetWillowGlobals().GetGlobalsDefinition().GeneralSkillPointsPerLevelUp, Self)), after the level rose
+        a.raw(0x0F); level_of_pri(a, general_points)
+        a.raw(146); level_of_pri(a, general_points)
+        a.raw(0x38, 68)                                            # PrimitiveCast FloatToInt
+        a.call(evaluate, lambda: a.context(lambda: a.context(lambda: a.call(get_willow_globals), lambda: a.call(get_globals_definition)),
+                                           lambda: a.instance(points_per_level)), a.self_, lambda: a.raw(0x4A))
+        a.raw(0x16)
+        a.call(recalculate)
         a.return_nothing(); a.end(); return a
     T.function(controller, 'ExpLevelUp', [('Bool', 'bCheated', 0)], level_up)
     return p
@@ -895,7 +921,7 @@ def build_mission(director=False, on_enabled=True):
     expression = (t.obj('AttributeOperand1', play_through) + t.byte('ComparisonOperator', COMPARISONS.index('OPERATOR_EqualTo'))
                   + t.float('ConstantOperand2', 2.0) + none)
     entry = (data('BaseValueIfTrue', constant=4.0)
-             + t.array('Expressions', 1, expression))
+             + t.array('Expressions', 1, expression) + none)
     conditional = (t.bool('bEnabled', True)
                    + t.array('ConditionalExpressionList', 1, entry)
                    + data('DefaultBaseValue', constant=3.0) + none)
@@ -913,7 +939,28 @@ def build_mission(director=False, on_enabled=True):
     # GD_Globals.General.Globals with an invented interaction distance (the use ray's length)
     globals_package = p.add_export(chain('Core', 'Package'), 'GD_Globals', w32(0) + none)
     general_package = p.add_export(chain('Core', 'Package'), 'General', w32(0) + none, outer=globals_package)
-    p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals', w32(0) + t.float('PlayerInteractionDistance', 420.0) + none, outer=general_package)
+    # the player's level as an attribute (swap 7): the replication info context, the object property ExpLevel of it
+    pri_context = p.add_export(chain('WillowGame', 'PlayerReplicationInfoAttributeContextResolver'), 'PriContextResolver', w32(0) + none)
+    exp_level_property = p.add_export(chain('Engine', 'ObjectPropertyAttributeValueResolver'), 'ExpLevelResolver', w32(0) + t.name_('PropertyName', 'ExpLevel') + none)
+    player_level = p.add_export(chain('Engine', 'AttributeDefinition'), 'PlayerExperienceLevel',
+                                w32(0) + t.array('ContextResolverChain', 1, w32(pri_context)) + t.array('ValueResolverChain', 1, w32(exp_level_property)) + none)
+    # the skill points per level (the note's rule in miniature): 1 when PlayerExperienceLevel >= 5, else the default 0
+    level_five = (t.obj('AttributeOperand1', player_level) + t.byte('ComparisonOperator', COMPARISONS.index('OPERATOR_GreaterThanOrEqual'))
+                  + t.float('ConstantOperand2', 5.0) + none)
+    from_five = data('BaseValueIfTrue', constant=1.0) + t.array('Expressions', 1, level_five) + none
+    points_conditional = t.bool('bEnabled', True) + t.array('ConditionalExpressionList', 1, from_five) + data('DefaultBaseValue', constant=0.0) + none
+    points_definition = p.add_export(chain('Engine', 'AttributeInitializationDefinition'), 'INI_SkillPointsPerLevelUp',
+                                     w32(0) + t.struct_('ConditionalInitialization', 'ConditionalInitialization', points_conditional) + none)
+    # the toy player class with a health pool whose base maximum is 10 x 1.5 ^ PlayerExperienceLevel (a value formula, the power from the attribute)
+    health_formula = t.bool('bEnabled', True) + data('Multiplier', constant=10.0) + data('Level', constant=1.5) + data('Power', attribute=player_level) + none
+    health_definition = p.add_export(chain('Engine', 'AttributeInitializationDefinition'), 'Init_PlayerHealth',
+                                     w32(0) + t.struct_('ValueFormula', 'ValueFormula', health_formula) + none)
+    health_pool = p.add_export(chain('WillowGame', 'ResourcePoolDefinition'), 'HealthPool', w32(0) + data('BaseMaxValue', definition=health_definition) + none)
+    siren = p.add_export(chain('Core', 'Package'), 'GD_Siren', w32(0) + none)
+    siren_character = p.add_export(chain('Core', 'Package'), 'Character', w32(0) + none, outer=siren)
+    p.add_export(chain('WillowGame', 'PlayerClassDefinition'), 'CharClass_Siren', w32(0) + t.obj('HealthPoolDefinition', health_pool) + none, outer=siren_character)
+    p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals',
+                 w32(0) + t.float('PlayerInteractionDistance', 420.0) + data('GeneralSkillPointsPerLevelUp', definition=points_definition) + none, outer=general_package)
     if director:
         other = p.add_export(chain('WillowGame', 'MissionDefinition'), 'OtherMission', b'')
         end_only = p.add_export(chain('WillowGame', 'MissionDefinition'), 'EndOnlyMission', b'')
@@ -1431,6 +1478,35 @@ with tempfile.TemporaryDirectory() as folder:
     check('D turn-in', remote(steps['turnin']) == ['MissionLevelOn', 'MutexBOff'], remote(steps['turnin']))
     # transitions only: the sequences end in the state the last verdicts left
     check('D final enabled sequences', sorted(got['dummy_enabled_sequences']) == ['Idle', 'MissionLevel'], got['dummy_enabled_sequences'])
+
+    # Scenario S7 (swap 7): the level-up's skill points come from the globals' formula and the new maximum health from the health pool's data, both
+    # as host events after the Level event. The reward at stage 4 is 27; R(4) 30, R(5) 48, R(6) 70.
+    def level_events(*steps):
+        code, got = slice_run(*steps)
+        return code, got, [(e['kind'], e['a']) for step in got['steps'] for e in step['events']
+                           if e['kind'] in ('experience', 'level', 'skill_points', 'max_health')]
+
+    def leveled(events, level, points, health):
+        return ([kind for kind, _ in events] == ['experience', 'level', 'skill_points', 'max_health'] and events[0][1] == '27' and events[1][1] == str(level)
+                and events[2][1] == str(points) and abs(float(events[3][1]) - health) < 1e-3)
+    flow = ('accept', 'range', 'turnin', 'tick:0.5')
+    # 4 -> 5 (pool 30 + 27 = 57): the first level with a point
+    code, got, events = level_events('stage:4', 'player:4:30', *flow)
+    check('S7 4 -> 5 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('S7 4 -> 5 awards 1 point, health 10 x 1.5^5', leveled(events, 5, 1, 75.9375), events)
+    check('S7 no stubs and no notes', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']))
+    # 5 -> 6 (pool 48 + 27 = 75)
+    code, got, events = level_events('stage:4', 'player:5:48', *flow)
+    check('S7 5 -> 6 awards 1 point, health 10 x 1.5^6', code == 0 and got['errors'] == [] and leveled(events, 6, 1, 113.90625), (events, got['errors']))
+    # 3 -> 4 (pool 16 + 27 = 43): below level 5 the formula gives 0, and the event still says so
+    code, got, events = level_events('stage:4', 'player:3:16', *flow)
+    check('S7 3 -> 4 awards no point', code == 0 and got['errors'] == [] and leveled(events, 4, 0, 50.625), (events, got['errors']))
+    # two levels from one reward (pool 44 + 27 = 71 >= R(6)): one event with both points, the health of the last level
+    code, got, events = level_events('stage:4', 'player:4:44', *flow)
+    check('S7 4 -> 6 awards 2 points once', code == 0 and got['errors'] == [] and leveled(events, 6, 2, 113.90625), (events, got['errors']))
+    # no level change (27 < R(5)): neither event is sent
+    code, got, events = level_events('stage:4', 'player:4:0', *flow)
+    check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events)
 
     # Scenario E: Behavior_TriggerDialogEvent through --mission-run (src/dialog.*), NATIVE_DIALOG.md.
     (root / 'DialogMission.upk').write_bytes(build_dialog_mission().build())

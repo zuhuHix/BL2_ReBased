@@ -756,7 +756,8 @@ int main(int argc, char** argv) {
             std::set<std::string> completed;
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
-                                          "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog"};
+                                          "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog",
+                                          "skill_points", "max_health"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {

@@ -7,16 +7,19 @@
 namespace vm {
 
 // What the attribute evaluator may read from the world. The real evaluator resolves attributes through context
-// resolvers (the player controller, the pawn, the globals); this subset has the two values the experience rules need.
+// resolvers (the player controller, the pawn, the globals); this subset has the values the experience and level-up rules need.
 struct AttributeContext {
     int playThroughCount = 1;     // D_Attributes.Balance.PlayThroughCount: 1 on the first playthrough (UNVERIFIED reading)
     float level = 0;              // the global slot a GlobalAttributeValueResolver reads (the experience curve's level)
+    // The player's replication info (NATIVE_ATTRIBUTES.md section 5: a controller source resolves to its PlayerReplicationInfo). Null: an
+    // attribute whose context chain asks for it does not resolve (a condition on it is false, a base value keeps its constant).
+    ObjectPtr replicationInfo;
 };
 
 // A SUBSET of the native AttributeInitializationData evaluator (docs/verification/NATIVE_PROGRESSION.md section 1, read from
 // native code, UNVERIFIED): constants, scale, attributes with a no-context chain of constant / simple-math / global resolvers,
-// definitions with a ValueFormula or a ConditionalInitialization on PlayThroughCount, the base-value modes, range
-// restriction and rounding. Arithmetic is single precision. Any shape outside the subset (random variance, other
+// definitions with a ValueFormula or a ConditionalInitialization on PlayThroughCount or PlayerExperienceLevel, the base-value modes,
+// range restriction and rounding. Arithmetic is single precision. Any shape outside the subset (random variance, other
 // resolvers, other context resolvers, other condition attributes) throws RuntimeError("unsupported ...") instead of guessing.
 class AttributeEvaluator {
 public:
@@ -34,7 +37,7 @@ private:
     float combined(Object& definition, float base, const AttributeContext& context);
     float restricted(Object& definition, float value, const AttributeContext& context);
     bool expressionsHold(const Value& expressions, const AttributeContext& context);
-    float operandValue(const Value& attribute, const AttributeContext& context);
+    std::optional<float> operandValue(const Value& attribute, const AttributeContext& context);
 };
 
 // Experience required to reach a level (NATIVE_PROGRESSION.md section 3): R(n) = max(0, trunc(f(n)) - trunc(f(1))), f the
