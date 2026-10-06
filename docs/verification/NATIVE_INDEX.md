@@ -280,3 +280,18 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | MissionTracker.IsValidMissionWeapon | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | gate for readying a mission weapon | UNVERIFIED | high | |
 | MissionTracker.GrantMissionWeaponsToClientPlayer | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | re-grant mission weapons on load | UNVERIFIED | medium | |
 | AMissionTracker mission-weapon removal (fires RemoveMissionWeapons) | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | Fire: take the lent pistol back | UNVERIFIED | medium | |
+| WillowDamagePipeline.AdjustDamage | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | Fire and fight: every hit (stage order, shield, element, crit) | UNVERIFIED | high order / medium formulas | |
+| DamagePipeline.ConvertDamageToHealing | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | none (not read) | UNVERIFIED | low | |
+| Actor.ActorTakeDamageInner | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | Kismet TakeDamage events, MostRecentDamageTaken | UNVERIFIED | medium | |
+| Pawn.PawnCheckTakeDamagePreconditions | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | damage gate | UNVERIFIED | medium | |
+| Pawn.SetHealth / GetHealth / GetMaxHealth / SetMaxHealth | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | health pool update | UNVERIFIED | high | |
+| ResourcePool.SetCurrentValue / AddCurrentValueImpulse | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | health/shield pool clamp | UNVERIFIED | medium | |
+| Pawn.NotifyTakeHit (Controller/WillowMind override) | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | Fire: raises OnTakeDamage after health change | UNVERIFIED | high | |
+| AIClassDefinition.OnTakeDamage / OnVehicleTakeDamage | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | Fire: dummy FireDamage event, filter Damage+ShieldDamage >= threshold | UNVERIFIED | high | |
+| DamageTypeDefinition.GetSurfaceDamageTypeModifier / GetPawnDamageTypeModifier / RecordRecentDamage | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | elemental effectiveness | UNVERIFIED | high | |
+| WillowDamageSource.ShouldDamageSourcePenetrateShields / CanDamageSourceBeAbsorbedByShields | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | shield stage | UNVERIFIED | medium | |
+| StatusEffectsComponent.RollChanceForStatusEffect | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | incendiary chance (not needed for completion) | UNVERIFIED | medium | |
+| StatusEffectsComponent update (DoT tick 0.33 s) | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | incendiary DoT, reports DmgType_Incendiary_Status | UNVERIFIED | medium | |
+| WillowPawn.NotifyDamageTaken / AddDamageToHitRegion / GetHitRegionForTakenDamage | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | hit regions (bodies not resolved) | UNVERIFIED | low | |
+| BodyClassDeathDefinition.OnKilledBy / OnDeathNonGib / OnDeathGib / OnPlayDeathPizazz | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | AI death behavior events | UNVERIFIED | high | |
+| WillowExperiencePipeline.CalculateExperiencePointsForKill / AwardCombatExperienceToParty | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | kill XP (structure only) | UNVERIFIED | low | |
