@@ -258,3 +258,25 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPlayerController.UpdateMissionObjective (script hook) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: HUD progress text and fanfare | UNVERIFIED | high | |
 | AIClassDefinition.OnTakeDamage (and the Pawn.NotifyTakeHit / WillowMind.NotifyTakeHit chain) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: Fire objective trigger | UNVERIFIED | medium | |
 | AIDefinition.OnTakeDamage (read only as the first of the event pair) | [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) | Fire mission: not used by the dummy | UNVERIFIED | low | |
+| WillowInventoryManager.CountUnreadiedInventory | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | backpack-full test (stored count) | UNVERIFIED | high | |
+| WillowInventoryManager.GetUnreadiedInventoryMaxSize | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | backpack limit, default 12 | UNVERIFIED | high | |
+| WillowInventoryManager.SetInventoryMaxSize | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | save load; clamps to >= 12 unless overridden | UNVERIFIED | high | |
+| WillowInventoryManager.CountReadiedWeapons | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | slot-full test | UNVERIFIED | high | |
+| WillowInventoryManager.GetWeaponReadyMax | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | weapon slot count (stored attribute value) | UNVERIFIED | high / medium | |
+| WillowInventoryManager.FindLeastValuableWeapon / FindLeastValuableItem | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | which readied weapon yields its slot | UNVERIFIED | medium-high | |
+| WillowInventoryManager.ItemActors | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | gear iteration | UNVERIFIED | medium | |
+| WillowInventoryManager.FindBestHolsteredWeapon / ReplaceHolsteredWeapon / SetHolsteredWeapon | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | body holster visuals only | UNVERIFIED | medium | |
+| WillowPlayerController.CanAffordToPickUpPickupable / PayForPickupable | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | priced pickups; free in Fire | UNVERIFIED | medium-high | |
+| WillowPlayerController.CanHoldWeapon | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | weapon switch gate | UNVERIFIED | medium-low | |
+| WillowPlayerController.ConditionalFixWeaponReadyMax | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | save load slot floor (plot missions 5 and 10) | UNVERIFIED | medium | |
+| WillowPlayerController.UpdateAmmoCounts | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | HUD ammo refresh (body not read) | UNVERIFIED | low | |
+| DroppedPickup/WillowPickup IPickupable accessors (GetPickupableInventory, GetPickupableInventoryDefinition, Pickupable_IsEnabled, IsDiscovered, MarkAsDiscovered, TouchPickupTrace) | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | every pickup | UNVERIFIED | medium | |
+| WillowInventory.GetInventorySpaceRequirement | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | backpack room (default 1; usable/mission items 0) | UNVERIFIED | medium-high | |
+| WillowEquipAbleItem.OnEquipped / OnUnequipped; WillowWeapon.OnEquip / OnUnequip; WillowItem.OnPickupAssociated | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | equip behavior events | UNVERIFIED | high / medium | |
+| EquipableItemDefinition.OnEquipped / OnUnequipped; WeaponTypeDefinition.OnEquip / OnUnequip; ItemDefinition.OnPickupAssociated; UsableItemDefinition.OnUsed | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | definition-level behavior events | UNVERIFIED | high / medium | |
+| WillowItem.IsEquipped / WillowEquipAbleItem.IsEquipped | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | UI marker | UNVERIFIED | low | |
+| WillowPawn.ShouldAutoReadyMissionWeapon | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | mission weapon ready (not injured) | UNVERIFIED | medium | |
+| WillowWeapon.IsMissionWeapon | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | sort header, drop rules | UNVERIFIED | medium | |
+| MissionTracker.IsValidMissionWeapon | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | gate for readying a mission weapon | UNVERIFIED | high | |
+| MissionTracker.GrantMissionWeaponsToClientPlayer | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | re-grant mission weapons on load | UNVERIFIED | medium | |
+| AMissionTracker mission-weapon removal (fires RemoveMissionWeapons) | [NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md) | Fire: take the lent pistol back | UNVERIFIED | medium | |
