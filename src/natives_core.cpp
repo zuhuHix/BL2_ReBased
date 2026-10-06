@@ -54,6 +54,16 @@ int32_t wrapInt(int64_t v) { return int32_t(uint32_t(uint64_t(v))); }
 void Runtime::registerCoreNatives() {
     auto reg = [this](const char* key, NativeFn fn) { registerNative(key, std::move(fn)); };
 
+    // ---------------------------------------------------------------------------------- interfaces
+    // Object.QueryInterface (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): the object itself when its class implements the interface class, else
+    // None. An interface value is valid iff its object half is non-null. "Implements" is the VM's structural stand-in (Runtime::implements:
+    // the class defines every function the interface declares) or a class derived from the interface; the packages' interface tables are not decoded.
+    reg("Object.QueryInterface(class)", [](NativeCall& c) {
+        Class* want = c.in(0).cls;
+        if (!c.self || !c.self->cls || !want) return Value::makeObject(nullptr);
+        return c.self->cls->isChildOf(want) || c.runtime.implements(c.self->cls, want) ? Value::makeObject(c.self) : Value::makeObject(nullptr);
+    });
+
     // ---------------------------------------------------------------------------------- integers
     reg("Object.+(int,int)", [](NativeCall& c) { return Value::makeInt(wrapInt(c.in(0).i + c.in(1).i)); });
     reg("Object.-(int,int)", [](NativeCall& c) { return Value::makeInt(wrapInt(c.in(0).i - c.in(1).i)); });

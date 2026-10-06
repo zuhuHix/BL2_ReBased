@@ -45,6 +45,7 @@ public:
         std::string name, type;           // VariableData.Name, EBehaviorVariableType name
         std::string object;               // object variables: the current value as a stock object path ("" = None)
         int32_t word = 0;                 // first word of the decoded value (int, float bits, bool, object reference)
+        ObjectPtr live;                   // object variables: the live VM object an event payload published (not a stock path)
     };
     struct Behavior {
         ObjectPtr object;
@@ -101,7 +102,18 @@ public:
     // Every enabled sequence with that event. `outputs` are the event's output values by property name (e.g.
     // "DamageType" -> stock object path); they are written to the variables the event links as outputs. `linkId` is the
     // caller's link-id filter: -1 follows every link, any other value only the links with that id.
-    void fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs = {}, int linkId = -1);
+    // `payload` is the objects the raiser attached (AIDefinition.OnUsed: instigator, used component). When given, an output-type variable link whose
+    // connection index is below its length takes that element into its object variable, by index and not by property name
+    // (NATIVE_MARCUS_USE_CHAIN.md, "Event payload to named variable", UNVERIFIED); `outputs` is then not consulted.
+    void fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs = {}, int linkId = -1,
+                   const std::vector<ObjectPtr>& payload = {});
+    // The objects a script behavior runs on: the objects of its Context-type variable link (an object variable's live object; a named-variable
+    // reference resolves to the first variable of the sequence with the same name that is not itself a reference), else `own`, the consumer's
+    // own object (NATIVE_BEHAVIOR_POPULATION.md G2, UNVERIFIED). An empty list means the behavior does not run.
+    std::vector<ObjectPtr> contexts(const Behavior& behavior, ObjectPtr own) const;
+    // The provider definition object (the Outer of its behaviors), and whether registerConsumer ran.
+    ObjectPtr definition() const { return definition_; }
+    bool registered() const { return registered_; }
     void tick(double seconds);                         // delayed links
     bool hasEvent(const std::string& event) const;
 
@@ -155,17 +167,21 @@ private:
     int depth_ = 0;
     bool valuesDecoded_ = false;
     bool registered_ = false;
+    ObjectPtr definition_;
 
     void decodeValues();
     bool unexpectedLink(const Behavior& behavior, const std::string& property);
-    void fireIn(size_t sequence, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId);
+    void fireIn(size_t sequence, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId, const std::vector<ObjectPtr>& payload);
     void start(int sequence, int behavior, double delay, const std::string& event);
     void runThread(int sequence, int behavior, const std::string& event, bool resumed = false, std::shared_ptr<void> state = nullptr);
     // One public call; the outermost refills the runaway budget.
+    // A call made while a behavior of this provider runs (a script behavior firing an event on it) keeps that behavior's RunInfo.
     struct Call {
         BehaviorProvider& p;
-        explicit Call(BehaviorProvider& provider) : p(provider) { if (p.depth_++ == 0) p.budget_ = 10000; }
-        ~Call() { --p.depth_; }
+        bool nested;
+        RunInfo saved;
+        explicit Call(BehaviorProvider& provider) : p(provider), nested(provider.depth_ > 0), saved(provider.run_) { if (p.depth_++ == 0) p.budget_ = 10000; }
+        ~Call() { --p.depth_; if (nested) p.run_ = saved; }
     };
 };
 

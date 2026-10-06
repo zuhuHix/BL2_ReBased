@@ -74,6 +74,11 @@ private:
     bool bWeaponLent = false;
     bool bFailed = false;
     int32 Rewards = 0;
+    // The use key's press on Marcus runs his stock OnUsed chain on the VM (FireMissionSlice::useMarcus): how many times it opened the mission
+    // interface (the host answers that call), the movie definition it named, and the behaviors of the last run ("name(sequence) -> output ids").
+    int32 MissionInterfacesOpened = 0;
+    FString LastInterfaceMovie;
+    TArray<FString> LastUseCascade;
     int32 Respawns = 0;
     int32 Checks = 0;
     int32 Errors = 0;

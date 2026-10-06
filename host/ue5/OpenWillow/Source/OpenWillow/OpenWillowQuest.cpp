@@ -459,6 +459,11 @@ void UOpenWillowQuest::Pump()
                 Skills && Skills->GetLevel() == FCString::Atoi(*A) ? TEXT("same") : TEXT("DIFFERENT"));
             break;
         }
+        case K::MissionInterface:   // Behavior_ShowMissionInterface reached the controller's ClientGFxPlayMovie; the screen itself is not hosted
+            ++MissionInterfacesOpened;
+            LastInterfaceMovie = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission interface opened by Marcus's use chain (movie %s, director %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()));
+            break;
         case K::Status: UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A); break;
         case K::ObjectiveSet: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective set active: %s"), *A); break;
         case K::ObjectiveComplete: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective complete: %s"), *A); break;
@@ -583,16 +588,24 @@ bool UOpenWillowQuest::TryUse()
     if (!Impl || bFailed || !InTalkReach()) return false;
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
-    // The stock accept / turn-in screen is not hosted. Marcus's own list scripts say what it would offer; the host stands in for the button press
-    // by confirming the one offered entry (redeemable first, as the screen lists them), which runs the stock AcceptMission / ServerCompleteMission
-    // with Marcus as the director. With nothing offered the key is not consumed (pickups and the door still get it).
+    // The key reached Marcus through the use ray above. His stock OnUsed chain runs on the VM (the nine sequence checks, the context dialog,
+    // HasMissions, ShowMissionInterface); it ends by asking the controller to open the mission interface, which Pump() sees as an event. The
+    // screen itself is not hosted: Marcus's own list scripts say what it would offer, and the host stands in for the button press by confirming
+    // the one offered entry (redeemable first, as the screen lists them), which runs the stock AcceptMission / ServerCompleteMission with Marcus
+    // as the director. With nothing offered the key is not consumed (pickups and the door still get it).
+    const int32 OpenedBefore = MissionInterfacesOpened;
+    const auto Use = Impl->Slice->useMarcus(Impl->Completed);
+    LastUseCascade.Reset();
+    for (const auto& Line : Use.cascade) LastUseCascade.Add(UTF8_TO_TCHAR(Line.c_str()));
+    Pump();
+    const bool bOpened = Use.interfaceOpened && MissionInterfacesOpened > OpenedBefore;
     bool bRedeemable = false, bEligible = false;
-    MissionScreen(bRedeemable, bEligible);
+    if (bOpened) MissionScreen(bRedeemable, bEligible);
     const TCHAR* Action = TEXT("nothing to accept or turn in");
     bool bOk = true;
     if (bRedeemable) { Action = TEXT("turn in"); bOk = TurnIn(); }
     else if (bEligible) { Action = TEXT("accept"); bOk = Accept(); }
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d)"), Action, bOk, int32(Current), Status());
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d, interface %d)"), Action, bOk, int32(Current), Status(), bOpened);
     return bRedeemable || bEligible;
 }
 
@@ -966,7 +979,17 @@ void UOpenWillowQuest::RunTest(float Delta)
         // Marcus's walk starts when the kickoff dialog behavior finishes: the tracker tick plays the kickoff (one tick after the accept) and
         // the dialog is triggered one kernel wake after that (NATIVE_DIALOG.md); with no audio device the behavior finishes on that wake.
         // So the walk begins a few frames after the use key, not in the frame of it (swap 4); the checks themselves are unchanged.
-        if (!bAcceptChecked) { bAcceptChecked = true; Check(Status() == 1, TEXT("use_key_accepts_mission")); }
+        if (!bAcceptChecked) {
+            bAcceptChecked = true;
+            Check(Status() == 1, TEXT("use_key_accepts_mission"));
+            // The use key went through his OnUsed chain: it opened the mission interface (HasMissions saw the Fire mission), after nine checks that
+            // all said "not enabled" (three names have no sequence, six belong to other missions)
+            Check(MissionInterfacesOpened == 1 && LastInterfaceMovie == TEXT("UI_Mission.MissionInterface_Definition"), TEXT("use_chain_reaches_mission_interface"));
+            int32 NotEnabled = 0, Seen = 0;
+            for (const FString& Line : LastUseCascade)
+                if (Line.StartsWith(TEXT("Behavior_IsSequenceEnabled"))) { ++Seen; if (Line.EndsWith(TEXT("-> 1"))) ++NotEnabled; }
+            Check(Seen == 9 && NotEnabled == 9, TEXT("use_chain_all_nine_checks_not_enabled"));
+        }
         if (Waiting(MissionEventsMatched >= 1 && bWalkStarted && Marcus->IsWalking(), 2.f)) return;
         Check(MissionEventsMatched >= 1 && bWalkStarted && Marcus->IsWalking(), TEXT("installed_kismet_starts_marcus_walk"));
         Check(Marcus->IsPlaying(Marcus->WalkClip()), TEXT("marcus_walk_clip_playing"));

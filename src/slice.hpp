@@ -32,7 +32,8 @@ class FireMissionSlice {
 public:
     struct HostEvent {
         enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete,
-                          Experience, Level };   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
+                          Experience, Level,   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
+                          MissionInterface };  // the mission screen was opened (ClientGFxPlayMovie): a = movie definition path, b = the director's path
         Kind kind;
         std::string a, b, c;
         std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)
@@ -44,6 +45,9 @@ public:
     MissionSystem& mission() { return *mission_; }
     BehaviorProvider& dummy() { return *dummy_; }
     bool accept(const std::set<std::string>& completedMissions);
+    // The use key's press on Marcus (after the host's use ray chose him): his stock OnUsed chain runs on the VM (MissionScript::useMarcus). The
+    // result says whether it reached the mission interface (a MissionInterface host event is queued) and lists the behaviors it ran.
+    MissionScript::MarcusUse useMarcus(const std::set<std::string>& completedMissions);
     // The mission screen's three lists (Marcus's own script over his directive table and the tracker's availability queries): the host's use key
     // confirms the entry offered here (a host stand-in for the button press) with accept / turnIn.
     MissionScript::MissionLists screen(const std::set<std::string>& completedMissions);

@@ -12,6 +12,8 @@
 
 namespace vm {
 
+class BehaviorProvider;
+
 // The script half of accepting and turning in a mission (docs/verification/NATIVE_MISSION_SCRIPT_BRIDGE.md).
 //
 // In this build the controller functions AcceptMission, ServerCompleteMission, UpdateMissionStatus and
@@ -36,6 +38,7 @@ public:
     struct ExpEarn { int amount = 0; int source = 0; int type = -1; };   // type -1: the optional argument was omitted
 
     MissionScript(Runtime& runtime, MissionSystem& mission);
+    ~MissionScript();
 
     // AcceptMission(Mission, MissionDirector = None) on the controller; `completed` is what MissionDependenciesMet sees.
     // Returns true when the mission became Active through it.
@@ -81,6 +84,20 @@ public:
     // run as script. False when the package has no such pawn (the director stays None).
     bool placeMarcus(const std::shared_ptr<const Package>& package, const std::string& path);
     bool hasMarcus() const { return director_ != nullptr; }
+    // The use key's press on Marcus, after the host's use ray chose him (NATIVE_MARCUS_USE_CHAIN.md, UNVERIFIED): AIDefinition.OnUsed raises the
+    // event "OnUsed" with link filter 2 (Generic) on his AI-definition provider (GD_Marcus.Character.AIDef_Marcus.AIBehaviorProviderDefinition_0), the
+    // payload being the instigator (the player's VM pawn) and the used component (None). His chain of script behaviors then runs on the VM through the
+    // BehaviorProvider kernel: the nine Behavior_IsSequenceEnabled checks (each "enabled" fires its remote event and stops the cascade), then the
+    // mission-context dialog, Behavior_HasMissions and Behavior_ShowMissionInterface, which ends in the controller's ClientGFxPlayMovie. That call
+    // is presentation and is not run: it is reported as `interfaceOpened` (the movie definition and the director) for the host to answer.
+    // The two later raises of UseObject (filters 0 and 1) reach no link of Marcus's provider and are not made.
+    struct MarcusUse {
+        bool interfaceOpened = false;
+        std::string movie, director;           // object paths
+        std::vector<std::string> cascade;      // every script behavior of the run: "name(sequence) -> selected output ids"
+    };
+    // `completed` is what MissionDependenciesMet sees (as for accept()).
+    MarcusUse useMarcus(const std::set<std::string>& completed);
     struct MissionLists { std::vector<std::string> eligible, inProgress, redeemable; };   // mission paths, the script's own order
     MissionLists missionLists(const std::set<std::string>& completed);
     // Runs a script behavior's ApplyBehaviorToContext on the VM (e.g. Behavior_UpdateMissionObjective: the world's tracker, UpdateObjective).
@@ -102,6 +119,12 @@ private:
     MissionSystem& mission_;
     ObjectPtr controller_, tracker_, world_, replication_, globals_, globalsDefinition_;
     ObjectPtr waypoint_, playerPawn_, marcusPawn_, director_;
+    std::unique_ptr<BehaviorProvider> marcusProvider_;      // Marcus's AI-definition provider, registered on his consumer (PID marcusPid_)
+    static constexpr int marcusPid_ = 1;                   // the ConsumerHandle.PID the bridge gives him (any non-zero value)
+    std::vector<int>* selected_ = nullptr;                 // the running script behavior's recorded output ids
+    MarcusUse use_;
+    void bindUse();
+    BehaviorProvider* registeredProvider(const Value& handle, const Value& provider);
     int objectiveUpdates_ = 0;
     std::vector<ObjectPtr> observers_;                 // IMission observers registered with the tracker (the waypoint)
     std::set<std::string> completed_;

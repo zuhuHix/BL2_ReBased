@@ -434,8 +434,131 @@ bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, c
     // The directive table is archetype data: a reference to a MissionDirectivesDefinition export, loaded here (the VM does not load references).
     Value& directives = required(runtime_, *director_, "MissionDirectives");
     if (directives.kind == Value::Kind::Object && directives.o) directives = Value::makeObject(loadRef(directives));
+    if (Value* handle = runtime_.property(*director_, "ConsumerHandle"))
+        if (Value* pid = handle->field("PID")) *pid = Value::makeInt(marcusPid_);
     marcusPawn_ = director_;      // the same pawn is the waypoint's Marcus toucher
+    // His AI-definition provider: registered on his consumer (every sequence disabled, then the bEnabledOnSpawn ones enabled). The enable
+    // conditions of the other missions' sequences are not applied: none of those missions exists in the tracker, so every verdict would be
+    // "not enabled" (pass 2 of NATIVE_BEHAVIOR_POPULATION.md section C is not run for him).
+    static const char* providerPath = "GD_Marcus.Character.AIDef_Marcus.AIBehaviorProviderDefinition_0";
+    if (const int32_t providerIndex = runtime_.findExport(*package, providerPath); providerIndex > 0) {
+        bindUse();
+        marcusProvider_ = std::make_unique<BehaviorProvider>(runtime_, package, providerIndex);
+        // The chain's behaviors are script: each runs its own ApplyBehaviorToContext on the VM, on the objects the kernel resolves for it.
+        for (const char* cls : {"GearboxFramework.Behavior_IsSequenceEnabled", "WillowGame.Behavior_RemoteCustomEvent", "WillowGame.Behavior_PlayAIMissionContextDialog",
+                                "WillowGame.Behavior_HasMissions", "WillowGame.Behavior_ShowMissionInterface"})
+            marcusProvider_->handle(cls, [this](BehaviorProvider& provider, BehaviorProvider::Behavior& behavior, const std::string&) {
+                std::vector<int> ids;
+                std::vector<int>* const outer = selected_;
+                selected_ = &ids;
+                Function* apply = runtime_.findMethod(behavior.object->cls, "ApplyBehaviorToContext");
+                for (const ObjectPtr& context : provider.contexts(behavior, director_)) {
+                    if (!apply) { errors.push_back("no ApplyBehaviorToContext on " + behavior.cls); break; }
+                    std::vector<Value> args(apply->params.size());
+                    for (size_t i = 0; i < args.size(); ++i) {
+                        if (apply->params[i].name == "ContextObject") args[i] = Value::makeObject(context);
+                        else if (apply->params[i].name == "SelfObject") args[i] = Value::makeObject(director_);
+                    }
+                    run([&] { runtime_.call(*apply, behavior.object, std::move(args)); });
+                }
+                selected_ = outer;
+                const Value* sequence = runtime_.property(*behavior.object, "SequenceName");
+                std::string line = behavior.name + (sequence && !sequence->s.empty() ? "(" + sequence->s + ")" : "") + " ->";
+                for (const int id : ids) line += " " + std::to_string(id);
+                use_.cascade.push_back(line);
+                return ids;
+            });
+        // World operations of his spawn-time sequences that nothing here runs (the AI hold, the throttle data, the usability and its icon): listed at the boundary, as for the dummy.
+        marcusProvider_->reportAtBoundary("GearboxFramework.Behavior_AIHold");
+        marcusProvider_->reportAtBoundary("WillowGame.Behavior_SetPawnThrottleData");
+        marcusProvider_->reportAtBoundary("WillowGame.Behavior_ChangeUsability");
+        marcusProvider_->reportAtBoundary("WillowGame.Behavior_SetUsableIcon");
+        run([this] { marcusProvider_->registerConsumer(); });
+        for (const auto& line : marcusProvider_->boundary) notes_.push_back("Marcus provider, reached at registration but not run: " + line);
+        for (const auto& error : marcusProvider_->errors) errors.push_back("Marcus provider: " + error);
+        marcusProvider_->errors.clear();
+    }
     return true;
+}
+
+MissionScript::~MissionScript() = default;
+
+namespace {
+std::string objectPath(const ObjectPtr& object) {
+    return object && object->resourcePackage ? object->resourcePackage->path(object->resourceIndex) : "";
+}
+}
+
+// The stock use-chain's natives (NATIVE_MARCUS_USE_CHAIN.md, NATIVE_MISSION_DISPATCH.md A2, NATIVE_CONTROLLER_HELPERS.md; all UNVERIFIED), bound when Marcus
+// is placed: the kernel and helper natives are static (no self) and act on the one provider the bridge built.
+void MissionScript::bindUse() {
+    // ActivateBehaviorOutputLink(KernelInfo, OutputLinkId) only appends the id to the running behavior's list (duplicates kept, call order).
+    bind("GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink", [this](NativeCall& c) {
+        if (selected_) selected_->push_back(int(c.in(1).integer()));
+        return Value();
+    });
+    // IsBehaviorSequenceEnabled(ConsumerHandle, ProviderDefinition, SequenceName): true only when the consumer has that provider registered, the
+    // provider has the sequence and its enabled bit is set. A None provider, an unregistered handle or provider, and an unknown name all give false;
+    // state is only read.
+    bind("GearboxFramework.BehaviorKernel.IsBehaviorSequenceEnabled", [this](NativeCall& c) {
+        BehaviorProvider* provider = registeredProvider(c.in(0), c.in(1));
+        return Value::makeBool(provider && provider->sequenceEnabled(c.in(2).s));
+    });
+    // ActivateBehaviorEventFromScript(ConsumerHandle, ProviderDefinition, EventName, optional EventOutputToActivate, optional Parameters): a None
+    // provider fires nothing; an omitted filter is -1 (every link); otherwise the event is fired on that provider's enabled sequences.
+    bind("GearboxFramework.BehaviorKernel.ActivateBehaviorEventFromScript", [this](NativeCall& c) {
+        if (!c.in(1).o) return Value();
+        const int filter = c.args.at(3).supplied ? int(c.in(3).integer()) : -1;
+        if (BehaviorProvider* provider = registeredProvider(c.in(0), c.in(1))) provider->fireEvent(c.in(2).s, {}, filter);
+        return Value();
+    });
+    // ResolveBehaviorProviderDefinitionReference(SourceBehavior, ProviderReference, PathName): a non-empty path wins (its set name slots joined
+    // into one object path; only the providers this bridge built are found, and the subobject separator is written as a dot), else the reference,
+    // else the Outer of the source behavior when it is a provider definition, else None. The reference branch is read only coarsely (the object
+    // itself is returned).
+    bind("GearboxFramework.BehaviorHelpers.ResolveBehaviorProviderDefinitionReference", [this](NativeCall& c) {
+        std::string full;
+        if (const Value* slots = c.in(2).field("PathComponentNames"))
+            for (const Value& slot : slots->elements())
+                if (!slot.s.empty() && slot.s != "None") full += (full.empty() ? "" : ".") + slot.s;
+        if (!full.empty())
+            return Value::makeObject(marcusProvider_ && full == marcusProvider_->path() ? marcusProvider_->definition() : nullptr);
+        if (c.in(1).kind == Value::Kind::Object && c.in(1).o) return c.in(1);
+        if (c.in(0).o && c.in(0).o->outer && c.in(0).o->outer->cls->isChildOf(runtime_.findClass("GearboxFramework.BehaviorProviderDefinition")))
+            return Value::makeObject(c.in(0).o->outer);
+        return Value::makeObject(nullptr);
+    });
+    // WillowPawn.GetBehaviorConsumerHandle (IBehaviorConsumer): the pawn's own ConsumerHandle field (an accessor; no note describes it, UNVERIFIED).
+    bind("WillowGame.WillowPawn.GetBehaviorConsumerHandle", [this](NativeCall& c) {
+        if (c.self != director_) return outsideBinding(c);
+        return required(runtime_, *director_, "ConsumerHandle");
+    });
+    // The client RPC that opens a movie is presentation: not run, reported (the host answers it, see useMarcus).
+    runtime_.overrideScript("WillowGame.WillowPlayerController.ClientGFxPlayMovie", [this](NativeCall& c) {
+        if (c.self != controller_) return outsideBinding(c);
+        use_.interfaceOpened = true;
+        use_.movie = objectPath(c.in(0).o);
+        use_.director = objectPath(c.in(1).o);
+        return Value();
+    });
+}
+
+// The consumer's registered provider for a handle and a provider object, or null (NATIVE_MARCUS_USE_CHAIN.md result rule).
+BehaviorProvider* MissionScript::registeredProvider(const Value& handle, const Value& provider) {
+    if (!marcusProvider_ || !marcusProvider_->registered() || provider.kind != Value::Kind::Object || !provider.o) return nullptr;
+    const Value* pid = handle.field("PID");
+    if (!pid || pid->integer() != marcusPid_) return nullptr;
+    return objectPath(provider.o) == marcusProvider_->path() ? marcusProvider_.get() : nullptr;
+}
+
+MissionScript::MarcusUse MissionScript::useMarcus(const std::set<std::string>& completed) {
+    use_ = MarcusUse();
+    if (!marcusProvider_) return use_;
+    completed_ = completed;
+    run([this] { marcusProvider_->fireEvent("OnUsed", {}, 2, {pawnFor(Toucher::Player), nullptr}); });
+    for (const auto& error : marcusProvider_->errors) errors.push_back("Marcus provider: " + error);
+    marcusProvider_->errors.clear();
+    return use_;
 }
 
 MissionScript::MissionLists MissionScript::missionLists(const std::set<std::string>& completed) {

@@ -594,6 +594,12 @@ void Runtime::registerNative(const std::string& key, NativeFn fn) {
         if (function->nativeKey == key) function->native = fn;
 }
 
+void Runtime::overrideScript(const std::string& path, NativeFn fn) {
+    Function* function = findFunction(path);
+    if (!function || function->isNative()) throw RuntimeError("overrideScript needs a script function: " + path);
+    function->native = std::move(fn);
+}
+
 // ------------------------------------------------------------------------------ defaults and objects
 namespace {
 

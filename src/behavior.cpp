@@ -86,6 +86,7 @@ std::string providerPathLeaf(const Value* components) {
 BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Package> package, int32_t exportIndex)
     : runtime_(runtime), package_(package), index_(exportIndex), path_(package->path(exportIndex)) {
     auto provider = runtime_.instantiateExport(package, exportIndex, 4);
+    definition_ = provider;
     if (provider->cls->path != "GearboxFramework.BehaviorProviderDefinition" &&
         provider->cls->path != "GearboxFramework.AIBehaviorProviderDefinition")
         throw RuntimeError("not a behavior provider: " + path_ + " (" + provider->cls->path + ")");
@@ -165,6 +166,7 @@ BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Packa
                 parsed.object = runtime_.instantiateExport(reference->o->resourcePackage, reference->o->resourceIndex, 4);
                 parsed.cls = parsed.object->cls->path;
                 parsed.name = reference->o->name;
+                parsed.object->outer = provider;      // a behavior sits in its provider (BehaviorHelpers' Outer fallback)
                 parsed.sequence = sequenceIndex;
                 std::tie(parsed.start, parsed.length) = unpack(behavior.field("OutputLinks"));
                 parsed.variables = slice(behavior.field("LinkedVariables"));
@@ -299,9 +301,9 @@ bool BehaviorProvider::setSequenceEnabled(const std::string& name, bool enabled)
                 for (auto& other : sequences_)
                     if (&other != &sequence && other.enabled && other.mutex) { setSequenceEnabled(other.name, false); break; }
             sequence.enabled = true;       // the enabled event is delivered after the bit is set ...
-            fireIn(index, "OnBehaviorSequenceEnabled", {}, -1);
+            fireIn(index, "OnBehaviorSequenceEnabled", {}, -1, {});
         } else {
-            fireIn(index, "OnBehaviorSequenceDisabled", {}, -1);      // ... the disabled event before it is cleared
+            fireIn(index, "OnBehaviorSequenceDisabled", {}, -1, {});      // ... the disabled event before it is cleared
             sequence.enabled = false;
         }
     }
@@ -317,15 +319,38 @@ void BehaviorProvider::registerConsumer() {
     for (const auto& name : onSpawn) setSequenceEnabled(name, true);
 }
 
-void BehaviorProvider::fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs, int linkId) {
+void BehaviorProvider::fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs, int linkId,
+                                 const std::vector<ObjectPtr>& payload) {
     Call call(*this);
     for (size_t s = 0; s < sequences_.size(); ++s)
-        if (sequences_[s].enabled) fireIn(s, event, outputs, linkId);
+        if (sequences_[s].enabled) fireIn(s, event, outputs, linkId, payload);
+}
+
+std::vector<ObjectPtr> BehaviorProvider::contexts(const Behavior& behavior, ObjectPtr own) const {
+    for (const auto& link : behavior.variables) {
+        if (link.type != "BVARLINK_Context") continue;
+        const auto& variables = sequences_[size_t(behavior.sequence)].variables;
+        std::vector<ObjectPtr> result;
+        for (const int index : link.variables) {
+            const Variable* variable = &variables[size_t(index)];
+            if (variable->type == "BVAR_NamedVariable" || variable->type == "BVAR_NamedKismetVariable") {
+                const std::string name = variable->name;
+                variable = nullptr;
+                if (variables[size_t(index)].type == "BVAR_NamedVariable")      // a Kismet reference is not resolved here
+                    for (const auto& candidate : variables)
+                        if (candidate.name == name && candidate.type != "BVAR_NamedVariable" && candidate.type != "BVAR_NamedKismetVariable") { variable = &candidate; break; }
+            }
+            if (variable && variable->type == "BVAR_Object" && variable->live) result.push_back(variable->live);
+        }
+        return result;
+    }
+    return {own};
 }
 
 // NATIVE_MISSION_DISPATCH.md A1 (UNVERIFIED): every matching entry of the sequence, gated, then its links in data order;
 // a due thread runs at once (depth-first) before the next link is considered. FilterObject is not evaluated.
-void BehaviorProvider::fireIn(size_t s, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId) {
+void BehaviorProvider::fireIn(size_t s, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId,
+                              const std::vector<ObjectPtr>& payload) {
     auto& sequence = sequences_[s];
     for (auto& e : sequence.events) {
         if (e.name != event || !e.enabled) continue;
@@ -336,10 +361,22 @@ void BehaviorProvider::fireIn(size_t s, const std::string& event, const std::map
         // The event publishes its outputs into the variables it links (a property the caller did not supply is None).
         for (const auto& link : e.variables) {
             if (link.type != "BVARLINK_Output") continue;
+            if (!payload.empty()) {         // by connection index (the property name is not matched)
+                if (link.connection < 0 || size_t(link.connection) >= payload.size()) continue;
+                const ObjectPtr& element = payload[size_t(link.connection)];
+                for (const int v : link.variables)
+                    if (sequence.variables[size_t(v)].type == "BVAR_Object") {
+                        sequence.variables[size_t(v)].live = element;
+                        sequence.variables[size_t(v)].object = element && element->resourcePackage ? element->resourcePackage->path(element->resourceIndex) : "";
+                    }
+                continue;
+            }
             const auto value = outputs.find(link.property);
             for (const int v : link.variables)
-                if (sequence.variables[size_t(v)].type == "BVAR_Object")
+                if (sequence.variables[size_t(v)].type == "BVAR_Object") {
                     sequence.variables[size_t(v)].object = value == outputs.end() ? "" : value->second;
+                    sequence.variables[size_t(v)].live = nullptr;
+                }
         }
         for (int i = 0; i < e.length; ++i) {
             const Link link = sequence.links[size_t(e.start + i)];

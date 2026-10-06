@@ -591,6 +591,11 @@ struct Interp {
             if (function.result) return rt.zeroValue(*function.result);
             return Value();
         }
+        // A script function a host binding overrides (Runtime::overrideScript): the binding runs instead of the bytecode.
+        if (function.native) {
+            NativeCall call{rt, function, target, std::move(args)};
+            return function.native(call);
+        }
         if (function.decodeFailed) throw RuntimeError("cannot run " + function.path + ": " + function.decodeError);
         if (!function.code) {
             try { function.code = std::make_shared<script::Code>(script::decode(*function.package, function.info)); }

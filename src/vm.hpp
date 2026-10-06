@@ -243,6 +243,9 @@ public:
 
     // Native registry. Key: "Class.Name(type,type,...)", see Function::nativeKey.
     void registerNative(const std::string& key, NativeFn fn);
+    // Replaces a SCRIPT function (not a native) with a host binding, for a call that only presents something (a client RPC that opens a
+    // movie): the binding runs instead of the bytecode. `path` is Package.Class.Function; the function must exist and not be native.
+    void overrideScript(const std::string& path, NativeFn fn);
     void registerCoreNatives();
 
 private:

@@ -1028,3 +1028,54 @@ The screen's movie is not hosted; 6b (the use itself, `OnUsed` through the kerne
 - `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
 - **`tools/test_quest.ps1`: first run PASS checks=88 errors=0, resume PASS checks=11 errors=0** (86 before, two new screen checks).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6b: the use key runs Marcus's OnUsed chain (2026-10-06)
+
+Source: `NATIVE_MARCUS_USE_CHAIN.md` (and `NATIVE_USE_INTERACTION.md`, `NATIVE_MISSION_DISPATCH.md` A2, `NATIVE_CONTROLLER_HELPERS.md`). Every rule is UNVERIFIED
+(read from native code, not confirmed in the running game). The key path is now: key -> the host's use ray (6a) -> `FireMissionSlice::useMarcus` -> his
+`OnUsed` chain on the VM -> the controller's `ClientGFxPlayMovie` (reported as a host event) -> the host confirms the offered entry (6c lists) -> the stock
+`AcceptMission` / `ServerCompleteMission`. The host no longer decides on its own to open the screen.
+
+- **The raise:** `MissionScript::useMarcus` raises `OnUsed` with link filter 2 (Generic) on Marcus's AI-definition provider
+  (`GD_Marcus.Character.AIDef_Marcus.AIBehaviorProviderDefinition_0`, the existing `BehaviorProvider`, registered on his consumer at `placeMarcus`: PID 1 in his
+  `ConsumerHandle`). The payload is the instigator (the player's VM pawn) and the used component (None). `BehaviorProvider::fireEvent` got an optional payload:
+  an output-type variable link takes the element at its connection index into its object variable (a live VM object, new `Variable::live`), so the instigator
+  lands in Brain's `PlayerWhoUsedMe`. The two later raises of `UseObject` (filters 0 and 1) reach no link and are not made. The VM Marcus `UseObject` script is not
+  run (the bridge makes the raise itself).
+- **The behaviors are script:** one handler runs each chain class's own `ApplyBehaviorToContext` on the VM (`Behavior_IsSequenceEnabled`,
+  `Behavior_RemoteCustomEvent`, `Behavior_PlayAIMissionContextDialog`, `Behavior_HasMissions`, `Behavior_ShowMissionInterface`), once per context object
+  (`BehaviorProvider::contexts`: a Context-type variable link resolves a named-variable reference to the first same-named non-reference variable, else the
+  consumer's own pawn). `SelfObject` is Marcus. Behaviors now set `outer` to the provider definition (the resolver's Outer fallback), and a nested call into the
+  provider (a remote event fired from script) keeps the calling behavior's `RunInfo`.
+- **Natives (bound in `MissionScript::bindUse`, only when Marcus's provider exists):** `BehaviorKernel.IsBehaviorSequenceEnabled` (true only for the registered
+  consumer + provider + an existing enabled sequence; None provider, unknown name, wrong handle give false), `BehaviorHelpers.ResolveBehaviorProviderDefinitionReference`
+  (a non-empty path wins, joined with dots; only the bridge's own provider is found; then the reference, returned as is; then the source behavior's Outer; else None),
+  `BehaviorKernel.ActivateBehaviorEventFromScript` (None provider fires nothing; an omitted filter is -1).
+- **Needed beyond the three (each has a note except the last):** `BehaviorKernel.ActivateBehaviorOutputLink` (NATIVE_MISSION_DISPATCH A2: appends the id to the
+  running behavior's list), `Object.QueryInterface` (NATIVE_CONTROLLER_HELPERS; a Core native, structural `Runtime::implements` stand-in; it worked for
+  `IBehaviorConsumer` and `IMissionDirector` on Marcus), and `WillowPawn.GetBehaviorConsumerHandle` (**no note**: an accessor returning the pawn's own
+  `ConsumerHandle` field, scoped to the VM Marcus). Also a small VM change: `Runtime::overrideScript` lets a host binding replace a script function; used only for
+  the controller's `ClientGFxPlayMovie`, which is presentation and is reported as `interfaceOpened` (movie definition, director) instead of run.
+- **Real data (`--slice-run ... use`):** the nine checks answer "not enabled" (outputs 1: three names have no sequence, six belong to other missions), the context
+  dialog runs, `Behavior_HasMissions` selects 0 while the Fire mission is eligible, in progress or redeemable and 1 when the tracker has no such mission for
+  Marcus (the Complete state: no link, nothing happens, the key is not consumed), `Behavior_ShowMissionInterface` opens the interface
+  (`UI_Mission.MissionInterface_Definition`, director `GD_Marcus.Character.Pawn_Marcus`). In the quest suite the first press accepts, the last turns in.
+- **Registration of his provider:** every sequence starts disabled and the `bEnabledOnSpawn` ones (`AI`, `Brain`) are enabled; the enable conditions of the other
+  missions' sequences are not applied (those missions are not in the tracker, every verdict would be "not enabled"). The `OnBehaviorSequenceEnabled` events of his
+  spawn reach four world operations that nothing here runs, listed at the boundary and in the script notes: `Behavior_AIHold`, `Behavior_SetPawnThrottleData`,
+  `Behavior_ChangeUsability`, `Behavior_SetUsableIcon`.
+- **Stubs newly reached:** one, `BehaviorBase.GetBehaviorContext(behaviorcontextdata,object,object,object,behaviorparameters)`, from
+  `Behavior_PlayAIMissionContextDialog` (one call per press). It is an undocumented native; as a stub it returns None, so the dialog behavior's script ends
+  without calling `WillowAIPawn.PlayOnUseDialog` (the dialog on use is therefore silent, as before this swap). Needs a note (BehaviorBase context resolution).
+- **Tests:** `mission-script-synthetic` scenario H (packages `UseChainOn` / `UseChainOff`): toy Marcus with a provider at the stock path; checks for a sequence
+  that does not exist, one that is disabled, one that is enabled (fires its remote event; the cascade stops, the interface is not reached), a check whose
+  path names no provider (selects nothing), the path winning over a `SequenceProvider` reference, and the payload variable reaching the Context-linked
+  behavior (the interface opens when no check is enabled; the script RPC is replaced). Quest suite: `use_chain_reaches_mission_interface` and
+  `use_chain_all_nine_checks_not_enabled` added; every earlier check name unchanged. CLI: `--slice-run ... use`, `--mission-run ... script:use` print the cascade.
+- **Not covered:** the reference and Outer branches of the resolver on the real data (all nine instances use a path); the remote events of the six other
+  missions (not enabled here); the Kismet named variables (`MarcusVendingProxy`, `MarcusStoreUser`) are not resolved.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=90 errors=0, resume PASS checks=11 errors=0** (88 before, two new use-chain checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

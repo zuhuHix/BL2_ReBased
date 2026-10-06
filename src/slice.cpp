@@ -214,6 +214,14 @@ void FireMissionSlice::pump() {
     errors_.push_back("mission/dummy state did not settle");
 }
 
+MissionScript::MarcusUse FireMissionSlice::useMarcus(const std::set<std::string>& completed) {
+    completedMissions_ = completed;
+    const auto use = script_->useMarcus(completed);
+    if (use.interfaceOpened) events_.push_back({HostEvent::Kind::MissionInterface, use.movie, use.director, "", ""});
+    pump();
+    return use;
+}
+
 // What Marcus's mission screen offers, from his own list scripts (NATIVE_USE_INTERACTION.md); the screen itself is not hosted.
 MissionScript::MissionLists FireMissionSlice::screen(const std::set<std::string>& completed) {
     completedMissions_ = completed;

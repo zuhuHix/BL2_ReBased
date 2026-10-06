@@ -31,6 +31,13 @@ in structure and call the bridge's CanStartMission / CanEndMission / GetMissionS
 OnPlayerTurnedInMission leave the markers ExpEarn(0, 120) / (0, 121). The toy controller calls them when AcceptMission / ServerCompleteMission
 get a director.
 
+The use-chain scenario (--mission-run `script:use`, scenario H, packages UseChainOn / UseChainOff) gives the toy Marcus a provider at the stock path
+GD_Marcus.Character.AIDef_Marcus.AIBehaviorProviderDefinition_0: sequence Brain with the event OnUsed (link id 2, its Instigator output published into an
+object variable by connection index), a cascade of Behavior_IsSequenceEnabled checks (a sequence that does not exist, one that is disabled, one that is
+enabled in the On package and disabled in the Off package, one whose path names no provider) and Behavior_RemoteCustomEvent / Behavior_ShowMissionInterface
+toys; their scripts mirror the installed ones in structure and call the natives the bridge binds (IsBehaviorSequenceEnabled, ResolveBehaviorProvider-
+DefinitionReference, ActivateBehaviorEventFromScript, ActivateBehaviorOutputLink, GetBehaviorConsumerHandle, ClientGFxPlayMovie).
+
 The dialog scenario (--mission-run, scenario E) uses a toy mission whose provider runs Behavior_TriggerDialogEvent behaviors over a toy
 dialog group (invented tags, priorities, acts, a talker name tag): Out on the first run, the dialog one kernel wake later, Finished when
 the live line ends, the priority arbitration with the tracked-mission floor, the last enabled entry for a tag, a template act through the
@@ -321,8 +328,8 @@ def build_gearbox():
 
     # The behavior provider vocabulary (tests/behavior_test.py has the commented version): sequences, events, behaviors, links.
     bpd = T.cls('BehaviorProviderDefinition')
-    var_types = ['BVAR_None', 'BVAR_Object', 'BVAR_Int', 'BVAR_Float', 'BVAR_InstanceData', 'BVAR_NamedVariable', 'BVAR_Mystery']
-    link_types = ['BVARLINK_Unknown', 'BVARLINK_Input', 'BVARLINK_Output']
+    var_types = ['BVAR_None', 'BVAR_Object', 'BVAR_Int', 'BVAR_Float', 'BVAR_InstanceData', 'BVAR_NamedVariable', 'BVAR_Mystery', 'BVAR_NamedKismetVariable']
+    link_types = ['BVARLINK_Unknown', 'BVARLINK_Input', 'BVARLINK_Output', 'BVARLINK_Context']
     p.add_export(toy.imp['Enum'], 'EBehaviorVariableType', w32(0) + toy.none + w32(0) + w32(len(var_types)) + b''.join(p.fname(v) for v in var_types), outer=bpd)
     p.add_export(toy.imp['Enum'], 'EBehaviorVariableLinkType', w32(0) + toy.none + w32(0) + w32(len(link_types)) + b''.join(p.fname(v) for v in link_types), outer=bpd)
     sub = T.struct_(0, 'SubarrayData')
@@ -363,6 +370,44 @@ def build_gearbox():
     T.array_of(seq, 'ConsolidatedVariableLinkData', 'Struct', vlink)
     T.array_of(seq, 'ConsolidatedLinkedVariables', 'Int')
     T.array_of(bpd, 'BehaviorSequences', 'Struct', seq)
+
+    # Swap 6b: the use chain's natives and the script behavior Behavior_IsSequenceEnabled (same structure as the installed one, over invented
+    # classes; the toy skips the QueryInterface step and asks the context object for its handle directly).
+    native = FUNC_NATIVE | FUNC_PUBLIC
+    kernel = T.cls('BehaviorKernel')
+    helpers = T.cls('BehaviorHelpers')
+    path_struct = T.struct_(0, 'NameBasedObjectPath')
+    T.array_of(path_struct, 'PathComponentNames', 'Name')
+    T.prop('Byte', path_struct, 'IsSubobjectMask')
+    activate_link = T.function(kernel, 'ActivateBehaviorOutputLink', [('Struct', 'KernelInfo', CPF_OUT), ('Int', 'OutputLinkId', 0)], None, native)['__self__']
+    is_enabled = T.function(kernel, 'IsBehaviorSequenceEnabled', [('Struct', 'ConsumerHandle', 0), ('Object', 'ProviderDefinition', 0), ('Name', 'BehaviorSequenceName', 0)],
+                            None, native, 'Bool')['__self__']
+    T.function(kernel, 'ActivateBehaviorEventFromScript', [('Struct', 'ConsumerHandle', 0), ('Object', 'ProviderDefinition', 0), ('Name', 'EventName', 0),
+                                                           ('Int', 'EventOutputToActivate', CPF_OPT), ('Array', 'Parameters', CPF_OPT)], None, native)
+    resolve = T.function(helpers, 'ResolveBehaviorProviderDefinitionReference', [('Object', 'SourceBehavior', 0), ('Object', 'ProviderReference', 0),
+                                                                                    ('Struct', 'PathName', 0)], None, native, 'Object')['__self__']
+    willow = p.add_import_full('Package', 0, 'WillowGame')
+    get_handle = p.add_import_full('Function', p.add_import_full('Class', willow, 'WillowPawn'), 'GetBehaviorConsumerHandle')
+    is_seq = T.cls('Behavior_IsSequenceEnabled')
+    seq_name = T.prop('Name', is_seq, 'SequenceName')
+    seq_provider = T.prop('Object', is_seq, 'SequenceProvider')
+    seq_path = T.prop('Struct', is_seq, 'ProviderDefinitionPathName', type_ref=path_struct)
+
+    def is_sequence_enabled(ids):
+        a = Asm()
+        a.raw(0x0F); a.local(ids, 'Handle'); a.context(lambda: a.local(ids, 'ContextObject'), lambda: a.call(get_handle))
+        a.raw(0x0F); a.local(ids, 'Provider'); a.call(resolve, a.self_, lambda: a.instance(seq_provider), lambda: a.instance(seq_path))
+        none_at = a.jump_if_not(lambda: (a.raw(119), a.local(ids, 'Provider'), a.raw(0x2A), a.raw(0x16)))     # Provider != None, else return
+        no_at = a.jump_if_not(lambda: a.call(is_enabled, lambda: a.local(ids, 'Handle'), lambda: a.local(ids, 'Provider'), lambda: a.instance(seq_name)))
+        a.call(activate_link, lambda: (a.raw(0x48), a.ref(ids['KernelInfo'])), lambda: a.int_const(0))
+        done = a.jump()
+        a.patch(no_at)
+        a.call(activate_link, lambda: (a.raw(0x48), a.ref(ids['KernelInfo'])), lambda: a.int_const(1))
+        a.patch(done); a.patch(none_at)
+        a.return_nothing(); a.end(); return a
+    T.function(is_seq, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
+                                                  ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
+               is_sequence_enabled, locals_=[('Struct', 'Handle'), ('Object', 'Provider')])
     return p
 
 
@@ -444,7 +489,12 @@ def build_willowgame():
 
     engine_pawn = p.add_import_full('Class', engine, 'Pawn')
     T.cls('WillowPlayerPawn', super_ref=engine_pawn)
-    ai_pawn = T.cls('WillowAIPawn', super_ref=engine_pawn)
+    willow_pawn = T.cls('WillowPawn', super_ref=engine_pawn)
+    consumer_handle = T.struct_(0, 'BehaviorConsumerHandle')
+    T.prop('Int', consumer_handle, 'PID')
+    T.prop('Struct', willow_pawn, 'ConsumerHandle', type_ref=consumer_handle)
+    T.function(willow_pawn, 'GetBehaviorConsumerHandle', [], None, native, 'Struct')
+    ai_pawn = T.cls('WillowAIPawn', super_ref=willow_pawn)
     reactions = ['MissionReactionLevelLoad', 'MissionReactionStatusChanged', 'MissionReactionObjectiveSetChanged',
                  'MissionReactionObjectiveUpdated', 'MissionReactionObjectiveCleared', 'MissionReactionObjectiveComplete']
     imission = T.cls('IMission')
@@ -578,6 +628,49 @@ def build_willowgame():
         add()
         a.patch(at3); a.patch(at2)
 
+    # ClientGFxPlayMovie (script in the game; the bridge replaces it with a report): the toy body leaves the marker 140 so a run shows it was not used
+    def play_movie_body(ids):
+        a = Asm()
+        a.call(exp_earn, lambda: a.int_const(0), lambda: a.byte_const(140))
+        a.return_nothing(); a.end(); return a
+    play_movie = T.function(controller, 'ClientGFxPlayMovie', [('Object', 'MovieDefinition', 0), ('Object', 'OtherObject', 0), ('Name', 'MovieTag', CPF_OPT)],
+                            play_movie_body)['__self__']
+    pawn_controller = p.add_import_full('ObjectProperty', engine_pawn, 'Controller')
+    gearbox_pkg = p.add_import_full('Package', 0, 'GearboxFramework')
+    helpers_cls = p.add_import_full('Class', gearbox_pkg, 'BehaviorHelpers')
+    kernel_cls = p.add_import_full('Class', gearbox_pkg, 'BehaviorKernel')
+    resolve_fn = p.add_import_full('Function', helpers_cls, 'ResolveBehaviorProviderDefinitionReference')
+    fire_fn = p.add_import_full('Function', kernel_cls, 'ActivateBehaviorEventFromScript')
+    path_struct_ref = p.add_import_full('ScriptStruct', gearbox_pkg, 'NameBasedObjectPath')
+    remote = T.cls('Behavior_RemoteCustomEvent')
+    event_name = T.prop('Name', remote, 'CustomEventName')
+    remote_provider = T.prop('Object', remote, 'SequenceProvider')
+    remote_path = T.prop('Struct', remote, 'ProviderDefinitionPathName', type_ref=path_struct_ref)
+
+    def remote_body(ids):      # Provider = Resolve(Self, SequenceProvider, Path); if (Provider != None) ActivateBehaviorEventFromScript(Handle, Provider, Name)
+        a = Asm()
+        a.raw(0x0F); a.local(ids, 'Provider'); a.call(resolve_fn, a.self_, lambda: a.instance(remote_provider), lambda: a.instance(remote_path))
+        none_at = a.jump_if_not(lambda: (a.raw(119), a.local(ids, 'Provider'), a.raw(0x2A), a.raw(0x16)))
+        a.raw(0x0F); a.local(ids, 'Handle'); a.context(lambda: a.local(ids, 'ContextObject'), lambda: a.call(get_handle_local))
+        a.call(fire_fn, lambda: a.local(ids, 'Handle'), lambda: a.local(ids, 'Provider'), lambda: a.instance(event_name), lambda: a.raw(0x4A), lambda: a.raw(0x4A))
+        a.patch(none_at)
+        a.return_nothing(); a.end(); return a
+    get_handle_local = [e for e in p.exports if e[3] == p.fname('GetBehaviorConsumerHandle')]
+    get_handle_local = p.exports.index(get_handle_local[0]) + 1
+    T.function(remote, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
+                                                  ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
+               remote_body, locals_=[('Struct', 'Handle'), ('Object', 'Provider')])
+    show = T.cls('Behavior_ShowMissionInterface')
+
+    def show_body(ids):        # ContextObject.Controller.ClientGFxPlayMovie(SelfObject, SelfObject)
+        a = Asm()
+        a.context(lambda: a.context(lambda: a.local(ids, 'ContextObject'), lambda: a.instance(pawn_controller)),
+                  lambda: a.call(play_movie, lambda: a.local(ids, 'SelfObject'), lambda: a.local(ids, 'SelfObject')))
+        a.return_nothing(); a.end(); return a
+    T.function(show, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
+                                                ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
+               show_body)
+
     director_list('GetEligibleMissions', eligible)
     director_list('GetRedeemableMissions', redeemable)
     director_list('GetInProgressMissions', in_progress)
@@ -700,7 +793,7 @@ def build_willowgame():
     return p
 
 
-def build_mission(director=False):
+def build_mission(director=False, on_enabled=True):
     """With director=True the package also holds a toy Marcus: GD_Marcus.Character.Pawn_Marcus (a WillowAIPawn) whose MissionDirectives reference
     a table of five invented entries (below). ToyMission: one set SetA {RockPaper_GoToRange (count 1)} (and an unused SetB) with bCanCompleteMission, activated at acceptance; a reward percentage that is an
     attribute chain (constant 0.5 x a conditional on the playthrough count) and the experience curve definition at its stock path."""
@@ -777,7 +870,63 @@ def build_mission(director=False):
                              w32(0) + t.array('MissionDirectives', len(entries), b''.join(entries)) + none)
         gd = p.add_export(chain('Core', 'Package'), 'GD_Marcus', w32(0) + none)
         character = p.add_export(chain('Core', 'Package'), 'Character', w32(0) + none, outer=gd)
+        package_class_import = lambda c: c('Core', 'Package')
         p.add_export(chain('WillowGame', 'WillowAIPawn'), 'Pawn_Marcus', w32(0) + t.obj('MissionDirectives', table) + none, outer=character)
+        # his AI-definition provider (NATIVE_MARCUS_USE_CHAIN.md in miniature, invented names). Brain: OnUsed (link id 2) -> check A "Missing" (no such
+        # sequence) -> B "Off" (exists, disabled) -> C "On" (exists; enabled when on_enabled) -> the remote event "Fired" when enabled, else X, the
+        # mission interface. A's not-enabled output also starts D, a check whose path names no provider. Reactor: "Fired" -> Y (a mission interface behavior
+        # on Marcus, which cannot open it: Marcus has no controller). C names a SequenceProvider too: the path wins over that reference.
+        aidef = p.add_export(package_class_import(chain), 'AIDef_Marcus', w32(0) + none, outer=character)
+        provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'AIBehaviorProviderDefinition_0', b'', outer=aidef)
+        other_provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'OtherProvider', w32(0) + none)
+
+        def path(*names):
+            slots = [p.fname('None')] * (6 - len(names)) + [p.fname(n) for n in names]
+            return t.struct_('ProviderDefinitionPathName', 'NameBasedObjectPath', t.array('PathComponentNames', 6, b''.join(slots)) + t.byte('IsSubobjectMask', 16) + none)
+        marcus_path = path('GD_Marcus', 'Character', 'AIDef_Marcus', 'AIBehaviorProviderDefinition_0')
+
+        def check(name, sequence, path_tags, reference=0):
+            body = w32(0) + t.name_('SequenceName', sequence) + path_tags + (t.obj('SequenceProvider', reference) if reference else b'') + none
+            return p.add_export(chain('GearboxFramework', 'Behavior_IsSequenceEnabled'), name, body, outer=provider)
+        a_ = check('Behavior_IsSequenceEnabled_A', 'Missing', marcus_path)
+        b_ = check('Behavior_IsSequenceEnabled_B', 'Off', marcus_path)
+        c_ = check('Behavior_IsSequenceEnabled_C', 'On', marcus_path, reference=other_provider)
+        d_ = check('Behavior_IsSequenceEnabled_D', 'On', path('Nope', 'Nothing'))
+        r_ = p.add_export(chain('WillowGame', 'Behavior_RemoteCustomEvent'), 'Behavior_RemoteCustomEvent_R',
+                          w32(0) + t.name_('CustomEventName', 'Fired') + marcus_path + none, outer=provider)
+        x_ = p.add_export(chain('WillowGame', 'Behavior_ShowMissionInterface'), 'Behavior_ShowMissionInterface_X', w32(0) + none, outer=provider)
+        y_ = p.add_export(chain('WillowGame', 'Behavior_ShowMissionInterface'), 'Behavior_ShowMissionInterface_Y', w32(0) + none, outer=provider)
+
+        def sub(name, first, length): return t.struct_(name, 'SubarrayData', t.int('ArrayIndexAndLength', (first << 16) | length) + none)
+
+        def link(behavior, link_id): return t.int('LinkIdAndLinkedBehavior', behavior | (link_id << 24)) + t.float('ActivateDelay', 0.0) + none
+
+        def var(name, kind): return t.name_('Name', name) + t.byte('Type', kind) + none
+
+        def vlink(prop, kind, first, count):
+            return t.name_('PropertyName', prop) + t.byte('VariableLinkType', kind) + t.byte('ConnectionIndex', 0) + sub('LinkedVariables', first, count) + none
+        BVAR_OBJECT, BVAR_NAMED, LINK_OUTPUT, LINK_CONTEXT = 1, 5, 2, 3
+        brain_behaviors = [(a_, 1, 3), (b_, 4, 2), (c_, 6, 2), (d_, 0, 0), (r_, 0, 0), (x_, 0, 0)]    # (object, first link, link count); X has the Context link
+        brain_links = [link(0, 2), link(4, 0), link(1, 1), link(3, 1), link(4, 0), link(2, 1), link(4, 0), link(5, 1)]
+        brain = (t.name_('BehaviorSequenceName', 'Brain') + t.bool('bEnabledOnSpawn', True)
+                 + t.array('EventData2', 1, t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', 'OnUsed') + none)
+                           + sub('OutputVariables', 0, 1) + sub('OutputLinks', 0, 1) + none)
+                 + t.array('BehaviorData2', len(brain_behaviors), b''.join(
+                     t.obj('Behavior', obj) + sub('LinkedVariables', 1 if obj == x_ else 0, 1 if obj == x_ else 0) + sub('OutputLinks', first, count) + none
+                     for obj, first, count in brain_behaviors))
+                 + t.array('VariableData', 2, var('Who', BVAR_NAMED) + var('Who', BVAR_OBJECT))
+                 + t.array('ConsolidatedOutputLinkData', len(brain_links), b''.join(brain_links))
+                 + t.array('ConsolidatedVariableLinkData', 2, vlink('Instigator', LINK_OUTPUT, 0, 1) + vlink('Context', LINK_CONTEXT, 1, 1))
+                 + t.array('ConsolidatedLinkedVariables', 2, w32(1, 0)) + none)
+        reactor = (t.name_('BehaviorSequenceName', 'Reactor') + t.bool('bEnabledOnSpawn', True)
+                   + t.array('EventData2', 1, t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', 'Fired') + none)
+                             + sub('OutputVariables', 0, 0) + sub('OutputLinks', 0, 1) + none)
+                   + t.array('BehaviorData2', 1, t.obj('Behavior', y_) + sub('LinkedVariables', 0, 0) + sub('OutputLinks', 0, 0) + none)
+                   + t.array('ConsolidatedOutputLinkData', 1, link(0, 0)) + none)
+        sequences = [brain, reactor, t.name_('BehaviorSequenceName', 'On') + t.bool('bEnabledOnSpawn', on_enabled) + none,
+                     t.name_('BehaviorSequenceName', 'Off') + t.bool('bEnabledOnSpawn', False) + none]
+        cls_, sup, outer_, name_, _ = p.exports[provider - 1]
+        p.exports[provider - 1] = (cls_, sup, outer_, name_, w32(0) + t.array('BehaviorSequences', len(sequences), b''.join(sequences)) + none + w32(0))
     cls_, sup, outer, name, _ = p.exports[mission - 1]
     p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
                               + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + none)
@@ -1049,6 +1198,39 @@ with tempfile.TemporaryDirectory() as folder:
     check('G director callbacks ran', sources.count(120) == 2 and sources.count(121) == 1, sources)
     check('G turn-in callback before the reward', sources.index(121) < sources.index(5) if 121 in sources and 5 in sources else False, sources)
     # a mission without a director table behaves as before (scenario A runs without Marcus: no callback markers)
+
+    # Scenario H (swap 6b): the use key's press on Marcus runs his OnUsed chain on the VM (NATIVE_MARCUS_USE_CHAIN.md).
+    for name, enabled in (('UseChainOn', True), ('UseChainOff', False)):
+        (root / f'{name}.upk').write_bytes(build_mission(director=True, on_enabled=enabled).build())
+
+    def use_run(name, *steps):
+        proc = subprocess.run([reader, str(root / f'{name}.upk'), '--mission-run', 'ToyMission', '--cooked', str(root), *steps],
+                              capture_output=True, text=True, encoding='utf-8')
+        assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
+        return proc.returncode, json.loads(proc.stdout)
+
+    def use_of(step): return step['use']
+    for name, enabled in (('UseChainOn', True), ('UseChainOff', False)):
+        code, got = use_run(name, 'script:use')
+        check(f'H {name} exit and errors', code == 0 and got['errors'] == [], (code, got['errors'], got['script']['notes'][-3:]))
+        use = got['steps'][0]['use']
+        lines = use['cascade']
+        # A: the sequence does not exist; B: it exists and is disabled; both answer "not enabled" (output 1); D's path names no provider: no output.
+        check(f'H {name} A and B not enabled', 'Behavior_IsSequenceEnabled_A(Missing) -> 1' in lines and 'Behavior_IsSequenceEnabled_B(Off) -> 1' in lines, lines)
+        check(f'H {name} D: unresolved provider selects nothing', 'Behavior_IsSequenceEnabled_D(On) ->' in lines, lines)
+        if enabled:
+            # C: the path (Marcus's provider, where "On" is enabled) wins over the SequenceProvider reference (another provider): output 0; the remote
+            # event fires and the cascade stops there: Y runs in the Reactor sequence, X (the interface) is never reached
+            check('H on: C enabled, path over reference', 'Behavior_IsSequenceEnabled_C(On) -> 0' in lines, lines)
+            check('H on: remote event fired, cascade stops', 'Behavior_RemoteCustomEvent_R ->' in lines and 'Behavior_ShowMissionInterface_Y ->' in lines
+                  and not any('_X' in line for line in lines) and not use['interface_opened'], use)
+        else:
+            # C disabled: output 1 reaches X, whose Context is the named variable that the OnUsed payload filled: the player pawn, so its Controller
+            # gets the ClientGFxPlayMovie call, which is reported (the toy body, marker 140, is not run)
+            check('H off: C not enabled', 'Behavior_IsSequenceEnabled_C(On) -> 1' in lines, lines)
+            check('H off: interface opened through the payload variable', use['interface_opened'] and 'Behavior_ShowMissionInterface_X ->' in lines
+                  and not any('_Y' in line for line in lines) and not any('Behavior_RemoteCustomEvent' in line for line in lines), use)
+            check('H off: the script RPC was replaced', 140 not in [e['source'] for e in got['script']['exp_earned']], got['script']['exp_earned'])
 
     # Scenario D: the dummy's enable conditions through --slice-run (src/slice.cpp), NATIVE_BEHAVIOR_POPULATION.md sections A-C.
     (root / 'Startup.upk').write_bytes((root / 'TestMission.upk').read_bytes())
