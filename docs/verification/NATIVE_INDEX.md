@@ -78,7 +78,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Actor.AllOwnedComponents | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
 | Actor.GetALocalPlayerController | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 7 sites | UNVERIFIED | high | |
 | WorldInfo.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | persistent level WorldInfo; Kismet/behavior lookups | UNVERIFIED | high | |
-| SequenceObject.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Kismet sequence ops; shared with BehaviorBase.GetWorldInfo | UNVERIFIED | high | |
+| SequenceObject.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Kismet sequence ops; shared with BehaviorBase.GetWorldInfo | UNVERIFIED | high | src/mission_script.cpp: BehaviorBase.GetWorldInfo (swap 5) |
 | Object.GotoState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 125 sites; state frame, EndState/BeginState, default label Begin | UNVERIFIED | medium | |
 | Object.PushState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 4 sites; Paused/Pushed events | UNVERIFIED | medium | |
 | Object.PopState | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Popped/Continued events | UNVERIFIED | medium | |

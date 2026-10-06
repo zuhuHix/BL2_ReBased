@@ -214,7 +214,7 @@ def build_engine():
     T.function(actor, 'IsPlayerOwned', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Bool')
     T.prop('Object', T.cls('Pawn', super_ref=actor), 'Controller')
     p.add_export(toy.imp['Enum'], 'ENetRole', w32(0) + toy.none + w32(0) + w32(len(ROLES)) + b''.join(p.fname(r) for r in ROLES), outer=actor)
-    world = T.cls('WorldInfo')
+    world = T.cls('WorldInfo', super_ref=actor)          # an Actor (Role) like the stock one
     T.prop('Object', world, 'GRI')
     T.prop('Bool', world, 'bIsMenuLevel')
     T.function(world, 'IsMenuLevel', [('Str', 'MapName', CPF_OPT)], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Bool')

@@ -935,8 +935,12 @@ opened analysis output). **All rules UNVERIFIED in the running game.** Replaces 
 - **Host:** the host still owns the shape test (actor cylinder vs the waypoint cylinder, now for any actor via its simple collision cylinder) and
   reports begin/end of overlap for the player pawn and for Marcus (`touchWaypoint`); it no longer looks at the objective state. Marcus's touch
   reaches the script and is ignored there. `enterRange()` stays as a thin wrapper (a player touch).
-- **Not yet swapped:** the dummy's `Behavior_UpdateMissionObjective` (Fire) is still the slice's own handler, not the script behavior; it is the
-  next step. `RequiredObjectivesComplete` is still not modelled (the note's gate also accepts it). New stubs reached at level start, all
+- **Fire (second commit of the swap):** the dummy's `Behavior_UpdateMissionObjective` now runs its own `ApplyBehaviorToContext` on the VM
+  (world role authority, `GetWorldInfo`, the cast of the context object to `IMissionObjective`, the world's tracker, `UpdateObjective`). New
+  binding `BehaviorBase.GetWorldInfo` (the bridge's world, NATIVE_ENGINE_CORE.md); the VM world now has `Role` = authority. The dummy pawn has
+  no VM object, so the context object is None: it casts to no interface exactly as a pawn does, and the bit is 0 (the note's reading). This
+  path is covered by the quest suite and a real-data `--slice-run`; the toy package has no script behavior for it (open).
+  `RequiredObjectivesComplete` is still not modelled (the note's gate also accepts it). New stubs reached at level start, all
   harmless for the slice: `Actor.AttachComponent`, `MissionTracker.RegisterWaypoint`, `Trigger.TriggerDetachSprites`.
 - **CLI:** each `--slice-run` step record now carries the mission status after it; new steps `touch:` / `untouch:` `player` / `marcus`.
 
@@ -947,3 +951,5 @@ opened analysis output). **All rules UNVERIFIED in the running game.** Replaces 
 - **`tools/test_quest.ps1`: first run PASS checks=83 errors=0, resume PASS checks=11 errors=0** (82 before; new check
   `objective_completed_through_waypoint_script_once`). The log shows Marcus's touch delivered and ignored, then the player's touch.
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+- After the Fire commit: CTest 11/11, packages 9/9, UE build Succeeded, quest PASS 83/83 and resume PASS 11/11, door PASS 16/16; a real-data
+  `--slice-run` (accept, range, spawn, hit:other, hit:fire, turnin) reaches ReadyToTurnIn on the incendiary hit and Complete on turn-in with no errors.

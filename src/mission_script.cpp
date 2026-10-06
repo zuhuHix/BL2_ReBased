@@ -35,6 +35,8 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     const auto authority = std::find(roles.begin(), roles.end(), "ROLE_Authority");
     if (authority == roles.end()) throw RuntimeError("mission script bridge: ENetRole has no ROLE_Authority");
     required(runtime, *controller_, "Role") = Value::makeByte(authority - roles.begin());
+    // The world runs as the authority too (behavior scripts such as Behavior_UpdateMissionObjective test the world's role).
+    required(runtime, *world_, "Role") = Value::makeByte(authority - roles.begin());
     // One playthrough with an empty mission list (the script indexes MissionPlaythroughs[GetCurrentPlaythrough()]).
     Value& playthroughs = required(runtime, *controller_, "MissionPlaythroughs");
     playthroughs = Value::makeArray();
@@ -243,6 +245,8 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         if (!path.empty()) mission_.updateObjectiveByPath(path, c.has(1) ? int(c.in(1).integer()) : 0);
         return Value();
     });
+    // BehaviorBase.GetWorldInfo ignores self and returns the world's own world info (NATIVE_ENGINE_CORE.md, UNVERIFIED): the bridge's world.
+    bind("Engine.BehaviorBase.GetWorldInfo", [this](NativeCall&) { return Value::makeObject(world_); });
     // RegisterMissionObserver: the observer is told "level load" at once (the waypoint's reaction does nothing) and then every
     // notification the tracker raises. Only the VM's own observers are kept here; the dummy's conditions are the slice's.
     bind("WillowGame.MissionTracker.RegisterMissionObserver", [this](NativeCall& c) {
@@ -441,6 +445,12 @@ void MissionScript::untouch(Toucher who) {
     if (found == items.end()) return;
     items.erase(found);
     if (runtime_.findMethod(waypoint_->cls, "UnTouch")) run([this, actor] { runtime_.callByName(waypoint_, "UnTouch", {Value::makeObject(actor)}); });
+}
+
+// A behavior whose ApplyBehaviorToContext is script, run on the VM with `context` as its ContextObject (the other arguments are left at
+// their defaults: the behaviors run here do not read them).
+void MissionScript::applyBehavior(ObjectPtr behavior, ObjectPtr context) {
+    run([this, behavior, context] { runtime_.callByName(behavior, "ApplyBehaviorToContext", {Value::makeObject(context)}); });
 }
 
 // The observer reactions, by kind (arguments beyond the tracker are not passed: the waypoint's reaction ignores them).

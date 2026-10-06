@@ -29,8 +29,11 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     script_->placeWaypoint(package, "TheWorld.PersistentLevel.WillowWaypoint_9");
     dummyName_ = dummyProviderPath.substr(dummyProviderPath.rfind('.') + 1);
     auto& d = *dummy_;
-    d.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
-        mission_->updateObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
+    // Behavior_UpdateMissionObjective is script (NATIVE_OBJECTIVE_TRIGGERS.md): it runs on the VM and reaches the tracker's UpdateObjective.
+    // Its context object would be the dummy pawn, which has no VM object here; None casts to no IMissionObjective, as a pawn does, so the
+    // bit is 0 either way.
+    d.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider&, BehaviorProvider::Behavior& b, const std::string&) {
+        script_->applyBehavior(b.object, nullptr);
         return std::vector<int>();
     });
     // Behavior_CompareObject runs through the provider's built-in handler (inputs from the variable data).

@@ -71,6 +71,8 @@ public:
     int objectiveUpdates() const { return objectiveUpdates_; }
     void touch(Toucher who);
     void untouch(Toucher who);
+    // Runs a script behavior's ApplyBehaviorToContext on the VM (e.g. Behavior_UpdateMissionObjective: the world's tracker, UpdateObjective).
+    void applyBehavior(ObjectPtr behavior, ObjectPtr context);
     // The tracker's observer notifications reach the VM observers (a registered waypoint) as their MissionReaction* script events.
     void notify(MissionSystem::Notification kind);
 
