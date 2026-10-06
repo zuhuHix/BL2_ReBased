@@ -4807,3 +4807,12 @@ AI-assisted (Claude), orchestrator acting as implementer from NATIVE_OBJECTIVE_T
 `BehaviorBase.GetWorldInfo` (the bridge's world), and the VM world's `Role` is authority. The context object is None (no VM dummy
 pawn), which yields bit 0 as a pawn context does. Checks: CTest 11/11 (toy WorldInfo is now an Actor, as the stock class is),
 packages 9/9, UE build Succeeded, quest PASS 83/83 and resume 11/11, door PASS 16/16. No toy coverage of the script behavior yet.
+
+## 2026-10-06: Matinee Completed / Reversed one frame after the last pose (UNVERIFIED rule)
+
+AI-assisted (Claude), orchestrator from NATIVE_KISMET_MATINEE.md ("Deactivated": a finished `SeqAct_Interp` is noticed on the next
+update). The host mover (`OpenWillowMover.cpp`) now applies the end pose, then on the next frame runs `InterpolationFinished` and
+fires Completed / Reversed, for both the door and the target track; a Play / Reverse arriving in between keeps the action running
+and suppresses that output, as the note's update order implies. `DoorRunning` / `TrackRunning` stay true until the deactivation.
+Checks: UE build Succeeded, door PASS 16/16, quest PASS 83/83 and resume 11/11 (CTest and packages unaffected: host only). The
+note's other correction (the move-track pose composition differs when keys rotate) is not applied yet.

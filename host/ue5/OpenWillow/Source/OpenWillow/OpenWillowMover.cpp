@@ -227,7 +227,8 @@ void UOpenWillowMover::StartMotion(bool NextReverse) {
     const auto Result = Impl->Script->notify(false, NextReverse);
     ScriptSteps += Result.steps;
     if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
-    Reverse = NextReverse; Running = true;
+    // A Play / Reverse before the pending deactivation keeps the action running: no Completed / Reversed for the turned-around run.
+    Reverse = NextReverse; Running = true; bDoorEndPending = false;
     ++(Reverse ? DoorCloseStarts : DoorOpenStarts);
     UE_LOG(LogTemp, Display, TEXT("OWMOVER start reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
 }
@@ -342,20 +343,23 @@ void UOpenWillowMover::TickComponent(float Delta, ELevelTick Type, FActorCompone
     if (Failed) return;
     TickTrack(Delta);
     if (Failed) return;
+    // SeqAct_Interp is seen as finished on the update after the one that reached the end (NATIVE_KISMET_MATINEE.md, UNVERIFIED): the
+    // deactivation (InterpolationFinished, then the Completed / Reversed output) runs one frame after the last pose.
+    if (bDoorEndPending) {
+        bDoorEndPending = false;
+        const auto Result = Impl->Script->notify(true, Reverse);
+        ScriptSteps += Result.steps;
+        if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
+        ++(Reverse ? DoorCloseEnds : DoorOpenEnds);
+        UE_LOG(LogTemp, Display, TEXT("OWMOVER finish reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
+        ApplyDispatch(Impl->Script->motionFinished(Reverse), Reverse ? TEXT("door Reversed") : TEXT("door Completed"));
+        if (Failed) return;
+    }
     if (Running) {
         Time = FMath::Clamp(Time + (Reverse ? -Delta : Delta), 0.f, Duration);
         // UE3 relative-frame composition remains UNVERIFIED against original.
         Mesh->SetWorldTransform(MatineePose(Initial, Impl->Position, Impl->Rotation, Time), false, nullptr, ETeleportType::TeleportPhysics);
-        if (Time == 0 || Time == Duration) {
-            const auto Result = Impl->Script->notify(true, Reverse);
-            ScriptSteps += Result.steps;
-            if (!Result.error.empty()) { Fail(UTF8_TO_TCHAR(Result.error.c_str())); return; }
-            Running = false;
-            ++(Reverse ? DoorCloseEnds : DoorOpenEnds);
-            UE_LOG(LogTemp, Display, TEXT("OWMOVER finish reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
-            ApplyDispatch(Impl->Script->motionFinished(Reverse), Reverse ? TEXT("door Reversed") : TEXT("door Completed"));
-            if (Failed) return;
-        }
+        if (Time == 0 || Time == Duration) { Running = false; bDoorEndPending = true; }
     }
     if (Testing) RunTest(Delta);
 }
@@ -425,6 +429,7 @@ void UOpenWillowMover::StartTrack(bool bReverse) {
     if (!bReverse && Impl->bRewindOnPlay) TrackTime = 0;
     bTrackReverse = bReverse;
     bTrackRunning = true;
+    bTrackEndPending = false;
     FireTrackKeys(TrackTime, TrackTime, true);
 }
 void UOpenWillowMover::FireTrackKeys(float From, float To, bool bInclusiveFrom) {
@@ -441,7 +446,16 @@ void UOpenWillowMover::FireTrackKeys(float From, float To, bool bInclusiveFrom) 
     }
 }
 void UOpenWillowMover::TickTrack(float Delta) {
-    if (!TrackMesh || !bTrackRunning) return;
+    if (!TrackMesh) return;
+    // As the door: the output follows one frame after the last pose (NATIVE_KISMET_MATINEE.md, UNVERIFIED).
+    if (bTrackEndPending) {
+        bTrackEndPending = false;
+        ++(bTrackReverse ? TrackReverseEnds : TrackForwardEnds);
+        ApplyDispatch(Impl->Script->output(TCHAR_TO_UTF8(*Impl->TrackAction), bTrackReverse ? "Reversed" : "Completed"),
+            bTrackReverse ? TEXT("track Reversed") : TEXT("track Completed"));
+        return;
+    }
+    if (!bTrackRunning) return;
     const float Before = TrackTime;
     TrackTime = FMath::Clamp(TrackTime + (bTrackReverse ? -Delta : Delta), 0.f, Impl->TrackDuration);
     FireTrackKeys(Before, TrackTime, false);
@@ -452,9 +466,7 @@ void UOpenWillowMover::TickTrack(float Delta) {
         false, nullptr, ETeleportType::TeleportPhysics);
     if ((bTrackReverse && TrackTime <= 0) || (!bTrackReverse && TrackTime >= Impl->TrackDuration)) {
         bTrackRunning = false;
-        ++(bTrackReverse ? TrackReverseEnds : TrackForwardEnds);
-        ApplyDispatch(Impl->Script->output(TCHAR_TO_UTF8(*Impl->TrackAction), bTrackReverse ? "Reversed" : "Completed"),
-            bTrackReverse ? TEXT("track Reversed") : TEXT("track Completed"));
+        bTrackEndPending = true;
     }
 }
 bool UOpenWillowMover::Ray(bool ClosedSpace) const {
