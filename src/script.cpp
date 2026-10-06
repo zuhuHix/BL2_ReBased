@@ -46,14 +46,14 @@ const Layout* layoutFor(uint8_t op) {
         set(0x47, "DynArrayFindStruct", "EwP");             // UNVERIFIED (array, u16, params up to 0x16)
         set(0x49, "DefaultParmValue", "wE"); set(0x4A, "EmptyParmValue", ""); set(0x4B, "InstanceDelegate", "n");
         set(0x4C, "Op4C", "i"); set(0x4D, "Op4D", "i"); set(0x4E, "Op4E", "i"); set(0x4F, "Op4F", "i");
-        set(0x50, "Op50", "i");                             // UNVERIFIED meaning, plain i32 (not a reference)
+        set(0x50, "Op50", "i");                             // typed temporaries 4C-50: plain i32 index (not a reference)
         set(0x51, "InterfaceContext", "E"); set(0x52, "InterfaceCast", "rE"); set(0x53, "EndOfScript", "");
         set(0x54, "DynArrayAdd", "EP");
         set(0x55, "DynArrayAddItem", "EwP"); set(0x56, "DynArrayRemoveItem", "EwP");  // UNVERIFIED: P ends at 0x16
         set(0x57, "DynArrayInsertItem", "EP"); set(0x58, "DynArrayIterator", "EEbEw");
         set(0x59, "DynArraySort", "EP"); set(0x5A, "FilterEditorOnly", "w");
-        set(0x5E, "Op5E", "r");                             // UNVERIFIED meaning
-        set(0x5F, "Op5F", "EE");                            // UNVERIFIED: typed Let
+        set(0x5E, "Op5E", "r");                             // attribute property reference (shares the 0x01 handler)
+        set(0x5F, "Op5F", "EE");                            // let attribute (NATIVE_BYTECODE_OPCODES.md, UNVERIFIED in game)
         set(0x1B, "VirtualFunction", "nP"); set(0x1C, "FinalFunction", "rP"); set(0x37, "GlobalFunction", "nP");
         set(0x42, "DelegateFunction", "brnP");
         set(0x19, "Context", "EwrbE"); set(0x12, "ClassContext", "EwrbE");
@@ -290,6 +290,7 @@ FunctionInfo readFunction(const Package& package, int32_t index) {
     const size_t count = u16At(start);
     const size_t sizeAt = start + 2 + 2 * count + 44;
     if (sizeAt + 4 > tailStart) throw DecodeError("header runs into the tail");
+    for (size_t i = 0; i < count; ++i) info.hiddenLocals.push_back(u16At(start + 2 + 2 * i));
     const int32_t memory = int32_t(u32At(sizeAt - 4)), size = int32_t(u32At(sizeAt));
     if (size < 0 || memory < 0) throw DecodeError("negative script size");
     if (sizeAt + 4 + size_t(size) != tailStart)

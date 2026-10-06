@@ -56,8 +56,8 @@ void Runtime::registerCoreNatives() {
 
     // ---------------------------------------------------------------------------------- interfaces
     // Object.QueryInterface (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): the object itself when its class implements the interface class, else
-    // None. An interface value is valid iff its object half is non-null. "Implements" is the VM's structural stand-in (Runtime::implements:
-    // the class defines every function the interface declares) or a class derived from the interface; the packages' interface tables are not decoded.
+    // None. An interface value is valid iff its object half is non-null. "Implements" is the interface table of the class or a super class
+    // (Runtime::implements, NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running game) or a class derived from the interface.
     reg("Object.QueryInterface(class)", [](NativeCall& c) {
         Class* want = c.in(0).cls;
         if (!c.self || !c.self->cls || !want) return Value::makeObject(nullptr);

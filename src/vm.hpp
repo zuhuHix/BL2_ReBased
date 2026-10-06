@@ -84,6 +84,9 @@ struct PropertyDecl {
     int32_t index = 0;                  // export index of the property
     int32_t typeRef = 0;                // struct / class / enum / inner property / function, package-relative
     int32_t typeRef2 = 0;               // metaclass (ClassProperty), source delegate (DelegateProperty)
+    int32_t typeRef3 = 0;               // attribute properties (NATIVE_BYTECODE_OPCODES.md): typeRef is the modifier stack and typeRef2 the paired
+                                        // property (base for a value property, value for a base property); a byte attribute carries its
+                                        // enum first, so there the stack is typeRef2 and the paired property typeRef3
     bool isParam() const { return flags & 0x80; }
     bool isOut() const { return flags & 0x100; }
     bool isOptional() const { return flags & 0x10; }
@@ -140,6 +143,30 @@ struct State {
     std::unordered_map<std::string, Function*> functions;   // lower-cased name
 };
 
+// One entry of a class's interface table: the interface class and the StructProperty that holds its table pointer
+// (VfTable_<Interface>, 0 for the native-only tables). Both are package-relative references into the declaring package.
+struct InterfaceEntry {
+    int32_t classRef = 0;
+    int32_t tableProperty = 0;
+    Class* cls = nullptr;               // classRef resolved on first use (Runtime::implements)
+    bool resolved = false;
+};
+
+// The part of a Class export this runtime keeps (docs/verification/NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running
+// game). The rest of the body is consumed for its size only: see decodeClassBody in vm.cpp for every field and what is unknown.
+struct ClassBody {
+    uint32_t classFlags = 0;
+    int32_t within = 0;                 // within class (reference)
+    int32_t defaultObject = 0;          // Default__<Class> (export reference)
+    std::string configName;
+    std::vector<InterfaceEntry> interfaces;     // interfaces this class names itself; super classes are not repeated
+};
+constexpr uint32_t CLASS_Interface = 0x4000;    // class flag bit 14 marks an interface class
+
+// Decodes the body of Class export `index` and checks it ends exactly at the export's serial size. Throws on any violation
+// (a reference outside the tables, a negative or oversized count, a bad name, trailing or missing bytes).
+ClassBody decodeClassBody(const Package& package, int32_t index);
+
 struct Class {
     std::string name;
     std::string path;                   // Package.Name
@@ -151,6 +178,10 @@ struct Class {
     std::unordered_map<std::string, State> states;          // lower-cased name
     ObjectPtr defaults;                 // the class default object (Default__Name), built on first use
     bool defaultsBuilt = false;
+    ClassBody body;                     // valid only when bodyDecoded
+    bool bodyDecoded = false;
+    std::string bodyError;              // why the body did not decode (synthetic packages, damaged exports)
+    bool isInterface() const { return bodyDecoded && (body.classFlags & CLASS_Interface); }
     bool isChildOf(const Class* other) const;
 };
 
@@ -220,9 +251,13 @@ public:
     PropertyDecl declAt(const std::shared_ptr<const Package>& package, int32_t ref);   // a property export, by reference
     std::vector<std::shared_ptr<const Package>> codePackages();                        // the loaded script packages
     int32_t findExport(const Package& package, const std::string& objectPath);   // fast Package::findExport
-    // Whether `cls` implements the interface class `iface` (named I<Upper>...): the class chain defines every function the interface
-    // declares. The packages' interface tables were not decoded; UnrealScript requires an implementer to define them (UNVERIFIED).
+    // Whether `cls` implements the interface class `iface`: `iface` is an interface class (class flag) and the interface table of `cls`
+    // or of a super class names `iface` or a class derived from it (NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running game).
+    // A class chain whose bodies did not decode (synthetic test packages) falls back to implementsStructurally.
     bool implements(Class* cls, const Class* iface);
+    // The earlier stand-in, kept as the fallback and as the comparison baseline: the class chain defines every function the
+    // interface declares, and the interface is named I<Upper>... .
+    bool implementsStructurally(Class* cls, const Class* iface);
 
     // Objects and values.
     ObjectPtr instantiate(Class* cls, const std::string& name = "");
@@ -271,6 +306,12 @@ private:
     void buildDefaults(Class* cls);
     void applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& package, int32_t exportIndex, size_t prefix = 4);
 };
+
+// Structural oracle over every Class export of a package: the body decodes and ends exactly at the serial size, the default
+// object is Default__<Class> of that class, and each interface entry names an interface-flagged class. JSON summary.
+std::string checkClassBodies(Runtime& runtime, const std::shared_ptr<const Package>& package, bool listFailures, size_t* failed = nullptr);
+// Old structural answer versus the interface table over every class of the nine code packages. JSON summary.
+std::string compareInterfaces(Runtime& runtime);
 
 struct SweepOptions {
     std::string classFilter;            // only functions of this class ("" = all)

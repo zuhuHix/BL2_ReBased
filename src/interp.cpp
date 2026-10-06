@@ -54,6 +54,7 @@ struct Interp {
     std::vector<const Function*> stack;                       // active script functions, innermost last
     Value scratch;                                            // sink for writes through a null reference
     std::map<std::pair<const Package*, int32_t>, PropertyDecl> decls;
+    std::map<std::pair<const Package*, int32_t>, std::pair<PropertyDecl, PropertyDecl>> attributeLinks;   // value property -> (stack, base)
 
     explicit Interp(Runtime& runtime) : rt(runtime) {}
 
@@ -86,7 +87,7 @@ struct Interp {
             return &found->second.ref();
         }
         case script::EX_Op4C: case script::EX_Op4D: case script::EX_Op4E: case script::EX_Op4F: case script::EX_Op50:
-            return &f.typed[{e.op, e.ints.at(0)}].ref();
+            return &typedTemporary(e, f).ref();
         case script::EX_InstanceVariable: case script::EX_Op5E: case script::EX_StateVariable: {
             if (!ctx) return &(scratch = Value());
             const auto& property = decl(f, e.refs.at(0));
@@ -128,6 +129,28 @@ struct Interp {
             scratch = eval(e, f, ctx);          // not a storage location: operate on a temporary
             return &scratch;
         }
+    }
+
+    // Opcodes 4C-50 (NATIVE_BYTECODE_OPCODES.md, UNVERIFIED in the running game): a hidden typed temporary of the function's frame. The operand
+    // is an index into the function's local-variable array as the engine stores it in memory (count first, then the file's values), so it is
+    // odd and selects pair (operand - 1) / 2. A slot nothing has written yet reads as the typed zero (the frame zero-fill is assumed).
+    Slot& typedTemporary(const Expr& e, Frame& f) {
+        const int32_t operand = e.ints.at(0);
+        if (operand < 1 || !(operand & 1) || size_t(operand) >= f.function->info.hiddenLocals.size())
+            throw RuntimeError("typed temporary " + std::to_string(operand) + " is outside the local-variable array of " + f.function->path);
+        auto found = f.typed.find({e.op, operand});
+        if (found == f.typed.end()) {
+            Slot slot;
+            switch (e.op) {
+            case script::EX_Op4C: slot.v = Value::makeInt(0); break;
+            case script::EX_Op4D: slot.v = Value::makeFloat(0); break;
+            case script::EX_Op4E: slot.v = Value::makeByte(0); break;
+            case script::EX_Op4F: slot.v = Value::makeBool(false); break;
+            default: slot.v = Value::makeObject(nullptr); break;
+            }
+            found = f.typed.emplace(std::make_pair(int(e.op), operand), std::move(slot)).first;
+        }
+        return found->second;
     }
 
     // The object a Context expression's member runs against; null when the object expression is None.
@@ -294,7 +317,8 @@ struct Interp {
         }
         case script::EX_InterfaceContext: return eval(e.kids.at(0), f, ctx);
         case script::EX_Skip: return eval(e.kids.at(0), f, ctx);
-        case script::EX_Let: case script::EX_LetBool: case script::EX_LetDelegate: case script::EX_Op5F: {
+        case script::EX_Op5F: letAttribute(e, f, ctx); return Value();     // a statement: no result
+        case script::EX_Let: case script::EX_LetBool: case script::EX_LetDelegate: {
             const Expr& lhs = e.kids.at(0);
             if (lhs.op == script::EX_DynArrayLength) {
                 // Assigning a dynamic array's length resizes it.
@@ -490,6 +514,78 @@ struct Interp {
             }
         }
         target = std::move(value);
+    }
+
+    // The stack and base companions of an attribute value property, found from the property's own references in the package (not by name):
+    // float and int attribute properties list (stack, base), a byte attribute lists (enum, stack, base). Values carry flag bit 63, bases bit 62
+    // (NATIVE_ATTRIBUTES.md; 257 value and 257 base properties of the nine code packages, all companions checked against the names).
+    const std::pair<PropertyDecl, PropertyDecl>& companions(const Frame& f, const PropertyDecl& value) {
+        const auto key = std::make_pair(value.package.get(), value.index);
+        const auto cached = attributeLinks.find(key);
+        if (cached != attributeLinks.end()) return cached->second;
+        const bool isByte = value.type == "ByteAttributeProperty";
+        if ((!isByte && value.type != "FloatAttributeProperty" && value.type != "IntAttributeProperty") || !(value.flags >> 63 & 1))
+            throw RuntimeError("let attribute: " + value.name + " is not an attribute value property in " + f.function->path);
+        auto stackDecl = rt.declAt(value.package, isByte ? value.typeRef2 : value.typeRef);
+        auto baseDecl = rt.declAt(value.package, isByte ? value.typeRef3 : value.typeRef2);
+        if (stackDecl.type != "ArrayProperty" || !(baseDecl.flags >> 62 & 1))
+            throw RuntimeError("let attribute: " + value.name + " has no modifier stack and base value in " + f.function->path);
+        return attributeLinks.emplace(key, std::make_pair(std::move(stackDecl), std::move(baseDecl))).first->second;
+    }
+
+    // The value of a stack attribute from its base and modifier stack (NATIVE_ATTRIBUTES.md section 3, UNVERIFIED in the running game), in
+    // single precision. A modifier object has Type (0 scale, 1 pre-add, 2 post-add, anything else ignored) and Value. Integer and byte
+    // attributes truncate toward zero; a byte keeps the low 8 bits, an out-of-range float becomes INT_MIN as the hardware conversion does.
+    Value attributeValue(const PropertyDecl& value, const Value& base, const Value& modifiers) {
+        float preAdd = 0, postAdd = 0, scaleUp = 0, scaleDown = 0;
+        for (const Value& item : modifiers.elements()) {
+            if (item.kind != K::Object || !item.o) continue;
+            const Value* type = rt.property(*item.o, "Type");
+            const Value* amount = rt.property(*item.o, "Value");
+            if (!type || !amount) { log("attribute modifier without Type or Value"); continue; }
+            const float x = float(amount->number());
+            switch (type->integer()) {
+            case 0: if (x > 0) scaleUp += x; else scaleDown += x; break;
+            case 1: preAdd += x; break;
+            case 2: postAdd += x; break;
+            default: break;
+            }
+        }
+        const float result = (float(base.number()) + preAdd) * ((1.0f + scaleUp) / (1.0f - scaleDown)) + postAdd;
+        if (value.type == "FloatAttributeProperty") return Value::makeFloat(result);
+        const int32_t whole = (result >= 2147483648.0f || result < -2147483648.0f || result != result) ? INT32_MIN : int32_t(result);
+        return value.type == "ByteAttributeProperty" ? Value::makeByte(whole) : Value::makeInt(whole);
+    }
+
+    // Opcode 5F, "let attribute" (NATIVE_BYTECODE_OPCODES.md, UNVERIFIED in the running game): the left side names an attribute value property
+    // (a bare 5E or Context(...) wrapping one). The right side is stored into the property's BASE companion and the value property is then
+    // recomputed from the base and the modifier stack. It does not run the attribute-changed notification, and the engine's replication-dirty
+    // hook (an empty virtual in the classes read) is skipped. A None context logs the error and still evaluates the right side.
+    void letAttribute(const Expr& e, Frame& f, const ObjectPtr& ctx) {
+        const Expr* left = &e.kids.at(0);
+        if (left->op == script::EX_DynArrayLength) { log("Illegal call to execLetAttribute() for Array"); return; }
+        ObjectPtr container = ctx;
+        while (left->op == script::EX_Context || left->op == script::EX_ClassContext) {
+            container = contextTarget(*left, f, container);
+            if (!container) break;
+            left = &left->kids.at(1);
+        }
+        if (!container) {
+            noteNoneContext(f);
+            log("Attempt to assign attribute through None");
+            eval(e.kids.at(1), f, ctx);
+            return;
+        }
+        if (left->op != script::EX_Op5E) throw RuntimeError("let attribute: the left side is not an attribute reference in " + f.function->path);
+        const PropertyDecl& value = decl(f, left->refs.at(0));
+        const auto& [stackDecl, baseDecl] = companions(f, value);
+        Value rhs = eval(e.kids.at(1), f, ctx);
+        Value* base = rt.property(*container, baseDecl.name);
+        Value* stored = rt.property(*container, value.name);
+        Value* modifiers = rt.property(*container, stackDecl.name);
+        if (!base || !stored || !modifiers) throw RuntimeError("let attribute: " + value.name + " is missing on its object in " + f.function->path);
+        assign(*base, std::move(rhs));
+        *stored = attributeValue(value, *base, *modifiers);
     }
 
     // --------------------------------------------------------------------------------------- calls

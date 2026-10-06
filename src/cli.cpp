@@ -28,6 +28,7 @@ void usage() {
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
         "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
+        "--class-check --cooked <directory> [--failures] | --interface-compare --cooked <directory> | "
         "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
         "--run-batch <file> --cooked <directory> | "
         "--native-census <entry-file> --cooked <directory> [--steps <n>] [--no-static] | "
@@ -545,6 +546,26 @@ int main(int argc, char** argv) {
             std::cout << "{\"index\":" << result.index << ",\"steps\":" << result.steps
                       << ",\"error\":" << (result.error.empty() ? "null" : quote(result.error)) << "}\n";
             return result.error.empty() ? 0 : 1;
+        }
+
+        if (mode == "--class-check" || mode == "--interface-compare") {
+            // Structural oracle over the Class exports of this package, or the table-versus-stand-in interface comparison over all code packages.
+            std::filesystem::path cooked;
+            bool listFailures = false;
+            for (int i = 3; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--failures" && mode == "--class-check") listFailures = true;
+                else usage();
+            }
+            if (cooked.empty()) usage();
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            if (mode == "--interface-compare") { std::cout << vm::compareInterfaces(runtime) << '\n'; return 0; }
+            const auto summary = vm::checkClassBodies(runtime, store.loadPath(sourcePath), listFailures);
+            std::cout << summary << '\n';
+            return summary.find("\"failed\":0}") != std::string::npos || summary.find("\"failed\":0,") != std::string::npos ? 0 : 1;
         }
 
         if (mode == "--vm-sweep") {
