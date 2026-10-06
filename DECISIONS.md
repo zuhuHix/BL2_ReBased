@@ -4850,3 +4850,15 @@ skill's `OnActivated`, then the state delegate that refills the 13 s cooldown po
 ready 18.7 s) and every early end are listed. The reload abort comes from the cast special move's `bBlocksWeaponActions`, which
 corrects NATIVE_WEAPON_FIRING; other corrections (NATIVE_SKILLS, PHASELOCK_STOCK_DATA, NATIVE_PHASELOCK_PRESENTATION) are in the note.
 All UNVERIFIED in game.
+
+## 2026-10-06: native notes on the attribute system (resolvers, modifier stacks, change notification) (UNVERIFIED)
+
+AI-assisted (Claude), analyst lane G14, Ghidra; own-words note `docs/verification/NATIVE_ATTRIBUTES.md`, no listing text. Context
+resolver chains stop at the first None; value resolvers fold forward; `GetValue`/`GetBaseValue` try the override context first.
+Only `ObjectPropertyAttributeValueResolver` accepts add/remove/set-base (effects on constant or derived attributes do nothing). Stack
+attributes keep value, base and a modifier stack (a second add of the same modifier is refused, remove deletes every copy, value
+recomputed with the NATIVE_WEAPON_RULES stack formula, integers truncated); simple attributes edit the value in place (Scale
+multiplies directly; remove is a no-op). The change notification fires only for notify-flagged properties (`ResourcePool` clamps,
+`Skill.Grade` forces a modifier refresh). About 26 resolvers/natives mapped; `ApplyAttributeEffects` is script. Corrections to
+NATIVE_PROGRESSION, NATIVE_SKILLS, NATIVE_WEAPON_RULES and PHASELOCK_STOCK_DATA are in the note. Open: slot `ComputedModifierValue`,
+how typed attribute assignments execute in the VM, resolver chain order (object arrays not decoded). All UNVERIFIED in game.
