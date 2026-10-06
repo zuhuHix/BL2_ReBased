@@ -402,3 +402,19 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | BehaviorHelpers.ResolveBehaviorProviderDefinitionReference | [NATIVE_MARCUS_USE_CHAIN.md](NATIVE_MARCUS_USE_CHAIN.md) | Fire: resolves the path name to Marcus's AI-definition provider (path wins over reference, else the behavior's Outer) | UNVERIFIED | medium-high | |
 | BehaviorKernel.ActivateBehaviorEventFromScript (extra: None provider fires nothing, omitted filter = -1) | [NATIVE_MARCUS_USE_CHAIN.md](NATIVE_MARCUS_USE_CHAIN.md) | Fire: Behavior_RemoteCustomEvent in Marcus's chain | UNVERIFIED | high | |
 | Behavior_AddMissionDirectives.ApplyBehaviorToContext | [NATIVE_MARCUS_USE_CHAIN.md](NATIVE_MARCUS_USE_CHAIN.md) | not on the Fire route (not read) | UNVERIFIED | none | |
+| Maya movement data (class, pawn, volume, globals) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | GroundSpeed 440, JumpZ 630, AirControl 0.11, crouch 50, eye height 70 | UNVERIFIED | high | |
+| Pawn speed fraction (virtual, no script name) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | walk 0.3, crouch 0.5, sprint attribute, encumbrance | UNVERIFIED | high / medium | |
+| Pawn velocity step and braking (virtual) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | ground friction 8, AccelRate 2048, stop below 10 uu/s | UNVERIFIED | high | |
+| Pawn max speed by physics mode | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | ground/air/water speed choice | UNVERIFIED | high | |
+| Pawn falling step (virtual) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | air control, terminal velocity, landing | UNVERIFIED | medium-high | |
+| WillowPlayerController.PlayerWalking.PlayerMove / ProcessMove (script) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | input to acceleration | UNVERIFIED | high | |
+| Sprint state machine (WillowPlayerInput / WillowPlayerController / WillowPlayerPawn script) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | sprint x1.35 = 594, entry/exit rules | UNVERIFIED | high | |
+| Pawn.TakeFallingDamage / WillowPawn.GetFallingDamageScale | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | fall damage above 1500 uu/s | UNVERIFIED | high / medium | |
+| WillowPlayerPawn.ProcessFallDistance | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | empty on the player pawn | UNVERIFIED | medium | |
+| Eye-height and bob update (virtual) | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | camera height smoothing, bob, footsteps | UNVERIFIED | medium-high | |
+| WillowPawn.WeaponBob | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | arms sway | UNVERIFIED | high | |
+| Pawn.GetPawnViewLocation / WillowPlayerPawn.CalcCamera | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | first-person camera position | UNVERIFIED | medium | |
+| WillowPlayerController.ToVFOV / ToHFOV / ScaleFOV | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | FOV conversions | UNVERIFIED | high | |
+| WillowPlayerController.GetDefaultDefaultFOV / GetVerticalDefaultDefaultFOV | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | default FOV 70 | UNVERIFIED | high | |
+| WillowPlayerController.CalculateFlexibleFOV / CalculateFlexibleFOVModifier / CalculateInverseFlexibleFOV / CalculateInverseFlexibleFOVModifier | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | sprint and zoom FOV | UNVERIFIED | high / medium | |
+| WillowPlayerController.GetFOVAngle / UpdateFOVAspectRatioScalar / IsZoomed | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | final FOV, zoom test | UNVERIFIED | medium | |
