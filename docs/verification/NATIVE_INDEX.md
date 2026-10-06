@@ -330,3 +330,22 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowSeqAct_AIScripted / WillowMind.OnAIScripted / Action_GoToScriptedDestination | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | Marcus walk | UNVERIFIED | medium-high | |
 | Action_FollowPath state FollowMoveNodes (Arrived/Leaving events) | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | door open/close | UNVERIFIED | high | |
 | SeqEvent_PopulatedActor/PopulatedPoint NotifyPopulatedActor | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | den/point Instigator variable | UNVERIFIED | medium | |
+| MissionTracker.InitializeWorldMissionState | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | Fire: resume (restore all mission records, listeners, mission weapon, behavior replay, observer kind 0) | UNVERIFIED | medium (flow), low (a few helpers) | |
+| MissionTracker.GrantMissionWeaponsToClientPlayer | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | Fire: lent pistol after load, non-primary controllers only (primary uses the tracker apply routine) | UNVERIFIED | medium | |
+| WillowPlayerController.AttemptPreSaveGameLoadFixup | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | Fire: first step of load; clamps level/currency/slots, recomputes unspent skill points | UNVERIFIED | medium-high | |
+| WillowPlayerController.AttemptPostSaveGameCreateFixup | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | Fire: last step of save generation; never lowers loaded values | UNVERIFIED | medium-high | |
+| WillowPlayerController.ConditionalFixWeaponReadyMax | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | load: weapon slot floor (first playthrough only; plot missions 5 and 10) | UNVERIFIED | high | |
+| WillowPlayerController.GetExpLevelLoadedFromSavedGame / GetExpPointsLoadedFromSavedGame | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | resume: loaded level and experience (floor for the save) | UNVERIFIED | high | |
+| WillowPlayerController.GetExpPoints | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save: experience written (never below loaded value, capped otherwise) | UNVERIFIED | medium-high | |
+| WillowPlayerController.GetActivePlotCriticalMissionNumber | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save: PlotMissionNumber label | UNVERIFIED | high | |
+| WillowPlayerController.GetLocalActiveMissionNumber | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save: ActiveMissionNumber label | UNVERIFIED | medium | |
+| WillowPlayerController.SaveStatsSaveGameData / ApplyStatsSaveGameData | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | stats blob round trip | UNVERIFIED | medium | |
+| WillowPlayerController.GenerateSaveGameGuid / AreSaveGuidsEqual | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save identity (guid once per character) | UNVERIFIED | high | |
+| WillowPlayerController.AddExpansionSavedataToUnloadableItemData / ExtractExpansionSavedataFromUnloadableItemData | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | marker entries for numbers that outgrew the format (none needed in slice) | UNVERIFIED | medium | |
+| WillowPlayerController.SaveDLCExpansionData | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | none in slice | UNVERIFIED | medium | |
+| WillowPlayerController.FixupSavedWeapons | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | load: patch-compat for a few known weapons (none in slice) | UNVERIFIED | medium | |
+| WillowPlayerController.ReloadDefaultSaveGame | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | new character with no cached save | UNVERIFIED | low | |
+| WillowPlayerController.NotifyReadyToLoadPendingSavegame | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | co-op save channel only; no-op standalone | UNVERIFIED | medium | |
+| WillowSaveGameManager.Save / SaveGame / BeginLoadGame / EndLoadGame / LoadRawData / GetLastSaveGame / ValidateSaveData / Get-SetCachedPlayerSaveGame (and siblings) | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | storage boundary: thin front ends to platform virtuals; cache per controller id | UNVERIFIED | high (that they are front ends) | |
+| (script, read) SaveGame / SaveAtStationIfNecessary / CanSaveGame trigger and gate rules | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | when the game saves (stations, status menu close, quit, prefs); no save from mission events | UNVERIFIED | high | |
+| (script, read) ApplyMissionSaveGameData / LoadPlayerSaveGame order | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | load order; bNeedsRewards pays again on load | UNVERIFIED | high | |
