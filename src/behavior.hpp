@@ -111,6 +111,9 @@ public:
     // reference resolves to the first variable of the sequence with the same name that is not itself a reference), else `own`, the consumer's
     // own object (NATIVE_BEHAVIOR_POPULATION.md G2, UNVERIFIED). An empty list means the behavior does not run.
     std::vector<ObjectPtr> contexts(const Behavior& behavior, ObjectPtr own) const;
+    // The objects a variable link resolves to (a named-variable reference to the first same-named non-reference variable; an object variable
+    // contributes its live object when it has one).
+    std::vector<ObjectPtr> linkedObjects(const Behavior& behavior, const VariableLink& link) const;
     // The provider definition object (the Outer of its behaviors), and whether registerConsumer ran.
     ObjectPtr definition() const { return definition_; }
     bool registered() const { return registered_; }
@@ -170,6 +173,11 @@ private:
     ObjectPtr definition_;
 
     void decodeValues();
+    // The runner's input binding of a BehaviorContextData property (NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED): for each Input link whose property is a
+    // struct of that type, the first resolved object goes into its ContextObject and its BehaviorContext selector becomes 4 (UseContextObject), even
+    // when the list is empty; after the run ContextObject is None again (the selector stays 4).
+    void bindContextInputs(Behavior& behavior);
+    void clearContextInputs(Behavior& behavior);
     bool unexpectedLink(const Behavior& behavior, const std::string& property);
     void fireIn(size_t sequence, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId, const std::vector<ObjectPtr>& payload);
     void start(int sequence, int behavior, double delay, const std::string& event);

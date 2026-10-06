@@ -217,6 +217,7 @@ void FireMissionSlice::pump() {
 MissionScript::MarcusUse FireMissionSlice::useMarcus(const std::set<std::string>& completed) {
     completedMissions_ = completed;
     const auto use = script_->useMarcus(completed);
+    if (!use.onUseTag.empty()) events_.push_back({HostEvent::Kind::OnUseDialog, use.onUseTag, use.onUseSpeaker, use.onUseTarget, ""});
     if (use.interfaceOpened) events_.push_back({HostEvent::Kind::MissionInterface, use.movie, use.director, "", ""});
     pump();
     return use;

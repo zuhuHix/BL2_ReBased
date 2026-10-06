@@ -218,6 +218,14 @@ def build_engine():
     T.prop('Name', T.cls('Behavior_RemoteEvent'), 'EventName')
     behavior_base = T.cls('BehaviorBase')
     T.function(behavior_base, 'GetWorldInfo', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Object')
+    context_data = T.struct_(behavior_base, 'BehaviorContextData')
+    T.prop('Name', context_data, 'InstancedDataContextName')
+    T.prop('Object', context_data, 'ContextObject')
+    T.prop('Byte', context_data, 'BehaviorContext')
+    T.prop('Byte', context_data, 'bSupportsDefaultOutputLink')
+    T.function(behavior_base, 'GetBehaviorContext', [('Struct', 'ContextData', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
+                                                     ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', CPF_OPT)],
+               None, FUNC_NATIVE | FUNC_PUBLIC, 'Object')
     contexts = ['BCONTEXT_Self', 'BCONTEXT_Instigator']
     p.add_export(toy.imp['Enum'], 'EBehaviorContext', w32(0) + toy.none + w32(0) + w32(len(contexts)) + b''.join(p.fname(c) for c in contexts),
                  outer=behavior_base)
@@ -428,6 +436,7 @@ def build_willowgame():
     object_cls = T.cls('Object')
     T.function(object_cls, 'Add_IntInt', [('Int', 'P0', 0), ('Int', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Int', native=146, friendly='+')
     T.function(object_cls, 'EqualEqual_IntInt', [('Int', 'P0', 0), ('Int', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=154, friendly='==')
+    T.function(object_cls, 'EqualEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=114, friendly='==')
     T.function(object_cls, 'NotEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=119, friendly='!=')
     T.cls('GlobalAttributeValueResolver')
     reward = T.struct_(0, 'MissionRewardData')
@@ -660,6 +669,36 @@ def build_willowgame():
     T.function(remote, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
                                                   ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
                remote_body, locals_=[('Struct', 'Handle'), ('Object', 'Provider')])
+    # Behavior_PlayAIMissionContextDialog (the class the bridge's handler covers) as a probe of GetBehaviorContext: it resolves its PlayerWhoUsedMe
+    # struct and selects output 0 for None, 2 for SelfObject and 1 for any other object, so the cascade line says what the resolver returned.
+    engine_pkg = p.add_import_full('Package', 0, 'Engine')
+    base_cls = p.add_import_full('Class', engine_pkg, 'BehaviorBase')
+    get_context = p.add_import_full('Function', base_cls, 'GetBehaviorContext')
+    context_struct = p.add_import_full('ScriptStruct', base_cls, 'BehaviorContextData')
+    activate_fn = p.add_import_full('Function', kernel_cls, 'ActivateBehaviorOutputLink')
+    probe = T.cls('Behavior_PlayAIMissionContextDialog')
+    who_prop = T.prop('Struct', probe, 'PlayerWhoUsedMe', type_ref=context_struct)
+
+    def probe_body(ids):
+        a = Asm()
+        a.raw(0x0F); a.local(ids, 'Resolved')
+        a.call(get_context, lambda: a.instance(who_prop), lambda: a.local(ids, 'SelfObject'), lambda: a.local(ids, 'MyInstigatorObject'),
+               lambda: a.local(ids, 'OtherEventParticipantObject'), lambda: a.raw(0x4A))
+        def select(n): a.call(activate_fn, lambda: (a.raw(0x48), a.ref(ids['KernelInfo'])), lambda: a.int_const(n))
+        none_at = a.jump_if_not(lambda: (a.raw(119), a.local(ids, 'Resolved'), a.raw(0x2A), a.raw(0x16)))       # Resolved != None
+        self_at = a.jump_if_not(lambda: (a.raw(114), a.local(ids, 'Resolved'), a.local(ids, 'SelfObject'), a.raw(0x16)))   # Resolved == SelfObject
+        select(2)
+        end_a = a.jump()
+        a.patch(self_at)
+        select(1)
+        end_b = a.jump()
+        a.patch(none_at)
+        select(0)
+        a.patch(end_a); a.patch(end_b)
+        a.return_nothing(); a.end(); return a
+    T.function(probe, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
+                                                 ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
+               probe_body, locals_=[('Object', 'Resolved')])
     show = T.cls('Behavior_ShowMissionInterface')
 
     def show_body(ids):        # ContextObject.Controller.ClientGFxPlayMovie(SelfObject, SelfObject)
@@ -905,7 +944,7 @@ def build_mission(director=False, on_enabled=True):
 
         def vlink(prop, kind, first, count):
             return t.name_('PropertyName', prop) + t.byte('VariableLinkType', kind) + t.byte('ConnectionIndex', 0) + sub('LinkedVariables', first, count) + none
-        BVAR_OBJECT, BVAR_NAMED, LINK_OUTPUT, LINK_CONTEXT = 1, 5, 2, 3
+        BVAR_OBJECT, BVAR_NAMED, LINK_OUTPUT, LINK_CONTEXT, LINK_INPUT = 1, 5, 2, 3, 1
         brain_behaviors = [(a_, 1, 3), (b_, 4, 2), (c_, 6, 2), (d_, 0, 0), (r_, 0, 0), (x_, 0, 0)]    # (object, first link, link count); X has the Context link
         brain_links = [link(0, 2), link(4, 0), link(1, 1), link(3, 1), link(4, 0), link(2, 1), link(4, 0), link(5, 1)]
         brain = (t.name_('BehaviorSequenceName', 'Brain') + t.bool('bEnabledOnSpawn', True)
@@ -923,10 +962,44 @@ def build_mission(director=False, on_enabled=True):
                              + sub('OutputVariables', 0, 0) + sub('OutputLinks', 0, 1) + none)
                    + t.array('BehaviorData2', 1, t.obj('Behavior', y_) + sub('LinkedVariables', 0, 0) + sub('OutputLinks', 0, 0) + none)
                    + t.array('ConsolidatedOutputLinkData', 1, link(0, 0)) + none)
+        # Probes (enabled on spawn, its own OnUsed event so the same press runs it): probe behaviors whose PlayerWhoUsedMe carries a selector, two
+        # Input links onto the runner's struct fill, and E (a mission interface behavior) whose Context link resolves to nothing, with a default link to Z.
+        def context_tags(selector, object_ref=0):
+            return t.struct_('PlayerWhoUsedMe', 'BehaviorContextData', (t.obj('ContextObject', object_ref) if object_ref else b'') + t.byte('BehaviorContext', selector) + none)
+
+        def probe(name, selector, object_ref=0):
+            return p.add_export(chain('WillowGame', 'Behavior_PlayAIMissionContextDialog'), name, w32(0) + context_tags(selector, object_ref) + none, outer=provider)
+        probes = [probe('Probe_Self', 0), probe('Probe_Instigator', 1), probe('Probe_Other', 2), probe('Probe_EventData', 3), probe('Probe_Object', 4, other_provider),
+                  probe('Probe_EmptyObject', 4), probe('Probe_Unknown', 5),
+                  probe('Probe_Filled', 0, other_provider),        # selector 0 and an object in the data: the Input link below must overwrite both
+                  probe('Probe_EmptyLink', 0, other_provider),     # the Input link resolves to nothing: ContextObject becomes None and the selector 4
+                  probe('Probe_AfterEmpty', 0)]                    # Z: reached only by the default link of the skipped behavior
+        skipped = p.add_export(chain('WillowGame', 'Behavior_ShowMissionInterface'), 'Behavior_ShowMissionInterface_E', w32(0) + none, outer=provider)
+        order = probes + [skipped]
+        z_index = len(probes) - 1
+        event_targets = [i for i in range(len(order)) if i != z_index]
+        default_link = t.int('LinkIdAndLinkedBehavior', z_index + (255 << 24) - (1 << 32)) + t.float('ActivateDelay', 0.0) + none      # id 255 = -1
+        behavior_rows = b''
+        for i, obj in enumerate(order):
+            first, count, vfirst, vcount = 0, 0, 0, 0
+            if obj == probes[7]: vfirst, vcount = 1, 1          # Probe_Filled: Input link (property PlayerWhoUsedMe) -> variable 0 (named "Who")
+            if obj == probes[8]: vfirst, vcount = 2, 1          # Probe_EmptyLink: Input link -> variable 2 (named "Nobody")
+            if obj == skipped: vfirst, vcount, first, count = 3, 1, len(event_targets), 1     # E: Context link -> "Nobody"; default link to Z
+            behavior_rows += t.obj('Behavior', obj) + sub('LinkedVariables', vfirst, vcount) + sub('OutputLinks', first, count) + none
+        probe_links = b''.join(link(i, 2) for i in event_targets) + default_link
+        probes_seq = (t.name_('BehaviorSequenceName', 'Probes') + t.bool('bEnabledOnSpawn', True)
+                      + t.array('EventData2', 1, t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', 'OnUsed') + none)
+                                + sub('OutputVariables', 0, 1) + sub('OutputLinks', 0, len(event_targets)) + none)
+                      + t.array('BehaviorData2', len(order), behavior_rows)
+                      + t.array('VariableData', 3, var('Who', BVAR_NAMED) + var('Who', BVAR_OBJECT) + var('Nobody', BVAR_NAMED))
+                      + t.array('ConsolidatedOutputLinkData', len(event_targets) + 1, probe_links)
+                      + t.array('ConsolidatedVariableLinkData', 4, vlink('Instigator', LINK_OUTPUT, 0, 1) + vlink('PlayerWhoUsedMe', LINK_INPUT, 1, 1)
+                                + vlink('PlayerWhoUsedMe', LINK_INPUT, 2, 1) + vlink('Context', LINK_CONTEXT, 3, 1))
+                      + t.array('ConsolidatedLinkedVariables', 4, w32(1, 0, 2, 2)) + none)
         sequences = [brain, reactor, t.name_('BehaviorSequenceName', 'On') + t.bool('bEnabledOnSpawn', on_enabled) + none,
-                     t.name_('BehaviorSequenceName', 'Off') + t.bool('bEnabledOnSpawn', False) + none]
+                     t.name_('BehaviorSequenceName', 'Off') + t.bool('bEnabledOnSpawn', False) + none, probes_seq]
         cls_, sup, outer_, name_, _ = p.exports[provider - 1]
-        p.exports[provider - 1] = (cls_, sup, outer_, name_, w32(0) + t.array('BehaviorSequences', len(sequences), b''.join(sequences)) + none + w32(0))
+        p.exports[provider - 1] = (cls_, sup, outer_, name_, w32(0) + t.array('BehaviorSequences', len(sequences), b''.join(sequences)) + none + w32(0, 0))
     cls_, sup, outer, name, _ = p.exports[mission - 1]
     p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
                               + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + none)
@@ -1219,6 +1292,14 @@ with tempfile.TemporaryDirectory() as folder:
         check(f'H {name} A and B not enabled', 'Behavior_IsSequenceEnabled_A(Missing) -> 1' in lines and 'Behavior_IsSequenceEnabled_B(Off) -> 1' in lines, lines)
         check(f'H {name} D: unresolved provider selects nothing', 'Behavior_IsSequenceEnabled_D(On) ->' in lines, lines)
         if enabled:
+            # The resolver (NATIVE_BEHAVIOR_CONTEXT.md): selector 0 gives SelfObject (output 2); 1, 2, 3 and unknown give None (0: a kernel-run behavior has no
+            # instigator or participant, and EventData is never consulted); 4 gives the struct's own ContextObject (1), or None when it is empty. The runner
+            # overwrote the selector and ContextObject of Probe_Filled with the player (output 1, not Self's 2); the empty Input link left None (0) although
+            # the data held an object; the behavior with an empty Context link did not run, and its default link reached the last probe (2).
+            for probe_name, expected in (('Probe_Self', 2), ('Probe_Instigator', 0), ('Probe_Other', 0), ('Probe_EventData', 0), ('Probe_Object', 1),
+                                         ('Probe_EmptyObject', 0), ('Probe_Unknown', 0), ('Probe_Filled', 1), ('Probe_EmptyLink', 0), ('Probe_AfterEmpty', 2)):
+                check(f'H probe {probe_name}', f'{probe_name} -> {expected}' in lines, [l for l in lines if l.startswith(probe_name)])
+            check('H empty Context link: behavior skipped', not any('Behavior_ShowMissionInterface_E' in line for line in lines), lines)
             # C: the path (Marcus's provider, where "On" is enabled) wins over the SequenceProvider reference (another provider): output 0; the remote
             # event fires and the cascade stops there: Y runs in the Reactor sequence, X (the interface) is never reached
             check('H on: C enabled, path over reference', 'Behavior_IsSequenceEnabled_C(On) -> 0' in lines, lines)

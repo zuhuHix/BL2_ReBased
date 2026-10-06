@@ -1,6 +1,7 @@
 #include "behavior.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <optional>
 
 namespace vm {
@@ -326,25 +327,57 @@ void BehaviorProvider::fireEvent(const std::string& event, const std::map<std::s
         if (sequences_[s].enabled) fireIn(s, event, outputs, linkId, payload);
 }
 
-std::vector<ObjectPtr> BehaviorProvider::contexts(const Behavior& behavior, ObjectPtr own) const {
-    for (const auto& link : behavior.variables) {
-        if (link.type != "BVARLINK_Context") continue;
-        const auto& variables = sequences_[size_t(behavior.sequence)].variables;
-        std::vector<ObjectPtr> result;
-        for (const int index : link.variables) {
-            const Variable* variable = &variables[size_t(index)];
-            if (variable->type == "BVAR_NamedVariable" || variable->type == "BVAR_NamedKismetVariable") {
-                const std::string name = variable->name;
-                variable = nullptr;
-                if (variables[size_t(index)].type == "BVAR_NamedVariable")      // a Kismet reference is not resolved here
-                    for (const auto& candidate : variables)
-                        if (candidate.name == name && candidate.type != "BVAR_NamedVariable" && candidate.type != "BVAR_NamedKismetVariable") { variable = &candidate; break; }
-            }
-            if (variable && variable->type == "BVAR_Object" && variable->live) result.push_back(variable->live);
+std::vector<ObjectPtr> BehaviorProvider::linkedObjects(const Behavior& behavior, const VariableLink& link) const {
+    const auto& variables = sequences_[size_t(behavior.sequence)].variables;
+    std::vector<ObjectPtr> result;
+    for (const int index : link.variables) {
+        const Variable* variable = &variables[size_t(index)];
+        if (variable->type == "BVAR_NamedVariable" || variable->type == "BVAR_NamedKismetVariable") {
+            const std::string name = variable->name;
+            variable = nullptr;
+            if (variables[size_t(index)].type == "BVAR_NamedVariable")      // a Kismet reference is not resolved here
+                for (const auto& candidate : variables)
+                    if (candidate.name == name && candidate.type != "BVAR_NamedVariable" && candidate.type != "BVAR_NamedKismetVariable") { variable = &candidate; break; }
         }
-        return result;
+        if (variable && variable->type == "BVAR_Object" && variable->live) result.push_back(variable->live);
     }
+    return result;
+}
+
+std::vector<ObjectPtr> BehaviorProvider::contexts(const Behavior& behavior, ObjectPtr own) const {
+    for (const auto& link : behavior.variables)
+        if (link.type == "BVARLINK_Context") return linkedObjects(behavior, link);
     return {own};
+}
+
+namespace {
+bool isContextData(const Value* property) {
+    const Aggregate* data = property && property->kind == Value::Kind::Struct ? property->aggregate() : nullptr;
+    if (!data) return false;
+    std::string type = data->typeName;
+    std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return type.size() >= 19 && type.compare(type.size() - 19, 19, "behaviorcontextdata") == 0;
+}
+}
+
+void BehaviorProvider::bindContextInputs(Behavior& behavior) {
+    for (const auto& link : behavior.variables) {
+        if (link.type != "BVARLINK_Input") continue;
+        Value* property = runtime_.property(*behavior.object, link.property);
+        if (!isContextData(property)) continue;
+        const auto objects = linkedObjects(behavior, link);
+        if (Value* object = property->field("ContextObject")) *object = Value::makeObject(objects.empty() ? nullptr : objects.front());
+        if (Value* selector = property->field("BehaviorContext")) *selector = Value::makeByte(4);
+    }
+}
+
+void BehaviorProvider::clearContextInputs(Behavior& behavior) {
+    for (const auto& link : behavior.variables) {
+        if (link.type != "BVARLINK_Input") continue;
+        Value* property = runtime_.property(*behavior.object, link.property);
+        if (!isContextData(property)) continue;
+        if (Value* object = property->field("ContextObject")) *object = Value::makeObject(nullptr);
+    }
 }
 
 // NATIVE_MISSION_DISPATCH.md A1 (UNVERIFIED): every matching entry of the sequence, gated, then its links in data order;
@@ -496,7 +529,9 @@ void BehaviorProvider::runThread(int s, int b, const std::string& event, bool re
         run_.initialRun = !resumed;
         run_.hasLinkedOutputs = behavior.length > 0;
         run_.state = state;
+        bindContextInputs(behavior);
         auto ids = handler->second(*this, behavior, event);
+        clearContextInputs(behavior);
         const double wait = run_.wait;
         state = run_.state;
         if (behavior.defaultOutput) ids.push_back(-1);

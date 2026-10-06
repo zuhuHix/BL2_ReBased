@@ -95,6 +95,10 @@ public:
         bool interfaceOpened = false;
         std::string movie, director;           // object paths
         std::vector<std::string> cascade;      // every script behavior of the run: "name(sequence) -> selected output ids"
+        // The on-use dialog (Behavior_PlayAIMissionContextDialog -> WillowAIPawn.PlayOnUseDialog, NATIVE_BEHAVIOR_CONTEXT.md): the tag it passes to the
+        // pawn's GearboxDialogComponent.TriggerEvent (the global VO_NPC_OnUse_* tag), the speaker (the component's owner, Marcus) and the other object
+        // (the player pawn's class). Empty when the dialog stayed silent. Playing the line needs the two-step group dispatch and is not done.
+        std::string onUseTag, onUseSpeaker, onUseTarget;
     };
     // `completed` is what MissionDependenciesMet sees (as for accept()).
     MarcusUse useMarcus(const std::set<std::string>& completed);
@@ -120,7 +124,8 @@ private:
     ObjectPtr controller_, tracker_, world_, replication_, globals_, globalsDefinition_;
     ObjectPtr waypoint_, playerPawn_, marcusPawn_, director_;
     std::unique_ptr<BehaviorProvider> marcusProvider_;      // Marcus's AI-definition provider, registered on his consumer (PID marcusPid_)
-    static constexpr int marcusPid_ = 1;                   // the ConsumerHandle.PID the bridge gives him (any non-zero value)
+    static constexpr int marcusPid_ = 0;                   // the first handle the consumer registration gives out (UNVERIFIED: the allocator's base); -1 is invalid
+    ObjectPtr dialogComponent_, dialogGlobals_;            // his GearboxDialogComponent (archetype) and GD_Globals.Dialog.DialogGlobals
     std::vector<int>* selected_ = nullptr;                 // the running script behavior's recorded output ids
     MarcusUse use_;
     void bindUse();

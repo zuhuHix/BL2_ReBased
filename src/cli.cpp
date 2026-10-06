@@ -101,7 +101,8 @@ std::string missionListsJson(const vm::MissionScript::MissionLists& lists) {
 // The result of the use key on Marcus (--slice-run `use`, --mission-run `script:use`).
 std::string useJson(const vm::MissionScript::MarcusUse& use) {
     std::string out = "{\"interface_opened\":" + std::string(use.interfaceOpened ? "true" : "false") + ",\"movie\":" + quote(use.movie) +
-                      ",\"director\":" + quote(use.director) + ",\"cascade\":[";
+                      ",\"director\":" + quote(use.director) + ",\"on_use_tag\":" + quote(use.onUseTag) + ",\"on_use_speaker\":" + quote(use.onUseSpeaker) +
+                      ",\"on_use_target\":" + quote(use.onUseTarget) + ",\"cascade\":[";
     for (size_t i = 0; i < use.cascade.size(); ++i) out += (i ? "," : "") + quote(use.cascade[i]);
     return out + "]}";
 }
@@ -722,7 +723,7 @@ int main(int argc, char** argv) {
             std::set<std::string> completed;
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
-                                          "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface"};
+                                          "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {

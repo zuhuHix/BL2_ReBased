@@ -1053,8 +1053,8 @@ Source: `NATIVE_MARCUS_USE_CHAIN.md` (and `NATIVE_USE_INTERACTION.md`, `NATIVE_M
   `BehaviorKernel.ActivateBehaviorEventFromScript` (None provider fires nothing; an omitted filter is -1).
 - **Needed beyond the three (each has a note except the last):** `BehaviorKernel.ActivateBehaviorOutputLink` (NATIVE_MISSION_DISPATCH A2: appends the id to the
   running behavior's list), `Object.QueryInterface` (NATIVE_CONTROLLER_HELPERS; a Core native, structural `Runtime::implements` stand-in; it worked for
-  `IBehaviorConsumer` and `IMissionDirector` on Marcus), and `WillowPawn.GetBehaviorConsumerHandle` (**no note**: an accessor returning the pawn's own
-  `ConsumerHandle` field, scoped to the VM Marcus). Also a small VM change: `Runtime::overrideScript` lets a host binding replace a script function; used only for
+  `IBehaviorConsumer` and `IMissionDirector` on Marcus), and `WillowPawn.GetBehaviorConsumerHandle` (a plain read of the pawn's own `ConsumerHandle` field, scoped to the VM Marcus; NATIVE_BEHAVIOR_CONTEXT.md later
+  described it: the field must start at -1 and be assigned once at consumer registration, which swap 6d does). Also a small VM change: `Runtime::overrideScript` lets a host binding replace a script function; used only for
   the controller's `ClientGFxPlayMovie`, which is presentation and is reported as `interfaceOpened` (movie definition, director) instead of run.
 - **Real data (`--slice-run ... use`):** the nine checks answer "not enabled" (outputs 1: three names have no sequence, six belong to other missions), the context
   dialog runs, `Behavior_HasMissions` selects 0 while the Fire mission is eligible, in progress or redeemable and 1 when the tracker has no such mission for
@@ -1065,8 +1065,8 @@ Source: `NATIVE_MARCUS_USE_CHAIN.md` (and `NATIVE_USE_INTERACTION.md`, `NATIVE_M
   spawn reach four world operations that nothing here runs, listed at the boundary and in the script notes: `Behavior_AIHold`, `Behavior_SetPawnThrottleData`,
   `Behavior_ChangeUsability`, `Behavior_SetUsableIcon`.
 - **Stubs newly reached:** one, `BehaviorBase.GetBehaviorContext(behaviorcontextdata,object,object,object,behaviorparameters)`, from
-  `Behavior_PlayAIMissionContextDialog` (one call per press). It is an undocumented native; as a stub it returns None, so the dialog behavior's script ends
-  without calling `WillowAIPawn.PlayOnUseDialog` (the dialog on use is therefore silent, as before this swap). Needs a note (BehaviorBase context resolution).
+  `Behavior_PlayAIMissionContextDialog` (one call per press). It is the pure resolver described in NATIVE_BEHAVIOR_CONTEXT.md (not a kernel context lookup); as a stub it returned None, so the dialog behavior's script ended
+  without calling `WillowAIPawn.PlayOnUseDialog` (the dialog on use was silent). The stub also needed the runner's struct fill (swap 6d).
 - **Tests:** `mission-script-synthetic` scenario H (packages `UseChainOn` / `UseChainOff`): toy Marcus with a provider at the stock path; checks for a sequence
   that does not exist, one that is disabled, one that is enabled (fires its remote event; the cascade stops, the interface is not reached), a check whose
   path names no provider (selects nothing), the path winning over a `SequenceProvider` reference, and the payload variable reaching the Context-linked
@@ -1078,4 +1078,54 @@ Source: `NATIVE_MARCUS_USE_CHAIN.md` (and `NATIVE_USE_INTERACTION.md`, `NATIVE_M
 ### Checks (2026-10-06, CMake Release and UE module rebuilt first)
 - `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
 - **`tools/test_quest.ps1`: first run PASS checks=90 errors=0, resume PASS checks=11 errors=0** (88 before, two new use-chain checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6d: Marcus's on-use dialog runs as script (2026-10-06)
+
+Source: `NATIVE_BEHAVIOR_CONTEXT.md` (lane G21). Every rule is UNVERIFIED (read from native code, not confirmed in the running game). The stub that
+left the on-use dialog silent (`BehaviorBase.GetBehaviorContext`) is gone; `Behavior_PlayAIMissionContextDialog` and `WillowAIPawn.PlayOnUseDialog` now run
+their own script on the VM and pick the tag from Marcus's own lists. Playing the line is an open item (below).
+
+- **`GetBehaviorContext` (pure resolver, `MissionScript::bindUse`):** the struct's `BehaviorContext` selector picks the base object: 0 `SelfObject`, 1 the
+  instigator, 2 the other participant, 4 the struct's own `ContextObject`; 3 (EventData) and anything else give None. A non-empty `InstancedDataContextName`
+  would ask the object's instance data; that path is not on Marcus's route and is listed as not implemented. The static and interface siblings are not bound
+  (not on the route).
+- **The thread runner's struct fill (`BehaviorProvider::bindContextInputs`):** before a behavior runs, an Input link onto a struct property of type
+  `BehaviorContextData` stores the first resolved object in `ContextObject` (None when nothing resolves) and sets the selector to 4; after the run
+  `ContextObject` is None again (the selector stays 4). Kernel-run behaviors get `SelfObject` = the consumer's pawn and no instigator, participant or event
+  data. A Context link that resolves to nothing skips the behavior for that pass (no run, no output); the provider then follows the default link only when the
+  behavior supports one. (A behavior with no Context link runs once on the consumer's own pawn, as before.)
+- **The consumer handle:** the VM Marcus's `ConsumerHandle.PID` starts at -1 (invalid) and is assigned once when his provider registers (the emulation of
+  `InitializeBehaviorProviders`, in `placeMarcus`): 0, the first slot (UNVERIFIED: the allocator's base). `GetBehaviorConsumerHandle` stays a plain field read;
+  the kernel natives treat -1 (and any other value) that is not his registered handle as "unregistered".
+- **What the guard needs, from his stock data (nothing invented):** `MyWillowMind` is a bare `WillowMind` VM object whose `AIClass` is the archetype's AI class
+  (`GD_Marcus.Character.CharClass_Marcus`, loaded, which names his `AIDef`); his `DialogComponent` is the archetype's component (loaded). The mind carries no
+  native mind state (nothing else reads it on this route). `PawnsUsingMe` is empty, the controller is the VM player controller. Building the mind was small.
+- **The tag:** `PlayOnUseDialog` counts the director lists (redeemable, then eligible, then in progress, then none: `DET_OnUse_MissionComplete`,
+  `..._MissionsAvailable`, `..._AllMissionsInProgress`, `..._NoMissions`, fetched through `WillowDialogGlobalsDefinition.Get`, bound to return
+  `GD_Globals.Dialog.DialogGlobals`) and calls the pawn's `GearboxDialogComponent.TriggerEvent(tag, player)`. That call is bound on Marcus's component and reported
+  (tag path, speaker = the component's owner, other object = the player pawn's class): `MarcusUse::onUseTag / onUseSpeaker / onUseTarget`, a host event
+  `OnUseDialog` (`on_use_dialog` in the CLI), printed by `--slice-run ... use`.
+  Real data: NotStarted gives `VO_NPC_OnUse_MissionsAvailable`, Active `VO_NPC_OnUse_AllMissionsInProgress`; in the quest suite the turn-in press gives
+  `VO_NPC_OnUse_MissionComplete` and the press after completion `VO_NPC_OnUse_NoMissions`.
+- **Playback: OPEN ITEM.** How the host plays dialog today: `DialogSystem` (src/dialog.*) plays a line for `Behavior_TriggerDialogEvent` with a group, a tag, Talk
+  acts and a registered talker (NATIVE_DIALOG.md), and the host's line player (SLICE_AUDIO_CHAIN.md) plays the chosen audio event. The on-use tags are
+  different: they sit in the generic group `GD_Dialog_NPC.Groups.DialogGroup_NPC`, whose Talk acts have no Marcus entry, so the **no-match output** runs a Trigger act
+  that fires the implementation tag (`DET_NPC_OnUse_*`) in Marcus's own group `DialogGroup_NPC_Marcus`. `DialogSystem` has no component-level `TriggerEvent` group search,
+  no no-match output and no Trigger acts, so this two-step dispatch is **not implemented** and the tag is reported, not played (the host logs it with "not played").
+  The `MissionComplete` tag may be silent even then (note: its generic event has no output action).
+- **Stubs:** none newly reached; `BehaviorBase.GetBehaviorContext` is gone. Quest log: 9 after accept, 15 after turn-in (the pre-6b counts).
+  Newly bound natives needed by the route: `WillowDialogGlobalsDefinition.Get` (listed in NATIVE_DIALOG.md only as "see package", the globals object is what the note
+  names) and `GearboxDialogComponent.TriggerEvent` (reported, scoped).
+- **Tests:** `mission-script-synthetic` scenario H gained a `Probes` sequence in the toy provider: probe behaviors for selectors 0, 1, 2, 3, 4 (with and without
+  an object), an unknown selector, an Input link that overwrites both the selector and the object in the data (the player: not Self), an Input link that resolves to
+  nothing (None, the data's object is gone), and a behavior whose Context link is empty (skipped, its default link reaches the next probe). Quest suite:
+  `use_chain_picks_on_use_dialog_tag` (the tag of the first press: missions available) and `use_chain_on_use_tag_follows_mission_state` (the turn-in press: mission
+  complete) added; every earlier name unchanged. (The first name says "plays" as the coordinator named it; what the host does is log the tag, not play it.)
+- **Not covered:** the runner's `ContextObject` reset after the run (no observer: it is rewritten before the next run); more than one object resolving into a
+  `BehaviorContextData` input (only the first is stored, as the note says); `StaticGetBehaviorContext`, `StaticGetAllBehaviorContexts`, `GetBehaviorContextInterface`.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (with class bodies exact), UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=92 errors=0, resume PASS checks=11 errors=0** (90 before, two new on-use checks).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

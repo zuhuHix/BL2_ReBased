@@ -459,6 +459,10 @@ void UOpenWillowQuest::Pump()
                 Skills && Skills->GetLevel() == FCString::Atoi(*A) ? TEXT("same") : TEXT("DIFFERENT"));
             break;
         }
+        case K::OnUseDialog:   // PlayOnUseDialog's TriggerEvent on Marcus's dialog component: reported, not played (two-step group dispatch not implemented)
+            LastOnUseTag = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST on-use dialog tag from Marcus's chain: %s (speaker %s, other %s; not played)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
+            break;
         case K::MissionInterface:   // Behavior_ShowMissionInterface reached the controller's ClientGFxPlayMovie; the screen itself is not hosted
             ++MissionInterfacesOpened;
             LastInterfaceMovie = A;
@@ -985,6 +989,8 @@ void UOpenWillowQuest::RunTest(float Delta)
             // The use key went through his OnUsed chain: it opened the mission interface (HasMissions saw the Fire mission), after nine checks that
             // all said "not enabled" (three names have no sequence, six belong to other missions)
             Check(MissionInterfacesOpened == 1 && LastInterfaceMovie == TEXT("UI_Mission.MissionInterface_Definition"), TEXT("use_chain_reaches_mission_interface"));
+            // PlayOnUseDialog picked its tag from Marcus's own lists: Fire is eligible, nothing redeemable, so "missions available"
+            Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionsAvailable"), TEXT("use_chain_picks_on_use_dialog_tag"));
             int32 NotEnabled = 0, Seen = 0;
             for (const FString& Line : LastUseCascade)
                 if (Line.StartsWith(TEXT("Behavior_IsSequenceEnabled"))) { ++Seen; if (Line.EndsWith(TEXT("-> 1"))) ++NotEnabled; }
@@ -1164,6 +1170,8 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 18: {
         Check(Status() == 3, TEXT("use_key_turns_in_mission"));
+        // the same press's on-use tag, now that Marcus's redeemable list has the mission: "mission complete"
+        Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionComplete"), TEXT("use_chain_on_use_tag_follows_mission_state"));
         Check(Rewards == 1, TEXT("xp_reward_granted_once"));
         const UOpenWillowSkills* Skills = Walker->GetSkills();
         // The tool's own amount at the same stage (tools/slice_values.py evaluates the same truncation rule apart).

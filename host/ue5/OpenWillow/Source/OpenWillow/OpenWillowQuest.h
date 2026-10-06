@@ -78,6 +78,9 @@ private:
     // interface (the host answers that call), the movie definition it named, and the behaviors of the last run ("name(sequence) -> output ids").
     int32 MissionInterfacesOpened = 0;
     FString LastInterfaceMovie;
+    // The on-use dialog his chain asked for (WillowAIPawn.PlayOnUseDialog -> the component's TriggerEvent): the global VO_NPC_OnUse_* tag of the last press.
+    // Reported only: the line is not played (the generic group's no-match output and Trigger act, then Marcus's own group, are not dispatched here).
+    FString LastOnUseTag;
     TArray<FString> LastUseCascade;
     int32 Respawns = 0;
     int32 Checks = 0;

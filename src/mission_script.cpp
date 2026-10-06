@@ -434,8 +434,24 @@ bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, c
     // The directive table is archetype data: a reference to a MissionDirectivesDefinition export, loaded here (the VM does not load references).
     Value& directives = required(runtime_, *director_, "MissionDirectives");
     if (directives.kind == Value::Kind::Object && directives.o) directives = Value::makeObject(loadRef(directives));
+    // The pawn's constructor leaves its ConsumerHandle at -1 (invalid); InitializeBehaviorProviders assigns it once, at consumer registration (below).
     if (Value* handle = runtime_.property(*director_, "ConsumerHandle"))
-        if (Value* pid = handle->field("PID")) *pid = Value::makeInt(marcusPid_);
+        if (Value* pid = handle->field("PID")) *pid = Value::makeInt(-1);
+    // What PlayOnUseDialog's guard needs, from his stock data: a mind whose AIClass is the archetype's AI class (which names his AIDef), and his
+    // dialog component. The mind is the bare WillowMind object (no native mind state); the class and the component are loaded from the archetype.
+    Value* aiClass = runtime_.property(*director_, "AIClass");
+    if (aiClass && aiClass->kind == Value::Kind::Object && aiClass->o && aiClass->o->resourcePackage && aiClass->o->resourceIndex > 0) {
+        *aiClass = Value::makeObject(loadRef(*aiClass));
+        if (Value* mind = runtime_.property(*director_, "MyWillowMind")) {
+            ObjectPtr willowMind = runtime_.instantiate(runtime_.findClass("WillowGame.WillowMind"));
+            required(runtime_, *willowMind, "AIClass") = *aiClass;
+            *mind = Value::makeObject(willowMind);
+        }
+    }
+    Value* component = runtime_.property(*director_, "DialogComponent");
+    if (component && component->kind == Value::Kind::Object && component->o && component->o->resourcePackage && component->o->resourceIndex > 0)
+        dialogComponent_ = runtime_.instantiateExport(component->o->resourcePackage, component->o->resourceIndex, 8);
+    if (dialogComponent_) *component = Value::makeObject(dialogComponent_);
     marcusPawn_ = director_;      // the same pawn is the waypoint's Marcus toucher
     // His AI-definition provider: registered on his consumer (every sequence disabled, then the bEnabledOnSpawn ones enabled). The enable
     // conditions of the other missions' sequences are not applied: none of those missions exists in the tracker, so every verdict would be
@@ -452,7 +468,10 @@ bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, c
                 std::vector<int>* const outer = selected_;
                 selected_ = &ids;
                 Function* apply = runtime_.findMethod(behavior.object->cls, "ApplyBehaviorToContext");
-                for (const ObjectPtr& context : provider.contexts(behavior, director_)) {
+                // An empty context list: the behavior does not run for this pass (no line, no output); the provider still takes its default link
+                // when the behavior supports one (NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED).
+                const auto contexts = provider.contexts(behavior, director_);
+                for (const ObjectPtr& context : contexts) {
                     if (!apply) { errors.push_back("no ApplyBehaviorToContext on " + behavior.cls); break; }
                     std::vector<Value> args(apply->params.size());
                     for (size_t i = 0; i < args.size(); ++i) {
@@ -462,6 +481,7 @@ bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, c
                     run([&] { runtime_.call(*apply, behavior.object, std::move(args)); });
                 }
                 selected_ = outer;
+                if (contexts.empty()) return ids;
                 const Value* sequence = runtime_.property(*behavior.object, "SequenceName");
                 std::string line = behavior.name + (sequence && !sequence->s.empty() ? "(" + sequence->s + ")" : "") + " ->";
                 for (const int id : ids) line += " " + std::to_string(id);
@@ -473,6 +493,9 @@ bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, c
         marcusProvider_->reportAtBoundary("WillowGame.Behavior_SetPawnThrottleData");
         marcusProvider_->reportAtBoundary("WillowGame.Behavior_ChangeUsability");
         marcusProvider_->reportAtBoundary("WillowGame.Behavior_SetUsableIcon");
+        // InitializeBehaviorProviders: while the handle is -1 the pawn registers as a consumer and keeps the answer (once).
+        if (Value* handle = runtime_.property(*director_, "ConsumerHandle"))
+            if (Value* pid = handle->field("PID"); pid && pid->integer() == -1) *pid = Value::makeInt(marcusPid_);
         run([this] { marcusProvider_->registerConsumer(); });
         for (const auto& line : marcusProvider_->boundary) notes_.push_back("Marcus provider, reached at registration but not run: " + line);
         for (const auto& error : marcusProvider_->errors) errors.push_back("Marcus provider: " + error);
@@ -528,11 +551,51 @@ void MissionScript::bindUse() {
             return Value::makeObject(c.in(0).o->outer);
         return Value::makeObject(nullptr);
     });
-    // WillowPawn.GetBehaviorConsumerHandle (IBehaviorConsumer): the pawn's own ConsumerHandle field (an accessor; no note describes it, UNVERIFIED).
+    // BehaviorBase.GetBehaviorContext (NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED): a pure resolver over its arguments, no kernel state. The struct's
+    // BehaviorContext selector picks the base object: 0 SelfObject, 1 MyInstigatorObject, 2 OtherEventParticipantObject, 4 the struct's own
+    // ContextObject; 3 (EventData) and anything else give None. A non-empty InstancedDataContextName would ask the object's instance data (not on this
+    // route, not implemented: listed with the stubs). The thread runner fills ContextObject and sets the selector (BehaviorProvider::bindContextInputs).
+    bind("Engine.BehaviorBase.GetBehaviorContext", [this](NativeCall& c) {
+        const Value& data = c.in(0);
+        const Value* selector = data.field("BehaviorContext");
+        const Value* name = data.field("InstancedDataContextName");
+        ObjectPtr base;
+        switch (selector ? selector->integer() : 0) {
+            case 0: base = c.in(1).o; break;
+            case 1: base = c.in(2).o; break;
+            case 2: base = c.in(3).o; break;
+            case 4: if (const Value* object = data.field("ContextObject")) base = object->o; break;
+            default: break;
+        }
+        if (base && name && !name->s.empty() && name->s != "None") notImplemented("BehaviorBase.GetBehaviorContext instance-data path");
+        return Value::makeObject(name && !name->s.empty() && name->s != "None" ? nullptr : base);
+    });
+    // WillowPawn.GetBehaviorConsumerHandle (IBehaviorConsumer, NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED): a plain read of the pawn's own ConsumerHandle field,
+    // whatever it holds (-1 until the consumer is registered).
     bind("WillowGame.WillowPawn.GetBehaviorConsumerHandle", [this](NativeCall& c) {
         if (c.self != director_) return outsideBinding(c);
         return required(runtime_, *director_, "ConsumerHandle");
     });
+    // WillowDialogGlobalsDefinition.Get: the configured globals object (GD_Globals.Dialog.DialogGlobals of the mission's package); only the on-use
+    // tags are read from it. GearboxDialogComponent.TriggerEvent(EventTag, Other, ObjectParameter, optional EventData): not played here; reported
+    // (the tag, the speaker, the other object) for the host. Scoped to Marcus's component; returns the zero event data.
+    if (dialogComponent_) {
+        bind("WillowGame.WillowDialogGlobalsDefinition.Get", [this](NativeCall&) {
+            if (!dialogGlobals_) {
+                const auto package = mission_.definition()->resourcePackage;
+                const int32_t index = package ? runtime_.findExport(*package, "GD_Globals.Dialog.DialogGlobals") : 0;
+                if (index > 0) dialogGlobals_ = runtime_.instantiateExport(package, index, 4);
+            }
+            return Value::makeObject(dialogGlobals_);
+        });
+        bind("GearboxFramework.GearboxDialogComponent.TriggerEvent", [this](NativeCall& c) {
+            if (c.self != dialogComponent_) return outsideBinding(c);
+            use_.onUseTag = objectPath(c.in(0).o);
+            use_.onUseSpeaker = objectPath(director_);
+            use_.onUseTarget = c.in(1).o && c.in(1).o->cls ? c.in(1).o->cls->name : "";
+            return c.function.result ? runtime_.zeroValue(*c.function.result) : Value();
+        });
+    }
     // The client RPC that opens a movie is presentation: not run, reported (the host answers it, see useMarcus).
     runtime_.overrideScript("WillowGame.WillowPlayerController.ClientGFxPlayMovie", [this](NativeCall& c) {
         if (c.self != controller_) return outsideBinding(c);

@@ -33,7 +33,8 @@ public:
     struct HostEvent {
         enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete,
                           Experience, Level,   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
-                          MissionInterface };  // the mission screen was opened (ClientGFxPlayMovie): a = movie definition path, b = the director's path
+                          MissionInterface,    // the mission screen was opened (ClientGFxPlayMovie): a = movie definition path, b = the director's path
+                          OnUseDialog };       // the on-use dialog's TriggerEvent: a = the global VO_NPC_OnUse_* tag path, b = the speaker (Marcus), c = the other object's class
         Kind kind;
         std::string a, b, c;
         std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)
