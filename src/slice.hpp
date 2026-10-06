@@ -64,6 +64,8 @@ public:
     // Active) and the player's level and experience (set before turnIn and whenever the host changes them).
     void setRegionGameStage(int stage) { script_->setRegionGameStage(stage); }
     void setPlayerExperience(int level, int64_t experience) { script_->setPlayerExperience(level, experience); }
+    // GlobalsDefinition.PlayerInteractionDistance of the installed data (350 uu): how far the use ray reaches (NATIVE_USE_INTERACTION.md).
+    float playerInteractionDistance() { return script_->playerInteractionDistance(); }
     int scriptObjectiveUpdates() const { return script_->objectiveUpdates(); }   // applied objective updates the VM controller was told about
     int scriptPlayerLevel() { return script_->playerLevel(); }
     float scriptExperiencePool() const { return script_->experiencePool(); }

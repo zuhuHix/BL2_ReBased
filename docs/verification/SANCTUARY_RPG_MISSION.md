@@ -953,3 +953,37 @@ opened analysis output). **All rules UNVERIFIED in the running game.** Replaces 
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
 - After the Fire commit: CTest 11/11, packages 9/9, UE build Succeeded, quest PASS 83/83 and resume PASS 11/11, door PASS 16/16; a real-data
   `--slice-run` (accept, range, spawn, hit:other, hit:fire, turnin) reaches ReadyToTurnIn on the incendiary hit and Complete on turn-in with no errors.
+
+## Script swap 6a: choosing the usable by the camera ray (2026-10-06)
+
+Source: `NATIVE_USE_INTERACTION.md` ("Per-frame usable evaluation"). Every rule below is UNVERIFIED (read from native code, not confirmed in the
+running game). Only step 6a is done; 6b and 6c (the use itself and the accept screen's logic as script) were sized and stopped, see below.
+
+- **Rule implemented (host function):** the 250 cm sphere around the player is gone. `UOpenWillowQuest::InTalkReach()` now casts one ray from the
+  player camera's position along the control rotation, `PlayerInteractionDistance` long, and Marcus is usable when the ray enters his hit volume and
+  nothing else blocks the visibility channel in front of it. No cone and no radius, as the note says. The distance is not a host constant: the VM
+  reads `GD_Globals.General.Globals.PlayerInteractionDistance` from the installed data (`MissionScript::playerInteractionDistance`, through
+  `FireMissionSlice`; 350 uu on the real data, shown by `--slice-run` / `--mission-run` as `script.interaction_distance`). The globals loader the
+  `WillowGlobals.GetGlobalsDefinition` native used is now one function (`MissionScript::globalsDefinition`).
+- **Hit volume (host-chosen, UNVERIFIED):** Marcus's mesh has no collision, so `AOpenWillowNpc` gets a query-only capsule from the imported mesh's bounds
+  (the combat targets' pattern), blocking only the visibility channel (it cannot block movement). The stock pawn's collision cylinder is not read.
+- **View point:** the camera component's location and the pawn's current control rotation (the camera manager's cached view lags one frame after a
+  teleport, which the automated run does).
+- **Not modelled:** the 1/30 s evaluation throttle, the cinematic lock and other blocking flags, the trade proxy, icons and prompts, the Use key's own
+  press path (`Walker->TryUse` still calls `TryUse`, which then accepts or turns in directly; that is 6b/6c).
+- **Tests:** `mission-script-synthetic` scenario A reads an invented `PlayerInteractionDistance` (420) from a toy `GD_Globals.General.Globals`.
+  Quest suite: three new checks, `use_ray_reaches_marcus_in_view`, `use_ray_misses_marcus_looking_away`, `use_ray_stops_at_interaction_distance`
+  (at the data's distance plus 100); `use_key_out_of_reach_ignored`, `use_key_accepts_mission`, `use_key_turns_in_mission` and the resume
+  "must not re-accept" check keep their names and pass.
+
+### Why 6b and 6c were not started
+The use itself as script needs, beyond the bridge's present objects, a VM Marcus `WillowAIPawn` with a mind, class and AI definition, the native
+`AIClassDefinition.OnUsed` / `AIDefinition.OnUsed` (event with link filter on two providers) and Marcus's AI-definition provider running through the
+kernel, `BehaviorBase.RunBehaviors`, the G4 cost natives, and the behaviors of his chain. One of those has no note: **`Behavior_IsSequenceEnabled`
+(native, 227 instances, nine in Marcus's chain) has no description of what it checks or which output link means enabled**; the data shows only link
+ids 0 and 1. Implementing it now would be guessing. The other pieces have notes. The orchestrator should decide whether to commission that note first.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=86 errors=0, resume PASS checks=11 errors=0** (83 before, three new use-ray checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

@@ -358,7 +358,7 @@ def build_gearbox():
 
 
 def build_willowgame():
-    toy = Toy(('Int', 'Bool', 'Byte', 'Object', 'Array', 'Struct', 'Name'))
+    toy = Toy(('Int', 'Float', 'Bool', 'Byte', 'Object', 'Array', 'Struct', 'Name'))
     p, T = toy.p, toy
     engine = p.add_import_full('Package', 0, 'Engine')
     aid = p.add_import_full('ScriptStruct', engine, 'AttributeInitializationData')
@@ -465,6 +465,8 @@ def build_willowgame():
     globals_ = T.cls('WillowGlobals', super_ref=gearbox_globals)
     T.function(globals_, 'GetWillowGlobals', [], None, native | 0x2000, 'Object')
     T.function(globals_, 'GetGlobalsDefinition', [], None, native, 'Object')
+    globals_definition = T.cls('GlobalsDefinition')
+    T.prop('Float', globals_definition, 'PlayerInteractionDistance')
 
     status_owner = T.cls('IMission')
     status = T.struct_(status_owner, 'MissionStatusPlayerData')
@@ -659,6 +661,10 @@ def build_mission():
                               + t.array('ValueResolverChain', 2, w32(constant_resolver, math_resolver)) + none)
     reward = t.struct_('Reward', 'MissionRewardData', data('ExperienceRewardPercentage', attribute=percentage) + none)
     set_b = p.add_export(chain('WillowGame', 'MissionObjectiveSetDefinition'), 'SetB', w32(0) + none, outer=mission)
+    # GD_Globals.General.Globals with an invented interaction distance (the use ray's length)
+    globals_package = p.add_export(chain('Core', 'Package'), 'GD_Globals', w32(0) + none)
+    general_package = p.add_export(chain('Core', 'Package'), 'General', w32(0) + none, outer=globals_package)
+    p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals', w32(0) + t.float('PlayerInteractionDistance', 420.0) + none, outer=general_package)
     cls_, sup, outer, name, _ = p.exports[mission - 1]
     p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
                               + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + none)
@@ -852,6 +858,8 @@ with tempfile.TemporaryDirectory() as folder:
     code, got = mission_run(root, 'stage:4', 'player:3:16', 'script:accept', 'script:accept', 'stage:9', 'tick:0.5', 'tick:0.5',
                             'obj:RockPaper_GoToRange', 'script:turnin', 'pool')
     check('A exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    # Swap 6a: the use ray's length is read from the globals data (invented 420), not a host constant
+    check('A interaction distance from the globals data', got['script']['interaction_distance'] == 420.0, got['script'].get('interaction_distance'))
     steps = [step for step in got['steps'] if not step['step'].startswith(('stage:', 'player:'))]
     check('A steps reported', len(steps) == 7, len(steps))
     if len(steps) == 7:

@@ -223,7 +223,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Skill.ForceRefresh | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate after grade change | UNVERIFIED | high | |
 | SkillEffectManager.RefreshSkillsForInstigator | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate a player's skills | UNVERIFIED | medium | |
 | SkillEffectManager.RefreshSkillsAffectingInstigator | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Re-evaluate skills affecting a player | UNVERIFIED | medium | |
-| WillowPlayerController per-frame usable evaluation (no script name; sets CurrentUsableObject) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: choosing Marcus (camera ray 350 uu) | UNVERIFIED | medium-high | |
+| WillowPlayerController per-frame usable evaluation (no script name; sets CurrentUsableObject) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: choosing Marcus (camera ray 350 uu) | UNVERIFIED | medium-high |  host `OpenWillowQuest.cpp` `InTalkReach`: one ray from the camera along the view, length `PlayerInteractionDistance` read from the globals data (`MissionScript::playerInteractionDistance`), Marcus usable unless something blocks first; no throttle, flags or icons |
 | WillowPlayerController.UpdateInteractionIcon | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | prompt presentation | UNVERIFIED | high | |
 | IUsable native virtuals of WillowAIPawn (icon, can-be-used, prompt, usable-by-user) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: Marcus is usable | UNVERIFIED | medium-high | |
 | WillowAIPawn.SetUsable | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: gates the talk prompt | UNVERIFIED | high | |

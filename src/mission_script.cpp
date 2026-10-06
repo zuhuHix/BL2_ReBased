@@ -115,14 +115,7 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         const Value* kernel = runtime_.property(*globals_, "TheBehaviorKernel");
         return kernel ? *kernel : Value::makeObject(nullptr);
     });
-    bind("WillowGame.WillowGlobals.GetGlobalsDefinition", [this](NativeCall&) {
-        if (!globalsDefinition_) {
-            const auto package = mission_.definition()->resourcePackage;
-            const int32_t index = package ? runtime_.findExport(*package, "GD_Globals.General.Globals") : 0;
-            if (index > 0) globalsDefinition_ = runtime_.instantiateExport(package, index, 4);
-        }
-        return Value::makeObject(globalsDefinition_);
-    });
+    bind("WillowGame.WillowGlobals.GetGlobalsDefinition", [this](NativeCall&) { return Value::makeObject(globalsDefinition()); });
     // IsDataValid reports the tracker's bDataValidated flag; ValidateData, the only writer, sets it (NATIVE_CONTROLLER_HELPERS.md).
     bind("WillowGame.MissionTracker.IsDataValid", [this](NativeCall& c) {
         if (c.self != tracker_) return outsideBinding(c);
@@ -545,6 +538,23 @@ std::vector<std::string> MissionScript::stubs() const {
     std::vector<std::string> result;
     for (const auto& [name, count] : stubs_) result.push_back(name + " x" + std::to_string(count));
     return result;
+}
+
+// The configured globals data object, loaded on first use (UNVERIFIED: its name comes from the notes' prose).
+ObjectPtr MissionScript::globalsDefinition() {
+    if (!globalsDefinition_) {
+        const auto package = mission_.definition()->resourcePackage;
+        const int32_t index = package ? runtime_.findExport(*package, "GD_Globals.General.Globals") : 0;
+        if (index > 0) globalsDefinition_ = runtime_.instantiateExport(package, index, 4);
+    }
+    return globalsDefinition_;
+}
+
+// PlayerInteractionDistance (NATIVE_USE_INTERACTION.md, UNVERIFIED): how long the use ray is; read from the data, 0 when absent.
+float MissionScript::playerInteractionDistance() {
+    const ObjectPtr definition = globalsDefinition();
+    const Value* distance = definition ? runtime_.property(*definition, "PlayerInteractionDistance") : nullptr;
+    return distance ? static_cast<float>(distance->number()) : 0.f;
 }
 
 } // namespace vm

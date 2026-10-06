@@ -1,5 +1,6 @@
 #include "OpenWillowNpc.h"
 #include "Animation/AnimSequence.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 
@@ -23,6 +24,19 @@ bool AOpenWillowNpc::Setup(const FString& MeshPath, const FString& IdlePath, con
     Mesh->SetSkeletalMesh(Skeletal);
     Mesh->SetRelativeLocation(MeshOffset);
     Play(IdleAnim);
+    // Hit volume for the use ray: a capsule from the imported mesh's bounds (host-chosen shape, UNVERIFIED; the stock pawn's collision
+    // cylinder is not read), query-only and blocking only the visibility channel, so it never blocks movement. The narrower horizontal
+    // extent is the radius, as for the combat targets.
+    const FBoxSphereBounds Bounds = Mesh->Bounds;
+    HitVolume = NewObject<UCapsuleComponent>(this, TEXT("UseHitVolume"));
+    HitVolume->SetupAttachment(Root);
+    HitVolume->SetRelativeLocation(Root->GetComponentTransform().InverseTransformPosition(Bounds.Origin));
+    HitVolume->SetCapsuleSize(FMath::Min(Bounds.BoxExtent.X, Bounds.BoxExtent.Y), Bounds.BoxExtent.Z);
+    HitVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    HitVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
+    HitVolume->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+    HitVolume->SetHiddenInGame(true);
+    HitVolume->RegisterComponent();
     return true;
 }
 

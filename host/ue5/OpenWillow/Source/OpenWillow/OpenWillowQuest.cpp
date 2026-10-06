@@ -8,6 +8,7 @@
 #include "OpenWillowSliceData.h"
 #include "OpenWillowWalker.h"
 #include "slice.hpp"
+#include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/Engine.h"
@@ -31,8 +32,6 @@
 namespace {
 const char* const MissionPath = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire";
 const char* const DummyProvider = "GD_TargetDummy.Character.CharClass_TargetDummy.BehaviorProviderDefinition_5";
-// Host-chosen (UNVERIFIED): how close the player must be to Marcus for the use key to talk to him.
-constexpr float TalkReach = 250.f;
 
 // JSON text of an object. The test compares a saved block with a freshly built one this way: both come from
 // UOpenWillowSkills::ProgressionJson, so equal fields give equal text.
@@ -544,10 +543,29 @@ bool UOpenWillowQuest::TurnIn()
     return bOk;
 }
 
+// Choosing the usable (NATIVE_USE_INTERACTION.md, "Per-frame usable evaluation", UNVERIFIED): one ray from the camera along the view,
+// GlobalsDefinition.PlayerInteractionDistance long (read from the installed data through the slice, 350 uu), the hits nearest first,
+// the first usable hit before a blocking hit wins; no cone, no radius. Marcus is the quest's only usable thing, so the ray tests his
+// capsule and the world's blocking geometry (the visibility channel, the player excluded). Not modelled: the 1/30 s throttle, the
+// cinematic lock, icons and prompts.
 bool UOpenWillowQuest::InTalkReach() const
 {
     const AActor* Owner = GetOwner();
-    return Marcus && Owner && FVector::Dist(Owner->GetActorLocation(), Marcus->GetActorLocation()) <= TalkReach;
+    const auto* Pawn = Cast<APawn>(Owner);
+    const UCameraComponent* Camera = Owner ? Owner->FindComponentByClass<UCameraComponent>() : nullptr;
+    const float Distance = Impl ? Impl->Slice->playerInteractionDistance() : 0.f;
+    if (!Marcus || !Pawn || !Camera || Distance <= 0.f || !GetWorld()) return false;
+    // The view point: the camera's position and the control rotation (current even in the frame of an aim change; the camera
+    // manager's cached view lags one frame).
+    const FVector Eye = Camera->GetComponentLocation();
+    const FRotator View = Pawn->GetViewRotation();
+    const FVector End = Eye + View.Vector() * Distance;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestUse), true, Owner);
+    FHitResult Usable;
+    if (!Marcus->GetHitVolume() || !Marcus->GetHitVolume()->LineTraceComponent(Usable, Eye, End, Query)) return false;
+    FHitResult Block;
+    Query.AddIgnoredActor(Marcus);   // Marcus is the usable; only what else blocks the ray in front of him matters
+    return !GetWorld()->LineTraceSingleByChannel(Block, Eye, End, ECC_Visibility, Query) || Block.Distance > Usable.Distance;
 }
 
 bool UOpenWillowQuest::TryUse()
@@ -912,6 +930,14 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     case 3:
         if (TestWait < 0.5f) return;
+        // The use ray (NATIVE_USE_INTERACTION.md, UNVERIFIED): Marcus is chosen only when the view line, PlayerInteractionDistance (350 uu
+        // from the data) long, reaches him; no radius or cone around the player stands in for it.
+        PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), MarcusFront);
+        Check(Impl->Slice->playerInteractionDistance() > 0.f && InTalkReach(), TEXT("use_ray_reaches_marcus_in_view"));
+        PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), Data.MarcusLocation + Marcus->GetActorForwardVector() * 300.f + FVector(0, 0, 20));
+        Check(!InTalkReach(), TEXT("use_ray_misses_marcus_looking_away"));
+        PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * (Impl->Slice->playerInteractionDistance() + 100.f) + FVector(0, 0, 20), MarcusFront);
+        Check(!InTalkReach(), TEXT("use_ray_stops_at_interaction_distance"));
         PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), MarcusFront);
         PressUse();
         break;

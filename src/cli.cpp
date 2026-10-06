@@ -86,9 +86,10 @@ void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
 // The mission script bridge's report, shared by --mission-run and --slice-run (src/mission_script.hpp): the controller's own
 // record of the mission, every ExpEarn call, the natives without an implementation that the script reached, VM notes.
 void printScriptReport(int playerStatus, bool needsRewards, int playerLevel, float pool, const std::vector<vm::MissionScript::ExpEarn>& earned,
-                       const std::vector<std::string>& stubs, const std::vector<std::string>& notes) {
+                       const std::vector<std::string>& stubs, const std::vector<std::string>& notes, float interactionDistance) {
     std::cout << "{\"player_status\":" << playerStatus << ",\"needs_rewards\":" << (needsRewards ? "true" : "false")
-              << ",\"player_level\":" << playerLevel << ",\"experience_pool\":" << pool << ",\"exp_earned\":[";
+              << ",\"player_level\":" << playerLevel << ",\"experience_pool\":" << pool << ",\"interaction_distance\":" << interactionDistance
+              << ",\"exp_earned\":[";
     bool first = true;
     for (const auto& earn : earned) {
         std::cout << (first ? "" : ",") << "{\"amount\":" << earn.amount << ",\"source\":" << earn.source << ",\"type\":" << earn.type << "}";
@@ -645,7 +646,7 @@ int main(int argc, char** argv) {
             std::cout << "]";
             if (script) {
                 std::cout << ",\"script\":";
-                printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->playerLevel(), script->experiencePool(), script->expEarned(), script->stubs(), script->notes());
+                printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->playerLevel(), script->experiencePool(), script->expEarned(), script->stubs(), script->notes(), script->playerInteractionDistance());
             }
             std::cout << "}\n";
             return mission.errors.empty() && (!script || script->errors.empty()) ? 0 : 1;
@@ -706,7 +707,7 @@ int main(int argc, char** argv) {
             first = true;
             for (const auto& line : slice.errors()) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "],\"script\":";
-            printScriptReport(slice.scriptPlayerStatus(), slice.scriptPlayerNeedsRewards(), slice.scriptPlayerLevel(), slice.scriptExperiencePool(), slice.expEarned(), slice.scriptStubs(), slice.scriptNotes());
+            printScriptReport(slice.scriptPlayerStatus(), slice.scriptPlayerNeedsRewards(), slice.scriptPlayerLevel(), slice.scriptExperiencePool(), slice.expEarned(), slice.scriptStubs(), slice.scriptNotes(), slice.playerInteractionDistance());
             std::cout << ",\"dummy_boundary\":[";
             first = true;
             for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }

@@ -69,6 +69,8 @@ public:
     bool placeWaypoint(const std::shared_ptr<const Package>& package, const std::string& path);
     bool hasWaypoint() const { return waypoint_ != nullptr; }
     int objectiveUpdates() const { return objectiveUpdates_; }
+    // GlobalsDefinition.PlayerInteractionDistance (0 when the data has no globals definition).
+    float playerInteractionDistance();
     void touch(Toucher who);
     void untouch(Toucher who);
     // Runs a script behavior's ApplyBehaviorToContext on the VM (e.g. Behavior_UpdateMissionObjective: the world's tracker, UpdateObjective).
@@ -111,6 +113,7 @@ private:
     Value* missionList();
     int currentPlaythrough();
     ObjectPtr pawnFor(Toucher who);
+    ObjectPtr globalsDefinition();
     Value objectiveValue(const std::string& objectivePath);
     void objectiveUpdated(const std::string& objectivePath, int bit);
     ExperienceCurve& curve();
