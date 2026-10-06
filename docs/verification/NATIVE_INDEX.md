@@ -420,3 +420,12 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPlayerController.GetFOVAngle / UpdateFOVAspectRatioScalar / IsZoomed | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | final FOV, zoom test | UNVERIFIED | medium | |
 | UClass serial body (interfaces table) | [NATIVE_CLASS_SERIAL_LAYOUT.md](NATIVE_CLASS_SERIAL_LAYOUT.md) | interface casts (IMission, IUsable, IMissionObjective) | UNVERIFIED | high (byte layout, 3,339/3,339 Class exports fit exactly); medium (field meaning) | |
 | UClass serial body (class flags, within, config name, default object) | [NATIVE_CLASS_SERIAL_LAYOUT.md](NATIVE_CLASS_SERIAL_LAYOUT.md) | class identity, Default__<Class> lookup | UNVERIFIED | high | |
+| opcode 4C (typed temporary, int) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | hidden int temporaries in script functions (8,747 uses) | UNVERIFIED | high | |
+| opcode 4D (typed temporary, float) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | hidden float temporaries (2,173 uses) | UNVERIFIED | high | |
+| opcode 4E (typed temporary, byte) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | hidden byte temporaries (284 uses) | UNVERIFIED | high | |
+| opcode 4F (typed temporary, bool) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | hidden bool temporaries (2,903 uses) | UNVERIFIED | high | |
+| opcode 50 (typed temporary, object) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | hidden object temporaries (18,823 uses) | UNVERIFIED | high | |
+| Gearbox local-variable array (function header pairs) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | frame offsets and tags of the hidden temporaries; load and Link rules | UNVERIFIED | high | |
+| opcode 5E (attribute property reference) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | every attribute value read in script (349 uses); same handler as opcode 01 | UNVERIFIED | high | |
+| opcode 5F (typed Let, let attribute) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | attribute assignments in script (116 uses: Skill.UpdateGrade, WillowWeapon.CalculateWeaponBaseValues, ...) | UNVERIFIED | high (dirty hook: medium) | |
+| opcodes 57 and 59 (DynArrayInsertItem, DynArraySort) | [NATIVE_BYTECODE_OPCODES.md](NATIVE_BYTECODE_OPCODES.md) | operand layout correction (16-bit after the array); never occur in the packages | UNVERIFIED | medium | |
