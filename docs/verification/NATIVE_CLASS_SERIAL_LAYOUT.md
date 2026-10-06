@@ -4,8 +4,9 @@ AI-assisted (Claude), analyst lane G19. Read from the game executable with Ghidr
 words; no decompiler output, pseudo-code or listing structure is reproduced here. **Every rule is UNVERIFIED in the
 running game** unless a line says how it was confirmed. The field order below was read from the native serialization
 routines and then fitted against the packages with a structural oracle (section "Oracle results"); the oracle is a
-script outside the repository (`local/p2/G19/`) and has not been run in-tree yet, so the layout stays UNVERIFIED until
-the implementer's oracle runs green in-tree.
+script outside the repository (`local/p2/G19/`). Update 2026-10-06: the in-tree oracle (`ow-package --class-check`, run by
+`tools/verify_packages.py`, lane I2) decodes 3,339 of 3,339 Class exports exactly, so the byte layout is checked structurally;
+the meaning of the fields and any cast result stay UNVERIFIED in the running game.
 
 ## Summary
 
