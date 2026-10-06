@@ -318,3 +318,15 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Actor.SetTimer (rate 0) | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | reload interruption | UNVERIFIED | low | |
 | WillowWeapon.OnAbortReload | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Phaselock aborts reload (body unread) | UNVERIFIED | low | |
 | WillowWeapon.GetStatusEffectBaseDamage / GetStatusEffectChanceModifier / GetStatusEffectBaseChanceModifier / GetFireIntervalChanceModifier | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Maliwan fire pistol: chance and DoT inputs | UNVERIFIED | high | |
+| SeqAct_Interp Activated/UpdateOp (Play, Reverse, Stop, Pause, Change Dir, Last Frame) | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | range door, target Matinee | UNVERIFIED | medium-high | |
+| SeqAct_Interp StepInterp/UpdateInterp (position advance, clamp, loop, finish) | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | door, target | UNVERIFIED | medium-high | |
+| SeqAct_Interp Deactivated (Completed/Reversed, InterpolationFinished) | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | door, target | UNVERIFIED | medium-high | |
+| SeqAct_Interp.SetPosition / Stop / AddPlayerToDirectorTracks / IsNetworkReady | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | not used by slice graph | UNVERIFIED | low | |
+| InterpGroup.UpdateGroup / InterpTrack.UpdateTrack wrapper | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | door, target | UNVERIFIED | medium | |
+| InterpTrackMove curve evaluation, GetLocationAtTime, InitTrackInst | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | door, target motion | UNVERIFIED | medium-high (maths), low (who applies pose) | |
+| InterpTrackEvent.UpdateTrack | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | target ChangeBool outputs | UNVERIFIED | high | |
+| SeqAct_ActivateRemoteEvent.Activated / PlayerController.ServerRemoteEvent | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | remote-event hops | UNVERIFIED | high | |
+| Behavior_MissionRemoteEvent.ApplyBehaviorToContext | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | mission -> Marcus walk | UNVERIFIED | medium | |
+| WillowSeqAct_AIScripted / WillowMind.OnAIScripted / Action_GoToScriptedDestination | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | Marcus walk | UNVERIFIED | medium-high | |
+| Action_FollowPath state FollowMoveNodes (Arrived/Leaving events) | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | door open/close | UNVERIFIED | high | |
+| SeqEvent_PopulatedActor/PopulatedPoint NotifyPopulatedActor | [NATIVE_KISMET_MATINEE.md](NATIVE_KISMET_MATINEE.md) | den/point Instigator variable | UNVERIFIED | medium | |
