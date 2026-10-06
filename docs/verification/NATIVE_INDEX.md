@@ -349,3 +349,27 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowSaveGameManager.Save / SaveGame / BeginLoadGame / EndLoadGame / LoadRawData / GetLastSaveGame / ValidateSaveData / Get-SetCachedPlayerSaveGame (and siblings) | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | storage boundary: thin front ends to platform virtuals; cache per controller id | UNVERIFIED | high (that they are front ends) | |
 | (script, read) SaveGame / SaveAtStationIfNecessary / CanSaveGame trigger and gate rules | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | when the game saves (stations, status menu close, quit, prefs); no save from mission events | UNVERIFIED | high | |
 | (script, read) ApplyMissionSaveGameData / LoadPlayerSaveGame order | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | load order; bNeedsRewards pays again on load | UNVERIFIED | high | |
+| SkillEffectManager.IsSkillActive | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: "already active" test in ServerStartActionSkill | UNVERIFIED | high | |
+| SkillEffectManager.NotifySkillEvent | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: fans a skill event to the controller's active skills (events 23/24 at ability use) | UNVERIFIED | medium | |
+| Skill.NotifySkillEvent | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: Skill_Phaselock OnActivated/OnDeactivated provider events (tattoo glow) | UNVERIFIED | medium | |
+| Skill per-frame refresh: action-skill expiry handshake (internal) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: 120 s skill backstop, WantsToDeactivate / IsDeactivateBlocked | UNVERIFIED | medium | |
+| ActionSkill per-frame update (internal) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: OnActionSkillTick every frame, NearingCompletion, timers | UNVERIFIED | medium | |
+| ActionSkill.OnActionSkillActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: provider event at start (no behaviors linked) | UNVERIFIED | high | |
+| ActionSkill.OnActionSkillDeactivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: provider event at end (deactivate DetonateAvailable, particle, sound) | UNVERIFIED | high | |
+| ActionSkill.OnActionSkillActiveAbilityActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: second-press ability event (not allowed for Phaselock) | UNVERIFIED | high | |
+| ActionSkill.OnActionSkillActiveAbilityNotified | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: same family, not used by Phaselock | UNVERIFIED | high | |
+| ActionSkill.OnOwnerAcquiredAutoAimTarget | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: provider event when the auto-aim target changes | UNVERIFIED | high | |
+| ActionSkill.OnOwnerLostAutoAimTarget | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: same shape as Acquired (read from its thunk only) | UNVERIFIED | medium | |
+| ActionSkill.OnActionSkillNearingCompletion | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: event 2 s before the skill duration (118 s, never reached) | UNVERIFIED | high | |
+| ActionSkill.OnTimerEvent | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Behavior timers on the action skill (unused by Phaselock) | UNVERIFIED | low | |
+| SkillDefinition.OnActivated / OnDeactivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: Skill_Phaselock provider events | UNVERIFIED | high | |
+| SkillDefinition.OnActionSkillActiveAbilityActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Skill-level twin of the active-ability event (event 24) | UNVERIFIED | high | |
+| SkillDefinition.OnActionSkillCooldownAbilityActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Skill-level twin of the cooldown-ability event (event 23) | UNVERIFIED | high | |
+| WillowPawn.IsActionSkillRunning | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: "action skill running" test (body not located; MyActionSkill present) | UNVERIFIED | medium | |
+| ActionSkillStateExpressionEvaluator.Evaluate | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Skill constraint on action-skill running state (not used by Phaselock) | UNVERIFIED | medium | |
+| WillowPlayerController.SetActionSkillTime | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya HUD: ActionSkillTime fraction of the skill duration, -1 when idle | UNVERIFIED | medium | |
+| WillowPlayerController.GetActionSkillDuration | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: skill object Duration (120) passed to active-ability events | UNVERIFIED | high | |
+| WillowHUDGFxMovie.UpdateActionSkill | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya HUD: cooldown icon frame (1 - c/m)*98 + 2, lock bar from deferred time | UNVERIFIED | low | |
+| WillowPlayerController.StartActionSkill / ServerStartActionSkill (script) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: key press to activation, all refusals | UNVERIFIED | high | |
+| Skill.Activate / Skill.Deactivate / ActionSkillCallback (script order) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: activation order, delegate and cooldown start | UNVERIFIED | high | |
+| SpecialMove_WeaponAction.ClientStarted -> PerformSharedWeaponActions (script) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: cast move aborts reload and keeps weapons busy | UNVERIFIED | high | |
