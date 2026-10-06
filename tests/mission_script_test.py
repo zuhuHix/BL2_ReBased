@@ -314,6 +314,11 @@ def build_gearbox():
     T.prop('Float', talk, 'Pitch')
     T.array_of(act, 'TalkData', 'Struct', talk)
     T.prop('Bool', act, 'bInstigatorTalker')
+    T.prop('Bool', act, 'bEnableNoMatch')
+    link_list = T.struct_(0, 'DialogOutputLink')
+    T.array_of(link_list, 'Links', 'Object')
+    T.array_of(act, 'OutputLinks', 'Struct', link_list)
+    T.cls('GearboxDialogVar_Instigator', super_ref=node)
     T.prop('Float', act, 'OutputDelay')
     event_data = T.struct_(0, 'DialogEventData')
     T.prop('Object', event_data, 'Tag')
@@ -467,6 +472,11 @@ def build_willowgame():
     willow_tag = T.cls('WillowDialogEventTag', super_ref=gearbox_tag)
     for field in ('bOncePerSession', 'bMultiplayerOnly', 'bDoesNotOverrideSamePriority', 'bIsEchoEvent'): T.prop('Bool', willow_tag, field)
     T.prop('Object', T.cls('WillowDialogAct_Talk', super_ref=gearbox_act), 'Emote')
+    trigger_act = T.cls('WillowDialogAct_Trigger', super_ref=p.add_import_full('Class', gearbox, 'GearboxDialogNode'))
+    output_link = p.add_import_full('ScriptStruct', gearbox, 'DialogOutputLink')
+    T.prop('Object', trigger_act, 'DialogEvent')
+    T.array_of(trigger_act, 'VariableLinks', 'Struct', output_link)
+    T.array_of(trigger_act, 'OutputLinks', 'Struct', output_link)
     globals_definition = T.cls('WillowDialogGlobalsDefinition')
     T.array_of(globals_definition, 'Priorities', 'Object')
     for field in ('ActiveMissionMinPriorityStart', 'ActiveSideMissionMinPriority', 'ActivePlotMissionMinPriority'): T.prop('Object', globals_definition, field)
@@ -1125,6 +1135,40 @@ def build_dialog_mission():
     cls_, sup, outer, name, _ = p.exports[group - 1]
     p.exports[group - 1] = (cls_, sup, outer, name, w32(0) + t.array('DialogEvents', len(entries), event_bodies) + template + links + none)
 
+    # Swap 6e (a pawn's component TriggerEvent, NATIVE_DIALOG.md): tag G lives in GenericGroup, whose talk act has no entry for the speaker (Marcus)
+    # and bEnableNoMatch, so its output 1 reaches a Trigger act that fires tag S on the instigator; S lives in SpeakerGroup (Marcus's own group), whose
+    # ParentGroup is GenericGroup. Tag Z (generic) has no inline act: the link table points to a template talk act with no audio event (silent).
+    other = p.add_export(chain('WillowGame', 'WillowDialogNameTag'), 'DialogName_Other', w32(0) + none)
+    gtag = event_tag('G', 'P30', False)
+    stag = event_tag('S', 'P20', False)
+    ztag = event_tag('Z', 'P30', False)
+    qtag = event_tag('Q', 'P30', False)
+    generic = p.add_export(chain('GearboxFramework', 'GearboxDialogGroup'), 'GenericGroup', b'')
+    speaker = p.add_export(chain('GearboxFramework', 'GearboxDialogGroup'), 'SpeakerGroup', b'')
+    generic_act = p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), 'GenericAct', b'', outer=generic)
+    trigger_act = p.add_export(chain('WillowGame', 'WillowDialogAct_Trigger'), 'TriggerAct', b'', outer=generic)
+    instigator_var = p.add_export(chain('GearboxFramework', 'GearboxDialogVar_Instigator'), 'InstigatorVar', w32(0) + none, outer=generic)
+    speaker_act = p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), 'SpeakerAct', b'', outer=speaker)
+
+    def link_struct(*targets): return t.array('Links', len(targets), w32(*targets)) + none     # one element of an array of DialogOutputLink
+
+    def set_payload(index, payload):
+        cls_, sup, outer_, name_, _ = p.exports[index - 1]
+        p.exports[index - 1] = (cls_, sup, outer_, name_, payload)
+    set_payload(generic_act, w32(0) + t.int('NodeID', 11) + t.array('TalkData', 1, t.obj('NameTag', other) + t.obj('TalkAkEvent', ak['A']) + none)
+                + t.bool('bInstigatorTalker', True) + t.bool('bEnableNoMatch', True)
+                + t.array('OutputLinks', 2, link_struct() + link_struct(trigger_act)) + none)
+    set_payload(trigger_act, w32(0) + t.int('NodeID', 12) + t.obj('DialogEvent', stag) + t.array('VariableLinks', 1, link_struct(instigator_var)) + none)
+    set_payload(speaker_act, w32(0) + t.int('NodeID', 13) + t.array('TalkData', 1, t.obj('NameTag', marcus) + t.obj('TalkAkEvent', ak['B']) + none)
+                + t.bool('bInstigatorTalker', True) + none)
+    generic_events = [(gtag, generic_act), (ztag, 0)]
+    set_payload(generic, w32(0) + t.array('DialogEvents', 2, b''.join(t.obj('Tag', tg) + t.bool('bEnabled', True) + (t.obj('OutputAction', a) if a else b'') + none
+                                                                      for tg, a in generic_events))
+                + t.array('TalkActs', 1, t.array('TalkData', 1, t.obj('NameTag', marcus) + none) + t.bool('bInstigatorTalker', True) + none)
+                + t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 2) + t.int('LinkNumber', 0) + t.int('ToNodeID', 3) + none) + none)
+    set_payload(speaker, w32(0) + t.array('DialogEvents', 1, t.obj('Tag', stag) + t.bool('bEnabled', True) + t.obj('OutputAction', speaker_act) + none)
+                + t.obj('ParentGroup', generic) + none)
+
     provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'DialogBpd', b'', outer=mission)
     behaviors, refs = [], {}
 
@@ -1413,6 +1457,34 @@ with tempfile.TemporaryDirectory() as folder:
     # F3: the Fire-style direct wrapper (range) goes through the waypoint too
     code, got = slice_run('accept', 'range')
     check('F3 range wrapper', code == 0 and [step['status'] for step in got['steps']] == [1, 2] and updates(got) == 1, [step['status'] for step in got['steps']])
+
+    # Scenario E2 (swap 6e): a pawn's component TriggerEvent through the stock dialog data (NATIVE_DIALOG.md "Component TriggerEvent")
+    def component(*steps):
+        proc = subprocess.run([reader, str(root / 'DialogMission.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), 'lines:5', *steps],
+                              capture_output=True, text=True, encoding='utf-8')
+        assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
+        return proc.returncode, json.loads(proc.stdout)
+    code, got = component('component:DialogName_Marcus|TagG|SpeakerGroup', 'tick:6', 'component:DialogName_Marcus|TagS|SpeakerGroup', 'tick:6',
+                          'component:DialogName_Marcus|TagG|GenericGroup', 'tick:6', 'component:DialogName_Marcus|TagZ|GenericGroup', 'tick:6',
+                          'component:DialogName_Marcus|TagQ|SpeakerGroup')
+    check('E2 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    rows = [step for step in got['steps'] if step['step'].startswith('component:')]
+
+    def lines_of(step): return [(e['a'], e['c'], e['detail']) for e in step['effects'] if e['kind'] == 'dialog']
+    if len(rows) == 5:
+        # G through the speaker's ParentGroup: the generic act has no entry for Marcus (no-match output 1), the Trigger act fires S on the instigator
+        # (Marcus), whose own group answers with his Talk act: one line, tag S, his audio event B, a pawn talker
+        got_lines = lines_of(rows[0])
+        check('E2 no-match output reaches the speaker group', len(got_lines) == 1 and got_lines[0][0] == 'TagS' and 'ak=Ak_B' in got_lines[0][2]
+              and 'talker=pawn' in got_lines[0][2] and 'outcome=started' in got_lines[0][2] and rows[0]['ok'], rows[0])
+        # S directly: the speaker's own group
+        check('E2 own tag plays directly', len(lines_of(rows[1])) == 1 and 'ak=Ak_B' in lines_of(rows[1])[0][2], rows[1])
+        # G with only the generic group: the Trigger act's talker cannot talk S (no group of his has it): nothing plays
+        check('E2 a talker that cannot talk the event stays silent', lines_of(rows[2]) == [] and not rows[2]['ok'], rows[2])
+        # Z: the template act has no audio event: a pass-through, no line, no error
+        check('E2 an act without audio is silent', lines_of(rows[3]) == [], rows[3])
+        # Q: no group has an enabled event for the tag
+        check('E2 no matching event, nothing happens', lines_of(rows[4]) == [] and not rows[4]['ok'], rows[4])
 
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')

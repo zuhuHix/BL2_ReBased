@@ -81,6 +81,10 @@ private:
     // The on-use dialog his chain asked for (WillowAIPawn.PlayOnUseDialog -> the component's TriggerEvent): the global VO_NPC_OnUse_* tag of the last press.
     // Reported only: the line is not played (the generic group's no-match output and Trigger act, then Marcus's own group, are not dispatched here).
     FString LastOnUseTag;
+    // The lines the dialog data chose for those presses (Marcus's own DET_NPC_OnUse_* lines, reached through the generic group's no-match output): how many, and
+    // the last one's event tag and AkEvent. They go through the same hook as the mission's lines (the manifest lookup); no audio device plays them.
+    int32 OnUseLines = 0, OnUseLinesBeforeTurnIn = 0;
+    FString LastOnUseLineTag, LastOnUseLineAk;
     TArray<FString> LastUseCascade;
     int32 Respawns = 0;
     int32 Checks = 0;

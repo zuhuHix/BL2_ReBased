@@ -48,6 +48,12 @@ public:
     void lineEnded(int lineId);
     // A pawn that can talk (its name tag, e.g. "GD_Dialog_NPC.Names.DialogName_Marcus"); without one the talker is an echo caller.
     void registerTalker(const std::string& nameTagPath);
+    // A pawn's dialog component (NATIVE_DIALOG.md "Component TriggerEvent / GetMatchingEvent", UNVERIFIED): the speaker is registered as a talker with
+    // its own dialog groups (the interface's DialogGroups, in order; a group without a match adds its ParentGroup to the search), and `tag` is triggered
+    // on it with the speaker as the event's instigator. The first group with an enabled event for the tag runs it; a Talk act with no entry for the
+    // speaker and bEnableNoMatch takes its output 1 (a Trigger act, which fires its DialogEvent on the instigator's own groups with the same event
+    // data); the speaker's own Talk act then plays its line as for any dialog (priority gate, audio). Returns whether a line started.
+    bool triggerOnComponent(const std::string& speakerNameTag, const std::vector<Value>& groups, const Value& tag);
     // The tracked mission's dialog group and whether the mission is plot-critical ("" = no tracked mission): the priority floor.
     void setTrackedMission(const std::string& groupPath, bool plotCritical) { trackedGroup_ = groupPath; trackedPlot_ = plotCritical; }
     void tick(double seconds);                    // the dialog components' per-frame update
@@ -66,8 +72,9 @@ private:
         int talker = -1;
     };
     struct TalkEntry { std::string nameTag, akEvent; };
-    struct Act { std::string path; std::vector<TalkEntry> talk; double outputDelay = 0; bool instigatorTalker = false; };
-    struct Talker { std::string nameTag; bool echo = false; int liveData = -1; int liveIndex = 0; };
+    // noMatch: bEnableNoMatch; noMatchNode: the node on output 1 (a Trigger act), an object reference (None when not linked).
+    struct Act { std::string path; std::vector<TalkEntry> talk; double outputDelay = 0; bool instigatorTalker = false, noMatch = false; Value noMatchNode; };
+    struct Talker { std::string nameTag; bool echo = false; int liveData = -1; int liveIndex = 0; std::vector<Value> groups; };
     struct Tag { std::string path; bool echo = false, noOverrideSame = false, groupEvent = false, soundEffect = false, oncePerSession = false, multiplayerOnly = false; int priority = 0; };
 
     Runtime& runtime_;
@@ -87,6 +94,8 @@ private:
     bool trackedPlot_ = false;
     int startIndex_ = 0, sideFloor_ = 0, plotFloor_ = 0;
     std::mt19937 rng_{12345};
+    int instigator_ = -1;                            // the current event context's instigator: a registered talker (a pawn), -1 for the mission
+    bool lineStarted_ = false;                       // set by talk() when a line started during the current component trigger
 
     ObjectPtr load(const Value& reference);
     void loadGlobals();
@@ -95,6 +104,12 @@ private:
     bool tagValid(const Tag& tag) const;
     std::string rootGroupOf(const Value& group);
     Handle trigger(const Value& group, const Value& tag);
+    // The event data of `reuse` (or a new one) bound to the event of `tag` found in `group`; runs its act chain. `reuse` keeps its use count.
+    Handle run(Handle reuse, const Value& group, const Tag& tag);
+    // GetMatchingEvent over a talker's groups (parents appended); a null Value when none has an enabled event for the tag.
+    Value matchingGroup(const std::vector<Value>& groups, const Tag& tag);
+    void followNoMatch(Handle handle, const Act& act);                // output 1 of a talk act: a Trigger act
+    void runTrigger(Handle handle, const ObjectPtr& node);
     int findAct(const Value& group, const Tag& info, Act& act);       // -1 no event, 0 an event with no act, 1 an act
     Act actOf(const ObjectPtr& node);
     void talk(Handle handle, const Act& act, const Tag& tag, const std::string& groupPath, const std::string& root);

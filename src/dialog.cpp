@@ -85,6 +85,39 @@ void DialogSystem::registerTalker(const std::string& nameTagPath) {
     talkers_.push_back(talker);
 }
 
+// GetMatchingEvent (no group given): the talker's groups in order; the first with an enabled entry for the tag wins; a group without one appends its
+// ParentGroup to the search (bAllowTemplates is not modelled: no template groups are involved here).
+Value DialogSystem::matchingGroup(const std::vector<Value>& groups, const Tag& tag) {
+    std::vector<Value> queue = groups;
+    for (size_t i = 0; i < queue.size() && i < 32; ++i) {
+        if (!queue[i].o || !queue[i].o->resourcePackage) continue;
+        ObjectPtr group = load(queue[i]);
+        if (const Value* events = runtime_.property(*group, "DialogEvents"))
+            for (const auto& entry : events->elements())
+                if (pathOf(entry.field("Tag")) == tag.path && flag(entry.field("bEnabled"))) return queue[i];
+        if (const Value* parent = runtime_.property(*group, "ParentGroup"); parent && parent->o && parent->o->resourcePackage) queue.push_back(*parent);
+    }
+    return Value();
+}
+
+bool DialogSystem::triggerOnComponent(const std::string& speakerNameTag, const std::vector<Value>& groups, const Value& tagRef) {
+    const Tag tag = tagOf(tagRef);
+    if (!tagValid(tag)) return false;
+    registerTalker(speakerNameTag);
+    int speaker = -1;
+    for (size_t i = 0; i < talkers_.size(); ++i)
+        if (!talkers_[i].echo && talkers_[i].nameTag == speakerNameTag) speaker = int(i);
+    talkers_[size_t(speaker)].groups = groups;
+    const Value group = matchingGroup(groups, tag);
+    if (!group.o) return false;                          // no group has an event for the tag: nothing happens
+    const int savedInstigator = instigator_;
+    instigator_ = speaker;                               // TriggerEvent: Instigator := the component's owner
+    lineStarted_ = false;
+    run(Handle(), group, tag);
+    instigator_ = savedInstigator;
+    return lineStarted_;
+}
+
 // The talker for a name tag: the first registered pawn with exactly that tag; failing that (echo events only) the echo caller for it,
 // created when absent. -1 when there is none.
 int DialogSystem::resolveTalker(const std::string& nameTag, bool echo) {
@@ -134,11 +167,17 @@ DialogSystem::Act DialogSystem::actOf(const ObjectPtr& node) {
     bool talkAct = false;
     for (const Class* cls = node->cls; cls; cls = cls->super) if (cls->name == "GearboxDialogAct_Talk") talkAct = true;
     if (!talkAct) notImplemented("dialog node class " + node->cls->path);
-    if (const Value* links = runtime_.property(*node, "OutputLinks"))
-        for (const auto& link : links->elements())
-            if (const Value* targets = link.field("Links"); targets && !targets->elements().empty()) notImplemented("an output link on a talk act");
-    if (const Value* variable = runtime_.property(*node, "TalkerVariable"); variable && variable->o) notImplemented("a talker variable");
     Act act;
+    // Output links: output 1 is the no-match output (NATIVE_DIALOG.md, Act_Talk.Activate: no talker and bEnableNoMatch); another output with a link is
+    // not modelled.
+    if (const Value* links = runtime_.property(*node, "OutputLinks"))
+        for (size_t i = 0; i < links->elements().size(); ++i)
+            if (const Value* targets = links->elements()[i].field("Links"); targets && !targets->elements().empty()) {
+                if (i != 1 || !flag(runtime_.property(*node, "bEnableNoMatch"))) notImplemented("an output link on a talk act");
+                act.noMatchNode = targets->elements().front();
+            }
+    act.noMatch = flag(runtime_.property(*node, "bEnableNoMatch"));
+    if (const Value* variable = runtime_.property(*node, "TalkerVariable"); variable && variable->o) notImplemented("a talker variable");
     act.path = node->resourcePackage ? node->resourcePackage->path(node->resourceIndex) : node->name;
     if (const Value* delay = runtime_.property(*node, "OutputDelay")) act.outputDelay = delay->number();
     act.instigatorTalker = flag(runtime_.property(*node, "bInstigatorTalker"));
@@ -195,22 +234,71 @@ DialogSystem::Handle DialogSystem::trigger(const Value& group, const Value& tagR
     const Tag tag = tagOf(tagRef);
     if (!tagValid(tag)) return {};
     if (!group.o) notImplemented("a dialog event without a group (talker-owned events)");
+    return run(Handle(), group, tag);
+}
+
+// TriggerGroupEvent from the found event on: the event data (the caller's `reuse` keeps its identity, else a pooled one), then the act chain.
+DialogSystem::Handle DialogSystem::run(Handle reuse, const Value& group, const Tag& tag) {
     if (tag.soundEffect) notImplemented("sound-effect dialog events");
     Act act;
     const int found = findAct(group, tag, act);
-    if (found < 0) return {};                            // no event for the tag: no event data
-    // An event data object: the first pooled one that is not live, reused (its use count rises) or a new one.
-    size_t slot = 0;
-    while (slot < data_.size() && data_[slot].live) ++slot;
-    if (slot == data_.size()) data_.emplace_back();
-    EventData& data = data_[slot];
-    const int useCount = data.useCount + 1;
-    data = EventData();
-    data.useCount = useCount;
-    const Handle handle{int(slot), useCount};
+    if (found < 0) return reuse;                         // no event for the tag: no event data
+    Handle handle = reuse;
+    if (handle.index < 0) {
+        // An event data object: the first pooled one that is not live, reused (its use count rises) or a new one.
+        size_t slot = 0;
+        while (slot < data_.size() && data_[slot].live) ++slot;
+        if (slot == data_.size()) data_.emplace_back();
+        EventData& data = data_[slot];
+        const int useCount = data.useCount + 1;
+        data = EventData();
+        data.useCount = useCount;
+        handle = Handle{int(slot), useCount};
+    }
     if (found == 0) return handle;
     talk(handle, act, tag, pathOf(&group), rootGroupOf(group));
     return handle;
+}
+
+// Output 1 of a talk act (no talker, bEnableNoMatch): the linked node. Only a Trigger act is modelled.
+void DialogSystem::followNoMatch(Handle handle, const Act& act) {
+    if (!act.noMatchNode.o) return;                      // not linked: the chain ends
+    ObjectPtr node = load(act.noMatchNode);
+    bool trigger = false;
+    for (const Class* cls = node->cls; cls; cls = cls->super) if (cls->name == "WillowDialogAct_Trigger") trigger = true;
+    if (!trigger) notImplemented("a no-match output into " + node->cls->path);
+    runTrigger(handle, node);
+}
+
+// Act_Trigger.Activate (NATIVE_DIALOG.md): the talker variable's talkers (the event's Instigator variable here), those that can talk the DialogEvent (a
+// group of theirs has an enabled entry for it); one is chosen (the only one here) and the DialogEvent is triggered on it with the same event data.
+// The act's own output 0 (after the line) has no link in the stock data and is not followed.
+void DialogSystem::runTrigger(Handle handle, const ObjectPtr& node) {
+    const Value* eventRef = runtime_.property(*node, "DialogEvent");
+    if (!eventRef || !eventRef->o) return;
+    if (const Value* links = runtime_.property(*node, "OutputLinks"))
+        for (const auto& link : links->elements())
+            if (const Value* targets = link.field("Links"); targets && !targets->elements().empty()) notImplemented("an output link on a trigger act");
+    std::vector<int> talkers;
+    if (const Value* variables = runtime_.property(*node, "VariableLinks"))
+        for (const auto& link : variables->elements())
+            if (const Value* targets = link.field("Links"))
+                for (const auto& target : targets->elements()) {
+                    if (!target.o) continue;
+                    ObjectPtr variable = load(target);
+                    bool instigator = false;
+                    for (const Class* cls = variable->cls; cls; cls = cls->super) if (cls->name == "GearboxDialogVar_Instigator") instigator = true;
+                    if (!instigator) notImplemented("a dialog variable of class " + variable->cls->path);
+                    if (instigator_ >= 0) talkers.push_back(instigator_);
+                }
+    const Tag tag = tagOf(*eventRef);
+    if (!tagValid(tag)) return;
+    for (const int talker : talkers) {
+        const Value group = matchingGroup(talkers_[size_t(talker)].groups, tag);
+        if (!group.o) continue;                          // this talker cannot talk the event
+        run(handle, group, tag);                         // the component's TriggerEvent, reusing the same event data
+        return;
+    }
 }
 
 // The talk act's Activate and GearboxDialogComponent.Talk. A pass-through for an act without audio; the talker; the gates (audio
@@ -228,10 +316,25 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
     line.talkAct = act.path;
     line.outputDelay = act.outputDelay;
     const auto report = [&](const char* outcome) { if (onLine) onLine(line, outcome); };
-    const TalkEntry& chosen = act.instigatorTalker ? act.talk.front() : act.talk[size_t(rng_() % act.talk.size())];
+    // Choosing the talker (NATIVE_DIALOG.md): the event's instigator when the act says so and it is a talker with an entry for its own name tag (exact
+    // tag; the ParentTag ancestors are not modelled); otherwise, as before, the mission is no actor (no talker). With no talker and bEnableNoMatch the
+    // act takes its output 1.
+    const TalkEntry* entry = nullptr;
+    int talker = -1;
+    if (act.instigatorTalker && instigator_ >= 0) {
+        for (const auto& candidate : act.talk)
+            if (candidate.nameTag == talkers_[size_t(instigator_)].nameTag) { entry = &candidate; talker = instigator_; break; }
+        if (talker < 0 && act.noMatch) { followNoMatch(handle, act); return; }
+        if (talker < 0) entry = &act.talk.front();
+    } else if (act.instigatorTalker) {
+        entry = &act.talk.front();
+    } else {
+        entry = &act.talk[size_t(rng_() % act.talk.size())];
+        talker = resolveTalker(entry->nameTag, tag.echo);
+    }
+    const TalkEntry& chosen = *entry;
     line.akEvent = chosen.akEvent;
     line.talker = chosen.nameTag;
-    const int talker = act.instigatorTalker ? -1 : resolveTalker(chosen.nameTag, tag.echo);
     if (talker < 0) { report("no talker"); return; }
     line.echo = talkers_[size_t(talker)].echo;
     if (!player_ && testLength_ < 0) { report("no audio device"); return; }      // Talk does nothing without an audio device
@@ -263,6 +366,7 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
     data.playing = player_ ? player_(line) : true;
     if (testLength_ >= 0) data.testEnd = now_ + testLength_;
     if (tag.oncePerSession) played_.insert(tag.path);
+    lineStarted_ = true;
     report(data.playing ? "started" : "not playing");
 }
 

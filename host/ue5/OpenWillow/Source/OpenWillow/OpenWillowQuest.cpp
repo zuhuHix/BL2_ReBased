@@ -415,6 +415,8 @@ void UOpenWillowQuest::Pump()
             };
             const FString Ak = Field("ak"), Outcome = Field("outcome");
             const TSharedPtr<FJsonObject>* Entry = Impl->Data.Audio.Find(TEXT("dialog:") + A);
+            if (!Entry) Entry = Impl->Data.Audio.Find(TEXT("marcus_group:") + A);      // Marcus's own group (the on-use barks)
+            if (A.StartsWith(TEXT("GD_Dialog_NPCImplementation."))) { ++OnUseLines; LastOnUseLineTag = A; LastOnUseLineAk = Ak; }
             if (!Entry) {
                 ++DialogMisses;
                 UE_LOG(LogTemp, Warning, TEXT("OWQUEST dialog %s: no audio manifest entry"), *A);
@@ -991,6 +993,17 @@ void UOpenWillowQuest::RunTest(float Delta)
             Check(MissionInterfacesOpened == 1 && LastInterfaceMovie == TEXT("UI_Mission.MissionInterface_Definition"), TEXT("use_chain_reaches_mission_interface"));
             // PlayOnUseDialog picked its tag from Marcus's own lists: Fire is eligible, nothing redeemable, so "missions available"
             Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionsAvailable"), TEXT("use_chain_picks_on_use_dialog_tag"));
+            // and the stock dialog data turned it into Marcus's own line: the global tag's generic act has no entry for him, its no-match output fires
+            // his DET_NPC_OnUse_MissionsAvailable on his own group (the manifest knows the AkEvent)
+            Check(OnUseLines == 1 && LastOnUseLineTag == TEXT("GD_Dialog_NPCImplementation.Events_MissionGiver.DET_NPC_OnUse_MissionsAvailable")
+                && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_New") && DialogMisses == 0, TEXT("use_chain_plays_on_use_line"));
+            // the chain again with the mission accepted: "all missions in progress" and its line (Fire is Active, not offered again). Run directly, not through
+            // the key: Marcus has already started to walk away, so the use ray would no longer reach him in this frame.
+            Impl->Slice->useMarcus(Impl->Completed);
+            Pump();
+            Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_AllMissionsInProgress") && OnUseLines == 2
+                && LastOnUseLineTag == TEXT("GD_Dialog_NPCImplementation.Events_MissionGiver.DET_NPC_OnUse_AllMissionsInProgress")
+                && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_During"), TEXT("use_chain_plays_in_progress_line"));
             int32 NotEnabled = 0, Seen = 0;
             for (const FString& Line : LastUseCascade)
                 if (Line.StartsWith(TEXT("Behavior_IsSequenceEnabled"))) { ++Seen; if (Line.EndsWith(TEXT("-> 1"))) ++NotEnabled; }
@@ -1155,6 +1168,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Gap > 0) Skills->AddExperience(Gap);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
         PointsBeforeReward = Skills->AvailablePoints();
+        OnUseLinesBeforeTurnIn = OnUseLines;
         {   // Ready to turn in: the redeemable list offers it, the eligible list no longer does
             bool bRedeemable = false, bEligible = true;
             MissionScreen(bRedeemable, bEligible);
@@ -1172,6 +1186,9 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(Status() == 3, TEXT("use_key_turns_in_mission"));
         // the same press's on-use tag, now that Marcus's redeemable list has the mission: "mission complete"
         Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionComplete"), TEXT("use_chain_on_use_tag_follows_mission_state"));
+        // the data says this one is silent: the generic event has no act of its own, its link-table template act has an entry for Marcus without an audio
+        // event, so the act passes through and no line is chosen
+        Check(OnUseLines == OnUseLinesBeforeTurnIn, TEXT("use_chain_mission_complete_is_silent"));
         Check(Rewards == 1, TEXT("xp_reward_granted_once"));
         const UOpenWillowSkills* Skills = Walker->GetSkills();
         // The tool's own amount at the same stage (tools/slice_values.py evaluates the same truncation rule apart).
@@ -1201,6 +1218,9 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 19:
         Check(Status() == 3 && Rewards == 1, TEXT("turn_in_not_repeatable"));
+        // the press after completion: nothing left, so "no missions" and Marcus's line for it
+        Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_NoMissions") && OnUseLines == OnUseLinesBeforeTurnIn + 1
+            && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_No_New"), TEXT("use_chain_plays_no_missions_line"));
         Check(Walker->LastPickupAccepted() && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) != INDEX_NONE
             && !IsValid(RewardPickup), TEXT("use_key_collects_loot_pickup_into_backpack"));
         PlacePlayer(Data.OracleDeathLocation, Data.DummyLocation);

@@ -670,6 +670,25 @@ int main(int argc, char** argv) {
                 else if (step == "pool" && script) script->updateExperiencePool();
                 else if (step.rfind("lines:", 0) == 0) mission.dialog().setTestLineLength(std::stod(step.substr(6)));   // every dialog line lasts <s>
                 else if (step.rfind("talker:", 0) == 0) mission.dialog().registerTalker(step.substr(7));              // a pawn with this name tag
+                else if (step.rfind("component:", 0) == 0) {      // component:<speaker name tag>|<event tag>|<group>[,<group>...]: a pawn's component TriggerEvent
+                    const std::string rest = step.substr(10);
+                    const auto bar1 = rest.find('|'), bar2 = rest.find('|', bar1 + 1);
+                    if (bar1 == std::string::npos || bar2 == std::string::npos) usage();
+                    auto owner = runtime.package(package->packageName);
+                    const auto object = [&](const std::string& path) {
+                        const int32_t found = runtime.findExport(*owner, path);
+                        if (found <= 0) throw std::runtime_error("no such object: " + path);
+                        return vm::Value::makeObject(runtime.instantiateExport(owner, found, 4));
+                    };
+                    std::vector<vm::Value> groups;
+                    for (size_t from = bar2 + 1; from <= rest.size();) {
+                        const auto comma = rest.find(',', from);
+                        groups.push_back(object(rest.substr(from, comma == std::string::npos ? std::string::npos : comma - from)));
+                        if (comma == std::string::npos) break;
+                        from = comma + 1;
+                    }
+                    ok = mission.dialog().triggerOnComponent(rest.substr(0, bar1), groups, object(rest.substr(bar1 + 1, bar2 - bar1 - 1)));
+                }
                 else if (step == "turnin") ok = mission.turnInMission();
                 else if (step == "kickoff") ok = mission.kickoff();
                 else if (step.rfind("obj:", 0) == 0) {

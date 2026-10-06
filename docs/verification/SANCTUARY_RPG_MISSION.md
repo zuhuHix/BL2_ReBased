@@ -1129,3 +1129,53 @@ their own script on the VM and pick the tag from Marcus's own lists. Playing the
 - `ctest` 11/11, `tools/verify_packages.py` 9/9 (with class bodies exact), UE build Succeeded.
 - **`tools/test_quest.ps1`: first run PASS checks=92 errors=0, resume PASS checks=11 errors=0** (90 before, two new on-use checks).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6e: the on-use line plays through the stock dialog data (2026-10-06)
+
+Source: `NATIVE_DIALOG.md` ("Component TriggerEvent / GetMatchingEvent", the Trigger act, the Talk act and its no-match output, the line rules),
+`NATIVE_BEHAVIOR_CONTEXT.md` (the data finding), `SLICE_AUDIO_CHAIN.md` (how a chosen line reaches the host). Every rule is UNVERIFIED (read from native
+code, not confirmed in the running game). `GearboxDialogComponent.TriggerEvent` is no longer "reported, not played": it runs in the existing `DialogSystem`
+(`src/dialog.*`), and the line it chooses reaches the host through the mission's own dialog hook.
+
+- **What `DialogSystem` gained (`triggerOnComponent`, no second engine):**
+  - the **group search** of `GetMatchingEvent`: the speaker's groups in order, the first with an enabled entry for the tag wins, a group without one appends its
+    `ParentGroup` to the search;
+  - the event's **instigator** is the speaker (a registered talker with its own groups), so a Talk act with `bInstigatorTalker` takes the instigator when it has an
+    entry for its own name tag (exact tag; the `ParentTag` ancestors are not modelled);
+  - the **no-match output**: no valid talker and `bEnableNoMatch` takes output 1, which here leads to a **Trigger act**; output links other than a no-match
+    link to a Trigger act still throw "not implemented";
+  - the **Trigger act**: its Instigator variable gives the talkers, those with a group holding an enabled entry for its `DialogEvent` can talk it, and the event
+    is triggered on that talker's own groups with the **same event data**. The act's own output 0 (after the line) has no link in the stock data and is not
+    followed. Any other dialog variable class throws "not implemented".
+- **How Marcus reaches it (bridge):** the component's speaker is read from his body class (`GD_Marcus.Character.BodyClass_Marcus`): `DialogName` (the name tag),
+  `DialogGroups` (his own group `DialogGroup_NPC_Marcus`) and `bNPCDialog`, then the dialog globals' `NPCDialogGroups` (the generic NPC group first). **That last step
+  is a labelled stand-in:** the native `WillowPawn.GetDialogGroups` (what a pawn's interface returns) has no note; the data names the list, and without it the tag
+  `VO_NPC_OnUse_*` is in no group of his and the line would stay silent. Marcus is registered as the talker when the component is triggered (so the mission's
+  own lines, which the host registers him for, are unaffected).
+- **The four states (stock data, read with `ow-package --object-dump`):** `VO_NPC_OnUse_MissionsAvailable`, `..._AllMissionsInProgress` and `..._NoMissions` sit in the
+  generic group `GD_Dialog_NPC.Groups.DialogGroup_NPC` with Talk acts (`Talk_24`, `Talk_33`, `Talk_4`) that have **no Marcus entry** and `bEnableNoMatch`; output 1 goes to
+  Trigger acts (`Trigger_8`, `_7`, `_9`) whose `DialogEvent` is Marcus's `DET_NPC_OnUse_*` tag, whose talker variable is the event's Instigator; his group answers with
+  Talk acts `115`, `113`, `116` and his own AkEvents `Ak_Play_VOCT_Marcus_Quest_New`, `..._Quest_During`, `..._Quest_No_New`. So NotStarted plays Quest_New, Active plays
+  Quest_During, and the press after completion plays Quest_No_New (the `NoMissions` act is symmetric: confirmed, closing that open item of the note).
+  **`VO_NPC_OnUse_MissionComplete` is silent** (finding, open question 4 closed): the generic event has no inline act; the link table points to the group's template talk
+  act, whose only entry is Marcus's name tag with **no AkEvent**, so the act passes through (output 0, no link) and no line is chosen. Nothing was invented for it.
+- **Reaching the host:** a chosen line is a dialog effect of the mission's `DialogSystem`, as for the mission's other lines: a host dialog event whose tag is the
+  `DET_NPC_OnUse_*` tag, group `DialogGroup_NPC_Marcus`, talker `DialogName_Marcus` (a pawn). The host's hook (`K::Dialog`) looks the tag up in the audio manifest
+  (`dialog:` entries, and now `marcus_group:` entries for Marcus's own group) and checks the AkEvent against the manifest's. **No audio is played: the host has no audio
+  device** (its `played=0` check stays); "plays" means the line was chosen by the stock data and found in the manifest, exactly as for the mission's lines.
+- **Real data (`--slice-run`):** NotStarted gives the Quest_New line (`outcome=started` with `lines:2`, `no audio device` without), Active gives the Quest_During line
+  (blocked by priority if Marcus's previous line is still live: the stock arbitration, tick past it). In the quest suite: the turn-in press (MissionComplete) chooses no line;
+  the press after completion chooses Quest_No_New.
+- **Stubs:** none newly reached (quest log 9 after accept, 15 after turn-in).
+- **Not modelled / open:** the `ParentTag` ancestor test of the talker validity; the manager `bEnabled` gate (assumed enabled); the priority gate is the existing
+  one (the DET tags are `DialogPriority_20`); `WillowPawn.GetDialogGroups` (stand-in above); sound-effect tags; Act_Chance / MissionSwitch / ObjectParameterSwitch in the
+  generic group (not on the four on-use routes); a no-match output into anything but a Trigger act. A failed `no talker` line still consumes a line id.
+- **Tests:** `mission-script-synthetic` scenario E2 (`--mission-run ... component:<speaker name tag>|<tag>|<groups>`; toy generic group, no-match output, Trigger act and a
+  speaker group with a `ParentGroup`): the no-match chain plays the speaker's line (tag S, his AkEvent, a pawn talker); his own tag plays directly; a talker that cannot
+  talk the event stays silent; an act without audio is silent; a tag in no group does nothing. Quest suite: `use_chain_plays_on_use_line`, `use_chain_plays_in_progress_line`,
+  `use_chain_mission_complete_is_silent`, `use_chain_plays_no_missions_line` added; every earlier name unchanged.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=96 errors=0, resume PASS checks=11 errors=0** (92 before, four new on-use line checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

@@ -576,23 +576,41 @@ void MissionScript::bindUse() {
         if (c.self != director_) return outsideBinding(c);
         return required(runtime_, *director_, "ConsumerHandle");
     });
-    // WillowDialogGlobalsDefinition.Get: the configured globals object (GD_Globals.Dialog.DialogGlobals of the mission's package); only the on-use
-    // tags are read from it. GearboxDialogComponent.TriggerEvent(EventTag, Other, ObjectParameter, optional EventData): not played here; reported
-    // (the tag, the speaker, the other object) for the host. Scoped to Marcus's component; returns the zero event data.
+    // WillowDialogGlobalsDefinition.Get: the configured globals object (GD_Globals.Dialog.DialogGlobals of the mission's package), whose on-use tags the
+    // script reads. GearboxDialogComponent.TriggerEvent(EventTag, Other, ObjectParameter, optional EventData) on Marcus's component: the speaker is his
+    // pawn (its body class gives the name tag DialogName and the groups DialogGroups, then, for an NPC pawn (bNPCDialog), the globals' NPCDialogGroups: a STAND-IN for the native
+    // WillowPawn.GetDialogGroups, which no note describes; the data names that list), and DialogSystem::triggerOnComponent runs the tag through the stock
+    // dialog data (NATIVE_DIALOG.md); the line, if one starts, reaches the host as an ordinary dialog effect. The tag, the speaker and the other object are
+    // also recorded. Scoped to Marcus's component; returns the zero event data.
     if (dialogComponent_) {
-        bind("WillowGame.WillowDialogGlobalsDefinition.Get", [this](NativeCall&) {
+        const auto globals = [this]() -> ObjectPtr {
             if (!dialogGlobals_) {
                 const auto package = mission_.definition()->resourcePackage;
                 const int32_t index = package ? runtime_.findExport(*package, "GD_Globals.Dialog.DialogGlobals") : 0;
                 if (index > 0) dialogGlobals_ = runtime_.instantiateExport(package, index, 4);
             }
-            return Value::makeObject(dialogGlobals_);
-        });
-        bind("GearboxFramework.GearboxDialogComponent.TriggerEvent", [this](NativeCall& c) {
+            return dialogGlobals_;
+        };
+        bind("WillowGame.WillowDialogGlobalsDefinition.Get", [globals](NativeCall&) { return Value::makeObject(globals()); });
+        bind("GearboxFramework.GearboxDialogComponent.TriggerEvent", [this, globals](NativeCall& c) {
             if (c.self != dialogComponent_) return outsideBinding(c);
             use_.onUseTag = objectPath(c.in(0).o);
             use_.onUseSpeaker = objectPath(director_);
             use_.onUseTarget = c.in(1).o && c.in(1).o->cls ? c.in(1).o->cls->name : "";
+            // The talker interface of a pawn reads its body class: DialogName, DialogGroups and bNPCDialog (BodyClassDefinition).
+            const Value* bodyRef = runtime_.property(*director_, "BodyClass");
+            if (!bodyRef || !bodyRef->o || !bodyRef->o->resourcePackage || bodyRef->o->resourceIndex <= 0) return c.function.result ? runtime_.zeroValue(*c.function.result) : Value();
+            const ObjectPtr body = loadRef(*bodyRef);
+            std::vector<Value> groups;
+            if (const Value* own = runtime_.property(*body, "DialogGroups"))
+                for (const Value& group : own->elements()) groups.push_back(group);
+            const Value* npc = runtime_.property(*body, "bNPCDialog");
+            if (npc && npc->truth())
+                if (ObjectPtr definition = globals())
+                    if (const Value* list = runtime_.property(*definition, "NPCDialogGroups"))
+                        for (const Value& group : list->elements()) groups.push_back(group);
+            const Value* name = runtime_.property(*body, "DialogName");
+            if (name && name->o && c.in(0).o) mission_.dialog().triggerOnComponent(objectPath(name->o), groups, c.in(0));
             return c.function.result ? runtime_.zeroValue(*c.function.result) : Value();
         });
     }
