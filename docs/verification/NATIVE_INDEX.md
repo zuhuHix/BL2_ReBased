@@ -418,3 +418,5 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPlayerController.GetDefaultDefaultFOV / GetVerticalDefaultDefaultFOV | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | default FOV 70 | UNVERIFIED | high | |
 | WillowPlayerController.CalculateFlexibleFOV / CalculateFlexibleFOVModifier / CalculateInverseFlexibleFOV / CalculateInverseFlexibleFOVModifier | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | sprint and zoom FOV | UNVERIFIED | high / medium | |
 | WillowPlayerController.GetFOVAngle / UpdateFOVAspectRatioScalar / IsZoomed | [NATIVE_PLAYER_MOVEMENT.md](NATIVE_PLAYER_MOVEMENT.md) | final FOV, zoom test | UNVERIFIED | medium | |
+| UClass serial body (interfaces table) | [NATIVE_CLASS_SERIAL_LAYOUT.md](NATIVE_CLASS_SERIAL_LAYOUT.md) | interface casts (IMission, IUsable, IMissionObjective) | UNVERIFIED | high (byte layout, 3,339/3,339 Class exports fit exactly); medium (field meaning) | |
+| UClass serial body (class flags, within, config name, default object) | [NATIVE_CLASS_SERIAL_LAYOUT.md](NATIVE_CLASS_SERIAL_LAYOUT.md) | class identity, Default__<Class> lookup | UNVERIFIED | high | |
