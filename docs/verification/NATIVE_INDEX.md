@@ -295,3 +295,26 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPawn.NotifyDamageTaken / AddDamageToHitRegion / GetHitRegionForTakenDamage | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | hit regions (bodies not resolved) | UNVERIFIED | low | |
 | BodyClassDeathDefinition.OnKilledBy / OnDeathNonGib / OnDeathGib / OnPlayDeathPizazz | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | AI death behavior events | UNVERIFIED | high | |
 | WillowExperiencePipeline.CalculateExperiencePointsForKill / AwardCombatExperienceToParty | [NATIVE_DAMAGE_DEATH.md](NATIVE_DAMAGE_DEATH.md) | kill XP (structure only) | UNVERIFIED | low | |
+| WillowWeapon states Active/WeaponFiring/WeaponReloading (script) | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: trigger to shot, refire, burst, auto-reload | UNVERIFIED | high | |
+| Weapon.GetFireInterval (WillowWeapon override) | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: shot cadence, barrel spin-up | UNVERIFIED | high | |
+| WillowWeapon.GetBurstInterval | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: burst gap | UNVERIFIED | high | |
+| WillowWeapon.GetFiringModeDefinition | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: Bullet/HitScan/Rocket selection | UNVERIFIED | high | |
+| WillowWeapon.GetAmmoCount | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: ammo pool vs clip | UNVERIFIED | high | |
+| WillowWeapon.GetMaxAmmo | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: ammo cap | UNVERIFIED | high | |
+| WillowWeapon.ShouldAutoReloadWhileFiring | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: auto-reload on empty clip | UNVERIFIED | medium | |
+| WillowWeapon.GetZoomEffect | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: zoom removes pool cone | UNVERIFIED | high | |
+| FiringModeDefinition.GetFiringPatternAdjustments | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | shotgun pellet pattern | UNVERIFIED | medium | |
+| FiringModeDefinition.NotifyFiringPatternWhenShotComplete | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | pattern index reset | UNVERIFIED | medium | |
+| WillowLightProjectileManager.AddProj | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: bullet travel time and hit sweep | UNVERIFIED | medium | |
+| WillowWeapon.ProcessInstantHitBullet | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: impact to TakeDamage | UNVERIFIED | medium | |
+| WillowWeapon.GetMultiProjectileDamage | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | shotgun pellet damage | UNVERIFIED | medium | |
+| WillowWeapon.ShouldBulletRicochetTowardsEnemy | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | ricochet (not slice) | UNVERIFIED | low | |
+| Weapon.GetTraceRange | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: hit-scan range = WeaponRange | UNVERIFIED | high | |
+| WillowPlayerController.AddWeaponKick | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: view kick per shot | UNVERIFIED | medium | |
+| WillowPlayerController.ApplyWanderingAndKick | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Fire: kick recovery per frame | UNVERIFIED | medium | |
+| WillowPlayerController.GetAccuracy / GetBaseAccuracy | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | accuracy pool current/min readers | UNVERIFIED | medium | |
+| WillowWeapon.GetCurrentRecoilAnimScale / GetCurrentZoomedRecoilAnimScale | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | recoil animation scale | UNVERIFIED | medium | |
+| ResourcePool.AddCurrentValueImpulse / HasIdleDelayPassed / GetTotalRegenRate | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | accuracy bloom and recovery | UNVERIFIED | medium | |
+| Actor.SetTimer (rate 0) | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | reload interruption | UNVERIFIED | low | |
+| WillowWeapon.OnAbortReload | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Phaselock aborts reload (body unread) | UNVERIFIED | low | |
+| WillowWeapon.GetStatusEffectBaseDamage / GetStatusEffectChanceModifier / GetStatusEffectBaseChanceModifier / GetFireIntervalChanceModifier | [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) | Maliwan fire pistol: chance and DoT inputs | UNVERIFIED | high | |
