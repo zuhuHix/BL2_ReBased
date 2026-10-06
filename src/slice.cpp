@@ -27,6 +27,8 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     dummy_ = std::make_unique<BehaviorProvider>(runtime, package, index);
     // The stock GoToRange waypoint (placed in the same level package), if the package has it.
     script_->placeWaypoint(package, "TheWorld.PersistentLevel.WillowWaypoint_9");
+    // Marcus, the mission director: the stock archetype with his own directive table (NATIVE_USE_INTERACTION.md); the placed pawn is an instance of it.
+    script_->placeMarcus(package, "GD_Marcus.Character.Pawn_Marcus");
     dummyName_ = dummyProviderPath.substr(dummyProviderPath.rfind('.') + 1);
     auto& d = *dummy_;
     // Behavior_UpdateMissionObjective is script (NATIVE_OBJECTIVE_TRIGGERS.md): it runs on the VM and reaches the tracker's UpdateObjective.
@@ -212,10 +214,22 @@ void FireMissionSlice::pump() {
     errors_.push_back("mission/dummy state did not settle");
 }
 
-// WillowPlayerController.AcceptMission runs as script; its native ActivateMission drives MissionSystem. The kickoff is the
-// pending record that the next tick() plays (bridge note); the mission's first objective set follows from it.
+// What Marcus's mission screen offers, from his own list scripts (NATIVE_USE_INTERACTION.md); the screen itself is not hosted.
+MissionScript::MissionLists FireMissionSlice::screen(const std::set<std::string>& completed) {
+    completedMissions_ = completed;
+    return script_->missionLists(completed);
+}
+
+// The confirm button on an entry (bridge note, "Calls into the C1 natives"): a thin wrapper kept for the CLI and the tests. When Marcus is
+// placed, the entry must be one his screen offers (the button only exists for an offered entry); WillowPlayerController.AcceptMission then
+// runs as script with Marcus as the director, and its native ActivateMission drives MissionSystem. The kickoff is the pending record that the
+// next tick() plays (bridge note); the mission's first objective set follows from it.
 bool FireMissionSlice::accept(const std::set<std::string>& completed) {
     completedMissions_ = completed;
+    if (script_->hasMarcus()) {
+        const auto lists = script_->missionLists(completed);
+        if (std::find(lists.eligible.begin(), lists.eligible.end(), mission_->path()) == lists.eligible.end()) return false;
+    }
     const bool ok = script_->accept(completed);
     pump();
     return ok;
@@ -270,10 +284,13 @@ bool FireMissionSlice::loadState(const std::string& state) {
     return true;
 }
 
-// WillowPlayerController.ServerCompleteMission runs as script (CompleteMission, then PlayTurnIn). The real turn-in screen
-// offers it only when MissionTracker.CanEndMission holds, so a mission that is not ready is refused here, before the script.
+// WillowPlayerController.ServerCompleteMission runs as script (CompleteMission, then PlayTurnIn) with Marcus as the director. The real turn-in
+// screen offers it only for a redeemable entry (CanEndMission holds), so a mission his lists do not offer is refused here, before the script.
 bool FireMissionSlice::turnIn() {
-    if (mission_->status() != MissionSystem::Status::ReadyToTurnIn) return false;
+    if (script_->hasMarcus()) {
+        const auto lists = script_->missionLists(completedMissions_);
+        if (std::find(lists.redeemable.begin(), lists.redeemable.end(), mission_->path()) == lists.redeemable.end()) return false;
+    } else if (!mission_->canEnd()) return false;
     const bool ok = script_->turnIn();
     pump();
     return ok;

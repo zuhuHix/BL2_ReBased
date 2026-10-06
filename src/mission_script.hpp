@@ -21,7 +21,7 @@ namespace vm {
 // object like src/mover.cpp, onto the existing MissionSystem, which stays the single owner of the mission's state.
 //
 // Natives implemented here (all UNVERIFIED, read from native code in the bridge note and NATIVE_PROGRESSION.md):
-// MissionTracker.ActivateMission, CompleteMission, PlayTurnIn, GetMissionStatus, IsDataValid;
+// MissionTracker.ActivateMission, CompleteMission, PlayTurnIn, GetMissionStatus, CanStartMission, CanEndMission, GetCompletedBranch, IsDataValid;
 // WillowPlayerController.NativeGetMissionIndex, ExpEarn, GetMaxExpLevel, GetExpPointsRequiredForLevel;
 // MissionDefinition.GetExperienceReward, GetGameStage, GetCurrencyRewardType, GetCurrencyReward, ShouldGrantAlternateReward,
 // GetItemRewardsForPlayer (empty rewards only). The experience pool and its level-up (ApplyExpPointsToExpLevel, run from
@@ -73,6 +73,16 @@ public:
     float playerInteractionDistance();
     void touch(Toucher who);
     void untouch(Toucher who);
+    // The mission screen's lists (NATIVE_USE_INTERACTION.md, "Marcus's chain (data) and the lists (script)", UNVERIFIED): a VM Marcus built from
+    // the stock archetype `path` of `package` (a WillowAIPawn whose MissionDirectivesDefinition table is the data's; authority, the VM world)
+    // stands for the one MissionDirector. Its own script builds the eligible / in-progress / redeemable lists over that table and the tracker's
+    // CanStartMission / CanEndMission / GetMissionStatus / GetCompletedBranch, which read the MissionSystem; the screen's movie itself is not
+    // hosted. AcceptMission / ServerCompleteMission then get Marcus as their director, so OnPlayerAcceptedMission / OnPlayerTurnedInMission
+    // run as script. False when the package has no such pawn (the director stays None).
+    bool placeMarcus(const std::shared_ptr<const Package>& package, const std::string& path);
+    bool hasMarcus() const { return director_ != nullptr; }
+    struct MissionLists { std::vector<std::string> eligible, inProgress, redeemable; };   // mission paths, the script's own order
+    MissionLists missionLists(const std::set<std::string>& completed);
     // Runs a script behavior's ApplyBehaviorToContext on the VM (e.g. Behavior_UpdateMissionObjective: the world's tracker, UpdateObjective).
     void applyBehavior(ObjectPtr behavior, ObjectPtr context);
     // The tracker's observer notifications reach the VM observers (a registered waypoint) as their MissionReaction* script events.
@@ -91,7 +101,7 @@ private:
     Runtime& runtime_;
     MissionSystem& mission_;
     ObjectPtr controller_, tracker_, world_, replication_, globals_, globalsDefinition_;
-    ObjectPtr waypoint_, playerPawn_, marcusPawn_;
+    ObjectPtr waypoint_, playerPawn_, marcusPawn_, director_;
     int objectiveUpdates_ = 0;
     std::vector<ObjectPtr> observers_;                 // IMission observers registered with the tracker (the waypoint)
     std::set<std::string> completed_;

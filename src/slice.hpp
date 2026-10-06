@@ -44,6 +44,9 @@ public:
     MissionSystem& mission() { return *mission_; }
     BehaviorProvider& dummy() { return *dummy_; }
     bool accept(const std::set<std::string>& completedMissions);
+    // The mission screen's three lists (Marcus's own script over his directive table and the tracker's availability queries): the host's use key
+    // confirms the entry offered here (a host stand-in for the button press) with accept / turnIn.
+    MissionScript::MissionLists screen(const std::set<std::string>& completedMissions);
     bool enterRange();                       // the GoToRange objective: the player enters the waypoint's cylinder (touchWaypoint)
     // The host's overlap of the waypoint's cylinder with the player pawn (or Marcus): begin / end. The stock WillowWaypoint script runs on
     // the VM: Touch for a player-owned pawn updates GoToRange when it is updatable, and the set-changed reaction re-checks the actors

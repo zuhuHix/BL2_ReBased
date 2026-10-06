@@ -23,8 +23,8 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | MissionTracker.SetKickoffHeard | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | sets bHeardKickoff | UNVERIFIED | high | |
 | MissionTracker.GetMissionStatus | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | status lookup | UNVERIFIED | high | src/mission_script.cpp |
 | MissionTracker.MissionDependenciesMet | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | availability | UNVERIFIED | high | |
-| MissionTracker.CanStartMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | availability incl. blocked test | UNVERIFIED | high | |
-| MissionTracker.CanEndMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | turn-in availability | UNVERIFIED | high | |
+| MissionTracker.CanStartMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | availability incl. blocked test | UNVERIFIED | high |  `src/mission_script.cpp` bound; `MissionSystem::canStart` (NotStarted and dependencies met; Failed, repeatable and the blocked test not modelled; a mission without a record is not offered) |
+| MissionTracker.CanEndMission | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | turn-in availability | UNVERIFIED | high |  `src/mission_script.cpp` bound; `MissionSystem::canEnd` (ReadyToTurnIn; RequiredObjectivesComplete and the blocked test not modelled) |
 | MissionDefinition.GetCurrencyRewardType | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: reward currency type | UNVERIFIED | high | src/mission_script.cpp |
 | MissionDefinition.GetCurrencyReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | Fire: credits (0) | UNVERIFIED | medium | src/mission_script.cpp (multiplier 0 and other currencies; credits formula not implemented) |
 | MissionDefinition.GetOptionalCreditReward | [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) | none for Fire | UNVERIFIED | medium | |
@@ -235,7 +235,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | MissionTracker.RegisterMissionDirector | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director table (presentation) | UNVERIFIED | medium | |
 | MissionTracker.UnregisterMissionDirector | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | director table (presentation) | UNVERIFIED | medium | |
 | MissionTracker.ProcessDynamicMissionDirectives | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | client refresh of the director table | UNVERIFIED | medium-low | |
-| MissionTracker.GetCompletedBranch | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | redeemable filter (Fire: branch None) | UNVERIFIED | medium-high | |
+| MissionTracker.GetCompletedBranch | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | redeemable filter (Fire: branch None) | UNVERIFIED | medium-high |  `src/mission_script.cpp` bound; `MissionSystem::completedBranch` (0 unless ReadyToTurnIn/Complete, then the last set's objectives all complete = 1, else 2) |
 | AIClassDefinition.OnUsed (and OnSecondaryUsed, OnUserCouldNotAfford, OnUserCouldNotAffordSecondary) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: starts Marcus's behavior chain | UNVERIFIED | high | |
 | AIDefinition.OnUsed (and the three twins) | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | Fire: starts Marcus's behavior chain | UNVERIFIED | high | |
 | WillowAIPawn.UpdateLookAtTarget | [NATIVE_USE_INTERACTION.md](NATIVE_USE_INTERACTION.md) | talk state (look-at target) | UNVERIFIED | medium-low | |

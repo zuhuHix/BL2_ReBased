@@ -286,12 +286,28 @@ void MissionSystem::evaluateSet() {
 }
 
 bool MissionSystem::accept(const std::set<std::string>& completed) {
-    if (status_ != Status::NotStarted || !available(completed)) return false;
+    if (!canStart(completed)) return false;
     // B4 (UNVERIFIED): which runs first, the status event or the initial set, was not settled; status first here.
     setStatus(Status::Active);
     if (activateInitialSet_ && activeSet_.empty() && !initialSet_.empty()) activateSet(initialSet_);
     collectProviderErrors();
     return true;
+}
+
+int MissionSystem::completedBranch() const {
+    if (status_ != Status::ReadyToTurnIn && status_ != Status::Complete) return 0;
+    const ObjectiveSet* last = nullptr;
+    std::set<std::string> seen;
+    for (std::string path = initialSet_; !path.empty() && seen.insert(path).second;) {
+        const auto found = std::find_if(sets_.begin(), sets_.end(), [&](const ObjectiveSet& set) { return set.path == path; });
+        if (found == sets_.end()) break;
+        last = &*found;
+        path = found->next;
+    }
+    if (!last || last->cls != "WillowGame.MissionObjectiveSetDefinition") return 0;
+    for (const auto& objective : last->objectives)
+        if (!completedObjectives_.count(objective)) return 2;
+    return 1;
 }
 
 bool MissionSystem::kickoff(bool dialogOnly) {

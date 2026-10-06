@@ -987,3 +987,44 @@ ids 0 and 1. Implementing it now would be guessing. The other pieces have notes.
 - `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
 - **`tools/test_quest.ps1`: first run PASS checks=86 errors=0, resume PASS checks=11 errors=0** (83 before, three new use-ray checks).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6c: the mission screen's logic as script (2026-10-06)
+
+Sources: `NATIVE_USE_INTERACTION.md` ("Marcus's chain (data) and the lists (script)", the button section) and `NATIVE_MISSION_SCRIPT_BRIDGE.md`
+("Availability queries", "IMissionDirector implementers"). Every rule is UNVERIFIED (read from native code, not confirmed in the running game).
+The screen's movie is not hosted; 6b (the use itself, `OnUsed` through the kernel) waits for the `Behavior_IsSequenceEnabled` note.
+
+- **A VM Marcus:** `MissionScript::placeMarcus` instantiates the stock archetype `GD_Marcus.Character.Pawn_Marcus` (a `WillowAIPawn`, so his
+  `MissionDirectivesDefinition_1` table, seven entries, is the data's), with authority role and the VM world. The VM does not load references, so
+  the table's reference is loaded in `placeMarcus`; the entries' missions stay references (imports into the mission's package). The same pawn is the
+  waypoint's Marcus toucher (it replaces the bare `WillowAIPawn` of swap 5; identity only).
+- **Bound natives (tracker):** `CanStartMission` (the `MissionSystem` predicate `canStart`, the one `accept()` now uses: NotStarted and dependencies
+  met), `CanEndMission` (`canEnd`: ReadyToTurnIn), `GetCompletedBranch` (`completedBranch`, per the note: follow `NextSet` from the initial set to
+  the last, 1 when all of its objectives are complete, 2 when not, 0 unless ReadyToTurnIn/Complete). A mission argument is matched by export path, so
+  a directive entry (a reference) and the loaded definition are the same mission. Not modelled: Failed, repeatable Complete, the blocked-mission
+  test, RequiredObjectivesComplete (`MissionSystem` has no such state). The tracker holds one mission record, so every other mission of Marcus's table
+  (the other six entries) answers "no record": not startable, not endable, branch 0, status NotStarted (stand-in).
+- **The lists are the stock script:** `WillowAIPawn.GetEligibleMissions`, `GetInProgressMissions`, `GetRedeemableMissions` run unchanged on the VM
+  Marcus (`MissionScript::missionLists`; `FireMissionSlice::screen`; `--slice-run ... screen`, `--mission-run ... script:screen`). Real data:
+  NotStarted -> eligible [Fire]; Active -> in progress [Fire]; the Complete / ReadyToTurnIn rows are covered by the toy scenario and by the
+  quest suite (the real Fire mission cannot reach ReadyToTurnIn from the CLI without Kismet).
+- **The confirm:** the host's use key asks the lists (`UOpenWillowQuest::MissionScreen`) and confirms the one offered entry (redeemable first, as
+  `DetermineQuestEntries` lists them), a host stand-in for the button press: `slice.accept()` / `turnIn()` now check the lists, then run the stock
+  `AcceptMission(Mission, Director = Marcus)` / `ServerCompleteMission(Mission, Marcus)` scripts. They stay as thin wrappers for the CLI and tests.
+  A mission the lists do not offer is refused before the script (the button does not exist); the hint line and the key's "consumed" result use the
+  same lists. With no Marcus in the data (the toy packages) the old direct path remains.
+- **Director callbacks (script now):** `AcceptMission` calls `OnPlayerAcceptedMission(controller, mission)` and `ServerCompleteMission` calls
+  `OnPlayerTurnedInMission` after `CompleteMission`, as stock script. Both are the stock `WillowAIPawn` functions; with nobody registered in
+  `PawnsUsingMe` (the accept screen's `BeginUse` is part of opening the screen, 6b) they return at their first test, so they reach **no** further
+  native here. When the screen is opened by the VM they will reach `MissionsAcceptedByPrimaryUser` / `PlayMissionTurnedInDialog` (not exercised).
+- **Stubs:** no new ones: after accept 9 and after turn-in 15 in the quest log, the same lists as before the swap (CLI `--slice-run` the same).
+- **Tests:** `mission-script-synthetic` scenario G (toy director with five invented entries: begins, begins+ends, other-mission end only, branch 1 and
+  branch 2 endings; toy list functions in the stock structure over the bridge's natives): eligible only when NotStarted; in progress when Active
+  (no dedup); redeemable by the completed branch when ready (branch-2 entry and the other mission not offered); nothing when Complete; an accept
+  while Active is refused and the screen no longer offers it; the callbacks run (markers 120 / 121), the turn-in one before the reward. Quest suite:
+  `mission_screen_offers_fire_from_marcus_directives` and `mission_screen_offers_turn_in_when_ready` added; all `use_key_*` names unchanged.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=88 errors=0, resume PASS checks=11 errors=0** (86 before, two new screen checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**

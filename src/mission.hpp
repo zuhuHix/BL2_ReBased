@@ -65,6 +65,15 @@ public:
     // Every dependency mission is in `completed` (paths), and the ObjectiveDependency, if any, holds: `objectiveStates`
     // maps objective paths of other missions to "Complete" / "Active" (B6).
     bool available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates = {}) const;
+    // The tracker's availability queries (NATIVE_MISSION_SCRIPT_BRIDGE.md, "Availability queries", UNVERIFIED), the predicates accept() and the
+    // mission screen's lists share. canStart: status NotStarted and the dependencies met (Failed, repeatable Complete and the blocked-mission
+    // test are not modelled: nothing in this mission blocks). canEnd: ReadyToTurnIn (RequiredObjectivesComplete is not modelled).
+    bool canStart(const std::set<std::string>& completed) const { return status_ == Status::NotStarted && available(completed); }
+    bool canEnd() const { return status_ == Status::ReadyToTurnIn; }
+    // GetCompletedBranch (NATIVE_USE_INTERACTION.md, UNVERIFIED): 0 (EMBE_None) unless the mission is ReadyToTurnIn or Complete; then follow NextSet from
+    // the initial set to the last set; for the objective-set class that lists ObjectiveDefinitions, 2 when any of its objectives is not complete, 1 when
+    // all are; 0 when there is no initial set or the last set is of another class.
+    int completedBranch() const;
     // ActivateMission: NotStarted -> Active ("Default" id 7), then the initial set only when bActivateInitialObjectiveSet.
     // Acceptance also writes the pending kickoff record (SetActiveMission), which the next tick() consumes.
     bool accept(const std::set<std::string>& completed);

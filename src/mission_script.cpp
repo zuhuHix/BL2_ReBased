@@ -42,7 +42,12 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     playthroughs = Value::makeArray();
     playthroughs.elements().push_back(runtime.newStruct("WillowGame.WillowPlayerController.MissionPlaythroughData"));
 
-    const auto isMission = [this](const Value& value) { return value.kind == Value::Kind::Object && value.o && value.o == mission_.definition(); };
+    // The mission object, or a reference to the same export (a director table names missions by reference, an import into the mission's package).
+    const auto isMission = [this](const Value& value) {
+        if (value.kind != Value::Kind::Object || !value.o) return false;
+        if (value.o == mission_.definition()) return true;
+        return value.o->resourcePackage && value.o->resourcePackage->path(value.o->resourceIndex) == mission_.path();
+    };
     // ActivateMission / CompleteMission (bridge note): thin front ends of the status routine, which MissionSystem owns. The
     // native itself refuses silently (no record, wrong status, dependencies not met) and ignores the role. Not modelled:
     // CompleteMission's chain to NextMissionInChain, the untracking, the unlock queue and the fast-forward prompt.
@@ -65,6 +70,20 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     bind("WillowGame.MissionTracker.GetMissionStatus", [this, isMission](NativeCall& c) {
         if (c.self != tracker_) return outsideBinding(c);
         return Value::makeByte(isMission(c.in(0)) ? mission_.statusNumber() : 0);   // no record: NotStarted
+    });
+    // The availability queries (bridge note, "Availability queries"): the mission's record is the MissionSystem; a mission without a record
+    // (any other mission of Marcus's table) is NotStarted and is not offered here (the tracker holds one mission), UNVERIFIED stand-in.
+    bind("WillowGame.MissionTracker.CanStartMission", [this, isMission](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeBool(isMission(c.in(0)) && mission_.canStart(completed_));
+    });
+    bind("WillowGame.MissionTracker.CanEndMission", [this, isMission](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeBool(isMission(c.in(0)) && mission_.canEnd());
+    });
+    bind("WillowGame.MissionTracker.GetCompletedBranch", [this, isMission](NativeCall& c) {
+        if (c.self != tracker_) return outsideBinding(c);
+        return Value::makeByte(isMission(c.in(0)) ? mission_.completedBranch() : 0);
     });
     // The controller's own list lookup (NATIVE_CONTROLLER_HELPERS.md): the index of the first record of the current playthrough's list
     // whose MissionDef is that object, -1 when the playthrough index is out of range or there is none.
@@ -322,14 +341,14 @@ bool MissionScript::accept(const std::set<std::string>& completed) {
     completed_ = completed;
     const auto before = mission_.status();
     run([this] {
-        runtime_.callByName(controller_, "AcceptMission", {Value::makeObject(mission_.definition()), Value::makeObject(nullptr)});
+        runtime_.callByName(controller_, "AcceptMission", {Value::makeObject(mission_.definition()), Value::makeObject(director_)});
     });
     return mission_.status() != before;
 }
 
 bool MissionScript::turnIn() {
     run([this] {
-        runtime_.callByName(controller_, "ServerCompleteMission", {Value::makeObject(mission_.definition()), Value::makeObject(nullptr)});
+        runtime_.callByName(controller_, "ServerCompleteMission", {Value::makeObject(mission_.definition()), Value::makeObject(director_)});
     });
     return mission_.status() == MissionSystem::Status::Complete;
 }
@@ -403,6 +422,42 @@ ObjectPtr MissionScript::pawnFor(Toucher who) {
         if (who == Toucher::Player) required(runtime_, *pawn, "Controller") = Value::makeObject(controller_);
     }
     return pawn;
+}
+
+bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, const std::string& path) {
+    const int32_t index = package ? runtime_.findExport(*package, path) : 0;
+    if (index <= 0) return false;
+    director_ = runtime_.instantiateExport(package, index, 4);
+    const auto roles = enumNames(runtime_, "Engine", "Actor.ENetRole");
+    required(runtime_, *director_, "Role") = Value::makeByte(std::find(roles.begin(), roles.end(), "ROLE_Authority") - roles.begin());
+    required(runtime_, *director_, "WorldInfo") = Value::makeObject(world_);
+    // The directive table is archetype data: a reference to a MissionDirectivesDefinition export, loaded here (the VM does not load references).
+    Value& directives = required(runtime_, *director_, "MissionDirectives");
+    if (directives.kind == Value::Kind::Object && directives.o) directives = Value::makeObject(loadRef(directives));
+    marcusPawn_ = director_;      // the same pawn is the waypoint's Marcus toucher
+    return true;
+}
+
+MissionScript::MissionLists MissionScript::missionLists(const std::set<std::string>& completed) {
+    MissionLists lists;
+    if (!director_) return lists;
+    completed_ = completed;
+    const auto collect = [this](const char* name, std::vector<std::string>& into) {
+        Function* function = runtime_.findMethod(director_->cls, name);
+        if (!function) throw RuntimeError(std::string("mission script bridge: Marcus has no ") + name);
+        std::vector<Value> outs;
+        runtime_.call(*function, director_, {Value::makeArray()}, &outs);
+        if (!outs.empty() && outs[0].kind == Value::Kind::Array)
+            for (const Value& mission : outs[0].elements())
+                if (mission.kind == Value::Kind::Object && mission.o && mission.o->resourcePackage)
+                    into.push_back(mission.o->resourcePackage->path(mission.o->resourceIndex));
+    };
+    run([&] {
+        collect("GetEligibleMissions", lists.eligible);
+        collect("GetInProgressMissions", lists.inProgress);
+        collect("GetRedeemableMissions", lists.redeemable);
+    });
+    return lists;
 }
 
 bool MissionScript::placeWaypoint(const std::shared_ptr<const Package>& package, const std::string& path) {

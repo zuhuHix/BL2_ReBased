@@ -83,6 +83,20 @@ void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
     }
 }
 
+// Marcus's mission screen lists as JSON (--slice-run `screen`, --mission-run `script:screen`).
+std::string missionListsJson(const vm::MissionScript::MissionLists& lists) {
+    std::string out = "{";
+    const auto one = [&out](const char* name, const std::vector<std::string>& paths, bool last) {
+        out += std::string("\"") + name + "\":[";
+        for (size_t i = 0; i < paths.size(); ++i) out += (i ? "," : "") + quote(paths[i]);
+        out += last ? "]" : "],";
+    };
+    one("eligible", lists.eligible, false);
+    one("in_progress", lists.inProgress, false);
+    one("redeemable", lists.redeemable, true);
+    return out + "}";
+}
+
 // The mission script bridge's report, shared by --mission-run and --slice-run (src/mission_script.hpp): the controller's own
 // record of the mission, every ExpEarn call, the natives without an implementation that the script reached, VM notes.
 void printScriptReport(int playerStatus, bool needsRewards, int playerLevel, float pool, const std::vector<vm::MissionScript::ExpEarn>& earned,
@@ -581,7 +595,7 @@ int main(int argc, char** argv) {
         }
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
-            // turnin | tick:<seconds> | script:accept | script:turnin | stage:<n> | player:<level>:<experience> | pool |
+            // turnin | tick:<seconds> | script:accept | script:turnin | script:screen | stage:<n> | player:<level>:<experience> | pool |
             // lines:<seconds> (a test line player: every dialog line lasts that long) | talker:<name tag path> (a pawn that can talk)
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
@@ -595,6 +609,7 @@ int main(int argc, char** argv) {
             for (int i = 6; i < argc; ++i)
                 if (std::string(argv[i]).rfind("script:", 0) == 0 || std::string(argv[i]).rfind("stage:", 0) == 0 || std::string(argv[i]).rfind("player:", 0) == 0) {
                     script = std::make_unique<vm::MissionScript>(runtime, mission);
+                    script->placeMarcus(runtime.package(package->packageName), "GD_Marcus.Character.Pawn_Marcus");   // the director, when the package has him
                     break;
                 }
             std::set<std::string> completed;
@@ -605,7 +620,9 @@ int main(int argc, char** argv) {
             for (int i = 6; i < argc; ++i) {
                 const std::string step = argv[i];
                 bool ok = true;
+                std::string screenJson;
                 if (step == "accept") ok = mission.accept(completed);
+                else if (step == "script:screen" && script) screenJson = missionListsJson(script->missionLists(completed));
                 else if (step == "script:accept" && script) ok = script->accept(completed);
                 else if (step == "script:turnin" && script) ok = script->turnIn();
                 else if (step.rfind("stage:", 0) == 0 && script) script->setRegionGameStage(std::stoi(step.substr(6)));
@@ -629,6 +646,7 @@ int main(int argc, char** argv) {
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
                           << ",\"set\":" << quote(mission.activeSet()) << ",\"status\":" << int(mission.status())
+                          << (screenJson.empty() ? "" : ",\"screen\":" + screenJson)
                           << ",\"kickoff_pending\":" << (mission.kickoffPending() ? "true" : "false") << ",\"effects\":[";
                 first = false;
                 bool firstEffect = true;
@@ -655,8 +673,9 @@ int main(int argc, char** argv) {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
             // Each step's record carries the mission status after it.
             // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
-            // owns) | player:<level>:<experience> (the player's state). accept and turnin run the installed controller script;
-            // tick also runs the experience pool update.
+            // owns) | player:<level>:<experience> (the player's state) | screen (Marcus's mission lists, printed with the step). accept and turnin
+            // run the installed controller script with Marcus as the director (the entry must be one his lists offer); tick also runs the
+            // experience pool update.
             // Package argument is Sanctuary_Dynamic.
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
@@ -673,7 +692,9 @@ int main(int argc, char** argv) {
             for (int i = 6; i < argc; ++i) {
                 const std::string step = argv[i];
                 bool ok = true;
+                std::string screenJson;
                 if (step == "accept") ok = slice.accept(completed);
+                else if (step == "screen") screenJson = missionListsJson(slice.screen(completed));
                 else if (step == "range") ok = slice.enterRange();
                 else if (step == "touch:player" || step == "touch:marcus") slice.touchWaypoint(step == "touch:player", true);      // overlap begins
                 else if (step == "untouch:player" || step == "untouch:marcus") slice.touchWaypoint(step == "untouch:player", false);
@@ -693,7 +714,7 @@ int main(int argc, char** argv) {
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
-                          << ",\"status\":" << int(slice.mission().status()) << ",\"events\":[";   // the mission status after the step
+                          << ",\"status\":" << int(slice.mission().status()) << (screenJson.empty() ? "" : ",\"screen\":" + screenJson) << ",\"events\":[";   // the mission status after the step
                 first = false;
                 bool firstEvent = true;
                 for (const auto& event : slice.drain()) {

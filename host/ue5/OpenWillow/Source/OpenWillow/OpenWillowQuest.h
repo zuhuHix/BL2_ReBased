@@ -97,6 +97,9 @@ private:
     bool TouchesTrigger(const class AActor* Actor) const;
     bool bPlayerInRange = false, bMarcusInRange = false;     // the waypoint cylinder overlap last reported to the slice
     bool InTalkReach() const;
+    // What Marcus's mission screen offers for this mission (NATIVE_USE_INTERACTION.md): his own list scripts run on the VM; the screen itself is
+    // not hosted. bOffered: the mission is in the redeemable or eligible list (redeemable entries come first).
+    void MissionScreen(bool& bRedeemable, bool& bEligible) const;
     void SpawnMarcus();
     void SpawnDummy();
     void ProcessArrivals();

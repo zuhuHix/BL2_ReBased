@@ -24,6 +24,13 @@ package; its toy script (Touch, ProcessPlayerTouch, the set-changed reaction ove
 mission observer) mirrors the stock one in structure, over invented classes. The controller's toy UpdateMissionObjective records the
 marker ExpEarn(0, 210), so the number of such records is the number of applied objective updates the controller was told about.
 
+The director scenario (--mission-run on `DirectorMission`, scenario G) adds a toy Marcus, GD_Marcus.Character.Pawn_Marcus (a WillowAIPawn), whose
+MissionDirectives table has five invented entries (another mission that begins, ToyMission that begins and ends, another that only ends,
+ToyMission ending on branch 1 and on branch 2). Its three toy list functions (GetEligible/InProgress/RedeemableMissions) mirror the stock ones
+in structure and call the bridge's CanStartMission / CanEndMission / GetMissionStatus / GetCompletedBranch; its OnPlayerAcceptedMission /
+OnPlayerTurnedInMission leave the markers ExpEarn(0, 120) / (0, 121). The toy controller calls them when AcceptMission / ServerCompleteMission
+get a director.
+
 The dialog scenario (--mission-run, scenario E) uses a toy mission whose provider runs Behavior_TriggerDialogEvent behaviors over a toy
 dialog group (invented tags, priorities, acts, a talker name tag): Out on the first run, the dialog one kernel wake later, Finished when
 the live line ends, the priority arbitration with the tracked-mission floor, the last enabled entry for a tag, a template act through the
@@ -134,6 +141,8 @@ class Asm:
     def self_(self): self.raw(0x17)
     def false(self): self.raw(0x28)
     def return_nothing(self): self.raw(0x04, 0x0B)
+    def struct_member(self, prop, struct, expr): self.raw(0x35); self.ref(prop); self.ref(struct); self.raw(0, 0); expr()
+    def jump(self): self.raw(0x06); at = len(self.b); self.w(0); return at     # Jump(<target>); patch like jump_if_not
     def jump_if_not(self, cond):                # JumpIfNot(<target>, cond); returns the position to patch with the target statement
         self.raw(0x07); at = len(self.b); self.w(0); cond(); return at
     def patch(self, at): struct.pack_into('<H', self.b, at, self.here())   # the target is the next statement's in-memory offset
@@ -371,7 +380,10 @@ def build_willowgame():
     native = FUNC_NATIVE | FUNC_PUBLIC
 
     # Operators the toy ExpLevelUp uses: Object.+(int,int), registered by the core natives under native number 146.
-    T.function(T.cls('Object'), 'Add_IntInt', [('Int', 'P0', 0), ('Int', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Int', native=146, friendly='+')
+    object_cls = T.cls('Object')
+    T.function(object_cls, 'Add_IntInt', [('Int', 'P0', 0), ('Int', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Int', native=146, friendly='+')
+    T.function(object_cls, 'EqualEqual_IntInt', [('Int', 'P0', 0), ('Int', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=154, friendly='==')
+    T.function(object_cls, 'NotEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=119, friendly='!=')
     T.cls('GlobalAttributeValueResolver')
     reward = T.struct_(0, 'MissionRewardData')
     for field in ('ExperienceRewardPercentage', 'CreditRewardMultiplier', 'OtherCurrencyReward'): T.prop('Struct', reward, field, type_ref=aid)
@@ -432,7 +444,7 @@ def build_willowgame():
 
     engine_pawn = p.add_import_full('Class', engine, 'Pawn')
     T.cls('WillowPlayerPawn', super_ref=engine_pawn)
-    T.cls('WillowAIPawn', super_ref=engine_pawn)
+    ai_pawn = T.cls('WillowAIPawn', super_ref=engine_pawn)
     reactions = ['MissionReactionLevelLoad', 'MissionReactionStatusChanged', 'MissionReactionObjectiveSetChanged',
                  'MissionReactionObjectiveUpdated', 'MissionReactionObjectiveCleared', 'MissionReactionObjectiveComplete']
     imission = T.cls('IMission')
@@ -450,7 +462,10 @@ def build_willowgame():
     activate = T.function(tracker, 'ActivateMission', pair, None, native)['__self__']
     complete = T.function(tracker, 'CompleteMission', pair, None, native)['__self__']
     play_turn_in = T.function(tracker, 'PlayTurnIn', [('Object', 'InMission', 0)], None, native)['__self__']
-    T.function(tracker, 'GetMissionStatus', [('Object', 'InMission', 0)], None, native, 'Byte')
+    get_status = T.function(tracker, 'GetMissionStatus', [('Object', 'InMission', 0)], None, native, 'Byte')['__self__']
+    can_start = T.function(tracker, 'CanStartMission', [('Object', 'InMission', 0)], None, native, 'Bool')['__self__']
+    can_end = T.function(tracker, 'CanEndMission', [('Object', 'InMission', 0)], None, native, 'Bool')['__self__']
+    completed_branch = T.function(tracker, 'GetCompletedBranch', [('Object', 'InMission', 0)], None, native, 'Byte')['__self__']
     is_valid = T.function(tracker, 'IsDataValid', [], None, native, 'Bool')['__self__']
     validate = T.function(tracker, 'ValidateData', [], None, native)['__self__']
     T.prop('Bool', tracker, 'bDataValidated')
@@ -492,6 +507,81 @@ def build_willowgame():
     is_menu = p.add_import_full('Function', p.add_import_full('Class', engine, 'WorldInfo'), 'IsMenuLevel')
     exp_earn = T.function(controller, 'ExpEarn', [('Int', 'Exp', 0), ('Byte', 'Source', 0), ('Byte', 'ExpType', CPF_OPT)], None, native)['__self__']
 
+    # The toy director (a WillowAIPawn): the two callbacks leave markers (ExpEarn on the accepting controller), the three list functions mirror
+    # the stock ones in structure (iterate the directive table, test each entry against the tracker), over the invented classes.
+    director_calls = {}
+    imd = T.cls('IMissionDirector')
+    director_data = T.struct_(imd, 'MissionDirectorData')
+    d_mission = T.prop('Object', director_data, 'MissionDefinition')
+    d_begins = T.prop('Bool', director_data, 'bBeginsMission')
+    d_ends = T.prop('Bool', director_data, 'bEndsMission')
+    d_branch = T.prop('Byte', director_data, 'BranchEnding')
+    directives = T.cls('MissionDirectivesDefinition')
+    directives_array = T.array_of(directives, 'MissionDirectives', 'Struct', director_data)
+    directives_prop = T.prop('Object', ai_pawn, 'MissionDirectives')
+
+    def callback(marker):
+        def body(ids):
+            a = Asm()
+            a.context(lambda: a.local(ids, 'PlayerAccepting'), lambda: a.call(exp_earn, lambda: a.int_const(0), lambda: a.byte_const(marker)))
+            a.return_nothing(); a.end(); return a
+        return body
+    director_calls['OnPlayerAcceptedMission'] = T.function(ai_pawn, 'OnPlayerAcceptedMission', [('Object', 'PlayerAccepting', 0), ('Object', 'MissionAccepted', 0)], callback(120))['__self__']
+    director_calls['OnPlayerTurnedInMission'] = T.function(ai_pawn, 'OnPlayerTurnedInMission', [('Object', 'PlayerAccepting', 0), ('Object', 'MissionTurnedIn', 0)], callback(121))['__self__']
+
+    def director_list(name, test):
+        def body(ids):
+            a = Asm()
+            member = lambda prop: (lambda: a.struct_member(prop, director_data, lambda: a.local(ids, 'Data')))
+            tracker_call = lambda function: a.context(lambda: a.local(ids, 'Tracker'), lambda: a.call(function, member(d_mission)))
+            def add():
+                a.raw(0x55); a.raw(0x48); a.ref(ids['Out']); a.w(0); member(d_mission)(); a.raw(0x16)
+                a.raw(0x0F); a.local(ids, 'Count'); a.raw(146); a.local(ids, 'Count'); a.int_const(1); a.raw(0x16)
+            def int_equal(left, right): a.raw(154); left(); right(); a.raw(0x16)
+            cast = lambda inner: (lambda: (a.raw(0x38, 58), inner()))
+            a.raw(0x0F); a.local(ids, 'Count'); a.int_const(0)
+            a.raw(0x0F); a.local(ids, 'Tracker')
+            a.context(lambda: a.context(lambda: a.instance(world_info), lambda: a.instance(gri)), lambda: a.instance(tracker_prop))
+            a.raw(0x58); a.context(lambda: a.instance(directives_prop), lambda: a.instance(directives_array)); a.local(ids, 'Data'); a.raw(0); a.raw(0x4A)
+            end_at = len(a.b); a.w(0)
+            test(a, ids, member, tracker_call, add, int_equal, cast)
+            a.raw(0x31)
+            struct.pack_into('<H', a.b, end_at, a.here())
+            a.raw(0x30)
+            a.raw(0x04); a.local(ids, 'Count'); a.end(); return a
+        T.function(ai_pawn, name, [('Array', 'Out', CPF_OUT)], body, result='Int', locals_=[('Int', 'Count'), ('Struct', 'Data'), ('Object', 'Tracker')])
+
+    def eligible(a, ids, member, tracker_call, add, int_equal, cast):     # begins and CanStartMission
+        at1 = a.jump_if_not(lambda: (a.raw(0x2D), member(d_begins)()))
+        at2 = a.jump_if_not(lambda: tracker_call(can_start))
+        add()
+        a.patch(at2); a.patch(at1)
+
+    def redeemable(a, ids, member, tracker_call, add, int_equal, cast):   # ends, CanEndMission, branch None or the completed branch
+        at1 = a.jump_if_not(lambda: (a.raw(0x2D), member(d_ends)()))
+        at2 = a.jump_if_not(lambda: tracker_call(can_end))
+        at3 = a.jump_if_not(lambda: int_equal(cast(member(d_branch)), lambda: (a.raw(0x38, 58), a.byte_const(0))))    # branch is None: add
+        add()
+        done = a.jump()
+        a.patch(at3)
+        at4 = a.jump_if_not(lambda: int_equal(cast(lambda: tracker_call(completed_branch)), cast(member(d_branch))))
+        add()
+        a.patch(at4); a.patch(done); a.patch(at2); a.patch(at1)
+
+    def in_progress(a, ids, member, tracker_call, add, int_equal, cast):   # begins or ends, and the status is Active
+        at1 = a.jump_if_not(lambda: (a.raw(0x2D), member(d_begins)()))
+        check_status = a.jump()
+        a.patch(at1)
+        at2 = a.jump_if_not(lambda: (a.raw(0x2D), member(d_ends)()))
+        a.patch(check_status)
+        at3 = a.jump_if_not(lambda: int_equal(cast(lambda: tracker_call(get_status)), lambda: (a.raw(0x38, 58), a.byte_const(1))))
+        add()
+        a.patch(at3); a.patch(at2)
+
+    director_list('GetEligibleMissions', eligible)
+    director_list('GetRedeemableMissions', redeemable)
+    director_list('GetInProgressMissions', in_progress)
+
     def update_hook(ids):
         a = Asm()
         a.call(exp_earn, lambda: a.int_const(0), lambda: a.byte_const(210))
@@ -502,9 +592,15 @@ def build_willowgame():
         a.context(lambda: a.context(lambda: a.context(lambda: a.instance(world_info), lambda: a.instance(gri)),
                                     lambda: a.instance(tracker_prop)), body)
 
+    def with_director(a, ids, name):     # if (MissionDirector != None) MissionDirector.<name>(Self, Mission)
+        at = a.jump_if_not(lambda: (a.raw(119), a.local(ids, 'MissionDirector'), a.raw(0x2A), a.raw(0x16)))
+        a.context(lambda: a.local(ids, 'MissionDirector'), lambda: a.call(director_calls[name], a.self_, lambda: a.local(ids, 'Mission')))
+        a.patch(at)
+
     def accept(ids):
         a = Asm()
         on_tracker(a, lambda: a.call(activate, lambda: a.local(ids, 'Mission'), a.self_))
+        with_director(a, ids, 'OnPlayerAcceptedMission')
         def marker(condition, yes, no):       # ExpEarn(0, condition ? yes : no): the recorded Source says what the native answered
             a.call(exp_earn, lambda: a.int_const(0),
                    lambda: (a.raw(0x45), condition(), a.w(0), a.byte_const(yes), a.w(0), a.byte_const(no)))
@@ -517,6 +613,7 @@ def build_willowgame():
     def complete_mission(ids):
         a = Asm()
         on_tracker(a, lambda: a.call(complete, lambda: a.local(ids, 'Mission'), a.self_))
+        with_director(a, ids, 'OnPlayerTurnedInMission')
         on_tracker(a, lambda: a.call(play_turn_in, lambda: a.local(ids, 'Mission')))
         a.call(exp_earn,
                lambda: a.context(lambda: a.local(ids, 'Mission'), lambda: a.call(get_xp, a.self_, a.false)),
@@ -603,8 +700,9 @@ def build_willowgame():
     return p
 
 
-def build_mission():
-    """ToyMission: one set SetA {RockPaper_GoToRange (count 1)} (and an unused SetB) with bCanCompleteMission, activated at acceptance; a reward percentage that is an
+def build_mission(director=False):
+    """With director=True the package also holds a toy Marcus: GD_Marcus.Character.Pawn_Marcus (a WillowAIPawn) whose MissionDirectives reference
+    a table of five invented entries (below). ToyMission: one set SetA {RockPaper_GoToRange (count 1)} (and an unused SetB) with bCanCompleteMission, activated at acceptance; a reward percentage that is an
     attribute chain (constant 0.5 x a conditional on the playthrough count) and the experience curve definition at its stock path."""
     p = Package()
     t = Tags(p)
@@ -665,6 +763,21 @@ def build_mission():
     globals_package = p.add_export(chain('Core', 'Package'), 'GD_Globals', w32(0) + none)
     general_package = p.add_export(chain('Core', 'Package'), 'General', w32(0) + none, outer=globals_package)
     p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals', w32(0) + t.float('PlayerInteractionDistance', 420.0) + none, outer=general_package)
+    if director:
+        other = p.add_export(chain('WillowGame', 'MissionDefinition'), 'OtherMission', b'')
+        end_only = p.add_export(chain('WillowGame', 'MissionDefinition'), 'EndOnlyMission', b'')
+
+        def entry(ref, begins, ends, branch):
+            return t.obj('MissionDefinition', ref) + t.bool('bBeginsMission', begins) + t.bool('bEndsMission', ends) + t.byte('BranchEnding', branch) + none
+        # e1 another mission that begins; e2 ToyMission begins and ends (no branch); e3 another mission that only ends; e4 / e5 ToyMission ends on
+        # branch 1 / 2. Nothing in the tracker knows the other two missions, so they are never offered.
+        entries = [entry(other, True, False, 0), entry(mission, True, True, 0), entry(end_only, False, True, 0),
+                   entry(mission, False, True, 1), entry(mission, False, True, 2)]
+        table = p.add_export(chain('WillowGame', 'MissionDirectivesDefinition'), 'MissionDirectivesDefinition_1',
+                             w32(0) + t.array('MissionDirectives', len(entries), b''.join(entries)) + none)
+        gd = p.add_export(chain('Core', 'Package'), 'GD_Marcus', w32(0) + none)
+        character = p.add_export(chain('Core', 'Package'), 'Character', w32(0) + none, outer=gd)
+        p.add_export(chain('WillowGame', 'WillowAIPawn'), 'Pawn_Marcus', w32(0) + t.obj('MissionDirectives', table) + none, outer=character)
     cls_, sup, outer, name, _ = p.exports[mission - 1]
     p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
                               + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + none)
@@ -902,6 +1015,40 @@ with tempfile.TemporaryDirectory() as folder:
     check('C exit', code == 0 and got['errors'] == [], (code, got['errors']))
     check('C no region stage', got['script']['experience_pool'] == 16 and got['script']['player_level'] == 3,
           (got['script']['experience_pool'], got['script']['player_level']))
+
+    # Scenario G (swap 6c): Marcus's mission screen and the director callbacks (NATIVE_USE_INTERACTION.md, NATIVE_MISSION_SCRIPT_BRIDGE.md).
+    (root / 'DirectorMission.upk').write_bytes(build_mission(director=True).build())
+
+    def director_run(*steps):
+        proc = subprocess.run([reader, str(root / 'DirectorMission.upk'), '--mission-run', 'ToyMission', '--cooked', str(root), *steps],
+                              capture_output=True, text=True, encoding='utf-8')
+        assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
+        return proc.returncode, json.loads(proc.stdout)
+
+    code, got = director_run('script:screen', 'script:accept', 'script:screen', 'script:accept', 'obj:RockPaper_GoToRange', 'script:screen',
+                             'script:turnin', 'script:screen')
+    check('G exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    screens = [step['screen'] for step in got['steps'] if 'screen' in step]
+    toy = 'ToyMission'
+    check('G screens reported', len(screens) == 4, len(screens))
+    if len(screens) == 4:
+        # NotStarted: only e2 begins and CanStartMission holds (the other missions have no record and are never offered); status 0 is not in progress
+        check('G not started: eligible only', screens[0] == {'eligible': [toy], 'in_progress': [], 'redeemable': []}, screens[0])
+        # Active: not startable; every entry of ToyMission that begins or ends is in progress (no deduplication); CanEndMission is false
+        check('G active: in progress', screens[1] == {'eligible': [], 'in_progress': [toy, toy, toy], 'redeemable': []}, screens[1])
+        # ReadyToTurnIn (the set completed): in progress is Active only, so none; redeemable: e2 (no branch) and e4 (branch 1 = the completed
+        # branch, every objective of the last set complete); not e5 (branch 2) and not e3 (another mission)
+        check('G ready: redeemable by branch', screens[2] == {'eligible': [], 'in_progress': [], 'redeemable': [toy, toy]}, screens[2])
+        # Complete: neither CanStartMission (not repeatable) nor CanEndMission holds
+        check('G complete: nothing offered', screens[3] == {'eligible': [], 'in_progress': [], 'redeemable': []}, screens[3])
+    steps = [step for step in got['steps'] if step['step'] in ('script:accept', 'script:turnin')]
+    check('G accept applied, then refused', [step['ok'] for step in steps] == [True, False, True] and [step['status'] for step in steps] == [1, 1, 3], steps)
+    sources = [e['source'] for e in got['script']['exp_earned']]
+    # AcceptMission runs the director's OnPlayerAcceptedMission after the native (marker 120, the toy script does not skip a refused call);
+    # ServerCompleteMission runs OnPlayerTurnedInMission (121) after CompleteMission and before PlayTurnIn
+    check('G director callbacks ran', sources.count(120) == 2 and sources.count(121) == 1, sources)
+    check('G turn-in callback before the reward', sources.index(121) < sources.index(5) if 121 in sources and 5 in sources else False, sources)
+    # a mission without a director table behaves as before (scenario A runs without Marcus: no callback markers)
 
     # Scenario D: the dummy's enable conditions through --slice-run (src/slice.cpp), NATIVE_BEHAVIOR_POPULATION.md sections A-C.
     (root / 'Startup.upk').write_bytes((root / 'TestMission.upk').read_bytes())

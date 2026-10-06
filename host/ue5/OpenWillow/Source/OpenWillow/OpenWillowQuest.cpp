@@ -26,6 +26,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UnrealClient.h"
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 
@@ -568,19 +569,31 @@ bool UOpenWillowQuest::InTalkReach() const
     return !GetWorld()->LineTraceSingleByChannel(Block, Eye, End, ECC_Visibility, Query) || Block.Distance > Usable.Distance;
 }
 
+void UOpenWillowQuest::MissionScreen(bool& bRedeemable, bool& bEligible) const
+{
+    const auto Lists = Impl->Slice->screen(Impl->Completed);
+    const std::string Path = Impl->Slice->mission().path();
+    const auto Has = [&Path](const std::vector<std::string>& List) { return std::find(List.begin(), List.end(), Path) != List.end(); };
+    bRedeemable = Has(Lists.redeemable);
+    bEligible = Has(Lists.eligible);
+}
+
 bool UOpenWillowQuest::TryUse()
 {
     if (!Impl || bFailed || !InTalkReach()) return false;
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
-    // The stock mission menu (accept / turn-in screen) is not hosted: the use key accepts or turns in directly.
-    // With nothing to accept or turn in, the key is not consumed (pickups and the door still get it).
+    // The stock accept / turn-in screen is not hosted. Marcus's own list scripts say what it would offer; the host stands in for the button press
+    // by confirming the one offered entry (redeemable first, as the screen lists them), which runs the stock AcceptMission / ServerCompleteMission
+    // with Marcus as the director. With nothing offered the key is not consumed (pickups and the door still get it).
+    bool bRedeemable = false, bEligible = false;
+    MissionScreen(bRedeemable, bEligible);
     const TCHAR* Action = TEXT("nothing to accept or turn in");
     bool bOk = true;
-    if (Current == S::NotStarted) { Action = TEXT("accept"); bOk = Accept(); }
-    else if (Current == S::ReadyToTurnIn) { Action = TEXT("turn in"); bOk = TurnIn(); }
+    if (bRedeemable) { Action = TEXT("turn in"); bOk = TurnIn(); }
+    else if (bEligible) { Action = TEXT("accept"); bOk = Accept(); }
     UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d)"), Action, bOk, int32(Current), Status());
-    return Current == S::NotStarted || Current == S::ReadyToTurnIn;
+    return bRedeemable || bEligible;
 }
 
 void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FString& DamageType)
@@ -746,7 +759,10 @@ void UOpenWillowQuest::UpdateHints()
 {
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
-    const bool bCanTalk = InTalkReach() && (Current == S::NotStarted || Current == S::ReadyToTurnIn);
+    bool bRedeemable = false, bEligible = false;
+    const bool bInReach = InTalkReach();
+    if (bInReach) MissionScreen(bRedeemable, bEligible);
+    const bool bCanTalk = bInReach && (bRedeemable || bEligible);
     if (bCanTalk && !bTalkHintLogged) UE_LOG(LogTemp, Display, TEXT("OWQUEST hint: press E (use) to talk to Marcus"));
     bTalkHintLogged = bCanTalk;
     if (!GEngine || bTesting) return;
@@ -922,6 +938,11 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 1:
         Check(Status() == 0, TEXT("use_key_out_of_reach_ignored"));
+        {   // Marcus's own list scripts over his directive table (the data's seven entries): the Fire mission is offered to begin, none to end
+            bool bRedeemable = true, bEligible = false;
+            MissionScreen(bRedeemable, bEligible);
+            Check(bEligible && !bRedeemable, TEXT("mission_screen_offers_fire_from_marcus_directives"));
+        }
         PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 350.f + FVector(0, 0, 20), MarcusFront + FVector(0, 0, 20));
         break;
     case 2:
@@ -1105,6 +1126,11 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Gap > 0) Skills->AddExperience(Gap);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
         PointsBeforeReward = Skills->AvailablePoints();
+        {   // Ready to turn in: the redeemable list offers it, the eligible list no longer does
+            bool bRedeemable = false, bEligible = true;
+            MissionScreen(bRedeemable, bEligible);
+            Check(bRedeemable && !bEligible, TEXT("mission_screen_offers_turn_in_when_ready"));
+        }
         // Test fixture: half of Maya's health off, so that what the level-up does to current health is visible.
         FHitResult Hit;
         UGameplayStatics::ApplyPointDamage(Walker, Walker->GetMaxHealth() * 0.5f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
