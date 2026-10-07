@@ -18,6 +18,8 @@ All 16 property streams were consumed exactly (no trailing bytes).
 The existing local schema (`GestaltInfos`, `Parts`) decodes only the part table. Three more lines make the reader decode the
 other three properties too (an array of bounds structs holding a nested bounds struct and vectors, and the socket mappings); no
 reader change was needed. Floats were compared as single precision.
+The five-line schema (the two existing lines plus `GestaltSocketMappings`, `GestaltPartBounds` and, for the mesh's socket list,
+`Sockets=ObjectProperty`) is now tracked as `tools/gestalt-arrays.schema` (2026-10-07).
 
 ## 2. Result (counts only)
 
@@ -99,7 +101,8 @@ anything about the meshes themselves.
   `tools/filter_gestalt_gltf.py` keeps every range of a wanted name (checked: the launcher fragment gives 36 triangles over 5
   ranges, the sniper body 1802 over 3, the sums of the table ranges). `tools/slice_npc_assets.py::candidate_sections_gltf` builds
   `{name: part}` and would keep only the last range of a duplicated name. It is only used for the pistol (no duplicate there),
-  so this is a latent hazard, not a current bug; not changed.
+  so this is a latent hazard, not a current bug. **Done (2026-10-07, lane I5):** it now keeps every range of a name in one primitive
+  (the pistol output is unchanged), checked by `tests/slice_npc_assets_test.py`.
 - **Tiling.** For all 9 original tables the ranges tile the index buffer with no gap and no overlap, starting at zero (the check
   RTSE's `dev/verify_gestalts.py` makes). For the 6 families that have a local UModel glTF the per-material totals equal the
   glTF's section sizes (6 of 6); shields, grenades and relics have no local glTF.
@@ -144,6 +147,9 @@ anything about the meshes themselves.
   effect, elemental, laser) for the 6 weapon families, 541 of 544 equal to the live game. The host does not use them: the muzzle
   flash is still an estimated point ([WEAPON_VISUALS.md](WEAPON_VISUALS.md) section 7) although the barrel fragment's muzzle
   socket and the eject port are decoded data (`NATIVE_WEAPON_VISUALS.md` names the eject port as the shell-casing socket).
+  **Done (2026-10-07, lane I5):** the schema is tracked (`tools/gestalt-arrays.schema`), `tools/gestalt_sockets.py` writes the
+  sockets, recipes carry `sockets`, and the host's muzzle flash and tracer start at the decoded `Muzzle` socket
+  ([WEAPON_VISUALS.md](WEAPON_VISUALS.md) section 11). The eject port is exposed; the host spawns no shell casings.
 
 ## 8. The mod as an oracle for the evaluator and the assembly (proposal, nothing run)
 

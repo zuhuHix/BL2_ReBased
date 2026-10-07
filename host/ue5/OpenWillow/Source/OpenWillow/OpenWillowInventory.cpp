@@ -16,6 +16,17 @@ float Number(const TSharedPtr<FJsonObject>& Card, const TCHAR* Field, float Fall
     return Card->TryGetNumberField(Field, Value) ? float(Value) : Fallback;
 }
 
+bool ReadVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, FVector& Out)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Numbers = nullptr;
+    if (!Object->TryGetArrayField(Field, Numbers) || Numbers->Num() != 3) return false;
+    double X = 0, Y = 0, Z = 0;
+    if (!(*Numbers)[0]->TryGetNumber(X) || !(*Numbers)[1]->TryGetNumber(Y) || !(*Numbers)[2]->TryGetNumber(Z)) return false;
+    if (!FMath::IsFinite(X) || !FMath::IsFinite(Y) || !FMath::IsFinite(Z)) return false;
+    Out = FVector(X, Y, Z);
+    return true;
+}
+
 bool IsGearItemType(const FString& Type)
 {
     return Type == TEXT("shield") || Type == TEXT("grenade_mod")
@@ -133,6 +144,19 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
         Item.StatusChance = float(StatusChance);
     }
     Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
+    const TSharedPtr<FJsonObject>* Sockets = nullptr;
+    if (Recipe->TryGetObjectField(TEXT("sockets"), Sockets))
+        for (const auto& Pair : (*Sockets)->Values)
+        {
+            const TSharedPtr<FJsonObject>* Entry = nullptr;
+            FOpenWillowGunSocket Socket;
+            if (!Pair.Value || !Pair.Value->TryGetObject(Entry)) continue;
+            (*Entry)->TryGetStringField(TEXT("bone"), Socket.Bone);
+            (*Entry)->TryGetStringField(TEXT("fragment"), Socket.Fragment);
+            if (Socket.Bone.IsEmpty() || !ReadVector(*Entry, TEXT("location"), Socket.Location)) continue;
+            Socket.bHasMeshLocation = ReadVector(*Entry, TEXT("mesh_location"), Socket.MeshLocation);
+            Item.Sockets.Add(FString(*Pair.Key), Socket);
+        }
     const TSharedPtr<FJsonObject>* Provenance = nullptr;
     if (OutProvenanceKind)
         *OutProvenanceKind = Recipe->TryGetObjectField(TEXT("provenance"), Provenance) ? (*Provenance)->GetStringField(TEXT("kind")) : FString();

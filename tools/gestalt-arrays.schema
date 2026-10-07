@@ -1,0 +1,5 @@
+GestaltInfos=StructProperty:GestaltInfo
+Parts=StructProperty:GestaltPartInfo
+GestaltSocketMappings=StructProperty:GestaltSocketMapping
+GestaltPartBounds=StructProperty:GestaltPartBounds
+Sockets=ObjectProperty

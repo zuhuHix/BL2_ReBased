@@ -88,11 +88,40 @@ def stat_ranges(package, recipe, level):
     return {'combinations': count, 'stats': {f: {'min': lo, 'max': hi} for f, (lo, hi) in sorted(ranges.items())}}
 
 
+def gestalt_kind(recipe):
+    """'Pistol' for a recipe whose gestalt is Weap_Pistol.GestaltDef_Pistol."""
+    gestalt = recipe['gestalt']
+    return (gestalt['path'] if isinstance(gestalt, dict) else str(gestalt)).split('.')[-1].removeprefix('GestaltDef_')
+
+
+def attach_sockets(recipe, gestalt_dir):
+    """recipe['sockets']: the sockets of the fragments the gun draws, keyed by original name (Muzzle, EjectPort, ...).
+
+    Reads <Kind>.sockets.json from tools/gestalt_sockets.py. Each entry is that fragment's socket (mangled name, bone,
+    bone-local location, rotation, scale, reference-pose mesh_location). When several drawn fragments define the same
+    original name (body variants share RearSight) the first fragment in name order is kept and the others are listed
+    under `also_from`. The host reads Muzzle and EjectPort (docs/verification/WEAPON_VISUALS.md section 11).
+    """
+    recipe.pop('sockets', None)
+    table = gestalt_dir / f'{gestalt_kind(recipe)}.sockets.json'
+    if not table.exists():
+        return f'skipped: {table.name} missing (run tools/gestalt_sockets.py)'
+    fragments = json.loads(table.read_text(encoding='utf-8'))['fragments']
+    sockets = {}
+    for fragment in sorted(recipe['gestalt_fragments']):
+        for original, socket in fragments.get(fragment, {}).get('sockets', {}).items():
+            if original in sockets:
+                sockets[original].setdefault('also_from', []).append(fragment)
+            else:
+                sockets[original] = {'fragment': fragment, **socket}
+    recipe['sockets'] = sockets
+    return 'ok'
+
+
 def build_mesh(recipe_path, recipe, gestalt_dir, gltf_dir):
     """<id>.gltf through tools/filter_gestalt_gltf.py, as tools/seed_inventory_demo.py does."""
     from filter_gestalt_gltf import gestalt_parts
-    gestalt = recipe['gestalt']
-    kind = (gestalt['path'] if isinstance(gestalt, dict) else str(gestalt)).split('.')[-1].removeprefix('GestaltDef_')
+    kind = gestalt_kind(recipe)
     table = gestalt_dir / f'{kind}.json'
     mesh = gltf_dir / f'GestaltDef_{kind}_GestaltSkeletalMesh.gltf'
     if not table.exists() or not mesh.exists():
@@ -170,9 +199,11 @@ def main():
             'note': 'pool and part selection are seeded stand-ins for native code (UNVERIFIED)'})
         items.append((recipe_id, recipe))
 
-    meshes = {}
+    meshes, sockets = {}, {}
     for recipe_id, recipe in items:
         path = args.output / f'{recipe_id}.json'
+        if args.gestalt:
+            sockets[recipe_id] = attach_sockets(recipe, args.gestalt)
         if args.gestalt and args.gltf:
             meshes[recipe_id] = build_mesh(path, recipe, args.gestalt, args.gltf)
         path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
@@ -181,7 +212,7 @@ def main():
     manifest = {
         'schemaVersion': 1, 'kind': 'openwillow.slice_gear', 'level': args.level, 'level_rule': LEVEL_RULE,
         'items': [{'id': i, 'recipe': f'{i}.json', 'balance': r['balance'], 'name': r['name'], 'type': r['type'],
-                   'provenance': r['provenance'], 'mesh': meshes.get(i, 'not built'), 'card': {k: r['stats']['card'].get(k) for k in (
+                   'provenance': r['provenance'], 'mesh': meshes.get(i, 'not built'), 'sockets': sockets.get(i, 'not attached'), 'card': {k: r['stats']['card'].get(k) for k in (
                        'damage', 'fire_rate', 'reload_time', 'magazine', 'shot_cost', 'projectiles', 'element',
                        'status_effect', 'status_chance', 'status_dps', 'status_duration', 'accuracy', 'display')}}
                   for i, r in items],

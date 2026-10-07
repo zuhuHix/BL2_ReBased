@@ -141,9 +141,10 @@ come from is still unexplained, so this chooses a data source for the host's car
   effects are first-person primitives as well, so they stay on the hand.
 - The world FOV: the game reads 77.55 where the host assumes 90 (106 degrees horizontal at 16:9); a rotation test to
   settle it (`local/orch/C/rg2.ps1`) was not run: a person was using the machine when it was due.
-- Muzzle flash: the host uses a sphere at an estimated point 27 cm past the `Barrel` bone; the game uses the type's `Muzzle`
-  socket, an orange/yellow particle flash for 0.33 s and ejected shell casings. Not changed. The emissive glow after shots is wired
-  (Lane E's rule) but not captured.
+- Muzzle flash: the game uses the type's `Muzzle` socket, an orange/yellow particle flash for 0.33 s and ejected shell casings. The
+  host's flash and tracer origin now come from the decoded `Muzzle` socket (section 11; it was a point estimated 27 cm past the `Barrel`
+  bone). The host still draws a sphere flash and no shell casings; the eject port is exposed only. The emissive glow after shots is
+  wired (Lane E's rule) but not captured.
 - First-person lighting: the real frames were taken in the HQ under cool light and the host's in Sanctuary daylight; the gun
   look is scene-independent in the host by design (analytic lights in view space), so only the inspect pairs are lighting-matched.
 - The mission pistol's host mesh in the quest is Lane B's `MaliwanPistol/SK_Pistol_Maliwan_2_Fire_seed1`, a different rolled sample
@@ -282,3 +283,55 @@ first-person frames is 126/116 (Infinity), 209/211 (Jakobs pistol), 230/228 (Mal
 near-white (cell median `#b7b9bd`), and the real first-person frames are lit blue where the host's Sanctuary street is neutral, so a pale
 metal reads whiter next to a grey street. No exposure error found; a small highlight excess on the Maliwan pistol (6 percent of pixels at
 250 or more, none in the real frame) is left alone. Light constants stay `UNVERIFIED`.
+
+## 11. Gun sockets from the decode: the muzzle flash origin (lane I5, 2026-10-07)
+
+AI-assisted (Claude). The gestalt definitions carry, per fragment, a socket mapping (the fragment's own socket name, for example
+`Muzzle` or `EjectPort`, and the mangled name of that socket in the shared mesh), and the shared mesh carries the sockets themselves
+(bone, bone-local location, optional rotation and scale). Our reader already decodes both exactly: 544 of 544 mappings and 541 of 544
+sockets equal the live game's ([RTSE_GUN_DATA_CROSSCHECK.md](RTSE_GUN_DATA_CROSSCHECK.md) section 2). This section is the pipeline and
+host use of that decode.
+
+- **Schema.** `tools/gestalt-arrays.schema` (tracked) is the old two-line schema plus `GestaltSocketMappings`, `GestaltPartBounds` (a
+  bounds struct with a nested bounds struct and vectors decodes without more lines) and `Sockets=ObjectProperty` for the mesh's socket
+  list. It replaces the hand-made `local/infinity/gestalt.schema`; `tools/slice_npc_assets.py` now uses it.
+- **Tool.** `tools/gestalt_sockets.py` decodes the six families the slice uses (pistol, SMG, assault rifle, shotgun, sniper, launcher),
+  writes `local/gestalt/<Kind>.json` (the part table the glTF filter reads, now with bounds and mappings decoded) and
+  `<Kind>.sockets.json` (per fragment: bounds and sockets by original name, with bone, location, rotation, scale and, from the UModel
+  skeleton, `mesh_location`, the same point in mesh space in the reference pose). Counts agree with the record: 60, 52, 48, 40, 40 and 32
+  mappings, none without a mesh socket.
+- **Recipes.** `tools/weapon_slice_gear.attach_sockets` copies the sockets of the fragments a gun draws into the recipe as `sockets`
+  (name order; when several drawn fragments define a name, the first is kept and the others listed under `also_from`).
+  `tools/weapon_slice_gear.py --gestalt` and `tools/weapon_refresh_fragments.py` call it; `weapon_refresh_fragments.py --sockets-only`
+  adds `sockets` to existing recipes and changes nothing else (fragments, meshes and hidden bones stay as they are). The muzzle always
+  comes from the one barrel fragment; the eject port from the body fragment (the Maliwan pistol body has none, so the fire mission pistol
+  has no `EjectPort`; the other bodies in the slice have one).
+- **Host.** `AOpenWillowWalker::MuzzleLocation` returns the held gun's `Muzzle` socket (`GunSocketLocation`): the bone's world transform
+  times the cooked bone-local offset. The flash and the tracer start there (the tracer 30 cm further along the shot). Shell casings are
+  not spawned by the host, so `EjectPort` is only exposed (`GunSocketLocation(TEXT("EjectPort"), ...)`, logged by `-owgunshots`).
+- **Fallback rule.** A gun whose recipe has no `Muzzle` socket (an older recipe, or no weapon mesh) uses the old estimate (27 cm past the
+  `Barrel` bone along the view, else a point in front of the camera). The host logs `OpenWillow muzzle fallback for <id>` once per gun and
+  counts fallback shots. Fallbacks seen: 0 in the quest run and the gun-shot runs below (all 13 local recipes carry a `Muzzle` socket).
+
+What the numbers say about the old estimate: from the `Barrel` bone the decoded muzzle is 27.4 cm ahead on the Infinity's Vladof barrel
+and 12.8 cm on the slice pistol's Torgue barrel (the old estimate was right for the first and about 14 cm too far for the second). The
+SMG's skeleton has no `Barrel` bone at all (its muzzle socket is on the root bone), so the old code used the camera fallback for it.
+
+**Conversion choices that are ours (UNVERIFIED against a capture of the live game).** The cooked data is in centimetres with the cooked
+mesh axes. The UModel glTF is metres with y and z swapped (checked on one barrel fragment's vertices against its decoded bounds), and the
+host's glTF import swaps them back, so the host's mesh space equals the cooked one. The bone-local offset is applied in the imported
+bone's own frame without any axis change or scale. Two checks support this, neither is a live capture:
+
+1. Offline, `tools/gestalt_sockets.py` computes every socket's mesh-space point from the glTF skeleton's reference pose. On all six
+   families every fragment's `Muzzle` lies inside its fragment's reference-pose bounds box grown by 5 cm (the farthest is 3.3 cm past the
+   front face, centred on the barrel axis).
+2. In the engine, the host compares the bone-based point with that reference point once per gun and socket (log line `OpenWillow gun
+   socket <id>/<name>: ... differ by x cm`). They agree to 0.00 cm for `Muzzle` and `EjectPort` on 8 guns: the slice pistol, the fire mission
+   pistol (`Muzzle` only), the slice SMG, assault rifle and shotgun, and Infinity recipes 1, 3 and 5. If they ever differ by more than 1 cm the
+   host uses the mesh-space point and says so. This confirms the bone frames and the axes inside the host's own import; it does not say the
+   game's flash sits at that point (a live capture of the flash, or the live socket's world position through the SDK driver, would).
+
+Not done: the socket rotation (flash direction), the alternate muzzle sockets of multi-barrel weapons (`Muzzle2` exists for the assault
+rifle fragment in the slice recipe), the scope and sight sockets, the three live-versus-cooked eye-socket differences, shell casings and
+a muzzle-flash particle. First-person flash placement under the foreground FOV projection is unchanged (the flash is a world actor at the
+gun's world point).

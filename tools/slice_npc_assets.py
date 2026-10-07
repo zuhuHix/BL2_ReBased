@@ -674,9 +674,7 @@ def pistol_step(args, rolls_only=False):
         sys.exit('pistol: run extract first (the gestalt glTF is missing)')
     gestalt_json = out / 'GestaltDef_Pistol.json'
     index = package.index['Weap_Pistol.GestaltDef_Pistol']
-    schema_file = ROOT / 'local/infinity/gestalt.schema'
-    if not schema_file.is_file():
-        sys.exit('pistol: local/infinity/gestalt.schema is missing (see docs/TOOLING.md, Infinity visual)')
+    schema_file = ROOT / 'tools/gestalt-arrays.schema'  # tracked; was the local/infinity/gestalt.schema hand-made copy
     done = subprocess.run([str(reader_path), str(startup), '--properties', str(index), '--property-offset', '4',
                            '--array-schema', str(schema_file)], capture_output=True, encoding='utf-8')
     if done.returncode:
@@ -721,6 +719,9 @@ def pistol_step(args, rolls_only=False):
 def candidate_sections_gltf(source_gltf, parts, fragments, output):
     """One primitive per fragment (each with its own named glTF material) in a single skeletal mesh.
 
+    A fragment name with several ranges in the part table keeps all of them in its one primitive (as
+    tools/filter_gestalt_gltf.py does); it used to keep only the last range (RTSE_GUN_DATA_CROSSCHECK.md section 6).
+
     Same section-order assumption as tools/filter_gestalt_gltf.py (checked there for the same file): one
     primitive per LOD section in material order. The new primitives share the original vertex buffers.
     """
@@ -738,17 +739,23 @@ def candidate_sections_gltf(source_gltf, parts, fragments, output):
         first += count
     original_materials = gltf['materials']
     new_primitives, new_materials, report = [], [], []
-    by_name = {p['SkeletalMeshFragmentName']: p for p in parts}
+    ranges = {}
+    for part in parts:  # a fragment name can own several ranges (launcher accessory, sniper body): keep every one
+        ranges.setdefault(part['SkeletalMeshFragmentName'], []).append(part)
     for fragment in fragments:
-        part = by_name[fragment]
-        material = part['MaterialIndex']
+        owned = ranges[fragment]
+        materials = {part['MaterialIndex'] for part in owned}
+        if len(materials) != 1:
+            raise RuntimeError(f'{fragment}: its ranges use several materials {sorted(materials)}')
+        material = materials.pop()
         primitive = primitives[material]
         accessor = gltf['accessors'][primitive['indices']]
         view = gltf['bufferViews'][accessor['bufferView']]
         base = view.get('byteOffset', 0) + accessor.get('byteOffset', 0)
-        local = part['FirstIndex'] - starts[material]
-        count = 3 * part['NumPrimitives']
-        indices = struct.unpack_from(f'<{count}H', blob, base + 2 * local)
+        indices = []
+        for part in owned:
+            local = part['FirstIndex'] - starts[material]
+            indices += struct.unpack_from(f'<{3 * part["NumPrimitives"]}H', blob, base + 2 * local)
         while len(blob) % 4:
             blob.append(0)
         gltf['bufferViews'].append({'buffer': 0, 'byteOffset': len(blob), 'byteLength': 2 * len(indices), 'target': 34963})
@@ -760,7 +767,8 @@ def candidate_sections_gltf(source_gltf, parts, fragments, output):
         kept['material'] = len(new_materials)
         new_materials.append({**original_materials[material], 'name': f'Frag_{fragment}'})
         new_primitives.append(kept)
-        report.append({'fragment': fragment, 'section_index': len(new_primitives) - 1, 'triangles': part['NumPrimitives'],
+        report.append({'fragment': fragment, 'section_index': len(new_primitives) - 1,
+                       'triangles': sum(part['NumPrimitives'] for part in owned), 'ranges': len(owned),
                        'gestalt_material_index': material, 'ue_material_slot': f'Frag_{fragment}'})
     binary = Path(output).with_suffix('.bin')
     binary.write_bytes(blob)

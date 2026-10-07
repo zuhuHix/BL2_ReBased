@@ -3,12 +3,13 @@
 Why: the first recipes took only GestaltModeSkeletalMeshName from each part. The running game also draws the
 part's AdditionalGestaltModeSkeletalMeshNames (body variants) and nothing for *_None parts
 (tools/weapon_recipe.part_fragments; docs/verification/WEAPON_VISUALS.md). This script keeps every recipe's
-rolled parts, stats and name as they are and only replaces `gestalt_fragments`/`unresolved_fragments` and the
-<id>.gltf/.bin beside it, so no part is re-rolled. Inputs and outputs are ignored local/ files.
+rolled parts, stats and name as they are and only replaces `gestalt_fragments`/`unresolved_fragments`, `sockets`
+(tools/weapon_slice_gear.attach_sockets) and the <id>.gltf/.bin beside it, so no part is re-rolled. Inputs and
+outputs are ignored local/ files. With --sockets-only nothing but `sockets` changes (no fragment or mesh rewrite).
 
   python tools/weapon_refresh_fragments.py --game "<BL2 install>" --dir local/items/slice local/items \\
-      --gestalt local/gestalt --gltf local/external/umodel/gestalt/Startup/SkeletalMesh3 [--ids infinity_3 ...]
-Prints one line per recipe: id, fragments, triangle total of the rebuilt mesh.
+      --gestalt local/gestalt --gltf local/external/umodel/gestalt/Startup/SkeletalMesh3 [--ids infinity_3 ...] [--sockets-only]
+Prints one line per recipe: id, fragments, triangle total of the rebuilt mesh, the sockets attached.
 """
 import argparse
 import json
@@ -92,6 +93,8 @@ def main():
     parser.add_argument('--gltf', type=Path, required=True)
     parser.add_argument('--schema', type=Path, default=ROOT / 'local/items/slice/slice_gear.schema')
     parser.add_argument('--ids', nargs='*', help='only these recipe ids')
+    parser.add_argument('--sockets-only', action='store_true',
+                        help='only attach `sockets` to each recipe as it stands; fragments, meshes and bones are left alone')
     args = parser.parse_args()
 
     startup = args.game / 'WillowGame/CookedPCConsole/Startup.upk'
@@ -103,9 +106,15 @@ def main():
             recipe = json.loads(path.read_text(encoding='utf-8-sig'))
             if 'parts' not in recipe or 'gestalt' not in recipe:
                 continue  # manifests and schemas
+            if args.sockets_only:
+                status = weapon_slice_gear.attach_sockets(recipe, args.gestalt)
+                path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
+                print(f'{path.stem}: sockets={sorted(recipe.get("sockets", {}))} ({status})')
+                continue
             recipe.pop('unresolved_fragments', None)
             recipe['gestalt_fragments'] = sorted({n for p in recipe['parts'].values()
                                                   for n in weapon_recipe.part_fragments(package, p['part'])})
+            sockets = weapon_slice_gear.attach_sockets(recipe, args.gestalt)
             status = weapon_slice_gear.build_mesh(path, recipe, args.gestalt, args.gltf)
             gltf = path.with_suffix('.gltf')
             total = triangles(gltf) if status == 'ok' and gltf.exists() else None  # the game's totals (before hiding bones)
@@ -114,7 +123,8 @@ def main():
             cut = drop_hidden_bone_triangles(gltf, bones) if bones and status == 'ok' else 0
             path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
             print(f'{path.stem}: {status} fragments={recipe["gestalt_fragments"]} '
-                  f'unresolved={recipe.get("unresolved_fragments", [])} triangles={total} hidden bones={bones} cut={cut}')
+                  f'unresolved={recipe.get("unresolved_fragments", [])} triangles={total} hidden bones={bones} cut={cut} '
+                  f'sockets={sorted(recipe.get("sockets", {}))} ({sockets})')
 
 
 if __name__ == '__main__':

@@ -668,11 +668,10 @@ The Infinity visual keeps only chosen fragments of UModel's pistol gestalt
 glTF. Decode the gestalt part ranges with a local array schema, then filter:
 
 ```powershell
-# local/infinity/gestalt.schema holds lines such as
-#   GestaltInfos=StructProperty:GestaltInfo
-#   Parts=StructProperty:GestaltPartInfo
+# tools/gestalt-arrays.schema (tracked since 2026-10-07) holds the array element types: GestaltInfos, Parts, and the
+# socket mappings, part bounds and mesh sockets that tools/gestalt_sockets.py reads
 ./build/Release/ow-package.exe "$game/WillowGame/CookedPCConsole/Startup.upk" --properties <GestaltDef_Pistol index> `
-  --property-offset 4 --array-schema local/infinity/gestalt.schema > local/infinity/gestaltdef.json
+  --property-offset 4 --array-schema tools/gestalt-arrays.schema > local/infinity/gestaltdef.json
 python tools/filter_gestalt_gltf.py --gltf <UModel GestaltDef_Pistol_GestaltSkeletalMesh.gltf> `
   --gestalt local/infinity/gestaltdef.json --output local/infinity/Infinity.gltf `
   --parts Pistol_Body_Vladof Pistol_Barrel_Vladof Pistol_Grip_Vladof Pistol_Scope_Vladof

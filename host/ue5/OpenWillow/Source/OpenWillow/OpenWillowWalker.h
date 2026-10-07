@@ -127,7 +127,11 @@ private:
     void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
     void AimAt(const FVector& Point);
+    // Muzzle flash and tracer origin: the held gun's decoded Muzzle socket, else the old estimate (logged, counted).
     FVector MuzzleLocation() const;
+    // World position of a socket of the held gun (recipe "sockets"; WEAPON_VISUALS.md section 11); false when the gun has none.
+    // "EjectPort" is exposed this way for shell casings, which the host does not spawn yet.
+    bool GunSocketLocation(const TCHAR* Name, FVector& OutWorld) const;
     UPROPERTY() TObjectPtr<class UCameraComponent> Camera;
     // Maya's first-person arms (-owmaya). Their animations carry a root
     // correction that keeps the arms skeleton's Camera bone at this
@@ -228,6 +232,9 @@ private:
     int32 PreLendSlot = INDEX_NONE;
     bool bWantsCombatTarget = false;
     bool bBarrelAxisLogged = false;
+    // Muzzle fallbacks used (shots), and the item/socket pairs whose socket check was already logged.
+    mutable int32 MuzzleFallbackShots = 0;
+    mutable TSet<FString> GunSocketLogged;
     // Look-input weapon sway, in degrees (yaw, pitch).
     FVector2D LookInput = FVector2D::ZeroVector;
     FVector2D Sway = FVector2D::ZeroVector;

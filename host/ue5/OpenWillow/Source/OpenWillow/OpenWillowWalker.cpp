@@ -577,6 +577,9 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     WeaponVisual->SetSkeletalMesh(WeaponMesh);
     OpenWillowGunLook::Apply(WeaponVisual);
     ApplyViewModel(Item->Id);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow gun sockets %s: Muzzle %s, EjectPort %s (no shell casings are spawned yet)"), *Item->Id,
+        Item->Sockets.Contains(TEXT("Muzzle")) ? TEXT("decoded") : TEXT("missing (estimate used)"),
+        Item->Sockets.Contains(TEXT("EjectPort")) ? TEXT("decoded") : TEXT("missing"));
     GlowImpulse = 0.f;
     AppliedGlow = 0.f;
     WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr || bInventoryPresentation);
@@ -1374,6 +1377,12 @@ void AOpenWillowWalker::RunGunShots(float Now)
             UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s R_Weapon_Bone %s WeaponOffset %s Barrel %s Camera bone %s"), *Id,
                 *Rel(Arms->GetBoneLocation(TEXT("R_Weapon_Bone"))), *Rel(WeaponVisual->GetBoneLocation(TEXT("WeaponOffset"))),
                 *Rel(WeaponVisual->GetBoneLocation(TEXT("Barrel"))), *Rel(Arms->GetBoneLocation(TEXT("Camera"))));
+            // The decoded sockets in the same camera space (WEAPON_VISUALS.md section 11); the check line comes from GunSocketLocation.
+            FVector MuzzleWorld = FVector::ZeroVector, EjectWorld = FVector::ZeroVector;
+            const bool bMuzzle = GunSocketLocation(TEXT("Muzzle"), MuzzleWorld);
+            const bool bEject = GunSocketLocation(TEXT("EjectPort"), EjectWorld);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s Muzzle socket %s EjectPort socket %s"), *Id,
+                bMuzzle ? *Rel(MuzzleWorld) : TEXT("none"), bEject ? *Rel(EjectWorld) : TEXT("none"));
         }
         break;
     case 2:
@@ -1419,10 +1428,47 @@ void AOpenWillowWalker::AimAt(const FVector& Point)
 {
     if (Controller) Controller->SetControlRotation((Point - Camera->GetComponentLocation()).Rotation());
 }
+bool AOpenWillowWalker::GunSocketLocation(const TCHAR* Name, FVector& OutWorld) const
+{
+    const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
+    const FOpenWillowGunSocket* Socket = Item ? Item->Sockets.Find(Name) : nullptr;
+    if (!Socket || !WeaponVisual->GetSkinnedAsset()) return false;
+    // The cooked offset is bone-local and in cm. Applying it in the imported bone's frame unchanged is our choice (UNVERIFIED
+    // axis/scale conversion): the glTF import keeps the cooked axes (the host's mesh space equals the cooked one, checked against
+    // fragment bounds) and bone frames are converted like the points. The tool also gives the same point in mesh space; the two
+    // are compared once per gun and socket, and the mesh-space point wins when they disagree by more than 1 cm.
+    FVector Reference = FVector::ZeroVector;
+    if (Socket->bHasMeshLocation) Reference = WeaponVisual->GetComponentTransform().TransformPosition(Socket->MeshLocation);
+    const FName Bone(*Socket->Bone);
+    const bool bBone = WeaponVisual->GetBoneIndex(Bone) != INDEX_NONE;
+    if (!bBone && !Socket->bHasMeshLocation) return false;
+    OutWorld = bBone ? WeaponVisual->GetBoneTransform(Bone).TransformPosition(Socket->Location) : Reference;
+    const FString Key = Item->Id + TEXT("/") + Name;
+    if (bBone && Socket->bHasMeshLocation && !GunSocketLogged.Contains(Key))
+    {
+        GunSocketLogged.Add(Key);
+        const float Difference = FVector::Dist(Reference, OutWorld);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gun socket %s: fragment %s bone %s, bone-based point and reference mesh point differ by %.2f cm%s"),
+            *Key, *Socket->Fragment, *Socket->Bone, Difference, Difference > 1.f ? TEXT(" (over 1 cm: the mesh-space point is used)") : TEXT(""));
+    }
+    if (bBone && Socket->bHasMeshLocation && FVector::Dist(Reference, OutWorld) > 1.f) OutWorld = Reference;
+    return true;
+}
 FVector AOpenWillowWalker::MuzzleLocation() const
 {
-    // Pistol_Barrel_Vladof's gestalt bounds end ~27 cm ahead of its Barrel
-    // bone. Projecting along the view approximates the unhosted Muzzle socket.
+    FVector Socket;
+    if (GunSocketLocation(TEXT("Muzzle"), Socket)) return Socket;
+    // Fallback for a gun without a decoded Muzzle socket: Pistol_Barrel_Vladof's gestalt bounds end ~27 cm ahead of its Barrel
+    // bone. Projecting along the view approximates the socket. Logged once per gun, counted per shot.
+    ++MuzzleFallbackShots;
+    const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
+    const FString Key = (Item ? Item->Id : FString(TEXT("none"))) + TEXT("/MuzzleFallback");
+    if (!GunSocketLogged.Contains(Key))
+    {
+        GunSocketLogged.Add(Key);
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow muzzle fallback for %s (no Muzzle socket in the recipe or no weapon mesh); estimated point used, fallback shots so far %d"),
+            Item ? *Item->Id : TEXT("none"), MuzzleFallbackShots);
+    }
     if (WeaponVisual->GetSkinnedAsset() && WeaponVisual->GetBoneIndex(TEXT("Barrel")) != INDEX_NONE)
         return WeaponVisual->GetBoneLocation(TEXT("Barrel")) + Camera->GetForwardVector() * 27.f;
     return Camera->GetComponentLocation() + Camera->GetForwardVector() * 60.f

@@ -27,6 +27,18 @@ struct FOpenWillowAmmoPool
     int32 Max = 0;
 };
 
+// One socket of a gun's gestalt mesh, from the recipe's "sockets" (tools/gestalt_sockets.py via
+// tools/weapon_slice_gear.attach_sockets). Location is the cooked bone-local offset in cm; MeshLocation is the same point
+// in mesh space in the reference pose, computed by the tool from the UModel skeleton (an oracle for the host's bone maths).
+struct FOpenWillowGunSocket
+{
+    FString Fragment;
+    FString Bone;
+    FVector Location = FVector::ZeroVector;
+    FVector MeshLocation = FVector::ZeroVector;
+    bool bHasMeshLocation = false;
+};
+
 // One rolled weapon, loaded from a tools/weapon_recipe.py recipe that
 // tools/weapon_stats.py has filled in. Values are the evaluated item-card
 // stats; see DECISIONS.md for which combination rules are UNVERIFIED.
@@ -77,6 +89,8 @@ struct FOpenWillowWeaponItem
     float StatusDps = 0;
     float StatusChance = 0; // percent
     TArray<FString> Fragments;
+    // Sockets of the fragments the gun draws, by original name ("Muzzle", "EjectPort", ...); empty when the recipe predates them.
+    TMap<FString, FOpenWillowGunSocket> Sockets;
     bool bFavorite = false;
     bool bTrash = false;
     bool bFavoriteKnown = false;
