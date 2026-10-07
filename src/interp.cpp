@@ -333,7 +333,9 @@ struct Interp {
             Value* target = lval(lhs, f, ctx);
             Value value = eval(e.kids.at(1), f, ctx);
             assign(*target, std::move(value));
-            return *lval(lhs, f, ctx);
+            // The value of the assignment is what the target now holds. Evaluating `lhs` again here would repeat its side effect: the index of
+            // `arr[arr.Length] = x` is the length, and a second evaluation grew the array a second time (one append stored two elements).
+            return *target;
         }
         case script::EX_Conditional: {
             return eval(e.kids.at(0), f, ctx).truth() ? eval(e.kids.at(1), f, ctx) : eval(e.kids.at(2), f, ctx);

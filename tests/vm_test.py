@@ -321,6 +321,16 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
         a.end(); return a
     make_function(foo, 'Arr', [], arr, locals_=[('Array', 'Items', 0)])
 
+    # Appending through the length: Foo.Append() runs Items[Items.Length] = v for 7 and 8 and returns the length. One assignment stores one element
+    # (the assignment's own value must not evaluate its target a second time: that grew the array again and stored each element twice).
+    def append(ids):
+        a = Asm()
+        for v in (7, 8):
+            a.stmt(); a.raw(0x0F); a.raw(0x10); a.raw(0x36); local(a, ids, 'Items'); local(a, ids, 'Items'); intc(a, v)
+        a.stmt(); a.raw(0x04); a.raw(0x36); local(a, ids, 'Items')
+        a.end(); return a
+    make_function(foo, 'Append', [], append, locals_=[('Array', 'Items', 0)])
+
     # Context on a None object: Foo.NoneCtx() = Context(None, 0) (yields a zero value; the census counts it)
     def none_ctx(ids):
         a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x19, 0x2A); a.w(1); a.ref(0); a.raw(0); a.raw(0x25); a.end(); return a
@@ -518,6 +528,7 @@ with tempfile.TemporaryDirectory() as folder:
     mystery = run(root, 'Core.Foo.CallMystery')
     assert mystery['result'] == '0' and any('UNIMPLEMENTED Object.Mystery(int)' in l for l in mystery['log']), mystery
     assert run(root, 'Core.Foo.Arr')['result'] == '2'
+    assert run(root, 'Core.Foo.Append')['result'] == '2'                      # one element per Items[Items.Length] = v, not two
 
     # Hidden typed temporaries: an unwritten slot reads as the typed zero of its opcode (not None); a byte slot wraps; a bad operand fails loudly.
     for suffix, zero in (('Int', '0'), ('Float', '0'), ('Byte', '0'), ('Bool', 'false'), ('Object', 'None')):
