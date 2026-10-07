@@ -49,6 +49,13 @@ attribute PlayerExperienceLevel, whose chain is the player replication info cont
 else 0, the note's rule) and calls RecalculateAttributeInitializedState, which the bridge answers with the health pool's base maximum (invented
 Init_PlayerHealth: 10 x 1.5 ^ level, so 50.625 at level 4, 75.9375 at 5, 113.90625 at 6). The slice reports them as skill_points and max_health events.
 
+The refill scenario (--slice-run, scenario S7b, swap 7b) adds to the toy world the pieces of NATIVE_LEVEL_UP_ATTRIBUTES.md in miniature: a toy
+ResourcePool (the pool-side CalculateBaseValues script: base maximum from the definition through the let-attribute opcode, then the follow rule of
+UpdateCurrentValueOnExtremaChange against the recorded maximum; the natives GetMaxValue, SetCurrentValue, UpdateLastValues, PoolIsNowFull are the bridge's),
+a manager on the controller, and an OnLevelUp collection (Behavior_RunBehaviorCollection -> Behavior_AttributeEffect -> a skill whose first effect adds the
+pool's maximum to its current value, PostAdd, and whose second effect targets a cooldown pool the VM does not have). The toy ExpLevelUp keeps the
+installed one's guard: with a pawn, more than 1.0 s of game time since LastLevelUpTime, then RunBehaviors(PlayerClass.OnLevelUp).
+
 The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
 with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
 OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
@@ -177,8 +184,8 @@ class Toy:
 
     def cls(self, name, super_ref=0): return self.p.add_export(self.imp['Class'], name, w32(0) * 4, super_ref=super_ref)
 
-    def prop(self, kind, owner, name, flags=0, type_ref=0):
-        payload = w32(0) + self.none + w32(0) + u32(1) + u64(flags) + self.none + w32(0) + w32(type_ref)
+    def prop(self, kind, owner, name, flags=0, type_ref=0, tail=None):
+        payload = w32(0) + self.none + w32(0) + u32(1) + u64(flags) + self.none + w32(0) + (w32(type_ref) if tail is None else tail)
         return self.p.add_export(self.imp[kind + 'Property'], name, payload, outer=owner)
 
     def array_of(self, owner, name, inner_kind, inner_ref=0):
@@ -208,6 +215,17 @@ class Toy:
         return ids
 
 
+def attribute(T, owner, name):
+    """A float attribute as the packages lay it out: the value property (flag bit 63) lists its modifier stack and base, the base (bit 62) its value."""
+    first = len(T.p.exports) + 1                                   # the stack's element property, then the stack, the base and the value
+    stack, base, value = first + 1, first + 2, first + 3
+    T.prop('Object', stack, name + 'ModifierStack_Element')
+    T.prop('Array', owner, name + 'ModifierStack', type_ref=first)
+    T.prop('FloatAttribute', owner, name + 'BaseValue', 1 << 62, tail=w32(0, value))
+    T.prop('FloatAttribute', owner, name, 1 << 63, tail=w32(stack, base))
+    return value
+
+
 ADD, SUB, MUL, DIV = 0, 1, 2, 3
 OPERANDS = ['MATHRESOLVEROPERAND_Add', 'MATHRESOLVEROPERAND_Sub', 'MATHRESOLVEROPERAND_Mul', 'MATHRESOLVEROPERAND_Div']
 COMPARISONS = ['OPERATOR_EqualTo', 'OPERATOR_NotEqualTo', 'OPERATOR_GreaterThan', 'OPERATOR_GreaterThanOrEqual',
@@ -215,7 +233,7 @@ COMPARISONS = ['OPERATOR_EqualTo', 'OPERATOR_NotEqualTo', 'OPERATOR_GreaterThan'
 
 
 def build_engine():
-    toy = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Str', 'Name'))
+    toy = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Str', 'Name', 'FloatAttribute', 'Class'))
     p, T = toy.p, toy
     t = Tags(p)
     changes = ['CHANGE_Toggle', 'CHANGE_Enable', 'CHANGE_Disable']
@@ -247,6 +265,7 @@ def build_engine():
     world = T.cls('WorldInfo', super_ref=actor)          # an Actor (Role) like the stock one
     T.prop('Object', world, 'GRI')
     T.prop('Bool', world, 'bIsMenuLevel')
+    T.prop('Float', world, 'TimeSeconds')
     T.function(world, 'IsMenuLevel', [('Str', 'MapName', CPF_OPT)], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Bool')
     # AttributeInitializationData: its own default makes BaseValueScaleConstant 1 (a field the data omits keeps that).
     aid = p.add_export(toy.imp['ScriptStruct'], 'AttributeInitializationData', bytes(52) + t.float('BaseValueScaleConstant', 1.0) + toy.none)
@@ -274,16 +293,89 @@ def build_engine():
     T.prop('Struct', definition, 'ValueFormula', type_ref=formula)
     T.prop('Struct', definition, 'ConditionalInitialization', type_ref=conditional)
     T.prop('Byte', definition, 'BaseValueMode')
-    T.function(definition, 'EvaluateInitializationData', [('Struct', 'InitializationData', 0, aid), ('Object', 'ContextSource', 0),
-                                                         ('Object', 'OptionalOverrideContextSource', CPF_OPT)], None,
-               FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Float')
+    evaluate = T.function(definition, 'EvaluateInitializationData', [('Struct', 'InitializationData', 0, aid), ('Object', 'ContextSource', 0),
+                                                                    ('Object', 'OptionalOverrideContextSource', CPF_OPT)], None,
+                          FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Float')['__self__']
     T.prop('Name', T.cls('ObjectPropertyAttributeValueResolver'), 'PropertyName')
     attribute = T.cls('AttributeDefinition')
     T.array_of(attribute, 'ContextResolverChain', 'Object')
     T.array_of(attribute, 'ValueResolverChain', 'Object')
     p.add_export(toy.imp['Enum'], 'EComparisonOperator', w32(0) + toy.none + w32(0) + w32(len(COMPARISONS)) + b''.join(p.fname(c) for c in COMPARISONS),
                  outer=T.cls('AttributeExpression'))
+    build_pool_graph(T, aid, definition, evaluate)
     return p
+
+
+def build_pool_graph(T, aid, definition, evaluate):
+    """The toy Engine's resource pool (swap 7b), with the pool-side script of NATIVE_LEVEL_UP_ATTRIBUTES.md section 3 in miniature."""
+    p = T.p
+    native = FUNC_NATIVE | FUNC_PUBLIC
+    operator = FUNC_NATIVE | 0x1000 | 0x23000
+    object_cls = T.cls('Object')
+    T.function(object_cls, 'NotEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, operator, 'Bool', native=119, friendly='!=')
+    T.function(object_cls, 'LessEqual_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, operator, 'Bool', native=178, friendly='<=')
+    T.function(object_cls, 'GreaterEqual_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, operator, 'Bool', native=179, friendly='>=')
+    resource = T.cls('ResourceDefinition')
+    T.prop('Class', resource, 'DefaultResourcePoolClass')
+    T.prop('Bool', resource, 'bIntegerOnlyUpdates')
+    pool_def = T.cls('ResourcePoolDefinition')
+    T.prop('Object', pool_def, 'Resource')
+    bmax_prop = T.prop('Struct', pool_def, 'BaseMaxValue', type_ref=aid)
+    T.prop('Float', pool_def, 'BaseMinValue')
+    bupdate = T.prop('Bool', pool_def, 'bUpdateCurrentValueOnExtremaChange')
+    pool = T.cls('ResourcePool')
+    definition_prop = T.prop('Object', pool, 'Definition')
+    provider = T.prop('Object', pool, 'AssociatedProvider')
+    for name in ('bIsAuthoritative', 'bCreatedAndNotModified', 'bHasPoolBeenFullSinceLastBeingDepleted'): T.prop('Bool', pool, name)
+    current = T.prop('Float', pool, 'CurrentValue')
+    last_current, last_min, last_max = (T.prop('Float', pool, n) for n in ('LastCurrentValue', 'LastMinValue', 'LastMaxValue'))
+    T.prop('Float', pool, 'RateRemainder')
+    T.prop('Float', pool, 'PoolIdleDelayStartTime')
+    max_value = attribute(T, pool, 'MaxValue')
+    min_value = attribute(T, pool, 'MinValue')
+    T.cls('HealthResourcePool', super_ref=pool)
+    manager = T.cls('ResourcePoolManager')
+    T.prop('Object', manager, 'ResourcePools')
+    T.function(manager, 'RecalculateBaseValues', [('Object', 'Mgr', 0)], None, native)
+    T.function(pool, 'GetMaxValue', [('Bool', 'bBase', CPF_OPT)], None, native, 'Float')
+    T.function(pool, 'SetCurrentValue', [('Float', 'Value', 0)], None, native)
+    update_last = T.function(pool, 'UpdateLastValues', [], None, native)['__self__']
+    pool_full = T.function(pool, 'PoolIsNowFull', [], None, native)['__self__']
+
+    def on_extrema(ids):        # if (Definition.bUpdate...) { if (Current >= LastMax) { Current = MaxValue; PoolIsNowFull(); } else if (Current <= LastMin) Current = MinValue; UpdateLastValues(); }
+        a = Asm()
+        at1 = a.jump_if_not(lambda: a.context(lambda: a.instance(definition_prop), lambda: (a.raw(0x2D), a.instance(bupdate))))
+        at2 = a.jump_if_not(lambda: (a.raw(179), a.instance(current), a.instance(last_max), a.raw(0x16)))
+        a.raw(0x0F); a.instance(current); a.raw(0x5E); a.ref(max_value)
+        a.call(pool_full)
+        done = a.jump()
+        a.patch(at2)
+        at3 = a.jump_if_not(lambda: (a.raw(178), a.instance(current), a.instance(last_min), a.raw(0x16)))
+        a.raw(0x0F); a.instance(current); a.raw(0x5E); a.ref(min_value)
+        a.patch(at3); a.patch(done)
+        a.call(update_last)
+        a.patch(at1)
+        a.return_nothing(); a.end(); return a
+    extrema = T.function(pool, 'UpdateCurrentValueOnExtremaChange', [], on_extrema)['__self__']
+
+    def calculate(ids):         # if (Definition != None) { MaxValue := Evaluate(Definition.BaseMaxValue, AssociatedProvider); UpdateCurrentValueOnExtremaChange(); }
+        a = Asm()
+        at = a.jump_if_not(lambda: (a.raw(119), a.instance(definition_prop), a.raw(0x2A), a.raw(0x16)))
+        a.raw(0x5F, 0x5E); a.ref(max_value)
+        a.call(evaluate, lambda: a.context(lambda: a.instance(definition_prop), lambda: a.instance(bmax_prop)), lambda: a.instance(provider), lambda: a.raw(0x4A))
+        a.call(extrema)
+        a.patch(at)
+        a.return_nothing(); a.end(); return a
+    T.function(pool, 'CalculateBaseValues', [('Bool', 'bOnlyCalculateAttributeInitializedState', CPF_OPT)], calculate)
+
+    # the attribute resolvers the effect data names
+    T.prop('Object', T.cls('ResourcePoolAttributeContextResolver'), 'Resource')
+    behavior_base = [e for e in p.exports if e[3] == p.fname('BehaviorBase')]
+    behavior_base = p.exports.index(behavior_base[0]) + 1
+    T.function(behavior_base, 'RunBehaviors', [('Array', 'Behaviors', 0), ('Object', 'ContextObject', 0), ('Object', 'InstigatorObject', 0)], None,
+               FUNC_NATIVE | FUNC_PUBLIC | 0x2000)
+    T.array_of(T.cls('BehaviorCollectionDefinition'), 'Behaviors', 'Object')
+    T.prop('Object', T.cls('Behavior_RunBehaviorCollection'), 'CollectionDefinition')
 
 
 def build_gearbox():
@@ -455,6 +547,8 @@ def build_willowgame():
     T.function(object_cls, 'EqualEqual_IntInt', [('Int', 'P0', 0), ('Int', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=154, friendly='==')
     T.function(object_cls, 'EqualEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=114, friendly='==')
     T.function(object_cls, 'NotEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=119, friendly='!=')
+    T.function(object_cls, 'Subtract_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Float', native=175, friendly='-')
+    T.function(object_cls, 'Greater_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=177, friendly='>')
     T.cls('GlobalAttributeValueResolver')
     reward = T.struct_(0, 'MissionRewardData')
     for field in ('ExperienceRewardPercentage', 'CreditRewardMultiplier', 'OtherCurrencyReward'): T.prop('Struct', reward, field, type_ref=aid)
@@ -573,8 +667,21 @@ def build_willowgame():
     T.prop('Float', globals_definition, 'PlayerInteractionDistance')
     points_per_level = T.prop('Struct', globals_definition, 'GeneralSkillPointsPerLevelUp', type_ref=aid)
     # the player's class and its health pool (the data the RecalculateAttributeInitializedState stand-in reads)
-    T.prop('Object', T.cls('PlayerClassDefinition'), 'HealthPoolDefinition')
-    T.prop('Struct', T.cls('ResourcePoolDefinition'), 'BaseMaxValue', type_ref=aid)
+    player_class = T.cls('PlayerClassDefinition')
+    T.prop('Object', player_class, 'HealthPoolDefinition')
+    on_level_up = T.array_of(player_class, 'OnLevelUp', 'Object')
+    # a level-up skill (swap 7b): its effects' attribute, modifier type, value and grade rules
+    effect_data = T.struct_(0, 'SkillEffectData')
+    T.prop('Object', effect_data, 'AttributeToModify')
+    T.prop('Byte', effect_data, 'ModifierType')
+    T.prop('Struct', effect_data, 'BaseModifierValue', type_ref=aid)
+    T.prop('Float', effect_data, 'GradeToStartApplyingEffect')
+    T.prop('Float', effect_data, 'PerGradeUpgradeInterval')
+    T.prop('Struct', effect_data, 'PerGradeUpgrade', type_ref=aid)
+    skill = T.cls('SkillDefinition')
+    T.prop('Int', skill, 'DefaultStartingGrade')
+    T.array_of(skill, 'SkillEffectDefinitions', 'Struct', effect_data)
+    T.prop('Object', T.cls('Behavior_AttributeEffect'), 'AttributeEffect')
     T.cls('PlayerReplicationInfoAttributeContextResolver')
 
     status_owner = T.cls('IMission')
@@ -593,6 +700,12 @@ def build_willowgame():
     T.function(controller, 'UpdateLcdMissionStatus', [], None, native)
     T.function(controller, 'PlayUIAkEvent', [('Object', 'Event', 0)], None, native)
     pri_prop = T.prop('Object', controller, 'PlayerReplicationInfo')
+    pawn_prop = T.prop('Object', controller, 'Pawn')
+    player_class_prop = T.prop('Object', controller, 'PlayerClass')
+    last_level_up = T.prop('Float', controller, 'LastLevelUpTime')
+    T.prop('Object', controller, 'ResourcePoolManager')
+    time_seconds = p.add_import_full('FloatProperty', p.add_import_full('Class', engine, 'WorldInfo'), 'TimeSeconds')
+    run_behaviors = p.add_import_full('Function', p.add_import_full('Class', engine, 'BehaviorBase'), 'RunBehaviors')
     T.function(controller, 'GetMaxExpLevel', [], None, native, 'Int')
     required = T.function(controller, 'GetExpPointsRequiredForLevel', [('Int', 'Level', 0)], None, native, 'Int')['__self__']
     playthrough = T.struct_(controller, 'MissionPlaythroughData')
@@ -872,6 +985,14 @@ def build_willowgame():
                                            lambda: a.instance(points_per_level)), a.self_, lambda: a.raw(0x4A))
         a.raw(0x16)
         a.call(recalculate)
+        # if (Pawn != None && WorldInfo.TimeSeconds - LastLevelUpTime > 1.0) { LastLevelUpTime = WorldInfo.TimeSeconds; RunBehaviors(PlayerClass.OnLevelUp, Pawn, Pawn); }
+        def now(): a.context(lambda: a.instance(world_info), lambda: a.instance(time_seconds))
+        guard = a.jump_if_not(lambda: (a.raw(119), a.instance(pawn_prop), a.raw(0x2A), a.raw(0x16)))
+        late = a.jump_if_not(lambda: (a.raw(177), a.raw(175), now(), a.instance(last_level_up), a.raw(0x16), a.raw(0x1E), a.b.extend(struct.pack('<f', 1.0)), a.raw(0x16)))
+        a.raw(0x0F); a.instance(last_level_up); now()
+        a.call(run_behaviors, lambda: a.context(lambda: a.instance(player_class_prop), lambda: a.instance(on_level_up)),
+               lambda: a.instance(pawn_prop), lambda: a.instance(pawn_prop))
+        a.patch(late); a.patch(guard)
         a.return_nothing(); a.end(); return a
     T.function(controller, 'ExpLevelUp', [('Bool', 'bCheated', 0)], level_up)
     return p
@@ -955,10 +1076,35 @@ def build_mission(director=False, on_enabled=True):
     health_formula = t.bool('bEnabled', True) + data('Multiplier', constant=10.0) + data('Level', constant=1.5) + data('Power', attribute=player_level) + none
     health_definition = p.add_export(chain('Engine', 'AttributeInitializationDefinition'), 'Init_PlayerHealth',
                                      w32(0) + t.struct_('ValueFormula', 'ValueFormula', health_formula) + none)
-    health_pool = p.add_export(chain('WillowGame', 'ResourcePoolDefinition'), 'HealthPool', w32(0) + data('BaseMaxValue', definition=health_definition) + none)
+    # the pool data (swap 7b): the resource names its pool class, the pool definition follows a changed maximum when it was full
+    pool_class = chain('Engine', 'HealthResourcePool')
+    health_resource = p.add_export(chain('Engine', 'ResourceDefinition'), 'Health', w32(0) + t.tag('DefaultResourcePoolClass', 'ClassProperty', 4, w32(pool_class)) + none)
+    cooldown_resource = p.add_export(chain('Engine', 'ResourceDefinition'), 'ActiveSkillCooldown', w32(0) + none)
+    health_pool = p.add_export(chain('Engine', 'ResourcePoolDefinition'), 'HealthPool', w32(0) + t.obj('Resource', health_resource)
+                               + data('BaseMaxValue', definition=health_definition) + t.bool('bUpdateCurrentValueOnExtremaChange', True) + none)
+    # the level-up skill: effect 1 adds the pool's maximum to its current value (PostAdd, from grade 1), effect 2 scales a cooldown pool's current value
+    # by 0 (Scale), a pool the VM does not have
+    def pool_attribute(name, resource, property_name):
+        resolver = p.add_export(chain('Engine', 'ResourcePoolAttributeContextResolver'), name + '_Context', w32(0) + t.obj('Resource', resource) + none)
+        value = p.add_export(chain('Engine', 'ObjectPropertyAttributeValueResolver'), name + '_Value', w32(0) + t.name_('PropertyName', property_name) + none)
+        return p.add_export(chain('Engine', 'AttributeDefinition'), name,
+                            w32(0) + t.array('ContextResolverChain', 1, w32(resolver)) + t.array('ValueResolverChain', 1, w32(value)) + none)
+    health_max = pool_attribute('HealthMaxValue', health_resource, 'MaxValue')
+    health_current = pool_attribute('HealthCurrentValue', health_resource, 'CurrentValue')
+    cooldown_current = pool_attribute('CooldownCurrentValue', cooldown_resource, 'CurrentValue')
+
+    def effect(attribute, modifier_type, value):
+        return (t.obj('AttributeToModify', attribute) + t.byte('ModifierType', modifier_type) + data('BaseModifierValue', **value)
+                + t.float('GradeToStartApplyingEffect', 1.0) + t.float('PerGradeUpgradeInterval', 1.0) + none)
+    skill = p.add_export(chain('WillowGame', 'SkillDefinition'), 'LevelUpSkill', w32(0) + t.int('DefaultStartingGrade', 1)
+                         + t.array('SkillEffectDefinitions', 2, effect(health_current, 2, dict(attribute=health_max)) + effect(cooldown_current, 0, dict(constant=0.0))) + none)
+    attribute_effect = p.add_export(chain('WillowGame', 'Behavior_AttributeEffect'), 'LevelUp_AttributeEffect', w32(0) + t.obj('AttributeEffect', skill) + none)
+    collection = p.add_export(chain('Engine', 'BehaviorCollectionDefinition'), 'PlayerBehavior_LevelUp', w32(0) + t.array('Behaviors', 1, w32(attribute_effect)) + none)
+    run_collection = p.add_export(chain('Engine', 'Behavior_RunBehaviorCollection'), 'LevelUp_RunCollection', w32(0) + t.obj('CollectionDefinition', collection) + none)
     siren = p.add_export(chain('Core', 'Package'), 'GD_Siren', w32(0) + none)
     siren_character = p.add_export(chain('Core', 'Package'), 'Character', w32(0) + none, outer=siren)
-    p.add_export(chain('WillowGame', 'PlayerClassDefinition'), 'CharClass_Siren', w32(0) + t.obj('HealthPoolDefinition', health_pool) + none, outer=siren_character)
+    p.add_export(chain('WillowGame', 'PlayerClassDefinition'), 'CharClass_Siren',
+                 w32(0) + t.obj('HealthPoolDefinition', health_pool) + t.array('OnLevelUp', 1, w32(run_collection)) + none, outer=siren_character)
     p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals',
                  w32(0) + t.float('PlayerInteractionDistance', 420.0) + data('GeneralSkillPointsPerLevelUp', definition=points_definition) + none, outer=general_package)
     if director:
@@ -1504,6 +1650,31 @@ with tempfile.TemporaryDirectory() as folder:
     # two levels from one reward (pool 44 + 27 = 71 >= R(6)): one event with both points, the health of the last level
     code, got, events = level_events('stage:4', 'player:4:44', *flow)
     check('S7 4 -> 6 awards 2 points once', code == 0 and got['errors'] == [] and leveled(events, 6, 2, 113.90625), (events, got['errors']))
+    # Scenario S7b (swap 7b): the pool rebase and the OnLevelUp refill (NATIVE_LEVEL_UP_ATTRIBUTES.md). The pool is seeded for the player's level (player:) with
+    # the host's current health (health:); a level-up is made by giving the pool the next level's experience (R(5) = 48, R(6) = 70, R(7) = 96) and ticking.
+    # Health at level 4 / 5 / 6 / 7 is 10 x 1.5^level: 50.625, 75.9375, 113.90625, 170.859375. The guard is OnExpLevelChange's: game time since the
+    # previous level-up must exceed 1 s (the game time is the sum of the ticks).
+    def health_of(got, step):
+        rows = [e for s in got['steps'] if s['step'] == step for e in s['events'] if e['kind'] == 'health']
+        return [(float(e['a']), float(e['b'])) for e in rows]
+
+    def near(pairs, *wanted): return len(pairs) == len(wanted) and all(abs(a - x) < 1e-3 and abs(b - y) < 1e-3 for (a, b), (x, y) in zip(pairs, wanted))
+    # a full pool follows the new maximum with no behavior run (inside the guard: t = 0.5)
+    code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
+    check('S7b full pool follows the new maximum', code == 0 and got['errors'] == [] and near(health_of(got, 'tick:0.5'), (75.9375, 75.9375)), (health_of(got, 'tick:0.5'), got['errors']))
+    # a half pool keeps its current value through the rebase when the behaviors do not run (inside the guard)
+    code, got = slice_run('stage:4', 'player:4:48', 'health:20', 'tick:0.5')
+    check('S7b half pool keeps current through the rebase', code == 0 and near(health_of(got, 'tick:0.5'), (20.0, 75.9375)), health_of(got, 'tick:0.5'))
+    # the same level-up after the guard: the level-up behavior adds the maximum to current and the pool clamps it: full
+    code, got = slice_run('stage:4', 'player:4:48', 'health:20', 'tick:2')
+    check('S7b half pool is refilled by the level-up behavior', code == 0 and got['errors'] == [] and near(health_of(got, 'tick:2'), (75.9375, 75.9375)), health_of(got, 'tick:2'))
+    check('S7b effects of a pool the VM lacks are not added, no stubs', got['script']['stubs'] == [], got['script']['stubs'])
+    # two level-ups within 1 s refill only once: the first (t = 2.1) refills, the second (t = 2.2, 0.1 s later) leaves current, the third (t = 3.7) refills again
+    code, got = slice_run('stage:4', 'tick:2', 'player:4:48', 'health:20', 'tick:0.1', 'player:5:70', 'health:20', 'tick:0.1', 'player:6:96', 'health:20', 'tick:1.5')
+    ticks = [s for s in got['steps'] if s['step'].startswith('tick:')]
+    per_step = [[(float(e['a']), float(e['b'])) for e in s['events'] if e['kind'] == 'health'] for s in ticks]
+    check('S7b two level-ups within 1 s refill once', code == 0 and got['errors'] == [] and len(per_step) == 4 and per_step[0] == []
+          and near(per_step[1], (75.9375, 75.9375)) and near(per_step[2], (20.0, 113.90625)) and near(per_step[3], (170.859375, 170.859375)), (per_step, got['errors']))
     # no level change (27 < R(5)): neither event is sent
     code, got, events = level_events('stage:4', 'player:4:0', *flow)
     check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events)

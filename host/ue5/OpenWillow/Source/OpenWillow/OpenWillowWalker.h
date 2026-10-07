@@ -92,6 +92,11 @@ public:
     // -owquest: sets maximum health from the recovered formula when Maya's level differs from the level it was last
     // set for (start, XP level-up, test fixtures); does nothing otherwise.
     void RefreshHealthForLevel();
+    // A level-up from the mission script's experience is handled by the VM (swap 7b): the host's own refresh waits (HoldHealthForScript) until the
+    // script's Health event arrives, and ApplyScriptHealth sets the maximum and current health from it (and ends the wait).
+    void HoldHealthForScript(bool bHold) { bHealthHeldForScript = bHold; }
+    bool IsHealthHeldForScript() const { return bHealthHeldForScript; }
+    void ApplyScriptHealth(float NewMax, float NewCurrent);
 private:
     void Forward(float Value);
     void Right(float Value);
@@ -138,6 +143,7 @@ private:
     float MaxHealth = 400.f;
     float Health = 400.f;
     int32 HealthLevel = 0;              // the level MaxHealth was last set for (0: not yet)
+    bool bHealthHeldForScript = false;  // a script level-up is pending: RefreshHealthForLevel does nothing
     FVector RespawnLocation = FVector::ZeroVector;
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;

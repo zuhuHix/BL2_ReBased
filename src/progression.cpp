@@ -54,7 +54,8 @@ float AttributeEvaluator::evaluateDefinition(Object& definition, const Attribute
 }
 
 // The attribute's value: with an empty context chain the attribute yields no value and the constant stands; the context resolvers are
-// the no-context one (always succeeds) and the player replication info one (succeeds when the context has one); each value resolver
+// the no-context one (always succeeds), the player replication info one (succeeds when the context has one) and the resource pool one
+// (succeeds when the context knows a pool for the resource); each value resolver
 // gets the previous value (NATIVE_PROGRESSION.md section 1, NATIVE_ATTRIBUTES.md sections 5 and 6, UNVERIFIED).
 std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const AttributeContext& context) {
     const Value* contexts = runtime_.property(attribute, "ContextResolverChain");
@@ -66,6 +67,12 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
         if (type == "WillowGame.PlayerReplicationInfoAttributeContextResolver") {
             if (!context.replicationInfo) return std::nullopt;      // the context does not resolve
             owner = context.replicationInfo;
+            continue;
+        }
+        if (type == "Engine.ResourcePoolAttributeContextResolver") {
+            const Value* resource = runtime_.property(*load(reference), "Resource");
+            owner = resource && context.resourcePool ? context.resourcePool(*resource) : nullptr;
+            if (!owner) return std::nullopt;                        // no such pool: the context does not resolve
             continue;
         }
         throw RuntimeError("unsupported attribute context resolver " + type);

@@ -472,9 +472,26 @@ void UOpenWillowQuest::Pump()
             // was confirmed in game, the trigger is a stand-in). The host's own formula (HealthForLevel) set its maximum health; the two are compared.
             const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
             ScriptMaxHealth = FCString::Atof(*A);
-            const float HostHealth = Walker ? Walker->GetMaxHealth() : -1.f;
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up max health: VM %.3f at level %d, host %.3f (%s)"), ScriptMaxHealth, Skills ? Skills->GetLevel() : -1,
+            float HostHealth = -1.f;
+            if (Skills) PlayerMaxHealth(Skills->GetLevel(), HostHealth);       // the host's own formula, the oracle
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up max health: VM %.3f at level %d, host formula %.3f (%s)"), ScriptMaxHealth, Skills ? Skills->GetLevel() : -1,
                 HostHealth, FMath::IsNearlyEqual(ScriptMaxHealth, HostHealth, 0.01f) ? TEXT("same") : TEXT("DIFFERENT"));
+            break;
+        }
+        case K::Health: {
+            // The VM's health pool after the level-up (NATIVE_LEVEL_UP_ATTRIBUTES.md, the refill observed in game): the host adopts it, so a level-up from half
+            // health ends at the new maximum. Compared with the host's own formula (the oracle) in the log and the suite.
+            const float Current = FCString::Atof(*A), Maximum = FCString::Atof(UTF8_TO_TCHAR(Event.b.c_str()));
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            float Formula = -1.f;
+            if (Skills) PlayerMaxHealth(Skills->GetLevel(), Formula);
+            ScriptHealthCurrent = Current;
+            ScriptHealthMaximum = Maximum;
+            ++ScriptHealthEvents;
+            bHealthAdoptedThisTick = true;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up health: VM %.3f/%.3f adopted; host formula maximum %.3f (%s)"), Current, Maximum, Formula,
+                FMath::IsNearlyEqual(Maximum, Formula, 0.01f) ? TEXT("same") : TEXT("DIFFERENT"));
+            if (Walker) Walker->ApplyScriptHealth(Maximum, Current);
             break;
         }
         case K::OnUseDialog:   // PlayOnUseDialog's TriggerEvent on Marcus's dialog component: reported, not played (two-step group dispatch not implemented)
@@ -549,6 +566,7 @@ void UOpenWillowQuest::SyncScriptInputs()
     FixRegionStage(Skills->GetLevel());
     Impl->Slice->setRegionGameStage(RegionStage);
     Impl->Slice->setPlayerExperience(Skills->GetLevel(), Skills->GetExperience());
+    Impl->Slice->setPlayerHealth(Walker->GetHealth());      // the VM's health pool starts from Maya's current health (a level-up rebases and refills it)
 }
 
 bool UOpenWillowQuest::Accept()
@@ -663,7 +681,12 @@ void UOpenWillowQuest::ApplyScriptExperience(int32 Amount)
     UE_LOG(LogTemp, Display, TEXT("OWQUEST script ExpEarn calls=%d amount=%d source=%d; pool gained %d"), int32(Earned.size()),
         Earned.empty() ? 0 : Earned.back().amount, Earned.empty() ? -1 : Earned.back().source, Amount);
     Skills->AddExperience(Amount);
-    Walker->RefreshHealthForLevel();   // a level-up from this reward sets the new level's health at once
+    // A level-up from this reward is the VM's: its pool update rebases the health pool and the OnLevelUp behaviors refill it, and the Health event sets Maya's
+    // health. The walker's own refresh waits for that event (the next tick) instead of setting the host formula at once.
+    if (Skills->GetLevel() != LevelBeforeReward) {
+        Walker->HoldHealthForScript(true);
+        HealthHoldTicks = 1;
+    }
     UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s from the script at region stage %d = %d XP (UNVERIFIED rules, amount at stage 8 confirmed); experience %lld -> %lld, level %d -> %d, skill points %d"),
         *Impl->Data.XpRewardAttribute, RegionStage, LastXpAmount, ExperienceBeforeReward,
         Skills->GetExperience(), LevelBeforeReward, Skills->GetLevel(), Skills->AvailablePoints());
@@ -819,8 +842,15 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
     }
     // Any other level change (the test fixtures' SetLevel) is picked up here, once a frame.
     if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->RefreshHealthForLevel();
+    bHealthAdoptedThisTick = false;
     Impl->Slice->tick(Delta);
     Pump();
+    // A script level-up that sent no Health event (no health pool data): the walker's own refresh takes over after this tick.
+    if (auto* HealthWalker = Cast<AOpenWillowWalker>(GetOwner()))
+        if (HealthWalker->IsHealthHeldForScript() && !bHealthAdoptedThisTick && --HealthHoldTicks <= 0) {
+            HealthWalker->HoldHealthForScript(false);
+            UE_LOG(LogTemp, Warning, TEXT("OWQUEST the script sent no health after the level-up: the host formula applies"));
+        }
     ProcessArrivals();
     if (bFailed) return;
     // GoToRange: the stock WillowWaypoint script runs on the VM (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED). The host reports when the player
@@ -1215,6 +1245,12 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(ScriptMaxHealth > 0.f && FMath::IsNearlyEqual(ScriptMaxHealth, Walker->GetMaxHealth(), 0.01f)
             && FMath::IsNearlyEqual(ScriptMaxHealth, Data.HealthForLevel(Skills->GetLevel()), 0.01f), TEXT("script_level_up_sets_max_health"));
         Check(HealthBeforeReward < MaxHealthBeforeReward && Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("level_up_refills_current_health"));
+        // Swap 7b: the refill is the VM's. Maya was at half health when the reward came; the VM's pool kept that current value through its rebase (not full, so it
+        // did not follow) and the OnLevelUp behavior refilled it: the one Health event is full at the new level's maximum, and the walker holds exactly those numbers.
+        Check(ScriptHealthEvents == 1 && HealthBeforeReward < MaxHealthBeforeReward * 0.51f && ScriptHealthCurrent == ScriptHealthMaximum
+            && FMath::IsNearlyEqual(ScriptHealthMaximum, Data.HealthForLevel(Skills->GetLevel()), 0.01f)
+            && Walker->GetHealth() == ScriptHealthCurrent && Walker->GetMaxHealth() == ScriptHealthMaximum && !Walker->IsHealthHeldForScript(),
+            TEXT("script_level_up_refills_health"));
         {
             // Stock data: the Fire mission's reward is experience only. The script's GetItemRewardsForPlayer found no item (it would list a
             // "not implemented" entry otherwise), and the host spawned no pickup and added nothing to the backpack.

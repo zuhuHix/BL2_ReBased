@@ -237,6 +237,9 @@ level 5, 212 at level 8 (displayed rounding unknown).
 212.6755 (L8), 638.886 (L17), 415,509.44 (L70, UVHM), each `80 × 1.13^L` to float precision. The HUD shows more
 (429 at L8) because the profile's Badass Rank skill modifies the pool ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 
+*Update 2026-10-07 (NATIVE_LEVEL_UP_ATTRIBUTES.md, lane G23; swap 7b): "whether a level-up refills current health" is answered: the native rebase changes the base maximum and leaves current alone unless the
+pool was full (then it follows); the class's `OnLevelUp` behaviors then add the effective maximum to current and the pool clamps it. The VM runs this rule.*
+
 **Confirmed in game 2026-10-07 (lane L1):** a level-up **refills current health to the new maximum** (214.5 of 429.1 became 484.8 of 484.8, and two more level-ups
 the same way), it does not keep the fraction or the absolute value; the new maximum (base `80 x 1.13^L`, times the profile's Badass modifier) is written inside
 `RecalculateAttributeInitializedState`, and the refill follows inside `OnExpLevelChange`; skill points +1 at 8 to 9, 9 to 10, 10 to 11; the shield's current and maximum

@@ -208,6 +208,7 @@ void FireMissionSlice::drainExperience() {
         case Kind::Level: events_.push_back({HostEvent::Kind::Level, std::to_string(gain.amount), "", "", ""}); break;
         case Kind::SkillPoints: events_.push_back({HostEvent::Kind::SkillPoints, std::to_string(gain.amount), "", "", ""}); break;
         case Kind::MaxHealth: events_.push_back({HostEvent::Kind::MaxHealth, std::to_string(gain.health), "", "", ""}); break;
+        case Kind::Health: events_.push_back({HostEvent::Kind::Health, std::to_string(gain.health), std::to_string(gain.maximum), "", ""}); break;
         }
     }
 }
@@ -314,6 +315,7 @@ bool FireMissionSlice::turnIn() {
 
 void FireMissionSlice::tick(double seconds) {
     mission_->tick(seconds);
+    script_->advanceTime(seconds);         // game time, read by OnExpLevelChange's 1 s guard
     script_->updateExperiencePool();       // the experience pool update, every frame (ApplyExpPointsToExpLevel)
     dummy_->tick(seconds);
     pump();

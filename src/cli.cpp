@@ -742,7 +742,7 @@ int main(int argc, char** argv) {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
             // Each step's record carries the mission status after it.
             // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
-            // owns) | player:<level>:<experience> (the player's state) | screen (Marcus's mission lists, printed with the step) | use (the use key
+            // owns) | player:<level>:<experience> (the player's state) | health:<current> (the player's current health, after player:) | screen (Marcus's mission lists, printed with the step) | use (the use key
             // on Marcus: his OnUsed chain; the behaviors it ran and the interface it opened are printed with the step). accept and turnin
             // run the installed controller script with Marcus as the director (the entry must be one his lists offer); tick also runs the
             // experience pool update.
@@ -757,7 +757,7 @@ int main(int argc, char** argv) {
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
                                           "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog",
-                                          "skill_points", "max_health"};
+                                          "skill_points", "max_health", "health"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {
@@ -788,6 +788,7 @@ int main(int argc, char** argv) {
                     if (colon == std::string::npos) usage();
                     slice.setPlayerExperience(std::stoi(step.substr(7, colon - 7)), std::stoll(step.substr(colon + 1)));
                 }
+                else if (step.rfind("health:", 0) == 0) slice.setPlayerHealth(std::stof(step.substr(7)));      // health:<current>, after player:
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")

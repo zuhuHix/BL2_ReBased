@@ -140,6 +140,11 @@ private:
     // number of such events) and the new maximum health (the health pool's base maximum, a stand-in trigger). The host compares them with its own.
     int32 ScriptSkillPoints = -1, ScriptSkillPointEvents = 0;
     float ScriptMaxHealth = -1.f;
+    // The Health event: maximum and current health after the script's level-up, which the host adopts (swap 7b). HealthHoldTicks: how many ticks the
+    // walker's own refresh waits for it after a script experience level-up.
+    float ScriptHealthCurrent = -1.f, ScriptHealthMaximum = -1.f;
+    int32 ScriptHealthEvents = 0, HealthHoldTicks = 0;
+    bool bHealthAdoptedThisTick = false;
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;

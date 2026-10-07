@@ -516,8 +516,10 @@ data reproduced the recorded baseline: quest suite 57/57 and resume 7/7, door su
 - **Health follows the level.** Max health is recomputed from the same formula whenever the level changes, and a
   level-up refills current health. The refill is read from data: `OnExpLevelChange` (script) runs the class's
   `OnLevelUp` behaviours, whose skill definition adds `HealthMaxValue` to `HealthCurrentValue`. That the pool caps the
-  sum at the maximum, and that the effect acts once, are UNVERIFIED. The same definition also touches the action-skill
-  cooldown; that is not modelled.
+  sum at the maximum, and that the effect acts once, were UNVERIFIED and are **observed to hold** (lane L1, in game,
+  2026-10-07, two captures). The same skill also resets the action-skill cooldown (Scale by the pool's minimum), and a second
+  `OnLevelUp` skill boosts shield recharge for 4 s; neither is modelled. The 1 s guard is a strict "greater than" on game time since the previous level-up
+  and sits before both behavior sets (swap 7b runs it as script).
   **Confirmed in game 2026-10-07 (lane L1):** the refill reaches the full new maximum (the cap holds) once, inside `OnExpLevelChange`. The same stock level-up skills also
   boost the shield recharge (half the maximum per second for 4 s) and, for a natural level-up, add +1.0 weapon-damage scale for 30 s; neither is modelled here ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 - **Phaselock**, row by row (replaces the rows of the same name in the table above):
@@ -1219,13 +1221,15 @@ reached `ExpPointsNextLevelAt`. Traced with `research/script_disasm.py` and the 
 | `FireSkillPointsChangedDelegates` | script | runs (no delegates registered in the VM graph) | unchanged |
 | first-skill-point stats, `BroadcastLocalizedMessage`, `RecordPointsEarnedEventForPlayer` | script / telemetry native | stat object absent; telemetry stub | unchanged: telemetry stays a stub (no rule to implement) |
 | `OnExpLevelChange`: `ExpPointsNextLevelAt` from `GetExpPointsRequiredForLevel` | script + native | implemented (swap 2) | unchanged |
-| `OnExpLevelChange`: `RecalculateAttributeInitializedState` | native thunk | **stub** | **host-boundary stand-in** (below) |
-| `OnExpLevelChange`: the pawn branch (`SetGameStage`, intrinsic armour, the class's `OnLevelUp` behaviors) | script | skipped: the VM controller has no pawn | unchanged (so the health top-up of `PlayerBehavior_LevelUp` is not run) |
+| `OnExpLevelChange`: `RecalculateAttributeInitializedState` | native thunk | **stub** | **host-boundary stand-in** (below); **replaced by the real rule in swap 7b** |
+| `OnExpLevelChange`: the pawn branch (`SetGameStage`, intrinsic armour, the class's `OnLevelUp` behaviors) | script | skipped: the VM controller has no pawn | unchanged in swap 7 (so the health top-up of `PlayerBehavior_LevelUp` was not run); **swap 7b runs the branch** |
 | `ClientOnExpLevelChange` (HUD queue, achievements, LCD, `RecordPlayerCharacterGainedLevelEventForPlayer`) | script | HUD absent; stubs | unchanged |
 
 The health pool's maximum is **not** written anywhere by the level-up script. The notes do not say which native recomputes it: `RecalculateAttributeInitializedState`
 is "a thin native thunk to a virtual method whose body was not reached" (NATIVE_ATTRIBUTES section 8) and `ResourcePoolManager.RecalculateBaseValues` is low
 confidence. So that step is the one that needed a stand-in; it did not need the whole attribute and resource-pool system.
+*Correction 2026-10-07 (NATIVE_LEVEL_UP_ATTRIBUTES.md, lane G23): the notes do say which native recomputes it: `RecalculateAttributeInitializedState`, through the pool rebase
+(`ResourcePoolManager.RecalculateBaseValues` -> the script `ResourcePool.CalculateBaseValues(true)`), so the stand-in below stood in for a known rule; swap 7b implements it.*
 
 ### What was implemented
 
@@ -1237,7 +1241,7 @@ confidence. So that step is the one that needed a stand-in; it did not need the 
   when the context has a replication info, otherwise the attribute does not resolve), the value resolver `ObjectPropertyAttributeValueResolver` (get: the named property of the
   resolved context, `ExpLevel` for `PlayerExperienceLevel`), and the condition attribute `PlayerExperienceLevel` next to `PlayThroughCount`. A comparison whose operand does not
   resolve is false (NATIVE_ATTRIBUTES section 11). Any other resolver or condition attribute still throws "unsupported ..." rather than guess.
-- **`WillowPlayerController.RecalculateAttributeInitializedState`: HOST-BOUNDARY STAND-IN.** It evaluates the health pool's base maximum for the new level
+- **`WillowPlayerController.RecalculateAttributeInitializedState`: HOST-BOUNDARY STAND-IN (superseded by swap 7b, below).** It evaluates the health pool's base maximum for the new level
   (`GD_Siren.Character.CharClass_Siren.HealthPoolDefinition` -> `BaseMaxValue` -> `Init_PlayerHealth`, found by its stock path: Maya is the host's player class, the VM
   controller's own `PlayerClass` stays unset) and keeps it for the pool update. **What the real native recomputes, and that it is the one that does this, is not established;
   only the data and the formula (NATIVE_PROGRESSION section 4) are from the notes.** Missing class data is a "not implemented" stub entry, not an error.
@@ -1273,7 +1277,7 @@ and the HUD side of `ClientOnExpLevelChange` (no HUD). No stub is newly reached.
 - The host still displays its own points and health; adopting the VM's numbers needs a points counter in the host (the save recomputes points from the level, NATIVE_SAVE_LOAD:
   `max(0, L - 4)` minus points spent, and must keep doing so) and a health setter, and is a UI/save change.
 - Which native writes the health pool's base maximum in the game; whether a level-up refills current health (the host does; the class's `OnLevelUp` behavior is a pawn branch the VM skips).
-  *Answered 2026-10-07 (lane L1, in game):* `RecalculateAttributeInitializedState` writes the maximum, and a level-up refills current health to the new maximum ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+  *Implemented in swap 7b (below).* *Answered 2026-10-07 (lane L1, in game):* `RecalculateAttributeInitializedState` writes the maximum, and a level-up refills current health to the new maximum ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 - The VM's `GeneralSkillPoints` starts at 0 each run (the host owns the unspent count), so the script's "first skill point" stat branch (old 0, new above 0) is reached with no stats object
   and does nothing; the spent-points and respec paths are not run.
 - Evaluation is single precision with `std::pow`; the game's `pow` may differ in the last bit (see NATIVE_PROGRESSION section 3 for the same question on the curve).
@@ -1306,3 +1310,85 @@ Maintainer decision, AI-assisted (Claude), lane I4: "that's not how missions are
   implemented" entry for a non-empty item reward, so the script path found none), no `AOpenWillowInventoryPickup` exists in the world and the backpack count is unchanged.
 - **Local files:** `local/items/slice/slice_reward_roll.*` and the manifest key were deleted on this machine (ignored, regenerable otherwise); a copy elsewhere is harmless but
   `host/ue5/import_slice_items.py` would still import a stale `slice_reward_roll.json` as an asset, so delete it there too.
+
+## Script swap 7b: the health pool rebase and the level-up refill (2026-10-07)
+
+AI-assisted (Claude), lane I4. Replaces swap 7's health stand-in with the rule of [NATIVE_LEVEL_UP_ATTRIBUTES.md](NATIVE_LEVEL_UP_ATTRIBUTES.md) (lane G23). **Every rule stays
+UNVERIFIED in the running game except the one outcome observed on 2026-10-07 by lane L1 in two live captures** (refill from half and from a quarter health to the new maximum,
+[REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)). The numbers differ from those captures only by the profile's Badass Rank modifier, which the slice does not have.
+
+### What runs now
+
+1. **The VM owns a health pool.** `MissionScript::ensureHealthPool` builds a `ResourcePoolManager` on the VM controller and one `ResourcePool` in it, of the class the health
+   resource names (`D_Resources.Health.DefaultResourcePoolClass`, `Engine.HealthResourcePool`), over Maya's `HealthPoolDefinition` (found by its stock path, as in swap 7), the
+   controller as `AssociatedProvider`, authoritative. The host seeds it: `setPlayerExperience` builds it at the player's level, full; `setPlayerHealth(current)` (the quest calls it
+   with Maya's current health before accept and turn-in) sets the current value and records it. Seeding is the pool's creation, not the level-up path: base maximum from
+   `BaseMaxValue` through the evaluator, empty modifier stack, minimum from the definition, then `UpdateLastValues`.
+2. **`RecalculateAttributeInitializedState` (controller-class part, section 1 of the note).** The native rebases every pool of the controller's manager through
+   `ResourcePoolManager.RecalculateBaseValues`, which runs the **installed script** `ResourcePool.CalculateBaseValues(true)` on each pool, in slot order. That script runs on the VM
+   unchanged: the let-attribute opcode (5F) stores the evaluated `BaseMaxValue` into `MaxValueBaseValue` and recomputes `MaxValue` from the stack with no notification; then
+   `UpdateCurrentValueOnExtremaChange` applies the follow rule (the definition flag `bUpdateCurrentValueOnExtremaChange` holds for health): **current becomes the new maximum
+   only if it was at or above the maximum recorded at the last `UpdateLastValues`**, and the script ends by recording the new values. Natives implemented for it, scoped to this one
+   pool, from section 4 of the note (UNVERIFIED): `ResourcePool.GetMaxValue` (base or effective), `SetCurrentValue` (authoritative gate, integer-resource truncation, clamp with the
+   minimum winning, idle-timer stamp), `UpdateLastValues` (clears "created and not modified" past 0.0001, records current, minimum, maximum), `PoolIsNowFull` (has-been-full flag when
+   minimum < maximum). The pool's other reads (`GetUpgradeLevel`, `ApplyUpgrades`) are installed script and run as is (health has no upgrade data).
+3. **The refill: `OnExpLevelChange`'s pawn branch runs in the VM, so the 1 s guard is the script's own.** During the level-up the controller is given the player's pawn (the VM
+   player pawn) and `PlayerClass` (Maya's class), and the world's `TimeSeconds` advances with the slice's ticks (`FireMissionSlice::tick` -> `advanceTime`). The installed script then
+   tests `bFeedback` and `TimeSeconds - LastLevelUpTime > 1.0` (strictly greater, before both behavior sets; `LastLevelUpTime` starts at 0, so a level-up in the first second of game time gets none),
+   sets `LastLevelUpTime` and calls `BehaviorBase.RunBehaviors(PlayerClass.OnLevelUp, ...)`, and again for `OnLevelUpNaturally`. Natives on that branch with no note of their own, bound
+   as UNVERIFIED stand-ins: `WillowPawn.GetAWillowPawn` (answers the pawn itself, its name), `WillowPawn.SetGameStage` (recorded only).
+4. **`BehaviorBase.RunBehaviors` is a labelled STAND-IN for the skill activation** (the note describes the data and the observed effect, not this native or the skill machinery behind
+   `Behavior_AttributeEffect`: `SkillEffectManager.ActivateSkill`, the timed skill, `AddSkillEffect`, `AdjustModifiers`). It walks the collection by its data
+   (`Behavior_RunBehaviorCollection.CollectionDefinition.Behaviors`) and for each `Behavior_AttributeEffect` applies the skill's effects at the starting grade (at least 1): the
+   attribute is resolved through its resource-pool context resolver and object-property value resolver to a pool of the VM (no such pool: the context does not resolve and the effect is not
+   added, which is the game's rule), the value is `BaseModifierValue` (evaluated for the controller: for the heal, `HealthMaxValue`, the **new** effective maximum, since the rebase came
+   first) + `PerGradeUpgrade x ((grade - start) div step)`, and a plain attribute (no modifier stack: `CurrentValue`) takes it in place: PostAdd adds, Scale multiplies by the raw value;
+   then the pool's notification clamps current (below the minimum to the minimum, at or above the maximum to the maximum). So the first skill's first effect adds the maximum to current
+   and the clamp ends at the maximum. Presentation behaviors (the particle and the dialog event) are listed in `script.notes`, not run. The evaluator gained the resource-pool context
+   resolver (`AttributeContext::resourcePool`) for this.
+5. **Events.** After a level change the slice sends `Level`, `SkillPoints`, `MaxHealth` (now the pool's effective maximum) and the new `Health` event (current in `a`, maximum in `b`).
+   `--slice-run` prints it as `health`; a new step `health:<current>` sets the player's current health (after `player:`).
+
+### Host (`OpenWillowQuest`, `OpenWillowWalker`)
+
+The host now **adopts** the VM's result for a level-up from the mission's experience. When the script's experience raises the level, the walker's own refresh is held
+(`HoldHealthForScript`) instead of setting the host formula at once; the `Health` event's numbers become Maya's maximum and current health (`ApplyScriptHealth`), which ends the hold; if
+no `Health` event comes in the next tick the host formula applies as before (logged). The host formula (`Data.HealthForLevel`) is the oracle: the log lines compare the VM's maximum
+with it. A level change the script did not handle (the suite's `SetLevel` fixtures) still goes through `RefreshHealthForLevel`. A load does not run any of this (the note, section 8).
+
+Existing checks whose meaning changed (names kept): `level_up_sets_formula_max_health` and `level_up_refills_current_health` now hold because the VM computed the maximum and
+refilled the half-empty pool (before, the host's own formula did both at once; the oracle comparison `Data.HealthForLevel` is unchanged); `script_level_up_sets_max_health` now compares the
+VM's maximum with the adopted walker maximum (still the same numbers). New: `script_level_up_refills_health` (Maya at half health when the reward came, one `Health` event full at the new
+level's maximum, the walker holds exactly those numbers). The old MaxHealth log line compares with the host formula, not with the walker.
+
+### Not modelled / reported
+
+- **Class-level attributes of the native** (section 1 parts 1 and 3): `EncumbranceResistance`, the twelve pawn damage modifiers and the ten status-effect resistances. For Maya's class
+  they are the constants 0 and 1, so nothing visible changes; the VM pawn has none of those attributes set up. **Not implemented.**
+- **The action-skill cooldown reset** (second effect of the first skill: `ActiveSkillCooldownCurrentValue` scaled by the pool's minimum, 0): the VM has no cooldown pool, so the effect finds no context and
+  is not added (the game's rule for a missing pool). It would need the Phaselock cooldown pool as a VM `ResourcePool` (definition `ActiveSkillCooldownPool_Siren`, current value, minimum) and
+  the host's cooldown state read from and written back to it; the host keeps its own cooldown. **Not implemented.**
+- **The shield recharge boost** (second `OnLevelUp` skill: `ShieldActiveRegenerationRate` PostAdd half the shield maximum, 4 s, a stack attribute removed at expiry) needs a shield pool, a
+  timed skill with expiry and the stack-attribute path of the modifier machinery. The slice has no shield (base maximum 0). **Not implemented.** Likewise the natural-level-up weapon-damage
+  scale (`OnLevelUpNaturally`), a 30 s stack effect on the weapon: **not implemented** (the behavior list is walked, the effect targets a stack attribute and is listed as not implemented).
+- The real skill activation (timed skill, grade, expiry), the pool's subclass "current value changed" hooks, the per-frame pool update (regeneration, which also records the last values),
+  `OnHealthPoolMaxValueModified`, the load-time fills (`ServerItemSaveGameDataCompleted`), and the pawn's `SetGameStage` (recorded only).
+- The VM pool has no modifier stack entries (the host applies no skills or Badass Rank to health), so the rebase's "keep the stack" is exercised by the formula only, not by data. The
+  profile Badass Rank modifier of the live captures (effective/base 2.01747) is not modelled by the host.
+- `SetCurrentValue`, `GetMaxValue`, `UpdateLastValues` and `PoolIsNowFull` are bound only for the one pool the bridge builds; `RunBehaviors` outside a level-up logs a stub.
+
+### Checks (2026-10-07, CMake Release and UE module rebuilt first)
+
+- Synthetic `tests/mission_script_test.py` scenario S7b (`--slice-run`; toy `ResourcePool` with the pool-side script in miniature, a manager, an `OnLevelUp` collection, the toy `ExpLevelUp`
+  with the installed guard; health `10 x 1.5^level`): a full pool follows the new maximum (75.9375/75.9375) with the behaviors inside the guard; a half pool (20) keeps its current value through
+  the rebase inside the guard (20 of 75.9375); the same level-up after the guard refills it (75.9375 of 75.9375); with level-ups at 2.1 s, 2.2 s and 3.7 s the first refills, the second
+  (0.1 s later) leaves current at 20 of 113.90625, the third refills (170.859375 of 170.859375); the cooldown effect of the toy skill (a pool the VM lacks) is not added and no stub appears.
+  The earlier S7 scenario is unchanged and passes.
+- Real data (`--slice-run`, installed packages): `player:8:28200 health:106.3 tick:3` gives skill_points 1, max_health 240.3233, health 240.3233 of 240.3233; the same with `tick:0.5` (inside the guard)
+  leaves 106.3 of 240.3233; a full pool at level 8 ends 240.3233 of 240.3233 (`player:8:28200 tick:3`).
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=98 errors=0 (97 before, one new: `script_level_up_refills_health`), resume PASS checks=11 errors=0.** The log shows
+  `OWQUEST script level-up health: VM 240.323/240.323 adopted; host formula maximum 240.323 (same)`. Stubs at the suite's log points are unchanged: 9 after accept, 15 after turn-in.
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0** (the last known run, local/p2/inv_swap2.log, was the same).
+- **One newly reached stub entry, after the level-up only** (`--slice-run` real data; not in the suite's two log lines): `level-up skill effect: attribute resolvers other than a resource pool's property (not
+  implemented) x1`, the natural-level-up weapon-damage effect (its attribute resolves through the weapon, not a pool). The shield and cooldown effects are skipped silently (no such pool in the VM).

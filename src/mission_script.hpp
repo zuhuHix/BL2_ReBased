@@ -30,8 +30,14 @@ class BehaviorProvider;
 // updateExperiencePool) live here as C++ state with the VM controller's PlayerReplicationInfo as the level's home.
 // Swap 7 (NATIVE_PROGRESSION.md, NATIVE_SKILLS.md section 1, NATIVE_ATTRIBUTES.md): AttributeInitializationDefinition.EvaluateInitializationData
 // (the evaluator of src/progression.*, with the player controller as the context source), so the installed ExpLevelUp awards its skill points
-// from GlobalsDefinition.GeneralSkillPointsPerLevelUp; WillowPlayerController.RecalculateAttributeInitializedState as a host-boundary stand-in that
-// re-evaluates the player's health pool base maximum (see recalculateMaxHealth).
+// from GlobalsDefinition.GeneralSkillPointsPerLevelUp.
+// Swap 7b (NATIVE_LEVEL_UP_ATTRIBUTES.md, UNVERIFIED; the refill was observed in two live captures): the VM controller owns a ResourcePoolManager
+// with one health ResourcePool built from Maya's stock HealthPoolDefinition. WillowPlayerController.RecalculateAttributeInitializedState rebases every
+// pool of the manager through the installed script ResourcePool.CalculateBaseValues(true) (the natives it needs: ResourcePoolManager.RecalculateBaseValues,
+// ResourcePool.GetMaxValue, SetCurrentValue, UpdateLastValues, PoolIsNowFull), so the base maximum comes from the data, the stack is kept and current
+// follows the new maximum only for a pool that was full. OnExpLevelChange's pawn branch runs in the VM (its 1 s guard is the script's): the stock
+// OnLevelUp collection reaches BehaviorBase.RunBehaviors, a STAND-IN here that applies the Behavior_AttributeEffect skills' effects by their data to
+// the pools the VM has (the heal; see runBehaviors). The class-level damage modifiers and status resistances, the shield and cooldown pools are not modelled.
 // Swap 3 (NATIVE_CONTROLLER_HELPERS.md): MissionTracker.IsDataValid (the bDataValidated flag) and ValidateData;
 // WillowPlayerController.GetCurrentPlaythrough, GetHUDMovie, UpdateLcdMissionStatus and PlayUIAkEvent (presentation: no-ops),
 // PlayerController.IsPrimaryPlayer, WorldInfo.IsMenuLevel, GetWillowGlobals / GetGearboxGlobals / GetBehaviorKernel /
@@ -58,17 +64,24 @@ public:
     void setRegionGameStage(int stage) { regionStage_ = stage; }
     // The player's experience level and experience pool value (the host's Maya), read before the pool is updated.
     void setPlayerExperience(int level, int64_t experience);
+    // The player's current health, the host's: the VM health pool is rebuilt for the player's level with this current value (a full pool follows the
+    // next level-up's maximum, a partly empty one does not). Call after setPlayerExperience. Without it the pool starts full.
+    void setPlayerHealth(float current);
+    // Game time: WorldInfo.TimeSeconds, which OnExpLevelChange's 1 s guard reads. The slice's tick advances it.
+    void advanceTime(double seconds);
     // ApplyExpPointsToExpLevel, called from the pool's per-frame update: while the pool has reached the next level's
     // requirement and the level is below the cap, the script ExpLevelUp(bCheated = false) runs on the controller.
     void updateExperiencePool();
     // What the script's level-up path produced, in order, for the host: what ExpEarn added to the pool (Experience), the level the pool
     // update raised the player to (Level), the unspent skill points that level-up awarded (SkillPoints: GeneralSkillPoints after minus before,
-    // sent with a level change even when 0) and the new maximum health (MaxHealth: the health pool's base maximum, evaluated by the
-    // RecalculateAttributeInitializedState stand-in). The host applies the experience and compares the rest with its own numbers.
+    // sent with a level change even when 0), the new maximum health (MaxHealth: the health pool's effective maximum, rebased by
+    // RecalculateAttributeInitializedState) and the health after the level-up (Health: current and maximum, the OnLevelUp refill included). The host
+    // applies the experience and the health and compares the rest with its own numbers.
     struct Gain {
-        enum class Kind { Experience, Level, SkillPoints, MaxHealth } kind = Kind::Experience;
+        enum class Kind { Experience, Level, SkillPoints, MaxHealth, Health } kind = Kind::Experience;
         int amount = 0;          // Experience: the amount, Level: the level, SkillPoints: the count
-        float health = 0;        // MaxHealth
+        float health = 0;        // MaxHealth: the maximum, Health: the current value
+        float maximum = 0;       // Health: the maximum
     };
     std::vector<Gain> takeGains() { auto result = std::move(gains_); gains_.clear(); return result; }
     const std::vector<ExpEarn>& expEarned() const { return expEarned_; }
@@ -154,9 +167,12 @@ private:
     std::unique_ptr<ExperienceCurve> curve_;
     ObjectPtr pri_;
     float pool_ = 0;                       // the experience resource pool's CurrentValue
-    ObjectPtr playerClass_;                // the player's class definition (the host's Maya): the health pool's data (a stand-in for the controller's PlayerClass)
-    float maxHealth_ = 0;                  // the last base maximum health RecalculateAttributeInitializedState evaluated
-    bool healthRecalculated_ = false;      // set by it, cleared by the pool update
+    ObjectPtr playerClass_;                // the player's class definition (the host's Maya): the health pool's data and the OnLevelUp behaviors
+    ObjectPtr manager_, healthPool_;       // the controller's ResourcePoolManager and its one pool (built on first use from the class's HealthPoolDefinition)
+    bool healthPoolFailed_ = false;        // the data for it is not in the packages: no health events
+    bool integerResource_ = false;         // the health resource's bIntegerOnlyUpdates
+    bool inLevelUp_ = false;               // the pool update is running ExpLevelUp: RunBehaviors is the level-up stand-in
+    int64_t pawnGameStage_ = 0;            // what OnExpLevelChange told the pawn (WillowPawn.SetGameStage; recorded only)
     int regionStage_ = 0, lockedStage_ = 0, playThroughCount_ = 1, maxLevel_ = 50;
     unsigned depth_ = 0;
 
@@ -175,7 +191,18 @@ private:
     int experienceReward(bool alternate);
     void expEarn(int amount, int source, int type);
     AttributeContext attributeContext(const Value& source);   // what EvaluateInitializationData reads for this context source
-    void recalculateMaxHealth();
+    ObjectPtr playerClass();
+    bool ensureHealthPool();
+    void seedHealthPool(float current);        // current < 0: full
+    ObjectPtr poolFor(const Value& resource);
+    float worldTime();
+    void setPoolCurrent(Object& pool, float value);
+    void updateLastValues(Object& pool);
+    void clampPool(Object& pool);
+    void rebasePools(const ObjectPtr& manager);
+    void runBehaviors(const Value& behaviors, int depth);
+    void applySkillEffects(const ObjectPtr& skill);
+    void bindOptional(const char* path, NativeFn fn);
     const Value& rewardData(bool alternate);
     ObjectPtr loadRef(const Value& reference);
     void notImplemented(const std::string& what);   // a labelled not-implemented path: listed with the stubs

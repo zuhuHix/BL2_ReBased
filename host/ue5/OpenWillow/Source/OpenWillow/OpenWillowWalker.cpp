@@ -125,20 +125,28 @@ void AOpenWillowWalker::RefreshHealthForLevel()
     // -owquest: maximum health from the recovered Init_PlayerHealth formula at Maya's level (skills, class mods and
     // relics not applied); otherwise the 400 host stand-in stays.
     float FormulaHealth = 0.f;
-    if (!Skills || Skills->GetLevel() == HealthLevel || !Quest || !Quest->Enabled()
+    if (bHealthHeldForScript || !Skills || Skills->GetLevel() == HealthLevel || !Quest || !Quest->Enabled()
         || !Quest->PlayerMaxHealth(Skills->GetLevel(), FormulaHealth))
         return;
-    // Current health becomes the new maximum, at start and on every level change. For a level-up this follows the
-    // installed data: WillowPlayerController.OnExpLevelChange (script) calls the native
-    // RecalculateAttributeInitializedState, then, with bFeedback, runs PlayerClassDefinition.OnLevelUp
-    // (GD_PlayerShared.Behaviors.PlayerBehavior_LevelUp), whose SkillDefinition_0 adds HealthMaxValue x 1 to
-    // HealthCurrentValue (MT_PostAdd). UNVERIFIED (native): that the pool clamps the sum at the new maximum and the
-    // timed effect acts once as a heal; OnExpLevelChange's 1 s guard (LastLevelUpTime) is not modelled; a level that
-    // goes down (test fixtures only) is treated the same.
+    // Current health becomes the new maximum, at start and on any level change the script did not handle (test fixtures,
+    // a level that goes down). A level-up from the mission's experience is handled by the VM instead (ApplyScriptHealth):
+    // OnExpLevelChange (script) rebases the health pool and, past its 1 s guard, runs the OnLevelUp behaviors that refill it
+    // (NATIVE_LEVEL_UP_ATTRIBUTES.md; the refill was observed in game).
     const int32 FromLevel = HealthLevel;
     MaxHealth = Health = FormulaHealth;
     HealthLevel = Skills->GetLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f for level %d (was level %d)"), Health, MaxHealth, HealthLevel, FromLevel);
+}
+
+void AOpenWillowWalker::ApplyScriptHealth(float NewMax, float NewCurrent)
+{
+    // The VM's health pool after a level-up: its effective maximum and its current value (the refill included).
+    const float FromMax = MaxHealth, FromHealth = Health;
+    MaxHealth = NewMax;
+    Health = NewCurrent;
+    if (Skills) HealthLevel = Skills->GetLevel();
+    bHealthHeldForScript = false;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f from the script's level-up (was %.1f/%.1f)"), Health, MaxHealth, FromHealth, FromMax);
 }
 
 void AOpenWillowWalker::BeginPlay()

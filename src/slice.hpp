@@ -26,7 +26,7 @@ namespace vm {
 // Experience also runs the script path (docs/verification/NATIVE_PROGRESSION.md, UNVERIFIED): the turn-in script reaches
 // GetExperienceReward (formula in src/progression.*) and ExpEarn (raises the VM-side pool), and tick() runs the pool update that
 // calls ExpLevelUp. The host supplies what it owns (region stage, the player's level and experience) and applies the Experience
-// event to its own state; it compares the Level, SkillPoints and MaxHealth events (what the script's level-up awarded and set) with its own.
+// event to its own state, adopts the Health event (maximum and current health after the level-up) and compares the Level, SkillPoints and MaxHealth events with its own.
 // Still host stand-ins: the damage type of the host's shot, the world ops listed in dummy().boundaryCalls.
 class FireMissionSlice {
 public:
@@ -36,7 +36,8 @@ public:
                           MissionInterface,    // the mission screen was opened (ClientGFxPlayMovie): a = movie definition path, b = the director's path
                           OnUseDialog,         // the on-use dialog's TriggerEvent: a = the global VO_NPC_OnUse_* tag path, b = the speaker (Marcus), c = the other object's class
                           SkillPoints,         // a = the unspent skill points the script's level-up awarded (the data's per-level formula; sent with a Level event, 0 included)
-                          MaxHealth };         // a = the new maximum health (the health pool's base maximum, a stand-in trigger: RecalculateAttributeInitializedState)
+                          MaxHealth,           // a = the new maximum health (the VM health pool's effective maximum, rebased by RecalculateAttributeInitializedState)
+                          Health };            // a = current health, b = maximum health after the level-up (the OnLevelUp refill included; sent with MaxHealth)
         Kind kind;
         std::string a, b, c;
         std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)
@@ -74,6 +75,8 @@ public:
     // Active) and the player's level and experience (set before turnIn and whenever the host changes them).
     void setRegionGameStage(int stage) { script_->setRegionGameStage(stage); }
     void setPlayerExperience(int level, int64_t experience) { script_->setPlayerExperience(level, experience); }
+    // The host's current health (call after setPlayerExperience): the VM health pool is rebuilt with it, so the level-up's rebase and refill start from it.
+    void setPlayerHealth(float current) { script_->setPlayerHealth(current); }
     // GlobalsDefinition.PlayerInteractionDistance of the installed data (350 uu): how far the use ray reaches (NATIVE_USE_INTERACTION.md).
     float playerInteractionDistance() { return script_->playerInteractionDistance(); }
     int scriptObjectiveUpdates() const { return script_->objectiveUpdates(); }   // applied objective updates the VM controller was told about

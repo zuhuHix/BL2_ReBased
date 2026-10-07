@@ -1,6 +1,7 @@
 #pragma once
 #include "vm.hpp"
 
+#include <functional>
 #include <map>
 #include <optional>
 
@@ -14,6 +15,9 @@ struct AttributeContext {
     // The player's replication info (NATIVE_ATTRIBUTES.md section 5: a controller source resolves to its PlayerReplicationInfo). Null: an
     // attribute whose context chain asks for it does not resolve (a condition on it is false, a base value keeps its constant).
     ObjectPtr replicationInfo;
+    // The pool of a resource definition (NATIVE_ATTRIBUTES.md section 5: ResourcePoolAttributeContextResolver, the resource's owner's pool for it).
+    // Empty or returning null: the attribute does not resolve.
+    std::function<ObjectPtr(const Value& resource)> resourcePool;
 };
 
 // A SUBSET of the native AttributeInitializationData evaluator (docs/verification/NATIVE_PROGRESSION.md section 1, read from
