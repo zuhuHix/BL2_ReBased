@@ -283,3 +283,68 @@ and "Handsome Jack Here") and five complete; none of the six missions whose sequ
 frame, **all 33 files are byte-identical after the session** (no restore was needed, profile.bin included), the startup mod's
 settings folder is unchanged, and the driver was removed. The game was closed through its window. The run lock changed hands
 before this lane released it (see the lane's handoff).
+
+## Fire mission golden trace (lane L2, 2026-10-07)
+
+AI-assisted (Claude), lane L2. Third capture session, same tool and safety rules as lane L1 (one game process under
+`local/ue_run.lock`, saves backed up and hashed first, `Install-Driver -BlockSavesAtStart`, startup-mod load of the level-8 Maya,
+memory-only changes, objects looked up again in every command). Goal: the real game's event order for the Fire mission, to compare
+with the VM's `--slice-run`. The full record, with the live sequence rule by rule and the comparison, is
+[FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md); raw rows and screenshots stay under ignored `local/realgame/L2/`. New
+command script: `scripts/fire_mission_probe.py` (394 hooks: 97 on mission, dialog, inventory, waypoint and Kismet functions and 297
+on every `Behavior_*` class; state snapshots between steps). Hooks see only calls that go through script.
+
+**What was played (recorded launch, about 190 s of game time):** the offer through the real use key on Marcus, accept (Enter),
+the range by a real waypoint touch (the player was placed there, then one W step), the Fire objective by a real shot with the lent
+Maliwan pistol (moved from the backpack to slot 3 by `ReadyBackpackInventory`), the turn-in by the use key and Enter, and the reward
+screen confirmed with Enter. One earlier launch served as a rehearsal (its accept was not recorded: a probe reload reset the
+recorder). The Dialog Skipper mod was active, so delays that depend on a spoken line are compressed; delays inside behavior links
+are not.
+
+**Confirmed in game (each by hook rows, with the game's clock):**
+
+- **Accept is one frame:** `AcceptMission` (script) -> `ActivateMission` -> `UpdateMissionStatus(Active)` -> changed-delegate ->
+  **the lent weapon goes to the backpack** (`AddInventory`, `AddInventoryToBackpack`, `ShowMissionWeaponTraining`) ->
+  active-mission delegate -> observers; then `OnPlayerAcceptedMission` on Marcus. The kickoff (`IsMissionMoviePlaying`, dialog 01)
+  follows on the next tick (+9 ms), the first objective set when the line ends. The same order the bridge note gives.
+- **The lent weapon is removed at Complete, not at ReadyToTurnIn:** `RemoveMissionWeapons`, `RemoveFromInventory`,
+  `ClientRemoveMissionWeapons` inside `CompleteMission`, after the changed-delegate and before the observers. Between the hit and
+  the turn-in the pistol is still in the inventory.
+- **Objective path:** waypoint `Touch` -> `ProcessPlayerTouch` -> `IsMissionObjectiveActive` -> `UpdateObjective` -> the waypoint's
+  updated reaction -> the controller's `UpdateMissionObjective` -> objectives-changed delegate -> the waypoint's complete reaction, in
+  one frame. The next set follows 0.505 s later (a behavior-link delay): dialog 03b behavior, `AdvanceObjectiveSet`, then the dummy
+  spawns 29 ms after that and its `Targetable` registration runs 0.98 s later, together with a mission behavior
+  (`ChangeRemoteBehaviorSequenceState_171`). The Fire hit runs the dummy's four behaviors, completes the objective, **then**
+  `UpdateMissionStatus(ReadyToTurnIn)`, then the `Default` link 9 behaviors (dialog 05, `RocksPaper_FireCompleted`). The dummy
+  sends its target back 2.002 s later and the mission raises `RocksPaper_TargetBack` twice at 3.002 s.
+- **Turn-in reward order:** `ServerCompleteMission` -> `CompleteMission` -> `UpdateMissionStatus(Complete)` ->
+  `ShouldGrantAlternateReward` (false) -> `ServerGrantMissionRewards` (currency type 0, currency 0, experience 395,
+  `ExpEarn(395, source 4, type 0)`, `GetItemRewardsForPlayer` empty, `ClientSpawnMissionRewardUI`) -> changed-delegate -> weapon
+  removal -> observers -> `OnPlayerTurnedInMission` on Marcus (`PlayMissionTurnedInDialog`, tag `VO_NPC_MissionTurnedIn`) ->
+  `PlayTurnIn`. Experience 26,218 -> 26,613, level 8 unchanged, no item. `MissionRewardsReceived` came later, from the reward
+  screen's confirmation (14.9 s here), and `AcceptOrSaveUnclaimedReward` never ran.
+- **Marcus's use chain at both uses:** the same nine checks (all false) and three behaviors as in lane L1; the on-use tag is
+  `VO_NPC_OnUse_MissionsAvailable` before the accept and `VO_NPC_OnUse_MissionComplete` at ReadyToTurnIn.
+- **Tracked mission:** accepting the side mission made it the tracked mission (a plot mission was tracked before); after the
+  turn-in the plot mission was tracked again.
+
+**Not observed (invisible to script hooks):** the dialog lines themselves (no call of `Talk`, `TalkReplicated`,
+`TriggerGroupEvent` or `PlayEchoDialog`), `SetMissionStatus`, `SetActiveMission`, `PlayKickoff`, the native second dialog lookup
+of the use chain, and the Kismet receivers of two of the six remote events.
+
+**Comparison with the VM (`--slice-run`, a copy of the binary from 01:47):** 38 items matched, 4 out of order (dialog 03b against
+the set, dialog 05 against `RocksPaper_FireCompleted`, the weapon grant, the weapon removal), 5 missing in the VM (`AIHold_57`
+on the dummy, the mission's `_171` and the 1 s before `Targetable`, `PlayMissionTurnedInDialog`, the screen close at accept, the
+reward confirmation), 4 extra in the VM (the `DET_` dialog event, lines 03a and 04, `AttemptStatusEffect_9`). Timings of behavior-link
+delays agree to within 10 ms (live 0.505 / 2.002 / 3.002 s; VM inside 0.01 s windows). Classification: two items are the already
+open "mission weapon at Active/Complete"; one is the already open "`PlayMissionTurnedInDialog` not exercised"; the dialog ordering
+pair, the screen close and the reward confirmation are host-side; the lines 03a / 04 and the `DET_` event are unobserved; **`AIHold_57`
+and the `Targetable` delay are the candidates for a VM fix**; the status-effect item is the VM's hit model.
+
+### Save safety (this session)
+
+`Backup-Saves` copied `SaveData` and `Config` first (`local/realgame/save-backup-20261007-014859`); 33 files hashed before and
+after each of the two launches. With saves blocked from the first frame (the driver's event log holds `save_blocked` marks), **all 33 files are byte-identical after the session** (profile.bin included), the startup mod's
+settings folder is unchanged, the driver was removed and the game was closed through its window (no kill). The run lock was taken at
+01:48:59 and released by this lane after the session; this lane spawned nothing (the lent pistol is the game's own) and the Fire offer, the XP and the weapon exist only in
+the closed process.
