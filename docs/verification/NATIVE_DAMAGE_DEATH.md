@@ -506,8 +506,13 @@ once. When the dead camera ends (`EndInjuredDeadCamera`) the state's `InjuredRes
 - **Implementer checklist:** zero health -> down state, not death; bleed-out 12 s solo with the successive-injury
   reduction; kill during bleed-out = second wind (health 25 % of max if lower, shield 90 %); bleed-out expiry -> death
   sequence -> `HandlePlayerDeathResurrection` -> station choice above -> full health and shield -> fee 7 % of cash (rounded
-  half up, at most cash) about 2 s after arrival.
-- **Open:** the duration of the death camera before respawn; the fee timing for the station path; hardcore mode.
+  half up, at most cash) charged at `ShowRespawnDialog`, which ran 11.8 s after arrival on a station respawn in the live game. The
+  fee rule was confirmed live (lane L3, [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md) step 16: 190, 177, 165 on 2,715, 2,534 and
+  2,357 cash).
+- **Observed since (lane L3, 2026-10-07):** on the station path `ShowRespawnDialog` runs 11.80 s after `ResurrectPlayer` in three
+  cases, not about 2 s, so do not use the 2.0 s schedule for a station respawn. The 2.0 s non-station schedule is still read from
+  native code only (UNVERIFIED). The death camera lasted 5.76 s.
+- **Open:** which caller schedules the station path's 11.8 s; hardcore mode.
 
 ## 11. Slice consequences (Fire mission)
 
