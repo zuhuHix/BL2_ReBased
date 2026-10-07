@@ -64,6 +64,11 @@ struct FOpenWillowWeaponItem
     FString RarityColor;
     int32 Level = 1;
     float Damage = 0;
+    // The WeaponDamage stack behind Damage (card "damage_stack", tools/weapon_stats.py damage_stack_of): Damage = (base + pre) x (1 + up) / (1 + down) + post.
+    // A later Scale modifier (the natural level-up's) joins the up-sum, so the shot is computed from these terms (AOpenWillowWalker::ShotDamage).
+    // Absent (false) for a recipe evaluated before the field existed.
+    bool bHasDamageStack = false;
+    float DamageBase = 0, DamagePreAdd = 0, DamagePostAdd = 0, DamageScaleUp = 0, DamageScaleDown = 0;
     float FireRate = 1;    // shots per second
     float ReloadTime = 0;
     float Magazine = 0;

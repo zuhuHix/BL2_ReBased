@@ -38,6 +38,9 @@ class BehaviorProvider;
 // follows the new maximum only for a pool that was full. OnExpLevelChange's pawn branch runs in the VM (its 1 s guard is the script's): the stock
 // OnLevelUp collection reaches BehaviorBase.RunBehaviors, a STAND-IN here that applies the Behavior_AttributeEffect skills' effects by their data to
 // the pools the VM has (the heal; see runBehaviors). The class-level damage modifiers and status resistances, the shield and cooldown pools are not modelled.
+// Swap 9 (lane I7): a natural level-up (ExpLevelUp(false): OnExpLevelChange's bNaturalLevelup) also reaches RunBehaviors with PlayerClass.OnLevelUpNaturally; its
+// skill's timed Scale effect on the held weapon's damage is not a pool of the VM, so it is handed to the host as a WeaponDamageScale gain (scale and duration
+// read from the skill's data), which adds it to the weapon's damage scale sum for that long.
 // Swap 3 (NATIVE_CONTROLLER_HELPERS.md): MissionTracker.IsDataValid (the bDataValidated flag) and ValidateData;
 // WillowPlayerController.GetCurrentPlaythrough, GetHUDMovie, UpdateLcdMissionStatus and PlayUIAkEvent (presentation: no-ops),
 // PlayerController.IsPrimaryPlayer, WorldInfo.IsMenuLevel, GetWillowGlobals / GetGearboxGlobals / GetBehaviorKernel /
@@ -72,16 +75,22 @@ public:
     // ApplyExpPointsToExpLevel, called from the pool's per-frame update: while the pool has reached the next level's
     // requirement and the level is below the cap, the script ExpLevelUp(bCheated = false) runs on the controller.
     void updateExperiencePool();
+    // One ExpLevelUp(bCheated = true) on the controller: the not-natural level-up (the console cheat's script argument). Nothing in the slice calls it; it is
+    // here so that the natural/not-natural rule of OnExpLevelChange can be checked end to end (--slice-run step `cheatlevel`). Reports like the pool update.
+    void cheatLevelUp();
     // What the script's level-up path produced, in order, for the host: what ExpEarn added to the pool (Experience), the level the pool
     // update raised the player to (Level), the unspent skill points that level-up awarded (SkillPoints: GeneralSkillPoints after minus before,
     // sent with a level change even when 0), the new maximum health (MaxHealth: the health pool's effective maximum, rebased by
     // RecalculateAttributeInitializedState) and the health after the level-up (Health: current and maximum, the OnLevelUp refill included). The host
-    // applies the experience and the health and compares the rest with its own numbers.
+    // applies the experience and the health and compares the rest with its own numbers. A natural level-up also hands over the weapon damage scale its
+    // OnLevelUpNaturally skill adds (WeaponDamageScale, after Health): the host holds the weapon, so the host applies it.
     struct Gain {
-        enum class Kind { Experience, Level, SkillPoints, MaxHealth, Health } kind = Kind::Experience;
+        enum class Kind { Experience, Level, SkillPoints, MaxHealth, Health, WeaponDamageScale } kind = Kind::Experience;
         int amount = 0;          // Experience: the amount, Level: the level, SkillPoints: the count
         float health = 0;        // MaxHealth: the maximum, Health: the current value
         float maximum = 0;       // Health: the maximum
+        float scale = 0;         // WeaponDamageScale: the value added to the weapon's damage scale sum
+        float duration = 0;      // WeaponDamageScale: seconds of game time the skill lasts
     };
     std::vector<Gain> takeGains() { auto result = std::move(gains_); gains_.clear(); return result; }
     const std::vector<ExpEarn>& expEarned() const { return expEarned_; }
@@ -165,6 +174,7 @@ private:
     std::vector<std::string> notes_;
     std::vector<ExpEarn> expEarned_;
     std::vector<Gain> gains_;
+    std::vector<Gain> levelUpEffects_;     // what the level-up's skills hand to the host (WeaponDamageScale), appended to gains_ after the level's own events
     AttributeEvaluator evaluator_;
     std::unique_ptr<ExperienceCurve> curve_;
     ObjectPtr pri_;
@@ -204,6 +214,9 @@ private:
     void rebasePools(const ObjectPtr& manager);
     void runBehaviors(const Value& behaviors, int depth);
     void applySkillEffects(const ObjectPtr& skill);
+    float effectAmount(const Value& effect, int grade);       // the effect's modifier value at the grade (NATIVE_SKILLS.md section 4.3)
+    void weaponEffect(const ObjectPtr& skill, const Value& effect, const std::string& property, int grade);
+    void runLevelUps(bool cheated);
     void bindOptional(const char* path, NativeFn fn);
     const Value& rewardData(bool alternate);
     ObjectPtr loadRef(const Value& reference);

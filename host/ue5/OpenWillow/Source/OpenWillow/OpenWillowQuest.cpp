@@ -494,6 +494,17 @@ void UOpenWillowQuest::Pump()
             if (Walker) Walker->ApplyScriptHealth(Maximum, Current);
             break;
         }
+        case K::WeaponDamageScale: {
+            // A natural level-up's OnLevelUpNaturally skill (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game: the held weapon's damage scale sum
+            // +1.0 for 30 s): the VM read the value and the duration from the installed skill, the walker holds the weapon and applies it.
+            ScriptDamageScale = FCString::Atof(*A);
+            ScriptDamageScaleSeconds = FCString::Atof(UTF8_TO_TCHAR(Event.b.c_str()));
+            ScriptDamageScaleAt = GetWorld()->GetTimeSeconds();
+            ++ScriptDamageScaleEvents;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up weapon damage scale: +%.3f for %.1f s (the VM's, from the skill's data)"), ScriptDamageScale, ScriptDamageScaleSeconds);
+            if (Walker) Walker->AddWeaponDamageScale(ScriptDamageScale, ScriptDamageScaleSeconds);
+            break;
+        }
         case K::OnUseDialog:   // PlayOnUseDialog's TriggerEvent on Marcus's dialog component: reported, not played (two-step group dispatch not implemented)
             LastOnUseTag = A;
             UE_LOG(LogTemp, Display, TEXT("OWQUEST on-use dialog tag from Marcus's chain: %s (speaker %s, other %s; not played)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
@@ -1287,6 +1298,27 @@ void UOpenWillowQuest::RunTest(float Delta)
             && FMath::IsNearlyEqual(ScriptHealthMaximum, Data.HealthForLevel(Skills->GetLevel()), 0.01f)
             && Walker->GetHealth() == ScriptHealthCurrent && Walker->GetMaxHealth() == ScriptHealthMaximum && !Walker->IsHealthHeldForScript(),
             TEXT("script_level_up_refills_health"));
+        {
+            // Swap 9: the level-up came from earned experience, so it is natural: ExpLevelUp(false) -> OnExpLevelChange(true, true) ran OnLevelUpNaturally, whose
+            // timed skill scales the held weapon's damage. One event, with the numbers the stock skill carries (+1.0, 30 s: the in-game observation), and the
+            // walker applies it by the stack rule: the Scale joins the weapon's up-sum, (base + pre) x (1 + up + s) / (1 + down) + post, which is the observed
+            // (S + s) / S; the card damage once the duration is over. The suite does not wait 30 s of game time: the expiry is evaluated just before and at the end time.
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            const float EndAt = ScriptDamageScaleAt + ScriptDamageScaleSeconds;
+            const float Now = GetWorld()->GetTimeSeconds();
+            const float Expected = Held && Held->bHasDamageStack
+                ? (Held->DamageBase + Held->DamagePreAdd) * (1.f + Held->DamageScaleUp + ScriptDamageScale) / (1.f + Held->DamageScaleDown) + Held->DamagePostAdd : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST natural level-up weapon damage: card %.3f, with the scale %.3f (stack formula %.3f, factor %.3f), after %.3f"),
+                Held ? Held->Damage : -1.f, Held ? Walker->ShotDamage(*Held, Now) : -1.f, Expected, Held && Held->Damage > 0.f ? Expected / Held->Damage : 0.f,
+                Held ? Walker->ShotDamage(*Held, EndAt) : -1.f);
+            Check(ScriptDamageScaleEvents == 1 && FMath::IsNearlyEqual(ScriptDamageScale, 1.f, 1e-4f) && FMath::IsNearlyEqual(ScriptDamageScaleSeconds, 30.f, 1e-3f)
+                && Held && Held->bHasDamageStack && Held->Damage > 0.f && Now < EndAt
+                && FMath::IsNearlyEqual((Held->DamageBase + Held->DamagePreAdd) * (1.f + Held->DamageScaleUp) / (1.f + Held->DamageScaleDown) + Held->DamagePostAdd, Held->Damage, 1e-3f)
+                && FMath::IsNearlyEqual(Walker->ShotDamage(*Held, Now), Expected, 1e-3f) && Expected > Held->Damage
+                && FMath::IsNearlyEqual(Walker->ShotDamage(*Held, EndAt - 0.01f), Expected, 1e-3f)
+                && Walker->ShotDamage(*Held, EndAt) == Held->Damage && Walker->WeaponDamageScaleAt(EndAt + 1.f) == 0.f,
+                TEXT("natural_level_up_scales_weapon_damage_for_duration"));
+        }
         {
             // Stock data: the Fire mission's reward is experience only. The script's GetItemRewardsForPlayer found no item (it would list a
             // "not implemented" entry otherwise), and the host spawned no pickup and added nothing to the backpack.

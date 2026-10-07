@@ -56,6 +56,11 @@ a manager on the controller, and an OnLevelUp collection (Behavior_RunBehaviorCo
 pool's maximum to its current value, PostAdd, and whose second effect targets a cooldown pool the VM does not have). The toy ExpLevelUp keeps the
 installed one's guard: with a pawn, more than 1.0 s of game time since LastLevelUpTime, then RunBehaviors(PlayerClass.OnLevelUp).
 
+The natural level-up scenario (--slice-run, scenario S9, swap 9) adds to that toy world an OnLevelUpNaturally collection with a timed skill (invented: DurationType Timed,
+12.5 s, one Scale effect of 0.75 on the weapon context's InstantHitDamage) and the toy ExpLevelUp's `if (!bCheated)` branch (the installed one passes
+`not bCheated` as bNaturalLevelup): the slice reports a weapon_damage_scale event (value, duration) for a natural level-up past the 1 s guard, none for
+`cheatlevel` (ExpLevelUp(true)) and none inside the guard.
+
 The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
 with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
 OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
@@ -321,6 +326,7 @@ def build_pool_graph(T, aid, definition, evaluate):
     T.function(object_cls, 'NotEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, operator, 'Bool', native=119, friendly='!=')
     T.function(object_cls, 'LessEqual_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, operator, 'Bool', native=178, friendly='<=')
     T.function(object_cls, 'GreaterEqual_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, operator, 'Bool', native=179, friendly='>=')
+    T.function(object_cls, 'Not_PreBool', [('Bool', 'A', 0)], None, operator | 0x10, 'Bool', native=129, friendly='!')
     resource = T.cls('ResourceDefinition')
     T.prop('Class', resource, 'DefaultResourcePoolClass')
     T.prop('Bool', resource, 'bIntegerOnlyUpdates')
@@ -376,6 +382,7 @@ def build_pool_graph(T, aid, definition, evaluate):
 
     # the attribute resolvers the effect data names
     T.prop('Object', T.cls('ResourcePoolAttributeContextResolver'), 'Resource')
+    T.cls('WeaponAttributeContextResolver')
     behavior_base = [e for e in p.exports if e[3] == p.fname('BehaviorBase')]
     behavior_base = p.exports.index(behavior_base[0]) + 1
     T.function(behavior_base, 'RunBehaviors', [('Array', 'Behaviors', 0), ('Object', 'ContextObject', 0), ('Object', 'InstigatorObject', 0)], None,
@@ -682,6 +689,7 @@ def build_willowgame():
     player_class = T.cls('PlayerClassDefinition')
     T.prop('Object', player_class, 'HealthPoolDefinition')
     on_level_up = T.array_of(player_class, 'OnLevelUp', 'Object')
+    on_level_up_naturally = T.array_of(player_class, 'OnLevelUpNaturally', 'Object')
     # a level-up skill (swap 7b): its effects' attribute, modifier type, value and grade rules
     effect_data = T.struct_(0, 'SkillEffectData')
     T.prop('Object', effect_data, 'AttributeToModify')
@@ -692,6 +700,8 @@ def build_willowgame():
     T.prop('Struct', effect_data, 'PerGradeUpgrade', type_ref=aid)
     skill = T.cls('SkillDefinition')
     T.prop('Int', skill, 'DefaultStartingGrade')
+    T.prop('Byte', skill, 'DurationType')
+    T.prop('Float', skill, 'InitialDuration')
     T.array_of(skill, 'SkillEffectDefinitions', 'Struct', effect_data)
     T.prop('Object', T.cls('Behavior_AttributeEffect'), 'AttributeEffect')
     T.cls('PlayerReplicationInfoAttributeContextResolver')
@@ -1009,13 +1019,19 @@ def build_willowgame():
                                            lambda: a.instance(points_per_level)), a.self_, lambda: a.raw(0x4A))
         a.raw(0x16)
         a.call(recalculate)
-        # if (Pawn != None && WorldInfo.TimeSeconds - LastLevelUpTime > 1.0) { LastLevelUpTime = WorldInfo.TimeSeconds; RunBehaviors(PlayerClass.OnLevelUp, Pawn, Pawn); }
+        # if (Pawn != None && WorldInfo.TimeSeconds - LastLevelUpTime > 1.0) { LastLevelUpTime = WorldInfo.TimeSeconds; RunBehaviors(PlayerClass.OnLevelUp, Pawn, Pawn);
+        #                                                                       if (!bCheated) RunBehaviors(PlayerClass.OnLevelUpNaturally, Pawn, Pawn); }
+        # (the installed OnExpLevelChange tests bNaturalLevelup, which ExpLevelUp passes as `not bCheated`)
         def now(): a.context(lambda: a.instance(world_info), lambda: a.instance(time_seconds))
         guard = a.jump_if_not(lambda: (a.raw(119), a.instance(pawn_prop), a.raw(0x2A), a.raw(0x16)))
         late = a.jump_if_not(lambda: (a.raw(177), a.raw(175), now(), a.instance(last_level_up), a.raw(0x16), a.raw(0x1E), a.b.extend(struct.pack('<f', 1.0)), a.raw(0x16)))
         a.raw(0x0F); a.instance(last_level_up); now()
         a.call(run_behaviors, lambda: a.context(lambda: a.instance(player_class_prop), lambda: a.instance(on_level_up)),
                lambda: a.instance(pawn_prop), lambda: a.instance(pawn_prop))
+        natural = a.jump_if_not(lambda: (a.raw(129), a.local(ids, 'bCheated'), a.raw(0x16)))
+        a.call(run_behaviors, lambda: a.context(lambda: a.instance(player_class_prop), lambda: a.instance(on_level_up_naturally)),
+               lambda: a.instance(pawn_prop), lambda: a.instance(pawn_prop))
+        a.patch(natural)
         a.patch(late); a.patch(guard)
         a.return_nothing(); a.end(); return a
     T.function(controller, 'ExpLevelUp', [('Bool', 'bCheated', 0)], level_up)
@@ -1123,12 +1139,28 @@ def build_mission(director=False, on_enabled=True, weapon=False):
     skill = p.add_export(chain('WillowGame', 'SkillDefinition'), 'LevelUpSkill', w32(0) + t.int('DefaultStartingGrade', 1)
                          + t.array('SkillEffectDefinitions', 2, effect(health_current, 2, dict(attribute=health_max)) + effect(cooldown_current, 0, dict(constant=0.0))) + none)
     attribute_effect = p.add_export(chain('WillowGame', 'Behavior_AttributeEffect'), 'LevelUp_AttributeEffect', w32(0) + t.obj('AttributeEffect', skill) + none)
+    # the natural level-up's skill (invented numbers): a timed skill (DurationType 1, 12.5 s) whose one effect scales the held weapon's damage by 0.75 from grade 0
+    weapon_context = p.add_export(chain('Engine', 'WeaponAttributeContextResolver'), 'WeaponDamage_Context', w32(0) + none)
+    weapon_value = p.add_export(chain('Engine', 'ObjectPropertyAttributeValueResolver'), 'WeaponDamage_Value', w32(0) + t.name_('PropertyName', 'InstantHitDamage') + none)
+    weapon_damage = p.add_export(chain('Engine', 'AttributeDefinition'), 'WeaponDamage',
+                                 w32(0) + t.array('ContextResolverChain', 1, w32(weapon_context)) + t.array('ValueResolverChain', 1, w32(weapon_value)) + none)
+    natural_effect = (t.obj('AttributeToModify', weapon_damage) + t.byte('ModifierType', 0) + data('BaseModifierValue', constant=0.75)
+                      + t.float('GradeToStartApplyingEffect', 0.0) + t.float('PerGradeUpgradeInterval', 1.0) + none)
+    natural_skill = p.add_export(chain('WillowGame', 'SkillDefinition'), 'LevelUpNaturallySkill', w32(0) + t.int('DefaultStartingGrade', 1)
+                                 + t.byte('DurationType', 1) + t.float('InitialDuration', 12.5) + t.array('SkillEffectDefinitions', 1, natural_effect) + none)
+    natural_attribute_effect = p.add_export(chain('WillowGame', 'Behavior_AttributeEffect'), 'LevelUpNaturally_AttributeEffect',
+                                            w32(0) + t.obj('AttributeEffect', natural_skill) + none)
+    natural_collection = p.add_export(chain('Engine', 'BehaviorCollectionDefinition'), 'PlayerBehavior_LevelUpNaturally',
+                                      w32(0) + t.array('Behaviors', 1, w32(natural_attribute_effect)) + none)
+    natural_run = p.add_export(chain('Engine', 'Behavior_RunBehaviorCollection'), 'LevelUpNaturally_RunCollection',
+                               w32(0) + t.obj('CollectionDefinition', natural_collection) + none)
     collection = p.add_export(chain('Engine', 'BehaviorCollectionDefinition'), 'PlayerBehavior_LevelUp', w32(0) + t.array('Behaviors', 1, w32(attribute_effect)) + none)
     run_collection = p.add_export(chain('Engine', 'Behavior_RunBehaviorCollection'), 'LevelUp_RunCollection', w32(0) + t.obj('CollectionDefinition', collection) + none)
     siren = p.add_export(chain('Core', 'Package'), 'GD_Siren', w32(0) + none)
     siren_character = p.add_export(chain('Core', 'Package'), 'Character', w32(0) + none, outer=siren)
     p.add_export(chain('WillowGame', 'PlayerClassDefinition'), 'CharClass_Siren',
-                 w32(0) + t.obj('HealthPoolDefinition', health_pool) + t.array('OnLevelUp', 1, w32(run_collection)) + none, outer=siren_character)
+                 w32(0) + t.obj('HealthPoolDefinition', health_pool) + t.array('OnLevelUp', 1, w32(run_collection))
+                 + t.array('OnLevelUpNaturally', 1, w32(natural_run)) + none, outer=siren_character)
     p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals',
                  w32(0) + t.float('PlayerInteractionDistance', 420.0) + data('GeneralSkillPointsPerLevelUp', definition=points_definition) + none, outer=general_package)
     if director:
@@ -1739,6 +1771,27 @@ with tempfile.TemporaryDirectory() as folder:
     per_step = [[(float(e['a']), float(e['b'])) for e in s['events'] if e['kind'] == 'health'] for s in ticks]
     check('S7b two level-ups within 1 s refill once', code == 0 and got['errors'] == [] and len(per_step) == 4 and per_step[0] == []
           and near(per_step[1], (75.9375, 75.9375)) and near(per_step[2], (20.0, 113.90625)) and near(per_step[3], (170.859375, 170.859375)), (per_step, got['errors']))
+    # Scenario S9 (swap 9): a natural level-up (ExpLevelUp(false): bNaturalLevelup) also runs PlayerClass.OnLevelUpNaturally. Its skill's effect targets the held
+    # weapon's damage (a stack attribute of a weapon the VM does not have), so the host gets a weapon_damage_scale event: the effect's value (0.75) and the
+    # skill's duration (12.5 s), both from the invented data, after the level's own events. A level-up that is not natural (ExpLevelUp(true), the step
+    # `cheatlevel`) raises none, and neither does a natural one inside the 1 s guard (the script's own rule: no behavior set runs).
+    def scale_events(got):
+        return [(s['step'], float(e['a']), float(e['b'])) for s in got['steps'] for e in s['events'] if e['kind'] == 'weapon_damage_scale']
+
+    def kinds_of(got, step): return [e['kind'] for s in got['steps'] if s['step'] == step for e in s['events']]
+    code, got = slice_run('stage:4', 'player:4:48', 'tick:2')
+    check('S9 natural level-up: one event with the data value and duration', code == 0 and got['errors'] == [] and scale_events(got) == [('tick:2', 0.75, 12.5)], (scale_events(got), got['errors']))
+    check('S9 the event follows the level, points, maximum and health events', kinds_of(got, 'tick:2') == ['level', 'skill_points', 'max_health', 'health', 'weapon_damage_scale'], kinds_of(got, 'tick:2'))
+    check('S9 the weapon effect is applied by the host: no stub, no note about it', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']))
+    code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
+    check('S9 natural level-up inside the 1 s guard: no event', code == 0 and got['errors'] == [] and scale_events(got) == [] and 'level' in kinds_of(got, 'tick:0.5'), (scale_events(got), kinds_of(got, 'tick:0.5')))
+    code, got = slice_run('stage:4', 'tick:2', 'player:4:0', 'cheatlevel')
+    check('S9 not-natural level-up past the guard: the level-up behavior ran (health), no weapon event',
+          code == 0 and got['errors'] == [] and scale_events(got) == [] and kinds_of(got, 'cheatlevel') == ['level', 'skill_points', 'max_health', 'health'], (scale_events(got), kinds_of(got, 'cheatlevel')))
+    check('S9 not-natural level-up: no stubs', got['script']['stubs'] == [], got['script']['stubs'])
+    code, got = slice_run('stage:4', 'tick:2', 'player:4:48', 'tick:0.1', 'player:5:70', 'tick:0.1', 'player:6:96', 'tick:1.5')
+    check('S9 each natural level-up outside the guard gives its own event (t = 2.1 and 3.7, not 2.2)',
+          code == 0 and got['errors'] == [] and [(s, a, b) for s, a, b in scale_events(got)] == [('tick:0.1', 0.75, 12.5), ('tick:1.5', 0.75, 12.5)], scale_events(got))
     # no level change (27 < R(5)): neither event is sent
     code, got, events = level_events('stage:4', 'player:4:0', *flow)
     check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events)

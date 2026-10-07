@@ -148,6 +148,9 @@ private:
     float ScriptHealthCurrent = -1.f, ScriptHealthMaximum = -1.f;
     int32 ScriptHealthEvents = 0, HealthHoldTicks = 0;
     bool bHealthAdoptedThisTick = false;
+    // The WeaponDamageScale events (swap 9): how many came, the last one's value and duration, and the game time the host handed it to the walker.
+    int32 ScriptDamageScaleEvents = 0;
+    float ScriptDamageScale = 0.f, ScriptDamageScaleSeconds = 0.f, ScriptDamageScaleAt = -1.f;
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;

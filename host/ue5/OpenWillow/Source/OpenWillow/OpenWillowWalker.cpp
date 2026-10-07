@@ -149,6 +149,38 @@ void AOpenWillowWalker::ApplyScriptHealth(float NewMax, float NewCurrent)
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f from the script's level-up (was %.1f/%.1f)"), Health, MaxHealth, FromHealth, FromMax);
 }
 
+void AOpenWillowWalker::AddWeaponDamageScale(float Scale, float Seconds)
+{
+    if (Scale <= 0.f)      // only a positive Scale is handed over (the stack formula puts a negative one in the divisor, which the host does not model)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow weapon damage scale %.3f ignored: not positive"), Scale);
+        return;
+    }
+    const float Now = GetWorld()->GetTimeSeconds();
+    DamageScales.Add({Scale, Now + Seconds});
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon damage scale +%.3f for %.1f s from the script's natural level-up (until game time %.2f, %d running)"),
+        Scale, Seconds, Now + Seconds, DamageScales.Num());
+}
+
+float AOpenWillowWalker::WeaponDamageScaleAt(float Now) const
+{
+    // The skill expires when its start time plus its duration is no later than now (NATIVE_SKILLS.md section 4.5), so a modifier runs while Now < EndsAt.
+    float Sum = 0.f;
+    for (const FDamageScale& Entry : DamageScales)
+        if (Now < Entry.EndsAt) Sum += Entry.Scale;
+    return Sum;
+}
+
+float AOpenWillowWalker::ShotDamage(const FOpenWillowWeaponItem& Weapon, float Now) const
+{
+    const float Scale = WeaponDamageScaleAt(Now);
+    if (Scale == 0.f) return Weapon.Damage;
+    // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: the sum 2.017 to 3.017 took 41.40 to 61.92): the Scale joins the up-sum.
+    if (Weapon.bHasDamageStack)
+        return (Weapon.DamageBase + Weapon.DamagePreAdd) * (1.f + Weapon.DamageScaleUp + Scale) / (1.f + Weapon.DamageScaleDown) + Weapon.DamagePostAdd;
+    return Weapon.Damage * (1.f + Scale);      // fallback without the stack: S taken as 1 (UNVERIFIED, see the header)
+}
+
 void AOpenWillowWalker::BeginPlay()
 {
     Super::BeginPlay();
@@ -425,6 +457,12 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         AddMovementInput(FRotator(0, GetControlRotation().Yaw, 0).Vector(), 1);
     }
     const float Now = GetWorld()->GetTimeSeconds();
+    for (int32 I = DamageScales.Num() - 1; I >= 0; --I)
+        if (Now >= DamageScales[I].EndsAt)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon damage scale +%.3f ended at game time %.2f"), DamageScales[I].Scale, Now);
+            DamageScales.RemoveAt(I);
+        }
     if (bWantsCombatTarget && !CombatTarget.IsValid() && Now > 1.f
         && GetCharacterMovement()->IsMovingOnGround())
     {
@@ -866,7 +904,11 @@ void AOpenWillowWalker::FireWeapon()
         ShotDamageTypeInFlight = Weapon ? Weapon->DamageType : FString();
         UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s (damage type %s)"), Weapon ? *Weapon->Id : TEXT("-"),
             *Target->GetName(), ShotDamageTypeInFlight.IsEmpty() ? TEXT("None") : *ShotDamageTypeInFlight);
-        UGameplayStatics::ApplyPointDamage(Target, Weapon ? Weapon->Damage : 0.f, Direction, Hit,
+        const float Now = GetWorld()->GetTimeSeconds();
+        const float Damage = Weapon ? ShotDamage(*Weapon, Now) : 0.f;
+        if (Weapon && Damage != Weapon->Damage)
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow shot damage %.2f (card %.2f, weapon damage scale +%.3f running)"), Damage, Weapon->Damage, WeaponDamageScaleAt(Now));
+        UGameplayStatics::ApplyPointDamage(Target, Damage, Direction, Hit,
             GetController(), this, UDamageType::StaticClass());
         ShotDamageTypeInFlight.Reset();
         TargetHitAt = GetWorld()->GetTimeSeconds();

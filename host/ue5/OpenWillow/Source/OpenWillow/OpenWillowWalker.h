@@ -97,6 +97,17 @@ public:
     void HoldHealthForScript(bool bHold) { bHealthHeldForScript = bHold; }
     bool IsHealthHeldForScript() const { return bHealthHeldForScript; }
     void ApplyScriptHealth(float NewMax, float NewCurrent);
+    // A natural level-up's OnLevelUpNaturally skill (the VM's WeaponDamageScale event, swap 9): a Scale modifier of `Scale` on the held weapon's damage for
+    // `Seconds` of game time from now. Each call is its own modifier, so two stack. NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game: +1.0 on the
+    // scale sum for 30 s (REALGAME_GROUND_TRUTH.md). Not saved (it is gone 30 s later).
+    void AddWeaponDamageScale(float Scale, float Seconds);
+    // The sum of the scale modifiers still running at game time `Now` (0 when none).
+    float WeaponDamageScaleAt(float Now) const;
+    // The damage of one shot of `Weapon` at game time `Now`. The stock rule is damage = (base + PreAdd) x (1 + up) / (1 + down) + PostAdd over the weapon's
+    // stack (NATIVE_ATTRIBUTES.md section 3; the card's "damage_stack" holds the terms), a running Scale s joins `up` (observed: sum 2.017 to 3.017, damage
+    // 41.40 to 61.92). A weapon without the stack (a recipe from before the field) falls back to card damage x (1 + s): HOST STAND-IN (UNVERIFIED), S taken
+    // as 1, an overstatement when other Scale modifiers are on the weapon. Which of the two applies is the weapon's, not a setting.
+    float ShotDamage(const FOpenWillowWeaponItem& Weapon, float Now) const;
 private:
     void Forward(float Value);
     void Right(float Value);
@@ -148,6 +159,8 @@ private:
     float Health = 400.f;
     int32 HealthLevel = 0;              // the level MaxHealth was last set for (0: not yet)
     bool bHealthHeldForScript = false;  // a script level-up is pending: RefreshHealthForLevel does nothing
+    struct FDamageScale { float Scale = 0; float EndsAt = 0; };
+    TArray<FDamageScale> DamageScales;  // the running weapon damage Scale modifiers (AddWeaponDamageScale); ended ones are dropped by Tick
     FVector RespawnLocation = FVector::ZeroVector;
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;

@@ -1053,7 +1053,8 @@ void MissionScript::runBehaviors(const Value& behaviors, int depth) {
 // pool of the VM; with no such pool the context does not resolve and the effect is not added (the game's rule: the cooldown and shield effects, the VM has
 // no such pools). Its value is BaseModifierValue (evaluated for the controller) + PerGradeUpgrade x ((grade - start) div step), 0 below the start grade;
 // the bonus list is not modelled. A plain attribute (no modifier stack: a pool's CurrentValue) takes the modifier in place and permanently: Scale
-// multiplies by the raw value, PreAdd and PostAdd add; then the pool's notification clamps current. A stack attribute is not modelled.
+// multiplies by the raw value, PreAdd and PostAdd add; then the pool's notification clamps current. A stack attribute is not modelled, except the held
+// weapon's damage (weaponEffect).
 void MissionScript::applySkillEffects(const ObjectPtr& skill) {
     const Value* effects = runtime_.property(*skill, "SkillEffectDefinitions");
     if (!effects) return;
@@ -1069,6 +1070,13 @@ void MissionScript::applySkillEffects(const ObjectPtr& skill) {
         if (contexts && values && contexts->elements().size() == 1 && values->elements().size() == 1) {
             contextResolver = loadRef(contexts->elements()[0]);
             valueResolver = loadRef(values->elements()[0]);
+        }
+        // The weapon context resolver (NATIVE_ATTRIBUTES.md section 5: a controller or pawn gives its held weapon): the VM holds no weapon, so the host applies it.
+        if (contextResolver && contextResolver->cls->path == "Engine.WeaponAttributeContextResolver"
+            && valueResolver->cls->path == "Engine.ObjectPropertyAttributeValueResolver") {
+            const Value* property = runtime_.property(*valueResolver, "PropertyName");
+            weaponEffect(skill, effect, property ? property->s : "", grade);
+            continue;
         }
         if (!contextResolver || contextResolver->cls->path != "Engine.ResourcePoolAttributeContextResolver"
             || valueResolver->cls->path != "Engine.ObjectPropertyAttributeValueResolver") {
@@ -1086,22 +1094,58 @@ void MissionScript::applySkillEffects(const ObjectPtr& skill) {
         }
         const Value* bonus = effect.field("BonusUpgradeList");
         if (bonus && !bonus->elements().empty()) notImplemented("level-up skill effect: the bonus upgrade list");
-        const auto number = [](const Value* value) { return value ? float(value->number()) : 0.f; };
-        const float start = number(effect.field("GradeToStartApplyingEffect"));
-        const float step = std::max(number(effect.field("PerGradeUpgradeInterval")), 1.f);
-        const AttributeContext context = attributeContext(Value::makeObject(controller_));
-        float amount = 0;
-        if (float(grade) >= start)
-            amount = evaluator_.evaluate(*effect.field("BaseModifierValue"), context)
-                   + evaluator_.evaluate(*effect.field("PerGradeUpgrade"), context) * std::floor((float(grade) - start) / step);
+        const float amount = effectAmount(effect, grade);
         Value* stored = runtime_.property(*pool, name);
         if (!stored) continue;
         float value = float(stored->number());
-        const int type = int(number(effect.field("ModifierType")));      // MT_Scale 0, MT_PreAdd 1, MT_PostAdd 2
+        const Value* modifierType = effect.field("ModifierType");
+        const int type = modifierType ? int(modifierType->number()) : 0;      // MT_Scale 0, MT_PreAdd 1, MT_PostAdd 2
         if (type == 0) value *= amount;
         else value += amount;
         *stored = Value::makeFloat(value);
         if (name == "CurrentValue") clampPool(*pool);
+    }
+}
+
+// The effect's modifier value at the grade (NATIVE_SKILLS.md section 4.3): 0 below the start grade, else BaseModifierValue + PerGradeUpgrade x ((grade - start)
+// div step), both evaluated for the controller. The bonus list is not modelled (the callers list it as not implemented).
+float MissionScript::effectAmount(const Value& effect, int grade) {
+    const auto number = [](const Value* value) { return value ? float(value->number()) : 0.f; };
+    const float start = number(effect.field("GradeToStartApplyingEffect"));
+    const float step = std::max(number(effect.field("PerGradeUpgradeInterval")), 1.f);
+    if (float(grade) < start) return 0.f;
+    const AttributeContext context = attributeContext(Value::makeObject(controller_));
+    return evaluator_.evaluate(*effect.field("BaseModifierValue"), context)
+         + evaluator_.evaluate(*effect.field("PerGradeUpgrade"), context) * std::floor((float(grade) - start) / step);
+}
+
+// A skill effect on a stack attribute of the held weapon (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7, NATIVE_ATTRIBUTES.md sections 3 and 5): the natural level-up's
+// WeaponDamage effect, a Scale modifier of a timed skill (DurationType Timed, InitialDuration seconds). The VM has no weapon, so the effect is not applied here:
+// the host gets one WeaponDamageScale gain (the effect's value and the skill's duration, both from the data) and adds it to the weapon's damage scale sum for
+// that long (observed in game, REALGAME_GROUND_TRUTH.md lane L1: the sum went up by 1.0 for 30 s). Only the weapon's damage property is handed over (the
+// property the stock WeaponDamage attribute names); any other weapon attribute, another modifier type, a skill that is not timed or a bonus list is
+// listed as not implemented. Each activation is its own modifier, so two natural level-ups within 30 s give two gains.
+// UNVERIFIED: the skill machinery behind this (the per-frame refresh moves a modifier to a newly held weapon every SkillEffectUpdateIterval, 0.5 s here; the host
+// applies it to whichever weapon is held when a shot is made, without that granularity).
+void MissionScript::weaponEffect(const ObjectPtr& skill, const Value& effect, const std::string& property, int grade) {
+    const Value* modifierType = effect.field("ModifierType");
+    const Value* bonus = effect.field("BonusUpgradeList");
+    const Value* durationType = runtime_.property(*skill, "DurationType");
+    const Value* duration = runtime_.property(*skill, "InitialDuration");
+    if (property != "InstantHitDamage") {
+        notImplemented("level-up skill effect: a weapon attribute other than the damage");
+    } else if (!modifierType || modifierType->integer() != 0) {
+        notImplemented("level-up skill effect: a weapon damage modifier that is not a Scale");
+    } else if (!durationType || durationType->integer() != 1 || !duration || duration->number() <= 0) {      // EEffectDurationType: Infinite 0, Timed 1
+        notImplemented("level-up skill effect: a weapon damage skill that is not timed");
+    } else if (bonus && !bonus->elements().empty()) {
+        notImplemented("level-up skill effect: the bonus upgrade list");
+    } else if (const float amount = effectAmount(effect, grade); amount != 0.f) {
+        Gain gain;
+        gain.kind = Gain::Kind::WeaponDamageScale;
+        gain.scale = amount;
+        gain.duration = float(duration->number());
+        levelUpEffects_.push_back(gain);
     }
 }
 
@@ -1121,7 +1165,12 @@ void MissionScript::expEarn(int amount, int source, int type) {
 // has reached ExpPointsNextLevelAt (> 0) and the level is below the maximum, the script ExpLevelUp runs, which raises ExpLevel
 // and (OnExpLevelChange) sets the next requirement. The LevelUpCount bookkeeping after it is not implemented. The script also adds the skill points
 // (the data's per-level formula) and calls RecalculateAttributeInitializedState: what they changed is reported with the level (see Gain).
-void MissionScript::updateExperiencePool() {
+void MissionScript::updateExperiencePool() { runLevelUps(false); }
+
+void MissionScript::cheatLevelUp() { runLevelUps(true); }
+
+// `cheated`: one ExpLevelUp(true) whatever the pool holds (OnExpLevelChange's bNaturalLevelup is then false: no OnLevelUpNaturally run); otherwise the pool's loop.
+void MissionScript::runLevelUps(bool cheated) {
     const int before = playerLevel();
     const int pointsBefore = int(required(runtime_, *pri_, "GeneralSkillPoints").integer());
     // OnExpLevelChange's pawn branch needs the controller's pawn and class (the game's controller has both): given for the level-up only
@@ -1133,17 +1182,19 @@ void MissionScript::updateExperiencePool() {
     if (pawn) *pawn = Value::makeObject(pawnFor(Toucher::Player));
     if (playerClass && cls) *playerClass = Value::makeObject(cls);
     inLevelUp_ = true;
+    levelUpEffects_.clear();
     for (int guard = 0; guard < 200; ++guard) {
         const Value& next = required(runtime_, *pri_, "ExpPointsNextLevelAt");
         const int level = playerLevel();
-        if (!(next.number() > 0 && double(pool_) >= next.number() && maxLevel_ > level)) break;
-        run([this] { runtime_.callByName(controller_, "ExpLevelUp", {Value::makeBool(false)}); });
+        if (!cheated && !(next.number() > 0 && double(pool_) >= next.number() && maxLevel_ > level)) break;
+        run([this, cheated] { runtime_.callByName(controller_, "ExpLevelUp", {Value::makeBool(cheated)}); });
         if (playerLevel() == level) { notes_.push_back("ExpLevelUp did not raise ExpLevel"); break; }
+        if (cheated) break;
     }
     inLevelUp_ = false;
     if (pawn) *pawn = savedPawn;
     if (playerClass) *playerClass = savedClass;
-    if (playerLevel() == before) return;
+    if (playerLevel() == before) { levelUpEffects_.clear(); return; }
     gains_.push_back({Gain::Kind::Level, playerLevel()});
     gains_.push_back({Gain::Kind::SkillPoints, int(required(runtime_, *pri_, "GeneralSkillPoints").integer()) - pointsBefore});
     if (healthPool_) {
@@ -1151,6 +1202,8 @@ void MissionScript::updateExperiencePool() {
         gains_.push_back({Gain::Kind::MaxHealth, 0, maximum});
         gains_.push_back({Gain::Kind::Health, 0, float(required(runtime_, *healthPool_, "CurrentValue").number()), maximum});
     }
+    for (const Gain& effect : levelUpEffects_) gains_.push_back(effect);
+    levelUpEffects_.clear();
 }
 
 std::vector<std::string> MissionScript::stubs() const {

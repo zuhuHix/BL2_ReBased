@@ -1502,3 +1502,56 @@ output of dialog 03b was never selected live).
   turn-in** (9 and 15 before): three newly reached, all from `BeginUse -> OnNewPrimaryUser -> StartLingerTimer` and the `Used` event: `AIComponent.ActivateEvent`, `Actor.ClearTimer`, and
   `EvaluateInitializationData` with a context source other than the player controller (`Actor.SetTimer` is now called twice).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.**
+
+## Level-up weapon damage scale (2026-10-07)
+
+AI-assisted (Claude), lane I7. Rules: [NATIVE_LEVEL_UP_ATTRIBUTES.md](NATIVE_LEVEL_UP_ATTRIBUTES.md) section 6 and 7, [NATIVE_ATTRIBUTES.md](NATIVE_ATTRIBUTES.md) sections 3 and 5,
+[NATIVE_SKILLS.md](NATIVE_SKILLS.md) section 4. **Observed in the running game (lane L1, [REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)):** after a natural level-up the equipped weapon's
+damage went from 41.40 to 61.92 for 30 s (the weapon's damage scale sum from 2.017 to 3.017, +1.0 added to the existing sum), gone at 30.3 s. Everything else here is UNVERIFIED.
+
+### What runs as script, what is data, what is a stand-in
+
+- **Script (unchanged installed code):** `ExpLevelUp(bCheated)` calls `OnExpLevelChange(true, not bCheated)`; inside the 1 s guard that function runs `PlayerClass.OnLevelUp` and then, **only
+  if `bNaturalLevelup`**, `PlayerClass.OnLevelUpNaturally`. So "natural" is decided by the script. The slice's pool update always calls `ExpLevelUp(false)` (earned experience), so its
+  level-ups are natural; the not-natural path is `ExpLevelUp(true)` (a cheat) and the load path (`bFeedback` false, no behaviors).
+- **Data (read, not hard-coded):** `OnLevelUpNaturally` of Maya's class names `PlayerBehavior_LevelUpNaturally`, one `Behavior_AttributeEffect` whose skill is `DurationType` Timed (position 1 of
+  `SkillDefinition.EEffectDurationType`: Infinite, Timed, MAX), `InitialDuration` 30, one effect on `D_Attributes.Weapon.WeaponDamage` (context resolver
+  `WeaponAttributeContextResolver`, value resolver `ObjectPropertyAttributeValueResolver` on `InstantHitDamage`), `ModifierType` Scale (0), `BaseModifierValue` 1, start grade 0. The skill also has
+  `bAutoUpdateContexts` and `SkillEffectUpdateIterval` 0.5 (seen with `--object-dump`).
+- **STAND-IN (VM, `MissionScript::weaponEffect`):** `BehaviorBase.RunBehaviors` stays the labelled stand-in for the skill activation. For an effect whose context is the weapon, the VM has no weapon,
+  so it does not apply the effect: it evaluates the value at the starting grade (the same `effectAmount` as the pool effects) and reads the skill's duration, and reports one host event
+  `weapon_damage_scale` (`a` = value, `b` = seconds), after `level`, `skill_points`, `max_health`, `health`. Only the weapon damage property, a Scale modifier, a timed skill and an empty bonus list are
+  handed over; anything else is a "not implemented" stub entry. This replaces the stub `level-up skill effect: attribute resolvers other than a resource pool's property` that swap 7b reported.
+  Each activation is its own modifier (two natural level-ups outside the guard give two events). `--slice-run` has a new step `cheatlevel` (one `ExpLevelUp(true)`), used only by the test.
+- **Host (`AOpenWillowWalker::AddWeaponDamageScale` / `ShotDamage`):** the walker keeps (scale, end time) entries in game time; an entry runs while `Now < start + duration`
+  (dropped by Tick, logged). The shot's damage follows the stack rule, **(base + PreAdd) x (1 + up + s) / (1 + down) + PostAdd** (NATIVE_ATTRIBUTES.md section 3), so the running scale joins
+  the weapon's existing up-sum, which is the observed (S + s) / S (3.017 / 2.017 = 1.496), not a doubling. The terms come from the card: `tools/weapon_stats.py` now writes
+  `card.damage_stack` (`base`, `pre_add`, `post_add`, `scale_up`, `scale_down`: the WeaponDamage stack that `combine()` turns into `damage`, which is unchanged) and the host parses it into
+  `FOpenWillowWeaponItem` (`bHasDamageStack`, `DamageBase` ...). **Fallback (labelled host stand-in, UNVERIFIED):** a recipe without the stack (evaluated before the field) gets card damage
+  x (1 + s), S taken as 1, which overstates when other Scale modifiers are on the weapon. A non-positive scale is refused (the stack puts a negative one in the divisor; not modelled).
+  The modifier follows whichever weapon is held when the shot is made; the game re-gathers the context every 0.5 s (not modelled). The effect is not saved.
+- **Local slice cards:** a full `tools/weapon_slice_gear.py` rerun re-rolls different guns than the ones in `local/items/slice` (different names and damage), so it was not used. The five existing
+  recipes were re-evaluated with `tools/weapon_stats.py --recipe` (on copies under `local/p2/I7/restat/`) and only `card.damage_stack` was copied into each existing recipe; its
+  terms rebuild each card's `damage` to within 1e-6 relative. (The re-evaluation also differs from the old cards in `rarity_rating`/`rarity_color`, and for the shotgun in reload, magazine and display:
+  the old recipes predate those tool changes. They were left as they were.)
+
+### Not modelled / open
+
+- The shield recharge boost (second `OnLevelUp` skill: no shield pool in the VM or host), the action-skill cooldown reset (a live check by another lane is running), other timed skills, the real skill
+  activation (`SkillEffectManager.ActivateSkill`, the per-frame refresh), and the host's weapon scale sum (a per-weapon modifier stack that would make the factor exact).
+- The expiry time is the host's game time at the event plus the duration; the VM's `TimeSeconds` and the host's clock are separate (the level-up runs in the tick after the turn-in, so they differ by a frame).
+
+### Checks (2026-10-07)
+
+- Synthetic `tests/weapon_stats_test.py` (30, two new): the card's `damage_stack` has the five terms, `combine()` over them gives `damage`, and a further Scale of 0.5 gives the (S + s) / S ratio, not a doubling.
+- Synthetic `tests/mission_script_test.py` scenario S9 (invented data: Scale 0.75, 12.5 s, the toy `ExpLevelUp` with the installed `not bCheated` branch): a natural level-up past the guard gives one
+  `weapon_damage_scale` 0.75 / 12.5 after `level`, `skill_points`, `max_health`, `health`, with no stub or note; inside the 1 s guard none; `cheatlevel` (not natural) past the guard runs the level-up behavior
+  (a `health` event) and gives none; two natural level-ups at 2.1 s and 3.7 s give two events and the one at 2.2 s none.
+- Real data (`--slice-run`, installed packages; logs under local/p2/I7/): `stage:8 player:8:27900 health:106.3 accept tick:5 range spawn tick:6 damage:... tick:5 turnin tick:3` gives `weapon_damage_scale 1.000000 30.000000`
+  after `health 240.3233 of 240.3233`; `player:8:0 tick:3 cheatlevel` gives the level, points, maximum and health events and no weapon event; no `level-up skill effect` stub remains (the only stub left on the
+  level-up path is the telemetry `RecordPlayerCharacterGainedLevelEventForPlayer`).
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, `tools/verify_fire_event_order.py` 18 of 18 (and `--self-test`), UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=103 errors=0 (102 before, one new: `natural_level_up_scales_weapon_damage_for_duration`), resume PASS checks=11 errors=0.** Log lines:
+  `OWQUEST script level-up weapon damage scale: +1.000 for 30.0 s (the VM's, from the skill's data)` and, for the held slice pistol, `card 63.633, with the scale 110.421 (stack formula 110.421, factor 1.735), after 63.633`
+  (1.735 = (1.36 + 1) / 1.36 for that gun's up-sum of 0.36; the card damage again at the end time).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0** (card loader touched: same as baseline).

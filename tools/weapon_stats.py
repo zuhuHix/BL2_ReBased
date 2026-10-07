@@ -296,6 +296,19 @@ def combine(start, m, integer=False):
     return f32((start + pre) * factor + post)
 
 
+def damage_stack_of(base, mods):
+    """The WeaponDamage stack's terms, so a later Scale modifier can be added to the real sum (combine() over these terms is the card's damage).
+
+    The host applies the natural level-up's timed Scale this way: (base + pre_add) * (1 + scale_up + s) / (1 + scale_down) + post_add. None when the
+    weapon has no damage base.
+    """
+    if base is None:
+        return None
+    m = mods or {}
+    return {'base': base, 'pre_add': m.get('MT_PreAdd', 0.0), 'post_add': m.get('MT_PostAdd', 0.0),
+            'scale_up': m.get('scale_up', 0.0), 'scale_down': m.get('scale_down', 0.0)}
+
+
 def damage_type_of(package, recipe, weapon_type):
     """The elemental part's CustomDamageTypeDefinition, else any part's, else the type's default.
 
@@ -599,6 +612,8 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
         'level_requirement': required,
         'level_line': required > 1,
         'damage': stat('WeaponDamage'),
+        # The terms behind 'damage' (see damage_stack_of): the host adds a timed Scale to this stack instead of multiplying the final number.
+        'damage_stack': damage_stack_of(base.get(ATTR + 'WeaponDamage'), mods.get(ATTR + 'WeaponDamage')),
         # The card shows 1 / FireInterval (the presentation's bDisplayAsInverse).
         'fire_rate': f32(1.0 / interval) if interval else None,
         'reload_time': stat('WeaponReloadSpeed'),

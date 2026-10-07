@@ -111,6 +111,15 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
     (*Card)->TryGetStringField(TEXT("rarity_color"), Item.RarityColor);
     Item.Level = int32(Number(*Card, TEXT("level"), 1));
     Item.Damage = Number(*Card, TEXT("damage"), 0);
+    if (const TSharedPtr<FJsonObject>* Stack = nullptr; (*Card)->TryGetObjectField(TEXT("damage_stack"), Stack))
+    {
+        Item.bHasDamageStack = true;
+        Item.DamageBase = Number(*Stack, TEXT("base"), 0);
+        Item.DamagePreAdd = Number(*Stack, TEXT("pre_add"), 0);
+        Item.DamagePostAdd = Number(*Stack, TEXT("post_add"), 0);
+        Item.DamageScaleUp = Number(*Stack, TEXT("scale_up"), 0);
+        Item.DamageScaleDown = Number(*Stack, TEXT("scale_down"), 0);
+    }
     Item.FireRate = FMath::Max(0.1f, Number(*Card, TEXT("fire_rate"), 1));
     Item.ReloadTime = Number(*Card, TEXT("reload_time"), 0);
     Item.Magazine = Number(*Card, TEXT("magazine"), 0);

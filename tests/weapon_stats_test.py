@@ -58,6 +58,22 @@ class WeaponStatsTests(unittest.TestCase):
         self.assertEqual(card['display']['damage'], 156)
         self.assertAlmostEqual(card['fire_rate'], 4.0)
 
+    def test_damage_stack_terms_rebuild_the_card_damage(self):
+        card = s.evaluate(FakePackage(world()), recipe(), level=3)['card']
+        stack = card['damage_stack']
+        self.assertEqual(sorted(stack), ['base', 'post_add', 'pre_add', 'scale_down', 'scale_up'])
+        self.assertAlmostEqual(stack['base'], 120.0)         # the level curve and the type scale are in the base
+        self.assertAlmostEqual(stack['scale_up'], 0.3)       # the slot grades: 0.1 x 3
+        # combine() over the terms is 'damage'; a further Scale of 0.5 raises the up-sum, not the final number: (base + pre) * (1 + up + 0.5) / (1 + down) + post
+        self.assertAlmostEqual(s.combine(stack['base'], {'MT_PreAdd': stack['pre_add'], 'MT_PostAdd': stack['post_add'],
+                                                         'scale_up': stack['scale_up'], 'scale_down': stack['scale_down']}), card['damage'], places=3)
+        more = (stack['base'] + stack['pre_add']) * (1 + stack['scale_up'] + 0.5) / (1 + stack['scale_down']) + stack['post_add']
+        self.assertAlmostEqual(more, card['damage'] * (stack['scale_up'] + 1.5) / (stack['scale_up'] + 1.0), places=3)
+
+    def test_no_damage_base_means_no_stack(self):
+        self.assertIsNone(s.damage_stack_of(None, {'scale_up': 1.0}))
+        self.assertEqual(s.damage_stack_of(5.0, None), {'base': 5.0, 'pre_add': 0.0, 'post_add': 0.0, 'scale_up': 0.0, 'scale_down': 0.0})
+
     def test_negative_scales_divide_and_manufacturer_operands(self):
         card = s.evaluate(FakePackage(world()), recipe(), level=1)['card']
         # Default 'split' rule: foreign-maker +3 is 0; 10 / (1 + 1000), then PostAdd +1 = 1.00999;
