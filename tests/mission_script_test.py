@@ -61,6 +61,10 @@ The natural level-up scenario (--slice-run, scenario S9, swap 9) adds to that to
 `not bCheated` as bNaturalLevelup): the slice reports a weapon_damage_scale event (value, duration) for a natural level-up past the 1 s guard, none for
 `cheatlevel` (ExpLevelUp(true)) and none inside the guard.
 
+The cooldown scenario (--slice-run, scenario S10, swap 10): the toy class names a cooldown pool definition (invented minimum 0.25) and the toy level-up skill's second effect
+scales the cooldown pool's CurrentValue by the pool's MinValue (as the installed one does): the slice reports action_skill_cooldown (Scale, 0.25) for a level-up past the guard,
+natural or not, none inside it.
+
 The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
 with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
 OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
@@ -688,6 +692,7 @@ def build_willowgame():
     # the player's class and its health pool (the data the RecalculateAttributeInitializedState stand-in reads)
     player_class = T.cls('PlayerClassDefinition')
     T.prop('Object', player_class, 'HealthPoolDefinition')
+    T.prop('Object', player_class, 'SkillCooldownPoolDefinition')
     on_level_up = T.array_of(player_class, 'OnLevelUp', 'Object')
     on_level_up_naturally = T.array_of(player_class, 'OnLevelUpNaturally', 'Object')
     # a level-up skill (swap 7b): its effects' attribute, modifier type, value and grade rules
@@ -1132,12 +1137,15 @@ def build_mission(director=False, on_enabled=True, weapon=False):
     health_max = pool_attribute('HealthMaxValue', health_resource, 'MaxValue')
     health_current = pool_attribute('HealthCurrentValue', health_resource, 'CurrentValue')
     cooldown_current = pool_attribute('CooldownCurrentValue', cooldown_resource, 'CurrentValue')
+    cooldown_min = pool_attribute('CooldownMinValue', cooldown_resource, 'MinValue')
+    # the cooldown pool's definition (swap 10; invented minimum 0.25 so that "Scale by the pool's minimum" is visibly not 0)
+    cooldown_pool = p.add_export(chain('Engine', 'ResourcePoolDefinition'), 'CooldownPool', w32(0) + t.obj('Resource', cooldown_resource) + t.float('BaseMinValue', 0.25) + none)
 
     def effect(attribute, modifier_type, value):
         return (t.obj('AttributeToModify', attribute) + t.byte('ModifierType', modifier_type) + data('BaseModifierValue', **value)
                 + t.float('GradeToStartApplyingEffect', 1.0) + t.float('PerGradeUpgradeInterval', 1.0) + none)
     skill = p.add_export(chain('WillowGame', 'SkillDefinition'), 'LevelUpSkill', w32(0) + t.int('DefaultStartingGrade', 1)
-                         + t.array('SkillEffectDefinitions', 2, effect(health_current, 2, dict(attribute=health_max)) + effect(cooldown_current, 0, dict(constant=0.0))) + none)
+                         + t.array('SkillEffectDefinitions', 2, effect(health_current, 2, dict(attribute=health_max)) + effect(cooldown_current, 0, dict(attribute=cooldown_min))) + none)
     attribute_effect = p.add_export(chain('WillowGame', 'Behavior_AttributeEffect'), 'LevelUp_AttributeEffect', w32(0) + t.obj('AttributeEffect', skill) + none)
     # the natural level-up's skill (invented numbers): a timed skill (DurationType 1, 12.5 s) whose one effect scales the held weapon's damage by 0.75 from grade 0
     weapon_context = p.add_export(chain('Engine', 'WeaponAttributeContextResolver'), 'WeaponDamage_Context', w32(0) + none)
@@ -1159,7 +1167,7 @@ def build_mission(director=False, on_enabled=True, weapon=False):
     siren = p.add_export(chain('Core', 'Package'), 'GD_Siren', w32(0) + none)
     siren_character = p.add_export(chain('Core', 'Package'), 'Character', w32(0) + none, outer=siren)
     p.add_export(chain('WillowGame', 'PlayerClassDefinition'), 'CharClass_Siren',
-                 w32(0) + t.obj('HealthPoolDefinition', health_pool) + t.array('OnLevelUp', 1, w32(run_collection))
+                 w32(0) + t.obj('HealthPoolDefinition', health_pool) + t.obj('SkillCooldownPoolDefinition', cooldown_pool) + t.array('OnLevelUp', 1, w32(run_collection))
                  + t.array('OnLevelUpNaturally', 1, w32(natural_run)) + none, outer=siren_character)
     p.add_export(chain('WillowGame', 'GlobalsDefinition'), 'Globals',
                  w32(0) + t.float('PlayerInteractionDistance', 420.0) + data('GeneralSkillPointsPerLevelUp', definition=points_definition) + none, outer=general_package)
@@ -1781,17 +1789,28 @@ with tempfile.TemporaryDirectory() as folder:
     def kinds_of(got, step): return [e['kind'] for s in got['steps'] if s['step'] == step for e in s['events']]
     code, got = slice_run('stage:4', 'player:4:48', 'tick:2')
     check('S9 natural level-up: one event with the data value and duration', code == 0 and got['errors'] == [] and scale_events(got) == [('tick:2', 0.75, 12.5)], (scale_events(got), got['errors']))
-    check('S9 the event follows the level, points, maximum and health events', kinds_of(got, 'tick:2') == ['level', 'skill_points', 'max_health', 'health', 'weapon_damage_scale'], kinds_of(got, 'tick:2'))
+    check('S9 the event follows the level, points, maximum, health and cooldown events', kinds_of(got, 'tick:2') == ['level', 'skill_points', 'max_health', 'health', 'action_skill_cooldown', 'weapon_damage_scale'], kinds_of(got, 'tick:2'))
     check('S9 the weapon effect is applied by the host: no stub, no note about it', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']))
     code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
     check('S9 natural level-up inside the 1 s guard: no event', code == 0 and got['errors'] == [] and scale_events(got) == [] and 'level' in kinds_of(got, 'tick:0.5'), (scale_events(got), kinds_of(got, 'tick:0.5')))
     code, got = slice_run('stage:4', 'tick:2', 'player:4:0', 'cheatlevel')
-    check('S9 not-natural level-up past the guard: the level-up behavior ran (health), no weapon event',
-          code == 0 and got['errors'] == [] and scale_events(got) == [] and kinds_of(got, 'cheatlevel') == ['level', 'skill_points', 'max_health', 'health'], (scale_events(got), kinds_of(got, 'cheatlevel')))
+    check('S9 not-natural level-up past the guard: the level-up behavior ran (health, cooldown), no weapon event',
+          code == 0 and got['errors'] == [] and scale_events(got) == [] and kinds_of(got, 'cheatlevel') == ['level', 'skill_points', 'max_health', 'health', 'action_skill_cooldown'], (scale_events(got), kinds_of(got, 'cheatlevel')))
     check('S9 not-natural level-up: no stubs', got['script']['stubs'] == [], got['script']['stubs'])
     code, got = slice_run('stage:4', 'tick:2', 'player:4:48', 'tick:0.1', 'player:5:70', 'tick:0.1', 'player:6:96', 'tick:1.5')
     check('S9 each natural level-up outside the guard gives its own event (t = 2.1 and 3.7, not 2.2)',
           code == 0 and got['errors'] == [] and [(s, a, b) for s, a, b in scale_events(got)] == [('tick:0.1', 0.75, 12.5), ('tick:1.5', 0.75, 12.5)], scale_events(got))
+    # Scenario S10 (swap 10): the OnLevelUp skill's second effect scales the action-skill cooldown's current value by the pool's minimum (invented: 0.25, so a Scale
+    # of the data's value and not a hard-coded reset). The VM has no cooldown current value (the host keeps it), so it hands over the modifier type and the value
+    # evaluated from the data, in the OnLevelUp collection, hence for a natural and a not-natural level-up alike (the script's rule), and only past the 1 s guard.
+    def cooldown_events(got):
+        return [(s['step'], e['a'], float(e['b'])) for s in got['steps'] for e in s['events'] if e['kind'] == 'action_skill_cooldown']
+    code, got = slice_run('stage:4', 'player:4:48', 'tick:2')
+    check('S10 natural level-up: one Scale event with the pool minimum from the data', code == 0 and got['errors'] == [] and cooldown_events(got) == [('tick:2', 'Scale', 0.25)], (cooldown_events(got), got['errors']))
+    code, got = slice_run('stage:4', 'tick:2', 'player:4:0', 'cheatlevel')
+    check('S10 not-natural level-up: the same event (OnLevelUp runs for it)', code == 0 and cooldown_events(got) == [('cheatlevel', 'Scale', 0.25)], cooldown_events(got))
+    code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
+    check('S10 inside the 1 s guard: no event', code == 0 and cooldown_events(got) == [], cooldown_events(got))
     # no level change (27 < R(5)): neither event is sent
     code, got, events = level_events('stage:4', 'player:4:0', *flow)
     check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events)

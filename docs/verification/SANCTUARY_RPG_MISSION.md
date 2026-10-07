@@ -1555,3 +1555,37 @@ damage went from 41.40 to 61.92 for 30 s (the weapon's damage scale sum from 2.0
   `OWQUEST script level-up weapon damage scale: +1.000 for 30.0 s (the VM's, from the skill's data)` and, for the held slice pistol, `card 63.633, with the scale 110.421 (stack formula 110.421, factor 1.735), after 63.633`
   (1.735 = (1.36 + 1) / 1.36 for that gun's up-sum of 0.36; the card damage again at the end time).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0** (card loader touched: same as baseline).
+
+## Script swap 10: the level-up resets the action-skill cooldown (2026-10-07)
+
+AI-assisted (Claude), lane I7. **Observed in the running game and VERIFIED by lane L3** ([COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md) section E, "Part B"): `ExpLevelUp(false)` took the action-skill
+cooldown to 0.0 in the same call, both at its 13.0 maximum during a real Phaselock hold (2.0 s after the cast) and at 7.99 during the drain, and it stayed 0 (no later refill, the hold was not
+ended); `ActionSkillCooldownComplete` ran within 1 ms after `ClientOnExpLevelChange`. The trace shows natural level-ups only. Everything about the VM and host path below is UNVERIFIED.
+
+### From the data: which collection, which modifier
+- The effect is the **second effect of the first skill of `PlayerBehavior_LevelUp`**, i.e. the class's **`OnLevelUp`** collection (not `OnLevelUpNaturally`): `D_Attributes.ActiveSkillCooldownResource.ActiveSkillCooldownCurrentValue`
+  (resource-pool context resolver on `D_Resources.ActiveSkillCooldown`, object-property resolver on `CurrentValue`, a plain attribute), `ModifierType` Scale (0), `BaseModifierValue` = the attribute
+  `ActiveSkillCooldownMinValue` (the pool's minimum), start grade 0. The pool is Maya's `SkillCooldownPoolDefinition` (`ActiveSkillCooldownPool_Siren`, `BaseMinValue` 0).
+- **Natural or not:** `OnExpLevelChange` runs `OnLevelUp` for every level-up with feedback and `OnLevelUpNaturally` only for a natural one, so the script (and this data) say the cooldown reset also follows a not-natural
+  level-up (`ExpLevelUp(true)`); the live trace does not show that case. **The natural / not-natural split of this effect is UNVERIFIED**, taken from the installed script and data.
+
+### What runs
+- **VM (`MissionScript::cooldownPool`, `cooldownEffect`):** `poolFor` now also knows a minimal cooldown pool: an `Engine.ResourcePool` over the class's `SkillCooldownPoolDefinition` with its minimum from the definition (not in the
+  manager: the rebase would evaluate its designer-attribute maximum; its current value is the host's). So the effect's value, the pool's own minimum, evaluates through the evaluator rather than being assumed to be 0. The
+  effect is not applied in the VM: the host gets one `action_skill_cooldown` event (`a` = Scale / PreAdd / PostAdd, `b` = the value), after `health` and before `weapon_damage_scale`, at every level-up past the 1 s guard.
+  A cooldown attribute other than `CurrentValue` or another modifier type is a "not implemented" stub entry. Real data: `Scale 0.000000` for natural and `cheatlevel` level-ups.
+- **Host (`AOpenWillowWalker::ModifyPhaselockCooldown`):** the Phaselock cooldown is a drain model (refilled at the cast, held rate until the release, then the base rate). The modifier is applied to the current value in place:
+  Scale multiplies it, PreAdd/PostAdd add, clamped to 0..maximum, and kept as an offset (`PhaselockCooldownAdjust`, cleared by the next cast) so the drain continues from the new value; Scale 0 therefore reads 0 through the hold and
+  after the release, as observed. Nothing of the cast is touched (a held or draining Phaselock is not ended). When it ends a running cooldown the host logs the game's `ActionSkillCooldownComplete`; **the host has no handler
+  for that call** (the HUD ring reads `PhaselockRemaining`), so nothing else runs.
+
+### Checks (2026-10-07)
+- Synthetic `tests/mission_script_test.py` scenario S10 (invented cooldown pool minimum 0.25, so the Scale value is the data's and not a built-in 0): a level-up past the guard gives one `action_skill_cooldown` Scale 0.25 after `health`
+  and before `weapon_damage_scale`, for a natural and a not-natural (`cheatlevel`) level-up; none inside the 1 s guard; the S9 event-order checks now include it; no stubs.
+- Real data (`--slice-run`): `action_skill_cooldown Scale 0.000000` for `player:8:28200 ... tick:3` and for `player:8:0 tick:3 cheatlevel`; no new stub.
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, `tools/verify_fire_event_order.py` self-test and 18 of 18, UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=105 errors=0 (103 before, two new: `level_up_resets_action_skill_cooldown`, `action_skill_cooldown_modifier_scales_then_resets_host_cooldown`), resume PASS checks=11 errors=0.**
+  Log: `OWQUEST script level-up action skill cooldown: Scale 0.000 (the VM's, from the skill's data): 0.00 -> 0.00`. At the turn-in no cooldown is running in the suite (the cast steps come later), so that check covers the event and
+  the host's application (reads 0); the modifier on a running cooldown is checked in the Phaselock steps after the blocked cast (Scale 0.5 halves what is left without completing, Scale 0 ends it and reports completion, a third
+  application changes nothing). The suite's later wait for that cooldown to drain is therefore shorter. **Not tested:** a reset while a cast is held (the host's offset keeps the cast untouched; the live observation is L3's).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.**

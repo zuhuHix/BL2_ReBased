@@ -149,6 +149,10 @@ private:
     int32 ScriptHealthEvents = 0, HealthHoldTicks = 0;
     bool bHealthAdoptedThisTick = false;
     // The WeaponDamageScale events (swap 9): how many came, the last one's value and duration, and the game time the host handed it to the walker.
+    // The ActionSkillCooldown events (swap 9's sibling, swap 10): how many came, the last one's modifier type and value, the cooldown left just before and after the host applied it.
+    int32 ScriptCooldownEvents = 0, ScriptCooldownType = -1;
+    float ScriptCooldownValue = -1.f, CooldownBeforeScript = -1.f, CooldownAfterScript = -1.f;
+    bool bScriptCooldownEnded = false;
     int32 ScriptDamageScaleEvents = 0;
     float ScriptDamageScale = 0.f, ScriptDamageScaleSeconds = 0.f, ScriptDamageScaleAt = -1.f;
     int64 ExperienceBeforeReward = 0;

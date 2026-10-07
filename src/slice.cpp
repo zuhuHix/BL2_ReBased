@@ -214,6 +214,7 @@ void FireMissionSlice::drainExperience() {
         case Kind::SkillPoints: events_.push_back({HostEvent::Kind::SkillPoints, std::to_string(gain.amount), "", "", ""}); break;
         case Kind::MaxHealth: events_.push_back({HostEvent::Kind::MaxHealth, std::to_string(gain.health), "", "", ""}); break;
         case Kind::Health: events_.push_back({HostEvent::Kind::Health, std::to_string(gain.health), std::to_string(gain.maximum), "", ""}); break;
+        case Kind::ActionSkillCooldown: events_.push_back({HostEvent::Kind::ActionSkillCooldown, gain.amount == 0 ? "Scale" : gain.amount == 1 ? "PreAdd" : "PostAdd", std::to_string(gain.scale), "", ""}); break;
         case Kind::WeaponDamageScale: events_.push_back({HostEvent::Kind::WeaponDamageScale, std::to_string(gain.scale), std::to_string(gain.duration), "", ""}); break;
         }
     }

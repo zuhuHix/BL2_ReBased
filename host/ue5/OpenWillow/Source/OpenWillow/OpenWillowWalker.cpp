@@ -1037,6 +1037,7 @@ void AOpenWillowWalker::UsePhaselock()
     const float Now = GetWorld()->GetTimeSeconds();
     // ActionSkillCallback refills the cooldown pool at activation, hit or miss.
     PhaselockCastAt = Now;
+    PhaselockCooldownAdjust = 0.f;
     PhaselockTimeline = FOpenWillowPhaselockTimeline();
     bPhaselockBlocked = false;
     PhaselockEndReason.Reset();
@@ -1268,7 +1269,21 @@ float AOpenWillowWalker::PhaselockRemaining() const
     if (Now >= PhaselockResetAt) return 0.f;
     const float Held = FMath::Clamp(Now, PhaselockCastAt, PhaselockHeldUntil) - PhaselockCastAt;
     const float Free = FMath::Max(0.f, Now - FMath::Max(PhaselockCastAt, PhaselockHeldUntil));
-    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * Phaselock.CooldownRate);
+    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * Phaselock.CooldownRate + PhaselockCooldownAdjust);
+}
+bool AOpenWillowWalker::ModifyPhaselockCooldown(int32 ModifierType, float Amount)
+{
+    // ModifierType: 0 Scale, 1 PreAdd, 2 PostAdd (EModifierType). The pool is clamped to its minimum (0) and maximum by the game's change notification; the
+    // adjustment is kept as an offset to the drain model, so the drain goes on from the new value. Nothing else of the cast is touched.
+    const float Before = PhaselockRemaining();
+    const float Wanted = ModifierType == 0 ? Before * Amount : Before + Amount;
+    const float After = FMath::Clamp(Wanted, 0.f, Phaselock.CooldownSeconds);
+    PhaselockCooldownAdjust += After - Before;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow action skill cooldown %s %.3f: %.2f -> %.2f of %.1f%s"), ModifierType == 0 ? TEXT("scaled by") : TEXT("raised by"),
+        Amount, Before, PhaselockRemaining(), Phaselock.CooldownSeconds, IsPhaselockActive() ? TEXT(" (the cast is still active)") : TEXT(""));
+    const bool bEnded = Before > 0.f && PhaselockRemaining() <= 0.f;
+    if (bEnded) UE_LOG(LogTemp, Display, TEXT("OpenWillow action skill cooldown complete (the game's ActionSkillCooldownComplete; the host has no handler, the HUD ring reads the cooldown)"));
+    return bEnded;
 }
 void AOpenWillowWalker::RunCombatShots(float Now)
 {

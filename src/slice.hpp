@@ -40,6 +40,7 @@ public:
                           Health,              // a = current health, b = maximum health after the level-up (the OnLevelUp refill included; sent with MaxHealth)
                           SequenceChange,      // a behavior (the mission's or the dummy's own) changed a sequence of the dummy's provider: a = provider, b = sequence, c = CHANGE_Enable / _Disable / _Toggle
                           TurnInDialog,        // PlayMissionTurnedInDialog's TriggerEvent on Marcus's component: a = the global VO_NPC_MissionTurnedIn tag path, b = the speaker, c = the other object's class
+                          ActionSkillCooldown, // the level-up skill's modifier on the action-skill cooldown's current value: a = Scale / PreAdd / PostAdd, b = its value (Scale 0 resets it)
                           WeaponDamageScale }; // a natural level-up's OnLevelUpNaturally skill: a = the value added to the held weapon's damage scale sum, b = seconds it lasts (both from the skill's data)
         Kind kind;
         std::string a, b, c;

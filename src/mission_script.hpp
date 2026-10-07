@@ -41,6 +41,8 @@ class BehaviorProvider;
 // Swap 9 (lane I7): a natural level-up (ExpLevelUp(false): OnExpLevelChange's bNaturalLevelup) also reaches RunBehaviors with PlayerClass.OnLevelUpNaturally; its
 // skill's timed Scale effect on the held weapon's damage is not a pool of the VM, so it is handed to the host as a WeaponDamageScale gain (scale and duration
 // read from the skill's data), which adds it to the weapon's damage scale sum for that long.
+// Swap 10 (lane I7): the first OnLevelUp skill's second effect, Scale of the action-skill cooldown's current value by the pool's minimum (0), targets a pool whose
+// current value the host keeps: it is handed to the host as an ActionSkillCooldown gain (modifier type and value from the data), natural or not (the script's rule).
 // Swap 3 (NATIVE_CONTROLLER_HELPERS.md): MissionTracker.IsDataValid (the bDataValidated flag) and ValidateData;
 // WillowPlayerController.GetCurrentPlaythrough, GetHUDMovie, UpdateLcdMissionStatus and PlayUIAkEvent (presentation: no-ops),
 // PlayerController.IsPrimaryPlayer, WorldInfo.IsMenuLevel, GetWillowGlobals / GetGearboxGlobals / GetBehaviorKernel /
@@ -85,11 +87,11 @@ public:
     // applies the experience and the health and compares the rest with its own numbers. A natural level-up also hands over the weapon damage scale its
     // OnLevelUpNaturally skill adds (WeaponDamageScale, after Health): the host holds the weapon, so the host applies it.
     struct Gain {
-        enum class Kind { Experience, Level, SkillPoints, MaxHealth, Health, WeaponDamageScale } kind = Kind::Experience;
-        int amount = 0;          // Experience: the amount, Level: the level, SkillPoints: the count
+        enum class Kind { Experience, Level, SkillPoints, MaxHealth, Health, WeaponDamageScale, ActionSkillCooldown } kind = Kind::Experience;
+        int amount = 0;          // Experience: the amount, Level: the level, SkillPoints: the count, ActionSkillCooldown: the modifier type (0 Scale, 1 PreAdd, 2 PostAdd)
         float health = 0;        // MaxHealth: the maximum, Health: the current value
         float maximum = 0;       // Health: the maximum
-        float scale = 0;         // WeaponDamageScale: the value added to the weapon's damage scale sum
+        float scale = 0;         // WeaponDamageScale: the value added to the weapon's damage scale sum; ActionSkillCooldown: the modifier's value
         float duration = 0;      // WeaponDamageScale: seconds of game time the skill lasts
     };
     std::vector<Gain> takeGains() { auto result = std::move(gains_); gains_.clear(); return result; }
@@ -180,6 +182,8 @@ private:
     ObjectPtr pri_;
     float pool_ = 0;                       // the experience resource pool's CurrentValue
     ObjectPtr playerClass_;                // the player's class definition (the host's Maya): the health pool's data and the OnLevelUp behaviors
+    ObjectPtr cooldownPool_;               // the action-skill cooldown pool, minimum only (cooldownPool()); not in the manager
+    bool cooldownPoolFailed_ = false;
     ObjectPtr manager_, healthPool_;       // the controller's ResourcePoolManager and its one pool (built on first use from the class's HealthPoolDefinition)
     bool healthPoolFailed_ = false;        // the data for it is not in the packages: no health events
     bool integerResource_ = false;         // the health resource's bIntegerOnlyUpdates
@@ -217,6 +221,8 @@ private:
     float effectAmount(const Value& effect, int grade);       // the effect's modifier value at the grade (NATIVE_SKILLS.md section 4.3)
     void weaponEffect(const ObjectPtr& skill, const Value& effect, const std::string& property, int grade);
     void runLevelUps(bool cheated);
+    ObjectPtr cooldownPool();
+    void cooldownEffect(const Value& effect, const std::string& property, float amount);
     void bindOptional(const char* path, NativeFn fn);
     const Value& rewardData(bool alternate);
     ObjectPtr loadRef(const Value& reference);

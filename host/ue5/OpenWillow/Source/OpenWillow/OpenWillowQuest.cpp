@@ -494,6 +494,20 @@ void UOpenWillowQuest::Pump()
             if (Walker) Walker->ApplyScriptHealth(Maximum, Current);
             break;
         }
+        case K::ActionSkillCooldown: {
+            // The first OnLevelUp skill's second effect (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game by lane L3: the cooldown went to 0 in the
+            // level-up call, at its maximum during a hold and at 7.99 during the drain): the VM read the modifier type and value from the installed data
+            // (Scale by the pool's minimum, 0); the host keeps the cooldown, so it applies it to that.
+            ScriptCooldownType = A == TEXT("Scale") ? 0 : A == TEXT("PreAdd") ? 1 : 2;
+            ScriptCooldownValue = FCString::Atof(UTF8_TO_TCHAR(Event.b.c_str()));
+            ++ScriptCooldownEvents;
+            CooldownBeforeScript = Walker ? Walker->PhaselockRemaining() : -1.f;
+            bScriptCooldownEnded = Walker && Walker->ModifyPhaselockCooldown(ScriptCooldownType, ScriptCooldownValue);
+            CooldownAfterScript = Walker ? Walker->PhaselockRemaining() : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up action skill cooldown: %s %.3f (the VM's, from the skill's data): %.2f -> %.2f"), *A, ScriptCooldownValue,
+                CooldownBeforeScript, CooldownAfterScript);
+            break;
+        }
         case K::WeaponDamageScale: {
             // A natural level-up's OnLevelUpNaturally skill (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game: the held weapon's damage scale sum
             // +1.0 for 30 s): the VM read the value and the duration from the installed skill, the walker holds the weapon and applies it.
@@ -1299,6 +1313,14 @@ void UOpenWillowQuest::RunTest(float Delta)
             && Walker->GetHealth() == ScriptHealthCurrent && Walker->GetMaxHealth() == ScriptHealthMaximum && !Walker->IsHealthHeldForScript(),
             TEXT("script_level_up_refills_health"));
         {
+            // Swap 10: OnLevelUp's first skill also scales the action-skill cooldown's current value by the pool's minimum (data: 0 for Maya), so the one ActionSkillCooldown
+            // event is Scale by 0 and the host's cooldown reads 0 after it (observed in game by lane L3: the cooldown went to 0 in the level-up call, held or draining).
+            // No cooldown is running at this point of the suite (the cast steps come later), so what is checked is the event and the host's application; the modifier on a running
+            // cooldown is the check action_skill_cooldown_modifier_scales_then_resets_host_cooldown in the Phaselock steps.
+            Check(ScriptCooldownEvents == 1 && ScriptCooldownType == 0 && ScriptCooldownValue == 0.f && CooldownAfterScript == 0.f && Walker->PhaselockRemaining() == 0.f,
+                TEXT("level_up_resets_action_skill_cooldown"));
+        }
+        {
             // Swap 9: the level-up came from earned experience, so it is natural: ExpLevelUp(false) -> OnExpLevelChange(true, true) ran OnLevelUpNaturally, whose
             // timed skill scales the held weapon's damage. One event, with the numbers the stock skill carries (+1.0, 30 s: the in-game observation), and the
             // walker applies it by the stack rule: the Scale joins the weapon's up-sum, (base + pre) x (1 + up + s) / (1 + down) + post, which is the observed
@@ -1639,6 +1661,16 @@ bool UOpenWillowQuest::RunPhaselockTest()
         // A blocked cast is not a fizzle: nothing resets the cooldown after ReleaseBufferTime.
         if (PhaselockWait < P.ReleaseBufferTime + 0.1f) return false;
         Check(Walker->PhaselockRemaining() > 0.f, TEXT("phaselock_blocked_cast_keeps_cooldown"));
+        {
+            // Swap 10, the host's application of the level-up skill's cooldown modifier on a cooldown that is really running (the turn-in's level-up comes while it is 0):
+            // Scale by 0.5 halves what is left (no completion), Scale by 0 (the data's modifier) ends it at once and reports the completion; the drain then stays at 0.
+            const float Left = Walker->PhaselockRemaining();
+            const bool bHalfEnded = Walker->ModifyPhaselockCooldown(0, 0.5f);
+            const float Half = Walker->PhaselockRemaining();
+            const bool bEnded = Walker->ModifyPhaselockCooldown(0, 0.f);
+            Check(Left > 1.f && !bHalfEnded && FMath::IsNearlyEqual(Half, Left * 0.5f, 0.05f) && bEnded && Walker->PhaselockRemaining() == 0.f && !Walker->ModifyPhaselockCooldown(0, 0.f),
+                TEXT("action_skill_cooldown_modifier_scales_then_resets_host_cooldown"));
+        }
         PhaselockDummy->SetCanPhaseLockFlag(true);
         Next();
         return false;

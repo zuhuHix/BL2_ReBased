@@ -53,6 +53,11 @@ public:
     // Object path of the mesh shown in Maya's hand ("" when none).
     FString HeldWeaponMesh() const;
     float PhaselockRemaining() const;
+    // The level-up skill's modifier on the action-skill cooldown's current value (the VM's ActionSkillCooldown event, swap 10): a plain attribute, so it takes
+    // effect in place at once: Scale multiplies the current value by `Amount` (0 resets it), PreAdd and PostAdd add. A cast in progress is not ended and the
+    // release is not moved (observed in game, COMBAT_GOLDEN_TRACE.md section E: the cooldown read 0 during the hold and after the release). Returns true when
+    // the modifier ended a running cooldown (the game then runs ActionSkillCooldownComplete; the host has no such handler, it logs it, and the HUD ring reads PhaselockRemaining).
+    bool ModifyPhaselockCooldown(int32 ModifierType, float Amount);
     float PhaselockCooldown() const { return Phaselock.CooldownSeconds; }
     // Last cast: world time, whether it lifted a target, whether the target was blocked (CanLiftTargetIf failed), and
     // its timeline (zero for a miss or a blocked target).
@@ -237,6 +242,7 @@ private:
     float PhaselockCastAt = -100.f;
     float PhaselockHeldUntil = -100.f;
     float PhaselockResetAt = -100.f;
+    float PhaselockCooldownAdjust = 0.f;    // what ModifyPhaselockCooldown added to the pool's current value since the last cast (the cast refills it: 0)
     bool bPhaselockHit = false;
     bool bPhaselockBlocked = false;
     FOpenWillowPhaselockTimeline PhaselockTimeline;

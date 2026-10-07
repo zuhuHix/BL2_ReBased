@@ -892,13 +892,45 @@ std::vector<ObjectPtr> poolsOf(Runtime& runtime, Object& manager) {
 
 // ResourcePoolAttributeContextResolver (NATIVE_ATTRIBUTES section 5, UNVERIFIED): the pool of the controller's manager whose definition is for the resource.
 ObjectPtr MissionScript::poolFor(const Value& resource) {
-    if (!manager_ || resource.kind != Value::Kind::Object || !resource.o) return nullptr;
-    for (const ObjectPtr& pool : poolsOf(runtime_, *manager_)) {
-        const Value* definition = runtime_.property(*pool, "Definition");
-        const Value* own = definition && definition->o ? runtime_.property(*definition->o, "Resource") : nullptr;
-        if (own && own->o && (own->o == resource.o || objectPath(own->o) == objectPath(resource.o))) return pool;
+    if (resource.kind != Value::Kind::Object || !resource.o) return nullptr;
+    const auto names = [&resource](const Value* own) { return own && own->o && (own->o == resource.o || objectPath(own->o) == objectPath(resource.o)); };
+    if (manager_)
+        for (const ObjectPtr& pool : poolsOf(runtime_, *manager_)) {
+            const Value* definition = runtime_.property(*pool, "Definition");
+            if (names(definition && definition->o ? runtime_.property(*definition->o, "Resource") : nullptr)) return pool;
+        }
+    if (const ObjectPtr cooldown = cooldownPool()) {
+        const Value* definition = runtime_.property(*cooldown, "Definition");
+        if (names(definition && definition->o ? runtime_.property(*definition->o, "Resource") : nullptr)) return cooldown;
     }
     return nullptr;
+}
+
+// The action-skill cooldown pool as the VM knows it: only what the level-up effect reads from it. A pool object (Engine.ResourcePool) over the class's
+// SkillCooldownPoolDefinition with its minimum from the definition, so the effect's value (the pool's own minimum) evaluates through the evaluator. It is not in
+// the manager (the rebase would evaluate its maximum, a designer attribute), and its current value is the host's (the effect is handed to the host, not
+// applied here). UNVERIFIED: that the game builds this pool the same way; null when the data is not in the packages.
+ObjectPtr MissionScript::cooldownPool() {
+    if (cooldownPool_ || cooldownPoolFailed_) return cooldownPool_;
+    cooldownPoolFailed_ = true;
+    try {
+        const ObjectPtr cls = playerClass();
+        const Value* reference = cls ? runtime_.property(*cls, "SkillCooldownPoolDefinition") : nullptr;
+        Class* poolClass = runtime_.findClass("Engine.ResourcePool");
+        if (!reference || reference->kind != Value::Kind::Object || !reference->o || !poolClass) return nullptr;
+        const ObjectPtr definition = loadRef(*reference);
+        const Value* baseMinimum = runtime_.property(*definition, "BaseMinValue");
+        const float minimum = baseMinimum ? float(baseMinimum->number()) : 0.f;
+        const ObjectPtr pool = runtime_.instantiate(poolClass);
+        required(runtime_, *pool, "Definition") = Value::makeObject(definition);
+        required(runtime_, *pool, "MinValueBaseValue") = Value::makeFloat(minimum);
+        required(runtime_, *pool, "MinValue") = Value::makeFloat(minimum);
+        cooldownPool_ = pool;
+        cooldownPoolFailed_ = false;
+    } catch (const RuntimeError&) {
+        cooldownPool_.reset();
+    }
+    return cooldownPool_;
 }
 
 float MissionScript::worldTime() {
@@ -1095,6 +1127,10 @@ void MissionScript::applySkillEffects(const ObjectPtr& skill) {
         const Value* bonus = effect.field("BonusUpgradeList");
         if (bonus && !bonus->elements().empty()) notImplemented("level-up skill effect: the bonus upgrade list");
         const float amount = effectAmount(effect, grade);
+        if (pool == cooldownPool_) {      // the action-skill cooldown: the host keeps its current value, so the host applies the modifier (cooldownEffect)
+            cooldownEffect(effect, name, amount);
+            continue;
+        }
         Value* stored = runtime_.property(*pool, name);
         if (!stored) continue;
         float value = float(stored->number());
@@ -1147,6 +1183,26 @@ void MissionScript::weaponEffect(const ObjectPtr& skill, const Value& effect, co
         gain.duration = float(duration->number());
         levelUpEffects_.push_back(gain);
     }
+}
+
+// A skill effect on the action-skill cooldown pool's current value (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; the first level-up skill's second effect: Scale by the
+// pool's minimum, which is 0 for Maya). On a plain attribute the game applies it in place at once (NATIVE_ATTRIBUTES.md section 3); the cooldown's current value is
+// the host's, so the host gets one ActionSkillCooldown gain (modifier type and value) and applies it to what it keeps. Observed in game (COMBAT_GOLDEN_TRACE.md
+// section E, lane L3): ExpLevelUp(false) took the cooldown to 0 in the same call, at the maximum during a hold and at 7.99 during the drain.
+// The collection that carries it is OnLevelUp (data), which OnExpLevelChange runs for a not-natural level-up too: that the reset applies then is read from the
+// script and the data, UNVERIFIED (the trace shows natural level-ups only).
+void MissionScript::cooldownEffect(const Value& effect, const std::string& property, float amount) {
+    const Value* modifierType = effect.field("ModifierType");
+    const int type = modifierType ? int(modifierType->number()) : 0;      // MT_Scale 0, MT_PreAdd 1, MT_PostAdd 2
+    if (property != "CurrentValue" || type < 0 || type > 2) {
+        notImplemented("level-up skill effect: an action-skill cooldown attribute other than the current value");
+        return;
+    }
+    Gain gain;
+    gain.kind = Gain::Kind::ActionSkillCooldown;
+    gain.amount = type;
+    gain.scale = amount;
+    levelUpEffects_.push_back(gain);
 }
 
 void MissionScript::expEarn(int amount, int source, int type) {
