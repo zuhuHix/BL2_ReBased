@@ -348,3 +348,19 @@ after each of the two launches. With saves blocked from the first frame (the dri
 settings folder is unchanged, the driver was removed and the game was closed through its window (no kill). The run lock was taken at
 01:48:59 and released by this lane after the session; this lane spawned nothing (the lent pistol is the game's own) and the Fire offer, the XP and the weapon exist only in
 the closed process.
+
+## Combat golden trace (lane L3, 2026-10-07)
+
+AI-assisted (Claude), lane L3. A fourth capture session, with the same tool and safety rules as lanes L1 and L2. The level-8 Maya was taken to
+Three Horns Divide (`Ice_P`) by the game's own `WillowGameInfo.InitiateTravel` and fought bullymongs with real mouse shots and one real
+Phaselock cast. The full record is [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md), and the new command script is
+`scripts/combat_probe.py`. Observed:
+- the per-pellet hit chain and the AI death order;
+- kill experience awards and pool credits;
+- drop pools and pickups;
+- the shield taking hits first, then its recharge;
+- down, bleed-out, death and respawn, with the 7 percent fee charged 11.8 s after arrival;
+- second wind.
+Also observed: **a level-up resets the action-skill cooldown to 0 in the same call** (at the cooldown's maximum and during the drain). The 4 s
+shield boost and the 30 s weapon-damage scale were seen again. All 60 hashed files (saves, config, the SDK settings, Sanity Saver's private
+backups) match after the session. The one file the Sanity Saver mod rewrote at load was restored from the backup.
