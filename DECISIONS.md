@@ -5024,3 +5024,12 @@ evaluates the health pool's base maximum (the data's `Init_PlayerHealth`, 80 x 1
 240.323) but does not yet adopt them, because `UOpenWillowSkills` has no points counter or health setter. Not modelled: the class's `OnLevelUp`
 health refill, respec, playthroughs above 1, DLC skill-point definitions. Checks: ctest 11/11, verify_packages 9/9, UE build succeeded, quest
 suite 98/98 + resume 11/11 (was 96 + 11), door suite 16/16, no new stubs. Verified: automated suites only.
+
+## 2026-10-07: REA MCP server installed as an analysis front end over Ghidra (maintainer request)
+
+AI-assisted (Claude). At the maintainer's request, `rea-agents` 4.1.0 (MIT, https://github.com/morluto/rea) is installed globally with npm,
+outside the repository, and registered as an MCP server for Claude Code with the existing Ghidra 12.1.4 and Temurin JDK 21. Its doctor check
+reports the Ghidra provider available; Hopper and IDA are not configured. Provenance and the package integrity hash are in THIRD_PARTY.md. The
+clean-room rules for Ghidra apply unchanged to REA: no REA output enters the repository, and notes are written in our own words. Also recorded:
+the maintainer prefers reading data and observable behaviour from the live game through the SDK (the approach of their BL2_RTSE mod) over
+package decoding or disassembly where the answer is observable at runtime.
