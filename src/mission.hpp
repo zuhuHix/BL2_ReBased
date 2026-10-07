@@ -94,6 +94,9 @@ public:
     void playTurnIn();
     // Behavior_TriggerDialogEvent's dialog (NATIVE_DIALOG.md): the host sets a line player or a test line length, registers its talkers.
     DialogSystem& dialog() { return dialog_; }
+    // A named Kismet variable of the mission's provider (the mission behaviors' BVAR_NamedKismetVariable links, e.g. TargetDummy) bound to a world object;
+    // None clears it. See BehaviorProvider::bindKismetVariable. No effect when the mission has no provider.
+    void bindKismetVariable(const std::string& name, ObjectPtr object);
     // The MissionDefinition object the script functions take as their Mission argument.
     ObjectPtr definition() const { return definition_; }
     // Script hooks of the bridge (src/mission_script.*): the native status routine calls UpdateMissionStatus on the local

@@ -114,8 +114,13 @@ public:
     // own object (NATIVE_BEHAVIOR_POPULATION.md G2, UNVERIFIED). An empty list means the behavior does not run.
     std::vector<ObjectPtr> contexts(const Behavior& behavior, ObjectPtr own) const;
     // The objects a variable link resolves to (a named-variable reference to the first same-named non-reference variable; an object variable
-    // contributes its live object when it has one).
+    // contributes its live object when it has one; a named Kismet variable reference contributes the object bound to that name, if any).
     std::vector<ObjectPtr> linkedObjects(const Behavior& behavior, const VariableLink& link) const;
+    // A named Kismet variable (BVAR_NamedKismetVariable) is the level sequence's own object variable of that name, which the kernel reads at the time a
+    // behavior is applied. Kismet is not part of the provider, so the owner of the world binds the object here (the slice binds TargetDummy to the pawn when
+    // the populate event has written it, as the live game does); None clears the name. An unbound name resolves to no object (UNVERIFIED: the live record
+    // shows an application with the variable still empty is dropped: docs/verification/FIRE_MISSION_GOLDEN_TRACE.md, lane L4).
+    void bindKismetVariable(const std::string& name, ObjectPtr object);
     // The provider definition object (the Outer of its behaviors), and whether registerConsumer ran.
     ObjectPtr definition() const { return definition_; }
     bool registered() const { return registered_; }
@@ -167,6 +172,7 @@ private:
     std::string path_;
     std::vector<Sequence> sequences_;
     std::unordered_map<std::string, Handler> handlers_;
+    std::map<std::string, ObjectPtr> kismet_;          // bindKismetVariable
     std::vector<Thread> waiting_;                      // threads not due yet (delayed links, capped threads)
     double now_ = 0;
     uint64_t order_ = 0;

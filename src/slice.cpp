@@ -25,6 +25,7 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     const int32_t index = runtime.findExport(*package, dummyProviderPath);
     if (index <= 0) throw RuntimeError("dummy behavior provider not found: " + dummyProviderPath);
     dummy_ = std::make_unique<BehaviorProvider>(runtime, package, index);
+    dummyPackage_ = package;
     // The stock GoToRange waypoint (placed in the same level package), if the package has it.
     script_->placeWaypoint(package, "TheWorld.PersistentLevel.WillowWaypoint_9");
     // Marcus, the mission director: the stock archetype with his own directive table (NATIVE_USE_INTERACTION.md); the placed pawn is an instance of it.
@@ -309,9 +310,25 @@ bool FireMissionSlice::spawnDummy() {
         notifyDepth_ = 0;
         applyConditions();                    // the LevelLoad verdict
     }
+    placeDummyPawn();
     dummy_->fireEvent("OnSpawned");
+    // The level's SeqEvent_PopulatedActor writes the pawn into the Kismet object variable TargetDummy after the pawn's own spawn behaviors (observed live:
+    // lane L4, the same frame as the first dialog behavior's resumed run, which comes before both).
+    mission_->bindKismetVariable("TargetDummy", dummyPawn_);
     pump();
     return true;
+}
+
+// The pawn object the VM holds for the dummy: the stock archetype, registered as a dialog talker under the dialog name of its body class (the live line 03a
+// is spoken by the dummy). Made once. The data without the archetype gives no pawn: nothing is bound then and nothing speaks.
+void FireMissionSlice::placeDummyPawn() {
+    if (dummyPawn_) return;
+    const int32_t index = runtime_.findExport(*dummyPackage_, "GD_TargetDummy.Character.Pawn_TargetDummy");
+    if (index <= 0) return;
+    dummyPawn_ = runtime_.instantiateExport(dummyPackage_, index, 4);
+    const Value* body = runtime_.property(*dummyPawn_, "BodyClass");
+    const auto dialog = mission_->dialog().pawnDialog(body ? *body : Value());
+    if (!dialog.nameTag.empty()) mission_->dialog().registerTalker(dialog.nameTag, dummyPawn_);
 }
 
 bool FireMissionSlice::hitDummy(bool fireDamage) {

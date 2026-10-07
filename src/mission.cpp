@@ -211,6 +211,10 @@ bool MissionSystem::setStatus(Status status) {
     return true;
 }
 
+void MissionSystem::bindKismetVariable(const std::string& name, ObjectPtr object) {
+    if (impl_->provider) impl_->provider->bindKismetVariable(name, std::move(object));
+}
+
 void MissionSystem::fireEvent(const std::string& name, int linkId) {
     if (impl_->provider) impl_->provider->fireEvent(name, {}, linkId);
 }

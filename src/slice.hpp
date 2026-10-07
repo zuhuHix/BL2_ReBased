@@ -75,7 +75,11 @@ public:
     // already inside (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED).
     void touchWaypoint(bool player, bool begin);
     // OnSpawned on the dummy: call when the host spawns it (the stock spawn is a population den tied to the Fire
-    // objective; not decoded here). With FireDamage enabled it emits RocksPaper_MoveTargetForward.
+    // objective; not decoded here). With FireDamage enabled it emits RocksPaper_MoveTargetForward. The pawn the VM holds for the dummy (the stock archetype
+    // GD_TargetDummy.Character.Pawn_TargetDummy) becomes a talker under its body class's dialog name tag, and, after the dummy's own spawn behaviors, the
+    // value of the mission's named Kismet variable TargetDummy (what the level's SeqEvent_PopulatedActor writes live): the mission behaviors linked to
+    // that variable (Behavior_TriggerDialogEvent_1184, the Targetable switch) then run on the dummy. Until this call the variable is empty, and a behavior
+    // applied then does not run (NATIVE_BEHAVIOR_CONTEXT.md; the live order and the empty-variable rule are in FIRE_MISSION_GOLDEN_TRACE.md, lane L4).
     bool spawnDummy();
     // OnTakeDamage on the dummy. `damageTypePath` is the stock object path of the damage type the host dealt (e.g.
     // "GD_Incendiary.DamageType.DmgType_Incendiary_Impact"); "" for None. It and `damageSourcePath` are written to the
@@ -119,6 +123,8 @@ private:
     std::unique_ptr<MissionSystem> mission_;
     std::unique_ptr<MissionScript> script_;
     std::unique_ptr<BehaviorProvider> dummy_;
+    std::shared_ptr<const Package> dummyPackage_;
+    ObjectPtr dummyPawn_;                    // the VM's pawn for the dummy, made at its first spawn (null when the data has no archetype)
     std::vector<HostEvent> events_;
     std::set<std::string> completedMissions_;
     std::string dummyName_;
@@ -132,6 +138,7 @@ private:
     void applyConditions();
     bool dummyRegistered_ = false;           // the dummy has been spawned: its provider is a consumer and its conditions observe the mission
     int notifyDepth_ = 0;
+    void placeDummyPawn();
     void changeSequence(const std::string& sequence, const std::string& action);
 };
 

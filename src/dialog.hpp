@@ -46,8 +46,12 @@ public:
     void setLinePlayer(std::function<bool(const Line&)> start) { player_ = std::move(start); testLength_ = -1; }
     void setTestLineLength(double seconds);
     void lineEnded(int lineId);
-    // A pawn that can talk (its name tag, e.g. "GD_Dialog_NPC.Names.DialogName_Marcus"); without one the talker is an echo caller.
-    void registerTalker(const std::string& nameTagPath);
+    // A pawn that can talk (its name tag, e.g. "GD_Dialog_NPC.Names.DialogName_Marcus"); without one the talker is an echo caller. With `actor` the talker
+    // is that object: a Behavior_TriggerDialogEvent whose context object is it speaks as its instigator (a talker registered earlier under the same
+    // name tag and without an actor takes the actor).
+    void registerTalker(const std::string& nameTagPath, ObjectPtr actor = nullptr);
+    // The behaviors that were applied to an empty context list and so did not run (NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED), by behavior name, in order.
+    const std::vector<std::string>& notRun() const { return notRun_; }
     // WillowPawn.GetDialogGroups and the lazily filled dialog name tag (NATIVE_DIALOG_GROUPS.md, UNVERIFIED), recomputed on every call from a pawn's body
     // class: no body class gives an empty list and no name tag; else the body class's DialogGroups, then, only when its bNPCDialog is set, the name tag's
     // DlcExpansion.NPCDialogGroups (if any) and the dialog globals' NPCDialogGroups, then (always, when the globals exist) the globals' DefaultTemplateGroup
@@ -84,7 +88,10 @@ private:
     struct TalkEntry { std::string nameTag, akEvent; };
     // noMatch: bEnableNoMatch; noMatchNode: the node on output 1 (a Trigger act), an object reference (None when not linked).
     struct Act { std::string path; std::vector<TalkEntry> talk; double outputDelay = 0; bool instigatorTalker = false, noMatch = false; Value noMatchNode; };
-    struct Talker { std::string nameTag; bool echo = false; int liveData = -1; int liveIndex = 0; std::vector<Value> groups; };
+    struct Talker { std::string nameTag; bool echo = false; int liveData = -1; int liveIndex = 0; std::vector<Value> groups; ObjectPtr actor; };
+    // What a Behavior_TriggerDialogEvent application keeps from its first run to its resumed runs (the kernel's per-thread state): the event data it
+    // triggered and the talker of its context object (-1: the context is the mission, which is no actor).
+    struct BehaviorState { Handle handle; int instigator = -1; };
     struct Tag { std::string path; bool echo = false, noOverrideSame = false, groupEvent = false, soundEffect = false, oncePerSession = false, multiplayerOnly = false; int priority = 0; };
 
     Runtime& runtime_;
@@ -98,6 +105,7 @@ private:
     std::map<std::string, int> groupIndex_;          // root group path -> effective priority index of its current event
     std::map<std::string, ObjectPtr> loaded_;
     ObjectPtr globals_;                              // the dialog globals object (null when the package has none)
+    std::vector<std::string> notRun_;                // see notRun()
     std::vector<std::string> search_;                // see lastSearch()
     std::set<std::string> played_;                   // bOncePerSession tags already played
     std::vector<std::string> priorities_;

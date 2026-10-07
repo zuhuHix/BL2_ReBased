@@ -349,16 +349,24 @@ std::vector<ObjectPtr> BehaviorProvider::linkedObjects(const Behavior& behavior,
     std::vector<ObjectPtr> result;
     for (const int index : link.variables) {
         const Variable* variable = &variables[size_t(index)];
-        if (variable->type == "BVAR_NamedVariable" || variable->type == "BVAR_NamedKismetVariable") {
+        if (variable->type == "BVAR_NamedKismetVariable") {      // the level sequence's variable of that name, bound by the owner of the world
+            const auto bound = kismet_.find(variable->name);
+            if (bound != kismet_.end() && bound->second) result.push_back(bound->second);
+            continue;
+        }
+        if (variable->type == "BVAR_NamedVariable") {
             const std::string name = variable->name;
             variable = nullptr;
-            if (variables[size_t(index)].type == "BVAR_NamedVariable")      // a Kismet reference is not resolved here
-                for (const auto& candidate : variables)
-                    if (candidate.name == name && candidate.type != "BVAR_NamedVariable" && candidate.type != "BVAR_NamedKismetVariable") { variable = &candidate; break; }
+            for (const auto& candidate : variables)
+                if (candidate.name == name && candidate.type != "BVAR_NamedVariable" && candidate.type != "BVAR_NamedKismetVariable") { variable = &candidate; break; }
         }
         if (variable && variable->type == "BVAR_Object" && variable->live) result.push_back(variable->live);
     }
     return result;
+}
+
+void BehaviorProvider::bindKismetVariable(const std::string& name, ObjectPtr object) {
+    if (object) kismet_[name] = std::move(object); else kismet_.erase(name);
 }
 
 std::vector<ObjectPtr> BehaviorProvider::contexts(const Behavior& behavior, ObjectPtr own) const {

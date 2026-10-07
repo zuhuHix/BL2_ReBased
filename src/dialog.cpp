@@ -86,10 +86,15 @@ std::string DialogSystem::rootGroupOf(const Value& group) {
 
 void DialogSystem::setTestLineLength(double seconds) { testLength_ = seconds; player_ = nullptr; }
 
-void DialogSystem::registerTalker(const std::string& nameTagPath) {
-    for (const auto& talker : talkers_) if (!talker.echo && talker.nameTag == nameTagPath) return;
+void DialogSystem::registerTalker(const std::string& nameTagPath, ObjectPtr actor) {
+    for (auto& talker : talkers_) {
+        if (talker.echo || talker.nameTag != nameTagPath) continue;
+        if (actor && !talker.actor) talker.actor = std::move(actor);
+        return;
+    }
     Talker talker;
     talker.nameTag = nameTagPath;
+    talker.actor = std::move(actor);
     talkers_.push_back(talker);
 }
 
@@ -450,13 +455,30 @@ std::vector<int> DialogSystem::behavior(BehaviorProvider& provider, BehaviorProv
     const Value* group = r.property(*behavior.object, "Group");
     const bool immediate = flag(r.property(*behavior.object, "bForcePlayImmediate"));
     std::vector<int> ids;
+    if (run.initialRun) {
+        // The application: the objects the kernel resolves for the behavior's Context link (the mission itself, a null entry, when it has none). An empty
+        // list means the behavior does not run: no Out, no Finished, no wait (the kernel still follows its default link when it supports one).
+        // NATIVE_BEHAVIOR_CONTEXT.md (UNVERIFIED); a named Kismet variable that is still unset gives this (the live skipper-on run, lane L4).
+        const auto contexts = provider.contexts(behavior, nullptr);
+        if (contexts.empty()) { notRun_.push_back(behavior.name); return ids; }
+        auto fresh = std::make_shared<BehaviorState>();
+        for (size_t i = 0; i < talkers_.size() && contexts.front(); ++i)
+            if (talkers_[i].actor == contexts.front()) fresh->instigator = int(i);
+        run.state = fresh;
+    }
+    const auto state = run.state ? std::static_pointer_cast<BehaviorState>(run.state) : std::make_shared<BehaviorState>();
     if (tag && tag->o) {
         if (run.initialRun && !immediate) {
             run.wait = 0.001;                            // latent for one kernel wake; Out is selected below
         } else {
-            Handle handle;
-            if (run.state) handle = *static_cast<Handle*>(run.state.get());
-            if (handle.index < 0 || immediate) { handle = trigger(group ? *group : Value(), *tag); run.state = std::make_shared<Handle>(handle); }
+            Handle& handle = state->handle;
+            if (handle.index < 0 || immediate) {
+                const int savedInstigator = instigator_;
+                instigator_ = state->instigator;         // TriggerGroupEvent: Instigator := the behavior's context object
+                handle = trigger(group ? *group : Value(), *tag);
+                instigator_ = savedInstigator;
+                run.state = state;
+            }
             if (handle.index < 0 || !active(handle) || immediate || !run.hasLinkedOutputs) ids.push_back(1);   // Finished
             else run.wait = 0.1;                         // poll while the line is live
             if (immediate) run.state.reset();
