@@ -850,9 +850,31 @@ Value Runtime::call(Function& function, ObjectPtr self, std::vector<Value> args,
         if (function.params[i].isOut()) arg.alias = &args[i];   // out parameters write back into `args`
         bound.push_back(std::move(arg));
     }
+    struct ActiveGuard {
+        Runtime& rt;
+        Interp* previous;
+        ActiveGuard(Runtime& runtime, Interp* now) : rt(runtime), previous(runtime.activeInterp_) { rt.activeInterp_ = now; }
+        ~ActiveGuard() { rt.activeInterp_ = previous; }
+    } active(*this, &interp);
     Value result = interp.invoke(function, self, std::move(bound));
     if (outs) *outs = std::move(args);
     return result;
+}
+
+Value Runtime::callFromNative(Function& function, ObjectPtr self, std::vector<Value> args) {
+    if (!activeInterp_) return call(function, std::move(self), std::move(args));
+    if (args.size() > function.params.size()) throw RuntimeError("too many arguments for " + function.path);
+    const size_t given = args.size();
+    args.resize(function.params.size());
+    std::vector<NativeCall::Arg> bound;
+    for (size_t i = 0; i < args.size(); ++i) {
+        NativeCall::Arg arg;
+        arg.supplied = i < given;
+        if (arg.supplied) arg.value = args[i];
+        if (function.params[i].isOut()) arg.alias = &args[i];
+        bound.push_back(std::move(arg));
+    }
+    return activeInterp_->invoke(function, self, std::move(bound));
 }
 
 Value Runtime::callByName(ObjectPtr self, const std::string& name, std::vector<Value> args) {

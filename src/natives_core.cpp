@@ -456,13 +456,52 @@ void Runtime::registerCoreNatives() {
         const Class* b = c.in(1).cls;
         return Value::makeBool(a && b && a->isChildOf(b));
     });
+    // GotoState(NewState, Label, bForceEvents, bKeepStack) (parameter order read from the Core package). The state name is tracked so
+    // state-specific function overrides are selected, and the state events run in the public UE3 order (UNVERIFIED against the game):
+    // when the state changes, or bForceEvents is set, EndState(new state) runs on the old state, then the name is set, then
+    // BeginState(old state) runs on the new one. A state name that no class of the chain declares only sets the name (the old
+    // behaviour, logged). Latent state code (labels, Sleep, FinishAnim) is NOT run: a Label argument is logged and ignored, and
+    // bKeepStack (the state stack) is ignored.
     reg("Object.GotoState(name,name,bool,bool)", [](NativeCall& c) {
-        // Latent state code is not run yet (UNVERIFIED); the state name is tracked so state-specific
-        // function overrides are selected.
-        if (c.self && c.has(0)) {
-            const std::string state = c.in(0).s;
-            c.self->state = lowered(state) == "none" ? std::string() : state;
+        if (!c.self || !c.has(0)) return Value();
+        Object& self = *c.self;
+        const std::string requested = c.in(0).s;
+        const bool toDefault = lowered(requested) == "none";
+        const std::string target = toDefault ? std::string() : requested;
+        const std::string previous = self.state;
+        const bool force = c.has(2) && c.in(2).truth();
+        if (c.has(1) && lowered(c.in(1).s) != "none")
+            c.runtime.log.push_back("GotoState: label " + c.in(1).s + " not run (latent state code is not run)");
+        if (lowered(previous) == lowered(target) && !force) return Value();
+        if (!toDefault) {
+            bool declared = false;
+            for (const Class* cursor = self.cls; cursor && !declared; cursor = cursor->super) declared = cursor->states.count(lowered(target)) != 0;
+            if (!declared) {
+                c.runtime.log.push_back("GotoState: state " + target + " is not declared on " + (self.cls ? self.cls->name : std::string("?")) + "; name set, no state events");
+                self.state = target;
+                return Value();
+            }
         }
+        // A GotoState inside an event is legitimate and finishes on its own; a chain this deep is a script that never settles.
+        constexpr unsigned MAX_NESTED_STATE_CHANGES = 8;
+        if (c.runtime.stateChangeDepth >= MAX_NESTED_STATE_CHANGES) {
+            c.runtime.log.push_back("GotoState: " + target + " abandoned, state events nested too deep");
+            return Value();
+        }
+        struct Nesting {
+            Runtime& runtime;
+            explicit Nesting(Runtime& r) : runtime(r) { ++runtime.stateChangeDepth; }
+            ~Nesting() { --runtime.stateChangeDepth; }
+        } nesting(c.runtime);
+        const auto nameOf = [](const std::string& state) { return Value::makeName(state.empty() ? "None" : state); };
+        // The old state's EndState (the state's own, else the class-level event Object declares empty).
+        if (Function* end = c.runtime.findMethod(self.cls, "EndState", previous))
+            c.runtime.callFromNative(*end, c.self, {nameOf(target)});
+        // The event itself changed state (a GotoState inside EndState): that change stands, this one is dropped.
+        if (self.state != previous) return Value();
+        self.state = target;
+        if (Function* begin = c.runtime.findMethod(self.cls, "BeginState", target))
+            c.runtime.callFromNative(*begin, c.self, {nameOf(previous)});
         return Value();
     });
     reg("Object.GetStateName()", [](NativeCall& c) {

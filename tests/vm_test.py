@@ -86,7 +86,7 @@ def build_package():
     p = Package()
     imp = {n: p.add_import('Class', n) for n in
            ('Class', 'Function', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty', 'ArrayProperty',
-            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty', 'ScriptStruct', 'StructProperty', 'ClassProperty', 'FloatAttributeProperty', 'IntAttributeProperty')}
+            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty', 'ScriptStruct', 'StructProperty', 'ClassProperty', 'FloatAttributeProperty', 'IntAttributeProperty', 'State')}
     none = p.fname('None')
 
     def prop(kind, owner, name, flags=0, dim=1, type_ref=None, tail=None):
@@ -477,6 +477,69 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
                  + tagged_attribute('RigSpeedBaseValue', 'FloatAttributeProperty', float_bytes(6.0)) + none)
     make_function(foo, 'AddSpeedMod', [('Int', 'Kind', 0), ('Float', 'Amount', 0)], add_mod(speed_stack), result=None, locals_=[('Object', 'M', 0)])
     make_function(foo, 'AddCapMod', [('Int', 'Kind', 0), ('Float', 'Amount', 0)], add_mod(cap_stack), result=None, locals_=[('Object', 'M', 0)])
+    # Object.GotoState state events (natives_core.cpp). Mach declares states A, B, C, D and Loop; every BeginState / EndState appends a
+    # marker to Trace and keeps its argument, so the order and the arguments of the events can be read back. Invented names throughout.
+    state_class = imp['State']
+    mach = class_ids['Mach'] = p.add_export(imp['Class'], 'Mach', w32(0) * 4, super_ref=obj)
+    trace = prop('StrProperty', mach, 'Trace')
+    end_arg = prop('NameProperty', mach, 'EndArg')
+    begin_arg = prop('NameProperty', mach, 'BeginArg')
+    goto = make_function(obj, 'GotoState', [('Name', 'NewState', CPF_OPT), ('Name', 'Label', CPF_OPT), ('Bool', 'bForceEvents', CPF_OPT),
+                                            ('Bool', 'bKeepStack', CPF_OPT)],
+                         None, flags=FUNC_NATIVE | FUNC_FINAL | FUNC_PUBLIC, native=113, result=None)['__self__']
+    def append_marker(a, text):                                      # Trace = Trace $ "text"
+        a.stmt(); a.raw(0x0F, 0x01); a.ref(trace)
+        call(a, 112, lambda: (a.raw(0x01), a.ref(trace)), lambda: (a.raw(0x1F), a.raw(*text.encode(), 0)))
+    def do_goto(a, state, label=None, force=False):                  # GotoState(state, label, force)
+        a.stmt(); a.raw(0x1C); a.ref(goto)
+        a.raw(0x21); a.i32(p.name(state)); a.i32(0)
+        if label: a.raw(0x21); a.i32(p.name(label)); a.i32(0)
+        else: a.raw(0x0B)
+        a.raw(0x27 if force else 0x28); a.raw(0x16)
+    def state_events(state, on_begin=None, on_end=None):
+        at = p.add_export(state_class, state, w32(0) * 4, outer=mach)
+        def begin(ids):
+            a = Asm(); append_marker(a, f'b{state};')
+            a.stmt(); a.raw(0x0F, 0x01); a.ref(begin_arg); local(a, ids, 'PreviousStateName')
+            if on_begin: on_begin(a)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        def end(ids):
+            a = Asm(); append_marker(a, f'e{state};')
+            a.stmt(); a.raw(0x0F, 0x01); a.ref(end_arg); local(a, ids, 'NextStateName')
+            if on_end: on_end(a)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        def where(ids):
+            a = Asm(); a.stmt(); a.raw(0x04, 0x1F); a.raw(*state.encode(), 0); a.end(); return a
+        make_function(at, 'BeginState', [('Name', 'PreviousStateName', 0)], begin, flags=FUNC_DEFINED | FUNC_PUBLIC, result=None)
+        make_function(at, 'EndState', [('Name', 'NextStateName', 0)], end, flags=FUNC_DEFINED | FUNC_PUBLIC, result=None)
+        make_function(at, 'Where', [], where, flags=FUNC_DEFINED | FUNC_PUBLIC, result='Str')
+    state_events('A')
+    state_events('B')
+    state_events('C', on_begin=lambda a: do_goto(a, 'A'))                      # a GotoState inside BeginState
+    fired = prop('BoolProperty', mach, 'Fired')
+    def redirect_once(a):                                                      # if (!Fired) { Fired = true; GotoState('B'); }
+        a.stmt(); a.raw(0x07); to_redirect = len(a.b); a.w(0); a.raw(0x2D, 0x01); a.ref(fired)   # JumpIfNot(BoolVariable(Fired))
+        a.stmt(); a.raw(0x06); to_end = len(a.b); a.w(0)
+        struct.pack_into('<H', a.b, to_redirect, a.here())
+        a.stmt(); a.raw(0x0F, 0x01); a.ref(fired); a.raw(0x27)
+        do_goto(a, 'B')
+        struct.pack_into('<H', a.b, to_end, a.here())
+    state_events('D', on_end=redirect_once)                                    # a GotoState inside EndState
+    state_events('Loop', on_begin=lambda a: do_goto(a, 'Loop', force=True))    # never settles: the nesting bound stops it
+    def where_default(ids):
+        a = Asm(); a.stmt(); a.raw(0x04, 0x1F); a.raw(*b'-', 0); a.end(); return a
+    make_function(mach, 'Where', [], where_default, result='Str')
+    for name, args in (('GoA', ('A',)), ('GoB', ('B',)), ('GoC', ('C',)), ('GoD', ('D',)), ('GoLoop', ('Loop',)), ('GoNone', ('None',)),
+                       ('GoMissing', ('Nope',)), ('GoABegin', ('A', 'Begin')), ('GoAForce', ('A', None, True)), ('GoBForce', ('B', None, True))):
+        def build(ids, args=args):
+            a = Asm(); do_goto(a, *args); a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        make_function(mach, name, [], build, result=None)
+    def call_where(ids):
+        a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x1B); a.i32(p.name('Where')); a.i32(0); a.raw(0x16); a.end(); return a
+    make_function(mach, 'CallWhere', [], call_where, result='Str')
+    make_function(mach, 'ReadTrace', [], instance_read(trace), result='Str')
+    make_function(mach, 'ReadEndArg', [], instance_read(end_arg), result='Name')
+    make_function(mach, 'ReadBeginArg', [], instance_read(begin_arg), result='Name')
     if interfaces:
         # Interface table fixture (all names and shapes invented). IThing and IThingChild declare no function, so the old structural
         # rule could never say yes for them. Impl names IThing (with a VfTable_ StructProperty child), Derived inherits it, ChildImpl names
@@ -616,6 +679,68 @@ run Core.Rig.ReadRigSpeedBase $rig
     # A None context logs the error and changes nothing; the right side is still evaluated.
     none = run(root, 'Core.Foo.SetSpeedOn', 'f:4', self_class='Core.Foo')
     assert any('Attempt to assign attribute through None' in line for line in none['log']), none
+    # Object.GotoState state events: EndState(new state) on the old state, the name is set, BeginState(old state) on the new one; the same
+    # state runs nothing unless bForceEvents; a GotoState inside an event nests; one inside EndState replaces the outer change; an undeclared
+    # state only sets the name; a Label is logged and not run (latent code is not run). One object per scenario.
+    states = root / 'states.txt'
+    states.write_text("""new m Core.Mach
+run Core.Mach.CallWhere $m
+run Core.Mach.GoA $m
+run Core.Mach.CallWhere $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.ReadBeginArg $m
+run Core.Mach.GoA $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.GoB $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.ReadEndArg $m
+run Core.Mach.ReadBeginArg $m
+run Core.Mach.GoBForce $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.GoNone $m
+run Core.Mach.CallWhere $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.ReadEndArg $m
+run Core.Mach.GoMissing $m
+run Core.Mach.ReadTrace $m
+new n Core.Mach
+run Core.Mach.GoC $n
+run Core.Mach.CallWhere $n
+run Core.Mach.ReadTrace $n
+run Core.Mach.ReadBeginArg $n
+new d Core.Mach
+run Core.Mach.GoD $d
+run Core.Mach.GoA $d
+run Core.Mach.CallWhere $d
+run Core.Mach.ReadTrace $d
+run Core.Mach.ReadEndArg $d
+run Core.Mach.ReadBeginArg $d
+new q Core.Mach
+run Core.Mach.GoLoop $q
+run Core.Mach.ReadTrace $q
+new l Core.Mach
+run Core.Mach.GoABegin $l
+run Core.Mach.ReadTrace $l
+""", encoding='utf-8')
+    done = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(states), '--cooked', str(root), '--no-static'],
+                          capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    entries = json.loads(done.stdout)['entries']
+    assert all(entry['status'] == 'completed' for entry in entries), entries
+    results = [entry.get('result') for entry in entries]
+    assert results[0] == '"-"', results                                   # the class-level Where: no state yet
+    assert [results[i] for i in (2, 3, 4, 6)] == ['"A"', '"bA;"', "'None'", '"bA;"'], results   # BeginState ran (previous None), EndState did not; same state: no events
+    assert [results[i] for i in (8, 9, 10)] == ['"bA;eA;bB;"', "'B'", "'A'"], results             # A -> B: EndState(B), then BeginState(A)
+    assert results[12] == '"bA;eA;bB;eB;bB;"', results                     # bForceEvents: both events although the state stays B
+    assert [results[i] for i in (14, 15, 16)] == ['"-"', '"bA;eA;bB;eB;bB;eB;"', "'None'"], results   # to None: EndState(None) only, the default Where answers again
+    assert results[18] == results[15], results                             # an undeclared state sets the name and runs no event
+    assert [results[i] for i in (20, 21, 22)] == ['"A"', '"bC;eC;bA;"', "'C'"], results          # BeginState(C) went to A: C ended once, A began
+    assert [results[i] for i in (25, 26, 27, 28)] == ['"B"', '"bD;eD;eD;bB;"', "'B'", "'D'"], results   # the redirect in EndState wins over the outer change
+    assert results[30] == '"bLoop;' + 'eLoop;bLoop;' * 7 + '"', results     # nesting bound: 8 levels run, the 9th is abandoned
+    assert results[32] == '"bA;"', results
+    assert any('state Nope is not declared on Mach' in line for line in run(root, 'Core.Mach.GoMissing', self_class='Core.Mach')['log'])
+    assert any('GotoState: Loop abandoned' in line for line in run(root, 'Core.Mach.GoLoop', self_class='Core.Mach')['log'])
+    assert any('label Begin not run' in line for line in run(root, 'Core.Mach.GoABegin', self_class='Core.Mach')['log'])
     # Native census (--native-census): per-entry call counters (implemented natives, logged stubs, script functions,
     # Context on None) plus the static closure, all on the synthetic package.
     entries = root / 'census.txt'

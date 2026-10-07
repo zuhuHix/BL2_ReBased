@@ -26,6 +26,7 @@ struct Class;
 struct Object;
 struct Function;
 struct Aggregate;
+struct Interp;
 class Runtime;
 using ObjectPtr = std::shared_ptr<Object>;
 
@@ -275,6 +276,11 @@ public:
     // `outs`, when given, receives every argument as it stands after the call (out parameters updated).
     Value call(Function& function, ObjectPtr self, std::vector<Value> args = {}, std::vector<Value>* outs = nullptr);
     Value callByName(ObjectPtr self, const std::string& name, std::vector<Value> args = {});
+    // Calls a script function from inside a native implementation. It runs on the interpreter that is executing the native, so the call
+    // depth and the step budget are shared with the script that made the native call (Runtime::call starts a new interpreter and a
+    // new step count). Outside a running script it is the same as call().
+    Value callFromNative(Function& function, ObjectPtr self, std::vector<Value> args = {});
+    unsigned stateChangeDepth = 0;      // nested Object.GotoState calls in progress (natives_core.cpp bounds it)
 
     // Native registry. Key: "Class.Name(type,type,...)", see Function::nativeKey.
     void registerNative(const std::string& key, NativeFn fn);
@@ -285,6 +291,7 @@ public:
 
 private:
     friend struct Interp;
+    Interp* activeInterp_ = nullptr;    // the interpreter inside Runtime::call, for callFromNative
     PackageStore& store_;
     std::map<std::string, std::unique_ptr<Class>> classes_;
     std::map<std::pair<const Package*, int32_t>, std::unique_ptr<Function>> functions_;
