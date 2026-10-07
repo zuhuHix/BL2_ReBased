@@ -867,6 +867,11 @@ void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_
         try {
             if (type == "IntProperty") value = Value::makeInt(tags.reader.i32());
             else if (type == "FloatProperty") value = Value::makeFloat(tags.floating());
+            // An attribute property's tag stores one plain 4-byte number, the same payload as the float or int tag (FITTED from the
+            // packages: every FloatAttributeProperty tag of a WillowPlayerController and a WillowPlayerPawn default object has size 4).
+            // Both the value property and its ...BaseValue companion are tagged, so both load; the modifier stack stays empty.
+            else if (type == "FloatAttributeProperty") value = Value::makeFloat(tags.floating());
+            else if (type == "IntAttributeProperty") value = Value::makeInt(tags.reader.i32());
             else if (type == "BoolProperty") value = Value::makeBool(boolean != 0);
             else if (type == "NameProperty") value = Value::makeName(tags.name());
             else if (type == "StrProperty") value = Value::makeString(tags.reader.string());

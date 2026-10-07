@@ -415,13 +415,13 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
     mod = p.add_export(imp['Class'], 'Mod', w32(0) * 4, super_ref=obj)
     mod_type = prop('ByteProperty', mod, 'Type')
     mod_value = prop('FloatProperty', mod, 'Value')
-    def attribute(name, kind):
+    def attribute(name, kind, owner=foo):
         first = len(p.exports) + 1                                   # stack's element property, then stack, base, value
         stack, base, value = first + 1, first + 2, first + 3
         prop('ObjectProperty', stack, name + 'ModifierStack_Element')
-        prop('ArrayProperty', foo, name + 'ModifierStack', type_ref=first)
-        prop(kind, foo, name + 'BaseValue', 1 << 62, tail=w32(0, value))
-        prop(kind, foo, name, 1 << 63, tail=w32(stack, base))
+        prop('ArrayProperty', owner, name + 'ModifierStack', type_ref=first)
+        prop(kind, owner, name + 'BaseValue', 1 << 62, tail=w32(0, value))
+        prop(kind, owner, name, 1 << 63, tail=w32(stack, base))
         return value, base, stack
     speed, speed_base, speed_stack = attribute('Speed', 'FloatAttributeProperty')
     cap, cap_base, cap_stack = attribute('Cap', 'IntAttributeProperty')
@@ -457,6 +457,24 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
             a.stmt(); a.raw(0x55, 0x01); a.ref(stack_ref); a.w(0); local(a, ids, 'M'); a.raw(0x16)              # stack.AddItem(M)
             a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
         return build
+    # Attribute properties in class defaults: Rig tags RigSpeed and its base as FloatAttributeProperty (a plain 4-byte float), RigCap and its
+    # base as IntAttributeProperty; RigPlus changes the speed pair only. Invented values; the layout is the one recovered from the packages.
+    rig = class_ids['Rig'] = p.add_export(imp['Class'], 'Rig', w32(0) * 4, super_ref=obj)
+    rig_speed, rig_speed_base, _ = attribute('RigSpeed', 'FloatAttributeProperty', rig)
+    rig_cap, rig_cap_base, _ = attribute('RigCap', 'IntAttributeProperty', rig)
+    rig_plus = class_ids['RigPlus'] = p.add_export(imp['Class'], 'RigPlus', w32(0) * 4, super_ref=rig)
+    make_function(rig, 'ReadRigSpeed', [], instance_read(rig_speed, 0x5E), result='Float')
+    make_function(rig, 'ReadRigSpeedBase', [], instance_read(rig_speed_base), result='Float')
+    make_function(rig, 'ReadRigCap', [], instance_read(rig_cap, 0x5E), result='Int')
+    make_function(rig, 'ReadRigCapBase', [], instance_read(rig_cap_base), result='Int')
+    make_function(rig, 'SetRigSpeed', [('Float', 'V', 0)], let_attribute(rig_speed, 'V', 'Float'), result=None)
+    def tagged_attribute(name, kind, packed): return p.fname(name) + p.fname(kind) + w32(4, 0) + packed
+    float_bytes = lambda v: struct.pack('<f', v)
+    p.add_export(rig, 'Default__Rig', w32(0) + tagged_attribute('RigSpeed', 'FloatAttributeProperty', float_bytes(2.5))
+                 + tagged_attribute('RigSpeedBaseValue', 'FloatAttributeProperty', float_bytes(2.5))
+                 + tagged_attribute('RigCap', 'IntAttributeProperty', w32(9)) + tagged_attribute('RigCapBaseValue', 'IntAttributeProperty', w32(9)) + none)
+    p.add_export(rig_plus, 'Default__RigPlus', w32(0) + tagged_attribute('RigSpeed', 'FloatAttributeProperty', float_bytes(6.0))
+                 + tagged_attribute('RigSpeedBaseValue', 'FloatAttributeProperty', float_bytes(6.0)) + none)
     make_function(foo, 'AddSpeedMod', [('Int', 'Kind', 0), ('Float', 'Amount', 0)], add_mod(speed_stack), result=None, locals_=[('Object', 'M', 0)])
     make_function(foo, 'AddCapMod', [('Int', 'Kind', 0), ('Float', 'Amount', 0)], add_mod(cap_stack), result=None, locals_=[('Object', 'M', 0)])
     if interfaces:
@@ -578,6 +596,23 @@ run Core.Foo.ReadCapBase $foo
     assert results[12:14] == ['8.25', '2'], results         # scale -1 joins the denominator: (2 + 5) * (1.5 / 2) + 3, through Context(Self)
     assert results[17:19] == ['13', '10'], results          # 10 * 1.25 + 0.9 = 13.4 truncated
     assert results[20:22] == ['-11', '-10'], results        # -12.5 + 0.9 = -11.6 truncates toward zero, not to -12
+    # Attribute properties in class defaults load as plain numbers: value and base, int and float, a subclass overriding its parent's.
+    for cls, speed_value in (('Core.Rig', '2.5'), ('Core.RigPlus', '6')):
+        for function, expected in (('ReadRigSpeed', speed_value), ('ReadRigSpeedBase', speed_value), ('ReadRigCap', '9'), ('ReadRigCapBase', '9')):
+            read = run(root, 'Core.Rig.' + function, self_class=cls)
+            assert read['result'] == expected, (cls, function, read)
+            assert not any('defaults: skipped' in line for line in read['log']), read
+    # A later 5F stores into the base loaded from the defaults and recomputes the value from it (stack empty): both become the new number.
+    rig_steps = root / 'rig.txt'
+    rig_steps.write_text("""new rig Core.RigPlus
+run Core.Rig.SetRigSpeed $rig f:3
+run Core.Rig.ReadRigSpeed $rig
+run Core.Rig.ReadRigSpeedBase $rig
+""", encoding='utf-8')
+    reset = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(rig_steps), '--cooked', str(root), '--no-static'],
+                           capture_output=True, text=True, encoding='utf-8')
+    assert reset.returncode == 0, (reset.stdout, reset.stderr)
+    assert [e.get('result') for e in json.loads(reset.stdout)['entries']][1:] == ['3', '3'], reset.stdout
     # A None context logs the error and changes nothing; the right side is still evaluated.
     none = run(root, 'Core.Foo.SetSpeedOn', 'f:4', self_class='Core.Foo')
     assert any('Attempt to assign attribute through None' in line for line in none['log']), none
