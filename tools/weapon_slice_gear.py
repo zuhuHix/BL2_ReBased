@@ -121,43 +121,6 @@ def pick_from_pool(package, values, pool, level, seed):
     return (weapons[0], tree) if weapons else (None, tree)
 
 
-REWARD_ID = 'slice_reward_roll'
-REWARD_NOTE = ('HOST STAND-IN, not stock: the mission RewardData carries only ExperienceRewardPercentage and '
-               'CreditRewardMultiplier 0, and PawnBalance_TargetDummy has no item pools, so nothing in the data drops '
-               'an item for this mission. This rolls the slice fallback list (loot.source) so the pickup path can be '
-               'exercised at turn-in. The seed is the first one >= 1 whose roll drops a weapon (most single rolls drop '
-               'nothing or money); the roll and part rules are seeded stand-ins for native code (UNVERIFIED).')
-
-
-def build_reward(args, package, localize):
-    """The turn-in loot stand-in: roll the fallback list from seed 1 up until a weapon drops; write its recipe."""
-    manifest_path = args.output / 'slice_manifest.json'
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    loot = manifest['loot']
-    tried = []
-    for seed in range(1, args.reward_seed_limit + 1):
-        drops = loot_pools.roll(loot, seed)
-        tried.append({'seed': seed, 'drops': [d['item'] for d in drops]})
-        weapons = [d for d in drops if package.classes.get(d['item'], '').endswith('WeaponBalanceDefinition')]
-        if weapons:
-            break
-    else:
-        raise SystemExit(f'no weapon in {args.reward_seed_limit} seeded rolls of {loot["source"]}')
-    drop = weapons[0]
-    # Parts use the roll seed too, so the reward is not a part-for-part copy of a pool-rolled slice gun.
-    recipe = build_recipe(package, drop['item'], seed, manifest['level'], localize, {
-        'kind': 'reward_roll', 'source': loot['source'], 'pool_chain': drop['chain'], 'roll_seed': seed,
-        'part_seed': seed, 'level': manifest['level'], 'level_rule': manifest['level_rule'], 'note': REWARD_NOTE})
-    path = args.output / f'{REWARD_ID}.json'
-    mesh = build_mesh(path, recipe, args.gestalt, args.gltf) if args.gestalt and args.gltf else 'not built'
-    path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
-    manifest['reward_roll'] = {'id': REWARD_ID, 'recipe': path.name, 'balance': recipe['balance'], 'name': recipe['name'],
-                               'type': recipe['type'], 'roll_seed': seed, 'seeds_tried': tried, 'mesh': mesh,
-                               'note': REWARD_NOTE}
-    manifest_path.write_text(json.dumps(manifest, indent=1), encoding='utf-8')
-    print(f"{REWARD_ID}: seed {seed} of {len(tried)} -> {recipe['name']} ({recipe['balance']}) via {' > '.join(drop['chain'])}; mesh {mesh}")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
@@ -167,9 +130,6 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'local/items/slice')
     parser.add_argument('--gestalt', type=Path, help='folder of <Type>.json gestalt part tables (optional meshes)')
     parser.add_argument('--gltf', type=Path, help='folder of GestaltDef_<Type>_GestaltSkeletalMesh.gltf (optional)')
-    parser.add_argument('--reward-only', action='store_true',
-                        help='only (re)build the turn-in loot stand-in (slice_reward_roll) from an existing slice_manifest.json')
-    parser.add_argument('--reward-seed-limit', type=int, default=200)
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to((ROOT / 'local').resolve()):
         parser.error('--output must stay under local/')
@@ -189,9 +149,6 @@ def main():
             files[name] = skill_stats.localization_for(args.game, name)
         return files[name].get((skill_stats.localization_key(path, package.classes), 'NoConstraintText'), default)
 
-    if args.reward_only:
-        build_reward(args, package, localize)
-        return
     values = loot_pools.Values(package)
     items = []
     recipe = build_recipe(package, MISSION_WEAPON, args.seed, args.level, localize, {

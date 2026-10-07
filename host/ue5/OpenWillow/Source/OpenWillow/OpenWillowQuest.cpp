@@ -126,10 +126,6 @@ void UOpenWillowQuest::BeginPlay()
             const FString OwnMesh = FString::Printf(TEXT("/Game/OpenWillow/Weapons/SliceItems/SK_%s.SK_%s"), *MissionWeapon.Id, *MissionWeapon.Id);
             MissionWeapon.MeshPath = FPackageName::DoesPackageExist(OwnMesh.Left(OwnMesh.Find(TEXT(".")))) ? OwnMesh : Impl->Data.PistolMesh;
         }
-        bHasReward = UOpenWillowInventory::FindRecipe(ItemDir, TEXT("reward_roll"), FString(), RewardItem);
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in: %s"), bHasReward
-            ? *FString::Printf(TEXT("%s \"%s\" (%s; host stand-in, the stock reward has no items)"), *RewardItem.Id, *RewardItem.Name, *RewardItem.Balance)
-            : TEXT("none prepared (tools/weapon_slice_gear.py --reward-only)"));
         FString GearText;
         TSharedPtr<FJsonObject> Gear;
         if (!FFileHelper::LoadFileToString(GearText, *FPaths::Combine(ItemDir, TEXT("slice_manifest.json")))
@@ -450,8 +446,7 @@ void UOpenWillowQuest::Pump()
         case K::Reward:
             ++Rewards;
             if (A != Impl->Data.XpRewardAttribute) { Fail(TEXT("reward attribute differs from world.json values.xp: ") + A); return; }
-            DropReward();
-            break;
+            break;      // experience only: the stock reward data has no item (GetItemRewardsForPlayer in the script path returns none)
         case K::Experience: ApplyScriptExperience(FCString::Atoi(*A)); break;   // what the script's ExpEarn put into the VM pool
         case K::Level: {
             // The pool update ran ExpLevelUp / OnExpLevelChange on the VM controller; the host's own level display follows from the
@@ -652,25 +647,6 @@ void UOpenWillowQuest::LendMissionWeapon()
     auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     bWeaponLent = Walker && Walker->LendWeapon(MissionWeapon);
     if (!bWeaponLent) UE_LOG(LogTemp, Error, TEXT("OWQUEST could not lend %s to Maya (backpack full or no walker)"), *MissionWeapon.Id);
-}
-
-void UOpenWillowQuest::DropReward()
-{
-    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
-    if (!bHasReward || !Walker) return;
-    // Host stand-in placement: on the floor 80 uu in front of the player.
-    const FVector Ahead = Walker->GetActorLocation() + FRotator(0, Walker->GetControlRotation().Yaw, 0).Vector() * 80.f;
-    FHitResult Floor;
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestReward), true, Walker);
-    const FVector At = GetWorld()->LineTraceSingleByChannel(Floor, Ahead, Ahead - FVector(0, 0, 400), ECC_Visibility, Query) ? Floor.ImpactPoint : Ahead;
-    FActorSpawnParameters Params;
-    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-    RewardPickup = GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(At, FRotator::ZeroRotator, Params);
-    if (!RewardPickup) return;
-    FOpenWillowTakenInventoryItem Item;
-    Item.Weapon = RewardItem;
-    RewardPickup->Initialize(Item);
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in dropped: %s \"%s\" at %s (press E to pick up)"), *RewardItem.Id, *RewardItem.Name, *At.ToString());
 }
 
 // The experience the script's ExpEarn put into the VM pool (MissionDefinition.GetExperienceReward: NATIVE_PROGRESSION section 2,
@@ -1189,6 +1165,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Gap > 0) Skills->AddExperience(Gap);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
         PointsBeforeReward = Skills->AvailablePoints();
+        BackpackBeforeReward = Walker->GetInventory()->BackpackCount();
         OnUseLinesBeforeTurnIn = OnUseLines;
         {   // Ready to turn in: the redeemable list offers it, the eligible list no longer does
             bool bRedeemable = false, bEligible = true;
@@ -1238,9 +1215,17 @@ void UOpenWillowQuest::RunTest(float Delta)
         Check(ScriptMaxHealth > 0.f && FMath::IsNearlyEqual(ScriptMaxHealth, Walker->GetMaxHealth(), 0.01f)
             && FMath::IsNearlyEqual(ScriptMaxHealth, Data.HealthForLevel(Skills->GetLevel()), 0.01f), TEXT("script_level_up_sets_max_health"));
         Check(HealthBeforeReward < MaxHealthBeforeReward && Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("level_up_refills_current_health"));
-        Check(bHasReward && RewardPickup && RewardPickup->DisplayName() == RewardItem.Name
-            && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) == INDEX_NONE, TEXT("turn_in_drops_loot_stand_in_pickup"));
-        PressUse();   // nothing left to turn in: the key falls through to the pickup
+        {
+            // Stock data: the Fire mission's reward is experience only. The script's GetItemRewardsForPlayer found no item (it would list a
+            // "not implemented" entry otherwise), and the host spawned no pickup and added nothing to the backpack.
+            TArray<AActor*> Pickups;
+            UGameplayStatics::GetAllActorsOfClass(GetWorld(), AOpenWillowInventoryPickup::StaticClass(), Pickups);
+            bool bItemRewardListed = false;
+            for (const auto& Stub : Impl->Slice->scriptStubs()) bItemRewardListed |= Stub.find("GetItemRewardsForPlayer") != std::string::npos;
+            Check(Rewards == 1 && !bItemRewardListed && Pickups.IsEmpty() && Walker->GetInventory()->BackpackCount() == BackpackBeforeReward,
+                TEXT("turn_in_gives_no_item_reward"));
+        }
+        PressUse();   // nothing left to turn in: the key reaches Marcus, who answers with his "no missions" line
         break;
     }
     case 19:
@@ -1248,8 +1233,6 @@ void UOpenWillowQuest::RunTest(float Delta)
         // the press after completion: nothing left, so "no missions" and Marcus's line for it
         Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_NoMissions") && OnUseLines == OnUseLinesBeforeTurnIn + 1
             && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_No_New"), TEXT("use_chain_plays_no_missions_line"));
-        Check(Walker->LastPickupAccepted() && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) != INDEX_NONE
-            && !IsValid(RewardPickup), TEXT("use_key_collects_loot_pickup_into_backpack"));
         PlacePlayer(Data.OracleDeathLocation, Data.DummyLocation);
         break;
     case 20: {

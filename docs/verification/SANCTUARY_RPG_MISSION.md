@@ -323,7 +323,7 @@ Route:
 4. Shoot it with a fire weapon. It rolls back and is removed.
 5. Press E at Marcus to turn in.
 
-Superseded for the player side by "Player side with stock data" below (lent stock pistol, XP, Phaselock, loot).
+Superseded for the player side by "Player side with stock data" below (lent stock pistol, XP, Phaselock).
 
 ## Player side with stock data (2026-10-01)
 
@@ -349,7 +349,7 @@ hand-play session are reported separately.
     not checked.
   - `MissionWeaponRemoved` takes it back and draws the weapon held before. A save made while it is lent re-lends it on
     the next launch (not exercised by the suite).
-  - Mission weapons and the loot stand-in are no longer loaded into the backpack at start.
+  - Mission weapons are no longer loaded into the backpack at start (the mission lends them).
 - **Damage type from the item.** A shot carries the held item's card `damage_type` path into the dummy's
   `OnTakeDamage` (`vm::FireMissionSlice::damageDummy`). The host fire-damage class `UOpenWillowFireDamageType` is
   removed. `DamageSource` is still passed empty: its stock value is not decoded.
@@ -403,13 +403,11 @@ hand-play session are reported separately.
   mission's `RewardData` tags only `ExperienceRewardPercentage` and `CreditRewardMultiplier` 0 (read with
   `--properties` on Startup export 24569). Two consequences:
   - The dummy does not drop anything.
-  - A **turn-in loot stand-in** sits behind the mission reward. `weapon_slice_gear.py --reward-only` rolls the slice
-    fallback list (`StandardEnemyGunsAndGear`) from seed 1 upward with the existing `loot_pools.roll` and keeps the
-    first seed whose roll drops a weapon. That is seed 31 of 31: Pool_GunsAndGear > Pool_Weapons_All > ..._01_Common
-    > Shotguns_01_Common > `SG_Bandit`, parts rolled with the same seed. Seeds 1-30 dropped nothing or money/eridium.
-  - The host drops that recipe as a pickup in front of the player at turn-in. The use key collects it: with nothing
-    to accept or turn in, E near Marcus is no longer consumed.
-  - This is a demonstration of the pickup path, **not stock behaviour**. The seed choice is deliberate and labelled.
+  - **The turn-in gives XP only, as the stock data says.** A turn-in loot stand-in used to sit behind the reward (`weapon_slice_gear.py
+    --reward-only` rolled `StandardEnemyGunsAndGear` to an `SG_Bandit` at seed 31 and the host dropped it as a pickup). **It was removed on
+    2026-10-07 by maintainer decision** ("that's not how missions are gonna look"): the tool flag, its recipe file and manifest key, the host's
+    spawn, and the two suite checks that picked it up are gone. The general pickup and backpack code stays (the lent pistol and the inventory
+    suite use it). The script's `GetItemRewardsForPlayer` returns no item for this mission and the host takes nothing from any other source.
 - **Pistol paint.** `prepare_weapon_paint.py` now accepts MIC chains with no pattern texture (as the thumbnail
   renderer already did) and a `--mesh` target. `Mati_MaliwanUncommon` -> `MasterMati_MaliwanUncommon` provides
   masks, the packed detail atlas (blue channel for pistols), the normal map and nine A/B/C zone colours.
@@ -417,7 +415,7 @@ hand-play session are reported separately.
   - Its `p_Decal` (`Pattern_MaliwanUncommon`, with `p_DecalScalePosition`/`p_DecalRotate`/`p_DecalChannel`) is not
     reproduced.
   - The Master_Gun graph is stripped, so the channel reading stays UNVERIFIED.
-  - The four pool-rolled slice guns and the loot stand-in have the grey stand-in material: their MICs have no local
+  - The four pool-rolled slice guns have the grey stand-in material: their MICs have no local
     UModel export.
 
 ### Automated checks (2026-10-01, CMake Release and UE module rebuilt first)
@@ -430,8 +428,7 @@ hand-play session are reported separately.
   `DmgType_Normal`), `lent_pistol_shot_carries_its_damage_type_to_dummy`,
   `incendiary_shot_completes_fire_objective_via_dummy_provider`, `mission_weapon_removed_after_objective`,
   `xp_amount_is_candidate_formula_at_mission_level` (396 = the tool's table), `xp_reward_levels_up_when_requirement_met`
-  (test fixture: experience topped up by 7,522 first; level 8 -> 9, points 4 -> 5), `turn_in_drops_loot_stand_in_pickup`,
-  `use_key_collects_loot_pickup_into_backpack`, `skill_point_buys_phaselock`, `phaselock_timelines_match_manifest_table`
+  (test fixture: experience topped up by 7,522 first; level 8 -> 9, points 4 -> 5), `skill_point_buys_phaselock`, `phaselock_timelines_match_manifest_table`
   (60 values, grades 0-5, first lock and re-lock; agreement between two readings of the same data, not a game check),
   `phaselock_miss_lifts_nothing_and_holds_skill`, `phaselock_miss_resets_cooldown_after_release_buffer`,
   `phaselock_hit_uses_manifest_timeline`, `phaselock_lifts_to_stock_height` (224 uu at 1.30 s, within 200 +- 30),
@@ -468,7 +465,7 @@ hand-play session are reported separately.
 
 The agent started a `run_quest.ps1 -Fresh` smoke window. A person then played it: sprint, reload, slot changes, accept
 at Marcus, the range touch, the dummy, one incendiary shot from the lent pistol completing Fire, the pistol taken back,
-turn-in, +396 XP (level 8 stays 8), and the loot stand-in picked up with E. Phaselock was not used in that session.
+turn-in, +396 XP (level 8 stays 8), and the loot stand-in picked up with E (the stand-in was removed on 2026-10-07). Phaselock was not used in that session.
 The agent then stopped that window about six minutes after the last input; the mission state had already been saved
 (`manual-save.json`, status Complete). This is the only hand-play evidence. It is not a game comparison.
 
@@ -478,7 +475,7 @@ The agent then stopped that window about six minutes after the last input; the m
 - The XP amount rule, the mission level, the experience and skill save, and health after a level-up.
 - `DamageSource`, the Incendiary status effect, the dummy's hit volume and health (20000).
 - Phaselock rows marked not done or partly above. Its sweep is a host stand-in.
-- Loot is a labelled stand-in. Ammo and money drops and pickups are not hosted.
+- The turn-in gives XP only (stock data; the loot stand-in was removed on 2026-10-07). Ammo and money drops and pickups are not hosted.
 - Paint: the decal, the Master_Gun lighting, and paint for the other slice guns.
 - Audio: unchanged (lookup only).
 - The inventory page's 3D preview still looks only in `Weapons/Items`, so slice guns show no preview mesh there.
@@ -1290,3 +1287,19 @@ and the HUD side of `ClientOnExpLevelChange` (no HUD). No stub is newly reached.
   The log lines: `OWQUEST script level-up skill points: VM awarded 1, host 1 (same)`, `OWQUEST script level-up max health: VM 240.323 at level 9, host 240.323 (same)`. Stubs unchanged
   at the points the suite logs them: 9 after accept, 15 after turn-in (the level-up runs in the next frame, after that line).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Turn-in loot stand-in removed (2026-10-07)
+
+Maintainer decision, AI-assisted (Claude), lane I4: "that's not how missions are gonna look". The stock data gives the Fire mission no item reward (`RewardData` has only
+`ExperienceRewardPercentage` and `CreditRewardMultiplier` 0; NATIVE_LOOT.md, `GetItemRewardPools` / `GetItemRewardsForPlayer`), so the turn-in is XP only.
+
+- **Removed:** `tools/weapon_slice_gear.py --reward-only` and `--reward-seed-limit` (`build_reward`, the `slice_reward_roll` recipe, mesh and the manifest's `reward_roll` key; the
+  rest of the tool, including the manifest's `loot` table and `build_mesh` used by `weapon_refresh_fragments.py`, is unchanged); in `OpenWillowQuest`: the `reward_roll` recipe lookup
+  at start, `RewardItem` / `bHasReward` / `RewardPickup` / `DropReward`, the pickup spawned by the `Reward` effect; in `OpenWillowInventory`: the `reward_roll` provenance skip in
+  `LoadRecipes` (only mission weapons are skipped now). The suite checks `turn_in_drops_loot_stand_in_pickup` and `use_key_collects_loot_pickup_into_backpack` are removed with it.
+- **Kept:** `AOpenWillowInventoryPickup`, the walker's pickup path and the backpack code (the lent mission pistol, the inventory suite). The press of E at the end of turn-in now reaches
+  Marcus (the "no missions" line, check `use_chain_plays_no_missions_line` unchanged).
+- **New check `turn_in_gives_no_item_reward`:** after the turn-in the reward counter is 1, the script's stub list has no `GetItemRewardsForPlayer` entry (that native lists a "not
+  implemented" entry for a non-empty item reward, so the script path found none), no `AOpenWillowInventoryPickup` exists in the world and the backpack count is unchanged.
+- **Local files:** `local/items/slice/slice_reward_roll.*` and the manifest key were deleted on this machine (ignored, regenerable otherwise); a copy elsewhere is harmless but
+  `host/ue5/import_slice_items.py` would still import a stale `slice_reward_roll.json` as an asset, so delete it there too.

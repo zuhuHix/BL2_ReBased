@@ -138,7 +138,7 @@ prototypes, so the repository's clock started a little after the work did.
   modelled.
 - The slice host stand-ins: kickoff played right after acceptance, dialog
   outputs selected together, a save-state fixture for the dependency mission, a
-  turn-in loot stand-in (stock data drops nothing for this mission), a lent
+  a lent
   mission weapon ([route record](docs/verification/SANCTUARY_RPG_MISSION.md)).
 
 **Blocked or open**
@@ -179,8 +179,8 @@ executors now follow the native dispatch notes (link-id filters, trigger limits,
 completion), all `UNVERIFIED`. Recorded checks (DECISIONS 2026-10-02): quest suite 73/73 and resume 10/10, door suite
 16/16, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9.
 All of it is host behaviour with labelled stand-ins (native auto-aim selection and constraint evaluation for
-Phaselock, a save-state fixture for the dependency mission, a turn-in loot stand-in because stock data drops
-nothing for this mission) and `UNVERIFIED` rules; nothing has been compared against the original game, and every
+Phaselock, a save-state fixture for the dependency mission; the turn-in loot stand-in was removed on 2026-10-07, the
+mission gives XP only as the stock data does) and `UNVERIFIED` rules; nothing has been compared against the original game, and every
 parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
 [the route record](docs/verification/SANCTUARY_RPG_MISSION.md) and
 [the dispatch notes](docs/verification/NATIVE_MISSION_DISPATCH.md).

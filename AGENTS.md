@@ -129,7 +129,7 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   damage type goes to the dummy's check, candidate XP into the skills component, Phaselock read from the manifest
   (lift rule, valid-target rule and cast gate from script and data), progression (level, XP, skill grades) in the quest
   save, health recomputed on level change, the dummy's Transform/RegisterTargetable behaviours and holder socket, and a
-  labelled turn-in loot stand-in (stock data drops no item for this mission). Recorded checks: quest suite 73/73 and
+  turn-in that gives XP only (the loot stand-in was removed on 2026-10-07: stock data drops no item for this mission). Recorded checks: quest suite 73/73 and
   resume 10/10, door suite 16/16, CTest 10/10, packages 9/9; inventory suite 47 PASS / 2 KNOWN_DIVERGENCE (sort order)
   on the fully seeded worktree, 45 PASS / 2 NOT_RUN / 2 KNOWN_DIVERGENCE on a regenerated one with a short backpack.
   This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive

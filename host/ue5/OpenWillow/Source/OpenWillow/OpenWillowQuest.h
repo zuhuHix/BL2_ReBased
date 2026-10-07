@@ -127,12 +127,6 @@ private:
     bool PhaselockTableMatchesManifest() const;
 
     FOpenWillowWeaponItem MissionWeapon;    // the lent recipe (identity, card stats, damage type, mesh path)
-    // Turn-in loot STAND-IN (not stock: the mission reward and the dummy carry no items), prepared by
-    // tools/weapon_slice_gear.py --reward-only; dropped as a pickup at turn-in when present.
-    FOpenWillowWeaponItem RewardItem;
-    bool bHasReward = false;
-    void DropReward();
-    UPROPERTY() TObjectPtr<class AOpenWillowInventoryPickup> RewardPickup;
     FString ItemDir;
     int32 GearLevel = 0;                // slice_manifest.json "level": the level the slice gear was rolled at
     // The mission's level: the GameStageRegion's stage, fixed per player and playthrough the first time it is asked
@@ -151,7 +145,7 @@ private:
     FString LastDummyDamageType;
     int32 DummyShots = 0;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
-    int32 PointsBeforeReward = 0;
+    int32 PointsBeforeReward = 0, BackpackBeforeReward = 0;
     float HealthBeforeReward = 0, MaxHealthBeforeReward = 0;
     float PhaselockCastSeen = 0;
     bool bLendPending = false;

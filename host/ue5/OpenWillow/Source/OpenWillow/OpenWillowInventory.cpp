@@ -200,9 +200,8 @@ int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
         FOpenWillowWeaponItem Item;
         FString Provenance;
         if (!ReadRecipe(FPaths::Combine(Directory, File), Item, &Provenance)) continue;
-        // tools/weapon_slice_gear.py provenance: a mission weapon is lent by its mission and the reward roll is dropped
-        // at turn-in; neither is carried from the start.
-        if (Provenance == TEXT("mission_weapon") || Provenance == TEXT("reward_roll")) continue;
+        // tools/weapon_slice_gear.py provenance: a mission weapon is lent by its mission, not carried from the start.
+        if (Provenance == TEXT("mission_weapon")) continue;
         if (!CanAddToBackpack())
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow inventory: backpack full (%d), skipped recipe %s"), BackpackCapacity, *ItemId);

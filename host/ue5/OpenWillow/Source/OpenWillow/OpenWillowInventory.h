@@ -148,8 +148,8 @@ public:
     // UNVERIFIED against a live BL2 run: expected base backpack and SDU cap.
     static constexpr int32 DefaultBackpackCapacity = 12;
     static constexpr int32 MaximumBackpackCapacity = 39;
-    // Loads every *.json recipe with stats under Directory; returns the count. Mission weapons and the turn-in loot
-    // stand-in are skipped: the quest lends or drops them (FindRecipe).
+    // Loads every *.json recipe with stats under Directory; returns the count. Mission weapons are skipped:
+    // the quest lends them (FindRecipe).
     int32 LoadRecipes(const FString& Directory);
     // One evaluated recipe file as an item; false when it is not one. OutProvenanceKind: the recipe's
     // provenance.kind ("mission_weapon", "pool_roll", or empty).

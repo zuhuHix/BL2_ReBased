@@ -90,7 +90,7 @@ Under the hood, the engine still reads all 2,008 packages from a full BL2 instal
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
-The door and the mission: a Sanctuary Matinee door opens from its installed Kismet events ([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)), and the Fire mission runs in the host on stock world data with labelled stand-ins (for example Phaselock targeting and a turn-in loot stand-in). Audio is looked up and logged, never played. See the [mission record](docs/verification/SANCTUARY_RPG_MISSION.md).
+The door and the mission: a Sanctuary Matinee door opens from its installed Kismet events ([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)), and the Fire mission runs in the host on stock world data with labelled stand-ins (for example Phaselock targeting; the turn-in gives XP only, as the stock data does). Audio is looked up and logged, never played. See the [mission record](docs/verification/SANCTUARY_RPG_MISSION.md).
 
 **Next up:** finishing Sanctuary's last visual gaps and comparing the host-run Fire mission slice (Maya, a lent pistol, Phaselock from stock data) against the original game, which has not been done yet. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
 
