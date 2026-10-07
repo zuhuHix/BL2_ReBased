@@ -37,7 +37,9 @@ public:
                           OnUseDialog,         // the on-use dialog's TriggerEvent: a = the global VO_NPC_OnUse_* tag path, b = the speaker (Marcus), c = the other object's class
                           SkillPoints,         // a = the unspent skill points the script's level-up awarded (the data's per-level formula; sent with a Level event, 0 included)
                           MaxHealth,           // a = the new maximum health (the VM health pool's effective maximum, rebased by RecalculateAttributeInitializedState)
-                          Health };            // a = current health, b = maximum health after the level-up (the OnLevelUp refill included; sent with MaxHealth)
+                          Health,              // a = current health, b = maximum health after the level-up (the OnLevelUp refill included; sent with MaxHealth)
+                          SequenceChange,      // a behavior (the mission's or the dummy's own) changed a sequence of the dummy's provider: a = provider, b = sequence, c = CHANGE_Enable / _Disable / _Toggle
+                          TurnInDialog };      // PlayMissionTurnedInDialog's TriggerEvent on Marcus's component: a = the global VO_NPC_MissionTurnedIn tag path, b = the speaker, c = the other object's class
         Kind kind;
         std::string a, b, c;
         std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)

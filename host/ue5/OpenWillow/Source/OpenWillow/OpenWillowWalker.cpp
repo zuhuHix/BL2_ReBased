@@ -633,32 +633,31 @@ bool AOpenWillowWalker::UnequipSlot(int32 Slot)
 }
 bool AOpenWillowWalker::LendWeapon(const FOpenWillowWeaponItem& Item)
 {
+    // The grant inside ActivateMission adds the weapon to the backpack and nothing more: observed in the real game (FIRE_MISSION_GOLDEN_TRACE.md, lane L2),
+    // AddInventory was called with bReady false and the weapon went to the backpack, not equipped; the player readied it from the inventory page before shooting.
+    // So it is not placed in a slot and not drawn here. Mission weapons are never saved (re-granted to the backpack on load). Level requirement: none.
     if (!Inventory || Inventory->FindItemIndexById(Item.Id) != INDEX_NONE || !Inventory->AddToBackpack(Item)) return false;
-    const int32 Index = Inventory->FindItemIndexById(Item.Id);
-    // Where the game puts a lent weapon is native (MissionTracker) and not observed. Host rule (UNVERIFIED): the first
-    // empty unlocked slot, else the last unlocked slot (its weapon goes back to the backpack); drawn at once. The
-    // level requirement is not checked for a lent weapon.
-    int32 Slot = Inventory->GetWeaponSlotsUnlocked() - 1;
-    for (int32 Candidate = 0; Candidate < Inventory->GetWeaponSlotsUnlocked(); ++Candidate)
-        if (!Inventory->SlotItem(Candidate)) { Slot = Candidate; break; }
-    PreLendSlot = Inventory->GetActiveSlot();
-    if (Index == INDEX_NONE || !Inventory->Equip(Index, Slot)) return false;
-    SelectSlot(Slot);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow lent weapon %s (%s, level %d, %.1f damage, %s) in slot %d"), *Item.Id, *Item.Name,
-        Item.Level, Item.Damage, *Item.DamageType, Slot + 1);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow lent weapon %s (%s, level %d, %.1f damage, %s) added to the backpack, not equipped"), *Item.Id, *Item.Name,
+        Item.Level, Item.Damage, *Item.DamageType);
     return true;
 }
 bool AOpenWillowWalker::ReturnLentWeapon(const FString& Id)
 {
+    // The removal takes the weapon out of the slots and the backpack alike (NATIVE_INVENTORY_EQUIP.md); the held weapon is replaced only when it was this one.
+    const FOpenWillowWeaponItem* Active = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    const bool bWasHeld = Active && UOpenWillowInventory::StableId(*Active) == Id;
     FOpenWillowTakenInventoryItem Taken;
     if (!TakeInventoryItemById(Id, Taken)) return false;
-    // Draw what was held before the lend, else the first equipped weapon (host rule, UNVERIFIED).
-    int32 Slot = Inventory->SlotItem(PreLendSlot) ? PreLendSlot : INDEX_NONE;
-    for (int32 Candidate = 0; Slot == INDEX_NONE && Candidate < UOpenWillowInventory::SlotCount; ++Candidate)
-        if (Inventory->SlotItem(Candidate)) Slot = Candidate;
-    if (Slot != INDEX_NONE) SelectSlot(Slot);
-    else Holster();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow returned lent weapon %s; holding slot %d"), *Id, Slot + 1);
+    int32 Slot = INDEX_NONE;
+    if (bWasHeld)
+    {
+        // Draw the first equipped weapon (host rule, UNVERIFIED: the game switches to the best remaining weapon).
+        for (int32 Candidate = 0; Slot == INDEX_NONE && Candidate < UOpenWillowInventory::SlotCount; ++Candidate)
+            if (Inventory->SlotItem(Candidate)) Slot = Candidate;
+        if (Slot != INDEX_NONE) SelectSlot(Slot);
+        else Holster();
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow returned lent weapon %s%s"), *Id, bWasHeld ? *FString::Printf(TEXT("; holding slot %d"), Slot + 1) : TEXT(" (it was not held)"));
     return true;
 }
 bool AOpenWillowWalker::DrawItemById(const FString& Id)

@@ -647,7 +647,7 @@ int main(int argc, char** argv) {
             for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
             std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
             bool first = true;
-            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated"};
+            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated", "turn_in_dialog"};
             const auto object = [&](const std::string& path) {      // an object of the mission's package, by path
                 auto owner = runtime.package(package->packageName);
                 const int32_t found = runtime.findExport(*owner, path);
@@ -757,7 +757,7 @@ int main(int argc, char** argv) {
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
                                           "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog",
-                                          "skill_points", "max_health", "health"};
+                                          "skill_points", "max_health", "health", "sequence_change", "turn_in_dialog"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {
@@ -926,6 +926,9 @@ int main(int argc, char** argv) {
                         std::cout << "]}";
                         firstLink = false;
                     }
+                std::cout << "],\"graph\":[";
+                bool firstEdge = true;
+                for (const auto& line : provider.graph(name)) { std::cout << (firstEdge ? "" : ",") << quote(line); firstEdge = false; }
                 std::cout << "]}";
                 first = false;
             }

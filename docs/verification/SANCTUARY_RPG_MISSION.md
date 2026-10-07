@@ -662,7 +662,7 @@ items, 0 choices) but it is a VM gap for missions with item rewards.
 ### Not modelled yet (differences from the note that this step leaves)
 
 `ClientReceiveMissionStatus` (remote players), the mission weapon at Active/Complete (the slice still lends it with the objective
-set), timed and defend missions, `RequiredObjectivesComplete` and `Failed`, the `SetActiveMission` early-exit gate and tracked-mission
+set; *done in swap 8, below*), timed and defend missions, `RequiredObjectivesComplete` and `Failed`, the `SetActiveMission` early-exit gate and tracked-mission
 choice, the "Loader" level wait, the kickoff's dialog request, and the note's order **initial objective set before the `Default`
 event** for `bActivateInitialObjectiveSet` missions (the Fire mission has it false; `MissionSystem::accept` keeps the old order for
 the toy data). The controller's mission record is rebuilt from the restored status after `loadState` (a restored mission has
@@ -1392,3 +1392,113 @@ level's maximum, the walker holds exactly those numbers). The old MaxHealth log 
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0** (the last known run, local/p2/inv_swap2.log, was the same).
 - **One newly reached stub entry, after the level-up only** (`--slice-run` real data; not in the suite's two log lines): `level-up skill effect: attribute resolvers other than a resource pool's property (not
   implemented) x1`, the natural-level-up weapon-damage effect (its attribute resolves through the weapon, not a pool). The shield and cooldown effects are skipped silently (no such pool in the VM).
+
+## Script swap 8: the lent weapon, the dummy's spawn and the turn-in dialog follow the real game's order (2026-10-07)
+
+AI-assisted (Claude), lane I6. Evidence: the live Fire-mission trace of lane L2 ([FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md), observed in the running
+game) and the installed data and script. Native rules come from [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md),
+[NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md), [NATIVE_DIALOG.md](NATIVE_DIALOG.md) and [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) (all
+UNVERIFIED unless the trace shows them; what the trace shows is named below). The comparison was rerun first with the current binary: the host-event stream was
+the one L2 compared (38 matched, 4 out of order, 5 missing, 4 extra). After this swap: **43 / 2 / 2 / 4**, and the 18 order rules in `tools/verify_fire_event_order.py`
+hold on the real data (9 of 18 before).
+
+### 1. The lent weapon: granted inside Active, removed inside Complete
+
+- **Observed (L2):** the grant is `AddInventory` (bReady false), then `AddInventoryToBackpack`, then the controller's `ShowMissionWeaponTraining`, inside `ActivateMission`,
+  after `UpdateMissionStatus(Active)` and the status delegates and before `SetActiveMission`; the item was in the backpack, not equipped. The removal is
+  `RemoveMissionWeapons` inside `CompleteMission`, after the status hook (the rewards) and before the observers. At ReadyToTurnIn nothing is removed: the pistol stayed
+  usable until the turn-in.
+- **VM (`src/mission.cpp`):** `MissionSystem::setStatus` emits `MissionWeaponGranted` right after the status event when the new status is Active, and `MissionWeaponRemoved`
+  right after it when Complete (before the observers and the `Default` event). The old rule (grant when the set holding the weapon's objective activates, remove when that
+  objective completes) is gone. The bridge note's owner condition is applied (`MissionSystem::lendsWeapon`: the weapon's own mission objective is one of the mission's
+  objectives); its region-stage condition (the mission has a `GameStageRegion`) is not read here. Events: `status`, `mission_weapon_granted`, then the initial set at accept;
+  `experience`, `status`, `mission_weapon_removed`, `reward` at turn-in. `ShowMissionWeaponTraining` (a contextual HUD prompt) is not run.
+- **Host:** `OpenWillowWalker::LendWeapon` now only adds the item to the backpack (not equipped, not drawn; the pickup stats, the roll and the level are the host's recipe);
+  `ReturnLentWeapon` removes it from the slots and the backpack alike and draws another weapon only if the lent one was held (first equipped slot: host rule, UNVERIFIED;
+  the game switches to the best remaining weapon). So **Maya must equip the pistol herself** before she can shoot with it, as in the live run (where the driver moved it
+  from the backpack into a slot with `ReadyBackpackInventory`): in the inventory page, or in the quest suite by a fixture that calls the same `EquipItem` the page calls.
+  A saved Active mission re-grants it into the backpack on load (the existing `weapon_lent` flag), which matches the note's `GiveTo(pawn, False)`.
+  Open: the host's `EquipItem` still checks the item's level against Maya's; the native rule gives a mission weapon level requirement 0. Not exercised (the lent pistol's level
+  is the gear level).
+- **Quest suite names (98 checks before):** kept: `mission_weapon_not_carried_before_lend`, `mission_weapon_lent` (after the range: still lent), `lent_pistol_drawn_with_recipe_identity_and_stats`,
+  `lent_pistol_shows_imported_mesh_with_arms`, `lent_pistol_shot_carries_its_damage_type_to_dummy`. **Meaning changed:** `mission_weapon_removed_after_objective` is replaced by
+  `mission_weapon_kept_after_objective` (the pistol is still lent and held after the objective completes). **Added:** `mission_weapon_granted_on_accept` (lent, in the backpack, in no
+  slot, not held), `lent_pistol_readied_from_backpack_by_player` (the fixture's equip: the player action that the grant no longer does), `mission_weapon_removed_on_turn_in` (gone from slots and
+  backpack, the held weapon is another), `turn_in_raises_mission_turned_in_dialog_tag`. The drawn-pistol checks hold after the player's equip, as they did after the old automatic draw.
+
+### 2. The dummy's `RegisterTargetable`: already the data's 1 s; now visible
+
+- **Cause (from the data; `--behavior-dump` now prints each sequence's links with ids and delays):** the mission provider's `Behavior_AdvanceObjectiveSet_96` (which runs 0.5 s
+  after the `RockPaper_GoToRange` completion, behind dialog 03b's first run) has one link, the **default output (id -1) with `ActivateDelay` 1.0, to `Behavior_ChangeRemoteBehaviorSequenceState_171`**,
+  which enables the dummy's `Targetable` sequence; that sequence's `OnBehaviorSequenceEnabled` runs `Behavior_RegisterTargetable_36`. The live trace shows exactly this
+  (`AdvanceObjectiveSet_96` at 89.953, `_171` and `RegisterTargetable_36` at 90.960).
+- **The VM already ran it** (the 1 s is a link delay of the kernel, from the first swaps); lane L2 read "at spawn" because the CLI printed no sequence changes and the dummy
+  trace has no times. Checked with `--slice-run` (`range tick:0.6 spawn tick:A`): `RegisterTargetable_36` is absent from the dummy's trace for A = 0.8 and present for A = 1.0
+  (the set came 0.5 s after the range, `_171` is due 1.0 s after the set). So nothing was changed in the rule. Added: the host event **`sequence_change`** (provider, sequence, action)
+  for every `Behavior_ChangeRemoteBehaviorSequenceState` (the mission's `_171`, the dummy's own `_84` and `_64`), so the order is comparable.
+- **Open (UNVERIFIED, not tested live):** whether a shot in the first second, before `Targetable`, counts. And if the dummy's registration came after `_171` ran (a host that spawns
+  it a second late), the registration would reset the enabled sequences and `Targetable` would stay off; the host spawns it with the set.
+
+### 3. `AIHold_57` on the dummy's spawn: `Behavior_SpecialMove` selects output 0
+
+The dummy's `Idle` sequence: `OnBehaviorSequenceEnabled -> Behavior_SpecialMove_58 --(output id 0)--> Behavior_AIHold_57`. The VM reported `SpecialMove` at the host boundary and,
+as for every boundary class, selected no output, so only default links were followed. The installed script of `Behavior_SpecialMove.ApplyBehaviorToContext` (`--disasm`)
+asks the context's special-move component to play the move on its first run and selects output 0 at once; output 1 follows when the move has ended. `BehaviorProvider::reportAtBoundary`
+gained an `outputs` argument (the ids the class's script selects before it needs the host's answer) and the dummy's `SpecialMove` is registered with `{0}`. `AIHold_57` now runs
+between `SpecialMove_58` and `Transform_12`, as live. Output 1 (the move ended) is not modelled (no animation system); no link of the dummy uses it. UNVERIFIED that the dummy's context
+has the special-move interface (the live `AIHold_57` is the evidence).
+
+### 4. `PlayMissionTurnedInDialog` at the turn-in
+
+- **Why the VM did not run it:** `OnPlayerTurnedInMission` (installed script, run since swap 6c) calls `PlayMissionTurnedInDialog` only when `PawnsUsingMe` is not empty and its first
+  entry's controller is the accepting player. `PawnsUsingMe` is filled by `BeginUse`, which the real game calls when Marcus's mission screen opens (the live order: `Behavior_ShowMissionInterface`,
+  `OnPlayerOpenedMissionUI`, `BeginUse`). The screen's movie (`QuestAcceptGFxMovie.Start`, script) is not hosted.
+- **What runs now (`MissionScript::useMarcus`):** when the chain opens the interface, the open of the movie is emulated at its observed position: `OnPlayerOpenedMissionUI(controller)` and
+  `BeginUse(player pawn)` on Marcus, both installed script. A movie opens once, so a second press while the screen is "open" does not run `Start` again. **The close is not emulated** (host UI): in the
+  real game the accept closes the screen (`EndUse`, `PlayDismissalDialog`, `OnPlayerClosedMissionUI`, observed); here the player stays Marcus's user for the rest of the run. An emulated close was tried and
+  dropped: the dismissal tag `VO_NPC_GenericDismissal` leads to a template talk act whose only entry names another NPC (Dannenberg), so the VM would report a "no talker" line that the host's audio manifest has
+  no entry for.
+- **The turn-in:** `ServerCompleteMission -> OnPlayerTurnedInMission -> PlayMissionTurnedInDialog` raises the global `VO_NPC_MissionTurnedIn` tag on Marcus's dialog component (the same tag as live, observed), which the
+  bound `GearboxDialogComponent.TriggerEvent` reports as the new host event **`turn_in_dialog`** (tag, speaker, other object's class) after `reward`, and runs through the stock dialog data.
+- **`Act_ObjectParameterSwitch` (`src/dialog.cpp`):** that tag's event action is a switch over the event's ObjectParameter (None here) with one `Outputs` entry (a mission); the note's rule is
+  implemented: an output for every entry equal to the parameter, else the last output. Nothing matches, the last output has no link, the chain ends: **the turned-in event is silent for the Fire mission**
+  (UNVERIFIED in the game: lines are native, not seen). A chosen output that has a link is "not implemented" (an error), as unsupported nodes were before.
+- **VM fix found on the way (`src/interp.cpp`):** `BeginUse` stores `PawnsUsingMe[PawnsUsingMe.Length] = User`. The assignment evaluated its target a second time to produce its value, and the second
+  evaluation of the index grew the array again, so **every `arr[arr.Length] = x` in script stored two elements**. That made `PawnsUsingMe` hold two users, and the stock `PlayOnUseDialog` (which stays
+  silent when more than one user is registered) went silent at the turn-in press. The assignment now returns the target it already holds. This is a general VM correction, not limited to the mission
+  code; the full gate below ran after it. Test: `tests/vm_test.py` `Foo.Append` (fails without the fix).
+
+### 5. The dialog event "one wake late" (03b and 05): not a defect
+
+The installed `Behavior_TriggerDialogEvent` script: first run (not forced): `NextExecutionDelayTime` = 0.001 and Out (id 0); the resumed run triggers the dialog. So in the real game too the line starts one
+kernel wake after the behavior's first application; the hook saw only that first application (before `AdvanceObjectiveSet_96` in the same frame) because the line is native. The VM's `dialog` event marks the line
+start, hence after the set. No code change; the event-order rules say so. [FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md) has what the live trace adds (no `_1184`/`_1183`: the Finished
+output of dialog 03b was never selected live).
+
+### CLI and tests
+
+- `--slice-run` events: `sequence_change`, `turn_in_dialog` (new); `--mission-run` effects: `turn_in_dialog`. `--behavior-dump` prints `graph` per sequence (event and behavior links with id and delay).
+- `tools/verify_fire_event_order.py`: the event-order rules of the Fire mission (names and order only), run on the real data; `--from-json` checks a saved `--slice-run`; `--self-test` checks the checker on an
+  invented stream (a weapon removed at the hit and a missing `AIHold_57` are caught). Needs the installed game, so it is not in CTest.
+- `tests/mission_script_test.py` (synthetic): scenario W (weapon granted inside Active, not at the second set; not removed at ReadyToTurnIn; removed inside Complete before the reward), H2 (the screen opens once, with
+  one user: the toy `BeginUse` appends through the length, which also covers the VM fix), E2 additions (a switch with no matching output ends silent; a matching one with a link is an error), and the dummy toy's Idle
+  sequence now runs a `Behavior_SpecialMove` whose output 0 leads to its remote event (scenario D). `tests/vm_test.py`: `Foo.Append`.
+- Host: the two new host-event kinds are logged; the quest-suite changes are listed in section 1.
+
+### Not modelled / open after this swap
+
+- The screen's close (accept and after the reward) and `MissionRewardsReceived` on the player's confirmation: host UI.
+- `ShowMissionWeaponTraining` (HUD prompt), `ActiveMissionWeapons` and `IsValidMissionWeapon` (the gate that refuses readying a mission weapon after its mission ended: nothing can ready it, it is removed with the mission),
+  the weapon's roll (the host uses its recipe), the grant's region-stage condition, `GrantMissionWeaponsToClientPlayer` (the host re-lends on load by its own flag).
+- `Behavior_SpecialMove`'s output 1 and the move itself; the dummy's idle animation.
+- Lines 03a and 04 (the VM plays them; the live trace never selected the Finished output that leads to them), the `DET_NPC_OnUse_MissionsAvailable` second step, `AttemptStatusEffect_9` (the VM's hit model): unchanged.
+
+### Checks (2026-10-07, CMake Release and UE module rebuilt first)
+
+- `ctest` **11/11** (`mission-script-synthetic` and `vm-synthetic` gained the cases above), `tools/verify_packages.py` **9/9** (class bodies exact), UE module `Result: Succeeded`.
+- Real-data `--slice-run` (the L2 step list): no errors; `python tools/verify_fire_event_order.py` **18 of 18** rules (9 of 18 on the stream before this swap); `--self-test` passes.
+- **`tools/test_quest.ps1`: first run PASS checks=102 errors=0 (98 before), resume PASS checks=11 errors=0.** The log shows `lent weapon ... added to the backpack, not equipped`, the three
+  `dummy sequence change` lines, `turn-in dialog tag raised on Marcus: ...VO_NPC_MissionTurnedIn`, `dialog lookups=9 misses=0 played=0`. Stub entries at the suite's log points: **12 after accept, 18 after
+  turn-in** (9 and 15 before): three newly reached, all from `BeginUse -> OnNewPrimaryUser -> StartLingerTimer` and the `Used` event: `AIComponent.ActivateEvent`, `Actor.ClearTimer`, and
+  `EvaluateInitializationData` with a context source other than the player controller (`Actor.SetTimer` is now called twice).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.**

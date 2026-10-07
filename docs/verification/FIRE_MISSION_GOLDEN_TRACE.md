@@ -212,3 +212,44 @@ the end, as live). Host-side naming only.
 as in the lane L2 handoff: backup and hash the saves, `Enter-RunLock`, `Install-Driver -BlockSavesAtStart`, start with
 `-Character=Save0008.sav`, press Enter, `fm_start()`, then the steps above with `fm_snap` between them, `fm_dump`, close the game
 through its window, compare hashes, `Remove-Driver`, `Exit-RunLock`.
+
+## After swap 8 (lane I6, 2026-10-07)
+
+AI-assisted (Claude), implementer lane I6. The comparison was rerun first with the **current** binary (after swaps 7b and the gun-socket change; the CLI's step list is
+the one above), then the VM was changed where the trace and the data show a difference, then it was rerun. Method and rules are in
+[SANCTUARY_RPG_MISSION.md](SANCTUARY_RPG_MISSION.md) ("Script swap 8"); the order the VM must now keep is stored as rules in `tools/verify_fire_event_order.py` (event
+kinds and names in an order, no game values; it needs the installed game; `--self-test` runs it on an invented stream).
+
+**Before (the current binary).** The host-event stream was the one lane L2 compared, to the item: the weapon granted with the second set and removed at the hit, no
+`AIHold_57` in the dummy's trace, no turned-in dialog. **38 matched, 4 out of order, 5 missing, 4 extra**, as above, with one correction to the "missing" list: the 1 s
+before `RegisterTargetable_36` was already in the VM (see below); it only could not be seen, because the CLI printed no sequence changes and the dummy trace has no times.
+The checker's 18 rules held 9 times on that stream.
+
+**After.** 43 matched, 2 out of order, 2 missing, 4 extra (live side 47 items: 43 + 2 + 2; VM side 49: 43 + 2 + 4). The checker's 18 rules hold 18 times on the real data.
+
+| Item | Before | After | How |
+|---|---|---|---|
+| Mission weapon grant | out of order (with the second set) | **matched** | inside `ActivateMission`: after the status hook and delegates, before the initial set; host: into the backpack, not equipped |
+| Mission weapon removal | out of order (at the hit) | **matched** | inside `CompleteMission`: after the status hook (experience) and before the reward; not at ReadyToTurnIn |
+| `AIHold_57` after `SpecialMove_58` | missing | **matched** | `Behavior_SpecialMove`'s script selects output 0 on its first run; the link to `AIHold_57` is on that output |
+| `ChangeRemoteBehaviorSequenceState_171` and its 1 s | missing | **matched** | data link `AdvanceObjectiveSet_96 -> _171`, default output, `ActivateDelay` 1.0; already run by the VM, now a visible `sequence_change` event |
+| `PlayMissionTurnedInDialog` / `VO_NPC_MissionTurnedIn` | missing | **matched** | the screen's open (`BeginUse`) is emulated, so `OnPlayerTurnedInMission` runs its dialog; new `turn_in_dialog` event; the stock event is silent (its switch takes its unlinked last output) |
+| Dialog 03b against the `FinalObj` set; dialog 05 against `FireCompleted` | out of order (2) | out of order (2), **explained** | not a VM defect: see below |
+| Accept-time screen close; `MissionRewardsReceived` on confirm | missing (2) | missing (2) | host UI, left alone as asked |
+| Extra: `DET_NPC_OnUse_MissionsAvailable`, lines 03a and 04, `AttemptStatusEffect_9` | 4 | 4 | unchanged |
+
+**The two "out of order" dialog items are what the event marks, not an order the VM got wrong.** The installed script of `Behavior_TriggerDialogEvent` (read with
+`--disasm`): on its first run (not forced) it sets `NextExecutionDelayTime` to 0.001 and selects Out (id 0); only the resumed run, one kernel wake later, triggers the
+dialog. The live hook sees the behavior's first application (before `AdvanceObjectiveSet_96` in the same frame); the line itself starts one wake later in the real game
+too, but the line is native and was not visible. The VM's `dialog` event marks the line's start, so it follows. No change was made. One new observation from the
+data: `_1186`'s Finished output (id 1) leads to `_1184 -> _1183` (the lines 03a and 04 in the VM). The live trace never applied `_1184` or `_1183` in the remaining 155 s of the recording, so in the
+real game `_1186`'s Finished was never selected in that window: the line 03b did not end, or never started. The VM selects Finished at once ("no talker"), which is the
+reason for its two extra lines. Cause not isolated (UNVERIFIED); it needs a native-level view of the dialog manager.
+
+**New things the stream shows.** `sequence_change` (provider, sequence, action) for the behaviors that change the dummy's sequences: the mission's `_171` (Targetable
+enabled, in the first tick after the spawn, 1 s after the set), the dummy's own `_84` (ObjectiveComplete enabled at the hit) and `_64` (disabled when the target is
+sent back). `turn_in_dialog` after `reward`.
+
+**Newly reached stubs** (real data `--slice-run`): `AIComponent.ActivateEvent` (the `Used` event in `BeginUse`), and from the same call, through `OnNewPrimaryUser ->
+StartLingerTimer` (installed script, read with `--disasm`): `Actor.ClearTimer`, `Actor.SetTimer` (now x2) and `EvaluateInitializationData` with a context source other than
+the player controller (the pawn's `TimeUntilConsideredLingering`; not implemented). All are presentation or timers for a screen that is not hosted; none changes an event.

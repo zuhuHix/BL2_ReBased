@@ -59,7 +59,13 @@ installed one's guard: with a pawn, more than 1.0 s of game time since LastLevel
 The dummy-sequence scenario (--slice-run, last section) uses a toy `Sanctuary_Dynamic` package that holds a provider at the stock path
 with sequences whose enable conditions are BehaviorSequenceEnableByMission objects (invented), and checks the remote events their
 OnBehaviorSequenceEnabled / Disabled behaviors emit, in order: the registration at spawn, the objective-state verdicts with the
-status gating, ObjectiveSetRestrictions, mission-level conditions and bSequenceEnabledMutex.
+status gating, ObjectiveSetRestrictions, mission-level conditions and bSequenceEnabledMutex. Its Idle sequence runs a Behavior_SpecialMove first: the next
+behavior follows only through the move's output 0 (swap 8).
+
+Swap 8 (the lent weapon, the screen's open, the turned-in dialog's switch): scenario W (WeaponMission: the director toy plus a MissionWeapon naming the mission's
+objective) checks the weapon is granted inside Active and removed inside Complete; scenario H2 gives the toy director OnPlayerOpenedMissionUI (marker 122) and a
+BeginUse that appends through the length (marker 123 with the length reached) and checks the screen opens once with one user; the dialog scenario E2 gains an
+Act_ObjectParameterSwitch (tag V: no entry matches, the unlinked last output ends the chain; tag Y: a matching entry whose output is linked is an error).
 """
 
 import json
@@ -389,6 +395,7 @@ def build_gearbox():
     T.function(globals_, 'GetGearboxGlobals', [], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Object')
     T.function(globals_, 'GetBehaviorKernel', [], None, FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Object')
     T.cls('NoContextNeededAttributeContextResolver')
+    T.cls('Behavior_SpecialMove')      # the dummy's Idle sequence (swap 8): the bridge's handler selects its output 0
     T.prop('Float', T.cls('ConstantAttributeValueResolver'), 'ConstantValue')
     math = T.cls('SimpleMathValueResolver')
     T.prop('Struct', math, 'Argument', type_ref=aid)
@@ -421,6 +428,9 @@ def build_gearbox():
     T.array_of(link_list, 'Links', 'Object')
     T.array_of(act, 'OutputLinks', 'Struct', link_list)
     T.cls('GearboxDialogVar_Instigator', super_ref=node)
+    switch = T.cls('GearboxDialogAct_ObjectParameterSwitch', super_ref=node)
+    T.array_of(switch, 'Outputs', 'Object')
+    T.array_of(switch, 'OutputLinks', 'Struct', link_list)
     T.prop('Float', act, 'OutputDelay')
     event_data = T.struct_(0, 'DialogEventData')
     T.prop('Object', event_data, 'Tag')
@@ -597,6 +607,8 @@ def build_willowgame():
     T.prop('Object', body_class, 'DialogName')
     T.prop('Name', T.cls('Behavior_MissionRemoteEvent'), 'EventName')
     mission = T.cls('MissionDefinition')
+    T.prop('Object', mission, 'MissionWeapon')
+    T.prop('Object', T.cls('MissionWeaponBalanceDefinition'), 'MissionObjective')
     T.prop('Object', mission, 'MissionDialogGroup')
     T.prop('Bool', mission, 'bPlotCritical')
     T.prop('Struct', mission, 'Reward', type_ref=reward)
@@ -795,6 +807,18 @@ def build_willowgame():
     play_movie = T.function(controller, 'ClientGFxPlayMovie', [('Object', 'MovieDefinition', 0), ('Object', 'OtherObject', 0), ('Name', 'MovieTag', CPF_OPT)],
                             play_movie_body)['__self__']
     pawn_controller = p.add_import_full('ObjectProperty', engine_pawn, 'Controller')
+    # The movie's open (swap 8): the director hears OnPlayerOpenedMissionUI (marker 122), and the user begins using him: BeginUse appends the user to
+    # PawnsUsingMe through the length, as the stock script does, then reports the length reached on the user's controller (ExpEarn(length, 123)).
+    users = T.array_of(ai_pawn, 'PawnsUsingMe', 'Object')
+    T.function(ai_pawn, 'OnPlayerOpenedMissionUI', [('Object', 'PlayerAccepting', 0)], callback(122))
+
+    def begin_use(ids):
+        a = Asm()
+        a.raw(0x0F); a.raw(0x10); a.raw(0x36); a.instance(users); a.instance(users); a.local(ids, 'User')
+        a.context(lambda: a.context(lambda: a.local(ids, 'User'), lambda: a.instance(pawn_controller)),
+                  lambda: a.call(exp_earn, lambda: (a.raw(0x36), a.instance(users)), lambda: a.byte_const(123)))
+        a.return_nothing(); a.end(); return a
+    T.function(ai_pawn, 'BeginUse', [('Object', 'User', 0)], begin_use)
     gearbox_pkg = p.add_import_full('Package', 0, 'GearboxFramework')
     helpers_cls = p.add_import_full('Class', gearbox_pkg, 'BehaviorHelpers')
     kernel_cls = p.add_import_full('Class', gearbox_pkg, 'BehaviorKernel')
@@ -998,7 +1022,7 @@ def build_willowgame():
     return p
 
 
-def build_mission(director=False, on_enabled=True):
+def build_mission(director=False, on_enabled=True, weapon=False):
     """With director=True the package also holds a toy Marcus: GD_Marcus.Character.Pawn_Marcus (a WillowAIPawn) whose MissionDirectives reference
     a table of five invented entries (below). ToyMission: one set SetA {RockPaper_GoToRange (count 1)} (and an unused SetB) with bCanCompleteMission, activated at acceptance; a reward percentage that is an
     attribute chain (constant 0.5 x a conditional on the playthrough count) and the experience curve definition at its stock path."""
@@ -1212,9 +1236,12 @@ def build_mission(director=False, on_enabled=True):
                      t.name_('BehaviorSequenceName', 'Off') + t.bool('bEnabledOnSpawn', False) + none, probes_seq]
         cls_, sup, outer_, name_, _ = p.exports[provider - 1]
         p.exports[provider - 1] = (cls_, sup, outer_, name_, w32(0) + t.array('BehaviorSequences', len(sequences), b''.join(sequences)) + none + w32(0, 0))
+    lent = b''
+    if weapon:      # a lent mission weapon whose own mission objective is the mission's one objective
+        lent = t.obj('MissionWeapon', p.add_export(chain('WillowGame', 'MissionWeaponBalanceDefinition'), 'ToyLentWeapon', w32(0) + t.obj('MissionObjective', only) + none))
     cls_, sup, outer, name, _ = p.exports[mission - 1]
     p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
-                              + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + none)
+                              + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + lent + none)
     return p
 
 
@@ -1256,22 +1283,30 @@ def build_dynamic():
 
     def sub(name, first, length): return t.struct_(name, 'SubarrayData', t.int('ArrayIndexAndLength', (first << 16) | length) + none)
 
-    def sequence(name, on_spawn=False, mutex=False, cond=None):
-        behaviors, links, events = [], [], b''
+    def sequence(name, on_spawn=False, mutex=False, cond=None, special_move=False):
+        """Each of the two events links to a Behavior_RemoteEvent naming the transition. With special_move the enabled event first runs a
+        Behavior_SpecialMove whose output 0 (its script selects it on the first run, swap 8) links to that remote event."""
+        behaviors, links, events, outs = [], [], b'', {}
         for event, remote in (('OnBehaviorSequenceEnabled', name + 'On'), ('OnBehaviorSequenceDisabled', name + 'Off')):
             behaviors.append(p.add_export(chain('Engine', 'Behavior_RemoteEvent'), f'{name}_{remote}', w32(0) + t.name_('EventName', remote) + none, outer=provider))
+            entry = len(behaviors) - 1
+            if special_move and event == 'OnBehaviorSequenceEnabled':
+                behaviors.append(p.add_export(chain('GearboxFramework', 'Behavior_SpecialMove'), f'{name}_SpecialMove', w32(0) + none, outer=provider))
+                outs[len(behaviors) - 1] = (len(links), 1)
+                links.append((entry, 0))
+                entry = len(behaviors) - 1
             events += (t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', event) + none)
                        + sub('OutputVariables', 0, 0) + sub('OutputLinks', len(links), 1) + none)
-            links.append(len(behaviors) - 1)
-        behavior_data = b''.join(t.obj('Behavior', ref) + sub('LinkedVariables', 0, 0) + sub('OutputLinks', 0, 0) + none for ref in behaviors)
-        link_data = b''.join(t.int('LinkIdAndLinkedBehavior', index | (0 << 24)) + t.float('ActivateDelay', 0.0) + none for index in links)
+            links.append((entry, 0))
+        behavior_data = b''.join(t.obj('Behavior', ref) + sub('LinkedVariables', 0, 0) + sub('OutputLinks', *outs.get(i, (0, 0))) + none for i, ref in enumerate(behaviors))
+        link_data = b''.join(t.int('LinkIdAndLinkedBehavior', index | (link_id << 24)) + t.float('ActivateDelay', 0.0) + none for index, link_id in links)
         return (t.name_('BehaviorSequenceName', name) + t.bool('bEnabledOnSpawn', on_spawn) + t.bool('bSequenceEnabledMutex', mutex)
                 + (t.obj('CustomEnableCondition', cond) if cond else b'')
                 + t.array('EventData2', 2, events) + t.array('BehaviorData2', len(behaviors), behavior_data)
                 + t.array('ConsolidatedOutputLinkData', len(links), link_data) + none)
     active = dict(bActive=True)
     sequences = [
-        sequence('Idle', on_spawn=True),
+        sequence('Idle', on_spawn=True, special_move=True),     # its enabled event runs a Behavior_SpecialMove: the remote event follows only through its output 0
         # the objective's state: Active while it can be progressed, Complete once its count is reached (status gating included)
         sequence('ObjSeq', cond=condition('ObjCondition', True, active, active)),
         sequence('RestrictA', cond=condition('RestrictACondition', True, active, active, [set_a])),
@@ -1363,11 +1398,20 @@ def build_dialog_mission():
     set_payload(trigger_act, w32(0) + t.int('NodeID', 12) + t.obj('DialogEvent', stag) + t.array('VariableLinks', 1, link_struct(instigator_var)) + none)
     set_payload(speaker_act, w32(0) + t.int('NodeID', 13) + t.array('TalkData', 1, t.obj('NameTag', marcus) + t.obj('TalkAkEvent', ak['B']) + none)
                 + t.bool('bInstigatorTalker', True) + none)
-    generic_events = [(gtag, generic_act), (ztag, 0)]
-    set_payload(generic, w32(0) + t.array('DialogEvents', 2, b''.join(t.obj('Tag', tg) + t.bool('bEnabled', True) + (t.obj('OutputAction', a) if a else b'') + none
+    # Swap 8 (Act_ObjectParameterSwitch, NATIVE_DIALOG.md): tag V's event action is a switch over the object parameter (None here) whose only Outputs entry is
+    # a name tag, so nothing matches and the last output, which has no link, ends the chain (silent, like the stock mission-turned-in event); tag Y's switch
+    # has a None entry, which matches, and that output has a link: not modelled, an error.
+    vtag = event_tag('V', 'P30', False)
+    ytag = event_tag('Y', 'P30', False)
+    switch_quiet = p.add_export(chain('GearboxFramework', 'GearboxDialogAct_ObjectParameterSwitch'), 'SwitchQuiet', b'', outer=generic)
+    switch_linked = p.add_export(chain('GearboxFramework', 'GearboxDialogAct_ObjectParameterSwitch'), 'SwitchLinked', b'', outer=generic)
+    set_payload(switch_quiet, w32(0) + t.int('NodeID', 14) + t.array('Outputs', 1, w32(other)) + t.array('OutputLinks', 2, link_struct() + link_struct()) + none)
+    set_payload(switch_linked, w32(0) + t.int('NodeID', 15) + t.array('Outputs', 1, w32(0)) + t.array('OutputLinks', 2, link_struct(generic_act) + link_struct()) + none)
+    generic_events = [(gtag, generic_act), (ztag, 0), (vtag, switch_quiet), (ytag, switch_linked)]
+    set_payload(generic, w32(0) + t.array('DialogEvents', len(generic_events), b''.join(t.obj('Tag', tg) + t.bool('bEnabled', True) + (t.obj('OutputAction', a) if a else b'') + none
                                                                       for tg, a in generic_events))
                 + t.array('TalkActs', 1, t.array('TalkData', 1, t.obj('NameTag', marcus) + none) + t.bool('bInstigatorTalker', True) + none)
-                + t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 2) + t.int('LinkNumber', 0) + t.int('ToNodeID', 3) + none) + none)
+                + t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 2) + t.int('LinkNumber', 0) + t.int('ToNodeID', len(generic_events) + 1) + none) + none)
     set_payload(speaker, w32(0) + t.array('DialogEvents', 1, t.obj('Tag', stag) + t.bool('bEnabled', True) + t.obj('OutputAction', speaker_act) + none)
                 + t.obj('ParentGroup', generic) + none)
 
@@ -1598,6 +1642,25 @@ with tempfile.TemporaryDirectory() as folder:
                   and not any('_Y' in line for line in lines) and not any('Behavior_RemoteCustomEvent' in line for line in lines), use)
             check('H off: the script RPC was replaced', 140 not in [e['source'] for e in got['script']['exp_earned']], got['script']['exp_earned'])
 
+    # Scenario H2 (swap 8): the mission screen's movie opens once. Its open runs OnPlayerOpenedMissionUI (marker 122) and the player's BeginUse, which appends
+    # the user to PawnsUsingMe through the length: one element (BeginUse reports the length it reached, 1; the assignment evaluating its target twice made it
+    # 2). A second press while the screen is open does not run the movie's Start again (no second marker, no second user).
+    code, got = use_run('UseChainOff', 'script:use', 'script:use')
+    check('H2 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('H2 the screen opens once, with one user', [(e['amount'], e['source']) for e in got['script']['exp_earned']] == [(0, 122), (1, 123)], got['script']['exp_earned'])
+    check('H2 both presses reached the interface', all(step['use']['interface_opened'] for step in got['steps']), [step['use']['interface_opened'] for step in got['steps']])
+
+    # Scenario W (swap 8): the lent weapon is granted inside Active and removed inside Complete, not with the objective set and not at ReadyToTurnIn
+    # (observed in the real game, FIRE_MISSION_GOLDEN_TRACE.md). The toy mission's weapon names the mission's own objective.
+    (root / 'WeaponMission.upk').write_bytes(build_mission(director=True, weapon=True).build())
+    code, got = use_run('WeaponMission', 'script:accept', 'tick:0.5', 'obj:RockPaper_GoToRange', 'script:turnin')
+    check('W exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    rows = {step['step']: [e['kind'] for e in step['effects']] for step in got['steps']}
+    check('W granted inside Active: after the status, before the initial set', rows.get('script:accept') == ['status', 'mission_weapon_granted', 'objective_set_active'], rows)
+    check('W not removed when the objective completes (ReadyToTurnIn)', 'mission_weapon_removed' not in rows.get('obj:RockPaper_GoToRange', [])
+          and 'mission_weapon_granted' not in rows.get('obj:RockPaper_GoToRange', []) and 'status' in rows.get('obj:RockPaper_GoToRange', []), rows)
+    check('W removed inside Complete: after the status, before the reward', rows.get('script:turnin') == ['status', 'mission_weapon_removed', 'reward'], rows)
+
     # Scenario D: the dummy's enable conditions through --slice-run (src/slice.cpp), NATIVE_BEHAVIOR_POPULATION.md sections A-C.
     (root / 'Startup.upk').write_bytes((root / 'TestMission.upk').read_bytes())
     (root / 'Sanctuary_Dynamic.upk').write_bytes(build_dynamic().build())
@@ -1616,6 +1679,7 @@ with tempfile.TemporaryDirectory() as folder:
     check('D accept: no sequence events', remote(steps['accept']) == [], remote(steps['accept']))
     # registration: pass 1 enables Idle, then each condition's verdict is applied in sequence order (objective Active in the active set,
     # RestrictA's set is active, RestrictB's is not, mission not Complete, MutexA's {Active} holds, MutexB's {ReadyToTurnIn} does not)
+    # (Idle's IdleOn follows its Behavior_SpecialMove through the move's output 0, which the bridge's boundary handler selects as the script does)
     check('D spawn registration', remote(steps['spawn']) == ['IdleOn', 'ObjSeqOn', 'RestrictAOn', 'MutexAOn'], remote(steps['spawn']))
     # the objective's progress write already makes it Complete (status Active, progress = count): ObjSeq and RestrictA turn off at the
     # progress notification; the set completion makes the mission ReadyToTurnIn: MutexB enables and disables MutexA first (the mutex)
@@ -1780,6 +1844,15 @@ with tempfile.TemporaryDirectory() as folder:
         check('E2 an act without audio is silent', lines_of(rows[3]) == [], rows[3])
         # Q: no group has an enabled event for the tag
         check('E2 no matching event, nothing happens', lines_of(rows[4]) == [] and not rows[4]['ok'], rows[4])
+
+    # Swap 8: an event whose action is an Act_ObjectParameterSwitch. The parameter is None; no Outputs entry matches, so the last output (no link) ends the
+    # chain: silent, no error. A matching (None) entry whose output is linked is not modelled: an error that names the switch.
+    code, got = component('component:DialogName_Marcus|TagV|GenericGroup', 'tick:6')
+    rows = [step for step in got['steps'] if step['step'].startswith('component:')]
+    check('E2 a switch with no matching output ends silent', code == 0 and got['errors'] == [] and len(rows) == 1 and lines_of(rows[0]) == [] and not rows[0]['ok'], (code, got['errors'], rows))
+    linked = subprocess.run([reader, str(root / 'DialogMission.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), 'lines:5', 'component:DialogName_Marcus|TagY|GenericGroup'],
+                            capture_output=True, text=True, encoding='utf-8')
+    check('E2 a linked switch output is not modelled', linked.returncode != 0 and 'object parameter switch' in linked.stderr, (linked.returncode, linked.stderr))
 
     # Scenario E3 (a pawn's dialog groups, NATIVE_DIALOG_GROUPS.md): the body class decides the list and the search runs through it
     steps_e3 = []

@@ -22,21 +22,23 @@ namespace vm {
 // fired with, objective progress, set completion, AdvanceObjectiveSet's target rule, status transitions) follow the
 // behaviour note docs/verification/NATIVE_MISSION_DISPATCH.md section B, read from native code: all UNVERIFIED in the
 // running game. Not modelled: RequiredObjectivesComplete and Failed, bRepeatable, collection/branching sets, the
-// level-load replay (B5), blocking sets, the mission weapon at status Active/Complete (kept on its objective).
+// level-load replay (B5), blocking sets.
 class MissionSystem {
 public:
     enum class Status { NotStarted, Active, ReadyToTurnIn, Complete };
 
     // Everything the host must do or show, in order. Nothing here has been executed by this class.
     struct Effect {
-        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated };
+        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated, TurnInDialog };
         Kind kind;
         std::string a, b, c;        // RemoteEvent: a=event; Dialog (a line chosen by Behavior_TriggerDialogEvent): a=event tag, b=group,
                                     // c=the talker's name tag, detail = "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>";
                                     // SetSequence: a=provider path, b=sequence, c=action (CHANGE_Enable/Disable/Toggle);
                                     // ObjectiveSet*: a=name; ObjectiveUpdated: a=name, b=new count;
                                     // StatusChanged: a=status; Reward: a=XP attribute path;
-                                    // MissionWeapon*: a=MissionWeaponBalanceDefinition path
+                                    // MissionWeapon*: a=MissionWeaponBalanceDefinition path;
+                                    // TurnInDialog: the tag raised on the director's dialog component by PlayMissionTurnedInDialog
+                                    // (a=tag path, b=speaker path, c=the other object's class)
         double time = 0;
         std::string detail;
     };
@@ -45,6 +47,7 @@ public:
 
     Status status() const { return status_; }
     bool hasOptionalObjective() const;
+    bool lendsWeapon() const;               // the mission lends its MissionWeapon: granted inside Active, removed inside Complete
     int statusNumber() const;               // the EMissionStatus number the script sees (Active 1, ReadyToTurnIn 3, Complete 4)
     const std::string& activeSet() const { return activeSet_; }
     const std::string& path() const { return missionPath_; }
@@ -107,6 +110,8 @@ public:
     bool updateObjective(const std::string& objectiveName, int bit = 0);
     bool updateObjectiveByPath(const std::string& objectivePath, int bit = 0);   // what Behavior_UpdateMissionObjective names
     bool customEvent(const std::string& name);
+    // The script bridge reports the turned-in dialog's tag here so that it sits in the effect order (after the status routine, before the line it chooses).
+    void noteTurnInDialog(const std::string& tag, const std::string& speaker, const std::string& other) { emit(Effect::Kind::TurnInDialog, tag, speaker, other); }
     // Turn-in: ReadyToTurnIn -> Complete and a Reward effect.
     bool turnInMission();
     void tick(double seconds);              // delayed behavior links

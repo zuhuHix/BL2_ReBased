@@ -83,7 +83,10 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     });
     // Reached since the provider registers like the stock one (the bEnabledOnSpawn sequences fire OnBehaviorSequenceEnabled, section C of
     // NATIVE_BEHAVIOR_POPULATION.md): a special-move (animation) request on the pawn; no animation system here, listed at the boundary.
-    d.reportAtBoundary("GearboxFramework.Behavior_SpecialMove");
+    // The installed script of Behavior_SpecialMove (read with --disasm): on its first run it asks the context's special-move component to play the
+    // move and selects output 0 at once; output 1 follows when the move has ended (not modelled: no animation system, and no link of the dummy's
+    // provider uses it). So the Idle sequence's next behavior, Behavior_AIHold_57 (output 0), runs, as it did in the real game (lane L2 trace).
+    d.reportAtBoundary("GearboxFramework.Behavior_SpecialMove", nullptr, {0});
     d.handle("GearboxFramework.Behavior_AIHold", [](BehaviorProvider&, BehaviorProvider::Behavior&, const std::string&) {
         return std::vector<int>();
     });
@@ -107,6 +110,7 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
 // Behavior_ChangeRemoteBehaviorSequenceState.Action (ITargetable.EChangeStatus). Its script hands the action to the
 // native BehaviorKernel.ChangeBehaviorSequenceActivationStatus; that Toggle flips the current state is UNVERIFIED.
 void FireMissionSlice::changeSequence(const std::string& sequence, const std::string& action) {
+    events_.push_back({HostEvent::Kind::SequenceChange, dummyName_, sequence, action});
     if (action == "CHANGE_Enable") dummy_->setSequenceEnabled(sequence, true);
     else if (action == "CHANGE_Disable") dummy_->setSequenceEnabled(sequence, false);
     else if (action == "CHANGE_Toggle") dummy_->setSequenceEnabled(sequence, !dummy_->sequenceEnabled(sequence));
@@ -192,6 +196,7 @@ bool FireMissionSlice::drainMission() {
         case K::StatusChanged: events_.push_back({HostEvent::Kind::Status, effect.a, "", ""}); break;
         case K::ObjectiveSetActive: events_.push_back({HostEvent::Kind::ObjectiveSet, effect.a, "", ""}); break;
         case K::ObjectiveComplete: events_.push_back({HostEvent::Kind::ObjectiveComplete, effect.a, "", ""}); break;
+        case K::TurnInDialog: events_.push_back({HostEvent::Kind::TurnInDialog, effect.a, effect.b, effect.c}); break;
         case K::ObjectiveUpdated: break;   // progress only; completion is reported separately
         }
     }

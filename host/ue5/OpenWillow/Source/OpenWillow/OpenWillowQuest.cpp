@@ -503,6 +503,14 @@ void UOpenWillowQuest::Pump()
             LastInterfaceMovie = A;
             UE_LOG(LogTemp, Display, TEXT("OWQUEST mission interface opened by Marcus's use chain (movie %s, director %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()));
             break;
+        case K::SequenceChange:   // a behavior changed a sequence of the dummy's provider (the VM already applied it): logged, with the game time of the run
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy sequence change: %s %s (%s)"), UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()), *A);
+            break;
+        case K::TurnInDialog:     // PlayMissionTurnedInDialog's TriggerEvent on Marcus's component after CompleteMission (observed in game); the stock data gives it no line
+            ++TurnInDialogTags;
+            LastTurnInTag = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in dialog tag raised on Marcus: %s (speaker %s, other %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
+            break;
         case K::Status: UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A); break;
         case K::ObjectiveSet: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective set active: %s"), *A); break;
         case K::ObjectiveComplete: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective complete: %s"), *A); break;
@@ -1015,6 +1023,15 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (!bAcceptChecked) {
             bAcceptChecked = true;
             Check(Status() == 1, TEXT("use_key_accepts_mission"));
+            {   // The lent weapon is granted inside ActivateMission (observed in the real game, FIRE_MISSION_GOLDEN_TRACE.md): in the backpack, not equipped, and
+                // not drawn (the grant is AddInventory with bReady false); Maya readies it herself before she shoots (case 6).
+                const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+                bool bSlotted = false;
+                for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
+                    if (const FOpenWillowWeaponItem* Item = Walker->GetInventory()->SlotItem(Slot); Item && UOpenWillowInventory::StableId(*Item) == MissionWeapon.Id) bSlotted = true;
+                Check(bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) != INDEX_NONE && !bSlotted && !(Held && Held->Id == MissionWeapon.Id),
+                    TEXT("mission_weapon_granted_on_accept"));
+            }
             // The use key went through his OnUsed chain: it opened the mission interface (HasMissions saw the Fire mission), after nine checks that
             // all said "not enabled" (three names have no sequence, six belong to other missions)
             Check(MissionInterfacesOpened == 1 && LastInterfaceMovie == TEXT("UI_Mission.MissionInterface_Definition"), TEXT("use_chain_reaches_mission_interface"));
@@ -1061,6 +1078,15 @@ void UOpenWillowQuest::RunTest(float Delta)
     case 6:
         if (TestWait < 2.0f) return;
         Check(Marcus->IsLookingAt(Walker, 10.f), TEXT("marcus_faces_player_after_walk"));
+        {   // Test fixture standing for the inventory page's equip action: the grant left the lent pistol in the backpack, so Maya readies it into a weapon
+            // slot (the first empty unlocked one, else the last: its weapon goes back to the backpack) and draws it before she can shoot with it.
+            UOpenWillowInventory* Inventory = Walker->GetInventory();
+            int32 Slot = Inventory->GetWeaponSlotsUnlocked() - 1;
+            for (int32 Candidate = 0; Candidate < Inventory->GetWeaponSlotsUnlocked(); ++Candidate)
+                if (!Inventory->SlotItem(Candidate)) { Slot = Candidate; break; }
+            const int32 Index = Inventory->FindItemIndexById(MissionWeapon.Id);
+            Check(Index != INDEX_NONE && Walker->EquipItem(Index, Slot) && Walker->DrawItemById(MissionWeapon.Id), TEXT("lent_pistol_readied_from_backpack_by_player"));
+        }
         // Outside the stock cylinder but inside the old 700 cm stand-in radius: must not complete.
         Check(Impl->ObjectiveState(Data.TriggerObjective) == "Active" && !PlayerTouchesTrigger(), TEXT("outside_stock_cylinder_does_not_trigger"));
         PlacePlayer(Data.TriggerCenter, Data.DummyLocation);
@@ -1176,9 +1202,11 @@ void UOpenWillowQuest::RunTest(float Delta)
         Walker->FireOnce();
         Check(DummyShots == Before + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
         Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
+        // The lent pistol is NOT taken back when the objective completes (observed in the real game: it stays in the inventory until the turn-in's
+        // CompleteMission); it is removed at the turn-in (case 18). Meaning changed: this check was "mission_weapon_removed_after_objective".
         const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
-        Check(!bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE && Held && Held->Id != MissionWeapon.Id,
-            TEXT("mission_weapon_removed_after_objective"));
+        Check(bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) != INDEX_NONE && Held && Held->Id == MissionWeapon.Id,
+            TEXT("mission_weapon_kept_after_objective"));
         break;
     }
     case 16:
@@ -1212,6 +1240,14 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 18: {
         Check(Status() == 3, TEXT("use_key_turns_in_mission"));
+        {   // CompleteMission removes the lent weapon (observed in the real game), from the slot and the backpack alike; the held weapon is then another one
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            Check(!bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE && Held && Held->Id != MissionWeapon.Id,
+                TEXT("mission_weapon_removed_on_turn_in"));
+        }
+        // OnPlayerTurnedInMission -> PlayMissionTurnedInDialog raised the generic turned-in tag on Marcus's component (observed in the real game, same tag);
+        // the stock data gives that event no line for this mission (its switch on the object parameter takes its no-match output).
+        Check(TurnInDialogTags == 1 && LastTurnInTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_MissionTurnedIn"), TEXT("turn_in_raises_mission_turned_in_dialog_tag"));
         // the same press's on-use tag, now that Marcus's redeemable list has the mission: "mission complete"
         Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionComplete"), TEXT("use_chain_on_use_tag_follows_mission_state"));
         // the data says this one is silent: the generic event has no act of its own, its link-table template act has an entry for Marcus without an audio

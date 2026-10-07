@@ -155,6 +155,11 @@ void MissionSystem::updateTrackedMission() {
     dialog_.setTrackedMission(tracked ? refPath(group) : "", plot && plot->truth());
 }
 
+// The grant condition of the bridge note: a MissionWeapon is set and the weapon's own mission objective is one of this mission's objectives.
+bool MissionSystem::lendsWeapon() const {
+    return !weapon_.empty() && std::any_of(objectives_.begin(), objectives_.end(), [&](const auto& entry) { return entry.second.path == weaponObjective_; });
+}
+
 int MissionSystem::statusNumber() const { return nativeStatus(status_); }
 
 bool MissionSystem::available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates) const {
@@ -194,6 +199,13 @@ bool MissionSystem::setStatus(Status status) {
     if (status == Status::Active && !heardKickoff_ && !kickoffPending_) { kickoffPending_ = true; kickoffFromActivation_ = true; }
     static const char* names[] = {"NotStarted", "Active", "ReadyToTurnIn", "Complete"};
     emit(Effect::Kind::StatusChanged, names[int(status)]);
+    // The lent weapon is part of the status branch itself: granted inside Active (after the script hook and the status delegates, before the
+    // initial set and the tracked-mission step) and removed inside Complete (after the hook, before the observers). Observed in the real game
+    // (FIRE_MISSION_GOLDEN_TRACE.md, lane L2): added to the backpack inside ActivateMission, removed inside CompleteMission, still there at
+    // ReadyToTurnIn. The bridge note's owner condition is applied (the weapon's mission objective belongs to this mission); its region-stage
+    // condition is not (UNVERIFIED).
+    if (lendsWeapon() && status == Status::Active) emit(Effect::Kind::MissionWeaponGranted, weapon_);
+    if (lendsWeapon() && status == Status::Complete) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
     if (onNotification) onNotification(Notification::StatusChanged);
     fireEvent("Default", StatusBase + nativeStatus(status));
     return true;
@@ -251,10 +263,6 @@ bool MissionSystem::activateSet(const std::string& setPath) {
     }
     activeSet_ = setPath;
     emit(Effect::Kind::ObjectiveSetActive, set->name);
-    // UNVERIFIED: the mission weapon is lent while the objective it belongs to is active (the native reading grants it
-    // at status Active and removes it at Complete; not adopted yet, see DECISIONS.md 2026-10-02).
-    if (!weapon_.empty() && std::find(set->objectivePaths.begin(), set->objectivePaths.end(), weaponObjective_) != set->objectivePaths.end())
-        emit(Effect::Kind::MissionWeaponGranted, weapon_);
     const std::string name = set->name;
     const bool evaluate = set->canCompleteMission;
     if (onNotification) onNotification(Notification::ObjectiveSetChanged);
@@ -378,7 +386,6 @@ bool MissionSystem::applyUpdate(const std::string& objectiveName, int bit) {
     if (count != objective.count) return true;
     completedObjectives_.insert(objectiveName);
     emit(Effect::Kind::ObjectiveComplete, objectiveName);
-    if (!weapon_.empty() && objective.path == weaponObjective_) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
     if (onNotification) onNotification(Notification::ObjectiveComplete);
     evaluateSet();
     fireEvent(objectiveName, ObjectiveCompleted);

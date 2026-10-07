@@ -239,13 +239,13 @@ void BehaviorProvider::decodeValues() {
 
 void BehaviorProvider::handle(const std::string& classPath, Handler handler) { handlers_[classPath] = std::move(handler); }
 
-void BehaviorProvider::reportAtBoundary(const std::string& classPath, Describe describe) {
-    handlers_[classPath] = [describe](BehaviorProvider& p, Behavior& b, const std::string& event) {
+void BehaviorProvider::reportAtBoundary(const std::string& classPath, Describe describe, std::vector<int> outputs) {
+    handlers_[classPath] = [describe, outputs](BehaviorProvider& p, Behavior& b, const std::string& event) {
         p.boundary.push_back(event + " -> " + b.cls + ":" + b.name);
         BoundaryCall call{event, b.cls, b.name, p.sequences_[size_t(b.sequence)].name, {}};
         if (describe) call.fields = describe(p, b);
         p.boundaryCalls.push_back(std::move(call));
-        return std::vector<int>();
+        return outputs;
     };
 }
 
@@ -279,6 +279,23 @@ const std::vector<BehaviorProvider::Behavior>& BehaviorProvider::behaviors(const
     for (const auto& sequence : sequences_)
         if (sequence.name == name) return sequence.behaviors;
     return none;
+}
+
+std::vector<std::string> BehaviorProvider::graph(const std::string& name) const {
+    std::vector<std::string> lines;
+    for (const auto& sequence : sequences_) {
+        if (sequence.name != name) continue;
+        const auto describe = [&](const std::string& from, int start, int length) {
+            for (int i = 0; i < length; ++i) {
+                const Link& link = sequence.links[size_t(start + i)];
+                lines.push_back(from + " -> " + sequence.behaviors[size_t(link.behavior)].name + " id=" + std::to_string(link.id) +
+                                " delay=" + std::to_string(link.delay));
+            }
+        };
+        for (const auto& event : sequence.events) describe("event " + event.name, event.start, event.length);
+        for (const auto& behavior : sequence.behaviors) describe(behavior.cls + ":" + behavior.name, behavior.start, behavior.length);
+    }
+    return lines;
 }
 
 bool BehaviorProvider::hasEvent(const std::string& event) const {

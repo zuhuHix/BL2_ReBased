@@ -411,9 +411,11 @@ bool MissionScript::accept(const std::set<std::string>& completed) {
 }
 
 bool MissionScript::turnIn() {
+    turningIn_ = true;      // the director's PlayMissionTurnedInDialog raises its tag on Marcus's component inside this run
     run([this] {
         runtime_.callByName(controller_, "ServerCompleteMission", {Value::makeObject(mission_.definition()), Value::makeObject(director_)});
     });
+    turningIn_ = false;
     return mission_.status() == MissionSystem::Status::Complete;
 }
 
@@ -658,16 +660,20 @@ void MissionScript::bindUse() {
         bind("WillowGame.WillowDialogGlobalsDefinition.Get", [globals](NativeCall&) { return Value::makeObject(globals()); });
         bind("GearboxFramework.GearboxDialogComponent.TriggerEvent", [this](NativeCall& c) {
             if (c.self != dialogComponent_) return outsideBinding(c);
-            use_.onUseTag = objectPath(c.in(0).o);
-            use_.onUseSpeaker = objectPath(director_);
-            use_.onUseTarget = c.in(1).o && c.in(1).o->cls ? c.in(1).o->cls->name : "";
+            const std::string other = c.in(1).o && c.in(1).o->cls ? c.in(1).o->cls->name : "";
             // The talker interface of a pawn: its dialog name tag and its list of groups, both from its body class.
             const Value* bodyRef = runtime_.property(*director_, "BodyClass");
             const DialogSystem::PawnDialog pawn = mission_.dialog().pawnDialog(bodyRef ? *bodyRef : Value());
-            use_.onUseGroupCount = pawn.groups.size();
-            if (!pawn.groups.empty()) {
-                use_.onUseFirstGroup = DialogSystem::objectPath(pawn.groups.front());
-                use_.onUseLastGroup = DialogSystem::objectPath(pawn.groups.back());
+            if (turningIn_) mission_.noteTurnInDialog(objectPath(c.in(0).o), objectPath(director_), other);   // PlayMissionTurnedInDialog (turn-in)
+            else {                                                                                          // PlayOnUseDialog (the use key)
+                use_.onUseTag = objectPath(c.in(0).o);
+                use_.onUseSpeaker = objectPath(director_);
+                use_.onUseTarget = other;
+                use_.onUseGroupCount = pawn.groups.size();
+                if (!pawn.groups.empty()) {
+                    use_.onUseFirstGroup = DialogSystem::objectPath(pawn.groups.front());
+                    use_.onUseLastGroup = DialogSystem::objectPath(pawn.groups.back());
+                }
             }
             if (!pawn.nameTag.empty() && c.in(0).o) mission_.dialog().triggerOnComponent(pawn.nameTag, pawn.groups, c.in(0));
             return c.function.result ? runtime_.zeroValue(*c.function.result) : Value();
@@ -696,6 +702,18 @@ MissionScript::MarcusUse MissionScript::useMarcus(const std::set<std::string>& c
     if (!marcusProvider_) return use_;
     completed_ = completed;
     run([this] { marcusProvider_->fireEvent("OnUsed", {}, 2, {pawnFor(Toucher::Player), nullptr}); });
+    // The screen's movie is not hosted. What its Start does on opening (QuestAcceptGFxMovie.Start, installed script; the order was observed in the
+    // real game, FIRE_MISSION_GOLDEN_TRACE.md): the director hears OnPlayerOpenedMissionUI(controller), and the player's pawn begins using him
+    // (ServerPlayerBeginUseNPC -> WillowAIPawn.BeginUse), which puts the player first in PawnsUsingMe; OnPlayerTurnedInMission later needs that.
+    // A movie opens once: the screen stays open here until a close, which is a host-UI step and is not emulated (in the real game the accept closes
+    // it: EndUse, the dismissal dialog, OnPlayerClosedMissionUI; a second open in this run therefore does not run Start again, which would add a second user).
+    if (use_.interfaceOpened && !screenOpen_) {
+        screenOpen_ = true;
+        run([this] {
+            runtime_.callByName(director_, "OnPlayerOpenedMissionUI", {Value::makeObject(controller_)});
+            runtime_.callByName(director_, "BeginUse", {Value::makeObject(pawnFor(Toucher::Player))});
+        });
+    }
     for (const auto& error : marcusProvider_->errors) errors.push_back("Marcus provider: " + error);
     marcusProvider_->errors.clear();
     return use_;

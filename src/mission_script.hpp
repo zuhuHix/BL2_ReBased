@@ -154,6 +154,8 @@ private:
     ObjectPtr dialogComponent_, dialogGlobals_;            // his GearboxDialogComponent (archetype) and GD_Globals.Dialog.DialogGlobals
     std::vector<int>* selected_ = nullptr;                 // the running script behavior's recorded output ids
     MarcusUse use_;
+    bool screenOpen_ = false;                              // Marcus's mission screen is open (its movie is not hosted): BeginUse ran; nothing closes it
+    bool turningIn_ = false;                               // ServerCompleteMission is running: a TriggerEvent on Marcus's component is the turned-in dialog
     void bindUse();
     BehaviorProvider* registeredProvider(const Value& handle, const Value& provider);
     int objectiveUpdates_ = 0;

@@ -34,8 +34,8 @@ public:
     bool TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem);
     void ToggleInventory();
     void ToggleSkills();
-    // Mission weapon lend/return (UOpenWillowQuest): the item goes into a weapon slot and is drawn; on return it is
-    // removed and the slot held before the lend is drawn again. Placement rule: host choice, UNVERIFIED.
+    // Mission weapon lend/return (UOpenWillowQuest): the grant adds the item to the backpack (observed in the real game: not equipped; the player
+    // readies it with EquipItem); the return removes it wherever it is and draws another weapon only if it was the held one.
     bool LendWeapon(const FOpenWillowWeaponItem& Item);
     bool ReturnLentWeapon(const FString& Id);
     // Draws the equipped weapon with this stable id; false when it is not in a slot.
@@ -229,7 +229,6 @@ private:
     FOpenWillowPhaselockTimeline PhaselockTimeline;
     TWeakObjectPtr<class AOpenWillowCombatTarget> PhaselockTarget;
     FString ShotDamageTypeInFlight;
-    int32 PreLendSlot = INDEX_NONE;
     bool bWantsCombatTarget = false;
     bool bBarrelAxisLogged = false;
     // Muzzle fallbacks used (shots), and the item/socket pairs whose socket check was already logged.

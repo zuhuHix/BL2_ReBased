@@ -23,7 +23,7 @@ namespace vm {
 // group's link table points to (TalkActs template or a node by NodeID); the talker (instigator, or a random TalkData entry resolved by
 // exact name tag to a registered talker, or an echo caller when none is registered); the priority arbitration (index in the
 // dialog globals' Priorities, the tracked mission's floor) before the line starts; then a live line that ends when the audio does
-// (+ OutputDelay). Nodes off the Fire route (talker variables, chance/compare/switch/random-branch nodes, sound-effect events,
+// (+ OutputDelay). Nodes off the Fire route (talker variables, chance/compare/random-branch nodes, an object-parameter switch whose chosen output is linked, sound-effect events,
 // output links on a talk act) throw RuntimeError("not implemented ...").
 //
 // The audio: a host that can play a line sets a line player (an audio device is available): it is told when a line starts and says
@@ -125,6 +125,7 @@ private:
     void followNoMatch(Handle handle, const Act& act);                // output 1 of a talk act: a Trigger act
     void runTrigger(Handle handle, const ObjectPtr& node);
     int findAct(const Value& group, const Tag& info, Act& act);       // -1 no event, 0 an event with no act, 1 an act
+    void objectParameterSwitch(const ObjectPtr& node);                // an event whose action is an Act_ObjectParameterSwitch
     Act actOf(const ObjectPtr& node);
     void talk(Handle handle, const Act& act, const Tag& tag, const std::string& groupPath, const std::string& root);
     int resolveTalker(const std::string& nameTag, bool echo);

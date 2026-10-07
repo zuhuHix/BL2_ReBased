@@ -234,6 +234,24 @@ DialogSystem::Act DialogSystem::actOf(const ObjectPtr& node) {
     return act;
 }
 
+// Act_ObjectParameterSwitch.Activate (NATIVE_DIALOG.md, UNVERIFIED): the event data's ObjectParameter is compared with each entry of Outputs, output i is
+// activated for every equal entry and, with none, the last output. The ObjectParameter is None on every route here (the callers pass none), so only a None
+// entry could match. Only an output without a link is modelled (the chain ends there, as on the generic mission-turned-in event, whose single entry names a
+// mission); a chosen output that has a link throws "not implemented".
+void DialogSystem::objectParameterSwitch(const ObjectPtr& node) {
+    const Value* outputs = runtime_.property(*node, "Outputs");
+    const Value* links = runtime_.property(*node, "OutputLinks");
+    std::vector<size_t> chosen;
+    if (outputs)
+        for (size_t i = 0; i < outputs->elements().size(); ++i)
+            if (!outputs->elements()[i].o) chosen.push_back(i);
+    if (chosen.empty() && links && !links->elements().empty()) chosen.push_back(links->elements().size() - 1);
+    for (const size_t i : chosen)
+        if (links && i < links->elements().size())
+            if (const Value* targets = links->elements()[i].field("Links"); targets && !targets->elements().empty())
+                notImplemented("an output link on an object parameter switch");
+}
+
 // FindEvent: the last enabled DialogEvents entry for the tag; its act is the inline OutputAction or, with none, the target of the
 // group's link table for (the entry's 1-based id, link 0): a TalkActs template (ids after the events) or a node by NodeID.
 int DialogSystem::findAct(const Value& groupRef, const Tag& info, Act& act) {
@@ -247,7 +265,13 @@ int DialogSystem::findAct(const Value& groupRef, const Tag& info, Act& act) {
         }
     if (!found) return -1;                              // no enabled entry for the tag
     const Value& entry = events->elements()[size_t(found) - 1];
-    if (const Value* action = entry.field("OutputAction"); action && action->o) { act = actOf(load(*action)); return 1; }
+    if (const Value* action = entry.field("OutputAction"); action && action->o) {
+        ObjectPtr node = load(*action);
+        for (const Class* cls = node->cls; cls; cls = cls->super)
+            if (cls->name == "GearboxDialogAct_ObjectParameterSwitch") { objectParameterSwitch(node); return 0; }   // an event with nothing linked: the chain ends
+        act = actOf(node);
+        return 1;
+    }
     const Value* links = runtime_.property(*group, "OutputLinksToStructs");
     if (!links) return 0;
     for (const auto& link : links->elements()) {

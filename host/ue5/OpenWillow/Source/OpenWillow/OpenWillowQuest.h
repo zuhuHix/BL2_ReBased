@@ -85,6 +85,9 @@ private:
     // the last one's event tag and AkEvent. They go through the same hook as the mission's lines (the manifest lookup); no audio device plays them.
     int32 OnUseLines = 0, OnUseLinesBeforeTurnIn = 0;
     FString LastOnUseLineTag, LastOnUseLineAk;
+    // The tag the director raised on his component when a mission was turned in (WillowAIPawn.PlayMissionTurnedInDialog; the stock data gives it no line): how many, and the last one's path.
+    int32 TurnInDialogTags = 0;
+    FString LastTurnInTag;
     TArray<FString> LastUseCascade;
     int32 Respawns = 0;
     int32 Checks = 0;

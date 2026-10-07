@@ -84,8 +84,10 @@ public:
     // The class acts on the world and has no binding yet: each execution is listed in `boundary` and
     // `boundaryCalls` (not run, not an error, never counted as implemented); it selects no output, so only its
     // default (-1) links are followed, and only when it supports the default output.
-    // `describe` adds the decoded fields of that behavior to its BoundaryCall.
-    void reportAtBoundary(const std::string& classPath, Describe describe = nullptr);
+    // `describe` adds the decoded fields of that behavior to its BoundaryCall. `outputs` are the output ids the class's installed script
+    // selects on its way (for a class whose script does so before it needs the host's answer, e.g. Behavior_SpecialMove's id 0 when the
+    // move is requested); the default is none.
+    void reportAtBoundary(const std::string& classPath, Describe describe = nullptr, std::vector<int> outputs = {});
     // Sequences whose bEnabledOnSpawn is false start disabled. Enabling/disabling fires OnBehaviorSequenceEnabled /
     // OnBehaviorSequenceDisabled on that sequence.
     // NATIVE_BEHAVIOR_POPULATION.md section C (UNVERIFIED): enabling a sequence with bSequenceEnabledMutex first disables one other enabled
@@ -127,6 +129,8 @@ public:
     std::optional<int32_t> intInput(Behavior& behavior, const std::string& property, bool* linked = nullptr);
     const std::vector<Variable>& variables(const std::string& sequence) const;
     const std::vector<Behavior>& behaviors(const std::string& sequence) const;
+    // The sequence's wiring as text lines (read-only, for --behavior-dump): each event's links and each behavior's links, with id and delay.
+    std::vector<std::string> graph(const std::string& sequence) const;
     bool valuesDecoded() const { return valuesDecoded_; }
 
     Runtime& runtime() { return runtime_; }
