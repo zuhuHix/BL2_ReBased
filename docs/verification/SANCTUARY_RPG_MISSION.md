@@ -518,6 +518,8 @@ data reproduced the recorded baseline: quest suite 57/57 and resume 7/7, door su
   `OnLevelUp` behaviours, whose skill definition adds `HealthMaxValue` to `HealthCurrentValue`. That the pool caps the
   sum at the maximum, and that the effect acts once, are UNVERIFIED. The same definition also touches the action-skill
   cooldown; that is not modelled.
+  **Confirmed in game 2026-10-07 (lane L1):** the refill reaches the full new maximum (the cap holds) once, inside `OnExpLevelChange`. The same stock level-up skills also
+  boost the shield recharge (half the maximum per second for 4 s) and, for a natural level-up, add +1.0 weapon-damage scale for 30 s; neither is modelled here ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 - **Phaselock**, row by row (replaces the rows of the same name in the table above):
 
   | Row | Status |
@@ -1271,6 +1273,7 @@ and the HUD side of `ClientOnExpLevelChange` (no HUD). No stub is newly reached.
 - The host still displays its own points and health; adopting the VM's numbers needs a points counter in the host (the save recomputes points from the level, NATIVE_SAVE_LOAD:
   `max(0, L - 4)` minus points spent, and must keep doing so) and a health setter, and is a UI/save change.
 - Which native writes the health pool's base maximum in the game; whether a level-up refills current health (the host does; the class's `OnLevelUp` behavior is a pawn branch the VM skips).
+  *Answered 2026-10-07 (lane L1, in game):* `RecalculateAttributeInitializedState` writes the maximum, and a level-up refills current health to the new maximum ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 - The VM's `GeneralSkillPoints` starts at 0 each run (the host owns the unspent count), so the script's "first skill point" stat branch (old 0, new above 0) is reached with no stats object
   and does nothing; the spent-points and respec paths are not run.
 - Evaluation is single precision with `std::pow`; the game's `pow` may differ in the last bit (see NATIVE_PROGRESSION section 3 for the same question on the curve).

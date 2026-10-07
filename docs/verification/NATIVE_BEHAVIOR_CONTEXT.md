@@ -262,3 +262,7 @@ read directly from script):**
   only through the generic NPC group's no-match output and a Trigger act (two-step dispatch above).
 - **SLICE_AUDIO_CHAIN.md ("Marcus's own group"):** the three `DET_NPC_OnUse_*` barks are not triggered directly by the
   on-use script; the script triggers the global `VO_NPC_OnUse_*` tags.
+
+**Confirmed in game 2026-10-07 (lane L1):** `PlayOnUseDialog(player pawn)` ran and triggered `VO_NPC_OnUse_MissionsAvailable` on Marcus's dialog component with the player as the other
+object; `CountMyMissionsByState` read 1 eligible, 0 in progress, 0 redeemable for that player, which is what the decision order predicts. The second, native step (the generic group's
+Trigger act re-firing the `DET_` tag) was not visible to script hooks and is still unobserved ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).

@@ -237,6 +237,12 @@ level 5, 212 at level 8 (displayed rounding unknown).
 212.6755 (L8), 638.886 (L17), 415,509.44 (L70, UVHM), each `80 × 1.13^L` to float precision. The HUD shows more
 (429 at L8) because the profile's Badass Rank skill modifies the pool ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 
+**Confirmed in game 2026-10-07 (lane L1):** a level-up **refills current health to the new maximum** (214.5 of 429.1 became 484.8 of 484.8, and two more level-ups
+the same way), it does not keep the fraction or the absolute value; the new maximum (base `80 x 1.13^L`, times the profile's Badass modifier) is written inside
+`RecalculateAttributeInitializedState`, and the refill follows inside `OnExpLevelChange`; skill points +1 at 8 to 9, 9 to 10, 10 to 11; the shield's current and maximum
+are not set, its recharge rate is raised by half the maximum per second for 4 s; a natural level-up also adds a 30 s weapon-damage scale of +1.0; observed by hooking the
+level-up functions and reading the pools around three `ExpEarn` level-ups ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md), "lane L1").
+
 ## What was not read
 
 > Update (2026-10-05): the script side of the turn-in, `ExpEarn` and the level-up trigger are now read in [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) (it also corrects the `ExpLevelUp` parameter name to `bCheated`).

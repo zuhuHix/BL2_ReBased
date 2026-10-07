@@ -248,3 +248,8 @@ Listed, not applied.
   defaults and set at the end of the manager's initialisation.
 - **NATIVE_BEHAVIOR_CONTEXT.md:** no correction; it lists the generic group and Marcus's group as the data sources, which
   agrees with the list above.
+
+**Confirmed in game 2026-10-07 (lane L1):** `GetDialogGroups` on the live Marcus pawn returned 127 entries in the order given above (his group, `DialogGroup_NPC`, the other 124
+global NPC groups with `GD_VOSQ_ThisJustIn` twice at positions 105 and 119 of 127, the default template group last); body class 1 group, 125 global NPC groups, no DLC expansion on his name tag.
+A read-only `GetMatchingEvent` with the player's name tag answered `DialogGroup_NPC` for the four `VO_NPC_OnUse_*` tags and `DialogGroup_NPC_Marcus` for `DET_NPC_OnUse_MissionsAvailable`. The
+`TriggerEvent` result and the `Trigger` act's second lookup were not observable ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).

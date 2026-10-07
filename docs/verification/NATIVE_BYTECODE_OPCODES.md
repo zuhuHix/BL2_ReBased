@@ -262,6 +262,11 @@ cannot disagree with them):
   local-variable slots" by resemblance, they are hidden typed temporaries selected through the function's pair array; 5E
   is the attribute-property reference; 5F is "let attribute".
 
+**Confirmed in game 2026-10-07 (lane L1), in part:** `Skill.UpdateGrade(N)` on a live skill (Mind's Eye, empty modifier stack) set both `Grade` and `GradeBaseValue` to N for N = 2, 5, 3 and
+set `bForceRefreshModifiersNextTick`: base and value are both written. **Correction (observed):** the stored grade is `max(N, 1)` (N = 0, -3, 1 all gave 1), so the two-argument native
+call whose second operand is the constant 1 (`native_250`) is a maximum, not "N plus one" as written in the call-site list above. Not shown in game: "no change notification" (a native
+virtual that script hooks cannot see) and the recompute from a non-empty modifier stack ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md), "lane L1").
+
 ## Not read yet
 
 - Which classes override the replication-dirty hook and what they do; the attribute-changed virtual's other overrides

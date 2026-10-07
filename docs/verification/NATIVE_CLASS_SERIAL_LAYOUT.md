@@ -170,6 +170,11 @@ function the interface class declares", with the interface name rule left out; t
   WillowPendingLevelPlayerController wrongly count as IInstanceData; PauseGFxMovie as IStorageDevice;
   SkillTreeGFxObject as ISkillTreeListener; ResourcePoolManager as IResourcePoolProvider.
 
+**Confirmed in game 2026-10-07 (lane L1):** the engine's own class-level interface check (`ImplementsInterface`, read through the SDK on the loaded classes) agrees with the real table
+on all 66 pairs where the stand-in said yes and the table no, and on all 203 non-`Core.Interface` pairs where the table said yes and the stand-in no (the other 772 "table yes" pairs are
+`Core.Interface`, for which the engine answers false: the rule "excluding `Core.Interface`" holds; the note's 771 is 772 in the list). Caveat: class check, not the script cast opcode on an
+object ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+
 ## Implementer checklist
 
 An implementation can read the table from the Class export. Each statement is testable.

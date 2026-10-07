@@ -49,7 +49,7 @@ $logDir = Join-Path $localDir 'inventory-actions'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
 
-# --- lock: created atomically, stale after 15 minutes, removed in finally ---
+# --- lock: created atomically, stale after 15 minutes with no editor or game running, removed in finally ---
 function Get-Lock {
     $deadline = (Get-Date).AddSeconds($LockWaitSeconds)
     while ($true) {
@@ -63,7 +63,9 @@ function Get-Lock {
         } catch [System.IO.IOException] {
             if (!(Test-Path -LiteralPath $lockPath)) { continue }
             $age = (Get-Date) - (Get-Item -LiteralPath $lockPath).LastWriteTime
-            if ($age.TotalMinutes -gt 15) {
+            # Old is not enough: a real-game session can hold the lock for longer, so only a lock with no editor or game running is stale.
+            $holderAlive = [bool](Get-Process -Name UnrealEditor, Borderlands2 -ErrorAction SilentlyContinue)
+            if ($age.TotalMinutes -gt 15 -and !$holderAlive) {
                 Write-Output "Removing stale lock ($([int]$age.TotalMinutes) min old): $(Get-Content -LiteralPath $lockPath -Raw)"
                 Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
                 continue

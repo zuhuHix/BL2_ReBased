@@ -300,6 +300,9 @@ only when a playthrough number read from the game state is above 1, so they shou
 - **WillowItem.RecomputeAttributeBaseValues, Controller / WillowPlayerController / WillowMind / WillowVehicle
   RecalculateAttributeInitializedState**: thin native thunks that call a virtual method; the bodies were not reached
   (the class vtables could not be resolved by name). Script calls them after level or class changes.
+  **Confirmed in game 2026-10-07 (lane L1):** `WillowPlayerController.RecalculateAttributeInitializedState` is what rewrites the health pool's base and effective
+  maximum at a level-up (old maximum before the call, new one after it, current health untouched by the call), and nothing else in the 1,600-odd numeric
+  attributes of the controller, pawn, replication info and pools changed inside it except the game stage a little later ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 - **ResourcePoolManager.RecalculateBaseValues(Mgr)**: for each of the manager's 16 pool slots that holds a pool, calls a named
   script function on the pool with a true argument (name not decoded). Confidence low.
 

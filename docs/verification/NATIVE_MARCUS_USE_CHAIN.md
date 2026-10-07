@@ -231,3 +231,9 @@ is archetype data on the pawn. Left for a later lane.
   Whether "none = any provider" holds for the tracker's own event raises was not re-read here; it does not hold for this native.
 - **NATIVE_USE_INTERACTION.md "Marcus's chain":** three of the nine names (`Ep4_SpeakToMarcusAboutBank`, `Ep4_GetMarcusCrystal`, `Ep14_Rescued`) have no sequence in the
   provider, so their checks are constant "not enabled".
+
+**Confirmed in game 2026-10-07 (lane L1):** pressing use on Marcus in Sanctuary (level-8 Maya, none of the six tested missions started) made the game call
+`BehaviorKernel.IsBehaviorSequenceEnabled` nine times in exactly the order of the cascade table, each with Marcus's consumer handle (49) and his AI provider, each answering
+false; then `Behavior_PlayAIMissionContextDialog`, `Behavior_HasMissions` and `Behavior_ShowMissionInterface` ran (the Fire mission offer appeared). Direct calls confirmed the result rule
+(only `AI`, `Brain`, `Patrol` enabled; unknown name, `None` provider and handles -1 and 0 false). `OnUsed` ran with filter 2, then with filter 0, the second reaching no check
+([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md), "lane L1").
