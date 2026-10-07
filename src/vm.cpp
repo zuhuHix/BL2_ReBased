@@ -684,6 +684,25 @@ void Runtime::registerNative(const std::string& key, NativeFn fn) {
         if (function->nativeKey == key) function->native = fn;
 }
 
+void Runtime::registerIterator(const std::string& key, IteratorFn fn) {
+    if (!iterators_.emplace(key, std::move(fn)).second) throw RuntimeError("duplicate iterator registration: " + key);
+}
+
+const IteratorFn* Runtime::iteratorFor(const Function& function) const {
+    if (function.nativeKey.empty()) return nullptr;
+    const auto found = iterators_.find(function.nativeKey);
+    return found == iterators_.end() ? nullptr : &found->second;
+}
+
+std::vector<ObjectPtr> Runtime::liveObjects(const Class* base) {
+    std::vector<ObjectPtr> found;
+    for (const auto& weak : live_) {
+        ObjectPtr object = weak.lock();
+        if (object && !object->destroyed && object->cls && (!base || object->cls->isChildOf(base))) found.push_back(std::move(object));
+    }
+    return found;
+}
+
 void Runtime::overrideScript(const std::string& path, NativeFn fn) {
     Function* function = findFunction(path);
     if (!function || function->isNative()) throw RuntimeError("overrideScript needs a script function: " + path);
@@ -1063,6 +1082,11 @@ ObjectPtr Runtime::instantiate(Class* cls, const std::string& name) {
     object->cls = cls;
     object->name = name.empty() ? cls->name + "_0" : name;
     object->props = defaults->props;
+    if (live_.size() >= liveCompactAt_) {
+        live_.erase(std::remove_if(live_.begin(), live_.end(), [](const std::weak_ptr<Object>& w) { return w.expired(); }), live_.end());
+        liveCompactAt_ = std::max<size_t>(1024, live_.size() * 2);
+    }
+    live_.push_back(object);
     return object;
 }
 

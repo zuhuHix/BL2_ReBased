@@ -34,6 +34,10 @@ struct IterState {
     Value* index = nullptr;
     size_t position = 0;
     size_t resume = 0;      // statement to run for each element
+    // An engine iterator (foreach over a native such as AllActors) walks a list the native returned: `array` points into `owned`, the item is
+    // the call's out parameter, destroyed objects are skipped, and the item reads None once the list is exhausted.
+    std::shared_ptr<Value> owned;
+    bool engine = false;
 };
 
 struct Frame {
@@ -737,6 +741,52 @@ struct Interp {
         return std::move(frame.result);
     }
 
+    // Starts a foreach over an engine iterator (EX_Iterator). The call sits under any Context wrappers and must be a numbered native that has an
+    // iterator registered (Runtime::registerIterator); anything else returns false and nothing is evaluated, so the caller skips the loop as
+    // before. Otherwise the object chain is resolved (a None object skips the loop, like any call on None), the arguments are bound like an
+    // ordinary call, the iterator returns its list, and the state is pushed with the out parameter as the loop variable. The first element
+    // is already assigned when this returns true and the list is not empty; an empty list leaves the variable None.
+    bool startEngineIterator(const Expr& s, Frame& f, size_t pc) {
+        const Expr* call = &s.kids.at(0);
+        while ((call->op == script::EX_Context || call->op == script::EX_ClassContext) && call->kids.size() == 2) call = &call->kids[1];
+        if (!call->isNativeCall()) return false;
+        Function* function = rt.nativeByIndex(call->native);
+        const IteratorFn* iterator = function ? rt.iteratorFor(*function) : nullptr;
+        if (!iterator) return false;
+        ObjectPtr receiver = f.self;
+        for (const Expr* wrapper = &s.kids.at(0); wrapper != call; wrapper = &wrapper->kids[1]) {
+            receiver = contextTarget(*wrapper, f, receiver);
+            if (!receiver) break;
+        }
+        IterState it;
+        it.engine = true;
+        it.owned = std::make_shared<Value>(Value::makeArray());
+        it.array = it.owned.get();
+        it.resume = pc + 1;
+        if (receiver) {
+            tick();
+            if (rt.countCalls) { rt.countedFunctions.emplace(function->path, function); ++rt.nativeCalls[function->path]; }
+            Bound bound = bindArguments(*function, *call, f, 0);
+            NativeCall native{rt, *function, receiver, std::move(bound.args)};
+            IteratorResult result = (*iterator)(native);
+            if (result.outParam < native.args.size() && native.args[result.outParam].alias) {
+                it.item = native.args[result.outParam].alias;
+                it.owned->elements() = std::move(result.items);
+            }
+        } else {
+            noteNoneContext(f);
+        }
+        if (!it.item) {         // None object, or the iterator named no usable out parameter: the loop body does not run
+            it.item = &scratch;
+        } else if (it.owned->elements().empty()) {
+            *it.item = Value::makeObject(nullptr);
+        } else {
+            *it.item = it.owned->elements()[0];
+        }
+        f.iterators.push_back(std::move(it));
+        return true;
+    }
+
     // ------------------------------------------------------------------------------------ statements
     size_t target(const Frame& f, uint32_t memoryOffset) {
         const auto found = f.code->statementAt.find(memoryOffset);
@@ -799,27 +849,45 @@ struct Interp {
                 it.item = lval(s.kids.at(1), f, f.self);
                 it.index = s.bytes.at(0) ? lval(s.kids.at(2), f, f.self) : nullptr;
                 it.resume = pc + 1;
-                if (it.array->kind != K::Array || it.array->elements().empty()) { pc = target(f, s.words.at(0)); continue; }
+                // The end offset of a loop is its IteratorPop (checked on the installed packages), which pops one iterator: the state is
+                // pushed even when the loop body never runs, so an empty inner loop does not pop the enclosing one.
+                const bool empty = it.array->kind != K::Array || it.array->elements().empty();
+                f.iterators.push_back(it);
+                if (empty) { pc = target(f, s.words.at(0)); continue; }
                 *it.item = it.array->elements()[0];
                 if (it.index) *it.index = Value::makeInt(0);
-                f.iterators.push_back(it);
                 ++pc;
                 continue;
             }
             case script::EX_Iterator: {
-                log("UNIMPLEMENTED native iterator (foreach over an engine iterator)");
-                pc = target(f, s.words.at(0));
+                // [call of an iterator native][u16 end]: the end offset is the loop's IteratorPop, the body ends at IteratorNext.
+                if (!startEngineIterator(s, f, pc)) {
+                    log("UNIMPLEMENTED native iterator (foreach over an engine iterator)");
+                    pc = target(f, s.words.at(0));
+                } else if (f.iterators.back().array->elements().empty()) {
+                    pc = target(f, s.words.at(0));
+                } else {
+                    ++pc;
+                }
                 continue;
             }
             case script::EX_IteratorNext: {
                 if (f.iterators.empty()) { ++pc; continue; }
                 IterState& it = f.iterators.back();
                 ++it.position;
+                if (it.engine)       // an object destroyed since the list was made is not visited
+                    while (it.position < it.array->elements().size()) {
+                        const Value& next = it.array->elements()[it.position];
+                        if (next.kind == K::Object && next.o && next.o->destroyed) ++it.position; else break;
+                    }
                 if (it.array->kind == K::Array && it.position < it.array->elements().size()) {
                     *it.item = it.array->elements()[it.position];
                     if (it.index) *it.index = Value::makeInt(int64_t(it.position));
                     pc = it.resume;
-                } else ++pc;
+                } else {
+                    if (it.engine) *it.item = Value::makeObject(nullptr);
+                    ++pc;
+                }
                 continue;
             }
             case script::EX_IteratorPop:

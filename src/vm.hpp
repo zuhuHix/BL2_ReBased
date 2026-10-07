@@ -218,6 +218,14 @@ struct NativeCall {
     bool has(size_t i) const { return i < args.size() && args[i].supplied; }
 };
 
+// An engine iterator native: the function a `foreach` calls (Actor.AllActors, Actor.DynamicActors). The implementation gets the call as the
+// interpreter bound it and returns the values the loop visits, in order; the loop assigns each one to the call's out parameter `outParam`.
+struct IteratorResult {
+    size_t outParam = 0;
+    std::vector<Value> items;
+};
+using IteratorFn = std::function<IteratorResult(NativeCall&)>;
+
 class Runtime {
 public:
     explicit Runtime(PackageStore& store);
@@ -282,8 +290,15 @@ public:
     Value callFromNative(Function& function, ObjectPtr self, std::vector<Value> args = {});
     unsigned stateChangeDepth = 0;      // nested Object.GotoState calls in progress (natives_core.cpp bounds it)
 
+    // Every object made by instantiate / instantiateExport that is still referenced and not marked destroyed, in creation order, whose class is
+    // `base` or a child of it. Class default objects and asset stand-ins are not live objects. This is what the engine iterators walk.
+    std::vector<ObjectPtr> liveObjects(const Class* base);
+
     // Native registry. Key: "Class.Name(type,type,...)", see Function::nativeKey.
     void registerNative(const std::string& key, NativeFn fn);
+    // An iterator native (same key form). A foreach over a native with no iterator registered is still skipped with a logged stub.
+    void registerIterator(const std::string& key, IteratorFn fn);
+    const IteratorFn* iteratorFor(const Function& function) const;
     // Replaces a SCRIPT function (not a native) with a host binding, for a call that only presents something (a client RPC that opens a
     // movie): the binding runs instead of the bytecode. `path` is Package.Class.Function; the function must exist and not be native.
     void overrideScript(const std::string& path, NativeFn fn);
@@ -298,6 +313,9 @@ private:
     std::map<std::pair<const Package*, int32_t>, Class*> classByExport_;
     std::map<std::pair<const Package*, int32_t>, std::unique_ptr<StructDef>> structs_;
     std::unordered_map<std::string, NativeFn> natives_;
+    std::unordered_map<std::string, IteratorFn> iterators_;
+    std::vector<std::weak_ptr<Object>> live_;       // creation order; expired entries are dropped when the list doubles
+    size_t liveCompactAt_ = 1024;
     std::unordered_map<uint32_t, Function*> nativeIndex_;
     bool nativeIndexBuilt_ = false;
     std::vector<std::shared_ptr<const Package>> codePackages_;

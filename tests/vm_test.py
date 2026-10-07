@@ -540,6 +540,78 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
     make_function(mach, 'ReadTrace', [], instance_read(trace), result='Str')
     make_function(mach, 'ReadEndArg', [], instance_read(end_arg), result='Name')
     make_function(mach, 'ReadBeginArg', [], instance_read(begin_arg), result='Name')
+    # Engine iterators (foreach over Actor.AllActors / DynamicActors, interp.cpp EX_Iterator). Layout, as in the installed packages: Iterator
+    # [call of the iterator native, optionally under Context][u16 end]; the body; IteratorNext; IteratorPop. The end offset and a break are the
+    # IteratorPop, a continue is the IteratorNext. Invented classes: Beacon and Crate are Actors, BeaconRed is a Beacon.
+    actor = class_ids['Actor'] = p.add_export(imp['Class'], 'Actor', w32(0) * 4, super_ref=obj)
+    beacon = class_ids['Beacon'] = p.add_export(imp['Class'], 'Beacon', w32(0) * 4, super_ref=actor)
+    class_ids['BeaconRed'] = p.add_export(imp['Class'], 'BeaconRed', w32(0) * 4, super_ref=beacon)
+    class_ids['Crate'] = p.add_export(imp['Class'], 'Crate', w32(0) * 4, super_ref=actor)
+    class_ids['Ghost'] = p.add_export(imp['Class'], 'Ghost', w32(0) * 4, super_ref=actor)       # never instantiated
+    iterator_params = [('Class', 'BaseClass', 0), ('Object', 'Actor', CPF_OUT), ('Class', 'InterfaceClass', CPF_OPT)]
+    for name, number in (('AllActors', 304), ('DynamicActors', 313), ('ChildActors', 305)):    # ChildActors has no iterator bound
+        make_function(actor, name, iterator_params if name != 'ChildActors' else iterator_params[:2], None,
+                      flags=FUNC_NATIVE | FUNC_FINAL | FUNC_PUBLIC, native=number, result=None)
+    seeker = class_ids['Seeker'] = p.add_export(imp['Class'], 'Seeker', w32(0) * 4, super_ref=obj)
+
+    def foreach_native(a, ids, number, wrapped, base='C', arity=3):     # Iterator [Context(W, ...)] native(C, A, <omitted>) [end placeholder]
+        a.stmt(); a.raw(0x2F)
+        if wrapped: a.raw(0x19); local(a, ids, 'W'); a.w(0); a.ref(0); a.raw(0)
+        a.raw(0x60 + (number >> 8), number & 255); local(a, ids, base); local(a, ids, 'A')
+        if arity == 3: a.raw(0x4A)
+        a.raw(0x16)
+        at = len(a.b); a.w(0)
+        return at
+
+    def count(a, ids, step=1):                                          # N = N + step
+        a.stmt(); a.raw(0x0F); local(a, ids, 'N'); call(a, 146, L(a, ids, 'N'), C(a, step))
+
+    def loop_function(body, number=304, wrapped=False, result='Int', arity=3):
+        """int N = 0; foreach native(C, A) { body } return N (or A). body(a, ids, next_offset, end_offset); built twice to learn the offsets."""
+        def build(ids):
+            def once(next_off, end_off):
+                a = Asm()
+                a.stmt(); a.raw(0x0F); local(a, ids, 'N'); a.raw(0x25)
+                at = foreach_native(a, ids, number, wrapped, arity=arity)
+                body(a, ids, next_off, end_off)
+                here_next = a.here(); a.stmt(); a.raw(0x31)
+                here_end = a.here(); a.stmt(); a.raw(0x30)
+                struct.pack_into('<H', a.b, at, here_end)
+                a.stmt(); a.raw(0x04); local(a, ids, 'A' if result == 'Object' else 'N')
+                a.end()
+                return a, here_next, here_end
+            _, next_off, end_off = once(0, 0)
+            return once(next_off, end_off)[0]
+        return build
+    def jump(a, offset): a.stmt(); a.raw(0x06); a.w(offset)
+    iterator_locals = [('Object', 'A', 0), ('Int', 'N', 0)]
+    def declare(name, build, params=(('Class', 'C', 0),), result='Int'):
+        make_function(seeker, name, list(params), build, locals_=iterator_locals, result=result)
+    declare('CountAll', loop_function(lambda a, ids, n, e: count(a, ids)))
+    declare('CountDynamic', loop_function(lambda a, ids, n, e: count(a, ids), number=313))
+    declare('CountVia', loop_function(lambda a, ids, n, e: count(a, ids), wrapped=True), params=(('Class', 'C', 0), ('Object', 'W', 0)))
+    declare('CountBreak', loop_function(lambda a, ids, n, e: (count(a, ids), jump(a, e))))
+    declare('CountContinue', loop_function(lambda a, ids, n, e: (count(a, ids), jump(a, n), count(a, ids, 100))))
+    declare('FirstBreak', loop_function(lambda a, ids, n, e: jump(a, e), result='Object'), result='Object')
+    declare('LastAfterLoop', loop_function(lambda a, ids, n, e: count(a, ids), result='Object'), result='Object')
+    declare('CountChildren', loop_function(lambda a, ids, n, e: count(a, ids), number=305, arity=2))     # no iterator bound: skipped, logged
+    def nested(ids):        # Total = 0; foreach AllActors(C, A) { Total += 10; foreach AllActors(D, B) Total += 1 } return Total
+        a = Asm()
+        a.stmt(); a.raw(0x0F); local(a, ids, 'N'); a.raw(0x25)
+        outer = foreach_native(a, ids, 304, False)
+        count(a, ids, 10)
+        a.stmt(); a.raw(0x2F); a.raw(0x61, 0x30); local(a, ids, 'D'); local(a, ids, 'B'); a.raw(0x4A); a.raw(0x16)
+        inner = len(a.b); a.w(0)
+        count(a, ids)
+        a.stmt(); a.raw(0x31)
+        inner_end = a.here(); a.stmt(); a.raw(0x30)
+        struct.pack_into('<H', a.b, inner, inner_end)
+        a.stmt(); a.raw(0x31)
+        outer_end = a.here(); a.stmt(); a.raw(0x30)
+        struct.pack_into('<H', a.b, outer, outer_end)
+        a.stmt(); a.raw(0x04); local(a, ids, 'N')
+        a.end(); return a
+    make_function(seeker, 'Nested', [('Class', 'C', 0), ('Class', 'D', 0)], nested, locals_=[('Object', 'A', 0), ('Object', 'B', 0), ('Int', 'N', 0)])
     if interfaces:
         # Interface table fixture (all names and shapes invented). IThing and IThingChild declare no function, so the old structural
         # rule could never say yes for them. Impl names IThing (with a VfTable_ StructProperty child), Derived inherits it, ChildImpl names
@@ -741,6 +813,48 @@ run Core.Mach.ReadTrace $l
     assert any('state Nope is not declared on Mach' in line for line in run(root, 'Core.Mach.GoMissing', self_class='Core.Mach')['log'])
     assert any('GotoState: Loop abandoned' in line for line in run(root, 'Core.Mach.GoLoop', self_class='Core.Mach')['log'])
     assert any('label Begin not run' in line for line in run(root, 'Core.Mach.GoABegin', self_class='Core.Mach')['log'])
+    # Engine iterators: AllActors / DynamicActors visit the live objects of the class or its children in creation order; the out parameter is
+    # the loop variable; break (the IteratorPop), continue (the IteratorNext), a Context object that is None, an empty inner loop that must not
+    # pop the outer one, and an iterator native with nothing bound (skipped with the old stub line).
+    walkers = root / 'iterators.txt'
+    walkers.write_text("""new b1 Core.Beacon
+new b2 Core.BeaconRed
+new c1 Core.Crate
+new c2 Core.Crate
+new c3 Core.Crate
+new s Core.Seeker
+run Core.Seeker.CountAll $s class:Core.Beacon
+run Core.Seeker.CountAll $s class:Core.BeaconRed
+run Core.Seeker.CountAll $s class:Core.Actor
+run Core.Seeker.CountAll $s none
+run Core.Seeker.CountAll $s class:Core.Ghost
+run Core.Seeker.CountDynamic $s class:Core.Crate
+run Core.Seeker.CountVia $s class:Core.Crate $b1
+run Core.Seeker.CountVia $s class:Core.Crate none
+run Core.Seeker.CountBreak $s class:Core.Crate
+run Core.Seeker.CountBreak $s class:Core.Ghost
+run Core.Seeker.CountContinue $s class:Core.Crate
+run Core.Seeker.FirstBreak $s class:Core.Crate
+run Core.Seeker.LastAfterLoop $s class:Core.Crate
+run Core.Seeker.Nested $s class:Core.Beacon class:Core.Crate
+run Core.Seeker.Nested $s class:Core.Beacon class:Core.Ghost
+run Core.Seeker.Nested $s class:Core.Ghost class:Core.Crate
+""", encoding='utf-8')
+    done = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(walkers), '--cooked', str(root), '--no-static'],
+                          capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    entries = json.loads(done.stdout)['entries']
+    assert all(entry['status'] == 'completed' for entry in entries), entries
+    results = [entry.get('result') for entry in entries]
+    assert results[0:5] == ['2', '1', '5', '0', '0'], results             # a child class counts; every actor; None and a non-actor class match nothing
+    assert results[5:8] == ['3', '3', '0'], results                       # DynamicActors; through Context(b1); a None Context skips the loop
+    assert results[8:10] == ['1', '0'], results                           # break lands on the IteratorPop; an empty loop runs no pass
+    assert results[10] == '3', results                                    # continue lands on the IteratorNext: three passes, the +100 is never reached
+    assert 'c1' in results[11] and results[12] == 'None', results         # creation order (the first crate); exhausted loop leaves the variable None
+    assert results[13:16] == ['26', '20', '0'], results                   # 2 beacons x (10 + 3 crates); empty inner loops do not end the outer one
+    children = run(root, 'Core.Seeker.CountChildren', self_class='Core.Seeker')
+    assert children['result'] == '0' and 'UNIMPLEMENTED native iterator (foreach over an engine iterator)' in children['log'], children
+    assert not any('ChildActors' in line for line in children['log']), children       # nothing was evaluated or called
     # Native census (--native-census): per-entry call counters (implemented natives, logged stubs, script functions,
     # Context on None) plus the static closure, all on the synthetic package.
     entries = root / 'census.txt'

@@ -504,6 +504,23 @@ void Runtime::registerCoreNatives() {
             c.runtime.callFromNative(*begin, c.self, {nameOf(previous)});
         return Value();
     });
+    // Engine iterators: Actor.AllActors(BaseClass, out Actor, optional InterfaceClass) and Actor.DynamicActors (same parameters, read from
+    // the Engine package). Both visit the runtime's live objects that are BaseClass or a child of it (and implement InterfaceClass when it is
+    // given), in creation order; the loop binds the out parameter (index 1). A None BaseClass matches nothing. UNVERIFIED: the real
+    // DynamicActors visits only actors spawned at run time (not the ones placed by the map), here it is the same list as AllActors, and
+    // the real walk is live (an actor spawned by the loop body may or may not be reached), here the list is taken when the loop starts.
+    const auto actors = [](NativeCall& c) {
+        IteratorResult result;
+        result.outParam = 1;
+        const Class* base = c.has(0) ? c.in(0).cls : nullptr;
+        const Class* interfaceClass = c.has(2) ? c.in(2).cls : nullptr;
+        if (!base) return result;
+        for (ObjectPtr& object : c.runtime.liveObjects(base))
+            if (!interfaceClass || c.runtime.implements(object->cls, interfaceClass)) result.items.push_back(Value::makeObject(std::move(object)));
+        return result;
+    };
+    registerIterator("Actor.AllActors(class,object,class)", actors);
+    registerIterator("Actor.DynamicActors(class,object,class)", actors);
     reg("Object.GetStateName()", [](NativeCall& c) {
         return Value::makeName(c.self && !c.self->state.empty() ? c.self->state : "None");
     });
