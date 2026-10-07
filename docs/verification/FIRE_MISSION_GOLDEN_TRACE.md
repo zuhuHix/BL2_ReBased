@@ -253,3 +253,90 @@ sent back). `turn_in_dialog` after `reward`.
 **Newly reached stubs** (real data `--slice-run`): `AIComponent.ActivateEvent` (the `Used` event in `BeginUse`), and from the same call, through `OnNewPrimaryUser ->
 StartLingerTimer` (installed script, read with `--disasm`): `Actor.ClearTimer`, `Actor.SetTimer` (now x2) and `EvaluateInitializationData` with a context source other than
 the player controller (the pawn's `TimeUntilConsideredLingering`; not implemented). All are presentation or timers for a screen that is not hosted; none changes an event.
+
+## Dialog lines without the dialog skipper (lane L4, 2026-10-07)
+
+AI-assisted (Claude), real-game lane L4. Question (work queue item 3): why did the live L2 run never apply `Behavior_TriggerDialogEvent_1184`
+and `_1183` (the lines 03a and 04 behind `_1186`'s Finished output), while the VM plays them? Method as in lanes L1 and L2 (one game process
+under `local/ue_run.lock`, saves and the SDK settings folder backed up and hashed first, `Install-Driver -BlockSavesAtStart`, level-8 Maya from
+`-Character=Save0008.sav`, memory-only, game closed through its window). Two launches: **launch 1 with the installed Dialog Skipper mod
+disabled in memory** (the unmodded dialog), **launch 2 with the mod on** (the L2 condition, replayed with a recorder that can see the dialog).
+New tool: `tools/real_game/scripts/dialog_probe.py` (loaded after `fire_mission_probe.py`; adds hooks on `Behavior_TriggerDialogEvent.TriggerDialogEvent`,
+`GearboxDialogEventData.IsActive`, `TalkStarted` / `TalkFinished` of the talk acts, and a per-frame poll of the dialog behaviors' event data, the
+dialog components' `IsTalking` and the manager's echo actor). Raw rows (29,452 and 15,892) and screenshots stay under ignored `local/realgame/L4/`.
+Labels as above: **observed** = a hook row or a live read; **UNVERIFIED** = inferred.
+
+### What the skipper does (read from the mod's own Python, in place; nothing copied)
+
+The installed mod (Dialog Skipper 2.3, GPL3, options "Autoskip Dialog" on and "Skip All Dialog" off) has three hooks. (a) Before
+`Behavior_TriggerDialogEvent.TriggerDialogEvent` it blocks the call when the context object is a non-hostile pawn or an echo actor; (b) after a talk act
+starts (`TalkStarted`) it calls the talker's component `StopTalking` when the talker is a non-hostile pawn or echo actor; (c) before
+`GearboxDialogComponent.TriggerEvent` it blocks the call when the component's owner is such a pawn. The mission's dialog behaviors run with the mission
+tracker as context, so (a) does not block them; (b) stops the line at its first instant (observed: `StopTalking`, then `TalkFinished`, then
+`TalkStarted` rows in one frame, and the event data's `IsActive` false at once). (c) fits why Marcus's on-use line was never heard in L1 and L2 (launch 2: the `TriggerEvent` row is there, no talk act of his group starts; UNVERIFIED that the block is the only reason).
+No other installed mod hooks dialog functions (the other `Dialog` matches in `sdk_mods` are UI boxes).
+The mod was switched off with `Mod.disable(dont_update_setting=True)` (no settings write); the settings folder is byte-identical after the session.
+
+### Observed: the unmodded Fire dialog (launch 1, game seconds)
+
+| Step | Line (talk act) | Speaker | Starts | Ends | Length |
+|---|---|---|---|---|---|
+| kickoff 01 (`_1185`) | `..._01_EchoX_Marcus` (act 1252) | Marcus pawn | 79.854 (accept 79.762) | 97.736 | 17.88 s |
+| set `GoToRange_ObjSet`, `RocksPaper_MoveMarcusToRange` | | | 97.746 (+0.010 after the end) | | |
+| 02 (`_1188`, +0.510 s link delay) | `..._02_EchoX_Marcus` (act 1253) | Marcus pawn | 98.274 | 104.038 | 5.76 s |
+| 03b (`_1186`, range touch) | `..._03b_echoX_Marcus` (act 67) | Marcus pawn | 152.244 (+0.041 after `_1186`) | 158.837 | 6.59 s |
+| 03a (`_1184`, applied 0.073 s after 03b's end) | `..._03a_LiveHypEng` (act 108) | the target dummy pawn (`WillowAIPawn_42`) | 158.933 | 160.945 | 2.01 s |
+| 04 (`_1183`, applied 0.013 s after 03a's end) | `..._04_EchoX_Marcus` (act 1255) | Marcus pawn | 160.980 | 165.993 | 5.01 s |
+| on-use line at the offer | `DET_NPC_OnUse_MissionsAvailable` (act 115 of Marcus's group, event 2 of 4) | Marcus pawn | 76.100 | 79.198 | 3.10 s |
+
+- **The whole chain plays**: `_1186`'s Finished is selected, `_1184` is applied (initial run), plays 03a with the dummy as speaker, `_1183` follows and plays 04 (it
+  has no linked outputs, so the chain ends). Lines 03a and 04 are real, not VM artefacts.
+- **Poll behaviour (observed)**: the behavior's resumed runs are separate applications of a transient copy of the behavior (`Transient.Behavior_TriggerDialogEvent_N`, not the data
+  object `_118x`); L2 filtered on the data names and so saw only the first run of each. The first resumed run is 35 to 90 ms after the first run (it starts the line); then the
+  behavior calls `IsActive` about every 0.103 s while the line is live and selects Finished on the first call that
+  returns false (kickoff: 0.010 s after the audio ended; 03b: 0.073 s). The talk act's `TalkFinished` row precedes the false `IsActive`.
+- **Unmodded delays that L2 compressed**: accept to the first objective set 17.98 s (L2: 0.1 s); first set to line 02 0.510 s; range touch to line 03b 0.041 s and to the end of 04 13.79 s.
+  Line lengths are the audio lengths (the host's `--slice-run` stand-in length is not these).
+- **`DET_NPC_OnUse_MissionsAvailable` is raised** (observed): in launch 1 the talk act that is event 2 of `DialogGroup_NPC_Marcus` (the group's four events are `DET_NPC_OnUse_AllMissionsInProgress`,
+  `DET_NPC_OnUse_MissionsAvailable`, `DET_NPC_OnUse_NoMissions`, `DET_NPC_PlayerLingeringInMenu`; act 115 is the second) started with Marcus as speaker inside the `VO_NPC_OnUse_MissionsAvailable`
+  `TriggerEvent` call (between its pre and post rows, same frame as `UseObject`, before `OnPlayerOpenedMissionUI`) and ran 3.10 s. So the VM's extra `dialog` event for it is a
+  real event; L1 and L2 did not see it, which fits the skipper blocking that `TriggerEvent` for Marcus.
+
+### Why L2 never saw `_1184` and `_1183` (observed; the mechanism is UNVERIFIED in detail)
+
+Launch 2 (skipper on) reproduces L2: in the 32 s after the range touch `_1184` and `_1183` were never applied (0 rows). What the rows show at the moment of `_1186`'s resumed run:
+
+- the skipper stops 03b at once (`StopTalking` in the same frame; `IsActive` false), so `_1186` selects Finished in its **first resumed run, 35 ms after its first run**, in the same frame in
+  which the target dummy spawns: in both launches the dummy's spawn behaviors (`SpecialMove_58`, `AIHold_57`, `Transform_12`, ..., `RemoteEvent_60`) and the Kismet `SeqEvent_PopulatedActor_2` run **after** the dialog
+  behavior's resumed run in that frame;
+- `_1184` is not a plain mission-context behavior: its `LinkedVariables` hold one entry, the provider's only variable `TargetDummy` (type `BVAR_NamedKismetVariable`), and live it is applied with the **dummy pawn as its context
+  object** (unmodded: `ContextObject = WillowAIPawn_42`, the `CharClass_TargetDummy` pawn). The Kismet object variable named `TargetDummy` (`SeqVar_Object_0` in the `RocksPaperGenocide` sequence) holds that pawn after the spawn
+  (read live), and `TargetDummy_Bot` is empty;
+- so, with the line skipped, Finished is selected before the pawn has been written to that Kismet variable; the link's target has no context object, is not applied, and `_1183` (behind `_1184`'s Finished) never starts.
+  UNVERIFIED: that the variable is empty at that instant (not read at that frame; the ordering of the rows fits it) and that an empty context list is what drops the application (the kernel's rule for a context-linked behavior with no
+  object was not read in this lane). With a line of normal length (6.59 s) the variable is long set and the chain runs.
+
+So the skipper is the cause, through the line-length dependence of a race with the dummy's spawn, not through a blocked or interrupted event data. The unmodded game has no such gap.
+
+### Consequences for the VM (code pointers in the lane handoff)
+
+- Lines 03a and 04 and the `DET_` dialog are real and in the live order: **extra items 1 to 3 of the L2 comparison move to "matched in kind"**; only `AttemptStatusEffect_9` (hit model) stays extra.
+- Differences that remain: the VM runs `_1184` with the mission as its context (no `TargetDummy` resolution), so its talker is not the dummy; in the VM 03b, 03a and 04 take no time when the host plays no audio ("no talker" / no
+  audio device selects Finished at once), live they take 6.59, 2.01 and 5.01 s; and the VM has no rule for an empty context ending a chain.
+- Observed order inside the frame (both launches): `_1186` first run (Out: `AdvanceObjectiveSet_96`), one kernel wake later `_1186`'s resumed run (the line starts), then the dummy's spawn behaviors.
+
+### Not done / not observed
+
+- A direct test of the race (for example holding the dummy's spawn back a frame) was not made; the mechanism above is the reading that fits every row.
+- The skipper-on control was a replay of the whole mission start (launch 2), not a re-trigger of one line: a first attempt to re-trigger line 03b from Python (`WillowDialogManager.TriggerGroupEvent` with `None` for the object
+  parameters, to compare the skipper on and off on one line) **crashed the game** (pyunrealsdk fatal error dialog, in launch 1, after the main data had been dumped). Nothing was written (saves blocked, hashes below); the
+  call was not tried again. The crash was in the call's arguments (UNVERIFIED which), not in a stale reference.
+- 03a's speaker is the dummy pawn by the `TalkStarted` row; the audio itself was not captured. The kickoff, 02 and the on-use lines were only observed as hook rows.
+- The mission was not played past 03a / 04 / the skipped replay (the Fire hit and the turn-in are L2's).
+
+### Save safety (this session)
+
+`Backup-Saves` (`local/realgame/save-backup-20261007-125046`) copied `SaveData` and `Config`; 33 files hashed before and after **each** launch (the first ended in the crash above); the SDK mods'
+settings folder (19 files) copied and hashed too. With saves blocked from the first frame (`save_blocked` marks in the driver's event log), **all 33 files are byte-identical after both launches and all 19 settings files
+are unchanged** (the mod's `enabled` flag was never written: `dont_update_setting=True`); re-checked after the lane's release, while lane L3's game ran (read-only hashing): settings still identical. The driver was removed; the game was closed through its window after launch 2 (after the crash dialog in launch 1: Enter on
+its OK button, no kill). The run lock was taken at 12:50:34 and released by this lane after the session; this lane spawned nothing.
