@@ -1390,12 +1390,14 @@ def build_dialog_mission():
                                   w32(0) + t.array('Priorities', len(names), w32(*[prio[n] for n in names])) + t.obj('ActiveMissionMinPriorityStart', prio['P20'])
                                   + t.obj('ActiveSideMissionMinPriority', prio['P35']) + t.obj('ActivePlotMissionMinPriority', prio['P100']) + none, outer=dialog_package)
     marcus = p.add_export(chain('WillowGame', 'WillowDialogNameTag'), 'DialogName_Marcus', w32(0) + none)
+    dummy_tag = p.add_export(chain('WillowGame', 'WillowDialogNameTag'), 'DialogName_Dummy', w32(0) + none)    # swap I8: a talker that is not the mission
     ak = {n: p.add_export(chain('Engine', 'AkEvent'), 'Ak_' + n, w32(0) + none) for n in 'ABCD'}
 
     def event_tag(name, priority_name, echo):
         return p.add_export(chain('WillowGame', 'WillowDialogEventTag'), 'Tag' + name,
                             w32(0) + t.obj('Priority', prio[priority_name]) + t.bool('bIsEchoEvent', echo) + none)
-    tags = {'A': event_tag('A', 'P70', True), 'B': event_tag('B', 'P30', False), 'C': event_tag('C', 'P10', False), 'D': event_tag('D', 'P70', True)}
+    tags = {'A': event_tag('A', 'P70', True), 'B': event_tag('B', 'P30', False), 'C': event_tag('C', 'P10', False), 'D': event_tag('D', 'P70', True),
+            'X': event_tag('X', 'P30', False)}
     group = p.add_export(chain('GearboxFramework', 'GearboxDialogGroup'), 'DialogGroup', b'')
 
     def talk_data(ak_name):
@@ -1404,11 +1406,15 @@ def build_dialog_mission():
     def act(name, node_id, ak_name):
         return p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), name, w32(0) + t.int('NodeID', node_id) + talk_data(ak_name) + none, outer=group)
     acts = {'A': act('ActA', 41, 'A'), 'B1': act('ActB1', 42, 'A'), 'B2': act('ActB2', 43, 'B'), 'B3': act('ActB3', 44, 'A'), 'D': act('ActD', 45, 'D')}
-    # events (1-based ids): 1 A, 2 B (first), 3 C (no inline act: the link table), 4 B (last enabled wins), 5 B (disabled), 6 D
-    entries = [('A', True, acts['A']), ('B', True, acts['B1']), ('C', True, 0), ('B', True, acts['B2']), ('B', False, acts['B3']), ('D', True, acts['D'])]
+    # Swap I8: ActX names the instigator as its talker; its only TalkData entry is the Dummy name tag (the shape of the Fire line 03a)
+    acts['X'] = p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), 'ActX', w32(0) + t.int('NodeID', 46)
+                             + t.array('TalkData', 1, t.obj('NameTag', dummy_tag) + t.obj('TalkAkEvent', ak['A']) + none) + t.bool('bInstigatorTalker', True) + none, outer=group)
+    # events (1-based ids): 1 A, 2 B (first), 3 C (no inline act: the link table), 4 B (last enabled wins), 5 B (disabled), 6 D, 7 X
+    entries = [('A', True, acts['A']), ('B', True, acts['B1']), ('C', True, 0), ('B', True, acts['B2']), ('B', False, acts['B3']), ('D', True, acts['D']),
+               ('X', True, acts['X'])]
     event_bodies = b''.join(t.obj('Tag', tags[n]) + t.bool('bEnabled', on) + (t.obj('OutputAction', a) if a else b'') + none for n, on, a in entries)
     template = t.array('TalkActs', 1, talk_data('C') + none)
-    links = t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 3) + t.int('LinkNumber', 0) + t.int('ToNodeID', 7) + none)
+    links = t.array('OutputLinksToStructs', 1, t.int('FromNodeID', 3) + t.int('LinkNumber', 0) + t.int('ToNodeID', len(entries) + 1) + none)
     cls_, sup, outer, name, _ = p.exports[group - 1]
     p.exports[group - 1] = (cls_, sup, outer, name, w32(0) + t.array('DialogEvents', len(entries), event_bodies) + template + links + none)
 
@@ -1500,7 +1506,7 @@ def build_dialog_mission():
     def behavior(name, cls_name, tags_):
         refs[name] = len(behaviors)
         behaviors.append(p.add_export(chain(*cls_name), name, w32(0) + tags_ + none, outer=provider))
-    for k, tag_name, immediate in (('Kick', 'A', False), ('Chat', 'B', False), ('Tmpl', 'C', False), ('Imm', 'D', True)):
+    for k, tag_name, immediate in (('Kick', 'A', False), ('Chat', 'B', False), ('Tmpl', 'C', False), ('Imm', 'D', True), ('Ctx', 'X', False)):
         behavior('K' + k, ('GearboxFramework', 'Behavior_TriggerDialogEvent'),
                  t.obj('EventTag', tags[tag_name]) + t.obj('Group', group) + (t.bool('bForcePlayImmediate', True) if immediate else b''))
         behavior(k + 'Out', ('WillowGame', 'Behavior_MissionRemoteEvent'), t.name_('EventName', k + 'Out'))
@@ -1509,7 +1515,8 @@ def build_dialog_mission():
     link_list = []
 
     def sub(name, first, length): return t.struct_(name, 'SubarrayData', t.int('ArrayIndexAndLength', (first << 16) | length) + none)
-    events = [('Default', [(12, refs['KKick'])]), ('Chatter', [(0, refs['KChat'])]), ('Template', [(0, refs['KTmpl'])]), ('Immediate', [(0, refs['KImm'])])]
+    events = [('Default', [(12, refs['KKick'])]), ('Chatter', [(0, refs['KChat'])]), ('Template', [(0, refs['KTmpl'])]), ('Immediate', [(0, refs['KImm'])]),
+              ('Ctx', [(0, refs['KCtx'])])]
     event_data_bytes = b''
     for name, targets in events:
         event_data_bytes += (t.struct_('UserData', 'BehaviorEventUserData', t.name_('EventName', name) + none) + sub('OutputVariables', 0, 0)
@@ -1518,13 +1525,18 @@ def build_dialog_mission():
     behavior_bytes = b''
     for index, ref in enumerate(behaviors):
         is_trigger = index % 3 == 0
-        behavior_bytes += (t.obj('Behavior', ref) + sub('LinkedVariables', 0, 0)
+        # swap I8: KCtx's Context link is the named Kismet variable Dummy (variable 0, one link); every other behavior runs on the mission
+        behavior_bytes += (t.obj('Behavior', ref) + sub('LinkedVariables', 0, 1 if ref == behaviors[refs['KCtx']] else 0)
                            + (sub('OutputLinks', len(link_list), 2) if is_trigger else sub('OutputLinks', 0, 0)) + none)
         if is_trigger: link_list.extend([(0, index + 1), (1, index + 2)])
     link_bytes = b''.join(t.int('LinkIdAndLinkedBehavior', index | (link_id << 24)) + t.float('ActivateDelay', 0.0) + none for link_id, index in link_list)
     seq = (t.name_('BehaviorSequenceName', 'Main') + t.bool('bEnabledOnSpawn', True)
            + t.array('EventData2', len(events), event_data_bytes) + t.array('BehaviorData2', len(behaviors), behavior_bytes)
-           + t.array('ConsolidatedOutputLinkData', len(link_list), link_bytes) + none)
+           + t.array('VariableData', 1, t.name_('Name', 'Dummy') + t.byte('Type', 7) + none)                                 # 7 = BVAR_NamedKismetVariable
+           + t.array('ConsolidatedOutputLinkData', len(link_list), link_bytes)
+           + t.array('ConsolidatedVariableLinkData', 1, t.name_('PropertyName', 'Context') + t.byte('VariableLinkType', 3) + t.byte('ConnectionIndex', 0)   # 3 = Context
+                     + sub('LinkedVariables', 0, 1) + none)
+           + t.array('ConsolidatedLinkedVariables', 1, w32(0)) + none)
     cls_, sup, outer, name, _ = p.exports[provider - 1]
     p.exports[provider - 1] = (cls_, sup, outer, name, w32(0) + t.array('BehaviorSequences', 1, seq) + none)
     cls_, sup, outer, name, _ = p.exports[mission - 1]
@@ -1866,6 +1878,44 @@ with tempfile.TemporaryDirectory() as folder:
     check('E3 template act through the link table', len(template) == 1 and template[0]['act'].endswith('TalkActs[0]') and template[0]['ak'].endswith('Ak_C'), template)
     immediate = steps[7]
     check('E3 immediate: Finished and Out in the first run (Out thread first)', seen(immediate) == ['ImmOut', 'ImmDone'] and len(lines(immediate)) == 1, (seen(immediate), lines(immediate)))
+
+    # Scenario E4 (swap I8): a dialog behavior whose Context link is a named Kismet variable (the Fire line 03a's shape): it runs on the object bound under
+    # that name, and that object is the event's instigator. NATIVE_BEHAVIOR_CONTEXT.md (empty list: not run) and FIRE_MISSION_GOLDEN_TRACE.md lane L4 (UNVERIFIED rules).
+    # The custom event Ctx applies KCtx (tag X, ActX: bInstigatorTalker, its only TalkData entry the Dummy name tag).
+    # a) the variable is unset: the application does not run (no Out, no line, no Finished, no wake, no error) and the mission's own behaviors are unaffected
+    code, got = dialog_run('lines:0.55', 'talker:DialogName_Marcus', 'accept', 'tick:1', 'custom:Ctx', 'tick:0.02', 'tick:0.7', 'custom:Chatter')
+    check('E4a exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    every = [(step['step'], seen(step), lines(step)) for step in got['steps']]
+    check('E4a an empty Kismet variable drops the application', not any(name in ('CtxOut', 'CtxDone') for _, seeing, _ in every for name in seeing)
+          and not any(l['tag'] == 'TagX' for _, _, ls in every for l in ls), every)
+    check('E4a the mission context behaviors still run', 'ChatOut' in seen(got['steps'][-1]), got['steps'][-1])
+
+    # b) the variable holds a pawn with the Dummy name tag: Out at once, the line starts one wake later with that pawn as talker, Finished at the first poll after it
+    code, got = dialog_run('lines:0.55', 'kismet:Dummy|DialogName_Dummy', 'accept', 'tick:1', 'custom:Ctx', 'tick:0.02', *(['tick:0.1'] * 6))
+    check('E4b exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    steps = got['steps'][3:]          # after lines: / kismet: / accept: tick:1, custom:Ctx, tick:0.02, six polls
+    check('E4b Out at once', seen(steps[1]) == ['CtxOut'] and lines(steps[1]) == [], (seen(steps[1]), lines(steps[1])))
+    x_lines = [l for step in steps for l in lines(step) if l['tag'] == 'TagX']
+    check('E4b the bound pawn speaks the line', len(x_lines) == 1 and x_lines[0]['outcome'] == 'started' and x_lines[0]['talker'] == 'pawn'
+          and x_lines[0]['talker_tag'].endswith('DialogName_Dummy') and x_lines[0]['act'].endswith('ActX'), x_lines)
+    done_at = [i for i, step in enumerate(steps[3:]) if 'CtxDone' in seen(step)]
+    check('E4b Finished waits for the line (the sixth poll step, as in E2)', done_at == [5], done_at)
+
+    # c) the variable holds a pawn of another name tag, and a pawn with the Dummy tag exists too: the line is the context's, so ActX finds no entry for it
+    # ("no talker"), although a name-tag lookup would have started it with the Dummy pawn
+    code, got = dialog_run('lines:0.55', 'talker:DialogName_Dummy', 'kismet:Dummy|DialogName_Other', 'accept', 'tick:1', 'custom:Ctx', 'tick:0.02', 'tick:0.02')
+    check('E4c exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    x_lines = [l for step in got['steps'] for l in lines(step) if l['tag'] == 'TagX']
+    check('E4c the context is the instigator', len(x_lines) == 1 and x_lines[0]['outcome'] == 'no talker', x_lines)
+
+    # d) the variable is read when the behavior is applied: dropped while empty, running once it is set, and clearing it drops the next application again
+    code, got = dialog_run('lines:0.55', 'accept', 'tick:1', 'custom:Ctx', 'tick:0.02', 'kismet:Dummy|DialogName_Dummy', 'custom:Ctx', 'tick:0.02',
+                           'tick:0.02', 'kismet:Dummy|', 'custom:Ctx', 'tick:0.02', 'tick:0.02')
+    check('E4d exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    order = [(step['step'], seen(step), [l['tag'] for l in lines(step)]) for step in got['steps']]
+    outs = [name for _, seeing, _ in order for name in seeing if name == 'CtxOut']
+    x_tags = [tag for _, _, tags_ in order for tag in tags_ if tag == 'TagX']
+    check('E4d only the application with the variable set runs', len(outs) == 1 and len(x_tags) == 1, order)
 
     # Scenario F: the GoToRange waypoint script through --slice-run (src/mission_script.*, src/slice.*), NATIVE_OBJECTIVE_TRIGGERS.md.
     def updates(got): return sum(1 for e in got['script']['exp_earned'] if e['source'] == 210)

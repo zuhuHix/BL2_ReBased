@@ -627,7 +627,8 @@ int main(int argc, char** argv) {
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
             // turnin | tick:<seconds> | script:accept | script:turnin | script:screen | script:use | stage:<n> | player:<level>:<experience> | pool |
-            // lines:<seconds> (a test line player: every dialog line lasts that long) | talker:<name tag path> (a pawn that can talk)
+            // lines:<seconds> (a test line player: every dialog line lasts that long) | talker:<name tag path> (a pawn that can talk) |
+            // kismet:<variable>|<name tag path> (a new talker pawn bound to the mission's named Kismet variable; no tag clears the variable)
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
@@ -677,6 +678,17 @@ int main(int argc, char** argv) {
                 else if (step == "pool" && script) script->updateExperiencePool();
                 else if (step.rfind("lines:", 0) == 0) mission.dialog().setTestLineLength(std::stod(step.substr(6)));   // every dialog line lasts <s>
                 else if (step.rfind("talker:", 0) == 0) mission.dialog().registerTalker(step.substr(7));              // a pawn with this name tag
+                else if (step.rfind("kismet:", 0) == 0) {         // kismet:<variable>|<name tag>: a new pawn with that name tag (a talker) bound to the mission's named Kismet variable; no tag clears it
+                    const std::string rest = step.substr(7);
+                    const auto bar = rest.find('|');
+                    if (bar == std::string::npos) usage();
+                    vm::ObjectPtr actor;
+                    if (bar + 1 < rest.size()) {
+                        actor = object(rest.substr(bar + 1)).o;       // any object stands for the pawn; its identity is what matters
+                        mission.dialog().registerTalker(rest.substr(bar + 1), actor);
+                    }
+                    mission.bindKismetVariable(rest.substr(0, bar), actor);
+                }
                 else if (step.rfind("component:", 0) == 0) {      // component:<speaker name tag>|<event tag>|<group>[,<group>...]: a pawn's component TriggerEvent
                     const std::string rest = step.substr(10);
                     const auto bar1 = rest.find('|'), bar2 = rest.find('|', bar1 + 1);

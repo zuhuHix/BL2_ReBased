@@ -383,9 +383,8 @@ void DialogSystem::runTrigger(Handle handle, const ObjectPtr& node) {
 void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std::string& groupPath, const std::string& root) {
     const bool hasAudio = std::any_of(act.talk.begin(), act.talk.end(), [](const TalkEntry& e) { return !e.akEvent.empty(); });
     if (!hasAudio) return;                               // no audio event: output 0 at once
-    // The talker: an instigator that is an actor (the dialog's instigator here is the mission, never an actor: no talker), else a random
-    // TalkData entry resolved by its exact name tag; an echo event may create the echo caller. A line with no talker is still
-    // reported ("no talker") so the host can see what the stock dialog would have said.
+    // The talker: an instigator that is an actor, else a random TalkData entry resolved by its exact name tag; an echo event may create the echo
+    // caller. A line with no talker is still reported ("no talker") so the host can see what the stock dialog would have said.
     Line line;
     line.id = nextLine_++;
     line.eventTag = tag.path;
@@ -394,8 +393,8 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
     line.outputDelay = act.outputDelay;
     const auto report = [&](const char* outcome) { if (onLine) onLine(line, outcome); };
     // Choosing the talker (NATIVE_DIALOG.md): the event's instigator when the act says so and it is a talker with an entry for its own name tag (exact
-    // tag; the ParentTag ancestors are not modelled); otherwise, as before, the mission is no actor (no talker). With no talker and bEnableNoMatch the
-    // act takes its output 1.
+    // tag; the ParentTag ancestors are not modelled); otherwise (the mission is no actor) the TalkData entry below. With no talker and bEnableNoMatch the
+    // act takes its output 1 (for an instigator that cannot talk it).
     const TalkEntry* entry = nullptr;
     int talker = -1;
     if (act.instigatorTalker && instigator_ >= 0) {
@@ -403,9 +402,10 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
             if (candidate.nameTag == talkers_[size_t(instigator_)].nameTag) { entry = &candidate; talker = instigator_; break; }
         if (talker < 0 && act.noMatch) { followNoMatch(handle, act); return; }
         if (talker < 0) entry = &act.talk.front();
-    } else if (act.instigatorTalker) {
-        entry = &act.talk.front();
     } else {
+        // No instigator actor (a behavior run for the mission, or an act that does not name the instigator): a random TalkData entry by its name tag. For
+        // an act that does name the instigator this is a fallback read from the live game, UNVERIFIED as a native rule: line 03b (act 67, bInstigatorTalker,
+        // its only entry Marcus) is spoken by Marcus's pawn although its behavior's context is the mission tracker (lane L4, FIRE_MISSION_GOLDEN_TRACE.md).
         entry = &act.talk[size_t(rng_() % act.talk.size())];
         talker = resolveTalker(entry->nameTag, tag.echo);
     }
