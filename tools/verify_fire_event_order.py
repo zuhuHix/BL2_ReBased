@@ -7,10 +7,15 @@ turn-in, what the dummy does after spawning) and from the script and data the VM
 pointers): only names that the docs already use. Passing means the VM's event stream has this order. It does not mean the VM matches the game in anything
 the rules do not say, and a rule marked UNVERIFIED reflects a native reading that the live trace did not show.
 
+Two runs: the default one (no line player, the host's own case; LANE L2's step list) and a LINES run (Marcus registered as a talker, every dialog line 2 s,
+longer gaps between the steps), which follows the unmodded dialog order of lane L4: 03b long, the dummy spawns during it and is bound to the Kismet
+variable TargetDummy, then 03a spoken by the dummy, then 04. In the default run every line takes no time, so 03b has ended before the dummy exists,
+TargetDummy is empty when 03a's behavior is applied and the application is dropped (the live skipper-on result; the empty-variable rule is UNVERIFIED).
+
 Needs the installed game (the real packages), like tools/verify_packages.py:
 
-    python tools/verify_fire_event_order.py --reader build/Release/ow-package.exe            # runs --slice-run (about 50 s)
-    python tools/verify_fire_event_order.py --from-json run.json                             # checks an existing --slice-run output
+    python tools/verify_fire_event_order.py --reader build/Release/ow-package.exe            # runs --slice-run twice (about 100 s)
+    python tools/verify_fire_event_order.py --from-json run.json --lines-json lines.json     # checks existing --slice-run outputs
     python tools/verify_fire_event_order.py --self-test                                      # the checker against an invented event stream
 """
 import argparse
@@ -35,12 +40,21 @@ STEPS = [
     ("confirmreward", "confirmreward"), ("close", "close"),
 ]
 
+# The LINES run: the same story with lines that take time (every line 2 s, Marcus a registered pawn talker), gaps long enough for each line.
+STEPS_LINES = [
+    ("stage", "stage:8"), ("talker", "talker:GD_Dialog_NPC.Names.DialogName_Marcus"), ("lines", "lines:2"), ("player", "player:8:26218"),
+    ("use_offer", "use"), ("accept", "accept"), ("kickoff", "tick:0.02"), ("t01", "tick:3"), ("t02", "tick:3"),
+    ("range", "range"), ("set2", "tick:1"), ("spawn", "spawn"), ("after_spawn", "tick:1.5"), ("chain", "tick:2.5"), ("chain_end", "tick:2.5"),
+    ("hit", "hit:fire"), ("dialog05", "tick:0.02"),
+]
+
 # One rule: a title, the step label (None = the whole run), and one of
 #   exact:    the events of that step, in order, are exactly these (kind, a-suffix or None)
 #   sequence: these events occur in this order (other events may lie between)
 #   absent:   these events do not occur in that step (or anywhere with None)
 #   not_in:   (kind, a-suffix) must not occur in the steps with these labels
 # The suffix is compared with the end of the event's `a` field (an object path, an event name, a status name); for a sequence_change with "sequence:action".
+# An optional third element of a (kind, suffix, text) item must occur in the event's `detail` or in ";name_tag=<c>" (the talker's name tag).
 RULES = [
     ("use before accept: Marcus's offer tag, then the mission screen, then his line", "use_offer", "sequence",
      [("on_use_dialog", "VO_NPC_OnUse_MissionsAvailable"), ("mission_interface", None), ("dialog", "DET_NPC_OnUse_MissionsAvailable")]),
@@ -88,6 +102,23 @@ RULES = [
     ("Escape closes the screen: the dismissal tag, then the interface closed", "close", "sequence",
      [("dismissal_dialog", "VO_NPC_GenericDismissal"), ("mission_interface_closed", "Pawn_Marcus")]),
     ("closing the screen does not receive the reward again", "close", "absent", [("reward_received", None)]),
+    # Lane L4 (skipper on, the same race): with no line player 03b ends at once, before the dummy exists; 03a's behavior is applied to the empty Kismet variable
+    # TargetDummy and dropped, and 04 (behind it) never starts. UNVERIFIED rule (an empty context list drops the application), observed order.
+    ("no line player: 03a and 04 do not run (TargetDummy is still empty when 03a is applied)", None, "absent",
+     [("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng"), ("dialog", "VOSQ_RockPaperGeno_04_EchoX_Marcus")]),
+]
+
+# Rules of the LINES run (labels of STEPS_LINES). Lane L4, unmodded game: 03b is spoken by Marcus, 03a (applied after 03b ends, long after the dummy spawned) by the
+# target dummy pawn, then 04 by Marcus. The dummy's name tag, the instigator rule and the fallback that makes Marcus speak 03b are UNVERIFIED native readings.
+RULES_LINES = [
+    ("03b is a live line spoken by Marcus's pawn", "set2", "sequence", [("dialog", "VOSQ_RockPaperGeno_03b_echoX_Marcus", "outcome=started")]),
+    ("03a does not start before the dummy spawned (it waits for 03b)", "set2", "absent", [("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng")]),
+    ("03a does not start at the spawn", "spawn", "absent", [("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng")]),
+    ("03a, then 04: 03a is spoken by the dummy (its name tag, a started line), 04 by Marcus", "chain", "sequence",
+     [("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng", "outcome=started"), ("dialog", "VOSQ_RockPaperGeno_04_EchoX_Marcus", "outcome=started")]),
+    ("03a's talker is the HypEngineer name tag", "chain", "sequence", [("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng", ";name_tag=GD_Dialog_NPC.Names.DialogName_HypEngineer")]),
+    ("the spawn comes before 03a: the dummy moves forward first", None, "sequence",
+     [("remote_event", "RocksPaper_MoveTargetForward"), ("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng")]),
 ]
 
 # The dummy provider's behaviors in the order they ran (BehaviorProvider::trace, "event -> behavior"): as many as the real game's hooks saw, in its order.
@@ -104,43 +135,56 @@ def key(event):
     return event["b"] + ":" + event["c"] if event["kind"] == "sequence_change" else event["a"]
 
 
-def matches(event, kind, suffix):
-    return event["kind"] == kind and (suffix is None or key(event).endswith(suffix))
+def matches(event, kind, suffix, text=None):
+    return (event["kind"] == kind and (suffix is None or key(event).endswith(suffix))
+            and (text is None or text in event.get("detail", "") + ";name_tag=" + event["c"]))
 
 
-def steps_of(run):
-    """step label -> that step's events, from the records of the run (the labels follow STEPS)."""
+def steps_of(run, steps=None):
+    """step label -> that step's events, from the records of the run (the labels follow STEPS, or `steps`)."""
+    steps = steps or STEPS
     records = run["steps"]
-    if len(records) != len(STEPS):
-        raise ValueError(f"the run has {len(records)} step records, STEPS has {len(STEPS)}")
-    return {label: record.get("events", []) for (label, _), record in zip(STEPS, records)}
+    if len(records) != len(steps):
+        raise ValueError(f"the run has {len(records)} step records, the step list has {len(steps)}")
+    return {label: record.get("events", []) for (label, _), record in zip(steps, records)}
 
 
-def check(run):
-    """Returns a list of (title, ok, detail) for every rule, plus the dummy order and the error list."""
-    by_step = steps_of(run)
-    whole = [event for (label, _) in STEPS for event in by_step[label]]
+def apply_rules(run, steps, rules):
+    """Returns a list of (title, ok, detail) for the rules, over the run's step records (labels from `steps`)."""
+    by_step = steps_of(run, steps)
+    whole = [event for (label, _) in steps for event in by_step[label]]
     results = []
-    for title, label, mode, spec in RULES:
+    for title, label, mode, spec in rules:
         events = whole if label is None else by_step[label]
         ok, detail = True, ""
         if mode == "exact":
-            ok = len(events) == len(spec) and all(matches(e, k, s) for e, (k, s) in zip(events, spec))
+            ok = len(events) == len(spec) and all(matches(e, *item) for e, item in zip(events, spec))
             detail = "" if ok else "got " + ", ".join(f"{e['kind']}:{e['a'].split('.')[-1]}" for e in events)
         elif mode == "sequence":
             at = 0
-            for kind, suffix in spec:
-                while at < len(events) and not matches(events[at], kind, suffix): at += 1
-                if at == len(events): ok, detail = False, f"missing or out of order: {kind} {suffix}"; break
+            for item in spec:
+                while at < len(events) and not matches(events[at], *item): at += 1
+                if at == len(events): ok, detail = False, f"missing or out of order: {item[0]} {item[1]}"; break
                 at += 1
         elif mode == "absent":
-            found = [e for e in events if any(matches(e, k, s) for k, s in spec)]
+            found = [e for e in events if any(matches(e, *item) for item in spec)]
             ok, detail = not found, "" if not found else "found " + ", ".join(f"{e['kind']}:{e['a'].split('.')[-1]}" for e in found)
         elif mode == "not_in":
             (kind, suffix), labels = spec
             found = [(lab, e) for lab in labels for e in by_step[lab] if matches(e, kind, suffix)]
             ok, detail = not found, "" if not found else "found in " + ", ".join(lab for lab, _ in found)
         results.append((title, ok, detail))
+    return results
+
+
+def check_lines(run):
+    """The LINES run: its rules, and no errors."""
+    return apply_rules(run, STEPS_LINES, RULES_LINES) + [("the lines run has no errors", run.get("errors") == [], str(run.get("errors")))]
+
+
+def check(run):
+    """Returns a list of (title, ok, detail) for every rule, plus the dummy order and the error list."""
+    results = apply_rules(run, STEPS, RULES)
     trace = [line.split(" -> ")[-1] for line in run.get("dummy_trace", [])]
     positions, at = [], 0
     for name in DUMMY_ORDER:
@@ -156,8 +200,8 @@ def check(run):
     return results
 
 
-def run_slice(reader, cooked):
-    command = [str(Path(reader).resolve()), str(Path(cooked) / "Sanctuary_Dynamic.upk"), "--slice-run", MISSION, "--cooked", str(cooked)] + [step for _, step in STEPS]
+def run_slice(reader, cooked, steps=None):
+    command = [str(Path(reader).resolve()), str(Path(cooked) / "Sanctuary_Dynamic.upk"), "--slice-run", MISSION, "--cooked", str(cooked)] + [step for _, step in (steps or STEPS)]
     done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     if not done.stdout.strip():
         raise SystemExit(f"--slice-run printed nothing (exit {done.returncode}): {done.stderr.strip()}")
@@ -193,7 +237,25 @@ def synthetic_run(wrong_weapon_step=False, early_reward=False, late_close=False)
             "dummy_trace": ["OnBehaviorSequenceEnabled -> " + name for name in DUMMY_ORDER]}
 
 
+def synthetic_lines_run(dummy_too_early=False):
+    """An invented LINES event stream that follows RULES_LINES. With dummy_too_early 03a starts at the spawn (before 03b would have ended)."""
+    def e(kind, a="", b="", c="", detail=""): return {"kind": kind, "a": a, "b": b, "c": c, "detail": detail}
+    line_03b = e("dialog", "VOSQ_RockPaperGeno_03b_echoX_Marcus", c="Names.DialogName_Marcus", detail="talker=pawn;outcome=started")
+    line_03a = e("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng", c="GD_Dialog_NPC.Names.DialogName_HypEngineer", detail="talker=pawn;outcome=started")
+    line_04 = e("dialog", "VOSQ_RockPaperGeno_04_EchoX_Marcus", c="Names.DialogName_Marcus", detail="talker=pawn;outcome=started")
+    events = {label: [] for label, _ in STEPS_LINES}
+    events["set2"] = [e("objective_set", "RocksPaper_FinalObj"), line_03b]
+    events["spawn"] = [e("remote_event", "RocksPaper_MoveTargetForward")] + ([line_03a] if dummy_too_early else [])
+    events["chain"] = [] if dummy_too_early else [line_03a, line_04]
+    return {"steps": [{"step": step, "events": events[label]} for label, step in STEPS_LINES], "errors": []}
+
+
 def self_test():
+    lines_good = check_lines(synthetic_lines_run())
+    lines_bad = check_lines(synthetic_lines_run(dummy_too_early=True))
+    lines_failures = []
+    if not all(ok for _, ok, _ in lines_good): lines_failures.append("the invented lines stream that follows RULES_LINES failed: " + str([t for t, ok, _ in lines_good if not ok]))
+    if not any("does not start at the spawn" in t for t, ok, _ in lines_bad if not ok): lines_failures.append("03a at the spawn was not caught")
     good = check(synthetic_run())
     bad = check(synthetic_run(wrong_weapon_step=True))
     failures = []
@@ -205,6 +267,10 @@ def self_test():
     shuffled = synthetic_run()
     shuffled["dummy_trace"] = [line for line in shuffled["dummy_trace"] if not line.endswith("Behavior_AIHold_57")]
     if all(ok for _, ok, _ in check(shuffled)): failures.append("a missing AIHold_57 was not caught")
+    with_03a = synthetic_run()
+    with_03a["steps"][STEPS.index(("range", "range"))]["events"].append({"kind": "dialog", "a": "VOSQ_RockPaperGeno_03a_LiveHypEng", "b": "", "c": "", "detail": ""})
+    if all(ok for _, ok, _ in check(with_03a)): failures.append("03a in the no-line-player run was not caught")
+    failures += lines_failures
     for failure in failures: print("self-test FAIL: " + failure)
     print("self-test " + ("FAILED" if failures else "passed"))
     return 1 if failures else 0
@@ -215,16 +281,23 @@ def main():
     parser.add_argument("--reader", default="build/Release/ow-package.exe")
     parser.add_argument("--cooked", default=os.environ.get("OPENWILLOW_BL2", "") and str(Path(os.environ["OPENWILLOW_BL2"]) / "WillowGame" / "CookedPCConsole"))
     parser.add_argument("--from-json", help="check this --slice-run output (made with the STEPS above) instead of running the reader")
-    parser.add_argument("--output", help="write the --slice-run output here (ignored local/ only)")
+    parser.add_argument("--lines-json", help="with --from-json: the LINES run's --slice-run output (made with STEPS_LINES); without it the LINES rules are skipped")
+    parser.add_argument("--output", help="write the default run's --slice-run output here (ignored local/ only)")
+    parser.add_argument("--lines-output", help="write the LINES run's --slice-run output here (ignored local/ only)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test: return self_test()
-    if args.from_json: run = json.loads(Path(args.from_json).read_text(encoding="utf-8"))
+    lines_run = None
+    if args.from_json:
+        run = json.loads(Path(args.from_json).read_text(encoding="utf-8"))
+        if args.lines_json: lines_run = json.loads(Path(args.lines_json).read_text(encoding="utf-8"))
     else:
         if not args.cooked: raise SystemExit("set OPENWILLOW_BL2 or pass --cooked <CookedPCConsole>")
         run = run_slice(args.reader, args.cooked)
         if args.output: Path(args.output).write_text(json.dumps(run), encoding="utf-8")
-    results = check(run)
+        lines_run = run_slice(args.reader, args.cooked, STEPS_LINES)
+        if args.lines_output: Path(args.lines_output).write_text(json.dumps(lines_run), encoding="utf-8")
+    results = check(run) + (check_lines(lines_run) if lines_run else [])
     for title, ok, detail in results:
         print(("PASS  " if ok else "FAIL  ") + title + ("" if ok else "  [" + detail + "]"))
     failed = sum(1 for _, ok, _ in results if not ok)
