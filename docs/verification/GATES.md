@@ -2,7 +2,7 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**Baseline (2026-10-08, commit f6504f3, second machine):** ctest 13/13; verify_packages 9 packages, 3,339/3,339 class
+**Baseline (2026-10-08, commit c33ed0c, second machine):** ctest 15/15; verify_packages 9 packages, 3,339/3,339 class
 bodies exact; Fire event order self-test and 32 of 32 rules; test_quest 117/117 plus resume 11/11; test_mover 16/16;
 test_inventory_actions 49 pass / 0 fail; verify_combat_pawn `--vm` 25 pass / 0 fail / 4 missing (the Defense Boost rows).
 
