@@ -62,6 +62,8 @@ public:
     explicit Run(Runtime& runtime) : runtime_(runtime), evaluator_(runtime), combat_(runtime, evaluator_) {
         try { runtime.package("Startup"); } catch (const std::exception&) {}
         combat_.setTakeDamageHandler([this](const CombatSystem::TakeDamageEvent& event) { raiseTakeDamage(event); });
+        combat_.setBehaviorEventHandler([this](const CombatSystem::BehaviorEvent& event) { raiseBehaviorEvent(event); });
+        combat_.enableDeaths();
     }
 
     void apply(const std::string& step);
@@ -75,6 +77,8 @@ private:
     std::vector<Spawned> pawns_;
     std::vector<CombatSystem::Player> players_;
     std::map<const Object*, std::unique_ptr<BehaviorProvider>> providers_;    // one class provider per pawn that was hit or whose sequences were set
+    std::map<const BehaviorProvider*, size_t> reported_;       // how many trace lines of a death-chain provider the hit's event list already has
+    std::map<const Object*, std::unique_ptr<BehaviorProvider>> deathProviders_;   // the provider of each pawn's death definition (BodyClassDeathDefinition), made when it raises its first event
     std::map<std::string, int> hitCounts_;
     std::map<std::string, double> rows_;
     std::vector<std::string> results_, errors_;
@@ -84,6 +88,10 @@ private:
     void row(const std::string& id, double value);
     Value managerOf(const Spawned& spawned);
     BehaviorProvider& providerFor(const ObjectPtr& pawn);
+    std::unique_ptr<BehaviorProvider> makeProvider(const Value& definition);
+    BehaviorProvider& deathProviderFor(const ObjectPtr& pawn, const ObjectPtr& deathDefinition);
+    std::vector<int> runScriptBehavior(BehaviorProvider& provider, BehaviorProvider::Behavior& behavior, const ObjectPtr& pawn);
+    void raiseBehaviorEvent(const CombatSystem::BehaviorEvent& event);
     void raiseTakeDamage(const CombatSystem::TakeDamageEvent& event);
     std::string hitJson(const CombatSystem::HitReport& report);
     std::string stateJson(size_t index);
@@ -240,22 +248,49 @@ void Run::apply(const std::string& step) {
     results_.push_back("{\"step\":" + quote(step) + ",\"result\":" + result + "}");
 }
 
+// A provider over a BehaviorProviderDefinition value (an export, or an import the VM resolves by the same path in Startup, as instantiateReference does).
+std::unique_ptr<BehaviorProvider> Run::makeProvider(const Value& definition) {
+    if (definition.kind != Value::Kind::Object || !definition.o || !definition.o->resourcePackage) throw RuntimeError("combat-run: no behavior provider definition");
+    auto package = definition.o->resourcePackage;
+    int32_t index = definition.o->resourceIndex;
+    if (index < 0) {
+        const std::string path = package->path(index);
+        package = runtime_.package("Startup");
+        index = runtime_.findExport(*package, path);
+    }
+    return std::make_unique<BehaviorProvider>(runtime_, package, index);
+}
+
+// A behavior that is installed script runs its ApplyBehaviorToContext on the VM, once per context object the kernel resolves for it; the output links its script
+// selects (BehaviorKernel.ActivateBehaviorOutputLink) are the ids the provider follows.
+std::vector<int> Run::runScriptBehavior(BehaviorProvider& provider, BehaviorProvider::Behavior& behavior, const ObjectPtr& pawn) {
+    std::vector<int> ids;
+    std::vector<int>* const outer = combat_.selectLinks(&ids);
+    Function* apply = runtime_.findMethod(behavior.object->cls, "ApplyBehaviorToContext");
+    if (!apply) throw RuntimeError("combat-run: no ApplyBehaviorToContext on " + behavior.cls);
+    try {
+        for (const ObjectPtr& context : provider.contexts(behavior, pawn)) {
+            std::vector<Value> args(apply->params.size());
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (apply->params[i].name == "ContextObject") args[i] = Value::makeObject(context);
+                else if (apply->params[i].name == "SelfObject") args[i] = Value::makeObject(pawn);
+            }
+            runtime_.call(*apply, behavior.object, std::move(args));
+        }
+    } catch (...) { combat_.selectLinks(outer); throw; }
+    combat_.selectLinks(outer);
+    return ids;
+}
+
 // The class provider of a pawn (its AI class's BehaviorProviderDefinition), registered as the stock spawn would: made once. The behavior classes the dummy and
-// the bullymongs reach that act on the world are listed at the boundary (reported, not run), the hold behavior runs its installed script on the pawn.
+// the bullymongs reach that act on the world are listed at the boundary (reported, not run), the hold behavior and the conditional run their installed script.
 BehaviorProvider& Run::providerFor(const ObjectPtr& pawn) {
     const auto found = providers_.find(pawn.get());
     if (found != providers_.end()) return *found->second;
     const Value* aiClass = runtime_.property(*pawn, "AIClass");
     const Value* definition = aiClass && aiClass->o ? runtime_.property(*aiClass->o, "BehaviorProviderDefinition") : nullptr;
-    if (!definition || definition->kind != Value::Kind::Object || !definition->o || !definition->o->resourcePackage) throw RuntimeError("combat-run: the pawn's AI class has no behavior provider");
-    auto package = definition->o->resourcePackage;
-    int32_t index = definition->o->resourceIndex;
-    if (index < 0) {                         // an import: the same export by path in Startup (as instantiateReference does)
-        const std::string path = package->path(index);
-        package = runtime_.package("Startup");
-        index = runtime_.findExport(*package, path);
-    }
-    auto provider = std::make_unique<BehaviorProvider>(runtime_, package, index);
+    if (!definition) throw RuntimeError("combat-run: the pawn's AI class has no behavior provider");
+    auto provider = makeProvider(*definition);
     BehaviorProvider& made = *provider;
     providers_[pawn.get()] = std::move(provider);
     made.handle("GearboxFramework.Behavior_AIHold", [this, pawn](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
@@ -263,12 +298,61 @@ BehaviorProvider& Run::providerFor(const ObjectPtr& pawn) {
             runtime_.callByName(b.object, "ApplyBehaviorToContext", {Value::makeObject(combat_.aiInterfaceFor(context))});
         return std::vector<int>();
     });
+    // Behavior_Conditional is installed script: its conditions are expression trees over the pawn (src/combat_death.cpp binds their Evaluate natives from the data).
+    made.handle("WillowGame.Behavior_Conditional", [this, pawn](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+        if (Value* conditions = runtime_.property(*b.object, "Conditions"))       // the expression trees are references to data objects: built before the script calls Evaluate
+            for (Value& entry : conditions->elements())
+                if (Value* tree = entry.field("Condition"); tree && tree->kind == Value::Kind::Object && tree->o) *tree = Value::makeObject(combat_.built(*tree));
+        return runScriptBehavior(p, b, pawn);
+    });
     for (const char* cls : {"WillowGame.Behavior_Transform", "WillowGame.Behavior_AttemptStatusEffect", "WillowGame.Behavior_UpdateMissionObjective",
                             "WillowGame.Behavior_RegisterTargetable", "GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", "Engine.Behavior_RemoteEvent"})
         made.reportAtBoundary(cls);
     made.reportAtBoundary("GearboxFramework.Behavior_SpecialMove", nullptr, {0});
     made.registerConsumer();
+    reported_[&made] = made.trace.size();
     return made;
+}
+
+// The provider of a death definition (BodyClassDeathDefinition.BehaviorProviderDefinition), made once per pawn and registered like the class provider. Its
+// script behaviors run on the VM; the ones that spawn effects, projectiles, sounds and dialog lines are listed at the boundary.
+BehaviorProvider& Run::deathProviderFor(const ObjectPtr& pawn, const ObjectPtr& deathDefinition) {
+    const auto found = deathProviders_.find(pawn.get());
+    if (found != deathProviders_.end()) return *found->second;
+    const Value* definition = deathDefinition ? runtime_.property(*deathDefinition, "BehaviorProviderDefinition") : nullptr;
+    if (!definition) throw RuntimeError("combat-run: the death definition has no behavior provider");
+    auto provider = makeProvider(*definition);
+    BehaviorProvider& made = *provider;
+    deathProviders_[pawn.get()] = std::move(provider);
+    for (const char* cls : {"GearboxFramework.Behavior_CustomEvent", "GearboxFramework.Behavior_CompareBool"})
+        made.handle(cls, [this, pawn](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) { return runScriptBehavior(p, b, pawn); });
+    for (const char* cls : {"WillowGame.Behavior_CoordinatedEffect", "GearboxFramework.Behavior_TriggerDialogEvent", "WillowGame.Behavior_ChangeInstanceDataSwitch",
+                            "WillowGame.PlayerBehavior_UnlockAchievementForAllPlayers", "WillowGame.Behavior_SpawnProjectile", "GearboxFramework.Behavior_PostAkEvent",
+                            "WillowGame.Behavior_SpawnParticleSystem", "WillowGame.Behavior_CreateImpactEffect", "Engine.Behavior_Destroy",
+                            "GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", "WillowGame.Behavior_MissionCustomEvent", "WillowGame.Behavior_SpawnItems",
+                            "WillowGame.Behavior_DamageSourceSwitch", "WillowGame.Behavior_AddObjectInstanceData"})
+        made.reportAtBoundary(cls);
+    made.registerConsumer();
+    reported_[&made] = made.trace.size();
+    return made;
+}
+
+// A behavior event of the death chain (BodyClassDeathDefinition.OnKilledBy and its kin, or a custom event a script behavior broadcast): raised on the death
+// definition's provider, a broadcast on the pawn's class provider too. The behaviors that ran and what the provider could not run are added to the hit's event list.
+void Run::raiseBehaviorEvent(const CombatSystem::BehaviorEvent& event) {
+    std::vector<BehaviorProvider*> targets;
+    const ObjectPtr definition = event.definition ? event.definition : (runtime_.property(*event.pawn, "MyDeathDef") ? runtime_.property(*event.pawn, "MyDeathDef")->o : nullptr);
+    if (definition) targets.push_back(&deathProviderFor(event.pawn, definition));
+    if (event.broadcast) {
+        try { targets.push_back(&providerFor(event.pawn)); } catch (const std::exception&) {}
+    }
+    for (BehaviorProvider* provider : targets) {
+        provider->fireEvent(event.name);
+        size_t& reported = reported_[provider];           // an event a behavior raised on the same provider inside this one has already listed its lines
+        for (; reported < provider->trace.size(); ++reported) combat_.note("behavior " + provider->trace[reported]);
+        for (const auto& error : provider->errors) combat_.note("provider error: " + error);
+        provider->errors.clear();
+    }
 }
 
 // NotifyTakeHit's raise (NATIVE_DAMAGE_DEATH.md section 5): OnTakeDamage on the pawn's class provider with the damage type definition and source as the
@@ -285,6 +369,7 @@ void Run::raiseTakeDamage(const CombatSystem::TakeDamageEvent& event) {
     const size_t before = provider.trace.size();
     provider.fireEvent("OnTakeDamage", {{"DamageType", objectPath(event.damageType)}, {"DamageSource", event.source ? event.source->path : ""}});
     for (size_t i = before; i < provider.trace.size(); ++i) combat_.note("behavior " + provider.trace[i]);
+    reported_[&provider] = provider.trace.size();
     for (const auto& error : provider.errors) combat_.note("provider error: " + error);
     provider.errors.clear();
 }
@@ -295,6 +380,13 @@ std::string Run::hitJson(const CombatSystem::HitReport& report) {
         << ",\"applied\":" << number(report.applied) << ",\"shield_damage\":" << number(report.shieldDamage) << ",\"demigod_before\":" << (report.demigodBefore ? "true" : "false")
         << ",\"demigod_after\":" << (report.demigodAfter ? "true" : "false") << ",\"events\":[";
     for (size_t i = 0; i < report.events.size(); ++i) out << (i ? "," : "") << quote(report.events[i]);
+    out << "],\"order\":[";
+    bool firstCall = true;
+    for (const std::string& call : report.order) {          // the operators (Core.Object) are left out: they are the arithmetic of the scripts
+        if (call.rfind("Core.Object.", 0) == 0) continue;
+        out << (firstCall ? "" : ",") << quote(call);
+        firstCall = false;
+    }
     out << "]}";
     return out.str();
 }

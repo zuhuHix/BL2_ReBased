@@ -243,6 +243,9 @@ public:
     std::map<std::string, size_t> stubCalls;        // natives with no implementation (logged stub, zero result)
     std::map<std::string, size_t> noneContexts;     // script function -> Context expressions whose object was None
     std::map<std::string, Function*> countedFunctions;   // path -> function, for every key in the counters above
+    // Call order, off unless set: every call (script or native, stub or not) appends its function path, in the order the calls start. The census above
+    // is by name; this is the order (the combat run compares a death with the live hook order).
+    std::vector<std::string>* callTrace = nullptr;
 
     // Loading. Class paths are "Package.Class"; function paths "Package.Class.Function".
     std::shared_ptr<const Package> package(const std::string& name);

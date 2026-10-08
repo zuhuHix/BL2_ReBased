@@ -143,6 +143,10 @@ ObjectPtr CombatSystem::hitRegion(Object& victim, const Value& hitInfo) {
     const ObjectPtr bodyClass = load(*body);
     const Value* boneName = hitInfo.kind == Value::Kind::Struct ? hitInfo.field("BoneName") : nullptr;
     const std::string bone = boneName ? lower(boneName->s) : "";
+    if ((bone.empty() || bone == "none") && !missing_["hit region: no bone"]) {
+        missing_["hit region: no bone"] = true;
+        logEvent("note: hit region: the hit names no bone, so the body class's DefaultHitRegion is used (the bone lookup is not exercised; no head/crit region)");
+    }
     if (!bone.empty() && bone != "none")
         if (const Value* list = runtime_.property(*bodyClass, "HitRegionList"))
             for (const Value& entry : list->elements()) {
@@ -551,7 +555,11 @@ CombatSystem::HitReport CombatSystem::hit(const ObjectPtr& victim, const ObjectP
     const auto before = runtime_.scriptCalls;
     const auto nativesBefore = runtime_.nativeCalls;
     const auto noneBefore = runtime_.noneContexts;
-    runtime_.call(*take, victim, arguments);
+    std::vector<std::string>* const outerTrace = runtime_.callTrace;
+    runtime_.callTrace = &report.order;
+    try { runtime_.call(*take, victim, arguments); }
+    catch (...) { runtime_.callTrace = outerTrace; runtime_.countCalls = counting; throw; }
+    runtime_.callTrace = outerTrace;
     runtime_.countCalls = counting;
     // The script functions the chain entered (a census, so alphabetical, not in call order; the natives' events above are in order).
     std::string ran;

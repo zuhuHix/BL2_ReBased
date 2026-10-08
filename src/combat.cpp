@@ -435,6 +435,7 @@ CombatSystem::Enemy CombatSystem::adopt(const ObjectPtr& pawnObject, int level, 
     } catch (const RuntimeError&) {}
     required(runtime_, pawn, "Controller") = Value::makeObject(enemy.mind);
     required(runtime_, pawn, "MyWillowMind") = Value::makeObject(enemy.mind);
+    if (deaths_) prepareForDeath(pawn, enemy.pawn);
 
     Function* setPool = runtime_.findMethod(pawn.cls, "SetHealthResourcePoolDefinition");
     if (!setPool) throw RuntimeError("combat: the pawn class has no SetHealthResourcePoolDefinition");

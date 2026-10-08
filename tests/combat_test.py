@@ -16,6 +16,12 @@ it then calls NotifyTakeHit. The real script computes health - damage and its fl
 natives (HoldDemigod / ReleaseDemigod / DemigodOnHold keep the reasons, a pawn stays demigod until every hold is released), SetHealth(1.0) staying exactly 1.0, and the
 order of the events (health is set before NotifyTakeHit raises OnTakeDamage).
 
+The death chain (src/combat_death.cpp, docs/verification/COMBAT_DEATH.md) is checked with a toy killing pawn class `WillowDoomedPawn`: its TakeDamage sets health below 0 and
+calls NotifyTakeHit and HandleHealthDepleted, whose toy scripts call the mission tracker's native NotifyPawnDied and Died, which calls SetHealth(0) and the game's
+script Killed through WorldInfo.Game. The checks are about what this unit adds: enableDeaths makes WorldInfo.Game and WorldInfo.GRI.MissionTracker (without them the
+script's context calls land on None), the call-order trace (`order`) shows the chain in the order the scripts run it, NotifyPawnDied is a bound native, and the
+post-state of the pawn (health 0, no valid pool after destroyhealth).
+
 Checked (the numbers are the rules of the note):
   - spawn: the pool lands in slot 0 with GUID 0, the manager's Owner is the mind, GetHealth / GetMaxHealth answer the pool (40.5), HealthVar stays 11
     (not written while the pool is valid), HealthMaxVar becomes the pool's maximum (SetHealthResourcePoolDefinition);
@@ -183,6 +189,8 @@ def build_engine():
     T.function(actor, 'GetResourcePoolCurrentValueOrDefault', [('Struct', 'PoolReference', CPF_OUT, reference), ('Float', 'DefaultValue', 0)], None, NATIVE, 'Float')
     world = T.cls('WorldInfo', super_ref=actor)
     T.prop('Float', world, 'TimeSeconds')
+    T.prop('Object', world, 'Game')
+    T.prop('Object', world, 'GRI')
     controller = T.cls('Controller', super_ref=actor)
     T.prop('Object', controller, 'Pawn')
     T.prop('Object', controller, 'ResourcePoolManager')
@@ -304,6 +312,44 @@ def build_willowgame():
     T.function(ai_pawn, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
                                        ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], take_damage)
 
+    # the death chain (WillowDoomedPawn): TakeDamage -> SetHealth(-5) -> NotifyTakeHit -> HandleHealthDepleted -> tracker.NotifyPawnDied -> Died -> SetHealth(0) -> Game.Killed
+    actor = p.add_import_full('Class', engine, 'Actor')
+    world_info = p.add_import_full('Class', engine, 'WorldInfo')
+    world_property = p.add_import_full('ObjectProperty', actor, 'WorldInfo')
+    game_property = p.add_import_full('ObjectProperty', world_info, 'Game')
+    gri_property = p.add_import_full('ObjectProperty', world_info, 'GRI')
+    game_info = T.cls('WillowGameInfo', super_ref=actor)
+    killed_function = T.function(game_info, 'Killed', [('Object', 'KilledPawn', 0)], lambda ids: (lambda a: (a.return_nothing(), a.end(), a)[2])(Asm()))['__self__']
+    tracker = T.cls('MissionTracker', super_ref=actor)
+    notify_died = T.function(tracker, 'NotifyPawnDied', [('Object', 'KilledPawn', 0)], None, NATIVE)['__self__']
+    replication = T.cls('WillowGameReplicationInfo', super_ref=actor)
+    tracker_property = T.prop('Object', replication, 'MissionTracker')
+    doomed = T.cls('WillowDoomedPawn', super_ref=ai_pawn)
+
+    def died(ids):                    # SetHealth(0.0); WorldInfo.Game.Killed(Self)
+        a = Asm()
+        a.final(set_health, lambda: a.float_const(0.0))
+        a.context(lambda: a.context(lambda: a.instance(world_property), lambda: a.instance(game_property)), lambda: a.final(killed_function, lambda: a.raw(0x17)))
+        a.return_nothing(); a.end(); return a
+    died_function = T.function(doomed, 'Died', [], died)['__self__']
+
+    def depleted(ids):                # WorldInfo.GRI.MissionTracker.NotifyPawnDied(Self); Died()
+        a = Asm()
+        a.context(lambda: a.context(lambda: a.instance(world_property), lambda: a.instance(gri_property)),
+                  lambda: a.context(lambda: a.instance(tracker_property), lambda: a.final(notify_died, lambda: a.raw(0x17))))
+        a.final(died_function)
+        a.return_nothing(); a.end(); return a
+    depleted_function = T.function(doomed, 'HandleHealthDepleted', [], depleted)['__self__']
+
+    def doomed_take_damage(ids):      # SetHealth(-5.0); NotifyTakeHit(...); HandleHealthDepleted()
+        a = Asm()
+        a.final(set_health, lambda: a.float_const(-5.0))
+        a.final(notify, *[(lambda n=n: a.local(ids, n)) for n in ('InstigatedBy', 'HitLocation', 'Damage', 'DamageType', 'Momentum', 'Pipeline')])
+        a.final(depleted_function)
+        a.return_nothing(); a.end(); return a
+    T.function(doomed, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
+                                      ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], doomed_take_damage)
+
     # the classes the hit step builds around the chain
     pipeline = T.cls('WillowDamagePipeline')
     for name in ('DamageTypeDef', 'ImpactDefinition', 'DirectHitObject'): T.prop('Object', pipeline, name)
@@ -338,6 +384,8 @@ def build_pawns():
     ai_class = p.add_export(p.add_import_full('Class', willow, 'AIClassDefinition'), 'AIClass_Toy',
                             w32(0) + t.obj('HealthPoolDefinition', health_definition) + t.obj('AIDef', health_definition) + none)
     p.add_export(p.add_import_full('Class', willow, 'WillowAIPawn'), 'Pawn_Toy',
+                 w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
+    p.add_export(p.add_import_full('Class', willow, 'WillowDoomedPawn'), 'Pawn_Doomed',
                  w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
     return p
 
@@ -441,6 +489,20 @@ with tempfile.TemporaryDirectory() as folder:
     order = [position(floor, 'TakeDamage'), position(floor, 'SetHealth'), position(floor, 'NotifyTakeHit'), position(floor, 'OnTakeDamage raised')]
     check('event order: health is set before NotifyTakeHit, which raises OnTakeDamage', all(i >= 0 for i in order) and order == sorted(order), floor['events'])
     check('a class with no behavior provider has nothing to raise the event to', any('no behavior provider' in e for e in floor['events']), floor['events'])
+
+    # ---- the death chain: enableDeaths gives the world a game and a tracker, the scripts run in order, NotifyPawnDied is a bound native, the post-state
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Doomed:4', 'player:8', 'hit:0:10::Bullet', 'destroyhealth:0')
+    check('death: exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    rows = got['steps']
+    kill = rows[2]['result']
+    expected_order = ['WillowGame.WillowDoomedPawn.TakeDamage', 'Engine.Pawn.SetHealth', 'Engine.Pawn.NotifyTakeHit', 'WillowGame.WillowDoomedPawn.HandleHealthDepleted',
+                      'WillowGame.MissionTracker.NotifyPawnDied', 'WillowGame.WillowDoomedPawn.Died', 'Engine.Pawn.SetHealth', 'WillowGame.WillowGameInfo.Killed']
+    check('death: the call order of the chain (TakeDamage, SetHealth, NotifyTakeHit, HandleHealthDepleted, NotifyPawnDied, Died, SetHealth, Killed)', kill.get('order') == expected_order, kill.get('order'))
+    check('death: the tracker native ran (it is bound, not a stub)', any(e.startswith('NotifyPawnDied') for e in kill['events']) and 'MissionTracker.NotifyPawnDied(object)' not in got['stubs'], (kill['events'], got['stubs']))
+    check('death: the game script ran (WorldInfo.Game is not None): no call on None', 'WillowGame.WillowGameInfo.Killed' in kill.get('order', []), kill.get('order'))
+    check('death: SetHealth(0) came after the lethal -5 (the events list the writes in order)', [e for e in kill['events'] if e.startswith('SetHealth')] == ['SetHealth -5.000000', 'SetHealth 0.000000'], kill['events'])
+    check('death: health is 0 after the chain', kill['health_after'] == 0, kill)
+    check('death: the pool is gone after destroyhealth', rows[3]['result']['state']['pool_valid'] is False and rows[3]['result']['state']['pool_slot'] == 255, rows[3])
 
 if failures:
     print(f'{len(failures)} combat check(s) failed:')

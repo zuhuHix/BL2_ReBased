@@ -77,6 +77,7 @@ public:
         double healthBefore = 0, healthAfter = 0, arriving = 0, applied = 0, shieldDamage = 0;
         bool demigodBefore = false, demigodAfter = false;
         std::vector<std::string> events;
+        std::vector<std::string> order;        // every function the chain called (script and native), in call order; "iterator <native>" for a foreach the VM skips
     };
     // A hit on `victim` by `instigator` (a controller; its pawn is the damage causer): the damage type definition `damageTypePath` (a stock object path,
     // looked up in Startup and the victim's package) and the damage source class `source`. Runs the victim's script TakeDamage; the owner's script guard
@@ -88,6 +89,27 @@ public:
     ObjectPtr aiInterfaceFor(const ObjectPtr& context);
     // Pawn.IsDemigodMode as the installed script answers it (the AI component's demigod hold or the mind's own flag).
     bool demigod(const ObjectPtr& pawn);
+    // ---- death (plan step S-c, src/combat_death.cpp) ----
+    // Makes the world a kill can run in and binds the natives the death chain reaches (docs/verification/COMBAT_DEATH.md): WorldInfo.Game becomes a
+    // WillowGameInfo (Pawn.Died and the kill credit are script on it; without a game the stock Pawn.Died returns at once), a world with no
+    // GameReplicationInfo gets a WillowGameReplicationInfo with a MissionTracker (WillowPawn.HandleHealthDepleted notifies it), and a pawn adopted
+    // from now on gets an inventory manager (WillowPawn.Died only drops loot for a pawn that has one). Not called by the slice, so its dummy is unchanged.
+    void enableDeaths();
+    // A behavior event the death chain raises on a pawn's providers (BodyClassDeathDefinition.OnKilledBy, OnPlayDeathPizazz, OnDeathNonGib, OnDeathGib, and a
+    // custom event a script behavior broadcasts to the consumer): the pawn is found by the consumer handle every pawn adopted after enableDeaths was given. The owner
+    // of the providers raises it (the --combat-run driver, like the OnTakeDamage handler).
+    struct BehaviorEvent {
+        ObjectPtr pawn, definition, killer;
+        std::string name;
+        bool broadcast = false;        // BehaviorKernel.BroadcastBehaviorEventFromScript: every provider of the consumer, not the death definition's
+    };
+    using BehaviorEventFn = std::function<void(const BehaviorEvent&)>;
+    void setBehaviorEventHandler(BehaviorEventFn handler) { behaviorEvent_ = std::move(handler); }
+    // The built object for a reference to a data object (the stand-in the property reader leaves for an object that is another export), made once: the condition
+    // trees of a Behavior_Conditional are such references, and the script calls Evaluate on them.
+    ObjectPtr built(const Value& reference) { return load(reference); }
+    // BehaviorKernel.ActivateBehaviorOutputLink appends to the list given here (the running script behavior's selected outputs); returns the previous list.
+    std::vector<int>* selectLinks(std::vector<int>* ids) { std::vector<int>* previous = selectedLinks_; selectedLinks_ = ids; return previous; }
     // The events of the natives that ran since the last clear, in order (the rows of HitReport are cut from it).
     const std::vector<std::string>& events() const { return events_; }
     void note(const std::string& text) { events_.push_back(text); }
@@ -102,6 +124,11 @@ private:
     Class* mindClass_ = nullptr;
     Class* aiPawnClass_ = nullptr;
     bool classesLooked_ = false;
+    bool deaths_ = false;                      // enableDeaths ran
+    BehaviorEventFn behaviorEvent_;
+    std::vector<int>* selectedLinks_ = nullptr;
+    std::map<int64_t, ObjectPtr> consumers_;   // consumer handle PID -> pawn
+    int64_t nextConsumer_ = 100;               // the first handle given out (the bridge's Marcus has 0)
     // The hit chain's state (src/combat_hit.cpp).
     TakeDamageFn takeDamage_;
     std::vector<std::string> events_;
@@ -117,6 +144,8 @@ private:
     void bind(const char* path, NativeFn fn);
     void bindNatives();
     void bindHitNatives();
+    void bindDeathNatives();
+    void prepareForDeath(Object& pawn, const ObjectPtr& self);
     ObjectPtr acquirePipeline(const Value& damageType, const Value& impact, bool friendly, const Value& hitObject);
     void releasePipeline(const ObjectPtr& pipeline);
     Value adjustDamage(NativeCall& c);

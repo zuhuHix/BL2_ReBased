@@ -677,6 +677,7 @@ struct Interp {
     // Runs `function` with bound arguments; natives call their implementation, script functions get a frame.
     Value invoke(Function& function, const ObjectPtr& target, std::vector<NativeCall::Arg> args) {
         tick();
+        if (rt.callTrace) rt.callTrace->push_back(function.path);
         if (rt.countCalls) {
             rt.countedFunctions.emplace(function.path, &function);
             if (!function.isNative()) ++rt.scriptCalls[function.path];
@@ -863,6 +864,13 @@ struct Interp {
                 // [call of an iterator native][u16 end]: the end offset is the loop's IteratorPop, the body ends at IteratorNext.
                 if (!startEngineIterator(s, f, pc)) {
                     log("UNIMPLEMENTED native iterator (foreach over an engine iterator)");
+                    if (rt.callTrace) {         // the call trace names which iterator it was (the stub line does not)
+                        const Expr* call = &s.kids.at(0);
+                        while ((call->op == script::EX_Context || call->op == script::EX_ClassContext) && call->kids.size() == 2) call = &call->kids[1];
+                        const Function* iterator = call->isNativeCall() ? rt.nativeByIndex(call->native)
+                                                   : call->op == script::EX_FinalFunction && !call->refs.empty() ? rt.functionAt(f.function->package, call->refs.at(0)) : nullptr;
+                        rt.callTrace->push_back("iterator " + (iterator ? iterator->path : !call->names.empty() ? call->names.at(0) : std::string("?")));
+                    }
                     pc = target(f, s.words.at(0));
                 } else if (f.iterators.back().array->elements().empty()) {
                     pc = target(f, s.words.at(0));
