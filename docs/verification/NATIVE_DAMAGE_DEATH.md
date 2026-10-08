@@ -441,6 +441,8 @@ Values (data; override or default):
   `total / MaxDesiredSuccessiveInjuries x NumSuccessiveInjuries` and floored at 1 s (solo defaults: 12 s, 8 s, 4 s, then
   1 s). `NumSuccessiveInjuries` grows by one when the previous injury was less than `MaxTimeBetweenInjuries` (30 s) ago,
   else resets to 0, and is also reset by a resurrection.
+  Live check (lane L5b, 2026-10-08, `COMBAT_GOLDEN_TRACE.md`): the first two injuries bled out in 12.0 s and the third in 8.0 s, so the observed cut is
+  `total x (1 - (N-1)/3)` for N = 1, 2 (the sequence above is shifted by one). N >= 3 and the 1 s floor were not reached (UNVERIFIED).
 - The timer (`flInjuredTargetedTime`) only starts after the "switch to sidearm" special move ends (state 2, targeted). It
   runs at the game's delta time unless the pawn is being revived (then the revive time runs instead and movement stops).
 - In the last `InjuredBonusTimePercent` percent of the bleed-out (remaining / total <= 0.10) the injured bonus is on: the

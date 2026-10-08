@@ -220,6 +220,79 @@ NATIVE_LEVEL_UP_ATTRIBUTES.md / NATIVE_ACTION_SKILL.md:
   a fizzle after 1.01 s leaves 0). Order in the cast matches section 5 of NATIVE_ACTION_SKILL: delegate start after `OnSelectedTarget` and the
   cooldown manager.
 
+## Open-rule checks (lane L5, 2026-10-07/08)
+
+AI-assisted (Claude), lanes L5 (2026-10-07, stopped after question 3) and L5b (2026-10-08, questions 4-6 and the bullymong). Same method as lane L3: one game
+process under the run lock, level-8 Maya (`-Character=Save0008.sav`), `Install-Driver -BlockSavesAtStart`, memory-only, closed through its window. New probe:
+`tools/real_game/scripts/open_rules_probe.py` (load it after `combat_probe.py`, never after `fire_mission_probe.py`). Raw rows (67,609 hook rows and 107,481 frames on
+2026-10-08) stay under ignored `local/realgame/L5/` and `local/realgame/L5b/`. Labels as above: **observed** or **UNVERIFIED**.
+
+**Fire dummy, pool slots, crit base (lane L5, 2026-10-07).**
+- The Fire target dummy has `GetHealth` = `GetMaxHealth` = **778.658** (level 8, game stage 8, `ExperiencePointMultiplier` 0.5, class health multiplier 5), not 20000. Real shots took it to
+  exactly **1.0** and every later hit (pistol, splash, DoT) applied 0.0; no death rows and no refill until the mission's Kismet destroyed it 4.0 s after the first hit. So it is **not
+  killable by damage**; the mechanism of the 1.0 floor is not identified (**UNVERIFIED**).
+- Maya's controller pool slots: 0-6 ammo (Combat_Rifle, Combat_Shotgun, Grenade_Protean, Patrol_SMG, Repeater_Pistol, Rocket_Launcher, Sniper_Rifle), 7 accuracy, 8 experience, 9 and 10 the action-skill
+  and melee cooldowns, 11 health, 12 shield, GUID byte = slot, 13 used: confirms NATIVE_COMBAT_GROUNDWORK section 1.10 (not re-read after a respawn).
+- Crit: `CurrentInstantHitCriticalHitBonus` base 2.0 (confirms section 3.4); the live value 4.9815 = (2.0 + 0.3) x (1 + 1.0159 + 0.15): Scale modifiers add as 1 + sum.
+
+**Kill experience (question 4): `trunc(max(10, mult x 10 x (level + 4)) x table[|d|])` fits 5 of 5 player-only kills on `Ice_P`.**
+`or_xp_hook` records one row inside `WillowExperiencePipeline.AwardCombatExperienceToParty` (PRE and POST): the award passed in, whether the killer is the player, the killed pawn's
+`GetExpLevel` and `ExperiencePointMultiplier`, the player's `GetExpPoints` before and after (the player's level comes from the `or_enemy` rows taken before each kill: 8, 8, then 10 after the question 5 level-ups).
+
+| victim (class, level, multiplier) | player level | award (`CalculateExperiencePointsForKill`) | pool delta | table entry |
+|---|---|---|---|---|
+| baby bullymong, 6, 0.5 | 8 | 50.0 | +35 | d=2: lower 0.7 (35.0) |
+| adult bullymong, 7, 1.25 | 8 | 137.5 | +123 | d=1: lower 0.9 (123.75 truncated) |
+| baby bullymong, 6, 0.5 | 10 | 50.0 | +7 | d=4: lower 0.15 (7.5 truncated) |
+| baby bullymong, 6, 0.5 | 10 | 50.0 | +7 | d=4 |
+| regular bullymong, 6, 0.75 | 10 | 75.0 | +11 | d=4 (11.25 truncated) |
+
+- **The award fits `max(10, mult x 10 x (level + 4))` exactly in 5 of 5** (50, 137.5, 50, 50, 75), with the multipliers the class data gives (baby Chump 0.5, regular Normal 0.75,
+  ranged NormalHigh 1.0, adult Tough 1.25; `GD_AI_Balance.XP.XPMultiplier_01..04`). No crit, no damage-type factor (both lists empty), playthrough 1 so M = 10.
+- **The credit fits the level-difference table of NATIVE_COMBAT_GROUNDWORK 5.2, truncated, in 5 of 5** (victim below the player: `LowerLevelEnemyExpScale` at position |d| - 1: 0.9, 0.7, 0.15 for d = 1, 2, 4).
+  With lane L3's two kills (112.5 -> +45 at d=3, entry 0.4; 50.0 -> +7 at d=4) the entries d = 1 to 4 are observed. A constant factor does not fit (0.7, 0.9, 0.15). The credit happens inside
+  `AwardCombatExperienceToParty` (the pool value changes between its PRE and POST rows; no script `ExpEarn`). Solo: share 100 percent, combat multiplier 1.0.
+- **Not observed:** equal level (scale 1), a victim above the player (`HigherLevelEnemyExpScale`), d >= 5, more than one player, playthrough 2 and above. The fit is therefore on lower-level victims with d = 1-4 only.
+
+**Action-skill cooldown and `ExpLevelUp(True)` (question 5).** The function's argument is `bCheated`; `True` runs `OnExpLevelChange(bFeedback true, bNaturalLevelup false)`.
+- Valid run: a real Phaselock cast locked a level-5 adult (`PhaseLockTarget` row), the cooldown pool read **13.0 (its maximum) at skill age 2.0 s**, `ExpLevelUp(True)` was called inside that frame and the pool read
+  **0.0 in the same call**, stayed 0 for the rest of the lock (no refill), level 9 -> 10, health refilled to full. `ActionSkillCooldownComplete` ran right after `ClientOnExpLevelChange`, as with `False`.
+  The lock itself was not cut short (`ReleaseTarget` 5.71 s and skill off 6.72 s after the key, as an uncheated cast). **The cooldown reset does not depend on the flag** (`False`: lane L3).
+- **Difference (new):** with `True` only the two `PlayerBehavior_LevelUp` skills ran (health refill, shield recharge boost 90.29/s for 3.99 s, the cooldown reset); `PlayerBehavior_LevelUpNaturally` did not: the equipped
+  weapon's damage stayed at 41.398 for the 35 s watched (a natural level-up gives 61.9 for 30 s). So `bNaturalLevelup = not bCheated`.
+- Two earlier casts fizzled (no line of sight: the player was placed behind an ice pillar): `StartActionSkill`, the cooldown draining from 13 at 1 per second, `Fizzled` after 1.01 s, `ResetSkillCooldown`, cooldown 0. The first cheat call
+  landed on that already-zero pool (level 8 -> 9, same two behaviors), so it does not count as a test.
+
+**Successive injuries and bleed-out (question 6).** Maya was downed by bullymongs (not scripted); a shotgun kill while in the targeted state gave the second wind (health 136.97 = 0.25 x 547.874 in the
+kill frame, shield 162.53 = 0.9 x 180.589 the next frame, 3 of 3), then enemies downed her again.
+
+| injury | `NumSuccessiveInjuries` (read at its start) | since the previous injury began | `TotalBleedoutTime` | targeted state to dead state |
+|---|---|---|---|---|
+| first (5 episodes, 3 run to the end) | 0 | over 30 s, or after a respawn | 12.0 | 12.00-12.04 s |
+| second | 1 | 11.5 s | 12.0 | 12.04 s |
+| third | 2 | 7.45 s | **8.0** | **8.02 s** |
+
+- The shortened bleed-out is observed: the third injury (N = 2) ended 8.0 s after its targeted state, and the attribute itself read 8.0. The second (N = 1) did **not** shorten (12.0 s). The note's `total / MaxDesiredSuccessiveInjuries x N`
+  (12 -> 8 at N = 1) is **contradicted**; the data fit `total x (1 - (N - 1) / 3)` for N = 1 and 2 (reduction 0 and 4 s). N = 3 (4 s by that fit) and the 1 s floor were **not observed** (no more low-health enemies); the 30 s window edge is not tested (**UNVERIFIED**).
+- Unchanged by N: down to the targeted state 2.28 s, dead state to ragdoll 0.84 s, death camera 5.76 s. The counter read 0 again for injuries after a respawn.
+- While down the shotgun fired only from the targeted state (clicks in the first 2.28 s did nothing).
+
+**Bullymong (the Phase 4 enemy; files `local/realgame/L5b/bullymong_*.json`).** Classes in the Three Horns Divide group: adult (`CharClass_PrimalBeastAdult`, balance `PawnBalance_PrimalBeastAdult`), regular
+(`CharClass_PrimalBeast`, `PawnBalance_PrimalBeast`), baby (`PawnBalance_PrimalBeast_Monglet`) and ranged (`PawnBalance_PrimalBeast_Slinger`), levels 5-7 in this session, game stage 6 for the level-7 adult.
+- Health: no shield and no `ShieldArmor` pool (only slot 0 `Pool_Health`, no regeneration), `bIsInvulnerable` false, `bCanBeDamaged` true. Class starting values: health multiplier adult 6, regular 2, ranged 4, baby 0.5;
+  base health per level 102.347 (5), 117.756 (6), 135.44 (7), about x1.15 a level (adult 614.1 / 812.6 at levels 5 / 7, ranged 409.4 at 5, baby 58.9 at 6).
+- Attack damage on a hit to the player (arrival value; the player was not invulnerable): `8 x 1.13^level x EnemyNonWeaponDamageMultiplier` (adult 5, regular 1.5, baby 0.75, ranged 3): adult melee 73.697 / 83.278 / 94.104 at levels
+  5 / 6 / 7 (`MeleeDef_PrimalBeast_Melee` and `_RadiusLeap`), regular 24.983 and baby 12.492 at 6, ranged grenade projectile 44.218 at 5. Applied to the player 0.715-0.741 of the arrival value, as in step 9.
+- AI: `AIDef_PrimalBeastAdult` (targeting `Targeting_ShortRange`, search radius 4096, `bHealOnReset`), controller `WillowMind`, behavior sequences `Default` (with an `OnTakeDamage` event) plus five `M_NameGame_*` mission-name sequences.
+- Drops seen in eight AI deaths (five by the player) (the `DropLootOnDeath` post row always shows an empty `SpawnedInventory`; the pools are rolled from inside it): `Pool_Ammo_All_Emergency`, `Pool_Ammo_All_NeedOnly` and `Pool_Eridium_Stick` returned false, `Pool_Health_All` returned true
+  twice and made a health pickup; no money or gun pool fired in this session (lane L3 saw `Pool_Money_1or2`). The adult's default pool list is `StandardEnemyGunsAndGear`.
+
+**What this confirms or contradicts.** NATIVE_COMBAT_GROUNDWORK 5.1 and 5.2 (kill XP): confirmed for the cases above. NATIVE_DAMAGE_DEATH 10.x: the successive-injury reduction needs correcting as above. NATIVE_LEVEL_UP_ATTRIBUTES: the cooldown reset is
+independent of the flag; the 30 s damage scale is natural-only. The host's Fire dummy health (20000) and its death and respawn are contradicted (first block). Hooks see only script calls: the native credit and the floor mechanism stay invisible.
+
+**Save safety (2026-10-08).** 60 files hashed before and after (33 save and config files, the SDK settings folder, Sanity Saver's private copies). Two differed afterwards: Sanity Saver's own `Save0008.json.gz` (rewritten by that mod at load, as in lanes L3 and L5) and
+`sdk_settings/python-sdk.json` (the SDK's own "Next Check Time" stamp, refreshed at startup because the stored one had expired; this lane wrote no setting). Both were restored from the backup taken first and the re-hash showed 0 of 60 different. Saves were blocked from the first frame; the game was closed through its window.
+
 ## Save safety
 
 `Backup-Saves` copied `SaveData` and `Config` first (`local/realgame/save-backup-20261007-130254`), together with the whole `sdk_mods/settings`
