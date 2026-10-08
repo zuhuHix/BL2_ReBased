@@ -5373,3 +5373,11 @@ Observed: the 0.715-0.741 arrival-to-applied factor (`0.65 x (1 + 0.02 x attacke
 No unboosted adult level-6 melee hit exists in the dump, so 0.728 there is the formula, not an observation; the comparator's FAIL row is a boosted hit. The Fire dummy: `Pawn.IsDemigodMode()` is False until the first player hit and True from the call of the dummy provider's `Behavior_AIHold_59` (reason `Safe`, type 3) on, and health then floors at 1.0 (the hit that would pass it sets `SetHealth(1.0)`, later hits apply 0); the mind's `GetAIDemigod/GetAIGod/InGodMode` stay False,
 and `HoldAIForMatinee`, `MAT_BeginAIGroup` and the mind's `SetAIDemigod/SetAIGod` never ran from script, so the plan's Matinee candidate is contradicted.
 UNVERIFIED: why Scale -0.5 reads 1/1.5, n >= 3, bullet and rocket types under the boost, the Power Boost effect, which part of the AIHold sets demigod (the type here has no God bit), whether releasing it clears demigod, other pawns. Save safety: 60 files hashed before and after; Sanity Saver's `Save0008.json.gz` and the SDK's own update-check stamp in `python-sdk.json` differed and were restored from the backup, then 0 of 60 differ. Automated checks: none (no code under `src/` or `host/`; one `py_compile` of the probe).
+
+## 2026-10-08: combat comparator reads the Defense Boost count (lane H3)
+
+AI-assisted (Claude). `tools/verify_combat_pawn.py --live` now reads `L6/q7_rows.json` (boost count per hit, ignored local data) and computes the
+applied-ratio rows from unboosted hits only. Adult level 6 has no unboosted melee hit in the dump, so that row is MISSING, not FAIL. New
+`ratio_boost1`/`ratio_boost2` rows check the `1/(1 + 0.5 n)` factor lane L6 observed live (adult L5 and L6 melee and ranged L5 grenade PASS at 1e-3).
+Checks: self-test on invented inputs passes; the live run gives 24 PASS, 0 FAIL, 5 MISSING of 29. Open: no 2-boost melee sample; status-effect and
+empty-type hits at adult L6 with one boost show no reduction in 39 hits (adult L5 status hits do show it), so the boost rule for non-melee sources stays UNVERIFIED.

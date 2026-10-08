@@ -14,6 +14,9 @@ is stored here: the live values are read from the ignored dumps under local/real
 VM JSON schema: {"rows": {<row id>: <number>, ...}}. A kill row takes {"award": <number>, "credit": <number>}. A row that is
 absent is reported MISSING and does not fail the run. Only FAIL makes the exit code 1.
 
+--live reads the hits from local/realgame/L6/q7_rows.json when it exists (it carries the Defense Boost count per hit), else from
+L5b/player_hits.json with no boost filter. The ratio rows use unboosted hits only; the ratio_boost<N> rows check the factor 1/(1+0.5 N).
+
 Tolerance: relative 1e-3 (|measured - expected| <= 1e-3 x |expected|). Kill credits are integers and get the same rule.
 A FAIL means the closed form does not reproduce the measured value; do not widen the tolerance to pass it.
 """
@@ -72,6 +75,7 @@ class Row:
     level: int = None
     player_level: int = None
     source: str = None             # arrival: melee or grenade; kill: "L5b" (live dumps) or "L3" (not read here)
+    boosts: int = 0               # ratio: Defense Boost count the hit must carry (0 = unboosted)
 
 
 ROWS = [
@@ -93,6 +97,10 @@ ROWS = [
     Row("ratio.PrimalBeastAdult.L7", "ratio", "PrimalBeastAdult", 7, source=MELEE),
     Row("ratio.PrimalBeast.L6", "ratio", "PrimalBeast", 6, source=MELEE),
     Row("ratio.PrimalBeastBaby.L6", "ratio", "PrimalBeastBaby", 6, source=MELEE),
+    Row("ratio_boost1.PrimalBeastAdult.L5", "ratio", "PrimalBeastAdult", 5, source=MELEE, boosts=1),
+    Row("ratio_boost1.PrimalBeastAdult.L6", "ratio", "PrimalBeastAdult", 6, source=MELEE, boosts=1),
+    Row("ratio_boost2.PrimalBeastAdult.L6", "ratio", "PrimalBeastAdult", 6, source=MELEE, boosts=2),
+    Row("ratio_boost1.PrimalBeast_Ranged.L5", "ratio", "PrimalBeast_Ranged", 5, source=GRENADE, boosts=1),
     Row("kill.PrimalBeastBaby.L6.p8", "kill", "PrimalBeastBaby", 6, 8, source="L5b"),
     Row("kill.PrimalBeastAdult.L7.p8", "kill", "PrimalBeastAdult", 7, 8, source="L5b"),
     Row("kill.PrimalBeastBaby.L6.p10.a", "kill", "PrimalBeastBaby", 6, 10, source="L5b"),
@@ -111,7 +119,7 @@ def expected(row):
     if row.kind == "arrival":
         return arrival(DAMAGE_MULT[row.cls], row.level)
     if row.kind == "ratio":
-        return applied_ratio(row.level)
+        return applied_ratio(row.level) / (1 + 0.5 * row.boosts)
     award = kill_award(XP_MULT[row.cls], row.level)
     return {"award": award, "credit": kill_credit(award, row.level, row.player_level)}
 
@@ -138,7 +146,7 @@ def measure_live(dummy, profiles, summary, hits):
             if row.kind == "arrival" and dmg:
                 measured[row.id] = statistics.median(h["dmg"] for h in dmg)
             if row.kind == "ratio":
-                full = [h for h in dmg if h["sh0"] == 0 and h["applied"] > 0 and abs(h["hp0"] - h["hp1"] - h["applied"]) < 1e-2]
+                full = [h for h in dmg if h.get("boosts", 0) == row.boosts and h["sh0"] == 0 and h["applied"] > 0 and abs(h["hp0"] - h["hp1"] - h["applied"]) < 1e-2]
                 if full: measured[row.id] = statistics.median(h["applied"] / h["dmg"] for h in full)
     pool = list(summary["kills"])
     for row in ROWS:
@@ -161,11 +169,19 @@ def close(measured, exp):
     return abs(float(measured) - exp) <= TOLERANCE * abs(exp)
 
 
+def missing_reason(row):
+    if row.source == "L3":
+        return "no live source (the L3 dump is not read by this comparator)"
+    if row.kind == "ratio":
+        return "no unboosted hit in the dump" if row.boosts == 0 else f"no {row.boosts}-boost hit from this source in the dump"
+    return "not in the measured values"
+
+
 def check_row(row, measured):
     """Returns (status, expected, detail): status is PASS, FAIL or MISSING."""
     exp = expected(row)
     if measured is None:
-        return "MISSING", exp, ("no live source (the L3 dump is not read by this comparator)" if row.source == "L3" else "not in the measured values")
+        return "MISSING", exp, missing_reason(row)
     if isinstance(exp, dict):
         if not isinstance(measured, dict) or not all(k in measured for k in exp):
             return "MISSING", exp, "kill row needs both award and credit"
@@ -195,11 +211,27 @@ def report(measured):
     return 1 if counts["FAIL"] else 0
 
 
+def hits_from_q7(records):
+    return [{"type": r["type"], "mind": [r["attacker"], r["attacker_level"], None], "dmg": r["arrival"], "applied": r["applied"],
+             "sh0": r["sh"][0], "sh1": r["sh"][1], "hp0": r["hp"][0], "hp1": r["hp"][1], "boosts": r["boosts_active"]} for r in records]
+
+
+def live_hits(directory):
+    def load(name):
+        return json.loads((directory / name).read_text(encoding="utf-8"))
+    q7 = directory / "L6" / "q7_rows.json"
+    if q7.exists():
+        print("hits: L6/q7_rows.json (ratio rows use unboosted hits only; boost rows use the hit's boost count)")
+        return hits_from_q7(load("L6/q7_rows.json"))
+    print("note: L6/q7_rows.json not found; ratio rows use all hits with no boost filter, boost rows have no source")
+    return load("L5b/player_hits.json")
+
+
 def live_measured(directory):
     def load(name):
         return json.loads((directory / name).read_text(encoding="utf-8"))
     return measure_live(load("L5/dummy_pre_allprops.json"), load("L5b/bullymong_profiles_pre.json"),
-                        load("L5b/bullymong_summary.json"), load("L5b/player_hits.json"))
+                        load("L5b/bullymong_summary.json"), live_hits(directory))
 
 
 def self_test():
@@ -240,6 +272,34 @@ def self_test():
     expect("live kill award+credit PASS", status["kill.PrimalBeastBaby.L6.p8"], "PASS")
     expect("live kill credit off by one FAIL", status["kill.PrimalBeastAdult.L7.p8"], "FAIL")
     expect("L3 kill is MISSING", status["kill.PrimalBeastAdult.L5.p8"], "MISSING")
+
+    def boosted_hit(level, boosts, ratio):
+        dmg = arrival(5, level)
+        applied = dmg * ratio
+        return {"type": MELEE, "mind": ["PrimalBeastAdult", level, None], "dmg": dmg, "applied": applied, "boosts": boosts,
+                "sh0": 0, "sh1": 0, "hp0": 100.0, "hp1": 100.0 - applied}
+    unboosted5 = boosted_hit(5, 0, applied_ratio(5))
+    boost1_5 = boosted_hit(5, 1, applied_ratio(5) / 1.5)
+    live_boost = measure_live(dummy_ok, profiles, {"kills": []}, [unboosted5, boost1_5])
+    boost_status = {row.id: check_row(row, live_boost.get(row.id)) for row in ROWS if row.kind == "ratio"}
+    expect("unboosted ratio ignores the boosted hit", boost_status["ratio.PrimalBeastAdult.L5"][0], "PASS")
+    expect("boost1 factor PASS", boost_status["ratio_boost1.PrimalBeastAdult.L5"][0], "PASS")
+    expect("boost1 expected is ratio / 1.5", round(boost_status["ratio_boost1.PrimalBeastAdult.L5"][1], 9), round(applied_ratio(5) / 1.5, 9))
+
+    only_boosted_6 = measure_live(dummy_ok, profiles, {"kills": []}, [boosted_hit(6, 1, applied_ratio(6) / 1.5)])
+    expect("no unboosted L6 hit is MISSING", check_row(next(r for r in ROWS if r.id == "ratio.PrimalBeastAdult.L6"), only_boosted_6.get("ratio.PrimalBeastAdult.L6"))[0], "MISSING")
+    expect("no unboosted L6 hit reason", check_row(next(r for r in ROWS if r.id == "ratio.PrimalBeastAdult.L6"), None)[2], "no unboosted hit in the dump")
+    expect("boost1 L6 PASS", check_row(next(r for r in ROWS if r.id == "ratio_boost1.PrimalBeastAdult.L6"), only_boosted_6.get("ratio_boost1.PrimalBeastAdult.L6"))[0], "PASS")
+    expect("no boost2 hit is MISSING", check_row(next(r for r in ROWS if r.id == "ratio_boost2.PrimalBeastAdult.L6"), None)[0], "MISSING")
+
+    wrong_factor = measure_live(dummy_ok, profiles, {"kills": []}, [boosted_hit(6, 1, applied_ratio(6))])
+    expect("boost1 without the 1/1.5 factor FAIL", check_row(next(r for r in ROWS if r.id == "ratio_boost1.PrimalBeastAdult.L6"), wrong_factor.get("ratio_boost1.PrimalBeastAdult.L6"))[0], "FAIL")
+
+    q7_hit = hits_from_q7([{"type": MELEE, "attacker": "PrimalBeastAdult", "attacker_level": 6, "arrival": 83.0, "applied": 40.0,
+                            "hp": [100.0, 60.0], "sh": [0.0, 0.0], "boosts_active": 2}])[0]
+    expect("q7 hit keeps boost count", q7_hit["boosts"], 2)
+    expect("q7 hit keeps arrival and level", (q7_hit["dmg"], q7_hit["mind"][1]), (83.0, 6))
+    expect("q7 hit keeps hp pair", (q7_hit["hp0"], q7_hit["hp1"]), (100.0, 60.0))
 
     vm = {"health.TargetDummy.L8": health(5, 8), "health.PrimalBeastBaby.L6": 1.0, "kill.PrimalBeast.L6.p10": {"award": 75.0, "credit": 11}}
     statuses = {row.id: check_row(row, vm.get(row.id))[0] for row in ROWS}
