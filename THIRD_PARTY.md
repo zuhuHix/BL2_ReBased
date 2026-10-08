@@ -194,6 +194,14 @@ decision before implementation.
   `rea setup --client claude_code` registered its MCP server in the user's Claude Code configuration (backup kept by
   REA) with `GHIDRA_INSTALL_DIR` and `JAVA_HOME` pointing at the Ghidra and JDK above. Hopper and IDA providers are not
   installed or configured.
+- **Update to 6.0.0** (maintainer request 2026-10-08): **rea-agents** 6.0.0 (npm, published 2026-10-08), same repository,
+  MIT License. npm tarball `rea-agents-6.0.0.tgz`, integrity
+  `sha512-C0zhw0DTi90xRirzyDMfBhT9sCIg8Earo3vc69afI/Ba14TzA8Pkv9r9tbH1p5ZXRMcxOvYujgJLRYg4wFzY8Q==` (shasum
+  `730cb63f35ab3df9d7444a9f9ae302edbbabf0a4`). Installed with `npm install -g rea-agents@6.0.0` on the second machine,
+  which still had 4.1.0. `rea setup --client claude_code --yes` was run with `GHIDRA_INSTALL_DIR` and `JAVA_HOME` set in
+  the shell, so the existing MCP registration keeps them (a dry run without them would have registered no environment);
+  it updated REA's bundled skill. `rea doctor --client claude_code` reports healthy with the Ghidra provider. Hopper and
+  IDA are still not installed or configured.
 - **Use:** an agent-facing front end over the same local Ghidra installation for analysing the player's own
   `Borderlands2.exe`. The same rules as Ghidra apply: no REA output, evidence bundle or analysis database enters the
   repository; raw results stay under ignored `local/` or REA's own store outside the repository; notes are written in
