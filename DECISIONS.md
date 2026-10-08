@@ -2465,3 +2465,15 @@ Reproduces (not "verified in the native"): arrival 73.6974 / 83.2781 / 94.1042 (
 UNVERIFIED: the bodies of every native reached (all bound in S-b to S-d), the higher-level-attacker table entry (no live hit), the AI weapon scales, which throw/projectile the live Slinger uses, the damage causer, Maya's missing body class (no hit region). Not implemented: hit volume/cone/allegiance/knockback/OnHitEnemy behaviors (S-h), the Defense Boost, the shield stage, the protection timer, averted death, the down state (S-f). `MeleeDef_PrimalBeast_RadiusBadass` has no damage source in its data and is refused.
 Checks: ctest 12/12 (combat-synthetic: toy melee definition, thrown rock, error cases), verify_packages 9/9 with 3,339/3,339 class bodies, Fire event order 32/32, `--slice-run` byte-identical to the HEAD build on both step lists, Sb L5 sequence unchanged, `verify_combat_pawn.py --vm` 25 PASS / 0 FAIL / 4 MISSING. UE build and suites not run. No sensitive file touched.
 Orchestrator rerun: ctest 13/13, verify_packages 9/9, event order 32/32, a fresh `--combat-run` gives 25 PASS / 0 FAIL / 4 MISSING in `verify_combat_pawn.py --vm`. The UE suites ran on the combined tree with Hf's host edits (117/117 + resume 11/11, mover 16/16, inventory 49/0).
+
+## 2026-10-08: token budget for agents: one-page lane brief, monthly decisions archive, lookup tools
+
+AI-assisted (Claude), at the maintainer's request. Subagent lanes were re-reading about 15 to 20k tokens of instructions each (AGENTS.md, CLAUDE.md,
+docs/LEGAL.md, docs/NATIVE_ANALYSIS.md and an ignored local rules file that does not travel between worktrees), and some opened DECISIONS.md (436 KB)
+or NATIVE_INDEX.md (102 KB) whole. Now: `docs/LANE_BRIEF.md` condenses the binding rules on one page (about 1.2k tokens; the long documents stay
+authoritative and unchanged, and a pointer at the top of AGENTS.md and CLAUDE.md sends subagents to it); `docs/verification/GATES.md` holds the gate
+commands and the current baseline; the 88 entries of 2026-09 moved verbatim to `docs/decisions/2026-09.md` (DECISIONS.md now 246 KB; months rotate the
+same way, `docs/TOOLING.md` "Decisions log: monthly archive"); `tools/decisions_index.py --check` confirms all 216 pre-split entries are present exactly
+once and identical after CRLF normalisation (checked against f6504f3); `tools/native_index_find.py` prints matching index rows. `docs/TOOLING_TRIM_PROPOSAL.md`
+lists repeated sections of TOOLING.md for the maintainer to approve; nothing was deleted. Checks: ctest 15/15, verify_packages 9/9. All tracked, so the
+setup persists in new worktrees.

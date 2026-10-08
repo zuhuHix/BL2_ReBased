@@ -3,6 +3,11 @@
 This is the tool-neutral project brief. Read it before starting work, then read
 `CLAUDE.md` for repository-specific safety rules when that file is present.
 
+**Subagents and short tasks:** read [docs/LANE_BRIEF.md](docs/LANE_BRIEF.md) (the binding rules on one page) and
+[docs/verification/GATES.md](docs/verification/GATES.md) (gate commands and the current baseline) instead of reading every long
+document; open the long documents only for the part your task touches. Read recent decisions with
+`python tools/decisions_index.py --tail N` and look up natives with `python tools/native_index_find.py <name>`.
+
 ## Strategic direction
 
 BL2_ReBased is a Borderlands 2 engine reimplementation targeting Unreal Engine 5.

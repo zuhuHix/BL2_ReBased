@@ -86,6 +86,23 @@ The external-tool acquisition and first smoke results are recorded in the
 UModel export is not independent proof that the corresponding custom decoder,
 material graph or original-game behavior is correct.
 
+## Decisions log: monthly archive
+
+[DECISIONS.md](../DECISIONS.md) keeps the current months; older months move verbatim to `docs/decisions/YYYY-MM.md`.
+When a month ends:
+
+1. Move every `## YYYY-MM-DD:` entry of that month, byte for byte and in its original order, into
+   `docs/decisions/YYYY-MM.md` under the one-line header `# Decisions and evidence, YYYY-MM (moved verbatim from DECISIONS.md)`.
+2. Add the line `Older entries: [YYYY-MM](docs/decisions/YYYY-MM.md).` under the title of DECISIONS.md.
+3. Run `python tools/decisions_index.py --check` before committing the rotation. Its default baseline is HEAD, which
+   still holds the pre-rotation log then. The check fails if an archived month still has entries in DECISIONS.md, if an
+   archive holds another month's entry, if a link line is missing, or if a baseline entry is lost or changed.
+
+Read the log with `python tools/decisions_index.py --tail N` (full text of the last N entries), `--grep WORD` (titles),
+or with no argument (every title with its file and line), rather than opening the whole file. The NATIVE_INDEX rows
+for a native name or a note file: `python tools/native_index_find.py <fragment> [...] [--note NAME]`.
+The synthetic tests are `tests/decisions_index_test.py` and `tests/native_index_find_test.py`.
+
 ## Build and test
 
 ```powershell
