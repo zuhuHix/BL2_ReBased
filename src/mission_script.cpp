@@ -1,5 +1,6 @@
 #include "mission_script.hpp"
 #include "behavior.hpp"
+#include "combat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,10 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     required(runtime, *controller_, "Role") = Value::makeByte(authority - roles.begin());
     // The world runs as the authority too (behavior scripts such as Behavior_UpdateMissionObjective test the world's role).
     required(runtime, *world_, "Role") = Value::makeByte(authority - roles.begin());
+    // Pool references, the pool natives, the pawn health natives and EvaluateInitializationData (src/combat.*): one binding for every pawn and pool. The
+    // player's controller is the one context source it does not know.
+    combat_ = std::make_unique<CombatSystem>(runtime, evaluator_, world_);
+    combat_->setContextProvider([this](const Value& source) { return attributeContext(source); });
     // One playthrough with an empty mission list (the script indexes MissionPlaythroughs[GetCurrentPlaythrough()]).
     Value& playthroughs = required(runtime, *controller_, "MissionPlaythroughs");
     playthroughs = Value::makeArray();
@@ -153,13 +158,9 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         expEarn(int(c.in(0).integer()), int(c.in(1).integer()), c.has(2) ? int(c.in(2).integer()) : -1);
         return Value();
     });
-    // AttributeInitializationDefinition.EvaluateInitializationData(Data, ContextSource, Override) (NATIVE_PROGRESSION section 1, NATIVE_ATTRIBUTES): the
-    // evaluator of src/progression.*; the installed ExpLevelUp reaches it for the skill points per level (GlobalsDefinition.GeneralSkillPointsPerLevelUp,
-    // a conditional on the player's level: 1 from level 5). Static: no self. Only the player controller is a known context source.
-    bind("Engine.AttributeInitializationDefinition.EvaluateInitializationData", [this](NativeCall& c) {
-        if (c.has(2) && c.in(2).kind == Value::Kind::Object && c.in(2).o) notImplemented("EvaluateInitializationData: an override context source");
-        return Value::makeFloat(evaluator_.evaluate(c.in(0), attributeContext(c.in(1))));
-    });
+    // AttributeInitializationDefinition.EvaluateInitializationData (NATIVE_PROGRESSION section 1, NATIVE_ATTRIBUTES) is bound by CombatSystem (src/combat.*);
+    // the installed ExpLevelUp reaches it for the skill points per level (GlobalsDefinition.GeneralSkillPointsPerLevelUp, a conditional on the player's level:
+    // 1 from level 5), with the player controller as the context source (attributeContext).
     // RecalculateAttributeInitializedState (NATIVE_LEVEL_UP_ATTRIBUTES.md section 1, UNVERIFIED, the effect on the health pool observed in game): the
     // controller-class part rebases every pool of the controller's ResourcePoolManager (section 2). Not modelled: the class-level part (encumbrance
     // resistance and the twelve damage modifiers of a pawn, for Maya's class the constants 0 and 1: nothing visible changes) and the status-effect
@@ -175,27 +176,7 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
         if (c.in(0).kind == Value::Kind::Object) rebasePools(c.in(0).o);
         return Value();
     });
-    // The pool natives (section 4, UNVERIFIED), scoped to the one pool the bridge built.
-    bindOptional("Engine.ResourcePool.GetMaxValue", [this](NativeCall& c) {
-        if (c.self != healthPool_) return outsideBinding(c);
-        return required(runtime_, *c.self, c.has(0) && c.in(0).truth() ? "MaxValueBaseValue" : "MaxValue");
-    });
-    bindOptional("Engine.ResourcePool.SetCurrentValue", [this](NativeCall& c) {
-        if (c.self != healthPool_) return outsideBinding(c);
-        setPoolCurrent(*c.self, float(c.in(0).number()));
-        return Value();
-    });
-    bindOptional("Engine.ResourcePool.UpdateLastValues", [this](NativeCall& c) {
-        if (c.self != healthPool_) return outsideBinding(c);
-        updateLastValues(*c.self);
-        return Value();
-    });
-    bindOptional("Engine.ResourcePool.PoolIsNowFull", [this](NativeCall& c) {
-        if (c.self != healthPool_) return outsideBinding(c);
-        if (required(runtime_, *c.self, "MinValue").number() < required(runtime_, *c.self, "MaxValue").number())
-            required(runtime_, *c.self, "bHasPoolBeenFullSinceLastBeingDepleted") = Value::makeBool(true);
-        return Value();
-    });
+    // The pool natives (section 4, UNVERIFIED: GetMaxValue, SetCurrentValue, UpdateLastValues, PoolIsNowFull) take any pool object and are bound by CombatSystem.
     // The pawn branch of OnExpLevelChange (section 6): the interface getter and the game stage have no note of their own: the getter answers the pawn
     // itself (its name), the stage is recorded only (UNVERIFIED stand-ins). RunBehaviors is the level-up stand-in (runBehaviors).
     bindOptional("WillowGame.WillowPawn.GetAWillowPawn", [this](NativeCall& c) { return Value::makeObject(c.self); });
@@ -487,6 +468,7 @@ ObjectPtr MissionScript::pawnFor(Toucher who) {
         // The player's pawn is controlled by the player's controller; Marcus has no player controller.
         if (who == Toucher::Player) required(runtime_, *pawn, "Controller") = Value::makeObject(controller_);
     }
+    if (who == Toucher::Player) linkPlayerHealth();
     return pawn;
 }
 
@@ -1059,11 +1041,6 @@ ObjectPtr MissionScript::cooldownPool() {
     return cooldownPool_;
 }
 
-float MissionScript::worldTime() {
-    const Value* time = runtime_.property(*world_, "TimeSeconds");
-    return time ? float(time->number()) : 0.f;
-}
-
 // The VM controller's one pool, built on first use (NATIVE_LEVEL_UP_ATTRIBUTES.md, "Maya on real data"): the class of the resource's
 // DefaultResourcePoolClass over Maya's HealthPoolDefinition, in a ResourcePoolManager on the controller, the controller as the pool's provider.
 // False (and no health events) when the packages do not hold that data. UNVERIFIED: the game builds its pools in the class defaults routine.
@@ -1088,9 +1065,11 @@ bool MissionScript::ensureHealthPool() {
                 poolClass = runtime_.classAt(value->o->resourcePackage, value->o->resourceIndex);
         }
         if (!poolClass) return false;
-        const Value* integer = runtime_.property(*resource, "bIntegerOnlyUpdates");
-        integerResource_ = integer && integer->truth();
         manager_ = runtime_.instantiate(managerClass);
+        // As CreateResourcePoolManagerIfNecessary leaves a manager: the owner's authority, and the owner (a package set whose manager class lacks them, a
+        // synthetic one, keeps neither).
+        if (Value* role = runtime_.property(*manager_, "Role")) *role = *runtime_.property(*controller_, "Role");
+        if (Value* owner = runtime_.property(*manager_, "Owner")) *owner = Value::makeObject(controller_);
         healthPool_ = runtime_.instantiate(poolClass);
         Value& slots = required(runtime_, *manager_, "ResourcePools");
         if (slots.kind == Value::Kind::Array) {
@@ -1104,12 +1083,35 @@ bool MissionScript::ensureHealthPool() {
         required(runtime_, *healthPool_, "bIsAuthoritative") = Value::makeBool(true);
         required(runtime_, *controller_, "ResourcePoolManager") = Value::makeObject(manager_);
         healthPoolFailed_ = false;
+        linkPlayerHealth();
         return true;
     } catch (const RuntimeError&) {
         manager_.reset();
         healthPool_.reset();
         return false;
     }
+}
+
+// The player pawn's HealthPool reference (section 1.1: manager, slot, GUID byte, cached pool) to the pool the bridge built: slot 0, the pool's own GUID.
+// Both objects are made lazily, so whichever comes second links them. The pawn's GetHealth and GetMaxHealth then answer from the pool (src/combat.*).
+void MissionScript::linkPlayerHealth() {
+    if (!playerPawn_ || !healthPool_) return;
+    Value* health = runtime_.property(*playerPawn_, "HealthPool");
+    if (!health) return;                    // a package set whose pawn has no pool reference (a synthetic one)
+    try {
+        Value reference = runtime_.newStruct("Engine.Actor.ResourcePoolReference");
+        const Value* guid = runtime_.property(*healthPool_, "PoolGUID");
+        Value* manager = reference.field("PoolManager");
+        Value* index = reference.field("PoolIndexInManager");
+        Value* generation = reference.field("PoolGUID");
+        Value* cache = reference.field("Data");
+        if (!manager || !index || !generation || !cache) return;
+        *manager = Value::makeObject(manager_);
+        *index = Value::makeByte(0);
+        *generation = Value::makeByte(guid ? guid->integer() : 0);
+        *cache = Value::makeObject(healthPool_);
+        *health = reference;
+    } catch (const RuntimeError&) {}
 }
 
 // (Re)initialises the pool for the player's level: base maximum from the definition's BaseMaxValue (the evaluator, the controller as the provider), an empty
@@ -1129,38 +1131,10 @@ void MissionScript::seedHealthPool(float current) {
         required(runtime_, pool, "MinValueBaseValue") = Value::makeFloat(minimum);
         required(runtime_, pool, "MinValue") = Value::makeFloat(minimum);
         required(runtime_, pool, "CurrentValue") = Value::makeFloat(current < 0 ? maximum : std::max(minimum, std::min(current, maximum)));
-        updateLastValues(pool);
+        combat_->updateLastValues(pool);
     } catch (const RuntimeError& error) {
         errors.push_back(std::string("mission script: ") + error.what());
     }
-}
-
-// ResourcePool.SetCurrentValue (NATIVE_LEVEL_UP_ATTRIBUTES.md section 4, UNVERIFIED): nothing unless the pool is authoritative; an integer-valued
-// resource truncates the value and the maximum first and keeps the fraction in the remainder; current is the value clamped to minimum..maximum, the minimum
-// winning when it exceeds the maximum; the idle-delay start time becomes the world time. (The subclass "current value changed" hooks are not modelled.)
-void MissionScript::setPoolCurrent(Object& pool, float value) {
-    if (!required(runtime_, pool, "bIsAuthoritative").truth()) return;
-    float maximum = float(required(runtime_, pool, "MaxValue").number());
-    const float minimum = float(required(runtime_, pool, "MinValue").number());
-    if (integerResource_) {
-        maximum = std::trunc(maximum);
-        const float whole = std::trunc(value);
-        required(runtime_, pool, "RateRemainder") = Value::makeFloat(value - whole);
-        value = whole;
-    }
-    required(runtime_, pool, "CurrentValue") = Value::makeFloat(std::max(minimum, std::min(value, maximum)));
-    required(runtime_, pool, "PoolIdleDelayStartTime") = Value::makeFloat(worldTime());
-}
-
-// ResourcePool.UpdateLastValues (section 4): "created and not modified" is cleared when current moved by more than 0.0001; then current, minimum and
-// maximum are recorded.
-void MissionScript::updateLastValues(Object& pool) {
-    const float current = float(required(runtime_, pool, "CurrentValue").number());
-    if (std::fabs(current - float(required(runtime_, pool, "LastCurrentValue").number())) > 0.0001f)
-        required(runtime_, pool, "bCreatedAndNotModified") = Value::makeBool(false);
-    required(runtime_, pool, "LastCurrentValue") = Value::makeFloat(current);
-    required(runtime_, pool, "LastMinValue") = Value::makeFloat(required(runtime_, pool, "MinValue").number());
-    required(runtime_, pool, "LastMaxValue") = Value::makeFloat(required(runtime_, pool, "MaxValue").number());
 }
 
 // The pool's reaction to a notifying change of CurrentValue (NATIVE_ATTRIBUTES section 4): below the minimum becomes the minimum, at or above the maximum

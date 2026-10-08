@@ -1,4 +1,5 @@
 #pragma once
+#include "combat.hpp"
 #include "mission.hpp"
 #include "progression.hpp"
 #include "vm.hpp"
@@ -198,6 +199,7 @@ private:
     std::vector<Gain> gains_;
     std::vector<Gain> levelUpEffects_;     // what the level-up's skills hand to the host (WeaponDamageScale), appended to gains_ after the level's own events
     AttributeEvaluator evaluator_;
+    std::unique_ptr<CombatSystem> combat_;  // pool references and natives, the pawn health natives, EvaluateInitializationData (src/combat.*)
     std::unique_ptr<ExperienceCurve> curve_;
     ObjectPtr pri_;
     float pool_ = 0;                       // the experience resource pool's CurrentValue
@@ -206,7 +208,6 @@ private:
     bool cooldownPoolFailed_ = false;
     ObjectPtr manager_, healthPool_;       // the controller's ResourcePoolManager and its one pool (built on first use from the class's HealthPoolDefinition)
     bool healthPoolFailed_ = false;        // the data for it is not in the packages: no health events
-    bool integerResource_ = false;         // the health resource's bIntegerOnlyUpdates
     bool inLevelUp_ = false;               // the pool update is running ExpLevelUp: RunBehaviors is the level-up stand-in
     int64_t pawnGameStage_ = 0;            // what OnExpLevelChange told the pawn (WillowPawn.SetGameStage; recorded only)
     int regionStage_ = 0, lockedStage_ = 0, playThroughCount_ = 1, maxLevel_ = 50;
@@ -229,11 +230,9 @@ private:
     AttributeContext attributeContext(const Value& source);   // what EvaluateInitializationData reads for this context source
     ObjectPtr playerClass();
     bool ensureHealthPool();
+    void linkPlayerHealth();                   // the player pawn's HealthPool reference to the pool (once both exist)
     void seedHealthPool(float current);        // current < 0: full
     ObjectPtr poolFor(const Value& resource);
-    float worldTime();
-    void setPoolCurrent(Object& pool, float value);
-    void updateLastValues(Object& pool);
     void clampPool(Object& pool);
     void rebasePools(const ObjectPtr& manager);
     void runBehaviors(const Value& behaviors, int depth);

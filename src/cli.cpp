@@ -1,5 +1,6 @@
 #include "assets.hpp"
 #include "census.hpp"
+#include "combat.hpp"
 #include "natives.hpp"
 #include "script.hpp"
 #include "vm.hpp"
@@ -37,7 +38,7 @@ void usage() {
         "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name> | --originator <object-path>) [--tick <s>]... | "
         "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
         "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
-        "--slice-run <mission-path> --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
+        "--slice-run <mission-path> --cooked <directory> <step>... | --combat-run --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
         "--behavior-run <provider-path> --cooked <directory> <step>... | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
@@ -846,6 +847,17 @@ int main(int argc, char** argv) {
             for (const auto& line : slice.dummy().trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "]}\n";
             return slice.errors().empty() ? 0 : 1;
+        }
+        if (mode == "--combat-run") {
+            // --combat-run --cooked <dir> <step>...: AI pawns spawned from their stock archetypes with their health pools; the steps and the report are in
+            // src/combat.hpp (combatRun). The package argument is any installed package; the archetypes name their own.
+            if (argc < 5 || std::string(argv[3]) != "--cooked") usage();
+            PackageStore store(argv[4]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            bool failed = false;
+            std::cout << vm::combatRun(runtime, std::vector<std::string>(argv + 5, argv + argc), &failed) << '\n';
+            return failed ? 1 : 0;
         }
         if (mode == "--behavior-run") {
             // --behavior-run <provider-path> --cooked <dir> <step>...: one provider alone. Steps: enable:<seq> | disable:<seq> |

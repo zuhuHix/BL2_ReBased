@@ -26,13 +26,26 @@ const Value& need(const Value* value, const char* what) {
 }
 }
 
+ObjectPtr instantiateReference(Runtime& runtime, const Value& reference) {
+    if (reference.kind != Value::Kind::Object || !reference.o || !reference.o->resourcePackage) throw RuntimeError("unresolved object reference");
+    auto package = reference.o->resourcePackage;
+    int32_t index = reference.o->resourceIndex;
+    if (index < 0) {
+        const std::string path = package->path(index);
+        package = runtime.package("Startup");
+        index = runtime.findExport(*package, path);
+    }
+    if (index <= 0) throw RuntimeError("unresolved object reference (" + reference.o->name + ")");
+    return runtime.instantiateExport(package, index, 4);
+}
+
 ObjectPtr AttributeEvaluator::load(const Value& reference) {
     if (reference.kind != Value::Kind::Object || !reference.o || !reference.o->resourcePackage)
         throw RuntimeError("attribute evaluator: unresolved object reference");
     const auto key = std::make_pair(reference.o->resourcePackage.get(), reference.o->resourceIndex);
     auto found = loaded_.find(key);
-    if (found == loaded_.end())
-        found = loaded_.emplace(key, runtime_.instantiateExport(reference.o->resourcePackage, reference.o->resourceIndex, 4)).first;
+    if (found == loaded_.end()) found = loaded_.emplace(key, instantiateReference(runtime_, reference)).first;
+    paths_[found->second.get()] = pathOf(reference);
     return found->second;
 }
 
@@ -54,8 +67,8 @@ float AttributeEvaluator::evaluateDefinition(Object& definition, const Attribute
 }
 
 // The attribute's value: with an empty context chain the attribute yields no value and the constant stands; the context resolvers are
-// the no-context one (always succeeds), the player replication info one (succeeds when the context has one) and the resource pool one
-// (succeeds when the context knows a pool for the resource); each value resolver
+// the no-context one (always succeeds), the player replication info one (succeeds when the context has one), the resource pool one
+// (succeeds when the context knows a pool for the resource) and the AI pawn and mind ones (succeed when the context has one); each value resolver
 // gets the previous value (NATIVE_PROGRESSION.md section 1, NATIVE_ATTRIBUTES.md sections 5 and 6, UNVERIFIED).
 std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const AttributeContext& context) {
     const Value* contexts = runtime_.property(attribute, "ContextResolverChain");
@@ -73,6 +86,16 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
             const Value* resource = runtime_.property(*load(reference), "Resource");
             owner = resource && context.resourcePool ? context.resourcePool(*resource) : nullptr;
             if (!owner) return std::nullopt;                        // no such pool: the context does not resolve
+            continue;
+        }
+        if (type == "Engine.PawnAttributeContextResolver") {
+            if (!context.pawn) return std::nullopt;
+            owner = context.pawn;
+            continue;
+        }
+        if (type == "WillowGame.WillowMindAttributeContextResolver") {
+            if (!context.mind) return std::nullopt;
+            owner = context.mind;
             continue;
         }
         throw RuntimeError("unsupported attribute context resolver " + type);
@@ -102,11 +125,28 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
             const Value* property = owner && name ? runtime_.property(*owner, name->s) : nullptr;
             if (!property) throw RuntimeError("unsupported object property attribute: no such property on the resolved context");
             value = float(property->number());
+        } else if (type == "GearboxFramework.NounAttributeValueResolver") {
+            value = nounValue(attribute, *resolver, owner, context);
         } else {
             throw RuntimeError("unsupported attribute value resolver " + type);
         }
     }
     return value;
+}
+
+// The AI parameter (NounAttributeValueResolver; its native body is unread, NATIVE_ATTRIBUTES "Not read yet", so this is a UNVERIFIED reading checked
+// against live health values): the resolved mind's class lists starting values (AttributeStartingValues: Attribute, BaseValue); the one for this
+// attribute is evaluated, else the resolver's own DefaultValue. The playthrough tables of the pawn balance (also AttributeStartingValues) are not read.
+float AttributeEvaluator::nounValue(Object& attribute, Object& resolver, const ObjectPtr& mind, const AttributeContext& context) {
+    const Value* aiClass = mind ? runtime_.property(*mind, "AIClass") : nullptr;
+    const Value* starting = aiClass && aiClass->kind == Value::Kind::Object && aiClass->o ? runtime_.property(*aiClass->o, "AttributeStartingValues") : nullptr;
+    const auto own = paths_.find(&attribute);
+    if (starting && own != paths_.end())
+        for (const auto& entry : starting->elements()) {
+            const Value* named = entry.field("Attribute");
+            if (named && pathOf(*named) == own->second) return evaluate(need(entry.field("BaseValue"), "BaseValue"), context);
+        }
+    return evaluate(need(runtime_.property(resolver, "DefaultValue"), "DefaultValue"), context);
 }
 
 // f from the definition's formula or conditional, then combined with the base by BaseValueMode. The numbers 1..3 are taken
@@ -142,8 +182,8 @@ float AttributeEvaluator::combined(Object& definition, float base, const Attribu
     }
 }
 
-// An entry's expressions are taken to all have to hold (UNVERIFIED). The attributes they may name are PlayThroughCount and
-// PlayerExperienceLevel; an operand that does not resolve makes the expression false (NATIVE_ATTRIBUTES.md section 11).
+// An entry's expressions are taken to all have to hold (UNVERIFIED). The attributes they may name are PlayThroughCount, NumberOfPlayers,
+// Targetable_Is_Champion and PlayerExperienceLevel; an operand that does not resolve makes the expression false (NATIVE_ATTRIBUTES.md section 11).
 bool AttributeEvaluator::expressionsHold(const Value& expressions, const AttributeContext& context) {
     const auto operators = enumNames(runtime_, "Engine", "AttributeExpression.EComparisonOperator");
     for (const auto& expression : expressions.elements()) {
@@ -168,6 +208,8 @@ bool AttributeEvaluator::expressionsHold(const Value& expressions, const Attribu
 std::optional<float> AttributeEvaluator::operandValue(const Value& attribute, const AttributeContext& context) {
     const std::string path = pathOf(attribute);
     if (endsWith(path, "PlayThroughCount")) return float(context.playThroughCount);
+    if (endsWith(path, "NumberOfPlayers")) return float(context.numberOfPlayers);
+    if (endsWith(path, "Targetable_Is_Champion")) return context.champion ? 1.f : 0.f;
     if (endsWith(path, "PlayerExperienceLevel")) return attributeValue(*load(attribute), context);     // the player's ExpLevel, when there is a player
     throw RuntimeError("unsupported condition attribute " + path);
 }
