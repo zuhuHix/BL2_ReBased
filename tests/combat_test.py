@@ -10,6 +10,12 @@ BaseMinValue; ShutDown clears Definition, AssociatedProvider and the values.
 The invented data: a pool for the resource Health (StartingValue 40.5, BaseMinValue -10) and a second definition naming the same resource (9), pools for
 the resource Ammo (7, and a second definition 3), a pawn archetype Pawn_Toy with HealthVar 11 and HealthMaxVar 12 and an AI class that names the health pool.
 
+The stock hit chain (src/combat_hit.cpp, docs/verification/NATIVE_DAMAGE_DEATH.md sections 0 and 5) is checked with a toy `TakeDamage` that has the order of the real
+chain and none of its arithmetic: if the pawn is demigod (the installed IsDemigodMode asks its AI component's demigod hold) it sets health to the floor 1.0, else to 0;
+it then calls NotifyTakeHit. The real script computes health - damage and its floor in script; here the checks are about what this unit adds: the demigod hold
+natives (HoldDemigod / ReleaseDemigod / DemigodOnHold keep the reasons, a pawn stays demigod until every hold is released), SetHealth(1.0) staying exactly 1.0, and the
+order of the events (health is set before NotifyTakeHit raises OnTakeDamage).
+
 Checked (the numbers are the rules of the note):
   - spawn: the pool lands in slot 0 with GUID 0, the manager's Owner is the mind, GetHealth / GetMaxHealth answer the pool (40.5), HealthVar stays 11
     (not written while the pool is valid), HealthMaxVar becomes the pool's maximum (SetHealthResourcePoolDefinition);
@@ -107,6 +113,11 @@ class Asm:
         self.raw(0x19); obj(); self.w(0); self.ref(0); self.raw(0); body()
     def float_const(self, v): self.raw(0x1E); self.b += struct.pack('<f', v)
     def return_nothing(self): self.raw(0x04, 0x0B)
+    def here(self): return len(self.b) + 4 * self.refs              # in-memory offset (references are 8 bytes there)
+    def final(self, function, *args):                               # FinalFunction(function, args...)
+        self.raw(0x1C); self.ref(function)
+        for arg in args: arg()
+        self.raw(0x16)
 
 
 FUNC_NATIVE, FUNC_FINAL, FUNC_DEFINED, FUNC_PUBLIC, FUNC_STATIC = 0x400, 0x1, 0x2, 0x20000, 0x2000
@@ -151,11 +162,12 @@ class Toy:
         payload = u16(0) + w32(*([0] * 10)) + w32(memory, len(script)) + script
         payload += u16(0) + bytes([0]) + u32(flags) + self.p.fname(name)
         assert self.p.add_export(self.imp['Function'], name, payload, outer=owner) == func_index
+        ids['__self__'] = func_index
         return ids
 
 
 def build_engine():
-    T = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Class'))
+    T = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Class', 'Name'))
     p = T.p
     actor = T.cls('Actor')
     T.prop('Byte', actor, 'Role')
@@ -184,6 +196,8 @@ def build_engine():
     T.function(pawn, 'GetMaxHealth', [], None, NATIVE, 'Float')
     T.function(pawn, 'SetMaxHealth', [('Float', 'NewMaxHealth', 0)], None, NATIVE)
     T.function(pawn, 'SetHealthResourcePoolDefinition', [('Object', 'ResourcePoolManager', CPF_OUT), ('Object', 'Definition', 0)], None, NATIVE)
+    T.function(pawn, 'NotifyTakeHit', [('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Damage', 0), ('Class', 'DamageType', 0),
+                                       ('Float', 'Momentum', 0), ('Object', 'Pipeline', 0)], None, NATIVE)
 
     resource = T.cls('ResourceDefinition')
     T.prop('Class', resource, 'DefaultResourcePoolClass')
@@ -231,19 +245,74 @@ def build_engine():
     return p
 
 
+def build_gearbox():
+    """The AI component's demigod hold natives, invented body-less declarations (the real ones are native)."""
+    T = Toy(('Byte', 'Object', 'Bool', 'Name'))
+    component = T.cls('AIComponent')
+    T.function(component, 'HoldDemigod', [('Name', 'Reason', 0), ('Object', 'Source', 0)], None, NATIVE)
+    T.function(component, 'ReleaseDemigod', [('Name', 'Reason', 0), ('Object', 'Source', 0)], None, NATIVE)
+    T.function(component, 'DemigodOnHold', [], None, NATIVE, 'Bool')
+    return T.p
+
+
 def build_willowgame():
-    T = Toy(('Byte', 'Object', 'Int'))
+    T = Toy(('Byte', 'Object', 'Int', 'Float', 'Bool', 'Class', 'Struct'))
     p = T.p
     engine = p.add_import_full('Package', 0, 'Engine')
+    gearbox = p.add_import_full('Package', 0, 'GearboxFramework')
     pawn = p.add_import_full('Class', engine, 'Pawn')
     controller = p.add_import_full('Class', engine, 'Controller')
-    T.prop('Object', T.cls('AIClassDefinition'), 'HealthPoolDefinition')
-    T.prop('Object', T.cls('WillowMind', super_ref=controller), 'AIClass')
+    set_health = p.add_import_full('Function', pawn, 'SetHealth')
+    notify = p.add_import_full('Function', pawn, 'NotifyTakeHit')
+    ai_class = T.cls('AIClassDefinition')
+    T.prop('Object', ai_class, 'HealthPoolDefinition')
+    T.prop('Object', ai_class, 'AIDef')
+    mind = T.cls('WillowMind', super_ref=controller)
+    T.prop('Object', mind, 'AIClass')
+    component_property = T.prop('Object', mind, 'AIComponent')
+    T.cls('WillowAIComponent', super_ref=p.add_import_full('Class', gearbox, 'AIComponent'))
+    on_hold = p.add_import_full('Function', p.add_import_full('Class', gearbox, 'AIComponent'), 'DemigodOnHold')
     ai_pawn = T.cls('WillowAIPawn', super_ref=pawn)
     T.prop('Object', ai_pawn, 'AIClass')
     T.prop('Int', ai_pawn, 'ExpLevel')
     T.prop('Int', ai_pawn, 'GameStage')
-    T.prop('Object', ai_pawn, 'MyWillowMind')
+    mind_property = T.prop('Object', ai_pawn, 'MyWillowMind')
+
+    # IsDemigodMode(): MyWillowMind.AIComponent.DemigodOnHold() (the installed script also asks the mind's own flag)
+    def is_demigod(ids):
+        a = Asm()
+        a.raw(0x04)
+        a.context(lambda: a.context(lambda: a.instance(mind_property), lambda: a.instance(component_property)), lambda: a.final(on_hold))
+        a.end(); return a
+    demigod = T.function(ai_pawn, 'IsDemigodMode', [], is_demigod, FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, 'Bool')['__self__']
+
+    # TakeDamage(...): if (IsDemigodMode()) SetHealth(1.0) else SetHealth(0.0); NotifyTakeHit(InstigatedBy, HitLocation, Damage, DamageType, Momentum, Pipeline)
+    def take_damage(ids):
+        def build(otherwise, notify_at):
+            a = Asm()
+            a.raw(0x07); a.w(otherwise); a.final(demigod)
+            a.final(set_health, lambda: a.float_const(1.0))
+            a.raw(0x06); a.w(notify_at)
+            here_else = a.here()
+            a.final(set_health, lambda: a.float_const(0.0))
+            here_notify = a.here()
+            a.final(notify, *[(lambda n=n: a.local(ids, n)) for n in ('InstigatedBy', 'HitLocation', 'Damage', 'DamageType', 'Momentum', 'Pipeline')])
+            a.return_nothing(); a.end()
+            return a, here_else, here_notify
+        _, here_else, here_notify = build(0, 0)
+        return build(here_else, here_notify)[0]
+    T.function(ai_pawn, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
+                                       ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], take_damage)
+
+    # the classes the hit step builds around the chain
+    pipeline = T.cls('WillowDamagePipeline')
+    for name in ('DamageTypeDef', 'ImpactDefinition', 'DirectHitObject'): T.prop('Object', pipeline, name)
+    T.prop('Bool', pipeline, 'bCanHitFriendly')
+    T.cls('WillowDmgSource_Bullet')
+    player_controller = T.cls('WillowPlayerController', super_ref=controller)
+    T.prop('Object', player_controller, 'PlayerReplicationInfo')
+    T.cls('WillowPlayerPawn', super_ref=pawn)
+    T.prop('Int', T.cls('WillowPlayerReplicationInfo'), 'ExpLevel')
     return p
 
 
@@ -266,7 +335,8 @@ def build_pawns():
     pool_definition('Pool_Health_Copy', health, 9.0)
     pool_definition('Pool_Ammo', ammo, 7.0)
     pool_definition('Pool_Ammo_Copy', ammo, 3.0)
-    ai_class = p.add_export(p.add_import_full('Class', willow, 'AIClassDefinition'), 'AIClass_Toy', w32(0) + t.obj('HealthPoolDefinition', health_definition) + none)
+    ai_class = p.add_export(p.add_import_full('Class', willow, 'AIClassDefinition'), 'AIClass_Toy',
+                            w32(0) + t.obj('HealthPoolDefinition', health_definition) + t.obj('AIDef', health_definition) + none)
     p.add_export(p.add_import_full('Class', willow, 'WillowAIPawn'), 'Pawn_Toy',
                  w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
     return p
@@ -291,6 +361,7 @@ def near(a, b): return abs(a - b) < 1e-4
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
     (root / 'Engine.upk').write_bytes(build_engine().build())
+    (root / 'GearboxFramework.upk').write_bytes(build_gearbox().build())
     (root / 'WillowGame.upk').write_bytes(build_willowgame().build())
     (root / 'ToyPawns.upk').write_bytes(build_pawns().build())
 
@@ -343,6 +414,33 @@ with tempfile.TemporaryDirectory() as folder:
     check('the health pool left its slot', [s['slot'] for s in after['slots']] == [1], after)
     check('SetHealth writes HealthVar without a pool', state(17)['health_var'] == 7 and state(17)['health'] == 7, state(17))
     check('the next pool takes the freed slot 0', rows[18]['result'].get('slot') == 0 and rows[18]['result'].get('guid') == 3 and [s['slot'] for s in state(18)['slots']] == [0, 1], rows[18])
+
+    # ---- the hit chain: demigod holds, the floor, the order of the events
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Toy:4', 'player:8',
+                           'hit:0:10::Bullet',
+                           'sethealth:0:40.5', 'hold:0:Safe', 'hit:0:10::Bullet',
+                           'sethealth:0:40.5', 'hold:0:Other', 'release:0:Safe', 'hit:0:10::Bullet',
+                           'release:0:Other', 'sethealth:0:40.5', 'hit:0:10::Bullet')
+    check('hit chain: exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    rows = got['steps']
+    mortal, floor, one_hold, released = (rows[i]['result'] for i in (2, 5, 9, 12))
+
+    def position(result, prefix):
+        return next((i for i, e in enumerate(result['events']) if e.startswith(prefix)), -1)
+
+    check('a pawn with no hold is not demigod and the mortal toy chain drops it to 0', mortal['demigod_before'] is False and mortal['demigod_after'] is False
+          and near(mortal['health_before'], 40.5) and mortal['health_after'] == 0, mortal)
+    check('state: no demigod before a hold', rows[3]['result']['state']['demigod'] is False, rows[3])
+    check('state: a hold makes the pawn demigod (the installed script asks the AI component)', rows[4]['result']['state']['demigod'] is True, rows[4])
+    check('demigod: the chain sets health to the floor 1.0 and SetHealth(1.0) leaves exactly 1.0', floor['demigod_before'] is True and floor['demigod_after'] is True
+          and floor['health_after'] == 1.0, floor)
+    check('two holds, one released: still demigod (a hold per reason)', rows[8]['result']['state']['demigod'] is True and one_hold['health_after'] == 1.0, (rows[8], one_hold))
+    check('every hold released: no longer demigod', rows[10]['result']['state']['demigod'] is False and released['demigod_before'] is False and released['health_after'] == 0,
+          (rows[10], released))
+    check('the rows of the hit: arriving damage and health after', near(got['rows'].get('hit.Toy.L4.2.arriving', -1), 10) and got['rows'].get('hit.Toy.L4.2.health_after') == 1.0, got['rows'])
+    order = [position(floor, 'TakeDamage'), position(floor, 'SetHealth'), position(floor, 'NotifyTakeHit'), position(floor, 'OnTakeDamage raised')]
+    check('event order: health is set before NotifyTakeHit, which raises OnTakeDamage', all(i >= 0 for i in order) and order == sorted(order), floor['events'])
+    check('a class with no behavior provider has nothing to raise the event to', any('no behavior provider' in e for e in floor['events']), floor['events'])
 
 if failures:
     print(f'{len(failures)} combat check(s) failed:')

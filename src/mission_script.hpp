@@ -161,6 +161,13 @@ public:
     // The tracker's observer notifications reach the VM observers (a registered waypoint) as their MissionReaction* script events.
     void notify(MissionSystem::Notification kind);
 
+    // The pawn health and hit chain (src/combat.*, src/combat_hit.cpp): the CombatSystem this bridge owns, the game stage the mission is played at (the
+    // locked one once Active, else the region's; 0 when the host set none) and a hit by the player on `victim`. The hit runs the victim's installed script
+    // TakeDamage with the VM controller as the instigator (its pawn linked for the call only, as the level-up does) under the bridge's script guard.
+    CombatSystem& combat() { return *combat_; }
+    int currentGameStage() const { return gameStage(); }
+    CombatSystem::HitReport hitFromPlayer(const ObjectPtr& victim, double damage, const std::string& damageTypePath, const std::string& sourceClass);
+
     // The controller's record of the mission (MissionPlaythroughs[0].MissionList[...].Status), -1 when it has none.
     int controllerStatus();
     bool controllerNeedsRewards();

@@ -49,7 +49,7 @@ void CombatSystem::bind(const char* path, NativeFn fn) {
     try {
         Function* function = runtime_.findFunction(path);
         if (function->isNative()) runtime_.registerNative(function->nativeKey, std::move(fn));
-    } catch (const RuntimeError&) {}
+    } catch (const std::exception&) {}      // a missing class or function, or a package the set does not have
 }
 
 void CombatSystem::notImplemented(const std::string& what) { runtime_.log.push_back(std::string(StubPrefix) + what + " (not implemented)"); }
@@ -76,6 +76,7 @@ ObjectPtr CombatSystem::load(const Value& reference) {
 }
 
 void CombatSystem::bindNatives() {
+    bindHitNatives();
     // EvaluateInitializationData(Data, ContextSource, Override) (NATIVE_PROGRESSION.md section 1): the evaluator of src/progression.*. Static: no self.
     bind("Engine.AttributeInitializationDefinition.EvaluateInitializationData", [this](NativeCall& c) {
         if (c.has(2) && isObject(&c.in(2))) notImplemented("EvaluateInitializationData: an override context source");
@@ -146,6 +147,7 @@ void CombatSystem::bindNatives() {
     bind("Engine.Pawn.SetHealth", [this](NativeCall& c) {
         float value = float(c.in(0).number());
         if (value >= 0.f && value < 1.f) value = 0.f;
+        events_.push_back("SetHealth " + std::to_string(value));
         const ObjectPtr pool = resolve(required(runtime_, *c.self, "HealthPool"));
         if (pool) setPoolCurrent(*pool, value);
         else required(runtime_, *c.self, "HealthVar") = Value::makeFloat(value);
@@ -360,6 +362,11 @@ void CombatSystem::setHealthPoolDefinition(Object& pawn, Value& manager, const V
 
 bool CombatSystem::describe(const ObjectPtr& source, AttributeContext& context) {
     if (!source) return false;
+    if (isPlayerController(source)) {         // a --combat-run attacker: a player controller resolves to its PlayerReplicationInfo (NATIVE_ATTRIBUTES.md section 5)
+        const Value* info = runtime_.property(*source, "PlayerReplicationInfo");
+        if (isObject(info)) context.replicationInfo = info->o;
+        return true;
+    }
     if (!classesLooked_) {
         classesLooked_ = true;
         try { mindClass_ = runtime_.findClass("WillowGame.WillowMind"); aiPawnClass_ = runtime_.findClass("WillowGame.WillowAIPawn"); }
@@ -388,24 +395,33 @@ AttributeContext CombatSystem::contextFor(const Value& source) {
     return context;
 }
 
-// The archetype is instantiated as MissionScript::placeMarcus does; the mind is a bare WillowMind (no native mind state) that carries the AI class and
-// the manager. The pool is made by the pawn's own script SetHealthResourcePoolDefinition over the class's HealthPoolDefinition, as ApplyCharacterClassDefaults
-// would call it; nothing else of the stock spawn (inventory, flags, skills, the attribute starting values as pawn state) is run.
+// The archetype is instantiated as MissionScript::placeMarcus does; adopt() gives it the rest.
 CombatSystem::Enemy CombatSystem::spawnEnemy(const std::shared_ptr<const Package>& package, const std::string& archetypePath, int level, int gameStage) {
     const int32_t index = package ? runtime_.findExport(*package, archetypePath) : 0;
     if (index <= 0) throw RuntimeError("combat: no such pawn archetype: " + archetypePath);
+    return adopt(runtime_.instantiateExport(package, index, 4), level, gameStage);
+}
+
+// The mind is a bare WillowMind (no native mind state) that carries the AI class, the manager and an AIComponent (the holds, section 7 of the hit chain
+// note: the demigod hold lives there). The pool is made by the pawn's own script SetHealthResourcePoolDefinition over the class's HealthPoolDefinition, as
+// ApplyCharacterClassDefaults would call it; nothing else of the stock spawn (inventory, flags, skills, the attribute starting values as pawn state) is run.
+CombatSystem::Enemy CombatSystem::adopt(const ObjectPtr& pawnObject, int level, int gameStage) {
     Enemy enemy;
-    enemy.pawn = runtime_.instantiateExport(package, index, 4);
+    enemy.pawn = pawnObject;
     Object& pawn = *enemy.pawn;
+    if (const Value* existing = runtime_.property(pawn, "MyWillowMind"); isObject(existing)) {
+        enemy.mind = existing->o;
+        return enemy;
+    }
     required(runtime_, pawn, "Role") = Value::makeByte(authority_);
     required(runtime_, pawn, "WorldInfo") = Value::makeObject(world_);
     required(runtime_, pawn, "ExpLevel") = Value::makeInt(level);
     required(runtime_, pawn, "GameStage") = Value::makeInt(gameStage);
     Value& aiClass = required(runtime_, pawn, "AIClass");
-    if (!isObject(&aiClass)) throw RuntimeError("combat: the archetype has no AI class: " + archetypePath);
+    if (!isObject(&aiClass)) throw RuntimeError("combat: the archetype has no AI class");
     aiClass = Value::makeObject(load(aiClass));
     const Value* definition = runtime_.property(*aiClass.o, "HealthPoolDefinition");
-    if (!isObject(definition)) throw RuntimeError("combat: the AI class has no health pool definition: " + archetypePath);
+    if (!isObject(definition)) throw RuntimeError("combat: the AI class has no health pool definition");
 
     enemy.mind = runtime_.instantiate(runtime_.findClass("WillowGame.WillowMind"));
     Object& mind = *enemy.mind;
@@ -413,6 +429,10 @@ CombatSystem::Enemy CombatSystem::spawnEnemy(const std::shared_ptr<const Package
     required(runtime_, mind, "WorldInfo") = Value::makeObject(world_);
     required(runtime_, mind, "AIClass") = aiClass;
     required(runtime_, mind, "Pawn") = Value::makeObject(enemy.pawn);
+    try {                                // a package set without the AI component (a synthetic one) has no holds to keep
+        if (Value* component = runtime_.property(mind, "AIComponent"))
+            *component = Value::makeObject(runtime_.instantiate(runtime_.findClass("WillowGame.WillowAIComponent")));
+    } catch (const RuntimeError&) {}
     required(runtime_, pawn, "Controller") = Value::makeObject(enemy.mind);
     required(runtime_, pawn, "MyWillowMind") = Value::makeObject(enemy.mind);
 

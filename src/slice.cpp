@@ -21,6 +21,17 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     // The tracker's observers in registration order: the VM's own (the waypoint, registered at level start) first, then the dummy's conditions.
     mission_->onNotification = [this](MissionSystem::Notification kind) { script_->notify(kind); applyConditions(); };
     script_ = std::make_unique<MissionScript>(runtime, *mission_);
+    // NotifyTakeHit of a pawn hit (MissionScript::hitFromPlayer) raises the dummy's OnTakeDamage with the damage type definition and the source class as the
+    // event's DamageType and DamageSource outputs, after the pawn's health was lowered.
+    script_->combat().setTakeDamageHandler([this](const CombatSystem::TakeDamageEvent& event) {
+        if (event.pawn != dummyPawn_) return;
+        const auto& type = event.damageType;
+        const size_t before = dummy_->trace.size();
+        dummy_->fireEvent("OnTakeDamage", {{"DamageType", type && type->resourcePackage ? type->resourcePackage->path(type->resourceIndex) : ""},
+                                           {"DamageSource", event.source ? event.source->path : ""}});
+        script_->combat().note("OnTakeDamage raised on the dummy's provider (damage=" + std::to_string(event.damage) + ")");
+        for (size_t i = before; i < dummy_->trace.size(); ++i) script_->combat().note("behavior " + dummy_->trace[i]);
+    });
     auto package = runtime.package(dummyProviderPackage);
     const int32_t index = runtime.findExport(*package, dummyProviderPath);
     if (index <= 0) throw RuntimeError("dummy behavior provider not found: " + dummyProviderPath);
@@ -88,7 +99,13 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
     // move and selects output 0 at once; output 1 follows when the move has ended (not modelled: no animation system, and no link of the dummy's
     // provider uses it). So the Idle sequence's next behavior, Behavior_AIHold_57 (output 0), runs, as it did in the real game (lane L2 trace).
     d.reportAtBoundary("GearboxFramework.Behavior_SpecialMove", nullptr, {0});
-    d.handle("GearboxFramework.Behavior_AIHold", [](BehaviorProvider&, BehaviorProvider::Behavior&, const std::string&) {
+    // The hold behavior is installed script (Behavior_AIHold.ApplyBehaviorToContext: its Type selects the AI component's Hold / HoldTarget / HoldMovement /
+    // HoldDemigod / HoldGod / HoldDialog, an Action other than 0 the Release of the same type). It runs on the VM once the dummy pawn has its mind and AI component
+    // (its first pawn hit), so the FireDamage sequence's AIHold_59 (Reason Safe, Type 3 = HoldDemigod) makes the pawn demigod, which the stock AdjustDamage and
+    // TakeDamage scripts answer with the floor of 1 health (lane L6). Before that the dummy has no AI component and the behavior stays a recorded no-op, as it was.
+    d.handle("GearboxFramework.Behavior_AIHold", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+        if (dummyCombat_)
+            for (const ObjectPtr& context : p.contexts(b, dummyPawn_)) script_->applyBehavior(b.object, script_->combat().aiInterfaceFor(context));
         return std::vector<int>();
     });
     d.handle("Engine.Behavior_RemoteEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
@@ -294,10 +311,31 @@ bool FireMissionSlice::enterRange() {
     return mission_->objectiveProgress("RockPaper_GoToRange") != before;
 }
 
-bool FireMissionSlice::damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath) {
-    dummy_->fireEvent("OnTakeDamage", {{"DamageType", damageTypePath}, {"DamageSource", damageSourcePath}});
+bool FireMissionSlice::damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath, double damage) {
+    if (damage < 0 || !dummyPawn_) {
+        dummy_->fireEvent("OnTakeDamage", {{"DamageType", damageTypePath}, {"DamageSource", damageSourcePath}});
+        pump();
+        return true;
+    }
+    try {
+        if (!dummyCombat_) {
+            const int stage = script_->currentGameStage() > 0 ? script_->currentGameStage() : script_->playerLevel();
+            script_->combat().adopt(dummyPawn_, stage, stage);
+            dummyCombat_ = true;
+        }
+        lastHit_ = script_->hitFromPlayer(dummyPawn_, damage, damageTypePath, damageSourcePath);
+    } catch (const std::exception& error) {
+        errors_.push_back(std::string("pawn hit: ") + error.what());
+        return false;
+    }
     pump();
     return true;
+}
+
+double FireMissionSlice::dummyHealth() {
+    if (!dummyCombat_) return -1;
+    Function* getHealth = runtime_.findMethod(dummyPawn_->cls, "GetHealth");
+    return getHealth ? runtime_.call(*getHealth, dummyPawn_).number() : -1;
 }
 
 // The stock spawn registers the dummy's provider on its pawn before OnSpawned (IntializeBehaviorProviderForConsumer: the

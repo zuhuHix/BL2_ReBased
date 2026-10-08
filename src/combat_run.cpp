@@ -1,8 +1,10 @@
 #include "combat.hpp"
+#include "behavior.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <iomanip>
+#include <memory>
 #include <map>
 #include <sstream>
 
@@ -59,6 +61,7 @@ public:
     // from another package resolves to them only while it is loaded. A package set without it (a synthetic one) has none.
     explicit Run(Runtime& runtime) : runtime_(runtime), evaluator_(runtime), combat_(runtime, evaluator_) {
         try { runtime.package("Startup"); } catch (const std::exception&) {}
+        combat_.setTakeDamageHandler([this](const CombatSystem::TakeDamageEvent& event) { raiseTakeDamage(event); });
     }
 
     void apply(const std::string& step);
@@ -70,6 +73,9 @@ private:
     AttributeEvaluator evaluator_;
     CombatSystem combat_;
     std::vector<Spawned> pawns_;
+    std::vector<CombatSystem::Player> players_;
+    std::map<const Object*, std::unique_ptr<BehaviorProvider>> providers_;    // one class provider per pawn that was hit or whose sequences were set
+    std::map<std::string, int> hitCounts_;
     std::map<std::string, double> rows_;
     std::vector<std::string> results_, errors_;
 
@@ -77,6 +83,9 @@ private:
     Value call(const ObjectPtr& self, const char* name, std::vector<Value> args = {}, std::vector<Value>* outs = nullptr);
     void row(const std::string& id, double value);
     Value managerOf(const Spawned& spawned);
+    BehaviorProvider& providerFor(const ObjectPtr& pawn);
+    void raiseTakeDamage(const CombatSystem::TakeDamageEvent& event);
+    std::string hitJson(const CombatSystem::HitReport& report);
     std::string stateJson(size_t index);
     std::string pawnJson(size_t index);
 };
@@ -178,6 +187,41 @@ void Run::apply(const std::string& step) {
             std::vector<Value> outs;
             runtime_.call(*destroy, manager.o, {*held}, &outs);
             *held = outs.at(0);
+        } else if (verb == "player") {
+            players_.push_back(combat_.spawnPlayer(std::stoi(parts.at(1))));
+            result = "{\"player\":" + std::to_string(players_.size() - 1) + "}";
+        } else if (verb == "hold" || verb == "release") {
+            // hold:<n>:<reason> / release:<n>:<reason>: the demigod hold of pawn n's AI component, as the AIHold behavior's script asks for it (HoldDemigod / ReleaseDemigod).
+            Spawned& spawned = pawn(parts.at(1));
+            const Value* component = runtime_.property(*spawned.enemy.mind, "AIComponent");
+            if (!component || component->kind != Value::Kind::Object || !component->o) throw RuntimeError("combat-run: the pawn's mind has no AI component");
+            call(component->o, verb == "hold" ? "HoldDemigod" : "ReleaseDemigod", {Value::makeName(parts.at(2)), Value::makeObject(nullptr)});
+        } else if (verb == "attr") {
+            // attr:<player>:<name>:<value>: a float attribute of player n's controller set as a state input (Maya's skills are not in the VM, so a live attribute
+            // value, e.g. InstigatedGrenadeDamageModifier from a snapshot, is given here); the controller's modifier stack stays empty.
+            if (players_.size() <= std::stoul(parts.at(1))) throw RuntimeError("combat-run: no such player " + parts.at(1));
+            Value* attribute = runtime_.property(*players_[std::stoul(parts.at(1))].controller, parts.at(2));
+            if (!attribute) throw RuntimeError("combat-run: the controller has no attribute " + parts.at(2));
+            *attribute = Value::makeFloat(std::stod(parts.at(3)));
+        } else if (verb == "sequence") {
+            // sequence:<pawn>:<name>:on|off: the enable condition the mission would deliver (BehaviorSequenceEnableByMission is not in this driver).
+            Spawned& spawned = pawn(parts.at(1));
+            const bool on = parts.at(3) == "on";
+            if (!on && parts.at(3) != "off") throw RuntimeError("combat-run: sequence:<pawn>:<name>:on|off");
+            result = std::string("{\"changed\":") + (providerFor(spawned.enemy.pawn).setSequenceEnabled(parts.at(2), on) ? "true" : "false") + "}";
+        } else if (verb == "hit") {
+            // hit:<pawn>:<damage>:<damage type definition path>[:<source>] by player 0; source is a short name (Pistol), a class name or a class path.
+            if (parts.size() < 4 || parts.size() > 5) throw RuntimeError("combat-run: hit:<pawn>:<damage>:<damage type path>[:<source>]");
+            if (players_.empty()) throw RuntimeError("combat-run: a hit needs a player (the step player:<level>) first");
+            Spawned& spawned = pawn(parts.at(1));
+            std::string source = parts.size() == 5 ? parts[4] : "Bullet";
+            if (source.find('.') == std::string::npos) source = "WillowGame." + std::string(source.rfind("WillowDmgSource_", 0) == 0 ? "" : "WillowDmgSource_") + source;
+            const auto report = combat_.hit(spawned.enemy.pawn, players_[0].controller, std::stod(parts.at(2)), parts.at(3), runtime_.findClass(source));
+            const std::string id = "hit." + spawned.rowClass + ".L" + std::to_string(spawned.level) + "." + std::to_string(++hitCounts_[spawned.rowClass + std::to_string(spawned.level)]);
+            row(id + ".arriving", report.arriving);
+            row(id + ".applied", report.applied);
+            row(id + ".health_after", report.healthAfter);
+            result = hitJson(report);
         } else {
             throw RuntimeError("combat-run: unknown step " + step);
         }
@@ -188,7 +232,7 @@ void Run::apply(const std::string& step) {
     // A step that names a pawn also reports that pawn's state after it.
     try {
         const auto parts = split(step);
-        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && std::stoul(parts[1]) < pawns_.size()) {
+        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && std::stoul(parts[1]) < pawns_.size()) {
             result.pop_back();
             result += (result.size() > 1 ? "," : "") + std::string("\"state\":{") + stateJson(std::stoul(parts[1])) + "}}";
         }
@@ -196,12 +240,71 @@ void Run::apply(const std::string& step) {
     results_.push_back("{\"step\":" + quote(step) + ",\"result\":" + result + "}");
 }
 
+// The class provider of a pawn (its AI class's BehaviorProviderDefinition), registered as the stock spawn would: made once. The behavior classes the dummy and
+// the bullymongs reach that act on the world are listed at the boundary (reported, not run), the hold behavior runs its installed script on the pawn.
+BehaviorProvider& Run::providerFor(const ObjectPtr& pawn) {
+    const auto found = providers_.find(pawn.get());
+    if (found != providers_.end()) return *found->second;
+    const Value* aiClass = runtime_.property(*pawn, "AIClass");
+    const Value* definition = aiClass && aiClass->o ? runtime_.property(*aiClass->o, "BehaviorProviderDefinition") : nullptr;
+    if (!definition || definition->kind != Value::Kind::Object || !definition->o || !definition->o->resourcePackage) throw RuntimeError("combat-run: the pawn's AI class has no behavior provider");
+    auto package = definition->o->resourcePackage;
+    int32_t index = definition->o->resourceIndex;
+    if (index < 0) {                         // an import: the same export by path in Startup (as instantiateReference does)
+        const std::string path = package->path(index);
+        package = runtime_.package("Startup");
+        index = runtime_.findExport(*package, path);
+    }
+    auto provider = std::make_unique<BehaviorProvider>(runtime_, package, index);
+    BehaviorProvider& made = *provider;
+    providers_[pawn.get()] = std::move(provider);
+    made.handle("GearboxFramework.Behavior_AIHold", [this, pawn](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+        for (const ObjectPtr& context : p.contexts(b, pawn))
+            runtime_.callByName(b.object, "ApplyBehaviorToContext", {Value::makeObject(combat_.aiInterfaceFor(context))});
+        return std::vector<int>();
+    });
+    for (const char* cls : {"WillowGame.Behavior_Transform", "WillowGame.Behavior_AttemptStatusEffect", "WillowGame.Behavior_UpdateMissionObjective",
+                            "WillowGame.Behavior_RegisterTargetable", "GearboxFramework.Behavior_ChangeRemoteBehaviorSequenceState", "Engine.Behavior_RemoteEvent"})
+        made.reportAtBoundary(cls);
+    made.reportAtBoundary("GearboxFramework.Behavior_SpecialMove", nullptr, {0});
+    made.registerConsumer();
+    return made;
+}
+
+// NotifyTakeHit's raise (NATIVE_DAMAGE_DEATH.md section 5): OnTakeDamage on the pawn's class provider with the damage type definition and source as the
+// event's DamageType and DamageSource outputs (stock paths); the behaviors that ran are added to the hit's event list.
+void Run::raiseTakeDamage(const CombatSystem::TakeDamageEvent& event) {
+    combat_.note("OnTakeDamage raised (damage=" + number(event.damage) + ")");
+    const Value* aiClass = runtime_.property(*event.pawn, "AIClass");
+    const Value* definition = aiClass && aiClass->o ? runtime_.property(*aiClass->o, "BehaviorProviderDefinition") : nullptr;
+    if (!definition || definition->kind != Value::Kind::Object || !definition->o) {         // a class with no behavior provider has nothing to raise it to
+        combat_.note("the pawn's AI class has no behavior provider");
+        return;
+    }
+    BehaviorProvider& provider = providerFor(event.pawn);
+    const size_t before = provider.trace.size();
+    provider.fireEvent("OnTakeDamage", {{"DamageType", objectPath(event.damageType)}, {"DamageSource", event.source ? event.source->path : ""}});
+    for (size_t i = before; i < provider.trace.size(); ++i) combat_.note("behavior " + provider.trace[i]);
+    for (const auto& error : provider.errors) combat_.note("provider error: " + error);
+    provider.errors.clear();
+}
+
+std::string Run::hitJson(const CombatSystem::HitReport& report) {
+    std::ostringstream out;
+    out << "{\"health_before\":" << number(report.healthBefore) << ",\"health_after\":" << number(report.healthAfter) << ",\"arriving\":" << number(report.arriving)
+        << ",\"applied\":" << number(report.applied) << ",\"shield_damage\":" << number(report.shieldDamage) << ",\"demigod_before\":" << (report.demigodBefore ? "true" : "false")
+        << ",\"demigod_after\":" << (report.demigodAfter ? "true" : "false") << ",\"events\":[";
+    for (size_t i = 0; i < report.events.size(); ++i) out << (i ? "," : "") << quote(report.events[i]);
+    out << "]}";
+    return out.str();
+}
+
 // A pawn's state: the natives' answers, the plain variables, the health reference and every occupied slot of the mind's manager.
 std::string Run::stateJson(size_t index) {
     Spawned& spawned = pawns_[index];
     const ObjectPtr& pawnObject = spawned.enemy.pawn;
     std::ostringstream out;
-    out << "\"health\":" << number(call(pawnObject, "GetHealth").number()) << ",\"max_health\":" << number(call(pawnObject, "GetMaxHealth").number())
+    out << "\"demigod\":" << (combat_.demigod(pawnObject) ? "true" : "false") << ",\"health\":" << number(call(pawnObject, "GetHealth").number()) << ",\"max_health\":" << number(call(pawnObject, "GetMaxHealth").number())
         << ",\"health_var\":" << number(runtime_.property(*pawnObject, "HealthVar")->number())
         << ",\"health_max_var\":" << number(runtime_.property(*pawnObject, "HealthMaxVar")->number());
     Value reference = *runtime_.property(*pawnObject, "HealthPool");

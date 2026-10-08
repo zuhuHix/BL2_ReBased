@@ -884,6 +884,20 @@ void MissionScript::untouch(Toucher who) {
     if (runtime_.findMethod(waypoint_->cls, "UnTouch")) run([this, actor] { runtime_.callByName(waypoint_, "UnTouch", {Value::makeObject(actor)}); });
 }
 
+// A hit by the player on `victim` (plan step S-b): the damage type definition `damageTypePath` and the damage source class `sourceClass` (a WillowDmgSource_*
+// class path; "" = WillowGame.WillowDmgSource_Bullet). The controller's Pawn is the player's VM pawn while the chain runs, as the game's controller has it.
+CombatSystem::HitReport MissionScript::hitFromPlayer(const ObjectPtr& victim, double damage, const std::string& damageTypePath, const std::string& sourceClass) {
+    CombatSystem::HitReport report;
+    Value* pawn = runtime_.property(*controller_, "Pawn");
+    const Value savedPawn = pawn ? *pawn : Value();
+    if (pawn) *pawn = Value::makeObject(pawnFor(Toucher::Player));
+    run([&] {
+        report = combat_->hit(victim, controller_, damage, damageTypePath, runtime_.findClass(sourceClass.empty() ? "WillowGame.WillowDmgSource_Bullet" : sourceClass));
+    });
+    if (pawn) *pawn = savedPawn;
+    return report;
+}
+
 // A behavior whose ApplyBehaviorToContext is script, run on the VM with `context` as its ContextObject (the other arguments are left at
 // their defaults: the behaviors run here do not read them).
 void MissionScript::applyBehavior(ObjectPtr behavior, ObjectPtr context) {

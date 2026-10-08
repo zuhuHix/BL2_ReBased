@@ -84,7 +84,16 @@ public:
     // OnTakeDamage on the dummy. `damageTypePath` is the stock object path of the damage type the host dealt (e.g.
     // "GD_Incendiary.DamageType.DmgType_Incendiary_Impact"); "" for None. It and `damageSourcePath` are written to the
     // variables the event links as its DamageType / DamageSource outputs.
-    bool damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath = "");
+    // With `damage` >= 0 and a pawn for the dummy, the player's hit goes through the stock chain on the VM (plan step S-b): the dummy pawn gets a mind and its
+    // health pool at its first hit (level and game stage: the mission's stage, else the player's level: a stand-in for the stock spawn), the pawn's installed
+    // TakeDamage runs with the VM controller as the instigator, health is lowered, and NotifyTakeHit then raises OnTakeDamage on the dummy's provider (this
+    // function's `damageTypePath` is the definition, `damageSourcePath` the WillowDmgSource_* class path, "" = Bullet). Without a damage (the host's call so far) or
+    // without a pawn the event is raised directly as before, with no health.
+    bool damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath = "", double damage = -1);
+    // The last pawn hit's report (health before and after, the damage applied, the natives of the chain in order) and the dummy pawn's health now (-1 before its first pawn hit).
+    const CombatSystem::HitReport& lastHit() const { return lastHit_; }
+    double dummyHealth();
+    MissionScript& script() { return *script_; }
     // Legacy convenience for the current host (true = the incendiary impact damage type, false = None). Prefer
     // damageDummy with the stock damage type of the shot.
     bool hitDummy(bool fireDamage);
@@ -125,6 +134,8 @@ private:
     std::unique_ptr<BehaviorProvider> dummy_;
     std::shared_ptr<const Package> dummyPackage_;
     ObjectPtr dummyPawn_;                    // the VM's pawn for the dummy, made at its first spawn (null when the data has no archetype)
+    bool dummyCombat_ = false;               // the pawn has its mind and health pool (its first pawn hit made them)
+    CombatSystem::HitReport lastHit_;
     std::vector<HostEvent> events_;
     std::set<std::string> completedMissions_;
     std::string dummyName_;

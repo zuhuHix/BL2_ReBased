@@ -754,7 +754,7 @@ int main(int argc, char** argv) {
         if (mode == "--slice-run") {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
             // Each step's record carries the mission status after it.
-            // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
+            // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | pawnhit:<damage>:<type>[:<source>] (the player's hit through the stock chain on the dummy pawn) | turnin | tick:<s> | stage:<n> (the region game stage the host
             // owns) | player:<level>:<experience> (the player's state) | health:<current> (the player's current health, after player:) | cheatlevel (one not-natural level-up) | screen (Marcus's mission lists, printed with the step) | use (the use key
             // on Marcus: his OnUsed chain; the behaviors it ran and the interface it opened are printed with the step) | confirmreward (Enter on the reward page the open screen showed at the turn-in) |
             // close (Escape: the player leaves Marcus's mission screen; the accept closes it by itself). accept and turnin
@@ -794,6 +794,21 @@ int main(int argc, char** argv) {
                 else if (step == "hit:fire") ok = slice.hitDummy(true);
                 else if (step == "hit:other") ok = slice.hitDummy(false);
                 else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
+                else if (step.rfind("pawnhit:", 0) == 0) {     // pawnhit:<damage>:<damage type definition path>[:<WillowDmgSource_* class path>]: the player's hit through the stock chain
+                    const auto firstColon = step.find(':', 8);
+                    if (firstColon == std::string::npos) usage();
+                    const auto secondColon = step.find(':', firstColon + 1);
+                    const std::string source = secondColon == std::string::npos ? "" : step.substr(secondColon + 1);
+                    ok = slice.damageDummy(step.substr(firstColon + 1, secondColon == std::string::npos ? std::string::npos : secondColon - firstColon - 1), source, std::stod(step.substr(8, firstColon - 8)));
+                    const auto& hit = slice.lastHit();
+                    std::ostringstream report;
+                    report << "{\"health_before\":" << hit.healthBefore << ",\"health_after\":" << hit.healthAfter << ",\"arriving\":" << hit.arriving << ",\"applied\":" << hit.applied
+                           << ",\"demigod_before\":" << (hit.demigodBefore ? "true" : "false") << ",\"demigod_after\":" << (hit.demigodAfter ? "true" : "false") << ",\"events\":[";
+                    for (size_t e = 0; e < hit.events.size(); ++e) report << (e ? "," : "") << quote(hit.events[e]);
+                    report << "]}";
+                    screenKey = "hit";
+                    screenJson = report.str();
+                }
                 else if (step == "turnin") ok = slice.turnIn();
                 else if (step == "confirmreward") ok = slice.confirmReward();     // Enter on the reward page the open screen showed
                 else if (step == "close") ok = slice.closeScreen();               // Escape: the player leaves Marcus's mission screen

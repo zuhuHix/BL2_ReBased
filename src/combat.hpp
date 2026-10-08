@@ -25,6 +25,12 @@ namespace vm {
 // An AI pawn (spawnEnemy) is the stock archetype instantiated as placeMarcus does, with a WillowMind as its controller; the mind's manager is made by
 // the same CreatePool the game calls (a pool made through the pawn's controller has the mind as its provider, section 1.4), and the pawn's level and
 // game stage are plain inputs (the stock spawn path that derives them, PopulationFactoryBalancedAIPawn, is not modelled).
+//
+// The stock hit chain (plan step S-b, src/combat_hit.cpp): hit() runs the installed script `TakeDamage` of the victim pawn with the instigator's controller,
+// so WillowAIPawn.TakeDamage -> WillowPawn.TakeDamage -> Pawn.TakeDamage -> AdjustDamage -> SetHealth -> NotifyTakeHit -> TookDamageFromEnemy are the game's
+// own script, and the natives they reach are bound there (docs/verification/NATIVE_DAMAGE_DEATH.md sections 1 to 7 and NATIVE_COMBAT_GROUNDWORK.md sections
+// 3 and 6, every rule UNVERIFIED unless a live row confirms it): the damage pipeline objects, AdjustDamage for a player instigator, the preconditions, the
+// bookkeeping natives, NotifyTakeHit (which raises the OnTakeDamage behavior event through the handler the owner registers) and the AI "demigod hold".
 class CombatSystem {
 public:
     // `world` is the VM's WorldInfo (its TimeSeconds stamps the pool's idle timer); null makes one with authority, for a run without the mission bridge.
@@ -43,9 +49,48 @@ public:
     // pool made from the class's HealthPoolDefinition. Throws RuntimeError when the data lacks a piece (an archetype with no AI class or pool definition).
     Enemy spawnEnemy(const std::shared_ptr<const Package>& package, const std::string& archetypePath, int level, int gameStage);
 
+    // Gives a pawn the pieces spawnEnemy builds around an archetype (authority, level, a WillowMind of its AI class with an AIComponent and the manager,
+    // the health pool); for the slice's own pawn, which was instantiated before it could be hit. Idempotent: a pawn that already has a mind is returned as it is.
+    Enemy adopt(const ObjectPtr& pawn, int level, int gameStage);
+
     // The pool services the natives and the mission bridge share (NATIVE_LEVEL_UP_ATTRIBUTES.md section 4).
     void setPoolCurrent(Object& pool, float value);
     void updateLastValues(Object& pool);
+
+    // ---- the stock hit chain (src/combat_hit.cpp) ----
+    // The player-controlled attacker of a --combat-run: a WillowPlayerController with a PlayerReplicationInfo at `level` and its WillowPlayerPawn.
+    struct Player { ObjectPtr controller, pawn; };
+    Player spawnPlayer(int level);
+
+    // What NotifyTakeHit hands the owner to raise OnTakeDamage with (NATIVE_DAMAGE_DEATH.md section 5): the hit pawn, the damaging controller, the damage
+    // that was applied to health (after the pipeline), the damage that went to shields, the damage source class and the pipeline's damage type definition.
+    struct TakeDamageEvent {
+        ObjectPtr pawn, instigator, damageType;
+        double damage = 0, shieldDamage = 0;
+        Class* source = nullptr;
+    };
+    using TakeDamageFn = std::function<void(const TakeDamageEvent&)>;
+    void setTakeDamageHandler(TakeDamageFn handler) { takeDamage_ = std::move(handler); }
+
+    // What one hit did, for the reports: health before and after, the damage the pipeline passed to health, and the natives of the chain in the order they ran.
+    struct HitReport {
+        double healthBefore = 0, healthAfter = 0, arriving = 0, applied = 0, shieldDamage = 0;
+        bool demigodBefore = false, demigodAfter = false;
+        std::vector<std::string> events;
+    };
+    // A hit on `victim` by `instigator` (a controller; its pawn is the damage causer): the damage type definition `damageTypePath` (a stock object path,
+    // looked up in Startup and the victim's package) and the damage source class `source`. Runs the victim's script TakeDamage; the owner's script guard
+    // (the slice's run()) wraps the call, this unit only runs the chain.
+    HitReport hit(const ObjectPtr& victim, const ObjectPtr& instigator, double damage, const std::string& damageTypePath, Class* source);
+    // The object a hold behavior (the installed Behavior_AIHold script) is applied to for `context`: the live game applies it to the pawn, and the script asks
+    // the context for IAIInterface, which the VM's class tables list for the mind (GearboxMind) and not for WillowAIPawn, so an AI pawn is answered by its mind
+    // (the object that owns the AIComponent anyway). A stand-in for the table gap, UNVERIFIED; any other object is returned as it is.
+    ObjectPtr aiInterfaceFor(const ObjectPtr& context);
+    // Pawn.IsDemigodMode as the installed script answers it (the AI component's demigod hold or the mind's own flag).
+    bool demigod(const ObjectPtr& pawn);
+    // The events of the natives that ran since the last clear, in order (the rows of HitReport are cut from it).
+    const std::vector<std::string>& events() const { return events_; }
+    void note(const std::string& text) { events_.push_back(text); }
 
 private:
     Runtime& runtime_;
@@ -57,9 +102,34 @@ private:
     Class* mindClass_ = nullptr;
     Class* aiPawnClass_ = nullptr;
     bool classesLooked_ = false;
+    // The hit chain's state (src/combat_hit.cpp).
+    TakeDamageFn takeDamage_;
+    std::vector<std::string> events_;
+    std::vector<ObjectPtr> pipelines_;               // the pool of pipeline objects (NATIVE_COMBAT_GROUNDWORK.md section 3.1)
+    std::vector<bool> pipelineInUse_;
+    ObjectPtr globalsDefinition_;                    // GD_Globals.General.Globals, found in Startup on first use
+    std::map<const Object*, std::vector<std::string>> demigodHolds_;   // AI component -> the reasons of its demigod holds
+    std::map<const Object*, bool> mindDemigod_;      // WillowMind.SetAIDemigod
+    std::map<std::string, ObjectPtr> byPath_;        // stock objects by path (damage types, hit regions), loaded once
+    std::vector<ObjectPtr> players_;                 // controllers spawnPlayer made (a context source of the evaluator)
+    std::map<std::string, bool> missing_;            // attribute and property names a stage wanted and the class does not have (reported once)
 
     void bind(const char* path, NativeFn fn);
     void bindNatives();
+    void bindHitNatives();
+    ObjectPtr acquirePipeline(const Value& damageType, const Value& impact, bool friendly, const Value& hitObject);
+    void releasePipeline(const ObjectPtr& pipeline);
+    Value adjustDamage(NativeCall& c);
+    ObjectPtr stockObject(const std::string& path, const std::shared_ptr<const Package>& hint = nullptr);
+    ObjectPtr globals();
+    float attribute(Object& owner, const char* name, float fallback = 1.f);   // an attribute's value property, `fallback` (and reported once) when absent
+    double evaluateFor(const Value& data, const ObjectPtr& instigator);   // an AttributeInitializationData with the instigator as the context source
+    int opinion(Object& self, const ObjectPtr& other);                    // Pawn.GetOpinion
+    float resistance(Object& pawn, Object& damageType);                   // GetPawnDamageTypeModifier
+    int levelOf(const ObjectPtr& controllerOrPawn);
+    ObjectPtr hitRegion(Object& victim, const Value& hitInfo);
+    bool isPlayerController(const ObjectPtr& object);
+    void logEvent(const std::string& text) { events_.push_back(text); }
     void notImplemented(const std::string& what);
     ObjectPtr load(const Value& reference);
     AttributeContext contextFor(const Value& source);
@@ -89,6 +159,14 @@ private:
 //   valid:<n>:<k>                    Actor.IsResourcePoolValid on the k-th reference of pawn n
 //   unpool:<n>:<k>                   DeletePoolByReference on the k-th pool the pool step made for pawn n (0-based)
 //   destroyhealth:<n>                DeletePoolByReference on pawn n's HealthPool (what Pawn.Died does), the reference written back
+//   player:<level>                   a player controller (PlayerReplicationInfo at that level) and its pawn: the attacker of the hit step (the first one is used)
+//   attr:<player>:<name>:<value>     a float attribute of that player's controller, as a state input (Maya's skills are not in the VM)
+//   hold:<n>:<reason> | release:<n>:<reason>   the demigod hold of pawn n's AI component (HoldDemigod / ReleaseDemigod), as the AIHold behavior's script asks
+//   sequence:<n>:<name>:on|off       enables or disables a sequence of pawn n's class behavior provider (made, registered, on first use)
+//   hit:<n>:<damage>:<damage type path>[:<source>]   the stock hit chain on pawn n by player 0 (src/combat_hit.cpp): the damage arrives as given, the
+//                                    damage type definition is a stock object path (""= None), the source a WillowDmgSource_* class (Pistol, Grenade,
+//                                    StatusEffect...; default Bullet). Rows hit.<class>.L<level>.<k>.arriving / .applied / .health_after; the step's
+//                                    result lists health before and after, whether the pawn was demigod, and the natives of the chain in the order they ran.
 // Every step that names a pawn reports its state afterwards ("state": the natives' answers, HealthVar and HealthMaxVar, the HealthPool reference, the occupied slots).
 // `failed`, when given, is set when a step threw or the report logged an error.
 std::string combatRun(Runtime& runtime, const std::vector<std::string>& steps, bool* failed = nullptr);
