@@ -511,6 +511,13 @@ CombatSystem::Player CombatSystem::spawnPlayer(int level) {
     required(runtime_, *player.controller, "Pawn") = Value::makeObject(player.pawn);
     required(runtime_, *player.pawn, "Controller") = Value::makeObject(player.controller);
     players_.push_back(player.controller);
+    // The game's replication info lists the players (AwardCombatExperienceToParty walks it): this controller's info, owned by the controller.
+    if (const Value* replication = runtime_.property(*world_, "GRI"); isObject(replication))
+        if (Value* list = runtime_.property(*replication->o, "PRIArray")) {
+            required(runtime_, *info, "Owner") = Value::makeObject(player.controller);
+            if (list->kind != Value::Kind::Array) *list = Value::makeArray();
+            list->elements().push_back(Value::makeObject(info));
+        }
     return player;
 }
 

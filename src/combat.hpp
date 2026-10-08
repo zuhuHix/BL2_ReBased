@@ -110,6 +110,12 @@ public:
     ObjectPtr built(const Value& reference) { return load(reference); }
     // BehaviorKernel.ActivateBehaviorOutputLink appends to the list given here (the running script behavior's selected outputs); returns the previous list.
     std::vector<int>* selectLinks(std::vector<int>* ids) { std::vector<int>* previous = selectedLinks_; selectedLinks_ = ids; return previous; }
+    // ---- kill experience (plan step S-d, src/combat_xp.cpp, docs/verification/COMBAT_KILL_XP.md) ----
+    // What the two experience natives did, per kill, for the reports: the amount CalculateExperiencePointsForKill returned for the party (before the split), the victim's
+    // level, and what AwardCombatExperienceToParty passed to each player controller's ExpEarn (the integer, truncated; the player's level at that moment).
+    struct Credit { ObjectPtr controller; int playerLevel = 0; int amount = 0; };
+    struct Kill { ObjectPtr killed; int killedLevel = 0; double award = 0; std::vector<Credit> credits; };
+    std::vector<Kill>& kills() { return kills_; }
     // The events of the natives that ran since the last clear, in order (the rows of HitReport are cut from it).
     const std::vector<std::string>& events() const { return events_; }
     void note(const std::string& text) { events_.push_back(text); }
@@ -126,6 +132,7 @@ private:
     bool classesLooked_ = false;
     bool deaths_ = false;                      // enableDeaths ran
     BehaviorEventFn behaviorEvent_;
+    std::vector<Kill> kills_;
     std::vector<int>* selectedLinks_ = nullptr;
     std::map<int64_t, ObjectPtr> consumers_;   // consumer handle PID -> pawn
     int64_t nextConsumer_ = 100;               // the first handle given out (the bridge's Marcus has 0)
@@ -146,6 +153,8 @@ private:
     void bindHitNatives();
     void bindDeathNatives();
     void prepareForDeath(Object& pawn, const ObjectPtr& self);
+    void bindExperienceNatives();
+    void applyExperienceMultiplier(const ObjectPtr& pawn, const ObjectPtr& mind);
     ObjectPtr acquirePipeline(const Value& damageType, const Value& impact, bool friendly, const Value& hitObject);
     void releasePipeline(const ObjectPtr& pipeline);
     Value adjustDamage(NativeCall& c);

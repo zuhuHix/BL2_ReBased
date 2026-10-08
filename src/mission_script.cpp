@@ -31,6 +31,14 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     // The replication info that holds the experience level (ExpLevelUp reads and raises it, OnExpLevelChange sets the next requirement).
     pri_ = runtime.instantiate(runtime.findClass("WillowGame.WillowPlayerReplicationInfo"));
     required(runtime, *controller_, "PlayerReplicationInfo") = Value::makeObject(pri_);
+    // The game's replication info lists the one player (kill experience walks the list: WillowExperiencePipeline.AwardCombatExperienceToParty, src/combat_xp.cpp).
+    // (A synthetic package set without these properties has no list to keep.)
+    if (Value* owner = runtime.property(*pri_, "Owner"))
+        if (Value* list = runtime.property(*replication_, "PRIArray")) {
+            *owner = Value::makeObject(controller_);
+            if (list->kind != Value::Kind::Array) *list = Value::makeArray();
+            list->elements().push_back(Value::makeObject(pri_));
+        }
     // A local controller with authority (single player); the role is looked up by its enum name, not assumed.
     const auto roles = enumNames(runtime, "Engine", "Actor.ENetRole");
     const auto authority = std::find(roles.begin(), roles.end(), "ROLE_Authority");

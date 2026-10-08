@@ -165,6 +165,10 @@ public:
     // locked one once Active, else the region's; 0 when the host set none) and a hit by the player on `victim`. The hit runs the victim's installed script
     // TakeDamage with the VM controller as the instigator (its pawn linked for the call only, as the level-up does) under the bridge's script guard.
     CombatSystem& combat() { return *combat_; }
+    // The VM controller (the player, the context source of the evaluator and the owner of the experience pool) and its pawn (made on first use, linked to the health pool):
+    // for the combat run, which reads the player's level, health and experience and lists the controller as the owner of its replication info.
+    ObjectPtr playerController() const { return controller_; }
+    ObjectPtr playerPawnObject() { return pawnFor(Toucher::Player); }
     int currentGameStage() const { return gameStage(); }
     CombatSystem::HitReport hitFromPlayer(const ObjectPtr& victim, double damage, const std::string& damageTypePath, const std::string& sourceClass);
 

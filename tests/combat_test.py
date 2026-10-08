@@ -22,6 +22,15 @@ script Killed through WorldInfo.Game. The checks are about what this unit adds: 
 script's context calls land on None), the call-order trace (`order`) shows the chain in the order the scripts run it, NotifyPawnDied is a bound native, and the
 post-state of the pawn (health 0, no valid pool after destroyhealth).
 
+The kill experience (src/combat_xp.cpp, docs/verification/COMBAT_KILL_XP.md) is checked on the same toy kill: the toy game's script Killed calls the two natives of
+WillowExperiencePipeline, and a toy `GD_Globals.General.Globals` (in a toy Startup package) holds invented data: the base formula is a constant 20 scaled by 1.5 (so every
+kill is worth 30 for the party, whatever the victim), the party weights are (killer bonus 0, weight 1) for one player and (0.25, 0.5) for two, and the level-difference table has
+two rows (1: higher 1.5, lower 0.8; 2: higher 2.0, lower 0.5). Victim level 5. The toy ExpEarn is a script that stores its argument; the amounts it was given are in the events.
+  - one player, level 4 (victim above by 1): 30 x 1.5 = 45;
+  - two players, the killer at level 4 and a partner at level 7: the killer (0.25 + 0.5) x 30 = 22.5 x 1.5 = 33.75 truncated to 33; the partner 0.5 x 30 = 15 x 0.5 (victim below
+    by 2) = 7.5 truncated to 7;
+  - one player at level 1 (difference 4, past the table's last row: the last row): 30 x 2.0 = 60; at level 5 (equal): 30.
+
 Checked (the numbers are the rules of the note):
   - spawn: the pool lands in slot 0 with GUID 0, the manager's Owner is the mind, GetHealth / GetMaxHealth answer the pool (40.5), HealthVar stays 11
     (not written while the pool is valid), HealthMaxVar becomes the pool's maximum (SetHealthResourcePoolDefinition);
@@ -99,6 +108,8 @@ class Tags:
     def int(self, name, v): return self.tag(name, 'IntProperty', 4, w32(v))
     def float(self, name, v): return self.tag(name, 'FloatProperty', 4, struct.pack('<f', v))
     def obj(self, name, ref): return self.tag(name, 'ObjectProperty', 4, w32(ref))
+    def struct_(self, name, type_, body): return self.tag(name, 'StructProperty', len(body), body, self.p.fname(type_))
+    def array(self, name, count, body): return self.tag(name, 'ArrayProperty', 4 + len(body), w32(count) + body)
     def none(self): return self.p.fname('None')
 
 
@@ -119,6 +130,8 @@ class Asm:
         self.raw(0x19); obj(); self.w(0); self.ref(0); self.raw(0); body()
     def float_const(self, v): self.raw(0x1E); self.b += struct.pack('<f', v)
     def return_nothing(self): self.raw(0x04, 0x0B)
+    def class_context(self, class_ref, body):   # ClassContext(ObjectConst(class), skip, return property, flags, body): a static call
+        self.raw(0x12, 0x20); self.ref(class_ref); self.w(0); self.ref(0); self.raw(0); body()
     def here(self): return len(self.b) + 4 * self.refs              # in-memory offset (references are 8 bytes there)
     def final(self, function, *args):                               # FinalFunction(function, args...)
         self.raw(0x1C); self.ref(function)
@@ -146,10 +159,10 @@ class Toy:
         payload = w32(0) + self.none + w32(0) + u32(1) + u64(flags) + self.none + w32(0) + w32(type_ref)
         return self.p.add_export(self.imp[kind + 'Property'], name, payload, outer=owner)
 
-    def array_of(self, owner, name, inner_kind):
+    def array_of(self, owner, name, inner_kind, inner_ref=0):
         index = len(self.p.exports) + 1
         self.prop('Array', owner, name, type_ref=index + 1)
-        self.prop(inner_kind, index, name)
+        self.prop(inner_kind, index, name, type_ref=inner_ref)
         return index
 
     def struct_(self, owner, name): return self.p.add_export(self.imp['ScriptStruct'], name, w32(0) * 4, outer=owner)
@@ -264,7 +277,7 @@ def build_gearbox():
 
 
 def build_willowgame():
-    T = Toy(('Byte', 'Object', 'Int', 'Float', 'Bool', 'Class', 'Struct'))
+    T = Toy(('Byte', 'Object', 'Int', 'Float', 'Bool', 'Class', 'Struct', 'Array'))
     p = T.p
     engine = p.add_import_full('Package', 0, 'Engine')
     gearbox = p.add_import_full('Package', 0, 'GearboxFramework')
@@ -319,33 +332,62 @@ def build_willowgame():
     game_property = p.add_import_full('ObjectProperty', world_info, 'Game')
     gri_property = p.add_import_full('ObjectProperty', world_info, 'GRI')
     game_info = T.cls('WillowGameInfo', super_ref=actor)
-    killed_function = T.function(game_info, 'Killed', [('Object', 'KilledPawn', 0)], lambda ids: (lambda a: (a.return_nothing(), a.end(), a)[2])(Asm()))['__self__']
+    T.prop('Int', game_info, 'EffectiveNumPlayers')
+    # the kill experience data and the two natives (static, on WillowExperiencePipeline)
+    globals_class = T.cls('GlobalsDefinition')
+    data_struct = T.struct_(globals_class, 'AttributeInitializationData')
+    for name in ('BaseValueConstant', 'BaseValueScaleConstant'): T.prop('Float', data_struct, name)
+    for name in ('BaseValueAttribute', 'InitializationDefinition'): T.prop('Object', data_struct, name)
+    T.prop('Struct', globals_class, 'BaseEnemyExperienceFormula', type_ref=data_struct)
+    weight_struct = T.struct_(globals_class, 'ExpAwardWeight')
+    T.prop('Int', weight_struct, 'Players')
+    for name in ('KillerExpBonus', 'ExpWeight'): T.prop('Float', weight_struct, name)
+    T.array_of(globals_class, 'ExpAwardWeights', 'Struct', weight_struct)
+    scale_struct = T.struct_(globals_class, 'ExpScaleByLevel')
+    T.prop('Int', scale_struct, 'LevelDifference')
+    for name in ('HigherLevelEnemyExpScale', 'LowerLevelEnemyExpScale'): T.prop('Float', scale_struct, name)
+    T.array_of(globals_class, 'ExpScaleByLevelDifference', 'Struct', scale_struct)
+    pipeline_x = T.cls('WillowExperiencePipeline')
+    calculate_function = T.function(pipeline_x, 'CalculateExperiencePointsForKill', [('Object', 'Killer', 0), ('Object', 'KilledPawn', 0), ('Bool', 'bKilledByCritical', 0),
+                                    ('Class', 'DamageSource', 0), ('Object', 'DamageTypeDef', 0)], None, NATIVE | FUNC_STATIC, 'Float')['__self__']
+    award_function = T.function(pipeline_x, 'AwardCombatExperienceToParty', [('Float', 'ExperiencePoints', 0), ('Object', 'Killer', 0), ('Object', 'KilledActor', 0)],
+                                None, NATIVE | FUNC_STATIC)['__self__']
+
+    def killed_body(ids):             # AwardCombatExperienceToParty(CalculateExperiencePointsForKill(Killer, KilledPawn, false, None, None), Killer, KilledPawn)
+        a = Asm()
+        local = lambda n: (lambda: a.local(ids, n))
+        points = lambda: a.class_context(pipeline_x, lambda: a.final(calculate_function, local('Killer'), local('KilledPawn'), lambda: a.raw(0x28), lambda: a.raw(0x2A), lambda: a.raw(0x2A)))
+        a.class_context(pipeline_x, lambda: a.final(award_function, points, local('Killer'), local('KilledPawn')))
+        a.return_nothing(); a.end(); return a
+    killed_function = T.function(game_info, 'Killed', [('Object', 'Killer', 0), ('Object', 'KilledPawn', 0)], killed_body)['__self__']
     tracker = T.cls('MissionTracker', super_ref=actor)
     notify_died = T.function(tracker, 'NotifyPawnDied', [('Object', 'KilledPawn', 0)], None, NATIVE)['__self__']
     replication = T.cls('WillowGameReplicationInfo', super_ref=actor)
     tracker_property = T.prop('Object', replication, 'MissionTracker')
+    T.array_of(replication, 'PRIArray', 'Object')
     doomed = T.cls('WillowDoomedPawn', super_ref=ai_pawn)
 
-    def died(ids):                    # SetHealth(0.0); WorldInfo.Game.Killed(Self)
+    def died(ids):                    # SetHealth(0.0); WorldInfo.Game.Killed(Killer, Self)
         a = Asm()
         a.final(set_health, lambda: a.float_const(0.0))
-        a.context(lambda: a.context(lambda: a.instance(world_property), lambda: a.instance(game_property)), lambda: a.final(killed_function, lambda: a.raw(0x17)))
+        a.context(lambda: a.context(lambda: a.instance(world_property), lambda: a.instance(game_property)),
+                  lambda: a.final(killed_function, lambda: a.local(ids, 'Killer'), lambda: a.raw(0x17)))
         a.return_nothing(); a.end(); return a
-    died_function = T.function(doomed, 'Died', [], died)['__self__']
+    died_function = T.function(doomed, 'Died', [('Object', 'Killer', 0)], died)['__self__']
 
-    def depleted(ids):                # WorldInfo.GRI.MissionTracker.NotifyPawnDied(Self); Died()
+    def depleted(ids):                # WorldInfo.GRI.MissionTracker.NotifyPawnDied(Self); Died(InstigatedBy)
         a = Asm()
         a.context(lambda: a.context(lambda: a.instance(world_property), lambda: a.instance(gri_property)),
                   lambda: a.context(lambda: a.instance(tracker_property), lambda: a.final(notify_died, lambda: a.raw(0x17))))
-        a.final(died_function)
+        a.final(died_function, lambda: a.local(ids, 'InstigatedBy'))
         a.return_nothing(); a.end(); return a
-    depleted_function = T.function(doomed, 'HandleHealthDepleted', [], depleted)['__self__']
+    depleted_function = T.function(doomed, 'HandleHealthDepleted', [('Object', 'InstigatedBy', 0)], depleted)['__self__']
 
     def doomed_take_damage(ids):      # SetHealth(-5.0); NotifyTakeHit(...); HandleHealthDepleted()
         a = Asm()
         a.final(set_health, lambda: a.float_const(-5.0))
         a.final(notify, *[(lambda n=n: a.local(ids, n)) for n in ('InstigatedBy', 'HitLocation', 'Damage', 'DamageType', 'Momentum', 'Pipeline')])
-        a.final(depleted_function)
+        a.final(depleted_function, lambda: a.local(ids, 'InstigatedBy'))
         a.return_nothing(); a.end(); return a
     T.function(doomed, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
                                       ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], doomed_take_damage)
@@ -357,8 +399,11 @@ def build_willowgame():
     T.cls('WillowDmgSource_Bullet')
     player_controller = T.cls('WillowPlayerController', super_ref=controller)
     T.prop('Object', player_controller, 'PlayerReplicationInfo')
+    last_exp = T.prop('Int', player_controller, 'LastExp')
+    T.function(player_controller, 'ExpEarn', [('Int', 'Exp', 0), ('Byte', 'Source', 0), ('Byte', 'Type', 0)],
+               lambda ids: (lambda a: (a.raw(0x0F), a.instance(last_exp), a.local(ids, 'Exp'), a.return_nothing(), a.end(), a)[5])(Asm()))
     T.cls('WillowPlayerPawn', super_ref=pawn)
-    T.prop('Int', T.cls('WillowPlayerReplicationInfo'), 'ExpLevel')
+    T.prop('Int', T.cls('WillowPlayerReplicationInfo', super_ref=actor), 'ExpLevel')
     return p
 
 
@@ -390,6 +435,26 @@ def build_pawns():
     return p
 
 
+def build_startup():
+    p = Package()
+    t = Tags(p)
+    none = t.none()
+    core = p.add_import_full('Package', 0, 'Core')
+    willow = p.add_import_full('Package', 0, 'WillowGame')
+    package_class = p.add_import_full('Class', core, 'Package')
+    globals_class = p.add_import_full('Class', willow, 'GlobalsDefinition')
+    group = p.add_export(package_class, 'GD_Globals', w32(0) + none)
+    general = p.add_export(package_class, 'General', w32(0) + none, outer=group)
+    formula = t.struct_('BaseEnemyExperienceFormula', 'AttributeInitializationData', t.float('BaseValueConstant', 20.0) + t.float('BaseValueScaleConstant', 1.5) + none)
+
+    def weight(players, bonus, share): return t.int('Players', players) + t.float('KillerExpBonus', bonus) + t.float('ExpWeight', share) + none
+
+    def scale(difference, higher, lower): return t.int('LevelDifference', difference) + t.float('HigherLevelEnemyExpScale', higher) + t.float('LowerLevelEnemyExpScale', lower) + none
+    p.add_export(globals_class, 'Globals', w32(0) + formula + t.array('ExpAwardWeights', 2, weight(1, 0.0, 1.0) + weight(2, 0.25, 0.5))
+                 + t.array('ExpScaleByLevelDifference', 2, scale(1, 1.5, 0.8) + scale(2, 2.0, 0.5)) + none, outer=general)
+    return p
+
+
 failures = []
 
 
@@ -412,6 +477,7 @@ with tempfile.TemporaryDirectory() as folder:
     (root / 'GearboxFramework.upk').write_bytes(build_gearbox().build())
     (root / 'WillowGame.upk').write_bytes(build_willowgame().build())
     (root / 'ToyPawns.upk').write_bytes(build_pawns().build())
+    (root / 'Startup.upk').write_bytes(build_startup().build())
 
     code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Toy:4',
                            'sethealth:0:0.5', 'sethealth:0:-3', 'sethealth:0:1.5', 'sethealth:0:500', 'setmax:0:99',
@@ -491,18 +557,41 @@ with tempfile.TemporaryDirectory() as folder:
     check('a class with no behavior provider has nothing to raise the event to', any('no behavior provider' in e for e in floor['events']), floor['events'])
 
     # ---- the death chain: enableDeaths gives the world a game and a tracker, the scripts run in order, NotifyPawnDied is a bound native, the post-state
-    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Doomed:4', 'player:8', 'hit:0:10::Bullet', 'destroyhealth:0')
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Doomed:4', 'player:8', 'hit:0:10::Bullet', 'destroyhealth:0')   # (the toy game's Killed also awards experience: logged, not asserted here)
     check('death: exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
     rows = got['steps']
     kill = rows[2]['result']
     expected_order = ['WillowGame.WillowDoomedPawn.TakeDamage', 'Engine.Pawn.SetHealth', 'Engine.Pawn.NotifyTakeHit', 'WillowGame.WillowDoomedPawn.HandleHealthDepleted',
                       'WillowGame.MissionTracker.NotifyPawnDied', 'WillowGame.WillowDoomedPawn.Died', 'Engine.Pawn.SetHealth', 'WillowGame.WillowGameInfo.Killed']
-    check('death: the call order of the chain (TakeDamage, SetHealth, NotifyTakeHit, HandleHealthDepleted, NotifyPawnDied, Died, SetHealth, Killed)', kill.get('order') == expected_order, kill.get('order'))
+    check('death: the call order of the chain (TakeDamage, SetHealth, NotifyTakeHit, HandleHealthDepleted, NotifyPawnDied, Died, SetHealth, Killed)',
+          kill.get('order', [])[:len(expected_order)] == expected_order and kill.get('order', [])[len(expected_order):][:2] == ['WillowGame.WillowExperiencePipeline.CalculateExperiencePointsForKill',
+          'WillowGame.WillowExperiencePipeline.AwardCombatExperienceToParty'], kill.get('order'))
     check('death: the tracker native ran (it is bound, not a stub)', any(e.startswith('NotifyPawnDied') for e in kill['events']) and 'MissionTracker.NotifyPawnDied(object)' not in got['stubs'], (kill['events'], got['stubs']))
     check('death: the game script ran (WorldInfo.Game is not None): no call on None', 'WillowGame.WillowGameInfo.Killed' in kill.get('order', []), kill.get('order'))
     check('death: SetHealth(0) came after the lethal -5 (the events list the writes in order)', [e for e in kill['events'] if e.startswith('SetHealth')] == ['SetHealth -5.000000', 'SetHealth 0.000000'], kill['events'])
     check('death: health is 0 after the chain', kill['health_after'] == 0, kill)
     check('death: the pool is gone after destroyhealth', rows[3]['result']['state']['pool_valid'] is False and rows[3]['result']['state']['pool_slot'] == 255, rows[3])
+
+    # ---- kill experience: the base formula and the two tables from the data, the split by player count, the level scale, truncation, the ExpEarn call
+    def kill(*steps):
+        code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Doomed:5', *steps)
+        check('xp: exit and errors', code == 0 and got['errors'] == [], (steps, code, got['errors']))
+        hit = next(r['result'] for r in got['steps'] if r['step'].startswith('hit'))
+        credits = [e for e in hit['events'] if e.startswith('AwardCombatExperienceToParty')]
+        return got, hit, credits
+    got, hit, credits = kill('player:4', 'players:1', 'hit:0:10::Bullet')
+    check('xp: one player below the victim by 1 gets 30 x 1.5 = 45', credits == ['AwardCombatExperienceToParty player_level=4 victim_level=5 ExpEarn(45, 1, 1)'], credits)
+    check('xp: the award of the kill is the base formula of the data (20 x 1.5)', near(got['rows'].get('kill.Doomed.L5.p4', {}).get('award', -1), 30.0), got['rows'])
+    check('xp: no stub for the experience natives (they are bound) and ExpEarn is the toy script', not any('Experience' in k or 'ExpEarn' in k for k in got['stubs']), got['stubs'])
+    got, hit, credits = kill('player:4', 'player:7', 'players:2', 'hit:0:10::Bullet')
+    check('xp: two players: the killer (0.25 + 0.5) x 30 x 1.5 = 33.75 -> 33, the partner 0.5 x 30 x 0.5 = 7.5 -> 7, in list order',
+          credits == ['AwardCombatExperienceToParty player_level=4 victim_level=5 ExpEarn(33, 1, 1)', 'AwardCombatExperienceToParty player_level=7 victim_level=5 ExpEarn(7, 1, 1)'], credits)
+    got, hit, credits = kill('player:1', 'players:1', 'hit:0:10::Bullet')
+    check('xp: a difference past the table uses its last row: 30 x 2.0 = 60', credits == ['AwardCombatExperienceToParty player_level=1 victim_level=5 ExpEarn(60, 1, 1)'], credits)
+    got, hit, credits = kill('player:5', 'players:1', 'hit:0:10::Bullet')
+    check('xp: equal levels leave the share unscaled: 30', credits == ['AwardCombatExperienceToParty player_level=5 victim_level=5 ExpEarn(30, 1, 1)'], credits)
+    got, hit, credits = kill('player:4', 'hit:0:10::Bullet')
+    check('xp: a game with no player count (0) is outside the table: bonus 0, weight 1', credits == ['AwardCombatExperienceToParty player_level=4 victim_level=5 ExpEarn(45, 1, 1)'], credits)
 
 if failures:
     print(f'{len(failures)} combat check(s) failed:')

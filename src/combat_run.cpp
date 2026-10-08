@@ -1,7 +1,9 @@
 #include "combat.hpp"
 #include "behavior.hpp"
+#include "mission_script.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <iomanip>
 #include <memory>
@@ -59,7 +61,11 @@ class Run {
 public:
     // Startup is always loaded in the game; the shared resource and attribute definitions (D_Resources.Health, D_Attributes.*) live there, and a reference
     // from another package resolves to them only while it is loaded. A package set without it (a synthetic one) has none.
-    explicit Run(Runtime& runtime) : runtime_(runtime), evaluator_(runtime), combat_(runtime, evaluator_) {
+    // `script`: the mission bridge a run with a `maya` step is built over (its controller is the player, its experience pool and level-up chain take the kill credit);
+    // without it the run has its own combat system and the player of the `player` step.
+    Run(Runtime& runtime, MissionScript* script)
+        : runtime_(runtime), evaluator_(runtime), ownCombat_(script ? nullptr : std::make_unique<CombatSystem>(runtime, evaluator_)),
+          combat_(script ? script->combat() : *ownCombat_), script_(script) {
         try { runtime.package("Startup"); } catch (const std::exception&) {}
         combat_.setTakeDamageHandler([this](const CombatSystem::TakeDamageEvent& event) { raiseTakeDamage(event); });
         combat_.setBehaviorEventHandler([this](const CombatSystem::BehaviorEvent& event) { raiseBehaviorEvent(event); });
@@ -73,7 +79,9 @@ public:
 private:
     Runtime& runtime_;
     AttributeEvaluator evaluator_;
-    CombatSystem combat_;
+    std::unique_ptr<CombatSystem> ownCombat_;
+    CombatSystem& combat_;
+    MissionScript* script_;
     std::vector<Spawned> pawns_;
     std::vector<CombatSystem::Player> players_;
     std::map<const Object*, std::unique_ptr<BehaviorProvider>> providers_;    // one class provider per pawn that was hit or whose sequences were set
@@ -81,6 +89,11 @@ private:
     std::map<const Object*, std::unique_ptr<BehaviorProvider>> deathProviders_;   // the provider of each pawn's death definition (BodyClassDeathDefinition), made when it raises its first event
     std::map<std::string, int> hitCounts_;
     std::map<std::string, double> rows_;
+    // A kill's row (kill.<class>.L<level>.p<player level>[.<tag>]): the award CalculateExperiencePointsForKill returned and the experience the player's pool gained.
+    struct KillRow { std::string id; double award = 0; bool credited = false; int credit = 0; };
+    std::vector<KillRow> killRows_;
+    std::string killTag_;
+    size_t killsSeen_ = 0;
     std::vector<std::string> results_, errors_;
 
     Spawned& pawn(const std::string& index);
@@ -94,6 +107,7 @@ private:
     void raiseBehaviorEvent(const CombatSystem::BehaviorEvent& event);
     void raiseTakeDamage(const CombatSystem::TakeDamageEvent& event);
     std::string hitJson(const CombatSystem::HitReport& report);
+    std::string playerJson();
     std::string stateJson(size_t index);
     std::string pawnJson(size_t index);
 };
@@ -198,6 +212,44 @@ void Run::apply(const std::string& step) {
         } else if (verb == "player") {
             players_.push_back(combat_.spawnPlayer(std::stoi(parts.at(1))));
             result = "{\"player\":" + std::to_string(players_.size() - 1) + "}";
+        } else if (verb == "maya") {
+            // maya:<level>[:<experience> | :short<n>]: the bridge's player at that level with that experience (default 0; shortN = N points short of the next level), health pool
+            // full for the level. May be given again between kills to change the player's level (the level is an input).
+            if (!script_) throw RuntimeError("combat-run: maya needs the mission bridge (it is built when a maya step is among the steps)");
+            const int level = std::stoi(parts.at(1));
+            script_->setPlayerExperience(level, 0);
+            if (parts.size() > 2) {
+                const std::string& amount = parts[2];
+                int64_t experience = 0;
+                if (amount.rfind("short", 0) == 0) {
+                    const Value* next = runtime_.property(*runtime_.property(*script_->playerController(), "PlayerReplicationInfo")->o, "ExpPointsNextLevelAt");
+                    experience = next->integer() - std::stoll(amount.substr(5));
+                } else {
+                    experience = std::stoll(amount);
+                }
+                script_->setPlayerExperience(level, experience);
+            }
+            result = "{\"player\":" + playerJson() + "}";
+        } else if (verb == "tick") {
+            // tick:<seconds>: game time passes and the experience pool's per-frame update runs (ApplyExpPointsToExpLevel: the installed ExpLevelUp while the pool has reached the
+            // next level), as the host's tick does. The level-up's gains are listed.
+            if (!script_) throw RuntimeError("combat-run: tick needs the mission bridge");
+            script_->advanceTime(std::stod(parts.at(1)));
+            script_->updateExperiencePool();
+            std::string gains;
+            const char* gainKinds[] = {"experience", "level", "skill_points", "max_health", "health", "weapon_damage_scale", "action_skill_cooldown"};
+            for (const auto& gain : script_->takeGains())
+                gains += std::string(gains.empty() ? "" : ",") + "{\"kind\":\"" + gainKinds[int(gain.kind)] + "\",\"amount\":" + std::to_string(gain.amount) + ",\"health\":" + number(gain.health)
+                         + ",\"maximum\":" + number(gain.maximum) + "}";
+            result = "{\"gains\":[" + gains + "],\"player\":" + playerJson() + "}";
+        } else if (verb == "players") {
+            // players:<n>: the game's EffectiveNumPlayers, which picks the row of the party-weight table (the VM has one local player; a second is for the synthetic tables).
+            const Value* game = runtime_.property(*combat_.world(), "Game");
+            Value* effective = game && game->kind == Value::Kind::Object && game->o ? runtime_.property(*game->o, "EffectiveNumPlayers") : nullptr;
+            if (!effective) throw RuntimeError("combat-run: the world has no game with EffectiveNumPlayers");
+            *effective = Value::makeInt(std::stoi(parts.at(1)));
+        } else if (verb == "killtag") {
+            killTag_ = parts.size() > 1 ? parts[1] : "";
         } else if (verb == "hold" || verb == "release") {
             // hold:<n>:<reason> / release:<n>:<reason>: the demigod hold of pawn n's AI component, as the AIHold behavior's script asks for it (HoldDemigod / ReleaseDemigod).
             Spawned& spawned = pawn(parts.at(1));
@@ -220,11 +272,25 @@ void Run::apply(const std::string& step) {
         } else if (verb == "hit") {
             // hit:<pawn>:<damage>:<damage type definition path>[:<source>] by player 0; source is a short name (Pistol), a class name or a class path.
             if (parts.size() < 4 || parts.size() > 5) throw RuntimeError("combat-run: hit:<pawn>:<damage>:<damage type path>[:<source>]");
-            if (players_.empty()) throw RuntimeError("combat-run: a hit needs a player (the step player:<level>) first");
+            if (players_.empty() && !script_) throw RuntimeError("combat-run: a hit needs a player (the step player:<level> or maya:<level>) first");
             Spawned& spawned = pawn(parts.at(1));
             std::string source = parts.size() == 5 ? parts[4] : "Bullet";
             if (source.find('.') == std::string::npos) source = "WillowGame." + std::string(source.rfind("WillowDmgSource_", 0) == 0 ? "" : "WillowDmgSource_") + source;
-            const auto report = combat_.hit(spawned.enemy.pawn, players_[0].controller, std::stod(parts.at(2)), parts.at(3), runtime_.findClass(source));
+            const float poolBefore = script_ ? script_->experiencePool() : 0.f;
+            const int playerLevel = script_ ? script_->playerLevel() : 0;
+            const auto report = script_ ? script_->hitFromPlayer(spawned.enemy.pawn, std::stod(parts.at(2)), parts.at(3), source)
+                                        : combat_.hit(spawned.enemy.pawn, players_[0].controller, std::stod(parts.at(2)), parts.at(3), runtime_.findClass(source));
+            // The kills this hit made (the experience natives record them): one row per kill, the credit being what the player's pool gained.
+            for (; killsSeen_ < combat_.kills().size(); ++killsSeen_) {
+                const auto& kill = combat_.kills()[killsSeen_];
+                if (kill.killed != spawned.enemy.pawn) continue;
+                KillRow killRow;
+                killRow.id = "kill." + spawned.rowClass + ".L" + std::to_string(spawned.level) + ".p" + std::to_string(kill.credits.empty() ? playerLevel : kill.credits[0].playerLevel);
+                if (!killTag_.empty()) killRow.id += "." + killTag_;
+                killRow.award = kill.award;
+                if (script_ && !kill.credits.empty()) { killRow.credited = true; killRow.credit = int(std::lround(script_->experiencePool() - poolBefore)); }
+                killRows_.push_back(killRow);
+            }
             const std::string id = "hit." + spawned.rowClass + ".L" + std::to_string(spawned.level) + "." + std::to_string(++hitCounts_[spawned.rowClass + std::to_string(spawned.level)]);
             row(id + ".arriving", report.arriving);
             row(id + ".applied", report.applied);
@@ -240,7 +306,7 @@ void Run::apply(const std::string& step) {
     // A step that names a pawn also reports that pawn's state after it.
     try {
         const auto parts = split(step);
-        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && std::stoul(parts[1]) < pawns_.size()) {
+        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && parts[0] != "maya" && parts[0] != "tick" && parts[0] != "killtag" && parts[0] != "players" && std::stoul(parts[1]) < pawns_.size()) {
             result.pop_back();
             result += (result.size() > 1 ? "," : "") + std::string("\"state\":{") + stateJson(std::stoul(parts[1])) + "}}";
         }
@@ -391,6 +457,18 @@ std::string Run::hitJson(const CombatSystem::HitReport& report) {
     return out.str();
 }
 
+// The bridge's player: level, experience pool, the next level's requirement, health and maximum (the VM pawn's natives over its health pool).
+std::string Run::playerJson() {
+    const ObjectPtr controller = script_->playerController();
+    const ObjectPtr pawnObject = script_->playerPawnObject();
+    const Value* info = runtime_.property(*controller, "PlayerReplicationInfo");
+    std::ostringstream out;
+    out << "{\"level\":" << script_->playerLevel() << ",\"experience\":" << number(script_->experiencePool())
+        << ",\"next_level_at\":" << runtime_.property(*info->o, "ExpPointsNextLevelAt")->integer()
+        << ",\"health\":" << number(call(pawnObject, "GetHealth").number()) << ",\"max_health\":" << number(call(pawnObject, "GetMaxHealth").number()) << "}";
+    return out.str();
+}
+
 // A pawn's state: the natives' answers, the plain variables, the health reference and every occupied slot of the mind's manager.
 std::string Run::stateJson(size_t index) {
     Spawned& spawned = pawns_[index];
@@ -439,6 +517,17 @@ std::string Run::report(double elapsed) {
     out << "{\"rows\":{";
     bool first = true;
     for (const auto& [id, value] : rows_) { out << (first ? "" : ",") << quote(id) << ':' << number(value); first = false; }
+    // The kill rows: {"award", "credit"} (credit only when the experience went into the bridge's pool). The same id more than once in a run (the same class, levels and tag)
+    // becomes <id>.a, <id>.b, ... in kill order, so that repeated kills are separate rows.
+    std::map<std::string, int> total, seen;
+    for (const KillRow& kill : killRows_) ++total[kill.id];
+    for (const KillRow& kill : killRows_) {
+        const std::string id = total[kill.id] > 1 ? kill.id + "." + char('a' + seen[kill.id]++) : kill.id;
+        out << (first ? "" : ",") << quote(id) << ":{\"award\":" << number(kill.award);
+        if (kill.credited) out << ",\"credit\":" << kill.credit;
+        out << "}";
+        first = false;
+    }
     out << "},\"pawns\":[";
     for (size_t i = 0; i < pawns_.size(); ++i) {
         try { out << (i ? "," : "") << pawnJson(i); }
@@ -468,7 +557,17 @@ std::string Run::report(double elapsed) {
 
 std::string combatRun(Runtime& runtime, const std::vector<std::string>& steps, bool* failed) {
     const auto started = std::chrono::steady_clock::now();
-    Run run(runtime);
+    // A run with a `maya` step is built over the mission bridge (src/mission_script.*): the player is its controller, whose experience pool and level-up chain take the kill
+    // credit. The mission is the stock Fire mission the slice uses; it only gives the bridge its curve and globals, nothing of it is played.
+    std::unique_ptr<MissionSystem> mission;
+    std::unique_ptr<MissionScript> script;
+    for (const auto& step : steps)
+        if (step.rfind("maya:", 0) == 0) {
+            mission = std::make_unique<MissionSystem>(runtime, "Startup", "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire");
+            script = std::make_unique<MissionScript>(runtime, *mission);
+            break;
+        }
+    Run run(runtime, script.get());
     for (const auto& step : steps) run.apply(step);
     const std::string text = run.report(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
     if (failed) *failed = run.failed();
