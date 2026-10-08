@@ -31,6 +31,8 @@ STEPS = [
     ("spawn", "spawn"), ("after_spawn", "tick:1"),
     ("hit", "hit:fire"), ("dialog05", "tick:0.02"), ("send_back", "tick:2.5"), ("target_back", "tick:1"),
     ("use_turnin", "use"), ("turnin", "turnin"), ("end1", "tick:0.1"), ("end2", "tick:1"),
+    # Swap 11: Enter on the reward page the turn-in showed, then Escape (the screen's close).
+    ("confirmreward", "confirmreward"), ("close", "close"),
 ]
 
 # One rule: a title, the step label (None = the whole run), and one of
@@ -44,7 +46,13 @@ RULES = [
      [("on_use_dialog", "VO_NPC_OnUse_MissionsAvailable"), ("mission_interface", None), ("dialog", "DET_NPC_OnUse_MissionsAvailable")]),
     # Swap 8, observed in the real game: the lent weapon is added inside ActivateMission, after the status routine's script hook (the status event) and
     # before the initial objective set and the kickoff.
-    ("accept: status Active, then the lent weapon, nothing else", "accept", "exact", [("status", "Active"), ("mission_weapon_granted", "MW_RockPaper_Fire")]),
+    # Swap 11 (the mission screen is open at the accept and closes inside it): the lent weapon still follows the status event, which now follows the close.
+    ("accept: status Active, then the lent weapon", "accept", "sequence", [("status", "Active"), ("mission_weapon_granted", "MW_RockPaper_Fire")]),
+    ("accept closes Marcus's screen: the dismissal tag, then the interface closed, then status Active, then the weapon", "accept", "sequence",
+     [("dismissal_dialog", "VO_NPC_GenericDismissal"), ("mission_interface_closed", "Pawn_Marcus"), ("status", "Active"), ("mission_weapon_granted", "MW_RockPaper_Fire")]),
+    ("the screen closes once at the accept and not before it", None, "not_in",
+     [("mission_interface_closed", None), ["stage", "player", "use_offer", "kickoff", "t01", "dialog02", "t1", "range", "set2", "spawn", "after_spawn", "hit",
+                                           "dialog05", "send_back", "target_back", "use_turnin", "turnin", "end1", "end2", "confirmreward"]]),
     ("kickoff (next tick): dialog 01, the first set, Marcus's walk", "kickoff", "sequence",
      [("dialog", "VOSQ_RockPaperGeno_01_EchoX_Marcus"), ("objective_set", "GoToRange_ObjSet"), ("remote_event", "RocksPaper_MoveMarcusToRange")]),
     ("dialog 02 comes after the walk starts", "dialog02", "sequence", [("dialog", "VOSQ_RockPaperGeno_02_EchoX_Marcus")]),
@@ -68,8 +76,18 @@ RULES = [
     ("turn-in press: the mission-complete tag", "use_turnin", "sequence", [("on_use_dialog", "VO_NPC_OnUse_MissionComplete"), ("mission_interface", None)]),
     # Observed in the real game: the weapon is removed inside CompleteMission, after the status hook (experience) and before the reward; then the director's
     # PlayMissionTurnedInDialog raises its tag.
-    ("turn-in: experience, Complete, the weapon is removed, the reward, the turned-in tag", "turnin", "exact",
-     [("experience", None), ("status", "Complete"), ("mission_weapon_removed", "MW_RockPaper_Fire"), ("reward", None), ("turn_in_dialog", "VO_NPC_MissionTurnedIn")]),
+    # Swap 11: with the screen open the controller shows the reward page (ClientSpawnMissionRewardUI) between the experience and the status; the reward itself
+    # waits for the player's confirmation.
+    ("turn-in: experience, the reward page, Complete, the weapon is removed, the reward, the turned-in tag", "turnin", "exact",
+     [("experience", None), ("reward_page", "M_RockPaperGenocide_Fire"), ("status", "Complete"), ("mission_weapon_removed", "MW_RockPaper_Fire"), ("reward", None),
+      ("turn_in_dialog", "VO_NPC_MissionTurnedIn")]),
+    ("the reward is not received before the player confirms the page", None, "not_in",
+     [("reward_received", None), ["use_offer", "accept", "kickoff", "t01", "dialog02", "t1", "range", "set2", "spawn", "after_spawn", "hit", "dialog05",
+                                  "send_back", "target_back", "use_turnin", "turnin", "end1", "end2"]]),
+    ("confirming the page gives exactly reward_received", "confirmreward", "exact", [("reward_received", "M_RockPaperGenocide_Fire")]),
+    ("Escape closes the screen: the dismissal tag, then the interface closed", "close", "sequence",
+     [("dismissal_dialog", "VO_NPC_GenericDismissal"), ("mission_interface_closed", "Pawn_Marcus")]),
+    ("closing the screen does not receive the reward again", "close", "absent", [("reward_received", None)]),
 ]
 
 # The dummy provider's behaviors in the order they ran (BehaviorProvider::trace, "event -> behavior"): as many as the real game's hooks saw, in its order.
@@ -146,12 +164,14 @@ def run_slice(reader, cooked):
     return json.loads(done.stdout)
 
 
-def synthetic_run(wrong_weapon_step=False):
-    """An invented event stream that follows RULES (self-test only). With wrong_weapon_step the weapon is removed at the hit."""
+def synthetic_run(wrong_weapon_step=False, early_reward=False, late_close=False):
+    """An invented event stream that follows RULES (self-test only). With wrong_weapon_step the weapon is removed at the hit; with early_reward the reward is
+    received inside the turn-in; with late_close the accept's close comes after the status event."""
     def e(kind, a="", b="", c=""): return {"kind": kind, "a": a, "b": b, "c": c, "detail": ""}
     events = {label: [] for label, _ in STEPS}
     events["use_offer"] = [e("on_use_dialog", "VO_NPC_OnUse_MissionsAvailable"), e("mission_interface", "Def"), e("dialog", "DET_NPC_OnUse_MissionsAvailable")]
-    events["accept"] = [e("status", "Active"), e("mission_weapon_granted", "MW_RockPaper_Fire")]
+    events["accept"] = [e("dismissal_dialog", "VO_NPC_GenericDismissal"), e("dialog", "DET_NPC_GenericDismissal"), e("mission_interface_closed", "Pawn_Marcus"),
+                        e("status", "Active"), e("mission_weapon_granted", "MW_RockPaper_Fire")]
     events["kickoff"] = [e("dialog", "VOSQ_RockPaperGeno_01_EchoX_Marcus"), e("objective_set", "GoToRange_ObjSet"), e("remote_event", "RocksPaper_MoveMarcusToRange")]
     events["dialog02"] = [e("dialog", "VOSQ_RockPaperGeno_02_EchoX_Marcus")]
     events["range"] = [e("objective_complete", "RockPaper_GoToRange")]
@@ -163,7 +183,12 @@ def synthetic_run(wrong_weapon_step=False):
     events["send_back"] = [e("remote_event", "RocksPaper_SendTargetBack"), e("sequence_change", "Dummy", "ObjectiveComplete", "CHANGE_Disable")]
     events["target_back"] = [e("remote_event", "RocksPaper_TargetBack"), e("remote_event", "RocksPaper_TargetBack")]
     events["use_turnin"] = [e("on_use_dialog", "VO_NPC_OnUse_MissionComplete"), e("mission_interface", "Def")]
-    events["turnin"] = [e("experience", "1"), e("status", "Complete"), e("mission_weapon_removed", "MW_RockPaper_Fire"), e("reward", "X"), e("turn_in_dialog", "VO_NPC_MissionTurnedIn")]
+    events["turnin"] = [e("experience", "1"), e("reward_page", "M_RockPaperGenocide_Fire"), e("status", "Complete"), e("mission_weapon_removed", "MW_RockPaper_Fire"),
+                        e("reward", "X"), e("turn_in_dialog", "VO_NPC_MissionTurnedIn")]
+    events["confirmreward"] = [e("reward_received", "M_RockPaperGenocide_Fire")]
+    events["close"] = [e("dismissal_dialog", "VO_NPC_GenericDismissal"), e("dialog", "DET_NPC_GenericDismissal"), e("mission_interface_closed", "Pawn_Marcus")]
+    if early_reward: events["turnin"].append(e("reward_received", "M_RockPaperGenocide_Fire"))
+    if late_close: events["accept"].insert(3, events["accept"].pop(2))      # mission_interface_closed after the status event
     return {"steps": [{"step": step, "events": events[label]} for label, step in STEPS], "errors": [],
             "dummy_trace": ["OnBehaviorSequenceEnabled -> " + name for name in DUMMY_ORDER]}
 
@@ -175,6 +200,8 @@ def self_test():
     if not all(ok for _, ok, _ in good): failures.append("the invented stream that follows RULES failed: " + str([t for t, ok, _ in good if not ok]))
     failed_bad = [t for t, ok, _ in bad if not ok]
     if not any("weapon is not removed" in t for t in failed_bad): failures.append("a weapon removed at the hit was not caught: " + str(failed_bad))
+    if not any("reward is not received before" in t for t, ok, _ in check(synthetic_run(early_reward=True)) if not ok): failures.append("a reward received before the confirmation was not caught")
+    if not any("accept closes Marcus" in t for t, ok, _ in check(synthetic_run(late_close=True)) if not ok): failures.append("a close after the status event was not caught")
     shuffled = synthetic_run()
     shuffled["dummy_trace"] = [line for line in shuffled["dummy_trace"] if not line.endswith("Behavior_AIHold_57")]
     if all(ok for _, ok, _ in check(shuffled)): failures.append("a missing AIHold_57 was not caught")

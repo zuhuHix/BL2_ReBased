@@ -1589,3 +1589,34 @@ ended); `ActionSkillCooldownComplete` ran within 1 ms after `ClientOnExpLevelCha
   the host's application (reads 0); the modifier on a running cooldown is checked in the Phaselock steps after the blocked cast (Scale 0.5 halves what is left without completing, Scale 0 ends it and reports completion, a third
   application changes nothing). The suite's later wait for that cooldown to drain is therefore shorter. **Not tested:** a reset while a cast is held (the host's offset keeps the cast untouched; the live observation is L3's).
 - **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.**
+
+## Script swap 11: Marcus's mission screen closes at the accept and the reward page waits for the player (2026-10-08)
+
+AI-assisted (Claude), implementer lane I10b. Record of the observed order and the comparison counts: [FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md) ("After swap 11"). Everything the VM
+does here follows the installed script; the host-only parts are stand-ins. **Beyond the order observed in the live game, all of it is UNVERIFIED.**
+
+### What runs
+- **VM (`MissionScript::bindScreen`, `openScreen`, `closeMovie`, `closeScreen`, `confirmReward`):** a stand-in object of the installed class `QuestAcceptGFxMovie` (director, NPC and focus subject filled as `Start` does) and a
+  `WillowGFxUIManager` on the controller. While the screen is open `WillowGFxUIManager.GetPlayingMovie` returns the stand-in, so the controller's own script finds a movie: `ClientUpdateUIMissionList` runs
+  the movie's `UpdateMissionList` -> `DetermineQuestEntries` -> `GotoCorrectPartOfMovie`, and an empty entry list ends in the native `GFxMoviePlayer.Close`. The host bindings are `GetPlayingMovie`, `Close` (raises the emulated `OnClose`: `ServerPlayerEndUseNPC`, then
+  `OnPlayerClosedMissionUI`), `GearboxGFxMovie.PlayUISound` (no-op) and two script overrides, `DisplayRewardsPage` (a flag that waits) and `DetermineQuestEntries` (rows built in C++; the VM keeps no element type for an array grown from empty by `DynArrayInsert`, so the script
+  version cannot fill struct rows; `src/interp.cpp` was not changed).
+- **Events (new):** `dismissal_dialog` (the generic dismissal tag raised on Marcus's component while the screen closes), `mission_interface_closed`, `reward_page` (the turn-in with the screen open) and `reward_received`
+  (`MissionRewardsReceived` on the player's confirmation). `--slice-run` has the steps `confirmreward` and `close`.
+- **Order:** accept = `dismissal_dialog`, `dialog`, `mission_interface_closed`, `status Active`, `mission_weapon_granted`. Turn-in with the screen open = `experience`, `reward_page`, `status Complete`, `mission_weapon_removed`, `reward`,
+  `turn_in_dialog`; `confirmreward` = `reward_received`. `tools/verify_fire_event_order.py` has 24 rules (the 18 of swap 8, two of them reworded for the new events, and six new ones).
+- **Host (`OpenWillowQuest`):** the four events are handled (counted and logged); while the reward page waits, the use key confirms it and then closes the screen (the stand-in for Enter and the Escape after it); the dismissal line (event
+  `dialog` right after the tag) is reported, not looked up: the audio manifest is built from the mission's own steps and has no entry for it. The suite's direct second `useMarcus` after the accept (the in-progress press) opens the screen
+  again, as the script does, so the fixture now closes it, as the player would.
+
+### Bug found on the way
+The first version of the `DetermineQuestEntries` override iterated `rows(...).elements()` of a temporary (freed memory), which left the entry list empty and the screen never closed at the accept. Fixed by naming the value.
+
+### Not modelled / open
+- One `EndUse` in the VM against two live (the first from the controller's focus object, not kept). The dismissal line's talker (the live run starts the act with another NPC; the VM reports `no talker`). The movie's own bookkeeping after
+  the confirmation (the live screen stayed open; the host closes it with the same key). All presentation of the screen. The audio manifest has no entry for the dismissal line (open: `tools/audio_slice_chain.py` only resolves the mission's own steps).
+
+### Checks (2026-10-08, CMake Release and UE module rebuilt first)
+- `ctest` 11/11; `tools/verify_packages.py` 9/9 packages, 3,339/3,339 class bodies; `tools/verify_fire_event_order.py` self-test and 24 of 24 rules on the real data.
+- **`tools/test_quest.ps1`: first run PASS checks=107 errors=0 (105 before, two new: `accept_closes_mission_screen_with_dismissal`, `reward_received_on_confirmation`), resume PASS checks=11 errors=0.**
+  `tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.

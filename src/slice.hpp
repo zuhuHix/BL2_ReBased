@@ -41,7 +41,11 @@ public:
                           SequenceChange,      // a behavior (the mission's or the dummy's own) changed a sequence of the dummy's provider: a = provider, b = sequence, c = CHANGE_Enable / _Disable / _Toggle
                           TurnInDialog,        // PlayMissionTurnedInDialog's TriggerEvent on Marcus's component: a = the global VO_NPC_MissionTurnedIn tag path, b = the speaker, c = the other object's class
                           ActionSkillCooldown, // the level-up skill's modifier on the action-skill cooldown's current value: a = Scale / PreAdd / PostAdd, b = its value (Scale 0 resets it)
-                          WeaponDamageScale }; // a natural level-up's OnLevelUpNaturally skill: a = the value added to the held weapon's damage scale sum, b = seconds it lasts (both from the skill's data)
+                          WeaponDamageScale,   // a natural level-up's OnLevelUpNaturally skill: a = the value added to the held weapon's damage scale sum, b = seconds it lasts (both from the skill's data)
+                          DismissalDialog,     // PlayDismissalDialog's TriggerEvent on Marcus's component when his mission screen closes: a = the global VO_NPC_GenericDismissal tag path, b = the speaker, c = the other object's class
+                          MissionInterfaceClosed, // Marcus's mission screen closed (the movie's OnClose ran): a = the director's path
+                          RewardPage,          // the turn-in's reward page is shown by the open screen and waits for the player: a = the mission's path
+                          RewardReceived };    // the player confirmed the reward page (MissionRewardsReceived ran): a = the mission's path
         Kind kind;
         std::string a, b, c;
         std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)
@@ -59,6 +63,12 @@ public:
     // The mission screen's three lists (Marcus's own script over his directive table and the tracker's availability queries): the host's use key
     // confirms the entry offered here (a host stand-in for the button press) with accept / turnIn.
     MissionScript::MissionLists screen(const std::set<std::string>& completedMissions);
+    // Marcus's mission screen after its open (MissionScript::closeScreen / confirmReward): the player leaves it (Escape), or confirms the reward page the open
+    // screen showed at the turn-in (Enter). The accept closes the screen by itself, inside the status routine.
+    bool closeScreen();
+    bool confirmReward();
+    bool screenOpen() const { return script_->screenOpen(); }
+    bool rewardPending() const { return script_->rewardPending(); }
     bool enterRange();                       // the GoToRange objective: the player enters the waypoint's cylinder (touchWaypoint)
     // The host's overlap of the waypoint's cylinder with the player pawn (or Marcus): begin / end. The stock WillowWaypoint script runs on
     // the VM: Touch for a player-owned pawn updates GoToRange when it is updatable, and the set-changed reaction re-checks the actors

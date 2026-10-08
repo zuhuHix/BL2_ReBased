@@ -139,6 +139,20 @@ public:
     };
     // `completed` is what MissionDependenciesMet sees (as for accept()).
     MarcusUse useMarcus(const std::set<std::string>& completed);
+    // Marcus's mission screen after its open (swap 11, FIRE_MISSION_GOLDEN_TRACE.md "The mission screen's close and the reward page"). The movie is not hosted: a
+    // VM stand-in object of the installed class QuestAcceptGFxMovie answers WillowGFxUIManager.GetPlayingMovie while the screen is open, so the controller's
+    // own script (ClientUpdateUIMissionList, ClientSpawnMissionRewardUI) finds a movie and the movie's own entry-list script (DetermineQuestEntries,
+    // UpdateMissionList, GotoCorrectPartOfMovie) decides what happens. What the host answers is the movie's native Close (the screen's end: the script of its OnClose,
+    // which ends the use of Marcus and tells him the screen closed) and DisplayRewardsPage (presentation: the page waits for the player).
+    //   Accept with the screen open: the entry list is empty afterwards, so the movie closes inside UpdateMissionStatus(Active), as observed.
+    //   Turn-in with the screen open: ClientSpawnMissionRewardUI shows the reward page and MissionRewardsReceived waits (rewardPending()); without a
+    //   screen the script takes the shortcut and MissionRewardsReceived runs inside the turn-in.
+    // closeScreen is the player leaving the screen (Escape); confirmReward is the player confirming the reward page (Enter): MissionRewardsReceived. Both
+    // return false when there is nothing to do.
+    bool screenOpen() const { return screenOpen_; }
+    bool rewardPending() const { return !rewardMission_.empty(); }
+    bool closeScreen();
+    bool confirmReward();
     struct MissionLists { std::vector<std::string> eligible, inProgress, redeemable; };   // mission paths, the script's own order
     MissionLists missionLists(const std::set<std::string>& completed);
     // Runs a script behavior's ApplyBehaviorToContext on the VM (e.g. Behavior_UpdateMissionObjective: the world's tracker, UpdateObjective).
@@ -165,7 +179,13 @@ private:
     ObjectPtr dialogComponent_, dialogGlobals_;            // his GearboxDialogComponent (archetype) and GD_Globals.Dialog.DialogGlobals
     std::vector<int>* selected_ = nullptr;                 // the running script behavior's recorded output ids
     MarcusUse use_;
-    bool screenOpen_ = false;                              // Marcus's mission screen is open (its movie is not hosted): BeginUse ran; nothing closes it
+    bool screenOpen_ = false;                              // Marcus's mission screen is open (its movie is not hosted): BeginUse ran; closeMovie ends it
+    ObjectPtr uiManager_, screenMovie_;                    // the controller's WillowGFxUIManager and the stand-in QuestAcceptGFxMovie (null: this package set has none)
+    bool closing_ = false;                                 // the screen's OnClose is running: a TriggerEvent on Marcus's component is the dismissal dialog
+    std::string rewardMission_;                            // the mission whose reward page is shown and waits for the player ("" = none)
+    void bindScreen();
+    void openScreen();
+    void closeMovie();
     bool turningIn_ = false;                               // ServerCompleteMission is running: a TriggerEvent on Marcus's component is the turned-in dialog
     void bindUse();
     BehaviorProvider* registeredProvider(const Value& handle, const Value& provider);

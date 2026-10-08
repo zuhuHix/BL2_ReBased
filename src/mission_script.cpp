@@ -525,6 +525,7 @@ bool MissionScript::placeMarcus(const std::shared_ptr<const Package>& package, c
     static const char* providerPath = "GD_Marcus.Character.AIDef_Marcus.AIBehaviorProviderDefinition_0";
     if (const int32_t providerIndex = runtime_.findExport(*package, providerPath); providerIndex > 0) {
         bindUse();
+        bindScreen();
         marcusProvider_ = std::make_unique<BehaviorProvider>(runtime_, package, providerIndex);
         // The chain's behaviors are script: each runs its own ApplyBehaviorToContext on the VM, on the objects the kernel resolves for it.
         for (const char* cls : {"GearboxFramework.Behavior_IsSequenceEnabled", "WillowGame.Behavior_RemoteCustomEvent", "WillowGame.Behavior_PlayAIMissionContextDialog",
@@ -665,6 +666,7 @@ void MissionScript::bindUse() {
             const Value* bodyRef = runtime_.property(*director_, "BodyClass");
             const DialogSystem::PawnDialog pawn = mission_.dialog().pawnDialog(bodyRef ? *bodyRef : Value());
             if (turningIn_) mission_.noteTurnInDialog(objectPath(c.in(0).o), objectPath(director_), other);   // PlayMissionTurnedInDialog (turn-in)
+            else if (closing_) mission_.noteDismissalDialog(objectPath(c.in(0).o), objectPath(director_), other);   // PlayDismissalDialog (the screen closes)
             else {                                                                                          // PlayOnUseDialog (the use key)
                 use_.onUseTag = objectPath(c.in(0).o);
                 use_.onUseSpeaker = objectPath(director_);
@@ -705,18 +707,142 @@ MissionScript::MarcusUse MissionScript::useMarcus(const std::set<std::string>& c
     // The screen's movie is not hosted. What its Start does on opening (QuestAcceptGFxMovie.Start, installed script; the order was observed in the
     // real game, FIRE_MISSION_GOLDEN_TRACE.md): the director hears OnPlayerOpenedMissionUI(controller), and the player's pawn begins using him
     // (ServerPlayerBeginUseNPC -> WillowAIPawn.BeginUse), which puts the player first in PawnsUsingMe; OnPlayerTurnedInMission later needs that.
-    // A movie opens once: the screen stays open here until a close, which is a host-UI step and is not emulated (in the real game the accept closes
-    // it: EndUse, the dismissal dialog, OnPlayerClosedMissionUI; a second open in this run therefore does not run Start again, which would add a second user).
-    if (use_.interfaceOpened && !screenOpen_) {
-        screenOpen_ = true;
-        run([this] {
-            runtime_.callByName(director_, "OnPlayerOpenedMissionUI", {Value::makeObject(controller_)});
-            runtime_.callByName(director_, "BeginUse", {Value::makeObject(pawnFor(Toucher::Player))});
-        });
-    }
+    // A movie opens once: the screen stays open until the movie closes (the accept's empty entry list, or closeScreen), so a second press while it is open does
+    // not run Start again, which would add a second user.
+    if (use_.interfaceOpened && !screenOpen_) openScreen();
     for (const auto& error : marcusProvider_->errors) errors.push_back("Marcus provider: " + error);
     marcusProvider_->errors.clear();
     return use_;
+}
+
+// Marcus's mission screen (swap 11; FIRE_MISSION_GOLDEN_TRACE.md "The mission screen's close and the reward page", NATIVE_GFX_BRIDGE.md). The movie is not hosted. What
+// the VM keeps of it is a stand-in object of the installed class QuestAcceptGFxMovie (its director, the NPC and the focus subject filled as Start does) that
+// WillowGFxUIManager.GetPlayingMovie returns while the screen is open, so the controller's script (ClientUpdateUIMissionList, ClientSpawnMissionRewardUI) finds
+// a movie and the movie's own entry-list script decides: DetermineQuestEntries, UpdateMissionList and GotoCorrectPartOfMovie run unchanged, and an empty list
+// ends in the native Close. The host answers four things, all presentation or the engine's own part: GetPlayingMovie, Close (it raises the script event OnClose,
+// emulated below), DisplayRewardsPage (the page is drawn by the movie, here it only waits) and GearboxGFxMovie.PlayUISound (a sound, or nothing). A package set
+// without those classes (a synthetic one) has no screen: the controller finds no movie and nothing below runs. All UNVERIFIED beyond the observed order.
+void MissionScript::bindScreen() {
+    try {
+        Class* movieClass = runtime_.findClass("WillowGame.QuestAcceptGFxMovie");
+        Class* managerClass = runtime_.findClass("WillowGame.WillowGFxUIManager");
+        bind("WillowGame.WillowGFxUIManager.GetPlayingMovie", [this](NativeCall& c) {
+            if (c.self != uiManager_) return outsideBinding(c);
+            return Value::makeObject(screenOpen_ ? screenMovie_ : nullptr);
+        });
+        // GFxMoviePlayer.Close(Unload): the script event OnClose is raised, then the movie stops (NATIVE_GFX_BRIDGE.md). Only the script half is modelled.
+        bind("GFxUI.GFxMoviePlayer.Close", [this](NativeCall& c) {
+            if (c.self != screenMovie_) return outsideBinding(c);
+            closeMovie();
+            return Value();
+        });
+        // PlayUISound(UIEvent): looks the event up in two sound tables and posts it; nothing happens when it is not found. Presentation: no-op.
+        bind("GearboxFramework.GearboxGFxMovie.PlayUISound", [this](NativeCall& c) {
+            if (c.self != screenMovie_) return outsideBinding(c);
+            return Value();
+        });
+        // DisplayRewardsPage(MissionReward): the movie goes to its reward frame and lists the reward; the player's key then accepts it. Here the page is a
+        // flag that waits for confirmReward (the key); nothing is drawn.
+        runtime_.overrideScript("WillowGame.QuestAcceptGFxMovie.DisplayRewardsPage", [this](NativeCall& c) {
+            if (c.self != screenMovie_) return outsideBinding(c);
+            const Value* mission = c.in(0).field("Mission");
+            rewardMission_ = objectPath(mission ? mission->o : nullptr);
+            mission_.noteRewardPage(rewardMission_);
+            return Value();
+        });
+        // DetermineQuestEntries: the movie asks the director for the redeemable, eligible and in-progress missions (his list scripts run: the observed CanEndMission /
+        // CanStartMission rows) and builds its rows, redeemable first (status 3), then eligible (0); in progress (1) apart. Its script cannot run here: it grows
+        // arrays of structs from empty with DynArrayInsert, and the VM keeps no element type for an empty array. So the rows are built here with the same rule.
+        // The director's table names the mission by reference; the row holds the loaded mission, as the game's one object is.
+        runtime_.overrideScript("WillowGame.QuestAcceptGFxMovie.DetermineQuestEntries", [this](NativeCall& c) {
+            if (c.self != screenMovie_) return outsideBinding(c);
+            const auto collect = [this](const char* name) {
+                std::vector<Value> missions;
+                Function* function = runtime_.findMethod(director_->cls, name);
+                if (!function) throw RuntimeError(std::string("mission screen: Marcus has no ") + name);
+                std::vector<Value> outs;
+                runtime_.call(*function, director_, {Value::makeArray()}, &outs);
+                if (!outs.empty() && outs[0].kind == Value::Kind::Array)
+                    for (const Value& mission : outs[0].elements())
+                        missions.push_back(mission.kind == Value::Kind::Object && mission.o && mission.o != mission_.definition() && mission.o->resourcePackage
+                                           && mission.o->resourcePackage->path(mission.o->resourceIndex) == mission_.path() ? Value::makeObject(mission_.definition()) : mission);
+                return missions;
+            };
+            const auto rows = [this](const std::vector<Value>& missions, int status) {
+                Value array = Value::makeArray();
+                for (const Value& mission : missions) {
+                    Value row = runtime_.newStruct("WillowGame.WillowPlayerController.StatusMenuMissionEligibilityData");
+                    *row.field("MissionDef") = mission;
+                    *row.field("MissionStatus") = Value::makeByte(status);
+                    array.elements().push_back(std::move(row));
+                }
+                return array;
+            };
+            const auto redeemable = collect("GetRedeemableMissions"), eligible = collect("GetEligibleMissions"), inProgress = collect("GetInProgressMissions");
+            Value list = rows(redeemable, 3);
+            Value eligibleRows = rows(eligible, 0);      // a name, not a temporary: a range-for over rows(...).elements() would iterate freed memory
+            for (Value& row : eligibleRows.elements()) list.elements().push_back(std::move(row));
+            required(runtime_, *screenMovie_, "MissionList") = std::move(list);
+            required(runtime_, *screenMovie_, "InProgressMissionList") = rows(inProgress, 1);
+            required(runtime_, *screenMovie_, "RedeemableCount") = Value::makeInt(int64_t(redeemable.size()));
+            required(runtime_, *screenMovie_, "EligibleCount") = Value::makeInt(int64_t(eligible.size()));
+            required(runtime_, *screenMovie_, "InProgressCount") = Value::makeInt(int64_t(inProgress.size()));
+            return Value();
+        });
+        uiManager_ = runtime_.instantiate(managerClass);
+        required(runtime_, *controller_, "GFxUIManager") = Value::makeObject(uiManager_);
+        screenMovie_ = runtime_.instantiate(movieClass);
+        required(runtime_, *screenMovie_, "MissionDirector") = Value::makeObject(director_);
+        required(runtime_, *screenMovie_, "FocusSubject") = Value::makeObject(director_);
+        required(runtime_, *screenMovie_, "ContextNPC") = Value::makeObject(director_);
+    } catch (const RuntimeError& error) {
+        uiManager_ = screenMovie_ = nullptr;
+        notes_.push_back(std::string("mission screen not hosted: ") + error.what());
+    }
+}
+
+// QuestAcceptGFxMovie.Start's part that reaches script (observed order: the director hears OnPlayerOpenedMissionUI, the entry list is built through his
+// list functions, then the player's pawn begins using him).
+void MissionScript::openScreen() {
+    screenOpen_ = true;
+    run([this] {
+        runtime_.callByName(director_, "OnPlayerOpenedMissionUI", {Value::makeObject(controller_)});
+        if (screenMovie_) runtime_.callByName(screenMovie_, "DetermineQuestEntries");
+        runtime_.callByName(director_, "BeginUse", {Value::makeObject(pawnFor(Toucher::Player))});
+    });
+}
+
+// The movie's OnClose, as far as it reaches script and was observed: the player stops using Marcus (ServerPlayerEndUseNPC -> WillowAIPawn.EndUse, which runs his
+// dismissal dialog and takes the player out of PawnsUsingMe), then he hears OnPlayerClosedMissionUI. The rest of OnClose (the post-process override, the focus
+// camera, the preview inventory) is presentation. The live trace has EndUse twice, the first one from EndFocus (the controller's FocusObject, which the VM does
+// not keep); the second one finds the list already empty, so one call here has the same effect.
+void MissionScript::closeMovie() {
+    if (!screenOpen_) return;
+    screenOpen_ = false;
+    closing_ = true;
+    runtime_.callByName(pawnFor(Toucher::Player), "ServerPlayerEndUseNPC", {Value::makeObject(director_)});
+    runtime_.callByName(director_, "OnPlayerClosedMissionUI", {Value::makeObject(controller_)});
+    closing_ = false;
+    mission_.noteInterfaceClosed(objectPath(director_));
+}
+
+// The player leaves the screen with Escape: the movie's extChoiceCancelled (a sound, then Close). Refused while the reward page waits (its key handler only
+// takes the confirmation).
+bool MissionScript::closeScreen() {
+    if (!screenOpen_ || !screenMovie_ || rewardPending()) return false;
+    run([this] { runtime_.callByName(screenMovie_, "extChoiceCancelled"); });
+    return !screenOpen_;
+}
+
+// The player confirms the reward page: the reward object calls the controller's MissionRewardsReceived with the mission (observed), which clears bNeedsRewards.
+// The movie's own bookkeeping after that (its entry list, the next mission) is not run: the screen stays open, as it did in the observed run.
+bool MissionScript::confirmReward() {
+    if (rewardMission_.empty()) return false;
+    const bool before = controllerNeedsRewards();
+    run([this] { runtime_.callByName(controller_, "MissionRewardsReceived", {Value::makeObject(mission_.definition())}); });
+    mission_.noteRewardReceived(rewardMission_);
+    rewardMission_.clear();
+    return before && !controllerNeedsRewards();
 }
 
 MissionScript::MissionLists MissionScript::missionLists(const std::set<std::string>& completed) {

@@ -385,6 +385,7 @@ void UOpenWillowQuest::Pump()
     UOpenWillowMover* Mover = Walker ? Walker->GetMover() : nullptr;
     for (const auto& Event : Impl->Slice->drain()) {
         const FString A = UTF8_TO_TCHAR(Event.a.c_str());
+        ++PumpEvents;
         switch (Event.kind) {
         case K::RemoteEvent:
             // Mission behaviors name their mission (WillowSeqEvent_MissionRemoteEvent); the dummy provider's
@@ -399,6 +400,12 @@ void UOpenWillowQuest::Pump()
                 Event.b.empty() ? TEXT("dummy provider") : TEXT("mission"), Mover ? Mover->LastEventMatched : -1);
             break;
         case K::Dialog: {
+            if (A == LastDismissalTag) {
+                // The line behind the dismissal tag (the generic group's act, spoken by another NPC in the real game: FIRE_MISSION_GOLDEN_TRACE.md). The audio manifest
+                // is built from the mission's own steps and does not hold it, so it is reported here and neither counted as a lookup nor as a miss; nothing plays.
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST dismissal line %s (%hs; not in the audio manifest, not played)"), *A, Event.detail.c_str());
+                break;
+            }
             // A line the stock dialog chose (NATIVE_DIALOG.md, UNVERIFIED): event tag, the talk act's AkEvent, the talker and what became of
             // it. No audio device is modelled, so no line plays ("no audio device"); the audio manifest resolves the event to its files.
             ++DialogLookups;
@@ -536,7 +543,29 @@ void UOpenWillowQuest::Pump()
             LastTurnInTag = A;
             UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in dialog tag raised on Marcus: %s (speaker %s, other %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
             break;
-        case K::Status: UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A); break;
+        case K::DismissalDialog:  // PlayDismissalDialog's TriggerEvent on Marcus's component when the use of him ends (observed in game); reported like the turn-in tag
+            ++DismissalTags;
+            DismissalAt = PumpEvents;
+            LastDismissalTag = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dismissal dialog tag raised on Marcus: %s (speaker %s, other %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
+            break;
+        case K::MissionInterfaceClosed:   // the movie's OnClose ran on the VM (the accept's empty entry list, or the player leaving the screen); nothing is drawn
+            ++MissionScreensClosed;
+            ClosedAt = PumpEvents;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission interface closed (director %s)"), *A);
+            break;
+        case K::RewardPage:       // the open screen shows the reward page; MissionRewardsReceived waits for the player (the use key, TryUse)
+            ++RewardPages;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST reward page shown for %s; waiting for the use key"), *A);
+            break;
+        case K::RewardReceived:   // the player confirmed the page: the controller's MissionRewardsReceived ran
+            ++RewardsReceived;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST reward received for %s"), *A);
+            break;
+        case K::Status:
+            if (A == TEXT("Active") && ActiveAt < 0) ActiveAt = PumpEvents;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A);
+            break;
         case K::ObjectiveSet: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective set active: %s"), *A); break;
         case K::ObjectiveComplete: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective complete: %s"), *A); break;
         }
@@ -658,7 +687,18 @@ void UOpenWillowQuest::MissionScreen(bool& bRedeemable, bool& bEligible) const
 
 bool UOpenWillowQuest::TryUse()
 {
-    if (!Impl || bFailed || !InTalkReach()) return false;
+    if (!Impl || bFailed) return false;
+    if (Impl->Slice->rewardPending()) {
+        // The reward page is up (the turn-in found Marcus's screen open): the page is modal and its key handler only takes the confirmation, so the use key is
+        // that confirmation (the movie's Enter), and the screen then closes (the stand-in for Escape: the dismissal tag, the interface closed).
+        const bool bReceived = Impl->Slice->confirmReward();
+        Pump();
+        const bool bClosed = Impl->Slice->closeScreen();
+        Pump();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST use key on the reward page: received=%d, screen closed=%d"), bReceived, bClosed);
+        return true;
+    }
+    if (!InTalkReach()) return false;
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
     // The key reached Marcus through the use ray above. His stock OnUsed chain runs on the VM (the nine sequence checks, the context dialog,
@@ -1060,6 +1100,10 @@ void UOpenWillowQuest::RunTest(float Delta)
             // The use key went through his OnUsed chain: it opened the mission interface (HasMissions saw the Fire mission), after nine checks that
             // all said "not enabled" (three names have no sequence, six belong to other missions)
             Check(MissionInterfacesOpened == 1 && LastInterfaceMovie == TEXT("UI_Mission.MissionInterface_Definition"), TEXT("use_chain_reaches_mission_interface"));
+            // The accept emptied the screen's entry list, so the movie closed inside the status routine (observed in game; the order is the VM's, from the installed
+            // script): Marcus's dismissal tag, then the interface closed, then the status event; the VM no longer holds the screen open.
+            Check(DismissalTags == 1 && LastDismissalTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_GenericDismissal") && MissionScreensClosed == 1 && !Impl->Slice->screenOpen()
+                && DismissalAt > 0 && DismissalAt < ClosedAt && ClosedAt < ActiveAt, TEXT("accept_closes_mission_screen_with_dismissal"));
             // PlayOnUseDialog picked its tag from Marcus's own lists: Fire is eligible, nothing redeemable, so "missions available"
             Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionsAvailable"), TEXT("use_chain_picks_on_use_dialog_tag"));
             // and the stock dialog data turned it into Marcus's own line: the global tag's generic act has no entry for him, its no-match output fires
@@ -1069,6 +1113,10 @@ void UOpenWillowQuest::RunTest(float Delta)
             // the chain again with the mission accepted: "all missions in progress" and its line (Fire is Active, not offered again). Run directly, not through
             // the key: Marcus has already started to walk away, so the use ray would no longer reach him in this frame.
             Impl->Slice->useMarcus(Impl->Completed);
+            Pump();
+            // That press opened the screen again (it lists only what is in progress); the player leaves it (Escape) before the next use, as the turn-in needs a screen
+            // that opens with the redeemable entry.
+            if (!Impl->Slice->closeScreen()) Fail(TEXT("the in-progress screen did not close"));
             Pump();
             Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_AllMissionsInProgress") && OnUseLines == 2
                 && LastOnUseLineTag == TEXT("GD_Dialog_NPCImplementation.Events_MissionGiver.DET_NPC_OnUse_AllMissionsInProgress")
@@ -1351,10 +1399,22 @@ void UOpenWillowQuest::RunTest(float Delta)
             Check(Rewards == 1 && !bItemRewardListed && Pickups.IsEmpty() && Walker->GetInventory()->BackpackCount() == BackpackBeforeReward,
                 TEXT("turn_in_gives_no_item_reward"));
         }
-        PressUse();   // nothing left to turn in: the key reaches Marcus, who answers with his "no missions" line
+        ClosesBeforeConfirm = MissionScreensClosed;
+        DismissalsBeforeConfirm = DismissalTags;
+        bRewardWaited = RewardPages == 1 && RewardsReceived == 0 && Impl->Slice->rewardPending() && Impl->Slice->scriptPlayerNeedsRewards();
+        PressUse();   // the reward page is up and waits: the key confirms it (and closes the screen); the key press after that gets Marcus's "no missions" line (step 19)
         break;
     }
     case 19:
+        if (!bRewardChecked) {
+            // The turn-in showed the reward page (the screen was open) and did not receive the reward: it was still pending when the key went in; that press confirmed
+            // it exactly once (the controller's MissionRewardsReceived) and the screen closed again.
+            bRewardChecked = true;
+            Check(bRewardWaited && RewardPages == 1 && RewardsReceived == 1 && !Impl->Slice->rewardPending() && !Impl->Slice->screenOpen() && MissionScreensClosed == ClosesBeforeConfirm + 1 && DismissalTags == DismissalsBeforeConfirm + 1
+                && !Impl->Slice->scriptPlayerNeedsRewards(), TEXT("reward_received_on_confirmation"));
+            PressUse();   // nothing left to turn in: the key reaches Marcus, who answers with his "no missions" line
+            return;
+        }
         Check(Status() == 3 && Rewards == 1, TEXT("turn_in_not_repeatable"));
         // the press after completion: nothing left, so "no missions" and Marcus's line for it
         Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_NoMissions") && OnUseLines == OnUseLinesBeforeTurnIn + 1

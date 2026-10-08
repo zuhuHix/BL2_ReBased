@@ -89,6 +89,15 @@ private:
     int32 TurnInDialogTags = 0;
     FString LastTurnInTag;
     TArray<FString> LastUseCascade;
+    // Marcus's mission screen after its open (swap 11, FIRE_MISSION_GOLDEN_TRACE.md): the VM closes it inside the accept (the dismissal tag raised on him, then the
+    // interface closed), and at the turn-in the reward page waits (RewardPages) until the use key confirms it (RewardsReceived). PumpEvents numbers the events the
+    // host has handled, so the checks can compare the order of the three that matter at the accept (dismissal tag, closed, status Active).
+    int32 DismissalTags = 0, MissionScreensClosed = 0, RewardPages = 0, RewardsReceived = 0;
+    int32 PumpEvents = 0, DismissalAt = -1, ClosedAt = -1, ActiveAt = -1;
+    FString LastDismissalTag;
+    bool bRewardChecked = false;        // test: the reward_received_on_confirmation check ran (step 19 waits one tick for the second press)
+    int32 ClosesBeforeConfirm = 0, DismissalsBeforeConfirm = 0;   // test: the counts when the page was waiting
+    bool bRewardWaited = false;         // test: after the turn-in the page was shown, the reward not yet received, and the controller still owed the rewards
     int32 Respawns = 0;
     int32 Checks = 0;
     int32 Errors = 0;

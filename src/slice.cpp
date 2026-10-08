@@ -197,6 +197,10 @@ bool FireMissionSlice::drainMission() {
         case K::ObjectiveSetActive: events_.push_back({HostEvent::Kind::ObjectiveSet, effect.a, "", ""}); break;
         case K::ObjectiveComplete: events_.push_back({HostEvent::Kind::ObjectiveComplete, effect.a, "", ""}); break;
         case K::TurnInDialog: events_.push_back({HostEvent::Kind::TurnInDialog, effect.a, effect.b, effect.c}); break;
+        case K::DismissalDialog: events_.push_back({HostEvent::Kind::DismissalDialog, effect.a, effect.b, effect.c}); break;
+        case K::InterfaceClosed: events_.push_back({HostEvent::Kind::MissionInterfaceClosed, effect.a, "", ""}); break;
+        case K::RewardPage: events_.push_back({HostEvent::Kind::RewardPage, effect.a, "", ""}); break;
+        case K::RewardReceived: events_.push_back({HostEvent::Kind::RewardReceived, effect.a, "", ""}); break;
         case K::ObjectiveUpdated: break;   // progress only; completion is reported separately
         }
     }
@@ -255,6 +259,20 @@ bool FireMissionSlice::accept(const std::set<std::string>& completed) {
         if (std::find(lists.eligible.begin(), lists.eligible.end(), mission_->path()) == lists.eligible.end()) return false;
     }
     const bool ok = script_->accept(completed);
+    pump();
+    return ok;
+}
+
+// The player leaves Marcus's mission screen (Escape), or confirms the reward page it showed at the turn-in (Enter). Host stand-ins for the movie's buttons;
+// what they run is installed script (MissionScript).
+bool FireMissionSlice::closeScreen() {
+    const bool ok = script_->closeScreen();
+    pump();
+    return ok;
+}
+
+bool FireMissionSlice::confirmReward() {
+    const bool ok = script_->confirmReward();
     pump();
     return ok;
 }

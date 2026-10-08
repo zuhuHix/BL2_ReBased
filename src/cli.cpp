@@ -647,7 +647,7 @@ int main(int argc, char** argv) {
             for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
             std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
             bool first = true;
-            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated", "turn_in_dialog"};
+            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated", "turn_in_dialog", "dismissal_dialog", "interface_closed", "reward_page", "reward_received"};
             const auto object = [&](const std::string& path) {      // an object of the mission's package, by path
                 auto owner = runtime.package(package->packageName);
                 const int32_t found = runtime.findExport(*owner, path);
@@ -743,7 +743,8 @@ int main(int argc, char** argv) {
             // Each step's record carries the mission status after it.
             // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | turnin | tick:<s> | stage:<n> (the region game stage the host
             // owns) | player:<level>:<experience> (the player's state) | health:<current> (the player's current health, after player:) | cheatlevel (one not-natural level-up) | screen (Marcus's mission lists, printed with the step) | use (the use key
-            // on Marcus: his OnUsed chain; the behaviors it ran and the interface it opened are printed with the step). accept and turnin
+            // on Marcus: his OnUsed chain; the behaviors it ran and the interface it opened are printed with the step) | confirmreward (Enter on the reward page the open screen showed at the turn-in) |
+            // close (Escape: the player leaves Marcus's mission screen; the accept closes it by itself). accept and turnin
             // run the installed controller script with Marcus as the director (the entry must be one his lists offer); tick also runs the
             // experience pool update.
             // Package argument is Sanctuary_Dynamic.
@@ -757,7 +758,8 @@ int main(int argc, char** argv) {
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
                                           "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog",
-                                          "skill_points", "max_health", "health", "sequence_change", "turn_in_dialog", "action_skill_cooldown", "weapon_damage_scale"};
+                                          "skill_points", "max_health", "health", "sequence_change", "turn_in_dialog", "action_skill_cooldown", "weapon_damage_scale",
+                                          "dismissal_dialog", "mission_interface_closed", "reward_page", "reward_received"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {
@@ -780,6 +782,8 @@ int main(int argc, char** argv) {
                 else if (step == "hit:other") ok = slice.hitDummy(false);
                 else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
                 else if (step == "turnin") ok = slice.turnIn();
+                else if (step == "confirmreward") ok = slice.confirmReward();     // Enter on the reward page the open screen showed
+                else if (step == "close") ok = slice.closeScreen();               // Escape: the player leaves Marcus's mission screen
                 else if (step == "cheatlevel") slice.cheatLevelUp();       // one ExpLevelUp(true): the not-natural level-up
                 else if (step.rfind("lines:", 0) == 0) slice.mission().dialog().setTestLineLength(std::stod(step.substr(6)));
                 else if (step.rfind("talker:", 0) == 0) slice.mission().dialog().registerTalker(step.substr(7));

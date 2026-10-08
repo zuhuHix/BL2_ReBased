@@ -235,7 +235,7 @@ The checker's 18 rules held 9 times on that stream.
 | `ChangeRemoteBehaviorSequenceState_171` and its 1 s | missing | **matched** | data link `AdvanceObjectiveSet_96 -> _171`, default output, `ActivateDelay` 1.0; already run by the VM, now a visible `sequence_change` event |
 | `PlayMissionTurnedInDialog` / `VO_NPC_MissionTurnedIn` | missing | **matched** | the screen's open (`BeginUse`) is emulated, so `OnPlayerTurnedInMission` runs its dialog; new `turn_in_dialog` event; the stock event is silent (its switch takes its unlinked last output) |
 | Dialog 03b against the `FinalObj` set; dialog 05 against `FireCompleted` | out of order (2) | out of order (2), **explained** | not a VM defect: see below |
-| Accept-time screen close; `MissionRewardsReceived` on confirm | missing (2) | missing (2) | host UI, left alone as asked |
+| Accept-time screen close; `MissionRewardsReceived` on confirm | missing (2) | missing (2) | host UI, left alone as asked; **matched since swap 11, see "After swap 11" below** |
 | Extra: `DET_NPC_OnUse_MissionsAvailable`, lines 03a and 04, `AttemptStatusEffect_9` | 4 | 4 | unchanged |
 
 **The two "out of order" dialog items are what the event marks, not an order the VM got wrong.** The installed script of `Behavior_TriggerDialogEvent` (read with
@@ -340,3 +340,35 @@ So the skipper is the cause, through the line-length dependence of a race with t
 settings folder (19 files) copied and hashed too. With saves blocked from the first frame (`save_blocked` marks in the driver's event log), **all 33 files are byte-identical after both launches and all 19 settings files
 are unchanged** (the mod's `enabled` flag was never written: `dont_update_setting=True`); re-checked after the lane's release, while lane L3's game ran (read-only hashing): settings still identical. The driver was removed; the game was closed through its window after launch 2 (after the crash dialog in launch 1: Enter on
 its OK button, no kill). The run lock was taken at 12:50:34 and released by this lane after the session; this lane spawned nothing.
+
+## After swap 11 (lane I10b, 2026-10-08): the mission screen's close and the reward page
+
+AI-assisted (Claude), implementer lane I10b. The two items left "missing" after swap 8 are the screen's close at the accept and `MissionRewardsReceived` on the
+player's confirmation. Both are now in the VM's event stream (`dismissal_dialog`, `mission_interface_closed` at the accept; `reward_page` at the turn-in, then
+`reward_received` on a `confirmreward` step), so the two items become **matched in kind**. **After.** 45 matched, 2 out of order (the explained dialog items), 0 missing,
+4 extra (live side 47 items: 45 + 2; VM side 51: 45 + 2 + 4). The checker's rules (24 now: the 18 of swap 8, two of them reworded for the new events, plus six new ones) hold 24 times on the real data.
+
+**What the live trace shows (observed, lane L2 rows and the L4 run; installed script read with the disassembler).** At the accept the order inside `UpdateMissionStatus(Active)` is
+`AddMission`, the movie's entry-list calls (`CanEndMission`, `CanStartMission`), `EndUse`, `PlayDismissalDialog` (tag `VO_NPC_GenericDismissal` raised on Marcus's dialog
+component), `EndUse` again (the first one comes from `EndFocus`), `OnPlayerClosedMissionUI`; the status delegates and the lent weapon follow. The close is the movie's own script:
+`ClientUpdateUIMissionList` -> `QuestAcceptGFxMovie.UpdateMissionList` -> `DetermineQuestEntries` -> `GotoCorrectPartOfMovie(False)`; the entry list is empty (the mission is now in
+progress), so it plays the close sound and calls `GFxMoviePlayer.Close`, whose script event `OnClose` ends the use of Marcus. At the turn-in `ClientSpawnMissionRewardUI` shows the reward page
+(`DisplayRewardsPage`), `MissionRewardsReceived` came 14.9 s later on the player's Enter (L2), and after the confirmation the screen did not close by itself (a screenshot of that run still lists "Shock Weapons").
+
+**What the VM does now (all UNVERIFIED beyond that observed order).** `MissionScript::bindScreen` keeps a stand-in object of the installed class `QuestAcceptGFxMovie` and a `WillowGFxUIManager`; the
+natives `WillowGFxUIManager.GetPlayingMovie`, `GFxMoviePlayer.Close` and `GearboxGFxMovie.PlayUISound` are host bindings (presentation, per NATIVE_GFX_BRIDGE.md), and the script
+functions `DisplayRewardsPage` (waits) and `DetermineQuestEntries` (builds the rows in C++) are overridden. Everything else is the installed script: with the screen open the accept
+reaches the native `Close`, which runs the emulated `OnClose` (`ServerPlayerEndUseNPC`, which runs `EndUse` and the dismissal dialog, then `OnPlayerClosedMissionUI`) inside the status routine,
+so `dismissal_dialog`, `dialog`, `mission_interface_closed` precede the `status` event. Without an open screen (the old path, synthetic packages) nothing changes: the controller finds no movie
+and `MissionRewardsReceived` still runs inside the turn-in. With it open the turn-in gives `experience`, `reward_page`, `status Complete`, `mission_weapon_removed`, `reward`, `turn_in_dialog`
+and the reward waits; `confirmreward` gives exactly `reward_received`; `close` (Escape) runs the movie's `extChoiceCancelled` and gives the dismissal tag and `mission_interface_closed`.
+
+**Why the rows are built in C++.** The movie's `DetermineQuestEntries` grows arrays of structs from empty with `DynArrayInsert`; the VM keeps no element type for an empty array, so the elements would
+be untyped. The override runs the same director calls (`GetRedeemableMissions`, `GetEligibleMissions`, `GetInProgressMissions`: the observed `CanEndMission` / `CanStartMission` rows) and builds
+the rows with the rule the script has (redeemable first with status 3, then eligible with 0; in progress apart). The VM was not changed for this. (A first version of the override iterated a temporary and
+left the list empty, which is why the close did not happen; fixed.)
+
+**Unverified / differences.** One `EndUse` here against two live (the first comes from the controller's focus object, which the VM does not keep; the second finds the list already empty, so the effect is the
+same). The dismissal line's talker: the live L4 run shows the tag starting a talk act with another NPC as talker; the VM's `dialog` event names the same act with `outcome=no talker`. The host's use key
+stands in for both Enter (confirm) and the Escape that follows (a second press is not needed); in the real game the screen stayed open after the confirmation. All presentation (the page, the sound, the
+post-process override, the focus camera, the preview inventory) is not modelled.

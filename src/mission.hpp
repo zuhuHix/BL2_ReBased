@@ -29,7 +29,8 @@ public:
 
     // Everything the host must do or show, in order. Nothing here has been executed by this class.
     struct Effect {
-        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated, TurnInDialog };
+        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated, TurnInDialog,
+                          DismissalDialog, InterfaceClosed, RewardPage, RewardReceived };
         Kind kind;
         std::string a, b, c;        // RemoteEvent: a=event; Dialog (a line chosen by Behavior_TriggerDialogEvent): a=event tag, b=group,
                                     // c=the talker's name tag, detail = "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>";
@@ -38,7 +39,11 @@ public:
                                     // StatusChanged: a=status; Reward: a=XP attribute path;
                                     // MissionWeapon*: a=MissionWeaponBalanceDefinition path;
                                     // TurnInDialog: the tag raised on the director's dialog component by PlayMissionTurnedInDialog
-                                    // (a=tag path, b=speaker path, c=the other object's class)
+                                    // (a=tag path, b=speaker path, c=the other object's class);
+                                    // DismissalDialog: the tag raised on the director's component when the player's use of him ends (WillowAIPawn.PlayDismissalDialog;
+                                    // same fields as TurnInDialog); InterfaceClosed: Marcus's mission screen closed (a=the director's path);
+                                    // RewardPage: the screen is open, so the reward page waits for the player (a=the mission's path);
+                                    // RewardReceived: the player confirmed it, MissionRewardsReceived ran (a=the mission's path)
         double time = 0;
         std::string detail;
     };
@@ -112,6 +117,12 @@ public:
     bool customEvent(const std::string& name);
     // The script bridge reports the turned-in dialog's tag here so that it sits in the effect order (after the status routine, before the line it chooses).
     void noteTurnInDialog(const std::string& tag, const std::string& speaker, const std::string& other) { emit(Effect::Kind::TurnInDialog, tag, speaker, other); }
+    // The same for the mission screen's host side (docs/verification/FIRE_MISSION_GOLDEN_TRACE.md, "The mission screen's close and the reward page"):
+    // the dismissal tag raised when the screen closes, the close itself, the reward page that waits, and the player's confirmation of it.
+    void noteDismissalDialog(const std::string& tag, const std::string& speaker, const std::string& other) { emit(Effect::Kind::DismissalDialog, tag, speaker, other); }
+    void noteInterfaceClosed(const std::string& director) { emit(Effect::Kind::InterfaceClosed, director); }
+    void noteRewardPage(const std::string& mission) { emit(Effect::Kind::RewardPage, mission); }
+    void noteRewardReceived(const std::string& mission) { emit(Effect::Kind::RewardReceived, mission); }
     // Turn-in: ReadyToTurnIn -> Complete and a Reward effect.
     bool turnInMission();
     void tick(double seconds);              // delayed behavior links
