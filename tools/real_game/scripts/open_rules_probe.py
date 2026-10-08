@@ -24,6 +24,10 @@ of a native (that crashed lane L4's game).
   killed actor's class, balance, level and multiplier, and the player's level, experience and pool value.
 - or_bully(name): one AI pawn's full profile (class, AI class and balance properties, pools, weapon, flags) for discovery;
   or_dump(obj) and or_fn_params(obj, fn) are the discovery helpers it uses.
+- or_god_state(pawn) and or_matinee_hook() (lane L6, question 8): the pawn's and its mind's demigod-like flags and health, and rows around
+  the AI Matinee functions (HoldAIForMatinee takes the bDemiGod argument).
+- or_hold_hook() and or_demigod_watch() (lane L6, question 8): rows around Behavior_AIHold and the mind's demigod/god setters, and one row per
+  change of the Fire dummy's IsDemigodMode / GetAIDemigod / GetAIGod / health.
 - or_mod_off(name): switch one installed SDK mod off in memory only (no settings write).
 - or_stand_in_front(path, distance): put the player in front of a pawn, looking at its chest (memory only; as lane L2's helper).
 - or_snap(label): a labelled row (player state, dummy, near enemies) appended to the combat rows.
@@ -366,6 +370,125 @@ def or_bully(name):
     if weapon is not None:
         out["weapon"] = {"class": weapon.Class.Name, "path": _p(weapon), "props": or_props(weapon, r"Damage|Definition|Type|Melee|Range|Fire", 60)}
     return out
+
+
+GOD_RX = r"God|Demi|Invul|Matinee|Hold|CanBeDamaged|Immort|Protect|MinHealth|Immune"
+MATINEE_FUNCS = ("MAT_BeginAIGroup", "HoldAIForMatinee", "MAT_FinishAIGroup", "ReleaseAIFromMatinee")
+
+
+def or_god_state(pawn, everything=False):
+    """Question 8: the flags that could keep an AI pawn above 0 health, on the pawn and on its mind, plus its health.
+    everything=True also stores every scalar property of both objects (to diff two moments offline)."""
+    out = {"pawn": _p(pawn), "flags": or_props(pawn, GOD_RX, limit=300), "health": None}
+    try:
+        out["health"] = [_p(pawn.GetHealth()), _p(pawn.GetMaxHealth())]
+    except Exception:
+        pass
+    try:
+        out["IsDemigodMode"] = _p(pawn.IsDemigodMode())
+    except Exception as e:
+        out["IsDemigodMode"] = "error " + repr(e)[:60]
+    mind = _g(pawn, "MyWillowMind")
+    if mind is not None:
+        out["mind"] = _p(mind)
+        out["mind_flags"] = or_props(mind, GOD_RX, limit=300)
+        for fn in ("InGodMode", "GetAIDemigod", "GetAIGod", "GetGodMode"):
+            try:
+                out["mind_" + fn] = _p(getattr(mind, fn)())
+            except Exception as e:
+                out["mind_" + fn] = "error " + repr(e)[:60]
+    if everything:
+        out["pawn_all"] = or_props(pawn, r".", limit=4000)
+        out["mind_all"] = or_props(mind, r".", limit=4000) if mind is not None else None
+    return out
+
+
+def or_matinee_hook(full_first=8):
+    """Question 8: PRE and POST rows for WillowAIPawn.MAT_BeginAIGroup, HoldAIForMatinee, MAT_FinishAIGroup and ReleaseAIFromMatinee
+    (arguments and or_god_state of the pawn; the first `full_first` rows also carry every scalar property). Call after cb_start()."""
+    def make(path, tag, name):
+        def hook(obj, args, ret, func):
+            if not CB["on"]:
+                return
+            OR["mat_n"] = OR.get("mat_n", 0) + 1
+            row = {"t": round(time.perf_counter() - CB["t0"], 4), "g": _game_t(), "f": CB["frame"], "or_matinee": name, "tag": tag,
+                   "args": _args(args, func), "ai_class": _p(_g(obj, "AIClass"))}
+            try:
+                row["god"] = or_god_state(obj, everything=OR["mat_n"] <= full_first)
+            except Exception as e:
+                row["god_error"] = repr(e)[:150]
+            CB["rows"].append(row)
+        return hook
+    done = []
+    for name in MATINEE_FUNCS:
+        for path in _declared_paths("WillowAIPawn", name):
+            _hook(path, Type.PRE, "ow_or_mat_pre_" + path, make(path, "pre", name))
+            _hook(path, Type.POST, "ow_or_mat_post_" + path, make(path, "post", name))
+            done.append(path)
+    return done
+
+
+def or_hold_hook():
+    """Question 8: PRE and POST rows for Behavior_AIHold.ApplyBehaviorToContext (Reason, Action, Type of the behavior and the demigod
+    state of its context pawn) and for the mind's SetAIDemigod / SetAIGod / SetGodMode if script calls them. Call after cb_start()."""
+    def make(tag, name, from_args):
+        def hook(obj, args, ret, func):
+            if not CB["on"]:
+                return
+            row = {"t": round(time.perf_counter() - CB["t0"], 4), "g": _game_t(), "f": CB["frame"], "or_hold": name, "tag": tag,
+                   "args": _args(args, func)}
+            if from_args:
+                row["behavior"] = {"obj": _p(obj), "Reason": _p(_g(obj, "Reason")), "Action": _p(_g(obj, "Action")),
+                                   "Type": _p(_g(obj, "Type"))}
+                pawn = _g(args, "ContextObject")
+            else:
+                pawn = _g(obj, "Pawn")
+            try:
+                if pawn is not None:
+                    row["god"] = or_god_state(pawn)
+            except Exception as e:
+                row["god_error"] = repr(e)[:150]
+            CB["rows"].append(row)
+        return hook
+    done = []
+    for cls_name, name, from_args in (("Behavior_AIHold", "ApplyBehaviorToContext", True), ("WillowMind", "SetAIDemigod", False),
+                                      ("WillowMind", "SetAIGod", False), ("WillowMind", "SetGodMode", False)):
+        for path in _declared_paths(cls_name, name):
+            _hook(path, Type.PRE, "ow_or_hold_pre_" + path, make("pre", name, from_args))
+            _hook(path, Type.POST, "ow_or_hold_post_" + path, make("post", name, from_args))
+            done.append(path)
+    return done
+
+
+def _or_watch_tick(*_a):
+    """One row whenever the Fire dummy's (IsDemigodMode, mind demigod, mind god, health) tuple changes."""
+    try:
+        d = OR.get("watch_pawn")
+        if d is None or _g(d, "bDeleteMe", False):
+            OR["watch_n"] = OR.get("watch_n", 0) + 1
+            if OR["watch_n"] % 20:
+                return
+            d = OR["watch_pawn"] = _find_dummy()
+            if d is None:
+                return
+        mind = _g(d, "MyWillowMind")
+        key = (d.IsDemigodMode(), mind.GetAIDemigod() if mind is not None else None, mind.GetAIGod() if mind is not None else None,
+               round(d.GetHealth(), 3))
+        if key != OR.get("watch_key"):
+            OR["watch_key"] = key
+            CB["rows"].append({"g": _game_t(), "f": CB["frame"], "t": round(time.perf_counter() - CB["t0"], 4),
+                               "or_watch": {"pawn": d.Name, "IsDemigodMode": _p(key[0]), "AIDemigod": _p(key[1]), "AIGod": _p(key[2]),
+                                            "health": key[3]}})
+    except Exception as e:
+        OR["watch_err"] = repr(e)[:120]
+
+
+def or_demigod_watch():
+    """Question 8: start logging changes of the Fire dummy's demigod-like state, one row per change (per frame resolution)."""
+    if not OR.get("watching"):
+        add_hook(TICK, Type.POST_UNCONDITIONAL, "ow_or_watch", _or_watch_tick)
+        OR["watching"] = True
+    return True
 
 
 def or_disarm():

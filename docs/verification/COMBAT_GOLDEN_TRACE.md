@@ -282,7 +282,7 @@ kill frame, shield 162.53 = 0.9 x 180.589 the next frame, 3 of 3), then enemies 
 - Health: no shield and no `ShieldArmor` pool (only slot 0 `Pool_Health`, no regeneration), `bIsInvulnerable` false, `bCanBeDamaged` true. Class starting values: health multiplier adult 6, regular 2, ranged 4, baby 0.5;
   base health per level 102.347 (5), 117.756 (6), 135.44 (7), about x1.15 a level (adult 614.1 / 812.6 at levels 5 / 7, ranged 409.4 at 5, baby 58.9 at 6).
 - Attack damage on a hit to the player (arrival value; the player was not invulnerable): `8 x 1.13^level x EnemyNonWeaponDamageMultiplier` (adult 5, regular 1.5, baby 0.75, ranged 3): adult melee 73.697 / 83.278 / 94.104 at levels
-  5 / 6 / 7 (`MeleeDef_PrimalBeast_Melee` and `_RadiusLeap`), regular 24.983 and baby 12.492 at 6, ranged grenade projectile 44.218 at 5. Applied to the player 0.715-0.741 of the arrival value, as in step 9.
+  5 / 6 / 7 (`MeleeDef_PrimalBeast_Melee` and `_RadiusLeap`), regular 24.983 and baby 12.492 at 6, ranged grenade projectile 44.218 at 5. Applied to the player 0.715-0.741 of the arrival value, as in step 9 (except for 15 s after a second wind, when a "Defense Boost" scales it by 1/1.5; see the lane L6 section).
 - AI: `AIDef_PrimalBeastAdult` (targeting `Targeting_ShortRange`, search radius 4096, `bHealOnReset`), controller `WillowMind`, behavior sequences `Default` (with an `OnTakeDamage` event) plus five `M_NameGame_*` mission-name sequences.
 - Drops seen in eight AI deaths (five by the player) (the `DropLootOnDeath` post row always shows an empty `SpawnedInventory`; the pools are rolled from inside it): `Pool_Ammo_All_Emergency`, `Pool_Ammo_All_NeedOnly` and `Pool_Eridium_Stick` returned false, `Pool_Health_All` returned true
   twice and made a health pickup; no money or gun pool fired in this session (lane L3 saw `Pool_Money_1or2`). The adult's default pool list is `StandardEnemyGunsAndGear`.
@@ -292,6 +292,46 @@ independent of the flag; the 30 s damage scale is natural-only. The host's Fire 
 
 **Save safety (2026-10-08).** 60 files hashed before and after (33 save and config files, the SDK settings folder, Sanity Saver's private copies). Two differed afterwards: Sanity Saver's own `Save0008.json.gz` (rewritten by that mod at load, as in lanes L3 and L5) and
 `sdk_settings/python-sdk.json` (the SDK's own "Next Check Time" stamp, refreshed at startup because the stored one had expired; this lane wrote no setting). Both were restored from the backup taken first and the re-hash showed 0 of 60 different. Saves were blocked from the first frame; the game was closed through its window.
+
+## Applied-damage ratio and the Fire dummy's floor (lane L6, 2026-10-08)
+
+AI-assisted (Claude), lane L6. Question 7 was answered offline from lane L5b's ignored dumps (`local/realgame/L5b/combat_rows_1.json`, `player_hits.json`: 665 hits to the player) plus two live reads of data objects; question 8 needed two
+launches (the first showed the floor again but read the wrong flags, the second read the right ones). Same method as lane L5b: one game process under the run lock, level-8 Maya (`-Character=Save0008.sav`), `Install-Driver -BlockSavesAtStart`, memory-only,
+closed through the window. Raw rows stay under ignored `local/realgame/L6/`. Labels: **observed** or **UNVERIFIED**.
+
+**Question 7: why some bullymong hits applied about 2/3 (or 1/2) of the formula. Cause found: the 15 s "Defense Boost" after a second wind. The earlier suspects are not it.**
+- The formula is `applied = arrival x 0.65 x (1 + 0.02 x attackerLevel)` for melee and grenade hits. The odd rows (applied / arrival: adult level 5 at 0.477, level 6 at 0.364 and 0.485, ranged grenade at 0.477) are **exactly** 2/3 and 1/2 of it: ratio to the formula 0.6667 (12 hits) and 0.5000 (2 hits), every other
+  unclipped melee or grenade hit 1.000 (spread 0.9999-1.0001).
+- Each reduced hit follows a second wind by a kill: after `GoFromInjuredToHealthy` the game activates two skills of `GD_PlayerShared.injured.PlayerInjuredDefinition` (`SkillEffectManager.ActivateSkill` rows): `Behavior_AttributeEffect_1.SkillDefinition_0` ("Power Boost", `WeaponDamage` Scale +0.5,
+  at the second-wind reason) and `Behavior_AttributeEffect_4.SkillDefinition_1` ("Defense Boost", at the frame the injured state is cleared). The Defense Boost definition, read live and in the packages (same values): duration 15 s, Scale modifier **-0.5** on each of `ReceivedBulletDamageModifier`,
+  `ReceivedMeleeDamageModifier`, `ReceivedGrenadeDamageModifier` and `ReceivedRocketDamageModifier` (the player controller's attributes, base 1.0, empty modifier stacks and `bIsProtectionTimerActive` false outside the boost). Status-effect damage is not in that list.
+- Three Defense Boosts were activated in the dump (game time 763.95, 927.70 and 940.19 s, all after a kill-caused second wind). Per number of boosts active (activation within the previous 15 s):
+
+| boosts active | melee hits (unclipped) | grenade hits | applied / (arrival x 0.65 x (1 + 0.02 x level)) |
+|---|---|---|---|
+| 0 | 130 | 23 | 1.000 (0.9999-1.0001) |
+| 1 | 8 | 4 | 0.6667 |
+| 2 | 2 | 0 | 0.5000 |
+
+  A hit is "clipped" when it took health to 0 (not used). The two-boost hits are at 0.3 s and 2.0 s after the 940.19 activation (the 927.70 one still running); the next hits, 3.1 s after 940.19 and 15.6 s after 927.70, fit one boost: the first expired between 14.5 s and 15.6 s after its activation (15 s duration).
+  The fit over the three counts is `damage x 1 / (1 + 0.5 n)` for n boosts; `1 - 0.5 n` (0.5, 0.0) and a product of (1 - 0.5) (0.5, 0.25) are contradicted. Why a -0.5 Scale reads as 1/1.5 is **UNVERIFIED** (n = 3 and above not seen; bullet and rocket types not seen, only listed in the data).
+- Not the cause (the data contradict them): health fraction (the 130 unboosted melee hits include 41 that began below half of maximum health, 4 that crossed half, and the lowest ended at 1.3 percent of maximum, all at ratio 1.000), a minimum-health or protection-timer cap (damage is reduced, not capped; health kept falling), crit or hit region
+  (every melee hit has bone `None`), the time since the previous hit (reduced hits came 0.02-1.5 s after the previous hit, and so did many unboosted ones) and the attacker (adult, regular and baby alike, only the boost count matters). All 140 melee rows lie on the three ratios above, so no averted-death roll or other special case shows up in them (a rare one cannot be excluded).
+- Consequence for the comparator (`tools/verify_combat_pawn.py`): its adult level-6 row failed because all three adult level-6 melee hits in the data are boosted hits (0.364, 0.364, 0.485); **no unboosted adult level-6 melee hit exists in the dump**, so 0.728 for that row is the formula (confirmed for regular and baby at level 6, adult at levels 5 and 7), not an observation. The comparator should leave out hits made while a boost is active.
+- Not covered: the Power Boost and the other second-wind reasons (a level-up reason did not run these skills in this dump, but the player was not down then), the boost during a second injury, whether the 15 s duration restarts or stacks per activation beyond n = 2 (two overlapping activations did stack).
+
+**Question 8: why the Fire dummy cannot be killed (floor 1.0). The `HoldAIForMatinee` candidate is contradicted; the dummy becomes demigod when its own first-hit behavior `Behavior_AIHold_59` runs.**
+- Reproduced in both launches (Fire mission replayed in memory from Marcus, real shots with the lent pistol): health 778.658, 641.6, 420.5, 283.4, 62.3, then **1.0** (second launch; the hit that would have taken 62.33 below 1 set `SetHealth(1.0)` and `NotifyTakeHit` got 61.33), and every later hit arrived and applied 0 (20 of 25 hit rows). As in lane L5 the mission's Kismet destroys the dummy a few seconds after the first hit.
+- `Pawn.IsDemigodMode()` on the dummy (WillowAIPawn, class `CharClass_TargetDummy`) was **False** at spawn, after reaching the range and while aiming, and **True** from the first player hit on (read every frame, one row per change: spawn, the flip, then two health changes; health reached 1.0 0.8 s after the flip). The flip is inside the
+  PRE and POST rows of one call: the dummy provider's `Behavior_AIHold_59` (reason `Safe`, action 0 (`AIHold_Release` is 1), type 3), which ran in the frame of the first hit, after that hit's `SetHealth` (641.6 health) and before the frame's second hit (the splash). `Behavior_AIHold_57` (reason `Mission`, type 0), run at the dummy's spawn, changed nothing.
+- The mind's own answers never changed: `GetAIDemigod`, `GetAIGod`, `GetGodMode` and `InGodMode` False before and after; `bIsInvulnerable` false, `bCanBeDamaged` true, `bUnderMatineeControl` false throughout (full scalar property dumps of the pawn and its mind before the shots and after the floor, first launch, differ only in times, `HealthVar`, pain and hit counters).
+- `WillowAIPawn.MAT_BeginAIGroup`, `HoldAIForMatinee`, `MAT_FinishAIGroup`, `ReleaseAIFromMatinee` and the mind's `SetAIDemigod` and `SetAIGod` were hooked in both launches and **never ran from script** (0 rows), so the Matinee path from the plan's section 0 is not what makes this dummy demigod.
+  (A native call would be invisible, but the flip is shown in the AIHold call.) That `AdjustDamage` caps a demigod pawn at 1 health (NATIVE_DAMAGE_DEATH) is consistent with the floor.
+- The `AIHoldType` enum is `Target` 1, `Movement` 2, `God` 4 (bit values); type 3 here is Target plus Movement, without the `God` bit, yet the demigod answer flipped. **UNVERIFIED:** which part of the hold (the `Safe` reason or the type bits) sets it; whether releasing the hold clears it; anything outside this dummy.
+
+**Save safety (lane L6, 2026-10-08).** 60 files hashed before and after two launches (33 save and config files, the SDK settings folder, Sanity Saver's private copies); saves blocked from the first frame, no setting written by this lane, both launches closed through the window (2 s), driver removed, lock released by this lane.
+Two files differed afterwards: Sanity Saver's `Save0008.json.gz` (rewritten at load) and `sdk_settings/python-sdk.json` (only the SDK's own "Next Check Time" stamp, 2026-10-07T17:54Z to 2026-10-09T11:19Z). Both were restored from the backup taken first; the re-hash showed 0 of 60 different. The 33 save and config files were byte-identical without a restore.
+
 
 ## Save safety
 
