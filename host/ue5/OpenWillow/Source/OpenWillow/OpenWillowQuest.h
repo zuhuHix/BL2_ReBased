@@ -169,6 +169,10 @@ private:
     FString LastDummyDamageType;
     int32 DummyShots = 0;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
+    // test: bullets fly, so a case fires, waits for the landing and checks; ShotPhase is the case's own sub-step, ShotsBefore the dummy's
+    // damage calls before the press, MagazineBefore the held magazine before it, ShotgunId and ShotgunSlot the multi-pellet gun readied for the pellet checks (DisplacedId the gun it took the slot from).
+    int32 ShotPhase = 0, ShotsBefore = 0, MagazineBefore = 0, ShotgunSlot = INDEX_NONE;
+    FString ShotgunId, DisplacedId;
     int32 PointsBeforeReward = 0, BackpackBeforeReward = 0;
     float HealthBeforeReward = 0, MaxHealthBeforeReward = 0;
     float PhaselockCastSeen = 0;

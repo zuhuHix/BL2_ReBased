@@ -39,6 +39,38 @@ struct FOpenWillowGunSocket
     bool bHasMeshLocation = false;
 };
 
+// One line of a firing mode's FiringPatternLines, offsets in degrees (the live dump's rotator units converted by
+// tools/weapon_refresh_firing.py). A point line gives Start as the offset; a rectangle line gives a random point
+// between Start and End (independent per axis; the dump only has lines degenerate in one axis, so the two-axis shape is UNVERIFIED).
+struct FOpenWillowPatternLine
+{
+    bool bPoint = true;
+    FRotator Start = FRotator::ZeroRotator;
+    FRotator End = FRotator::ZeroRotator;
+};
+
+// The weapon's FiringModeDefinition as the live game read it (card "firing", PROJECTILE_FIRING_PATTERNS_LIVE.md).
+// A rocket or beam mode is carried (FireType, ProjectileDefinition) but the host does not model it yet.
+struct FOpenWillowFiringMode
+{
+    FString Mode;
+    FString FireType = TEXT("Bullet");
+    FString Tracer;               // PartSysTemplate of the mode
+    FString ProjectileDefinition; // rocket modes; empty for bullets
+    float Speed = 0;              // the mode's own speed in uu/s; the weapon multiplier is in FOpenWillowWeaponItem::ProjectileSpeed
+    float AirFriction = 0;
+    int32 NumRicochets = 0;       // carried only
+    FVector TraceExtent = FVector::ZeroVector;
+    bool bSuppressWeaponSpread = false;
+    bool bFireRandomlyFromPattern = false;
+    bool bScalePatternByWeaponSpread = false;
+    bool bResetPatternAfterEachShot = false;
+    float BasePatternSpread = 1;
+    float MinPatternScale = 0;
+    float InstantHitMomentum = 10; // weapon type value; 10 (the class default) when the recipe has none: UNVERIFIED for that case
+    TArray<FOpenWillowPatternLine> Lines;
+};
+
 // One rolled weapon, loaded from a tools/weapon_recipe.py recipe that
 // tools/weapon_stats.py has filled in. Values are the evaluated item-card
 // stats; see DECISIONS.md for which combination rules are UNVERIFIED.
@@ -90,6 +122,13 @@ struct FOpenWillowWeaponItem
     // Card rows beyond the five main stats (tools/weapon_stats.py): the projectile count printed after the damage
     // ("21x7") and an elemental weapon's status damage per second and chance. Values are the evaluated, unrounded ones.
     int32 Projectiles = 1;
+    // Firing mode (card "firing", tools/weapon_refresh_firing.py); bHasFiring false for a recipe without the block, which then
+    // fires Projectiles plain bullets with the card spread (host stand-in, UNVERIFIED).
+    bool bHasFiring = false;
+    FOpenWillowFiringMode Firing;
+    float ProjectileSpeed = 0; // card "projectile_speed": the mode speed x the weapon's projectile speed multiplier
+    // Per weapon runtime state, not saved: the next FiringPatternLines index (0 on a new weapon).
+    int32 NextFiringPatternIndex = 0;
     bool bHasStatus = false;
     float StatusDps = 0;
     float StatusChance = 0; // percent

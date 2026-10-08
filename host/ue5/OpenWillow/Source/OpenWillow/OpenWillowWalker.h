@@ -44,6 +44,25 @@ public:
     bool FireOnce();
     // Stock damage type path of the shot being applied right now (the held item's card damage type); "" otherwise.
     const FString& ShotDamageType() const { return ShotDamageTypeInFlight; }
+    // Momentum (ray direction x type InstantHitMomentum x 100) of the bullet being applied right now; zero otherwise.
+    const FVector& ShotMomentum() const { return ShotMomentumInFlight; }
+    // What the last trigger pull did, for the host suite and the log (one entry per pellet).
+    struct FShotRecord
+    {
+        int32 Id = 0;
+        float FiredAt = -1.f;
+        FVector Aim = FVector::ZeroVector;    // unit view direction the pellets were built on
+        float Damage = 0.f;                   // stored per pellet at the press
+        float MomentumLength = 0.f;           // weapon type InstantHitMomentum x 100
+        TArray<FVector> Directions;           // unit vector per pellet
+        TArray<float> Flight;                 // seconds the pellet needs for its path at its start speed
+        TArray<float> LandedAt;               // game time its damage was applied to a target; -1 while in flight or if it hit none
+        int32 DamageCalls = 0;                // ApplyPointDamage calls this press has made so far
+    };
+    const FShotRecord& LastShot() const { return LastPress; }
+    // One FiringPatternLines offset for the next pellet (degrees), advancing the weapon's pattern index (public so the suite can drive it).
+    static FRotator PatternOffset(FOpenWillowWeaponItem& Weapon);
+    int32 BulletsInFlight() const { return Bullets.Num(); }
     // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).
     void UsePhaselock();
     // Whether a cast would start now; otherwise why not (not bought, cooldown, or the failing skill constraint).
@@ -133,6 +152,32 @@ private:
     bool StartReload(float Now);
     void CancelReload();
     void FireWeapon();
+    // A bullet like the game's light projectile manager keeps (PROJECTILE_FIRING_PATTERNS_LIVE.md R5): fixed at the press are the
+    // start, the direction, the end of the ray traced then, the damage and the damage type; the speed changes with air friction.
+    struct FBullet
+    {
+        FVector Start = FVector::ZeroVector;
+        FVector Direction = FVector::ForwardVector;
+        float Length = 0.f;                   // start to the traced end (range or first hit)
+        float Travelled = 0.f;
+        float Speed = 0.f;
+        float AirFriction = 0.f;
+        FVector TraceExtent = FVector::ZeroVector;
+        float LastUpdate = 0.f;
+        float Damage = 0.f;
+        float MomentumLength = 0.f;
+        FString DamageType;
+        int32 ShotId = 0;
+        int32 Pellet = 0;
+    };
+    TArray<FBullet> Bullets;
+    FShotRecord LastPress;
+    // Moves every bullet along its ray for the game time since its last update, sweeps that segment, lands what it meets.
+    void AdvanceBullets(float Now);
+    void LandBullet(const FBullet& Bullet, const FHitResult& Hit, float Now);
+    // The weapon's own random cone (WillowWeapon.AddSpread): a rotator offset inside a disc of radius SpreadDegrees / 2.
+    static FRotator SpreadOffset(float SpreadDegrees);
+    FVector ShotMomentumInFlight = FVector::ZeroVector;
     void PickupNearby();
     // Arms are shown while a pose clip set is loaded (a drawn weapon, or Unarmed clips if imported) and no menu covers them.
     void UpdateArmsVisibility();

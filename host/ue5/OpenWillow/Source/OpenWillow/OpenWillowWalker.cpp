@@ -44,6 +44,10 @@
 namespace
 {
 const TCHAR* MayaRoot = TEXT("/Game/OpenWillow/Characters/Maya");
+// WillowWeapon.Range, the class default: the ray traced for every observed bullet was this long (PROJECTILE_FIRING_PATTERNS_LIVE.md R5).
+constexpr float WeaponRange = 16384.f;
+// Host stand-in (UNVERIFIED) for a recipe without a firing block: a plain bullet at this speed (the speed of the default SMG and shotgun modes).
+constexpr float FallbackBulletSpeed = 20000.f;
 UAnimSequence* LoadArmsAnim(const TCHAR* Set, const TCHAR* Clip)
 {
     const FString Path = FString::Printf(TEXT("%s/FirstPerson/Anim_%s_%s.Anim_%s_%s"),
@@ -503,6 +507,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     if (bGunShots && bMayaActive && Controller) RunGunShots(Now);
     static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
+    AdvanceBullets(Now);
     FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
     if (bReloading && Now >= ReloadEndsAt)
     {
@@ -861,58 +866,171 @@ bool AOpenWillowWalker::StartReload(float Now)
     return true;
 }
 void AOpenWillowWalker::CancelReload() { bReloading = false; }
+FRotator AOpenWillowWalker::PatternOffset(FOpenWillowWeaponItem& Weapon)
+{
+    // FiringModeDefinition.GetFiringPatternAdjustments, as observed live (PROJECTILE_FIRING_PATTERNS_LIVE.md R3). The random pick is
+    // taken as uniform over the lines and a two-axis rectangle as independent per axis: UNVERIFIED (the dump's lines are one-axis).
+    const FOpenWillowFiringMode& Mode = Weapon.Firing;
+    const int32 Count = Mode.Lines.Num();
+    if (Count == 0) return FRotator::ZeroRotator;
+    int32 Index = 0;
+    if (Mode.bFireRandomlyFromPattern)
+        Index = FMath::RandRange(0, Count - 1);
+    else
+    {
+        Index = Weapon.NextFiringPatternIndex % Count;
+        Weapon.NextFiringPatternIndex = (Index + 1) % Count; // advances per pellet
+    }
+    const FOpenWillowPatternLine& Line = Mode.Lines[Index];
+    FRotator Offset = Line.Start;
+    if (!Line.bPoint)
+        Offset = FRotator(FMath::Lerp(Line.Start.Pitch, Line.End.Pitch, FMath::FRand()),
+            FMath::Lerp(Line.Start.Yaw, Line.End.Yaw, FMath::FRand()), FMath::Lerp(Line.Start.Roll, Line.End.Roll, FMath::FRand()));
+    // The scale's lower floor was observed; ratios above 1 were not tested (UNVERIFIED).
+    const float Scale = Mode.bScalePatternByWeaponSpread && Mode.BasePatternSpread > 0.f
+        ? FMath::Max(Weapon.Spread / Mode.BasePatternSpread, Mode.MinPatternScale) : 1.f;
+    return Offset * Scale;
+}
+
+FRotator AOpenWillowWalker::SpreadOffset(float SpreadDegrees)
+{
+    // WillowWeapon.AddSpread (script, NATIVE_WEAPON_FIRING.md section 4): yaw = r1 * spread, pitch = r2 * sqrt(1 - (2 r1)^2) * spread with r in
+    // (-0.5, 0.5), so the offset never leaves a disc of radius spread / 2 (observed bound, R4); the density is not fitted (UNVERIFIED).
+    if (SpreadDegrees <= 0.f) return FRotator::ZeroRotator;
+    const float R1 = FMath::FRand() - 0.5f, R2 = FMath::FRand() - 0.5f;
+    return FRotator(R2 * FMath::Sqrt(FMath::Max(0.f, 1.f - 4.f * R1 * R1)) * SpreadDegrees, R1 * SpreadDegrees, 0.f);
+}
+
 void AOpenWillowWalker::FireWeapon()
 {
     // ADD_Fire_Recoil is a UE3 additive clip; layer it on the held pose.
     if (ArmsAnim && FirePistolAnim) ArmsAnim->PlayAdditive(FirePistolAnim, 0.45f);
     GlowImpulse = FMath::Min(GlowImpulse + 0.25f, 5.f);
-    LastGlowShotAt = GetWorld()->GetTimeSeconds();
-    // A deterministic figure-eight is a visual proxy for the installed
-    // FiringPatternLines array, whose serialized elements remain unsupported.
-    const float Phase = ShotCount++ * (PI / 8.f);
-    const float Spread = FMath::Tan(FMath::DegreesToRadians(2.1f));
-    const FVector ForwardAim = Camera->GetForwardVector();
-    const FVector Direction = (ForwardAim + Spread * (FMath::Sin(Phase) * Camera->GetRightVector()
-        + 0.5f * FMath::Sin(2.f * Phase) * Camera->GetUpVector())).GetSafeNormal();
-    const FVector Start = Camera->GetComponentLocation();
-    const FVector End = Start + Direction * 10000.f;
-    FHitResult Hit;
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowInfinity), true, this);
-    const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query);
-    const FVector Impact = bHit ? Hit.ImpactPoint : End;
+    const float Now = GetWorld()->GetTimeSeconds();
+    LastGlowShotAt = Now;
     const FVector Muzzle = MuzzleLocation();
     AOpenWillowShotFx::Flash(GetWorld(), Muzzle, FLinearColor(1.f, 0.5f, 0.15f), 3.5f, 0.05f, 40.f);
-    AOpenWillowShotFx::Tracer(GetWorld(), Muzzle + (Impact - Muzzle).GetSafeNormal() * 30.f, Impact);
-    if (!bHit) return;
-    AOpenWillowShotFx::Flash(GetWorld(), Impact + Hit.ImpactNormal * 2.f,
+    FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
+    if (!Weapon) return;
+    // One press (PROJECTILE_FIRING_PATTERNS_LIVE.md R1): for each of ProjectilesPerShot pellets the firing pattern's offset, then the weapon
+    // spread cone unless the mode suppresses it, then one bullet that flies. Ammo and clip were taken once by the caller. The accuracy-pool
+    // cone (R2) is not modelled: the host has no accuracy pool, so every pellet starts from the view direction.
+    const FOpenWillowFiringMode& Mode = Weapon->Firing;
+    if (Mode.FireType != TEXT("Bullet") && !GunSocketLogged.Contains(Weapon->Id + TEXT("/FireType")))
+    {
+        GunSocketLogged.Add(Weapon->Id + TEXT("/FireType"));
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s fires %s mode %s: rockets and beams are not modelled, it fires plain bullets"),
+            *Weapon->Id, *Mode.FireType, *Mode.Mode);
+    }
+    // card projectile_speed = mode Speed x the weapon's projectile speed multiplier; a recipe without it flies at a stand-in speed (UNVERIFIED).
+    const float BulletSpeed = Weapon->ProjectileSpeed > 0.f ? Weapon->ProjectileSpeed : FallbackBulletSpeed;
+    const int32 Pellets = FMath::Max(1, Weapon->Projectiles);
+    const FRotator Aim = Camera->GetComponentRotation();
+    const FVector Start = Camera->GetComponentLocation();
+    // The damage is fixed when the bullet is made (R5: the manager stores it) and every pellet carries the card's per-pellet damage (R6).
+    const float Damage = ShotDamage(*Weapon, Now);
+    if (Damage != Weapon->Damage)
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow shot damage %.2f (card %.2f, weapon damage scale +%.3f running)"), Damage, Weapon->Damage, WeaponDamageScaleAt(Now));
+    LastPress = FShotRecord();
+    LastPress.Id = ++ShotCount;
+    LastPress.FiredAt = Now;
+    LastPress.Aim = Aim.Vector();
+    LastPress.Damage = Damage;
+    LastPress.MomentumLength = Mode.InstantHitMomentum * 100.f;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowShot), true, this);
+    for (int32 Pellet = 0; Pellet < Pellets; ++Pellet)
+    {
+        FRotator Direction = Aim + PatternOffset(*Weapon);
+        if (!Mode.bSuppressWeaponSpread) Direction += SpreadOffset(Weapon->Spread);
+        FBullet Bullet;
+        Bullet.Start = Start;
+        Bullet.Direction = Direction.Vector();
+        // The ray traced at the press (CalcWeaponFire) fixes where the bullet ends: the first hit or the weapon range.
+        FHitResult Hit;
+        const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + Bullet.Direction * WeaponRange, ECC_Visibility, Query);
+        Bullet.Length = bHit ? FVector::Dist(Start, Hit.ImpactPoint) : WeaponRange;
+        Bullet.Speed = BulletSpeed;
+        Bullet.AirFriction = Mode.AirFriction;
+        Bullet.TraceExtent = Mode.TraceExtent;
+        Bullet.LastUpdate = Now;
+        Bullet.Damage = Damage;
+        Bullet.MomentumLength = LastPress.MomentumLength;
+        Bullet.DamageType = Weapon->DamageType;
+        Bullet.ShotId = LastPress.Id;
+        Bullet.Pellet = Pellet;
+        Bullets.Add(Bullet);
+        LastPress.Directions.Add(Bullet.Direction);
+        LastPress.Flight.Add(Bullet.Length / BulletSpeed);
+        LastPress.LandedAt.Add(-1.f);
+        // The tracer starts at the weapon and flies with the bullet (bStartParticleTracerAtWeapon); a stand-in streak, not the mode's particle.
+        const FVector End = Start + Bullet.Direction * Bullet.Length;
+        AOpenWillowShotFx::TracerFlight(GetWorld(), Muzzle + (End - Muzzle).GetSafeNormal() * 30.f, End, BulletSpeed,
+            FMath::Clamp(BulletSpeed * 0.02f, 40.f, 600.f));
+    }
+    // NotifyFiringPatternWhenShotComplete
+    if (Mode.bResetPatternAfterEachShot) Weapon->NextFiringPatternIndex = 0;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %d: %s fires %d pellet(s) at %.0f uu/s, damage %.2f each"), LastPress.Id, *Weapon->Id, Pellets, BulletSpeed, Damage);
+}
+
+void AOpenWillowWalker::AdvanceBullets(float Now)
+{
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowBullet), true, this);
+    for (int32 Index = Bullets.Num() - 1; Index >= 0; --Index)
+    {
+        FBullet& Bullet = Bullets[Index];
+        const float Delta = Now - Bullet.LastUpdate;
+        if (Delta <= 0.f) continue;
+        Bullet.LastUpdate = Now;
+        // A negative AirFriction speeds the bullet up each frame (R5, observed 6.002 against the formula's 6 on a friction of -6); a positive
+        // friction and the modes' Acceleration vector were not observed and are not applied (UNVERIFIED).
+        if (Bullet.AirFriction < 0.f) Bullet.Speed *= 1.f + FMath::Abs(Bullet.AirFriction) * Delta;
+        const float From = Bullet.Travelled;
+        Bullet.Travelled = FMath::Min(From + Bullet.Speed * Delta, Bullet.Length);
+        const bool bEnded = Bullet.Travelled >= Bullet.Length;
+        // The segment flown this frame is swept; the last one reaches 2 cm past the traced end so the surface it was traced to is found again.
+        const FVector A = Bullet.Start + Bullet.Direction * From;
+        const FVector B = Bullet.Start + Bullet.Direction * (Bullet.Travelled + (bEnded ? 2.f : 0.f));
+        FHitResult Hit;
+        // TraceExtent (7 of 150 modes; none of the slice guns) sweeps a box instead of a line; its shape is UNVERIFIED.
+        const bool bHit = Bullet.TraceExtent.IsNearlyZero()
+            ? GetWorld()->LineTraceSingleByChannel(Hit, A, B, ECC_Visibility, Query)
+            : GetWorld()->SweepSingleByChannel(Hit, A, B, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeBox(Bullet.TraceExtent), Query);
+        if (!bHit && !bEnded) continue;
+        const FBullet Done = Bullet;   // landing runs game code (TakeDamage), which may fire again and grow the array
+        Bullets.RemoveAtSwap(Index);
+        if (bHit) LandBullet(Done, Hit, Now);
+    }
+}
+
+void AOpenWillowWalker::LandBullet(const FBullet& Bullet, const FHitResult& Hit, float Now)
+{
+    AOpenWillowShotFx::Flash(GetWorld(), Hit.ImpactPoint + Hit.ImpactNormal * 2.f,
         FLinearColor(1.f, 0.75f, 0.35f), 5.f, 0.3f, 60.f);
     AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
     if (!Target)
     {
         if (UMaterialInterface* Hole = LoadObject<UMaterialInterface>(nullptr,
             TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
-            UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 7.f, 7.f), Impact,
+            UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 7.f, 7.f), Hit.ImpactPoint,
                 (-Hit.ImpactNormal).Rotation(), 12.f);
         return;
     }
+    // One damage call per pellet that hits (R6). The shot carries the item's stock damage type path (card damage_type); the target reads it
+    // while the damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded. No crits, element or
+    // target resistances yet. Momentum = ray direction x the type's InstantHitMomentum x 100.
+    ShotDamageTypeInFlight = Bullet.DamageType;
+    ShotMomentumInFlight = Bullet.Direction * Bullet.MomentumLength;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %d pellet %d hits %s (damage %.2f, damage type %s)"), Bullet.ShotId, Bullet.Pellet,
+        *Target->GetName(), Bullet.Damage, ShotDamageTypeInFlight.IsEmpty() ? TEXT("None") : *ShotDamageTypeInFlight);
+    if (Bullet.ShotId == LastPress.Id && LastPress.LandedAt.IsValidIndex(Bullet.Pellet))
     {
-        // Evaluated item-card damage (tools/weapon_stats.py); no crits, element
-        // or target resistances yet.
-        const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
-        // The shot carries the item's stock damage type path (card damage_type); the target reads it while the
-        // damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded.
-        ShotDamageTypeInFlight = Weapon ? Weapon->DamageType : FString();
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s (damage type %s)"), Weapon ? *Weapon->Id : TEXT("-"),
-            *Target->GetName(), ShotDamageTypeInFlight.IsEmpty() ? TEXT("None") : *ShotDamageTypeInFlight);
-        const float Now = GetWorld()->GetTimeSeconds();
-        const float Damage = Weapon ? ShotDamage(*Weapon, Now) : 0.f;
-        if (Weapon && Damage != Weapon->Damage)
-            UE_LOG(LogTemp, Display, TEXT("OpenWillow shot damage %.2f (card %.2f, weapon damage scale +%.3f running)"), Damage, Weapon->Damage, WeaponDamageScaleAt(Now));
-        UGameplayStatics::ApplyPointDamage(Target, Damage, Direction, Hit,
-            GetController(), this, UDamageType::StaticClass());
-        ShotDamageTypeInFlight.Reset();
-        TargetHitAt = GetWorld()->GetTimeSeconds();
+        LastPress.LandedAt[Bullet.Pellet] = Now;
+        ++LastPress.DamageCalls;
     }
+    UGameplayStatics::ApplyPointDamage(Target, Bullet.Damage, Bullet.Direction, Hit, GetController(), this, UDamageType::StaticClass());
+    ShotDamageTypeInFlight.Reset();
+    ShotMomentumInFlight = FVector::ZeroVector;
+    TargetHitAt = Now;
 }
 bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
 {

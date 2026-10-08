@@ -27,6 +27,47 @@ bool ReadVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, FVect
     return true;
 }
 
+// The card's "firing" block (tools/weapon_refresh_firing.py). Pattern offsets arrive in degrees.
+bool ReadRotator(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, FRotator& Out)
+{
+    FVector Degrees;
+    if (!ReadVector(Object, Field, Degrees)) return false;
+    Out = FRotator(Degrees.X, Degrees.Y, Degrees.Z);
+    return true;
+}
+
+void ReadFiringMode(const TSharedPtr<FJsonObject>& Block, FOpenWillowFiringMode& Mode)
+{
+    Block->TryGetStringField(TEXT("mode"), Mode.Mode);
+    Block->TryGetStringField(TEXT("fire_type"), Mode.FireType);
+    Block->TryGetStringField(TEXT("tracer"), Mode.Tracer);
+    Block->TryGetStringField(TEXT("projectile_definition"), Mode.ProjectileDefinition);
+    Mode.Speed = Number(Block, TEXT("speed"), 0);
+    Mode.AirFriction = Number(Block, TEXT("air_friction"), 0);
+    Mode.NumRicochets = int32(Number(Block, TEXT("num_ricochets"), 0));
+    ReadVector(Block, TEXT("trace_extent"), Mode.TraceExtent);
+    Block->TryGetBoolField(TEXT("suppress_weapon_spread"), Mode.bSuppressWeaponSpread);
+    Block->TryGetBoolField(TEXT("fire_randomly_from_pattern"), Mode.bFireRandomlyFromPattern);
+    Block->TryGetBoolField(TEXT("scale_pattern_by_weapon_spread"), Mode.bScalePatternByWeaponSpread);
+    Block->TryGetBoolField(TEXT("reset_pattern_after_each_shot"), Mode.bResetPatternAfterEachShot);
+    Mode.BasePatternSpread = Number(Block, TEXT("base_pattern_spread"), 1);
+    Mode.MinPatternScale = Number(Block, TEXT("min_pattern_scale"), 0);
+    Mode.InstantHitMomentum = Number(Block, TEXT("instant_hit_momentum"), Mode.InstantHitMomentum);
+    const TArray<TSharedPtr<FJsonValue>>* Lines = nullptr;
+    if (!Block->TryGetArrayField(TEXT("pattern_lines"), Lines)) return;
+    for (const TSharedPtr<FJsonValue>& Value : *Lines)
+    {
+        const TSharedPtr<FJsonObject>* Entry = nullptr;
+        FOpenWillowPatternLine Line;
+        FString Kind;
+        if (!Value || !Value->TryGetObject(Entry) || !(*Entry)->TryGetStringField(TEXT("kind"), Kind)
+            || !ReadRotator(*Entry, TEXT("start"), Line.Start)) continue;
+        Line.bPoint = Kind != TEXT("rectangle");
+        if (!Line.bPoint && !ReadRotator(*Entry, TEXT("end"), Line.End)) continue;
+        Mode.Lines.Add(Line);
+    }
+}
+
 bool IsGearItemType(const FString& Type)
 {
     return Type == TEXT("shield") || Type == TEXT("grenade_mod")
@@ -144,6 +185,12 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
     (*Card)->TryGetStringField(TEXT("fun_stats"), Item.FunStats);
     if ((*Card)->TryGetNumberField(TEXT("projectiles"), Extra) && FMath::IsFinite(Extra) && Extra >= 1 && Extra <= 1000)
         Item.Projectiles = int32(Extra);
+    Item.ProjectileSpeed = Number(*Card, TEXT("projectile_speed"), 0);
+    if (const TSharedPtr<FJsonObject>* Firing = nullptr; (*Card)->TryGetObjectField(TEXT("firing"), Firing))
+    {
+        Item.bHasFiring = true;
+        ReadFiringMode(*Firing, Item.Firing);
+    }
     double StatusDps = 0, StatusChance = 0;
     if ((*Card)->TryGetNumberField(TEXT("status_dps"), StatusDps) && (*Card)->TryGetNumberField(TEXT("status_chance"), StatusChance)
         && FMath::IsFinite(StatusDps) && FMath::IsFinite(StatusChance) && StatusDps >= 0 && StatusChance >= 0)

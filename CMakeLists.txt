@@ -39,6 +39,7 @@ add_test(NAME kismet-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}
 add_test(NAME behavior-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/behavior_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME mission-script-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/mission_script_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME combat-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/combat_test.py $<TARGET_FILE:ow-package>)
+add_test(NAME weapon-refresh-firing-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_refresh_firing_test.py)
 if(OPENWILLOW_LZO)
   add_test(NAME container-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/package_test.py $<TARGET_FILE:ow-package> --compressed)
   add_test(NAME assets-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/assets_test.py $<TARGET_FILE:ow-package>)

@@ -15,6 +15,7 @@ AOpenWillowShotFx::AOpenWillowShotFx()
     PrimaryActorTick.bCanEverTick = true;
     Visual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FxVisual"));
     RootComponent = Visual;
+    Visual->SetMobility(EComponentMobility::Movable); // TracerFlight moves the actor
     Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Visual->SetCastShadow(false);
     Light = CreateDefaultSubobject<UPointLightComponent>(TEXT("FxLight"));
@@ -48,6 +49,15 @@ void AOpenWillowShotFx::Setup(UStaticMesh* Mesh, const FLinearColor& Color, floa
 void AOpenWillowShotFx::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    if (bFlying)
+    {
+        const float Run = FlightSpeed * (GetWorld()->GetTimeSeconds() - Born);
+        const float Head = FMath::Min(Run, FlightDistance);
+        const float Tail = FMath::Clamp(Run - FlightLength, 0.f, FlightDistance);
+        SetActorLocation(FlightStart + FlightDir * (Head + Tail) * 0.5f);
+        SetActorScale3D(FVector(GetActorScale3D().X, GetActorScale3D().Y, FMath::Max(Head - Tail, 0.01f) / 100.f));
+        return;
+    }
     const float Fade = 1.f - FMath::Clamp((GetWorld()->GetTimeSeconds() - Born) / Lifetime, 0.f, 1.f);
     if (Material) Material->SetScalarParameterValue(TEXT("Intensity"), StartIntensity * Fade);
     Light->SetIntensity(StartLight * Fade);
@@ -66,6 +76,27 @@ void AOpenWillowShotFx::Tracer(UWorld* World, const FVector& Start, const FVecto
     Fx->FinishSpawning(Pose);
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")),
         Color, 6.f, Life, 0.f);
+}
+
+void AOpenWillowShotFx::TracerFlight(UWorld* World, const FVector& Start, const FVector& End, float Speed, float Length,
+    const FLinearColor& Color, float Radius)
+{
+    const FVector Span = End - Start;
+    const float Distance = Span.Size();
+    if (!World || Distance < 1.f || Speed < 1.f) return;
+    const FVector Direction = Span / Distance;
+    const FTransform Pose(FRotationMatrix::MakeFromZ(Direction).Rotator(), Start, FVector(Radius / 50.f, Radius / 50.f, 0.0001f));
+    auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
+    Fx->FinishSpawning(Pose);
+    // The streak is gone once its tail has reached the end.
+    Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")),
+        Color, 6.f, (Distance + Length) / Speed, 0.f);
+    Fx->bFlying = true;
+    Fx->FlightStart = Start;
+    Fx->FlightDir = Direction;
+    Fx->FlightDistance = Distance;
+    Fx->FlightSpeed = Speed;
+    Fx->FlightLength = Length;
 }
 
 void AOpenWillowShotFx::Flash(UWorld* World, const FVector& Location, const FLinearColor& Color,

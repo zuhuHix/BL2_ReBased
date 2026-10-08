@@ -969,6 +969,62 @@ void UOpenWillowQuest::PressUse()
     }
 }
 
+// The firing-pattern rules of PROJECTILE_FIRING_PATTERNS_LIVE.md R3 on an invented weapon (no game data): sequential lines advance per pellet and wrap,
+// the scale is max(Spread / BasePatternSpread, MinPatternScale), a random pick stays on the lines, a rectangle line stays inside its corners.
+static bool PatternRulesHold()
+{
+    auto Point = [](float Yaw) { FOpenWillowPatternLine Line; Line.Start = FRotator(0.f, Yaw, 0.f); return Line; };
+    FOpenWillowWeaponItem Gun;
+    Gun.Firing.Lines = {Point(10.f), Point(20.f), Point(30.f), Point(40.f)};
+    Gun.Firing.bScalePatternByWeaponSpread = true;
+    Gun.Firing.BasePatternSpread = 2.f;
+    Gun.Firing.MinPatternScale = 0.5f;
+    bool bGood = true;
+    Gun.Spread = 2.f;   // ratio 1: the lines as they are
+    const float Expected[6] = {10.f, 20.f, 30.f, 40.f, 10.f, 20.f};
+    for (float Yaw : Expected) bGood &= FMath::IsNearlyEqual(AOpenWillowWalker::PatternOffset(Gun).Yaw, Yaw, 1.e-4f);
+    bGood &= Gun.NextFiringPatternIndex == 2;
+    Gun.NextFiringPatternIndex = 0;
+    Gun.Spread = 6.f;   // ratio 3
+    bGood &= FMath::IsNearlyEqual(AOpenWillowWalker::PatternOffset(Gun).Yaw, 30.f, 1.e-4f);
+    Gun.NextFiringPatternIndex = 0;
+    Gun.Spread = 0.2f;  // ratio 0.1, under the floor
+    bGood &= FMath::IsNearlyEqual(AOpenWillowWalker::PatternOffset(Gun).Yaw, 5.f, 1.e-4f);
+    Gun.Firing.bScalePatternByWeaponSpread = false;
+    Gun.Firing.bFireRandomlyFromPattern = true;
+    Gun.NextFiringPatternIndex = 0;
+    TSet<int32> Seen;
+    for (int32 Draw = 0; Draw < 200; ++Draw) Seen.Add(FMath::RoundToInt(AOpenWillowWalker::PatternOffset(Gun).Yaw / 10.f));
+    bGood &= Seen.Num() == 4 && Gun.NextFiringPatternIndex == 0;   // all four lines drawn, nothing outside them, no index advance
+    FOpenWillowPatternLine Rectangle = Point(-10.f);
+    Rectangle.bPoint = false;
+    Rectangle.End = FRotator(0.f, 10.f, 0.f);
+    Gun.Firing.Lines = {Rectangle};
+    float Low = 1000.f, High = -1000.f;
+    for (int32 Draw = 0; Draw < 200; ++Draw)
+    {
+        const float Yaw = AOpenWillowWalker::PatternOffset(Gun).Yaw;
+        Low = FMath::Min(Low, Yaw);
+        High = FMath::Max(High, Yaw);
+    }
+    return bGood && Low >= -10.f && High <= 10.f && High - Low > 10.f;
+}
+
+// The last press's pellets that reached a target: none arrives before its flight time (path length over speed) and each within a quarter second
+// of it (the bullet lands in the first tick at or after that time).
+static bool PelletsLandOnTime(const AOpenWillowWalker::FShotRecord& Last)
+{
+    bool bAny = false;
+    for (int32 Pellet = 0; Pellet < Last.LandedAt.Num(); ++Pellet)
+    {
+        if (Last.LandedAt[Pellet] < 0.f) continue;
+        bAny = true;
+        const float Delay = Last.LandedAt[Pellet] - Last.FiredAt;
+        if (Delay < Last.Flight[Pellet] - 1.e-4f || Delay > Last.Flight[Pellet] + 0.25f) return false;
+    }
+    return bAny;
+}
+
 void UOpenWillowQuest::Shot(const TCHAR* Name)
 {
     FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWQuest_%s.png"), Name), false, false);
@@ -1262,18 +1318,122 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 14: {
         if (TestWait < 0.5f) return;
-        const int32 Before = DummyShots;
-        Walker->FireOnce();
-        Check(DummyShots == Before + 1 && LastDummyDamageType == WrongType && Status() == 1
-            && Impl->ObjectiveState(Data.DummyObjective) == "Active", TEXT("wrong_element_shot_reaches_dummy_and_does_not_complete"));
+        // Bullets fly now (the press makes them, the damage arrives about distance / speed later), so the case fires, waits for the landing and
+        // checks (phases 0 and 1), then does the same with the equipped multi-pellet gun (phases 2 and 3).
+        if (ShotPhase == 0)
+        {
+            ShotsBefore = DummyShots;
+            Walker->FireOnce();
+            Check(DummyShots == ShotsBefore && Walker->BulletsInFlight() >= 1, TEXT("bullet_has_not_landed_in_the_pressing_frame"));
+            ShotPhase = 1;
+            return;
+        }
+        if (ShotPhase == 1)
+        {
+            if (Waiting(Walker->BulletsInFlight() == 0, 3.f)) return;
+            const FOpenWillowWeaponItem* Wrong = Walker->GetInventory()->ActiveWeapon();
+            const int32 Landed = DummyShots - ShotsBefore;
+            // Was "DummyShots == Before + 1": still exactly one damage call for a one-pellet gun; a multi-pellet gun makes one per pellet that hits.
+            Check((Wrong && Wrong->Projectiles > 1 ? Landed >= 1 : Landed == 1) && Landed == Walker->LastShot().DamageCalls && LastDummyDamageType == WrongType
+                && Status() == 1 && Impl->ObjectiveState(Data.DummyObjective) == "Active", TEXT("wrong_element_shot_reaches_dummy_and_does_not_complete"));
+            Check(PelletsLandOnTime(Walker->LastShot()), TEXT("wrong_element_bullet_lands_after_its_flight_time"));
+            // Test fixture: the slice shotgun is in the backpack and the weapon slots are full, so ready it into the first slot that holds neither the
+            // lent pistol nor the wrong-element gun (that gun goes back to the backpack, and back into its slot after the checks).
+            UOpenWillowInventory* Inventory = Walker->GetInventory();
+            const int32 Slots = Inventory->GetWeaponSlotsUnlocked();
+            for (int32 Slot = 0; Slot < Slots && ShotgunSlot == INDEX_NONE; ++Slot)
+            {
+                const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot);
+                if (!Item) { ShotgunSlot = Slot; break; }
+                if (Item->Id != MissionWeapon.Id && UOpenWillowInventory::StableId(*Item) != WrongId) { ShotgunSlot = Slot; DisplacedId = UOpenWillowInventory::StableId(*Item); }
+            }
+            for (const FOpenWillowWeaponItem& Item : Inventory->Items())
+                if (ShotgunId.IsEmpty() && Item.Projectiles > 1) ShotgunId = UOpenWillowInventory::StableId(Item);
+            const int32 Index = Inventory->FindItemIndexById(ShotgunId);
+            if (ShotgunSlot == INDEX_NONE || Index == INDEX_NONE || !Walker->EquipItem(Index, ShotgunSlot) || !Walker->DrawItemById(ShotgunId))
+            {
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST pellet gun fixture: slot %d, item %s (backpack index %d), level %d"), ShotgunSlot, *ShotgunId, Index, Walker->GetSkills()->GetLevel());
+                Fail(TEXT("no multi-pellet gun to ready for the pellet checks"));
+                return;
+            }
+            ShotPhase = 2;
+            TestWait = 0;
+            return;
+        }
+        if (ShotPhase == 2)
+        {
+            if (TestWait < 0.3f) return;
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            ShotsBefore = DummyShots;
+            MagazineBefore = Held ? UOpenWillowInventory::MagazineLeft(*Held) : 0;
+            Walker->FireOnce();
+            ShotPhase = 3;
+            TestWait = 0;
+            return;
+        }
+        if (Waiting(Walker->BulletsInFlight() == 0, 3.f)) return;
+        {
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            const AOpenWillowWalker::FShotRecord& Last = Walker->LastShot();
+            const int32 Pellets = Held ? Held->Projectiles : 0;
+            const int32 Landed = DummyShots - ShotsBefore;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST shotgun press: %d pellet(s), %d landed on the dummy, magazine %d -> %d"), Last.Directions.Num(), Landed,
+                MagazineBefore, Held ? UOpenWillowInventory::MagazineLeft(*Held) : 0);
+            Check(Held && Pellets > 1 && Last.Directions.Num() == Pellets && Last.Id > 0,
+                TEXT("multi_pellet_gun_fires_its_pellet_count_in_one_press"));
+            Check(Held && MagazineBefore - UOpenWillowInventory::MagazineLeft(*Held) == UOpenWillowInventory::ShotCostRounds(*Held),
+                TEXT("ammo_taken_once_per_press_not_per_pellet"));
+            // Each pellet leaves the aim by at most the pattern's reach plus half the weapon spread cone (a pattern offset and a cone offset add as
+            // rotators: the triangle inequality bounds the angle between the directions), and the pattern does spread the pellets.
+            float Bound = 0.f, Widest = 0.f;
+            if (Held)
+            {
+                const FOpenWillowFiringMode& Mode = Held->Firing;
+                const float Scale = Mode.bScalePatternByWeaponSpread && Mode.BasePatternSpread > 0.f
+                    ? FMath::Max(Held->Spread / Mode.BasePatternSpread, Mode.MinPatternScale) : 1.f;
+                float Reach = 0.f;
+                for (const FOpenWillowPatternLine& Line : Mode.Lines)
+                    Reach = FMath::Max(Reach, FMath::Max(FVector2D(Line.Start.Pitch, Line.Start.Yaw).Size(), FVector2D(Line.End.Pitch, Line.End.Yaw).Size()));
+                Bound = Reach * Scale + (Mode.bSuppressWeaponSpread ? 0.f : Held->Spread * 0.5f) + 0.01f;
+            }
+            bool bInside = Last.Directions.Num() > 0;
+            for (const FVector& Direction : Last.Directions)
+            {
+                const float Angle = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(Direction, Last.Aim), -1.f, 1.f)));
+                Widest = FMath::Max(Widest, Angle);
+                bInside &= Angle <= Bound;
+            }
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST shotgun pellets: widest %.2f deg from the aim, bound %.2f deg"), Widest, Bound);
+            Check(bInside && Widest > 0.1f, TEXT("pellet_directions_inside_pattern_and_cone_bounds"));
+            // One damage call per pellet that hit (the dummy's own TakeDamage count and the walker's ApplyPointDamage count agree), each with
+            // the card's per-pellet damage and the type momentum x 100.
+            Check(Landed >= 1 && Landed <= Pellets && Landed == Last.DamageCalls && Held && Last.Damage == Held->Damage,
+                TEXT("damage_called_once_per_pellet_that_hits"));
+            Check(Held && Last.MomentumLength > 0.f && FMath::IsNearlyEqual(Last.MomentumLength, Held->Firing.InstantHitMomentum * 100.f),
+                TEXT("shot_momentum_is_type_momentum_times_100"));
+            Check(PelletsLandOnTime(Last), TEXT("pellets_land_after_their_flight_time"));
+            Check(PatternRulesHold(), TEXT("firing_pattern_lines_sequential_scaled_random_rules"));
+            Shot(TEXT("3b_ShotgunPelletsLanded"));
+        }
+        ShotPhase = 0;
+        Walker->UnequipSlot(ShotgunSlot);
+        if (!DisplacedId.IsEmpty()) Walker->EquipItem(Walker->GetInventory()->FindItemIndexById(DisplacedId), ShotgunSlot);
         Walker->DrawItemById(MissionWeapon.Id);
         break;
     }
     case 15: {
         if (TestWait < 0.5f) return;
-        const int32 Before = DummyShots;
-        Walker->FireOnce();
-        Check(DummyShots == Before + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
+        if (ShotPhase == 0)
+        {
+            ShotsBefore = DummyShots;
+            Walker->FireOnce();
+            ShotPhase = 1;
+            return;
+        }
+        if (Waiting(Walker->BulletsInFlight() == 0, 3.f)) return;
+        ShotPhase = 0;
+        Check(DummyShots == ShotsBefore + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
+        Check(PelletsLandOnTime(Walker->LastShot()), TEXT("lent_pistol_bullet_lands_after_its_flight_time"));
         Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
         // The lent pistol is NOT taken back when the objective completes (observed in the real game: it stays in the inventory until the turn-in's
         // CompleteMission); it is removed at the turn-in (case 18). Meaning changed: this check was "mission_weapon_removed_after_objective".
