@@ -482,3 +482,16 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Pawn.IsEnemy / IsFriendly / IsNeutral / GetOpinion (ITargetable) | [NATIVE_COMBAT_GROUNDWORK.md](NATIVE_COMBAT_GROUNDWORK.md) | allegiance opinion rule (Enemy 0, Neutral 1, Friendly 2); WillowGameInfo.Killed event choice | UNVERIFIED | high (generic), low (WillowPawn override) | `src/combat_hit.cpp` (the generic four-step rule; the player is Neutral, as the data has no player allegiance: UNVERIFIED) |
 | AIComponent.HoldDemigod / ReleaseDemigod / DemigodOnHold | none (bodies unread) | Fire: the dummy's floor, `Behavior_AIHold` Type 3 (Demigod) run on its first pawn hit | UNVERIFIED | medium (script call), low (natives) | `src/combat_hit.cpp` (one list of reasons per component, release removes one matching reason, DemigodOnHold is any hold; the floor reproduces the live L5 row, see [COMBAT_HIT_CHAIN.md](COMBAT_HIT_CHAIN.md); release not tested live) |
 | WillowMind.GetAIDemigod / SetAIDemigod | none (bodies unread) | Fire: none seen on the hit path | UNVERIFIED | low | `src/combat_hit.cpp` (a plain flag per mind) |
+| AIComponent update cadence (target update then state update, UpdateRate gate; no script name) | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: AI decision cadence | UNVERIFIED | medium | |
+| AIComponent.FindTargets / GetTargets | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: candidates within SearchRadius (XY only) | UNVERIFIED | medium | |
+| AIComponent.ValidTarget | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: candidate filter (partly read) | UNVERIFIED | low | |
+| AIComponent.AddTarget / InitializeTargetRecord | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: MindTargetInfo creation | UNVERIFIED | medium | |
+| AIComponent.ShouldRemoveTarget / ForceRemoveTarget / TargetRemoved | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: target drop | UNVERIFIED | medium | |
+| AIComponent.CalcTargetInfo / PrioritizeTarget | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: knowledge + weighted-mean priority | UNVERIFIED | medium-high | |
+| AIComponent.ChooseBestTarget / SetTarget / TargetChanged / ValidCurrentTarget | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: CurrentTarget, Target_Acquired / Target_Lost, CanTargetIf / StopTargetingIf | UNVERIFIED | medium | |
+| Targeting_ShortRange iterators (WillowTI_Calc*, WillowTI_Prioritize*, TargetIterator*, TI_PrioritizeBonus) | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: meaning of every priority term | UNVERIFIED | medium | |
+| AI action-tree selection (priority/random/sequence nodes, CanRunIf, TimedStart, resources) | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: which Action_* runs | UNVERIFIED | medium | |
+| ActionSequence.TriggerBehavior | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h: the "Attack" behavior event | UNVERIFIED | medium | |
+| MeleeDefinition.MeleeAttack (radius volume, cone trace) | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h/S-e: melee hit volume and victim filter | UNVERIFIED | medium (radius), low (cone) | |
+| Melee hit application (allegiance, damage, knockback, behavior lists) | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | S-h/S-e: what a melee hit does | UNVERIFIED | medium | |
+| WillowPawn.BeginMeleeOverTime / EndMeleeOverTime | [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) | charge / grab melee entry points only | UNVERIFIED | low | |
