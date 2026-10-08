@@ -906,6 +906,18 @@ CombatSystem::HitReport MissionScript::hitFromPlayer(const ObjectPtr& victim, do
     return report;
 }
 
+// A blow by an AI attacker on the player (plan step S-e): the player's VM pawn is the victim, hit through its installed TakeDamage with the attacker's mind as the instigator.
+CombatSystem::Swing MissionScript::swingAtPlayer(const ObjectPtr& mind, const CombatSystem::Delivery& delivery) {
+    CombatSystem::Swing swing;
+    Value* pawn = runtime_.property(*controller_, "Pawn");
+    const Value savedPawn = pawn ? *pawn : Value();
+    const ObjectPtr victim = pawnFor(Toucher::Player);
+    if (pawn) *pawn = Value::makeObject(victim);
+    run([&] { swing = combat_->swing(mind, victim, delivery); });
+    if (pawn) *pawn = savedPawn;
+    return swing;
+}
+
 // A behavior whose ApplyBehaviorToContext is script, run on the VM with `context` as its ContextObject (the other arguments are left at
 // their defaults: the behaviors run here do not read them).
 void MissionScript::applyBehavior(ObjectPtr behavior, ObjectPtr context) {

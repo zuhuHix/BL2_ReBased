@@ -40,8 +40,7 @@ Stage order of GROUNDWORK 3.2, single precision: level difference (player table;
 of the instigator controller times `Received<Source>DamageModifier` of the victim's mind, plus the extra factors of the note), instigator damage type (`Instigated<Element>DamageModifier`), hit
 region and critical (region from the bone, default `DefaultHitRegion`; critical only for a `bCriticalHit` region and not for status-effect damage; the region's `DefaultImpactResponse` modifier),
 intrinsic armor (`/ (1 + 0.01 x IntrinsicArmor)`), damage surface (the region's surface type, flesh when it has none; the damage type's `Flesh/Armor/ShieldDamageModifier` evaluated with the
-instigator as context, times the victim's resistance attribute). The result goes into the summary's `FinalDamage`, which the script reads. Not implemented and noted in the events: the AI
-instigator's stage 1 (plan step S-e), the shield stage (a victim with a shield pool), backstab, first/last shot in clip, reflection, the hit-region cap, averted death, the protection timer.
+instigator as context, times the victim's resistance attribute). The result goes into the summary's `FinalDamage`, which the script reads. Stage 1 (the AI instigator's scale) is implemented since plan step S-e ([COMBAT_MELEE.md](COMBAT_MELEE.md)). Not implemented and noted in the events: the shield stage (a victim with a shield pool), backstab, first/last shot in clip, reflection, the hit-region cap, averted death, the protection timer.
 
 ## Results (all from `--combat-run` on the installed packages, level-8 Maya, no game launched in this lane)
 
@@ -75,5 +74,5 @@ lowered **before** the event, as DD 0.1 says and the live order shows. In the Fi
   state as the identity 1. A real initialisation is part of the stock spawn, not modelled.
 - The hit region comes from a bone; the live hits had bones (Hips, Neck, Head ...) and the VM driver sends none (the default region, a non-critical body region, both matched the live numbers). Critical
   regions (Head) are implemented but not compared with a live row.
-- `Behavior_Conditional` and the bullymong crawl (`CheckInjured`) are S-c; the AI instigator's stage 1 is S-e; shields are not modelled.
+- `Behavior_Conditional` and the bullymong crawl (`CheckInjured`) are S-c; the AI instigator's stage 1 is done (S-e, COMBAT_MELEE.md); shields are not modelled.
 - The host still takes the 20,000 stand-in health: the host swap (S-b2) is a separate lane and a maintainer decision.

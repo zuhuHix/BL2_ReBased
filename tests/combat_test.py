@@ -31,6 +31,11 @@ two rows (1: higher 1.5, lower 0.8; 2: higher 2.0, lower 0.5). Victim level 5. T
     by 2) = 7.5 truncated to 7;
   - one player at level 1 (difference 4, past the table's last row: the last row): 30 x 2.0 = 60; at level 5 (equal): 30.
 
+The melee swing (src/combat_hit.cpp, docs/verification/COMBAT_MELEE.md) is checked with a toy `MeleeDefinition` (Damage = constant 40 scaled by 1.5, source class
+WillowDmgSource_Melee, a toy damage type definition), a toy thrown rock (`Behavior_AIThrowProjectileAtTarget` whose ChildProjectileBaseValues carry a ProjectileDamage entry of
+constant 10 scaled by 1.5, and a `Behavior_CauseDamage` with DamageFormula scale 2.0 and source WillowDmgSource_Grenade) and a toy player pawn whose TakeDamage stores its Damage argument
+as the health: the step must read the damage from the data (60; 10 x 1.5 x 2.0 = 30), take the source class and the type from the definition, and refuse an object that delivers nothing.
+
 Checked (the numbers are the rules of the note):
   - spawn: the pool lands in slot 0 with GUID 0, the manager's Owner is the mind, GetHealth / GetMaxHealth answer the pool (40.5), HealthVar stays 11
     (not written while the pool is valid), HealthMaxVar becomes the pool's maximum (SetHealthResourcePoolDefinition);
@@ -397,12 +402,35 @@ def build_willowgame():
     for name in ('DamageTypeDef', 'ImpactDefinition', 'DirectHitObject'): T.prop('Object', pipeline, name)
     T.prop('Bool', pipeline, 'bCanHitFriendly')
     T.cls('WillowDmgSource_Bullet')
+    # the melee swing: the definition classes and their data, the damage sources, the toy damage type definition
+    T.cls('WillowDmgSource_Melee'), T.cls('WillowDmgSource_Grenade')
+    T.cls('DamageTypeDefinition')
+    melee = T.cls('MeleeDefinition')
+    T.prop('Struct', melee, 'Damage', type_ref=data_struct)
+    T.prop('Class', melee, 'DamageSource')
+    T.prop('Object', melee, 'DamageTypeDefinition')
+    throw = T.cls('Behavior_AIThrowProjectileAtTarget')
+    projectile_value = T.struct_(throw, 'ProjectileBaseValue')
+    T.prop('Object', projectile_value, 'Attribute')
+    T.prop('Struct', projectile_value, 'BaseValue', type_ref=data_struct)
+    T.array_of(throw, 'ChildProjectileBaseValues', 'Struct', projectile_value)
+    cause = T.cls('Behavior_CauseDamage')
+    T.prop('Struct', cause, 'DamageFormula', type_ref=data_struct)
+    T.prop('Class', cause, 'DamageSource')
+    T.prop('Object', cause, 'DamageTypeDefinition')
     player_controller = T.cls('WillowPlayerController', super_ref=controller)
     T.prop('Object', player_controller, 'PlayerReplicationInfo')
     last_exp = T.prop('Int', player_controller, 'LastExp')
     T.function(player_controller, 'ExpEarn', [('Int', 'Exp', 0), ('Byte', 'Source', 0), ('Byte', 'Type', 0)],
                lambda ids: (lambda a: (a.raw(0x0F), a.instance(last_exp), a.local(ids, 'Exp'), a.return_nothing(), a.end(), a)[5])(Asm()))
-    T.cls('WillowPlayerPawn', super_ref=pawn)
+    player_pawn = T.cls('WillowPlayerPawn', super_ref=pawn)
+
+    def player_take_damage(ids):      # SetHealth(Damage): the health is what arrived
+        a = Asm()
+        a.final(set_health, lambda: a.local(ids, 'Damage'))
+        a.return_nothing(); a.end(); return a
+    T.function(player_pawn, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
+                                           ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], player_take_damage)
     T.prop('Int', T.cls('WillowPlayerReplicationInfo', super_ref=actor), 'ExpLevel')
     return p
 
@@ -432,6 +460,23 @@ def build_pawns():
                  w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
     p.add_export(p.add_import_full('Class', willow, 'WillowDoomedPawn'), 'Pawn_Doomed',
                  w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
+    # the melee swing's data: a damage type definition, a melee definition, a thrown rock and its Behavior_CauseDamage, the ProjectileDamage attribute under a Projectile group
+    core = p.add_import_full('Package', 0, 'Core')
+    package_class = p.add_import_full('Class', core, 'Package')
+    type_definition = p.add_export(p.add_import_full('Class', willow, 'DamageTypeDefinition'), 'DamageType_Toy', w32(0) + none)
+    group = p.add_export(package_class, 'Projectile', w32(0) + none)
+    attribute = p.add_export(resource_class, 'ProjectileDamage', w32(0) + none, outer=group)
+
+    def data(name, constant, scale):
+        return t.struct_(name, 'AttributeInitializationData', t.float('BaseValueConstant', constant) + t.float('BaseValueScaleConstant', scale) + none)
+    p.add_export(p.add_import_full('Class', willow, 'MeleeDefinition'), 'Melee_Toy',
+                 w32(0) + data('Damage', 40.0, 1.5) + t.tag('DamageSource', 'ClassProperty', 4, w32(p.add_import_full('Class', willow, 'WillowDmgSource_Melee')))
+                 + t.obj('DamageTypeDefinition', type_definition) + none)
+    p.add_export(p.add_import_full('Class', willow, 'Behavior_AIThrowProjectileAtTarget'), 'Throw_Toy',
+                 w32(0) + t.array('ChildProjectileBaseValues', 1, t.obj('Attribute', attribute) + data('BaseValue', 10.0, 1.5) + none) + none)
+    p.add_export(p.add_import_full('Class', willow, 'Behavior_CauseDamage'), 'Cause_Toy',
+                 w32(0) + data('DamageFormula', 0.0, 2.0) + t.tag('DamageSource', 'ClassProperty', 4, w32(p.add_import_full('Class', willow, 'WillowDmgSource_Grenade')))
+                 + t.obj('DamageTypeDefinition', type_definition) + none)
     return p
 
 
@@ -592,6 +637,22 @@ with tempfile.TemporaryDirectory() as folder:
     check('xp: equal levels leave the share unscaled: 30', credits == ['AwardCombatExperienceToParty player_level=5 victim_level=5 ExpEarn(30, 1, 1)'], credits)
     got, hit, credits = kill('player:4', 'hit:0:10::Bullet')
     check('xp: a game with no player count (0) is outside the table: bonus 0, weight 1', credits == ['AwardCombatExperienceToParty player_level=4 victim_level=5 ExpEarn(45, 1, 1)'], credits)
+
+    # ---- the melee swing: the damage from the data (the attacker's mind as the source), the definition's source and type, delivered to the player with no hit volume
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Toy:4', 'player:8', 'swing:0:Melee_Toy', 'swing:0:Throw_Toy:Cause_Toy', 'swing:0:Throw_Toy', 'swing:0:Pawn_Toy', 'swing:0:NoSuchObject')
+    rows = got['steps']
+    swing, rock = rows[2]['result'], rows[3]['result']
+    check('swing: the toy player pawn takes 40 x 1.5 = 60 from the definition (health, arrival and the hit report agree)', near(swing.get('arrival', -1), 60) and near(swing['hit']['arriving'], 60)
+          and near(swing['hit']['health_after'], 60) and near(got['rows'].get('arrival.Toy.L4', -1), 60), (swing, got['rows']))
+    check('swing: the damage source class and the damage type come from the definition', swing.get('source') == 'WillowDmgSource_Melee' and swing.get('damage_type', '').endswith('DamageType_Toy'), swing)
+    check("swing: the event list says the fixture always connects and the chain ran with the definition's source", 'always connects' in swing['hit']['events'][0]
+          and any('source=WillowDmgSource_Melee' in e for e in swing['hit']['events']), swing['hit']['events'])
+    check('swing: a thrown rock is the ProjectileDamage entry (10 x 1.5) scaled by the cause-damage formula (2.0) = 30, source from the Behavior_CauseDamage',
+          near(rock.get('arrival', -1), 30) and rock.get('source') == 'WillowDmgSource_Grenade' and near(rock['hit']['health_after'], 30) and near(got['rows'].get('arrival.Toy.L4#2', -1), 30), (rock, got['rows']))
+    check('swing: a throw without its Behavior_CauseDamage, an object that delivers nothing and a missing object are refused with a reason',
+          len(got['errors']) == 3 and 'needs the projectile' in got['errors'][0] and 'neither a MeleeDefinition' in got['errors'][1] and 'has no NoSuchObject' in got['errors'][2] and code != 0, (code, got['errors']))
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Toy:4', 'swing:0:Melee_Toy')
+    check('swing: with no player to hit the step is refused', code != 0 and 'needs a player' in got['errors'][0], got['errors'])
 
 if failures:
     print(f'{len(failures)} combat check(s) failed:')

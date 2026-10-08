@@ -21,6 +21,18 @@ const Kind kinds[] = {
     {"ranged", "Ice_Dynamic", "GD_PrimalBeast_Ranged.Character.Pawn_PrimalBeast_Ranged"},
     {"baby", "Ice_Dynamic", "GD_PrimalBeastBaby.Character.Pawn_PrimalBeastBaby"},
 };
+// What a swing step can name instead of a definition path (the stock bullymong data of Ice_Dynamic): the melee definitions, and the Slinger's thrown rock as the throw
+// behavior plus the projectile's Behavior_CauseDamage. The path of the throw is the one of the Slinger's first throw animation (UNVERIFIED that it is the one used live).
+struct Swing { const char* name; const char* definition; const char* causeDamage; };
+const Swing swings[] = {
+    {"melee", "GD_PrimalBeastShared.Melee.MeleeDef_PrimalBeast_Melee", nullptr},
+    {"leap", "GD_PrimalBeastShared.Melee.MeleeDef_PrimalBeast_RadiusLeap", nullptr},
+    {"badass", "GD_PrimalBeastShared.Melee.MeleeDef_PrimalBeast_RadiusBadass", nullptr},
+    {"grab", "GD_PrimalBeastShared.Melee.MeleeDef_PrimalBeast_MeleeGrabBaby", nullptr},
+    {"charge", "GD_PrimalBeastShared.Melee.MeleeDef_Melee_Charge", nullptr},
+    {"slinger", "GD_PrimalBeastShared.Anims.AnimMotion_SlingerThrow1.BehaviorProviderDefinition_43.Behavior_AIThrowProjectileAtTarget_142",
+     "GD_PrimalBeastShared.Projectiles.Projectile_IceRock.BehaviorProviderDefinition_0.Behavior_CauseDamage_13"},
+};
 // Where the per-level base of the enemy health formula sits (the same data is in the packages that hold an enemy: Sanctuary_Dynamic, Ice_Dynamic).
 constexpr const char* baseHealthPath = "GD_Balance_HealthAndDamage.HealthAndDamage.Init_BaseEnemyHealth";
 
@@ -269,6 +281,34 @@ void Run::apply(const std::string& step) {
             const bool on = parts.at(3) == "on";
             if (!on && parts.at(3) != "off") throw RuntimeError("combat-run: sequence:<pawn>:<name>:on|off");
             result = std::string("{\"changed\":") + (providerFor(spawned.enemy.pawn).setSequenceEnabled(parts.at(2), on) ? "true" : "false") + "}";
+        } else if (verb == "swing") {
+            // swing:<attacker>:<kind | definition path>[:<cause damage path>]: one blow of pawn n at the player (Maya's VM pawn when the run has a maya step, else player 0; plan step S-e, a fixture: it always connects). The definition is
+            // a kind of the table above, or the path of a MeleeDefinition (or of a Behavior_AIThrowProjectileAtTarget with the projectile's Behavior_CauseDamage as the third part) in the
+            // attacker's package. The damage is evaluated with the attacker's mind, then goes through the player's stock TakeDamage with the mind as the instigator. Rows
+            // arrival.<class>.L<level> (the damage as it arrives) and ratio.<class>.L<level> (what reached the player's health over the arrival).
+            if (parts.size() < 3 || parts.size() > 4) throw RuntimeError("combat-run: swing:<attacker>:<kind or definition path>[:<cause damage path>]");
+            if (!script_ && players_.empty()) throw RuntimeError("combat-run: a swing needs a player to hit (the step maya:<level>, Maya's VM pawn, or player:<level>)");
+            Spawned& attacker = pawn(parts.at(1));
+            std::string definition = parts[2], causeDamage = parts.size() == 4 ? parts[3] : "";
+            for (const Swing& kind : swings)
+                if (definition == kind.name) { definition = kind.definition; causeDamage = kind.causeDamage ? kind.causeDamage : ""; }
+            const auto package = runtime_.package(attacker.package);
+            const auto instantiate = [&](const std::string& path) {
+                const int32_t index = runtime_.findExport(*package, path);
+                if (index <= 0) throw RuntimeError("combat-run: " + attacker.package + " has no " + path);
+                return runtime_.instantiateExport(package, index, 4);
+            };
+            const auto delivery = combat_.deliveryOf(instantiate(definition), causeDamage.empty() ? nullptr : instantiate(causeDamage));
+            const auto swing = script_ ? script_->swingAtPlayer(attacker.enemy.mind, delivery) : combat_.swing(attacker.enemy.mind, players_[0].pawn, delivery);
+            const std::string id = attacker.rowClass + ".L" + std::to_string(attacker.level);
+            row("arrival." + id, swing.arrival);
+            if (swing.arrival > 0) row("ratio." + id, swing.hit.applied / swing.arrival);
+            std::ostringstream out;
+            out << "{\"definition\":" << quote(delivery.what) << ",\"source\":" << quote(swing.source) << ",\"damage_type\":" << quote(swing.damageType)
+                << ",\"arrival\":" << number(swing.arrival) << ",\"applied\":" << number(swing.hit.applied) << ",\"ratio\":" << number(swing.arrival > 0 ? swing.hit.applied / swing.arrival : 0)
+                << ",\"shield_damage\":" << number(swing.hit.shieldDamage) << ",\"health_lost\":" << number(swing.hit.healthBefore - swing.hit.healthAfter)
+                << ",\"hit\":" << hitJson(swing.hit) << ",\"player\":" << (script_ ? playerJson() : "null") << "}";
+            result = out.str();
         } else if (verb == "hit") {
             // hit:<pawn>:<damage>:<damage type definition path>[:<source>] by player 0; source is a short name (Pistol), a class name or a class path.
             if (parts.size() < 4 || parts.size() > 5) throw RuntimeError("combat-run: hit:<pawn>:<damage>:<damage type path>[:<source>]");

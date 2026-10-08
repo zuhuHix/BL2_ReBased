@@ -120,6 +120,9 @@ bool CombatSystem::isPlayerController(const ObjectPtr& object) {
 // the PlayerReplicationInfo's ExpLevel, an AI pawn its own ExpLevel (the Mind answers for its pawn).
 int CombatSystem::levelOf(const ObjectPtr& actor) {
     if (!actor) return 0;
+    AttributeContext ai;                                     // an AI pawn, or the mind that controls one (the instigator of a bullymong's melee), answers with its pawn's level
+    if (!isPlayerController(actor) && describe(actor, ai) && ai.pawn)
+        if (const Value* level = runtime_.property(*ai.pawn, "ExpLevel")) return int(level->integer());
     ObjectPtr current = actor;
     if (const Value* controller = runtime_.property(*current, "Controller"); isObject(controller) && !isObject(runtime_.property(*current, "MyWillowMind")))
         current = controller->o;                                         // a player pawn answers through its controller
@@ -336,8 +339,9 @@ void CombatSystem::bindHitNatives() {
 // WillowDamagePipeline.AdjustDamage(out IncomingDamage, out DamageSeverityPercent, DamagedActor, DamageInstigator, HitLocation, DamageSource, out HitMomentum,
 // out HitInfo) returning the summary. NATIVE_COMBAT_GROUNDWORK.md section 3.2's stage order; every stage is UNVERIFIED unless a live row confirms it. Written
 // here: the stages a player hit on an AI pawn can reach (level difference, damage source, instigator damage type, hit region and crit, intrinsic armor,
-// damage surface x element). Left out and said so in the events: the AI instigator's scale (stage 1), backstab, first/last shot, reflection, the shield
-// stage (a victim with a shield), the hit-region cap, averted death and the protection timer (player victims). The result goes into the summary's
+// damage surface x element) and, for an AI instigator's blow on the player (plan step S-e), the AI damage scale of stage 1. Left out and said so in the events:
+// the AI weapon scales, backstab, first/last shot, reflection, the shield stage (a victim with a shield), the hit-region cap, averted death and the protection
+// timer (player victims). The result goes into the summary's
 // FinalDamage (the script that called us reads it from there); the out arguments are not written (the live call showed them unset).
 Value CombatSystem::adjustDamage(NativeCall& c) {
     Object& pipeline = *c.self;
@@ -348,6 +352,9 @@ Value CombatSystem::adjustDamage(NativeCall& c) {
     float damage = float(c.in(0).number());
     const auto store = [&summary](const char* field, float value) { if (Value* slot = summary.field(field)) *slot = Value::makeFloat(value); };
     const auto removed = [&](const char* field, float before, float after) { store(field, before - after); };
+    const auto once = [this](const std::string& key, const std::string& text) {
+        if (!missing_[key]) { missing_[key] = true; logEvent("note: " + text); }
+    };
 
     // Setup: the victim's health before, the hit's source kind.
     Function* getHealth = victim ? runtime_.findMethod(victim->cls, "GetHealth") : nullptr;
@@ -368,9 +375,21 @@ Value CombatSystem::adjustDamage(NativeCall& c) {
     const Value* victimController = victim ? runtime_.property(*victim, "Controller") : nullptr;
     const ObjectPtr victimMind = isObject(victimController) ? victimController->o : nullptr;
 
-    // 1. AI damage scale: only for an AI instigator (not a player controller); not written (plan step S-e).
-    if (instigator && !playerInstigator) logEvent("note: AdjustDamage stage 1 (AI damage scale) for an AI instigator is not implemented");
-    store("AIDamageScaleReduction", 0.f);
+    // 1. AI damage scale (plan step S-e): only for an AI instigator (not a player controller). The globals definition's GlobalAIDamageScale, evaluated with the
+    // instigator as the context source, multiplies the damage; the weapon scales that bullet and rocket damage from an AI weapon also takes
+    // (GlobalAIWeaponDamageScale and the per-weapon-type ones) are not implemented and said so. The pawn "with a player's arms" exception of the note is not modelled.
+    {
+        const float before = damage;
+        if (instigator && !playerInstigator) {
+            const Value* scale = runtime_.property(*globals(), "GlobalAIDamageScale");
+            if (scale) damage *= float(evaluateFor(*scale, instigator));
+            else logEvent("note: the globals definition has no GlobalAIDamageScale (stage 1 read as 1)");
+            if (kind == SourceKind::Bullet || kind == SourceKind::Rocket)
+                once("ai weapon scale", "AdjustDamage stage 1: the AI weapon scales of bullet and rocket damage are not implemented");
+        }
+        removed("AIDamageScaleReduction", before, damage);
+        if (instigator && !playerInstigator) logEvent("AdjustDamage AI damage scale=" + number(before > 0 ? damage / before : 0));
+    }
 
     // 2. Level difference: with an instigating controller and a pawn victim. Equal levels 1; else |difference| (clamped to the table length) selects the entry,
     // the higher-level attacker takes HigherLevelAttackerDmgScale and the lower-level one LowerLevelAttackerDmgScale; the player table for a player attacker,
@@ -480,14 +499,13 @@ Value CombatSystem::adjustDamage(NativeCall& c) {
 
     // 12 to 14: the hit-region cap (a region with bTrackDamage), averted death (a victim whose PlayerAvertDeathChance is above 0) and the protection timer
     // (a player victim) are not implemented; each is said once per object.
-    const auto once = [this](const std::string& key, const std::string& text) {
-        if (!missing_[key]) { missing_[key] = true; logEvent("note: " + text); }
-    };
     if (region)
         if (const Value* tracked = runtime_.property(*region, "bTrackDamage"); tracked && tracked->truth())
             once("bTrackDamage " + pathOf(region), "AdjustDamage hit-region cap (bTrackDamage) is not implemented for " + pathOf(region));
-    if (victim && attribute(*victim, "PlayerAvertDeathChance", 0.f) > 0.f) once("averted", "AdjustDamage averted death is not implemented");
-    if (isPlayerController(victimMind)) once("protection", "AdjustDamage protection timer for a player victim is not implemented");
+    if (victim && attribute(*victim, "PlayerAvertDeathChance", 0.f) > 0.f)
+        once("averted", "AdjustDamage averted death is not implemented (the victim's PlayerAvertDeathChance is above 0)");
+    if (isPlayerController(victimMind) && instigator && !playerInstigator)
+        once("protection", "AdjustDamage protection timer (stage 15: a player victim hit by an AI) is not implemented; it only acts on a hit that would take health below half of the maximum");
 
     // Tail: FinalDamage is what reaches health; the severity is left to the caller's script (it sets it from the result).
     store("FinalDamage", damage);
@@ -533,12 +551,16 @@ bool CombatSystem::demigod(const ObjectPtr& pawn) {
 }
 
 CombatSystem::HitReport CombatSystem::hit(const ObjectPtr& victim, const ObjectPtr& instigator, double damage, const std::string& damageTypePath, Class* source) {
+    return hitWithType(victim, instigator, damage, damageTypePath.empty() ? nullptr : stockObject(damageTypePath, victim->resourcePackage), source);
+}
+
+CombatSystem::HitReport CombatSystem::hitWithType(const ObjectPtr& victim, const ObjectPtr& instigator, double damage, const ObjectPtr& damageType, Class* source) {
     HitReport report;
     const size_t mark = events_.size();
+    const std::string damageTypePath = pathOf(damageType);
     Function* take = runtime_.findMethod(victim->cls, "TakeDamage");
     Function* getHealth = runtime_.findMethod(victim->cls, "GetHealth");
     if (!take || !getHealth) throw RuntimeError("combat hit: the victim's class has no TakeDamage / GetHealth");
-    const ObjectPtr damageType = damageTypePath.empty() ? nullptr : stockObject(damageTypePath, victim->resourcePackage);
     report.healthBefore = runtime_.callFromNative(*getHealth, victim).number();
     report.demigodBefore = demigod(victim);
     report.arriving = damage;
@@ -599,6 +621,71 @@ CombatSystem::HitReport CombatSystem::hit(const ObjectPtr& victim, const ObjectP
     report.demigodAfter = demigod(victim);
     report.events.assign(events_.begin() + long(mark), events_.end());
     return report;
+}
+
+// ---- a melee swing as a fixture (plan step S-e, docs/verification/COMBAT_MELEE.md) ----
+
+namespace {
+// A class-typed property of a data object: a Class value, or (as the data reader leaves a class reference to another package) an object stand-in for the class export.
+Class* classValue(Runtime& runtime, const Value* value) {
+    if (!value) return nullptr;
+    if (value->kind == Value::Kind::Class) return value->cls;
+    if (isObject(value) && value->o->resourcePackage) return runtime.classAt(value->o->resourcePackage, value->o->resourceIndex);
+    return nullptr;
+}
+}
+
+// What a definition delivers when it hits (docs/verification/NATIVE_AI_MELEE.md, "Hit application"): the damage data, the damage type definition and the damage source
+// class. A MeleeDefinition carries all three itself (Damage, DamageTypeDefinition, DamageSource). A thrown projectile (Behavior_AIThrowProjectileAtTarget) carries the
+// damage as the ProjectileDamage entry of its ChildProjectileBaseValues, and the projectile's Behavior_CauseDamage `causeDamage` names the type and the source (its damage
+// formula reads that same attribute). Read from the data; the natives' bodies are unread, UNVERIFIED.
+CombatSystem::Delivery CombatSystem::deliveryOf(const ObjectPtr& definition, const ObjectPtr& causeDamage) {
+    if (!definition) throw RuntimeError("combat swing: no definition");
+    Delivery delivery;
+    delivery.what = pathOf(definition);
+    Object* holder = definition.get();
+    if (definition->cls->isChildOf(runtime_.findClass("WillowGame.MeleeDefinition"))) {
+        delivery.damage = required(runtime_, *definition, "Damage");
+        if (const Value* named = runtime_.property(*definition, "DamageTypeDefinitionOverride"); named && named->kind == Value::Kind::Name && !named->s.empty() && named->s != "None")
+            logEvent("note: " + delivery.what + " names a damage type override (" + named->s + "), which is not read; DamageTypeDefinition is used");
+    } else if (definition->cls->isChildOf(runtime_.findClass("WillowGame.Behavior_AIThrowProjectileAtTarget"))) {
+        if (!causeDamage) throw RuntimeError("combat swing: a thrown projectile needs the projectile's Behavior_CauseDamage (the second definition)");
+        bool found = false;
+        for (const Value& entry : required(runtime_, *definition, "ChildProjectileBaseValues").elements()) {
+            const Value* attribute = entry.field("Attribute");
+            const std::string path = attribute && isObject(attribute) ? pathOf(attribute->o) : "";
+            if (path.size() < 17 || path.compare(path.size() - 17, 17, ".ProjectileDamage") != 0) continue;
+            delivery.damage = *entry.field("BaseValue");
+            found = true;
+            break;
+        }
+        if (!found) throw RuntimeError("combat swing: " + delivery.what + " has no ProjectileDamage entry");
+        const Value& formula = required(runtime_, *causeDamage, "DamageFormula");          // BaseValueAttribute ProjectileDamage, constant 0: only its scale is applied
+        if (formula.field("BaseValueConstant")->number() != 0)
+            logEvent("note: " + pathOf(causeDamage) + " has a damage formula constant, which is not applied");
+        if (Value* scale = delivery.damage.field("BaseValueScaleConstant"))
+            *scale = Value::makeFloat(float(scale->number()) * float(formula.field("BaseValueScaleConstant")->number()));
+        delivery.what += " + " + pathOf(causeDamage);
+        holder = causeDamage.get();
+    } else {
+        throw RuntimeError("combat swing: " + delivery.what + " is neither a MeleeDefinition nor a Behavior_AIThrowProjectileAtTarget");
+    }
+    delivery.source = classValue(runtime_, runtime_.property(*holder, "DamageSource"));
+    if (!delivery.source) throw RuntimeError("combat swing: " + delivery.what + " names no damage source class");
+    delivery.damageType = load(required(runtime_, *holder, "DamageTypeDefinition"));
+    return delivery;
+}
+
+// The attacker's blow lands (the fixture: no hit volume, no cone, no allegiance test, no momentum; it always connects): the damage evaluated with the attacker's mind as
+// the context source (NATIVE_AI_MELEE.md, "Damage amount"), delivered to `victim` through the stock TakeDamage chain with the mind as the instigator.
+CombatSystem::Swing CombatSystem::swing(const ObjectPtr& mind, const ObjectPtr& victim, const Delivery& delivery) {
+    Swing result;
+    result.arrival = double(evaluateFor(delivery.damage, mind));
+    result.source = delivery.source ? delivery.source->name : "";
+    result.damageType = pathOf(delivery.damageType);
+    result.hit = hitWithType(victim, mind, result.arrival, delivery.damageType, delivery.source);
+    result.hit.events.insert(result.hit.events.begin(), "swing " + delivery.what + " arrival=" + number(result.arrival) + " (fixture: always connects, no hit volume)");
+    return result;
 }
 
 } // namespace vm

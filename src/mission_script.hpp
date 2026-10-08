@@ -171,6 +171,8 @@ public:
     ObjectPtr playerPawnObject() { return pawnFor(Toucher::Player); }
     int currentGameStage() const { return gameStage(); }
     CombatSystem::HitReport hitFromPlayer(const ObjectPtr& victim, double damage, const std::string& damageTypePath, const std::string& sourceClass);
+    // A blow by an AI attacker's mind on the player's VM pawn (plan step S-e): CombatSystem::swing under the bridge's script guard, with the controller's Pawn linked for the call.
+    CombatSystem::Swing swingAtPlayer(const ObjectPtr& mind, const CombatSystem::Delivery& delivery);
 
     // The controller's record of the mission (MissionPlaythroughs[0].MissionList[...].Status), -1 when it has none.
     int controllerStatus();

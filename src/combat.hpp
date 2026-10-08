@@ -83,6 +83,22 @@ public:
     // looked up in Startup and the victim's package) and the damage source class `source`. Runs the victim's script TakeDamage; the owner's script guard
     // (the slice's run()) wraps the call, this unit only runs the chain.
     HitReport hit(const ObjectPtr& victim, const ObjectPtr& instigator, double damage, const std::string& damageTypePath, Class* source);
+    // The same with the damage type definition as an object (a melee definition's own) instead of a stock path.
+    HitReport hitWithType(const ObjectPtr& victim, const ObjectPtr& instigator, double damage, const ObjectPtr& damageType, Class* source);
+    // ---- a melee swing as a fixture (plan step S-e, src/combat_hit.cpp, docs/verification/COMBAT_MELEE.md) ----
+    // What a definition delivers: the damage data (an AttributeInitializationData), the damage type definition and the damage source class. deliveryOf reads them from a
+    // MeleeDefinition, or from a Behavior_AIThrowProjectileAtTarget plus the projectile's Behavior_CauseDamage `causeDamage`. Throws RuntimeError for any other object.
+    struct Delivery {
+        Value damage;
+        ObjectPtr damageType;
+        Class* source = nullptr;
+        std::string what;
+    };
+    Delivery deliveryOf(const ObjectPtr& definition, const ObjectPtr& causeDamage = nullptr);
+    // One blow: the damage evaluated with `mind` (the attacker's WillowMind) as the context source, then delivered to `victim` through its installed TakeDamage with `mind` as the
+    // instigator. The fixture always connects: no hit volume or cone, no allegiance test, no knockback, no OnHitEnemy behaviors.
+    struct Swing { double arrival = 0; std::string source, damageType; HitReport hit; };
+    Swing swing(const ObjectPtr& mind, const ObjectPtr& victim, const Delivery& delivery);
     // The object a hold behavior (the installed Behavior_AIHold script) is applied to for `context`: the live game applies it to the pawn, and the script asks
     // the context for IAIInterface, which the VM's class tables list for the mind (GearboxMind) and not for WillowAIPawn, so an AI pawn is answered by its mind
     // (the object that owns the AIComponent anyway). A stand-in for the table gap, UNVERIFIED; any other object is returned as it is.
@@ -205,6 +221,10 @@ private:
 //                                    damage type definition is a stock object path (""= None), the source a WillowDmgSource_* class (Pistol, Grenade,
 //                                    StatusEffect...; default Bullet). Rows hit.<class>.L<level>.<k>.arriving / .applied / .health_after; the step's
 //                                    result lists health before and after, whether the pawn was demigod, and the natives of the chain in the order they ran.
+//   swing:<n>:<kind | definition path>[:<cause damage path>]   one blow of pawn n at the player (Maya's VM pawn in a run with a maya step, else player 0), plan step S-e: kind
+//                                    melee | leap | badass | grab | charge | slinger, or the path of a MeleeDefinition (or of a Behavior_AIThrowProjectileAtTarget and the projectile's
+//                                    Behavior_CauseDamage) in pawn n's package. The damage is evaluated with pawn n's mind and delivered through the player's stock TakeDamage with the mind as
+//                                    the instigator; it always connects. Rows arrival.<class>.L<level> and ratio.<class>.L<level> (what reached the player's health over the arrival).
 // Every step that names a pawn reports its state afterwards ("state": the natives' answers, HealthVar and HealthMaxVar, the HealthPool reference, the occupied slots).
 // `failed`, when given, is set when a step threw or the report logged an error.
 std::string combatRun(Runtime& runtime, const std::vector<std::string>& steps, bool* failed = nullptr);
