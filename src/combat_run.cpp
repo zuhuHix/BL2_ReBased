@@ -2,6 +2,8 @@
 #include "behavior.hpp"
 #include "mission_script.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +35,12 @@ const Swing swings[] = {
     {"slinger", "GD_PrimalBeastShared.Anims.AnimMotion_SlingerThrow1.BehaviorProviderDefinition_43.Behavior_AIThrowProjectileAtTarget_142",
      "GD_PrimalBeastShared.Projectiles.Projectile_IceRock.BehaviorProviderDefinition_0.Behavior_CauseDamage_13"},
 };
+// Where the game times a step of the player's down state by an animation or a station's Kismet, neither of which the VM has, the bleed step plays the stock script's callback
+// itself after the delay the live game showed (COMBAT_GOLDEN_TRACE.md section D steps 11 to 16; UNVERIFIED stand-ins, not derived from data): the injured special move's end
+// (SwitchToSidearm), the injured-death animation's end (InjuredDeathAnimDone) and the respawn dialog (ShowRespawnDialog, scheduled by the station on the live path; its caller
+// was not traced). The death camera is not one of them: the game's camera asks the pawn for its view every frame (CalcInjuredDeadCamera), and the installed script ends the
+// camera itself after the delays of its data, so the bleed step makes that same call each frame while the camera is active.
+constexpr double specialMoveEnd = 2.28, ragdollDelay = 0.84, respawnDialogDelay = 11.8;
 // Where the per-level base of the enemy health formula sits (the same data is in the packages that hold an enemy: Sanctuary_Dynamic, Ice_Dynamic).
 constexpr const char* baseHealthPath = "GD_Balance_HealthAndDamage.HealthAndDamage.Init_BaseEnemyHealth";
 
@@ -100,6 +108,18 @@ private:
     std::map<const BehaviorProvider*, size_t> reported_;       // how many trace lines of a death-chain provider the hit's event list already has
     std::map<const Object*, std::unique_ptr<BehaviorProvider>> deathProviders_;   // the provider of each pawn's death definition (BodyClassDeathDefinition), made when it raises its first event
     std::map<std::string, int> hitCounts_;
+    // The player's down state (plan step S-f): the injury being played, with the times of what the callbacks above were played at. Everything about it is read from the
+    // pawn's script variables; the number counts the injuries of the run.
+    struct Episode {
+        bool active = false, targeted = false, ragdolled = false, cameraEnded = false;
+        int number = 0;
+        double downAt = 0, targetedAt = -1, deadAt = -1, total = 0, successive = 0;
+    };
+    Episode episode_;
+    int injuries_ = 0;
+    double respawnAt_ = -1;       // when the respawn happened, while its dialog (the fee) is still due
+    struct Fee { std::string injury; int64_t cash = 0, charged = 0; };
+    std::vector<Fee> feeRows_;     // one per respawn dialog: the cash before and what ShowRespawnDialog charged
     std::map<std::string, double> rows_;
     // A kill's row (kill.<class>.L<level>.p<player level>[.<tag>]): the award CalculateExperiencePointsForKill returned and the experience the player's pool gained.
     struct KillRow { std::string id; double award = 0; bool credited = false; int credit = 0; };
@@ -120,6 +140,11 @@ private:
     void raiseTakeDamage(const CombatSystem::TakeDamageEvent& event);
     std::string hitJson(const CombatSystem::HitReport& report);
     std::string playerJson();
+    Value callState(const ObjectPtr& self, const char* name, std::vector<Value> args = {});
+    double worldNow();
+    void trackDown();
+    void bleed(double seconds, double dt);
+    std::string downJson();
     std::string stateJson(size_t index);
     std::string pawnJson(size_t index);
 };
@@ -241,6 +266,8 @@ void Run::apply(const std::string& step) {
                 }
                 script_->setPlayerExperience(level, experience);
             }
+            combat_.preparePlayerPawn(script_->playerPawnObject());
+            for (const char* name : {"DigistructCoordinatedEffect", "DigistructCoordinatedEffectKillVolume"}) script_->loadGlobalsReference(name);   // the death camera's end time
             result = "{\"player\":" + playerJson() + "}";
         } else if (verb == "tick") {
             // tick:<seconds>: game time passes and the experience pool's per-frame update runs (ApplyExpPointsToExpLevel: the installed ExpLevelUp while the pool has reached the
@@ -281,6 +308,24 @@ void Run::apply(const std::string& step) {
             const bool on = parts.at(3) == "on";
             if (!on && parts.at(3) != "off") throw RuntimeError("combat-run: sequence:<pawn>:<name>:on|off");
             result = std::string("{\"changed\":") + (providerFor(spawned.enemy.pawn).setSequenceEnabled(parts.at(2), on) ? "true" : "false") + "}";
+        } else if (verb == "cash") {
+            // cash:<amount>: the player's credits on hand (a state input: the respawn fee is a share of it).
+            if (!script_) throw RuntimeError("combat-run: cash needs the mission bridge (the step maya:<level>)");
+            combat_.setCurrencyOnHand(*runtime_.property(*script_->playerController(), "PlayerReplicationInfo")->o, 0, std::stoll(parts.at(1)));
+        } else if (verb == "bleed") {
+            // bleed:<seconds>[:<dt>] (plan step S-f): game time passes in frames of dt seconds (default 1/60, about the live frame time) and, while Maya's pawn is in the injured state, her installed script Tick
+            // runs each frame; the callbacks the game's animations, death camera and station time are played at the live delays (the constants above). Rows down.* per injury.
+            if (!script_) throw RuntimeError("combat-run: bleed needs the mission bridge (the step maya:<level>)");
+            if (parts.size() < 2 || parts.size() > 3) throw RuntimeError("combat-run: bleed:<seconds>[:<dt>]");
+            const size_t logBefore = runtime_.log.size();
+            bleed(std::stod(parts.at(1)), parts.size() == 3 ? std::stod(parts[2]) : 1.0 / 60.0);
+            std::ostringstream out;
+            out << "{\"time\":" << number(worldNow()) << ",\"down\":" << downJson() << ",\"player\":" << playerJson() << ",\"log\":[";
+            bool first = true;
+            for (size_t i = logBefore; i < runtime_.log.size(); ++i)
+                if (runtime_.log[i].rfind("UNIMPLEMENTED ", 0) != 0) { out << (first ? "" : ",") << quote(runtime_.log[i]); first = false; }
+            out << "]}";
+            result = out.str();
         } else if (verb == "swing") {
             // swing:<attacker>:<kind | definition path>[:<cause damage path>]: one blow of pawn n at the player (Maya's VM pawn when the run has a maya step, else player 0; plan step S-e, a fixture: it always connects). The definition is
             // a kind of the table above, or the path of a MeleeDefinition (or of a Behavior_AIThrowProjectileAtTarget with the projectile's Behavior_CauseDamage as the third part) in the
@@ -307,7 +352,9 @@ void Run::apply(const std::string& step) {
             out << "{\"definition\":" << quote(delivery.what) << ",\"source\":" << quote(swing.source) << ",\"damage_type\":" << quote(swing.damageType)
                 << ",\"arrival\":" << number(swing.arrival) << ",\"applied\":" << number(swing.hit.applied) << ",\"ratio\":" << number(swing.arrival > 0 ? swing.hit.applied / swing.arrival : 0)
                 << ",\"shield_damage\":" << number(swing.hit.shieldDamage) << ",\"health_lost\":" << number(swing.hit.healthBefore - swing.hit.healthAfter)
-                << ",\"hit\":" << hitJson(swing.hit) << ",\"player\":" << (script_ ? playerJson() : "null") << "}";
+                << ",\"hit\":" << hitJson(swing.hit) << ",\"player\":" << (script_ ? playerJson() : "null");
+            if (script_) { trackDown(); if (episode_.active) out << ",\"down\":" << downJson(); }
+            out << "}";
             result = out.str();
         } else if (verb == "hit") {
             // hit:<pawn>:<damage>:<damage type definition path>[:<source>] by player 0; source is a short name (Pistol), a class name or a class path.
@@ -336,8 +383,13 @@ void Run::apply(const std::string& step) {
             row(id + ".applied", report.applied);
             row(id + ".health_after", report.healthAfter);
             result = hitJson(report);
+            if (script_ && (episode_.active || injuries_ > 0)) { trackDown(); result.pop_back(); result += ",\"down\":" + downJson() + "}"; }
         } else {
             throw RuntimeError("combat-run: unknown step " + step);
+        }
+        if (script_) {          // a script run the bridge's guard caught (an exception inside the VM): the step failed
+            for (const std::string& error : script_->errors) errors_.push_back(step + ": " + error);
+            script_->errors.clear();
         }
     } catch (const std::exception& error) {
         errors_.push_back(step + ": " + error.what());
@@ -346,7 +398,7 @@ void Run::apply(const std::string& step) {
     // A step that names a pawn also reports that pawn's state after it.
     try {
         const auto parts = split(step);
-        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && parts[0] != "maya" && parts[0] != "tick" && parts[0] != "killtag" && parts[0] != "players" && std::stoul(parts[1]) < pawns_.size()) {
+        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && parts[0] != "maya" && parts[0] != "tick" && parts[0] != "killtag" && parts[0] != "players" && parts[0] != "bleed" && parts[0] != "cash" && std::stoul(parts[1]) < pawns_.size()) {
             result.pop_back();
             result += (result.size() > 1 ? "," : "") + std::string("\"state\":{") + stateJson(std::stoul(parts[1])) + "}}";
         }
@@ -509,6 +561,107 @@ std::string Run::playerJson() {
     return out.str();
 }
 
+// A script method by name, dispatched on the object's class and its current state (the state's function wins, as the game's own calls resolve it).
+Value Run::callState(const ObjectPtr& self, const char* name, std::vector<Value> args) {
+    Function* function = runtime_.findMethod(self->cls, name, self->state);
+    if (!function) throw RuntimeError(std::string("combat-run: ") + self->cls->name + " has no function " + name + " in state " + self->state);
+    return runtime_.call(*function, self, std::move(args), nullptr);
+}
+
+double Run::worldNow() {
+    const Value* time = runtime_.property(*combat_.world(), "TimeSeconds");
+    return time ? time->number() : 0.0;
+}
+
+namespace {
+bool isInjuredState(const ObjectPtr& pawn) {
+    std::string state = pawn->state;
+    for (char& ch : state) ch = char(std::tolower((unsigned char)ch));
+    return state == "injured";
+}
+double numberOf(Runtime& runtime, Object& object, const char* name) {
+    const Value* value = runtime.property(object, name);
+    return value ? value->number() : 0.0;
+}
+}
+
+// Starts the record of an injury when Maya's pawn has just entered the injured state (BeginState ran inside the hit), reading what the script worked out.
+void Run::trackDown() {
+    const ObjectPtr pawn = script_->playerPawnObject();
+    if (episode_.active || !isInjuredState(pawn)) return;
+    episode_ = Episode();
+    episode_.active = true;
+    episode_.number = ++injuries_;
+    episode_.downAt = worldNow();
+    episode_.total = numberOf(runtime_, *pawn, "TotalBleedoutTime");
+    episode_.successive = numberOf(runtime_, *pawn, "NumSuccessiveInjuries");
+    row("down.total." + std::to_string(episode_.number), episode_.total);
+    row("down.successive." + std::to_string(episode_.number), episode_.successive);
+}
+
+// Game time in frames; see the bleed step. One frame: time moves on, then, in the injured state, the callbacks that are due and the script Tick.
+void Run::bleed(double seconds, double dt) {
+    if (dt <= 0) throw RuntimeError("combat-run: bleed: the frame time must be positive");
+    for (long frame = 0, frames = std::lround(seconds / dt); frame < frames; ++frame) {
+        script_->advanceTime(dt);
+        const double now = worldNow();
+        trackDown();
+        const std::string n = std::to_string(episode_.number);
+        script_->withPlayerPawn([&](const ObjectPtr& pawn) {
+            if (episode_.active && isInjuredState(pawn)) {
+                if (!episode_.targeted && now - episode_.downAt >= specialMoveEnd - 1e-9) {
+                    callState(pawn, "SwitchToSidearm");
+                    episode_.targeted = true;
+                    episode_.targetedAt = now;
+                }
+                callState(pawn, "Tick", {Value::makeFloat(dt)});
+                if (episode_.deadAt < 0 && numberOf(runtime_, *pawn, "InjuredDeadState") >= 1) {
+                    episode_.deadAt = now;
+                    // The script's own timer at that frame: the bleed-out total plus the part of the last frame past it (the game's frames were about 1/60 s).
+                    row("down.bleed_over." + n, numberOf(runtime_, *pawn, "flInjuredTargetedTime") - episode_.total);
+                    if (episode_.targetedAt >= 0) row("down.bleed_wall." + n, now - episode_.targetedAt);
+                }
+                if (episode_.deadAt >= 0 && !episode_.ragdolled && isInjuredState(pawn) && now - episode_.deadAt >= ragdollDelay - 1e-9) {
+                    callState(pawn, "InjuredDeathAnimDone");
+                    episode_.ragdolled = true;
+                }
+                if (episode_.deadAt >= 0 && !episode_.cameraEnded && isInjuredState(pawn) && numberOf(runtime_, *pawn, "bInjuredDeadCameraActive") != 0) {
+                    // The camera's per-frame view request (out: location, rotation, field of view); the script ends the camera (EndInjuredDeadCamera -> InjuredRespawn) when its time is up.
+                    callState(pawn, "CalcInjuredDeadCamera", {Value::makeFloat(dt), Value(), Value(), Value()});
+                    if (numberOf(runtime_, *pawn, "bInjuredDeadCameraActive") == 0) {
+                        episode_.cameraEnded = true;
+                        row("down.camera." + n, now - episode_.deadAt);
+                    }
+                }
+            }
+            if (episode_.active && !isInjuredState(pawn)) {         // the state ended inside this frame: a second wind, or the respawn
+                episode_.active = false;
+                const double ratio = call(pawn, "GetHealth").number() / std::max(1e-9, call(pawn, "GetMaxHealth").number());
+                row(std::string(episode_.cameraEnded ? "down.respawn_health." : "down.second_wind_health.") + n, ratio);
+                if (episode_.cameraEnded) respawnAt_ = now;
+            }
+            if (respawnAt_ >= 0 && now - respawnAt_ >= respawnDialogDelay - 1e-9) {
+                respawnAt_ = -1;
+                Object& info = *runtime_.property(*script_->playerController(), "PlayerReplicationInfo")->o;
+                const int64_t cash = combat_.currencyOnHand(info, 0);
+                callState(pawn, "ShowRespawnDialog");
+                feeRows_.push_back({n, cash, cash - combat_.currencyOnHand(info, 0)});
+            }
+        });
+    }
+}
+
+std::string Run::downJson() {
+    const ObjectPtr pawn = script_->playerPawnObject();
+    std::ostringstream out;
+    out << "{\"state\":" << quote(pawn->state) << ",\"injury\":" << episode_.number << ",\"injured_state\":" << number(numberOf(runtime_, *pawn, "InjuredState"))
+        << ",\"dead_state\":" << number(numberOf(runtime_, *pawn, "InjuredDeadState")) << ",\"second_wind_reason\":" << number(numberOf(runtime_, *pawn, "SecondWindReason"))
+        << ",\"total_bleedout\":" << number(numberOf(runtime_, *pawn, "TotalBleedoutTime")) << ",\"successive\":" << number(numberOf(runtime_, *pawn, "NumSuccessiveInjuries"))
+        << ",\"targeted_time\":" << number(numberOf(runtime_, *pawn, "flInjuredTargetedTime")) << ",\"last_injury_time\":" << number(numberOf(runtime_, *pawn, "LastInjuryTime"))
+        << ",\"since_down\":" << number(worldNow() - episode_.downAt) << "}";
+    return out.str();
+}
+
 // A pawn's state: the natives' answers, the plain variables, the health reference and every occupied slot of the mind's manager.
 std::string Run::stateJson(size_t index) {
     Spawned& spawned = pawns_[index];
@@ -566,6 +719,10 @@ std::string Run::report(double elapsed) {
         out << (first ? "" : ",") << quote(id) << ":{\"award\":" << number(kill.award);
         if (kill.credited) out << ",\"credit\":" << kill.credit;
         out << "}";
+        first = false;
+    }
+    for (const Fee& fee : feeRows_) {
+        out << (first ? "" : ",") << quote("down.fee." + fee.injury) << ":{\"cash\":" << fee.cash << ",\"fee\":" << fee.charged << "}";
         first = false;
     }
     out << "},\"pawns\":[";

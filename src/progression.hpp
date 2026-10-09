@@ -15,6 +15,9 @@ struct AttributeContext {
     // The player's replication info (NATIVE_ATTRIBUTES.md section 5: a controller source resolves to its PlayerReplicationInfo). Null: an
     // attribute whose context chain asks for it does not resolve (a condition on it is false, a base value keeps its constant).
     ObjectPtr replicationInfo;
+    // The player controller itself (a ControllerAttributeContextResolver resolves to it; the respawn fee's cost, GlobalsDefinition.TeleportCost, is evaluated with it, UNVERIFIED reading
+    // of the resolver, whose body is unread). Null: an attribute whose context chain asks for it does not resolve.
+    ObjectPtr controller;
     // The pool of a resource definition (NATIVE_ATTRIBUTES.md section 5: ResourcePoolAttributeContextResolver, the resource's owner's pool for it).
     // Empty or returning null: the attribute does not resolve.
     std::function<ObjectPtr(const Value& resource)> resourcePool;

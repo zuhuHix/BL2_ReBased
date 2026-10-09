@@ -11,7 +11,12 @@ is stored here: the live values are read from the ignored dumps under local/real
     python tools/verify_combat_pawn.py --list                    # row ids and expected values
     python tools/verify_combat_pawn.py --self-test               # formulas and PASS/FAIL/MISSING logic on invented inputs
 
-VM JSON schema: {"rows": {<row id>: <number>, ...}}. A kill row takes {"award": <number>, "credit": <number>}. A row that is
+The down rows (plan step S-f, docs/verification/COMBAT_DOWN_RESPAWN.md) are about the stock injured state running on the VM, and are only measured by --vm of the six-injury run
+whose step list is in that document: bleed-out total and its successive-injury counter per injury (12 s, 12 s, 8 s for the counter read 0, 1, 2 after the injury began, as
+lane L5b saw them), the overshoot of the script's timer past the total (a frame), the length of the death camera (5.76 s), the health share after a second wind (0.25) and after a respawn (1.0), and the respawn fee
+(0.07 of the cash, rounded half up, at most the cash; 190, 177, 165 on 2,715, 2,534, 2,357 as lane L3 saw them). --live has no source for them (MISSING).
+
+VM JSON schema: {"rows": {<row id>: <number>, ...}}. A kill row takes {"award": <number>, "credit": <number>}; a fee row {"cash": <number>, "fee": <number>}. A row that is
 absent is reported MISSING and does not fail the run. Only FAIL makes the exit code 1.
 
 --live reads the hits from local/realgame/L6/q7_rows.json when it exists (it carries the Defense Boost count per hit), else from
@@ -38,6 +43,24 @@ XP_MULT = {"TargetDummy": 0.5, "PrimalBeastAdult": 1.25, "PrimalBeast": 0.75, "P
 LOWER_LEVEL_EXP_SCALE = [0.9, 0.7, 0.4, 0.15, 0.05, 0.01]  # index |d| - 1; the last entry also covers larger differences
 
 MELEE, GRENADE = "WillowDmgSource_Melee", "WillowDmgSource_Grenade"
+
+# The player's down state as docs/verification/COMBAT_GOLDEN_TRACE.md section D and the L5b question-6 table record it (live values of lanes L3 and L5b).
+BLEED_BASE = 12.0            # TotalBleedoutTime of an injury with no successive reduction (Maya, one player)
+CAMERA_LENGTH = 5.76         # s from the dead state to the end of the death camera (live: 5.761, 5.765, 5.762)
+CAMERA_TOLERANCE = 0.05      # s: one frame of the run plus the live spread
+BLEED_OVERSHOOT = 0.05       # s: how far the script's timer may be past the total in the frame that ends the bleed-out (the live bleed-outs were 12.00 to 12.04 s)
+SECOND_WIND_HEALTH = 0.25    # share of maximum health after a second wind (136.97 = 0.25 x 547.874)
+RESPAWN_HEALTH = 1.0
+FEE_RATE = 0.07
+
+
+def bleed_total(successive):
+    """The observed bleed-out for the counter `successive` as read after the injury began (live: 0, 1, 2 gave 12, 12, 8): total x (1 - (N - 1) / 3), no cut below N = 1."""
+    return BLEED_BASE * (1 - max(successive - 1, 0) / 3)
+
+
+def respawn_fee(cash):
+    return min(cash, math.floor(FEE_RATE * cash + 0.5))
 
 
 def base_health(level):
@@ -76,6 +99,8 @@ class Row:
     player_level: int = None
     source: str = None             # arrival: melee or grenade; kill: "L5b" (live dumps) or "L3" (not read here)
     boosts: int = 0               # ratio: Defense Boost count the hit must carry (0 = unboosted)
+    value: float = None           # down rows: the expected number (down_count, down_total, down_share)
+    cash: int = None              # down_fee rows: the cash the scenario gives the player before the fee (None: not fixed by the scenario)
 
 
 ROWS = [
@@ -110,6 +135,20 @@ ROWS = [
     Row("kill.PrimalBeastBaby.L6.p10.L3", "kill", "PrimalBeastBaby", 6, 10, source="L3"),
 ]
 
+# The six injuries of the S-f run (COMBAT_DOWN_RESPAWN.md): 1 to 3 are first injuries ending in a respawn (cash 2,715, 2,534, 2,357), 4 to 6 follow each other within the 30 s
+# window with a second wind between them, so the counter read after each is 0, 1, 2 and the third bleeds out in 8 s.
+SUCCESSIVE = {1: 0, 2: 0, 3: 0, 4: 0, 5: 1, 6: 2}
+for _k, _n in SUCCESSIVE.items():
+    ROWS.append(Row(f"down.successive.{_k}", "down_count", value=_n))
+    ROWS.append(Row(f"down.total.{_k}", "down_total", value=bleed_total(_n)))
+for _k in (1, 2, 3, 6):
+    ROWS.append(Row(f"down.bleed_over.{_k}", "down_over"))
+    ROWS.append(Row(f"down.camera.{_k}", "down_camera"))
+    ROWS.append(Row(f"down.respawn_health.{_k}", "down_share", value=RESPAWN_HEALTH))
+    ROWS.append(Row(f"down.fee.{_k}", "down_fee", cash={1: 2715, 2: 2534, 3: 2357}.get(_k)))
+for _k in (4, 5):
+    ROWS.append(Row(f"down.second_wind_health.{_k}", "down_share", value=SECOND_WIND_HEALTH))
+
 
 def expected(row):
     if row.kind == "health":
@@ -120,6 +159,14 @@ def expected(row):
         return arrival(DAMAGE_MULT[row.cls], row.level)
     if row.kind == "ratio":
         return applied_ratio(row.level) / (1 + 0.5 * row.boosts)
+    if row.kind in ("down_count", "down_total", "down_share"):
+        return row.value
+    if row.kind == "down_over":
+        return 0.0
+    if row.kind == "down_camera":
+        return CAMERA_LENGTH
+    if row.kind == "down_fee":
+        return {"cash": row.cash, "fee": respawn_fee(row.cash)} if row.cash is not None else {"fee": "0.07 x cash, rounded half up, at most the cash"}
     award = kill_award(XP_MULT[row.cls], row.level)
     return {"award": award, "credit": kill_credit(award, row.level, row.player_level)}
 
@@ -170,6 +217,8 @@ def close(measured, exp):
 
 
 def missing_reason(row):
+    if row.kind.startswith("down"):
+        return "a VM row of the S-f run; no live dump source"
     if row.source == "L3":
         return "no live source (the L3 dump is not read by this comparator)"
     if row.kind == "ratio":
@@ -182,6 +231,19 @@ def check_row(row, measured):
     exp = expected(row)
     if measured is None:
         return "MISSING", exp, missing_reason(row)
+    if row.kind == "down_fee":
+        if not isinstance(measured, dict) or "cash" not in measured or "fee" not in measured:
+            return "MISSING", exp, "fee row needs both cash and fee"
+        if row.cash is None:
+            exp = {"cash": measured["cash"], "fee": respawn_fee(measured["cash"])}
+        ok = measured["cash"] == exp["cash"] and measured["fee"] == exp["fee"]
+        return ("PASS" if ok else "FAIL"), exp, ""
+    if row.kind == "down_over":
+        return ("PASS" if -1e-6 <= float(measured) <= BLEED_OVERSHOOT else "FAIL"), f"0 to {BLEED_OVERSHOOT:g} s", ""
+    if row.kind == "down_count":
+        return ("PASS" if float(measured) == exp else "FAIL"), exp, ""
+    if row.kind == "down_camera":
+        return ("PASS" if abs(float(measured) - CAMERA_LENGTH) <= CAMERA_TOLERANCE else "FAIL"), f"{CAMERA_LENGTH:g} +- {CAMERA_TOLERANCE:g} s", ""
     if isinstance(exp, dict):
         if not isinstance(measured, dict) or not all(k in measured for k in exp):
             return "MISSING", exp, "kill row needs both award and credit"
@@ -192,6 +254,8 @@ def check_row(row, measured):
 
 
 def fmt(value):
+    if isinstance(value, dict) and "fee" in value:
+        return (f"cash {value['cash']} " if "cash" in value else "") + f"fee {value['fee']}"
     if isinstance(value, dict):
         return "award " + fmt(value["award"]) + " credit " + fmt(value["credit"])
     if isinstance(value, float):
@@ -308,6 +372,34 @@ def self_test():
     expect("vm absent MISSING", statuses["health.PrimalBeastAdult.L7"], "MISSING")
     expect("vm kill both keys PASS", statuses["kill.PrimalBeast.L6.p10"], "PASS")
     expect("vm partial kill MISSING", check_row(next(r for r in ROWS if r.id == "kill.PrimalBeastBaby.L6.p10.b"), {"award": 50.0})[0], "MISSING")
+    # The down rows (invented VM values; the live numbers they stand for are in the constants above).
+    row_of = {row.id: row for row in ROWS}
+    expect("bleed_total N=0,1,2,3", [bleed_total(n) for n in (0, 1, 2, 3)], [12.0, 12.0, 8.0, 4.0])
+    expect("respawn_fee rounds half up", [respawn_fee(c) for c in (2715, 2534, 2357, 50, 10)], [190, 177, 165, 4, 1])
+    expect("respawn_fee never above the cash", respawn_fee(0), 0)
+    expect("down rows listed", sum(1 for r in ROWS if r.kind.startswith("down")), 12 + 4 + 4 + 4 + 4 + 2)
+    expect("down total 3rd (counter 2) is 8", expected(row_of["down.total.6"]), 8.0)
+    down_vm = {"down.total.1": 12.0, "down.total.5": 8.0, "down.successive.5": 1, "down.successive.6": 1, "down.bleed_over.1": 0.0334,
+               "down.bleed_over.2": 0.08, "down.second_wind_health.4": 0.25, "down.respawn_health.1": 0.99,
+               "down.fee.1": {"cash": 2715, "fee": 190}, "down.fee.2": {"cash": 2534, "fee": 178}, "down.fee.3": {"cash": 2000, "fee": 165},
+               "down.fee.6": {"cash": 2192, "fee": 153}}
+    down_status = {rid: check_row(row_of[rid], down_vm.get(rid))[0] for rid in row_of if rid.startswith("down.")}
+    expect("down total PASS", down_status["down.total.1"], "PASS")
+    expect("down total with the old 12/8/4 reading FAIL", down_status["down.total.5"], "FAIL")
+    expect("down counter PASS", down_status["down.successive.5"], "PASS")
+    expect("down counter off by one FAIL", down_status["down.successive.6"], "FAIL")
+    expect("down overshoot within a frame PASS", down_status["down.bleed_over.1"], "PASS")
+    expect("down overshoot of a frame and a half FAIL", down_status["down.bleed_over.2"], "FAIL")
+    expect("down camera within the band PASS", check_row(row_of["down.camera.1"], 5.80)[0], "PASS")
+    expect("down camera of the old 0.77 s (effect duration unread) FAIL", check_row(row_of["down.camera.2"], 0.7667)[0], "FAIL")
+    expect("down second wind share PASS", down_status["down.second_wind_health.4"], "PASS")
+    expect("down second wind absent MISSING", down_status["down.second_wind_health.5"], "MISSING")
+    expect("down respawn share 0.99 FAIL", down_status["down.respawn_health.1"], "FAIL")
+    expect("down fee PASS", down_status["down.fee.1"], "PASS")
+    expect("down fee off by one FAIL", down_status["down.fee.2"], "FAIL")
+    expect("down fee on the wrong cash FAIL", down_status["down.fee.3"], "FAIL")
+    expect("down fee by the rule when the scenario fixes no cash PASS", down_status["down.fee.6"], "PASS")
+    expect("down fee half row MISSING", check_row(row_of["down.fee.1"], {"cash": 2715})[0], "MISSING")
     for failure in failures: print("self-test FAIL: " + failure)
     print("self-test " + ("FAILED" if failures else "passed"))
     return 1 if failures else 0

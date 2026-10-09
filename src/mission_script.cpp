@@ -50,6 +50,7 @@ MissionScript::MissionScript(Runtime& runtime, MissionSystem& mission) : runtime
     // player's controller is the one context source it does not know.
     combat_ = std::make_unique<CombatSystem>(runtime, evaluator_, world_);
     combat_->setContextProvider([this](const Value& source) { return attributeContext(source); });
+    combat_->setInjuredDefinitionProvider([this] { return injuredDefinition(); });
     // One playthrough with an empty mission list (the script indexes MissionPlaythroughs[GetCurrentPlaythrough()]).
     Value& playthroughs = required(runtime, *controller_, "MissionPlaythroughs");
     playthroughs = Value::makeArray();
@@ -918,6 +919,23 @@ CombatSystem::Swing MissionScript::swingAtPlayer(const ObjectPtr& mind, const Co
     return swing;
 }
 
+void MissionScript::withPlayerPawn(const std::function<void(const ObjectPtr&)>& body) {
+    Value* pawn = runtime_.property(*controller_, "Pawn");
+    const Value savedPawn = pawn ? *pawn : Value();
+    const ObjectPtr victim = pawnFor(Toucher::Player);
+    if (pawn) *pawn = Value::makeObject(victim);
+    run([&] { body(victim); });
+    if (pawn) *pawn = savedPawn;
+}
+
+// The injured definition the player's class names (NATIVE_DAMAGE_DEATH.md section 10.1): a reference into the class's package, loaded as the other stock data is.
+ObjectPtr MissionScript::injuredDefinition() {
+    const ObjectPtr cls = playerClass();
+    const Value* reference = cls ? runtime_.property(*cls, "CharacterInjuredDefinition") : nullptr;
+    if (!reference || reference->kind != Value::Kind::Object || !reference->o) return nullptr;
+    return loadRef(*reference);
+}
+
 // A behavior whose ApplyBehaviorToContext is script, run on the VM with `context` as its ContextObject (the other arguments are left at
 // their defaults: the behaviors run here do not read them).
 void MissionScript::applyBehavior(ObjectPtr behavior, ObjectPtr context) {
@@ -1000,7 +1018,7 @@ AttributeContext MissionScript::attributeContext(const Value& source) {
     AttributeContext context;
     context.playThroughCount = playThroughCount_;
     context.resourcePool = [this](const Value& resource) { return poolFor(resource); };
-    if (source.kind == Value::Kind::Object && source.o == controller_) context.replicationInfo = pri_;
+    if (source.kind == Value::Kind::Object && source.o == controller_) { context.replicationInfo = pri_; context.controller = controller_; }
     else if (source.kind == Value::Kind::Object && source.o) notImplemented("EvaluateInitializationData: a context source other than the player controller");
     return context;
 }
@@ -1410,6 +1428,13 @@ ObjectPtr MissionScript::globalsDefinition() {
         if (index > 0) globalsDefinition_ = runtime_.instantiateExport(package, index, 4);
     }
     return globalsDefinition_;
+}
+
+void MissionScript::loadGlobalsReference(const char* property) {
+    const ObjectPtr definition = globalsDefinition();
+    Value* reference = definition ? runtime_.property(*definition, property) : nullptr;
+    if (reference && reference->kind == Value::Kind::Object && reference->o && reference->o->props.empty() && reference->o->resourcePackage)
+        *reference = Value::makeObject(loadRef(*reference));
 }
 
 // PlayerInteractionDistance (NATIVE_USE_INTERACTION.md, UNVERIFIED): how long the use ray is; read from the data, 0 when absent.

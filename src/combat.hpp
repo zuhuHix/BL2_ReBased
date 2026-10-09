@@ -126,6 +126,17 @@ public:
     ObjectPtr built(const Value& reference) { return load(reference); }
     // BehaviorKernel.ActivateBehaviorOutputLink appends to the list given here (the running script behavior's selected outputs); returns the previous list.
     std::vector<int>* selectLinks(std::vector<int>* ids) { std::vector<int>* previous = selectedLinks_; selectedLinks_ = ids; return previous; }
+    // ---- the player goes down (plan step S-f, src/combat_down.cpp, docs/verification/COMBAT_DOWN_RESPAWN.md) ----
+    // The injured definition of the player's class, which WillowPlayerController.GetInjuredDefinition answers (the mission bridge supplies it; without one the native
+    // answers None). The natives the stock injured state reaches (second wind reason, revive percentage, targetability) are bound by enableDeaths.
+    using ObjectFn = std::function<ObjectPtr()>;
+    void setInjuredDefinitionProvider(ObjectFn provider) { injuredDefinition_ = std::move(provider); }
+    // What the injured state's script reads of the pawn it runs on and the bridge's player pawn does not have: the world (WorldInfo, whose TimeSeconds the state stamps its
+    // injuries with and reads them against) and authority. Idempotent; the slice never calls it, so the pawn it uses is unchanged.
+    void preparePlayerPawn(const ObjectPtr& pawn);
+    // The credits (or another currency) on a replication info: Currency[type].CurrentAmount, as GetCurrencyOnHand answers it; the setter is a state input (the run's cash).
+    int64_t currencyOnHand(Object& info, int64_t type);
+    void setCurrencyOnHand(Object& info, int64_t type, int64_t amount);
     // ---- kill experience (plan step S-d, src/combat_xp.cpp, docs/verification/COMBAT_KILL_XP.md) ----
     // What the two experience natives did, per kill, for the reports: the amount CalculateExperiencePointsForKill returned for the party (before the split), the victim's
     // level, and what AwardCombatExperienceToParty passed to each player controller's ExpEarn (the integer, truncated; the player's level at that moment).
@@ -148,6 +159,7 @@ private:
     bool classesLooked_ = false;
     bool deaths_ = false;                      // enableDeaths ran
     BehaviorEventFn behaviorEvent_;
+    ObjectFn injuredDefinition_;
     std::vector<Kill> kills_;
     std::vector<int>* selectedLinks_ = nullptr;
     std::map<int64_t, ObjectPtr> consumers_;   // consumer handle PID -> pawn
@@ -170,6 +182,7 @@ private:
     void bindDeathNatives();
     void prepareForDeath(Object& pawn, const ObjectPtr& self);
     void bindExperienceNatives();
+    void bindDownNatives();
     void applyExperienceMultiplier(const ObjectPtr& pawn, const ObjectPtr& mind);
     ObjectPtr acquirePipeline(const Value& damageType, const Value& impact, bool friendly, const Value& hitObject);
     void releasePipeline(const ObjectPtr& pipeline);
@@ -225,6 +238,12 @@ private:
 //                                    melee | leap | badass | grab | charge | slinger, or the path of a MeleeDefinition (or of a Behavior_AIThrowProjectileAtTarget and the projectile's
 //                                    Behavior_CauseDamage) in pawn n's package. The damage is evaluated with pawn n's mind and delivered through the player's stock TakeDamage with the mind as
 //                                    the instigator; it always connects. Rows arrival.<class>.L<level> and ratio.<class>.L<level> (what reached the player's health over the arrival).
+//   cash:<amount>                    the player's credits on hand (a state input; the respawn fee is a share of it)
+//   bleed:<seconds>[:<dt>]           plan step S-f: game time passes in frames (default 1/60 s); while Maya's pawn is in the injured state her installed Tick runs each frame, the
+//                                    script's own death camera is asked for its view each frame, and the callbacks the game's animations and station time (SwitchToSidearm after
+//                                    2.28 s, InjuredDeathAnimDone after 0.84 s, ShowRespawnDialog 11.8 s after the respawn) are played at the live delays (UNVERIFIED stand-ins).
+//                                    Rows down.total / successive / bleed_over / camera / second_wind_health / respawn_health / fee per injury (docs/verification/COMBAT_DOWN_RESPAWN.md).
+//                                    A hit or swing that takes Maya's health to 0 starts the down state by itself (the installed HandleHealthDepleted -> PlayInjured -> injured state).
 // Every step that names a pawn reports its state afterwards ("state": the natives' answers, HealthVar and HealthMaxVar, the HealthPool reference, the occupied slots).
 // `failed`, when given, is set when a step threw or the report logged an error.
 std::string combatRun(Runtime& runtime, const std::vector<std::string>& steps, bool* failed = nullptr);

@@ -36,6 +36,10 @@ WillowDmgSource_Melee, a toy damage type definition), a toy thrown rock (`Behavi
 constant 10 scaled by 1.5, and a `Behavior_CauseDamage` with DamageFormula scale 2.0 and source WillowDmgSource_Grenade) and a toy player pawn whose TakeDamage stores its Damage argument
 as the health: the step must read the damage from the data (60; 10 x 1.5 x 2.0 = 30), take the source class and the type from the definition, and refuse an object that delivers nothing.
 
+The down state's natives (src/combat_down.cpp, docs/verification/COMBAT_DOWN_RESPAWN.md) are checked with a toy `WillowDownPawn` whose TakeDamage sets bIsInjured, calls
+SetSecondWindReason(3) and SetCanTarget(false), then sets the health to 3.0, to 7.0 if IsInjured() answers true and to 1.0 if CanTarget() still answers true: the run must log the two
+calls, end at health 7.0 (IsInjured read the flag the script set, CanTarget read the false SetCanTarget stored) and leave those natives out of the stubs.
+
 Checked (the numbers are the rules of the note):
   - spawn: the pool lands in slot 0 with GUID 0, the manager's Owner is the mind, GetHealth / GetMaxHealth answer the pool (40.5), HealthVar stays 11
     (not written while the pool is valid), HealthMaxVar becomes the pool's maximum (SetHealthResourcePoolDefinition);
@@ -197,6 +201,9 @@ def build_engine():
     T.prop('Byte', actor, 'Role')
     T.prop('Object', actor, 'WorldInfo')
     T.prop('Object', actor, 'Owner')
+    T.prop('Bool', actor, 'bCanTarget')
+    T.function(actor, 'SetCanTarget', [('Bool', 'bCanTargetIn', 0)], None, NATIVE)
+    T.function(actor, 'CanTarget', [], None, NATIVE, 'Bool')
     p.add_export(T.imp['Enum'], 'ENetRole', w32(0) + T.none + w32(0) + w32(len(ROLES)) + b''.join(p.fname(r) for r in ROLES), outer=actor)
     reference = T.struct_(actor, 'ResourcePoolReference')
     T.prop('Object', reference, 'PoolManager')
@@ -217,6 +224,8 @@ def build_engine():
     T.prop('Struct', pawn, 'HealthPool', type_ref=reference)
     T.prop('Float', pawn, 'HealthVar')
     T.prop('Float', pawn, 'HealthMaxVar')
+    T.prop('Bool', pawn, 'bIsInjured')
+    T.function(pawn, 'IsInjured', [], None, NATIVE, 'Bool')
     T.function(pawn, 'GetHealth', [], None, NATIVE, 'Float')
     T.function(pawn, 'SetHealth', [('Float', 'NewHealth', 0)], None, NATIVE)
     T.function(pawn, 'GetMaxHealth', [], None, NATIVE, 'Float')
@@ -298,7 +307,11 @@ def build_willowgame():
     component_property = T.prop('Object', mind, 'AIComponent')
     T.cls('WillowAIComponent', super_ref=p.add_import_full('Class', gearbox, 'AIComponent'))
     on_hold = p.add_import_full('Function', p.add_import_full('Class', gearbox, 'AIComponent'), 'DemigodOnHold')
-    ai_pawn = T.cls('WillowAIPawn', super_ref=pawn)
+    willow_pawn = T.cls('WillowPawn', super_ref=pawn)
+    T.prop('Byte', willow_pawn, 'SecondWindReason')
+    set_wind = T.function(willow_pawn, 'SetSecondWindReason', [('Byte', 'Reason', 0)], None, NATIVE)['__self__']
+    clear_wind = T.function(willow_pawn, 'ClearSecondWindReason', [], None, NATIVE)['__self__']
+    ai_pawn = T.cls('WillowAIPawn', super_ref=willow_pawn)
     T.prop('Object', ai_pawn, 'AIClass')
     T.prop('Int', ai_pawn, 'ExpLevel')
     T.prop('Int', ai_pawn, 'GameStage')
@@ -397,6 +410,36 @@ def build_willowgame():
     T.function(doomed, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
                                       ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], doomed_take_damage)
 
+    # the down state's natives (WillowDownPawn): bIsInjured = true; SetSecondWindReason(3); SetCanTarget(false); SetHealth(3.0); if (IsInjured()) SetHealth(7.0); if (CanTarget()) SetHealth(1.0);
+    # ClearSecondWindReason()
+    pawn_import = p.add_import_full('Class', engine, 'Pawn')
+    injured_property = p.add_import_full('BoolProperty', pawn_import, 'bIsInjured')
+    set_can_target = p.add_import_full('Function', actor, 'SetCanTarget')
+    can_target = p.add_import_full('Function', actor, 'CanTarget')
+    is_injured = p.add_import_full('Function', pawn_import, 'IsInjured')
+    down = T.cls('WillowDownPawn', super_ref=ai_pawn)
+
+    def down_take_damage(ids):
+        def build(after_injured, after_target):
+            a = Asm()
+            a.raw(0x14); a.instance(injured_property); a.raw(0x27)
+            a.final(set_wind, lambda: a.raw(0x24, 3))
+            a.final(set_can_target, lambda: a.raw(0x28))
+            a.final(set_health, lambda: a.float_const(3.0))
+            a.raw(0x07); a.w(after_injured); a.final(is_injured)
+            a.final(set_health, lambda: a.float_const(7.0))
+            here_injured = a.here()
+            a.raw(0x07); a.w(after_target); a.final(can_target)
+            a.final(set_health, lambda: a.float_const(1.0))
+            here_target = a.here()
+            a.final(clear_wind)
+            a.return_nothing(); a.end()
+            return a, here_injured, here_target
+        _, here_injured, here_target = build(0, 0)
+        return build(here_injured, here_target)[0]
+    T.function(down, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
+                                    ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], down_take_damage)
+
     # the classes the hit step builds around the chain
     pipeline = T.cls('WillowDamagePipeline')
     for name in ('DamageTypeDef', 'ImpactDefinition', 'DirectHitObject'): T.prop('Object', pipeline, name)
@@ -459,6 +502,8 @@ def build_pawns():
     p.add_export(p.add_import_full('Class', willow, 'WillowAIPawn'), 'Pawn_Toy',
                  w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
     p.add_export(p.add_import_full('Class', willow, 'WillowDoomedPawn'), 'Pawn_Doomed',
+                 w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
+    p.add_export(p.add_import_full('Class', willow, 'WillowDownPawn'), 'Pawn_Down',
                  w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
     # the melee swing's data: a damage type definition, a melee definition, a thrown rock and its Behavior_CauseDamage, the ProjectileDamage attribute under a Projectile group
     core = p.add_import_full('Package', 0, 'Core')
@@ -653,6 +698,18 @@ with tempfile.TemporaryDirectory() as folder:
           len(got['errors']) == 3 and 'needs the projectile' in got['errors'][0] and 'neither a MeleeDefinition' in got['errors'][1] and 'has no NoSuchObject' in got['errors'][2] and code != 0, (code, got['errors']))
     code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Toy:4', 'swing:0:Melee_Toy')
     check('swing: with no player to hit the step is refused', code != 0 and 'needs a player' in got['errors'][0], got['errors'])
+
+    # ---- the down state's natives: bound (not stubs), their effects visible to the script that calls them
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Down:4', 'player:8', 'hit:0:10::Bullet')
+    down = got['steps'][2]['result']
+    check('down: exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('down: SetSecondWindReason and SetCanTarget log what they were given', 'SetSecondWindReason 3' in down['events'] and 'SetCanTarget false' in down['events'], down['events'])
+    check('down: IsInjured answered the flag the script set and CanTarget the false SetCanTarget stored (health 7)', near(down['health_after'], 7.0), down)
+    check('down: none of the down natives is a stub', not [k for k in got['stubs'] if k.split('(')[0] in ('Pawn.IsInjured', 'Actor.SetCanTarget', 'Actor.CanTarget', 'WillowPawn.SetSecondWindReason', 'WillowPawn.ClearSecondWindReason')], got['stubs'])
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Down:4', 'bleed:1')
+    check('down: bleed without the mission bridge is refused with a reason', code != 0 and 'needs the mission bridge' in got['errors'][0], got['errors'])
+    code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Down:4', 'cash:100')
+    check('down: cash without the mission bridge is refused with a reason', code != 0 and 'needs the mission bridge' in got['errors'][0], got['errors'])
 
 if failures:
     print(f'{len(failures)} combat check(s) failed:')

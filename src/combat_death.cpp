@@ -93,6 +93,7 @@ const char* const presentationNoOps[] = {
 
 void CombatSystem::bindDeathNatives() {
     bindExperienceNatives();
+    bindDownNatives();
     // Pawn.IsHumanControlled: the pawn's controller is a player controller (the killer's pawn gets KilledEnemy, a human victim would be a player).
     bind("Engine.Pawn.IsHumanControlled", [this](NativeCall& c) {
         const Value* controller = runtime_.property(*c.self, "Controller");

@@ -365,6 +365,7 @@ bool CombatSystem::describe(const ObjectPtr& source, AttributeContext& context) 
     if (isPlayerController(source)) {         // a --combat-run attacker: a player controller resolves to its PlayerReplicationInfo (NATIVE_ATTRIBUTES.md section 5)
         const Value* info = runtime_.property(*source, "PlayerReplicationInfo");
         if (isObject(info)) context.replicationInfo = info->o;
+        context.controller = source;
         return true;
     }
     if (!classesLooked_) {

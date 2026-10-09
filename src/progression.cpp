@@ -67,7 +67,7 @@ float AttributeEvaluator::evaluateDefinition(Object& definition, const Attribute
 }
 
 // The attribute's value: with an empty context chain the attribute yields no value and the constant stands; the context resolvers are
-// the no-context one (always succeeds), the player replication info one (succeeds when the context has one), the resource pool one
+// the no-context one (always succeeds), the player replication info one and the controller one (succeed when the context has one), the resource pool one
 // (succeeds when the context knows a pool for the resource) and the AI pawn and mind ones (succeed when the context has one); each value resolver
 // gets the previous value (NATIVE_PROGRESSION.md section 1, NATIVE_ATTRIBUTES.md sections 5 and 6, UNVERIFIED).
 std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const AttributeContext& context) {
@@ -80,6 +80,11 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
         if (type == "WillowGame.PlayerReplicationInfoAttributeContextResolver") {
             if (!context.replicationInfo) return std::nullopt;      // the context does not resolve
             owner = context.replicationInfo;
+            continue;
+        }
+        if (type == "Engine.ControllerAttributeContextResolver") {
+            if (!context.controller) return std::nullopt;
+            owner = context.controller;
             continue;
         }
         if (type == "Engine.ResourcePoolAttributeContextResolver") {
@@ -125,6 +130,20 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
             const Value* property = owner && name ? runtime_.property(*owner, name->s) : nullptr;
             if (!property) throw RuntimeError("unsupported object property attribute: no such property on the resolved context");
             value = float(property->number());
+        } else if (type == "WillowGame.CurrencyAttributeValueResolver") {
+            // The amount on hand of the resolver's FormOfCurrency, read from the resolved replication info. UNVERIFIED stand-in: the resolver's body is unread
+            // (NATIVE_ATTRIBUTES "Not read yet"); the death penalty cost (0.07 x credits) is the case that needs it, and the live fee rows match it (COMBAT_DOWN_RESPAWN.md).
+            ObjectPtr info = owner ? owner : context.replicationInfo;
+            if (info && !runtime_.property(*info, "Currency"))        // the resolved context is the controller: its replication info holds the amounts
+                if (const Value* held = runtime_.property(*info, "PlayerReplicationInfo"); held && held->kind == Value::Kind::Object && held->o) info = held->o;
+            const Value* form = runtime_.property(*resolver, "FormOfCurrency");
+            const Value* currency = info ? runtime_.property(*info, "Currency") : nullptr;
+            if (!form || !currency) throw RuntimeError("unsupported currency attribute: no replication info or no Currency table in the context");
+            const size_t at = size_t(form->integer());
+            const Value* entry = currency->kind == Value::Kind::Array ? (at < currency->elements().size() ? &currency->elements()[at] : nullptr) : (at == 0 ? currency : nullptr);
+            const Value* amount = entry ? entry->field("CurrentAmount") : nullptr;
+            if (!amount) throw RuntimeError("unsupported currency attribute: no such currency slot");
+            value = float(amount->number());
         } else if (type == "GearboxFramework.NounAttributeValueResolver") {
             value = nounValue(attribute, *resolver, owner, context);
         } else {

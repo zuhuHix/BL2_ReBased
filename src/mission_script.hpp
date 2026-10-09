@@ -173,6 +173,14 @@ public:
     CombatSystem::HitReport hitFromPlayer(const ObjectPtr& victim, double damage, const std::string& damageTypePath, const std::string& sourceClass);
     // A blow by an AI attacker's mind on the player's VM pawn (plan step S-e): CombatSystem::swing under the bridge's script guard, with the controller's Pawn linked for the call.
     CombatSystem::Swing swingAtPlayer(const ObjectPtr& mind, const CombatSystem::Delivery& delivery);
+    // A call on the player's VM pawn with that pawn linked as the controller's Pawn for the call (plan step S-f: the down state's Tick, its state callbacks and the respawn
+    // run on Maya's pawn), under the bridge's script guard. The pawn is passed to `body`.
+    void withPlayerPawn(const std::function<void(const ObjectPtr&)>& body);
+    // The player class's injured definition (CharClass_Siren.CharacterInjuredDefinition, NATIVE_DAMAGE_DEATH.md section 10.1), loaded; null when the class has none.
+    ObjectPtr injuredDefinition();
+    // Builds the object a property of the globals definition refers to (the VM leaves a reference to another export as an empty stand-in, so a script reading a field of it gets a default): the
+    // death camera ends after the EffectDuration of GlobalsDefinition.DigistructCoordinatedEffect (plan step S-f). Nothing when the property is absent, empty or already built.
+    void loadGlobalsReference(const char* property);
 
     // The controller's record of the mission (MissionPlaythroughs[0].MissionList[...].Status), -1 when it has none.
     int controllerStatus();
