@@ -438,11 +438,14 @@ Values (data; override or default):
 
 ### 10.2 While down
 - The bleed-out total is `BaseRejuvenateDelay` (solo) x the pawn's `TimeToBeRevivedMultiplier` attribute, then reduced by
-  `total / MaxDesiredSuccessiveInjuries x NumSuccessiveInjuries` and floored at 1 s (solo defaults: 12 s, 8 s, 4 s, then
-  1 s). `NumSuccessiveInjuries` grows by one when the previous injury was less than `MaxTimeBetweenInjuries` (30 s) ago,
-  else resets to 0, and is also reset by a resurrection.
-  Live check (lane L5b, 2026-10-08, `COMBAT_GOLDEN_TRACE.md`): the first two injuries bled out in 12.0 s and the third in 8.0 s, so the observed cut is
-  `total x (1 - (N-1)/3)` for N = 1, 2 (the sequence above is shifted by one). N >= 3 and the 1 s floor were not reached (UNVERIFIED).
+  `total / MaxDesiredSuccessiveInjuries x N` and floored at 1 s, where N is `NumSuccessiveInjuries` **before this injury**
+  (`BeginState` reads it first and updates it only at its end). N = 0, 1, 2, 3 give 12 s, 8 s, 4 s, then 1 s.
+  `NumSuccessiveInjuries` grows by one when the previous injury was less than `MaxTimeBetweenInjuries` (30 s) ago,
+  else resets to 0, and is also reset by a resurrection. So a run of injuries after a quiet period bleeds out 12 s, 12 s,
+  8 s, 4 s (the counter before each is 0, 0, 1, 2).
+  Live check (lane L5b, 2026-10-08, `COMBAT_GOLDEN_TRACE.md`): the first, second and third injuries bled out in 12.0 s, 12.0 s and 8.0 s.
+  L5b read the counter after `BeginState` (0, 1, 2), which gives the counters before the injuries (0, 0, 1) and fits this rule. N >= 3 and the 1 s floor were not reached live (UNVERIFIED).
+  VM run (installed script, [COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md)): the same 12 / 12 / 8, and 12 / 8 / 4 / 1 when the first injury falls in the first 30 s of game time (class default `LastInjuryTime` 0; UNVERIFIED live).
 - The timer (`flInjuredTargetedTime`) only starts after the "switch to sidearm" special move ends (state 2, targeted). It
   runs at the game's delta time unless the pawn is being revived (then the revive time runs instead and movement stops).
 - In the last `InjuredBonusTimePercent` percent of the bleed-out (remaining / total <= 0.10) the injured bonus is on: the
@@ -505,8 +508,8 @@ once. When the dead camera ends (`EndInjuredDeadCamera`) the state's `InjuredRes
   refill behaviors; max health follows the level formula of [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) section 4.
 - **Mission state** is not touched (nothing in these paths calls the mission tracker); only `NotifyPawnDied` for
   non-injurable pawns reaches it.
-- **Implementer checklist:** zero health -> down state, not death; bleed-out 12 s solo with the successive-injury
-  reduction; kill during bleed-out = second wind (health 25 % of max if lower, shield 90 %); bleed-out expiry -> death
+- **Implementer checklist:** zero health -> down state, not death; bleed-out 12 s solo, reduced by total / 3 x N with N the
+  successive-injury counter before this injury (section 10.2); kill during bleed-out = second wind (health 25 % of max if lower, shield 90 %); bleed-out expiry -> death
   sequence -> `HandlePlayerDeathResurrection` -> station choice above -> full health and shield -> fee 7 % of cash (rounded
   half up, at most cash) charged at `ShowRespawnDialog`, which ran 11.8 s after arrival on a station respawn in the live game. The
   fee rule was confirmed live (lane L3, [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md) step 16: 190, 177, 165 on 2,715, 2,534 and

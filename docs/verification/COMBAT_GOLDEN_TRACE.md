@@ -266,14 +266,14 @@ process under the run lock, level-8 Maya (`-Character=Save0008.sav`), `Install-D
 **Successive injuries and bleed-out (question 6).** Maya was downed by bullymongs (not scripted); a shotgun kill while in the targeted state gave the second wind (health 136.97 = 0.25 x 547.874 in the
 kill frame, shield 162.53 = 0.9 x 180.589 the next frame, 3 of 3), then enemies downed her again.
 
-| injury | `NumSuccessiveInjuries` (read at its start) | since the previous injury began | `TotalBleedoutTime` | targeted state to dead state |
+| injury | `NumSuccessiveInjuries` (read after this injury's `BeginState`) | since the previous injury began | `TotalBleedoutTime` | targeted state to dead state |
 |---|---|---|---|---|
 | first (5 episodes, 3 run to the end) | 0 | over 30 s, or after a respawn | 12.0 | 12.00-12.04 s |
 | second | 1 | 11.5 s | 12.0 | 12.04 s |
 | third | 2 | 7.45 s | **8.0** | **8.02 s** |
 
-- The shortened bleed-out is observed: the third injury (N = 2) ended 8.0 s after its targeted state, and the attribute itself read 8.0. The second (N = 1) did **not** shorten (12.0 s). The note's `total / MaxDesiredSuccessiveInjuries x N`
-  (12 -> 8 at N = 1) is **contradicted**; the data fit `total x (1 - (N - 1) / 3)` for N = 1 and 2 (reduction 0 and 4 s). N = 3 (4 s by that fit) and the 1 s floor were **not observed** (no more low-health enemies); the 30 s window edge is not tested (**UNVERIFIED**).
+- The shortened bleed-out is observed: the third injury ended 8.0 s after its targeted state, and the attribute itself read 8.0. The second did **not** shorten (12.0 s). The table's counters were read after `BeginState`, which raises the counter at its end; the counters before the three injuries were 0, 0, 1. With N as the counter before the injury, the note's `total / MaxDesiredSuccessiveInjuries x N` fits all three (12, 12, 8). The earlier "contradicted" reading applied N to the after-injury counter, which is wrong. Before-counter N = 2 gives 4 s and N = 3 the 1 s floor; neither was **observed** (no more low-health enemies), and the 30 s window edge is not tested (**UNVERIFIED**).
+  VM run ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md)): the installed script reproduces 12 / 12 / 8 and gives 12 / 8 / 4 / 1 when the first injury falls in the first 30 s of game time (UNVERIFIED live).
 - Unchanged by N: down to the targeted state 2.28 s, dead state to ragdoll 0.84 s, death camera 5.76 s. The counter read 0 again for injuries after a respawn.
 - While down the shotgun fired only from the targeted state (clicks in the first 2.28 s did nothing).
 
