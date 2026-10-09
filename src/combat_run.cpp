@@ -15,14 +15,16 @@
 namespace vm {
 namespace {
 // The stock archetypes the CLI names: kind -> package and archetype path. Anything else is "<Package>/<archetype path>".
-struct Kind { const char* name; const char* package; const char* path; };
+// `balance` is the pawn's AIPawnBalanceDefinition in the same package (the loot step reads the pool lists and the item game stage from it); empty for a pawn that has none here.
+struct Kind { const char* name; const char* package; const char* path; const char* balance; };
 const Kind kinds[] = {
-    {"dummy", "Sanctuary_Dynamic", "GD_TargetDummy.Character.Pawn_TargetDummy"},
-    {"regular", "Ice_Dynamic", "GD_PrimalBeast.Character.Pawn_PrimalBeast"},
-    {"adult", "Ice_Dynamic", "GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult"},
-    {"ranged", "Ice_Dynamic", "GD_PrimalBeast_Ranged.Character.Pawn_PrimalBeast_Ranged"},
-    {"baby", "Ice_Dynamic", "GD_PrimalBeastBaby.Character.Pawn_PrimalBeastBaby"},
+    {"dummy", "Sanctuary_Dynamic", "GD_TargetDummy.Character.Pawn_TargetDummy", ""},
+    {"regular", "Ice_Dynamic", "GD_PrimalBeast.Character.Pawn_PrimalBeast", "GD_Population_PrimalBeast.Balance.PawnBalance_PrimalBeast"},
+    {"adult", "Ice_Dynamic", "GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult", "GD_Population_PrimalBeast.Balance.PawnBalance_PrimalBeastAdult"},
+    {"ranged", "Ice_Dynamic", "GD_PrimalBeast_Ranged.Character.Pawn_PrimalBeast_Ranged", "GD_Population_PrimalBeast.Balance.PawnBalance_PrimalBeast_Slinger"},
+    {"baby", "Ice_Dynamic", "GD_PrimalBeastBaby.Character.Pawn_PrimalBeastBaby", "GD_Population_PrimalBeast.Balance.PawnBalance_PrimalBeast_Monglet"},
 };
+constexpr const char* killDamageType = "GD_Impact.DamageType.DmgType_Normal";   // what the loot batch kills with
 // What a swing step can name instead of a definition path (the stock bullymong data of Ice_Dynamic): the melee definitions, and the Slinger's thrown rock as the throw
 // behavior plus the projectile's Behavior_CauseDamage. The path of the throw is the one of the Slinger's first throw animation (UNVERIFIED that it is the one used live).
 struct Swing { const char* name; const char* definition; const char* causeDamage; };
@@ -45,7 +47,7 @@ constexpr double specialMoveEnd = 2.28, ragdollDelay = 0.84, respawnDialogDelay 
 constexpr const char* baseHealthPath = "GD_Balance_HealthAndDamage.HealthAndDamage.Init_BaseEnemyHealth";
 
 struct Spawned {
-    std::string package, path, rowClass;
+    std::string package, path, rowClass, balance;
     int level = 0, stage = 0;
     double milliseconds = 0;
     CombatSystem::Enemy enemy;
@@ -108,6 +110,7 @@ private:
     std::map<const BehaviorProvider*, size_t> reported_;       // how many trace lines of a death-chain provider the hit's event list already has
     std::map<const Object*, std::unique_ptr<BehaviorProvider>> deathProviders_;   // the provider of each pawn's death definition (BodyClassDeathDefinition), made when it raises its first event
     std::map<std::string, int> hitCounts_;
+    size_t dropsSeen_ = 0;                 // how many of the combat system's death rolls the steps have already reported
     // The player's down state (plan step S-f): the injury being played, with the times of what the callbacks above were played at. Everything about it is read from the
     // pawn's script variables; the number counts the injuries of the run.
     struct Episode {
@@ -139,6 +142,10 @@ private:
     void raiseBehaviorEvent(const CombatSystem::BehaviorEvent& event);
     void raiseTakeDamage(const CombatSystem::TakeDamageEvent& event);
     std::string hitJson(const CombatSystem::HitReport& report);
+    std::string lootJson(const CombatSystem::LootDrop& drop);
+    std::string lootAfter(const Spawned& spawned, const std::string& key);
+    std::string lootBatch(const std::vector<std::string>& parts);
+    std::string rollPoolSteps(const std::vector<std::string>& parts);
     std::string playerJson();
     Value callState(const ObjectPtr& self, const char* name, std::vector<Value> args = {});
     double worldNow();
@@ -179,25 +186,38 @@ void Run::apply(const std::string& step) {
         const auto parts = split(step);
         const std::string& verb = parts.at(0);
         if (verb == "spawn") {
-            if (parts.size() < 3 || parts.size() > 4) throw RuntimeError("combat-run: spawn:<kind>:<level>[:<stage>]");
+            if (parts.size() < 3 || parts.size() > 5) throw RuntimeError("combat-run: spawn:<kind>:<level>[:<stage>[:<balance path>]]");
             Spawned spawned;
             const auto slash = parts[1].find('/');
             if (slash != std::string::npos) { spawned.package = parts[1].substr(0, slash); spawned.path = parts[1].substr(slash + 1); }
             for (const Kind& kind : kinds)
-                if (parts[1] == kind.name) { spawned.package = kind.package; spawned.path = kind.path; }
+                if (parts[1] == kind.name) { spawned.package = kind.package; spawned.path = kind.path; spawned.balance = kind.balance; }
             if (spawned.path.empty()) throw RuntimeError("combat-run: unknown pawn kind " + parts[1]);
             spawned.level = std::stoi(parts[2]);
-            spawned.stage = parts.size() == 4 ? std::stoi(parts[3]) : spawned.level;
+            spawned.stage = parts.size() >= 4 ? std::stoi(parts[3]) : spawned.level;
+            if (parts.size() == 5) spawned.balance = parts[4];       // the pawn balance of an archetype that is not one of the named kinds
             const auto leaf = spawned.path.substr(spawned.path.rfind('.') + 1);
             spawned.rowClass = leaf.rfind("Pawn_", 0) == 0 ? leaf.substr(5) : leaf;
+            std::string lootSetup;
             const auto started = std::chrono::steady_clock::now();
             spawned.enemy = combat_.spawnEnemy(runtime_.package(spawned.package), spawned.path, spawned.level, spawned.stage);
+            if (!spawned.balance.empty()) {         // the stock spawn's loot setup: the item game stage and the pawn's pool list (plan step S-g)
+                const auto package = runtime_.package(spawned.package);
+                const int32_t balance = runtime_.findExport(*package, spawned.balance);
+                if (balance <= 0) throw RuntimeError("combat-run: " + spawned.package + " has no " + spawned.balance);
+                combat_.setupLoot(spawned.enemy.pawn, runtime_.instantiateExport(package, balance, 4));
+                lootSetup = ",\"loot_setup\":{\"item_stage\":" + std::to_string(runtime_.property(*spawned.enemy.pawn, "GameStageForSpawnedInventory")->integer()) + ",\"pools\":[";
+                const Value* list = runtime_.property(*spawned.enemy.pawn, "ItemPoolList");
+                for (size_t i = 0; list && i < list->elements().size(); ++i)
+                    lootSetup += (i ? "," : "") + quote(objectPath(list->elements()[i].field("ItemPool")->o));
+                lootSetup += "]}";
+            }
             spawned.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
             const std::string id = spawned.rowClass + ".L" + std::to_string(spawned.level);
             row("health." + id, call(spawned.enemy.pawn, "GetHealth").number());
             row("max_health." + id, call(spawned.enemy.pawn, "GetMaxHealth").number());
             pawns_.push_back(std::move(spawned));
-            result = "{\"pawn\":" + std::to_string(pawns_.size() - 1) + ",\"milliseconds\":" + number(pawns_.back().milliseconds) + "}";
+            result = "{\"pawn\":" + std::to_string(pawns_.size() - 1) + ",\"milliseconds\":" + number(pawns_.back().milliseconds) + lootSetup + "}";
         } else if (verb == "base") {
             Spawned& spawned = pawn(parts.at(1));
             const auto package = runtime_.package(spawned.package);
@@ -383,7 +403,19 @@ void Run::apply(const std::string& step) {
             row(id + ".applied", report.applied);
             row(id + ".health_after", report.healthAfter);
             result = hitJson(report);
+            if (const std::string lootText = lootAfter(spawned, id.substr(4)); !lootText.empty()) { result.pop_back(); result += ",\"loot\":" + lootText + "}"; }
             if (script_ && (episode_.active || injuries_ > 0)) { trackDown(); result.pop_back(); result += ",\"down\":" + downJson() + "}"; }
+        } else if (verb == "seed") {
+            // seed:<n>: the loot's random (C rand() stand-in, src/combat_loot.cpp) restarts from n; the default is fixed, so a run repeats.
+            combat_.seedRandom(uint32_t(std::stoul(parts.at(1))));
+        } else if (verb == "mayahealth") {
+            // mayahealth:<share>: Maya's health set to that share of her maximum (a state input: the health drop weight looks at it).
+            if (!script_) throw RuntimeError("combat-run: mayahealth needs the mission bridge (the step maya:<level>)");
+            script_->setPlayerHealth(float(std::stod(parts.at(1)) * call(script_->playerPawnObject(), "GetMaxHealth").number()));
+        } else if (verb == "rollpool") {
+            result = rollPoolSteps(parts);
+        } else if (verb == "lootbatch") {
+            result = lootBatch(parts);
         } else {
             throw RuntimeError("combat-run: unknown step " + step);
         }
@@ -398,7 +430,7 @@ void Run::apply(const std::string& step) {
     // A step that names a pawn also reports that pawn's state after it.
     try {
         const auto parts = split(step);
-        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && parts[0] != "maya" && parts[0] != "tick" && parts[0] != "killtag" && parts[0] != "players" && parts[0] != "bleed" && parts[0] != "cash" && std::stoul(parts[1]) < pawns_.size()) {
+        if (parts.size() > 1 && parts[0] != "spawn" && parts[0] != "base" && parts[0] != "player" && parts[0] != "attr" && parts[0] != "maya" && parts[0] != "tick" && parts[0] != "killtag" && parts[0] != "players" && parts[0] != "bleed" && parts[0] != "cash" && parts[0] != "seed" && parts[0] != "mayahealth" && parts[0] != "lootbatch" && std::stoul(parts[1]) < pawns_.size()) {
             result.pop_back();
             result += (result.size() > 1 ? "," : "") + std::string("\"state\":{") + stateJson(std::stoul(parts[1])) + "}}";
         }
@@ -660,6 +692,158 @@ std::string Run::downJson() {
         << ",\"targeted_time\":" << number(numberOf(runtime_, *pawn, "flInjuredTargetedTime")) << ",\"last_injury_time\":" << number(numberOf(runtime_, *pawn, "LastInjuryTime"))
         << ",\"since_down\":" << number(worldNow() - episode_.downAt) << "}";
     return out.str();
+}
+
+// A death roll as JSON (plan step S-g): the item game stage and awesome level the pools were called with, and for every pool the script's loop rolled its chance, draw, whether it was
+// tried (the call the live hook saw), what the call returned and the items (records: balance, manufacturer, inventory class, level, drop flags).
+std::string Run::lootJson(const CombatSystem::LootDrop& drop) {
+    std::ostringstream out;
+    out << "{\"item_stage\":" << drop.stage << ",\"awesome\":" << drop.awesome << ",\"below_kill_z\":" << (drop.belowKillZ ? "true" : "false") << ",\"pools\":[";
+    bool first = true;
+    for (const auto& pool : drop.pools) {
+        out << (first ? "" : ",") << "{\"pool\":" << quote(pool.pool) << ",\"chance\":" << number(pool.chance) << ",\"roll\":" << number(pool.roll) << ",\"tried\":" << (pool.tried ? "true" : "false")
+            << ",\"returned\":" << (pool.returned ? "true" : "false");
+        if (!pool.error.empty()) out << ",\"error\":" << quote(pool.error);
+        out << ",\"items\":[";
+        bool firstItem = true;
+        for (const auto& item : pool.items) {
+            out << (firstItem ? "" : ",") << "{\"balance\":" << quote(item.balance) << ",\"manufacturer\":" << quote(item.manufacturer) << ",\"class\":" << quote(item.inventoryClass) << ",\"level\":" << item.level
+                << ",\"drop_on_death\":" << (item.dropOnDeath ? "true" : "false") << ",\"dropped\":" << (item.dropped ? "true" : "false") << "}";
+            firstItem = false;
+        }
+        out << "]}";
+        first = false;
+    }
+    out << "]}";
+    return out.str();
+}
+
+// The death roll(s) a hit on `spawned` made since the last report: rows loot.<key>.* for the tried pools (returned 0/1 and the number of items) and the whole roll as JSON.
+std::string Run::lootAfter(const Spawned& spawned, const std::string& key) {
+    std::string text;
+    for (; dropsSeen_ < combat_.drops().size(); ++dropsSeen_) {
+        const auto& drop = combat_.drops()[dropsSeen_];
+        if (drop.pawn != spawned.enemy.pawn) continue;
+        size_t tried = 0, dropped = 0;
+        for (const auto& pool : drop.pools) {
+            if (!pool.tried) continue;
+            ++tried;
+            for (const auto& item : pool.items) dropped += item.dropped;
+            const std::string name = pool.pool.substr(pool.pool.rfind('.') + 1);
+            row("loot." + key + "." + name + ".returned", pool.returned ? 1 : 0);
+            row("loot." + key + "." + name + ".items", double(pool.items.size()));
+        }
+        row("loot." + key + ".item_stage", drop.stage);
+        row("loot." + key + ".pools_tried", double(tried));
+        row("loot." + key + ".items_dropped", double(dropped));
+        text = lootJson(drop);
+    }
+    return text;
+}
+
+// rollpool:<pawn>:<pool path>[:<stage>[:<count>]]: ItemPool.SpawnBalancedInventoryFromPool called through the VM (as the script calls it, optional arguments omitted) with pawn n as the context
+// source, at the given item game stage (default the pawn's), <count> times. Rows loot.roll.<pool>.stage<s>.n / .true / .items (the calls, those that returned true, the inventories made);
+// the result lists the inventories of the last call (stand-in objects: their class and bDropOnDeath). The pool path is looked up in Startup and in the pawn's package.
+std::string Run::rollPoolSteps(const std::vector<std::string>& parts) {
+    if (parts.size() < 3 || parts.size() > 5) throw RuntimeError("combat-run: rollpool:<pawn>:<pool path>[:<stage>[:<count>]]");
+    Spawned& spawned = pawn(parts.at(1));
+    ObjectPtr pool;
+    for (const std::string& name : {std::string("Startup"), spawned.package}) {
+        const auto package = runtime_.package(name);
+        if (const int32_t at = runtime_.findExport(*package, parts.at(2)); at > 0) { pool = runtime_.instantiateExport(package, at, 4); break; }
+    }
+    if (!pool) throw RuntimeError("combat-run: no such item pool " + parts.at(2));
+    const int stage = parts.size() > 3 ? std::stoi(parts[3]) : int(runtime_.property(*spawned.enemy.pawn, "GameStageForSpawnedInventory")->integer());
+    const int count = parts.size() > 4 ? std::stoi(parts[4]) : 1;
+    Function* spawn = runtime_.findFunction("WillowGame.ItemPool.SpawnBalancedInventoryFromPool");
+    int returned = 0, items = 0;
+    std::vector<Value> last;
+    for (int i = 0; i < count; ++i) {
+        std::vector<Value> outs;
+        std::vector<Value> arguments{Value::makeObject(pool), Value::makeInt(stage), Value::makeInt(0), Value::makeObject(spawned.enemy.pawn), Value::makeArray()};   // the optional ones omitted
+        returned += runtime_.call(*spawn, nullptr, arguments, &outs).truth();
+        last = outs.at(4).elements();
+        items += int(last.size());
+    }
+    const std::string name = parts.at(2).substr(parts.at(2).rfind('.') + 1);
+    const std::string key = "loot.roll." + name + ".stage" + std::to_string(stage);
+    row(key + ".n", count);
+    row(key + ".true", returned);
+    row(key + ".items", items);
+    std::ostringstream out;
+    out << "{\"stage\":" << stage << ",\"calls\":" << count << ",\"returned_true\":" << returned << ",\"inventories\":[";
+    for (size_t i = 0; i < last.size(); ++i) {
+        const Value* flag = runtime_.property(*last[i].o, "bDropOnDeath");
+        out << (i ? "," : "") << "{\"class\":" << quote(last[i].o->cls->name) << ",\"drop_on_death\":" << (flag && flag->truth() ? "true" : "false") << "}";
+    }
+    out << "]}";
+    return out.str();
+}
+
+// lootbatch:<kind>:<level>:<stage>:<count>[:<tag>] (plan step S-g): <count> kills of a fresh pawn each, through the same spawn and lethal hit steps (a shotgun hit of 9999 by the player, one
+// pawn after the other), with the death rolls summed. Nothing of the kills is kept except the sums (the pawns, their rows and results are dropped as they finish). Rows
+// loot.batch.<tag>.n, .stage.<s> (rolls at that item game stage), .stage_min / .stage_max, .level_mismatch (items not at the stage's level), and per pool: .<pool>.chance (the first kill's) / .chance_max, .tried, .true (returned true), .items, .dropped; and for
+// Pool_Money_1or2 .qty.<k> (tried rolls that made k items). The random is seeded by the seed step, so the batch repeats.
+std::string Run::lootBatch(const std::vector<std::string>& parts) {
+    if (parts.size() < 5 || parts.size() > 6) throw RuntimeError("combat-run: lootbatch:<kind>:<level>:<stage>:<count>[:<tag>]");
+    if (!script_ && players_.empty()) throw RuntimeError("combat-run: a loot batch needs a player (the step maya:<level> or player:<level>) first");
+    const int count = std::stoi(parts[4]);
+    const std::string tag = parts.size() == 6 ? parts[5] : parts[1];
+    const auto savedRows = rows_;
+    const auto savedHits = hitCounts_;
+    const size_t savedKillRows = killRows_.size(), savedResults = results_.size();
+    struct Sum { double chance = -1, chanceMax = 0, tried = 0, returned = 0, items = 0, dropped = 0, errors = 0; };
+    std::map<std::string, Sum> sums;
+    std::map<int, int> stages, quantities;
+    int kills = 0, levelMismatches = 0;
+    for (int i = 0; i < count; ++i) {
+        const size_t errorsBefore = errors_.size();
+        apply("spawn:" + parts[1] + ":" + parts[2] + ":" + parts[3]);
+        if (errors_.size() != errorsBefore) throw RuntimeError("combat-run: lootbatch: " + errors_.back());
+        const std::string index = std::to_string(pawns_.size() - 1);
+        const size_t before = combat_.drops().size();
+        apply("hit:" + index + ":9999:" + killDamageType + ":Shotgun");
+        for (size_t at = before; at < combat_.drops().size(); ++at) {
+            const auto& drop = combat_.drops()[at];
+            if (drop.pawn != pawns_.back().enemy.pawn) continue;
+            ++kills;
+            ++stages[drop.stage];
+            for (const auto& pool : drop.pools) {
+                Sum& sum = sums[pool.pool.substr(pool.pool.rfind('.') + 1)];
+                sum.chance = sum.chance < 0 ? pool.chance : std::min(sum.chance, pool.chance);
+                sum.chanceMax = std::max(sum.chanceMax, pool.chance);
+                sum.tried += pool.tried;
+                sum.errors += !pool.error.empty();
+                sum.returned += pool.tried && pool.returned;
+                sum.items += double(pool.items.size());
+                for (const auto& item : pool.items) { sum.dropped += item.dropped; levelMismatches += item.level != drop.stage; }
+                if (pool.tried && pool.pool.find("Pool_Money_1or2") != std::string::npos) ++quantities[int(pool.items.size())];
+            }
+        }
+        pawns_.pop_back();
+        results_.resize(savedResults);
+        killRows_.resize(savedKillRows);
+    }
+    rows_ = savedRows;
+    hitCounts_ = savedHits;
+    combat_.drops().clear();
+    dropsSeen_ = 0;
+    const std::string key = "loot.batch." + tag;
+    row(key + ".n", kills);
+    for (const auto& [stage, n] : stages) row(key + ".stage." + std::to_string(stage), n);
+    if (!stages.empty()) { row(key + ".stage_min", stages.begin()->first); row(key + ".stage_max", stages.rbegin()->first); }
+    row(key + ".level_mismatch", levelMismatches);       // items whose level is not the stage they were rolled at (the cap is 50, above the stages used)
+    for (const auto& [name, sum] : sums) {
+        row(key + "." + name + ".chance", sum.chance);
+        row(key + "." + name + ".chance_max", sum.chanceMax);
+        row(key + "." + name + ".tried", sum.tried);
+        row(key + "." + name + ".true", sum.returned);
+        row(key + "." + name + ".items", sum.items);
+        row(key + "." + name + ".dropped", sum.dropped);
+        if (sum.errors > 0) row(key + "." + name + ".errors", sum.errors);
+    }
+    for (const auto& [quantity, n] : quantities) row(key + ".Pool_Money_1or2.qty." + std::to_string(quantity), n);
+    return "{\"kills\":" + std::to_string(kills) + "}";
 }
 
 // A pawn's state: the natives' answers, the plain variables, the health reference and every occupied slot of the mind's manager.

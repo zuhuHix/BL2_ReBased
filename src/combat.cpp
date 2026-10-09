@@ -390,7 +390,10 @@ bool CombatSystem::describe(const ObjectPtr& source, AttributeContext& context) 
 
 AttributeContext CombatSystem::contextFor(const Value& source) {
     AttributeContext context;
-    if (isObject(&source) && describe(source.o, context)) return context;
+    if (isObject(&source) && describe(source.o, context)) {
+        context.playerPool = [this](const Value& resource) { return localPlayerPool(resource); };       // the drop weights look at the local player (plan step S-g)
+        return context;
+    }
     if (contextFor_) return contextFor_(source);
     if (isObject(&source)) notImplemented("EvaluateInitializationData: a context source that is not an AI pawn or mind");
     return context;

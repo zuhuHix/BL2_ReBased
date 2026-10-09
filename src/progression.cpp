@@ -66,6 +66,11 @@ float AttributeEvaluator::evaluateDefinition(Object& definition, const Attribute
     return restricted(definition, combined(definition, 0.f, context), context);
 }
 
+std::optional<float> AttributeEvaluator::evaluateAttribute(const Value& reference, const AttributeContext& context) {
+    if (reference.kind != Value::Kind::Object || !reference.o) return std::nullopt;
+    return attributeValue(*load(reference), context);
+}
+
 // The attribute's value: with an empty context chain the attribute yields no value and the constant stands; the context resolvers are
 // the no-context one (always succeeds), the player replication info one and the controller one (succeed when the context has one), the resource pool one
 // (succeeds when the context knows a pool for the resource) and the AI pawn and mind ones (succeed when the context has one); each value resolver
@@ -77,6 +82,9 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
     for (const auto& reference : contexts->elements()) {
         const std::string& type = load(reference)->cls->path;
         if (type == "GearboxFramework.NoContextNeededAttributeContextResolver") continue;
+        // The game info and the designer-attribute holder always resolve (no state of theirs is read here; a designer attribute keeps its base value, the loot's artifact weights
+        // use one: GD_Artifacts.BalanceAttributes.Attribute_DeputyCount). UNVERIFIED readings, plan step S-g.
+        if (type == "Engine.GameInfoAttributeContextResolver" || type == "WillowGame.DesignerAttributeContextResolver") continue;
         if (type == "WillowGame.PlayerReplicationInfoAttributeContextResolver") {
             if (!context.replicationInfo) return std::nullopt;      // the context does not resolve
             owner = context.replicationInfo;
@@ -106,6 +114,10 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
         throw RuntimeError("unsupported attribute context resolver " + type);
     }
     float value = 0;
+    if (attribute.cls->path == "WillowGame.DesignerAttributeDefinition") {          // a designer attribute is set by the game's designers' code at run time; here it keeps its base value
+        const Value* base = runtime_.property(attribute, "BaseValue");
+        return base ? evaluate(*base, context) : 0.f;
+    }
     const Value* chain = runtime_.property(attribute, "ValueResolverChain");
     if (!chain) throw RuntimeError("unsupported attribute: no value resolver chain");
     for (const auto& reference : chain->elements()) {
@@ -146,6 +158,28 @@ std::optional<float> AttributeEvaluator::attributeValue(Object& attribute, const
             value = float(amount->number());
         } else if (type == "GearboxFramework.NounAttributeValueResolver") {
             value = nounValue(attribute, *resolver, owner, context);
+        } else if (type == "GearboxFramework.RandomAttributeValueResolver") {
+            // A random number between the bounds replaces the running value (ValueLifetime and the saved values are not modelled: a fresh draw each time). UNVERIFIED: the body is unread
+            // (NATIVE_ATTRIBUTES "Not read yet"); plan step S-g needs it for the ammo pools' quantity.
+            const Value* integer = runtime_.property(*resolver, "bUseIntegerRandomization");
+            value = randomBetween(need(runtime_.property(*resolver, "LowerBound"), "LowerBound"), need(runtime_.property(*resolver, "UpperBound"), "UpperBound"),
+                                  integer && integer->truth(), context);
+        } else if (type == "GearboxFramework.ConstraintAttributeValueResolver") {
+            // The running value clamped to the enabled bounds (minimum first, as the range restriction of a definition). UNVERIFIED: body unread.
+            const Value& range = need(runtime_.property(*resolver, "Constraints"), "Constraints");
+            if (const Value* on = range.field("bEnableMinValueRestriction"); on && on->truth()) value = std::max(value, evaluate(need(range.field("MinValue"), "MinValue"), context));
+            if (const Value* on = range.field("bEnableMaxValueRestriction"); on && on->truth()) value = std::min(value, evaluate(need(range.field("MaxValue"), "MaxValue"), context));
+        } else if (type == "GearboxFramework.ConditionalAttributeValueResolver") {
+            // The first entry of the list whose expressions hold, else the default. The struct's bEnabled flag is false in the shipped data that has entries (the drop odds of guns by
+            // number of players) and the editor's own display shares use the entries, so the flag is not tested (the reading tools/loot_pools.py checks against those shares, UNVERIFIED).
+            const Value& expressions = need(runtime_.property(*resolver, "ValueExpressions"), "ValueExpressions");
+            const Value* chosen = &need(expressions.field("DefaultBaseValue"), "DefaultBaseValue");
+            if (const Value* list = expressions.field("ConditionalExpressionList"))
+                for (const auto& entry : list->elements())
+                    if (expressionsHold(need(entry.field("Expressions"), "Expressions"), context)) { chosen = &need(entry.field("BaseValueIfTrue"), "BaseValueIfTrue"); break; }
+            value = evaluate(*chosen, context);
+        } else if (type == "WillowGame.AmmoDropWeightAttributeValueResolver") {
+            value = ammoDropWeight(*resolver, context);
         } else {
             throw RuntimeError("unsupported attribute value resolver " + type);
         }
@@ -168,12 +202,41 @@ float AttributeEvaluator::nounValue(Object& attribute, Object& resolver, const O
     return evaluate(need(runtime_.property(resolver, "DefaultValue"), "DefaultValue"), context);
 }
 
+// A random number from lower to upper, both evaluated: an integer between them inclusive, or a real one. The generator is the owner's (setRandom): C rand() / 32767 scaled to the
+// span, the top draw kept inside the span. UNVERIFIED stand-in: the native generator's exact mapping is unread; the item game stage offset (-2 to +1) reached both ends in the live
+// game, which fits the inclusive reading.
+float AttributeEvaluator::randomBetween(const Value& lower, const Value& upper, bool integer, const AttributeContext& context) {
+    if (!random_) throw RuntimeError("unsupported attribute definition: random variance (no random source)");
+    const float low = evaluate(lower, context), high = evaluate(upper, context);
+    const double draw = double(random_()) / 32768.0;                // 0 <= draw < 1
+    if (!integer) return low + float(draw) * (high - low);
+    const double span = std::floor(double(high)) - std::ceil(double(low)) + 1;
+    if (span < 1) return std::ceil(low);
+    return float(std::ceil(double(low)) + std::floor(draw * span));
+}
+
+// The ammo and health drop weight (AmmoDropWeightAttributeValueResolver, UNVERIFIED reading of its data; body unread): the share of the local player's pool for the resource is
+// compared with the resource threshold; at or above it the weight is the above-threshold one, below it the weight rises linearly from the minimum (at the threshold) to the
+// maximum (empty); a player with no such pool gets the no-pool weight. The direction of the slope is the stand-in's guess (more need, more drops).
+float AttributeEvaluator::ammoDropWeight(Object& resolver, const AttributeContext& context) {
+    const auto weight = [&](const char* name) { return evaluate(need(runtime_.property(resolver, name), name), context); };
+    const Value* resource = runtime_.property(resolver, "Resource");
+    const ObjectPtr pool = resource && context.playerPool ? context.playerPool(*resource) : nullptr;
+    if (!pool) return weight("NoPoolWeight");
+    const float maximum = number(runtime_.property(*pool, "MaxValue"));
+    const float share = maximum > 0 ? number(runtime_.property(*pool, "CurrentValue")) / maximum : 0.f;
+    const float threshold = weight("ResourceThreshold");
+    if (share >= threshold) return weight("AboveThresholdWeight");
+    const float low = weight("MinBelowThresholdWeight"), high = weight("MaxBelowThresholdWeight");
+    return threshold > 0 ? high + (share / threshold) * (low - high) : low;
+}
+
 // f from the definition's formula or conditional, then combined with the base by BaseValueMode. The numbers 1..3 are taken
 // as base + f, base x f and f - base in the note's order (which enum name is which was not checked: UNVERIFIED).
 float AttributeEvaluator::combined(Object& definition, float base, const AttributeContext& context) {
-    if (const Value* variance = runtime_.property(definition, "RandomVariance"))
-        if (const Value* enabled = variance->field("bEnabled"); enabled && enabled->truth())
-            throw RuntimeError("unsupported attribute definition: random variance");
+    const Value* variance = runtime_.property(definition, "RandomVariance");
+    const bool random = variance && variance->field("bEnabled") && variance->field("bEnabled")->truth();
+    if (random && !random_) throw RuntimeError("unsupported attribute definition: random variance");
     const Value* formula = runtime_.property(definition, "ValueFormula");
     const Value* conditional = runtime_.property(definition, "ConditionalInitialization");
     float f = 0;
@@ -189,16 +252,21 @@ float AttributeEvaluator::combined(Object& definition, float base, const Attribu
             for (const auto& entry : list->elements())
                 if (expressionsHold(need(entry.field("Expressions"), "Expressions"), context)) { chosen = &need(entry.field("BaseValueIfTrue"), "BaseValueIfTrue"); break; }
         f = evaluate(*chosen, context);
-    } else {
+    } else if (!random) {
         throw RuntimeError("unsupported attribute definition: neither a value formula nor a conditional");
-    }
+    }                                                         // a purely random definition (the pool quantities) has f = 0
+    float value;
     switch (int(need(runtime_.property(definition, "BaseValueMode"), "BaseValueMode").integer())) {
-    case 0: return f;
-    case 1: return base + f;
-    case 2: return base * f;
-    case 3: return f - base;
+    case 0: value = f; break;
+    case 1: value = base + f; break;
+    case 2: value = base * f; break;
+    case 3: value = f - base; break;
     default: throw RuntimeError("unsupported base value mode");
     }
+    // The random amount between the bounds is added after the mode (NATIVE_PROGRESSION.md section 1 step 2); the scale and the clamp follow in evaluate().
+    if (random) value += randomBetween(need(variance->field("LowerBound"), "LowerBound"), need(variance->field("UpperBound"), "UpperBound"),
+                                       variance->field("bUseIntegerRandomization") && variance->field("bUseIntegerRandomization")->truth(), context);
+    return value;
 }
 
 // An entry's expressions are taken to all have to hold (UNVERIFIED). The attributes they may name are PlayThroughCount, NumberOfPlayers,

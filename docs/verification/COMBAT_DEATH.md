@@ -22,7 +22,7 @@ natives under it (`src/combat_death.cpp`, `src/combat_run.cpp`). `HitReport.orde
 |---|---|---|
 | `WorldInfo.Game` = a `WillowGameInfo` instance at its class defaults | the installed `Pawn.Died` begins with a test of `WorldInfo.Game` and returns false without one, and the kill credit is script on it (`WillowGameInfo.Killed`) | the live game has one (the live pellets run `GameInfo.ReduceDamage`); the class is not known to be the exact live one (a coop subclass may be) |
 | `WorldInfo.GRI` = a `WillowGameReplicationInfo` with a `MissionTracker` (only when the world has none; the mission bridge's own is kept) | `WillowPawn.HandleHealthDepleted` reaches the tracker through it | UNVERIFIED stand-in |
-| an inventory manager on the pawn (an instance of its `InventoryManagerClass`, empty) | `WillowPawn.Died` calls `DropLootOnDeath` only for a pawn that has one | stand-in; the inventory stays empty (plan step S-g fills it) |
+| an inventory manager on the pawn (an instance of its `InventoryManagerClass`, empty) | `WillowPawn.Died` calls `DropLootOnDeath` only for a pawn that has one | stand-in; the inventory stays empty (the loot of step S-g is records, [COMBAT_LOOT.md](COMBAT_LOOT.md)) |
 | the pawn's `StatusEffectComp` and `SMComponent` built from their archetype exports | the archetype holds references; the script calls them (`OwnerDied`, `StopAny`) | as `placeMarcus` builds the dialog component |
 | `MyDeathDef` = the body class's `DeathDef`, a consumer handle (`ConsumerHandle.PID`, first value 100) | the stock spawn sets both (`SetDeathDefinition`, `InitializeBehaviorProviders`) | the PID is a counter of this unit, not the game's allocator |
 | `Physics` = `PHYS_Walking` when the archetype has 0 | the bullymong class provider's `Behavior_Conditional` tests the physics state; the live pawn was standing on the ground | UNVERIFIED stand-in for the landing that sets it |
@@ -46,7 +46,7 @@ synthetic one) has no deaths and nothing changes for it.
 | `Actor.Destroy` | marks `bDeleteMe`; its `Destroyed` event and the removal belong to the host | UNVERIFIED |
 | `ResourcePool.GetCurrentValue` | the pool's `CurrentValue` (`DestroyHealthPool` copies it into `HealthVar` before deleting the pool) | trivial |
 | `WillowAIPawn.GetAwesomeLevel / GetGameStageForSpawnedInventory` | field reads | plan step S-g owns what they mean |
-| `WillowPawn.DropLootOnDeath` (script, overridden) | logged with the size of the pawn's `ItemPoolList` (0: `SetupPawnItemPoolList` is plan step S-g); nothing is rolled or dropped | stub, as the plan says |
+| `WillowPawn.DropLootOnDeath` (script, overridden) | the pawn's pools are rolled (plan step S-g, [COMBAT_LOOT.md](COMBAT_LOOT.md)); this lane (S-c) logged the call and rolled nothing | S-g replaced the stub |
 
 The driver (`src/combat_run.cpp`) makes the death definition's provider per pawn like the class provider, runs the installed scripts of `Behavior_Conditional`, `Behavior_CustomEvent`
 and `Behavior_CompareBool` on the VM, and lists the behaviors that spawn effects, projectiles, sounds and dialog lines at the boundary (reported, not run).
@@ -98,7 +98,7 @@ GUID 255, `pool_valid` false), `GetMaxHealth` falls back to `HealthMaxVar`. The 
 - **Hit region:** the driver sends no bone, so the body class's `DefaultHitRegion` (`HitRegion_Body`) is used; the first hit of a run says so in its events. No head hit, no crit row.
 - **Kill-stat objectives:** the tracker has no registry, so a pawn killed while an objective keyed by `STAT_PLAYER_KILLS_BULLYMONG` is active would not progress it here (logged, not silent
   for the pawn's own objective and for defend entries; the stat registry is not read).
-- **Loot** (`SetupPawnItemPoolList`, `SpawnBalancedInventoryFromPool`) is plan step S-g. `DropLootOnDeath` is overridden, not run.
+- **Loot** (`SetupPawnItemPoolList`, `SpawnBalancedInventoryFromPool`) was plan step S-g and is done: [COMBAT_LOOT.md](COMBAT_LOOT.md). `DropLootOnDeath` is overridden by the unit's roll, not run as script.
 - **Skipped iterators** (`foreach` over an engine iterator the VM does not implement; each is logged by the stub line and now named in the call trace): `WillowDamagePipeline.DamageDealtSkillEventsTriggered`
   (in `ProcessDamageDealtSkillEvents`, the player's skill events), `Actor.ComponentList`, `WorldInfo.AllControllers` (in `GameInfo.NotifyKilled`), `InventoryManager.InventoryActors`,
   `WillowInventoryManager.ItemActors`. This answers the plan's "unnamed iterator" for the hit and death chain.

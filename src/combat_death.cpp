@@ -209,7 +209,7 @@ void CombatSystem::bindDeathNatives() {
     });
     // ResourcePool.GetCurrentValue (DestroyHealthPool reads it before deleting the pool).
     bind("Engine.ResourcePool.GetCurrentValue", [this](NativeCall& c) { return required(runtime_, *c.self, "CurrentValue"); });
-    // The spawned-inventory levels are plain fields of the pawn (NATIVE_LOOT.md, the loot step S-g owns what they mean).
+    // The spawned-inventory levels are plain fields of the pawn (NATIVE_LOOT.md); src/combat_loot.cpp sets the stage at spawn and reads both for the death roll.
     for (const char* base : {"WillowGame.WillowAIPawn"}) {
         const std::string owner = base;
         bind((owner + ".GetAwesomeLevel").c_str(), [this](NativeCall& c) { const Value* v = runtime_.property(*c.self, "AwesomeLevel"); return Value::makeInt(v ? v->integer() : 0); });
@@ -218,14 +218,7 @@ void CombatSystem::bindDeathNatives() {
             return Value::makeInt(v ? v->integer() : 0);
         });
     }
-    // DropLootOnDeath: the pawn has no item pool list (SetupPawnItemPoolList is plan step S-g), so the installed script would roll nothing; the call is logged instead.
-    try {
-        runtime_.overrideScript("WillowGame.WillowPawn.DropLootOnDeath", [this](NativeCall& c) {
-            const Value* pools = runtime_.property(*c.self, "ItemPoolList");
-            logEvent("DropLootOnDeath: " + std::to_string(pools ? pools->elements().size() : 0) + " item pools (the pool list is set up by plan step S-g); nothing dropped");
-            return Value();
-        });
-    } catch (const RuntimeError&) {}
+    bindLootNatives();                // DropLootOnDeath and the pool natives (plan step S-g)
 }
 
 } // namespace vm

@@ -25,6 +25,9 @@ struct AttributeContext {
     // parameters are the mind's class values, UNVERIFIED reading). Null: an attribute whose context chain asks for it does not resolve.
     ObjectPtr pawn;               // PawnAttributeContextResolver: the pawn (its ExpLevel, via an object-property resolver)
     ObjectPtr mind;               // WillowMindAttributeContextResolver: the AI mind; its AIClass holds the starting values
+    // The local player's pool of a resource, for the ammo and health drop weights (AmmoDropWeightAttributeValueResolver, plan step S-g: what the player needs decides what drops;
+    // the resolver reads it from the engine, UNVERIFIED). Empty or returning null: the player has no such pool.
+    std::function<ObjectPtr(const Value& resource)> playerPool;
     // Single player, not a champion (UNVERIFIED readings of D_Attributes.GameProperties.NumberOfPlayers and Targetable.Targetable_Is_Champion;
     // the data conditions that read them have their first entry for these values).
     int numberOfPlayers = 1;
@@ -49,11 +52,17 @@ public:
     float evaluate(const Value& data, const AttributeContext& context);
     // A definition on its own: f(ValueFormula) or the selected conditional value, range restriction and rounding applied.
     float evaluateDefinition(Object& definition, const AttributeContext& context);
+    // An attribute definition (a reference) on its own, as a pool's game-stage requirement is read: its value chain, or nothing when its context chain does not resolve.
+    std::optional<float> evaluateAttribute(const Value& reference, const AttributeContext& context);
+    // The engine's random for the random variance of a definition and the random value resolver (plan step S-g): returns what C `rand()` would, 0..32767. Without one an
+    // enabled random variance is "unsupported", as before. The owner decides the seed; the slice never sets one.
+    void setRandom(std::function<int()> rand15) { random_ = std::move(rand15); }
 
 private:
     Runtime& runtime_;
     std::map<std::pair<const Package*, int32_t>, ObjectPtr> loaded_;
     std::map<const Object*, std::string> paths_;      // the object path each loaded object was made from (the noun resolver matches attributes by it)
+    std::function<int()> random_;
     ObjectPtr load(const Value& reference);
     float nounValue(Object& attribute, Object& resolver, const ObjectPtr& mind, const AttributeContext& context);
     std::optional<float> attributeValue(Object& attribute, const AttributeContext& context);
@@ -61,6 +70,8 @@ private:
     float restricted(Object& definition, float value, const AttributeContext& context);
     bool expressionsHold(const Value& expressions, const AttributeContext& context);
     std::optional<float> operandValue(const Value& attribute, const AttributeContext& context);
+    float randomBetween(const Value& lower, const Value& upper, bool integer, const AttributeContext& context);
+    float ammoDropWeight(Object& resolver, const AttributeContext& context);
 };
 
 // Experience required to reach a level (NATIVE_PROGRESSION.md section 3): R(n) = max(0, trunc(f(n)) - trunc(f(1))), f the

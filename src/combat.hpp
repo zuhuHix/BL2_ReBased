@@ -137,6 +137,37 @@ public:
     // The credits (or another currency) on a replication info: Currency[type].CurrentAmount, as GetCurrencyOnHand answers it; the setter is a state input (the run's cash).
     int64_t currencyOnHand(Object& info, int64_t type);
     void setCurrencyOnHand(Object& info, int64_t type, int64_t amount);
+    // ---- loot on death (plan step S-g, src/combat_loot.cpp, docs/verification/COMBAT_LOOT.md; every rule UNVERIFIED unless a live row says otherwise) ----
+    // What one death roll made: for each pool of the pawn's list that the script's loop did not skip (bAutoReadyItems false) the chance, the random draw, whether the pool was tried
+    // (chance above 0 and draw at or below it, the call the live hook saw) and what ItemPool.SpawnBalancedInventoryFromPool returned and spawned. There is no inventory or pickup on the
+    // VM: an item is a record (balance, manufacturer, inventory class, level) and "dropped" means the script's drop test passed (the others are destroyed).
+    struct LootItem {
+        std::string pool, balance, manufacturer, inventoryClass;
+        int level = 0;
+        bool dropOnDeath = false, dropped = false;
+        Class* cls = nullptr;
+    };
+    struct LootPool {
+        std::string pool, error;
+        double chance = 0, roll = 0;
+        bool tried = false, returned = false;
+        std::vector<LootItem> items;
+    };
+    struct LootDrop {
+        ObjectPtr pawn;
+        int stage = 0, awesome = 0;
+        bool belowKillZ = false;
+        std::vector<LootPool> pools;
+    };
+    std::vector<LootDrop>& drops() { return drops_; }
+    // The engine's random for the loot (the pool picks, the death roll's FRand, the random variance of a quantity or of the item game stage offset): C `rand()`, 0..32767, as a seedable
+    // stand-in (the Microsoft C runtime's linear congruential generator; the game's own seed is not known). The default seed is fixed, so a run repeats.
+    void seedRandom(uint32_t seed) { randomState_ = seed; }
+    static constexpr uint32_t DefaultSeed = 20261009;
+    // What the stock spawn does for the loot (PopulationFactoryBalancedAIPawn.SetupBalancedPopulationActor, script, read from the package): the pawn's item game stage (its experience level
+    // or its game stage by the balance's BaseItemGameStage, plus the truncated ItemGameStageOffset), then AIPawnBalanceDefinition.SetupPawnItemPoolList(pawn). A pawn that has no balance
+    // is not given one (the dummy-less archetypes of --combat-run). Needs enableDeaths first for the random of the offset.
+    void setupLoot(const ObjectPtr& pawn, const ObjectPtr& balance);
     // ---- kill experience (plan step S-d, src/combat_xp.cpp, docs/verification/COMBAT_KILL_XP.md) ----
     // What the two experience natives did, per kill, for the reports: the amount CalculateExperiencePointsForKill returned for the party (before the split), the victim's
     // level, and what AwardCombatExperienceToParty passed to each player controller's ExpEarn (the integer, truncated; the player's level at that moment).
@@ -175,6 +206,10 @@ private:
     std::map<std::string, ObjectPtr> byPath_;        // stock objects by path (damage types, hit regions), loaded once
     std::vector<ObjectPtr> players_;                 // controllers spawnPlayer made (a context source of the evaluator)
     std::map<std::string, bool> missing_;            // attribute and property names a stage wanted and the class does not have (reported once)
+    // The loot state (src/combat_loot.cpp).
+    struct LootCandidate;
+    uint32_t randomState_ = DefaultSeed;
+    std::vector<LootDrop> drops_;
 
     void bind(const char* path, NativeFn fn);
     void bindNatives();
@@ -183,6 +218,20 @@ private:
     void prepareForDeath(Object& pawn, const ObjectPtr& self);
     void bindExperienceNatives();
     void bindDownNatives();
+    void bindLootNatives();
+    int rand15();
+    float frand();
+    void dropLoot(const ObjectPtr& pawn);
+    bool spawnFromPool(const ObjectPtr& pool, int stage, int awesome, const ObjectPtr& source, bool mayDrop, std::vector<LootItem>& out, int depth = 0);
+    bool poolPasses(const ObjectPtr& pool, int stage, int cap, const AttributeContext& context, int depth);
+    std::vector<LootCandidate> expandBalance(const ObjectPtr& balance, int stage, int cap, const AttributeContext& context);
+    ObjectPtr inventoryDefinitionFor(const ObjectPtr& balance, const ObjectPtr& manufacturer, int word, std::vector<const Object*>& active);
+    int expLevelFor(const ObjectPtr& balance, const ObjectPtr& manufacturer, int word, std::vector<const Object*>& active);
+    void appendPools(const ObjectPtr& list, std::vector<Value>& out, int depth);       // ItemPoolListDefinition.AddToItemPoolList
+    int playThroughIndex(const ObjectPtr& balance);
+    bool setupItemPoolList(const ObjectPtr& balance, const ObjectPtr& pawn);
+    ObjectPtr localPlayerPawn();
+    ObjectPtr localPlayerPool(const Value& resource);
     void applyExperienceMultiplier(const ObjectPtr& pawn, const ObjectPtr& mind);
     ObjectPtr acquirePipeline(const Value& damageType, const Value& impact, bool friendly, const Value& hitObject);
     void releasePipeline(const ObjectPtr& pipeline);
@@ -218,7 +267,9 @@ private:
 
 // The `--combat-run` mode of ow-package (src/combat_run.cpp): spawns the requested pawns on `runtime`, applies the steps, and returns a JSON report with the
 // "rows" object that tools/verify_combat_pawn.py --vm reads. Steps:
-//   spawn:<kind>:<level>[:<stage>]   kind: dummy | regular | adult | ranged | baby (the stock archetypes), or <Package>/<archetype path>; stage defaults to the level
+//   spawn:<kind>:<level>[:<stage>[:<balance path>]]   kind: dummy | regular | adult | ranged | baby (the stock archetypes), or <Package>/<archetype path>; stage defaults to the level.
+//                                    The bullymong kinds also get their pawn balance's loot setup (plan step S-g: the item game stage and the pool list); another archetype gets one when a
+//                                    balance path (an AIPawnBalanceDefinition of the archetype's package) is given.
 //   base:<n>                         the per-level base (Init_BaseEnemyHealth) evaluated for pawn n (0-based, in spawn order), row base.L<level>
 //   sethealth:<n>:<v> | setmax:<n>:<v>   Pawn.SetHealth / SetMaxHealth on pawn n
 //   pool:<n>:<definition path>       CreatePool through pawn n's mind with that pool definition (a second pool in the same manager)
@@ -244,6 +295,13 @@ private:
 //                                    2.28 s, InjuredDeathAnimDone after 0.84 s, ShowRespawnDialog 11.8 s after the respawn) are played at the live delays (UNVERIFIED stand-ins).
 //                                    Rows down.total / successive / bleed_over / camera / second_wind_health / respawn_health / fee per injury (docs/verification/COMBAT_DOWN_RESPAWN.md).
 //                                    A hit or swing that takes Maya's health to 0 starts the down state by itself (the installed HandleHealthDepleted -> PlayInjured -> injured state).
+//   seed:<n>                         the loot's random (a C rand() stand-in) restarts from n; the default seed is fixed, so a run repeats
+//   mayahealth:<share>               Maya's health set to that share of her maximum (the health drop weight looks at it)
+//   rollpool:<n>:<pool path>[:<stage>[:<count>]]   ItemPool.SpawnBalancedInventoryFromPool called through the VM with pawn n as the context source, <count> times (plan step S-g);
+//                                    rows loot.roll.<pool>.stage<s>.n / .true / .items
+//   lootbatch:<kind>:<level>:<stage>:<count>[:<tag>]   <count> kills of a fresh pawn each by the player (needs maya or player), the death rolls summed: rows loot.batch.<tag>.n,
+//                                    .stage.<s>, and per pool .chance / .chance_max / .tried / .true / .items / .dropped (Pool_Money_1or2 also .qty.<k>)
+// A kill step (hit) also reports the death roll as "loot" (item stage, and per pool chance, draw, tried, returned, items) and rows loot.<class>.L<level>.<k>.* (docs/verification/COMBAT_LOOT.md).
 // Every step that names a pawn reports its state afterwards ("state": the natives' answers, HealthVar and HealthMaxVar, the HealthPool reference, the occupied slots).
 // `failed`, when given, is set when a step threw or the report logged an error.
 std::string combatRun(Runtime& runtime, const std::vector<std::string>& steps, bool* failed = nullptr);

@@ -40,6 +40,18 @@ The down state's natives (src/combat_down.cpp, docs/verification/COMBAT_DOWN_RES
 SetSecondWindReason(3) and SetCanTarget(false), then sets the health to 3.0, to 7.0 if IsInjured() answers true and to 1.0 if CanTarget() still answers true: the run must log the two
 calls, end at health 7.0 (IsInjured read the flag the script set, CanTarget read the false SetCanTarget stored) and leave those natives out of the stubs.
 
+The loot on death (src/combat_loot.cpp, docs/verification/COMBAT_LOOT.md) is checked with toy item data and a toy `WillowLootPawn` whose TakeDamage calls DropLootOnDeath and sets health 0
+(the installed DropLootOnDeath is replaced by the unit's roll). Invented data: two inventory balances (`Bal_Coin`, grade window 1 to 100; `Bal_Gem`, window 5 to 100), pools of them,
+lists and two pawn balances. The expected values are the rules of NATIVE_LOOT.md worked by hand:
+  - the pawn's list: the playthrough's custom included lists replace the default ones (List_B then, depth first, its included List_C), custom pool list empty so the default own list stays;
+    order Pool_Half, Pool_Coins, (Pool_Ready is skipped: bAutoReadyItems), Pool_Gated, Pool_Nested, Pool_Rand, Pool_Fallback; a balance with no playthrough gets no list at all;
+  - the item game stage: BaseItemGameStage 1 is the game stage (6) plus the truncated offset (1.9 -> 1) = 7; 0 is the experience level; item level = the stage capped at 50;
+  - a pool is tried when its chance is above 0 and the draw is at most the chance (chance 1: always, 0.5: about half); quantity is the number of picks, with replacement
+    (3 at weights 1 : 3, so about a quarter coins; a random quantity of 2 to 4 reaches both ends); a grade window that excludes the stage gives no candidate (only coins at stage 4);
+  - a pool whose minimum stage attribute (5) is above the stage returns false and makes nothing; an empty nested pool takes no share (1000 against 1); a nested pool's picks have
+    bDropOnDeath = the entry flag AND the outer entry flag; a nested pool that finds nothing does not change the outer result; an entry naming an empty pool and a balance uses the balance;
+  - the random is seeded: the same seed repeats the whole record, another seed does not; ItemPool.SpawnBalancedInventoryFromPool is a bound native (rollpool step).
+
 Checked (the numbers are the rules of the note):
   - spawn: the pool lands in slot 0 with GUID 0, the manager's Owner is the mind, GetHealth / GetMaxHealth answer the pool (40.5), HealthVar stays 11
     (not written while the pool is valid), HealthMaxVar becomes the pool's maximum (SetHealthResourcePoolDefinition);
@@ -116,6 +128,7 @@ class Tags:
 
     def int(self, name, v): return self.tag(name, 'IntProperty', 4, w32(v))
     def float(self, name, v): return self.tag(name, 'FloatProperty', 4, struct.pack('<f', v))
+    def bool(self, name, v): return self.tag(name, 'BoolProperty', 0, bytes([1 if v else 0]))
     def obj(self, name, ref): return self.tag(name, 'ObjectProperty', 4, w32(ref))
     def struct_(self, name, type_, body): return self.tag(name, 'StructProperty', len(body), body, self.p.fname(type_))
     def array(self, name, count, body): return self.tag(name, 'ArrayProperty', 4 + len(body), w32(count) + body)
@@ -277,12 +290,29 @@ def build_engine():
     T.function(manager, 'CreatePool', [('Object', 'Mgr', CPF_OUT), ('Object', 'ActorOwner', 0), ('Object', 'PoolDefinition', 0), ('Bool', 'bReinitializeExistingPool', CPF_OPT)],
                None, NATIVE | FUNC_STATIC, ('Struct', reference))
     T.function(manager, 'DeletePoolByReference', [('Struct', 'PoolReference', CPF_OUT, reference)], None, NATIVE)
+    # the attribute evaluator's data (the loot's quantity and stage attributes): an attribute with context and value resolver chains, and a definition with a random variance
+    attribute = T.cls('AttributeDefinition')
+    T.array_of(attribute, 'ContextResolverChain', 'Object')
+    T.array_of(attribute, 'ValueResolverChain', 'Object')
+    definition_class = T.cls('AttributeInitializationDefinition')
+    data = T.struct_(definition_class, 'AttributeInitializationData')
+    for name in ('BaseValueConstant', 'BaseValueScaleConstant'): T.prop('Float', data, name)
+    for name in ('BaseValueAttribute', 'InitializationDefinition'): T.prop('Object', data, name)
+    variance = T.struct_(definition_class, 'RandomVariance')
+    T.prop('Bool', variance, 'bEnabled')
+    T.prop('Bool', variance, 'bUseIntegerRandomization')
+    T.prop('Struct', variance, 'LowerBound', type_ref=data)
+    T.prop('Struct', variance, 'UpperBound', type_ref=data)
+    T.prop('Byte', definition_class, 'BaseValueMode')
+    T.prop('Struct', definition_class, 'RandomVariance', type_ref=variance)
     return p
 
 
 def build_gearbox():
     """The AI component's demigod hold natives, invented body-less declarations (the real ones are native)."""
-    T = Toy(('Byte', 'Object', 'Bool', 'Name'))
+    T = Toy(('Byte', 'Object', 'Bool', 'Name', 'Float'))
+    T.cls('NoContextNeededAttributeContextResolver')
+    T.prop('Float', T.cls('ConstantAttributeValueResolver'), 'ConstantValue')
     component = T.cls('AIComponent')
     T.function(component, 'HoldDemigod', [('Name', 'Reason', 0), ('Object', 'Source', 0)], None, NATIVE)
     T.function(component, 'ReleaseDemigod', [('Name', 'Reason', 0), ('Object', 'Source', 0)], None, NATIVE)
@@ -475,6 +505,69 @@ def build_willowgame():
     T.function(player_pawn, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
                                            ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], player_take_damage)
     T.prop('Int', T.cls('WillowPlayerReplicationInfo', super_ref=actor), 'ExpLevel')
+
+    # ---- the loot on death: the data classes the pool roll reads (names as the game's), the pawn balance with its native, and a toy pawn that rolls its loot when hit
+    pool_info = T.struct_(globals_class, 'ItemPoolInfo')
+    T.prop('Object', pool_info, 'ItemPool')
+    T.prop('Struct', pool_info, 'PoolProbability', type_ref=data_struct)
+    entry_struct = T.struct_(globals_class, 'BalancedInventoryData')
+    for name in ('ItmPoolDefinition', 'InvBalanceDefinition'): T.prop('Object', entry_struct, name)
+    T.prop('Struct', entry_struct, 'Probability', type_ref=data_struct)
+    T.prop('Bool', entry_struct, 'bDropOnDeath')
+    item_pool = T.cls('ItemPoolDefinition')
+    T.array_of(item_pool, 'BalancedItems', 'Struct', entry_struct)
+    T.prop('Struct', item_pool, 'Quantity', type_ref=data_struct)
+    T.prop('Bool', item_pool, 'bAutoReadyItems')
+    for name in ('MinGameStageRequirement', 'MaxGameStageRequirement'): T.prop('Object', item_pool, name)
+    pool_list = T.cls('ItemPoolListDefinition')
+    T.array_of(pool_list, 'ItemPools', 'Struct', pool_info)
+    T.array_of(pool_list, 'ItemPoolIncludedLists', 'Object')
+    window = T.struct_(globals_class, 'StageWindow')
+    for name in ('MinGameStage', 'MaxGameStage'): T.prop('Int', window, name)
+    grade_modifiers = T.struct_(globals_class, 'GradeModifiers')
+    T.prop('Int', grade_modifiers, 'ExpLevel')
+    T.prop('Object', grade_modifiers, 'CustomInventoryDefinition')
+    grade = T.struct_(globals_class, 'GradeEntry')
+    T.prop('Struct', grade, 'GameStageRequirement', type_ref=window)
+    for name in ('MinSpawnProbabilityModifier', 'MaxSpawnProbabilityModifier'): T.prop('Struct', grade, name, type_ref=data_struct)
+    T.prop('Struct', grade, 'GradeModifiers', type_ref=grade_modifiers)
+    maker = T.struct_(globals_class, 'ManufacturerEntry')
+    T.prop('Object', maker, 'Manufacturer')
+    T.array_of(maker, 'Grades', 'Struct', grade)
+    inventory_balance = T.cls('InventoryBalanceDefinition')
+    T.prop('Object', inventory_balance, 'InventoryDefinition')
+    T.array_of(inventory_balance, 'Manufacturers', 'Struct', maker)
+    T.prop('Bool', inventory_balance, 'bInterpolateExpLevel')
+    T.prop('Object', inventory_balance, 'BaseDefinition')
+    T.prop('Class', T.cls('InventoryDefinition'), 'InventoryClass')
+    T.cls('ManufacturerDefinition')
+    for name in ('WillowUsableItem', 'WillowWeapon'): T.prop('Bool', T.cls(name), 'bDropOnDeath')
+    play_through = T.struct_(globals_class, 'PlayThroughData')
+    T.array_of(play_through, 'CustomItemPoolIncludedLists', 'Object')
+    T.array_of(play_through, 'CustomItemPoolList', 'Struct', pool_info)
+    pawn_balance = T.cls('AIPawnBalanceDefinition')
+    T.prop('Int', pawn_balance, 'BaseItemGameStage')
+    T.prop('Struct', pawn_balance, 'ItemGameStageOffset', type_ref=data_struct)
+    T.array_of(pawn_balance, 'DefaultItemPoolIncludedLists', 'Object')
+    T.array_of(pawn_balance, 'DefaultItemPoolList', 'Struct', pool_info)
+    T.array_of(pawn_balance, 'PlayThroughs', 'Struct', play_through)
+    T.function(pawn_balance, 'SetupPawnItemPoolList', [('Object', 'SpawnedPawn', 0)], None, NATIVE, 'Bool')
+    T.function(T.cls('ItemPool'), 'SpawnBalancedInventoryFromPool', [('Object', 'Definition', 0), ('Int', 'GameStage', 0), ('Int', 'AwesomeLevel', 0), ('Object', 'ContextSource', 0),
+               ('Object', 'SpawnedInventory', CPF_OUT), ('Object', 'GameStageVarianceFormula', CPF_OPT), ('Float', 'OuterPoolChance', CPF_OPT), ('Bool', 'bInventoryMayDropOnDeath', CPF_OPT)],
+               None, NATIVE | FUNC_STATIC, 'Bool')
+    loot_pawn = T.cls('WillowLootPawn', super_ref=ai_pawn)
+    T.array_of(loot_pawn, 'ItemPoolList', 'Struct', pool_info)
+    T.prop('Int', loot_pawn, 'GameStageForSpawnedInventory')
+    T.prop('Int', loot_pawn, 'AwesomeLevel')
+    drop_loot = T.function(willow_pawn, 'DropLootOnDeath', [], lambda ids: (lambda a: (a.return_nothing(), a.end(), a)[2])(Asm()))['__self__']
+
+    def loot_take_damage(ids):        # DropLootOnDeath(); SetHealth(0.0)
+        a = Asm()
+        a.final(drop_loot)
+        a.final(set_health, lambda: a.float_const(0.0))
+        a.return_nothing(); a.end(); return a
+    T.function(loot_pawn, 'TakeDamage', [('Float', 'Damage', 0), ('Object', 'InstigatedBy', 0), ('Float', 'HitLocation', 0), ('Float', 'Momentum', 0),
+                                         ('Class', 'DamageType', 0), ('Float', 'HitInfo', 0), ('Object', 'DamageCauser', 0), ('Object', 'Pipeline', 0)], loot_take_damage)
     return p
 
 
@@ -522,6 +615,68 @@ def build_pawns():
     p.add_export(p.add_import_full('Class', willow, 'Behavior_CauseDamage'), 'Cause_Toy',
                  w32(0) + data('DamageFormula', 0.0, 2.0) + t.tag('DamageSource', 'ClassProperty', 4, w32(p.add_import_full('Class', willow, 'WillowDmgSource_Grenade')))
                  + t.obj('DamageTypeDefinition', type_definition) + none)
+
+    # ---- the loot data (invented): see the docstring
+    gearbox = p.add_import_full('Package', 0, 'GearboxFramework')
+    attribute_class = p.add_import_full('Class', engine, 'AttributeDefinition')
+    definition_class_ = p.add_import_full('Class', engine, 'AttributeInitializationDefinition')
+    no_context = p.add_export(p.add_import_full('Class', gearbox, 'NoContextNeededAttributeContextResolver'), 'NoContext_0', w32(0) + none)
+    constant_five = p.add_export(p.add_import_full('Class', gearbox, 'ConstantAttributeValueResolver'), 'Constant_5', w32(0) + t.float('ConstantValue', 5.0) + none)
+    stage_five = p.add_export(attribute_class, 'Attr_Stage5', w32(0) + t.array('ContextResolverChain', 1, w32(no_context)) + t.array('ValueResolverChain', 1, w32(constant_five)) + none)
+    random_quantity = p.add_export(definition_class_, 'Random_2to4', w32(0) + t.struct_('RandomVariance', 'RandomVariance', t.bool('bEnabled', True) + t.bool('bUseIntegerRandomization', True)
+                                   + data('LowerBound', 2.0, 1.0) + data('UpperBound', 4.0, 1.0) + none) + none)
+    maker_item = p.add_export(p.add_import_full('Class', willow, 'ManufacturerDefinition'), 'Mfr_Toy', w32(0) + none)
+    inventory_definition = p.add_import_full('Class', willow, 'InventoryDefinition')
+    coin_definition = p.add_export(inventory_definition, 'Def_Coin', w32(0) + t.tag('InventoryClass', 'ClassProperty', 4, w32(p.add_import_full('Class', willow, 'WillowUsableItem'))) + none)
+    gem_definition = p.add_export(inventory_definition, 'Def_Gem', w32(0) + t.tag('InventoryClass', 'ClassProperty', 4, w32(p.add_import_full('Class', willow, 'WillowWeapon'))) + none)
+
+    def grades(low, high):
+        window = t.struct_('GameStageRequirement', 'StageWindow', t.int('MinGameStage', low) + t.int('MaxGameStage', high) + none)
+        return window + data('MinSpawnProbabilityModifier', 1.0, 1.0) + data('MaxSpawnProbabilityModifier', 1.0, 1.0) \
+            + t.struct_('GradeModifiers', 'GradeModifiers', t.int('ExpLevel', 1) + none) + none
+
+    def inventory_balance(name, definition, low, high):
+        return p.add_export(p.add_import_full('Class', willow, 'InventoryBalanceDefinition'), name,
+                            w32(0) + t.obj('InventoryDefinition', definition) + t.array('Manufacturers', 1, t.obj('Manufacturer', maker_item) + t.array('Grades', 1, grades(low, high)) + none)
+                            + t.bool('bInterpolateExpLevel', True) + none)
+    bal_coin, bal_gem = inventory_balance('Bal_Coin', coin_definition, 1, 100), inventory_balance('Bal_Gem', gem_definition, 5, 100)
+
+    def entry(pool=None, balance=None, weight=1.0, drop=True):
+        return (t.obj('ItmPoolDefinition', pool) if pool else b'') + (t.obj('InvBalanceDefinition', balance) if balance else b'') + data('Probability', weight, 1.0) + t.bool('bDropOnDeath', drop) + none
+
+    def item_pool(name, entries, quantity=None, ready=False, minimum=None):
+        return p.add_export(p.add_import_full('Class', willow, 'ItemPoolDefinition'), name,
+                            w32(0) + t.array('BalancedItems', len(entries), b''.join(entries)) + (quantity or data('Quantity', 1.0, 1.0)) + t.bool('bAutoReadyItems', ready)
+                            + (t.obj('MinGameStageRequirement', minimum) if minimum else b'') + none)
+    pool_coins = item_pool('Pool_Coins', [entry(balance=bal_coin, weight=1.0, drop=True), entry(balance=bal_gem, weight=3.0, drop=False)], data('Quantity', 3.0, 1.0))
+    pool_gated = item_pool('Pool_Gated', [entry(balance=bal_coin)], minimum=stage_five)
+    pool_empty = item_pool('Pool_Empty', [])
+    pool_inner = item_pool('Pool_Inner', [entry(balance=bal_gem, drop=True)])
+    pool_nested = item_pool('Pool_Nested', [entry(pool=pool_empty, weight=1000.0, drop=True), entry(pool=pool_inner, weight=1.0, drop=False)])
+    pool_random = item_pool('Pool_Rand', [entry(balance=bal_coin)], t.struct_('Quantity', 'AttributeInitializationData', t.float('BaseValueConstant', 0.0)
+                            + t.float('BaseValueScaleConstant', 1.0) + t.obj('InitializationDefinition', random_quantity) + none))
+    pool_fallback = item_pool('Pool_Fallback', [entry(pool=pool_empty, balance=bal_coin)])        # an entry naming an empty pool and a balance: the empty pool counts as absent, the balance is used
+    pool_half, pool_never = item_pool('Pool_Half', [entry(balance=bal_coin)]), item_pool('Pool_Never', [entry(balance=bal_coin)])
+    pool_ready = item_pool('Pool_Ready', [entry(balance=bal_coin)], ready=True)
+
+    def info(pool, chance): return t.obj('ItemPool', pool) + data('PoolProbability', chance, 1.0) + none
+    list_class = p.add_import_full('Class', willow, 'ItemPoolListDefinition')
+    list_c = p.add_export(list_class, 'List_C', w32(0) + t.array('ItemPools', 1, info(pool_half, 0.5)) + none)
+    list_b = p.add_export(list_class, 'List_B', w32(0) + t.array('ItemPools', 3, info(pool_coins, 1.0) + info(pool_ready, 1.0) + info(pool_gated, 1.0))
+                          + t.array('ItemPoolIncludedLists', 1, w32(list_c)) + none)
+    list_a = p.add_export(list_class, 'List_A', w32(0) + t.array('ItemPools', 1, info(pool_never, 0.0)) + none)
+    balance_class = p.add_import_full('Class', willow, 'AIPawnBalanceDefinition')
+
+    def pawn_balance(name, base_stage, offset, play_throughs):
+        return p.add_export(balance_class, name, w32(0) + t.int('BaseItemGameStage', base_stage) + data('ItemGameStageOffset', offset, 1.0)
+                            + t.array('DefaultItemPoolIncludedLists', 1, w32(list_a)) + t.array('DefaultItemPoolList', 3, info(pool_nested, 1.0) + info(pool_random, 1.0) + info(pool_fallback, 1.0))
+                            + t.array('PlayThroughs', len(play_throughs), b''.join(play_throughs)) + none)
+    first_play_through = t.array('CustomItemPoolIncludedLists', 1, w32(list_b)) + t.array('CustomItemPoolList', 0, b'') + none
+    pawn_balance('Balance_Toy', 1, 1.9, [first_play_through])
+    pawn_balance('Balance_Low', 0, 0.0, [first_play_through])
+    pawn_balance('Balance_None', 1, 0.0, [])
+    p.add_export(p.add_import_full('Class', willow, 'WillowLootPawn'), 'Pawn_Loot',
+                 w32(0) + t.obj('AIClass', ai_class) + t.float('HealthVar', 11.0) + t.float('HealthMaxVar', 12.0) + none)
     return p
 
 
@@ -710,6 +865,76 @@ with tempfile.TemporaryDirectory() as folder:
     check('down: bleed without the mission bridge is refused with a reason', code != 0 and 'needs the mission bridge' in got['errors'][0], got['errors'])
     code, got = combat_run(root, 'spawn:ToyPawns/Pawn_Down:4', 'cash:100')
     check('down: cash without the mission bridge is refused with a reason', code != 0 and 'needs the mission bridge' in got['errors'][0], got['errors'])
+
+    # ---- the loot on death (docs/verification/COMBAT_LOOT.md): the toy data and the hand-worked rules of the docstring
+    def loot_run(seed, kills, balance, level=4, stage=6, extra=()):
+        steps = [f'seed:{seed}', 'player:8']
+        for i in range(kills): steps += [f'spawn:ToyPawns/Pawn_Loot:{level}:{stage}:{balance}', f'hit:{i}:10::Bullet']
+        code, got = combat_run(root, *steps, *extra)
+        check(f'loot: exit and errors ({balance}, seed {seed})', code == 0 and got['errors'] == [], (code, got['errors']))
+        return got, [r['result']['loot'] for r in got['steps'] if r['step'].startswith('hit') and 'loot' in r['result']]
+
+    def pool_of(drop, name): return next((q for q in drop['pools'] if q['pool'] == name), None)
+
+    got, drops = loot_run(3, 60, 'Balance_Toy')
+    check('loot: every kill has a death roll', len(drops) == 60, len(drops))
+    check('loot: the item game stage is the game stage 6 plus the truncated offset 1.9 -> 1 = 7', {d['item_stage'] for d in drops} == {7}, [d['item_stage'] for d in drops][:5])
+    check('loot: the pool list is the custom included lists (List_C first, then List_B) and the default own list, no Pool_Never, no Pool_Ready',
+          [q['pool'] for q in drops[0]['pools']] == ['Pool_Half', 'Pool_Coins', 'Pool_Gated', 'Pool_Nested', 'Pool_Rand', 'Pool_Fallback'], [q['pool'] for q in drops[0]['pools']])
+    coins = [pool_of(d, 'Pool_Coins') for d in drops]
+    check('loot: chance 1 is always tried and the pool returns true with 3 picks', all(c['tried'] and c['returned'] and len(c['items']) == 3 for c in coins), coins[0])
+    kinds = [i['balance'] for c in coins for i in c['items']]
+    check('loot: weights 1 : 3 give about a quarter coins in 180 picks (45 +- 23)', 22 <= kinds.count('Bal_Coin') <= 68 and kinds.count('Bal_Coin') + kinds.count('Bal_Gem') == 180, kinds.count('Bal_Coin'))
+    check('loot: an item has the level of the stage (7) and its entry flag decides the drop (a coin is dropped, a gem destroyed)',
+          all(i['level'] == 7 and i['dropped'] == (i['balance'] == 'Bal_Coin') and i['drop_on_death'] == (i['balance'] == 'Bal_Coin') for c in coins for i in c['items']), coins[0])
+    check('loot: the inventory class comes from the definition of the balance', {i['class'] for c in coins for i in c['items'] if i['balance'] == 'Bal_Coin'} == {'WillowUsableItem'}
+          and {i['class'] for c in coins for i in c['items'] if i['balance'] == 'Bal_Gem'} == {'WillowWeapon'}, coins[0])
+    gated = [pool_of(d, 'Pool_Gated') for d in drops]
+    check('loot: the minimum stage 5 admits stage 7: returned true, one coin', all(g['tried'] and g['returned'] and len(g['items']) == 1 for g in gated), gated[0])
+    nested = [pool_of(d, 'Pool_Nested') for d in drops]
+    check('loot: an empty nested pool takes no share (1000 against 1): the inner pool always rolls its gem, and the outer entry flag false makes it undropped',
+          all(n['returned'] and len(n['items']) == 1 and n['items'][0]['balance'] == 'Bal_Gem' and n['items'][0]['drop_on_death'] is False and n['items'][0]['dropped'] is False for n in nested), nested[0])
+    check('loot: an entry that names an empty pool and a balance uses the balance (the empty pool counts as absent)', all(pool_of(d, 'Pool_Fallback')['returned']
+          and [i['balance'] for i in pool_of(d, 'Pool_Fallback')['items']] == ['Bal_Coin'] for d in drops), pool_of(drops[0], 'Pool_Fallback'))
+    quantities = [len(pool_of(d, 'Pool_Rand')['items']) for d in drops]
+    check('loot: a random quantity of 2 to 4 (integer, both ends) reaches each value', set(quantities) == {2, 3, 4}, sorted(set(quantities)))
+    half = sum(pool_of(d, 'Pool_Half')['tried'] for d in drops)
+    check('loot: chance 0.5 is tried about half of 60 deaths (30 +- 15), the draw is at most the chance', 15 <= half <= 45
+          and all(pool_of(d, 'Pool_Half')['tried'] == (pool_of(d, 'Pool_Half')['roll'] <= 0.5) for d in drops), half)
+    events = [r['result']['events'] for r in got['steps'] if r['step'].startswith('hit')][0]
+    setup = got['steps'][2]['result'].get('loot_setup', {})
+    check('loot: the spawn reports the item game stage and the pool list the setup made (the carried-gear Pool_Ready is in the list, the roll skips it)',
+          setup.get('item_stage') == 7 and setup.get('pools') == ['Pool_Half', 'Pool_Coins', 'Pool_Ready', 'Pool_Gated', 'Pool_Nested', 'Pool_Rand', 'Pool_Fallback'], setup)
+    check('loot: the roll is in the events', any(e.startswith('DropLootOnDeath: item stage 7, 6 pools rolled (1 carried-gear pools skipped)') for e in events), events)
+
+    got, drops = loot_run(3, 6, 'Balance_Low')
+    check('loot: BaseItemGameStage 0 is the experience level (4) with offset 0', {d['item_stage'] for d in drops} == {4}, drops[0]['item_stage'])
+    check('loot: below the minimum stage the pool returns false and makes nothing', all(pool_of(d, 'Pool_Gated')['tried'] and not pool_of(d, 'Pool_Gated')['returned'] and not pool_of(d, 'Pool_Gated')['items'] for d in drops), pool_of(drops[0], 'Pool_Gated'))
+    check('loot: a grade window that excludes the stage gives no candidate: only coins at stage 4', all(len(pool_of(d, 'Pool_Coins')['items']) == 3
+          and all(i['balance'] == 'Bal_Coin' and i['level'] == 4 and i['dropped'] for i in pool_of(d, 'Pool_Coins')['items']) for d in drops), pool_of(drops[0], 'Pool_Coins'))
+    check('loot: a nested pool that finds nothing does not change the outer result (true, no items)', all(pool_of(d, 'Pool_Nested')['returned'] and not pool_of(d, 'Pool_Nested')['items'] for d in drops), pool_of(drops[0], 'Pool_Nested'))
+
+    got, drops = loot_run(3, 2, 'Balance_Toy', stage=59)
+    check('loot: the stage 60 is kept as the item stage but an item level is capped at 50', drops[0]['item_stage'] == 60 and all(i['level'] == 50 for i in pool_of(drops[0], 'Pool_Coins')['items']), drops[0])
+
+    first, repeat, other = (loot_run(seed, 20, 'Balance_Toy')[1] for seed in (5, 5, 6))
+    check('loot: the same seed repeats the whole record', json.dumps(first) == json.dumps(repeat))
+    check('loot: another seed does not', json.dumps(first) != json.dumps(other))
+
+    got, drops = loot_run(3, 1, 'Balance_None')
+    check('loot: a balance with no playthrough gives the pawn no list (nothing rolled)', drops[0]['pools'] == [] and got['steps'][2]['result']['loot_setup']['pools'] == [], (drops[0], got['steps'][2]))
+
+    # the native, called through the VM (rollpool): Pool_Gated at stage 4 (false) and 5 (true), Pool_Coins at stage 4 (3 coin inventories per call)
+    code, got = combat_run(root, 'seed:3', 'spawn:ToyPawns/Pawn_Loot:4:6:Balance_Low', 'rollpool:0:Pool_Gated:4:5', 'rollpool:0:Pool_Gated:5:5', 'rollpool:0:Pool_Coins:4:7')
+    check('loot: rollpool exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('loot: the native returns false below the minimum stage (5 calls, 0 true, 0 inventories) and true at it',
+          got['rows'].get('loot.roll.Pool_Gated.stage4.true') == 0 and got['rows'].get('loot.roll.Pool_Gated.stage4.items') == 0
+          and got['rows'].get('loot.roll.Pool_Gated.stage5.true') == 5 and got['rows'].get('loot.roll.Pool_Gated.stage5.items') == 5, got['rows'])
+    result = got['steps'][4]['result']
+    check('loot: 7 calls of Pool_Coins at stage 4 make 21 stand-in inventories, coins with bDropOnDeath set',
+          got['rows'].get('loot.roll.Pool_Coins.stage4.items') == 21 and got['rows'].get('loot.roll.Pool_Coins.stage4.true') == 7
+          and result['inventories'] == [{'class': 'WillowUsableItem', 'drop_on_death': True}] * 3, (got['rows'], result))
+    check('loot: the pool natives are bound, not stubs', not [k for k in got['stubs'] if 'ItemPool' in k or 'SetupPawnItemPoolList' in k], got['stubs'])
 
 if failures:
     print(f'{len(failures)} combat check(s) failed:')

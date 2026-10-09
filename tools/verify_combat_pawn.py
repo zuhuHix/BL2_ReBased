@@ -16,6 +16,13 @@ whose step list is in that document: bleed-out total and its successive-injury c
 lane L5b saw them), the overshoot of the script's timer past the total (a frame), the length of the death camera (5.76 s), the health share after a second wind (0.25) and after a respawn (1.0), and the respawn fee
 (0.07 of the cash, rounded half up, at most the cash; 190, 177, 165 on 2,715, 2,534, 2,357 as lane L3 saw them). --live has no source for them (MISSING).
 
+The loot rows (plan step S-g, docs/verification/COMBAT_LOOT.md) are about the death roll on the VM, measured by --vm of the loot run whose step list is in that document (it may be a
+second JSON: --vm takes several files and merges their rows). Loot is random, so most rows are distribution comparisons: the pool chances against the numbers in the data (the constants
+below, public values of the game's item pool list for a standard enemy), the empirical rate of a pool being tried over hundreds of seeded kills against that chance (four binomial
+standard deviations, plus one for the rare pools), and the live flags the hook saw (a pool tried at item stage 6 that returned false or true, the item stage of a baby and of an adult, a
+vehicle skin that is not dropped). The `loot.rule.*` rows are the VM's own readings with no live row (marked UNVERIFIED in the document). A row marked OPEN is a live observation the VM does
+not reproduce yet; it is reported, never counted as a pass, and does not fail the run.
+
 VM JSON schema: {"rows": {<row id>: <number>, ...}}. A kill row takes {"award": <number>, "credit": <number>}; a fee row {"cash": <number>, "fee": <number>}. A row that is
 absent is reported MISSING and does not fail the run. Only FAIL makes the exit code 1.
 
@@ -43,6 +50,14 @@ XP_MULT = {"TargetDummy": 0.5, "PrimalBeastAdult": 1.25, "PrimalBeast": 0.75, "P
 LOWER_LEVEL_EXP_SCALE = [0.9, 0.7, 0.4, 0.15, 0.05, 0.01]  # index |d| - 1; the last entry also covers larger differences
 
 MELEE, GRENADE = "WillowDmgSource_Melee", "WillowDmgSource_Grenade"
+
+# The standard enemy pool list's chances for one player at full health, as the data evaluates them (GD_Itempools.ListDefs.StandardEnemyGunsAndGear; the drop odds attributes, one player):
+# the values the VM must read from the packages, and against which the empirical rate of "tried" is compared. The ammo pools' 0.2 is the AmmoDrops_PerPlayer share (1.0 x 0.2) and the
+# emergency pool's constant; the health pool's 0.03 is its above-threshold weight (the player's health is at or above 40 percent).
+LOOT_CHANCE = {"Pool_GunsAndGear": 0.085, "Pool_VehicleSkins_All": 0.05, "Pool_Money_1or2": 0.25, "Pool_Eridium_Bar": 0.0015, "Pool_Eridium_Stick": 0.008,
+               "Pool_Health_All": 0.03, "Pool_Ammo_All_NeedOnly": 0.2, "Pool_Ammo_All_Emergency": 0.2}
+LOOT_TAGS = ("adult", "baby")                    # the loot batches of the run: an adult at game stage 6 and a baby at stage 6
+HEALTH_CHANCE_AT_20_PERCENT = 0.175              # the stand-in's reading of the health weight at 20 percent health: 0.25 + (0.2 / 0.4) x (0.1 - 0.25), UNVERIFIED
 
 # The player's down state as docs/verification/COMBAT_GOLDEN_TRACE.md section D and the L5b question-6 table record it (live values of lanes L3 and L5b).
 BLEED_BASE = 12.0            # TotalBleedoutTime of an injury with no successive reduction (Maya, one player)
@@ -101,6 +116,12 @@ class Row:
     boosts: int = 0               # ratio: Defense Boost count the hit must carry (0 = unboosted)
     value: float = None           # down rows: the expected number (down_count, down_total, down_share)
     cash: int = None              # down_fee rows: the cash the scenario gives the player before the fee (None: not fixed by the scenario)
+    pool: str = None              # loot rows: the item pool; tag: the loot batch; stage: the item game stage of a rollpool step
+    tag: str = None
+    stage: int = None
+    flag: str = None              # loot_flag: "all" (every call returned true) or "none"; loot_destroyed: "none" or "all" dropped
+    qty: int = None               # loot_qty: the number of items one call of the money pool made
+    open: bool = False            # the live observation is not reproduced yet: a mismatch is OPEN, not FAIL
 
 
 ROWS = [
@@ -150,6 +171,116 @@ for _k in (4, 5):
     ROWS.append(Row(f"down.second_wind_health.{_k}", "down_share", value=SECOND_WIND_HEALTH))
 
 
+# The loot rows. Live: COMBAT_GOLDEN_TRACE.md section A step 7 (lane L3) and the bullymong paragraph (lane L5b): the flags of the pools tried at item stage 6 or 7, the item stage of a baby (6)
+# and of an adult (4 and 7 were seen), the items made by the money pool, the vehicle skin that got no pickup.
+for _pool in LOOT_CHANCE:
+    ROWS.append(Row(f"loot.chance.{_pool}", "loot_chance", pool=_pool, tag="adult"))
+    for _tag in LOOT_TAGS:
+        ROWS.append(Row(f"loot.rate.{_tag}.{_pool}", "loot_rate", pool=_pool, tag=_tag))
+for _pool, _stage, _flag in (("Pool_Eridium_Stick", 6, "none"), ("Pool_Ammo_All_Emergency", 6, "none"), ("Pool_Ammo_All_NeedOnly", 6, "none"), ("Pool_Health_All", 6, "all"),
+                             ("Pool_Money_1or2", 6, "all"), ("Pool_Money_1or2", 7, "all"), ("Pool_GunsAndGear", 6, "all"), ("Pool_VehicleSkins_All", 6, "all")):
+    ROWS.append(Row(f"loot.live.{_pool}.stage{_stage}", "loot_flag", pool=_pool, stage=_stage, flag=_flag))
+ROWS.append(Row("loot.rule.Pool_Eridium_Stick.stage7", "loot_flag", pool="Pool_Eridium_Stick", stage=7, flag="all"))        # the minimum stage 7 of the data, no live row
+for _pool, _flag in (("Pool_VehicleSkins_All", "none"), ("Pool_Health_All", "all"), ("Pool_Money_1or2", "all")):
+    ROWS.append(Row(f"loot.live.drop.{_pool}", "loot_destroyed", pool=_pool, tag="adult", flag=_flag))
+ROWS.append(Row("loot.live.stage.baby", "loot_stage", tag="baby"))
+ROWS.append(Row("loot.live.stage.adult", "loot_stage", tag="adult"))
+ROWS.append(Row("loot.live.level.adult", "loot_level", tag="adult"))
+ROWS.append(Row("loot.live.money.baby.qty1", "loot_qty", tag="baby", qty=1))
+ROWS.append(Row("loot.live.money.adult.qty3", "loot_qty", tag="adult", qty=3, open=True))     # live: 3 items from Pool_Money_1or2 on an adult; the VM's quantity is 1 or 2
+ROWS.append(Row("loot.rule.money.qty2_share", "loot_qty_share", tag="adult"))
+ROWS.append(Row("loot.rule.health.chance_at_20pct", "loot_health_low", pool="Pool_Health_All", tag="low"))
+
+
+def lootkey(tag, *names):
+    return ".".join(("loot", "batch", tag) + names)
+
+
+def measure_loot(rows):
+    """The measured value of every loot row whose VM rows are present (the VM JSON keeps flat numbers; the comparisons need two or three of them)."""
+    measured = {}
+
+    for row in ROWS:
+        if row.kind == "loot_chance":
+            value = rows.get(lootkey(row.tag, row.pool, "chance"))
+            if value is not None: measured[row.id] = value
+        elif row.kind == "loot_rate":
+            n, k = rows.get(lootkey(row.tag, "n")), rows.get(lootkey(row.tag, row.pool, "tried"))
+            if n is not None and k is not None: measured[row.id] = {"n": n, "k": k}
+        elif row.kind == "loot_flag":
+            base = f"loot.roll.{row.pool}.stage{row.stage}"
+            n, true = rows.get(base + ".n"), rows.get(base + ".true")
+            if n is not None and true is not None: measured[row.id] = {"n": n, "true": true}
+        elif row.kind == "loot_destroyed":
+            items, dropped = rows.get(lootkey(row.tag, row.pool, "items")), rows.get(lootkey(row.tag, row.pool, "dropped"))
+            if items is not None and dropped is not None: measured[row.id] = {"items": items, "dropped": dropped}
+        elif row.kind == "loot_stage":
+            stages = {int(k.rsplit(".", 1)[1]): v for k, v in rows.items() if k.startswith(lootkey(row.tag, "stage") + ".") and k.rsplit(".", 1)[1].isdigit()}
+            n = rows.get(lootkey(row.tag, "n"))
+            if stages and n is not None: measured[row.id] = {"n": n, "stages": stages}
+        elif row.kind == "loot_level":
+            mismatch, n = rows.get(lootkey(row.tag, "level_mismatch")), rows.get(lootkey(row.tag, "n"))
+            if mismatch is not None and n is not None: measured[row.id] = {"n": n, "mismatch": mismatch}
+        elif row.kind in ("loot_qty", "loot_qty_share"):
+            counts = {int(k.rsplit(".", 1)[1]): v for k, v in rows.items() if k.startswith(lootkey(row.tag, "Pool_Money_1or2", "qty") + ".")}
+            tried = rows.get(lootkey(row.tag, "Pool_Money_1or2", "tried"))
+            if tried is not None: measured[row.id] = {"tried": tried, "counts": counts}
+        elif row.kind == "loot_health_low":
+            value = rows.get(lootkey(row.tag, row.pool, "chance"))
+            if value is not None: measured[row.id] = value
+    return measured
+
+
+def loot_expected(row):
+    if row.kind in ("loot_chance", "loot_rate"): return LOOT_CHANCE[row.pool]
+    return {"loot_flag": f"{row.flag} of the calls return true", "loot_destroyed": f"{row.flag} of the items dropped",
+            "loot_stage": "every roll at item stage 6" if row.tag == "baby" else "stages 4 to 7, a quarter each", "loot_level": "every item's level is its roll stage",
+            "loot_qty": f"{row.qty} items from one call reachable", "loot_qty_share": "2 items in a quarter of the calls, 1 in the rest",
+            "loot_health_low": HEALTH_CHANCE_AT_20_PERCENT}[row.kind]
+
+
+def binomial_ok(n, k, p):
+    """k successes of n at probability p: within four standard deviations plus one (the rare pools have fewer than one expected)."""
+    return abs(k - n * p) <= 4 * math.sqrt(n * p * (1 - p)) + 1
+
+
+def check_loot(row, measured):
+    """Returns (status, expected, detail) for a loot row; `measured` is what measure_loot made."""
+    if row.kind == "loot_chance":
+        exp = LOOT_CHANCE[row.pool]
+        return ("PASS" if close(measured, exp) else "FAIL"), exp, ""
+    if row.kind == "loot_rate":
+        exp = LOOT_CHANCE[row.pool]
+        n, k = measured["n"], measured["k"]
+        return ("PASS" if binomial_ok(n, k, exp) else "FAIL"), f"{exp:g} x {n:g} = {exp * n:.1f} +- {4 * math.sqrt(n * exp * (1 - exp)) + 1:.1f} tried", f"tried {k:g}"
+    if row.kind == "loot_flag":
+        n, true = measured["n"], measured["true"]
+        ok = n > 0 and true == (n if row.flag == "all" else 0)
+        return ("PASS" if ok else "FAIL"), f"{row.flag} of {n:g} calls return true", f"true {true:g}"
+    if row.kind == "loot_destroyed":
+        items, dropped = measured["items"], measured["dropped"]
+        ok = items > 0 and dropped == (items if row.flag == "all" else 0)
+        return ("PASS" if ok else "FAIL"), f"{row.flag} of the items dropped", f"items {items:g}, dropped {dropped:g}"
+    if row.kind == "loot_stage":
+        n, stages = measured["n"], measured["stages"]
+        if row.tag == "baby":                       # no offset: the item stage is the game stage (6 in the run)
+            return ("PASS" if set(stages) == {6} else "FAIL"), "every roll at item stage 6", f"stages {sorted(stages)}"
+        ok = min(stages) == 4 and max(stages) == 7 and all(binomial_ok(n, stages.get(s, 0), 0.25) for s in (4, 5, 6, 7))      # offset -2 to +1 on stage 6, each end seen live
+        return ("PASS" if ok else "FAIL"), "stages 4 to 7, a quarter each", f"stages {dict(sorted(stages.items()))}"
+    if row.kind == "loot_level":
+        return ("PASS" if measured["n"] > 0 and measured["mismatch"] == 0 else "FAIL"), "every item's level is its roll stage", f"mismatches {measured['mismatch']:g}"
+    if row.kind == "loot_qty":
+        reached = measured["counts"].get(row.qty, 0)
+        if reached > 0: return "PASS", f"{row.qty} items from one call reachable", f"{reached:g} of {measured['tried']:g} tried"
+        return ("OPEN" if row.open else "FAIL"), f"{row.qty} items from one call reachable", f"quantities seen {sorted(measured['counts'])}"
+    if row.kind == "loot_qty_share":
+        tried, counts = measured["tried"], measured["counts"]
+        return ("PASS" if tried > 0 and binomial_ok(tried, counts.get(2, 0), 0.25) and set(counts) <= {1, 2} else "FAIL"), "2 items in a quarter of the calls, 1 in the rest", f"counts {dict(sorted(counts.items()))}"
+    if row.kind == "loot_health_low":
+        return ("PASS" if close(measured, HEALTH_CHANCE_AT_20_PERCENT) else "FAIL"), HEALTH_CHANCE_AT_20_PERCENT, ""
+    raise ValueError(row.kind)
+
+
 def expected(row):
     if row.kind == "health":
         return health(HEALTH_MULT[row.cls], row.level)
@@ -159,6 +290,8 @@ def expected(row):
         return arrival(DAMAGE_MULT[row.cls], row.level)
     if row.kind == "ratio":
         return applied_ratio(row.level) / (1 + 0.5 * row.boosts)
+    if row.kind.startswith("loot"):
+        return loot_expected(row)
     if row.kind in ("down_count", "down_total", "down_share"):
         return row.value
     if row.kind == "down_over":
@@ -205,11 +338,14 @@ def measure_live(dummy, profiles, summary, hits):
     return measured
 
 
-def measure_vm(path):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if "rows" not in data:
-        raise SystemExit(f"{path}: no 'rows' object (see the schema in this file's docstring)")
-    return data["rows"]
+def measure_vm(paths):
+    rows = {}
+    for path in ([paths] if isinstance(paths, str) else paths):
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if "rows" not in data:
+            raise SystemExit(f"{path}: no 'rows' object (see the schema in this file's docstring)")
+        rows.update(data["rows"])
+    return {**rows, **measure_loot(rows)}
 
 
 def close(measured, exp):
@@ -217,6 +353,8 @@ def close(measured, exp):
 
 
 def missing_reason(row):
+    if row.kind.startswith("loot"):
+        return "a VM row of the S-g loot run; no live dump source"
     if row.kind.startswith("down"):
         return "a VM row of the S-f run; no live dump source"
     if row.source == "L3":
@@ -231,6 +369,8 @@ def check_row(row, measured):
     exp = expected(row)
     if measured is None:
         return "MISSING", exp, missing_reason(row)
+    if row.kind.startswith("loot"):
+        return check_loot(row, measured)
     if row.kind == "down_fee":
         if not isinstance(measured, dict) or "cash" not in measured or "fee" not in measured:
             return "MISSING", exp, "fee row needs both cash and fee"
@@ -264,14 +404,18 @@ def fmt(value):
 
 
 def report(measured):
-    counts = {"PASS": 0, "FAIL": 0, "MISSING": 0}
+    counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "OPEN": 0}
+    # The loot rows belong to the loot run (COMBAT_LOOT.md, the rollpool and lootbatch steps): a source without their rows (--live, or the S-a to S-f run) does not list them.
+    rows = [row for row in ROWS if not row.kind.startswith("loot") or any(key.startswith(("loot.batch.", "loot.roll.")) for key in measured)]
     print(f"tolerance: relative {TOLERANCE:g} (|measured - expected| <= {TOLERANCE:g} x |expected|)")
-    for row in ROWS:
+    for row in rows:
         status, exp, detail = check_row(row, measured.get(row.id))
         counts[status] += 1
-        got = "" if status == "MISSING" else f"  measured {fmt(measured[row.id])}"
+        got = "" if status == "MISSING" or row.kind.startswith("loot") else f"  measured {fmt(measured[row.id])}"        # a loot row says what it measured in its detail
         print(f"{status:<8}{row.id:<34} expected {fmt(exp)}{got}" + (f"  [{detail}]" if detail else ""))
-    print(f"{counts['PASS']} PASS, {counts['FAIL']} FAIL, {counts['MISSING']} MISSING of {len(ROWS)} rows")
+    print(f"{counts['PASS']} PASS, {counts['FAIL']} FAIL, {counts['MISSING']} MISSING of {len(rows)} rows"
+          + (f" ({counts['OPEN']} OPEN: a live observation the VM does not reproduce yet, listed above)" if counts["OPEN"] else "")
+          + (f"; {len(ROWS) - len(rows)} loot rows not listed (no loot rows in this source, see docs/verification/COMBAT_LOOT.md)" if len(rows) < len(ROWS) else ""))
     return 1 if counts["FAIL"] else 0
 
 
@@ -400,6 +544,52 @@ def self_test():
     expect("down fee on the wrong cash FAIL", down_status["down.fee.3"], "FAIL")
     expect("down fee by the rule when the scenario fixes no cash PASS", down_status["down.fee.6"], "PASS")
     expect("down fee half row MISSING", check_row(row_of["down.fee.1"], {"cash": 2715})[0], "MISSING")
+    # The loot rows (invented VM numbers).
+    expect("loot rows listed", sum(1 for r in ROWS if r.kind.startswith("loot")), 8 + 16 + 9 + 3 + 2 + 2 + 1 + 1 + 1)
+    loot_vm = {"loot.batch.adult.n": 500, "loot.batch.baby.n": 500, "loot.batch.low.n": 100}
+    for tag in ("adult", "baby"):
+        for pool, chance in LOOT_CHANCE.items():
+            loot_vm[f"loot.batch.{tag}.{pool}.chance"] = chance
+            loot_vm[f"loot.batch.{tag}.{pool}.tried"] = round(500 * chance)
+    loot_vm["loot.batch.adult.Pool_Money_1or2.chance"] = 0.3                    # a wrong chance
+    loot_vm["loot.batch.baby.Pool_Health_All.tried"] = 40                       # 15 expected, sd 3.8: far outside
+    loot_vm["loot.batch.adult.Pool_Eridium_Bar.tried"] = 2                      # a rare pool: 0.75 expected, within the band
+    loot_vm["loot.batch.low.Pool_Health_All.chance"] = 0.175
+    loot_vm.update({"loot.roll.Pool_Eridium_Stick.stage6.n": 50, "loot.roll.Pool_Eridium_Stick.stage6.true": 0, "loot.roll.Pool_Eridium_Stick.stage7.n": 50, "loot.roll.Pool_Eridium_Stick.stage7.true": 49,
+                    "loot.roll.Pool_Health_All.stage6.n": 200, "loot.roll.Pool_Health_All.stage6.true": 200, "loot.roll.Pool_Money_1or2.stage6.n": 5, "loot.roll.Pool_Money_1or2.stage6.true": 4,
+                    "loot.roll.Pool_Ammo_All_Emergency.stage6.n": 200, "loot.roll.Pool_Ammo_All_Emergency.stage6.true": 0})
+    loot_vm.update({"loot.batch.adult.Pool_VehicleSkins_All.items": 13, "loot.batch.adult.Pool_VehicleSkins_All.dropped": 0, "loot.batch.adult.Pool_Health_All.items": 9, "loot.batch.adult.Pool_Health_All.dropped": 8,
+                    "loot.batch.adult.Pool_Money_1or2.items": 100, "loot.batch.adult.Pool_Money_1or2.dropped": 100})
+    loot_vm.update({"loot.batch.baby.stage.6": 500, "loot.batch.adult.stage.4": 120, "loot.batch.adult.stage.5": 130, "loot.batch.adult.stage.6": 125, "loot.batch.adult.stage.7": 125,
+                    "loot.batch.adult.level_mismatch": 0, "loot.batch.adult.Pool_Money_1or2.tried": 130, "loot.batch.adult.Pool_Money_1or2.qty.1": 97, "loot.batch.adult.Pool_Money_1or2.qty.2": 33,
+                    "loot.batch.baby.Pool_Money_1or2.tried": 120, "loot.batch.baby.Pool_Money_1or2.qty.1": 90, "loot.batch.baby.Pool_Money_1or2.qty.2": 30})
+    loot_merged = {**loot_vm, **measure_loot(loot_vm)}
+    loot_status = {row.id: check_row(row, loot_merged.get(row.id)) for row in ROWS if row.kind.startswith("loot")}
+    expect("loot chance PASS", loot_status["loot.chance.Pool_GunsAndGear"][0], "PASS")
+    expect("loot chance off FAIL", loot_status["loot.chance.Pool_Money_1or2"][0], "FAIL")
+    expect("loot rate PASS", loot_status["loot.rate.adult.Pool_GunsAndGear"][0], "PASS")
+    expect("loot rate far above FAIL", loot_status["loot.rate.baby.Pool_Health_All"][0], "FAIL")
+    expect("loot rate of a rare pool within the band PASS", loot_status["loot.rate.adult.Pool_Eridium_Bar"][0], "PASS")
+    expect("loot flag none PASS", loot_status["loot.live.Pool_Eridium_Stick.stage6"][0], "PASS")
+    expect("loot flag all PASS", loot_status["loot.live.Pool_Health_All.stage6"][0], "PASS")
+    expect("loot flag all with one false FAIL", loot_status["loot.live.Pool_Money_1or2.stage6"][0], "FAIL")
+    expect("loot flag none with a true FAIL", loot_status["loot.rule.Pool_Eridium_Stick.stage7"][0], "FAIL")
+    expect("loot flag absent MISSING", loot_status["loot.live.Pool_GunsAndGear.stage6"][0], "MISSING")
+    expect("loot destroyed none PASS", loot_status["loot.live.drop.Pool_VehicleSkins_All"][0], "PASS")
+    expect("loot dropped all with one destroyed FAIL", loot_status["loot.live.drop.Pool_Health_All"][0], "FAIL")
+    expect("loot dropped all PASS", loot_status["loot.live.drop.Pool_Money_1or2"][0], "PASS")
+    expect("loot baby stage PASS", loot_status["loot.live.stage.baby"][0], "PASS")
+    expect("loot adult stage band PASS", loot_status["loot.live.stage.adult"][0], "PASS")
+    expect("loot level PASS", loot_status["loot.live.level.adult"][0], "PASS")
+    expect("loot money 1 item reachable PASS", loot_status["loot.live.money.baby.qty1"][0], "PASS")
+    expect("loot money 3 items unreachable is OPEN, not FAIL", loot_status["loot.live.money.adult.qty3"][0], "OPEN")
+    expect("loot money quantity share PASS", loot_status["loot.rule.money.qty2_share"][0], "PASS")
+    expect("loot health at 20 percent PASS", loot_status["loot.rule.health.chance_at_20pct"][0], "PASS")
+    loot_wrong = {**loot_merged, "loot.batch.adult.Pool_Money_1or2.qty.3": 4}
+    expect("loot money 3 items reachable PASS", check_row(next(r for r in ROWS if r.id == "loot.live.money.adult.qty3"), measure_loot(loot_wrong)["loot.live.money.adult.qty3"])[0], "PASS")
+    loot_skewed = {**loot_vm, "loot.batch.adult.stage.4": 10, "loot.batch.adult.stage.5": 240}
+    expect("loot adult stage skew FAIL", check_row(next(r for r in ROWS if r.id == "loot.live.stage.adult"), measure_loot(loot_skewed)["loot.live.stage.adult"])[0], "FAIL")
+    expect("loot qty1 absent is FAIL (not OPEN)", check_row(next(r for r in ROWS if r.id == "loot.live.money.baby.qty1"), {"tried": 10, "counts": {2: 10}})[0], "FAIL")
     for failure in failures: print("self-test FAIL: " + failure)
     print("self-test " + ("FAILED" if failures else "passed"))
     return 1 if failures else 0
@@ -409,7 +599,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--live", action="store_true", help="compare with the ignored live dumps under local/realgame/")
     parser.add_argument("--realgame", default=str(REALGAME), help="directory holding the L5 and L5b dumps")
-    parser.add_argument("--vm", metavar="FILE.json", help="compare with a VM JSON (schema in the docstring)")
+    parser.add_argument("--vm", metavar="FILE.json", nargs="+", help="compare with one or more VM JSONs (schema in the docstring; the rows are merged)")
     parser.add_argument("--list", action="store_true", help="print the row ids and expected values")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
