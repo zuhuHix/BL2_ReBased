@@ -1,3 +1,5 @@
+**Applied 2026-10-09 (maintainer approved); rows left unchanged: Tools added 2026-10-01 and 2026-10-02, Driving the real game, Maya with the Infinity and Phaselock, Verification status of the reader, Sanctuary artifact trace (Material v1, Sanctuary ambient NPCs and four other rows were applied in part only; see local/p2/H9/handoff.md).**
+
 # docs/TOOLING.md trim proposal (not applied)
 
 Proposal only. Nothing in docs/TOOLING.md has been deleted. The maintainer approves each row before any edit.
