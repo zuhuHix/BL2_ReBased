@@ -7,6 +7,8 @@ game** unless a line says how it was confirmed; each section ends with the live 
 groundwork. This note continues [NATIVE_AI_MELEE.md](NATIVE_AI_MELEE.md) (lane G25), whose "Not read yet" list it works through; it does not repeat what
 that note already says.
 
+**Live status (lane L9, 2026-10-09).** The running game was observed for the notice rules, the threat level over time, `ValidTarget`, `ValidCurrentTarget`, `TargetChanged`, the attack route, the melee sweep and the tree timers. Counts and conclusions are in [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md) (sections 0 to 8 hold the observations, section 11 the corrections). Where this note and the game disagree, the game wins, and the paragraphs below say so and carry the matching number. Main changes: a bullymong spawned by a population den is judged on the den (the den is its parent, and the den gives the threat origin and radii); the den's record is the one stamped; a fresh record shows level 1; and the level does fall back after `ForgetTime`, so the earlier "no reader" statement is refuted. Rules L9 did not exercise (the cone boundary near zero, a bullymong without a den, the `LoopCountMax` cap, the 1.0 s failure block, `Finish`, the leaps, the chase natives, the awareness zones, the hold natives) remain UNVERIFIED.
+
 How the classes were found (tooling note, no addresses): the Willow classes have no registration pattern the query script understands, so
 their function tables were located by comparing the table of the already resolved base `AIComponent` with every table in the read-only data
 (the Willow table shares nearly all slots), and the result was confirmed from the class registration code (its constructor stores exactly that
@@ -18,25 +20,25 @@ map property; treating a map as 60 bytes reproduces the registered class sizes o
 
 | Native | Script signature (from the package) | Slice relevance | Confidence | Status |
 |---|---|---|---|---|
-| WillowAIComponent.GetTargets / GetTargetsFromParents / AddDenTargets | `native function GetTargets()`, `GetTargetsFromParents()`, `AddDenTargets(PopulationOpportunityDen Den)` | S-h: where a bullymong's candidate list comes from (den members) | medium | UNVERIFIED |
+| WillowAIComponent.GetTargets / GetTargetsFromParents / AddDenTargets | `native function GetTargets()`, `GetTargetsFromParents()`, `AddDenTargets(PopulationOpportunityDen Den)` | S-h: where a bullymong's candidate list comes from (den members) | medium | UNVERIFIED; lone case refuted for den bullymongs (L9) |
 | AIComponent.FindTargets (hidden-owner condition resolved) | `native function FindTargets()` | S-h: who is a candidate | medium | UNVERIFIED |
-| WillowAIComponent.ValidTarget (base and Willow part) | `native function bool ValidTarget(Actor Target)` | S-h: candidate filter | medium | UNVERIFIED |
-| WillowAIComponent.ValidCurrentTarget | `native function bool ValidCurrentTarget(MindTargetInfo TargetRec)` | S-h: keep and acquire gate (threat level) | high | UNVERIFIED |
-| WillowAIComponent.InitializeTargetRecord / TargetRemoved | `native function InitializeTargetRecord(MindTargetInfo)`, `TargetRemoved(MindTargetInfo)` | S-h: record start state, hand-off to a vehicle or occupant | medium | UNVERIFIED |
-| WillowAIComponent.TargetChanged | `native function TargetChanged(Actor OldTarget, Actor NewTarget)` | S-h: head look, provoked flag, targeting counters | medium (counters, flag), low (presentation calls) | UNVERIFIED |
-| WillowAIComponent.NotifyAttackedBy / SetThreatLevel / GetThreatLevel / GetHighestThreatLevel | `native function NotifyAttackedBy(Actor Attacker)`, `SetThreatLevel(Actor Target, EThreatLevel NewThreat)`, `GetThreatLevel(Actor Target)`, `GetHighestThreatLevel()` | S-h: how a bullymong notices and stays on Maya | high (formulas), medium (den helper) | UNVERIFIED |
-| WillowTI_CalcThreat (refinement of the G25 reading) | C++ virtual, no script name | S-h: the "notice" rule when nobody attacked | medium | UNVERIFIED |
+| WillowAIComponent.ValidTarget (base and Willow part) | `native function bool ValidTarget(Actor Target)` | S-h: candidate filter | medium | UNVERIFIED; six answers live (L9) |
+| WillowAIComponent.ValidCurrentTarget | `native function bool ValidCurrentTarget(MindTargetInfo TargetRec)` | S-h: keep and acquire gate (threat level) | high | UNVERIFIED; threat gate live (L9) |
+| WillowAIComponent.InitializeTargetRecord / TargetRemoved | `native function InitializeTargetRecord(MindTargetInfo)`, `TargetRemoved(MindTargetInfo)` | S-h: record start state, hand-off to a vehicle or occupant | medium | UNVERIFIED; start level corrected (L9) |
+| WillowAIComponent.TargetChanged | `native function TargetChanged(Actor OldTarget, Actor NewTarget)` | S-h: head look, provoked flag, targeting counters | medium (counters, flag), low (presentation calls) | UNVERIFIED; flag, look-at and counters live (L9) |
+| WillowAIComponent.NotifyAttackedBy / SetThreatLevel / GetThreatLevel / GetHighestThreatLevel | `native function NotifyAttackedBy(Actor Attacker)`, `SetThreatLevel(Actor Target, EThreatLevel NewThreat)`, `GetThreatLevel(Actor Target)`, `GetHighestThreatLevel()` | S-h: how a bullymong notices and stays on Maya | high (formulas), medium (den helper) | UNVERIFIED; stamps and fall-back live (L9) |
+| WillowTI_CalcThreat (refinement of the G25 reading) | C++ virtual, no script name | S-h: the "notice" rule when nobody attacked | medium | UNVERIFIED; both rules live (L9) |
 | Leaders and forced target: HasForcedTarget / GetForcedTarget / Get/SetTargetLeader / Get/SetFormationLeader | `native function` | S-h: only for groups; kept short | medium | UNVERIFIED |
 | WillowAIComponent combat zones (Claim / Unclaim / Available / ByLocation / MarkCurrent / Invalidate) | `native function` on a `CombatZone` struct | not for the bullymong (ranged AI) | medium | UNVERIFIED |
 | WillowAIComponent.Hold / Release / OnHold / ClearState / head look and phase lock holds | `native function Hold(Name HoldName, Object Tag)` etc. | S-h and Phaselock: how holds are stored | medium | UNVERIFIED |
-| WillowMind.NotifyAttackedBy | `native function NotifyAttackedBy(Actor Attacker, bool bDamaged)` | S-h: what a hit on a bullymong does | high | UNVERIFIED |
-| WillowMind.IsAwareOfTarget | `native function bool IsAwareOfTarget(Actor PotentialTarget)` | S-h/S-e: "unaware" damage bonus | medium | UNVERIFIED |
+| WillowMind.NotifyAttackedBy | `native function NotifyAttackedBy(Actor Attacker, bool bDamaged)` | S-h: what a hit on a bullymong does | high | UNVERIFIED; call live, field writes not read (L9) |
+| WillowMind.IsAwareOfTarget | `native function bool IsAwareOfTarget(Actor PotentialTarget)` | S-h/S-e: "unaware" damage bonus | medium | UNVERIFIED; fresh-record True live (L9) |
 | ISeeTargetable.AddTargetable (WillowMind) | `native function bool AddTargetable(Actor NewTarget, bool bSeeTarget, bool bHearThreat, bool bSmellTarget)` | low | medium | UNVERIFIED |
 | WillowMind.NotifyTakeHit | `native function NotifyTakeHit(Controller InstigatedBy, Pawn HitPawn, Vector HitLocation, float Damage, class DamageType, Vector Momentum, optional DamagePipeline Pipeline)` | low (reaction plumbing) | low | UNVERIFIED |
-| TargetIteratorCheckAwareness and the other iterators found (PrioritizeHealth, PrioritizeOpinion, CalcCombat) | C++ virtuals | not used by the bullymong's targeting definition | medium (awareness), high (the two prioritizers) | UNVERIFIED |
-| IMeleeAttacker on WillowPawn / WillowAIPawn | ten interface methods | S-h/S-e: melee origin, hit list | high | UNVERIFIED |
-| Melee over time (MeleeAttack entry, BeginMeleeOverTime / EndMeleeOverTime, the per-frame tick) | `native function BeginMeleeOverTime(MeleeDefinition)` / `EndMeleeOverTime()` | S-h: charge and grab; repeated hits | high | UNVERIFIED |
-| AI tree natives: eligibility, activation, completion (loops, TimedReset), interruption, ActionSequence.Finish | no script names except `ActionSequence.Finish(optional bool bFailed)` | S-h: which action runs and when it can repeat | high | UNVERIFIED |
+| TargetIteratorCheckAwareness and the other iterators found (PrioritizeHealth, PrioritizeOpinion, CalcCombat) | C++ virtuals | not used by the bullymong's targeting definition | medium (awareness), high (the two prioritizers) | UNVERIFIED; zone collections None live (L9) |
+| IMeleeAttacker on WillowPawn / WillowAIPawn | ten interface methods | S-h/S-e: melee origin, hit list | high | UNVERIFIED; trace source live (L9) |
+| Melee over time (MeleeAttack entry, BeginMeleeOverTime / EndMeleeOverTime, the per-frame tick) | `native function BeginMeleeOverTime(MeleeDefinition)` / `EndMeleeOverTime()` | S-h: charge and grab; repeated hits | high | UNVERIFIED; charge run live (L9) |
+| AI tree natives: eligibility, activation, completion (loops, TimedReset), interruption, ActionSequence.Finish | no script names except `ActionSequence.Finish(optional bool bFailed)` | S-h: which action runs and when it can repeat | high | UNVERIFIED; timers and counters live (L9) |
 | WillowAIPawn.StartLeapAtActor / StartLeap / GetLeapRotation | `native function float StartLeapAtActor(TrajectoryData Options, Actor Target)`, `StartLeap(Vector StartLoc, Vector EndLoc, float LeapSpeed, float LeapAngle)` | S-h (stretch): the bullymong leap | medium (StartLeap), low (StartLeapAtActor numerics) | UNVERIFIED |
 
 ## What the script side calls (grep of the package listings)
@@ -69,8 +71,8 @@ one in NATIVE_COMBAT_GROUNDWORK (Enemy 0, Neutral 1, Friendly 2). Everything bel
 - **AddDenTargets(Den):** calls `AddTarget` for every pawn in the den's `SpawnedDenMembers`. `AddTarget` applies `ValidTarget`, so same-allegiance members are
   normally rejected; the purpose of adding den members is not established (see Open).
 - **Implementer checklist:** for a lone bullymong (no den, no parent) only the base behaviour matters: `FindTargets` is the only source of candidates.
-- **Open:** why a den adds its own members; whether the bullymong adult has a den parent in Sanctuary (it probably does not).
-- **Live confirmation:** on a spawned bullymong read `AIComponent.GetParentComponent()` and `WillowAIDefinition.bGetTargetsFromParents`; both being None / false confirms the lone case.
+- **Open:** why a den adds its own members. Whether a bullymong has a den parent is answered for Three Horns Divide (it does, lane L9); Sanctuary was not checked.
+- **Live confirmation (lane L9, 2026-10-09):** refuted for bullymongs spawned by a den. `GetParentComponent()` is the den's component (a population den, not a patrol den) and `bGetTargetsFromParents` is false, in about 25 pawns of three dens. The lone case (no den) was not seen, so the lone-bullymong checklist above stays UNVERIFIED. See sections 0 and 8 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## AIComponent.FindTargets: the hidden-owner condition (resolves a G25 open item)
 
@@ -111,7 +113,7 @@ when `bOverrideSearchRadius` is set, else `AIDefinition.TargetSearchRadius` (con
   longer possessed) as soon as the next removal pass runs `ShouldRemoveTarget` (which is "ValidTarget fails now, or a parent exists and does not know the target").
 - **Implementer checklist:** the order above; the friendliness test uses opinion Friendly (not "not Enemy"); no allegiance on the AI means no valid target; the search radius is not part of
   `ValidTarget` (a target that walks out of the radius stays valid and keeps its record; only `StopTargetingIf` or invalidity drops it).
-- **Live confirmation:** call `AIComponent.ValidTarget` through pyunrealsdk on a spawned bullymong for: Maya, a cloaked Maya (if reproducible), a downed Maya, a friendly NPC, and a null; compare with the list above.
+- **Live confirmation (lane L9, 2026-10-09):** confirmed for six answers on a regular bullymong: Maya true; a null false; the pawn itself false; another bullymong of its own allegiance false; Maya with `bCloaked` set false (true again once cleared); the pawn's allegiance cleared (memory only, one call, restored) gives false for Maya, which confirms the "no allegiance, no valid target" rule once. Not tried: a downed Maya, a friendly NPC (none on that map), a vehicle, and `bCanTargetFriendlies`. Section 4 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## WillowAIComponent.ValidCurrentTarget (the real acquire/keep gate)
 
@@ -121,11 +123,11 @@ when `bOverrideSearchRadius` is set, else `AIDefinition.TargetSearchRadius` (con
 - **Why this matters:** G25 listed the base rule only. Without threat level 2 or 3 a record is never chosen as `CurrentTarget`, so a bullymong that has Maya in `Targets` does nothing
   until it has noticed her (see `WillowTI_CalcThreat`) or been attacked or provoked.
 - **Implementer checklist:** keep and acquire both require threat level >= 2; there is no decay (see "Threat level storage").
-- **Live confirmation:** poll `AIComponent.Targets[i].ThreatLevel` and `AIComponent.CurrentTarget` while walking Maya toward a sleeping bullymong; `CurrentTarget` stays None while `ThreatLevel` is 0 or 1.
+- **Live confirmation (lane L9, 2026-10-09):** confirmed. For minutes at level 1 (records present, exposure Full but out of the cone or the radius) the pawn had no `CurrentTarget`; the target was set in the same update as the level-2 stamp; it was kept for 10.8 s with Maya 6 km away and dropped 0.13 s after the level fell. The `bHidden` clause was not tested. Sections 2 and 10 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## InitializeTargetRecord, TargetRemoved
 
-- **InitializeTargetRecord(record):** base is a no-op. Willow: for a `WillowMindTargetInfo`, store the target's targetable interface in `Targetable` and set `ThreatLevel` to `ETL_NoThreat`.
+- **InitializeTargetRecord(record):** base is a no-op. Willow: for a `WillowMindTargetInfo`, store the target's targetable interface in `Targetable` and set `ThreatLevel` to `ETL_NoThreat`. **Live correction (lane L9):** the first level visible on a fresh record is `ETL_InThreatRadius` (1); `GetThreatLevel` answers 0 only when there is no record, and `TargetExposureToMe` reads -1.0 on the first update of a fresh record. The code writes 0 and the game shows 1; the reason was not separated. Section 2 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 - **TargetRemoved(record):** base is a no-op. Willow, for a Willow record, picks a replacement actor and hands the threat over:
   - if the removed actor was a pawn that was driving a vehicle (or sitting in a vehicle weapon seat): the replacement is that vehicle;
   - if the removed actor was a vehicle without a driver: the replacement is its first seat's occupant pawn, else that seat's last occupant;
@@ -151,7 +153,7 @@ when `bOverrideSearchRadius` is set, else `AIDefinition.TargetSearchRadius` (con
 - **Constants:** none.
 - **Implementer checklist:** set `bProvoked` and `ProvokedLocation` on the first acquisition; keep the counters in step (decrement old, increment new, including to/from None); send `SetLookAtTarget` unless held.
 - **Open:** the three pawn notifications and the presentation calls.
-- **Live confirmation:** hook `AIComponent.TargetChanged` (or `AIDefinition.OnTargetAcquired`) and read `WillowMind.bProvoked`, `WillowMind.ProvokedLocation` and `WillowPawn.NumAICurrentlyTargeting` of Maya before and after.
+- **Live confirmation (lane L9, 2026-10-09):** confirmed for the flag, the location, the look-at call and the counters. On acquisition `bProvoked` went False to True, `ProvokedLocation` became the pawn's location in that frame, `SetLookAtTarget(player, zero offset)` was called in that frame, and Maya's `NumAICurrentlyTargeting` rose by one per AI and fell to 0 when the targets were lost. The flag is not a record of "has been noticed": den-spawned pawns could already have it true before anything noticed Maya. The three pawn notifications and the presentation calls were not visible. Section 5 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## NotifyAttackedBy, SetThreatLevel, GetThreatLevel, GetHighestThreatLevel
 
@@ -164,17 +166,17 @@ when `bOverrideSearchRadius` is set, else `AIDefinition.TargetSearchRadius` (con
      `TriggerProvokedEvents` on that den and on every den in its `SharedThreatDens`;
   4. `record.ThreatLevel` becomes the larger of its old value and `NewThreat` (it can only rise);
   5. if `NewThreat` >= 2 and the world exists and `record.AggroTime` is still (almost) zero, `AggroTime` is set to now;
-  6. if `NewThreat` is `ETL_SeenInThreatRadius`: `ForgetTime = max(ForgetTime, now + d)` with d = `WillowAIDenDefinition.MinEngagementTime` when the AI definition is a den definition, else **2.5 s**;
-     if it is `ETL_Provoked`: the same with `MinProvokedTime` or **10.0 s**. (Levels 0 and 1 do nothing more.)
+  6. if `NewThreat` is `ETL_SeenInThreatRadius`: `ForgetTime = max(ForgetTime, now + d)` with d = `WillowAIDenDefinition.MinEngagementTime` when the AI definition is a den definition, else **2.5 s** (not seen for a den-spawned bullymong; the den value 10.0 was, lane L9);
+     if it is `ETL_Provoked`: the same with `MinProvokedTime` or **10.0 s** (not seen; the den value 25.0 was, lane L9). (Levels 0 and 1 do nothing more.)
 - **GetThreatLevel(Target):** walks up the parent chain starting at this component. A component that has an allegiance and whose pawn regards `Target` as Friendly answers **2** (friendlies always count as
   "seen"). When the walk reaches the root without that, it returns the root record's `ThreatLevel` for `Target`, or 0 when there is no record.
 - **GetHighestThreatLevel():** the largest `ThreatLevel` over this component's own Willow records (0 when none).
-- **Threat level storage:** `ThreatLevel` only rises through `SetThreatLevel`; `WillowTI_CalcThreat` re-reads it every target update. `ForgetTime` is written here and copied in `TargetRemoved`, and **no reader was found** in script
+- **Threat level storage:** `ThreatLevel` is raised through `SetThreatLevel`; `WillowTI_CalcThreat` re-reads it every target update. `ForgetTime` is written here and copied in `TargetRemoved`. **Live correction (lane L9):** the level does fall. After `now` passes `ForgetTime`, the den's next update lowers it: to 1 in place while Maya is inside the list radius, or the record is removed when she is beyond it (0.03 to 0.92 s after `ForgetTime` in three runs). While the notice condition holds, `ForgetTime` is refreshed at every member update, so a level lasts as long as the refresh does. The "no reader" statement of the earlier draft is refuted; the code that reads `ForgetTime` was not located by the search in this note.
   or in the WillowGame native code that was searched, so nothing was found that lowers a threat level. A bullymong provoked once stays provoked for as long as it keeps the record (UNVERIFIED; a reader may exist elsewhere).
 - **Calls into script:** none (the den helper calls a den native).
-- **Constants:** 2.5 s and 10.0 s defaults; levels as above.
-- **Implementer checklist:** Maya hits bullymong: `AddTarget(Maya)` (if valid) then `SetThreatLevel(Maya, 3)`: `ThreatLevel` 3, `AggroTime` now, `ForgetTime` now + 10; next target update the record can become `CurrentTarget`.
-- **Live confirmation:** shoot a bullymong once and read the new record's `ThreatLevel` (3), `AggroTime` (the shot time) and `ForgetTime` (shot time + 10, or the den definition value); repeat after 30 s to see whether anything lowers `ThreatLevel`.
+- **Constants:** 2.5 s and 10.0 s defaults (not seen for a den-spawned bullymong, where the den values 10.0 and 25.0 apply); levels as above.
+- **Implementer checklist:** Maya hits bullymong: `AddTarget(Maya)` (if valid) then `SetThreatLevel(Maya, 3)`: `ThreatLevel` 3, `AggroTime` now, `ForgetTime` now + 25 on the den's record for a den-spawned bullymong (lane L9); next target update the record can become `CurrentTarget`.
+- **Live confirmation (lane L9, 2026-10-09):** confirmed on the den's (root) record, not on the pawn's. A real shot 1,200 uu from Maya gave level 3, `AggroTime` the frame's world time and `ForgetTime` AggroTime + 25.0 (the den definition's provoked time); a level-2 notice gave + 10.0. The members' copies keep `AggroTime` and `ForgetTime` at 0.0 and copy only the level. The fall after the window is confirmed (storage paragraph above). Not tried: a second hit inside the window. Sections 2 and 3 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## WillowTI_CalcThreat (refinement of the G25 note)
 
@@ -185,9 +187,8 @@ definition and **the AI's pawn regards the target as an Enemy**, it may raise th
 - **Proximity rule** (skipped when the target is a vehicle, so vehicles need the sight rule): the horizontal distance from the threat origin is less than a patrol limit (unlimited unless the den is not a patrol den, then
   the den's `PatrolRadius`) **and** the 3D distance from the pawn to the target minus the pawn's collision radius is less than `GlobalsDefinition.AICloseThreatRadius`.
 - **Threat origin and radius:** with no den, or a patrol den: the pawn's location (the mind's `ProvokedLocation` when `bProvoked` is set) and the AI's search radius (4096 for the adult bullymong); with a non-patrol den: the den's location, its `ThreatRadius`.
-- **Implementer checklist:** run after the exposure iterator (Knowledge order); the result is level 2 plus the `SetThreatLevel(…, 2)` side effects (AggroTime, ForgetTime 2.5 s).
-- **Live confirmation:** read `WillowMind.SightViewCone`, `GlobalsDefinition.AICloseThreatRadius`, the AI definition's `TargetSearchRadius`; walk Maya in from behind (no sight) and from the front at several distances and record the distance and
-  angle at which `ThreatLevel` first becomes 2.
+- **Implementer checklist:** run after the exposure iterator (Knowledge order); the result is level 2 plus the `SetThreatLevel(…, 2)` side effects (AggroTime, ForgetTime 10 s for a den definition; the 2.5 s default was not seen). Live (lane L9): the exposure these rules read is one update old, and level 2 and `CurrentTarget` come in the same update.
+- **Live confirmation (lane L9, 2026-10-09):** the rules are confirmed in the running game with the den as origin. The sight rule fired at 4,660 uu and not at 4,680 (den `ThreatRadius` 4,665.625), with a lag of 0.209 to 0.220 s from the exposure turning Full; it did not fire at 4,640 with the member behind (dot -0.67). The proximity rule fired at 728.0 (3D distance minus collision radius, below 768) and not at 770.0, and did not fire beyond the den's patrol radius (6,200 against 3,667.19). The cone was tested only by sign (+0.91 fires, -0.67 does not); the boundary near zero is open. The collision-component gate, the patrol-den skip and the `ProvokedLocation` origin were not seen. Sections 0 and 8 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 - **Open:** `ITargetable` is read as "slot 28 = IsEnemy" because slot 2c is certainly IsFriendly; the enemy gate is that reading.
 
 ## Leaders, forced target, formations
@@ -228,18 +229,18 @@ definition and **the AI's pawn regards the target as an Enemy**, it may raise th
 - **Reads/does:** requires the mind's AI component to be a Willow component, the mind to have a pawn and the world to exist. It calls the component's `NotifyAttackedBy(Attacker)` (so the attacker becomes a target and Provoked);
   then, **if the pawn does not regard the attacker as Friendly**, it records on the component: `LastAttackedTime = now`, `LastAttacker = Attacker`, and (only when `bDamaged`) `LastHurtTime = now`.
 - **Implementer checklist:** the three field writes are gated by "not Friendly"; `bDamaged` only controls `LastHurtTime`.
-- **Live confirmation:** hook `WillowMind.NotifyAttackedBy`, shoot a bullymong, read `WillowAIComponent.LastAttackedTime`, `LastHurtTime`, `LastAttacker` and `Targets`.
+- **Live confirmation (lane L9, 2026-10-09):** partly confirmed. For a real shot the hook saw the call from `WillowAIPawn.TakeDamage` with `bDamaged` true, with the player's pawn as attacker, and the level-3 stamp followed (section 3 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md)). The three field writes (`LastAttackedTime`, `LastHurtTime`, `LastAttacker`) were **not read**, and the "not friendly" gate was not tested.
 
 ## WillowMind.IsAwareOfTarget (and the damage pipeline use)
 
 - **Signature:** `native function bool IsAwareOfTarget(Actor PotentialTarget)`.
 - **Does:** false when the world does not exist. Looks up the record for the actor **at the root component** (the lookup climbs; it never creates). No record: **false**. Otherwise true when
   `WillowMind.MinAggroTimeToConsiderAwareOfTarget + record.AggroTime < now`. `AggroTime` is zero until `SetThreatLevel` stamps it, so a record that exists but has never been raised to threat 2 counts as aware once the delay has passed
-  (UNVERIFIED: the default value of `AggroTime` on a fresh record was not seen and could be non-zero).
+  (Live, lane L9: the fresh record's `AggroTime` read 0 every time, and the answer was True; see the live line below.)
 - **Used by:** one stage of the damage pipeline. Reading: when the victim's mind is not aware of the attacker, the damage is multiplied by a per-attacker "unaware" multiplier and the hit is tagged with the unaware flag value (25) in
   its flag list. This is the source of the `OnDamagedUnawareEnemy` skill events. Which object holds the multiplier is not fully identified.
 - **Implementer checklist:** record-presence first, then the aggro delay; only the damage stage needs it for the slice, and only for skills that depend on unaware hits.
-- **Live confirmation:** call `IsAwareOfTarget(Maya)` on an idle bullymong before it has noticed her, again after one shot, and after the delay; read `MinAggroTimeToConsiderAwareOfTarget` and a fresh record's `AggroTime`.
+- **Live confirmation (lane L9, 2026-10-09):** confirmed. No record (Maya beyond about 7 km, or after the removal) gives False; a fresh record (level 1, `AggroTime` 0) gives True; after a level-2 or level-3 stamp it is False for 0.1 s and True from then on (last False 0.098, 0.090 and 0.084 s, first True 0.114, 0.102 and 0.108 s after the stamp, three runs). So an "unaware" bonus would only apply with no record or in the 0.1 s after a stamp. Section 2 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## ISeeTargetable.AddTargetable (WillowMind) and WillowMind.NotifyTakeHit
 
@@ -247,7 +248,7 @@ definition and **the AI's pawn regards the target as an Enemy**, it may raise th
   The three flags are not used by this implementation (UNVERIFIED reading of the implementation's argument use).
 - **NotifyTakeHit(...):** gated on the game-info being present and the mind having a controlled pawn. When the damage is non-zero it notifies a game-level object with the instigator and damage; when the pawn has its behavior component it raises the "took hit"
   behavior events with the hit pawn, location and damage (two parallel kernels, one for a known instigator and one without). It then calls the base function, which does nothing. Pure plumbing for animation/behavior reactions; not part of target choice.
-- **Live confirmation:** hook `NotifyTakeHit` on a shot bullymong and record the arguments; compare `Damage` with `Actor.TakeDamage`.
+- **Live confirmation (lane L9, 2026-10-09):** not seen. The hook on `NotifyTakeHit` never fired for a shot bullymong (the route is native-to-native), and `AddTargetable` was not seen either. Both stay UNVERIFIED.
 
 ## Awareness zones and the other iterators found
 
@@ -261,7 +262,7 @@ definition and **the AI's pawn regards the target as an Enemy**, it may raise th
   `ratio` for Healthy. Not used by the bullymong.
 - **WillowTI_PrioritizeOpinion** (field `Opinion`): `OnePriority = 1` when the AI's opinion of the target equals the iterator's `Opinion`, else 0 (mind-based evaluation). Not used by the bullymong.
 - **WillowTI_CalcCombat:** the script class adds no fields and no C++ class or function table of its own was found for it, so it behaves as the base `TI_Calc` no-op in native (UNVERIFIED; it may still carry script-side state).
-- **Live confirmation:** dump `Targeting_ShortRange.Knowledge` / `Prioritization` and any other targeting definition for `TargetIteratorCheckAwareness` entries; read the mind's `CurrentAwarenessZoneCollection`.
+- **Live confirmation (lane L9, 2026-10-09):** the bullymong's mind has no awareness zones: every zone collection read as None, so the awareness iterator is not in play for this pawn. The targeting definitions were not dumped in full, and the view-cone and hearing virtuals were not exercised.
 
 ## IMeleeAttacker on WillowPawn and WillowAIPawn
 
@@ -286,7 +287,7 @@ The pawn implements `IMeleeAttacker` as a second function table. `WillowAIPawn` 
 - **Consequence for the G25 melee volume:** for an AI pawn the volume origin before `HitStartOffset` is the actor location (not an eye point); the vertical band therefore centres at foot / capsule-centre height of the actor
   plus `DamageHeightOffset`, and the facing is the aim-offset rotation when the pawn has an aim-offset node.
 - **Implementer checklist:** port the table above; the AI variant's origin is the actor location.
-- **Live confirmation:** hook `GetMeleeTraceSourceLocationAndRotation` (script-visible via the interface) on a bullymong and compare with `Actor.Location` and the pawn's `AimOffset` current aim; read `WillowPawn.MeleeState` during a charge.
+- **Live confirmation (lane L9, 2026-10-09):** the location is confirmed: the trace source equalled the actor's `Location` to 0.01 uu on one pawn (two reads). The rotation equalled the actor's `Rotation` on that pawn, which had no aim difference, so the aim-offset case is not separated. `MeleeState` read during a charge matches the next section. Section 6 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## Melee over time: who repeats the hit, and when it stops
 
@@ -300,8 +301,8 @@ The pawn implements `IMeleeAttacker` as a second function table. `WillowAIPawn` 
   4. After the sweeps, if the world exists and `def.MaxMeleeDuration` is less than now minus `MeleeStartTime`, `EndMeleeOverTime()`. The check follows the sweeps, so the sweep of the frame in which the duration is exceeded still happens.
 - **Other things that end it (script):** `WillowPawn.Landed` when `bStopMeleeOnLanded`, `WillowPawn.Destroyed`, `Behavior_StopMeleeAttack`.
 - **Constants:** minimum interval 1/15 s; for the five live bullymong definitions: `_MeleeGrabBaby` 0.75 s / 0.1 s, `Melee_Charge` 5 s / 0.0667 s (clamped value), others are single-shot.
-- **Implementer checklist:** immediate sweep; then accumulate dt and sweep per whole interval (catch-up allowed); end on duration, death, landed (flag), destroy or an explicit stop; hit-once lists live in `MeleeState.HitActors` and are cleared on end.
-- **Live confirmation:** run a charge (`MeleeDef_Melee_Charge`) against Maya; log `Actor.TakeDamage` timestamps: expect the first at the call time and the next ones about every 0.0667 s until 5 s after the start (or until she is out of the volume / the charge ends).
+- **Implementer checklist:** immediate sweep; then accumulate dt and sweep per whole interval (catch-up allowed); end on duration, death, landed (flag), destroy or an explicit stop; hit-once lists live in `MeleeState.HitActors` and are cleared on end. A target is hit once per melee when the definition's `bHitEachTargetOnlyOnce` is set (the live charge: one hit on the player in 5 s, lane L9).
+- **Live confirmation (lane L9, 2026-10-09):** the sweep rate is confirmed; the expectation of repeated damage is refuted. A charge ran 74 sweeps in 5.007 s (median spacing 0.0674 s, frame granularity), so the 1/15 s clamp holds, and the first sweep came at the call. The player was hit **once** in the 5 s, because `bHitEachTargetOnlyOnce` is true on this definition. The melee ended 5.0072 and 5.0077 s after its start and cleared the hit list. A player outside the volume at the call was hit 0.0035 s after moving in at 1.0 s; moving out and in again at 3.0 s gave no second hit. The final-frame sweep was not separated. Section 6 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## AI tree natives: eligibility, activation, completion, interruption
 
@@ -340,8 +341,7 @@ Fields come from `AIComponent.AITreeData` (type, children, resource, `CanRunIf`,
 - **Script events on actions:** `Init`, `CanRun`, `Start`, `Update(dt)` (each frame for the running action), `Stop`, `ActivateEvent(name)`.
 - **Constants:** 1.0 s failure cool-off; random scale 32768.
 - **Implementer checklist:** leaf-returning selector; eligibility order; completion writes `TimedReset` cooldown and loop counters as above; `Finish` re-selects immediately; update-time interruption as above.
-- **Live confirmation:** log a bullymong's `AIComponent.CurrentState` and the node array fields (`NextTimedRun`, `LoopCount`, `LastRandomChild`, `ActionFailName`, `LastFailTime`) for 60 s of combat; check that after Melee finishes its `NextTimedRun` is in the `TimedReset` window,
-  that the random node never picks a child more than `LoopCountMax` times in a row, and that a failed action blocks its node for 1 s.
+- **Live confirmation (lane L9, 2026-10-09):** partly confirmed on a 62 s fight and two 60 s recordings. The `TimedStart` re-arm on acquisition set `NextTimedRun` to now + 10.0003 s in the acquiring frame. The `TimedReset` after the perch finished set it to now + 27.05 (inside 20 to 30). Random node: `LoopCount` went from 4 to 1 when a different child ran, then 2 and 3 on the same child's next finishes, then 1 after the other child, and the last-child index followed. The `LoopCountMax` cap was **not exercised** (both maxima 0). `LastFailTime` stayed 0 on every node, so the 1.0 s failure block and the `Finish` rule were **not exercised**. `ActionFailName` values seen: NoPathToPerch, NotReachable, PathingFailed, NoTarget, NotScripted, InvalidLocation. Section 7 of [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md).
 
 ## WillowAIPawn.StartLeapAtActor, StartLeap, GetLeapRotation (stretch)
 
@@ -366,7 +366,7 @@ were **not** read in this lane.
 - The AI resource registry virtuals (`Resource` availability, acquire, release) and the exact "action default state" call at state stop.
 - The view-cone and hearing virtuals of the awareness iterator; the hidden-threat bookkeeping helpers.
 - The leap solver, the navigation handle natives and `FollowPath`; cover natives (`TryEnterCover`, `GetCoverExposure`), `GetFormation`.
-- Default values of a fresh `WillowMindTargetInfo` (`AggroTime`, `ForgetTime`) and any reader of `ForgetTime`.
+- The code that lowers a threat level after `ForgetTime` (the game shows the fall; the reader was not located here). A fresh record's `AggroTime` and `ForgetTime` read 0, but a den record can carry a stale `ForgetTime` from an earlier engagement.
 - Which object holds the "unaware" damage multiplier in the damage pipeline stage.
 
 ## Corrections to earlier notes
@@ -377,3 +377,16 @@ were **not** read in this lane.
 - NATIVE_AI_MELEE.md, "WillowTI_CalcThreat" and "WillowTI_CalcCombat": the threat iterator's rules are above; `CalcCombat` has no native body.
 - NATIVE_AI_MELEE.md, "Melee over time": the repeater is the pawn's per-frame tick (section above); `MeleeAttack` calls `BeginMeleeOverTime` itself and sweeps once immediately.
 - NATIVE_AI_MELEE.md, melee origin: for an AI pawn it is the actor's location, not an eye point.
+
+## Live corrections from lane L9 (2026-10-09)
+
+Each item is observed in the running game; the numbers are in [AI_AWARENESS_LIVE.md](AI_AWARENESS_LIVE.md) section 11.
+
+- **Lone case:** a bullymong spawned by a population den has a den parent. The threat origin is the den's location with the den's `ThreatRadius`, and the patrol limit is the den's `PatrolRadius`; the pawn's own location and the 4,096 radius were not the operative values for these bullymongs.
+- **`ForgetTime`:** it has a reader in the running game. The level falls at the den's next update after `ForgetTime` (to 1 in place, or the record is removed), and `AggroTime` returns to 0 in the first case.
+- **`SetThreatLevel`:** it stamps the den's (root) record; members only copy the level.
+- **Fresh record:** the first visible level is `ETL_InThreatRadius` (1); `GetThreatLevel` is 0 only when there is no record. `TargetExposureToMe` reads -1.0 on the first update of a fresh record.
+- **Defaults:** the 2.5 s and 10 s defaults for non-den definitions were not seen; the den definition's 10.0 and 25.0 are the operative values for a den-spawned bullymong.
+- **Timing:** the exposure read by `WillowTI_CalcThreat` is one update old; level 2 and `CurrentTarget` come in the same update; `IsAwareOfTarget` is False for 0.1 s after a stamp and True for a fresh record.
+- **Melee over time:** `bHitEachTargetOnlyOnce` is why a charge hits a target once; the sweeps themselves still run at 1/15 s.
+- **`bProvoked`:** it is set on acquisition, but den-spawned pawns can already have it true before anything noticed the player, so it does not record "noticed".
