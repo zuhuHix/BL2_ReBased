@@ -10,21 +10,23 @@ confirm it. Purpose: plan step S-h groundwork (how a bullymong picks a target an
 
 | Native | Script signature (from the package) | Slice relevance | Confidence | Status |
 |---|---|---|---|---|
-| AIComponent tick (target update, then state update; no script name) | called from the mind's per-frame tick | S-h: cadence of every AI decision | medium | UNVERIFIED |
-| AIComponent.FindTargets / GetTargets | `native function FindTargets()` / `GetTargets()` | S-h: who is a candidate (search radius) | medium | UNVERIFIED |
+| AIComponent tick (target update, then state update; no script name) | called from the mind's per-frame tick | S-h: cadence of every AI decision | medium | Confirmed in the running game, lane L8 (cadence) |
+| AIComponent.FindTargets / GetTargets | `native function FindTargets()` / `GetTargets()` | S-h: who is a candidate (search radius) | medium | Partly refuted in the running game, lane L8 (no 4096 cut; height ignored) |
 | AIComponent.ValidTarget | `native function bool ValidTarget(Actor)` | S-h: candidate filter | low (partly read) | UNVERIFIED |
 | AIComponent.AddTarget / InitializeTargetRecord | `native function MindTargetInfo AddTarget(Actor)` | S-h: record creation | medium | UNVERIFIED |
 | AIComponent.ShouldRemoveTarget / ForceRemoveTarget / TargetRemoved | `native function bool ShouldRemoveTarget(MindTargetInfo)` | S-h: when a target is dropped | medium | UNVERIFIED |
 | AIComponent.CalcTargetInfo | `native function CalcTargetInfo(MindTargetInfo)` | S-h: distance, exposure, threat per record | medium | UNVERIFIED |
-| AIComponent.PrioritizeTarget | `native function PrioritizeTarget(MindTargetInfo)` | S-h: priority formula | high (formula), medium (iterator meaning) | UNVERIFIED |
-| AIComponent.ChooseBestTarget / SetTarget / TargetChanged | `native function ChooseBestTarget()`, `SetTarget(Actor)`, `TargetChanged(Actor,Actor)` | S-h: current target, Target_Acquired / Target_Lost | medium | UNVERIFIED |
-| AIComponent.ValidCurrentTarget (CanTargetIf / StopTargetingIf) | `native function bool ValidCurrentTarget(MindTargetInfo)` | S-h: target hysteresis | high | UNVERIFIED |
-| Targeting iterators of Targeting_ShortRange (WillowTI_*, TargetIterator*, TI_Prioritize*) | no script names (C++ virtuals) | S-h: what the numbers mean | medium | UNVERIFIED |
-| AI action-tree selection (node types 1 to 4, eligibility, timed start, resources) | no script name (AIComponent virtuals) | S-h: which Action runs | medium | UNVERIFIED |
-| ActionSequence.TriggerBehavior | `native final function TriggerBehavior(name)` | S-h: the "Attack" behavior event | medium | UNVERIFIED |
-| MeleeDefinition.MeleeAttack | `native final function MeleeAttack(Object ContextObject)` | S-h/S-e: the melee hit | medium (radius path), low (cone path) | UNVERIFIED |
-| Melee hit application (internal to MeleeAttack) | none | S-h/S-e: allegiance filter, damage, knockback, behavior lists | medium | UNVERIFIED |
+| AIComponent.PrioritizeTarget | `native function PrioritizeTarget(MindTargetInfo)` | S-h: priority formula | high (formula), medium (iterator meaning) | Confirmed in the running game, lane L8 (formula and weights) |
+| AIComponent.ChooseBestTarget / SetTarget / TargetChanged | `native function ChooseBestTarget()`, `SetTarget(Actor)`, `TargetChanged(Actor,Actor)` | S-h: current target, Target_Acquired / Target_Lost | medium | Partly confirmed, lane L8 (events; acquisition needs sight) |
+| AIComponent.ValidCurrentTarget (CanTargetIf / StopTargetingIf) | `native function bool ValidCurrentTarget(MindTargetInfo)` | S-h: target hysteresis | high | Partly confirmed, lane L8 (CanTargetIf is None here) |
+| Targeting iterators of Targeting_ShortRange (WillowTI_*, TargetIterator*, TI_Prioritize*) | no script names (C++ virtuals) | S-h: what the numbers mean | medium | Partly confirmed, lane L8 (Nearby, Exposed, Previous, Bonus; Idle and Attacking weight 0) |
+| AI action-tree selection (node types 1 to 4, eligibility, timed start, resources) | no script name (AIComponent virtuals) | S-h: which Action runs | medium | UNVERIFIED (lane L8 read the timing data only) |
+| ActionSequence.TriggerBehavior | `native final function TriggerBehavior(name)` | S-h: the "Attack" behavior event | medium | Confirmed in the running game, lane L8 (0.41 s to the melee call) |
+| MeleeDefinition.MeleeAttack | `native final function MeleeAttack(Object ContextObject)` | S-h/S-e: the melee hit | medium (radius path), low (cone path) | Confirmed in the running game, lane L8 (radius path only) |
+| Melee hit application (internal to MeleeAttack) | none | S-h/S-e: allegiance filter, damage, knockback, behavior lists | medium | Partly confirmed, lane L8 (damage, momentum; allegiance and behavior lists not exercised) |
 | WillowPawn.BeginMeleeOverTime / EndMeleeOverTime, IMeleeAttacker interface | `native` | S-h: charge and grab melee | low (only the entry points) | UNVERIFIED |
+
+**Live status (lane L8, 2026-10-09).** The running game now answers part of this note; the record is [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md). Confirmed there: the update cadence (`UpdateRate` 0.2), the priority formula and its weights, the 0.41 s delay from the `Attack` event to the melee call, and the reach, cone, damage and momentum of the melee volume for one adult (reach and cone measured from a point 100 uu behind the attacker). Corrected there: the search radius is not a list filter, the vertical band, the horizontal reach test, `WillowTI_CalcCombat`, and the AI definition events. Rules that the record did not cover stay `UNVERIFIED`. The corrections are listed at the end of this note; each affected section says what was seen.
 
 ## How the bullymong chain fits together (reading order, not a mirror of any listing)
 
@@ -51,16 +53,15 @@ confirm it. Purpose: plan step S-h groundwork (how a bullymong picks a target an
   at most once per `UpdateRate`. `ForceUpdateTargets` skips the interval test. A separate helper that receives a (hit) report forces a full target update when the
   component has exactly one record; its caller was not identified (see "Not read yet").
 - **Implementer checklist:** one `tickAI(dt)` that does target update then state update; both guarded by `now >= LastStateUpdateTime + UpdateRate`; a hold stops the running action.
-- **Live confirmation:** read `AIComponent.UpdateRate` of a bullymong; poll `LastTargetUpdateTime` and `LastStateUpdateTime` every frame and check the
-  spacing of changes equals `UpdateRate` (hook `GearboxFramework.AIComponent:Tick` if script-visible, else poll from a `Engine.Actor:Tick` hook on the pawn).
+- **Live confirmation (confirmed in the running game, lane L8):** `UpdateRate` is 0.2. Over 2,433 frames of one adult, `LastTargetUpdateTime` equalled `LastStateUpdateTime` in every frame, and each changed at a spacing of at least 0.1999 s (mean 0.2113): the update runs at the first frame at or after the interval. Method and counts: [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 3.1.
 
 ## Target list: finding, filtering, adding, removing
 
 - **Search radius.** `TargetingDefinition.SearchRadius` when `bOverrideSearchRadius` is set, otherwise `AIDefinition.TargetSearchRadius` (4096 for the adult bullymong, whose
-  `Targeting_ShortRange` is read as the definition; whether it sets the override flag is not recorded). The test compares **horizontal** distance
-  (X and Y only) squared with the radius squared; height is ignored.
+  `Targeting_ShortRange` is read as the definition; lane L8 read the override as false, so this 4096 applies). The test compares **horizontal** distance
+  (X and Y only) squared with the radius squared; height is ignored. Lane L8 found that the list is not cut at this radius (see below).
 - **FindTargets:** if the component has a parent AI (`bGetTargetsFromParents`), targets come from the parent; otherwise every pawn the world lists
-  is a candidate: it must be within the radius and pass `ValidTarget`, then `AddTarget`. A candidate is skipped when the owner is flagged in a
+  is a candidate: it must pass `ValidTarget`, then `AddTarget` (lane L8 saw no radius cut). A candidate is skipped when the owner is flagged in a
   way I did not decode (a flag of the owning mind combined with a per-pawn state test).
 - **ValidTarget(actor) (partly read):** false when the AI or its interface is missing or the actor is the owner itself. The actor is first mapped to
   its driver/controller-side pawn when it has one. If the owner's allegiance test says the actor is not an enemy, it is only valid when
@@ -73,9 +74,8 @@ confirm it. Purpose: plan step S-h groundwork (how a bullymong picks a target an
 - **Remove stale (start of every target update):** every record with `ShouldRemoveTarget` true is marked, except that if there is exactly one
   record, an extra owner test passes and the target is still valid, the record is kept. Marked records are removed from the end of the array
   towards the front (`TargetRemoved` runs for each).
-- **Implementer checklist:** radius test is XY only; one record per actor; records appended in discovery order; removal pass before the find pass.
-- **Live confirmation:** a bullymong with a player at 3000 uu horizontal and 1500 uu above: expect it to be a target (height ignored). Read `AIComponent.Targets`
-  (array of `WillowMindTargetInfo`: `Target`, `Distance`, `bShouldRemove`) while the player crosses 4096 uu.
+- **Implementer checklist:** no 4096 cut on the list (lane L8), height ignored; one record per actor; records appended in discovery order; removal pass before the find pass.
+- **Live confirmation (lane L8, partly refuted):** the height part holds: a record existed with the player 1,497 uu above an adult, and 13.8 km above a rakk drone. The radius part does not: records of the player existed at horizontal 4,100 to 7,000 uu, so 4096 is not a list filter. In one test geometry the record dropped near 6.94 km coming in and near 7.07 km going out; the cause is UNVERIFIED. The `bShouldRemove` field was not read. See [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 3.4.
 
 ## CalcTargetInfo and PrioritizeTarget
 
@@ -83,17 +83,15 @@ confirm it. Purpose: plan step S-h groundwork (how a bullymong picks a target an
   evaluation (if the owner is a `GearboxMind`), then its interface-based evaluation. Each iterator type fills only its own fields (below).
 - **PrioritizeTarget(record):** for each entry in `TargetingDefinition.Prioritization` (class `TI_Prioritize` subclasses, each with a `Weight`):
   set `record.OnePriority = 0`, run the iterator (mind-based, then interface-based), then accumulate. `record.Priority = sum(OnePriority * Weight) / sum(Weight)`;
-  the record is left unchanged when the weight sum is not positive. Each iterator writes `OnePriority`, normally in 0..1.
+  the record is left unchanged when the weight sum is not positive. Each iterator writes `OnePriority`, normally in 0..1 (lane L8 saw the exposed iterator write -1.0 unclamped).
 - **Implementer checklist:** weighted mean; weights come from data; an iterator that does not write leaves OnePriority at 0.
-- **Live confirmation:** read `Targeting_ShortRange.Prioritization[i].Weight` and the live `MindTargetInfo.Priority`, `OnePriority` is overwritten each iterator, so
-  verify by hooking each iterator's script-visible entry if any, otherwise compare `Priority` with the predicted mean using the per-iterator formulas below.
+- **Live confirmation (confirmed for this definition in the running game, lane L8):** `Priority` equals the weighted mean of the iterators with weights 1.0 (nearby), 1.0 (exposed), 0.4 (previous) and 1.0 (bonus), sum 3.4; Idle and Attacking carry weight 0. Checked on 134 samples to a residual under 5e-8. The `Distance` in the nearby term is the 3D distance. Two changes: the exposed iterator is not clamped (`TargetExposureToMe` -1.0 went into `Priority` unclamped), and `OnePriority` read 0.0 in every sample, so it cannot check one iterator. See [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 3.2.
 
 ## The iterators of GD_AI_Targeting.Targeting_ShortRange
 
-Knowledge: `WillowTI_CalcCanFire`, `WillowTI_CalcCombat`, `WillowTI_CalcDistances`, `WillowTI_CalcExposure`, `WillowTI_CalcThreat`.
+Knowledge, in the live definition's order (lane L8): `WillowTI_CalcThreat`, `WillowTI_CalcCanFire`, `WillowTI_CalcExposure`, `WillowTI_CalcDistances`, and a fifth entry that holds no object.
 Prioritization: `TargetIteratorPrioritizeExposedTargets`, `TargetIteratorPrioritizeNearbyTarget`, `TargetIteratorPrioritizePreviousTarget`, `TI_PrioritizeBonus`,
-`WillowTI_PrioritizeAttacking`, `WillowTI_PrioritizeIdle`. Weights and the iterator fields (`MaxDistance`, `DecayRate`, `FullyEngagedPct`, `MaxAICurrentlyTargeting`) are data and
-were not read (live read needed).
+`WillowTI_PrioritizeAttacking`, `WillowTI_PrioritizeIdle`. Weights and the iterator fields (`MaxDistance`, `DecayRate`, `FullyEngagedPct`, `MaxAICurrentlyTargeting`) are data; lane L8 read the values of `Targeting_ShortRange` (see the live confirmation below).
 
 - **WillowTI_CalcDistances:** `Distance` = 3D distance from the owner pawn to the target; `Distance2D` = horizontal distance; `DistanceVertical` = absolute height difference;
   `DotToTarget` = dot of the owner's facing (yaw, pitch) with the unit vector to the target; `DotFromTarget` = the same for the target's facing back at the owner;
@@ -105,7 +103,7 @@ were not read (live read needed).
   location when it has one); `bCanFireAt` and `bCanSeeOrHearTarget` are set when `Exposure` is not zero.
 - **WillowTI_CalcThreat:** sets `ThreatLevel` from the engine (0 = none), and may raise it to 2 (high) when the target can see the owner within a distance
   and view-angle test against the owner's weapon range data; it then reports the new level to the mind. The thresholds were not tabulated.
-- **WillowTI_CalcCombat:** not resolved (no vtable found); open.
+- **WillowTI_CalcCombat:** not resolved (no vtable found). Lane L8 found that the live definition's fifth `Knowledge` entry holds no object, so this iterator is not in that definition (refuted for it).
 - **TargetIteratorPrioritizeExposedTargets:** `OnePriority = TargetExposureToMe`.
 - **TargetIteratorPrioritizeNearbyTarget:** with no awareness-zone info for the target: `OnePriority = clamp(1 - Distance / MaxDistance, 0, 1)`; with awareness-zone info:
   the zone record's own priority clamped to 0..1.
@@ -118,8 +116,11 @@ were not read (live read needed).
 - **WillowTI_PrioritizeIdle:** takes how many AIs are already targeting the target (`WillowPawn.NumAICurrentlyTargeting` for a pawn target, an equivalent counter on
   the other target kinds; 1 when no counter is readable) and sets `OnePriority = clamp(1 - count / MaxAICurrentlyTargeting, 0, 1)`; when the owner itself is the target's current
   attacker it is subtracted first. Only runs when the owner has an AI component.
-- **Live confirmation (all):** dump `Targeting_ShortRange` iterator objects (`Weight`, `MaxDistance`, `DecayRate`, `FullyEngagedPct`, `MaxAICurrentlyTargeting`) and, for a bullymong with a
-  player in sight, the `WillowMindTargetInfo` fields `Distance`, `Distance2D`, `DistanceVertical`, `DotToTarget`, `TargetExposureToMe`, `Exposure`, `ThreatLevel`, `Priority`.
+- **Live confirmation (lane L8):**
+  - `WillowTI_CalcDistances`: the distance fields equal the pawns' geometry when both are still, and lag it by up to one update (0.2 s) when they move.
+  - `WillowTI_CalcExposure`: `TargetExposureToMe` took 0.0, 0.5, 1.0 and -1.0; 0.5 gave `Exposure_Half`. The 0.4 and 0.9 thresholds were not tested. `bCanSeeOrHearTarget` followed line of sight, not distance. The -1.0 is new; its meaning is UNVERIFIED.
+  - `WillowTI_CalcThreat`: `ThreatLevel` was `ETL_InThreatRadius` or `ETL_SeenInThreatRadius`; the other values were not seen.
+  - The iterator weights and fields were read as data for `Targeting_ShortRange` (weights above, `MaxDistance` 4096 for the nearby iterator); the rest of the fields were not checked against behavior. See [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) sections 2, 3.2 and 3.3.
 
 ## ChooseBestTarget, SetTarget, TargetChanged, ValidCurrentTarget
 
@@ -134,8 +135,8 @@ were not read (live read needed).
   `WillowActionSequencePawn` script: `Target_Acquired` re-reads `Target`, `TargetRec` and `ParentTargetRec` from the component; `Target_Lost` clears all three.
   The order of the two events is read from code structure (lost first), not from names; UNVERIFIED.
 - **TargetChanged(old, new) (base):** when there was no target and now there is one, the component re-arms the timed start of every tree node (see "Timed fields").
-- **Implementer checklist:** acquire needs CanTargetIf, keep needs not StopTargetingIf; highest priority first; at most one SetTarget per update.
-- **Live confirmation:** hook `GearboxFramework.AIDefinition:OnTargetAcquired` and `:OnTargetLost` and `WillowGame.WillowActionSequencePawn:ActivateEvent` and log the order and arguments.
+- **Implementer checklist:** acquire needs CanTargetIf and (lane L8) sight, keep needs not StopTargetingIf; highest priority first; at most one SetTarget per update.
+- **Live confirmation (lane L8):** the `AIDefinition.OnTargetAcquired` and `OnTargetLost` hooks never fired through script (0 rows in 8,838 hook rows), so that hook point is refuted. The events were seen on `WillowActionSequencePawn.ActivateEvent`: on acquisition every action of the adult's tree (10 of 10) got `Target_Acquired` in one frame, the running action first, then node order; `Target_Lost` went to the same set (159 and 159 per-action events in the long fight). `Target_Lost` before `Target_Acquired` on a switch was not seen (UNVERIFIED). Acquisition followed sight: an adult with line of sight blocked (`Exposure_None`) did not acquire the player down to 2,925 uu, although its record had a positive priority, and `CanTargetIf` is None in this definition, so the gate that held it is UNVERIFIED. Loss came before the record went (see [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 3.4).
 
 ## State selection: the AI action tree
 
@@ -165,9 +166,7 @@ children PickUpObject (combat perch), ThrowIceSpike, CloseMelee, `Random`, BackU
   attack location reached or movement not allowed means `RotateToTarget` (aim), else `MoveToTarget`.
 - **Implementer checklist:** an explicit tree evaluator with the four node types; timed start armed on first target; eligibility as above; random draw uses a uniform value in 0..1
   (the engine's integer random divided by 32768).
-- **Live confirmation:** per `AIComponent` read `CurrentState` (the running node), the node array fields `NextTimedRun`, `ActiveChild`, `ActionFailName`; log a bullymong from
-  first sight of the player for 30 s: the perch node must not run before the 10 s mark; the random node's outcome frequencies should approach 1.0 : 0.25 : 0.25 among eligible children
-  (over 100 samples); `Action.CanRun` reasons via a hook on `Action_GenericAttack:CanRun`.
+- **Live confirmation (lane L8, not exercised):** the selection pass, the random draws and the `CanRun` reasons were not observed; the recording was a fight with the player near. Only the data was read: the perch node's `TimedStart` 10 to 10 s and `TimedReset` 20 to 30 s, and the random weights 1.0 : 0.25 : 0.25. Still open: the perch node's first run, the outcome frequencies over 100 samples, and the `Action.CanRun` reasons. See [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 8.
 
 ## ActionSequence.TriggerBehavior
 
@@ -175,8 +174,7 @@ children PickUpObject (combat perch), ThrowIceSpike, CloseMelee, `Random`, BackU
   `NATIVE_BEHAVIOR_POPULATION.md`). Nothing happens when the AI interface or the consumer is missing or the event name is not found.
 - **Used by:** `Action_AnimAttack.Attack.BeginState` raises the event `Attack` (and `Action_AttackLoop` raises `StartAnim`). How the event reaches the `Behavior_MeleeAttack` of a bullymong is
   data in the character's behavior provider and was not read.
-- **Live confirmation:** hook `GearboxFramework.ActionSequence:TriggerBehavior` (name argument) and `WillowGame.Behavior_MeleeAttack:ApplyBehaviorToContext` and log which `MeleeDefinition`
-  is in `Behavior_MeleeAttack.MeleeDefinition`, and the time from `Attack` to the melee call (the animation offset).
+- **Live confirmation (confirmed in the running game, lane L8):** for the adult's Close Melee, 35 swings: `Attack` came 0.011 to 0.166 s (mean 0.027) after the node's `Start`, and `Behavior_MeleeAttack.ApplyBehaviorToContext` and `MeleeAttack` ran in the same frame, 0.400 to 0.425 s (mean 0.410) after the `Attack` trigger. Two `Behavior_MeleeAttack` objects served the swings, and both pointed at the same `MeleeDefinition`. Leaps (take-off to landing, 1.08 to 3.48 s) are a different interval. See [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 4.
 
 ## MeleeDefinition.MeleeAttack
 
@@ -197,10 +195,10 @@ children PickUpObject (combat perch), ThrowIceSpike, CloseMelee, `Random`, BackU
   - The radius is `DamageRadius`. If `bMeleeOverPeriodOfTime` and `bExpandRadiusOverTime` are both set and `MaxMeleeDuration` is positive, the outer radius grows with the elapsed
     fraction of the melee (elapsed / duration, times `DamageRadius`), and the inner radius is what the previous interval reached, so only the newly covered ring is hit.
   - Candidates are the actors the world lists that are alive, not hidden or deleted, carry a collision-related actor flag (not decoded), and are not the attacker itself.
-  - A candidate's vertical extent (centre height plus or minus its collision half-height) must overlap the band centre plus or minus `DamageHeight` (so `DamageHeight` is a half-height).
+  - Vertical (corrected in lane L8): the test is not an overlap with a band of `DamageHeight` half-height. The victim's centre must lie in a band about -143 to +339 uu from the attacker's `Location` (width about 482, for the adult attacker and the player victim). This band is fitted to the data, so UNVERIFIED as the native's own formula.
   - The angle test: the dot product of the unit vector from origin to candidate with the attacker's horizontal forward vector must be at least cos(`DamageConeAngle` / 2).
-    For 360 degrees every direction passes. `DamageConeAngle` is a full angle in degrees (Melee 128 degrees means plus or minus 64).
-  - The distance test: 3D distance from the origin (with the vertical centre) must be at most the radius. A candidate beyond the radius is still accepted when a per-actor extra
+    For 360 degrees every direction passes. `DamageConeAngle` is a full angle in degrees (Melee 128 degrees means plus or minus 64). Lane L8 confirmed the half-angle for the Melee definition (hits to 63.8 degrees, misses from 66.2), measured from a point 100 uu behind the attacker.
+  - The distance test (corrected in lane L8): the horizontal distance from the origin must be at most the radius. Read in 3D, the edge would have been 647 to 656 instead of 640, so the 3D reading is refuted. A candidate beyond the radius is still accepted when a per-actor extra
     test passes (not decoded; probably a collision-extent allowance), otherwise rejected.
   - Unless `bIgnoreWorldGeometry`, a line trace from the attacker to the candidate must not hit another blocking object first.
   - Qualifying candidates are applied in the order the world lists them.
@@ -212,8 +210,8 @@ children PickUpObject (combat perch), ThrowIceSpike, CloseMelee, `Random`, BackU
   - If `bMeleeOverPeriodOfTime` and `bHitEachTargetOnlyOnce` are both set: skip when the attacker's melee state already lists the victim; else record it.
   - Allegiance: using the attacker's mind, the victim must be an enemy (`bAffectEnemy`), a friend (`bAffectFriendly`) or neutral (`bAffectNeutral`). A victim without a controller skips this test.
   - Damage amount: the `Damage` attribute-initialisation data evaluated for the attacker pawn (for the bullymong this reproduces the live closed form: 8 x 1.13^level x class
-    `EnemyNonWeaponDamageMultiplier` x `BaseValueScaleConstant`, adult melee 73.697 at level 5; see `COMBAT_GOLDEN_TRACE.md`). `Knockback` is evaluated the same way and the momentum
-    is the horizontal unit direction from the attacker to the victim (height zero) times Knockback times 100000 (reading of the second evaluation; confidence medium-low).
+    `EnemyNonWeaponDamageMultiplier` x `BaseValueScaleConstant`, adult melee 73.697 at level 5; see `COMBAT_GOLDEN_TRACE.md`). Lane L8 confirmed the same closed form at level 7 (94.104, one `TakeDamage` per call, 48 hits). `Knockback` is evaluated the same way and the momentum
+    is the horizontal unit direction from the attacker to the victim (height zero) times Knockback times 100000 (reading of the second evaluation; confidence medium-low). Lane L8 confirmed the horizontal direction and the 100,000 factor for the adult's melee: magnitude 75,000 with Z zero, direction from the attacker's `Location` (not the cone origin), 48 hits within 0.003 deg. The `Knockback` value was not read, so 0.75 is only the observed magnitude over 100,000.
   - The damage is delivered through the engine damage call with the definition's `DamageSource` class, damage type (`DamageTypeDefinition`, or the name override), impact definition,
     status effect damage and chance, the hit location, the momentum and the attacker's controller as instigator. From there `NATIVE_DAMAGE_DEATH.md` applies (shield first, `AdjustDamage`
     stages, `WillowPlayerPawn.TakeDamage`).
@@ -223,14 +221,12 @@ children PickUpObject (combat perch), ThrowIceSpike, CloseMelee, `Random`, BackU
 - **Calls into script:** the behavior lists (script `Behavior_*` objects); `Pawn.TakeDamage` chain via the engine damage call.
 - **Calls other natives:** `IMeleeAttacker` interface methods (`GetMeleeTraceSourceLocationAndRotation`, `HasActorAlreadyBeenHitByMelee`, `GetMeleeAttackerMass`, begin/end over time), the attribute
   evaluator, the damage call, the line trace.
-- **Implementer checklist:** (1) no `IMeleeAttacker` or neither volume flag means no hit; (2) radius volume test as above with the three conditions (vertical band, half-angle, 3D radius);
+- **Implementer checklist:** (1) no `IMeleeAttacker` or neither volume flag means no hit; (2) radius volume test as above with the three conditions (vertical band, half-angle, horizontal radius, lane L8);
   (3) allegiance flags; (4) damage from the data, momentum on the horizontal plane; (5) behavior lists in the stated order; (6) one hit per victim per call (once per melee when over time).
 - **Constants of the five live bullymong definitions** (from the live dump in `local/realgame/L5b/`): `MeleeDef_PrimalBeast_Melee`: radius 640, half-height 256, cone 128, offset -100 forward;
   `_RadiusLeap`: 320, 192, 360, offset +200; `_RadiusBadass`: 1024, 128, 360, scale 1.5; `_MeleeGrabBaby` (over time 0.75 s, interval 0.1, once per target): 580, 320, 128; `MeleeDef_Melee_Charge` (over
   time 5 s, interval 0.0667, once per target): 512, 80, 64, trace 340.
-- **Live confirmation:** hook `WillowGame.MeleeDefinition:MeleeAttack`; place Maya at set distances and angles from an adult bullymong and record hit or miss (and
-  `Engine.Actor:TakeDamage` arguments: `DamageAmount`, `Momentum`, `HitInfo`). Expect hits out to about 640 uu, not behind the bullymong (plus or minus 64 degrees), and not above 256 uu of vertical
-  difference. Compare the momentum vector with the horizontal direction times Knockback times 100000.
+- **Live confirmation (lane L8, radius path only; 71 controlled swings of one adult against the player, plus earlier ones for the method):** reach is a horizontal 640 uu from the point 100 uu behind the attacker (hit at 639.1, miss at 647.9); the cone is a 64-degree half-angle from that point (hit at 63.8, miss at 66.2); the vertical band is -143 to +339 uu about the attacker's `Location` (corrected above, fitted); damage 94.104 and momentum 75,000 as above. Other definitions (`_RadiusLeap`, `_RadiusBadass`, grab, charge), allegiance flags, line-of-sight blocking and the over-time definitions were not exercised. See [AI_MELEE_TARGETING_LIVE.md](AI_MELEE_TARGETING_LIVE.md) section 5.
 
 ## Melee over time
 
@@ -244,8 +240,20 @@ children PickUpObject (combat perch), ThrowIceSpike, CloseMelee, `Random`, BackU
 - The `IMeleeAttacker` implementations on `WillowPawn` / `WillowAIPawn` (trace source, hit list, over-time timer).
 - Full `ValidTarget` and the hidden-owner condition in `FindTargets`; the node-completion code (loop counts, `TimedReset`); the interruption test between actions; `Action_LeapAtTarget` and
   movement natives (`FollowPath`, nav mesh).
-- Weights and field values of `Targeting_ShortRange` iterators and the `AIResource` registry (live reads).
+- The `AIResource` registry (not read). The `Targeting_ShortRange` weights and field values were read in lane L8 (see the iterators section).
 
 ## Corrections to earlier notes
-- None. `COMBAT_GOLDEN_TRACE.md` section on the bullymong ("AI: `AIDef_PrimalBeastAdult` ...") stays as written; this note adds how the AI works. The plan text in `local/p2/S2/bullymong_plan.md`
+- Search radius: the 4096 radius is not a filter on the target list. Records existed at 4,100 to 7,000 uu horizontal, and one geometry dropped them near 6.94 to 7.07 km; the cause is UNVERIFIED. Height is ignored (confirmed).
+- Vertical melee band: the acceptance band is about -143 to +339 uu about the attacker's `Location`, not a half-height of `DamageHeight` either side of the victim's extent (fitted, UNVERIFIED as the native formula).
+- Melee distance test: horizontal, not 3D (radius 640 from the point 100 uu behind the attacker: hit at 639.1, miss at 647.9).
+- `WillowTI_CalcCombat`: the live definition's fifth `Knowledge` entry holds no object.
+- AI definition events: `OnTargetAcquired` and `OnTargetLost` never fired through script; the events were seen on the action sequence pawn's `ActivateEvent`.
+- Acquisition: a positive priority alone did not make the player the current target; the adult did not acquire the player without sight to 2,925 uu. `CanTargetIf` is None in this definition.
+- Exposed iterator: not clamped (`TargetExposureToMe` -1.0 went into `Priority`).
+- Momentum: the magnitude for the adult's melee was 75,000 (0.75 times 100,000); the `Knockback` value itself was not read.
+- Attack to melee call: the note left the delay unmeasured; the record gives 0.410 s on average (0.400 to 0.425).
+
+Still open: `Target_Lost` before `Target_Acquired` on a switch (UNVERIFIED). Confirmed numbers are in the sections above, not repeated here.
+
+- `COMBAT_GOLDEN_TRACE.md` section on the bullymong ("AI: `AIDef_PrimalBeastAdult` ...") stays as written; this note adds how the AI works. The plan text in `local/p2/S2/bullymong_plan.md`
   ("`MeleeDefinition.MeleeAttack` (native, unread)") is now partially read.
