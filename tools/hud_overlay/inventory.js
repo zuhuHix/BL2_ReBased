@@ -133,7 +133,7 @@ const FUN_STATS_OVERLAP = 6;
 const ARROW_VALUE_GAP = 2;
 // Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
 const CARD_TEXT_SIZE = 16;
-const HEADER_SHRINK = 0.93, HINT_LIFT = 13, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint 10 px right and 4 low, plate 3 low (critic round 13)
+const HEADER_SHRINK = 0.93, HINT_LIFT = 8, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint text centred near y 657 like the real line (its slant averages 653-661), plate 3 low
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
@@ -292,12 +292,16 @@ function ammoKeyForItem(item) {
   return weaponAmmoKeys.get(String(item.type || 'pistol').trim().toLowerCase()) || null;
 }
 
+// `inventory.html?logsnapshot` writes every new host snapshot to the console (the UE log), so a captured state can be
+// replayed in a plain browser while tuning the layout. Off by default.
+const LOG_SNAPSHOTS = /[?&]logsnapshot\b/.test(String(location.search || ''));
 window.owInventory = snapshot => {
   if (!snapshot || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.slots)
       || snapshot.slots.length !== 4) return;
   const firstSnapshot = state === null;
   const serial = JSON.stringify(snapshot);
   if (serial === lastState) return;
+  if (LOG_SNAPSHOTS) console.log(`OWINVSNAPSHOT ${serial}`);
   lastState = serial;
   state = snapshot;
   if (transferSourceId && !itemById(transferSourceId)) finishTransfer();
@@ -833,6 +837,11 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
   call(card, 'SetTitle', String(item.manufacturer || '').toLowerCase(), escapeHtml(item.name), color(item),
     movieTypeIcon(item), element === 'None' ? 'none' : element.toLowerCase(),
     equippedIds().has(item.id));
+  // SetTitle counts the name's lines with Scaleform's getLineLength, which Ruffle lacks, so every name counted as two lines
+  // and the stats started a line low (real cards put them right under a one-line name). The field's bottomScroll is the
+  // number of lines it shows (all of them: the field is two lines tall).
+  const titleLines = Number(get(`${card}.titleLine`, 'bottomScroll'));
+  if (titleLines >= 1 && titleLines <= 2) call(card, 'SetRequiredTitleLines', titleLines);
   call(card, 'TurnOffAllTopStats');
   const stats = cardStats(item), otherStats = cardStats(compareItem || {});
   for (let index=0; index<7; index++) {
@@ -858,11 +867,12 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     statVisibility.set(`${row}.auxField`, false);
     statVisibility.set(`${row}.arrow`, arrowShown);
     if (arrowShown) set(`${row}.arrow`, '_visible', true);
-    // The value is right-aligned to the same edge as the arrow, so with an arrow showing it moves left by
-    // the arrow's width (its natural x is remembered per field).
+    // On real cards a value without an arrow ends at the arrow column's right edge and one with an arrow ends just before
+    // the arrow (2026-10-21 elemental and compare cards); the movie's field ended at the arrow's left edge, so values sat
+    // about 15 px left of the real ones. The field's natural x is remembered per field.
     if (!statMainX.has(`${row}.mainField`)) statMainX.set(`${row}.mainField`, Number(get(`${row}.mainField`, '_x')));
-    const arrowWidth = arrowShown ? Number(get(`${row}.arrow`, '_width')) : 0;
-    set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) - (arrowWidth > 0 ? arrowWidth + ARROW_VALUE_GAP : 0));
+    const arrowWidth = Number(get(`${row}.arrow`, '_width')) || 0;
+    set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) + arrowWidth - (arrowShown ? arrowWidth + ARROW_VALUE_GAP : 0));
   });
   // Legacy plain-text payloads are '; '-joined. The weapon contract puts red
   // text first; observed gear formatting below overrides this fallback.
@@ -954,9 +964,13 @@ function drawCard() {
   // item being moved is green, the card it is compared with is yellow. The main card is the moved item.
   // A backpack item with an equipped counterpart also shows arrows against it without a second card.
   const arrowsAgainst = compare || (item && !equippedIds().has(item.id) ? itemById(equippedIdFor(item)) : null);
-  const movedStyle = transferSourceId ? 'compare' : 'highlight', otherStyle = transferSourceId ? 'highlight' : 'compare';
+  const movedStyle = transferSourceId ? 'compare' : 'highlight';
+  const otherStyle = transferSourceId ? 'highlight' : 'compare';
   configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : arrowsAgainst, movedStyle);
   configureCard(INV + '.compareCard', fromLeft ? item : compare, fromLeft ? compare : item, otherStyle);
+  // Inspect shows the card in its plain blue frame (2026-10-04 Inspect captures, both items), not the selection yellow:
+  // the background clip's first frame (its other two are the yellow and green ones SetBackgroundStyle names).
+  if (inspectMode) player.ow(INV + '.mainCard.bkgd', 'gotoAndStop', 1);
   setCompareLayout(Boolean(compare) || Boolean(transferSourceId), fromLeft);
   const gearSlot = gearSlotForItem(item);
   const compareSlotLabel = gearSlot
@@ -1058,7 +1072,7 @@ function announce(message) {
 // background would look better (needs a change to the preview actor, not made here).
 const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
 // The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
-const INSPECT_ZOOM = 1.3;
+const INSPECT_ZOOM = 1.75; // the real model spans x 329-949 (620 px) where ours spanned 463 px at 1.3
 const INSPECT_HINT_DX = 53;
 const INSPECT_CARD_INSET_X = 0.03, INSPECT_CARD_INSET_TOP = -0.06, INSPECT_CARD_INSET_BOTTOM = -0.05; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
@@ -1066,7 +1080,8 @@ const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
   ['[Mouse-Wheel-Up/Mouse-Wheel-Down] Zoom', true], ['[P] Screenshot', false], ['[Escape] Close', true]];
 let inspectCardHome = null, inspectZoom = 1, inspectApplied = false, inspectShownImage = '';
 const INSPECT_HIDDEN_CLIPS = () => [INV+'.equippedPanel', INV+'.storagePanel', INV+'.ammo', INV+'.currencyPanel',
-  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header', ROOT+'.sway', ROOT+'.scanlines', ROOT+'.tooltips.scanlines'];
+  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header', ROOT+'.sway', ROOT+'.scanlines', ROOT+'.tooltips.scanlines',
+  ROOT+'.ring']; // the ring layer drew the pale box behind the card and the grey bar under the hints (critic round 16)
 // Moves the main card to the top left (remembering where it was) or puts it back.
 function placeInspectCard(on) {
   const card = INV + '.mainCard';

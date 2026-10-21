@@ -1143,3 +1143,55 @@ green tile frame is thicker and tinted. Small and compare views start their list
 AI-assisted, page-only. Equipped-view panel title moved up 13 px so it no longer collides with the "WEAPONS" sub-header; compare lists show 7.6 rows; the moved tile has a translucent lime fill;
 Skills trees, card height, plate and description size adjusted; the Inspect hint strip is moved right and unfaded. Suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits, UNVERIFIED.
 Final open items are listed in the lane handoff (tilt/glass, Skills pitch and tile brightness, Inspect card height and keyed holes, empty cells, gear compare, Phaselock HUD sigil).
+
+## Rounds 16-19 (2026-10-21, lane D of the 2026-10-21 orchestration)
+
+AI-assisted (Claude). Machine: the second PC (not the maintainer's main one). Real-game frames, engine frames, critic reports and
+the snapshot used for headless replays stay under ignored `local/realgame/d16/` and `local/orch/D16/`.
+
+**Method.** Each round: engine frames from the `-owinvshots` sequence (one locked UE run), an independent critic (a fresh agent each
+round, given only the frame paths and the out-of-scope list) scoring 11 screen pairs against the 2026-10-04 real frames, fixes, the
+action suite. Between locked runs the pages were tuned in a headless Edge at 1280x720 replaying a snapshot the engine logged
+(`inventory.html?logsnapshot` prints each host snapshot as an `OWINVSNAPSHOT` console line); the headless frames match the engine's
+for the inventory and Skills views (the compare view needed the fix of round 17 to agree).
+
+**Real-game session (2026-10-21).** `tools/real_game/realgame.ps1` with the hub lock, saves backed up and restored (one `.sav.bak`
+differed and was restored), the driver removed afterwards. Continue loaded a different save than on 2026-10-04: Maya level 17 in Tundra
+Express, five weapons in a 15-slot backpack, community mods as before. Two Maliwan weapons were added from their balances and removed
+before quitting. Seen (screen captures, **confirmed in game** only for what the frames show):
+
+- **Skills overview (Q)**: the three trees on a plane receding to the right (visible panels x 238-478 / 497-700 / 720-900, y 170-610 /
+  185-595 / 198-580), every tree name shown (MOTION included), the action plate where it is outside the overview, the footer not moved.
+- **Empty backpack cells are selectable**: Down past the last item moves the gold selection onto the "(EMPTY)" cells; no card is shown,
+  the mini Equipped column shows its EQUIPPED title, the list scrolls so the selected empty cell is the last visible row, and the hint
+  line keeps Sort and Close lit with Select/Compare, Drop and Inspect dimmed.
+- **Elemental card**: "Burn Damage / sec." and "Ignite Chance" rows after Magazine Size; a value with an arrow ends right before the
+  arrow, a value without one ends at the arrow column's right edge; the stats start directly under a one-line name.
+- An item above the player's level has a red card frame and a red "LEVEL REQUIREMENT" strip (not reproduced yet).
+
+### Round 16
+
+Baseline critic on fresh frames of the round-15 state: **7.27/10** (11 pairs). Changes:
+
+- **Skills tiles**: the movie's skill cell places a cyan `overclocked` outline on its first frame and no frame removes it, so Ruffle drew
+  it on every tile; the real page shows dark (locked) and white (open) borders. It is now shown only for a class-mod bonus (that rule is
+  UNVERIFIED). Found with a local SWF tag walk of the converted StatusMenu (output stays under `local/`).
+- **Phaselock plate**: the portrait sat in a clip with a pink colour transform from the plate's "disabled" frame that no later frame
+  clears; past "disabled" the icon is loaded into an untinted sibling clip. The plate is placed absolutely (the movie resets it after the
+  layout pass), 15 px right and 18 px up, scaled 103% x 128% (the real plate is taller, a fit for the missing 3D), and drawn over the trees.
+- **Skills trees** 7% taller than wide (real panel y 158-620 against 172-612); description text keeps size 16 with leading -3 (line pitch
+  22.5 px against 21.8 real, real wrap kept). **Overview** follows the real frame above: one pose per tree, all names shown, no footer drop.
+- **Inspect**: card in its plain blue frame (the background clip's first frame; both real Inspect frames), the movie's `ring` layer hidden
+  (it drew a pale box behind the card and a grey bar under the hints), model drawn 1.75x (the real pistol spans 622 px; ours 463 at 1.3).
+- **Cards**: Ruffle lacks the Scaleform `getLineLength` that `SetTitle` uses, so every name counted as two lines and the stats started a
+  line low; the field's `bottomScroll` now sets `SetRequiredTitleLines`. Values end at the arrow column like the real cards.
+- Hint line 5 px lower (real text centred near y 657). Capture sequence: Down before D1 and after entering the Backpack, so the frames
+  show weapon slot 2 and backpack row 2 like the reference frames (the game enters the Backpack at row 1, seen on 2026-10-21).
+
+Critic (a different agent instance): **6.85/10** on the 11 pairs, 8.2 on the new overview pair. It ranked the Maya display model first
+(not shown in our sessions; the third-party reference `local/ui/ref/inventory_maya_real.jpg` shows it, so it stays and later critics are
+told so), then perspective and the glass sheet, the Equipped column about 140 px low in the backpack-origin compare (a placement race,
+fixed in round 17), and the Inspect model, which now showed slot 2's rifle instead of a pistol. Suite: **49 PASS / 0 FAIL / 0 NOT_RUN /
+0 KNOWN_DIVERGENCE** with `-Items local/inventory-actions/bounded-recipes`; with this machine's default item set 24 / 3 / 22 / 0, because
+that set starts over the backpack capacity and the host (correctly) refuses unequips (same result in a 2026-10-15 log of the source
+worktree). All placements are fits to captured frames (UNVERIFIED).

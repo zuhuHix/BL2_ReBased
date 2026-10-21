@@ -265,8 +265,10 @@ void AOpenWillowMayaHUD::TickInvShots()
     // One entry per step: {action, argument, wait after}. Actions: key, shot, open, tab, closeSkills.
     struct FInvShotStep { const TCHAR* Action; const TCHAR* Arg; double Wait; };
     static const FInvShotStep Steps[] = {
-        {TEXT("open"), TEXT(""), 4.}, {TEXT("shot"), TEXT("D1_Inventory"), .6},
-        {TEXT("key"), TEXT("ArrowRight"), 1.5}, {TEXT("shot"), TEXT("D2_Backpack"), .5},
+        // Down before D1 and after entering the Backpack: the reference frames (i09, i06 of 2026-10-04) have weapon slot 2
+        // and backpack row 2 selected, so the captures show the same states.
+        {TEXT("open"), TEXT(""), 4.}, {TEXT("key"), TEXT("ArrowDown"), .8}, {TEXT("shot"), TEXT("D1_Inventory"), .6},
+        {TEXT("key"), TEXT("ArrowRight"), 1.2}, {TEXT("key"), TEXT("ArrowDown"), 1.}, {TEXT("shot"), TEXT("D2_Backpack"), .5},
         {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2b_SortTypes"), .5},
         {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2c_SortBrands"), .5},
         {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2d_SortItems"), .5},
