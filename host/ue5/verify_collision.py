@@ -29,6 +29,10 @@ for instance in scene['actors']:
                 raise RuntimeError('Saved triangle collision mismatch: ' + label)
             if len(actual) != len(expected):
                 raise RuntimeError('Saved hull count mismatch: ' + label)
+            for kind, count in (('spheres', unreal.OpenWillowCollision.count_spheres(mesh)),
+                                ('capsules', unreal.OpenWillowCollision.count_capsules(mesh))):
+                if count != (len(definition['collision'].get(kind, [])) if i == 0 else 0):
+                    raise RuntimeError('Saved %s count mismatch: %s' % (kind, label))
             for a, e in zip(actual, expected):
                 if len(a.vertices) != len(e['vertices']):
                     raise RuntimeError('Saved hull vertex count mismatch: ' + label)
@@ -36,13 +40,17 @@ for instance in scene['actors']:
                     if max(abs(x-y) for x, y in zip((v.x,v.y,v.z), point)) > .001:
                         raise RuntimeError('Saved collision vertex mismatch: ' + label)
             checked.add(mesh.get_path_name())
-        active = instance['collision_enabled'] and (triangle or (i == 0 and bool(definition['collision']['hulls'])))
+        simple = any(definition['collision'].get(k) for k in ('hulls', 'spheres', 'capsules'))
+        active = instance['collision_enabled'] and (triangle or (i == 0 and simple))
         wanted = unreal.CollisionEnabled.QUERY_AND_PHYSICS if active else unreal.CollisionEnabled.NO_COLLISION
         if component.get_collision_enabled() != wanted:
             raise RuntimeError('Saved collision switch mismatch: ' + label)
         enabled += int(active)
         triangle_enabled += int(active and triangle)
-report = {'verified_mesh_sections': len(checked), 'enabled_components': enabled,
+volume_actors = [a for a in actors.get_all_level_actors() if a.get_actor_label() == 'OpenWillow_Volumes']
+if scene.get('volume_policy') == 'observed_blocking_volumes_v1' and len(volume_actors) != 1:
+    raise RuntimeError('Expected one OpenWillow_Volumes actor, found %d' % len(volume_actors))
+report = {'verified_mesh_sections': len(checked), 'volume_actors': len(volume_actors), 'enabled_components': enabled,
           'enabled_triangle_components': triangle_enabled, 'errors': 0}
 (root / 'ue-collision-verify.json').write_text(json.dumps(report, indent=2))
 unreal.log('OpenWillow collision verified: ' + json.dumps(report))

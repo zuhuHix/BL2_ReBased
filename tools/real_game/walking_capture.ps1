@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory)][string]$Probes,          # JSON list from walking_routes.py candidates (plus any hand routes)
     [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
     [string]$Lane = 'B',
+    [string]$Character = 'Save0008.sav',            # quick_startup's -Character slot (a character standing in Sanctuary); '' = Continue
+    [switch]$CallerHoldsHubLock,                    # the caller already took the shared UE/game lock
     [double]$Speed = 150                            # cm/s used only to size each probe's time limit
 )
 $ErrorActionPreference = 'Stop'
@@ -14,19 +16,22 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $probeList = Get-Content $Probes -Raw | ConvertFrom-Json
 $hub = $null; $bak = $null
-if ($HubLock) { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
+if (-not $CallerHoldsHubLock) { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
 try {
     Enter-RunLock 600
     $bak = Backup-Saves; "backup $bak"
     Install-Driver
     Get-ChildItem (Join-Path $script:RG 'cmd') -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-    Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies') | Out-Null
+    $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies')
+    if ($Character) { $gameArgs += "-Character=$Character" }  # the quick_startup mod puts this slot on the menu's Continue
+    Start-Game $gameArgs | Out-Null
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GamePy 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { throw 'driver did not answer' }
     Invoke-GamePy 'print(block_saves())' | Out-Null
     Focus-Game | Out-Null
-    Send-Key C; Start-Sleep 2; Send-Key Enter; Start-Sleep 3; Send-Key Enter; Start-Sleep 40
+    if ($Character) { Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45 }
+    else { Send-Key C; Start-Sleep 2; Send-Key Enter; Start-Sleep 3; Send-Key Enter; Start-Sleep 40 }
     $map = Invoke-GamePy 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name)' 20
     "map: $map"
     if ($map -notmatch 'Sanctuary') { throw "not in Sanctuary: $map" }

@@ -1,9 +1,10 @@
 """Synthetic checks for tools/walking_routes.py; no game data."""
+import math
 from pathlib import Path
 import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from walking_routes import candidates, placement_point, ramp_probe, summarize
+from walking_routes import candidates, ground, placement_point, ramp_probe, summarize
 
 
 def pose(location=(0, 0, 0), rotation=(0, 0, 0), scale=(1, 1, 1)):
@@ -55,14 +56,26 @@ class Ramps(unittest.TestCase):
 
 class Summary(unittest.TestCase):
     def test_reached_and_extremes(self):
-        rows = [{'t': 1.0, 'p': [0, 0, 190], 'feet': 100, 'phys': 'PHYS_Walking'},
-                {'t': 1.5, 'p': [200, 0, 150], 'feet': 60, 'phys': 'PHYS_Falling'},
-                {'t': 3.0, 'p': [370, 10, 390], 'feet': 300, 'phys': 'PHYS_Walking'}]
+        rows = [{'t': 1.0, 'p': [0, 0, 190], 'feet': 100, 'phys': '1', 'floor': [0, 0, 1]},
+                {'t': 1.5, 'p': [200, 0, 150], 'feet': 60, 'phys': '2', 'floor': [0, 0, 1]},
+                {'t': 3.0, 'p': [370, 10, 390], 'feet': 300, 'phys': '1', 'floor': [0, 0, 1]}]
         s = summarize(rows, [[-80, 0, 100], [380, 0, 300]])
         self.assertTrue(s['reached'])
+        # Row 1 is an initial drop; heights count from the landing at row 2.
         self.assertEqual((s['min_feet'], s['max_feet'], s['final_feet'], s['duration'], s['falling_samples']),
-                         (60, 300, 300, 2.0, 1))
+                         (300, 300, 300, 2.0, 1))
+        self.assertAlmostEqual(s['landing_distance'], round(math.hypot(450, 10), 1))
+        steady = [dict(r, phys='1') for r in rows]
+        s = summarize(steady, [[-80, 0, 100], [380, 0, 300]])
+        self.assertEqual((s['min_feet'], s['landing_distance']), (60, 80))
         self.assertFalse(summarize(rows[:2], [[-80, 0, 100], [380, 0, 300]])['reached'])
+
+    def test_ground_under_centre_on_a_slope(self):
+        # Walking on a 45 degree slope: the rim stands one radius above the surface under the centre.
+        row = {'feet': 100, 'phys': '1', 'floor': [0, -math.sqrt(.5), math.sqrt(.5)]}
+        self.assertAlmostEqual(ground(row, 42), 58)
+        self.assertEqual(ground(dict(row, phys='2'), 42), 100)   # falling: no surface contact
+        self.assertEqual(ground(dict(row, floor=None), 42), 100)
 
 
 if __name__ == '__main__':
