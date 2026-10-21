@@ -1170,8 +1170,6 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
         static bool bBlurOff = false;   // Borderlands 2 draws no motion blur (UE5's smeared the lifted target)
         if (!bBlurOff && GEngine) bBlurOff = GEngine->Exec(GetWorld(), TEXT("r.MotionBlurQuality 0"));
         if (Now < 7.f || !CombatTarget.IsValid()) return;
-        // The matched game capture looked level (pitch 0) at its bullymong; a stock-pawn target is large enough to be cast
-        // on that way, so the framing matches. The engine-shape dummy keeps the aim at its chest.
         const FVector Aim = CombatTarget->AimPoint();
         AimAt(CombatTarget->IsStockPawn() ? FVector(Aim.X, Aim.Y, Camera->GetComponentLocation().Z) : Aim - FVector(0, 0, 20));
         ++PhaselockShotStep;
@@ -1181,6 +1179,13 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
         if (Now < 8.f) return;
         UsePhaselock();
         PhaselockShotCastAt = Now;
+        // Capture-only pitch offset in degrees (UNVERIFIED fit): the matched 2026-10-21 frame's ground/wash boundary is
+        // about 50 px lower than the host at 720 px, roughly 3.5 degrees with the matched FOV. Positive UE pitch moves
+        // the ground and target down. Apply after target selection so the capture framing does not alter the cast result.
+        float PitchOffset = 0.f;
+        FParse::Value(FCommandLine::Get(), TEXT("owphaselockpitch="), PitchOffset);
+        if (bPhaselockHit && FMath::Abs(PitchOffset) > KINDA_SMALL_NUMBER && Controller)
+            Controller->SetControlRotation(Controller->GetControlRotation() + FRotator(PitchOffset, 0.f, 0.f));
         ++PhaselockShotStep;
     }
     else if (PhaselockShotStep < 2 + HitCount)
@@ -1412,7 +1417,12 @@ void AOpenWillowWalker::SpawnCombatTarget()
         ECC_Visibility, Query)) Location = Floor.ImpactPoint;
     FActorSpawnParameters Params;
     Params.Owner = this;
-    const FRotator Facing(0, GetControlRotation().Yaw + 180.f, 0);
+    // The exported bullymong mesh presents its rear when the actor faces the camera under the old +180 test offset.
+    // Zero is the visual fit for this test pawn; UNVERIFIED against a live actor rotation. Override with
+    // -owcombatpawyawoffset=<degrees> when checking another orientation.
+    float FacingYawOffset = 0.f;
+    FParse::Value(FCommandLine::Get(), TEXT("owcombatpawyawoffset="), FacingYawOffset);
+    const FRotator Facing(0, GetControlRotation().Yaw + FacingYawOffset, 0);
     CombatTarget = GetWorld()->SpawnActor<AOpenWillowCombatTarget>(Location, Facing, Params);
     if (CombatTarget.IsValid()) CombatTarget->UseCommandLinePawn();   // -owcombatpawn=<Id>: a stock enemy instead of the shapes
     UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target spawned at %s"), *Location.ToString());

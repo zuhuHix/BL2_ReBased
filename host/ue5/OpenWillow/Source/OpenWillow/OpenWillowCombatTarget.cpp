@@ -13,6 +13,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -183,6 +184,9 @@ bool AOpenWillowCombatTarget::UseCommandLinePawn()
         return false;
     }
     StockMesh->SetRelativeScale3D(FVector(P->GetNumberField(TEXT("mesh_scale"))));
+    const UMaterialInterface* SkinMaterial = StockMesh->GetMaterial(0);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow target: stock pawn %s skin material %s"), *Id,
+        SkinMaterial ? *SkinMaterial->GetPathName() : TEXT("<none>"));
     // The stock pawn's collision cylinder replaces the bounds-sized capsule: its centre and half height are what the
     // lift trace uses (CollisionCentre). A UE capsule cannot be flatter than a sphere, so a cylinder wider than it is
     // tall (the adult bullymong's 150 x 90) keeps the half height and gets the half height as its radius (host choice;

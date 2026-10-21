@@ -1038,3 +1038,57 @@ game's thin wisps; the rim is a cleaner, steadier ring than the game's cloudy, f
 The pink eye under the target is the HUD's action-skill indicator (round 6), not an effect. The critics' "collapse late at 5.3 s"
 is the matched_650 reference's second lock of the same pawn (round 5); adult68 and the 2026-10-21 probe show the release
 from 4.615 s with the ring still up at 5.0 s.
+
+## Round 17 (2026-10-22): capture framing, foreground hand effect, haze fit
+
+Host captures are in ignored `local/laneB/r1` and are paired with the 2026-10-21 Three Horns references in
+`local/laneB/r1/pairs/06_0.25s.jpg`, `07_0.80s.jpg` and `08_1.50s.jpg` (host left; both at 1280x720 before pairing).
+The UE 5.8 module built successfully. The FX importer re-ran from the existing local manifest and UModel-prepared exports:
+18 material instances, 21 textures and 3 meshes; 3 materials stayed skipped: the impact half-moon has no exported texture
+parameters, the energy-spike modulate shader's dark streaks remain unexplained, and SirenSuction is a screen-distortion
+material. These imports are not validation that every template renders correctly.
+
+### Capture camera and intro wash
+
+`-owphaselockpitch=<degrees>` is now applied after `UsePhaselock` selects its target, so capture framing does not change the
+target query. The first attempt applied +3.5 degrees before the cast and missed by a small amount: offset 0.262 exceeded the
+0.259 magnet radius. After moving the capture-only adjustment, the logged hit at depth 650 uu scored 0.686 with offset 0.159
+inside a 0.258 magnet radius. The host's +0.80 s wash boundary, measured as the strongest row-to-row luminance change over
+x=80..1199, moved from row 470 in the previous host frame to row 533; the real-game boundary spans rows 517-523 (peak at
+518). This is a 63 px correction from the old host frame and leaves the new boundary about 15 px below the reference.
+The host remains slightly brighter in the same broad strip (mean RGB at rows 500-509: 183,225,249; reference: 172,214,241),
+but the scenes differ (Sanctuary versus Three Horns), so that is not an isolated material measurement. `InitialFlash`
+Overbright remains at its existing value 1; this pair does not justify changing it.
+
+### Hand void and first-person depth
+
+The dark field belongs to `Part_SirenASHandOrb`'s `ModulateBlack` emitter (`Mat_SirenOrbBlackMOD`), while the later blue tint
+belongs to `Part_PhaseLockScreenEffect`. The UE5 component now sets the first-person primitive type and foreground depth
+priority for hand-space effects, preserving the material's depth behaviour. The +0.25 s capture still shows a broad dark
+quad with a sharp lower intersection; the change has not made its outline match the real game's soft circular disc. The
+textureless material has no stock texture inputs in the prepared export and is drawn with our radial material stand-in, so
+the exact truncation/depth interaction remains **UNVERIFIED**. Do not treat this as a resolved visual gap.
+
+### Bubble interior and target material
+
+The `Mat_EnemyOrbCoreColor` haze's blue coefficient changed from 1.6 to 1.0 (a 37.5% reduction). Round 14's prior
+matched-frame measurement was host mean (26,32,108), game (28,32,86); that was the reason for reducing the excess blue.
+The new 1.50 s pair still looks lighter and bluer in the host. A direct RGB annulus mean is not comparable here because the
+new host bubble sits over Sanctuary and the reference sits over snow/rock in Three Horns; the before/after isolated shader
+value remains **UNVERIFIED** until measured on equivalent background pixels. The annulus mean from round 14 must not be
+presented as a measurement of this new import.
+
+The target component loaded `/Game/OpenWillow/Characters/PhaselockTarget/Bullymong/Materials/MI_Mati_Bullymong_Zone`; the
+editor report says all nine `p_A/B/CColor{Hilight,Midtone,Shadow}` vectors were applied. The prepared property manifest
+records, for example, `p_AColorMidtone=(0.780899,0.534723,0.424757,1)` and
+`p_CColorMidtone=(0.449438,0.368965,0.316917,1)`. These package values are data evidence, not a visual-parity result: the
+capture still reads cool grey/blue under the host lighting. The ambient citizen zone shader is reused by analogy, and its
+mixing rule remains **UNVERIFIED** for the bullymong. No colour vectors were guessed or edited this round.
+
+### Facing and remaining limitations
+
+The test pawn now faces the view at the 0-degree default, with `-owcombatpawyawoffset=<degrees>` retained as a capture
+override; the 1.50 s capture presents its torso toward the camera. The exact stock yaw rule and pose alignment remain
+**UNVERIFIED**, and the short screenshots do not settle whether the lift still reads too airborne. The HUD skill sigil is
+still excluded as a separate HUD lane. These are host-render captures only, not gameplay parity validation; an independent
+critic review is still required.
