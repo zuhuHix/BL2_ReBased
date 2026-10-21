@@ -4500,7 +4500,7 @@ AI-assisted (Claude), lane A. Details and counts: `docs/verification/SANCTUARY_S
   observed 26-byte actor prefix and must end at the object end. `WiringActor` and `WillowInteractiveObject` components
   are placed like a `StaticMeshActor`'s; mission pickup spawners and failsafes, whose component is the actor's
   `PreviewMesh`, are listed in `excluded_components` (`mission_item_preview_mesh`), as is the second exact copy of a
-  component on the same interactive object (`duplicate_component`). Confirmed in the running game (Plan B save):
+  component on the same interactive object (`duplicate_component`; the copy must also match on `HiddenGame`, shadow and collision flags, so a visible component is never dropped for a hidden one). Confirmed in the running game (Plan B save):
   spawners and failsafes have no primitive component; every placed interactive-object component is attached, not
   hidden, with the package's mesh and relative pose; each vault-symbol actor attaches one plane, not two. Their
   visibility in other mission or challenge states is `UNVERIFIED`.
