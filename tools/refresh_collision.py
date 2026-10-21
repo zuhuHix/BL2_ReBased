@@ -15,6 +15,8 @@ def refresh(reader, game, root, live_volumes=None):
         scene.load(level)
     counts = {'supported': 0, 'absent': 0, 'unsupported': 0, 'hulls': 0, 'spheres': 0, 'capsules': 0}
     for name, mesh in manifest['meshes'].items():
+        if 'bsp' in mesh or 'terrain' in mesh:
+            continue  # prepare_bsp / prepare_terrain sections keep their own triangle collision
         package, path = mesh['source'].split(':', 1) if ':' in mesh['source'] else (None, None)
         # identity() uses Package:path; require a unique StaticMesh export.
         if package is None:
@@ -49,6 +51,8 @@ def refresh(reader, game, root, live_volumes=None):
         for kind in ('hulls', 'spheres', 'capsules'):
             counts[kind] += len(collision.get(kind, []))
     for actor in manifest['actors']:
+        if 'bsp' in actor or 'terrain' in actor:
+            continue
         matches = [r for r in scene.load(actor['level']).values() if r['path'] == actor['source']]
         if len(matches) != 1:
             raise ValueError('Ambiguous actor: ' + actor['source'])

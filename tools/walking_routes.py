@@ -107,27 +107,57 @@ def candidates(scene):
     return result
 
 
-def summarize(rows, points):
-    """Ground truth from one live trace (rows of {'p': [x,y,z], 'feet': z, 'phys': n, 'wp': i})."""
+WALKING, FALLING = ('1', 'PHYS_Walking'), ('2', 'PHYS_Falling')  # the SDK reports the enum as its number
+
+
+def ground(row, radius):
+    """Height of the surface under the pawn's centre.
+
+    A UE3 player cylinder standing on a slope rests on its uphill rim, so its feet are about
+    radius * tan(slope) above the surface under its centre (observed on the Sanctuary ramps:
+    feet 35-42 cm above the ramp hull at 33 degrees, radius 42). A UE5 capsule rests differently,
+    so routes are compared on this ground height, not on feet height. Falling rows use the feet.
+    """
+    floor = row.get('floor')
+    if row.get('phys') not in WALKING or not floor or not 0 < floor[2] <= 1:
+        return row['feet']
+    return row['feet'] - radius * math.tan(math.acos(floor[2]))
+
+
+def summarize(rows, points, radius=42.0):
+    """Ground truth from one live trace (rows of {'t', 'p', 'feet', 'phys', 'floor'})."""
     if not rows:
         raise ValueError('Empty trace')
     last = rows[-1]['p']
     reached = math.hypot(last[0] - points[-1][0], last[1] - points[-1][1]) <= END_RADIUS
-    feet = [r['feet'] for r in rows]
+    # The capture moves the pawn by writing its Location; the running game left it hovering at
+    # the start until it moved, then it dropped. Heights count from its first landing after
+    # such an initial drop, and the host starts counting at the same distance along the route.
+    landing = 0
+    falls = [i for i, r in enumerate(rows) if r.get('phys') in FALLING and r['t'] - rows[0]['t'] < 1.0]
+    if falls:
+        landing = next((i for i in range(falls[0], len(rows)) if rows[i].get('phys') in WALKING), len(rows) - 1)
+    walked = rows[landing:]
+    feet = [r['feet'] for r in walked]
+    heights = [ground(r, radius) for r in walked]
+    start = rows[landing]['p']
     return {'reached': reached, 'final': last, 'final_feet': rows[-1]['feet'],
             'min_feet': min(feet), 'max_feet': max(feet),
+            'landing_distance': round(math.hypot(start[0] - points[0][0], start[1] - points[0][1]), 1),
+            'final_ground': round(heights[-1], 2), 'min_ground': round(min(heights), 2),
             'duration': round(rows[-1]['t'] - rows[0]['t'], 3),
-            'falling_samples': sum(1 for r in rows if r.get('phys') == 'PHYS_Falling')}
+            'falling_samples': sum(1 for r in rows if r.get('phys') in FALLING)}
 
 
 def routes(probes, trace_dir, capture):
+    radius = float(capture.get('cylinder', {}).get('radius', 42.0))
     result = []
     for probe in probes:
         trace = Path(trace_dir) / (probe['name'] + '.jsonl')
         if not trace.is_file():
             continue
         rows = [json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines() if line.strip()]
-        result.append(dict(probe, original=summarize(rows, probe['points'])))
+        result.append(dict(probe, original=summarize(rows, probe['points'], radius)))
     return {'schema': 1, 'capture': capture, 'end_radius': END_RADIUS, 'routes': result}
 
 

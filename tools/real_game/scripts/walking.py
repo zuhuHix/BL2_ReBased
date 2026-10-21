@@ -77,7 +77,7 @@ def walk_info():
 
 def walk_volumes():
     rows = []
-    for volume in unrealsdk.find_all("Volume"):
+    for volume in unrealsdk.find_all("Volume", exact=False):
         path = volume._path_name()
         if "PersistentLevel" not in path:
             continue  # class defaults and archetypes
