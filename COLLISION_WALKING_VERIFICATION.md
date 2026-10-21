@@ -86,7 +86,9 @@ This section records rules, counts and pass/fail only.
   values read from the class defaults (`Default__<Class>` and its archetype chain) in the installed `Engine` package:
   `Volume` sets `bCollideActors=True`, `BlockingVolume` `bBlockActors=True`, `PathBlockingVolume` `bCollideActors=False`.
   Rotation, DrawScale, DrawScale3D and PrePivot are refused, not guessed (none occurs in Sanctuary). A
-  `DynamicBlockingVolume` is left out until its state is observed in the running game, because Kismet may toggle it.
+  `DynamicBlockingVolume` keeps its brush whatever its serialized flags say and is left out until its state is
+  observed in the running game, because Kismet may toggle it (review round 1: a serialized-off volume that the
+  running game shows on is now imported).
   The host builds blocking volumes at play time from `volumes-runtime.json` through one `AOpenWillowVolumes` actor
   (hidden, collision-only, blocks pawns and physics bodies, ignores the Visibility and Camera channels).
 - **Sphere and capsule elements** (`tools/collision_geometry.py` `shapes()`, `UOpenWillowCollision::SetShapes`).
@@ -101,7 +103,9 @@ This section records rules, counts and pass/fail only.
   one straight probe per placed stair ramp (start 80 cm before the low edge, end 80 cm past the high edge) plus five
   multi-ramp flights and switchbacks and one open-ground walk from the player start, 35 in all. The running game walks
   each with a steering autopilot (view yaw set every frame, forward key held) and records the pawn every frame.
-  `OpenWillow.RouteWalking` replays the same probes in the host with the same steering rule.
+  `OpenWillow.RouteWalking` replays the same probes in the host with the same steering rule. A probe without a
+  usable trace stops `walking_routes.py routes`; the test requires the manifest's `expected_routes` and checks as
+  many volumes as `volumes-runtime.json` lists (review round 1).
 
 ## Observed in the running game (2026-10-21, one session, Save0008 level-8 Maya in Sanctuary)
 
@@ -132,8 +136,9 @@ pre-session backup and the save folder compared afterwards.
 
 Automated checks:
 
-- `python tests/collision_test.py`: 9/9 (box, convex, sphere, capsule, refused scale, volume flags and defaults,
-  refused transforms, dynamic volumes, live observations). `python tests/walking_routes_test.py`: 6/6.
+- `python tests/collision_test.py`: 10/10 (box, convex, sphere, capsule, refused scale, volume flags and defaults,
+  refused transforms, dynamic volumes including serialized-off/live-on, live observations).
+  `python tests/walking_routes_test.py`: 7/7.
 - CTest 10/10; `tools/verify_packages.py` 9/9 packages. No file under `src/` and no `CMakeLists.txt` change.
 - `refresh_collision.py` on Sanctuary: 304 supported bodies, 113 absent, 2 unsupported (unchanged), 509 hulls,
   0 spheres and 0 capsules on placed meshes (the 7 capsules and 1 sphere outside `PhAT` assets in the Sanctuary

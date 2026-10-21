@@ -309,8 +309,15 @@ private:
             Entry.Limit = Original->GetNumberField(TEXT("duration")) * 2 + 4;
             Routes.Add(MoveTemp(Entry));
         }
+        // A partial manifest (interrupted capture, edited file) must not pass with fewer routes.
+        int32 Expected = -1;
+        if (!Json->TryGetNumberField(TEXT("expected_routes"), Expected) || Expected != Routes.Num() || Expected < 1)
+        {
+            Test->AddError(FString::Printf(TEXT("walk-routes.json lists %d usable routes, expected_routes %d"), Routes.Num(), Expected));
+            return false;
+        }
         Test->AddInfo(FString::Printf(TEXT("Route probes: %d"), Routes.Num()));
-        return !Routes.IsEmpty();
+        return true;
     }
     static double GroundUnder(UWorld* World, AOpenWillowWalker* Pawn, const FVector& Centre, double Fallback)
     {
@@ -330,6 +337,13 @@ private:
     }
     void CheckVolumes(UWorld* World, AOpenWillowWalker* Pawn)
     {
+        // The count to check comes from the same volumes-runtime.json the volumes actor reads.
+        FString Text;
+        TSharedPtr<FJsonObject> Json;
+        const FString Root = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_SCENE"));
+        const int32 Expected = FFileHelper::LoadFileToString(Text, *FPaths::Combine(Root, TEXT("volumes-runtime.json")))
+            && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) && Json.IsValid()
+            ? Json->GetArrayField(TEXT("volumes")).Num() : -1;
         for (TActorIterator<AOpenWillowVolumes> It(World); It; ++It)
             for (UActorComponent* C : It->GetComponents())
             {
@@ -353,6 +367,9 @@ private:
                 Test->TestTrue(*FString::Printf(TEXT("%s blocks a pawn sweep and lets a line trace through"), *Volume->ComponentTags[0].ToString()),
                     Blocks && TracePasses);
             }
+        if (Expected < 0) Test->AddError(TEXT("Missing volumes-runtime.json (tools/refresh_collision.py)"));
+        else if (Expected == 0) Test->AddWarning(TEXT("volumes-runtime.json lists no blocking volumes; none checked"));
+        Test->TestEqual(TEXT("Every blocking volume in volumes-runtime.json was built and checked"), VolumesTotal, FMath::Max(Expected, 0));
     }
     FAutomationTestBase* Test;
     double Started, StageTime = 0, BestTime = 0, MinFeet = 0, MaxFeet = 0, MinGround = 0, EndRadius = 40;

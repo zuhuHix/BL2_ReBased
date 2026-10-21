@@ -45,15 +45,30 @@ def volume_record(cls, actor, component, defaults):
         raise ValueError('Volume without Location')
     flags = {name: actor.get(name, defaults.get(name)) for name in FLAG_FIELDS}
     blocks = bool(flags['bCollideActors']) and bool(flags['bBlockActors'])
+    dynamic = cls.rsplit('.', 1)[-1] == 'DynamicBlockingVolume'
     record = {'class': cls, 'location': point(actor['Location']), 'hulls': [], 'blocks_players': blocks,
-              'dynamic': cls.rsplit('.', 1)[-1] == 'DynamicBlockingVolume', 'flags': flags}
-    if not blocks:
+              'dynamic': dynamic, 'flags': flags}
+    record['status'] = initial_status(record)
+    if not blocks and not dynamic:
         return record  # e.g. PathBlockingVolume: cooked without a brush component
+    # A dynamic volume keeps its brush whatever its serialized flags say: Kismet may switch it
+    # on before the player sees it, and the live observation decides (apply_live_state).
     geometry = shapes(component.get('_tags', []), 'BrushAggGeom')
     if geometry['spheres'] or geometry['capsules'] or not geometry['hulls']:
         raise ValueError('Volume aggregate is not convex-only')
     record['hulls'] = geometry['hulls']
     return record
+
+
+def initial_status(record):
+    """Decoded state before any live observation.
+
+    Static volumes keep their serialized state. Every dynamic volume, whether serialized on or
+    off, waits for an observation of the running game (Kismet may toggle it).
+    """
+    if record['dynamic']:
+        return 'dynamic_unobserved'
+    return 'blocking' if record['blocks_players'] else 'non_blocking'
 
 
 class Defaults:
@@ -150,10 +165,6 @@ def collect(scene, levels):
                                                 COMPONENT_PREFIX, '--array-schema', SCHEMA)
                     component = dict(fields(component_data['properties']), _tags=component_data['properties'])
                 entry.update(volume_record(record['class'], actor, component, defaults.flags(record['class'])))
-                # Kismet may toggle a DynamicBlockingVolume before the player sees it; keep it
-                # out of the host until its state is observed in the running game (live_state).
-                entry['status'] = ('non_blocking' if not entry['blocks_players'] else
-                                   'dynamic_unobserved' if entry['dynamic'] else 'blocking')
             except (ValueError, KeyError) as error:
                 entry.update(status='unsupported', reason=str(error), hulls=[])
             counts[entry['status']] += 1

@@ -4,7 +4,9 @@ from pathlib import Path
 import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from walking_routes import candidates, ground, placement_point, ramp_probe, summarize
+import json
+import tempfile
+from walking_routes import candidates, ground, placement_point, ramp_probe, routes, summarize
 
 
 def pose(location=(0, 0, 0), rotation=(0, 0, 0), scale=(1, 1, 1)):
@@ -76,6 +78,23 @@ class Summary(unittest.TestCase):
         self.assertAlmostEqual(ground(row, 42), 58)
         self.assertEqual(ground(dict(row, phys='2'), 42), 100)   # falling: no surface contact
         self.assertEqual(ground(dict(row, floor=None), 42), 100)
+
+
+class Manifest(unittest.TestCase):
+    def test_missing_or_empty_trace_fails(self):
+        probes = [{'name': 'a', 'points': [[0, 0, 100], [100, 0, 100]]},
+                  {'name': 'b', 'points': [[0, 0, 100], [100, 0, 100]]}]
+        row = {'t': 0, 'p': [100, 0, 180], 'feet': 100, 'phys': '1', 'floor': [0, 0, 1]}
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, 'a.jsonl').write_text(json.dumps(row) + '\n', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'b'):
+                routes(probes, folder, {})
+            Path(folder, 'b.jsonl').write_text('', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'b'):
+                routes(probes, folder, {})
+            Path(folder, 'b.jsonl').write_text(json.dumps(row) + '\n', encoding='utf-8')
+            data = routes(probes, folder, {})
+            self.assertEqual((data['expected_routes'], len(data['routes'])), (2, 2))
 
 
 if __name__ == '__main__':
