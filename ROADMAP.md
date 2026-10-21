@@ -251,8 +251,11 @@ well-bounded ones are marked *good first task*.
       none left (2026-10-21). Interactive objects and the wiring cable are
       placed (checked against the running game at Plan B), mission-item preview
       meshes and duplicate components are listed with reasons, and the reader
-      accepts the doubled colour buffers found on 27 base-game meshes. Ash still
-      has 309 unclassified owners (AI markers, vehicle stations, props). See the
+      accepts the doubled colour buffers found on 27 base-game meshes. The same
+      owner rules place 21 interactive objects on Ash and 4 on Southpaw
+      (`UNVERIFIED` there: not compared with the running game). Ash still has
+      271 unclassified owners (AI markers, vehicle stations, props) and
+      Southpaw one. See the
       [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
 - [ ] Complete walking collision: initial Sanctuary convex/box collision and
       placeholder walking are verified; full routes and stairs remain open.

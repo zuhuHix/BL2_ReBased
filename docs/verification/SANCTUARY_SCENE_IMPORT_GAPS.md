@@ -139,19 +139,29 @@ established in this pass. No "before" host capture was taken, so the score is no
 
 ## Ash and Southpaw re-measured
 
-Same tools, `main` versus this branch, `prepare_level.py` only (neither map has prepared terrain or BSP):
+Same tools, `main` (664b5fd) versus this branch at 0dfa2c2, `prepare_level.py` only (neither map has prepared
+terrain or BSP). An independent review run at 0dfa2c2 reported the same owner numbers.
 
-| Map | Opaque missing diffuse (defs / sections) | Unsupported owners | Excluded previews | Colour-stream issues |
-| --- | --- | --- | --- | --- |
-| Ash_P before | 13 / 117 | 325 | 0 | 0 |
-| Ash_P after | 13 / 117 | 309 | 14 | 0 |
-| SouthpawFactory_P before | 0 / 0 | 10 | 0 | 0 |
-| SouthpawFactory_P after | 0 / 0 | 5 | 4 | 0 |
+| Map | Placements | Opaque missing diffuse (defs / sections) | Unsupported owners | Interactive objects placed | Excluded (previews / duplicates) | Colour-stream issues |
+| --- | ---: | --- | ---: | ---: | --- | ---: |
+| Ash_P before | 5,059 | 13 / 117 | 325 | 0 | 0 / 0 | 0 |
+| Ash_P after | 5,082 | 13 / 117 | 271 | 21 | 14 / 17 | 0 |
+| SouthpawFactory_P before | 3,987 | 0 / 0 | 10 | 0 | 0 / 0 | 0 |
+| SouthpawFactory_P after | 3,992 | 0 / 0 | 1 | 4 | 4 / 0 | 0 |
 
-The material fallbacks are Sanctuary entries, so Ash's 13 opaque gaps (volcanic ash, lava, alien plaster, cube
-windows and others) are unchanged and remain open. Each map gained its cable placement(s). Ash's remaining owners
-are `Perch` (128) and `WillowPopulationPoint` (116) AI markers, `WillowInteractiveObject` (38), vehicle-station
-platforms and terminals (18), `WillowPropObject` (8) and one `KActor`; they are not classified by this pass.
+The owner rules are not Sanctuary-specific, so they apply on every map: Ash places 21 interactive-object components
+and lists 17 exact duplicates (21 + 17 = its 38 interactive-object components), plus two cables; Southpaw places 4
+and one cable. **Interactive-object placement outside Sanctuary is `UNVERIFIED`:** only Sanctuary was compared with
+the running game, so whether every Ash and Southpaw component is attached and visible in game, and whether each
+listed duplicate is really the copy the game drops, has not been checked. The material fallbacks are Sanctuary
+entries, so Ash's 13 opaque gaps (volcanic ash, lava, alien plaster, cube windows and others) are unchanged and remain
+open. Ash's 271 remaining owners are `Perch` (128) and `WillowPopulationPoint` (116) AI markers, vehicle-station
+platforms and terminals (18), `WillowPropObject` (8) and one `KActor`; Southpaw's one is a `KActor`. They are not
+classified by this pass.
+
+The duplicate test compares raw serialized values, so an omitted flag (`None`) and an explicitly serialized default
+differ and such a pair would both be placed. That errs towards drawing both; no such pair was found on Sanctuary, Ash
+or Southpaw.
 
 ## Reproduce
 
