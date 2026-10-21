@@ -303,6 +303,29 @@ check('The VM is not asked to move onto or between empty cells', () => {
   assert.equal(logs.slice(before).filter(line => /^OWINVMOVE/.test(line)).length, 1);
   run('inventoryVm.enabled = false; inventoryVm.pending = null; inventoryVm.queue.length = 0');
 });
+check('Unequip keys do nothing on an empty backpack cell (review of PR #46)', () => {
+  // Weapon slot 1 was the last equipped cell; U/Delete/Backspace must not unequip it from an empty cell.
+  run('reset(); inventoryVm.enabled = false; inventoryVm.failed = false; inventoryVm.pending = null; inventoryVm.queue.length = 0; window.owInventory({...state, backpackCapacity:15})');
+  press('ArrowRight'); run("for(let i=0;i<13;i++) key('ArrowDown')");
+  assert.equal(selected(), 'empty:0'); assert.equal(run('targetSlot'), 0);
+  const before = logs.length;
+  press('u', 'Delete', 'Backspace');
+  assert.equal(logs.slice(before).filter(line => /^OWITEM/.test(line)).length, 0);
+});
+check('Queued VM moves that reach the last item continue onto the empty cells in order (review of PR #46)', () => {
+  run("reset(); window.owInventory({...state, backpackCapacity:15}); inventoryVm.failed = false; inventoryVm.pending = null; inventoryVm.queue.length = 0; inventoryVm.enabled = true; select('b11'); navigationPanel = 'backpack'");
+  const moves = () => logs.filter(line => /^OWINVMOVE/.test(line)).length;
+  const before = moves();
+  press('ArrowDown', 'ArrowDown'); // the first goes to the VM; the second waits for its reply
+  assert.equal(moves() - before, 1); assert.equal(run('inventoryVm.queue.length'), 1); assert.equal(selected(), 'b11');
+  run('window.owInventoryVmResult({serial:inventoryVm.pending.serial,index:12,steps:55,error:""})'); // delayed reply: now on 'spare'
+  // The queued Down now starts on the last item, so it is the host's and lands on the first empty cell; nothing more goes to the VM.
+  assert.equal(selected(), 'empty:0'); assert.equal(moves() - before, 1);
+  assert.equal(run('inventoryVm.queue.length'), 0); assert.equal(run('inventoryVm.pending'), null);
+  // From the empty cell, Up is the host's too and returns to the last item without a VM request.
+  press('ArrowUp'); assert.equal(selected(), 'spare'); assert.equal(moves() - before, 1);
+  run('inventoryVm.enabled = false');
+});
 check('The menu turn maps measured screen points back to movie points (menu3d.js)', () => {
   // No turn: identity. An 11-degree turn about (640, 360): the centre is fixed; a point left of it is drawn further left and
   // taller, so the movie point for a screen point at x 300 lies right of 300, and projecting it forward gives 300 again.
