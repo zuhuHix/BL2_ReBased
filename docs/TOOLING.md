@@ -532,6 +532,13 @@ Use WASD and mouse, with Space to jump. Omit `-Walk` for the free-flight viewer.
 This uses UE5 movement defaults tuned for inspection; it does not reproduce BL2
 movement physics. See [collision preparation, checks and limits](../COLLISION_WALKING_VERIFICATION.md).
 
+Blocking volumes and recorded routes (2026-10-21): `tools/refresh_collision.py` also writes the map's blocking
+volumes (`tools/collision_volumes.py`) and `volumes-runtime.json`; pass `--live-volumes` with a walking capture to
+settle dynamic ones. `tools/walking_routes.py candidates` proposes stair probes, `tools/real_game/walking_capture.ps1`
+walks them in the running game (takes the screen and keyboard; output under `local/realgame/walking/`),
+`tools/walking_routes.py routes` writes `walk-routes.json`, and `tools/test_ue_viewer.ps1 -Route` runs
+`OpenWillow.RouteWalking` and `OpenWillow.CollisionShapes`.
+
 ### Selecting an installed map
 
 `tools/viewer.py` lists persistent packages in the base-game cooked directory.

@@ -257,11 +257,16 @@ well-bounded ones are marked *good first task*.
       271 unclassified owners (AI markers, vehicle stations, props) and
       Southpaw one. See the
       [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
-- [ ] Complete walking collision: initial Sanctuary convex/box collision and
-      placeholder walking are verified; full routes and stairs remain open.
-      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes
-      and blocking volumes remain unsupported; terrain uses triangle collision
-      verified by `OpenWillow.TerrainWalking` on Sanctuary only. See
+- [~] Complete walking collision: initial Sanctuary convex/box collision and
+      placeholder walking are verified. Since 2026-10-21 blocking volumes
+      (static, and dynamic ones in the state observed live) and sphere/capsule
+      elements are imported, and `OpenWillow.RouteWalking` replays 35 stair and
+      route probes recorded in the running game: 29/29 of the probes the
+      original finished pass, volumes 5/5. Open: town-wide routes, two probes
+      the host walks but the original does not, Kismet volume toggles, the
+      jump arc, Ash and Southpaw refreshes; terrain uses triangle collision
+      verified by `OpenWillow.TerrainWalking` on Sanctuary only (one hole
+      assertion fails on this machine's probe data, not from this change). See
       [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] Broader map coverage. Command-line and in-game selectors exist; the
       in-game list only offers already imported scenes (2026-09-14).
