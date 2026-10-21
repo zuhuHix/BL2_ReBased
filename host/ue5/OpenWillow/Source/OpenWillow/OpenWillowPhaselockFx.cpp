@@ -46,6 +46,9 @@ const FOwFxEmitterScalar EmitterScalars[] = {
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_03"), TEXT("Gain"), 0.4f},
     // The star-burst at the fist (0.5-0.95 s): the game has no rays there; most of it is removed.
     {TEXT("Part_SirenASHandOrb"), TEXT("EndBrightness"), TEXT("Gain"), 0.15f},
+    // 2026-10-21: the bubble intro's flashes keep the shader's own overbright (1); Mat_SirenGlowMOD's default 0.4 is the hand's
+    // calibration, which left the game's 0.72-0.8 s white-blue wash a faint blue tint.
+    {TEXT("Part_SirenASEnemyOrbBegin"), TEXT("InitialFlash"), TEXT("Overbright"), 1.f},
 };
 
 // Host calibration (UNVERIFIED): the hand effect's palm orb ("Center") and dark disc ("ModulateBlack") start 0.05 s (orb) and 0.1 s (disc) into their

@@ -107,6 +107,11 @@ below the clip length the blend is dropped), loop from its end, stretch the fall
 down; hold the AI and uncloak; add the mesh-centring offset after 0.35 s; allow shots through during the 0.7 s lift but
 block the player only after it.
 
+Status (2026-10-21, [PHASELOCK_STOCK_DATA.md](PHASELOCK_STOCK_DATA.md) "Round 16"): exercised for the first time on a stock pawn, the
+bullymong (`-owcombatpawn=Bullymong`): lift at the cast with the 0.4 s blend-in, loop from the lift clip's end, fall stretched to
+`DropTime`, land on touch-down, the mesh centring after 0.35 s (on the bones' box; the stock physics asset is not imported). Not done:
+the AI hold and uncloak (the test target has no AI), the collision switch during the lift.
+
 ## 3. The first-person arm / hand cast effect
 
 * The cast move on Maya's own components is `GD_Siren_Skills.Misc.Phaselock_1st3rd_SM` (hit) or

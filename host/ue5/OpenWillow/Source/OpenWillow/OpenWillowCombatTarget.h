@@ -79,6 +79,11 @@ public:
     // death: the installed Kismet destroys it. Returns false when an asset does not load.
     // Hits use a hidden capsule sized from the imported mesh bounds (host-chosen; stock collision not read).
     bool UseStockPawn(const FString& MeshPath, const FString& IdlePath, const FString& DeathPath, const FVector& MeshOffset);
+    // Test target only (-owcombattest): with -owcombatpawn=<Id>, show the stock enemy that
+    // tools/import_phaselock_target.ps1 imported (local/phaselock/target/host_target.json; e.g. the bullymong, whose AnimSet
+    // has the four PhaseLock clips). The actor origin stays on the floor; the hit volume is the pawn's collision cylinder.
+    // Returns false (engine shapes kept) when the switch is absent or the data or an asset is missing.
+    bool UseCommandLinePawn();
     bool IsStockPawn() const { return StockMesh != nullptr; }
     class USkeletalMeshComponent* GetStockMesh() const { return StockMesh; }
     TArray<FOpenWillowDamagePopup> Popups;
@@ -104,6 +109,13 @@ private:
     UPROPERTY() TObjectPtr<class UAnimSequence> LoopClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> FallClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> LandClip;
+    // Plays a clip on the stock mesh through UOpenWillowTargetAnimInstance (crossfade over BlendIn seconds).
+    void PlayStock(class UAnimSequence* Clip, bool bLoop, float Rate = 1.f, float BlendIn = 0.f);
+    // SpecialMove_PhaseLock blends read in NATIVE_PHASELOCK_PRESENTATION.md section 2.1 (UNVERIFIED in game): the default
+    // definition's lift move overrides BlendInTime to 0.4 s; loop, drop and land keep 0.1 s. EC_OnAnimEnd and
+    // EC_StopOnLastFrame force their blend-out to 0, so the return to the idle is a cut.
+    static constexpr float LiftBlendIn = 0.4f;
+    static constexpr float MoveBlendIn = 0.1f;
     UOpenWillowFxComponent* SpawnBubble(const FString& TemplateName, float Now);
     // Draw scale for a bubble emitter spawned now (mesh bounds / BubbleFXScale, with the host's size calibration).
     float BubbleDrawScale() const;
@@ -123,6 +135,7 @@ private:
     float AnimClipEndsAt = 0;
     FVector StockMeshBaseOffset = FVector::ZeroVector;   // the stock mesh's rest offset in Pivot space
     float MeshExtraZ = 0;               // LiftActionSkill.UpdateLiftedPawnMeshOffset: extra Z that centres the mesh bounds
+    float PawnLocationAbovePivot = 0;   // where the UE3 pawn Location (the point the mesh is centred on) is above Pivot
     int32 AnimStage = 0;                // 0 none, 1 lift, 2 loop, 3 fall, 4 land
     FVector HomeLocation = FVector::ZeroVector;
     FVector2D Wobble = FVector2D::ZeroVector;

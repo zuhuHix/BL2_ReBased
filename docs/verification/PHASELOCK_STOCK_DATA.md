@@ -949,3 +949,55 @@ Changes (all `UNVERIFIED` calibrations):
 * The 0.30 s void: not changed; with first-person space on it is solid black (the hand's black orb uses the shader's values).
 * Not done: side streaks 80-100 px left and right of the sphere (the streak sprites take the template's random rotation; orienting them
   horizontally needs a rotation rule that was not read).
+
+## Round 16 (2026-10-21): a stock enemy as the lifted target, the cast arm's timing, the intro flash
+
+AI-assisted (Claude). The maintainer's three visible problems (2026-10-02) were the bubble and its effects, the lifted target's
+animation and the first-person cast "missing something". Rounds 1-15 worked on the bubble and the hand; the target never animated,
+because the slice's target dummy has no `PhaseLock_*` clips. Frames: host `local/laneC/r6`-`r8` (ignored), game
+`matched_650/run2` (same distance and field of view) and `cast_close`. All calibrations below are `UNVERIFIED`.
+
+### A stock enemy with the four clips
+
+* `tools/prepare_phaselock_target.py` / `tools/import_phaselock_target.ps1` export the bullymong (`GD_PrimalBeast.Character.Pawn_PrimalBeast`
+  in `Ice_Dynamic`, the enemy of every real-game Phaselock capture): mesh, the component's material instance, and from
+  `Anim_PrimalBeast.Unarmed` (105 clips, all four `PhaseLock_*` present) the idle, a death and the four Phaselock clips (lift 1.2 s,
+  loop 1.47 s, fall 0.53 s, land 0.47 s at 30 fps; MD5-to-UE fit error 4e-7). Identities come from our reader, exports from UModel
+  build 1590 (4 of 4 jobs), the clip conversion and editor import from the slice NPC pipeline. The zone-colour material of the
+  ambient citizens (`M_OW_NPC_Zone`) is reused because the bullymong's `p_Masks` has the same two-halves layout (checked by eye);
+  the skin still reads grey-blue under Sanctuary's light (open, not this lane's).
+* Host: `-owcombattest -owcombatpawn=Bullymong` shows it as the test target (`AOpenWillowCombatTarget::UseCommandLinePawn`); the hit
+  volume is the observed 150 x 90 collision cylinder (a UE capsule cannot be flatter than a sphere, so its radius is 90).
+* **Mesh scale.** The archetype's component `Scale` is 0.7; the 2026-10-03 SDK read of a live adult reported `Mesh.Scale` 1.0. At 1.0
+  the host's bullymong is about 1.45x the game's on the matched frames (same distance and field of view, checked against the bubble
+  rim, 1.21 px/uu against the game's 1.226), at 0.7 it matches. The host uses 0.7; which read is wrong is open (the real-game probe
+  below reads the rendered bone spread).
+* **Bubble size from the real pawn, no stand-in.** With the stock clips, the host's mesh bounds at the three bubble spawns are
+  307 / 245 / 200 uu for the unscaled mesh (game 290 / 230-260 / 193) and 215 / 169 / 140 at Scale 0.7. The game's numbers behave as if
+  the component scale were not applied to the bounds, so the host divides the bounds radius by the component scale (host reading,
+  `UNVERIFIED`). The pose-dependent shrink of the bubble that round 8 had to imitate with `-owbubbleradius=290,233,210` now comes from
+  the clips themselves (lock pose, then the curled loop pose); the stand-in switch is no longer needed for this target.
+* **Lift blend.** `PhaseLock_Lift` raises the hips by itself (from 61 to about 240 uu above the root in the clip). Played as a cut (UE5's
+  single-clip player), the body jumped up at the cast; the critic saw the host's target "rising earlier and higher" although the lifted
+  location follows the game's sampled curve within 10 uu (0 to 191 uu by 0.70 s in the game, 0 to 201 in the host). A small anim
+  instance (`UOpenWillowTargetAnimInstance`) now crossfades the stock moves: lift in over 0.4 s (the default definition's override),
+  loop, fall and land over 0.1 s, the fall stretched to `DropTime`, cuts where the stock ending forces a 0 blend-out. Linear blend
+  shape (not read).
+* **Centring.** `UpdateLiftedPawnMeshOffset` centres `Mesh.Bounds` on the pawn's Location. The host had centred it on the floor-level
+  pivot (90 uu low for this pawn) and UE5's auto-generated physics asset is not the stock one, so the host centres the box around the
+  bones (the skinless root excluded) on the cylinder centre. Log at 3.0 s: bone box 3001.9, pawn location 3002.2, bubble 3002.2.
+* No motion blur on the stock mesh or the arms (`bPerBoneMotionBlur` off) and none in the Phaselock captures (`r.MotionBlurQuality 0`):
+  Borderlands 2 has none, and UE5's smeared the hand and the rising body.
+
+### The cast arm
+
+* `Anim_Phaselock` (`SpecialMove_FirstPerson`) has the `GearboxAnimDefinition` defaults: rate 1, blend in and out 0.1 s, `EC_OnBlendOut`.
+  The host now uses those blends. At rate 1 the arm drops about 0.1 s before the game's (raised at 0.55 s in the game, low in the host);
+  the round 8 rate 0.85 stays (`-owcastrate=<r>` overrides it). With it the fist closes around the orb at 0.65 s in both.
+* The hand's smear at 0.55-0.75 s (critics since round 6) was UE5's per-bone motion blur, not an effect: crisp with it off.
+
+### The intro flash
+
+`Mat_SirenGlowMOD`'s overbright was scaled by 0.4 for every emitter (round 7, fitted on the hand at 0.55 s). The bubble intro's
+`InitialFlash` emitters now use the shader's own value 1 (material scalar `Overbright`, set per emitter): the 0.75-0.80 s frames
+change from a faint blue tint to a pale wash close to the game's. The game's wash is already full at 0.72 s, the host's at 0.75 s.

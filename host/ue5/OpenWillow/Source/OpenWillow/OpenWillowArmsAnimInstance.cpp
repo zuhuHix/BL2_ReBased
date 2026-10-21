@@ -2,6 +2,7 @@
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimationAsset.h"
 #include "AnimationRuntime.h"
+#include "Components/SkeletalMeshComponent.h"
 
 namespace
 {
@@ -48,10 +49,13 @@ void UOpenWillowArmsAnimInstance::SetMovement(float InGroundSpeed, bool bInFalli
     bLanding = bInLanding;
 }
 
-void UOpenWillowArmsAnimInstance::PlayAction(UAnimSequence* InAction, float InWeight, float InRate)
+void UOpenWillowArmsAnimInstance::PlayAction(UAnimSequence* InAction, float InWeight, float InRate, float InBlendIn,
+    float InBlendOut)
 {
     Action = InAction;
     ActionRate = InRate;
+    ActionBlendIn = InBlendIn;
+    ActionBlendOut = InBlendOut;
     ActionWeight = FMath::Clamp(InWeight, 0.f, 1.f);
     ++ActionSerial;
 }
@@ -61,6 +65,14 @@ void UOpenWillowArmsAnimInstance::PlayAdditive(UAnimSequence* InAdditive, float 
     Additive = InAdditive;
     AdditiveWeight = FMath::Clamp(InWeight, 0.f, 1.f);
     ++AdditiveSerial;
+}
+
+void UOpenWillowArmsAnimInstance::NativeInitializeAnimation()
+{
+    Super::NativeInitializeAnimation();
+    // Borderlands 2 draws no motion blur; UE5's per-bone blur smeared the hand during fast clips such as the Phaselock cast
+    // (2026-10-21 captures: crisp with r.MotionBlurQuality 0, ghosted without).
+    if (USkeletalMeshComponent* Mesh = GetSkelMeshComponent()) Mesh->bPerBoneMotionBlur = false;
 }
 
 FAnimInstanceProxy* UOpenWillowArmsAnimInstance::CreateAnimInstanceProxy()
@@ -83,6 +95,8 @@ void FOpenWillowArmsProxy::PreUpdate(UAnimInstance* Instance, float DeltaSeconds
     DesiredActionSerial = Arms->ActionSerial;
     DesiredActionWeight = Arms->ActionWeight;
     DesiredActionRate = Arms->ActionRate;
+    DesiredActionBlendIn = Arms->ActionBlendIn;
+    DesiredActionBlendOut = Arms->ActionBlendOut;
     if (Arms->AdditiveSerial != ActiveAdditiveSerial)
     {
         // Restart on every shot so rapid fire keeps re-kicking the arms.
@@ -125,16 +139,32 @@ void FOpenWillowArmsProxy::UpdateAnimationNode(const FAnimationUpdateContext& Co
         ActiveActionSerial = DesiredActionSerial;
         ActiveAction = DesiredAction;
         ActionRateNow = DesiredActionRate;
+        ActionBlendInNow = DesiredActionBlendIn;
+        ActionBlendOutNow = DesiredActionBlendOut;
         ActionTime = 0.f;
         ActionAlpha = 0.f;
     }
     if (ActiveAction)
     {
         Advance(ActiveAction, ActionTime, DeltaSeconds * ActionRateNow, false);
-        const bool bEnded = ActionTime >= ActiveAction->GetPlayLength();
-        ActionAlpha = FMath::FInterpConstantTo(ActionAlpha,
-            bEnded ? 0.f : DesiredActionWeight, DeltaSeconds, 12.f);
-        if (bEnded && ActionAlpha <= 0.f) ActiveAction = nullptr;
+        const float Length = ActiveAction->GetPlayLength();
+        const bool bEnded = ActionTime >= Length;
+        if (ActionBlendOutNow > 0.f)
+        {
+            // Stock timing (GearboxAnimDefinition): linear blend-in from the start, blend-out that reaches 0 at the end
+            // of the clip, both in seconds of clip time divided by the rate. Blend curve shape: UNVERIFIED (linear).
+            const float Rate = FMath::Max(ActionRateNow, KINDA_SMALL_NUMBER);
+            const float In = ActionBlendInNow > 0.f ? ActionTime / Rate / ActionBlendInNow : 1.f;
+            const float Out = (Length - ActionTime) / Rate / ActionBlendOutNow;
+            ActionAlpha = DesiredActionWeight * FMath::Clamp(FMath::Min(In, Out), 0.f, 1.f);
+            if (bEnded) ActiveAction = nullptr;
+        }
+        else
+        {
+            ActionAlpha = FMath::FInterpConstantTo(ActionAlpha,
+                bEnded ? 0.f : DesiredActionWeight, DeltaSeconds, 12.f);
+            if (bEnded && ActionAlpha <= 0.f) ActiveAction = nullptr;
+        }
     }
     if (ActiveAdditive)
     {
