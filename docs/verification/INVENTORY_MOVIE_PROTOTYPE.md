@@ -1216,3 +1216,23 @@ Critic (fresh instance; told that the Maya model is out of scope): **7.21/10** o
 Its top items: perspective and the curved glass (both missing), the hint line in the equipped view about 40 px higher than the real one,
 the Inspect backdrop (grid and circular motif), the Skills action strip about 20 px high, the selected row of some sorts lower than real.
 Suite: **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set).
+
+### Round 18: the movie's 3D turn
+
+The movie's open questions about "perspective tilt" had a plain cause: the StatusMenu turns the `inventory` clip 11 degrees about the
+vertical axis (`_yrotation` 11 at the screen centre, read live from the running movie) and the `skills` clip 7.24 degrees; Ruffle
+ignores `_yrotation`. The pages now apply the same turn to the player and the hit layer as a CSS 3D transform (`tools/hud_overlay/menu3d.js`),
+at the focal length of Flash's default 55-degree field of view (1229 px for a 1280 px stage; Scaleform's own camera is not read,
+UNVERIFIED). On the 2026-10-04 backpack frame the panel's right edge is 0.963 of its left edge's height; this projection gives 0.962.
+The engine frames show the turn (card frame edges 205 and 192 px tall, against 207 and 200 before). Inspect stays square-on, as in the
+real frames. Measured fits are screen positions, so the page maps each target back through the projection before comparing it with the
+movie's own bounds; the Skills overview poses were refitted with the turn on (they become nearly uniform: x-scale 99/90/86, was 105/89/79).
+The page report's `backpackRowsAligned` (suite steps 9 and 15) compared movie bounds with the hit boxes' screen rectangles, which the turn
+changes for both alike; it now compares layout offsets (`OpenWillowMayaHUD.cpp`).
+
+Not reproduced: the curved cyan glass sheet. The movie's `ring` clip is that sheet (a dark teal grid with a curved lower edge here); the
+game draws it far behind at `_z` -22000 with a blend that brightens the world, which a transparent page over the UE viewport cannot do.
+
+Critic (fresh instance): **7.67/10** on the 11 pairs, 7.65 over 13 (compare views 8.0, Skills 7.9, Inspect 7.0, empty cell 7.4). Its top items:
+the glass field, the Inspect backdrop, the card about 15 px low, the hint line about 6 px high. Suite **49 PASS / 0 FAIL / 0 NOT_RUN /
+0 KNOWN_DIVERGENCE** after the report fix (47 / 2 / 0 / 0 before it); navigation 30/30.

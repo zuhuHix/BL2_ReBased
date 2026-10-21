@@ -935,17 +935,20 @@ function fitCard(card, target) {
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
   const width = bounds.xMax - bounds.xMin;
-  if (!(width > 20) || Math.abs(width - target.width) > 1.5) {
-    const factor = target.width / width;
+  const left = target.x !== undefined ? target.x : target.right - target.width;
+  const targetWidth = toMovie(left + target.width, target.y).x - toMovie(left, target.y).x;
+  if (!(width > 20) || Math.abs(width - targetWidth) > 1.5) {
+    const factor = targetWidth / width;
     if (!Number.isFinite(factor) || factor < 0.3 || factor > 3) return;
     set(card, '_xscale', Number(get(card, '_xscale')) * factor);
     set(card, '_yscale', Number(get(card, '_yscale')) * factor);
   }
   const fitted = readBounds(card + '.bkgd');
   if (!fitted) return;
-  const left = target.x !== undefined ? target.x : target.right - target.width;
+  const screenLeft = target.x !== undefined ? target.x : target.right - target.width;
+  const topLeft = toMovie(screenLeft, target.y);
   const scale = Number(get(INV, '_xscale')) / 100 || 1;
-  const dx = left - fitted.xMin, dy = target.y - fitted.yMin;
+  const dx = topLeft.x - fitted.xMin, dy = topLeft.y - fitted.yMin;
   if (Math.abs(dx) > 1) set(card, '_x', Number(get(card, '_x')) + dx / scale);
   if (Math.abs(dy) > 1) set(card, '_y', Number(get(card, '_y')) + dy / scale);
 }
@@ -1143,6 +1146,7 @@ function updateInspect() {
     // The real hint strip is centred about 53 px right of where the movie puts it.
     set(ROOT + '.tooltips', '_x', Number(get(ROOT + '.tooltips', '_x')) + (on ? INSPECT_HINT_DX : -INSPECT_HINT_DX));
     if (!on) { player.style.clipPath = ''; applyMovieVisibility(); }
+    update3d();
   }
   if (on) { fitCards(); clipMovieToInspectParts(); }
   if (!on) { inspect.hidden = true; return; }
@@ -1561,6 +1565,14 @@ function refreshBackpackHeader() {
 // Which of the two panel arrangements applies: the Backpack focus view, or the Equipped view (also used by the
 // compare view, which has its own card tween).
 const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceId && !inspectMode;
+
+// The movie turns the inventory clip 11 degrees about the vertical axis (read live, see menu3d.js); the page applies the turn.
+// Inspect shows the card square-on in the real frames, so the turn is off there.
+function update3d() {
+  return window.owMenu3d.apply(document.getElementById('presentation'), inspectMode ? 0 : Number(get(INV, '_yrotation')) || 0,
+    Number(get(INV, '_x')), Number(get(INV, '_y')));
+}
+const toMovie = (x, y) => window.owMenu3d.toMovie(x, y);
 // Compare view (a transfer): the Equipped panel is narrowed into the gap between the two cards and the Backpack panel
 // moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
 // (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
@@ -1582,7 +1594,8 @@ function placeStoragePanel() {
   }
   const bounds = readBounds(panel + '.bkgd');
   if (!bounds) return;
-  const dx = pose.left - bounds.xMin, dy = pose.top - bounds.yMin;
+  const target = toMovie(pose.left, pose.top);
+  const dx = target.x - bounds.xMin, dy = target.y - bounds.yMin;
   if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
   if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
   placeEquippedPanel();
@@ -1605,9 +1618,10 @@ function placeEquippedPanel() {
     }
     const bounds = compare ? readBounds(panel + '.cell1.hitTestClip') : call(panel, 'getBounds', ROOT);
     if (!bounds) return;
-    const centreX = compare ? COMPARE_EQUIPPED.centreX : FOCUS_EQUIPPED.centreX;
-    const dx = centreX - (bounds.xMin + bounds.xMax) / 2;
-    const dy = compare ? COMPARE_EQUIPPED.cell1Top - bounds.yMin : FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
+    const target = compare ? toMovie(COMPARE_EQUIPPED.centreX, COMPARE_EQUIPPED.cell1Top)
+      : toMovie(FOCUS_EQUIPPED.centreX, FOCUS_EQUIPPED.centreY);
+    const dx = target.x - (bounds.xMin + bounds.xMax) / 2;
+    const dy = target.y - (compare ? bounds.yMin : (bounds.yMin + bounds.yMax) / 2);
     if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
     if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
   } else if (equippedHome) {
@@ -1710,6 +1724,7 @@ function placeListHeaders(headers, rowWidth) {
 }
 
 function render() {
+  update3d();
   if (!ready || !state) return;
   // The host's right-edge fade of the movie would cut the Backpack panel when it moves right for the compare view.
   document.body.classList.toggle('compare-wide', Boolean(transferSourceId));
@@ -1954,6 +1969,7 @@ dragLayer.addEventListener('wheel', event => {
 function layoutStage() {
   const scale = Math.min(innerWidth / 1280, innerHeight / 720);
   const width = 1280 * scale, height = 720 * scale;
+  window.owMenu3d?.setScale(scale);
   Object.assign(document.getElementById('presentation').style, {
     left:`${(innerWidth - width) / 2}px`, top:`${(innerHeight - height) / 2}px`,
     width:`${width}px`, height:`${height}px`
@@ -2065,6 +2081,7 @@ function watchLayout() {
   if (!ready || !state) return;
   try {
     applyMovieVisibility();
+    if (update3d()) { render(); return; }
     const signature = movieLayoutSignature();
     if (signature && signature !== renderedLayout) {
       if (signature !== pendingLayout) { pendingLayout = signature; pendingSince = performance.now(); }

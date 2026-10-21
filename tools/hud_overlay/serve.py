@@ -21,7 +21,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 PAGES = {'/': 'index.html', '/index.html': 'index.html', '/skills.html': 'skills.html', '/skills.js': 'skills.js',
          '/skill_info.js': 'skill_info.js', '/inventory.html': 'inventory.html',
-         '/inventory.js': 'inventory.js'}
+         '/inventory.js': 'inventory.js', '/menu3d.js': 'menu3d.js'}
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8'}
 PACKAGE_PREFIX = '/ package/'
 
