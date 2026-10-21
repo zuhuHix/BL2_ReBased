@@ -83,6 +83,9 @@ prototypes, so the repository's clock started a little after the work did.
 - Phaselock round 16 (DECISIONS 2026-10-21): a stock bullymong as the lifted target (its four PhaseLock clips, stock
   blends, the hold's mesh lowering observed live); CTest 10/10, packages 9/9, quest suite 79/0 and 11/0. Critic overall
   5.8 / 5.7 / 5.5 over three rounds (target 4.5); an agent's judgement against real frames, not parity.
+- Inventory and Skills rounds 16-19 (DECISIONS 2026-10-21): the pages apply the movie's own 3D turn, empty backpack cells are
+  selectable, Inspect and Skills details follow fresh real-game captures; critic 7.27 before, 7.57-7.67 after (8/10 not reached).
+  Inventory suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE (bounded item set), navigation 30/30, CTest 10/10, packages 9/9.
 - Suites after the Phaselock, ambient-citizen, gun and menu rounds (DECISIONS 2026-10-05): CTest 10/10,
   packages 9/9, quest suite 79/79 first run and 11/11 resume, door suite 16/16, inventory suite 49 PASS /
   0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE, navigation 27/27. Automated checks only; the visual state is in the
