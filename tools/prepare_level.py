@@ -168,8 +168,13 @@ PLACED_OWNER_CLASSES = ('Engine.StaticMeshActor', 'Engine.InterpActor',
                         'WillowGame.WillowInteractiveObject')
 # Owner classes whose actors may serialize the same component twice. The five
 # Sanctuary vault-symbol actors each carry two identical planes, and the running
-# game attaches one; the second exact copy is listed, not placed.
+# game attaches one; the second exact copy is listed, not placed. A copy only
+# counts as a duplicate when it also matches on visibility and collision, so a
+# hidden and a visible component are never merged (the owner's bHidden is
+# shared by both and needs no entry here).
 DEDUPLICATED_OWNER_CLASSES = ('WillowGame.WillowInteractiveObject',)
+DUPLICATE_SIGNATURE_PROPERTIES = ('HiddenGame', 'CastShadow', 'CollideActors', 'BlockActors',
+                                  'BlockRigidBody', 'BlockZeroExtent', 'BlockNonZeroExtent')
 # Owners whose StaticMeshComponent is not what the game draws. They are listed
 # in the manifest's excluded_components with the reason, not placed.
 EXCLUDED_OWNER_CLASSES = {
@@ -1447,7 +1452,8 @@ class Scene:
                         if disposition == 'placed' and owner['class'] in DEDUPLICATED_OWNER_CLASSES:
                             signature = (level, owner['index'], key,
                                          json.dumps(p.get('Materials', []), sort_keys=True),
-                                         json.dumps(transform(p, True)))
+                                         json.dumps(transform(p, True)),
+                                         json.dumps([p.get(name) for name in DUPLICATE_SIGNATURE_PROPERTIES]))
                             if signature in owner_components:
                                 disposition = 'duplicate_component'
                             owner_components.add(signature)

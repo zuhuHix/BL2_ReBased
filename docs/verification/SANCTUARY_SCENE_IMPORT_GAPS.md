@@ -74,7 +74,7 @@ places exists live with `HiddenGame` false, attached, with the package's mesh, m
 rotation and scale (vault symbols, Moxxi's piano, the customization machine, Claptrap's stash, Roland's projector
 eye, the bounty board's transporter and board). Each of the five vault-symbol actors attaches one
 `BasePlane_256x128_Col` plane while the package serializes two identical components; the first is placed and the
-copy is listed. What the game draws for these objects in other mission or challenge states (a vault symbol after it
+copy is listed. A copy only counts as a duplicate when it also matches on `HiddenGame`, shadow casting and the collision flags, so a hidden and a visible component are never merged (review round 1); the five Sanctuary pairs match on all of them, and the counts did not change. What the game draws for these objects in other mission or challenge states (a vault symbol after it
 is found, the projector during Episode 10) is not interpreted and stays `UNVERIFIED`. The live game also shows
 interactive objects whose meshes come only from their definitions at runtime (for example Roland's HQ TV, the fuel-cell
 pylons, the cardboard boxes); the package has no placed component for them, so they are outside this count.

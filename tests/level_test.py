@@ -687,6 +687,24 @@ class SceneTests(unittest.TestCase):
             self.assertEqual(result['excluded_components'][1]['source'].rsplit('.', 1)[-1],
                              'StaticMeshComponent_4')
             self.assertEqual(result['excluded_components'][1]['reason'], 'duplicate_component')
+            # A hidden first copy never removes the visible one: both stay, and the
+            # hidden copy keeps its hidden flag.
+            for hidden_slot in (7, 8):
+                scene = FakeScene(Path(folder))
+                scene.data['A_P'][hidden_slot] = dict(
+                    scene.data['A_P'][hidden_slot], **record(StaticMesh={'index': 9}, HiddenGame=True))
+                result = scene.build('A_P')
+                placed = {a['source'].rsplit('.', 1)[-1]: a['hidden_visual'] for a in result['actors']}
+                self.assertEqual(placed, {'StaticMeshComponent_1': False,
+                                          'StaticMeshComponent_3': hidden_slot == 7,
+                                          'StaticMeshComponent_4': hidden_slot == 8})
+                self.assertNotIn('duplicate_component',
+                                 [e['reason'] for e in result['excluded_components']])
+            # A different collision flag is not a duplicate either.
+            scene = FakeScene(Path(folder))
+            scene.data['A_P'][8] = dict(scene.data['A_P'][8], **record(StaticMesh={'index': 9},
+                                                                       BlockActors=False))
+            self.assertEqual(len(scene.build('A_P')['actors']), 3)
             # A different pose is not a duplicate.
             scene = FakeScene(Path(folder))
             scene.data['A_P'][8] = dict(scene.data['A_P'][8], **record(StaticMesh={'index': 9},
