@@ -1195,3 +1195,24 @@ fixed in round 17), and the Inspect model, which now showed slot 2's rifle inste
 0 KNOWN_DIVERGENCE** with `-Items local/inventory-actions/bounded-recipes`; with this machine's default item set 24 / 3 / 22 / 0, because
 that set starts over the backpack capacity and the host (correctly) refuses unequips (same result in a 2026-10-15 log of the source
 worktree). All placements are fits to captured frames (UNVERIFIED).
+
+### Round 17
+
+- **Empty backpack cells are selectable** (observed 2026-10-21): Down past the last item moves onto the "(EMPTY)" cells (ids
+  `empty:N`), the cards are hidden, the mini Equipped column shows its title, Select/Compare, Drop, Favourite/Trash and Inspect do nothing,
+  and the Sort hint stays lit. The installed `MoveDelta` is still given the item rows only, so moves onto or between empty cells are the
+  host's; how the VM itself treats empty entries is not run (UNVERIFIED). Two synthetic navigation checks were added (29/29).
+- **Compare view**: the Equipped column is placed by weapon slot 1's cell (centre x 542, top y 158 on the compare captures). The panel's
+  own bounds included a child that leaves after the compare tween, which put the column about 140 px low in round 16's backpack-origin
+  compare and in the headless replays.
+- **Capture sequence**: Inspect is taken on slot 1's pistol (the reference Inspect frame shows a pistol; round 16 inspected a rifle) and a
+  new frame D2g walks the Backpack onto its empty cells.
+- **Second real-game session (same day, same save)**: a class mod, relic, grenade mod and shield were spawned from their balances, read
+  and removed. Live `GetCategoryKey()`: `comm`, `Artifact`, `mod`, `Shield`. The ITEMS sort with one of each shows RELICS, CLASS MODS,
+  GRENADE MODS, SHIELDS (with ALL: WEAPONS first, then the same four), which is what the host draws. The PERSONAL header of the
+  2026-10-04 pack therefore belonged to some other category (not identified); no change. Saves restored (one `.sav.bak`), driver removed.
+
+Critic (fresh instance; told that the Maya model is out of scope): **7.21/10** on the 11 pairs, 7.22 over 13 (overview 7.6, empty cell 6.9).
+Its top items: perspective and the curved glass (both missing), the hint line in the equipped view about 40 px higher than the real one,
+the Inspect backdrop (grid and circular motif), the Skills action strip about 20 px high, the selected row of some sorts lower than real.
+Suite: **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set).

@@ -318,7 +318,8 @@ window.owInventory = snapshot => {
     const id = targetGearSlot ? state.gearSlots?.[targetGearSlot] : state.slots[targetSlot];
     selectedId = itemById(id)?.id || null;
   }
-  if (!itemById(selectedId)) {
+  if (!itemById(selectedId) && !(isEmptyCellId(selectedId) && navigationPanel === 'backpack' && !transferSourceId
+      && backpackEntries().some(entry => entry.id === selectedId))) {
     const heldId = state.slots[targetSlot];
     // An intentionally selected empty equipment cell must stay empty when
     // unrelated ammo/currency snapshots arrive.
@@ -433,8 +434,17 @@ function backpackEntries() {
   }
   const capacity = Number.isFinite(state?.backpackCapacity) && state.backpackCapacity > 0 ? state.backpackCapacity : 0;
   const empties = capacity ? Math.max(0, capacity - items.length) : Math.max(0, VISIBLE_ROWS + 1 - items.length);
-  for (let i = 0; i < empties; i++) entries.push({empty:true});
+  for (let i = 0; i < empties; i++) entries.push({empty:true, id:emptyCellId(i)});
   return entries;
+}
+// The trailing "(EMPTY)" cells are selectable in the original (2026-10-21 capture: Down past the last item moves the selection
+// onto them, no card is shown). They are selected by these ids; outside a transfer only (a transfer lists weapons only).
+const emptyCellId = index => `empty:${index}`;
+const isEmptyCellId = id => typeof id === 'string' && id.startsWith('empty:');
+function selectableRows() {
+  const items = backpackItems();
+  if (transferSourceId) return items;
+  return [...items, ...backpackEntries().filter(entry => entry.empty)];
 }
 
 function requestAction(action, fields = {}) {
@@ -980,7 +990,8 @@ function drawCard() {
   const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
   // Seen in the real compare views: from the equipped item the Sort entry stays, from a backpack item it is gone.
-  if ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped))
+  if ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped)
+      || (!transferSourceId && isEmptyCellId(selectedId)))
     hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
@@ -1009,7 +1020,7 @@ function syncSelection() {
   for (const entry of backpackEntries().slice(firstRow)) {
     if (entry.header !== undefined) continue;
     if (cell >= RENDERED_ROWS) break;
-    if (entry.item) call(`${INV}.storagePanel.owRows.owRow${cell}`, 'SetSelected', entry.item.id === selectedId);
+    if (entry.item || entry.empty) call(`${INV}.storagePanel.owRows.owRow${cell}`, 'SetSelected', (entry.item?.id ?? entry.id) === selectedId);
     cell++;
   }
   for (const button of document.querySelectorAll('#controls [data-kind="backpack"]'))
@@ -1024,7 +1035,7 @@ function maxFirstRow(entries) {
   return index;
 }
 function scrollForSelected(entries) {
-  const index = entries.findIndex(entry => entry.item?.id === selectedId);
+  const index = entries.findIndex(entry => (entry.item?.id ?? entry.id) === selectedId);
   const maximum = maxFirstRow(entries);
   let start = Math.max(0, Math.min(maximum, firstRow));
   if (index < 0) return start;
@@ -1162,6 +1173,7 @@ function updateInspect() {
 }
 
 function toggleInspect() {
+  if (!inspectMode && !itemById(selectedId)) return; // nothing to inspect (an empty cell: the real hint shows Inspect dimmed)
   inspectMode = !inspectMode;
   if (inspectMode) inspectItemId = null;
   // Leaving inspect brings the hidden card back through the normal draw path.
@@ -1326,15 +1338,16 @@ window.owInventoryVmResult = result => {
 };
 
 function applyBackpackSelection(rows, index) {
+  const wasEmpty = isEmptyCellId(selectedId);
   selectedId = rows[index].id;
   navigationPanel = 'backpack';
   lastBackpackId = selectedId;
-  targetGearSlot = gearSlotForItem(rows[index]);
+  targetGearSlot = rows[index].empty ? null : gearSlotForItem(rows[index]);
   compareId = transferSourceId;
   const nextFirstRow = scrollForSelected(backpackEntries());
-  if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
+  if (nextFirstRow !== firstRow || wasEmpty !== isEmptyCellId(selectedId)) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
   else { syncSelection(); drawCard(); focusItem(selectedId); }
-  announce(itemAriaLabel(itemById(selectedId)));
+  announce(isEmptyCellId(selectedId) ? 'Empty backpack slot' : itemAriaLabel(itemById(selectedId)));
 }
 
 function moveSelection(delta) {
@@ -1342,13 +1355,16 @@ function moveSelection(delta) {
     if (!targetGearSlot) cycleTargetSlot(delta);
     return;
   }
-  const rows = backpackItems();
+  const rows = selectableRows(), itemCount = backpackItems().length;
   if (!rows.length) return;
-  if (inventoryVm.failed && navigationPanel === 'backpack' && !transferSourceId) return;
-  if (inventoryVm.enabled && navigationPanel === 'backpack' && !transferSourceId) {
+  let index = rows.findIndex(row => row.id === selectedId);
+  // The VM's MoveDelta is given the item rows only, so a move that starts on an empty cell or leaves the last item downwards
+  // is the host's (onto the empty cells, as observed; the VM's own handling of empty entries is not run here).
+  const hostMove = index >= itemCount - 1 && (index >= itemCount || delta > 0);
+  if (!hostMove && inventoryVm.failed && navigationPanel === 'backpack' && !transferSourceId) return;
+  if (!hostMove && inventoryVm.enabled && navigationPanel === 'backpack' && !transferSourceId) {
     requestInventoryMove(delta); return;
   }
-  let index = rows.findIndex(item => item.id === selectedId);
   index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
   applyBackpackSelection(rows, index);
 }
@@ -1408,6 +1424,10 @@ function enterBackpack() {
   const entries = backpackEntries();
   const id = entries.find(entry => entry.item?.id === lastBackpackId)?.item.id
     || entries.slice(firstRow).find(entry => entry.item)?.item.id;
+  if (isEmptyCellId(lastBackpackId) && entries.some(entry => entry.id === lastBackpackId)) {
+    selectedId = lastBackpackId; navigationPanel = 'backpack'; targetGearSlot = null; compareId = null;
+    firstRow = scrollForSelected(backpackEntries()); render(); return;
+  }
   if (id) { select(id); firstRow = scrollForSelected(backpackEntries()); render(); focusItem(id); }
 }
 
@@ -1545,7 +1565,9 @@ const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceI
 // moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
 // (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
 const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:135 - 13}; // title at y 150 like the real frame
-const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, top:118};
+// Placed by weapon slot 1's cell (centre x 542, top y 158 on the 2026-10-04 compare captures): the panel's own bounds
+// include a child that leaves after the compare tween, which dropped the column about 140 px (critic round 16).
+const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, cell1Top:158};
 let appliedFocus = false, equippedHome = null;
 const panelPose = () => backpackFocused() ? FOCUS_PANEL : transferSourceId ? COMPARE_BACKPACK
   : {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:PANEL_LEFT, top:PANEL_TOP};
@@ -1571,7 +1593,7 @@ function placeStoragePanel() {
 function placeEquippedPanel() {
   const panel = INV + '.equippedPanel', focus = backpackFocused(), compare = Boolean(transferSourceId);
   // The mini column behind the card shows no title in the original (a clipped "QUIPPED" peeked out below short cards).
-  set(panel + '.equippedLabel', '_visible', !focus);
+  set(panel + '.equippedLabel', '_visible', !focus || isEmptyCellId(selectedId)); // shown again when no card covers it (2026-10-21)
   if (focus || compare) {
     if (!equippedHome) equippedHome = {x:Number(get(panel, '_x')), y:Number(get(panel, '_y')),
       xs:Number(get(panel, '_xscale')), ys:Number(get(panel, '_yscale'))};
@@ -1581,11 +1603,11 @@ function placeEquippedPanel() {
       set(panel, '_xscale', xs);
       set(panel, '_yscale', ys);
     }
-    const bounds = call(panel, 'getBounds', ROOT);
+    const bounds = compare ? readBounds(panel + '.cell1.hitTestClip') : call(panel, 'getBounds', ROOT);
     if (!bounds) return;
     const centreX = compare ? COMPARE_EQUIPPED.centreX : FOCUS_EQUIPPED.centreX;
     const dx = centreX - (bounds.xMin + bounds.xMax) / 2;
-    const dy = compare ? COMPARE_EQUIPPED.top - bounds.yMin : FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
+    const dy = compare ? COMPARE_EQUIPPED.cell1Top - bounds.yMin : FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
     if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
     if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
   } else if (equippedHome) {
@@ -1799,7 +1821,7 @@ function render() {
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     // Equipped-origin compare (2026-10-04 capture): the chosen equipped slot carries the highlight, the backpack row only
     // marks the candidate whose card is on the right, so it gets no band.
-    const rowSelected = Boolean(item && item.id === selectedId);
+    const rowSelected = (item ? item.id : entry.id) === selectedId;
     // Backpack-origin compare: the moved item's tile has a green frame like its card, not the gold selection.
     const greenFrame = rowSelected && transferSourceId && !transferFromEquipped;
     call(path, 'SetSelected', rowSelected && !greenFrame);

@@ -277,8 +277,16 @@ void AOpenWillowMayaHUD::TickInvShots()
         {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D3_CompareFromBackpack"), .5},   // compare, backpack origin
         {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("ArrowLeft"), 1.2},
         {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D4_CompareFromEquipped"), .5}, // compare, equipped origin
-        {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("f"), 2.}, {TEXT("shot"), TEXT("D5_Inspect"), .5},
-        {TEXT("key"), TEXT("f"), .8}, {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
+        // Inspect slot 1's pistol (the reference Inspect frame shows a pistol), then walk the Backpack onto its empty cells.
+        {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("ArrowUp"), .8}, {TEXT("key"), TEXT("f"), 2.}, {TEXT("shot"), TEXT("D5_Inspect"), .5},
+        {TEXT("key"), TEXT("f"), .8}, {TEXT("key"), TEXT("ArrowRight"), 1.}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), 1.2}, {TEXT("shot"), TEXT("D2g_EmptyCell"), .5},
+        {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
         {TEXT("key"), TEXT("q"), 1.5}, {TEXT("shot"), TEXT("D7_SkillsOverview"), .5},
         {TEXT("closeSkills"), TEXT(""), 1.5}};
     if (InvShotStep >= UE_ARRAY_COUNT(Steps))
