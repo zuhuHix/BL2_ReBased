@@ -1,5 +1,6 @@
 """Synthetic checks for tools/walking_routes.py; no game data."""
 import math
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -81,20 +82,42 @@ class Summary(unittest.TestCase):
 
 
 class Manifest(unittest.TestCase):
+    PROBES = [{'name': 'a', 'points': [[0, 0, 100], [100, 0, 100]]},
+              {'name': 'b', 'points': [[0, 0, 100], [100, 0, 100]]}]
+    EXPECTED = {'routes': 2, 'blocking_volumes': 5}
+    ROW = json.dumps({'t': 0, 'p': [100, 0, 180], 'feet': 100, 'phys': '1', 'floor': [0, 0, 1]}) + chr(10)
+
+    def write(self, folder, name, text, mtime):
+        path = Path(folder, name + '.jsonl')
+        path.write_text(text, encoding='utf-8')
+        os.utime(path, (mtime, mtime))
+
     def test_missing_or_empty_trace_fails(self):
-        probes = [{'name': 'a', 'points': [[0, 0, 100], [100, 0, 100]]},
-                  {'name': 'b', 'points': [[0, 0, 100], [100, 0, 100]]}]
-        row = {'t': 0, 'p': [100, 0, 180], 'feet': 100, 'phys': '1', 'floor': [0, 0, 1]}
         with tempfile.TemporaryDirectory() as folder:
-            Path(folder, 'a.jsonl').write_text(json.dumps(row) + '\n', encoding='utf-8')
+            self.write(folder, 'a', self.ROW, 2000)
             with self.assertRaisesRegex(ValueError, 'b'):
-                routes(probes, folder, {})
-            Path(folder, 'b.jsonl').write_text('', encoding='utf-8')
+                routes(self.PROBES, folder, {'captured_at': 1000}, self.EXPECTED)
+            self.write(folder, 'b', '', 2000)
             with self.assertRaisesRegex(ValueError, 'b'):
-                routes(probes, folder, {})
-            Path(folder, 'b.jsonl').write_text(json.dumps(row) + '\n', encoding='utf-8')
-            data = routes(probes, folder, {})
-            self.assertEqual((data['expected_routes'], len(data['routes'])), (2, 2))
+                routes(self.PROBES, folder, {'captured_at': 1000}, self.EXPECTED)
+            self.write(folder, 'b', self.ROW, 2000)
+            data = routes(self.PROBES, folder, {'captured_at': 1000}, self.EXPECTED)
+            self.assertEqual((data['expected_routes'], data['expected_volumes'], len(data['routes'])), (2, 5, 2))
+
+    def test_truncated_probe_list_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.write(folder, 'a', self.ROW, 2000)
+            with self.assertRaisesRegex(ValueError, '1 probes, expected 2'):
+                routes(self.PROBES[:1], folder, {'captured_at': 1000}, self.EXPECTED)
+
+    def test_stale_trace_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.write(folder, 'a', self.ROW, 2000)
+            self.write(folder, 'b', self.ROW, 500)   # left over from an earlier capture
+            with self.assertRaisesRegex(ValueError, 'older than this capture: b'):
+                routes(self.PROBES, folder, {'captured_at': 1000}, self.EXPECTED)
+            with self.assertRaisesRegex(ValueError, 'captured_at'):
+                routes(self.PROBES, folder, {}, self.EXPECTED)
 
 
 if __name__ == '__main__':

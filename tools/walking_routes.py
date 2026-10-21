@@ -149,11 +149,29 @@ def summarize(rows, points, radius=42.0):
             'falling_samples': sum(1 for r in rows if r.get('phys') in FALLING)}
 
 
-def routes(probes, trace_dir, capture):
+# Committed counts for the recorded maps, independent of any generated file: the probe list
+# (29 stair ramps from `candidates` plus six hand-made routes) and the blocking volumes the
+# running game showed (3 static, 2 dynamic). A truncated or partial manifest fails against these.
+EXPECTED = {'Sanctuary_P': {'routes': 35, 'blocking_volumes': 5}}
+
+
+def routes(probes, trace_dir, capture, expected):
+    """walk-routes.json content. `expected` holds the committed counts for the map.
+
+    Every probe needs a trace written during this capture (not before `captured_at`, the
+    time walk_dump recorded at the start of the session), and the probe count must match.
+    """
+    if len(probes) != expected['routes']:
+        raise ValueError('Probe list has %d probes, expected %d' % (len(probes), expected['routes']))
+    if 'captured_at' not in capture:
+        raise ValueError('Capture has no captured_at; record it with walking.py walk_dump')
     radius = float(capture.get('cylinder', {}).get('radius', 42.0))
-    result, missing = [], []
+    result, missing, stale = [], [], []
     for probe in probes:
         trace = Path(trace_dir) / (probe['name'] + '.jsonl')
+        if trace.is_file() and trace.stat().st_mtime < capture['captured_at']:
+            stale.append(probe['name'])
+            continue
         rows = ([json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines() if line.strip()]
                 if trace.is_file() else [])
         if len(probe['points']) < 2 or not rows:
@@ -161,10 +179,12 @@ def routes(probes, trace_dir, capture):
             continue
         result.append(dict(probe, original=summarize(rows, probe['points'], radius)))
     # An interrupted capture must not produce a smaller manifest that still passes.
+    if stale:
+        raise ValueError('Traces older than this capture: ' + ', '.join(stale))
     if missing:
         raise ValueError('Probes without a usable trace: ' + ', '.join(missing))
-    return {'schema': 1, 'capture': capture, 'end_radius': END_RADIUS, 'expected_routes': len(result),
-            'routes': result}
+    return {'schema': 1, 'capture': capture, 'end_radius': END_RADIUS, 'expected_routes': expected['routes'],
+            'expected_volumes': expected['blocking_volumes'], 'routes': result}
 
 
 def main():
@@ -178,6 +198,7 @@ def main():
     r.add_argument('--traces', type=Path, required=True)
     r.add_argument('--capture', type=Path, required=True, help='walk_info JSON from the same session')
     r.add_argument('--output', type=Path, required=True)
+    r.add_argument('--map', default='Sanctuary_P', choices=sorted(EXPECTED))
     args = parser.parse_args()
     if args.command == 'candidates':
         scene = json.loads((args.scene / 'scene.json').read_text(encoding='utf-8'))
@@ -187,7 +208,8 @@ def main():
     else:
         probes = json.loads(args.probes.read_text(encoding='utf-8'))
         capture = json.loads(args.capture.read_text(encoding='utf-8'))
-        data = routes(probes, args.traces, capture.get('info', capture))  # walk_dump holds {'info', 'volumes'}
+        # walk_dump holds {'info', 'volumes'}
+        data = routes(probes, args.traces, capture.get('info', capture), EXPECTED[args.map])
         args.output.write_text(json.dumps(data, indent=1) + '\n', encoding='utf-8')
         print(json.dumps({'routes': len(data['routes']),
                           'reached': sum(r['original']['reached'] for r in data['routes'])}))
