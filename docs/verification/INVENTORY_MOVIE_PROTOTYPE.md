@@ -1261,3 +1261,13 @@ instance). The 8/10 target is not reached. Open, in the order the last critics r
 3. The focus view scrolls an empty-cell selection one row higher than the real list does; tab strip about 10 px left; ammo and count
    plates a few pixels off.
 4. Cards: no flavour lines; a red frame and red level strip for items above the player's level are not reproduced.
+
+### PR #46 review fixes (2026-10-21)
+
+- On an empty backpack cell U, Delete and Backspace fell through to the remembered weapon slot and unequipped it; `unequip()` now
+  returns on an empty-cell selection.
+- The host-side boundary rule for empty cells was applied only when a key was pressed, so a Down queued behind a pending VM move was
+  still sent to the VM after the first move reached the last item (the VM only knows the item rows). While a VM move is pending, every
+  move now joins the queue, and the dispatcher decides the boundary rule against the current selection.
+- Two synthetic checks (both fail on the round-19 code): navigation 32/32. Suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE**
+  (bounded item set).

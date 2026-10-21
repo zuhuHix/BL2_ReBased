@@ -540,6 +540,8 @@ function equip() {
 }
 
 function unequip() {
+  // An empty backpack cell has no item; without this, U/Delete fell through to the remembered weapon slot (review of PR #46).
+  if (isEmptyCellId(selectedId)) return;
   const item = itemById(selectedId);
   if (targetGearSlot) {
     if (state?.gearSlots?.[targetGearSlot]) requestAction('unequip', {gearSlot:targetGearSlot});
@@ -1313,6 +1315,10 @@ function dispatchInventoryMove() {
   if (!inventoryVm.enabled || navigationPanel !== 'backpack' || transferSourceId || inspectMode) {
     inventoryVm.queue.length = 0; return;
   }
+  // The boundary rule is decided here, against the selection the earlier moves left: a queued Down that now starts on the last
+  // item (or on an empty cell) is the host's, since the VM only knows the item rows.
+  while (inventoryVm.queue.length && isHostBoundaryMove(inventoryVm.queue[0])) hostBackpackMove(inventoryVm.queue.shift());
+  if (!inventoryVm.queue.length) return;
   const rows = backpackItems();
   if (!rows.length) { inventoryVm.queue.length = 0; return; }
   const start = rows.findIndex(item => item.id === selectedId);
@@ -1356,23 +1362,34 @@ function applyBackpackSelection(rows, index) {
   announce(isEmptyCellId(selectedId) ? 'Empty backpack slot' : itemAriaLabel(itemById(selectedId)));
 }
 
+// The VM's MoveDelta is given the item rows only, so a move that starts on an empty cell or leaves the last item downwards
+// is the host's (onto the empty cells, as observed; the VM's own handling of empty entries is not run here).
+function isHostBoundaryMove(delta) {
+  const rows = selectableRows(), itemCount = backpackItems().length;
+  const index = rows.findIndex(row => row.id === selectedId);
+  return index >= 0 && index >= itemCount - 1 && (index >= itemCount || delta > 0);
+}
+function hostBackpackMove(delta) {
+  const rows = selectableRows();
+  if (!rows.length) return;
+  let index = rows.findIndex(row => row.id === selectedId);
+  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
+  applyBackpackSelection(rows, index);
+}
 function moveSelection(delta) {
   if (transferSourceId && !transferFromEquipped) {
     if (!targetGearSlot) cycleTargetSlot(delta);
     return;
   }
-  const rows = selectableRows(), itemCount = backpackItems().length;
-  if (!rows.length) return;
-  let index = rows.findIndex(row => row.id === selectedId);
-  // The VM's MoveDelta is given the item rows only, so a move that starts on an empty cell or leaves the last item downwards
-  // is the host's (onto the empty cells, as observed; the VM's own handling of empty entries is not run here).
-  const hostMove = index >= itemCount - 1 && (index >= itemCount || delta > 0);
-  if (!hostMove && inventoryVm.failed && navigationPanel === 'backpack' && !transferSourceId) return;
-  if (!hostMove && inventoryVm.enabled && navigationPanel === 'backpack' && !transferSourceId) {
-    requestInventoryMove(delta); return;
-  }
-  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
-  applyBackpackSelection(rows, index);
+  if (!selectableRows().length) return;
+  const vmPanel = navigationPanel === 'backpack' && !transferSourceId;
+  // While a VM move is pending or queued every move joins the queue, so the moves keep their order; the dispatcher decides
+  // there which ones are host boundary moves.
+  if (vmPanel && inventoryVm.enabled && (inventoryVm.pending || inventoryVm.queue.length)) { requestInventoryMove(delta); return; }
+  const hostMove = isHostBoundaryMove(delta);
+  if (!hostMove && inventoryVm.failed && vmPanel) return;
+  if (!hostMove && inventoryVm.enabled && vmPanel) { requestInventoryMove(delta); return; }
+  hostBackpackMove(delta);
 }
 
 // Host spatial navigation uses the movie's actual cell centers rather than
