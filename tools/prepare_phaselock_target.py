@@ -53,7 +53,12 @@ TARGETS = {
         # bullymong is about 1.45x too large against the matched_650 frames (same distance and field of view, curled loop pose
         # and idle), while the archetype's component Scale 0.7 matches them; the host uses 0.7 and the conflict stays UNVERIFIED.
         'observed': {'collision_radius': 150.0, 'collision_height': 90.0,
-                     'source': 'local/realgame/phaselock/size_rule/adult68 (SDK read)'},
+                     'source': 'local/realgame/phaselock/size_rule/adult68 (SDK read)',
+                     # UpdateLiftedPawnMeshOffset centres Mesh.Bounds (the stock physics asset, not imported) on the pawn's
+                     # Location. Live (2026-10-21, local/realgame/phaselock/target_anim run2): Mesh.Translation.Z went from
+                     # -102.1 at rest to -221.5 through the hold (-119.5); the host's bone-box centring moved it -60.8. The
+                     # host therefore centres the bones' box this much below the Location (a fit for this pawn, UNVERIFIED).
+                     'centre_bias': 58.7},
     },
 }
 
@@ -168,6 +173,7 @@ def host_target(name, target):
     return {'id': name, 'mesh': f'{dest}/Meshes/{mesh}/SkeletalMeshes/{mesh}.{mesh}',
             'idle': anim('Idle'), 'death': anim('Death'), 'mesh_offset_z': z, 'mesh_scale': scale,
             'collision_radius': observed['collision_radius'], 'collision_height': observed['collision_height'],
+            'centre_bias': observed.get('centre_bias', 0.0),
             'source': {'translation_and_scale': 'archetype mesh component (our reader)', 'cylinder': observed['source']}}
 
 
