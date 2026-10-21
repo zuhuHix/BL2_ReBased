@@ -31,10 +31,12 @@ let displayedStates = new Map();
 // original's SkillTreeGFxObject.ToggleOverviewMode; arrows and Enter do nothing there). The numbers are the
 // installed UI_SkillTree.Definitions.Gfx_SkillTree defaults (OverviewOffset.X 235, OverviewGlobalOffset.X -50,
 // OverviewScale 85); how the game combines them with the selected tree's X is not read, so the layout below is
-// a fit (UNVERIFIED) checked by eye against a third-party overview screenshot.
+// a fit (UNVERIFIED). The 2026-10-21 real capture (Maya, 1280x720) shows the three trees on a plane that recedes to the right:
+// visible panels at x 238-478 / 497-700 / 720-900 and y 170-610 / 185-595 / 198-580, every tree name shown and the footer
+// where it is outside the overview. Ruffle has no 3D, so each tree gets its own scale (x, y and scales below fitted to those boxes).
 let overview = false;
-const OVERVIEW_HINT_DROP = 15, OVERVIEW_LOCKED_ALPHA = 55; // host choices read off the overview screenshot
-const OVERVIEW = {offsetX:265, globalX:5, scale:95, y:50}; // offset/global/scale defaults are 235/-50/85; enlarged to the third-party overview screenshot (fit)
+const OVERVIEW_HINT_DROP = 0, OVERVIEW_LOCKED_ALPHA = 55;
+const OVERVIEW_POSES = [{x:-294, y:17, sx:105, sy:99}, {x:-34, y:18, sx:89, sy:92}, {x:194, y:18.5, sx:79, sy:86}];
 
 // Open-time instrumentation, the same "OWINVTIME js_<event> ..." lines inventory.js sends through the
 // console bridge. The host preloads this page hidden at level start (as it does the inventory page) and
@@ -149,7 +151,7 @@ function canSpend(target) {
 // Info box text (tools/hud_overlay/skill_info.js reproduces the traced
 // SetInfo HTML) and the footer, built from the install's own strings.
 // The real description text is a little smaller than the movie's default as scaled by the card fit (critic round 12).
-const DESCRIPTION_SIZE = 16;
+const DESCRIPTION_SIZE = 16, DESCRIPTION_LEADING = -3;
 function refreshSelection() {
   if (!ready) return;
   applyInfoCard();
@@ -159,7 +161,7 @@ function refreshSelection() {
   // back to the imported font library for missing glyphs and Ruffle does not,
   // so the page selects the imported $WillowBody alias itself (as for badges).
   const face = html => `<font face="$WillowBody">${html}</font>`;
-  const description = html => `<font face="$WillowBody" size="${DESCRIPTION_SIZE}">${html}</font>`;
+  const description = html => `<textformat leading="${DESCRIPTION_LEADING}"><font face="$WillowBody" size="${DESCRIPTION_SIZE}">${html}</font></textformat>`;
   const name = selected.skill.name || '';
   call(SKILLS + '.InformationBox', 'SetInfo', name,
     description(skillInfoHtml(selected.skill, skillState(selected), data.strings)));
@@ -199,8 +201,9 @@ function toggleOverview() {
 function updateOverview(immediate = false) {
   call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
   data.branches.forEach((_, i) => {
-    const x = 15 + OVERVIEW.globalX + OVERVIEW.offsetX * (i - 1);
-    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, x, OVERVIEW.y, 0, OVERVIEW.scale, OVERVIEW.scale, 100);
+    const pose = OVERVIEW_POSES[Math.min(i, OVERVIEW_POSES.length - 1)];
+    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, pose.x, pose.y, 0, pose.sx, pose.sy, 100);
+    set(`${SKILLS}.Tree${i + 1}.TreeName`, '_visible', true);
   });
 }
 
@@ -290,6 +293,9 @@ function renderRanks() {
         // A trained skill's badge counts class-mod grades, drawn in the
         // class-mod cyan (9/5 in the maintainer's capture; colour by eye).
         const bonus = grade > 0 ? Math.max(0, Math.floor(Number(bonuses[skill.id]) || 0)) : 0;
+        // The cell symbol places a cyan `overclocked` outline on its first frame and no frame removes it, so the movie left it on
+        // every tile; the 2026-10-04 capture (no class mod) shows it on none. Shown only for a class-mod bonus (UNVERIFIED rule).
+        set(`${cell}.overclocked`, '_visible', bonus > 0);
         if (status !== 'disabled')
           setGradeText(`${cell}.points`, `${grade + bonus}/${skill.maxGrade}`, bonus ? '33ffff' : null);
       }
@@ -300,7 +306,17 @@ function renderRanks() {
   const actionState = grade >= data.actionSkill.maxGrade ? 4 : grade > 0 ? 3 : points ? 2 : 1;
   if (displayedStates.get(action) !== actionState) {
     player.ow(action, 'gotoAndStop', actionState);
-    if (data.actionSkill.icon) call(`${action}.iconContainer`, 'loadMovie', data.actionSkill.icon);
+    // The plate's iconContainer carries a pink colour transform from its "disabled" frame that no later frame clears, while the
+    // 2026-10-04 capture shows the trained portrait untinted. Past "disabled" the icon goes into an untinted sibling clip.
+    const tinted = `${action}.iconContainer`, plain = `${action}.owIcon`;
+    if (actionState > 1 && !Number.isFinite(Number(get(plain, '_x')))) {
+      call(action, 'createEmptyMovieClip', 'owIcon', 6);
+      for (const key of ['_x', '_y', '_xscale', '_yscale']) set(plain, key, get(tinted, key));
+    }
+    const target = actionState > 1 ? plain : tinted;
+    set(tinted, '_visible', target === tinted);
+    if (Number.isFinite(Number(get(plain, '_x')))) set(plain, '_visible', target === plain);
+    if (data.actionSkill.icon) call(target, 'loadMovie', data.actionSkill.icon);
     displayedStates.set(action, actionState);
   }
   if (grade || points) setGradeText(`${action}.points`, `${grade}/${data.actionSkill.maxGrade}`);
@@ -316,6 +332,9 @@ function renderRanks() {
 // coordinates). Both constants were fitted to one real-game capture
 // (Cataclysm at 70.6% behind Harmony); they are not read from the movie.
 const PERSPECTIVE = 13200;
+// The real trees are drawn about 7% taller than wide against the movie's square scale (tree panel y 158-620 against 172-612 on
+// the 2026-10-04 capture), most likely the 3D camera's vertical foreshortening, which Ruffle does not apply. A fit (UNVERIFIED).
+const TREE_STRETCH_Y = 1.07;
 const PROJECTION = { x: -209, y: 12 };
 function branchTween(offset) {
   const x = 15 + 330 * offset, y = 17, z = -5500 * Math.abs(offset);
@@ -337,7 +356,7 @@ function updateBranch(which, immediate = false) {
   call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
   data.branches.forEach((_, i) => {
     const t = branchTween(i - selectedBranch);
-    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, t.x, t.y, 0, t.scale, t.scale, t.alpha);
+    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, t.x, t.y, 0, t.scale, t.scale * TREE_STRETCH_Y, t.alpha);
     // The tree left of the selected one has its name behind the Siren plate in the original.
     set(`${SKILLS}.Tree${i + 1}.TreeName`, '_visible', !(i < selectedBranch));
   });
@@ -464,7 +483,8 @@ function populate() {
 // at (225, 530); here it follows the card). Moves are done on the movie clips in
 // ROOT coordinates (a host fit; the original gets these from its 3D camera).
 const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:25, hintDY:56, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
-  card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106}};
+  card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106},
+  plateDX:15, plateDY:-18, plateScaleX:103, plateScaleY:128}; // the Phaselock plate's green frame is 202x72 at (576, 83) on the real frame (ours 197x56), above the taller trees (fit)
 let layoutApplied = false;
 function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
 function moveClip(path, parent, dx, dy) {
@@ -478,7 +498,19 @@ function moveClip(path, parent, dx, dy) {
 // again on every selection and when the page opens; it changes nothing once the card is within a pixel.
 const CARD_Y_STRETCH = 1.045; const PLATE_UP = 22; // the card ended at y 380 against 390 in the real frame
 let wrapperHomeY = null;
+// The movie puts the plate back at its authored place (15.85, -238.45 in the skills clip) after the layout pass, so it is set
+// absolutely here, with the card fit.
+const PLATE_HOME = {x:15.85, y:-238.45}, PLATE_DEPTH = 1040;
+function applyPlate() {
+  const scale = Number(get(SKILLS, '_xscale')) / 100 || 1, plate = `${SKILLS}.ActiveAbility`;
+  set(plate, '_x', PLATE_HOME.x + SKILLS_LAYOUT.plateDX / scale);
+  set(plate, '_y', PLATE_HOME.y + SKILLS_LAYOUT.plateDY / scale);
+  set(plate, '_xscale', SKILLS_LAYOUT.plateScaleX); set(plate, '_yscale', SKILLS_LAYOUT.plateScaleY);
+  // Drawn over the trees like the real plate, whose "1/1" badge overlaps the tree's top edge (the trees use depths 23-705).
+  if (Number(call(plate, 'getDepth')) !== PLATE_DEPTH) call(plate, 'swapDepths', PLATE_DEPTH);
+}
 function applyInfoCard() {
+  applyPlate();
   const info = `${SKILLS}.InformationBox`, wrapper = `${info}.infoWrapper`, bkgd = `${wrapper}.DescriptionBkgd`, card = SKILLS_LAYOUT.card;
   // The Siren plate is a sibling of the card (infoWrapper) inside the clip, 18-33 px lower than the real one; the card is moved down
   // inside the clip by PLATE_UP and the clip up by the same amount, so the card stays and the plate rises.

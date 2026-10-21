@@ -45,7 +45,9 @@ body.compare-wide ruffle-player,body.inspect-wide ruffle-player{-webkit-mask-ima
 #inspect-preview{position:absolute;z-index:5;inset:0;display:grid;place-items:center;--zoom:1;
  pointer-events:auto;touch-action:none;cursor:grab}
 #inspect-preview[hidden]{display:none}
-#inspect-preview .inspect-picture{display:grid;place-items:center;width:62%;height:62%;margin-top:3%;color:#c8d4d8;font:bold 18px Arial}
+/* Centred on the real Inspect frame's model (x 639, y 362): grid centring halves the margins, so these move it 56 px right
+   and puts its centre 11 px above the page centre. */
+#inspect-preview .inspect-picture{display:grid;place-items:center;width:62%;height:62%;margin:-22px 0 0 112px;color:#c8d4d8;font:bold 18px Arial}
 #inspect-preview img{grid-area:1/1;width:100%;height:100%;object-fit:contain;image-rendering:auto;
  transform:scale(var(--zoom));transform-origin:50% 50%;pointer-events:none}
 #loading{position:absolute;inset:0;display:grid;place-items:center;background:#12283d;color:white;font:20px Arial}
