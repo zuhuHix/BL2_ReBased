@@ -246,12 +246,12 @@ void AOpenWillowMayaHUD::TickInvShots()
     if (InvShotAt == 0)
     {
         InvShotAt = Now + 2.;
-        // Skills state of the real-game capture (Maya L8): Phaselock trained, three points in Mind's Eye, none left.
+        // Skills state of the 2026-10-21 matched real-game capture (Maya L36 with -owlevel=36): Phaselock trained,
+        // every other point unspent.
         if (UOpenWillowSkills* Skills = Maya->GetSkills())
         {
             FString Why;
             Skills->TrySpend(-1, -1, -1, Why);
-            for (int32 I = 0; I < 3; ++I) Skills->TrySpend(1, 0, 0, Why);
         }
         return;
     }
@@ -288,6 +288,9 @@ void AOpenWillowMayaHUD::TickInvShots()
         {TEXT("key"), TEXT("ArrowDown"), 1.2}, {TEXT("shot"), TEXT("D2g_EmptyCell"), .5},
         {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
         {TEXT("key"), TEXT("q"), 1.5}, {TEXT("shot"), TEXT("D7_SkillsOverview"), .5},
+        // Back out of the overview, then Down x4 from Phaselock: the real game lands on Harmony's Sustenance (D6b).
+        {TEXT("key"), TEXT("q"), 1.5}, {TEXT("key"), TEXT("ArrowDown"), .5}, {TEXT("key"), TEXT("ArrowDown"), .5},
+        {TEXT("key"), TEXT("ArrowDown"), .5}, {TEXT("key"), TEXT("ArrowDown"), 1.}, {TEXT("shot"), TEXT("D6b_SkillsSustenance"), .5},
         {TEXT("closeSkills"), TEXT(""), 1.5}};
     if (InvShotStep >= UE_ARRAY_COUNT(Steps))
     {
