@@ -109,7 +109,33 @@ No bounds check was relaxed: counts are still bounded by the payload, and other 
 
 ## Visual check
 
-VISUAL_RESULT
+Matched viewpoints: six real-game frames (Plan B save, 1280x720, camera read back with `so_camera`) and six host
+`-Inspect` captures at the same location, rotation and FOV (`local/sanctuary/inspection-views.json`). Host chain on
+this machine: `run_ue_level.ps1 -ImportOnly` (4,914 section actors, 0 material compile failures; saved-scene,
+collision and UV verifiers passed) then `test_ue_viewer.ps1 -Inspect` (6 views, Success). Views: town entrance,
+plaza spire, Moxxi's (star lights, tapestries), Roland's HQ map table, customization machine, bounty board.
+
+Independent critic (Codex GPT-6-Luna, given only the file paths), verbatim overall: **4.5/10**. Its top five
+differences, in its order:
+
+1. The host lacks the reference's nighttime lighting and blue, teal and warm practical-light palette across nearly
+   all six views.
+2. Important glowing details are missing or muted: Roland HQ's map table and doorway hologram, and the plaza's blue
+   and turquoise lighting.
+3. Several prominent surfaces are blank or the wrong colour: the Roland HQ table, the customization machine's side
+   panels, the start-view graffiti wall and the tapestry seating.
+4. The start view is missing its snowy mountain skyline and street character; the customization view is missing the
+   people visible outside.
+5. The tapestry star lights have oversized black rectangular backings, and the spire monument is cropped at the top
+   in the host.
+
+Reading for this lane: the object set at all six viewpoints matches (the newly placed piano area, customization
+machine, bounty board and wiring are where the game draws them); the scores are dominated by lighting and time of day,
+which this lane does not touch. Open items it surfaced that belong to materials: the map table (the documented
+remaining gap), the customization machine's side panels (the game shows a runtime instance,
+`MaterialInstanceConstant_113`, where the package has no override; not investigated), the star-light backings and the
+graffiti decals. The distant mountain behind Scooter's is missing from the host start view; its cause was not
+established in this pass. No "before" host capture was taken, so the score is not a before/after comparison.
 
 ## Ash and Southpaw re-measured
 
