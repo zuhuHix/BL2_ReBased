@@ -1027,7 +1027,7 @@ void AOpenWillowWalker::UsePhaselock()
         PhaselockTimeline = FOpenWillowPhaselockTimeline();
         PhaselockHeldUntil = Now;
         PhaselockResetAt = Now + Phaselock.ReleaseBufferTime;
-        if (ArmsAnim && PhaselockFailAnim) ArmsAnim->PlayAction(PhaselockFailAnim);
+        if (ArmsAnim && PhaselockFailAnim) ArmsAnim->PlayAction(PhaselockFailAnim, 1.f, 1.f, 0.1f, 0.1f);   // stock blends, as the hit
         HandFxAt = PhaselockFx.bLoaded ? Now + PhaselockFx.FailNotifyTime : -1.f;
         bHandFxMiss = true;
         UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya Phaselock missed (%s; cooldown resets after %.1f s)"),
@@ -1039,9 +1039,13 @@ void AOpenWillowWalker::UsePhaselock()
     // The cooldown manager holds the pool from OnSelectedTarget (the cast) to OnReleasedTarget.
     PhaselockHeldUntil = Now + PhaselockTimeline.ReleasedAt;
     PhaselockResetAt = TNumericLimits<float>::Max();
-    // Host calibration (UNVERIFIED): the cast clip plays at 0.85 speed, because the game frames show the arm dropping about
-    // 0.05-0.07 s after the host's at full speed. The hand effect starts at the clip's 0.25 s notify counted in seconds.
-    if (ArmsAnim && PhaselockAnim) ArmsAnim->PlayAction(PhaselockAnim, 1.f, 0.85f);
+    // Anim_Phaselock (SpecialMove_FirstPerson) has the GearboxAnimDefinition defaults: rate 1, blend in and out 0.1 s, ending
+    // EC_OnBlendOut; the blends are used as they are. The rate stays the round 8 calibration 0.85 (UNVERIFIED): at rate 1
+    // the host's arm still drops about 0.1 s before the game's (2026-10-21 frames: raised at 0.55 s in the game, low in the
+    // host), and the fist closes at 0.65 s in both only at 0.85. -owcastrate=<r> overrides it for comparisons. The hand
+    // effect starts at the clip's 0.25 s notify counted in seconds.
+    static const float CastRate = [] { float R = 0.85f; FParse::Value(FCommandLine::Get(), TEXT("owcastrate="), R); return R; }();
+    if (ArmsAnim && PhaselockAnim) ArmsAnim->PlayAction(PhaselockAnim, 1.f, CastRate, 0.1f, 0.1f);
     // Phase_Lock_Lift's AnimNotify_UseBehavior fires PlayPhaselockHandFXFirstPerson at its time into the clip.
     HandFxAt = PhaselockFx.bLoaded ? Now + PhaselockFx.LiftNotifyTime : -1.f;
     bHandFxMiss = false;
@@ -1163,8 +1167,13 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
         // up to the default 0.4 s clamp) does not move the effect on and each shot lands on its scheduled time.
         // (FApp's fixed time step is compiled out in this engine build.)
         if (AWorldSettings* Settings = GetWorld()->GetWorldSettings()) Settings->MaxUndilatedFrameTime = 1.f / 60.f;
+        static bool bBlurOff = false;   // Borderlands 2 draws no motion blur (UE5's smeared the lifted target)
+        if (!bBlurOff && GEngine) bBlurOff = GEngine->Exec(GetWorld(), TEXT("r.MotionBlurQuality 0"));
         if (Now < 7.f || !CombatTarget.IsValid()) return;
-        AimAt(CombatTarget->AimPoint() - FVector(0, 0, 20));
+        // The matched game capture looked level (pitch 0) at its bullymong; a stock-pawn target is large enough to be cast
+        // on that way, so the framing matches. The engine-shape dummy keeps the aim at its chest.
+        const FVector Aim = CombatTarget->AimPoint();
+        AimAt(CombatTarget->IsStockPawn() ? FVector(Aim.X, Aim.Y, Camera->GetComponentLocation().Z) : Aim - FVector(0, 0, 20));
         ++PhaselockShotStep;
     }
     else if (PhaselockShotStep == 1)
@@ -1405,6 +1414,7 @@ void AOpenWillowWalker::SpawnCombatTarget()
     Params.Owner = this;
     const FRotator Facing(0, GetControlRotation().Yaw + 180.f, 0);
     CombatTarget = GetWorld()->SpawnActor<AOpenWillowCombatTarget>(Location, Facing, Params);
+    if (CombatTarget.IsValid()) CombatTarget->UseCommandLinePawn();   // -owcombatpawn=<Id>: a stock enemy instead of the shapes
     UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target spawned at %s"), *Location.ToString());
 }
 void AOpenWillowWalker::AimAt(const FVector& Point)

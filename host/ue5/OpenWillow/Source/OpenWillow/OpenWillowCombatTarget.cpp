@@ -2,6 +2,7 @@
 #include "OpenWillowShotFx.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowTargetAnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -13,7 +14,11 @@
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -106,9 +111,12 @@ bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FStrin
     StockMesh->SetRelativeLocation(MeshOffset);
     StockMeshBaseOffset = MeshOffset;
     StockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    StockMesh->bPerBoneMotionBlur = false;   // Borderlands 2 draws no motion blur (the lift clips smeared in UE5)
+    StockMesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+    StockMesh->SetAnimInstanceClass(UOpenWillowTargetAnimInstance::StaticClass());
     StockMesh->RegisterComponent();
-    StockMesh->PlayAnimation(Idle, true);
     StockIdle = Idle;
+    PlayStock(Idle, true);
     // SpecialMove_PhaseLock plays PhaseLock_Lift/Loop/Fall/Land from the pawn's own AnimSets. The host looks for them
     // next to the imported idle clip (same name with the clip part replaced); stock data gives the slice dummy none
     // (PHASELOCK_STOCK_DATA.md), so it keeps its idle and no other pawn's clips are borrowed.
@@ -141,6 +149,54 @@ bool AOpenWillowCombatTarget::UseStockPawn(const FString& MeshPath, const FStrin
     return true;
 }
 
+void AOpenWillowCombatTarget::PlayStock(UAnimSequence* Clip, bool bLoop, float Rate, float BlendIn)
+{
+    // SpecialMove blends (GearboxAnimDefinition.PlayAnim and the special-move node, read not run): no blend when the clip's
+    // play time is shorter than the blend (the node drops blends that do not fit; the blend-out of these moves is 0).
+    if (!bLoop && Clip && Clip->GetPlayLength() / FMath::Max(Rate, KINDA_SMALL_NUMBER) < BlendIn) BlendIn = 0.f;
+    if (auto* Anim = StockMesh ? Cast<UOpenWillowTargetAnimInstance>(StockMesh->GetAnimInstance()) : nullptr)
+        Anim->Play(Clip, bLoop, Rate, BlendIn);
+}
+
+bool AOpenWillowCombatTarget::UseCommandLinePawn()
+{
+    FString Id;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("owcombatpawn="), Id) || Id.IsEmpty()) return false;
+    const FString File = FPaths::ConvertRelativePathToFull(
+        FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/phaselock/target/host_target.json")));
+    FString Text;
+    TSharedPtr<FJsonObject> Root;
+    const TSharedPtr<FJsonObject>* Entry = nullptr;
+    if (!FFileHelper::LoadFileToString(Text, *File) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root)
+        || !Root || !Root->TryGetObjectField(Id, Entry))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow target: no '%s' in %s (run tools/import_phaselock_target.ps1)"), *Id, *File);
+        return false;
+    }
+    const TSharedPtr<FJsonObject>& P = *Entry;
+    // Mesh offset: UE3 puts the mesh at the pawn's Location (the cylinder centre) plus the mesh component's Translation;
+    // this actor's origin is the floor, so the tool wrote CollisionHeight + Translation.Z.
+    if (!UseStockPawn(P->GetStringField(TEXT("mesh")), P->GetStringField(TEXT("idle")), P->GetStringField(TEXT("death")),
+            FVector(0, 0, P->GetNumberField(TEXT("mesh_offset_z")))))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow target: assets of '%s' did not load"), *Id);
+        return false;
+    }
+    StockMesh->SetRelativeScale3D(FVector(P->GetNumberField(TEXT("mesh_scale"))));
+    // The stock pawn's collision cylinder replaces the bounds-sized capsule: its centre and half height are what the
+    // lift trace uses (CollisionCentre). A UE capsule cannot be flatter than a sphere, so a cylinder wider than it is
+    // tall (the adult bullymong's 150 x 90) keeps the half height and gets the half height as its radius (host choice;
+    // the auto-aim radius is then smaller than the game's).
+    const float Radius = P->GetNumberField(TEXT("collision_radius"));
+    const float HalfHeight = P->GetNumberField(TEXT("collision_height"));
+    HitVolume->SetCapsuleSize(FMath::Min(Radius, HalfHeight), HalfHeight);
+    HitVolume->SetRelativeLocation(FVector(0, 0, HalfHeight));
+    PawnLocationAbovePivot = HalfHeight;   // the UE3 pawn's Location is its cylinder centre
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow target: stock pawn %s, mesh offset %.1f, scale %.2f, cylinder %.0f x %.0f"),
+        *Id, StockMeshBaseOffset.Z, StockMesh->GetRelativeScale3D().X, Radius, HalfHeight);
+    return true;
+}
+
 float AOpenWillowCombatTarget::PhaselockReleasedAt() const { return ReleasedAt; }
 
 float AOpenWillowCombatTarget::AutoAimRadius() const
@@ -170,7 +226,11 @@ float AOpenWillowCombatTarget::MeshBoundsRadius() const
         }
     }
     if (Override.Num() > 0) return Override[FMath::Clamp(BubbleStageNow, 0, Override.Num() - 1)] ;
-    if (StockMesh) return StockMesh->Bounds.SphereRadius;
+    // Host reading (UNVERIFIED): the game's bounds behave as if the mesh component's own Scale were not applied. The bullymong
+    // renders at its archetype Scale 0.7 (frame sizes), yet the SDK read 290 / about 230-260 / 193 uu at the three bubble
+    // spawns; the host's bounds of the unscaled mesh give 307 / 245 / 200 and of the 0.7 mesh 215 / 169 / 140. So the
+    // radius is divided by the component scale (1 for the slice dummy).
+    if (StockMesh) return StockMesh->Bounds.SphereRadius / FMath::Max(StockMesh->GetRelativeScale3D().X, KINDA_SMALL_NUMBER);
     FBoxSphereBounds Bounds = Post->Bounds;
     Bounds = Bounds + Torso->Bounds;
     Bounds = Bounds + Head->Bounds;
@@ -413,7 +473,7 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
     }
     if (StockMesh && LiftClip)
     {
-        StockMesh->PlayAnimation(LiftClip, false);
+        PlayStock(LiftClip, false, 1.f, LiftBlendIn);
         AnimClipEndsAt = Now + LiftClip->GetPlayLength();
         AnimStage = 1;
     }
@@ -460,14 +520,30 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
             Height = BobHeight;
         }
         UpdatePresentation(Now, Held);
-        if (AnimStage == 1 && Now >= AnimClipEndsAt && StockMesh && LoopClip) { StockMesh->PlayAnimation(LoopClip, true); AnimStage = 2; }
+        if (AnimStage == 1 && Now >= AnimClipEndsAt && StockMesh && LoopClip) { PlayStock(LoopClip, true, 1.f, MoveBlendIn); AnimStage = 2; }
         // UpdateLiftedPawnMeshOffset (script, read not run; NATIVE_PHASELOCK_PRESENTATION.md): after the snap part of the
         // lift the mesh is moved in Z so that its bounds centre sits on the pawn's location, eased by VInterpTo speed 5.
         if (StockMesh && Held > Lock.LiftDuration * Lock.SnapTimePct)
         {
-            const float Wanted = Pivot->GetComponentLocation().Z - (StockMesh->Bounds.Origin.Z - MeshExtraZ);
+            // The script centres Mesh.Bounds, which UE3 takes from the stock physics asset. The host's mesh has UE5's
+            // auto-generated physics asset, whose bounds sat 60-80 uu below the visible bullymong (2026-10-21 captures), so
+            // the host centres the box around the bones instead (host stand-in, UNVERIFIED). The root bone is left out: it
+            // carries no skin and stays at the mesh origin (the feet) while the lifted pose curls up.
+            FBox Bones(ForceInit);
+            for (int32 Bone = 0; Bone < StockMesh->GetNumBones(); ++Bone)
+            {
+                const FName Name = StockMesh->GetBoneName(Bone);
+                if (!StockMesh->GetParentBone(Name).IsNone()) Bones += StockMesh->GetBoneLocation(Name);
+            }
+            const float CentreZ = Bones.IsValid ? float(Bones.GetCenter().Z) : float(StockMesh->Bounds.Origin.Z);
+            const float Wanted = Pivot->GetComponentLocation().Z + PawnLocationAbovePivot - (CentreZ - MeshExtraZ);
             MeshExtraZ += (Wanted - MeshExtraZ) * FMath::Clamp(5.f * DeltaSeconds, 0.f, 1.f);
             StockMesh->SetRelativeLocation(StockMeshBaseOffset + FVector(0, 0, MeshExtraZ));
+            if (FMath::FloorToInt(Held * 2.f) != FMath::FloorToInt((Held - DeltaSeconds) * 2.f))
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow lifted mesh at %.2f s: pivot %.1f, pawn location %.1f, bone box centre %.1f, bounds centre %.1f (r %.1f), extra %.1f, bubble %.1f"),
+                    Held, Pivot->GetComponentLocation().Z, Pivot->GetComponentLocation().Z + PawnLocationAbovePivot,
+                    CentreZ, StockMesh->Bounds.Origin.Z, StockMesh->Bounds.SphereRadius, MeshExtraZ,
+                    BubbleLoop ? BubbleLoop->GetComponentLocation().Z : (BubbleIntro ? BubbleIntro->GetComponentLocation().Z : 0.f));
         }
         // The script moves the lifted pawn without rotating it; only hit wobble remains.
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
@@ -488,11 +564,10 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
             // DropTarget: the drop clip stretched to DropTime, else the loop is stopped (idle).
             if (StockMesh && FallClip)
             {
-                StockMesh->PlayAnimation(FallClip, false);
-                StockMesh->SetPlayRate(FallClip->GetPlayLength() / FMath::Max(Lock.DropTime, KINDA_SMALL_NUMBER));
+                PlayStock(FallClip, false, FallClip->GetPlayLength() / FMath::Max(Lock.DropTime, KINDA_SMALL_NUMBER), MoveBlendIn);
                 AnimStage = 3;
             }
-            else if (StockMesh && AnimStage != 0) { StockMesh->PlayAnimation(StockIdle, true); AnimStage = 0; }
+            else if (StockMesh && AnimStage != 0) { PlayStock(StockIdle, true); AnimStage = 0; }
             UE_LOG(LogTemp, Display, TEXT("OpenWillow Phaselock released %s after %.2f s"), *GetName(), Held);
         }
     }
@@ -518,11 +593,10 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     // CheckLandTarget: the land clip once the pawn is down again, then idle.
     if (AnimStage == 3 && Height <= 0.f && StockMesh)
     {
-        StockMesh->SetPlayRate(1.f);
-        if (LandClip) { StockMesh->PlayAnimation(LandClip, false); AnimClipEndsAt = Now + LandClip->GetPlayLength(); AnimStage = 4; }
-        else { StockMesh->PlayAnimation(StockIdle, true); AnimStage = 0; }
+        if (LandClip) { PlayStock(LandClip, false, 1.f, MoveBlendIn); AnimClipEndsAt = Now + LandClip->GetPlayLength(); AnimStage = 4; }
+        else { PlayStock(StockIdle, true); AnimStage = 0; }
     }
-    if (AnimStage == 4 && Now >= AnimClipEndsAt && StockMesh) { StockMesh->PlayAnimation(StockIdle, true); AnimStage = 0; }
+    if (AnimStage == 4 && Now >= AnimClipEndsAt && StockMesh) { PlayStock(StockIdle, true); AnimStage = 0; }
     // Finished bubble templates are removed (the intro and end emitters have no life span of their own here).
     if (BubbleIntro && BubbleIntro->IsFinished()) { BubbleIntro->DestroyComponent(); BubbleIntro = nullptr; }
     if (BubbleOutro && BubbleOutro->IsFinished()) { BubbleOutro->DestroyComponent(); BubbleOutro = nullptr; }
@@ -567,7 +641,7 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         DiedAt = Now;
         ClearPresentation();
         SetActorEnableCollision(false);
-        if (StockMesh && StockDeath) StockMesh->PlayAnimation(StockDeath, false);
+        if (StockMesh && StockDeath) PlayStock(StockDeath, false);
         AOpenWillowShotFx::Flash(GetWorld(), AimPoint(), FLinearColor(1.f, 0.55f, 0.2f), 70.f, 0.25f, 4000.f);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnSeconds);
     }

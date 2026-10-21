@@ -694,13 +694,14 @@ return float4(min(4.0, a * Col.rgb), saturate(a * Col.a) * saturate((SD - PD) / 
 
 # Mat_SirenGlowMOD (modulate, overbright): the scene is multiplied by 1 + min(3, soft fade over 16 x particle alpha x a
 # mirrored soft mask at twice the UV x particle colour). UE5 draws modulate after the translucent layers, not in emitter
-# order. Host calibration (UNVERIFIED): the overbright is scaled by 0.4, because at 0.55 s the host's whole street is washed
-# out while the game frame keeps its contrast (the game's wash comes at 0.72 s).
+# order. Host calibration (UNVERIFIED): the overbright is scaled by Overbright, 0.4 by default, because at 0.55 s the host's
+# whole street is washed out while the game frame keeps its contrast; the bubble intro's flashes, which make the game's wash
+# at 0.72 s, set their own value per emitter (OpenWillowPhaselockFx.cpp EmitterScalars).
 exact('Mat_SirenGlowMOD', 'mod', ['EnergyOrbSoftMod_Dif_Mirror'], r"""
 float g = Texture2DSample(T0, T0Sampler, 2.0 * UV).r;
 float3 boost = min(3.0, saturate((SD - PD) / 16.0) * Col.a * g * Col.rgb);
-return float4(1.0 + 0.4 * boost, 1.0);
-""")
+return float4(1.0 + Overbright * boost, 1.0);
+""", params=(('Overbright', 0.4),))
 
 
 def exact_material(name):
