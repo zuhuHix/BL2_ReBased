@@ -133,7 +133,7 @@ const FUN_STATS_OVERLAP = 6;
 const ARROW_VALUE_GAP = 2;
 // Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
 const CARD_TEXT_SIZE = 16;
-const HEADER_SHRINK = 0.93, HINT_LIFT = 8, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint text centred near y 657 like the real line (its slant averages 653-661), plate 3 low
+const HEADER_SHRINK = 0.93, HINT_LIFT = 2, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint text 6 px lower than round 16 (critic round 18: host 656-672, real 662-678), plate 3 low
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
@@ -929,7 +929,9 @@ function fitFunStats(card, hasFunStats) {
 // 0.896 on the host captures): the visible frame widths wanted are 307, 273, 253 and 292.
 const FRAME_INSET = 0.896;
 const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
-const CARD_FIT = {single:fitTarget(307, 215, 112), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
+// single: 6 px left and 15 px up from the round-15 fit, after the round-18 frames with the 3D turn (frame corner 218, 123 against
+// 212, 108 on the real equipped view).
+const CARD_FIT = {single:fitTarget(307, 209, 97), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
   inspect:fitTarget(285, 55, 44)};  // the level strip sits about 14 px above the frame's clip, so the frame is at 44 for a strip at 30
 function fitCard(card, target) {
   const bounds = readBounds(card + '.bkgd');

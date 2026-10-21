@@ -1236,3 +1236,28 @@ game draws it far behind at `_z` -22000 with a blend that brightens the world, w
 Critic (fresh instance): **7.67/10** on the 11 pairs, 7.65 over 13 (compare views 8.0, Skills 7.9, Inspect 7.0, empty cell 7.4). Its top items:
 the glass field, the Inspect backdrop, the card about 15 px low, the hint line about 6 px high. Suite **49 PASS / 0 FAIL / 0 NOT_RUN /
 0 KNOWN_DIVERGENCE** after the report fix (47 / 2 / 0 / 0 before it); navigation 30/30.
+
+### Round 19
+
+- **Inspect backdrop**: our own drawing after the real Inspect frames: grey light from the top centre (sampled 84 there, 55 in the top
+  corners, 30 in the bottom ones; ours within 4 grey levels at eight sample points), soft concentric bands about 85 px apart and a faint
+  6 px grid. The game's circular emblem is not drawn.
+- **Card anchor**: the single card's frame corner moved 6 px left and 15 px up (now 210, 108 against 212, 108 on the real equipped view).
+- **Hint line** 6 px lower in the inventory views.
+
+Critic (fresh instance): **7.57/10** on the 11 pairs, 7.57 over 13 (Inspect 7.6 from 7.0, Skills 8.1, overview 7.9). Pairs that did not change
+moved by up to 0.6 between the round-18 and round-19 critics, so 7.67 against 7.57 is within the reviewers' spread, not a regression we can
+point at. Suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE**.
+
+### Where rounds 16-19 leave the pages
+
+Critic means on the same 11 pairs: baseline 7.27, round 16 6.85, round 17 7.21, round 18 7.67, round 19 7.57 (each a different reviewer
+instance). The 8/10 target is not reached. Open, in the order the last critics ranked them:
+
+1. The curved cyan glass sheet (the movie's `ring` clip, drawn by the game far behind with a brightening blend) and the panels' edge
+   bloom. A transparent page composited over the UE viewport cannot brighten the world; this needs host compositing or a drawn stand-in.
+2. Residual perspective: the real panel's left edge leans about 16 px over its height; a turn about the vertical axis cannot lean
+   vertical edges, so the game's camera likely also pitches or uses a different projection (not read; UNVERIFIED).
+3. The focus view scrolls an empty-cell selection one row higher than the real list does; tab strip about 10 px left; ammo and count
+   plates a few pixels off.
+4. Cards: no flavour lines; a red frame and red level strip for items above the player's level are not reproduced.
