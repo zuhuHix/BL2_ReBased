@@ -109,6 +109,20 @@ class Volumes(unittest.TestCase):
         apply_live_state(volumes, {'L:TheWorld.PersistentLevel.D_0': {'collide': False, 'block': True}})
         self.assertEqual([v['status'] for v in volumes], ['non_blocking', 'dynamic_unobserved'])
 
+    def test_dynamic_volume_serialized_off_but_live_on(self):
+        # Kismet can switch on a volume whose serialized flags are off: keep its brush and let the
+        # running game's state decide.
+        r = volume_record('Engine.DynamicBlockingVolume', {'Location': dict(X=0,Y=0,Z=0), 'bCollideActors': False},
+                          self.component(), dict(self.DEFAULTS, bEnabled=True))
+        self.assertEqual((r['blocks_players'], r['status'], len(r['hulls'])), (False, 'dynamic_unobserved', 1))
+        volumes = [dict(r, level='L', source='TheWorld.PersistentLevel.D_0')]
+        apply_live_state(volumes, {'L:TheWorld.PersistentLevel.D_0': {'collide': True, 'block': True}})
+        self.assertEqual((volumes[0]['status'], len(volumes[0]['hulls'])), ('blocking', 1))
+        # A static volume keeps its serialized state: off stays off, without geometry.
+        s = volume_record('Engine.BlockingVolume', {'Location': dict(X=0,Y=0,Z=0), 'bCollideActors': False},
+                          self.component(), self.DEFAULTS)
+        self.assertEqual((s['status'], s['hulls']), ('non_blocking', []))
+
     def test_live_observations(self):
         dump = {'volumes': [{'path': 'L.TheWorld:PersistentLevel.B_0', 'bCollideActors': True, 'bBlockActors': True,
                              'component': {'CollideActors': True, 'BlockActors': True, 'BlockZeroExtent': False,

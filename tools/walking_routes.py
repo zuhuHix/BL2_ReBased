@@ -151,14 +151,20 @@ def summarize(rows, points, radius=42.0):
 
 def routes(probes, trace_dir, capture):
     radius = float(capture.get('cylinder', {}).get('radius', 42.0))
-    result = []
+    result, missing = [], []
     for probe in probes:
         trace = Path(trace_dir) / (probe['name'] + '.jsonl')
-        if not trace.is_file():
+        rows = ([json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines() if line.strip()]
+                if trace.is_file() else [])
+        if len(probe['points']) < 2 or not rows:
+            missing.append(probe['name'])
             continue
-        rows = [json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines() if line.strip()]
         result.append(dict(probe, original=summarize(rows, probe['points'], radius)))
-    return {'schema': 1, 'capture': capture, 'end_radius': END_RADIUS, 'routes': result}
+    # An interrupted capture must not produce a smaller manifest that still passes.
+    if missing:
+        raise ValueError('Probes without a usable trace: ' + ', '.join(missing))
+    return {'schema': 1, 'capture': capture, 'end_radius': END_RADIUS, 'expected_routes': len(result),
+            'routes': result}
 
 
 def main():
