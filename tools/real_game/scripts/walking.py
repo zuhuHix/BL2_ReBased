@@ -182,6 +182,7 @@ def walk_stop():
 def walk_dump(name):
     out = Path(RG_OUT)  # noqa: F821
     out.mkdir(parents=True, exist_ok=True)
-    data = {"info": walk_info(), "volumes": walk_volumes()}
+    # captured_at lets walking_routes.py refuse traces left over from an earlier capture.
+    data = {"info": dict(walk_info(), captured_at=time.time()), "volumes": walk_volumes()}
     (out / (name + ".json")).write_text(json.dumps(data, indent=1), encoding="utf-8")
     return {"volumes": len(data["volumes"]), "pawn": data["info"]["class"]}

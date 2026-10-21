@@ -104,8 +104,11 @@ This section records rules, counts and pass/fail only.
   multi-ramp flights and switchbacks and one open-ground walk from the player start, 35 in all. The running game walks
   each with a steering autopilot (view yaw set every frame, forward key held) and records the pawn every frame.
   `OpenWillow.RouteWalking` replays the same probes in the host with the same steering rule. A probe without a
-  usable trace stops `walking_routes.py routes`; the test requires the manifest's `expected_routes` and checks as
-  many volumes as `volumes-runtime.json` lists (review round 1).
+  usable trace, or a trace older than the capture's `captured_at`, stops `walking_routes.py routes`; so does a probe
+  list that differs from the committed count for the map (`EXPECTED`: Sanctuary 35 routes, 5 blocking volumes). The
+  capture clears old traces first. The test requires those committed counts and fails on zero volumes (review
+  rounds 1-2). The 2026-10-21 capture predates `captured_at`; it was backfilled from the session log's start time,
+  73 s before the first trace.
 
 ## Observed in the running game (2026-10-21, one session, Save0008 level-8 Maya in Sanctuary)
 
@@ -138,7 +141,7 @@ Automated checks:
 
 - `python tests/collision_test.py`: 10/10 (box, convex, sphere, capsule, refused scale, volume flags and defaults,
   refused transforms, dynamic volumes including serialized-off/live-on, live observations).
-  `python tests/walking_routes_test.py`: 7/7.
+  `python tests/walking_routes_test.py`: 9/9 (including truncated probe lists and stale traces).
 - CTest 10/10; `tools/verify_packages.py` 9/9 packages. No file under `src/` and no `CMakeLists.txt` change.
 - `refresh_collision.py` on Sanctuary: 304 supported bodies, 113 absent, 2 unsupported (unchanged), 509 hulls,
   0 spheres and 0 capsules on placed meshes (the 7 capsules and 1 sphere outside `PhAT` assets in the Sanctuary

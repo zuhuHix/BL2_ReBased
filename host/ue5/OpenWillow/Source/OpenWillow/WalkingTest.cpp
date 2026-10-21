@@ -311,9 +311,11 @@ private:
         }
         // A partial manifest (interrupted capture, edited file) must not pass with fewer routes.
         int32 Expected = -1;
-        if (!Json->TryGetNumberField(TEXT("expected_routes"), Expected) || Expected != Routes.Num() || Expected < 1)
+        if (!Json->TryGetNumberField(TEXT("expected_routes"), Expected) || Expected != Routes.Num() || Expected < 1
+            || !Json->TryGetNumberField(TEXT("expected_volumes"), ExpectedVolumes) || ExpectedVolumes < 1)
         {
-            Test->AddError(FString::Printf(TEXT("walk-routes.json lists %d usable routes, expected_routes %d"), Routes.Num(), Expected));
+            Test->AddError(FString::Printf(TEXT("walk-routes.json lists %d usable routes, expected_routes %d, expected_volumes %d"),
+                Routes.Num(), Expected, ExpectedVolumes));
             return false;
         }
         Test->AddInfo(FString::Printf(TEXT("Route probes: %d"), Routes.Num()));
@@ -337,13 +339,6 @@ private:
     }
     void CheckVolumes(UWorld* World, AOpenWillowWalker* Pawn)
     {
-        // The count to check comes from the same volumes-runtime.json the volumes actor reads.
-        FString Text;
-        TSharedPtr<FJsonObject> Json;
-        const FString Root = FPlatformMisc::GetEnvironmentVariable(TEXT("OPENWILLOW_SCENE"));
-        const int32 Expected = FFileHelper::LoadFileToString(Text, *FPaths::Combine(Root, TEXT("volumes-runtime.json")))
-            && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) && Json.IsValid()
-            ? Json->GetArrayField(TEXT("volumes")).Num() : -1;
         for (TActorIterator<AOpenWillowVolumes> It(World); It; ++It)
             for (UActorComponent* C : It->GetComponents())
             {
@@ -367,15 +362,17 @@ private:
                 Test->TestTrue(*FString::Printf(TEXT("%s blocks a pawn sweep and lets a line trace through"), *Volume->ComponentTags[0].ToString()),
                     Blocks && TracePasses);
             }
-        if (Expected < 0) Test->AddError(TEXT("Missing volumes-runtime.json (tools/refresh_collision.py)"));
-        else if (Expected == 0) Test->AddWarning(TEXT("volumes-runtime.json lists no blocking volumes; none checked"));
-        Test->TestEqual(TEXT("Every blocking volume in volumes-runtime.json was built and checked"), VolumesTotal, FMath::Max(Expected, 0));
+        // ExpectedVolumes is the committed count for the map (walking_routes.py EXPECTED), not the
+        // length of the generated volumes-runtime.json, so an empty or partial list fails.
+        if (VolumesTotal == 0) Test->AddError(TEXT("No blocking volume was built or checked"));
+        Test->TestEqual(TEXT("Blocking volumes built and checked match the committed count"), VolumesTotal, ExpectedVolumes);
     }
     FAutomationTestBase* Test;
     double Started, StageTime = 0, BestTime = 0, MinFeet = 0, MaxFeet = 0, MinGround = 0, EndRadius = 40;
     static constexpr double FallMargin = 30, HeightMargin = 30;
     int Stage = 0, Route = 0, Waypoint = 1, Passed = 0, Asserted = 0, NotAsserted = 0, HostReachedUnfinished = 0, Failed = 0;
     int VolumesTotal = 0, VolumesPassed = 0;
+    int32 ExpectedVolumes = -1;
     FVector Origin, Best, MinPos;
     FString CaptureSummary = TEXT("not recorded");
     TArray<double> Captured, Saved;  // radius, half-height, step, walkable Z, speed

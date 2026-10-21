@@ -36,6 +36,8 @@ try {
     "map: $map"
     if ($map -notmatch 'Sanctuary') { throw "not in Sanctuary: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
+    # Start from an empty trace folder so no probe can reuse a trace from an earlier capture.
+    Get-ChildItem (Join-Path $script:RG 'walking') -Filter *.jsonl -ErrorAction SilentlyContinue | Remove-Item
     Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/walking.py') walking 60 | Out-Null
     "dump: " + (Invoke-GamePy "print(walk_dump('walk_info'))" 60)
     Save-Shot 'walking/loaded.png' | Out-Null
