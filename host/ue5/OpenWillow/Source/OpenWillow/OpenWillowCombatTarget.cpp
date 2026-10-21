@@ -191,7 +191,9 @@ bool AOpenWillowCombatTarget::UseCommandLinePawn()
     const float HalfHeight = P->GetNumberField(TEXT("collision_height"));
     HitVolume->SetCapsuleSize(FMath::Min(Radius, HalfHeight), HalfHeight);
     HitVolume->SetRelativeLocation(FVector(0, 0, HalfHeight));
-    PawnLocationAbovePivot = HalfHeight;   // the UE3 pawn's Location is its cylinder centre
+    // The UE3 pawn's Location is its cylinder centre; the bones' box is centred centre_bias below it (observed fit, see
+    // tools/prepare_phaselock_target.py), standing in for the stock physics asset's bounds.
+    PawnLocationAbovePivot = HalfHeight - float(P->GetNumberField(TEXT("centre_bias")));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow target: stock pawn %s, mesh offset %.1f, scale %.2f, cylinder %.0f x %.0f"),
         *Id, StockMeshBaseOffset.Z, StockMesh->GetRelativeScale3D().X, Radius, HalfHeight);
     return true;

@@ -985,7 +985,9 @@ because the slice's target dummy has no `PhaseLock_*` clips. Frames: host `local
   shape (not read).
 * **Centring.** `UpdateLiftedPawnMeshOffset` centres `Mesh.Bounds` on the pawn's Location. The host had centred it on the floor-level
   pivot (90 uu low for this pawn) and UE5's auto-generated physics asset is not the stock one, so the host centres the box around the
-  bones (the skinless root excluded) on the cylinder centre. Log at 3.0 s: bone box 3001.9, pawn location 3002.2, bubble 3002.2.
+  bones (the skinless root excluded). Centred on the Location that moved the mesh 61 uu during the hold; the live pawn's
+  `Mesh.Translation.Z` moved 119.5 uu (probe below), so the box is centred 58.7 uu below the Location (`centre_bias`, a fit for this
+  pawn). Host log: mesh shift -81 at 1.0 s and -119.2 / -119.5 at 2.0 / 3.0 s; game -60 at 1.0 s and -118.5 at 2.0 s.
 * No motion blur on the stock mesh or the arms (`bPerBoneMotionBlur` off) and none in the Phaselock captures (`r.MotionBlurQuality 0`):
   Borderlands 2 has none, and UE5's smeared the hand and the rising body.
 
@@ -1001,3 +1003,38 @@ because the slice's target dummy has no `PhaseLock_*` clips. Frames: host `local
 `Mat_SirenGlowMOD`'s overbright was scaled by 0.4 for every emitter (round 7, fitted on the hand at 0.55 s). The bubble intro's
 `InitialFlash` emitters now use the shader's own value 1 (material scalar `Overbright`, set per emitter): the 0.75-0.80 s frames
 change from a faint blue tint to a pale wash close to the game's. The game's wash is already full at 0.72 s, the host's at 0.75 s.
+
+### Real-game probe (2026-10-21)
+
+`tools/real_game/scripts/phaselock_target_anim.py` on a live Adult Bullymong in Ice_P (two casts, 650 uu, camera pitched onto the
+target; ignored `local/realgame/phaselock/target_anim/`, notes and report there):
+
+* **Observed:** the skill states (lift 0.02-0.71 s, hold to 4.615 s, release to 5.72 s) match the host's timeline (0.70 / 4.60 /
+  5.70 s). The pawn's `Mesh.Translation.Z` is -102.1 at rest, -114 at 0.5 s, -162 at 1.0 s and -221.5 ± 1 through the hold, and back to
+  -102 after landing: the mesh centring is real and large (119.5 uu). The base idle sequence's weight falls from 0.94 to 0 over about
+  0.4 s after the cast and comes back over about 0.1 s after the landing, which fits the lift move's 0.4 s blend-in and the land move's
+  ending (the special-move node's own sequence players were not exposed to the sampler, so the PhaseLock clip names, rates and the fall's
+  stretch were **not** read).
+* **Mesh scale, still open:** the live component reads `Scale` 1.0 (and `Translation.Z` -107.8, not the archetype's -92). The head sits
+  105.5 uu above the root bone, which fits the unscaled skeleton in the idle clip (108-117); the hips (23 against 60-67) and the
+  hand-to-hand distance (94 against 211) fit neither scale, so the live pose was not the idle clip alone. The frame sizes and the body
+  to bubble ratio favour 0.7. The host keeps 0.7; `UNVERIFIED`.
+* Mesh bounds sphere radius in the hold: 191 (both casts), at rest 220-304 depending on the idle phase.
+* Not read: the drop clip's rate, the land clip's start, the AI hold and uncloak.
+
+### Visual review (independent critic, matched frames; scores verbatim)
+
+| Round | Frames | Bubble | Lifted target | Cast arm | Overall |
+|---|---|---|---|---|---|
+| 1 | `local/laneC/r6` (stock pawn, centring on the bones, no blur on the arms) | 6.0 | 4.5 | 7.0 | 5.8 |
+| 2 | `r8` (+ lift blend, intro overbright 1, no motion blur in captures) | 5.5 | 4.5 | 7.0 | 5.7 |
+| 3 | `r9` (+ observed hold lowering) | 5.5 | 4.5 | 6.5 | 5.5 |
+
+The 8/10 target was not reached. The critics' remaining differences, most visible first: the held bullymong shows its back
+where the game shows its front (the same clip; cause not found: the clip conversion, the lift pose or a yaw the game applies
+were not separated); the host's body still looks airborne at 0.5 s where the game's still crouches (the location curves agree
+within 10 uu, so the body's offset during the lift is the open part); the opening cyan swirl around the hand is broader than the
+game's thin wisps; the rim is a cleaner, steadier ring than the game's cloudy, flickering one; the palm orb is paler and larger.
+The pink eye under the target is the HUD's action-skill indicator (round 6), not an effect. The critics' "collapse late at 5.3 s"
+is the matched_650 reference's second lock of the same pawn (round 5); adult68 and the 2026-10-21 probe show the release
+from 4.615 s with the ring still up at 5.0 s.
