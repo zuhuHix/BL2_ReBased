@@ -333,7 +333,10 @@ for name, definition in scene['materials'].items():
             else:
                 assert isinstance(visible, unreal.MaterialExpressionConstant3Vector)
                 value = visible.get_editor_property('constant')
-                close([value.r, value.g, value.b], definition.get('constant_diffuse') or [0.5, 0.5, 0.5], 1e-6)
+                # Same neutral as import_level.py: white (no change) for Modulate.
+                neutral = ([1.0, 1.0, 1.0] if definition.get('blend_mode') == 'BLEND_Modulate'
+                           else [0.5, 0.5, 0.5])
+                close([value.r, value.g, value.b], definition.get('constant_diffuse') or neutral, 1e-6)
         verified_unlit_materials.append(name)
     for channel, filename in definition['channels'].items():
         if not filename:
