@@ -103,8 +103,9 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   origin and the compare and Skills layout (critic 7.3/10); rounds 12-15 the selection band, focus-view extents,
   list height, compare hints and frames and the Skills plate (each preferred over the previous round in a blind A/B;
   round 15 about 7.4/10).
-  Open: the perspective tilt and glass sheen (3D transforms Ruffle ignores), selectable empty
-  backpack cells, gear compare (not yet observed in the real game), white flavour lines on cards.
+  Rounds 16-19 (2026-10-21) apply the movie's own 3D turn (`menu3d.js`), make empty backpack cells selectable and follow
+  fresh real-game captures (critic 7.27 before, 7.57-7.67 after). Open: the curved glass sheet, residual perspective,
+  gear compare (not yet observed in the real game), white flavour lines on cards.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
