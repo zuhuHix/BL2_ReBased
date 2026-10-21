@@ -299,7 +299,11 @@ for name, definition in scene['materials'].items():
     if not definition['channels'].get('diffuse'):
         # A recorded constant comes from an unconnected UE3 DiffuseColor input
         # (see prepare_level.unconnected_diffuse_constant); otherwise neutral.
-        color = definition.get('constant_diffuse') or [0.5, 0.5, 0.5]
+        # Modulate multiplies the scene by this colour, so its neutral is white
+        # (no change): an unrecovered vault symbol or blood decal must not
+        # darken the wall behind it.
+        neutral = [1.0, 1.0, 1.0] if blend_name == 'BLEND_Modulate' else [0.5, 0.5, 0.5]
+        color = definition.get('constant_diffuse') or neutral
         fallback = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
         fallback.set_editor_property('constant', unreal.LinearColor(color[0], color[1], color[2], 1))
         mel.connect_material_property(fallback, '', unreal.MaterialProperty.MP_BASE_COLOR)

@@ -624,6 +624,112 @@ class SceneTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Missing'):
                 scene.build('A_P')
 
+    def test_owner_policy_places_wiring_and_lists_mission_previews(self):
+        class FakeScene(m.Scene):
+            def __init__(self, output):
+                self.output = output
+                self.meshes, self.materials, self.issues = {}, {}, []
+                self.data = {'Startup': {}, 'A_P': {
+                    2: {'class': 'GearboxFramework.WiringActor', 'index': 2,
+                        'path': 'TheWorld.PersistentLevel.WiringActor_0'},
+                    3: {'class': 'Engine.StaticMeshComponent', 'index': 3, 'outer': 2,
+                        'path': 'TheWorld.PersistentLevel.WiringActor_0.StaticMeshComponent_1',
+                        **record(StaticMesh={'index': 9})},
+                    4: {'class': 'WillowGame.WillowMissionPickupSpawner', 'index': 4,
+                        'path': 'TheWorld.PersistentLevel.WillowMissionPickupSpawner_0'},
+                    5: {'class': 'Engine.StaticMeshComponent', 'index': 5, 'outer': 4,
+                        'path': 'TheWorld.PersistentLevel.WillowMissionPickupSpawner_0.StaticMeshComponent_2',
+                        **record(StaticMesh={'index': 9})},
+                    6: {'class': 'WillowGame.WillowInteractiveObject', 'index': 6,
+                        'path': 'TheWorld.PersistentLevel.WillowInteractiveObject_0'},
+                    7: {'class': 'Engine.StaticMeshComponent', 'index': 7, 'outer': 6,
+                        'path': 'TheWorld.PersistentLevel.WillowInteractiveObject_0.StaticMeshComponent_3',
+                        **record(StaticMesh={'index': 9})},
+                    8: {'class': 'Engine.StaticMeshComponent', 'index': 8, 'outer': 6,
+                        'path': 'TheWorld.PersistentLevel.WillowInteractiveObject_0.StaticMeshComponent_4',
+                        **record(StaticMesh={'index': 9})},
+                    9: {'class': 'Engine.StaticMesh', 'index': 9, 'path': 'Synthetic.Mesh'}}}
+                self.owner_data = {
+                    2: tags(Location={'X': 1, 'Y': 1, 'Z': 1}),
+                    4: tags(PreviewMesh={'index': 5, 'path': 'TheWorld.PersistentLevel.'
+                                         'WillowMissionPickupSpawner_0.StaticMeshComponent_2'},
+                            Location={'X': 50})}
+
+            def load(self, name):
+                return self.data[name]
+
+            def resolve(self, package, ref):
+                return package, ref['index']
+
+            def call(self, package, *args):
+                assert args[0] == '--properties' and args[2:] == ('--property-offset', 26)
+                return {'properties': self.owner_data.get(args[1], []), 'trailing_bytes': 0}
+
+            def mesh(self, key):
+                self.meshes['synthetic_mesh'] = {'sections': [{'slot': 0, 'material': None}]}
+                return 'synthetic_mesh'
+
+        with tempfile.TemporaryDirectory() as folder:
+            scene = FakeScene(Path(folder))
+            result = scene.build('A_P')
+            self.assertEqual(result['actors'][0]['source'],
+                             'TheWorld.PersistentLevel.WiringActor_0.StaticMeshComponent_1')
+            self.assertEqual(result['actors'][0]['transform']['actor']['location'], [1, 1, 1])
+            self.assertEqual(result['excluded_components'][:1], [{
+                'level': 'A_P',
+                'source': 'TheWorld.PersistentLevel.WillowMissionPickupSpawner_0.StaticMeshComponent_2',
+                'owner_class': 'WillowGame.WillowMissionPickupSpawner', 'mesh': 'A_P:Synthetic.Mesh',
+                'reason': 'mission_item_preview_mesh'}])
+            # The interactive object is placed once; its exact duplicate is listed.
+            self.assertEqual(result['issues'], [])
+            self.assertEqual([a['source'].rsplit('.', 1)[-1] for a in result['actors']],
+                             ['StaticMeshComponent_1', 'StaticMeshComponent_3'])
+            self.assertEqual(result['excluded_components'][1]['source'].rsplit('.', 1)[-1],
+                             'StaticMeshComponent_4')
+            self.assertEqual(result['excluded_components'][1]['reason'], 'duplicate_component')
+            # A different pose is not a duplicate.
+            scene = FakeScene(Path(folder))
+            scene.data['A_P'][8] = dict(scene.data['A_P'][8], **record(StaticMesh={'index': 9},
+                                                                       Translation={'X': 5}))
+            result = scene.build('A_P')
+            self.assertEqual(len(result['actors']), 3)
+            # A spawner whose component is not its PreviewMesh stays unsupported.
+            scene = FakeScene(Path(folder))
+            scene.owner_data[4] = tags(Location={'X': 50})
+            result = scene.build('A_P')
+            self.assertEqual([e['reason'] for e in result['excluded_components']], ['duplicate_component'])
+            self.assertEqual([i['error'] for i in result['issues']], ['Unsupported component owner'])
+            # Owner properties must end exactly at the object end.
+            scene = FakeScene(Path(folder))
+            scene.call = lambda package, *args: {'properties': [], 'trailing_bytes': 4}
+            with self.assertRaisesRegex(ValueError, 'No static mesh placements'):
+                scene.build('A_P')
+            self.assertTrue(all('object end' in i['error'] for i in scene.issues))
+
+    def test_icicle_color_skips_named_glow_sampler(self):
+        scene = object.__new__(m.Scene)
+        identities = {1: 'Sanctuary_Land:Prop_Icicles.Materials.Mat_Icicles',
+                      2: 'Sanctuary_Land:Prop_Icicles.Textures.IcicleMultiple_Nrm',
+                      3: 'Sanctuary_Land:Prop_Skybox.MoveMe.Ice_Dif',
+                      4: 'Sanctuary_P:Prop_Aliens.Textures.SnowDrift_01_Dif'}
+        scene.materials, scene.issues = {}, []
+        scene.filename = lambda key, suffix: str(key[1]) + suffix
+        scene.identity = lambda key: identities[key[1]] if key[0] != 'Other' else 'Other:Mat_Icicles'
+        scene.load = lambda package: {i: {'class': 'Engine.Texture2D'} for i in (2, 3, 4)}
+        scene.material_metadata = lambda key: {}
+        scene.material_parameters = lambda key: {'normal': (key[0], 2)}
+        scene.texture = lambda key, channel: str(key[1]) + '.png'
+        scene.cooked_material_textures = lambda key: (key, [(key[0], i) for i in (2, 3, 4)], 80)
+        scene.material(('Sanctuary_Land', 1))
+        material = scene.materials['1']
+        self.assertEqual(material['channels'], {'diffuse': '4.png', 'normal': '2.png'})
+        self.assertEqual(material['diffuse_inference_method'], 'icicle_color_fallback_v1')
+        self.assertIn('P_InternalGlowTexture (Ice_Dif) tinted by P_InternalGlowColor',
+                      material['surface_approximation']['omitted'])
+        scene.materials.clear()
+        scene.material(('Other', 1))
+        self.assertNotIn('diffuse', scene.materials['1']['channels'])
+
     def sky_scene(self, records):
         scene = object.__new__(m.Scene)
         scene.load = lambda package: records
