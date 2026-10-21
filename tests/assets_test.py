@@ -11,7 +11,7 @@ import zlib
 reader = str(Path(sys.argv[1]).resolve())
 names = ['None', 'Texture2D', 'StaticMesh', 'Class', 'Probe', 'Format', 'ByteProperty',
          'EPixelFormat', 'PF_DXT1', 'PF_DXT5', 'TextureFileCacheName', 'NameProperty', 'TestCache', 'PF_A8R8G8B8', 'PF_G8',
-         'TerrainWeightMapTexture', 'PF_Unknown']
+         'TerrainWeightMapTexture', 'PF_Unknown', 'WiringMesh']
 def words(*v): return struct.pack('<' + 'I' * len(v), *v)
 def fname(s): return words(names.index(s), 0)
 def tag(name, kind, value, extra=b''):
@@ -59,7 +59,7 @@ def png_pixels(path, width=4, height=4):
     stride = width * 4 + 1
     assert len(rows) == height * stride and all(rows[y*stride] == 0 for y in range(height))
     return b''.join(rows[y*stride+1:(y+1)*stride] for y in range(height))
-def mesh(bad_index=False, full=False):
+def mesh(bad_index=False, full=False, colors=0, bulk=None):
     native = bytes(28+4+24) + words(6,0,8,0,18,0,0,0,1)
     native += words(0,0,0,0,1)  # empty source bulk, one section
     native += words(0,0,0,1,0,1,0,2,0,0) + b'\0'
@@ -68,7 +68,11 @@ def mesh(bad_index=False, full=False):
     native += words(1,stride,3,int(full),stride,3)
     for u,v in [(0,0),(1,0),(0,1)]:
         native += bytes([255,128,128,255,128,128,255,255]) + struct.pack('<2f' if full else '<2e',u,v)
-    native += words(0,0,3,2,3) + struct.pack('<3H',0,1,9 if bad_index else 2)
+    if colors:
+        native += words(4,colors,4,colors if bulk is None else bulk) + bytes(range(4*colors))
+    else:
+        native += words(0,0)
+    native += words(3,2,3) + struct.pack('<3H',0,1,9 if bad_index else 2)
     return words(0) + fname('None') + native
 
 with tempfile.TemporaryDirectory() as folder:
@@ -184,6 +188,19 @@ with tempfile.TemporaryDirectory() as folder:
         obj = output.read_text()
         assert 'v 100 0 0\n' in obj and 'vt 0 0\n' in obj and 'f 1/1/1 2/2/2 3/3/3\n' in obj
     assert run('StaticMesh',mesh(True),'--mesh').returncode != 0
+    # Colour buffers: one entry per vertex, or exactly twice that (observed on 27
+    # base-game meshes); the extra entries are skipped. Anything else fails.
+    for colors in [3, 6]:
+        result = run('StaticMesh',mesh(colors=colors),'--mesh')
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)['vertices'] == 3
+    for colors, bulk in [(5, None), (9, None), (6, 3)]:
+        result = run('StaticMesh',mesh(colors=colors,bulk=bulk),'--mesh')
+        assert result.returncode != 0 and 'color' in result.stderr, result.stderr
+    # GearboxFramework.WiringMesh is read with the StaticMesh layout.
+    result = run('WiringMesh',mesh(),'--mesh')
+    assert result.returncode == 0, result.stderr
+    assert run('Texture2D',mesh(),'--mesh').returncode != 0
     for end in range(0,len(mesh()),7):
         assert run('StaticMesh',mesh()[:end],'--mesh').returncode != 0
     def mesh_variant(index_width=4, lod_count=2):

@@ -152,6 +152,47 @@ MATINEE_FIRST_KEY_TRANSLATION = [16551, -171794, -164]
 MATINEE_FIRST_KEY_ROTATION = [0, 78.75, 0]
 
 
+# Actor classes whose StaticMeshComponents are placed like a StaticMeshActor's:
+# actor pose times component pose, with the same hidden-flag rules. Classes
+# other than the two engine ones are not in the bulk scene records; their
+# properties are read per owner (see Scene.owner_properties).
+PLACED_OWNER_CLASSES = ('Engine.StaticMeshActor', 'Engine.InterpActor',
+                        # One generated cable mesh in Sanctuary_P (a WiringMesh,
+                        # read as a StaticMesh; see DECISIONS 2026-10-21).
+                        'GearboxFramework.WiringActor',
+                        # Interactive objects (vault symbols, piano, bounty board,
+                        # customization machine...). In the running game at Plan B
+                        # each of these components was attached and not hidden, with
+                        # the package's mesh and relative pose. Their visibility is
+                        # mission/challenge state that is not interpreted here.
+                        'WillowGame.WillowInteractiveObject')
+# Owner classes whose actors may serialize the same component twice. The five
+# Sanctuary vault-symbol actors each carry two identical planes, and the running
+# game attaches one; the second exact copy is listed, not placed.
+DEDUPLICATED_OWNER_CLASSES = ('WillowGame.WillowInteractiveObject',)
+# Owners whose StaticMeshComponent is not what the game draws. They are listed
+# in the manifest's excluded_components with the reason, not placed.
+EXCLUDED_OWNER_CLASSES = {
+    # Each spawner and failsafe serializes its component as `PreviewMesh` next
+    # to a MissionItemDef: an editor preview of the mission item, which the
+    # game spawns as a pickup only when the mission state asks for it.
+    'WillowGame.WillowMissionPickupSpawner': 'mission_item_preview_mesh',
+    'WillowGame.WillowMissionPickupFailsafe': 'mission_item_preview_mesh',
+}
+
+
+def owner_disposition(owner_class, owner_props, component_path):
+    """Return 'placed', an exclusion reason, or None for an unsupported owner."""
+    if owner_class in PLACED_OWNER_CLASSES:
+        return 'placed'
+    reason = EXCLUDED_OWNER_CLASSES.get(owner_class)
+    if reason == 'mission_item_preview_mesh':
+        preview = owner_props.get('PreviewMesh')
+        if not (isinstance(preview, dict) and preview.get('path') == component_path):
+            return None
+    return reason
+
+
 def placement_collision(level, source, component_props):
     """Return whether a placed component blocks the host walker."""
     if (level, source) in LANDED_INACTIVE_COLLISION:
@@ -299,6 +340,51 @@ INSPECTED_COLOR_FALLBACKS = {
         'normal': 'Sanctuary_P:Prop_Rocks_02.Textures.WasteLandRock_Nrm',
         'omitted': ['SnowDrift_01_Dif blend', 'UV modulation'],
         'issue': 'Approximation: inspected DirtySnow_Dif texture used as snow color; snow blend not reconstructed'},
+    # Sanctuary_Land's remaining opaque gaps (2026-10-21), read the same way.
+    # The icicles' Ice_Dif is not their color: it is the named
+    # P_InternalGlowTexture (tinted by P_InternalGlowColor) and the cube is
+    # P_SimpleReflect, so the one remaining unnamed _Dif, SnowDrift_01_Dif,
+    # is used as the body.
+    'Sanctuary_Land:Prop_Icicles.Materials.Mat_Icicles': {
+        'method': 'icicle_color_fallback_v1', 'label': 'Icicle', 'noun': 'ice',
+        'color': 'Sanctuary_P:Prop_Aliens.Textures.SnowDrift_01_Dif',
+        'normal': 'Sanctuary_Land:Prop_Icicles.Textures.IcicleMultiple_Nrm',
+        'omitted': ['P_InternalGlowTexture (Ice_Dif) tinted by P_InternalGlowColor',
+                    'P_SimpleReflect cube reflection', 'UV modulation'],
+        'issue': 'Approximation: unnamed SnowDrift_01_Dif used as icicle color; named internal glow (Ice_Dif) and reflection not reconstructed'},
+    # Distant snow fields: the same DirtySnow_Dif reading as Mat_PatchySnow;
+    # both carry C1/C2 tint vectors and a fresnel colour that are omitted.
+    'Sanctuary_Land:Env_TundraExpress.Materials.Mat_PatchySnow_Skybox01': {
+        'method': 'distant_patchy_snow_color_fallback_v1', 'label': 'Distant-patchy-snow', 'noun': 'snow',
+        'color': 'Sanctuary_P:Prop_Terrain.Textures.DirtySnow_Dif',
+        'normal': 'Sanctuary_P:Prop_Rocks_02.Textures.WasteLandRock_Nrm',
+        'omitted': ['WaterHqNoise_Gray masked blend with SnowDrift_01_Dif / SlateGravel_Dif',
+                    'C1/C2 tint vectors', 'P_FresnelColor', 'UV modulation'],
+        'issue': 'Approximation: inspected DirtySnow_Dif texture used as distant snow color; masked snow/gravel blend and tints not reconstructed'},
+    'Sanctuary_Land:Env_Ice.Materials.Mat_DirtySnowDistant': {
+        'method': 'distant_dirty_snow_color_fallback_v1', 'label': 'Distant-dirty-snow', 'noun': 'snow',
+        'color': 'Sanctuary_P:Prop_Terrain.Textures.DirtySnow_Dif',
+        'normal': 'Sanctuary_P:Prop_Rocks_02.Textures.WasteLandRock_Nrm',
+        'omitted': ['SnowDrift_01_Dif blend', 'C1/C2 tint vectors', 'P_FresnelColor', 'UV modulation'],
+        'issue': 'Approximation: inspected DirtySnow_Dif texture used as distant snow color; snow blend and tints not reconstructed'},
+    # Skybox mountains: no named samplers survive. SkyboxMountain_Dif is a
+    # rock-and-snow photo; SkyboxMountainSnow_Dif is mostly white and reads
+    # as the snow layer whose blend is not recovered.
+    'Sanctuary_Land:Prop_Glacier.Materials.Mat_MountainDistant': {
+        'method': 'distant_mountain_color_fallback_v1', 'label': 'Distant-mountain', 'noun': 'mountain',
+        'color': 'Sanctuary_Land:Prop_Skybox.Textures.SkyboxMountain_Dif',
+        'normal': None,
+        'omitted': ['SkyboxMountainSnow_Dif snow layer blend', 'UV modulation'],
+        'issue': 'Approximation: inspected SkyboxMountain_Dif texture used as mountain color; snow layer blend not reconstructed'},
+    # Roland's HQ chemical tank: the tank's own atlas next to a smoke overlay
+    # _Dif; the cube is the named P_SimpleReflect.
+    'Sanctuary_P:Prop_Tanks.Materials.Mat_ChemTank02': {
+        'method': 'chem_tank_color_fallback_v1', 'label': 'Chem-tank', 'noun': 'tank',
+        'color': 'Sanctuary_P:Prop_Tanks.Textures.ChemTank02_Dif',
+        'normal': None,
+        'omitted': ['ChemTank02_Comp packed mask', 'Transmission/Fresnel/Tube/Spec/EmissColorA/B vectors',
+                    'P_SimpleReflect cube reflection', 'Smoke2_GP_Dif overlay'],
+        'issue': 'Approximation: inspected ChemTank02_Dif texture used as tank color; packed mask, tints, reflection and smoke overlay not reconstructed'},
 }
 
 # Inspected Unlit materials whose visible color is scaled by a named vector
@@ -772,6 +858,24 @@ class Scene:
 
     def issue(self, context, error):
         self.issues.append({'object': context, 'error': str(error)})
+
+    def owner_properties(self, level, owner):
+        """Decoded properties of a component's owning actor.
+
+        The bulk scene records decode only engine placement classes. Other
+        owners are read on demand with the same observed 26-byte actor prefix,
+        and must decode to their exact end (no trailing bytes).
+        """
+        if 'data' in owner or 'error' in owner:
+            return props(owner)
+        cache = self.__dict__.setdefault('_owner_properties', {})
+        key = (level, owner['index'])
+        if key not in cache:
+            data = self.call(level, '--properties', owner['index'], '--property-offset', 26)
+            if data.get('trailing_bytes') != 0:
+                raise ValueError('Owner properties do not end at the object end')
+            cache[key] = values(data.get('properties', []))
+        return cache[key]
 
     def material_parameters(self, key, stack=()):
         if key in stack or len(stack) >= 32:
@@ -1298,7 +1402,7 @@ class Scene:
     def build(self, persistent):
         self.load('Startup')
         levels = self.levels(persistent)
-        actors, camera = [], None
+        actors, camera, excluded, owner_components = [], None, [], set()
         matinee_first_key_applied = 0
         matinee_first_key = getattr(self, 'matinee_first_key', False)
         for level in levels:
@@ -1329,12 +1433,30 @@ class Scene:
                     pose = placements.get(record['index'])
                     if pose is not None:
                         pose = dict(pose, scale=collection_scale(p, pose['scale']))
+                    owner = records.get(record['outer'])
+                    owner_props = {}
                     if pose is None:
-                        owner = records.get(record['outer'])
-                        if not owner or owner['class'] not in ('Engine.StaticMeshActor', 'Engine.InterpActor'):
+                        if owner is None:
                             self.issue(level + ':' + record['path'], 'Unsupported component owner')
                             continue
-                        pose = {'actor': transform(props(owner)), 'component': transform(p, True)}
+                        owner_props = self.owner_properties(level, owner)
+                        disposition = owner_disposition(owner['class'], owner_props, record['path'])
+                        if disposition is None:
+                            self.issue(level + ':' + record['path'], 'Unsupported component owner')
+                            continue
+                        if disposition == 'placed' and owner['class'] in DEDUPLICATED_OWNER_CLASSES:
+                            signature = (level, owner['index'], key,
+                                         json.dumps(p.get('Materials', []), sort_keys=True),
+                                         json.dumps(transform(p, True)))
+                            if signature in owner_components:
+                                disposition = 'duplicate_component'
+                            owner_components.add(signature)
+                        if disposition != 'placed':
+                            excluded.append({'level': level, 'source': record['path'],
+                                             'owner_class': owner['class'],
+                                             'mesh': self.identity(key), 'reason': disposition})
+                            continue
+                        pose = {'actor': transform(owner_props), 'component': transform(p, True)}
                     if matinee_first_key:
                         pose, applied = apply_matinee_first_key_pose(record['path'], pose)
                         matinee_first_key_applied += int(applied)
@@ -1354,8 +1476,8 @@ class Scene:
                         for material_name in effective_materials:
                             if material_name in self.materials:
                                 self.materials[material_name]['two_sided'] = True
-                    owner = records.get(record['outer'])
                     source_hidden = bool(p.get('HiddenGame')) or bool(
+                        owner_props.get('bHidden') if owner_props else
                         owner and props(owner).get('bHidden'))
                     actor = {'source': record['path'], 'level': level, 'mesh': mesh_name,
                              'transform': pose, 'materials': overrides, 'static': True,
@@ -1383,6 +1505,7 @@ class Scene:
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
+                  'excluded_components': excluded,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
                   'collision_policy': 'observed_convex_and_box_v1',
                   'matinee_first_key_policy': (
@@ -1394,7 +1517,8 @@ class Scene:
         temporary = self.output / 'scene.json.tmp'
         temporary.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
         temporary.replace(self.output / 'scene.json')
-        print(json.dumps({'levels': levels, 'placements': len(actors), 'meshes': len(self.meshes),
+        print(json.dumps({'levels': levels, 'placements': len(actors), 'excluded': len(excluded),
+                          'meshes': len(self.meshes),
                           'materials': len(self.materials), 'issues': len(self.issues)}), flush=True)
         return result
 

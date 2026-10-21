@@ -932,6 +932,9 @@ lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-
 `amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
 Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials and attached meshes (hair, hats, gear);
 `amb_view_*`, `amb_cam` and `amb_aim_at` frame a pawn.
+`scripts/scene_owners.py` (`Invoke-GamePyFile ... scene_owners.py lanea`, then `so_dump('owners', [materials])`) lists the
+live components of interactive objects, mission spawners and wiring actors with their hidden flags and poses; `so_view` and
+`so_camera` place the player and read the exact view (`GetPlayerViewPoint`, FOV) for a matched host inspection viewpoint.
 
 ## Sanctuary ambient NPCs (host, behind a flag)
 
