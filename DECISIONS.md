@@ -4503,7 +4503,7 @@ AI-assisted (Claude), lane A. Details and counts: `docs/verification/SANCTUARY_S
   component on the same interactive object (`duplicate_component`; the copy must also match on `HiddenGame`, shadow and collision flags, so a visible component is never dropped for a hidden one). Confirmed in the running game (Plan B save):
   spawners and failsafes have no primitive component; every placed interactive-object component is attached, not
   hidden, with the package's mesh and relative pose; each vault-symbol actor attaches one plane, not two. Their
-  visibility in other mission or challenge states is `UNVERIFIED`.
+  visibility in other mission or challenge states is `UNVERIFIED`. The rules are not map-specific: on Ash they place 21 interactive-object components and list 17 duplicates (271 unsupported owners left, from 325), on Southpaw 4 (1 left, from 10); placement on those maps was not compared with the running game and is `UNVERIFIED`.
 - **Materials.** Five more exact `INSPECTED_COLOR_FALLBACKS` (icicles, two distant snow fields, distant mountains,
   Roland's chemical tank), each from its parameter chain, cooked list and the decoded candidates; the icicles'
   `Ice_Dif` is the named internal-glow sampler and is not used as colour. All `partial_unverified`. The spire
