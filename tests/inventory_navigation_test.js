@@ -276,4 +276,30 @@ check('Compare view outlines the cells that cannot take the compared item', () =
   run('finishTransfer(true)');
   assert.equal(run('[0,1,2,3,4,5,6,7].some(compareRefusesCell)'), false);
 });
+check('Down past the last backpack item selects the empty cells; item actions ignore them', () => {
+  // 2026-10-21 capture: the selection walks onto the trailing "(EMPTY)" cells and no card is shown.
+  run('reset(); inventoryVm.enabled = false; inventoryVm.failed = false; inventoryVm.pending = null; inventoryVm.queue.length = 0; window.owInventory({...state, backpackCapacity:15})'); // 13 backpack items, 2 empty cells
+  press('ArrowRight'); run("for(let i=0;i<12;i++) key('ArrowDown')");
+  assert.equal(selected(), 'spare');
+  press('ArrowDown'); assert.equal(selected(), 'empty:0');
+  press('ArrowDown', 'ArrowDown'); assert.equal(selected(), 'empty:1'); // stops at the last cell
+  const before = logs.length;
+  press('e', 'q', 'v', 'f');
+  assert.equal(logs.slice(before).filter(line => /^OWITEM/.test(line)).length, 0);
+  assert.equal(run('inspectMode'), false); assert.equal(run('transferSourceId'), null);
+  // A new snapshot keeps the empty selection; Left/Right come back to it.
+  run('window.owInventory({...state, money:5})'); assert.equal(selected(), 'empty:1');
+  press('ArrowLeft', 'ArrowRight'); assert.equal(selected(), 'empty:1');
+  press('ArrowUp', 'ArrowUp'); assert.equal(selected(), 'spare');
+});
+check('The VM is not asked to move onto or between empty cells', () => {
+  run("reset(); window.owInventory({...state, backpackCapacity:15}); inventoryVm.enabled = true; inventoryVm.failed = false; select('spare'); navigationPanel = 'backpack'");
+  const before = logs.length;
+  press('ArrowDown'); assert.equal(selected(), 'empty:0');
+  press('ArrowUp'); assert.equal(selected(), 'spare');
+  assert.equal(logs.slice(before).filter(line => /^OWINVMOVE/.test(line)).length, 0);
+  press('ArrowUp'); // an item-to-item move still goes to the VM
+  assert.equal(logs.slice(before).filter(line => /^OWINVMOVE/.test(line)).length, 1);
+  run('inventoryVm.enabled = false; inventoryVm.pending = null; inventoryVm.queue.length = 0');
+});
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);
