@@ -522,7 +522,9 @@ float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
 // Host calibration (UNVERIFIED): x3 on the weight (the shader's own weights give a haze several times fainter than the
 // game frames show between core and rim) and a blue-violet tint (the texture is magenta, the game's band is blue-violet).
 float weight = 3.0 * core.r * Col.a * mask * dot(centred, centred);
-float3 colour = Col.rgb * core.rgb * float3(0.3, 0.5, 1.6);
+// Round 17 fit: the previous blue multiplier 1.6 measured about 108 in the inner annulus against 86 in the game
+// (Round 14's matched capture); keep the red/green fit and reduce only blue. UNVERIFIED against a rebuilt material capture.
+float3 colour = Col.rgb * core.rgb * float3(0.3, 0.5, 1.0);
 float softFade = saturate((SD - PD) / 41.0);
 return float4(min(4.0, colour) * weight * softFade, 1.0);
 """)

@@ -715,7 +715,13 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
                     Mid->SetScalarParameterValue(FName(*Parts[2]), FCString::Atof(*Parts[3]));
             }
         }
-        if (bFirstPersonSpace) C->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+        if (bFirstPersonSpace)
+        {
+            C->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+            // Candidate UE3-to-UE5 mapping: draw this hand-space sprite above ordinary world geometry. Whether the
+            // stock first-person draw path uses this depth group, and how it interacts with depth fading, is UNVERIFIED.
+            C->SetDepthPriorityGroup(SDPG_Foreground);
+        }
         for (int32 Slot = 0; Slot < FMath::Max(1, C->GetNumMaterials()); ++Slot) C->SetMaterial(Slot, Mid);
         C->RegisterComponent();
         S.Pool.Add(C);

@@ -3,7 +3,7 @@ param(
     [string]$Out = 'local/phaselock/b2',
     [int]$TimeoutSeconds = 240,
     [int]$WaitForEditorSeconds = 900,
-    # Extra command-line switches (e.g. '-owfov=100').
+    # Extra command-line switches (e.g. '-owfov=77.55', '-owfpfov=45', '-owphaselockpitch=3.5').
     [string[]]$Extra = @()
 )
 # AI-assisted. Captures the host Phaselock presentation on Sanctuary: Maya (-owmaya) with a slice gun, the host
