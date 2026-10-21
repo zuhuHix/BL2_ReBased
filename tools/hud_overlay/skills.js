@@ -33,10 +33,11 @@ let displayedStates = new Map();
 // OverviewScale 85); how the game combines them with the selected tree's X is not read, so the layout below is
 // a fit (UNVERIFIED). The 2026-10-21 real capture (Maya, 1280x720) shows the three trees on a plane that recedes to the right:
 // visible panels at x 238-478 / 497-700 / 720-900 and y 170-610 / 185-595 / 198-580, every tree name shown and the footer
-// where it is outside the overview. Ruffle has no 3D, so each tree gets its own scale (x, y and scales below fitted to those boxes).
+// where it is outside the overview. The poses below are fitted to those boxes with the movie's 7.24-degree turn applied
+// (menu3d.js), which already makes the left tree larger; what remains is a fit for the rest of the game's 3D camera.
 let overview = false;
 const OVERVIEW_HINT_DROP = 0, OVERVIEW_LOCKED_ALPHA = 55;
-const OVERVIEW_POSES = [{x:-294, y:17, sx:105, sy:99}, {x:-34, y:18, sx:89, sy:92}, {x:194, y:18.5, sx:79, sy:86}];
+const OVERVIEW_POSES = [{x:-283, y:16, sx:98.6, sy:92.7}, {x:-31, y:17.6, sx:90, sy:89.7}, {x:206.3, y:18.7, sx:85.5, sy:86.9}];
 
 // Open-time instrumentation, the same "OWINVTIME js_<event> ..." lines inventory.js sends through the
 // console bridge. The host preloads this page hidden at level start (as it does the inventory page) and
@@ -521,7 +522,8 @@ function applyInfoCard() {
   }
   const b = boundsOf(bkgd);
   if (!b) return;
-  const boundsWidth = card.width / card.boundsShare;
+  const movieWidth = window.owMenu3d.toMovie(card.left + card.width, card.top).x - window.owMenu3d.toMovie(card.left, card.top).x;
+  const boundsWidth = movieWidth / card.boundsShare;
   if (Math.abs((b.xMax - b.xMin) - boundsWidth) > 1.5) {
     const factor = boundsWidth / (b.xMax - b.xMin);
     if (!(factor > 0.3 && factor < 4)) return;
@@ -530,8 +532,15 @@ function applyInfoCard() {
   }
   const f = boundsOf(bkgd);
   if (!f) return;
-  const dx = card.left - card.insetLeft * boundsWidth - f.xMin, dy = card.top - card.insetTop * boundsWidth - f.yMin;
+  // card.left/top/width are screen measurements; with the movie's turn applied (menu3d.js) they map back to movie points.
+  const topLeft = window.owMenu3d.toMovie(card.left, card.top);
+  const dx = topLeft.x - card.insetLeft * boundsWidth - f.xMin, dy = topLeft.y - card.insetTop * boundsWidth - f.yMin;
   if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moveClip(info, SKILLS, dx, dy);
+}
+// The movie turns the skills clip about the vertical axis (7.24 degrees, read live); the page applies it (menu3d.js) to the
+// player and the hit layer, but only after the layout pass, whose moves change the clip's position.
+function apply3d() {
+  window.owMenu3d.apply(document.body, Number(get(SKILLS, '_yrotation')) || 0, Number(get(SKILLS, '_x')), Number(get(SKILLS, '_y')));
 }
 function applySkillsLayout() {
   if (layoutApplied) return;
@@ -543,6 +552,7 @@ function applySkillsLayout() {
   if (hb) moveClip(header, ROOT, SKILLS_LAYOUT.headerCentreX - (hb.xMin + hb.xMax) / 2, SKILLS_LAYOUT.headerDY);
   moveClip(SKILLS, ROOT, SKILLS_LAYOUT.treesDX, SKILLS_LAYOUT.treesDY);
   moveClip(`${ROOT}.tooltips`, ROOT, SKILLS_LAYOUT.hintDX, SKILLS_LAYOUT.hintDY); // the real footer is at y 657, below the Siren plate
+  apply3d();
   applyInfoCard();
   setTimeout(applyInfoCard, 700); setTimeout(applyInfoCard, 1500);
 }

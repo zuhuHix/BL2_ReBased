@@ -21,6 +21,7 @@ const context = vm.createContext({console:{log:value=>logs.push(value), error(){
     querySelector:node, querySelectorAll:()=>[], addEventListener(){}, visibilityState:'visible'},
   window:{addEventListener(){}, RufflePlayer:{newest:()=>({createPlayer:()=>({
     ow(){}, ruffle:()=>({load:()=>new Promise(()=>{})})})})}}});
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/menu3d.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/inventory.js'),'utf8'),context);
 const run = code => vm.runInContext(code,context);
 run(`
@@ -301,5 +302,19 @@ check('The VM is not asked to move onto or between empty cells', () => {
   press('ArrowUp'); // an item-to-item move still goes to the VM
   assert.equal(logs.slice(before).filter(line => /^OWINVMOVE/.test(line)).length, 1);
   run('inventoryVm.enabled = false; inventoryVm.pending = null; inventoryVm.queue.length = 0');
+});
+check('The menu turn maps measured screen points back to movie points (menu3d.js)', () => {
+  // No turn: identity. An 11-degree turn about (640, 360): the centre is fixed; a point left of it is drawn further left and
+  // taller, so the movie point for a screen point at x 300 lies right of 300, and projecting it forward gives 300 again.
+  assert.deepEqual(JSON.parse(run('JSON.stringify(window.owMenu3d.toMovie(300, 200))')), {x:300, y:200});
+  run(`window.owMenu3d.apply({style:{setProperty(){}}}, 11, 640, 360)`);
+  const centre = JSON.parse(run('JSON.stringify(window.owMenu3d.toMovie(640, 360))'));
+  assert.deepEqual(centre, {x:640, y:360});
+  const m = JSON.parse(run('JSON.stringify(window.owMenu3d.toMovie(300, 200))'));
+  assert.ok(m.x > 300 && m.x < 320, `x ${m.x}`);
+  const a = 11 * Math.PI / 180, d = m.x - 640, k = 1229 / (1229 + d * Math.sin(a));
+  assert.ok(Math.abs(640 + d * Math.cos(a) * k - 300) < 1e-6 && Math.abs(360 + (m.y - 360) * k - 200) < 1e-6);
+  run('window.owMenu3d.setScale(1)'); // back to no turn for later checks
+  run(`window.owMenu3d.apply({style:{setProperty(){}}}, 0, 640, 360)`);
 });
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);
