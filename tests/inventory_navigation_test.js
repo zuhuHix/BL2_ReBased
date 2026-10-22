@@ -74,11 +74,11 @@ check('Right from a weapon slot or a right-hand gear cell enters the backpack', 
   run('reset(); selectEquipmentSlot(6)'); press('ArrowRight'); assert.equal(selected(), 'b0');
   press('ArrowRight'); assert.equal(selected(), 'b0');
 });
-check('Left in the backpack returns to the last equipped cell', () => {
+check('Left in the backpack returns to the equipped analogue, even after another slot was visited', () => {
   run('reset(); selectEquipmentSlot(7)'); press('ArrowRight', 'ArrowDown', 'ArrowDown', 'ArrowLeft');
-  assert.equal(selected(), 'relic');
+  assert.equal(selected(), 'w0');
   run('reset(); selectEquipmentSlot(2)'); press('ArrowRight', 'ArrowLeft');
-  assert.equal(selected(), 'w2');
+  assert.equal(selected(), 'w0');
 });
 check('Backpack keeps its row when re-entered and stops at the top', () => {
   run('reset()'); press('ArrowRight', 'ArrowUp'); assert.equal(selected(), 'b0');
@@ -116,7 +116,7 @@ check('Host updates refresh the occupant of the selected slot', () => {
 check('Pointer selection updates the destination and the remembered cell', () => {
   run("reset(); select('w2')"); assert.equal(run('targetSlot'), 2);
   run("select('relic')"); assert.equal(run('lastEquippedIndex'), 7);
-  press('ArrowRight', 'ArrowLeft'); assert.equal(selected(), 'relic');
+  press('ArrowRight', 'ArrowLeft'); assert.equal(selected(), 'w0');
 });
 check('Backpack-origin swap: Up/Down choose the destination, Left/Right do nothing, no wrap', () => {
   run("reset(); select('b0'); key('e')");
@@ -209,6 +209,15 @@ check('Backpack weapon compare uses the active weapon, not the last destination 
   assert.equal(run('targetSlot'), 0); // transfer starts at its compare partner
   run('finishTransfer(true)');
 });
+check('Escape then Left then E returns to the active analogue for an equipped-origin compare (D20 D4)', () => {
+  run("reset(); selectEquipmentSlot(1); select('b0'); beginBackpackTransfer()");
+  assert.equal(run('compareId'), 'w0');
+  press('Escape', 'ArrowLeft', 'e');
+  assert.equal(run('transferSourceId'), 'w0');
+  assert.equal(run('transferFromEquipped'), true);
+  assert.equal(run('equippedSelectionIndex()'), 0);
+  assert.equal(run('targetSlot'), 0);
+});
 check('Equipped-origin weapon compare keeps the selected weapon slot and a backpack candidate (D4)', () => {
   run("reset(); selectEquipmentSlot(0); beginEquippedTransfer()");
   assert.equal(run('transferSourceId'), 'w0');
@@ -222,7 +231,7 @@ check('Equipped-origin weapon compare keeps the selected weapon slot and a backp
 check('Gamepad D-pad shares keyboard navigation', () => {
   run('reset(); gamepadActions[13]()'); assert.equal(selected(), 'w1');
   run('gamepadActions[15]()'); assert.equal(selected(), 'b0');
-  run('gamepadActions[14]()'); assert.equal(selected(), 'w1');
+  run('gamepadActions[14]()'); assert.equal(selected(), 'w0');
 });
 check('Confirmed host equip moves navigation to the occupied destination', () => {
   run("reset(); select('b0'); window.owInventory({...state,slots:['w0','b0','w2','w3']})");
@@ -404,10 +413,11 @@ check('The menu turn maps measured screen points back to movie points (menu3d.js
   run(`window.owMenu3d.apply({style:{setProperty(){}}}, 0, 640, 360)`);
 });
 check('D5 Inspect fit, zoom and hint text track the measured targets (UNVERIFIED)', () => {
-  assert.equal(run('INSPECT_CARD_LEFT'), 28); // movie-space target accounts for the visible frame inset
-  assert.equal(run('INSPECT_CARD_TOP'), 43);
+  assert.equal(run('INSPECT_CARD_LEFT'), 56); // measured target inputs for the visible frame inset
+  assert.equal(run('INSPECT_CARD_TOP'), 50);
   assert.equal(run('INSPECT_ZOOM'), 1.54);
-  assert.equal(run('INSPECT_HINT_FONT_SIZE'), 14);
-  assert.equal(run('CARD_FIT.inspect.width * FRAME_INSET'), 316);
+  assert.equal(run('INSPECT_HINT_FONT_SIZE'), 12);
+  assert.equal(run('CARD_FIT.inspect.width * FRAME_INSET'), 293);
+  assert.equal(run('CARD_FIT.inspect.aspect'), 306/241);
 });
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);

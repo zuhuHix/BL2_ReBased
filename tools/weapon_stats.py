@@ -484,6 +484,29 @@ def damage_type_of(package, recipe, weapon_type):
     return weapon_type.get('DefaultDamageTypeDefinition')
 
 
+ELEMENTS_BY_DAMAGE_TYPE = {
+    'DAMAGE_TYPE_Explosive': 'Explosive',
+    'DAMAGE_TYPE_Incindiary': 'Fire',
+    'DAMAGE_TYPE_Shock': 'Shock',
+    'DAMAGE_TYPE_Corrosive': 'Corrosive',
+}
+
+
+def card_element(package, recipe, damage_type):
+    """Element badge from the resolved damage type, falling back to the part name.
+
+    Elemental_None does not remove a weapon type's default damage type. The card
+    movie accepts the same element names used by elemental parts (for example,
+    ``Explosive`` becomes the ``explosive`` icon key in the host adapter).
+    """
+    if damage_type:
+        element = ELEMENTS_BY_DAMAGE_TYPE.get(package.props(damage_type).get('DamageType'))
+        if element:
+            return element
+    elemental = recipe.get('parts', {}).get('Elemental', {}).get('part', '')
+    return elemental.rsplit('_', 1)[-1] if elemental else None
+
+
 def status_rows(package, damage_type, final, value):
     """Status-effect card rows for the weapon's damage type ({} when it applies none).
 
@@ -751,10 +774,10 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
     def stat(name):
         return final.get(ATTR + name)
     interval = stat('WeaponFireInterval')
-    elemental = recipe['parts'].get('Elemental', {}).get('part', '')
     price, price_checked = sale_value(package, recipe, weapon_type, level, unresolved)
     rarity_level, rarity_rating, rarity_color = rarity_of(package, weapon_type, parts, value)
     damage_type = damage_type_of(package, recipe, weapon_type)
+    element = card_element(package, recipe, damage_type)
     status = status_rows(package, damage_type, final, value)
     projectiles = stat('WeaponProjectilesPerShot')
     card_sources = _presentation_sources(recipe, recipe['weapon_type'], parts)
@@ -790,7 +813,7 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
         'spin_mode': weapon_type.get('BarrelSpinMode') if spin else None,
         # Cooked data omits the class default, 1 on Default__WeaponPartDefinition.
         'spin_start_interval_scale': barrel.get('StartingSpinUpFireIntervalMultiplier', 1.0) if spin else None,
-        'element': elemental.rsplit('_', 1)[-1] if elemental else None,
+        'element': element,
         # Host scale 1 Common .. 5 Legendary; rarity_level / rarity_rating / rarity_color are the game's terms.
         'rarity': rarity,
         'rarity_level': rarity_level,

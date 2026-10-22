@@ -120,6 +120,32 @@ class WeaponStatsTests(unittest.TestCase):
         objects['Status.Burn']['bDoesDamageOverTime'] = False
         self.assertIsNone(s.evaluate(FakePackage(objects), item, level=1)['card']['status_dps'])
 
+    def test_element_badge_uses_type_default_when_elemental_part_is_none(self):
+        objects = world()
+        objects['Type']['DefaultDamageTypeDefinition'] = 'Damage.Explosive'
+        objects['Damage.Explosive'] = {'DamageType': 'DAMAGE_TYPE_Explosive'}
+        objects['Element.None'] = {}
+        item = recipe()
+        item['parts']['Elemental'] = {'part': 'Element.None'}
+
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+
+        self.assertEqual(card['damage_type'], 'Damage.Explosive')
+        self.assertEqual(card['element'], 'Explosive')
+        without_elemental_part = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(without_elemental_part['element'], 'Explosive')
+
+    def test_element_badge_maps_damage_type_enum_to_existing_icon_names(self):
+        objects = world()
+        objects['Damage.Fire'] = {'DamageType': 'DAMAGE_TYPE_Incindiary'}
+        objects['Element.Fire'] = {'CustomDamageTypeDefinition': 'Damage.Fire'}
+        item = recipe()
+        item['parts']['Elemental'] = {'part': 'Element.Fire'}
+
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+
+        self.assertEqual(card['element'], 'Fire')
+
     def test_barrel_firing_mode_overrides_the_type_and_speed_scales(self):
         objects = world()
         objects['Type'].update({'DefaultFiringModeDefinition': 'Mode.Default', 'WeaponAttributeEffects': [
@@ -256,13 +282,17 @@ class CardFieldTests(unittest.TestCase):
         objects = card_world()
         objects['Prefix.Cheap'] = {'PartName': 'Cheap', 'MonetaryValueMod': 'ModC', 'WeaponAttributeEffects': [
             {'AttributeToModify': A + 'WeaponDamage', 'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0.5)}]}
-        objects.update({'ModC': {}, 'ModC.ConstantAttributeValueResolver_0': {'ConstantValue': 0.5}})
+        objects['Title.Cheap'] = {'MonetaryValueMod': 'ModD'}
+        objects.update({'ModC': {}, 'ModC.ConstantAttributeValueResolver_0': {'ConstantValue': 0.5},
+                        'ModD': {}, 'ModD.ConstantAttributeValueResolver_0': {'ConstantValue': 0.7}})
         plain = self.card(objects)
         named = self.card(objects, prefix={'part': 'Prefix.Cheap'})
+        fully_named = self.card(objects, prefix={'part': 'Prefix.Cheap'}, title={'part': 'Title.Cheap'})
         # 120 * (1 + 0.3 slot + 0.5 prefix) at level 3 vs 120 * 1.3; the value halves (1132.5 -> 566.25).
         self.assertAlmostEqual(plain['damage'], 120 * 1.3, places=3)
         self.assertAlmostEqual(named['damage'], 120 * 1.8, places=3)
         self.assertEqual((plain['sale_value'], named['sale_value']), (1132, 566))
+        self.assertEqual(fully_named['sale_value'], 396)  # both name-part modifiers multiply before truncation
 
     def test_fun_stats_uses_the_localized_override(self):
         objects = card_world()
@@ -289,6 +319,8 @@ class CardTextTests(unittest.TestCase):
         item = recipe()
         item['parts']['Sight'] = {'part': 'Sight'}
         card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        # Current model: 80 / (45 / (1 + 0.13 * 7)); resolver conversion is UNVERIFIED.
+        self.assertAlmostEqual(card['weapon_zoom'], 80.0 / (45.0 / 1.91), places=5)
         self.assertEqual(card['display']['weapon_zoom'], 3.4)
         self.assertIn('3.4x Weapon Zoom', card['fun_stats'])
         self.assertEqual(card['fun_stats_lines'], [{'text': '3.4x Weapon Zoom', 'color': '#FFFFFF'}])
