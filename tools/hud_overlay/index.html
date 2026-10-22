@@ -16,6 +16,7 @@
     skillCooldown              remaining fraction of the action-skill cooldown pool, 0 = ready
     skillIcon                  the class's HUD icon movie, e.g. "/ package/UI_HUD_AAIcons/AA-Siren"
                                (clip mapping in action_skill.js)
+    minimap                    {movie, centre, blobs, x, y, yaw, icons}: the minimap (minimap.js)
   Clip names and frame directions were observed in the Ruffle bench
   (DECISIONS.md 2026-09-26), not read from the game's scripts:
     health, shield, grenades, bullets: 100 bar frames, frame 1 full;
@@ -36,6 +37,7 @@
 <script src="action_skill.js"></script>
 <script src="hud3d.js"></script>
 <script src="hud_fields.js"></script>
+<script src="minimap.js"></script>
 </head><body>
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
@@ -86,11 +88,12 @@
         + ` icon=${call(P1 + '.character.cooldown', 'get', '_currentframe')}`;
       if (line !== lastSkillPage) { console.log(line); lastSkillPage = line; }
     }
+    if ('minimap' in s) window.owMinimap.apply(call, s.minimap);
     // The stand-in for the clusters' 3D turn (hud3d.js), once the character frame is set and the clips have had a
     // second to settle (bounds read on the boot frame came out wrong in UE); the host resends its state every second.
     if ('character' in s) characterSet = true;
-    // With the warp (hud_warp.js) the turned clips stay flat in the movie and the overlay draws their perspective;
-    // the minimap keeps the stand-in either way.
+    // With the warp (hud_warp.js) the turned clips, the minimap included, stay flat in the movie and the overlay draws
+    // their perspective; without it hud3d.js's affine stand-in turns them.
     if (!turned && characterSet && performance.now() - readyAt > 1000) {
       clipNames = String(call(P1, 'keys')).split(',').filter(Boolean);
       p1Origin = {x: Number(call(P1, 'get', '_x')), y: Number(call(P1, 'get', '_y'))};
@@ -99,9 +102,11 @@
         : {path: 'affine'};
       if (!window.owHudWarp) console.log('OpenWillow HUD 3D path affine: hud_warp.js not loaded');
       window.owHudWarpState = warp;
-      const skip = new Set(warp.path === 'warp' ? clipNames.filter(n => n !== 'minimapEcho') : []);
+      const skip = new Set(warp.path === 'warp' ? clipNames : []);
       turned = window.owHud3d.apply(call, P1, clipNames, skip);
-      console.log('OpenWillow HUD 3D turn on ' + turned.join(' ') + (warp.path === 'warp' ? ' (stand-in); warp for the rest' : ''));
+      console.log(warp.path === 'warp' ? 'OpenWillow HUD 3D turn by the warp' : 'OpenWillow HUD 3D turn on ' + turned.join(' '));
+      // Without the warp, the minimap's stand-in is placed over the panel's own extent (minimap.js placeEcho).
+      if (warp.path !== 'warp') window.owMinimap.placeEcho(call, P1, window.owHud3d);
     }
     // The warp's regions follow what the clips show. Reading them walks the turned clips' children (about 30 ms in the
     // bench), so only when the applied state changes (the host resends it every second) or every 5 s for the movie's
@@ -113,15 +118,17 @@
     const key = JSON.stringify(shown), now = performance.now();
     if (warp && warp.path === 'warp' && (key !== warpKey && now - warpReadAt > 250 || now - warpReadAt > 5000)) {
       warpKey = key; warpReadAt = now;
-      const clips = window.owHudWarp.readClips(call, P1, clipNames, p1Origin, new Set(['minimapEcho']));
-      // The minimap keeps its stand-in exactly: its drawn pixels stay in place.
-      const minimap = window.owHudWarp.drawnRect(call, P1, 'minimapEcho');
-      const regions = warp.setClips(clips, minimap ? [{name: 'minimapEcho', rect: minimap}] : []);
+      // The minimap is warped like the other clusters, over its panel's extent (minimap.js warpRect: its parked
+      // library icons would otherwise widen the region).
+      const clips = window.owMinimap.warpClips(window.owHudWarp.readClips(call, P1, clipNames, p1Origin), call, P1, p1Origin);
+      const regions = warp.setClips(clips, []);
       const names = regions.map(r => r.name).join(' ');
       if (names !== warp.names) { warp.names = names; console.log('OpenWillow HUD 3D warp regions ' + names); }
     }
   }
 
+  // The map movie's onLoadInit (minimap.js loads it through the clip's own setMapMovie) asks for the fog toggles.
+  window.extInitMinimapFogOfWar = () => window.owMinimap.initFog(call);
   // The host may call before the movie is ready; keep the latest values.
   window.owHud = state => {
     Object.assign(pending, state);

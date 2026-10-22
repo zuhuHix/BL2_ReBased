@@ -747,6 +747,11 @@ movie: `python tools/prepare_hud_icons.py --reader build/Release/ow-package.exe 
 `./tools/test_action_skill_hud.ps1 -Game $game [-SharedLock <file>]`, casts once and checks the logged state against
 the real game's timings; real-game capture: `tools/real_game/action_skill_hud_capture.ps1`, layout read:
 `tools/real_game/hud_layout_capture.ps1` (`docs/verification/ACTION_SKILL_HUD.md`).
+The minimap (`p1.minimapEcho.minimap`, `docs/verification/HUD_MINIMAP.md`) needs the level's map movie and an icon
+manifest: `python tools/prepare_minimap.py --reader build/Release/ow-package.exe --game $game` (writes
+`local/ui/run/UI_TacticalMap_Sanctuary/`, `SharedWillowTacMaps/` and `local/slice/minimap.json`; the host reads the
+manifest by default or from `-owminimap=<json>`). Its in-engine check, `./tools/test_hud_minimap.ps1 -Game $game
+[-SharedLock <file>]`, puts Maya at eight real-game capture spots; live reads: `tools/real_game/scripts/minimap.py`.
 The BL2-style StatusMenu Inventory movie is enabled by default; press **Tab**
 (or **I**) for Inventory and **K** for Skills; the header tabs and the K/I keys switch between the two pages. Pass `-NoInventoryMovie` only to use the
 fallback host inventory panel.

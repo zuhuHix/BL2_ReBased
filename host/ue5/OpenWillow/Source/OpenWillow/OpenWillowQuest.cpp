@@ -182,6 +182,18 @@ int32 UOpenWillowQuest::Status() const
     return Impl ? int32(Impl->Slice->mission().status()) : -1;
 }
 
+void UOpenWillowQuest::MinimapMarkers(TArray<TPair<FString, FVector>>& Out) const
+{
+    if (!Impl) return;
+    using S = vm::MissionSystem::Status;
+    const S Current = Impl->Slice->mission().status();
+    if (Marcus && Current == S::NotStarted) Out.Emplace(TEXT("eligible"), Marcus->GetActorLocation());
+    if (Marcus && Current == S::ReadyToTurnIn) Out.Emplace(TEXT("turnin"), Marcus->GetActorLocation());
+    if (Current != S::Active) return;
+    if (Impl->ObjectiveState(Impl->Data.TriggerObjective) == "Active") Out.Emplace(TEXT("objective"), Impl->Data.TriggerCenter);
+    else if (Dummy && Impl->ObjectiveState(Impl->Data.DummyObjective) == "Active") Out.Emplace(TEXT("objective"), Dummy->GetActorLocation());
+}
+
 void UOpenWillowQuest::Fail(const FString& Error)
 {
     bFailed = true;
