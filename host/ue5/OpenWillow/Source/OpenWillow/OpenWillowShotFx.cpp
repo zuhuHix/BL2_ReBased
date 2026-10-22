@@ -10,6 +10,7 @@
 namespace
 {
 const TCHAR* FxMaterialPath = TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_FxAdditive.M_OW_FxAdditive");
+const TCHAR* FlameMaterialPath = TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_MuzzleFlame.M_OW_MuzzleFlame");
 }
 
 AOpenWillowShotFx::AOpenWillowShotFx()
@@ -27,14 +28,21 @@ AOpenWillowShotFx::AOpenWillowShotFx()
 }
 
 void AOpenWillowShotFx::Setup(UStaticMesh* Mesh, const FLinearColor& Color, float Intensity,
-    float Life, float LightIntensity)
+    float Life, float LightIntensity, bool bSoftFlame, float CoreStrength)
 {
     Visual->SetStaticMesh(Mesh);
-    if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, FxMaterialPath))
+    UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, bSoftFlame ? FlameMaterialPath : FxMaterialPath);
+    if (!Base && bSoftFlame) Base = LoadObject<UMaterialInterface>(nullptr, FxMaterialPath);
+    if (Base)
     {
         Material = UMaterialInstanceDynamic::Create(Base, this);
         Material->SetVectorParameterValue(TEXT("Color"), Color);
         Material->SetScalarParameterValue(TEXT("Intensity"), Intensity);
+        if (bSoftFlame)
+        {
+            Material->SetVectorParameterValue(TEXT("CoreColor"), FLinearColor(1.f, 0.68f, 0.12f, 1.f));
+            Material->SetScalarParameterValue(TEXT("CoreStrength"), CoreStrength);
+        }
         Visual->SetMaterial(0, Material);
     }
     Light->SetLightColor(Color);
@@ -95,60 +103,50 @@ void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, floa
     if (!World) return;
     const float SafeRadius = FMath::Max(0.1f, Radius);
     const float SafeLife = FMath::Max(0.01f, Life);
-    // Host-made starburst. The muzzle socket and type duration come from live reads; size, shape, tint and the short
-    // render life are UNVERIFIED visual fits to the lane E burst references.
+    // Host-made, soft additive quads. The selected muzzle socket anchors every layer; the mask shape,
+    // size, tint and short render life are UNVERIFIED visual fits to the lane E burst references.
     const float PlumeLife = FMath::Min(SafeLife, 0.12f);
-    const float Extent = FMath::Clamp(SafeRadius * 1.05f, 3.5f, 6.f);
-    const float RayLength = Extent * 1.6f;
-    const float RayWidth = Extent * 0.22f;
-    const UStaticMesh* Cone = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cone.Cone"));
+    const float Extent = FMath::Clamp(SafeRadius * 1.25f, 4.5f, 6.f);
+    UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+    if (!Plane) return;
     FRotator CameraRotation = FRotator::ZeroRotator;
     if (APlayerController* PC = World->GetFirstPlayerController())
         if (PC->PlayerCameraManager) CameraRotation = PC->PlayerCameraManager->GetCameraRotation();
     const FRotationMatrix CameraBasis(CameraRotation);
     const FVector ViewForward = CameraBasis.GetUnitAxis(EAxis::X);
-    const FVector Directions[] = {
-        CameraBasis.GetUnitAxis(EAxis::Y), -CameraBasis.GetUnitAxis(EAxis::Y),
-        CameraBasis.GetUnitAxis(EAxis::Z), -CameraBasis.GetUnitAxis(EAxis::Z),
-        (CameraBasis.GetUnitAxis(EAxis::Y) + CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
-        (CameraBasis.GetUnitAxis(EAxis::Y) - CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
-        (-CameraBasis.GetUnitAxis(EAxis::Y) + CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
-        (-CameraBasis.GetUnitAxis(EAxis::Y) - CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
-    };
-    for (int32 I = 0; Cone && I < UE_ARRAY_COUNT(Directions); ++I)
+    const FQuat Facing = FQuat::FindBetweenNormals(FVector::UpVector, -ViewForward);
+    for (int32 I = 0; I < 6; ++I)
     {
-        const float Length = RayLength * (I < 4 ? 1.f : 0.58f);
-        const FVector Direction = Directions[I];
-        const FQuat Rotation = FQuat::FindBetweenNormals(FVector::UpVector, Direction);
-        const FVector RayLocation = Location + Direction * (Length * 0.48f) + ViewForward * 1.5f;
-        const FVector Scale(RayWidth / 50.f, RayWidth / 50.f, Length / 100.f);
-        const FTransform Pose(Rotation, RayLocation, Scale);
+        const float Height = Extent * FMath::FRandRange(1.1f, 1.75f);
+        const float Width = Extent * FMath::FRandRange(0.55f, 0.95f);
+        const float Roll = FMath::FRandRange(0.f, 360.f);
+        const FQuat Twist(-ViewForward, FMath::DegreesToRadians(Roll));
+        const FTransform Pose(Twist * Facing, Location,
+            FVector(Width / 100.f, Height / 100.f, 1.f));
         auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
         Fx->FinishSpawning(Pose);
-        const FLinearColor RayColor = I < 4 ? Color : Color * FLinearColor(1.f, 0.62f, 0.38f, 1.f);
-        Fx->Setup(const_cast<UStaticMesh*>(Cone), RayColor, 8.f, PlumeLife, 0.f);
+        Fx->Setup(Plane, Color, 1.3f, PlumeLife, 0.f, true, 0.f);
         Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     }
-    const float CoreScale = Extent * 0.16f / 50.f;
-    const FTransform CorePose(CameraRotation, Location + ViewForward * 2.f, FVector(CoreScale));
+    const float CoreSize = Extent * 0.44f;
+    const FTransform CorePose(Facing, Location, FVector(CoreSize / 100.f, CoreSize / 100.f, 1.f));
     auto* Core = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), CorePose);
     Core->FinishSpawning(CorePose);
-    Core->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")),
-        FLinearColor(1.f, 0.78f, 0.16f, 1.f), 10.f, PlumeLife, 120.f);
+    Core->Setup(Plane, Color, 2.5f, PlumeLife, 90.f, true, 1.f);
     Core->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
 }
 
 void AOpenWillowShotFx::Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale)
 {
     if (!World) return;
-    const FVector SafeScale(FMath::Max(0.001f, 0.008f * Scale), FMath::Max(0.001f, 0.008f * Scale),
+    const FVector SafeScale(FMath::Max(0.001f, 0.003f * Scale), FMath::Max(0.001f, 0.003f * Scale),
         FMath::Max(0.001f, 0.012f * Scale));
-    // UNVERIFIED host stand-ins: cylinder scale, orientation, subdued brass tint, intensity and lifetime.
+    // UNVERIFIED host stand-ins: short cylinder, orientation, subdued brass tint, intensity and lifetime.
     const FTransform Pose(FRotator(90.f, 0.f, 0.f), Location, SafeScale);
     auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
     Fx->FinishSpawning(Pose);
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")),
-        FLinearColor(0.72f, 0.34f, 0.055f, 1.f), 0.55f, 0.65f, 0.f);
+        FLinearColor(0.72f, 0.34f, 0.055f, 1.f), 0.55f, 0.22f, 0.f);
     Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     Fx->bIsCasing = true;
     Fx->CasingVelocity = Velocity;

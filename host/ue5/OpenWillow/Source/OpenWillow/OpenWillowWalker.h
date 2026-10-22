@@ -223,7 +223,6 @@ private:
     {
         FVector Offset = FVector::ZeroVector;
         float Fov = 0.f;
-        float FirstPersonScaleFit = 1.f;
         float ZoomFov = 0.f;
         float ZoomBlendTime = 0.2f;
         FVector ZoomOffset = FVector::ZeroVector;

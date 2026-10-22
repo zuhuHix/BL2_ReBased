@@ -65,7 +65,8 @@ int32 UOpenWillowScopeOverlay::NativePaint(const FPaintArgs& Args, const FGeomet
     const FVector2D Size = AllottedGeometry.GetLocalSize();
     if (Size.X <= 0.f || Size.Y <= 0.f) return Layer;
 
-    const float MaskWidth = Size.X * 0.21875f; // measured black side-mask extent in the local SMG ADS frame
+    constexpr float ClearApertureFraction = 580.f / 960.f; // real reference aperture: about 580 px in a 960 px panel
+    const float MaskWidth = Size.X * (1.f - ClearApertureFraction) * 0.5f;
     const FSlateBrush* White = FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"));
     auto AddMask = [&](float X)
     {
@@ -79,42 +80,42 @@ int32 UOpenWillowScopeOverlay::NativePaint(const FPaintArgs& Args, const FGeomet
 
     const FVector2D Centre(Size.X * 0.5f, Size.Y * 0.5f);
     const float Radius = FMath::Min(Size.X * 0.25f, Size.Y * 0.222f);
-    TArray<FVector2f> Circle;
-    Circle.Reserve(65);
-    for (int32 I = 0; I <= 64; ++I)
-    {
-        const float Angle = 2.f * PI * float(I) / 64.f;
-        Circle.Add(FVector2f(Centre.X + Radius * FMath::Cos(Angle),
-            Centre.Y + Radius * FMath::Sin(Angle)));
-    }
     const FLinearColor Reticle(1.f, 0.82f, 0.015f, 0.95f);
-    FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Circle,
-        ESlateDrawEffect::None, Reticle, true, 2.f);
+    // The reference uses separate arc pieces around the four inward arrows, not a closed ring.
+    for (int32 Segment = 0; Segment < 4; ++Segment)
+    {
+        TArray<FVector2f> Arc;
+        const float Start = Segment * PI * 0.5f + PI * 0.18f;
+        const float End = (Segment + 1) * PI * 0.5f - PI * 0.18f;
+        for (int32 I = 0; I <= 12; ++I)
+        {
+            const float Angle = FMath::Lerp(Start, End, float(I) / 12.f);
+            Arc.Add(FVector2f(Centre.X + Radius * FMath::Cos(Angle),
+                Centre.Y + Radius * FMath::Sin(Angle)));
+        }
+        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Arc,
+            ESlateDrawEffect::None, Reticle, false, 2.2f);
+    }
     for (int32 I = 0; I < 4; ++I)
     {
         const float Angle = PI * 0.5f * float(I);
         const FVector2f Direction(FMath::Cos(Angle), FMath::Sin(Angle));
         const FVector2f Perpendicular(-Direction.Y, Direction.X);
-        TArray<FVector2f> Tick = {
-            FVector2f(Centre.X + (Radius - 10.f) * FMath::Cos(Angle),
-                Centre.Y + (Radius - 10.f) * FMath::Sin(Angle)),
-            FVector2f(Centre.X + (Radius + 6.f) * FMath::Cos(Angle),
-                Centre.Y + (Radius + 6.f) * FMath::Sin(Angle)),
+        const FVector2f Tip(Centre.X + Radius * 0.68f * Direction.X,
+            Centre.Y + Radius * 0.68f * Direction.Y);
+        const FVector2f ArrowBase(Centre.X + Radius * 0.90f * Direction.X,
+            Centre.Y + Radius * 0.90f * Direction.Y);
+        TArray<FVector2f> ArrowShaft = { ArrowBase, Tip };
+        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), ArrowShaft,
+            ESlateDrawEffect::None, Reticle, true, 2.4f);
+        TArray<FVector2f> ArrowHead = {
+            FVector2f(Tip.X + Radius * 0.16f * Direction.X + 7.f * Perpendicular.X,
+                Tip.Y + Radius * 0.16f * Direction.Y + 7.f * Perpendicular.Y), Tip,
+            FVector2f(Tip.X + Radius * 0.16f * Direction.X - 7.f * Perpendicular.X,
+                Tip.Y + Radius * 0.16f * Direction.Y - 7.f * Perpendicular.Y),
         };
-        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Tick,
-            ESlateDrawEffect::None, Reticle, true, 2.f);
-        const FVector2f Tip(Centre.X + Radius * 0.78f * Direction.X,
-            Centre.Y + Radius * 0.78f * Direction.Y);
-        const FVector2f ArrowBase(Centre.X + Radius * 0.92f * Direction.X,
-            Centre.Y + Radius * 0.92f * Direction.Y);
-        TArray<FVector2f> Arrow = {
-            Tip,
-            FVector2f(ArrowBase.X + 6.f * Perpendicular.X, ArrowBase.Y + 6.f * Perpendicular.Y),
-            FVector2f(ArrowBase.X - 6.f * Perpendicular.X, ArrowBase.Y - 6.f * Perpendicular.Y),
-            Tip,
-        };
-        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Arrow,
-            ESlateDrawEffect::None, Reticle, true, 2.f);
+        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), ArrowHead,
+            ESlateDrawEffect::None, Reticle, true, 2.4f);
     }
     // Four interrupted inner arcs and a lower rangefinder are an UNVERIFIED host fit to the live SMG scope frame.
     for (int32 Quadrant = 0; Quadrant < 4; ++Quadrant)
@@ -125,7 +126,7 @@ int32 UOpenWillowScopeOverlay::NativePaint(const FPaintArgs& Args, const FGeomet
         for (int32 I = 0; I <= 12; ++I)
         {
             const float Angle = FMath::Lerp(Start, End, float(I) / 12.f);
-            const float InnerRadius = Radius * 0.50f;
+            const float InnerRadius = Radius * 0.42f;
             Arc.Add(FVector2f(Centre.X + InnerRadius * FMath::Cos(Angle),
                 Centre.Y + InnerRadius * FMath::Sin(Angle)));
         }
@@ -654,9 +655,6 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
             Model.Offset = FVector((*Offset)[0]->AsNumber(), (*Offset)[1]->AsNumber(), (*Offset)[2]->AsNumber());
         double Fov = 0.0;
         if ((*Entry)->TryGetNumberField(TEXT("first_person_fov"), Fov)) Model.Fov = float(Fov);
-        double ScaleFit = 1.0;
-        if ((*Entry)->TryGetNumberField(TEXT("first_person_scale_fit"), ScaleFit))
-            Model.FirstPersonScaleFit = FMath::Clamp(float(ScaleFit), 0.25f, 1.5f);
         const TArray<TSharedPtr<FJsonValue>>* ZoomFit = nullptr;
         if ((*Entry)->TryGetArrayField(TEXT("zoom_position_fit_cm"), ZoomFit) && ZoomFit->Num() == 3)
             Model.ZoomPositionFit = FVector(float((*ZoomFit)[0]->AsNumber()), float((*ZoomFit)[1]->AsNumber()),
@@ -717,15 +715,13 @@ void AOpenWillowWalker::ApplyViewModel(const FString& ItemId)
     FViewModel* Model = ViewModels.Find(ItemId);
     const FVector BaseOffset = bViewModelActive && Model ? Model->Offset + CameraBoneOffset : FVector::ZeroVector;
     Arms->SetRelativeLocation(BaseOffset);
-    if (WeaponVisual)
-        WeaponVisual->SetRelativeScale3D(FVector(Model ? Model->FirstPersonScaleFit : 1.f));
     if (bViewModelActive)
         Camera->SetFirstPersonFieldOfView(bViewFovForced || !Model || Model->Fov <= 1.f ? ViewFovDefault : Model->Fov);  // horizontal degrees
     if (Model)
     {
         Model->ZoomOffset = FVector::ZeroVector;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow view model %s type FOV %.2f, hip offset %s, weapon size fit %.2f, ADS fit %s"),
-            *ItemId, Model->Fov, *Model->Offset.ToString(), Model->FirstPersonScaleFit,
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow view model %s type FOV %.2f, hip offset %s, ADS fit %s"),
+            *ItemId, Model->Fov, *Model->Offset.ToString(),
             *Model->ZoomPositionFit.ToString());
     }
     if (Model && bAimHeld) BeginAimTransition(GetWorld()->GetTimeSeconds());
@@ -862,11 +858,12 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     // clips were not imported keeps the pistol set. Imported by tools/prepare_character_anims.py + import_character_anims.py.
     FString ArmsSet = TEXT("Pistol");
     if (Item->Type == TEXT("Assault Rifle")) ArmsSet = TEXT("AssaultRifle");
-    else if (Item->Type == TEXT("Sub-Machine Gun")) ArmsSet = TEXT("SMG");
+    else if (Item->Type == TEXT("Sub-Machine Gun") || Item->Type == TEXT("SMG")) ArmsSet = TEXT("SMG");
     else if (Item->Type == TEXT("Shotgun")) ArmsSet = TEXT("Shotgun");
     const bool bOwnSet = ArmsSet != TEXT("Pistol")
         && FPackageName::DoesPackageExist(FString::Printf(TEXT("%s/FirstPerson/Anim_%s_Idle"), MayaRoot, *ArmsSet));
     if (!bOwnSet) ArmsSet = TEXT("Pistol");
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow arms idle set %s for %s (item type %s)"), *ArmsSet, *Item->Id, *Item->Type);
     IdleAnim = LoadArmsAnim(*ArmsSet, TEXT("Idle"));
     RunAnim = LoadArmsAnim(*ArmsSet, TEXT("Run_F"));
     SprintAnim = LoadArmsAnim(*ArmsSet, TEXT("Sprint"));
@@ -1775,6 +1772,12 @@ void AOpenWillowWalker::RunGunShots(float Now)
         if (Now < GunShotPhaseAt + Settle) return;
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_idle.png"), *Id), true, false);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s idle"), *Id);
+        const FVector WeaponMountScale = Arms->GetSocketTransform(TEXT("R_Weapon_Bone"), RTS_World).GetScale3D();
+        const FVector WeaponWorldScale = WeaponVisual->GetComponentTransform().GetScale3D();
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots hip pose %s aim alpha %.3f arms %s weapon scale %s"), *Id,
+            AimAlpha, *Arms->GetRelativeLocation().ToString(), *WeaponVisual->GetRelativeScale3D().ToString());
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots mount scale %s weapon world scale %s"),
+            *WeaponMountScale.ToString(), *WeaponWorldScale.ToString());
         {
             // Camera-space (forward, right, up in cm) positions of the arms' weapon bone and the gun's bones, for comparison with the
             // SDK probe of the running game (docs/verification/WEAPON_VISUALS.md section 10).
@@ -1836,6 +1839,8 @@ void AOpenWillowWalker::RunGunShots(float Now)
             return;
         }
         if (Now < GunShotNextBurstAt) return; // Capture within 50 ms while the fitted host flash is still bright.
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots hip-fire pose %s aim alpha %.3f arms %s"), *Id,
+            AimAlpha, *Arms->GetRelativeLocation().ToString());
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_firing.png"), *Id), true, false);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s hip-fire flash at %.3f s after last shot"), *Id,
             Now - (GunShotNextBurstAt - 0.03f));

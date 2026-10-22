@@ -57,27 +57,12 @@ SCHEMA_ADDITIONS = [
     'RelativeScale=StructProperty:Vector',
 ]
 
-# The live type fields and the foreground FOV are already applied to the held
-# mesh. These two small, recipe-specific size corrections are visual fits from
-# the lane E idle frames; they are not stock weapon-type fields.
-FIRST_PERSON_SCALE_FITS = {
-    'slice_assault_rifle': 0.75,
-    'slice_smg': 0.54,
-}
-
 # Camera-local translation added after the selected cooked eye socket is
 # centered. The pistol's fallback body socket does not coincide with the
 # visible sight line, so this is a separate frame fit.
 ZOOM_POSITION_FITS_CM = {
     'slice_pistol': (0.0, -3.2, 11.0),
 }
-
-
-def first_person_scale_fit(recipe_id):
-    scale = FIRST_PERSON_SCALE_FITS.get(recipe_id, 1.0)
-    source = ('UNVERIFIED fit to lane E idle frame size'
-              if recipe_id in FIRST_PERSON_SCALE_FITS else 'no recipe-specific fit')
-    return float(scale), source
 
 
 def zoom_position_fit_cm(recipe_id):
@@ -366,15 +351,12 @@ def type_view_fields(recipe_id, class_defaults, type_properties):
         recoil_scale = float(recoil_scale)
     except (TypeError, ValueError):
         recoil_scale = 1.0
-    first_person_scale, first_person_scale_source = first_person_scale_fit(recipe_id)
     zoom_position_fit, zoom_position_fit_source = zoom_position_fit_cm(recipe_id)
     entry = {
         'weapon_type': str(type_properties.get('weapon_type') or ''),
         'player_view_offset': offset,
         'first_person_fov': float(fov) if fov is not None else None,
         'first_person_fov_source': 'cooked type' if type_properties.get('FirstPersonMeshFOV') is not None else 'cooked class default',
-        'first_person_scale_fit': first_person_scale,
-        'first_person_scale_fit_source': first_person_scale_source,
         'zoom_position_fit_cm': zoom_position_fit,
         'zoom_position_fit_source': zoom_position_fit_source,
         'zoom_fov': float(zoom_fov) if zoom_fov is not None else None,
