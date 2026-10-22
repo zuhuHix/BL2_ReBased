@@ -86,6 +86,20 @@ class MaterialAuditTest(unittest.TestCase):
                          ['terrain_weighted_blend', 'no_supported_channels'])
         self.assertEqual(report['excluded_components'], {'mission_item_preview_mesh': 2})
 
+    def test_inspected_unlit_recipe_is_reported_as_partial_not_neutral_fallback(self):
+        scene = dict(schema=1, dynamic_policy='frozen', map='Synthetic_P', issues=[],
+                     materials={'map': dict(source='Synthetic:Map', channels={},
+                                            scene_recipe={'method': 'synthetic_map_v1',
+                                                          'status': 'partial_unverified',
+                                                          'unlit_color_layers': []})},
+                     meshes={'mesh': {'source': 'mesh', 'sections': [{'slot': 0, 'material': 'map'}]}},
+                     actors=[{'source': 'c', 'level': 'Synthetic_P', 'mesh': 'mesh', 'materials': []}])
+        report = audit(scene)
+        self.assertEqual(report['counts']['inspected_material_recipes'], 1)
+        self.assertEqual(report['counts']['inspected_material_recipe_placed_sections'], 1)
+        self.assertEqual(report['section_audit'][0]['cause'], 'inspected_material_recipe')
+        self.assertEqual(report['gap_status_counts'], {})
+
 
 if __name__ == '__main__':
     unittest.main()

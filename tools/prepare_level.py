@@ -57,6 +57,24 @@ def vector(value, default=0):
     return [value.get(k, default) for k in ('X', 'Y', 'Z')]
 
 
+def byte_color_rgb(value):
+    """Convert a decoded UE3 FColor to normalized RGB without guessing channels."""
+    if not isinstance(value, dict) or not all(
+            isinstance(value.get(c), int) and not isinstance(value.get(c), bool)
+            and 0 <= value[c] <= 255 for c in 'RGB'):
+        raise ValueError('Expected a decoded byte color')
+    return [value[c] / 255.0 for c in 'RGB']
+
+
+def decoded_settings(value):
+    """Keep only decoded name/value fields from a serialized settings array."""
+    if not isinstance(value, list):
+        return {}
+    return {item['name']: item['value'] for item in value
+            if isinstance(item, dict) and item.get('status') == 'decoded'
+            and isinstance(item.get('name'), str) and 'value' in item}
+
+
 def transform(p, component=False):
     rot = p.get('Rotation', {})
     return {'location': vector(p.get('Translation' if component else 'Location', {})),
@@ -376,11 +394,11 @@ INSPECTED_COLOR_FALLBACKS = {
     # rock-and-snow photo; SkyboxMountainSnow_Dif is mostly white and reads
     # as the snow layer whose blend is not recovered.
     'Sanctuary_Land:Prop_Glacier.Materials.Mat_MountainDistant': {
-        'method': 'distant_mountain_color_fallback_v1', 'label': 'Distant-mountain', 'noun': 'mountain',
-        'color': 'Sanctuary_Land:Prop_Skybox.Textures.SkyboxMountain_Dif',
+        'method': 'distant_mountain_snow_color_fallback_v1', 'label': 'Distant-mountain', 'noun': 'mountain',
+        'color': 'Sanctuary_Land:Prop_Skybox.Textures.SkyboxMountainSnow_Dif',
         'normal': None,
-        'omitted': ['SkyboxMountainSnow_Dif snow layer blend', 'UV modulation'],
-        'issue': 'Approximation: inspected SkyboxMountain_Dif texture used as mountain color; snow layer blend not reconstructed'},
+        'omitted': ['SkyboxMountain_Dif rock layer blend', 'UV modulation'],
+        'issue': 'Approximation: inspected mostly snowy SkyboxMountainSnow_Dif texture used as mountain color; rock/snow layer blend not reconstructed'},
     # Roland's HQ chemical tank: the tank's own atlas next to a smoke overlay
     # _Dif; the cube is the named P_SimpleReflect.
     'Sanctuary_P:Prop_Tanks.Materials.Mat_ChemTank02': {
@@ -390,6 +408,81 @@ INSPECTED_COLOR_FALLBACKS = {
         'omitted': ['ChemTank02_Comp packed mask', 'Transmission/Fresnel/Tube/Spec/EmissColorA/B vectors',
                     'P_SimpleReflect cube reflection', 'Smoke2_GP_Dif overlay'],
         'issue': 'Approximation: inspected ChemTank02_Dif texture used as tank color; packed mask, tints, reflection and smoke overlay not reconstructed'},
+}
+
+# Small material recipes for the five matched-viewpoint gaps. These are
+# source-identity and cooked-resource scoped; each mask/color relationship is
+# an explicit host approximation, not a recovered UE3 graph. Textures are
+# decoded to the ignored local scene only.
+INSPECTED_SCENE_MATERIAL_RECIPES = {
+    'Sanctuary_P:Prop_CustomizationMachine.Materials.Master_CharacterCustomization': {
+        'method': 'customization_banner_swirl_v1',
+        'base': 'Sanctuary_P:Prop_CustomizationMachine.Materials.Master_CharacterCustomization',
+        'diffuse': 'Sanctuary_P:Prop_CustomizationMachine.Textures.CM_MachineBanner',
+        'emissive_layers': [
+            {'texture': 'Sanctuary_P:FX_Shared_Energy.Textures.EnergySwirls_Dif_Tex',
+             'channel': 'RGB', 'color': [0.08, 0.72, 1.0], 'srgb': True}],
+        'omitted': ['Aliencenterfade_Dif gradient overlay', 'native panel mask and UV animation'],
+        'issue': 'Approximation: CM_MachineBanner used as the panel color and EnergySwirls_Dif_Tex as cyan emissive; graph and animated overlay not reconstructed'},
+    'Sanctuary_P:Prop_Signs_02.Materials.Mat_SanctuaryMoxxis': {
+        'method': 'moxxi_neon_masks_v1',
+        'base': 'Sanctuary_P:Prop_Signs_02.Materials.Mat_SanctuaryMoxxis',
+        'emissive_layers': [
+            {'texture': 'Sanctuary_P:Prop_Signs_02.Textures.SanctuaryMoxxis_Mask',
+             'channel': 'R', 'color': [2.2, 0.08, 0.14], 'srgb': False},
+            {'texture': 'Sanctuary_P:Prop_Signs_02.Textures.SanctuaryMoxxis_Mask_02',
+             'channel': 'R', 'color': [1.8, 0.10, 0.85], 'srgb': False},
+            {'texture': 'Sanctuary_P:Prop_Signs_02.Textures.SanctuaryMoxxis_Mask_02',
+             'channel': 'G', 'color': [1.8, 0.35, 0.10], 'srgb': False}],
+        'omitted': ['native sign mask blend and palette', 'night-time light contribution'],
+        'issue': 'Approximation: sparse R/R/G channels in the two inspected Moxxi mask atlases drive pink, violet and warm emissive layers; native palette and glow are not reconstructed'},
+    'Sanctuary_P:Prop_Carnival.Materials.Mati_LightStrips_01': {
+        'method': 'light_strip_component_emissive_v1',
+        'base': 'Sanctuary_P:Prop_Carnival.Materials.Mat_LightStrips_01',
+        'emissive_layers': [
+            {'texture': 'Sanctuary_P:Prop_Carnival.LightStrip_Comp',
+             'channel': 'RGB', 'color': [2.0, 2.0, 2.0], 'srgb': True}],
+        'omitted': ['native bulb palette and bloom'],
+        'issue': 'Approximation: inspected colored LightStrip_Comp atlas drives emissive RGB; native bulb shader and bloom are not reconstructed'},
+    'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap': {
+        'method': 'world_map_mask_colorization_v1',
+        'base': 'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap',
+        'host_lighting_model': 'MLM_Unlit',
+        'unlit_color_layers': [
+            {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
+             'channel': 'R', 'color': [0.08, 0.65, 0.75], 'srgb': False},
+            {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
+             'channel': 'G', 'color': [1.5, 0.04, 0.025], 'srgb': False},
+            {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
+             'channel': 'B', 'color': [0.08, 1.0, 0.12], 'srgb': False}],
+        'omitted': ['RolandsControlRoom02_Cube reflection', 'native map palette and animated markers'],
+        'issue': 'Approximation: inspected WorldMap_Comp R/G/B masks are colorized as cyan land, red routes/grid and green markers and emitted Unlit; palette and reflection remain unverified'},
+}
+
+# Instance parameters are read from the cooked parent chain; only the exact
+# material identities below may use them. Values are never copied into code.
+INSPECTED_EMISSIVE_MULTIPLIERS = {
+    'Sanctuary_P:Prop_CustomizationMachine.Materials.CM_Mat': {
+        'base': 'WillowGame:Common_Materials.Environment.Master_World',
+        'parameter': 'p_EmissiveScale',
+        'method': 'customization_emissive_scale_v1',
+        'omitted': ['emissive mask graph and animated panel overlays'],
+    },
+}
+
+INSPECTED_UNLIT_CONSTANT_COLORS = {
+    'Sanctuary_P:Common_Materials.Hyperion.Master_HyperionEye_INST': {
+        'base': 'Sanctuary_P:Common_Materials.Hyperion.Master_HyperionEye',
+        'parameter': 'p_EyeColorA',
+        'method': 'hyperion_eye_unlit_color_v1',
+        'omitted': ['other eye color vectors', 'masked eye graph and texture animation'],
+    },
+    'Sanctuary_P:Char_ClapTrap.Materials.Mati_ClapTrapLensTeal': {
+        'base': 'Sanctuary_P:Common_Materials.Hyperion.Master_HyperionEye',
+        'parameter': 'p_EyeColorA',
+        'method': 'hyperion_eye_unlit_color_v1',
+        'omitted': ['other eye color vectors', 'masked eye graph and texture animation'],
+    },
 }
 
 # Inspected Unlit materials whose visible color is scaled by a named vector
@@ -976,6 +1069,59 @@ class Scene:
                 'parameter': entry['parameter'], 'source_material': self.identity(base),
                 'rgb': [float(value[c]) for c in 'RGB'], 'omitted': entry['omitted']}
 
+    def inspected_color_parameter(self, key, material, table):
+        """Read one exact-chain RGB parameter for an inspected host recipe."""
+        entry = table.get(self.identity(key))
+        if entry is None:
+            return None
+        base, _, _, vectors = self.named_chain_parameters(key)
+        if self.identity(base) != entry['base']:
+            raise ValueError('Color parameter requires the inspected base material')
+        value = vectors.get(entry['parameter'].casefold())
+        if not isinstance(value, dict) or not all(
+                isinstance(value.get(c), (int, float)) and not isinstance(value.get(c), bool)
+                and math.isfinite(value[c]) and 0 <= value[c] <= 64 for c in 'RGB'):
+            raise ValueError(f"Color parameter {entry['parameter']} is missing or invalid")
+        if table is INSPECTED_UNLIT_CONSTANT_COLORS and material.get('lighting_model') != 'MLM_Unlit':
+            raise ValueError('Unlit color requires an Unlit material')
+        return {'method': entry['method'], 'status': 'partial_unverified',
+                'parameter': entry['parameter'], 'source_material': self.identity(base),
+                'rgb': [float(value[c]) for c in 'RGB'], 'omitted': entry['omitted']}
+
+    def inspected_scene_material_recipe(self, key, base, textures):
+        """Return a resource-validated visual recipe for exact Sanctuary materials."""
+        entry = INSPECTED_SCENE_MATERIAL_RECIPES.get(self.identity(key))
+        if entry is None:
+            return None
+        if self.identity(base) != entry['base']:
+            raise ValueError('Scene material recipe requires the inspected base material')
+
+        def inspected(identity):
+            found = [item for item in textures if self.identity(item) == identity
+                     and self.load(item[0])[item[1]]['class'].rsplit('.', 1)[-1] == 'Texture2D']
+            if len(found) != 1:
+                raise ValueError('Scene material recipe requires the inspected texture: ' + identity)
+            return found[0]
+
+        result = {'method': entry['method'], 'status': 'partial_unverified',
+                  'base_material': entry['base'], 'omitted': entry['omitted'],
+                  'issue': entry['issue']}
+        if entry.get('host_lighting_model'):
+            result['host_lighting_model'] = entry['host_lighting_model']
+        if entry.get('diffuse'):
+            diffuse = inspected(entry['diffuse'])
+            result['diffuse'] = self.texture(diffuse, 'diffuse')
+            result['diffuse_source'] = self.identity(diffuse)
+        for channel in ('emissive_layers', 'unlit_color_layers'):
+            layers = []
+            for index, layer in enumerate(entry.get(channel, [])):
+                texture = inspected(layer['texture'])
+                layers.append({**layer, 'source': self.identity(texture),
+                               'file': self.texture(texture, f'recipe_{channel}_{index}')})
+            if layers:
+                result[channel] = layers
+        return result
+
     def native_sky_approximation(self, key):
         """Named inputs of the observed time-of-day sky master, or None.
 
@@ -1174,6 +1320,29 @@ class Scene:
                         material['unlit_color_multiplier'] = multiplier
                         self.issue(material['source'],
                                    f"Approximation: Unlit color scaled by {multiplier['parameter']}; shadow mask, relief and secondary color not reconstructed")
+                if self.identity(key) in INSPECTED_EMISSIVE_MULTIPLIERS:
+                    try:
+                        multiplier = self.inspected_color_parameter(
+                            key, material, INSPECTED_EMISSIVE_MULTIPLIERS)
+                    except ValueError as error:
+                        multiplier = None
+                        self.issue(material['source'] + ':emissive-scale', error)
+                    if multiplier is not None:
+                        material['emissive_multiplier'] = multiplier
+                        self.issue(material['source'],
+                                   'Approximation: emissive texture scaled by the inspected p_EmissiveScale vector; emissive graph remains unresolved')
+                if self.identity(key) in INSPECTED_UNLIT_CONSTANT_COLORS:
+                    try:
+                        color = self.inspected_color_parameter(
+                            key, material, INSPECTED_UNLIT_CONSTANT_COLORS)
+                    except ValueError as error:
+                        color = None
+                        self.issue(material['source'] + ':unlit-color', error)
+                    if color is not None:
+                        material['unlit_constant_color'] = color
+                        material['host_blend_mode'] = 'BLEND_Opaque'
+                        self.issue(material['source'],
+                                   'Approximation: inspected p_EyeColorA is shown as a constant Unlit color; masked eye graph is not reconstructed')
                 regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
                 if regular_fallback is not None:
                     parent = self.resolve(key[0], props(self.load(key[0])[key[1]]).get('Parent', 0))
@@ -1226,6 +1395,14 @@ class Scene:
                                 'source': self.identity(base),
                                 'textures': [self.identity(t) for t in textures],
                                 'opaque_tail_bytes': opaque}
+                            try:
+                                recipe = self.inspected_scene_material_recipe(key, base, textures)
+                            except ValueError as error:
+                                recipe = None
+                                self.issue(material['source'] + ':scene-recipe', error)
+                            if recipe is not None:
+                                material['scene_recipe'] = recipe
+                                self.issue(material['source'], recipe['issue'])
                             inferred, method = cooked_diffuse_candidate(
                                 textures, self.identity,
                                 lambda t: self.load(t[0])[t[1]]['class'].rsplit('.', 1)[-1],
@@ -1328,7 +1505,13 @@ class Scene:
                         self.issue(material['source'] + ':' + channel, error)
                 material.pop('_channel_priority', None)
                 material.pop('_channel_stub', None)
-                if not any(material['channels'].values()) and 'constant_diffuse' not in material:
+                recipe = material.get('scene_recipe')
+                if recipe and recipe.get('diffuse'):
+                    material['channels']['diffuse'] = recipe['diffuse']
+                    material['diffuse_inference'] = recipe['diffuse_source']
+                    material['diffuse_inference_method'] = recipe['method']
+                if (not any(material['channels'].values()) and 'constant_diffuse' not in material
+                        and 'unlit_constant_color' not in material and 'scene_recipe' not in material):
                     self.issue(material['source'], 'No supported named Material v1 texture parameters; neutral fallback')
             except ValueError as error:
                 self.issue(material['source'], error)
@@ -1403,6 +1586,123 @@ class Scene:
                         self.package(sublevel)  # missing dependencies are fatal
                         pending.append(sublevel)
         return levels
+
+    def lighting_manifest(self, levels):
+        """Export the decoded Sanctuary light actors and explicitly unresolved inputs."""
+        manifest = {'status': 'partial_unverified', 'source_levels': list(levels),
+                    'host_policy': 'source_skylight_heightfog_with_inspection_sun_v1',
+                    'sky_light': None, 'height_fog': None, 'directional_light': None,
+                    'post_process_volumes': [], 'world_info': [],
+                    'placed_actor_counts': {name: 0 for name in (
+                        'PointLight', 'SpotLight', 'DirectionalLight', 'DominantDirectionalLight',
+                        'SkyLightToggleable', 'HeightFog', 'PostProcessVolume')},
+                    'static_light_collections': {'actors': 0, 'point_components': 0,
+                                                 'spot_components': 0},
+                    'light_component_owners': {'PointLightComponent': {},
+                                               'SpotLightComponent': {}},
+                    'issues': []}
+
+        def read_properties(level, record, offset):
+            result = self.call(level, '--properties', record['index'], '--property-offset', offset)
+            if result.get('trailing_bytes') != 0:
+                raise ValueError('Property decode did not reach the object end')
+            return values(result.get('properties', []))
+
+        def read_component(level, reference, offset=8):
+            key = self.resolve(level, reference)
+            if key is None:
+                raise ValueError('Light actor has no serialized component reference')
+            component_package, component_index = key
+            component = self.load(component_package).get(component_index)
+            if component is None:
+                raise ValueError('Light component reference is unresolved')
+            props_value = read_properties(component_package, component, offset)
+            return component, props_value
+
+        for level in levels:
+            rows = self.load(level)
+            class_counts = {}
+            owner_counts = {'PointLightComponent': {}, 'SpotLightComponent': {}}
+            for row in rows.values():
+                cls = row['class'].rsplit('.', 1)[-1]
+                class_counts[cls] = class_counts.get(cls, 0) + 1
+                if cls in manifest['placed_actor_counts']:
+                    manifest['placed_actor_counts'][cls] += 1
+                if cls in manifest['light_component_owners']:
+                    owner = rows.get(row.get('outer'), {})
+                    owner_class = owner.get('class', 'unresolved').rsplit('.', 1)[-1]
+                    owners = owner_counts[cls]
+                    owners[owner_class] = owners.get(owner_class, 0) + 1
+            manifest['static_light_collections']['actors'] += class_counts.get('StaticLightCollectionActor', 0)
+            for class_name, component_name in (('PointLightComponent', 'point_components'),
+                                               ('SpotLightComponent', 'spot_components')):
+                owners = manifest['light_component_owners'][class_name]
+                for owner_class, count in owner_counts[class_name].items():
+                    owners[owner_class] = owners.get(owner_class, 0) + count
+                manifest['static_light_collections'][component_name] += owner_counts[class_name].get(
+                    'StaticLightCollectionActor', 0)
+            for row in rows.values():
+                cls = row['class'].rsplit('.', 1)[-1]
+                if cls not in ('SkyLightToggleable', 'HeightFog', 'DominantDirectionalLight',
+                               'PostProcessVolume', 'WorldInfo'):
+                    continue
+                source = level + ':' + row['path']
+                try:
+                    actor = read_properties(level, row, 26)
+                    location = vector(actor.get('Location', {}))
+                    if cls == 'SkyLightToggleable':
+                        component, data = read_component(level, actor.get('LightComponent'))
+                        light_color = data.get('LightColor')
+                        lower_color = data.get('LowerColor')
+                        manifest['sky_light'] = {
+                            'source': source, 'component': level + ':' + component['path'],
+                            'location': location,
+                            'light_color_rgb': byte_color_rgb(light_color),
+                            'lower_color_rgb': byte_color_rgb(lower_color),
+                            'lower_brightness': data.get('LowerBrightness'),
+                            'precomputed_lighting_valid': data.get('bPrecomputedLightingIsValid'),
+                            'component_property_offset': 8,
+                            'status': 'partial_unverified'}
+                    elif cls == 'HeightFog':
+                        component, data = read_component(level, actor.get('Component'))
+                        manifest['height_fog'] = {
+                            'source': source, 'component': level + ':' + component['path'],
+                            'location': location, 'height': data['Height'], 'density': data['Density'],
+                            'light_brightness': data['LightBrightness'],
+                            'light_color_rgb': byte_color_rgb(data['LightColor']),
+                            'start_distance': data['StartDistance'],
+                            'extinction_distance': data['ExtinctionDistance'],
+                            'component_property_offset': 8, 'status': 'partial_unverified'}
+                    elif cls == 'DominantDirectionalLight':
+                        entry = {'source': source, 'location': location,
+                                 'rotation': [actor.get('Rotation', {}).get(k, 0) * 360 / 65536
+                                              for k in ('Pitch', 'Yaw', 'Roll')],
+                                 'status': 'actor_transform_only_unverified'}
+                        try:
+                            component, _ = read_component(level, actor.get('LightComponent'))
+                            entry['component'] = level + ':' + component['path']
+                            entry['status'] = 'component_reference_read_unverified'
+                        except ValueError as error:
+                            entry['component_error'] = str(error)
+                        manifest['directional_light'] = entry
+                    elif cls == 'PostProcessVolume':
+                        manifest['post_process_volumes'].append({
+                            'source': source, 'location': location,
+                            'priority': actor.get('Priority'),
+                            'settings': decoded_settings(actor.get('Settings')),
+                            'bounds_status': 'brush bounds and unbound flag not decoded',
+                            'status': 'settings_only_unverified'})
+                    else:
+                        manifest['world_info'].append({
+                            'source': source,
+                            'default_post_process_settings_present': 'DefaultPostProcessSettings' in actor,
+                            'property_offset': 26, 'status': 'decoded_properties_only_unverified'})
+                except (ValueError, KeyError, TypeError) as error:
+                    manifest['issues'].append({'source': source, 'error': str(error)})
+        if manifest['directional_light'] is not None and manifest['directional_light'].get('component_error'):
+            manifest['issues'].append({'source': manifest['directional_light']['source'] + ':LightComponent',
+                                       'error': manifest['directional_light']['component_error']})
+        return manifest
 
     def build(self, persistent):
         self.load('Startup')
@@ -1508,9 +1808,11 @@ class Scene:
             raise ValueError('Matinee first-key experiment expected exactly one '
                              f'{MATINEE_FIRST_KEY_COMPONENT}, found '
                              f'{matinee_first_key_applied}')
+        lighting = self.lighting_manifest(levels)
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
+                  'lighting': lighting,
                   'excluded_components': excluded,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
                   'collision_policy': 'observed_convex_and_box_v1',

@@ -6,6 +6,32 @@ from prepare_level import Scene, placement_collision, props
 from collision_geometry import shapes
 from collision_volumes import apply_live_state, collect as collect_volumes, live_observations
 
+# Export classes the reader decodes with the StaticMesh layout. prepare_level
+# also places the generated cable mesh of a GearboxFramework.WiringActor, a
+# GearboxFramework.WiringMesh export (docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
+MESH_CLASSES = ('StaticMesh', 'WiringMesh')
+
+
+def mesh_export(records, source, path):
+    """Return the one mesh export at `path`, refusing missing or duplicate matches."""
+    matches = [r for r in records if r['path'] == path and r['class'].rsplit('.', 1)[-1] in MESH_CLASSES]
+    if len(matches) != 1:
+        raise ValueError('Ambiguous mesh: ' + source)
+    return matches[0]
+
+
+def generated_skeletal_mesh(mesh, records):
+    """Recognize the one UModel-prepared animated mesh, which has no StaticMesh collision export."""
+    pose = mesh.get('pose', {})
+    if pose.get('source') != 'UModel MD5 animation':
+        return False
+    source = mesh['source']
+    package, path = source.split(':', 1)
+    matches = [r for r in records if r['path'] == path and r['class'].rsplit('.', 1)[-1] == 'SkeletalMesh']
+    if len(matches) != 1 or matches[0].get('package', package) != package:
+        raise ValueError('Ambiguous generated skeletal mesh: ' + source)
+    return True
+
 
 def refresh(reader, game, root, live_volumes=None):
     scene = Scene(reader, game, root)
@@ -13,20 +39,22 @@ def refresh(reader, game, root, live_volumes=None):
     manifest = json.loads(filename.read_text(encoding='utf-8'))
     for level in manifest['levels']:
         scene.load(level)
-    counts = {'supported': 0, 'absent': 0, 'unsupported': 0, 'hulls': 0, 'spheres': 0, 'capsules': 0}
+    counts = {'supported': 0, 'absent': 0, 'unsupported': 0, 'hulls': 0, 'spheres': 0,
+              'capsules': 0, 'skeletal_meshes_skipped': 0}
     for name, mesh in manifest['meshes'].items():
         if 'bsp' in mesh or 'terrain' in mesh:
             continue  # prepare_bsp / prepare_terrain sections keep their own triangle collision
         package, path = mesh['source'].split(':', 1) if ':' in mesh['source'] else (None, None)
-        # identity() uses Package:path; require a unique StaticMesh export.
+        # identity() uses Package:path; require a unique mesh export.
         if package is None:
             raise ValueError('Unsupported mesh identity: ' + mesh['source'])
-        matches = [r for r in scene.load(package).values()
-                   if r['path'] == path and r['class'].rsplit('.', 1)[-1] == 'StaticMesh']
-        if len(matches) != 1:
-            raise ValueError('Ambiguous mesh: ' + mesh['source'])
+        records = list(scene.load(package).values())
+        if generated_skeletal_mesh(mesh, records):
+            counts['skeletal_meshes_skipped'] += 1
+            continue
+        export = mesh_export(records, mesh['source'], path)
         probe = root / (name + '_collision_probe.obj')
-        data = scene.call(package, '--mesh', matches[0]['index'], '--property-offset', 4, '--output', probe)
+        data = scene.call(package, '--mesh', export['index'], '--property-offset', 4, '--output', probe)
         # Refuse to attach collision to changed geometry from another installation.
         original = root / (name + '.obj')
         if not original.is_file() or original.read_bytes() != probe.read_bytes():
@@ -52,6 +80,9 @@ def refresh(reader, game, root, live_volumes=None):
             counts[kind] += len(collision.get(kind, []))
     for actor in manifest['actors']:
         if 'bsp' in actor or 'terrain' in actor:
+            continue
+        if generated_skeletal_mesh(manifest['meshes'][actor['mesh']], scene.load(
+                manifest['meshes'][actor['mesh']]['source'].split(':', 1)[0]).values()):
             continue
         matches = [r for r in scene.load(actor['level']).values() if r['path'] == actor['source']]
         if len(matches) != 1:
