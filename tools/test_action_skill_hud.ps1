@@ -52,13 +52,21 @@ try {
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Host "Launched action-skill HUD test pid $($process.Id); log: $log"
-    if (!$process.WaitForExit($TimeoutSeconds * 1000)) { Write-Host 'Timed out; stopping the run.' }
+    $finished = $process.WaitForExit($TimeoutSeconds * 1000)
+    # Only this run's captures (written after the launch) are copied; the checker requires every scheduled one.
     if (Test-Path -LiteralPath $shots) {
         Get-ChildItem -LiteralPath $shots -Filter 'OWSkillHud_*.png' | Where-Object { $_.LastWriteTime -ge $started } |
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $outDir -Force }
     }
-    & python (Join-Path $PSScriptRoot 'check_action_skill_hud.py') $log
-    $code = $LASTEXITCODE
+    if ($finished) {
+        & python (Join-Path $PSScriptRoot 'check_action_skill_hud.py') $log --shots $outDir
+        $code = $LASTEXITCODE
+    } else {
+        # A hung or slow run fails even when the logged sequence looks complete; the checker is not run.
+        Write-Output "OWSKILLHUDTEST FAIL run_finished editor still running after $TimeoutSeconds s"
+        Write-Output 'OWSKILLHUDTEST SUMMARY result=FAIL reason=timeout'
+        $code = 1
+    }
     Write-Host "Screenshots and log: $outDir"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
