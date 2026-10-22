@@ -491,6 +491,11 @@ void UOpenWillowFxComponent::Play(const FOwFxTemplate* InTemplate, float DrawSca
             UE_LOG(LogTemp, Display, TEXT("OpenWillow FX %s: emitter %s modules not played: %s"), *Template->Name, *E.Name,
                 *FString::Join(E.Unsupported, TEXT(", ")));
     }
+    // Cascade's zero-time bursts are visible on the activation frame. A host component can be played from a Walker or
+    // target tick after its own tick group has already run; process only events at the current emitter time and render
+    // once here so a capture on that frame does not miss the intro swirl/flash. This zero-delta priming is UNVERIFIED.
+    for (FEmitterState& S : States) Simulate(S, 0.f);
+    for (int32 Index = 0; Index < States.Num(); ++Index) Render(States[Index], Index);
 }
 
 void UOpenWillowFxComponent::StopEmitting()

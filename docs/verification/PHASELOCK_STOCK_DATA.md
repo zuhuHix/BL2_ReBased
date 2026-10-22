@@ -1092,3 +1092,76 @@ override; the 1.50 s capture presents its torso toward the camera. The exact sto
 **UNVERIFIED**, and the short screenshots do not settle whether the lift still reads too airborne. The HUD skill sigil is
 still excluded as a separate HUD lane. These are host-render captures only, not gameplay parity validation; an independent
 critic review is still required.
+
+## Round 18 (2026-10-22): bubble framing, startup scheduling, screen mask
+
+Round 1's independent visual review scored the matched-frame set 5.9/10. This round addresses the measurable bubble-size error, the
+missing zero-time hand burst, and the screen effect's texture weighting. The valid host run is
+`local/laneB/r2/run-20261022-013146.log`; host-left/game-right pairs are in `local/laneB/r2/pairs/` at 0.25, 0.50, 0.80,
+1.50, 3.00 and 4.50 s. The capture used `-owfov=62.15 -owfpfov=45 -owphaselockpitch=3.5 -owcombatpawyawoffset=0
+-owcombatpawn=Bullymong` at 1280 x 720. The shot tool's comment now explains the aspect conversion for its FOV override.
+
+### Bubble size and capture FOV
+
+The old shot command used `-owfov=77.55`, but `OpenWillowWalker.cpp` treats this as a 4:3 horizontal FOV and converts it to the
+current aspect ratio. At 16:9 this produced 93.931 degrees, not the 77.55 degrees used by the matched game frames. Using
+`-owfov=62.15` produces 77.565 degrees at 16:9. No bubble scale was changed: a horizontal framing mismatch had made the old
+comparison misleading.
+
+For an outer-edge check at 1.50 s, on the 1280 x 720 source images, take mean RGB over rows 264-276 and columns 400-879; mark
+pixels where B > 170, B-R > 25 and G > 100, then use the first qualifying run of at least 3 pixels left of x=640 and last such
+run right of x=640. This reads the outer blue ring edge (the older `rim_width` ridge detector selects an inner host ridge).
+The span is 355 px in the Round 1 host, 420 px in this host, and 422 px in the matched game frame. This is an image-edge
+measurement, not a decoded particle size; it supports keeping the existing scale and leaves the host 2 px narrower by this
+criterion. The detector and the capture calibration remain **UNVERIFIED** as stock rendering rules.
+
+### Hit-notify hand effect and screen mask
+
+`NATIVE_PHASELOCK_PRESENTATION.md` places the `Phase_Lock_Lift` hand-effect notification at 0.25 s. The Round 1 host log had
+zero hand particles at +0.256 s; this host log reports seven. `UOpenWillowFxComponent::Play` now simulates each emitter at
+zero delta and renders it once on activation, so a component activated after its tick group still processes time-zero bursts.
+That fixes the scheduling count, but the +0.25 s pair still has a broad dark quad and lacks the game's conspicuous blue arcs.
+The host's +0.30 s frame has a visible blue swirl, so these captures do not justify shifting all hand emitters earlier; the
+stock swirl and disc timing, hand attachment translation, and the quad's sharp lower edge remain **UNVERIFIED**.
+
+Round 6's compiled `Mat_PhaseLockScreenEffect` listing says the mask contributes RGB to the screen colour. The importer had
+used only the green channel with a 0.6 floor. It now weights the hue-preserving scene-modulation stand-in with the mask's
+brightest RGB channel and no floor; the screen quad also disables depth testing. The +0.80 s host pair shows more radial
+texture between streaks, but the wash remains brighter and more uniform/white-cyan than the game's blue streaked wash. A
+post-process scene-sampling attempt blacked out the scene in both tested pass/input configurations and was reverted to the
+surface-quad stand-in. The stock scene-colour expression and the host wash's final brightness remain **UNVERIFIED**. The
+pink/white eye sigil remains HUD-owned and is excluded.
+
+### Target colour and remaining comparisons
+
+The +1.50 s bubble outer span now matches by the detector above, while the host interior still reads lighter and bluer than
+the game's dark navy centre. The target still reads cool grey-blue in Sanctuary where the Three Horns reference is brown/ochre;
+no colour fit was made because the scenes have different lighting and the material graph was not recovered. As a bounded
+inspection, UModel / UE Viewer build 1590 (MIT, `https://www.gildor.org/en/projects/umodel`) ran against the local
+`Master_Creature` in `WillowGame.upk`. Command: `C:\Users\yorad\Tools\UEViewer\umodel.exe -export -game=border
+-path="C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2\WillowGame\CookedPCConsole" -obj=Master_Creature
+-out=local/analysis/round18-master-creature -uc -png -nomesh -noanim -nostat WillowGame.upk Master_Creature Material`.
+The invocation took about 0.17 s. The output under ignored `local/analysis/round18-master-creature/` contained 1 `.log`,
+1 `.mat`, 10 `.png`, and 1 `.txt` file; it reported no export errors or duplicate outputs. This bounded run intentionally
+did not request meshes or animations. It did not return a material shader graph: the `.mat` property listing and local
+shader-cache lookup had no parent graph or corresponding shader map/GUID. This did not establish the bullymong's shader
+or albedo under neutral lighting. The brown/ochre mismatch and the target's host pose/framing remain open rather than
+fitted by eye.
+
+### Validation and open items
+
+* **Automated extraction/build/capture:** the existing local UModel inspection completed as counted above; the UE 5.8
+  Development build succeeded; the importer reported 18 material instances, 21 textures and 3 meshes imported, with 3
+  materials skipped (impact half-moon without exported texture parameters, unresolved energy-spike modulate graph, and the
+  screen-distortion SirenSuction). The valid host capture run exited successfully and produced all requested timings.
+* **Visual validation:** the 0.25/0.50/0.80/1.50/3.00/4.50 s host-left/game-right pairs were generated for the parent
+  critic. The outer bubble edge was measured with the stated threshold; the remaining differences above are visual
+  inspection only. No independent critic score is available yet.
+* **Gameplay validation:** none was run in this round. The captures test presentation in the host and do not establish
+  gameplay or stock behavior parity.
+
+The 0.25 s black void/blue arcs, the 0.80 s hand aura position and wash brightness, the bubble's interior colour, the
+bullymong's Sanctuary colour and pose, and the screen-refraction effect remain open. The zero-delta burst handling, mask
+weighting, FOV conversion used for these captures, outer-edge threshold, and material/shader stand-ins are **UNVERIFIED**
+as exact stock behavior. The 8/10 critic target was not evaluated in this implementation turn; hand the pair set to the
+parent for review.
