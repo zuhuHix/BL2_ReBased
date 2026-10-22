@@ -256,6 +256,62 @@ def temporary_sky_policy(scene):
             'spawn_sky_atmosphere': not native}
 
 
+# Sanctuary host profile. Only the Sanctuary_P map gets the Sanctuary
+# calibrations, source-derived lighting, decals and static lights. Every other
+# map keeps the pre-round-1 inspection rig. Round-4 host pieces are additionally
+# opt-in through this environment variable (comma-separated, case-insensitive).
+SANCTUARY_MAP = 'Sanctuary_P'
+SANCTUARY_OPT_IN_ENV = 'OPENWILLOW_SANCTUARY_OPT_IN'
+SANCTUARY_OPT_IN_NAMES = frozenset(('grade', 'diffuse_tint', 'xmas_bulbs', 'static_lights',
+                                    'graffiti_decals'))
+SANCTUARY_XMAS_BULB_METHOD = 'xmas_bulb_emissive_v1'
+
+
+def sanctuary_profile(scene):
+    """True only for Sanctuary_P; other maps never receive the Sanctuary profile."""
+    return scene.get('map') == SANCTUARY_MAP
+
+
+def sanctuary_opt_ins(environ_value, scene):
+    """Opt-in names that take effect for this scene.
+
+    Unknown names raise ValueError even on other maps, so a typo is never silent.
+    Valid names are ignored (empty set) unless the scene is Sanctuary_P.
+    """
+    requested = set()
+    for token in (environ_value or '').split(','):
+        name = token.strip().lower()
+        if not name:
+            continue
+        if name not in SANCTUARY_OPT_IN_NAMES:
+            raise ValueError('Unknown %s name %r; expected one of: %s' % (
+                SANCTUARY_OPT_IN_ENV, token.strip(), ', '.join(sorted(SANCTUARY_OPT_IN_NAMES))))
+        requested.add(name)
+    if not sanctuary_profile(scene):
+        return frozenset()
+    return frozenset(requested)
+
+
+def sanctuary_source_lighting(scene):
+    """Decoded source lighting records; empty for non-Sanctuary maps (pre-round-1 rig)."""
+    return scene.get('lighting', {}) if sanctuary_profile(scene) else {}
+
+
+def host_sky_cloud_opacity(scene, source_opacity):
+    """Sanctuary cloud-band calibration only on Sanctuary_P; the source cap otherwise."""
+    if sanctuary_profile(scene):
+        return sanctuary_sky_cloud_opacity(source_opacity)
+    return float(source_opacity)
+
+
+def effective_scene_recipe(definition, opt_ins):
+    """The scene_recipe a material gets this run; the bulb recipe needs its opt-in."""
+    recipe = definition.get('scene_recipe', {})
+    if recipe.get('method') == SANCTUARY_XMAS_BULB_METHOD and 'xmas_bulbs' not in opt_ins:
+        return {}
+    return recipe
+
+
 def ue3_color_linear(rgb):
     """Linear RGB for a UE3 FColor given as byte/255 values.
 

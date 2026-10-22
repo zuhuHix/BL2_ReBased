@@ -93,6 +93,11 @@ SANCTUARY_LIGHT_SELECTION = {
 }
 
 
+def sanctuary_lighting_enabled(map_name):
+    """Only the Sanctuary persistent map gets the Sanctuary lighting policy."""
+    return map_name == 'Sanctuary_P'
+
+
 def select_sanctuary_light_components(components):
     """Apply deterministic thresholds, spatial quota and total light cap."""
     records = [dict(item) for item in components]
@@ -2210,6 +2215,9 @@ class Scene:
                     raise ValueError('LightComponents count does not match its decoded references')
                 if data.get('trailing_bytes') != len(references) * 64:
                     raise ValueError('StaticLightCollectionActor tail does not match its component count')
+                # Stage this array's records locally so a malformed element
+                # cannot leave earlier lights of the same actor in the output.
+                staged_records = []
                 for reference in references:
                     component = rows.get(reference.get('index'))
                     if component is None:
@@ -2219,7 +2227,8 @@ class Scene:
                         raise ValueError('LightComponents contains an unsupported light component class')
                     if component.get('outer') != actor['index']:
                         raise ValueError('Light component outer does not match collection owner')
-                    component_records.append((component, component_kind))
+                    staged_records.append((component, component_kind))
+                component_records.extend(staged_records)
             except (ValueError, KeyError, TypeError) as error:
                 issues.append({'source': source, 'error': str(error)})
                 membership_errors.append(source)
@@ -2630,7 +2639,9 @@ class Scene:
             raise ValueError('Matinee first-key experiment expected exactly one '
                              f'{MATINEE_FIRST_KEY_COMPONENT}, found '
                              f'{matinee_first_key_applied}')
-        lighting = self.lighting_manifest(levels)
+        # The lighting policy is Sanctuary-only; other maps keep the pre-round-1
+        # scene.json shape with no 'lighting' key.
+        lighting = self.lighting_manifest(levels) if sanctuary_lighting_enabled(persistent) else None
         decals = self.decals_manifest(levels)
         decals['static_mesh_candidates'] = self.decal_like_static_meshes(actors)
         decals['census']['static_mesh_candidate_placements'] = sum(
@@ -2638,8 +2649,7 @@ class Scene:
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
-                  'lighting': lighting, 'decals': decals,
-                  'excluded_components': excluded,
+                  'decals': decals, 'excluded_components': excluded,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
                   'collision_policy': 'observed_convex_and_box_v1',
                   'matinee_first_key_policy': (
@@ -2648,6 +2658,8 @@ class Scene:
                   'matinee_first_key_applied': matinee_first_key_applied,
                   'outer_shell_policy': ('mesh_default_for_teleported_overrides_v1'
                                          if getattr(self, 'outer_shell', False) else 'placed_overrides')}
+        if lighting is not None:
+            result['lighting'] = lighting
         temporary = self.output / 'scene.json.tmp'
         temporary.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
         temporary.replace(self.output / 'scene.json')

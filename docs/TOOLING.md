@@ -539,6 +539,12 @@ walks them in the running game (takes the screen and keyboard; output under `loc
 `tools/walking_routes.py routes` writes `walk-routes.json`, and `tools/test_ue_viewer.ps1 -Route` runs
 `OpenWillow.RouteWalking` and `OpenWillow.CollisionShapes`.
 
+Sanctuary visual opt-in (2026-10-22): `tools/prepare_level.py` writes the decoded lighting, decal and diffuse-tint records
+into `scene.json` for `Sanctuary_P` only (other maps get no `lighting` key, and their decals default-deny). The host applies
+the round-4 visuals only when the environment variable `OPENWILLOW_SANCTUARY_OPT_IN` lists them: `grade`, `diffuse_tint`,
+`xmas_bulbs`, `static_lights`, `graffiti_decals` (comma-separated; all default OFF). The 0.14 cloud-cap scale stays on. See
+[SANCTUARY_SCENE_IMPORT_GAPS.md](verification/SANCTUARY_SCENE_IMPORT_GAPS.md) for the calibrations, all `UNVERIFIED`.
+
 ### Selecting an installed map
 
 `tools/viewer.py` lists persistent packages in the base-game cooked directory.
