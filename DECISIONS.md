@@ -4682,4 +4682,3 @@ AI-assisted (Claude, with Codex sub-agents). Lane D of the 2026-10-21 orchestrat
   49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE with `-Items local/inventory-actions/bounded-recipes`. The suite first
   failed step 20 (and skipped the seven steps after it) because a transfer started on the analogue even after a number key had
   chosen slot 2; a number-key choice for the selected item now wins (host control, the game's behaviour is not observed).
-
