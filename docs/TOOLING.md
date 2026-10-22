@@ -8,6 +8,27 @@ the ignored `local/` directory.
 Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3. The UE5
 host additionally needs Unreal Engine 5.8 installed.
 
+## Main tools at a glance (maintainer, 2026-10-22)
+
+Reach for these first, roughly in this order, before writing a one-off decoder. Every rule below
+(outputs under ignored `local/`, nothing game-derived in git, UNVERIFIED until confirmed in the game)
+still applies.
+
+| Need | Tool | Where / how |
+|---|---|---|
+| A value or behaviour the running game shows | **bl-sdk (unrealsdk + pyunrealsdk) live reads and hooks**, the way the maintainer's [RTSE](https://github.com/zuhuHix/Bl2_RTSE) save editor works (`find_object`/`find_all`, hooks, a game-thread job queue) | `tools/real_game/` (`realgame.ps1`, `scripts/*.py`, `openwillow_realgame` SDK mod); see "Driving the real game" below |
+| Decoding anything: native functions, binary formats, movies, runtime call tracing | **REA** ("reverse engineer anything", npm `rea-agents` 6.0.0, used through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/` (docs/NATIVE_ANALYSIS.md) |
+| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 | `C:\Users\yorad\Tools\`, `tools/ghidra_import.ps1` |
+| Meshes, textures, animations, sounds | UModel / UE Viewer build 1590 | "UModel / UE Viewer" below |
+| Package identity, properties, scene records | `ow-package` (ours) | "`ow-package`: the package reader" below |
+| UnrealScript bytecode | `research/script_disasm.py` (ours) | "Reading the game's UnrealScript" below |
+| The game's object dumps as an oracle | OpenBLCMM datapack | `tools/blcmm_dumps.py`, THIRD_PARTY.md |
+| BL2's Scaleform UI movies | Ruffle (desktop and web builds) | "BL2's HUD movie over UE5" below |
+| Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `C:\Users\yorad\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
+
+REA and Gibbed have no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open
+(2026-10-22).
+
 ## External tools
 
 External tools are optional local dependencies. Keep their binaries outside the
