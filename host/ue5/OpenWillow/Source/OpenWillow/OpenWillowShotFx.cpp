@@ -89,17 +89,18 @@ void AOpenWillowShotFx::Flash(UWorld* World, const FVector& Location, const FLin
         Color, 8.f, Life, LightIntensity);
 }
 
-void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, float Radius, float Life)
+void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, float Radius, float Life,
+    const FLinearColor& Color)
 {
     if (!World) return;
     const float SafeRadius = FMath::Max(0.1f, Radius);
     const float SafeLife = FMath::Max(0.01f, Life);
-    // Host-made four-point plume. The live type provides the muzzle socket and duration, but not a scalar size or
-    // screen shape. The compact dimensions and 0.16 s life are UNVERIFIED fits to the lane E ~0.12 s post-shot frame.
-    const float PlumeLife = FMath::Min(SafeLife, 0.16f);
-    const float Extent = FMath::Clamp(SafeRadius * 0.38f, 0.75f, 1.35f);
-    const float RayLength = Extent * 2.1f;
-    const float RayWidth = Extent * 0.34f;
+    // Host-made starburst. The muzzle socket and type duration come from live reads; size, shape, tint and the short
+    // render life are UNVERIFIED visual fits to the lane E burst references.
+    const float PlumeLife = FMath::Min(SafeLife, 0.12f);
+    const float Extent = FMath::Clamp(SafeRadius * 1.05f, 3.5f, 6.f);
+    const float RayLength = Extent * 1.6f;
+    const float RayWidth = Extent * 0.22f;
     const UStaticMesh* Cone = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cone.Cone"));
     FRotator CameraRotation = FRotator::ZeroRotator;
     if (APlayerController* PC = World->GetFirstPlayerController())
@@ -109,26 +110,31 @@ void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, floa
     const FVector Directions[] = {
         CameraBasis.GetUnitAxis(EAxis::Y), -CameraBasis.GetUnitAxis(EAxis::Y),
         CameraBasis.GetUnitAxis(EAxis::Z), -CameraBasis.GetUnitAxis(EAxis::Z),
+        (CameraBasis.GetUnitAxis(EAxis::Y) + CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
+        (CameraBasis.GetUnitAxis(EAxis::Y) - CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
+        (-CameraBasis.GetUnitAxis(EAxis::Y) + CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
+        (-CameraBasis.GetUnitAxis(EAxis::Y) - CameraBasis.GetUnitAxis(EAxis::Z)).GetSafeNormal(),
     };
     for (int32 I = 0; Cone && I < UE_ARRAY_COUNT(Directions); ++I)
     {
-        const float Length = RayLength * ((I == 0 || I == 3) ? 1.f : 0.76f);
+        const float Length = RayLength * (I < 4 ? 1.f : 0.58f);
         const FVector Direction = Directions[I];
         const FQuat Rotation = FQuat::FindBetweenNormals(FVector::UpVector, Direction);
-        const FVector RayLocation = Location + Direction * (Length * 0.48f) + ViewForward * 0.25f;
+        const FVector RayLocation = Location + Direction * (Length * 0.48f) + ViewForward * 1.5f;
         const FVector Scale(RayWidth / 50.f, RayWidth / 50.f, Length / 100.f);
         const FTransform Pose(Rotation, RayLocation, Scale);
         auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
         Fx->FinishSpawning(Pose);
-        Fx->Setup(const_cast<UStaticMesh*>(Cone), FLinearColor(1.f, 0.23f, 0.015f, 1.f), 6.5f, PlumeLife, 0.f);
+        const FLinearColor RayColor = I < 4 ? Color : Color * FLinearColor(1.f, 0.62f, 0.38f, 1.f);
+        Fx->Setup(const_cast<UStaticMesh*>(Cone), RayColor, 8.f, PlumeLife, 0.f);
         Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     }
-    const float CoreScale = Extent * 0.38f / 50.f;
-    const FTransform CorePose(CameraRotation, Location + ViewForward * 0.5f, FVector(CoreScale));
+    const float CoreScale = Extent * 0.16f / 50.f;
+    const FTransform CorePose(CameraRotation, Location + ViewForward * 2.f, FVector(CoreScale));
     auto* Core = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), CorePose);
     Core->FinishSpawning(CorePose);
     Core->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")),
-        FLinearColor(1.f, 0.86f, 0.24f, 1.f), 8.f, FMath::Min(PlumeLife, 0.12f), 0.f);
+        FLinearColor(1.f, 0.78f, 0.16f, 1.f), 10.f, PlumeLife, 120.f);
     Core->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
 }
 

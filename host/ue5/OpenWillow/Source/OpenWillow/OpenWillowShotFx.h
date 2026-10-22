@@ -20,7 +20,8 @@ public:
     static void Flash(UWorld* World, const FVector& Location, const FLinearColor& Color,
         float Radius, float Life, float LightIntensity);
     // Two-layer host muzzle effect. Radius remains an UNVERIFIED stand-in because the type has no scalar size field.
-    static void MuzzleFlash(UWorld* World, const FVector& Location, float Radius, float Life);
+    static void MuzzleFlash(UWorld* World, const FVector& Location, float Radius, float Life,
+        const FLinearColor& Color);
     // Low-cost brass cylinder stand-in, launched from the selected type/body socket toward the right. Its size, life and
     // ballistic constants are UNVERIFIED host values; the type data only identifies the casing template/socket.
     static void Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale = 1.f);

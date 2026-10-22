@@ -205,6 +205,7 @@ private:
     bool bReloading = false;
     float ReloadEndsAt = 0;
     UPROPERTY() TObjectPtr<class UAnimSequence> WeaponReloadAnim;
+    UPROPERTY() TObjectPtr<class UAnimSequence> ArmsReloadAnim;
     bool bOutOfAmmoLogged = false;
     float LandUntil = 0;
     float TargetHitAt = -10;
@@ -222,9 +223,11 @@ private:
     {
         FVector Offset = FVector::ZeroVector;
         float Fov = 0.f;
+        float FirstPersonScaleFit = 1.f;
         float ZoomFov = 0.f;
         float ZoomBlendTime = 0.2f;
         FVector ZoomOffset = FVector::ZeroVector;
+        FVector ZoomPositionFit = FVector::ZeroVector;
         FWeaponSocketData ZoomSocket;
         FWeaponSocketData MuzzleSocket;
         FWeaponSocketData ShellSocket;
@@ -239,6 +242,8 @@ private:
         float RecoilWeight = 0.45f;
         float ZoomedRecoilScale = 1.f;
         FString ReloadAsset;
+        FString ReloadAnimation;
+        FString ArmsAnimSet;
     };
     TMap<FString, FViewModel> ViewModels;
     bool bViewModelActive = false;      // foreground FOV on (the default; -owfpfov=0 turns it and the offsets off)

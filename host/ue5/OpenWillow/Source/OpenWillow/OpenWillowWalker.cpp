@@ -87,11 +87,14 @@ int32 UOpenWillowScopeOverlay::NativePaint(const FPaintArgs& Args, const FGeomet
         Circle.Add(FVector2f(Centre.X + Radius * FMath::Cos(Angle),
             Centre.Y + Radius * FMath::Sin(Angle)));
     }
+    const FLinearColor Reticle(1.f, 0.82f, 0.015f, 0.95f);
     FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Circle,
-        ESlateDrawEffect::None, FLinearColor(1.f, 0.82f, 0.015f, 0.95f), true, 2.f);
+        ESlateDrawEffect::None, Reticle, true, 2.f);
     for (int32 I = 0; I < 4; ++I)
     {
         const float Angle = PI * 0.5f * float(I);
+        const FVector2f Direction(FMath::Cos(Angle), FMath::Sin(Angle));
+        const FVector2f Perpendicular(-Direction.Y, Direction.X);
         TArray<FVector2f> Tick = {
             FVector2f(Centre.X + (Radius - 10.f) * FMath::Cos(Angle),
                 Centre.Y + (Radius - 10.f) * FMath::Sin(Angle)),
@@ -99,7 +102,51 @@ int32 UOpenWillowScopeOverlay::NativePaint(const FPaintArgs& Args, const FGeomet
                 Centre.Y + (Radius + 6.f) * FMath::Sin(Angle)),
         };
         FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Tick,
-            ESlateDrawEffect::None, FLinearColor(1.f, 0.82f, 0.015f, 0.95f), true, 2.f);
+            ESlateDrawEffect::None, Reticle, true, 2.f);
+        const FVector2f Tip(Centre.X + Radius * 0.78f * Direction.X,
+            Centre.Y + Radius * 0.78f * Direction.Y);
+        const FVector2f ArrowBase(Centre.X + Radius * 0.92f * Direction.X,
+            Centre.Y + Radius * 0.92f * Direction.Y);
+        TArray<FVector2f> Arrow = {
+            Tip,
+            FVector2f(ArrowBase.X + 6.f * Perpendicular.X, ArrowBase.Y + 6.f * Perpendicular.Y),
+            FVector2f(ArrowBase.X - 6.f * Perpendicular.X, ArrowBase.Y - 6.f * Perpendicular.Y),
+            Tip,
+        };
+        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Arrow,
+            ESlateDrawEffect::None, Reticle, true, 2.f);
+    }
+    // Four interrupted inner arcs and a lower rangefinder are an UNVERIFIED host fit to the live SMG scope frame.
+    for (int32 Quadrant = 0; Quadrant < 4; ++Quadrant)
+    {
+        TArray<FVector2f> Arc;
+        const float Start = Quadrant * PI * 0.5f + PI * 0.18f;
+        const float End = (Quadrant + 1) * PI * 0.5f - PI * 0.18f;
+        for (int32 I = 0; I <= 12; ++I)
+        {
+            const float Angle = FMath::Lerp(Start, End, float(I) / 12.f);
+            const float InnerRadius = Radius * 0.50f;
+            Arc.Add(FVector2f(Centre.X + InnerRadius * FMath::Cos(Angle),
+                Centre.Y + InnerRadius * FMath::Sin(Angle)));
+        }
+        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), Arc,
+            ESlateDrawEffect::None, Reticle, false, 2.f);
+    }
+    const FVector2f RangeLeft(Centre.X - Radius * 0.36f, Centre.Y + Radius * 0.84f);
+    const FVector2f RangeRight(Centre.X + Radius * 0.36f, Centre.Y + Radius * 0.84f);
+    const FVector2f RangeTip(Centre.X, Centre.Y + Radius * 1.48f);
+    TArray<FVector2f> RangeTriangle = { RangeLeft, RangeRight, RangeTip, RangeLeft };
+    FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), RangeTriangle,
+        ESlateDrawEffect::None, Reticle, true, 2.f);
+    for (int32 Mark = 0; Mark < 5; ++Mark)
+    {
+        const float Y = FMath::Lerp(Centre.Y + Radius * 0.96f, Centre.Y + Radius * 1.34f, float(Mark) / 4.f);
+        const float HalfWidth = Radius * (0.25f - 0.035f * Mark);
+        TArray<FVector2f> RangeLine = {
+            FVector2f(Centre.X - HalfWidth, Y), FVector2f(Centre.X + HalfWidth, Y),
+        };
+        FSlateDrawElement::MakeLines(OutDrawElements, ++Layer, AllottedGeometry.ToPaintGeometry(), RangeLine,
+            ESlateDrawEffect::None, Reticle, false, 1.5f);
     }
     return Layer;
 }
@@ -533,6 +580,8 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
             WeaponVisual->SetPosition(0.f, false); // reload clips start at the weapon's idle pose
         }
         WeaponReloadAnim = nullptr;
+        if (ArmsAnim && ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
+        ArmsReloadAnim = nullptr;
     }
     if (bMayaActive && bWeaponOut && Weapon && bFireHeld && !bReloading && Now >= NextShotAt)
     {
@@ -605,6 +654,13 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
             Model.Offset = FVector((*Offset)[0]->AsNumber(), (*Offset)[1]->AsNumber(), (*Offset)[2]->AsNumber());
         double Fov = 0.0;
         if ((*Entry)->TryGetNumberField(TEXT("first_person_fov"), Fov)) Model.Fov = float(Fov);
+        double ScaleFit = 1.0;
+        if ((*Entry)->TryGetNumberField(TEXT("first_person_scale_fit"), ScaleFit))
+            Model.FirstPersonScaleFit = FMath::Clamp(float(ScaleFit), 0.25f, 1.5f);
+        const TArray<TSharedPtr<FJsonValue>>* ZoomFit = nullptr;
+        if ((*Entry)->TryGetArrayField(TEXT("zoom_position_fit_cm"), ZoomFit) && ZoomFit->Num() == 3)
+            Model.ZoomPositionFit = FVector(float((*ZoomFit)[0]->AsNumber()), float((*ZoomFit)[1]->AsNumber()),
+                float((*ZoomFit)[2]->AsNumber()));
         double Number = 0.0;
         if ((*Entry)->TryGetNumberField(TEXT("zoom_fov"), Number)) Model.ZoomFov = float(Number);
         if ((*Entry)->TryGetNumberField(TEXT("zoom_blend_time"), Number)) Model.ZoomBlendTime = FMath::Max(0.01f, float(Number));
@@ -619,6 +675,11 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
         if ((*Entry)->TryGetBoolField(TEXT("shell_casing_enabled"), Enabled)) Model.bShellCasingEnabled = Enabled;
         if ((*Entry)->TryGetBoolField(TEXT("scope_overlay"), Enabled)) Model.bScopeOverlay = Enabled;
         (*Entry)->TryGetStringField(TEXT("weapon_reload_asset"), Model.ReloadAsset);
+        (*Entry)->TryGetStringField(TEXT("reload_animation"), Model.ReloadAnimation);
+        FString WeaponAnimSet;
+        (*Entry)->TryGetStringField(TEXT("weapon_anim_set"), WeaponAnimSet);
+        const int32 AnimSetDot = WeaponAnimSet.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+        Model.ArmsAnimSet = AnimSetDot == INDEX_NONE ? WeaponAnimSet : WeaponAnimSet.Mid(AnimSetDot + 1);
         const TArray<TSharedPtr<FJsonValue>>* Tracer = nullptr;
         if ((*Entry)->TryGetArrayField(TEXT("tracer_color"), Tracer) && Tracer->Num() == 4)
             Model.TracerColor = FLinearColor(float((*Tracer)[0]->AsNumber()) / 255.f,
@@ -656,20 +717,16 @@ void AOpenWillowWalker::ApplyViewModel(const FString& ItemId)
     FViewModel* Model = ViewModels.Find(ItemId);
     const FVector BaseOffset = bViewModelActive && Model ? Model->Offset + CameraBoneOffset : FVector::ZeroVector;
     Arms->SetRelativeLocation(BaseOffset);
+    if (WeaponVisual)
+        WeaponVisual->SetRelativeScale3D(FVector(Model ? Model->FirstPersonScaleFit : 1.f));
     if (bViewModelActive)
         Camera->SetFirstPersonFieldOfView(bViewFovForced || !Model || Model->Fov <= 1.f ? ViewFovDefault : Model->Fov);  // horizontal degrees
     if (Model)
     {
         Model->ZoomOffset = FVector::ZeroVector;
-        if (Model->ZoomSocket.bValid && (WeaponVisual->DoesSocketExist(FName(*Model->ZoomSocket.Name))
-            || WeaponVisual->GetBoneIndex(FName(*Model->ZoomSocket.Bone)) != INDEX_NONE))
-        {
-            // Host ADS stand-in: move the arms/gun until the selected cooked eye socket lies on the camera centreline.
-            // This is a socket-driven, per-recipe offset; the stock view-model controller math is UNVERIFIED.
-            const FVector SocketInCamera = Camera->GetComponentTransform().InverseTransformPosition(
-                WeaponSocketWorld(Model->ZoomSocket).GetLocation());
-            Model->ZoomOffset = FVector(0.f, -SocketInCamera.Y, -SocketInCamera.Z);
-        }
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow view model %s type FOV %.2f, hip offset %s, weapon size fit %.2f, ADS fit %s"),
+            *ItemId, Model->Fov, *Model->Offset.ToString(), Model->FirstPersonScaleFit,
+            *Model->ZoomPositionFit.ToString());
     }
     if (Model && bAimHeld) BeginAimTransition(GetWorld()->GetTimeSeconds());
 }
@@ -683,6 +740,8 @@ FTransform AOpenWillowWalker::WeaponSocketWorld(const FWeaponSocketData& Socket)
     if (!WeaponVisual || !Socket.bValid) return FTransform::Identity;
     const FName SocketName(*Socket.Name);
     const FName SocketBone(*Socket.Bone);
+    if (WeaponVisual->DoesSocketExist(SocketName))
+        return WeaponVisual->GetSocketTransform(SocketName, RTS_World);
     FTransform ParentWorld;
     int32 BoneIndex = WeaponVisual->GetBoneIndex(SocketBone);
     if (BoneIndex != INDEX_NONE)
@@ -726,7 +785,7 @@ void AOpenWillowWalker::UpdateAim(float Now)
     if (ItemId != AimTransitionWeaponId) BeginAimTransition(Now);
     const float Progress = FMath::Clamp((Now - AimTransitionStart) / FMath::Max(0.01f, AimTransitionDuration), 0.f, 1.f);
     AimAlpha = FMath::Lerp(AimTransitionStartAlpha, AimTransitionTargetAlpha, Progress);
-    const FViewModel* Model = Item ? ViewModels.Find(ItemId) : nullptr;
+    FViewModel* Model = Item ? ViewModels.Find(ItemId) : nullptr;
     // Use the measured ZoomedEndFOV directly as UE5's horizontal camera FOV. The previous 4:3-to-viewport
     // conversion made ADS visibly too wide on the 16:9 capture; this interpretation remains UNVERIFIED native behavior.
     const float ZoomFov = Model && Model->ZoomFov > 1.f ? Model->ZoomFov : WorldFovDefault;
@@ -741,8 +800,42 @@ void AOpenWillowWalker::UpdateAim(float Now)
     {
         static const FVector CameraBoneOffset(9.42, -2.15, -0.36);
         const FVector BaseOffset = bViewModelActive && Model ? Model->Offset + CameraBoneOffset : FVector::ZeroVector;
+        if (Model && Model->ZoomSocket.bValid && WeaponVisual
+            && (WeaponVisual->DoesSocketExist(FName(*Model->ZoomSocket.Name))
+                || WeaponVisual->GetBoneIndex(FName(*Model->ZoomSocket.Bone)) != INDEX_NONE))
+        {
+            const FVector SocketInCamera = Camera->GetComponentTransform().InverseTransformPosition(
+                WeaponSocketWorld(Model->ZoomSocket).GetLocation());
+            // Remove the arm translation applied on the previous frame to recover this socket's hip-pose position.
+            // Re-evaluate after each per-type pose update instead of retaining a value measured during slot selection.
+            const FVector AppliedZoom = Arms->GetRelativeLocation() - BaseOffset;
+            const FVector BaseSocket = SocketInCamera - AppliedZoom;
+            float ViewportHeight = 720.f;
+            float Aspect = 16.f / 9.f;
+            if (GEngine && GEngine->GameViewport)
+            {
+                FVector2D ViewportSize = FVector2D::ZeroVector;
+                GEngine->GameViewport->GetViewportSize(ViewportSize);
+                if (ViewportSize.Y > 1.f)
+                {
+                    ViewportHeight = ViewportSize.Y;
+                    Aspect = ViewportSize.X / ViewportSize.Y;
+                }
+            }
+            const float Fov = Model->Fov > 1.f ? Model->Fov : ViewFovDefault;
+            const float VerticalFov = 2.f * FMath::Atan(FMath::Tan(FMath::DegreesToRadians(Fov) * 0.5f) / Aspect);
+            const float DropPixels = ViewportHeight * (18.f / 568.f); // live frame fit: ~18 px below reticle on a 568 px panel
+            const float DropCm = FMath::Max(0.f, BaseSocket.X) * FMath::Tan(VerticalFov * 0.5f)
+                * (2.f * DropPixels / ViewportHeight);
+            Model->ZoomOffset = FVector(0.f, -BaseSocket.Y, -BaseSocket.Z - DropCm) + Model->ZoomPositionFit;
+        }
+        else if (Model)
+        {
+            Model->ZoomOffset = FVector::ZeroVector;
+        }
         Arms->SetRelativeLocation(BaseOffset + (Model ? Model->ZoomOffset * AimAlpha : FVector::ZeroVector));
     }
+    UpdateArmsVisibility();
 }
 void AOpenWillowWalker::SelectSlot(int32 Slot)
 {
@@ -972,11 +1065,18 @@ FString AOpenWillowWalker::HeldWeaponMesh() const
 }
 bool AOpenWillowWalker::AreArmsShown() const
 {
-    return Arms && Arms->GetSkinnedAsset() && !bInventoryPresentation && IdleAnim;
+    const FViewModel* Model = ActiveViewModel();
+    const bool bScopeHides = Model && Model->bScopeOverlay && AimAlpha >= 0.98f;
+    return Arms && Arms->GetSkinnedAsset() && !bInventoryPresentation && IdleAnim && !bScopeHides;
 }
 void AOpenWillowWalker::UpdateArmsVisibility()
 {
-    if (Arms) Arms->SetHiddenInGame(bInventoryPresentation || !IdleAnim);
+    const FViewModel* Model = ActiveViewModel();
+    const bool bScopeHides = Model && Model->bScopeOverlay && AimAlpha >= 0.98f;
+    if (Arms) Arms->SetHiddenInGame(bInventoryPresentation || !IdleAnim || bScopeHides);
+    if (WeaponVisual)
+        WeaponVisual->SetHiddenInGame(bInventoryPresentation || !bWeaponOut || !WeaponVisual->GetSkinnedAsset()
+            || bScopeHides);
 }
 void AOpenWillowWalker::FirePressed()
 {
@@ -1019,20 +1119,35 @@ bool AOpenWillowWalker::StartReload(float Now)
     bReloading = true;
     ReloadEndsAt = Now + FMath::Max(0.1f, Weapon->ReloadTime);
     WeaponReloadAnim = nullptr;
+    ArmsReloadAnim = nullptr;
     if (const FViewModel* Model = ViewModels.Find(Weapon->Id); Model && !Model->ReloadAsset.IsEmpty())
     {
         WeaponReloadAnim = LoadObject<UAnimSequence>(nullptr, *Model->ReloadAsset);
+        ArmsReloadAnim = (!Model->ArmsAnimSet.IsEmpty() && !Model->ReloadAnimation.IsEmpty())
+            ? LoadArmsAnim(*Model->ArmsAnimSet, *Model->ReloadAnimation) : nullptr;
+        const float Rate = WeaponReloadAnim
+            ? WeaponReloadAnim->GetPlayLength() / FMath::Max(0.1f, Weapon->ReloadTime) : 1.f;
         if (WeaponReloadAnim && WeaponVisual)
         {
             // No stock animation-rate scalar is present in the selected type data. ClipLength / item ReloadTime is an
             // UNVERIFIED timing rule inferred from the requested whole-reload span.
-            const float Rate = WeaponReloadAnim->GetPlayLength() / FMath::Max(0.1f, Weapon->ReloadTime);
             WeaponVisual->PlayAnimation(WeaponReloadAnim, false);
             WeaponVisual->SetPlayRate(Rate);
             UE_LOG(LogTemp, Display, TEXT("OpenWillow reload clip %s rate %.3f"), *Model->ReloadAsset, Rate);
         }
         else if (!WeaponReloadAnim)
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow reload animation not found: %s"), *Model->ReloadAsset);
+        if (ArmsReloadAnim && ArmsAnim)
+        {
+            ArmsAnim->PlayAction(ArmsReloadAnim, 1.f, Rate);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow arms reload clip %s/%s rate %.3f"),
+                *Model->ArmsAnimSet, *Model->ReloadAnimation, Rate);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms reload animation missing: %s/%s"),
+                *Model->ArmsAnimSet, *Model->ReloadAnimation);
+        }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload started: %s, %.1f s"), *Weapon->Name, Weapon->ReloadTime);
     return true;
@@ -1046,6 +1161,8 @@ void AOpenWillowWalker::CancelReload()
         WeaponVisual->SetPosition(0.f, false);
     }
     WeaponReloadAnim = nullptr;
+    if (ArmsAnim && ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
+    ArmsReloadAnim = nullptr;
 }
 void AOpenWillowWalker::FireWeapon()
 {
@@ -1070,8 +1187,13 @@ void AOpenWillowWalker::FireWeapon()
     const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query);
     const FVector Impact = bHit ? Hit.ImpactPoint : End;
     const FVector Muzzle = MuzzleLocation();
+    FLinearColor MuzzleTint(1.f, 0.22f, 0.025f, 1.f);
+    if (const FOpenWillowWeaponItem* FiredItem = Inventory ? Inventory->ActiveWeapon() : nullptr;
+        FiredItem && (FiredItem->DamageType.Contains(TEXT("Fire"), ESearchCase::IgnoreCase)
+            || FiredItem->DamageType.Contains(TEXT("Incendiary"), ESearchCase::IgnoreCase)))
+        MuzzleTint = FLinearColor(1.f, 0.075f, 0.012f, 1.f);
     AOpenWillowShotFx::MuzzleFlash(GetWorld(), Muzzle, Model ? Model->MuzzleFlashRadius : 3.5f,
-        Model ? Model->MuzzleFlashDuration : 0.33f);
+        Model ? Model->MuzzleFlashDuration : 0.33f, MuzzleTint);
     // Live WeaponTypeDefinition data names no tracer template for this four-gun slice; suppress the generic line for them.
     // Keep the previous fallback for other items until their weapon type is present in weapon_view.json.
     // The 30 cm start offset is an UNVERIFIED host stand-in; live data-gated tracers are absent for the four measured guns.
@@ -1680,6 +1802,13 @@ void AOpenWillowWalker::RunGunShots(float Now)
         const FViewModel* Model = ActiveViewModel();
         const float AimWait = (Model ? Model->ZoomBlendTime : 0.2f) + 0.2f;
         if (Now < GunShotPhaseAt + AimWait) return;
+        if (Model && Model->ZoomSocket.bValid)
+        {
+            const FVector SocketInCamera = Camera->GetComponentTransform().InverseTransformPosition(
+                WeaponSocketWorld(Model->ZoomSocket).GetLocation());
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow aim socket %s camera %s fitted offset %s alpha %.3f"),
+                *Model->ZoomSocket.Name, *SocketInCamera.ToString(), *Model->ZoomOffset.ToString(), AimAlpha);
+        }
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_ads.png"), *Id), true, false);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s ADS"), *Id);
         ++GunShotStep;
@@ -1702,14 +1831,14 @@ void AOpenWillowWalker::RunGunShots(float Now)
             {
                 FireWeapon();
                 ++GunShotBurstCount;
-                GunShotNextBurstAt = Now + (GunShotBurstCount == 3 ? 0.12f : 0.1f);
+                GunShotNextBurstAt = Now + (GunShotBurstCount == 3 ? 0.03f : 0.1f);
             }
             return;
         }
-        if (Now < GunShotNextBurstAt) return; // Match the real-game muzzle-flash sample at ~0.12 s after the last shot.
+        if (Now < GunShotNextBurstAt) return; // Capture within 50 ms while the fitted host flash is still bright.
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_firing.png"), *Id), true, false);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s hip-fire flash at %.3f s after last shot"), *Id,
-            Now - (GunShotNextBurstAt - 0.12f));
+            Now - (GunShotNextBurstAt - 0.03f));
         ++GunShotStep;
         break;
     case 5:
