@@ -10,7 +10,11 @@
     healthText, shieldText, ammoText, grenadeText, levelText, classModText   strings
     grenades                   fill fraction 0..1
     weaponOut                  bool
-    character                  frame label of p1.character, e.g. "siren"
+    character                  frame (label or number) of p1.character; the game uses 6 for Maya
+    skillActive                remaining fraction of the action skill's lock, null when the emblem is off
+    skillCooldown              remaining fraction of the action-skill cooldown pool, 0 = ready
+    skillIcon                  the class's HUD icon movie, e.g. "/ package/UI_HUD_AAIcons/AA-Siren"
+                               (clip mapping in action_skill.js)
   Clip names and frame directions were observed in the Ruffle bench
   (DECISIONS.md 2026-09-26), not read from the game's scripts:
     health, shield, grenades, bullets: 100 bar frames, frame 1 full;
@@ -26,6 +30,8 @@
     contextMenu: 'off', allowScriptAccess: true };
 </script>
 <script src="ruffle/ruffle.js"></script>
+<script src="action_skill.js"></script>
+<script src="hud3d.js"></script>
 </head><body>
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
@@ -34,6 +40,8 @@
 
   let ready = false;
   let pending = {};
+  let turned = null, characterSet = false, readyAt = 0;  // the 3D-turn stand-in is applied once
+  let skill = {};   // the action-skill fields last applied (action_skill.js plans from the change)
   const P1 = '_level1.p1';
   const call = (target, op, a, b) => player.ow(target, op, a, b);
   // Bars whose frame 1 is full and frame 100 empty.
@@ -55,6 +63,16 @@
     // and the class-mod title ("LV 17 Hoarding War Dog" in the game).
     if ('levelText' in s) call(P1 + '.levelClassMod.level', 'set', 'text', s.levelText);
     if ('classModText' in s) call(P1 + '.levelClassMod.comm', 'set', 'text', s.classModText);
+    // After `character`: the icon clip exists only on the character frame.
+    for (const c of window.owActionSkill.plan(skill, s)) call(c[0], c[1], c[2], c[3]);
+    for (const key of ['skillActive', 'skillCooldown', 'skillIcon']) if (key in s) skill[key] = s[key];
+    // The stand-in for the clusters' 3D turn (hud3d.js), once the character frame is set and the clips have had a
+    // second to settle (bounds read on the boot frame came out wrong in UE); the host resends its state every second.
+    if ('character' in s) characterSet = true;
+    if (!turned && characterSet && performance.now() - readyAt > 1000) {
+      turned = window.owHud3d.apply(call, P1, String(call(P1, 'keys')).split(',').filter(Boolean));
+      console.log('OpenWillow HUD 3D turn on ' + turned.join(' '));
+    }
   }
 
   // The host may call before the movie is ready; keep the latest values.
@@ -80,6 +98,7 @@
     clearInterval(boot);
     call(P1 + '.bossModule', 'set', '_visible', false);
     ready = true;
+    readyAt = performance.now();
     console.log('OpenWillow HUD movie ready');
     window.owHud({});
   }, 200);

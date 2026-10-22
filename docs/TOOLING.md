@@ -728,6 +728,11 @@ running and launches Sanctuary as Maya with `-owflashhud=<url>` and
 `-owflashskills=<url>`. The HUD overlay logs "OpenWillow Flash HUD page loaded"
 and "HUD movie ready" in the UE log.
 It is a prototype: see DECISIONS.md for what is driven and what is not.
+Maya's action-skill indicator (the icon's cooldown veil and the Siren emblem while Phaselock holds) needs the icon
+movie: `python tools/prepare_hud_icons.py --reader build/Release/ow-package.exe --game $game`. Its in-engine check,
+`./tools/test_action_skill_hud.ps1 -Game $game [-SharedLock <file>]`, casts once and checks the logged state against
+the real game's timings; real-game capture: `tools/real_game/action_skill_hud_capture.ps1`, layout read:
+`tools/real_game/hud_layout_capture.ps1` (`docs/verification/ACTION_SKILL_HUD.md`).
 The BL2-style StatusMenu Inventory movie is enabled by default; press **Tab**
 (or **I**) for Inventory and **K** for Skills; the header tabs and the K/I keys switch between the two pages. Pass `-NoInventoryMovie` only to use the
 fallback host inventory panel.
