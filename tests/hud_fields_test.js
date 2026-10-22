@@ -46,4 +46,14 @@ assert.strictEqual(line, 'OWHUDPAGE health=1.000 shield=null ammo=0.857 grenades
 assert.ok(fields.pageLine({weaponOut: false}, () => undefined).startsWith(
   'OWHUDPAGE health=null shield=null ammo=null grenades=null weaponOut=0 weaponType=- healthText= shieldText='));
 
+// The ready line echoes the host's per-run id from the URL, wherever it sits in the query, and never invents one.
+const ID = '0123456789ABCDEF0123456789ABCDEF';
+assert.strictEqual(fields.readyLine(`?owid=${ID}`, 'C:\\checkout\\tools\\hud_overlay'),
+  `OpenWillow HUD movie ready id=${ID} pages=C:\\checkout\\tools\\hud_overlay`);
+assert.strictEqual(fields.readyLine(`?hud3d=affine&owid=${ID}`, null), `OpenWillow HUD movie ready id=${ID} pages=unknown`);
+assert.strictEqual(fields.readyLine('?hud3d=affine', 'x'), 'OpenWillow HUD movie ready id=- pages=x');
+assert.strictEqual(fields.readyLine('', undefined), 'OpenWillow HUD movie ready id=- pages=unknown');
+// Only the id's own characters: a crafted value cannot smuggle a second " id=" field in.
+assert.strictEqual(fields.readyLine(`?owid=${ID}%20id=other`, 'x'), `OpenWillow HUD movie ready id=${ID} pages=x`);
+
 console.log('hud_fields_test: all checks passed');

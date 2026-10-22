@@ -43,17 +43,6 @@ namespace
 {
 const TCHAR* DefaultFlashHudUrl = TEXT("http://127.0.0.1:8767/");
 
-// The overlay page's ready line names the pages directory its server serves (tools/hud_overlay/serve.py's
-// X-OpenWillow-Pages header); the movie counts only when that is this checkout's tools/hud_overlay, so another
-// worktree's server answering on the same port (with its own, possibly older, pages) is not used.
-bool IsOwnHudPages(FString Pages)
-{
-    FString Own = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../tools/hud_overlay")));
-    Pages.TrimStartAndEndInline();
-    FPaths::NormalizeDirectoryName(Own);
-    FPaths::NormalizeDirectoryName(Pages);
-    return !Pages.IsEmpty() && Own.Equals(Pages, ESearchCase::IgnoreCase);
-}
 const FLinearColor Backing(0.02f, 0.03f, 0.04f, 0.65f);
 const FLinearColor Frame(0.85f, 0.85f, 0.8f, 0.9f);
 const FLinearColor Legendary(1.f, 0.55f, 0.08f);
@@ -166,6 +155,11 @@ void AOpenWillowMayaHUD::BeginPlay()
     // Without -owflashhud=<url> the movie comes from the local HUD server (tools/hud_overlay/serve.py). Either way it
     // only counts once its page reports ready (see the console handler below); until then the canvas fallback draws.
     if (!bExplicitUrl) Url = DefaultFlashHudUrl;
+    // A fresh id in the page URL that the page echoes in its ready line (tools/hud_overlay/hud_fields.js, readyLine):
+    // the movie counts only when the page answering is one that speaks this protocol, so another checkout's server
+    // with older pages on the same port gives the canvas. No path is compared, so junctions and aliases do not matter.
+    const FString PageId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    Url += (Url.Contains(TEXT("?")) ? TEXT("&owid=") : TEXT("?owid=")) + PageId;
     // SWebBrowser only creates a window once the WebBrowser module is loaded;
     // the WebBrowserWidget plugin normally does that, and we do not use it.
     if (!IWebBrowserModule::Get().IsWebModuleAvailable())
@@ -198,15 +192,13 @@ void AOpenWillowMayaHUD::BeginPlay()
                     UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (page failed to load)"));
                 }
             })
-        .OnConsoleMessage_Lambda([WeakThis](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
+        .OnConsoleMessage_Lambda([WeakThis, PageId](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
             {
                 UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD console: %s (%s:%d)"), *Message, *Source, Line);
                 AOpenWillowMayaHUD* Hud = WeakThis.Get();
                 if (Hud && !Hud->bFlashHudReady && !Hud->bFlashHudFailed && Message.StartsWith(TEXT("OpenWillow HUD movie ready")))
                 {
-                    FString Pages;
-                    Message.Split(TEXT("pages="), nullptr, &Pages);
-                    if (IsOwnHudPages(Pages))
+                    if (Message.Contains(TEXT(" id=") + PageId + TEXT(" ")))
                     {
                         Hud->bFlashHudReady = true;
                         UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: movie (page reported ready)"));
@@ -214,7 +206,7 @@ void AOpenWillowMayaHUD::BeginPlay()
                     else
                     {
                         Hud->bFlashHudFailed = true;
-                        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (the page is served from '%s', not this checkout's tools/hud_overlay)"), *Pages);
+                        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (the page did not echo this run's id: another server or older pages)"));
                     }
                 }
             });

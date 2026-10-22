@@ -50,7 +50,14 @@
       + ` outer=${frame('crosshairs.outer')} spread=${frame('crosshairs.outer.weapon')} icon=${frame('bullets.bullet_icon')}`;
   }
 
-  const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine};
+  // The ready line: echoes the host's per-run id from the page URL (`?owid=`; the host shows the movie only when it
+  // matches) and names the pages directory the server serves (serve.py's X-OpenWillow-Pages header; for diagnosis).
+  function readyLine(search, pages) {
+    const id = (/[?&]owid=([0-9A-Za-z]+)/.exec(search || '') || [])[1];
+    return `OpenWillow HUD movie ready id=${id || '-'} pages=${pages || 'unknown'}`;
+  }
+
+  const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

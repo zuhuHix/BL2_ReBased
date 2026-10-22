@@ -4808,9 +4808,8 @@ AI-assisted (Claude Opus 5.5 orchestrating, Opus and Haiku sub-agents; critic GP
 
 - **Default HUD.** BL2's HUD movie (Ruffle overlay) is the gameplay HUD whenever its page reports ready; the host opens
   `http://127.0.0.1:8767/` without `-owflashhud`. The canvas HUD is a fallback (not ready, load error, `-owcanvashud`)
-  and no longer draws the temporary Phaselock ring and orb. The movie counts only when the page's ready line names this
-  checkout's `tools/hud_overlay` (from `serve.py`'s `X-OpenWillow-Pages` header); another checkout's server gives the
-  canvas. The quest, mover, Phaselock-shots and character-capture runs pass `-owcanvashud` so their outcome does not
+  and no longer draws the temporary Phaselock ring and orb. The movie counts only when the page's ready line echoes the fresh
+  id the host put in its URL (`?owid=`); an older page from another checkout's server gives the canvas. The quest, mover, Phaselock-shots and character-capture runs pass `-owcanvashud` so their outcome does not
   depend on a server being up.
 - **Perspective.** `tools/hud_overlay/hud_warp.js` draws the turned clusters through a per-clip homography from the
   fitted projection (F 914 derived from the definition's View3DFOV 70, read live; scale 1.095 fitted, UNVERIFIED), reading
@@ -4821,7 +4820,7 @@ AI-assisted (Claude Opus 5.5 orchestrating, Opus and Haiku sub-agents; critic GP
   widening while firing: not done) and ammo icon per weapon type from a live read (pistol 3/9/3, shotgun 7/17/5); other types UNVERIFIED and left alone.
   Ruffle hands non-ASCII ExternalInterface strings to AVM1 as UTF-8 bytes, so such text is set through `htmlText`
   entities (bench-verified).
-- **Checks.** `tests/hud_warp_test.js`, `tests/hud_fields_test.js`, `tests/check_hud_shots_test.py` (synthetic); in-engine
-  `tools/run_hud_shots.ps1` 15/15, `tools/test_action_skill_hud.ps1` 19/19, `tools/test_inventory_actions.ps1` 49/49
+- **Checks.** `tests/hud_warp_test.js`, `tests/hud_fields_test.js`, `tests/check_hud_shots_test.py` (35 synthetic cases); in-engine
+  `tools/run_hud_shots.ps1` 17/17, `tools/test_action_skill_hud.ps1` 19/19, `tools/test_inventory_actions.ps1` 49/49
   (bounded recipe set). Critic 8.0, then 7.7 measured (crosshair spread per gun and 1-4 px side placement remain); blind
   A/B warp 8 vs stand-in 6, warp preferred in 6 of 6.

@@ -146,10 +146,10 @@
     call(P1 + '.bossModule', 'set', '_visible', false);
     ready = true;
     readyAt = performance.now();
-    // The ready line names the checkout serving these pages (serve.py's X-OpenWillow-Pages header): the host shows the
-    // movie only when that is its own checkout, since another worktree's server can answer on the same port.
-    fetch('hud_fields.js', {cache: 'no-store'}).then(r => r.headers.get('X-OpenWillow-Pages') || 'unknown', () => 'unknown')
-      .then(pages => console.log('OpenWillow HUD movie ready pages=' + pages));
+    // The ready line echoes the host's per-run id (the host shows the movie only when it matches) and names the pages
+    // directory the server serves (hud_fields.js, readyLine).
+    fetch('hud_fields.js', {cache: 'no-store'}).then(r => r.headers.get('X-OpenWillow-Pages'), () => null)
+      .then(pages => console.log(window.owHudFields.readyLine(location.search, pages)));
     window.owHud({});
   }, 200);
 </script></body></html>

@@ -735,8 +735,7 @@ running and launches Sanctuary as Maya with `-owflashhud=<url>` and
 and "HUD movie ready" in the UE log.
 Since 2026-10-22 the movie is the default gameplay HUD: without `-owflashhud` the host opens
 `http://127.0.0.1:8767/` itself (so a running `serve.py` on that port is enough) and draws the canvas fallback until the
-page reports ready (and names this checkout's `tools/hud_overlay` as the directory its server serves) or if it fails
-to load; `-owcanvashud` forces the fallback (the scripted test and capture runs pass it). The log says `OpenWillow HUD path:
+page reports ready (echoing the per-run id the host put in its URL) or if it fails to load; `-owcanvashud` forces the fallback (the scripted test and capture runs pass it). The log says `OpenWillow HUD path:
 movie|canvas (<reason>)` and, from the page, `OpenWillow HUD 3D path warp|affine: <why>` (the perspective warp of the
 turned clusters; add `?hud3d=affine` to the page URL for the 2D stand-in). Gameplay-HUD captures for a parity review:
 `./tools/run_hud_shots.ps1 -Game $game [-Level 36 -Shield] [-Affine]` (slice weapons, at rest and after three shots,

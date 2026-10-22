@@ -1,8 +1,8 @@
 """Synthetic tests for tools/check_hud_shots.py (no game or engine needed; logs and PNGs are generated here).
 
 Every value is invented: a pistol with a 12-round magazine and 340 in reserve, grenades 2 of 4, a health text of 250,
-a shield of 1200 named "Test Shield". The frames the page should show are worked out by hand in the comments below
-(1 + round((1 - f) * 99), round half up), not computed by the checker.
+a shield of 1200 named "Test Shield", and run ids made up for these tests. The frames the page should show are worked
+out by hand in the comments below (1 + round((1 - f) * 99), round half up), not computed by the checker.
 """
 import struct
 import sys
@@ -17,7 +17,10 @@ import check_hud_shots as chk  # noqa: E402
 NB = '\\u00a0'      # the host's JSON escape for a no-break space, as written in the log
 PREFIX = 'LogTemp: Display: '
 CONSOLE = 'LogTemp: Display: OpenWillow Flash HUD console: '
-READY = CONSOLE + 'OpenWillow HUD movie ready pages=C:\\Test\\tools\\hud_overlay (http://127.0.0.1:8795/:152)'
+OWID = 'A1B2C3D4E5F60718293A4B5C6D7E8F90'          # invented run ids, 32 hex characters like the host's
+OTHER_OWID = 'FEDCBA9876543210FEDCBA9876543210'
+OVERLAY = PREFIX + f'OpenWillow Flash HUD overlay: http://127.0.0.1:8795/?owid={OWID}'
+READY = CONSOLE + f'OpenWillow HUD movie ready id={OWID} pages=C:\\Test\\tools\\hud_overlay (http://127.0.0.1:8795/:152)'
 MOVIE = PREFIX + 'OpenWillow HUD path: movie (page reported ready)'
 WARP = CONSOLE + 'OpenWillow HUD 3D path warp: Ruffle webgl2 (http://127.0.0.1:8795/hud_warp.js:311)'
 CANVAS = PREFIX + "OpenWillow HUD path: canvas (the page is served from 'C:\\Test\\served', not this checkout's tools/hud_overlay)"
@@ -54,10 +57,10 @@ def page(magazine=12, shielded=True, level='24'):
     return CONSOLE + 'OWHUDPAGE ' + echo + ' ' + shown + ENDING
 
 
-def synthetic_log(magazines=(12, 11, 10, 9), shield=True, path=(READY, MOVIE, WARP), states=True, pages=True,
-                  done=True, level='24'):
+def synthetic_log(magazines=(12, 11, 10, 9), shield=True, path=(OVERLAY, READY, MOVIE, WARP), states=True,
+                  pages=True, done=True, level='24'):
     """A run's log as the host writes it: the path lines, a shield line, the rest shot, three fires, the fired shot.
-    Each state is followed by its page read-back."""
+    Each state is followed by its page read-back: four states and four pages in the default run."""
     lines = list(path)
     if shield:
         lines.append(PREFIX + 'OWHUDSHOTS shield Test Shield')
@@ -86,6 +89,13 @@ def edit_page(text, index, old, new):
     target = pages[index]
     assert old in lines[target], (old, lines[target])
     lines[target] = lines[target].replace(old, new)
+    return '\n'.join(lines)
+
+
+def drop_page(text, index):
+    """Remove the index-th OWHUDPAGE line (index -1 is the last one)."""
+    lines = text.split('\n')
+    del lines[[i for i, line in enumerate(lines) if 'OWHUDPAGE' in line][index]]
     return '\n'.join(lines)
 
 
@@ -121,7 +131,8 @@ def outcome(text, folder=None, expect_shield=False):
     return {name: (ok, detail) for name, ok, detail in chk.run_checks(text, folder, expect_shield)}
 
 
-PAGE_CHECKS = ('page_lines', 'page_state_from_host', 'page_frames_match_state', 'page_follows_fire')
+PAGE_CHECKS = ('page_lines', 'page_state_from_host', 'page_acks_each_state', 'page_frames_match_state',
+               'page_follows_fire')
 
 
 class CheckTest(unittest.TestCase):
@@ -145,6 +156,7 @@ class CheckTest(unittest.TestCase):
     def test_matching_run_passes(self):
         found = outcome(synthetic_log(), self.folder.name, expect_shield=True)
         self.assertTrue(all(ok for ok, _ in found.values()), {k: v for k, v in found.items() if not v[0]})
+        self.assertTrue(found['page_acks_each_state'][0])
 
     def test_canvas_path_fails(self):
         found = outcome(synthetic_log(path=(CANVAS,)))
@@ -157,6 +169,32 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(found['warp_path'][0])
         self.assertIn('affine', found['warp_path'][1])
         self.assertIn('3D turn not reported', found['warp_path'][1])
+
+    def test_identity_passes_with_plain_and_affine_urls(self):
+        self.assertTrue(outcome(synthetic_log())['page_identity'][0])
+        affine = synthetic_log().replace('?owid=', '?hud3d=affine&owid=')
+        self.assertTrue(outcome(affine)['page_identity'][0])
+
+    def test_ready_line_with_dash_id_fails(self):
+        found = outcome(synthetic_log().replace(f' id={OWID} ', ' id=- '))
+        self.assertFalse(found['page_identity'][0])
+        self.assertIn('did not echo', found['page_identity'][1])
+
+    def test_ready_line_with_another_id_fails(self):
+        found = outcome(synthetic_log().replace(f' id={OWID} ', f' id={OTHER_OWID} '))
+        self.assertFalse(found['page_identity'][0])
+        self.assertIn(OTHER_OWID, found['page_identity'][1])
+        self.assertIn(OWID, found['page_identity'][1])
+
+    def test_overlay_url_without_owid_fails(self):
+        found = outcome(synthetic_log().replace(f'?owid={OWID}', '?'))
+        self.assertFalse(found['page_identity'][0])
+        self.assertIn('owid', found['page_identity'][1])
+
+    def test_ready_line_without_id_fails(self):
+        found = outcome(synthetic_log().replace(f' id={OWID}', ''))
+        self.assertFalse(found['page_identity'][0])
+        self.assertIn('no id=', found['page_identity'][1])
 
     def test_no_state_lines_fails(self):
         found = outcome(synthetic_log(states=False))
@@ -209,6 +247,31 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(found['page_state_from_host'][0])
         self.assertIn('line', found['page_state_from_host'][1])
 
+    def test_page_echoing_an_earlier_state_fails(self):
+        # The last page echoes the magazine before, though it follows the newest state: its pairing check must fail.
+        lines = synthetic_log().split('\n')
+        pages = [i for i, line in enumerate(lines) if 'OWHUDPAGE' in line]
+        lines[pages[-1]] = lines[pages[-2]]
+        found = outcome('\n'.join(lines))
+        self.assertFalse(found['page_state_from_host'][0])
+        self.assertIn(f'line {pages[-1] + 1}', found['page_state_from_host'][1])
+        self.assertFalse(found['page_follows_fire'][0])
+        self.assertIn('"10', found['page_follows_fire'][1])
+
+    def test_state_without_page_line_fails_ack(self):
+        # The page after the state with magazine 11 is removed; the pages around it still echo their own states.
+        found = outcome(drop_page(synthetic_log(), 1))
+        self.assertFalse(found['page_acks_each_state'][0])
+        self.assertIn('ammoText 11', found['page_acks_each_state'][1])
+        self.assertTrue(found['page_state_from_host'][0])
+        self.assertTrue(found['page_follows_fire'][0])
+
+    def test_state_superseded_before_first_page_is_exempt(self):
+        # No page for the first state: it was superseded before any page existed, so the acknowledgment still passes.
+        found = outcome(drop_page(synthetic_log(), 0))
+        self.assertTrue(found['page_acks_each_state'][0])
+        self.assertTrue(found['page_state_from_host'][0])
+
     def test_bullets_frame_off_by_two_fails(self):
         text = edit_page(synthetic_log(), 1, f'fBullets={MAGAZINE_FRAME[11]} ', f'fBullets={MAGAZINE_FRAME[11] + 2} ')
         found = outcome(text)
@@ -252,8 +315,7 @@ class CheckTest(unittest.TestCase):
         pages = [i for i, line in enumerate(lines) if 'OWHUDPAGE' in line]
         lines[pages[-1]] = lines[pages[-2]]                 # the last page still shows the magazine before
         found = outcome('\n'.join(lines))
-        self.assertTrue(found['page_state_from_host'][0])
-        self.assertTrue(found['page_frames_match_state'][0])
+        self.assertFalse(found['page_state_from_host'][0])
         self.assertFalse(found['page_follows_fire'][0])
         self.assertIn('"10', found['page_follows_fire'][1])
 

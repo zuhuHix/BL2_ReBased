@@ -13,12 +13,15 @@ captures stay under ignored `local/`.
   The movie counts only once the page logs `OpenWillow HUD movie ready`; until then, or after a load error (the overlay
   is then removed), the canvas fallback draws. `-owcanvashud` forces the fallback. The log line
   `OpenWillow HUD path: movie|canvas (<reason>)` says which path is in use.
-* **Only this checkout's pages.** Another worktree's `serve.py` can answer on the same port with its own, possibly
-  older, pages. The page's ready line names the pages directory its server serves (`serve.py`'s `X-OpenWillow-Pages`
-  header, `OpenWillow HUD movie ready pages=<dir>`); the host shows the movie only when that is its own
-  `tools/hud_overlay` and otherwise falls back to the canvas. Checked in UE against another checkout's older server
-  (its ready line names no directory): `OpenWillow HUD path: canvas (the page is served from '', not this checkout's
-  tools/hud_overlay)`.
+* **Only a page that answers this run.** Another worktree's `serve.py` can answer on the same port with its own, older
+  pages. The host appends a fresh id to the page URL (`?owid=<guid>`) and the page echoes it in its ready line
+  (`OpenWillow HUD movie ready id=<id> pages=<dir>`, `hud_fields.js` `readyLine`); the movie counts only on an exact
+  match, else the canvas draws. No path is compared, so a checkout opened through a junction or alias is not refused
+  (a first version compared the served directory with the host's own and would have been). `pages=` (serve.py's
+  `X-OpenWillow-Pages` header) is logged for diagnosis only, so a server from another checkout whose pages already
+  speak this protocol is accepted; the launchers (`tools/run_ue_flash_hud.ps1`) still refuse such a server by that
+  header. Checked in UE against another checkout's older server: `OpenWillow HUD path: canvas (the page did not echo
+  this run's id: another server or older pages)`.
 * **Test and capture runs keep the canvas HUD.** `tools/test_quest.ps1`, `tools/test_mover.ps1`,
   `tools/run_phaselock_shots.ps1` and `tools/run_ue_character.ps1` pass `-owcanvashud`, so their outcome cannot depend
   on whether an overlay server happens to be listening (the Maya HUD exists only with `-owwalk -owmaya`; the ambient,
@@ -114,9 +117,10 @@ keeps the field's own format (seen in the bench).
   longer; -25 mirrored), every source pixel drawn once and inside its region's quad, reserved regions kept in place, the
   path choice and fallbacks, the context patch on a fake canvas, the visible-bounds rules on a fake harness.
 * `node tests/hud_fields_test.js`: ASCII text as `text`, no-break spaces and markup characters as `htmlText` entities, a
-  non-BMP character as one entity; the pistol and shotgun frames; no frames for unobserved types.
+  non-BMP character as one entity; the pistol and shotgun frames; no frames for unobserved types; the `OWHUDPAGE`
+  line (`pageLine`); the ready line echoing the URL id wherever it sits in the query, `id=-` without one (`readyLine`).
 * `node tests/hud_action_skill_test.js` (unchanged contract, still green).
-* `python tests/check_hud_shots_test.py` (16 synthetic cases) for `tools/check_hud_shots.py`, the checker of
+* `python tests/check_hud_shots_test.py` (35 synthetic cases) for `tools/check_hud_shots.py`, the checker of
   `tools/run_hud_shots.ps1`: one `-game` run with the slice weapons and `-owhudshots` (the held weapon at rest, three
   shots, quit; `-Shield` equips the first gear-manifest shield the level allows, `-Level` sets Maya's level, `-Affine`
   selects the stand-in for A/B captures). Checks: the movie path, the warp path, the state line format (level padding,
@@ -124,9 +128,12 @@ keeps the field's own format (seen in the bench).
   captures valid 1280x720 PNGs, not blank, with the health bar's red and the ammo bar's blue in fixed boxes. Movie
   read-backs: after each change the page logs `OWHUDPAGE`, the state it applied (written as the host's `OWHUDSTATE`)
   and what the movie shows for it (the health, shield, ammo and grenade bar frames, the five texts, the crosshair style,
-  spread and ammo-icon frames; `hud_fields.js`, `pageLine`); the checker requires every echoed state to be one the host
-  logged, every frame and text to equal what that state maps to, and the last page ammo text to be the host's last.
-* In-engine, this PC: `tools/run_hud_shots.ps1 -Level 36 -Shield` 15/15 with the page read-backs (11/11 before them) (magazine 7, 6, 5, 4; reserve 200; shield
+  spread and ammo-icon frames; `hud_fields.js`, `pageLine`); the checker pairs each read-back with the latest host state logged before it and requires
+  its echo to equal that state, an acknowledgement for every host state from the first one the page saw, every frame
+  and text to equal what the state maps to, and the last page ammo text to be the host's last. `page_identity`: the
+  ready line echoes the id in the overlay URL.
+* In-engine, this PC: `tools/run_hud_shots.ps1 -Level 36 -Shield` 17/17 with the page read-backs and the page id (11/11 before them);
+  the same checker on a run against another checkout's older server fails `movie_path` and `page_identity`, as intended (magazine 7, 6, 5, 4; reserve 200; shield
   the first equippable gear-manifest shield); `tools/test_action_skill_hud.ps1` 19/19 (three runs during the lane: one 18/19, see below, then 19/19 twice).
   The 18/19 run pushed the state before the scripted cast in the same frame, so the full pool appeared one frame late
   (0.152 s against 0.15 s); the cast now runs first.

@@ -1,17 +1,20 @@
 """Check a gameplay-HUD capture run (tools/run_hud_shots.ps1, -owhudshots) from its log and its two captures.
 
 The log (local/hudshots/<stamp>/run.log) must show BL2's HUD movie on the Ruffle warp path (the
-`OpenWillow HUD path: movie` line, a `HUD 3D path warp` line, and no canvas or affine fallback), at least one
+`OpenWillow HUD path: movie` line, a `HUD 3D path warp` line, and no canvas or affine fallback), the page's identity
+(the overlay URL carries this run's `owid=` id and the page's ready line echoes exactly that id), at least one
 OWHUDSTATE line and every one in the host's format (fractions with three decimals, weaponOut 0 or 1, healthText an
 integer, level two digits or more, ammoText and grenadeText with the no-break spaces the host writes as the JSON
 escape, shield and grenades null or a fraction), the `OWHUDSHOTS fire 1` lines with the magazine dropping by one each
 time and the reserve unchanged, and the `OWHUDSHOTS done` line. The page read-back (OWHUDPAGE, logged through the page
-console) must come from at least three page reads, each echoing a host state, with the frames and texts the page
-should show for that state, and the last page must show the final magazine. With --expect-shield the log must also
-show the shield being equipped. The captures (OWHud_rest.png and OWHud_fired.png, 1280x720) must be complete PNGs
-(every chunk's CRC, IHDR first, IEND last, the IDAT stream inflating to the image's size), not blank, and show the
-health bar (red) and the ammo bar (blue/violet) in fixed screen boxes. Whether the captures look like the game is the
-critic's call (docs/verification/HUD_PARITY.md), not this check's.
+console) must come from at least three page reads. Each page read is paired with the OWHUDSTATE line logged just before
+it and must echo that state (page_state_from_host); every state from the first paired one on must have a page read
+after it (page_acks_each_state); the frames and texts must be the ones the page should show for its own echo
+(page_frames_match_state); and the last page must show the final magazine (page_follows_fire). With --expect-shield
+the log must also show the shield being equipped. The captures (OWHud_rest.png and OWHud_fired.png, 1280x720) must be
+complete PNGs (every chunk's CRC, IHDR first, IEND last, the IDAT stream inflating to the image's size), not blank, and
+show the health bar (red) and the ammo bar (blue/violet) in fixed screen boxes. Whether the captures look like the game
+is the critic's call (docs/verification/HUD_PARITY.md), not this check's.
 Prints one `OWHUDSHOTSTEST PASS|FAIL|SKIP <name> <detail>` line per check and a summary. Exit code 0 only when every
 check passes; without --shots the summary is PARTIAL and the exit code 2.
 """
@@ -55,6 +58,10 @@ PAGE = re.compile(r'OWHUDPAGE health=(?P<health>\S*) shield=(?P<shield>\S*) ammo
                   r'tAmmo=(?P<tAmmo>.*?) tGrenade=(?P<tGrenade>.*?) tLevel=(?P<tLevel>.*?) '
                   r'outer=(?P<outer>\S*) spread=(?P<spread>\S*) icon=(?P<icon>\S*)\s*$')
 PAGE_SUFFIX = re.compile(r'\s*\(https?://[^)\s]*\)\s*$')      # the console's " (http://...:<line>)" tail
+# The overlay URL the host logs (its last query value is the run's owid, 32 letters or digits) and the page's ready line
+# (`id=` is the owid the page echoes, or `-` when the page has none to echo).
+OVERLAY = re.compile(r'OpenWillow Flash HUD overlay: \S*?[?&]owid=(?P<owid>[0-9A-Za-z]{32})(?![0-9A-Za-z])')
+READY = re.compile(r'OpenWillow HUD movie ready(?: id=(?P<id>\S+))?')
 SHAPES = {'pistol': ('3', '9', '3'), 'shotgun': ('7', '17', '5')}   # weaponType: outer, spread, icon frames
 FORMATS = {
     'health': re.compile(FRACTION),
@@ -169,30 +176,81 @@ def page_problems(page):
     return problems
 
 
-def check_pages(lines, states):
-    """The OWHUDPAGE read-backs against the host's states; states is a list of (line, fields dict or None)."""
-    pages = []
+def pair_pages(lines, states):
+    """Each OWHUDPAGE line as (line number, parsed echo or None, index in states of the OWHUDSTATE logged just before it)."""
+    pairs = []
     for number, line in enumerate(lines, 1):
         if 'OWHUDPAGE' in line:
             body = PAGE_SUFFIX.sub('', line[line.index('OWHUDPAGE'):])
-            pages.append((number, PAGE.match(body)))
+            before = [index for index, (state_line, _) in enumerate(states) if state_line < number]
+            pairs.append((number, PAGE.match(body), before[-1] if before else None))
+    return pairs
+
+
+def describe(fields):
+    return f'health {fields["health"]} ammoText {fields["ammoText"]}' if fields else 'not the host format'
+
+
+def check_identity(lines):
+    """page_identity: the overlay URL carries this run's owid and the page's ready line echoes exactly that id."""
+    overlay = [line for line in lines if 'OpenWillow Flash HUD overlay:' in line]
+    ready = [line for line in lines if 'OpenWillow HUD movie ready' in line]
+    if not overlay:
+        return 'page_identity', False, 'no "OpenWillow Flash HUD overlay:" line'
+    found = OVERLAY.search(overlay[-1])
+    if not found:
+        return 'page_identity', False, f'overlay URL has no owid=<32 letters or digits>: {overlay[-1].strip()[-120:]}'
+    owid = found['owid']
+    if not ready:
+        return 'page_identity', False, 'no "OpenWillow HUD movie ready" line'
+    echoed = READY.search(ready[-1])['id']
+    if echoed is None:
+        return 'page_identity', False, 'ready line has no id= (older pages)'
+    if echoed != owid:
+        return 'page_identity', False, (f'ready line id {echoed}, overlay owid {owid} '
+                                        '(the page did not echo this run\'s id)')
+    return 'page_identity', True, f'ready line echoes the overlay owid {owid}'
+
+
+def check_pages(lines, states):
+    """The OWHUDPAGE read-backs against the host's states; states is a list of (line, fields dict or None)."""
+    pages = pair_pages(lines, states)
     results = [('page_lines', len(pages) >= PAGE_MIN, f'{len(pages)} OWHUDPAGE lines, need at least {PAGE_MIN}')]
     if not pages:
-        for name in ('page_state_from_host', 'page_frames_match_state', 'page_follows_fire'):
+        for name in ('page_state_from_host', 'page_acks_each_state', 'page_frames_match_state', 'page_follows_fire'):
             results.append((name, False, 'no OWHUDPAGE lines'))
         return results
-    parsed = [(number, found) for number, found in pages if found]
-    malformed = [number for number, found in pages if not found]
-    hosts = {tuple(fields[name] for name in STATE_FIELDS) for _, fields in states if fields}
-    unmatched = [number for number, found in parsed
-                 if tuple(found[name] for name in STATE_FIELDS) not in hosts]
-    if malformed:
-        echo_detail = f'lines {malformed[:3]} not the page format'
-    elif unmatched:
-        echo_detail = f'lines {unmatched[:3]} echo no OWHUDSTATE line'
+    malformed = [number for number, found, _ in pages if not found]
+    problems = []
+    for number, found, index in pages:
+        if not found:
+            problems.append(f'line {number} not the page format')
+        elif index is None:
+            problems.append(f'line {number} has no OWHUDSTATE line before it')
+        elif states[index][1] is None:
+            problems.append(f'line {number} follows line {states[index][0]}, not the host format')
+        else:
+            host = states[index][1]
+            differ = [name for name in STATE_FIELDS if found[name] != host[name]]
+            if differ:
+                problems.append(f'line {number} differs from state line {states[index][0]} in {", ".join(differ)}')
+    results.append(('page_state_from_host', not problems,
+                    f'{len(pages)} page echoes match the state logged before them' if not problems
+                    else f'{len(problems)} wrong, first ' + '; '.join(problems[:3])))
+    if not states:
+        results.append(('page_acks_each_state', False, 'no OWHUDSTATE line'))
+    elif pages[0][2] is None:
+        results.append(('page_acks_each_state', False,
+                        f'first OWHUDPAGE line {pages[0][0]} has no OWHUDSTATE line before it'))
     else:
-        echo_detail = f'{len(parsed)} page echoes match a host state'
-    results.append(('page_state_from_host', not malformed and not unmatched, echo_detail))
+        first = pages[0][2]     # the states logged before the first page were superseded before it existed
+        acked = {index for _, _, index in pages if index is not None}
+        missing = [index for index in range(first, len(states)) if index not in acked]
+        results.append(('page_acks_each_state', not missing,
+                        f'every OWHUDSTATE from line {states[first][0]} on has a page line' if not missing else
+                        f'{len(missing)} states with no page line, first ' + '; '.join(
+                            f'line {states[index][0]} ({describe(states[index][1])})' for index in missing[:3])))
+    parsed = [(number, found) for number, found, _ in pages if found]
     wrong = [(number, problems) for number, found in parsed for problems in [page_problems(found)] if problems]
     frame_detail = (f'{len(wrong)} of {len(parsed)} pages off, first ' + '; '.join(
         f'line {number}: {", ".join(problems)}' for number, problems in wrong[:3])) if wrong else \
@@ -224,6 +282,7 @@ def check_log(text, expect_shield):
         ('warp_path', bool(warp) and not affine,
          f'warp line {warp[:1]}' if not affine else
          f'affine fallback at line {affine[0]}: {lines[affine[0] - 1].strip()[-160:]}'),
+        check_identity(lines),
         ('state_lines', bool(states), f'{len(states)} OWHUDSTATE lines'),
         ('state_format', bool(states) and not bad,
          f'{len(bad)} of {len(states)} off-format, first {bad[:2]}' if bad else f'{len(states)} lines in the host format'),
