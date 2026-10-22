@@ -72,6 +72,10 @@ and each turned child given the scale and position that meet the projection at i
 trapezoid of a turned clip (near edge taller) is not drawn. Applying it on the boot frame read wrong bounds in UE (the
 icon was pushed off the left edge), so the page waits one second after the movie is ready.
 
+Since the HUD parity lane (2026-10-22, `HUD_PARITY.md`) the turned clips are drawn with their true perspective by a
+WebGL warp of the movie's canvas (`tools/hud_overlay/hud_warp.js`); the stand-in above remains for the minimap and as
+the fallback when the warp cannot run. The checks below still pass with the warp (19/19).
+
 ## Host implementation
 
 * `tools/hud_overlay/action_skill.js` maps the state to the movie calls above (emblem on/off and bar frame, icon frame,

@@ -1,0 +1,262 @@
+"""Check a gameplay-HUD capture run (tools/run_hud_shots.ps1, -owhudshots) from its log and its two captures.
+
+The log (local/hudshots/<stamp>/run.log) must show BL2's HUD movie on the Ruffle warp path (the
+`OpenWillow HUD path: movie` line, a `HUD 3D path warp` line, and no canvas or affine fallback), at least one
+OWHUDSTATE line and every one in the host's format (healthText an integer, level two digits, ammoText and
+grenadeText with the no-break spaces the host writes as the JSON escape, shield null or a fraction), the
+`OWHUDSHOTS fire 1` lines with the magazine dropping by one each time and the reserve unchanged, and the
+`OWHUDSHOTS done` line. With --expect-shield the log must also show the shield being equipped. The captures
+(OWHud_rest.png and OWHud_fired.png, 1280x720) must be complete PNGs (every chunk's CRC, IHDR first, IEND last,
+the IDAT stream inflating to the image's size), not blank, and show the health bar (red) and the ammo bar
+(blue/violet) in fixed screen boxes. Whether the captures look like the game is the critic's call
+(docs/verification/HUD_PARITY.md), not this check's.
+Prints one `OWHUDSHOTSTEST PASS|FAIL <name> <detail>` line per check and a summary. Exit code 0 only when every
+check passes; without --shots the summary is PARTIAL and the exit code 2.
+"""
+import argparse
+import re
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+SHOT_SIZE = (1280, 720)
+SHOTS = ('OWHud_rest.png', 'OWHud_fired.png')
+FIRE_SHOTS = 3                     # run_hud_shots.ps1 fires three rounds
+# Screen boxes (x0, y0, x1, y1) of the health bar and the ammo bar on the 1280x720 HUD, and the pixel counts
+# the colour tests need inside them. The real run local/hudshots/20261022-173219 has about 3040 red pixels in the
+# health box and 2800 to 4300 blue/violet in the ammo box; the minimum is about a third of the lowest of those.
+HEALTH_BOX, AMMO_BOX = (0, 640, 300, 700), (1000, 640, 1250, 700)
+HEALTH_MIN, AMMO_MIN = 1000, 1000
+NOT_BLANK_MIN_COLOURS = 64
+# The host writes each no-break space as this six-character JSON escape, not as a character.
+NBSP = r'\\u00a0'
+STATE = re.compile(r'OWHUDSTATE health=(\S*) healthText=(\S*) shield=(\S*) ammoText=(\S*) grenadeText=(\S*) level=(\S*)\s*$')
+FORMATS = {
+    'healthText': re.compile(r'[0-9]+'),
+    'shield': re.compile(r'null|[0-9]+\.[0-9]+'),
+    'level': re.compile(r'[0-9]{2}'),
+    'ammoText': re.compile(rf'(?:[0-9]+(?:{NBSP}/{NBSP}[0-9]+)?)?'),
+    'grenadeText': re.compile(rf'(?:[0-9]+{NBSP}/{NBSP}[0-9]+)?'),
+}
+AMMO_PAIR = re.compile(rf'([0-9]+){NBSP}/{NBSP}([0-9]+)')
+FIRE = re.compile(r'OWHUDSHOTS fire 1\b')
+SHIELD = re.compile(r'OWHUDSHOTS shield (.+?)\s*$')
+DONE = 'OWHUDSHOTS done'
+
+
+def where(lines, needle):
+    return [number for number, line in enumerate(lines, 1) if needle in line]
+
+
+def magazine(ammo):
+    """(magazine, reserve) of an ammoText value: reserve is None for digits only, magazine None when empty."""
+    pair = AMMO_PAIR.fullmatch(ammo)
+    if pair:
+        return int(pair[1]), int(pair[2])
+    if re.fullmatch(r'[0-9]+', ammo):
+        return int(ammo), None
+    return None, None
+
+
+def read_log(text):
+    """The state lines (format problems included) and the fire and shield lines, in the order the log has them."""
+    lines = text.splitlines()
+    events, bad = [], []
+    for number, line in enumerate(lines, 1):
+        if 'OWHUDSTATE' in line:
+            found = STATE.search(line)
+            if not found:
+                bad.append(f'line {number}: not the host\'s state format')
+                events.append(('state', number, None, (None, None)))
+                continue
+            health_text, shield, ammo, grenade, level = found[2], found[3], found[4], found[5], found[6]
+            fields = {'healthText': health_text, 'shield': shield, 'ammoText': ammo, 'grenadeText': grenade, 'level': level}
+            problems = [name for name, value in fields.items() if not FORMATS[name].fullmatch(value)]
+            if problems:
+                bad.append(f'line {number}: {", ".join(problems)}')
+            events.append(('state', number, shield, magazine(ammo)))
+        elif FIRE.search(line):
+            events.append(('fire', number))
+        elif SHIELD.search(line):
+            events.append(('shield', number, SHIELD.search(line)[1]))
+    return lines, events, bad
+
+
+def fire_steps(events):
+    """(before, after) (magazine, reserve) around each fire line; (None, None) where no state brackets it."""
+    steps = []
+    for index, event in enumerate(events):
+        if event[0] != 'fire':
+            continue
+        before = next((e[3] for e in reversed(events[:index]) if e[0] == 'state'), (None, None))
+        after = next((e[3] for e in events[index + 1:] if e[0] == 'state'), (None, None))
+        steps.append((before, after))
+    return steps
+
+
+def check_log(text, expect_shield):
+    lines, events, bad = read_log(text)
+    states = [e for e in events if e[0] == 'state']
+    movie, canvas = where(lines, 'OpenWillow HUD path: movie'), where(lines, 'OpenWillow HUD path: canvas')
+    warp, affine = where(lines, 'OpenWillow HUD 3D path warp'), where(lines, 'OpenWillow HUD 3D path affine')
+    results = [
+        ('movie_path', bool(movie) and not canvas,
+         f'movie line {movie[:1]}, canvas lines {canvas[:3]}'),
+        ('warp_path', bool(warp) and not affine,
+         f'warp line {warp[:1]}' if not affine else
+         f'affine fallback at line {affine[0]}: {lines[affine[0] - 1].strip()[-160:]}'),
+        ('state_lines', bool(states), f'{len(states)} OWHUDSTATE lines'),
+        ('state_format', bool(states) and not bad,
+         f'{len(bad)} of {len(states)} off-format, first {bad[:2]}' if bad else f'{len(states)} lines in the host format'),
+    ]
+    if expect_shield:
+        shields = [e for e in events if e[0] == 'shield']
+        drawn = [e for e in events if e[0] == 'state' and e[2] is not None and e[2] != 'null'
+                 and any(s[1] < e[1] for s in shields)]
+        results.append(('shield_shown', bool(shields) and bool(drawn),
+                        f'shield line {shields[0][2] if shields else None}, {len(drawn)} later states with a shield'))
+    else:
+        results.append(('shield_shown', None, 'not requested (--expect-shield)'))
+    steps = fire_steps(events)
+    shown = [f'{b[0]}->{a[0]}' for b, a in steps]
+    ok = len(steps) == FIRE_SHOTS and all(
+        b[0] is not None and a[0] == b[0] - 1 and b[1] == a[1] for b, a in steps)
+    ok = ok and steps[-1][1][0] == steps[0][0][0] - FIRE_SHOTS
+    results.append(('fire_counts', ok,
+                    f'{len(steps)} fire lines, magazine {", ".join(shown)}' if steps else 'no fire lines'))
+    results.append(('done', DONE in text, f'{DONE} logged: {DONE in text}'))
+    return results
+
+
+def read_shot(path):
+    """(rows, bytes per pixel) of a complete 1280x720 8-bit RGB/RGBA non-interlaced PNG; ValueError with the reason otherwise."""
+    data = path.read_bytes() if path.is_file() else b''
+    if data[:8] != PNG_SIGNATURE:
+        raise ValueError('not a PNG')
+    pos, kinds, idat, header = 8, [], [], None
+    while pos < len(data):
+        if pos + 8 > len(data):
+            raise ValueError('truncated chunk header')
+        length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+        if pos + 12 + length > len(data):
+            raise ValueError(f'truncated {kind.decode("ascii", "replace")} chunk')
+        body = data[pos + 8:pos + 8 + length]
+        if zlib.crc32(kind + body) != struct.unpack('>I', data[pos + 8 + length:pos + 12 + length])[0]:
+            raise ValueError(f'CRC fails in {kind.decode("ascii", "replace")}')
+        kinds.append(kind)
+        if kind == b'IHDR' and length == 13:
+            header = struct.unpack('>IIBBBBB', body)
+        elif kind == b'IDAT':
+            idat.append(body)
+        pos += 12 + length
+    if not kinds or kinds[0] != b'IHDR' or kinds[-1] != b'IEND' or not idat or header is None:
+        raise ValueError('chunks out of order or missing')
+    width, height, depth, colour, _, _, interlace = header
+    if (width, height) != SHOT_SIZE:
+        raise ValueError(f'{width}x{height}, not 1280x720')
+    if depth != 8 or colour not in (2, 6) or interlace:
+        raise ValueError(f'unsupported PNG (depth {depth}, colour type {colour}, interlace {interlace})')
+    bpp = 3 if colour == 2 else 4
+    stride = width * bpp
+    try:
+        raw = zlib.decompress(b''.join(idat))
+    except zlib.error:
+        raise ValueError('IDAT does not inflate')
+    if len(raw) != height * (1 + stride):
+        raise ValueError('IDAT inflates to the wrong size')
+    rows, prev = [], bytearray(stride)
+    for y in range(height):   # the PNG row filters (PNG specification, section 9)
+        start = y * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1:start + 1 + stride])
+        if kind > 4:
+            raise ValueError(f'unknown filter {kind}')
+        for i in range(stride if kind else 0):
+            a = line[i - bpp] if i >= bpp else 0
+            b, c = prev[i], (prev[i - bpp] if i >= bpp else 0)
+            if kind == 1:
+                line[i] = (line[i] + a) & 255
+            elif kind == 2:
+                line[i] = (line[i] + b) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            else:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(line)
+        prev = line
+    return rows, bpp
+
+
+def count(shot, box, test):
+    """Pixels inside a screen box whose (r, g, b) passes the test."""
+    rows, bpp = shot
+    x0, y0, x1, y1 = box
+    return sum(1 for row in rows[y0:y1] for x in range(x0, x1)
+               if test(row[x * bpp], row[x * bpp + 1], row[x * bpp + 2]))
+
+
+def is_health(r, g, b):
+    return r > 150 and g < 80 and b < 90
+
+
+def is_ammo(r, g, b):
+    return b > 150 and r < 140
+
+
+def check_shots(folder):
+    """The captures: complete 1280x720 PNGs, not blank, with the health bar and the ammo bar drawn."""
+    folder = Path(folder)
+    shots, errors = {}, []
+    for name in SHOTS:
+        try:
+            shots[name] = read_shot(folder / name)
+        except (ValueError, OSError) as error:
+            errors.append(f'{name}: {error}')
+    results = [('shots_valid', not errors and len(shots) == len(SHOTS),
+                f'both 1280x720 PNGs, complete' if not errors else '; '.join(errors))]
+    colours = {}
+    for name, (rows, bpp) in shots.items():
+        colours[name] = len({bytes(row[i:i + bpp]) for row in rows[::4] for i in range(0, len(row), bpp)})
+    results.append(('shots_not_blank', bool(colours) and all(c >= NOT_BLANK_MIN_COLOURS for c in colours.values()),
+                    f'distinct colours (sampled rows) {colours}'))
+    red = {n: count(s, HEALTH_BOX, is_health) for n, s in shots.items()}
+    ammo = {n: count(s, AMMO_BOX, is_ammo) for n, s in shots.items()}
+    results.append(('health_bar_drawn', len(red) == len(SHOTS) and all(v > HEALTH_MIN for v in red.values()),
+                    f'red pixels in the health box {red}, need > {HEALTH_MIN}'))
+    results.append(('ammo_bar_drawn', len(ammo) == len(SHOTS) and all(v > AMMO_MIN for v in ammo.values()),
+                    f'blue/violet pixels in the ammo box {ammo}, need > {AMMO_MIN}'))
+    return results
+
+
+def run_checks(text, shots=None, expect_shield=False):
+    results = check_log(text, expect_shield)
+    if shots is not None:
+        results += check_shots(shots)
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('log')
+    parser.add_argument('--shots', help=f'folder holding {" and ".join(SHOTS)} of this run (needed for a PASS)')
+    parser.add_argument('--expect-shield', action='store_true', help='the run equipped a shield (run_hud_shots.ps1 -Shield)')
+    args = parser.parse_args()
+    text = Path(args.log).read_text(encoding='utf-8-sig', errors='replace')
+    results = run_checks(text, args.shots, args.expect_shield)
+    for name, ok, detail in results:
+        if ok is None:
+            print(f'OWHUDSHOTSTEST SKIP {name} {detail}')
+        else:
+            print(f'OWHUDSHOTSTEST {"PASS" if ok else "FAIL"} {name} {detail}')
+    failed = sum(1 for _, ok, _ in results if ok is False)
+    passed = sum(1 for _, ok, _ in results if ok)
+    result = 'FAIL' if failed else 'PASS' if args.shots else 'PARTIAL'
+    print(f'OWHUDSHOTSTEST SUMMARY result={result} passed={passed} failed={failed}'
+          + ('' if args.shots else ' (captures not checked: no --shots)'))
+    return 1 if failed else 0 if args.shots else 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

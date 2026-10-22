@@ -75,8 +75,9 @@ private:
     FString LastPageReport;
     int32 PageReportCount = 0;
     void DrawDamagePopups(UFont* Font);
-    // -owflashhud=<url>: BL2's own HUD movie in Ruffle, in a transparent
-    // web page over the viewport (tools/hud_overlay). Prototype only.
+    // BL2's own HUD movie in Ruffle, in a transparent web page over the viewport (tools/hud_overlay). It is the
+    // default gameplay HUD from http://127.0.0.1:8767/ (tools/run_ue_flash_hud.ps1); -owflashhud=<url> picks
+    // another page and -owcanvashud forces the canvas HUD.
     void PushFlashHudState(const class AOpenWillowWalker& Maya);
     // The action-skill indicator's inputs (tools/hud_overlay/action_skill.js): OutActive is the running skill's
     // remaining fraction (-1 when none), OutCooldown the cooldown's remaining fraction (0 = ready).
@@ -85,11 +86,21 @@ private:
 
     TSharedPtr<SWebBrowser> FlashHud;
     TSharedPtr<SWidget> FlashHudRoot;
+    // The movie counts only once its page reports ready (until then the canvas fallback draws); bFlashHudFailed asks
+    // DrawHUD to drop the overlay after a load error.
+    bool bFlashHudReady = false;
+    bool bFlashHudFailed = false;
     FString LastFlashState;
     FString LastSkillHudLine;
+    FString LastHudStateLine;
     // -owskillhudshots (with -owflashhud and -owcombattest): one unattended Phaselock cast with HUD captures
     // (OWSkillHud_*.png) through the cooldown, then quit.
     void TickSkillHudShots(class AOpenWillowWalker& Maya);
+    // -owhudshots (with -owitems): gameplay-HUD captures for the parity critic (OWHud_*.png): the held weapon at rest,
+    // then after three shots, then quit.
+    void TickHudShots(class AOpenWillowWalker& Maya);
+    int32 HudShotStep = 0;
+    float HudShotAt = 0.f;
     int32 SkillShotStep = 0;
     float SkillShotCastAt = 0.f;
     bool bSkillShotCast = false;

@@ -10,6 +10,8 @@
 // the 1280 px stage (read in the game); the scale F / D = 1.095 is fitted (UNVERIFIED), and how Scaleform derives it
 // was not read. Ruffle draws affine transforms only, so each turned clip gets the scale and position that meet that
 // projection at its bounds' left and right edges: the trapezoid (its near edge taller than its far edge) is not drawn.
+// When hud_warp.js can read Ruffle's canvas it draws the true perspective of the turned clips and this stand-in is
+// kept for the minimap (and for every turned clip when the warp is unavailable).
 (function (root) {
   'use strict';
   const CX = 640, CY = 360;
@@ -29,15 +31,16 @@
   }
 
   // Applies the stand-in once: `p1` is scaled by SCALE about the stage centre (the unturned plane) and every direct
-  // child with a turn gets its projection relative to that. `ow(target, op, a, b)` is the harness callback.
-  // Returns the turned clips' names (null when the movie is not ready).
-  function apply(ow, p1, names) {
+  // child with a turn gets its projection relative to that, except the clips named in `skip` (left flat: hud_warp.js
+  // draws their turn). `ow(target, op, a, b)` is the harness callback. Returns the names of the clips given the
+  // stand-in (null when the movie is not ready).
+  function apply(ow, p1, names, skip) {
     const px = ow(p1, 'get', '_x'), py = ow(p1, 'get', '_y');
     if (![px, py].every(Number.isFinite)) return null;
     const turned = [];
     for (const name of names) {
       const clip = `${p1}.${name}`, a = Number(ow(clip, 'get', '_yrotation'));
-      if (!a || Number(ow(clip, 'get', '_rotation'))) continue;
+      if (!a || Number(ow(clip, 'get', '_rotation')) || (skip && skip.has(name))) continue;
       const b = ow(clip, 'apply', 'getBounds', []);
       const x = ow(clip, 'get', '_x'), y = ow(clip, 'get', '_y');
       const xs = ow(clip, 'get', '_xscale') / 100, ys = ow(clip, 'get', '_yscale') / 100;

@@ -10,6 +10,7 @@
     healthText, shieldText, ammoText, grenadeText, levelText, classModText   strings
     grenades                   fill fraction 0..1
     weaponOut                  bool
+    weaponType                 the held weapon's ammo type key (pistol, smg, ar, shotgun, sniper, launcher)
     character                  frame (label or number) of p1.character; the game uses 6 for Maya
     skillActive                remaining fraction of the action skill's lock, null when the emblem is off
     skillCooldown              remaining fraction of the action-skill cooldown pool, 0 = ready
@@ -29,9 +30,12 @@
     wmode: 'transparent', backgroundColor: null, letterbox: 'off', logLevel: 'error',
     contextMenu: 'off', allowScriptAccess: true };
 </script>
+<!-- Before ruffle.js: hud_warp.js asks for Ruffle's WebGL context with preserveDrawingBuffer so it can be read. -->
+<script src="hud_warp.js"></script>
 <script src="ruffle/ruffle.js"></script>
 <script src="action_skill.js"></script>
 <script src="hud3d.js"></script>
+<script src="hud_fields.js"></script>
 </head><body>
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
@@ -41,9 +45,12 @@
   let ready = false;
   let pending = {};
   let turned = null, characterSet = false, readyAt = 0;  // the 3D-turn stand-in is applied once
+  let warp = null, p1Origin = null, clipNames = [], warpReadAt = 0, warpKey = '';   // hud_warp.js, when it can read Ruffle's canvas
+  const shown = {};   // every field applied so far: the warp re-reads its regions when this changes
   let skill = {}, lastSkillPage = '';   // the action-skill fields last applied (action_skill.js plans from the change)
   const P1 = '_level1.p1';
   const call = (target, op, a, b) => player.ow(target, op, a, b);
+  const setText = (field, text) => call(...window.owHudFields.textCall(field, text));
   // Bars whose frame 1 is full and frame 100 empty.
   const downFrame = fill => 1 + Math.round((1 - Math.min(1, Math.max(0, fill))) * 99);
 
@@ -55,14 +62,15 @@
     if ('weaponOut' in s && !s.weaponOut) call(P1 + '.bullets', 'gotoAndStop', 'noWeapon');
     else if ('ammo' in s) call(P1 + '.bullets', 'gotoAndStop', downFrame(s.ammo));
     if ('character' in s) call(P1 + '.character', 'gotoAndStop', s.character);
-    if ('healthText' in s) call(P1 + '.health.health_disp', 'set', 'text', s.healthText);
-    if ('shieldText' in s) call(P1 + '.shield.shield_disp', 'set', 'text', s.shieldText);
-    if ('ammoText' in s) call(P1 + '.bullets.bullet_c', 'set', 'text', s.ammoText);
-    if ('grenadeText' in s) call(P1 + '.grenades.grenadesDisp', 'set', 'text', s.grenadeText);
+    if ('weaponType' in s) for (const c of window.owHudFields.weaponCalls(s.weaponType)) call(c[0], c[1], c[2], c[3]);
+    if ('healthText' in s) setText(P1 + '.health.health_disp', s.healthText);
+    if ('shieldText' in s) setText(P1 + '.shield.shield_disp', s.shieldText);
+    if ('ammoText' in s) setText(P1 + '.bullets.bullet_c', s.ammoText);
+    if ('grenadeText' in s) setText(P1 + '.grenades.grenadesDisp', s.grenadeText);
     // XP bar caption: "LV" (lvdisp, localized in the movie), the level number
     // and the class-mod title ("LV 17 Hoarding War Dog" in the game).
-    if ('levelText' in s) call(P1 + '.levelClassMod.level', 'set', 'text', s.levelText);
-    if ('classModText' in s) call(P1 + '.levelClassMod.comm', 'set', 'text', s.classModText);
+    if ('levelText' in s) setText(P1 + '.levelClassMod.level', s.levelText);
+    if ('classModText' in s) setText(P1 + '.levelClassMod.comm', s.classModText);
     // After `character`: the icon clip exists only on the character frame.
     const skillCalls = window.owActionSkill.plan(skill, s);
     for (const c of skillCalls) call(c[0], c[1], c[2], c[3]);
@@ -80,9 +88,33 @@
     // The stand-in for the clusters' 3D turn (hud3d.js), once the character frame is set and the clips have had a
     // second to settle (bounds read on the boot frame came out wrong in UE); the host resends its state every second.
     if ('character' in s) characterSet = true;
+    // With the warp (hud_warp.js) the turned clips stay flat in the movie and the overlay draws their perspective;
+    // the minimap keeps the stand-in either way.
     if (!turned && characterSet && performance.now() - readyAt > 1000) {
-      turned = window.owHud3d.apply(call, P1, String(call(P1, 'keys')).split(',').filter(Boolean));
-      console.log('OpenWillow HUD 3D turn on ' + turned.join(' '));
+      clipNames = String(call(P1, 'keys')).split(',').filter(Boolean);
+      p1Origin = {x: Number(call(P1, 'get', '_x')), y: Number(call(P1, 'get', '_y'))};
+      // A serve.py started before hud_warp.js existed does not serve it: keep the stand-in then.
+      warp = window.owHudWarp ? window.owHudWarp.start(player, console.log, /[?&]hud3d=affine(&|$)/.test(location.search))
+        : {path: 'affine'};
+      if (!window.owHudWarp) console.log('OpenWillow HUD 3D path affine: hud_warp.js not loaded');
+      window.owHudWarpState = warp;
+      const skip = new Set(warp.path === 'warp' ? clipNames.filter(n => n !== 'minimapEcho') : []);
+      turned = window.owHud3d.apply(call, P1, clipNames, skip);
+      console.log('OpenWillow HUD 3D turn on ' + turned.join(' ') + (warp.path === 'warp' ? ' (stand-in); warp for the rest' : ''));
+    }
+    // The warp's regions follow what the clips show. Reading them walks the turned clips' children (about 30 ms in the
+    // bench), so only when the applied state changes (the host resends it every second) or every 5 s for the movie's
+    // own animations.
+    Object.assign(shown, s);
+    const key = JSON.stringify(shown), now = performance.now();
+    if (warp && warp.path === 'warp' && (key !== warpKey && now - warpReadAt > 250 || now - warpReadAt > 5000)) {
+      warpKey = key; warpReadAt = now;
+      const clips = window.owHudWarp.readClips(call, P1, clipNames, p1Origin, new Set(['minimapEcho']));
+      // The minimap keeps its stand-in exactly: its drawn pixels stay in place.
+      const minimap = window.owHudWarp.drawnRect(call, P1, 'minimapEcho');
+      const regions = warp.setClips(clips, minimap ? [{name: 'minimapEcho', rect: minimap}] : []);
+      const names = regions.map(r => r.name).join(' ');
+      if (names !== warp.names) { warp.names = names; console.log('OpenWillow HUD 3D warp regions ' + names); }
     }
   }
 
