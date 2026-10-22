@@ -6,8 +6,14 @@ import sys
 from pathlib import Path
 import unreal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+mel = unreal.MaterialEditingLibrary
 from scene_geometry import actor_label
-from scene_import_rules import temporary_sky_policy, ue3_color_linear
+from scene_import_rules import (SANCTUARY_SKY_INTENSITY_CALIBRATION,
+                                temporary_sky_policy, ue3_color_linear,
+                                ue3_decal_dimensions_to_ue5,
+                                ue3_directional_brightness_to_ue5,
+                                ue3_sky_light_color_to_ue5,
+                                ue3_world_post_process_to_ue5)
 
 
 def xyz(v):
@@ -53,24 +59,32 @@ if source_fog_expected:
 assert set(lighting) == expected_lighting
 sun_component = lighting['OpenWillow_Sun'].get_component_by_class(unreal.DirectionalLightComponent)
 assert sun_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
-assert abs(sun_component.get_editor_property('intensity') - 1.0) < .01
 source_directional = scene.get('lighting', {}).get('directional_light')
+expected_sun_intensity = (ue3_directional_brightness_to_ue5(source_directional['light_brightness'])
+                          if source_directional is not None
+                          and 'light_brightness' in source_directional else 1.0)
+assert abs(sun_component.get_editor_property('intensity') - expected_sun_intensity) < .01
 if source_directional is not None:
     # UE5 normalizes rotator angles, so compare them modulo 360 degrees.
     rotation = lighting['OpenWillow_Sun'].get_actor_rotation()
     for actual, expected in zip([rotation.pitch, rotation.yaw, rotation.roll], source_directional['rotation']):
         assert abs((actual - expected + 180) % 360 - 180) <= 1e-2, (rotation, source_directional['rotation'])
+    if 'light_color_rgb' in source_directional:
+        color = sun_component.get_editor_property('light_color')
+        close([color.r, color.g, color.b], [c * 255 for c in source_directional['light_color_rgb']], 3)
 sky_component = lighting['OpenWillow_SkyFill'].get_component_by_class(unreal.SkyLightComponent)
 assert sky_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
 assert sky_component.get_editor_property('source_type') == unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP
 assert sky_component.get_editor_property('cubemap').get_path_name() == '/Engine/EngineResources/GrayLightTextureCube.GrayLightTextureCube'
 source_sky = scene.get('lighting', {}).get('sky_light')
-expected_sky_intensity = 1.0 if source_sky is not None else 0.5
+expected_sky_intensity = SANCTUARY_SKY_INTENSITY_CALIBRATION if source_sky is not None else 0.5
 assert abs(sky_component.get_editor_property('intensity') - expected_sky_intensity) < .01
 if source_sky is not None:
-    # light_color is stored as an sRGB FColor; compare bytes against the source FColor.
+    # The calibrated linear fill is stored back as sRGB FColor channels.
     color = sky_component.get_editor_property('light_color')
-    close([color.r, color.g, color.b], [c * 255 for c in source_sky['light_color_rgb']], 3)
+    calibrated_sky = ue3_sky_light_color_to_ue5(source_sky['light_color_rgb'])
+    close([color.r, color.g, color.b],
+          [value ** (1.0 / 2.2) * 255 for value in calibrated_sky], 3)
     lower = sky_component.get_editor_property('lower_hemisphere_color')
     close([lower.r, lower.g, lower.b],
           [c * source_sky['lower_brightness'] for c in ue3_color_linear(source_sky['lower_color_rgb'])], 1e-4)
@@ -110,7 +124,7 @@ assert post.get_editor_property('unbound')
 assert abs(post.get_editor_property('blend_weight') - 1.0) < .01
 post_settings = post.get_editor_property('settings')
 for name in ('override_auto_exposure_method', 'override_auto_exposure_min_brightness',
-             'override_auto_exposure_max_brightness', 'override_auto_exposure_bias'):
+             'override_auto_exposure_max_brightness'):
     try:
         value = post_settings.get_editor_property(name)
     except Exception:
@@ -120,6 +134,79 @@ for name in ('override_auto_exposure_method', 'override_auto_exposure_min_bright
         except Exception:
             continue
     assert not value, name
+world_info = next((item for item in scene.get('lighting', {}).get('world_info', [])
+                   if item.get('default_post_process_settings')), None)
+source_post_process = (ue3_world_post_process_to_ue5(world_info['default_post_process_settings'])
+                       if world_info is not None else None)
+if source_post_process is not None:
+    for override_name, value_name in (
+            ('override_auto_exposure_bias', 'auto_exposure_bias'),
+            ('override_color_gain', 'color_gain'),
+            ('override_color_offset', 'color_offset'),
+            ('override_bloom_intensity', 'bloom_intensity')):
+        assert post_settings.get_editor_property(override_name), override_name
+        actual = post_settings.get_editor_property(value_name)
+        expected = source_post_process[value_name]
+        if value_name in ('color_gain', 'color_offset'):
+            close([actual.x, actual.y, actual.z], expected, 1e-5)
+        else:
+            assert abs(float(actual) - float(expected)) < 1e-5, (value_name, actual, expected)
+source_volume_records = scene.get('lighting', {}).get('post_process_volumes', [])
+host_post_process_volumes = [actor for actor in actors
+                             if isinstance(actor, unreal.PostProcessVolume)]
+assert [actor.get_actor_label() for actor in host_post_process_volumes] == ['OpenWillow_Exposure']
+assert all(isinstance(item.get('settings'), dict) and item.get('bounds_status')
+           == 'brush bounds not decoded' for item in source_volume_records)
+
+# Independently match every supported source DecalActor to a saved UE5 decal,
+# verify the projection extent/material binding, and enumerate unsupported inputs.
+decal_manifest = scene.get('decals', {})
+source_decals = decal_manifest.get('actors', [])
+supported_decals = [item for item in source_decals if item.get('status') == 'partial_unverified']
+decal_actors = {actor.get_actor_label(): actor for actor in actors
+                if isinstance(actor, unreal.DecalActor)}
+assert len(source_decals) == decal_manifest.get('census', {}).get('actors', len(source_decals))
+assert len(decal_actors) == len(supported_decals), (len(decal_actors), len(supported_decals))
+for source in supported_decals:
+    label = actor_label(source['level'], source['source'], 0)
+    actor = decal_actors[label]
+    close(xyz(actor.get_actor_location()), source['transform']['location'])
+    basis = source.get('projection_basis', {})
+    normal = basis.get('HitNormal', [0.0, 0.0, 0.0])
+    magnitude = math.sqrt(sum(float(value) ** 2 for value in normal))
+    if magnitude > 1e-5:
+        close(xyz(actor.get_actor_forward_vector()), [float(value) / magnitude for value in normal], .001)
+    component = actor.get_component_by_class(unreal.DecalComponent)
+    assert component is not None
+    size = component.get_editor_property('decal_size')
+    close(xyz(size), ue3_decal_dimensions_to_ue5(source['dimensions']), .001)
+    material = component.get_editor_property('decal_material')
+    assert material is not None and material.get_name() == 'M_OpenWillowDecal_' + source['material']
+    assert material.get_editor_property('material_domain') == unreal.MaterialDomain.MD_DEFERRED_DECAL
+    assert material.get_editor_property('blend_mode') == unreal.BlendMode.BLEND_TRANSLUCENT
+    source_material = decal_manifest.get('materials', {}).get(source['material'], {})
+    diffuse = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
+    opacity = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_OPACITY)
+    assert isinstance(diffuse, unreal.MaterialExpressionTextureSample)
+    if source_material.get('opacity_source') == 'inverse_rgb_luminance_v1':
+        assert isinstance(opacity, unreal.MaterialExpressionOneMinus)
+    else:
+        assert source_material.get('opacity_source') == 'Texture2D alpha channel'
+        assert isinstance(opacity, unreal.MaterialExpressionComponentMask)
+        assert bool(opacity.get_editor_property('a'))
+    tags = [str(tag) for tag in actor.get_editor_property('tags')]
+    assert source['source'] in tags
+static_mesh_candidates = decal_manifest.get('static_mesh_candidates', [])
+verified_static_mesh_candidate_placements = 0
+for candidate in static_mesh_candidates:
+    instances = [item for item in scene['actors'] if item['mesh'] == candidate['mesh']]
+    assert len(instances) == candidate['placements'], (candidate['source'], len(instances))
+    for instance in instances:
+        for section in scene['meshes'][instance['mesh']]['sections']:
+            assert actor_label(instance['level'], instance['source'], section['slot']) in placed
+        verified_static_mesh_candidate_placements += 1
+assert verified_static_mesh_candidate_placements == decal_manifest.get('census', {}).get(
+    'static_mesh_candidate_placements', 0)
 
 
 # Independently compare collection world translation and axis lengths to the
@@ -230,7 +317,6 @@ for definition in scene['meshes'].values():
         close(xyz(bounds.origin), [(a + b) * .5 for a, b in zip(minimum, maximum)])
         close(xyz(bounds.box_extent), [(b - a) * .5 for a, b in zip(minimum, maximum)])
 
-mel = unreal.MaterialEditingLibrary
 channels = {'diffuse': unreal.MaterialProperty.MP_BASE_COLOR, 'normal': unreal.MaterialProperty.MP_NORMAL,
             'specular': unreal.MaterialProperty.MP_SPECULAR, 'emissive': unreal.MaterialProperty.MP_EMISSIVE_COLOR}
 verified_channels = set()
@@ -576,6 +662,15 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_hidden_visual_placements': verified_hidden_visual,
           'verified_neutral_fallback_sections': verified_neutral_fallback,
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
+          'verified_decals': len(supported_decals),
+          'unsupported_decals': len(source_decals) - len(supported_decals),
+          'source_decal_components': decal_manifest.get('census', {}).get('components', 0),
+          'source_decal_materials': decal_manifest.get('census', {}).get('unique_materials', 0),
+          'verified_decal_like_mesh_placements': verified_static_mesh_candidate_placements,
+          'source_sky_light_brightness_status': (source_sky or {}).get('light_brightness_status'),
+          'verified_world_info_post_process': source_post_process is not None,
+          'verified_source_post_process_volume_records': len(source_volume_records),
+          'host_post_process_volumes': len(host_post_process_volumes),
           'temporary_sky_fallback': ('none_native_dome_approximation' if native_sky_approximated
                                      else 'UE5_SkyAtmosphere+OpenWillow_SkyFallback'),
           'visual_validation': 'pending'}

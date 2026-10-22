@@ -53,6 +53,21 @@ def props(record):
     return values(record.get('data', {}).get('properties', []))
 
 
+def decoded_texture_properties(record):
+    """Read decoded Texture2D UProperties from the package reader result.
+
+    Scene records intentionally omit Texture2D properties. Offset 8 is the
+    serialized UObject property start; texture bulk payload follows the
+    property stream, so trailing bytes are expected and are not treated as an
+    incomplete property decode.
+    """
+    if 'error' in record:
+        raise ValueError(record['error'])
+    if record.get('property_offset') != 8 or not isinstance(record.get('properties'), list):
+        raise ValueError('Texture2D property decode did not use the expected property stream')
+    return values(record['properties'])
+
+
 def vector(value, default=0):
     return [value.get(k, default) for k in ('X', 'Y', 'Z')]
 
@@ -73,6 +88,26 @@ def decoded_settings(value):
     return {item['name']: item['value'] for item in value
             if isinstance(item, dict) and item.get('status') == 'decoded'
             and isinstance(item.get('name'), str) and 'value' in item}
+
+
+def property_name_offsets(payload, names, property_name):
+    """Find package-name-table anchors in an export payload.
+
+    Callers still validate the complete property stream with the package
+    reader. This helper only returns byte positions carrying the exact FName
+    requested by the caller; it does not infer arbitrary serialization sizes.
+    """
+    if not isinstance(payload, (bytes, bytearray, memoryview)) or not isinstance(names, list):
+        raise ValueError('Property anchor requires payload bytes and a package name table')
+    indices = [index for index, name in enumerate(names) if name == property_name]
+    offsets = []
+    for index in indices:
+        marker = struct.pack('<ii', index, 0)
+        offset = payload.find(marker)
+        while offset >= 0:
+            offsets.append(offset)
+            offset = payload.find(marker, offset + 1)
+    return sorted(set(offsets))
 
 
 def transform(p, component=False):
@@ -419,6 +454,10 @@ INSPECTED_SCENE_MATERIAL_RECIPES = {
         'method': 'customization_banner_swirl_v1',
         'base': 'Sanctuary_P:Prop_CustomizationMachine.Materials.Master_CharacterCustomization',
         'diffuse': 'Sanctuary_P:Prop_CustomizationMachine.Textures.CM_MachineBanner',
+        # UNVERIFIED host calibration against lane A's matched round-2 shots;
+        # this is a brighter host display, not a decoded UE3 scalar.
+        'emissive_calibration_scale': 3.0,
+        'emissive_calibration_evidence': 'round2 matched camera 01: cyan display and holo are still subdued',
         'emissive_layers': [
             {'texture': 'Sanctuary_P:FX_Shared_Energy.Textures.EnergySwirls_Dif_Tex',
              'channel': 'RGB', 'color': [0.08, 0.72, 1.0], 'srgb': True}],
@@ -427,6 +466,10 @@ INSPECTED_SCENE_MATERIAL_RECIPES = {
     'Sanctuary_P:Prop_Signs_02.Materials.Mat_SanctuaryMoxxis': {
         'method': 'moxxi_neon_masks_v1',
         'base': 'Sanctuary_P:Prop_Signs_02.Materials.Mat_SanctuaryMoxxis',
+        # UNVERIFIED host calibration against lane A's matched round-2 shots;
+        # the sign glow is too dim in the host and this scale is not decoded.
+        'emissive_calibration_scale': 2.8,
+        'emissive_calibration_evidence': 'round2 matched camera 05: Moxxi sign glow is dimmer than reference',
         'emissive_layers': [
             {'texture': 'Sanctuary_P:Prop_Signs_02.Textures.SanctuaryMoxxis_Mask',
              'channel': 'R', 'color': [2.2, 0.08, 0.14], 'srgb': False},
@@ -439,6 +482,10 @@ INSPECTED_SCENE_MATERIAL_RECIPES = {
     'Sanctuary_P:Prop_Carnival.Materials.Mati_LightStrips_01': {
         'method': 'light_strip_component_emissive_v1',
         'base': 'Sanctuary_P:Prop_Carnival.Materials.Mat_LightStrips_01',
+        # UNVERIFIED host calibration against matched round-2 cameras 05/07;
+        # the bulb colors are channel masks, and this scale is not decoded.
+        'emissive_calibration_scale': 4.0,
+        'emissive_calibration_evidence': 'round2 matched cameras 05/07: string bulbs are not visible in the host',
         'emissive_layers': [
             {'texture': 'Sanctuary_P:Prop_Carnival.LightStrip_Comp',
              'channel': 'RGB', 'color': [2.0, 2.0, 2.0], 'srgb': True}],
@@ -447,16 +494,41 @@ INSPECTED_SCENE_MATERIAL_RECIPES = {
     'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap': {
         'method': 'world_map_mask_colorization_v1',
         'base': 'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap',
+        # UNVERIFIED host palette calibration against matched round-2 cameras
+        # 03/08; R/G/B channel identities were inspected, palette values were not decoded.
         'host_lighting_model': 'MLM_Unlit',
         'unlit_color_layers': [
             {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
-             'channel': 'R', 'color': [0.08, 0.65, 0.75], 'srgb': False},
+             'channel': 'R', 'color': [0.16, 0.58, 0.68], 'srgb': False},
             {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
-             'channel': 'G', 'color': [1.5, 0.04, 0.025], 'srgb': False},
+             'channel': 'G', 'color': [0.035, 0.09, 0.105], 'srgb': False},
             {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
-             'channel': 'B', 'color': [0.08, 1.0, 0.12], 'srgb': False}],
+             'channel': 'B', 'color': [0.08, 0.24, 0.27], 'srgb': False}],
         'omitted': ['RolandsControlRoom02_Cube reflection', 'native map palette and animated markers'],
-        'issue': 'Approximation: inspected WorldMap_Comp R/G/B masks are colorized as cyan land, red routes/grid and green markers and emitted Unlit; palette and reflection remain unverified'},
+        'issue': 'UNVERIFIED approximation: inspected WorldMap_Comp R carries land/contour artwork, G carries the grid, and B carries markers; host maps these to pale cyan land and dark teal markings; palette and reflection remain unreconstructed'},
+}
+
+# The cooked Engine package serializes Height, FieldOfView and FarPlane on
+# Default__DecalComponent. The remaining fallback values below follow the
+# public UE3 DecalComponent class reference; Width/Thickness/NearPlane are not
+# serialized in this local class default object and remain UNVERIFIED here.
+UE3_DECAL_COMPONENT_DEFAULTS_UNVERIFIED = {
+    'Width': 200.0, 'Height': 200.0, 'Thickness': 10.0,
+    'NearPlane': 0.0, 'FarPlane': 300.0, 'FieldOfView': 80.0,
+}
+
+
+def decal_opacity_source(blend_mode, texture_properties=None):
+    """Choose a bounded opacity input for the supported single-texture decal path."""
+    texture_properties = texture_properties if isinstance(texture_properties, dict) else {}
+    if blend_mode == 'BLEND_Modulate' and texture_properties.get('CompressionNoAlpha') is not True:
+        return 'inverse_rgb_luminance_v1'
+    if blend_mode == 'BLEND_Masked':
+        return 'Texture2D alpha channel'
+    return None
+
+DECAL_LIKE_STATIC_MESH_IDENTITIES = {
+    'Startup:FX_Shared_Mesh.Meshes.Planes.DecalPlane_LiquidDev',
 }
 
 # Instance parameters are read from the cooked parent chain; only the exact
@@ -911,6 +983,56 @@ class Scene:
             raise ValueError(run.stderr.strip())
         return json.loads(run.stdout)
 
+    def properties_batch(self, package, indices, offset, label):
+        """Read same-class actor/component properties in one bounded reader call."""
+        indices = list(dict.fromkeys(indices))
+        if not indices:
+            return {}
+        index_file = self.output / f'.{label}-{package}.indices'
+        index_file.write_text('\n'.join(str(i) for i in indices) + '\n', encoding='ascii')
+        try:
+            run = subprocess.run([str(self.reader), str(self.package(package)),
+                                  '--properties-batch', str(index_file),
+                                  '--property-offset', str(offset)],
+                                 capture_output=True, text=True, encoding='utf-8')
+        finally:
+            index_file.unlink(missing_ok=True)
+        if run.returncode:
+            raise ValueError(run.stderr.strip())
+        records = [json.loads(line) for line in run.stdout.splitlines() if line.strip()]
+        result = {int(item['index']): item for item in records}
+        if len(result) != len(indices):
+            raise ValueError('Package reader property batch returned an incomplete record set')
+        return result
+
+    def anchored_properties(self, package, index, anchor, required):
+        """Recover one class-specific property-stream start from an exact FName.
+
+        This is used only for the directional-light component whose serialized
+        lightmap payload precedes its UProperties. The candidate is accepted
+        only when the package reader sees the anchor first, all required fields,
+        and a property stream that consumes the rest of that component export.
+        """
+        names = self.call(package, '--names')
+        payload = bytes(self.call(package, '--payload', index))
+        candidates = []
+        for offset in property_name_offsets(payload, names, anchor):
+            try:
+                record = self.call(package, '--properties', index,
+                                   '--property-offset', offset)
+            except ValueError:
+                continue
+            properties = record.get('properties', [])
+            decoded_names = [item.get('name') for item in properties
+                             if item.get('status') == 'decoded']
+            decoded = values(properties)
+            if (record.get('trailing_bytes') == 0 and decoded_names
+                    and decoded_names[0] == anchor and set(required) <= set(decoded)):
+                candidates.append((offset, decoded, properties))
+        if len(candidates) != 1:
+            raise ValueError(f'Expected one complete {anchor} property stream, found {len(candidates)}')
+        return candidates[0]
+
     def load(self, package):
         if package not in self.records:
             self.records[package] = {r['index']: r for r in self.call(package, '--scene-records', self.schema)}
@@ -1106,6 +1228,13 @@ class Scene:
         result = {'method': entry['method'], 'status': 'partial_unverified',
                   'base_material': entry['base'], 'omitted': entry['omitted'],
                   'issue': entry['issue']}
+        calibration = float(entry.get('emissive_calibration_scale', 1.0))
+        if not math.isfinite(calibration) or calibration <= 0:
+            raise ValueError('Scene material emissive calibration must be finite and positive')
+        if calibration != 1.0:
+            result['emissive_calibration'] = {
+                'scale': calibration, 'status': 'UNVERIFIED host screenshot calibration',
+                'evidence': entry.get('emissive_calibration_evidence', 'named host calibration')}
         if entry.get('host_lighting_model'):
             result['host_lighting_model'] = entry['host_lighting_model']
         if entry.get('diffuse'):
@@ -1116,7 +1245,11 @@ class Scene:
             layers = []
             for index, layer in enumerate(entry.get(channel, [])):
                 texture = inspected(layer['texture'])
-                layers.append({**layer, 'source': self.identity(texture),
+                prepared_layer = dict(layer)
+                if channel == 'emissive_layers' and calibration != 1.0:
+                    prepared_layer['color'] = [float(value) * calibration
+                                               for value in layer['color']]
+                layers.append({**prepared_layer, 'source': self.identity(texture),
                                'file': self.texture(texture, f'recipe_{channel}_{index}')})
             if layers:
                 result[channel] = layers
@@ -1587,10 +1720,242 @@ class Scene:
                         pending.append(sublevel)
         return levels
 
+    def decal_component_defaults(self):
+        """Read local cooked CDO values; keep omitted native defaults labelled."""
+        defaults = dict(UE3_DECAL_COMPONENT_DEFAULTS_UNVERIFIED)
+        evidence = {name: 'UNVERIFIED public UE3 DecalComponent default'
+                    for name in defaults}
+        try:
+            rows = self.load('Engine')
+            matches = [row for row in rows.values()
+                       if row['path'] == 'Default__DecalComponent'
+                       and row['class'].rsplit('.', 1)[-1] == 'DecalComponent']
+            if len(matches) != 1:
+                return defaults, evidence
+            decoded = values(self.call('Engine', '--properties', matches[0]['index'],
+                                       '--property-offset', 8).get('properties', []))
+            for name in defaults:
+                value = decoded.get(name)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                    defaults[name] = float(value)
+                    evidence[name] = 'Engine.Default__DecalComponent decoded property'
+        except (ValueError, KeyError, TypeError):
+            pass
+        return defaults, evidence
+
+    def decal_material_definition(self, key):
+        """Use one cooked decal Texture2D as diffuse plus a bounded opacity source.
+
+        This is a deliberately narrow resource translation. It does not
+        reconstruct the DecalMaterial graph; materials with more than one
+        cooked texture or no single Texture2D stay unsupported.
+        """
+        identity = self.identity(key)
+        filename = self.filename(key, '')
+        record = self.load(key[0])[key[1]]
+        material = {'source': identity, 'status': 'unsupported',
+                    'issue': 'UNVERIFIED: decal material graph is not reconstructed'}
+        if record['class'].rsplit('.', 1)[-1] != 'DecalMaterial':
+            material['issue'] = 'Unsupported decal reference class: ' + record['class']
+            return filename, material
+        try:
+            refs, opaque = cooked_texture_references(
+                bytes(self.call(key[0], '--payload', key[1])), record['data'])
+            textures = [self.resolve(key[0], ref) for ref in refs]
+            if len(textures) != 1 or textures[0] is None:
+                material['issue'] = f'Unsupported decal texture set: expected one texture, found {len(textures)}'
+                return filename, material
+            texture = textures[0]
+            texture_record = self.load(texture[0])[texture[1]]
+            if texture_record['class'].rsplit('.', 1)[-1] != 'Texture2D':
+                material['issue'] = 'Unsupported decal texture class: ' + texture_record['class']
+                return filename, material
+            properties = props(record)
+            blend_mode = properties.get('BlendMode')
+            texture_property_record = self.call(
+                texture[0], '--properties', texture[1], '--property-offset', 8)
+            texture_properties = decoded_texture_properties(texture_property_record)
+            if blend_mode == 'BLEND_Translucent':
+                material['issue'] = ('Unsupported translucent decal: the single texture does not '
+                                     'expose a verified opacity graph')
+                return filename, material
+            if (blend_mode == 'BLEND_Modulate'
+                    and texture_properties.get('CompressionNoAlpha') is True):
+                material['issue'] = ('Unsupported Modulate decal: Texture2D CompressionNoAlpha is true; '
+                                     'RGB channel roles are unresolved')
+                return filename, material
+            opacity_source = decal_opacity_source(blend_mode, texture_properties)
+            if opacity_source is None:
+                material['issue'] = 'Unsupported decal blend mode: ' + str(blend_mode)
+                return filename, material
+            material.update({
+                'status': 'partial_unverified',
+                'texture_file': self.texture(texture, 'decal'),
+                'texture_source': self.identity(texture),
+                'texture_count': len(textures),
+                'opaque_tail_bytes': opaque,
+                'blend_mode': blend_mode,
+                'texture_compression_no_alpha': texture_properties.get('CompressionNoAlpha'),
+                'texture_compression_no_alpha_evidence': (
+                    'Texture2D CompressionNoAlpha decoded'
+                    if isinstance(texture_properties.get('CompressionNoAlpha'), bool)
+                    else 'Texture2D CompressionNoAlpha was not serialized/decoded'),
+                'lighting_model': properties.get('LightingModel'),
+                'opacity_source': opacity_source,
+                'method': 'single_texture_deferred_decal_v1',
+                'issue': ('UNVERIFIED approximation: the cooked DecalMaterial resource names one '
+                          'Texture2D; host uses RGB with inverse-luminance opacity for Modulate '
+                          'unless CompressionNoAlpha is explicitly true, '
+                          'or texture alpha for Masked; native graph and exact blend behavior '
+                          'remain unreconstructed')})
+        except (ValueError, KeyError, TypeError) as error:
+            material['issue'] = str(error)
+        return filename, material
+
+    def decals_manifest(self, levels):
+        """Export placed DecalActor transforms, projection inputs and materials."""
+        defaults, default_evidence = self.decal_component_defaults()
+        decal_materials, actors, issues = {}, [], []
+        actor_count = component_count = 0
+        component_batches = {}
+        for level in levels:
+            rows = self.load(level)
+            source_actors = [row for row in rows.values()
+                             if row['class'].rsplit('.', 1)[-1] == 'DecalActor'
+                             and row['path'].startswith('TheWorld.PersistentLevel.')]
+            actor_count += len(source_actors)
+            if not source_actors:
+                continue
+            batch = self.properties_batch(level, [row['index'] for row in source_actors],
+                                          26, 'decal-actors')
+            for row in source_actors:
+                result = batch.get(row['index'], {})
+                if 'error' in result:
+                    issues.append({'source': level + ':' + row['path'], 'error': result['error']})
+                    actors.append({'source': level + ':' + row['path'], 'status': 'unsupported',
+                                   'issue': result['error']})
+                    continue
+                actor_props = values(result.get('properties', []))
+                component_key = self.resolve(level, actor_props.get('Decal'))
+                if component_key is None:
+                    issues.append({'source': level + ':' + row['path'],
+                                   'error': 'DecalActor has no resolved DecalComponent'})
+                    actors.append({'source': level + ':' + row['path'], 'status': 'unsupported',
+                                   'issue': 'DecalActor has no resolved DecalComponent'})
+                    continue
+                component = self.load(component_key[0]).get(component_key[1])
+                if component is None or component['class'].rsplit('.', 1)[-1] != 'DecalComponent':
+                    error = 'DecalActor component is missing or is not a DecalComponent'
+                    issues.append({'source': level + ':' + row['path'], 'error': error})
+                    actors.append({'source': level + ':' + row['path'], 'status': 'unsupported',
+                                   'issue': error})
+                    continue
+                component_count += 1
+                component_batches.setdefault(component_key[0], []).append(
+                    (level, row, actor_props, component_key, component))
+
+        for package, records in component_batches.items():
+            component_results = self.properties_batch(
+                package, [record[3][1] for record in records], 8, 'decal-components')
+            for level, row, actor_props, component_key, component in records:
+                source = level + ':' + row['path']
+                result = component_results.get(component_key[1], {})
+                if 'error' in result:
+                    issues.append({'source': source, 'error': result['error']})
+                    actors.append({'source': source, 'status': 'unsupported',
+                                   'component_source': package + ':' + component['path'],
+                                   'issue': result['error']})
+                    continue
+                component_props = values(result.get('properties', []))
+                material_key = self.resolve(package, component_props.get('DecalMaterial'))
+                material_name = None
+                material_source = None
+                if material_key is not None:
+                    material_name = self.filename(material_key, '')
+                    if material_name not in decal_materials:
+                        material_name, definition = self.decal_material_definition(material_key)
+                        decal_materials[material_name] = definition
+                    definition = decal_materials[material_name]
+                    material_source = self.identity(material_key)
+
+                dimensions, dimension_evidence = {}, {}
+                for property_name, field_name in (
+                        ('Width', 'width'), ('Height', 'height'), ('Thickness', 'thickness'),
+                        ('NearPlane', 'near_plane'), ('FarPlane', 'far_plane'),
+                        ('FieldOfView', 'field_of_view')):
+                    if property_name in component_props:
+                        value = component_props[property_name]
+                        evidence = 'DecalComponent instance property'
+                    else:
+                        value = defaults[property_name]
+                        evidence = default_evidence[property_name]
+                    if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                            or not math.isfinite(value) or value < 0):
+                        raise ValueError(f'Invalid decal projection dimension {property_name} on {source}')
+                    dimensions[field_name] = float(value)
+                    dimension_evidence[field_name] = evidence
+
+                location = vector(actor_props.get('Location', {}))
+                rotation = [actor_props.get('Rotation', {}).get(axis, 0) * 360 / 65536
+                            for axis in ('Pitch', 'Yaw', 'Roll')]
+                projection_basis = {name: vector(component_props.get(name, {}))
+                                    for name in ('HitLocation', 'HitNormal', 'HitTangent', 'HitBinormal')}
+                supported = (material_name is not None
+                             and decal_materials[material_name]['status'] == 'partial_unverified')
+                actors.append({
+                    'source': source, 'level': level,
+                    'component_source': package + ':' + component['path'],
+                    'material': material_name, 'material_source': material_source,
+                    'transform': {'location': location, 'rotation': rotation},
+                    'projection_basis': projection_basis,
+                    'dimensions': dimensions, 'dimension_evidence': dimension_evidence,
+                    'status': 'partial_unverified' if supported else 'unsupported',
+                    'issue': ('UNVERIFIED UE3 projection axes and blend are approximated by a UE5 deferred decal'
+                              if supported else 'No supported single-texture DecalMaterial resource')})
+
+        supported = sum(item.get('status') == 'partial_unverified' for item in actors)
+        unique_supported_materials = sum(item.get('status') == 'partial_unverified'
+                                         for item in decal_materials.values())
+        return {'status': 'partial_unverified',
+                'policy': 'single_texture_deferred_decal_v1',
+                'census': {'actors': actor_count, 'components': component_count,
+                           'supported_import_candidates': supported,
+                           'unsupported': len(actors) - supported,
+                           'unique_materials': len(decal_materials),
+                           'supported_materials': unique_supported_materials,
+                           'unresolved_materials': len(decal_materials) - unique_supported_materials},
+                'materials': decal_materials, 'actors': actors, 'issues': issues,
+                'defaults_status': 'local CDO values plus labelled UNVERIFIED defaults'}
+
+    def decal_like_static_meshes(self, placements):
+        """List explicitly named decal-like placements kept on the mesh path."""
+        result = []
+        for mesh_name, mesh in self.meshes.items():
+            identity = mesh.get('source')
+            if identity not in DECAL_LIKE_STATIC_MESH_IDENTITIES:
+                continue
+            instances = [item for item in placements if item.get('mesh') == mesh_name]
+            by_level = {}
+            material_ids = set()
+            for instance in instances:
+                by_level[instance['level']] = by_level.get(instance['level'], 0) + 1
+                materials = instance.get('materials') or [
+                    section.get('material') for section in mesh.get('sections', [])]
+                material_ids.update(value for value in materials if value)
+            material_sources = sorted(self.materials[item]['source'] for item in material_ids)
+            result.append({'mesh': mesh_name, 'source': identity,
+                           'placements': len(instances), 'placements_by_level': by_level,
+                           'material_sources': material_sources,
+                           'status': 'already_imported_as_static_mesh',
+                           'evidence': ('The package records a planar mesh with water-effect material references; '
+                                        'existing mesh export carries its geometry, transform and material slots. '
+                                        'Decal projection conversion is not confirmed for this mesh.')})
+        return result
+
     def lighting_manifest(self, levels):
         """Export the decoded Sanctuary light actors and explicitly unresolved inputs."""
         manifest = {'status': 'partial_unverified', 'source_levels': list(levels),
-                    'host_policy': 'source_skylight_heightfog_with_inspection_sun_v1',
+                    'host_policy': 'decoded_light_components_worldinfo_pp_with_inspection_calibration_v2',
                     'sky_light': None, 'height_fog': None, 'directional_light': None,
                     'post_process_volumes': [], 'world_info': [],
                     'placed_actor_counts': {name: 0 for name in (
@@ -1659,6 +2024,9 @@ class Scene:
                             'location': location,
                             'light_color_rgb': byte_color_rgb(light_color),
                             'lower_color_rgb': byte_color_rgb(lower_color),
+                            'light_brightness': data.get('Brightness'),
+                            'light_brightness_status': ('decoded' if 'Brightness' in data
+                                                        else 'not serialized on this component'),
                             'lower_brightness': data.get('LowerBrightness'),
                             'precomputed_lighting_valid': data.get('bPrecomputedLightingIsValid'),
                             'component_property_offset': 8,
@@ -1679,9 +2047,24 @@ class Scene:
                                               for k in ('Pitch', 'Yaw', 'Roll')],
                                  'status': 'actor_transform_only_unverified'}
                         try:
-                            component, _ = read_component(level, actor.get('LightComponent'))
-                            entry['component'] = level + ':' + component['path']
-                            entry['status'] = 'component_reference_read_unverified'
+                            component_key = self.resolve(level, actor.get('LightComponent'))
+                            if component_key is None:
+                                raise ValueError('Directional light has no serialized component reference')
+                            component_package, component_index = component_key
+                            component = self.load(component_package).get(component_index)
+                            if (component is None or
+                                    component['class'].rsplit('.', 1)[-1] != 'DominantDirectionalLightComponent'):
+                                raise ValueError('Directional light component class is unresolved')
+                            property_offset, data, _ = self.anchored_properties(
+                                component_package, component_index, 'LightmassSettings',
+                                {'Brightness', 'LightColor'})
+                            entry.update({
+                                'component': component_package + ':' + component['path'],
+                                'component_property_offset': property_offset,
+                                'component_property_anchor': 'LightmassSettings',
+                                'light_brightness': data['Brightness'],
+                                'light_color_rgb': byte_color_rgb(data['LightColor']),
+                                'status': 'component_light_values_decoded_unverified'})
                         except ValueError as error:
                             entry['component_error'] = str(error)
                         manifest['directional_light'] = entry
@@ -1690,12 +2073,17 @@ class Scene:
                             'source': source, 'location': location,
                             'priority': actor.get('Priority'),
                             'settings': decoded_settings(actor.get('Settings')),
-                            'bounds_status': 'brush bounds and unbound flag not decoded',
+                            'b_unbound': actor.get('bUnbound'),
+                            'b_unbound_status': ('decoded' if 'bUnbound' in actor
+                                                 else 'not serialized on this actor'),
+                            'bounds_status': 'brush bounds not decoded',
                             'status': 'settings_only_unverified'})
                     else:
+                        default_settings = decoded_settings(actor.get('DefaultPostProcessSettings'))
                         manifest['world_info'].append({
                             'source': source,
                             'default_post_process_settings_present': 'DefaultPostProcessSettings' in actor,
+                            'default_post_process_settings': default_settings,
                             'property_offset': 26, 'status': 'decoded_properties_only_unverified'})
                 except (ValueError, KeyError, TypeError) as error:
                     manifest['issues'].append({'source': source, 'error': str(error)})
@@ -1809,10 +2197,14 @@ class Scene:
                              f'{MATINEE_FIRST_KEY_COMPONENT}, found '
                              f'{matinee_first_key_applied}')
         lighting = self.lighting_manifest(levels)
+        decals = self.decals_manifest(levels)
+        decals['static_mesh_candidates'] = self.decal_like_static_meshes(actors)
+        decals['census']['static_mesh_candidate_placements'] = sum(
+            item['placements'] for item in decals['static_mesh_candidates'])
         result = {'schema': 1, 'map': persistent, 'levels': levels, 'actors': actors,
                   'package_scope': 'base_and_dlc' if getattr(self, 'include_dlc', False) else 'base',
                   'meshes': self.meshes, 'materials': self.materials, 'camera': camera,
-                  'lighting': lighting,
+                  'lighting': lighting, 'decals': decals,
                   'excluded_components': excluded,
                   'issues': self.issues, 'dynamic_policy': 'frozen', 'visual_validation': 'pending',
                   'collision_policy': 'observed_convex_and_box_v1',
@@ -1827,7 +2219,8 @@ class Scene:
         temporary.replace(self.output / 'scene.json')
         print(json.dumps({'levels': levels, 'placements': len(actors), 'excluded': len(excluded),
                           'meshes': len(self.meshes),
-                          'materials': len(self.materials), 'issues': len(self.issues)}), flush=True)
+                          'materials': len(self.materials), 'issues': len(self.issues),
+                          'decals': decals['census']}), flush=True)
         return result
 
 
