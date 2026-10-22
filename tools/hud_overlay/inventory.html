@@ -3,14 +3,15 @@
 <html><head><meta charset="utf-8"><title>OpenWillow inventory</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
-#presentation{position:absolute;width:1280px;height:720px;perspective:var(--ow-focal,1229px);perspective-origin:var(--ow-origin,50% 50%)}
+#presentation{position:absolute;z-index:1;width:1280px;height:720px;perspective:var(--ow-focal,1229px);perspective-origin:var(--ow-origin,50% 50%)}
 /* The movie's own Y turn of the inventory clip (see update3d in inventory.js), for the picture and its hit boxes alike. */
 ruffle-player,#stage{transform-origin:var(--ow-origin,50% 50%);transform:rotateY(var(--ow-rotation,0deg))}
-ruffle-player{display:block;width:100%;height:100%;
+.ow-glass-sheet{position:absolute;z-index:0;inset:0;display:block;width:100%;height:100%;pointer-events:none}
+ruffle-player{position:relative;z-index:2;display:block;width:100%;height:100%;
  -webkit-mask-image:linear-gradient(to right,#000 0%,#000 73%,transparent 77%);
  mask-image:linear-gradient(to right,#000 0%,#000 73%,transparent 77%)}
 body.compare-wide ruffle-player,body.inspect-wide ruffle-player{-webkit-mask-image:none;mask-image:none}
-#stage{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+#stage{position:absolute;z-index:3;left:0;top:0;width:100%;height:100%;pointer-events:none}
 #controls{position:absolute;inset:0;pointer-events:none}
 .cell{position:absolute;background:transparent;border:0;color:#fff;font:bold 13px Arial;
  text-shadow:1px 1px 2px #000;pointer-events:auto;cursor:pointer;padding:5px;user-select:none;
@@ -44,7 +45,7 @@ body.compare-wide ruffle-player,body.inspect-wide ruffle-player{-webkit-mask-ima
    transparent surface over everything that carries the item picture and takes the drag/wheel. */
 /* Our own drawing after the 2026-10-04 Inspect frames (a fit, UNVERIFIED): a grey light from the top centre (about 84 there, 55 in the
    top corners, 30 in the bottom ones), soft concentric bands about 85 px apart centred on the model, and a faint 6 px grid. */
-#inspect-backdrop{position:absolute;inset:0;background:
+#inspect-backdrop{position:absolute;z-index:1;inset:0;background:
  repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 6px),
  repeating-linear-gradient(90deg,rgba(255,255,255,.012) 0 1px,transparent 1px 6px),
  repeating-radial-gradient(circle at 51% 50%,rgba(255,255,255,0) 0,rgba(255,255,255,.022) 42px,rgba(255,255,255,0) 84px),
@@ -57,7 +58,7 @@ body.compare-wide ruffle-player,body.inspect-wide ruffle-player{-webkit-mask-ima
 #inspect-preview .inspect-picture{display:grid;place-items:center;width:62%;height:62%;margin:-22px 0 0 290px;color:#c8d4d8;font:bold 18px Arial}
 #inspect-preview img{grid-area:1/1;width:100%;height:100%;object-fit:contain;image-rendering:auto;
  transform:scale(var(--zoom));transform-origin:50% 50%;pointer-events:none}
-#loading{position:absolute;inset:0;display:grid;place-items:center;background:#12283d;color:white;font:20px Arial}
+#loading{position:absolute;z-index:4;inset:0;display:grid;place-items:center;background:#12283d;color:white;font:20px Arial}
 #loading[hidden]{display:none}
 </style>
 <script>
@@ -68,4 +69,5 @@ window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden',splashScreen:f
 <div id="inspect-preview" hidden aria-live="polite"></div></div></div><div id="live-status" role="status" aria-live="polite"></div>
 <div id="loading" role="status">Loading inventory…</div>
 <script src="menu3d.js"></script>
+<script src="glass_sheet.js"></script>
 <script src="inventory.js"></script></body></html>

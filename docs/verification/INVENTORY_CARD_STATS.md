@@ -126,14 +126,13 @@ was not decoded. Green/purple/orange status lines are likewise absent.
 
 ## Host forwarding
 
-`OpenWillowInventory.cpp` reads `accuracy`, `accuracy_known`, `sale_value`,
-`sale_value_known`, `fun_stats` from `stats.card` and writes weapon snapshot
-items with `accuracy` and `value` only when present, `accuracyKnown` and
-`valueKnown` always (false when absent or unverified), and `funStats` only when
-non-empty. Items whose recipe has no display type (the Infinity recipes) now get
-a `type` label (`Pistol`, `SMG`, `Assault Rifle`, `Shotgun`, `Sniper Rifle`,
-`Launcher`) resolved from the balance/ammo type; a recipe-provided type is
-unchanged.
+OpenWillowInventory.cpp reads element, accuracy, accuracy_known, sale_value,
+sale_value_known, fun_stats, and fun_stats_markup from stats.card. It copies the
+element key to the weapon snapshot and writes accuracy/value only when present,
+their known flags always, and non-empty fun text/markup. inventory.js lowercases
+the element key for the movie's SetTitle element argument and passes funStatsMarkup
+to the movie. No adapter or page change is needed for the explosive badge; a host
+capture with the regenerated recipes remains unverified.
 
 ## Populated for the local recipes
 
@@ -152,13 +151,14 @@ local/items/<id>.json` after this change (the recipes are ignored local files).
 
 - Whether the inferred zoom reference conversion matches the native attribute resolver.
 - Whether the real card's accuracy uses player-side modifiers beyond the item spread.
-- The bounded launcher recipe's captured sale value while its selected name part differs from the real roll.
+- Host rendering of the regenerated element badge has not been captured.
 
 ## Automated checks (synthetic)
 
-`tests/weapon_stats_test.py` (34 synthetic tests) covers the remap, clamping and
-absence, the scaled-base price calculator with rounding, the checked/unchecked
-flag, unresolved attributes, red flavour and card text sources, zoom, ammo and markup. It is not
+`tests/weapon_stats_test.py` (36 synthetic tests) covers the remap, clamping and
+absence, damage-type element mapping, the scaled-base price calculator with name-part
+modifiers, the checked/unchecked flag, unresolved attributes, red flavour and card
+text sources, zoom, ammo and markup. It is not
 registered with CTest (that needs `CMakeLists.txt`, a sensitive file); run it
 with `python tests/weapon_stats_test.py`.
 
@@ -223,16 +223,13 @@ type and parts, rather than visually adjusting the displayed digit. Damage, accu
 same decoded attribute/presentation path; accuracy remaps spread to the card percent, damage rounds up, and magazine
 size rounds down. The comparison report under ignored `local/orch/D20/` records the numeric capture audit.
 
-The `golden_card_compare.py` rerun on 2026-10-22 compared 69 records: all 67 supported entries matched for damage,
-projectile count, accuracy, fire rate, reload, magazine, status DPS/chance and sale value; 2 records were unsupported
-because a damage type could not be resolved. All six `slice_exact` records matched those numeric fields. Five of six
-slice host names matched; the remaining mismatch is recipe name composition. This automated check does not validate
-the newly generated text or the inferred zoom conversion.
+The Round 1 comparison log from 2026-10-22 reported all fields matching across 67 supported records, with 2
+unsupported. The Round 2 cooked-package rerun below, explicitly without a `--live-data` overlay, produced a different
+tally; use its counts as the current reproducible result. Neither run validates the new element string or zoom parity.
 
-The host's `inventory.js` already accepts `item.funStatsMarkup` and passes it to the movie; no page change is needed.
-The recipe adapter currently reads only `stats.card.fun_stats`. To show the same orange line and inline damage-type
-highlight as the source card, `OpenWillowInventory.cpp` must also read `stats.card.fun_stats_markup` into
-`Item.FunStatsMarkup`; this lane does not own that adapter.
+The adapter reads stats.card.fun_stats_markup into Item.FunStatsMarkup, and
+inventory.js passes funStatsMarkup to the movie. The forwarding path is present;
+its in-game rendering has not been checked.
 
 Recipe-only regeneration (never the separately owned `weapon_view.json`):
 
@@ -244,8 +241,43 @@ Get-ChildItem local/inventory-actions/bounded-recipes -Filter '*.json' |
   ForEach-Object { python tools/weapon_stats.py --reader $weaponStatsReader --package $weaponStatsPackage --recipe $_.FullName --game $env:OPENWILLOW_BL2 }
 ```
 
-The zoom reference conversion remains **UNVERIFIED** against the native resolver: some captured zoom labels differ
-from the data-derived output by one tenth. Also, the bounded launcher recipe's selected name part differs from the
-real capture, so its computed sale value describes the recipe parts and does not establish the captured item's price.
-Neither mismatch is patched with a per-item number. The card-text markup is also pending a host run because the adapter
-forwarding change above is outside this lane.
+The earlier zoom and price caveats are updated by the Round 2 audit below. Card-text
+markup forwarding is in the adapter, but its in-game rendering has not been checked.
+
+## Round 2 audit (2026-10-22)
+
+The card's `element` is the resolved damage type's elemental kind. `card_element()` maps the installed `DamageType`
+enum to the card's existing element names, then falls back to the selected `Elemental` part name. This preserves
+the existing Fire icon and also handles explosive weapons whose `Elemental_None` part leaves the type's default
+explosive damage active. The D20 capture shows the real explosive badge; the host already forwards
+`stats.card.element` and lowercases it for the movie's `SetTitle` element key, so this field requires no adapter or
+page change. The new recipe output has not been checked in a host capture.
+
+The sale calculator is unchanged. The D20 spawned record has the bounded launcher recipe's same balance, level and
+non-name parts, but a different prefix. Evaluating an in-memory copy with the captured prefix reproduces the
+recorded sale value exactly. This isolates that price difference to the bounded recipe's name-part choice; the
+calculator already multiplies every selected part and name-part `MonetaryValueMod`. The bounded recipe set remains
+unchanged, so its computed value still describes its selected prefix.
+
+The zoom model still computes `80 / effective ZoomedEndFOV`, including the selected parts' active
+`WeaponZoomFOV` slot grade. The D20 comparison matches three of the five zoom labels; two differ by one tenth.
+The paired capture uses the same weapon parts as the bounded recipes, and neither one global nearest-rounding rule
+nor floor explains all five labels. The checked type FOV and slot-grade inputs do not establish why those two
+values differ, so the native resolver conversion and those recipe zoom outputs remain **UNVERIFIED**. No per-item
+zoom adjustment was added. The synthetic zoom test checks the implemented FOV/grade arithmetic, not game parity.
+
+The Round 2 cooked-package golden comparison used
+tools/real_game/golden_card_compare.py without a --live-data overlay, writing
+local/realgame/cards/golden_compare_r2.json. It compared 69 entries: 2 unsupported;
+among 67 supported, damage matched 63, projectile count 67, accuracy 67, fire rate
+67, reload 62, magazine 55, and sale value 67. Status DPS matched 16/16 and status
+chance 15/16. Within slice_exact, damage, projectile count, accuracy, fire rate and
+sale value matched 6/6; reload and magazine matched 4/6. This automated run does
+not verify the new element string or zoom parity.
+
+Synthetic regression coverage now includes a default explosive type with an `Elemental_None` part, the existing Fire
+icon mapping, prefix and title price multipliers together, and the current zoom FOV/grade calculation. In-game
+validation remains pending because this lane does not own the host/page or run a UE capture. Regenerating the six
+bounded recipes changed only the element field in the three Torgue recipes; numeric card fields did not change, and
+weapon_view.json was excluded and left untouched. Automated checks: weapon_stats_test.py
+36/36, CTest 10/10, and verify_packages.py 9/9.

@@ -6,8 +6,16 @@ window.owInventoryStartedAt = startupAt;
 window.owInventoryMovieReady = false;
 window.owInventoryReady = false;
 const player = window.RufflePlayer.newest().createPlayer();
-document.getElementById('presentation').prepend(player);
-document.getElementById('presentation').prepend(document.getElementById('inspect-backdrop')); // under the movie
+const presentation = document.getElementById('presentation');
+const glassSheet = document.getElementById('ow-glass-sheet');
+const inspectBackdrop = document.getElementById('inspect-backdrop');
+if (glassSheet && inspectBackdrop && typeof presentation.insertBefore === 'function') {
+  presentation.insertBefore(inspectBackdrop, glassSheet.nextSibling);
+  presentation.insertBefore(player, inspectBackdrop.nextSibling);
+} else {
+  presentation.prepend(player);
+  presentation.prepend(inspectBackdrop); // under the movie
+}
 window.owPlayer = player;
 
 const ROOT = '_level1', INV = ROOT + '.inventory';
@@ -35,6 +43,7 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 12
 // The small and compare views start the list lower than the real frames did by 34 and 30 px ("WEAPONS" at y 205/213 against 171/170),
 // which is where the old category chevrons' sub-label used to sit.
 const LIST_TOP = 47, LIST_TOP_COMPARE = 40, LIST_TOP_FOCUS = 38; // the focus panel moved up 8 px (title at y 100), the list stays where it was
+const SCROLLED_LIST_ORIGIN = 28; // movie px; with focus scaling this is about 30 screen px
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
 const FOCUS_PANEL = {scale:0.92, scaleY:0.979, left:497, top:67}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
@@ -133,7 +142,7 @@ const FUN_STATS_OVERLAP = 6;
 const ARROW_VALUE_GAP = 2;
 // Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
 const CARD_TEXT_SIZE = 16;
-const HEADER_SHRINK = 0.93, HINT_LIFT = 2, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint text 6 px lower than round 16 (critic round 18: host 656-672, real 662-678), plate 3 low
+const HEADER_SHRINK = 0.93, HEADER_SHIFT_X = 15, HINT_LIFT = 2, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // D20 inventory title group is 15 px left in every paired state
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
@@ -271,6 +280,14 @@ const selectedSlotIndex = () => {
     : targetGearSlot ? 4 + gearSlots.findIndex(slot => slot.key === targetGearSlot) : targetSlot;
 };
 const equippedSelectionIndex = () => navigationPanel === 'equipped' || transferFromEquipped ? selectedSlotIndex() : -1;
+function equippedAnalogueIndexFor(item) {
+  const analogue = equippedIdFor(item);
+  const index = analogue ? equippedItems().indexOf(analogue) : -1;
+  if (index >= 0 && !slotLocked(index)) return index;
+  const activeSlot = Number(state?.activeSlot);
+  if (Number.isInteger(activeSlot) && activeSlot >= 0 && activeSlot < 4 && !slotLocked(activeSlot)) return activeSlot;
+  return slotLocked(lastEquippedIndex) ? 0 : lastEquippedIndex;
+}
 
 // Optional host field: how many of the four weapon slots are open (a new Maya has 2).
 // Absent or invalid means all four, so older hosts keep working.
@@ -950,8 +967,14 @@ const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left 
 // single: 6 px left and 15 px up from the round-15 fit, after the round-18 frames with the 3D turn (frame corner 218, 123 against
 // 212, 108 on the real equipped view).
 const CARD_FIT = {single:fitTarget(307, 209, 97), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
-  inspect:fitTarget(316, 28, 43)};  // UNVERIFIED D5 fit: visible frame about x20-352, y31-284 after the movie inset
+  inspect:{...fitTarget(293, 56, 50), aspect:306/241}}; // D20 D5: UNVERIFIED fit from host x20-350,y29-300 to real x48-354,y36-277
+const cardAspectCorrection = new Map();
 function fitCard(card, target) {
+  const previousAspect = cardAspectCorrection.get(card) || 1;
+  if (!target.aspect && Math.abs(previousAspect - 1) > 0.001) {
+    set(card, '_yscale', Number(get(card, '_yscale')) / previousAspect);
+    cardAspectCorrection.set(card, 1);
+  }
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
   const width = bounds.xMax - bounds.xMin;
@@ -963,8 +986,19 @@ function fitCard(card, target) {
     set(card, '_xscale', Number(get(card, '_xscale')) * factor);
     set(card, '_yscale', Number(get(card, '_yscale')) * factor);
   }
-  const fitted = readBounds(card + '.bkgd');
+  let fitted = readBounds(card + '.bkgd');
   if (!fitted) return;
+  if (target.aspect) {
+    const currentHeight = fitted.yMax - fitted.yMin;
+    const targetHeight = (fitted.xMax - fitted.xMin) / target.aspect;
+    const factorY = targetHeight / currentHeight;
+    if (Number.isFinite(factorY) && factorY > 0.3 && factorY < 3 && Math.abs(factorY - 1) > 0.001) {
+      set(card, '_yscale', Number(get(card, '_yscale')) * factorY);
+      cardAspectCorrection.set(card, previousAspect * factorY);
+      fitted = readBounds(card + '.bkgd');
+      if (!fitted) return;
+    }
+  }
   const screenLeft = target.x !== undefined ? target.x : target.right - target.width;
   const topLeft = toMovie(screenLeft, target.y);
   const scale = Number(get(INV, '_xscale')) / 100 || 1;
@@ -1114,11 +1148,12 @@ function announce(message) {
 // hidden. The picture is the native 3D frame (it rotates with a drag); that frame has its own near-black
 // background, which the `lighten` blend lets the backdrop replace. A larger frame with a transparent
 // background would look better (needs a change to the preview actor, not made here).
-const INSPECT_CARD_LEFT = 28, INSPECT_CARD_TOP = 43; // movie-space target for visible frame x20,y31; fit UNVERIFIED
+const INSPECT_CARD_LEFT = 56, INSPECT_CARD_TOP = 50; // D20 D5 target inputs for visible frame x48,y36; fit UNVERIFIED
 // UNVERIFIED D5 fit: resize and move the host render to the captured real bounds (x about 300-983).
 const INSPECT_ZOOM = 1.54;
 const INSPECT_HINT_DX = 53;
-const INSPECT_HINT_FONT_SIZE = 14; // UNVERIFIED D5 width fit: larger type plus a wider gap approaches the real 817 px span
+const INSPECT_HINT_FONT_SIZE = 12; // UNVERIFIED D20 D5 fit: the full hint is one centered line near y670
+const INSPECT_HINT_GAP = '  ';
 const INSPECT_CARD_INSET_X = 0.03, INSPECT_CARD_INSET_TOP = -0.06, INSPECT_CARD_INSET_BOTTOM = -0.05; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
 const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
@@ -1172,6 +1207,7 @@ function updateInspect() {
     inspectApplied = on;
     backdrop.hidden = !on;
     document.body.classList.toggle('inspect-wide', on); // no right-edge fade: the hint strip reaches x 1030
+    window.owGlassSheet?.setVisible(!on);
     document.getElementById('controls').style.display = on ? 'none' : '';
     for (const path of INSPECT_HIDDEN_CLIPS()) set(path, '_visible', !on);
     // The real hint strip is centred about 53 px right of where the movie puts it.
@@ -1203,7 +1239,7 @@ function updateInspect() {
   inspect.appendChild(picture);
   inspect.hidden = false;
   const markup = INSPECT_HINTS.map(([label, enabled]) =>
-    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
+    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join(INSPECT_HINT_GAP);
   set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="${INSPECT_HINT_FONT_SIZE}">${markup}</font></p>`);
 }
 
@@ -1504,9 +1540,10 @@ function navigateInventory(direction) {
   }
   if (navigationPanel === 'backpack') {
     if (!horizontal) moveSelection(direction === 'up' ? -1 : 1);
-    // Observed: Left returns to the equipped cell last selected there, not to the cell the
-    // selected backpack item would occupy.
-    else if (direction === 'left') selectEquipmentSlot(lastEquippedIndex);
+    // D20 Esc/Left/E capture: Left returns to the equipped analogue for the
+    // selected backpack item (the active weapon for weapons), not the last
+    // destination slot visited while configuring a transfer.
+    else if (direction === 'left') selectEquipmentSlot(equippedAnalogueIndexFor(itemById(selectedId)));
     return;
   }
   const next = equipmentNeighbour(selectedSlotIndex(), direction);
@@ -1692,6 +1729,34 @@ function compareRefusesCell(index) {
   const gearSlot = gearSlotForItem(source);
   return gearSlot ? index !== 4 + gearSlots.findIndex(slot => slot.key === gearSlot) : index >= 4;
 }
+// In D20 D3/D4 the red gear rows measured 59 px high, versus 47 px in round 1.
+// Expand each rejected gear cell locally and keep the bottom row's lower edge
+// fixed; move the upper row up by one added row-height so the two rows stay joined.
+// This geometry fit is UNVERIFIED until the host is captured again.
+const COMPARE_BAD_CELL_HEIGHT_RATIO = 59 / 47;
+const compareGearCellHome = new Map();
+function placeCompareGearCell(index, expanded) {
+  if (index < 4) return;
+  const panel = INV + '.equippedPanel', cell = `${panel}.cell${index+1}`;
+  const hitClip = `${cell}.hitTestClip`;
+  let home = compareGearCellHome.get(index);
+  if (!home) {
+    const bounds = call(hitClip, 'getBounds', panel);
+    const y = Number(get(cell, '_y')), yscale = Number(get(cell, '_yscale'));
+    if (!bounds || ![bounds.yMin,bounds.yMax,y,yscale].every(Number.isFinite) || yscale === 0) return;
+    home = {y, yscale, bounds};
+    compareGearCellHome.set(index, home);
+  }
+  set(cell, '_y', home.y);
+  set(cell, '_yscale', expanded ? home.yscale * COMPARE_BAD_CELL_HEIGHT_RATIO : home.yscale);
+  if (!expanded) return;
+  const bounds = call(hitClip, 'getBounds', panel);
+  if (!bounds || ![bounds.yMin,bounds.yMax].every(Number.isFinite)) return;
+  const addedHeight = (home.bounds.yMax - home.bounds.yMin) * (COMPARE_BAD_CELL_HEIGHT_RATIO - 1);
+  const upperRow = index === 4 || index === 6;
+  const targetBottom = home.bounds.yMax - (upperRow ? addedHeight : 0);
+  set(cell, '_y', home.y + targetBottom - bounds.yMax);
+}
 
 // One sub-header row of the list, drawn with the movie's own header clip (the clip that carries the backpack's
 // sub-label) at list offset `y`, centred on the cell column once that column's width is known (placeListHeaders).
@@ -1805,6 +1870,7 @@ function render() {
     // a padlocked one). Seen with a weapon compared from either origin: the four gear cells turn red. The
     // gear-item case below applies the same rule and was not observed (UNVERIFIED).
     const refused = compareRefusesCell(i);
+    placeCompareGearCell(i, refused);
     call(cell, 'SetCellState', locked ? (refused ? 'lockedbad' : 'locked') : (refused ? 'bad' : 'normal'));
     if (i < 4) set(cell+'.emptyLabel', '_visible', !locked && !item);
     call(cell, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
@@ -1851,7 +1917,11 @@ function render() {
   listHeaderNames = [];
   const bands = [];
   // Draw the visible entries top to bottom; cells are numbered owRow0.. in draw order.
-  let y = 0, row = 0;
+  // The real focus view keeps a partial first cell at the top as its scroll
+  // origin advances. Integer entry scrolling alone shows an extra row and puts
+  // D20's selected empty cell about 30 px too low. Keep the clip origin fixed
+  // and place the scrolled content 28 movie px above it (UNVERIFIED outside D20).
+  let y = backpackFocused() && firstRow > 0 ? -SCROLLED_LIST_ORIGIN : 0, row = 0;
   const headers = [];
   for (let k = firstRow; k < entries.length && y < viewHeight() + listPeekHeight() && row < RENDERED_ROWS + 1; k++) {
     const entry = entries[k];
@@ -1897,7 +1967,7 @@ function render() {
     if (greenFrame) drawTileFrame(path);
     // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
     if (rowSelected && backpackFocused()) bands.push(y);
-    const partial = y + ROW_PITCH > viewHeight() + 1;
+    const partial = y < 0 || y + ROW_PITCH > viewHeight() + 1;
     y += ROW_PITCH;
     row++;
     if (!item) continue;
@@ -1924,9 +1994,11 @@ function render() {
     const stage = document.getElementById('stage').getBoundingClientRect();
     for (const button of layer.querySelectorAll('[data-partial=true]')) {
       const bounds = button.getBoundingClientRect();
-      const limit = stage.top + bottom * stage.width / 1280;
-      const cropped = Math.max(0, Math.min(100, (bounds.bottom-limit) / bounds.height * 100));
-      button.style.clipPath = `inset(0 0 ${cropped}% 0)`;
+      const topLimit = top === null ? stage.top : stage.top + top * stage.width / 1280;
+      const bottomLimit = stage.top + bottom * stage.width / 1280;
+      const croppedTop = Math.max(0, Math.min(100, (topLimit-bounds.top) / bounds.height * 100));
+      const croppedBottom = Math.max(0, Math.min(100, (bounds.bottom-bottomLimit) / bounds.height * 100));
+      button.style.clipPath = `inset(${croppedTop}% 0 ${croppedBottom}% 0)`;
     }
   }
 
@@ -2198,7 +2270,8 @@ function pollReady() {
     set(headerPath, '_xscale', Number(get(headerPath, '_xscale')) * HEADER_SHRINK);
     set(headerPath, '_yscale', Number(get(headerPath, '_yscale')) * HEADER_SHRINK);
     const headerAfter = readBounds(headerPath);
-    if (headerBefore && headerAfter) set(headerPath, '_x', Number(get(headerPath, '_x')) + (headerBefore.xMin - headerAfter.xMin));
+    if (headerBefore && headerAfter)
+      set(headerPath, '_x', Number(get(headerPath, '_x')) + (headerBefore.xMin - headerAfter.xMin) + HEADER_SHIFT_X);
     set(ROOT + '.tooltips', '_y', Number(get(ROOT + '.tooltips', '_y')) - HINT_LIFT);
     set(ROOT + '.tooltips', '_x', Number(get(ROOT + '.tooltips', '_x')) + HINT_SHIFT_X);
     set(INV + '.storageCount', '_y', Number(get(INV + '.storageCount', '_y')) - PLATE_LIFT);
