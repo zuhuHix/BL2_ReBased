@@ -132,6 +132,7 @@ private:
     void BeginAimTransition(float Now);
     void UpdateAim(float Now);
     const FViewModel* ActiveViewModel() const;
+    void RunReloadPhaselockTest(float Now);
     FTransform WeaponSocketWorld(const FWeaponSocketData& Socket) const;
     void PickupNearby();
     // Arms are shown while a pose clip set is loaded (a drawn weapon, or Unarmed clips if imported) and no menu covers them.
@@ -204,6 +205,11 @@ private:
     float NextShotAt = 0;
     bool bReloading = false;
     float ReloadEndsAt = 0;
+    float ReloadRefillAt = 0;
+    float ReloadCompletePercent = 1.f; // missing view-model field preserves the old full-duration refill
+    FString ReloadCompletePercentSource = TEXT("default: missing cooked type field; legacy full-duration refill");
+    int32 ReloadAmmoMoved = 0;
+    bool bReloadRefilled = false;
     UPROPERTY() TObjectPtr<class UAnimSequence> WeaponReloadAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> ArmsReloadAnim;
     bool bOutOfAmmoLogged = false;
@@ -225,6 +231,8 @@ private:
         float Fov = 0.f;
         float ZoomFov = 0.f;
         float ZoomBlendTime = 0.2f;
+        float ReloadCompletePercent = 1.f; // compatibility default for older manifests
+        FString ReloadCompletePercentSource = TEXT("default: missing cooked type field; legacy full-duration refill");
         FVector ZoomOffset = FVector::ZeroVector;
         FVector ZoomPositionFit = FVector::ZeroVector;
         FWeaponSocketData ZoomSocket;
@@ -277,6 +285,10 @@ private:
     void RunPhaselockShots(float Now);
     int32 PhaselockShotStep = 0;
     float PhaselockShotCastAt = -1;
+    int32 ReloadPhaselockTestStep = 0;
+    float ReloadPhaselockTestRefillAt = 0.f;
+    float ReloadPhaselockTestEndsAt = 0.f;
+    float ReloadPhaselockTestCastAt = 0.f;
     // Cooldown pool model (UNVERIFIED semantics, PHASELOCK_STOCK_DATA.md): refilled at activation, drained at the held
     // rate until PhaselockHeldUntil (the release), then at the base rate; a miss resets it at PhaselockResetAt.
     float PhaselockCastAt = -100.f;
