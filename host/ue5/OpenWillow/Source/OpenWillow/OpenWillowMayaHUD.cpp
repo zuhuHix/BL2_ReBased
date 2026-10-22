@@ -717,6 +717,11 @@ void AOpenWillowMayaHUD::ActionSkillHudState(const AOpenWillowWalker& Maya, floa
     // the skill ends; the host's pool model does the same (PhaselockRemaining).
     if (Maya.PhaselockCooldown() > 0.f)
         OutCooldown = FMath::Clamp(Maya.PhaselockRemaining() / Maya.PhaselockCooldown(), 0.f, 1.f);
+    // Quantized to the clips' resolution (about 1/100 per frame), rounded up so the emblem starts full and the icon is
+    // ready only when the pool is empty: the state, and so the page push and the log line, change only when a drawn
+    // frame can.
+    if (OutActive >= 0.f) OutActive = FMath::CeilToFloat(OutActive * 100.f) / 100.f;
+    OutCooldown = FMath::CeilToFloat(OutCooldown * 100.f) / 100.f;
 }
 void AOpenWillowMayaHUD::TickSkillHudShots(AOpenWillowWalker& Maya)
 {
@@ -780,17 +785,17 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     const FString State = FString::Printf(
         TEXT("{\"character\":6,\"skillIcon\":\"/ package/UI_HUD_AAIcons/AA-Siren\",\"health\":1,\"shield\":1,\"healthText\":\"\",\"shieldText\":\"\","
              "\"xp\":%.3f,\"levelText\":\"%d\",\"grenades\":null,\"weaponOut\":%s,\"ammo\":%.3f,\"ammoText\":\"%s\","
-             "\"skillActive\":%s,\"skillCooldown\":%.3f}"),
+             "\"skillActive\":%s,\"skillCooldown\":%.2f}"),
         Skills ? Skills->LevelProgress() : 0.f,
         Skills ? Skills->GetLevel() : 1,
         bArmed ? TEXT("true") : TEXT("false"),
         MagazineFill,
         bArmed ? *FString::Printf(TEXT("%d"), MagazineLeft) : TEXT(""),
-        SkillActive < 0.f ? TEXT("null") : *FString::Printf(TEXT("%.3f"), SkillActive),
+        SkillActive < 0.f ? TEXT("null") : *FString::Printf(TEXT("%.2f"), SkillActive),
         SkillCooldown);
     // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
     // (tools/check_action_skill_hud.py reads them).
-    const FString SkillLine = FString::Printf(TEXT("active=%.3f cooldown=%.3f"), SkillActive, SkillCooldown);
+    const FString SkillLine = FString::Printf(TEXT("active=%.2f cooldown=%.2f"), SkillActive, SkillCooldown);
     if (SkillLine != LastSkillHudLine)
     {
         UE_LOG(LogTemp, Display, TEXT("OWSKILLHUD t=%.3f cast=%.3f %s"), GetWorld()->GetTimeSeconds(), Maya.LastPhaselockCastAt(), *SkillLine);

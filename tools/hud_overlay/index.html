@@ -67,12 +67,14 @@
     const skillCalls = window.owActionSkill.plan(skill, s);
     for (const c of skillCalls) call(c[0], c[1], c[2], c[3]);
     for (const key of ['skillActive', 'skillCooldown', 'skillIcon']) if (key in s) skill[key] = s[key];
-    // Acknowledge what the movie now shows, read back from its clips (the host logs the page's console;
-    // tools/check_action_skill_hud.py compares these frames with the host's state lines).
+    // Acknowledge what the movie now shows: the state just applied and the frames read back from its clips (the host
+    // logs the page's console; tools/check_action_skill_hud.py checks the frames against that state).
     if (skillCalls.length) {
       const aa = call(P1 + '.activeAbility', 'get', '_currentframe');
-      const line = `OWSKILLPAGE emblem=${aa} bar=${aa === 3 ? call(P1 + '.activeAbility.bar', 'get', '_currentframe') : 0}`
-        + ` cooldown=${call(P1 + '.character.cooldown', 'get', '_currentframe')}`;
+      const fixed = v => (v === null || v === undefined ? -1 : Number(v)).toFixed(2);
+      const line = `OWSKILLPAGE active=${fixed(skill.skillActive)} cooldown=${fixed(skill.skillCooldown)}`
+        + ` emblem=${aa} bar=${aa === 3 ? call(P1 + '.activeAbility.bar', 'get', '_currentframe') : 0}`
+        + ` icon=${call(P1 + '.character.cooldown', 'get', '_currentframe')}`;
       if (line !== lastSkillPage) { console.log(line); lastSkillPage = line; }
     }
     // The stand-in for the clusters' 3D turn (hud3d.js), once the character frame is set and the clips have had a
