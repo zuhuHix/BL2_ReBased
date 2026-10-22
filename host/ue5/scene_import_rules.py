@@ -11,6 +11,42 @@ SANCTUARY_SKY_INTENSITY_CALIBRATION = 1.5
 SANCTUARY_SKY_LIGHT_COLOR_CALIBRATION = (3.0, 2.1, 1.0)
 SANCTUARY_AUTO_EXPOSURE_CALIBRATION_BIAS = -1.5
 
+# Sanctuary-only host choices. Light units and these thresholds are screenshot
+# calibration, not a UE3-to-UE5 unit conversion.
+# Round-3 HQ captures showed clipped source-light pools at 300 cd per source
+# brightness unit. This lower value is a named, UNVERIFIED visual calibration.
+SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS = 25.0
+SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS = 25.0
+# High source values still produced an orange pool in the matched HQ capture
+# after the first brightness clamp. Clamp source brightness before applying
+# the named scale; smaller lights retain their source value. This remains an
+# UNVERIFIED host calibration, with radius and source color still preserved.
+SANCTUARY_LIGHT_BRIGHTNESS_CEILING = 3.0
+# A saturated orange static point light still created an artificial HQ ring
+# after the general ceiling. This narrowly scoped, screenshot-derived scale is
+# an UNVERIFIED intensity calibration; it does not change source color/radius.
+SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE = 0.01
+SANCTUARY_LIGHT_MIN_RADIUS = 128.0
+SANCTUARY_LIGHT_MIN_BRIGHTNESS = 0.1
+SANCTUARY_LIGHT_CELL_SIZE = 1500.0
+SANCTUARY_LIGHT_MAX_PER_CELL = 2
+SANCTUARY_LIGHT_MAX_IMPORTED = 128
+
+SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING = 0.55
+SANCTUARY_GRAFITTO_INK_OPACITY_GAIN = 6.0
+SANCTUARY_GRAFITTO_INK_COLOR = (0.001, 0.003, 0.008)
+# The kept graffiti actors sit outside their receiver surface. Their local
+# volume reaches inward by a bounded amount; the cap avoids long UE3 far planes
+# reaching unrelated receivers. This is an UNVERIFIED host calibration.
+SANCTUARY_GRAFITTO_MAX_DEPTH = 128.0
+
+SANCTUARY_WORLD_MAP_PALETTE = {
+    'background': (0.11, 0.38, 0.50),
+    'land': (0.30, 0.72, 0.82),
+    'grid': (0.004, 0.020, 0.028),
+    'markers': (0.006, 0.030, 0.045),
+}
+
 
 def ue3_directional_brightness_to_ue5(brightness):
     """Apply the named, screenshot-calibrated UE3 brightness-to-lux scale."""
@@ -82,6 +118,99 @@ def ue3_decal_dimensions_to_ue5(dimensions):
         raise ValueError('Decal far plane must not precede near plane')
     depth = max(thickness, far_plane - near_plane)
     return [depth * 0.5, width * 0.5, height * 0.5]
+
+
+def ue3_grafitto_dimensions_to_ue5(dimensions):
+    """Bound the kept graffiti's UE5 projector using UE3 near/far depth.
+
+    UE5 DecalSize.X is a centered half-depth along local X. The actor origin
+    is moved inward separately by ue3_grafitto_projection_to_ue5 so an
+    off-surface UE3 hit point still intersects its receiver. The depth cap is
+    an UNVERIFIED visual safety calibration; width and height retain their
+    UE3 world-space half-extents.
+    """
+    full = ue3_decal_dimensions_to_ue5(dimensions)
+    depth = min(full[0] * 2.0, SANCTUARY_GRAFITTO_MAX_DEPTH)
+    return [depth * 0.5, full[1], full[2]]
+
+
+def ue3_grafitto_projection_to_ue5(location, hit_normal, dimensions):
+    """Return the receiver-overlapping UE5 center and local-X direction.
+
+    UE3 HitNormal points out of the receiver. Moving the centered UE5 volume
+    opposite that normal keeps the source hit point at its outer boundary;
+    its half-depth then reaches the receiver without projecting the full
+    native far plane through nearby geometry. The mapping is UNVERIFIED.
+    """
+    if (not isinstance(location, (list, tuple)) or len(location) != 3
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   or not math.isfinite(value) for value in location)):
+        raise ValueError('Graffito location must contain three finite coordinates')
+    if (not isinstance(hit_normal, (list, tuple)) or len(hit_normal) != 3
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   or not math.isfinite(value) for value in hit_normal)):
+        raise ValueError('Graffito HitNormal must contain three finite coordinates')
+    magnitude = math.sqrt(sum(float(value) ** 2 for value in hit_normal))
+    if magnitude <= 1e-5:
+        raise ValueError('Graffito HitNormal must be non-zero')
+    size = ue3_grafitto_dimensions_to_ue5(dimensions)
+    normal = [float(value) / magnitude for value in hit_normal]
+    near_plane = float(dimensions['near_plane'])
+    offset = near_plane + size[0]
+    center = [float(value) - axis * offset for value, axis in zip(location, normal)]
+    return center, normal
+
+
+def sanctuary_grafitto_opacity(rgb):
+    """Return the calibrated dark-ink mask for the opaque white-backed atlas."""
+    if (not isinstance(rgb, (list, tuple)) or len(rgb) != 3
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   or not math.isfinite(value) or value < 0 or value > 1 for value in rgb)):
+        raise ValueError('Graffitto RGB must contain three normalized finite channels')
+    luminance = sum(float(value) * weight for value, weight in zip(rgb, (0.2126, 0.7152, 0.0722)))
+    return min(1.0, max(0.0,
+                        (SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING - luminance)
+                        * SANCTUARY_GRAFITTO_INK_OPACITY_GAIN))
+
+
+def sanctuary_world_map_color(rgb_masks):
+    """Calibrated R=land, G=grid, B=markers palette for WorldMap_Comp."""
+    if (not isinstance(rgb_masks, (list, tuple)) or len(rgb_masks) != 3
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   or not math.isfinite(value) or value < 0 or value > 1 for value in rgb_masks)):
+        raise ValueError('World map masks must contain three normalized finite channels')
+    r, g, b = (float(value) for value in rgb_masks)
+    palette = SANCTUARY_WORLD_MAP_PALETTE
+    land = [background + (value - background) * r
+            for background, value in zip(palette['background'], palette['land'])]
+    grid = [value + (dark - value) * g
+            for value, dark in zip(land, palette['grid'])]
+    return [value + (dark - value) * b
+            for value, dark in zip(grid, palette['markers'])]
+
+
+def sanctuary_light_calibration(kind, brightness, color_rgb=None):
+    """Map an installed point/spot light's source brightness to UE5 candelas.
+
+    The multiplier, source-brightness ceiling and saturated-orange point-light
+    scale are UNVERIFIED Sanctuary capture calibrations. Radius stays in world
+    units; source FColor channels are separately converted to linear.
+    """
+    if (kind not in ('Point', 'Spot') or not isinstance(brightness, (int, float))
+            or isinstance(brightness, bool) or not math.isfinite(brightness) or brightness < 0):
+        raise ValueError('Light kind or brightness is invalid')
+    scale = (SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS if kind == 'Point'
+             else SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS)
+    intensity = min(float(brightness), SANCTUARY_LIGHT_BRIGHTNESS_CEILING) * scale
+    if color_rgb is not None:
+        if (not isinstance(color_rgb, (list, tuple)) or len(color_rgb) != 3
+                or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                       or not math.isfinite(value) or value < 0 or value > 1 for value in color_rgb)):
+            raise ValueError('Light color must contain three normalized finite channels')
+        red, green, blue = (float(value) for value in color_rgb)
+        if kind == 'Point' and red >= 0.8 and 0.25 <= green <= 0.6 and blue <= 0.1:
+            intensity *= SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE
+    return intensity
 
 
 def native_sky_approximated(scene):

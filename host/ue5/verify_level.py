@@ -8,10 +8,24 @@ import unreal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 mel = unreal.MaterialEditingLibrary
 from scene_geometry import actor_label
-from scene_import_rules import (SANCTUARY_SKY_INTENSITY_CALIBRATION,
+from scene_import_rules import (SANCTUARY_GRAFITTO_INK_COLOR,
+                                SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING,
+                                SANCTUARY_GRAFITTO_INK_OPACITY_GAIN,
+                                SANCTUARY_LIGHT_CELL_SIZE,
+                                SANCTUARY_LIGHT_BRIGHTNESS_CEILING,
+                                SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE,
+                                SANCTUARY_LIGHT_MAX_IMPORTED,
+                                SANCTUARY_LIGHT_MAX_PER_CELL,
+                                SANCTUARY_LIGHT_MIN_BRIGHTNESS,
+                                SANCTUARY_LIGHT_MIN_RADIUS,
+                                SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
+                                SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
+                                SANCTUARY_SKY_INTENSITY_CALIBRATION,
                                 temporary_sky_policy, ue3_color_linear,
-                                ue3_decal_dimensions_to_ue5,
+                                ue3_grafitto_dimensions_to_ue5,
+                                ue3_grafitto_projection_to_ue5,
                                 ue3_directional_brightness_to_ue5,
+                                sanctuary_light_calibration,
                                 ue3_sky_light_color_to_ue5,
                                 ue3_world_post_process_to_ue5)
 
@@ -24,8 +38,75 @@ def close(actual, expected, tolerance=.05):
     assert all(abs(a - b) <= tolerance for a, b in zip(actual, expected)), (actual, expected)
 
 
+def linear_to_srgb_byte(value):
+    value = max(0.0, min(1.0, float(value)))
+    encoded = (12.92 * value if value <= 0.0031308
+               else 1.055 * value ** (1.0 / 2.4) - 0.055)
+    return round(encoded * 255.0)
+
+
+def expression_key(node):
+    return node.get_path_name()
+
+
+def material_graph(material, material_property):
+    """Return the saved expression graph connected to one material property."""
+    root_node = mel.get_material_property_input_node(material, material_property)
+    nodes, inputs = {}, {}
+    pending = [root_node]
+    while pending:
+        node = pending.pop()
+        if node is None:
+            continue
+        key = expression_key(node)
+        if key in nodes:
+            continue
+        nodes[key] = node
+        inputs[key] = [item for item in mel.get_inputs_for_material_expression(material, node)
+                       if item is not None]
+        pending.extend(inputs[key])
+    return root_node, nodes, inputs
+
+
+def verify_world_map_recipe(material, name, recipe):
+    """Check the saved pale-cyan backing and three exact mask-to-palette lerps."""
+    root_node, nodes, graph_inputs = material_graph(
+        material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    assert isinstance(root_node, unreal.MaterialExpressionLinearInterpolate), name
+    expected_layers = [('markers', 'B'), ('grid', 'G'), ('land', 'R')]
+    current = root_node
+    seen_samples = set()
+    for palette_name, channel in expected_layers:
+        assert isinstance(current, unreal.MaterialExpressionLinearInterpolate), (name, palette_name)
+        inputs = graph_inputs[expression_key(current)]
+        assert len(inputs) == 3, (name, palette_name, len(inputs))
+        prior, color_node, alpha = inputs
+        assert isinstance(color_node, unreal.MaterialExpressionConstant3Vector), (name, palette_name)
+        expected_color = recipe['palette'][palette_name]
+        color = color_node.get_editor_property('constant')
+        close([color.r, color.g, color.b], expected_color, 1e-6)
+        assert isinstance(alpha, unreal.MaterialExpressionComponentMask), (name, palette_name)
+        assert all(bool(alpha.get_editor_property(component.lower())) == (component == channel)
+                   for component in 'RGBA'), (name, palette_name, channel)
+        mask_inputs = graph_inputs[expression_key(alpha)]
+        assert len(mask_inputs) == 1 and isinstance(mask_inputs[0], unreal.MaterialExpressionTextureSample)
+        sample = mask_inputs[0]
+        seen_samples.add(expression_key(sample))
+        assert sample.get_editor_property('texture').get_name() == Path(
+            recipe['mask_texture_file']).stem, name
+        assert not sample.get_editor_property('texture').get_editor_property('srgb'), name
+        current = prior
+    assert isinstance(current, unreal.MaterialExpressionConstant3Vector), name
+    background = current.get_editor_property('constant')
+    close([background.r, background.g, background.b], recipe['palette']['background'], 1e-6)
+    assert len(seen_samples) == 1 and len(nodes) >= 10, (name, len(seen_samples), len(nodes))
+    return {'material': name, 'channels': ['R', 'G', 'B'],
+            'mask_texture': recipe['mask_texture_source'], 'graph': 'cyan_backing_mask_lerps'}
+
+
 root = Path(os.environ['OPENWILLOW_SCENE']).resolve()
 scene = json.loads((root / 'scene.json').read_text(encoding='utf-8'))
+import_report = json.loads((root / 'ue-import.json').read_text(encoding='utf-8'))
 (root / 'ue-verify.json').unlink(missing_ok=True)
 base = '/Game/OpenWillow/' + scene['map']
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -158,28 +239,35 @@ assert [actor.get_actor_label() for actor in host_post_process_volumes] == ['Ope
 assert all(isinstance(item.get('settings'), dict) and item.get('bounds_status')
            == 'brush bounds not decoded' for item in source_volume_records)
 
-# Independently match every supported source DecalActor to a saved UE5 decal,
-# verify the projection extent/material binding, and enumerate unsupported inputs.
+# Independently match only the default-allowlisted graffiti to a saved UE5
+# decal; all other source decal materials must stay excluded.
 decal_manifest = scene.get('decals', {})
 source_decals = decal_manifest.get('actors', [])
 supported_decals = [item for item in source_decals if item.get('status') == 'partial_unverified']
+excluded_decals = [item for item in source_decals if item.get('status') == 'excluded_default_deny']
+decal_allowlist = {'Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito'}
 decal_actors = {actor.get_actor_label(): actor for actor in actors
                 if isinstance(actor, unreal.DecalActor)}
 assert len(source_decals) == decal_manifest.get('census', {}).get('actors', len(source_decals))
+assert all(item.get('material_source') in decal_allowlist for item in supported_decals)
+assert all(item.get('exclusion_reason') and item.get('material_source') not in decal_allowlist
+           for item in excluded_decals)
 assert len(decal_actors) == len(supported_decals), (len(decal_actors), len(supported_decals))
+expected_excluded = decal_manifest.get('census', {}).get('excluded_import_candidates', 0)
+assert len(excluded_decals) == expected_excluded
 for source in supported_decals:
     label = actor_label(source['level'], source['source'], 0)
     actor = decal_actors[label]
-    close(xyz(actor.get_actor_location()), source['transform']['location'])
     basis = source.get('projection_basis', {})
     normal = basis.get('HitNormal', [0.0, 0.0, 0.0])
-    magnitude = math.sqrt(sum(float(value) ** 2 for value in normal))
-    if magnitude > 1e-5:
-        close(xyz(actor.get_actor_forward_vector()), [float(value) / magnitude for value in normal], .001)
+    expected_location, expected_forward = ue3_grafitto_projection_to_ue5(
+        source['transform']['location'], normal, source['dimensions'])
+    close(xyz(actor.get_actor_location()), expected_location, .01)
+    close(xyz(actor.get_actor_forward_vector()), expected_forward, .001)
     component = actor.get_component_by_class(unreal.DecalComponent)
     assert component is not None
     size = component.get_editor_property('decal_size')
-    close(xyz(size), ue3_decal_dimensions_to_ue5(source['dimensions']), .001)
+    close(xyz(size), ue3_grafitto_dimensions_to_ue5(source['dimensions']), .001)
     material = component.get_editor_property('decal_material')
     assert material is not None and material.get_name() == 'M_OpenWillowDecal_' + source['material']
     assert material.get_editor_property('material_domain') == unreal.MaterialDomain.MD_DEFERRED_DECAL
@@ -187,15 +275,146 @@ for source in supported_decals:
     source_material = decal_manifest.get('materials', {}).get(source['material'], {})
     diffuse = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
     opacity = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_OPACITY)
-    assert isinstance(diffuse, unreal.MaterialExpressionTextureSample)
-    if source_material.get('opacity_source') == 'inverse_rgb_luminance_v1':
-        assert isinstance(opacity, unreal.MaterialExpressionOneMinus)
-    else:
-        assert source_material.get('opacity_source') == 'Texture2D alpha channel'
-        assert isinstance(opacity, unreal.MaterialExpressionComponentMask)
-        assert bool(opacity.get_editor_property('a'))
+    assert source_material.get('method') == 'grafitto_dark_ink_deferred_decal_v1'
+    assert source_material.get('opacity_source') == 'grafitto_dark_ink_mask_v1'
+    assert source_material.get('ink_color_linear') == list(SANCTUARY_GRAFITTO_INK_COLOR)
+    assert source_material.get('opacity_luminance_ceiling') == SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING
+    assert source_material.get('opacity_gain') == SANCTUARY_GRAFITTO_INK_OPACITY_GAIN
+    assert isinstance(diffuse, unreal.MaterialExpressionConstant3Vector)
+    ink = diffuse.get_editor_property('constant')
+    close([ink.r, ink.g, ink.b], SANCTUARY_GRAFITTO_INK_COLOR, 1e-6)
+    assert isinstance(opacity, unreal.MaterialExpressionSaturate)
+    _, opacity_nodes, opacity_inputs = material_graph(material, unreal.MaterialProperty.MP_OPACITY)
+    assert any(isinstance(node, unreal.MaterialExpressionDotProduct)
+               and len(opacity_inputs[expression_key(node)]) == 2
+               and isinstance(opacity_inputs[expression_key(node)][1], unreal.MaterialExpressionConstant3Vector)
+               and all(abs(actual - expected) < 1e-6 for actual, expected in zip(
+                   [opacity_inputs[expression_key(node)][1].get_editor_property('constant').r,
+                    opacity_inputs[expression_key(node)][1].get_editor_property('constant').g,
+                    opacity_inputs[expression_key(node)][1].get_editor_property('constant').b],
+                    [0.2126, 0.7152, 0.0722]))
+               for node in opacity_nodes.values())
+    assert any(isinstance(node, unreal.MaterialExpressionConstant)
+               and abs(float(node.get_editor_property('r'))
+                       - SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING) < 1e-6
+               for node in opacity_nodes.values())
+    assert any(isinstance(node, unreal.MaterialExpressionConstant)
+               and abs(float(node.get_editor_property('r')) - SANCTUARY_GRAFITTO_INK_OPACITY_GAIN) < 1e-6
+               for node in opacity_nodes.values())
+    assert any(isinstance(node, unreal.MaterialExpressionTextureSample)
+               and node.get_editor_property('texture').get_name()
+               == Path(source_material['texture_file']).stem for node in opacity_nodes.values())
     tags = [str(tag) for tag in actor.get_editor_property('tags')]
     assert source['source'] in tags
+    for vector_name, host_getter, sign in (('HitTangent', actor.get_actor_right_vector, 1.0),
+                                           ('HitBinormal', actor.get_actor_up_vector, 1.0)):
+        expected_axis = source.get('projection_basis', {}).get(vector_name, [0.0, 0.0, 0.0])
+        magnitude = math.sqrt(sum(float(value) ** 2 for value in expected_axis))
+        if magnitude > 1e-5:
+            close(xyz(host_getter()), [sign * float(value) / magnitude for value in expected_axis], .002)
+
+static_light_manifest = scene.get('lighting', {}).get('static_light_import', {})
+static_light_records = static_light_manifest.get('components', [])
+selection_policy = static_light_manifest.get('selection_policy', {})
+assert selection_policy.get('min_radius') == SANCTUARY_LIGHT_MIN_RADIUS
+assert selection_policy.get('min_brightness') == SANCTUARY_LIGHT_MIN_BRIGHTNESS
+assert selection_policy.get('cell_size') == SANCTUARY_LIGHT_CELL_SIZE
+assert selection_policy.get('max_per_cell') == SANCTUARY_LIGHT_MAX_PER_CELL
+assert selection_policy.get('max_imported') == SANCTUARY_LIGHT_MAX_IMPORTED
+candidate_records = []
+for item in static_light_records:
+    if item.get('enabled') is False or item.get('status') == 'unsupported':
+        continue
+    radius, brightness, position = item.get('radius'), item.get('brightness'), item.get('position')
+    valid = (item.get('kind') in ('Point', 'Spot')
+             and isinstance(radius, (int, float)) and not isinstance(radius, bool)
+             and math.isfinite(radius) and isinstance(brightness, (int, float))
+             and not isinstance(brightness, bool) and math.isfinite(brightness)
+             and isinstance(position, list) and len(position) == 3
+             and all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                     and math.isfinite(value) for value in position)
+             and isinstance(item.get('light_color_rgb'), list)
+             and len(item['light_color_rgb']) == 3
+             and all(isinstance(value, (int, float)) and 0 <= value <= 1
+                     for value in item['light_color_rgb']))
+    if not valid or radius < SANCTUARY_LIGHT_MIN_RADIUS or brightness < SANCTUARY_LIGHT_MIN_BRIGHTNESS:
+        continue
+    item['_verify_score'] = float(radius) * float(brightness)
+    item['_verify_cell'] = tuple(math.floor(float(value) / SANCTUARY_LIGHT_CELL_SIZE)
+                                 for value in position)
+    candidate_records.append(item)
+candidate_buckets = {}
+for item in candidate_records:
+    candidate_buckets.setdefault(item['_verify_cell'], []).append(item)
+quota_winners = []
+for cell in sorted(candidate_buckets):
+    ranked = sorted(candidate_buckets[cell], key=lambda item: (-item['_verify_score'], item['source']))
+    quota_winners.extend(ranked[:SANCTUARY_LIGHT_MAX_PER_CELL])
+expected_light_sources = {item['source'] for item in sorted(
+    quota_winners, key=lambda item: (-item['_verify_score'], item['source']))[:SANCTUARY_LIGHT_MAX_IMPORTED]}
+for item in static_light_records:
+    expected_selected = item.get('source') in expected_light_sources
+    assert (item.get('status') == 'selected') == expected_selected, item.get('source')
+    assert bool(item.get('selected')) == expected_selected, item.get('source')
+for item in static_light_records:
+    item.pop('_verify_score', None)
+    item.pop('_verify_cell', None)
+source_light_actors = [actor for actor in actors
+                       if 'OpenWillow_SourceStaticLight' in
+                       [str(tag) for tag in actor.get_editor_property('tags')]]
+reported_static_lights = import_report.get('lighting', {}).get('static_source_lights', {})
+expected_orange_scaled = sum(
+    1 for item in static_light_records if item.get('source') in expected_light_sources
+    and item.get('kind') == 'Point'
+    and sanctuary_light_calibration('Point', item['brightness'], item['light_color_rgb'])
+    < sanctuary_light_calibration('Point', item['brightness']))
+assert reported_static_lights.get('source_components') == len(static_light_records)
+assert reported_static_lights.get('imported') == len(expected_light_sources)
+assert reported_static_lights.get('skipped') == len(static_light_records) - len(expected_light_sources)
+assert reported_static_lights.get('source_brightness_ceiling') == SANCTUARY_LIGHT_BRIGHTNESS_CEILING
+assert reported_static_lights.get('orange_point_light_intensity_scale') == SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE
+assert reported_static_lights.get('orange_point_lights_scaled') == expected_orange_scaled
+assert len(source_light_actors) == len(expected_light_sources)
+source_actor_by_source = {}
+for actor in source_light_actors:
+    tags = [str(tag) for tag in actor.get_editor_property('tags')]
+    matching = [tag for tag in tags if tag in expected_light_sources]
+    assert len(matching) == 1, (actor.get_actor_label(), matching)
+    source_actor_by_source[matching[0]] = actor
+assert set(source_actor_by_source) == expected_light_sources
+for source in static_light_records:
+    if source['source'] not in expected_light_sources:
+        continue
+    actor = source_actor_by_source[source['source']]
+    close(xyz(actor.get_actor_location()), source['position'], .01)
+    kind = source['kind']
+    if kind == 'Point':
+        assert isinstance(actor, unreal.PointLight)
+        component = actor.get_component_by_class(unreal.PointLightComponent)
+        scale = SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS
+    else:
+        assert isinstance(actor, unreal.SpotLight)
+        component = actor.get_component_by_class(unreal.SpotLightComponent)
+        scale = SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS
+        direction = source['forward']
+        magnitude = math.sqrt(sum(float(value) ** 2 for value in direction))
+        assert magnitude > 1e-5
+        close(xyz(actor.get_actor_forward_vector()),
+              [float(value) / magnitude for value in direction], .002)
+        close([component.get_editor_property('inner_cone_angle'),
+               component.get_editor_property('outer_cone_angle')],
+              [source['inner_cone_angle'], source['outer_cone_angle']], .001)
+    assert component is not None
+    assert component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
+    assert component.get_editor_property('intensity_units') == unreal.LightUnits.CANDELAS
+    expected_intensity = sanctuary_light_calibration(kind, source['brightness'], source['light_color_rgb'])
+    assert abs(float(component.get_editor_property('intensity')) - expected_intensity) < .01
+    assert abs(float(component.get_editor_property('attenuation_radius')) - source['radius']) < .01
+    assert not component.get_editor_property('cast_shadows')
+    color = component.get_editor_property('light_color')
+    expected_color = [linear_to_srgb_byte(value) for value in
+                      ue3_color_linear(source['light_color_rgb'])]
+    close([color.r, color.g, color.b], expected_color, 1.0)
 static_mesh_candidates = decal_manifest.get('static_mesh_candidates', [])
 verified_static_mesh_candidate_placements = 0
 for candidate in static_mesh_candidates:
@@ -421,29 +640,6 @@ def verify_terrain_blend(material, name, definition):
             'diffuse_textures': len(expected_diffuse), 'graph': 'weighted_sum_reaches_base_color'}
 
 
-def expression_key(node):
-    return node.get_path_name()
-
-
-def material_graph(material, material_property):
-    """Return the saved expression graph connected to one material property."""
-    root_node = mel.get_material_property_input_node(material, material_property)
-    nodes, inputs = {}, {}
-    pending = [root_node]
-    while pending:
-        node = pending.pop()
-        if node is None:
-            continue
-        key = expression_key(node)
-        if key in nodes:
-            continue
-        nodes[key] = node
-        inputs[key] = [item for item in mel.get_inputs_for_material_expression(material, node)
-                       if item is not None]
-        pending.extend(inputs[key])
-    return root_node, nodes, inputs
-
-
 def has_emissive_alpha_mask(nodes, graph_inputs, sample):
     sample_key = expression_key(sample)
     return any(isinstance(node, unreal.MaterialExpressionMultiply)
@@ -548,12 +744,15 @@ def verify_emissive_multiplier(material, name, definition):
 
 verified_scene_recipe_layers = 0
 verified_scene_recipe_materials = set()
+verified_world_map_recipe = []
 verified_emissive_multipliers = []
 verified_unlit_constants = []
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
     assert material.get_editor_property('two_sided') == bool(definition.get('two_sided', False)), name
     recipe = definition.get('scene_recipe', {})
+    if recipe.get('method') == 'world_map_mask_colorization_v2':
+        verified_world_map_recipe.append(verify_world_map_recipe(material, name, recipe))
     host_shading_name = recipe.get('host_lighting_model',
                                    'MLM_Unlit' if definition.get('unlit_constant_color') else
                                    definition.get('lighting_model', 'MLM_DefaultLit'))
@@ -590,6 +789,9 @@ for name, definition in scene['materials'].items():
             close([value.r, value.g, value.b], expected_color, 1e-6)
             verified_unlit_constants.append(name)
         elif recipe.get('unlit_color_layers'):
+            pass
+        elif recipe.get('method') == 'world_map_mask_colorization_v2':
+            # The custom R/G/B mask graph was independently checked above.
             pass
         elif not definition['channels'].get('emissive'):
             multiplier = definition.get('unlit_color_multiplier')
@@ -655,6 +857,7 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_constant_materials': verified_unlit_constants,
           'verified_scene_recipe_material_count': len(verified_scene_recipe_materials),
           'verified_scene_recipe_layer_count': verified_scene_recipe_layers,
+          'verified_world_map_recipes': verified_world_map_recipe,
           'verified_outer_shell_placements': verified_outer_shell,
           'verified_outer_shell_replacements': verified_outer_shell_replacements,
           'expected_outer_shell_replacements': sum(
@@ -663,7 +866,10 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_neutral_fallback_sections': verified_neutral_fallback,
           'geometry_bounds': 'matches source OBJ', 'lighting_actors': sorted(lighting),
           'verified_decals': len(supported_decals),
-          'unsupported_decals': len(source_decals) - len(supported_decals),
+          'excluded_default_deny_decals': len(excluded_decals),
+          'unsupported_decals': len(source_decals) - len(supported_decals) - len(excluded_decals),
+          'verified_source_lights': len(expected_light_sources),
+          'skipped_source_lights': len(static_light_records) - len(expected_light_sources),
           'source_decal_components': decal_manifest.get('census', {}).get('components', 0),
           'source_decal_materials': decal_manifest.get('census', {}).get('unique_materials', 0),
           'verified_decal_like_mesh_placements': verified_static_mesh_candidate_placements,

@@ -7,11 +7,20 @@ import unreal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scene_geometry import actor_label, host_obj
 from scene_import_rules import (SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS,
+                                SANCTUARY_GRAFITTO_INK_COLOR,
+                                SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING,
+                                SANCTUARY_GRAFITTO_INK_OPACITY_GAIN,
+                                SANCTUARY_LIGHT_BRIGHTNESS_CEILING,
+                                SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE,
+                                SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
+                                SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
                                 SANCTUARY_SKY_INTENSITY_CALIBRATION,
                                 temporary_sky_policy,
                                 ue3_color_linear,
-                                ue3_decal_dimensions_to_ue5,
+                                ue3_grafitto_dimensions_to_ue5,
+                                ue3_grafitto_projection_to_ue5,
                                 ue3_directional_brightness_to_ue5,
+                                sanctuary_light_calibration,
                                 ue3_sky_light_color_to_ue5,
                                 ue3_world_post_process_to_ue5)
 
@@ -127,9 +136,63 @@ def build_texture_layers(material, layers):
     return result
 
 
+def build_world_map_mask_colorization(material, recipe):
+    """Build the calibrated pale-cyan backing and R/G/B map mask overlays."""
+    if recipe.get('method') != 'world_map_mask_colorization_v2':
+        raise RuntimeError('Unsupported world-map recipe: ' + str(recipe.get('method')))
+    filename = recipe.get('mask_texture_file')
+    channels = recipe.get('mask_channels', {})
+    palette = recipe.get('palette', {})
+    if (not filename or channels != {'land': 'R', 'grid': 'G', 'markers': 'B'}
+            or set(palette) != {'background', 'land', 'grid', 'markers'}):
+        raise RuntimeError('World-map recipe lacks its exact texture, channel roles, or palette')
+    texture = textures.get(filename)
+    if texture is None:
+        texture = imported(filename, unreal.Texture2D)
+        textures[filename] = texture
+    texture.set_editor_property('srgb', False)
+    texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
+    sample = mel.create_material_expression(material, unreal.MaterialExpressionTextureSample)
+    sample.set_editor_property('texture', texture)
+    sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+
+    def color_node(key):
+        rgb = palette[key]
+        if (not isinstance(rgb, list) or len(rgb) != 3
+                or any(not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0
+                       for value in rgb)):
+            raise RuntimeError('Invalid world-map palette entry: ' + key)
+        node = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+        node.set_editor_property('constant', unreal.LinearColor(float(rgb[0]), float(rgb[1]),
+                                                                 float(rgb[2]), 1.0))
+        return node
+
+    def mask(channel):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionComponentMask)
+        for component in ('R', 'G', 'B', 'A'):
+            node.set_editor_property(component.lower(), channel == component)
+        if not mel.connect_material_expressions(sample, '', node, ''):
+            raise RuntimeError('Cannot connect WorldMap_Comp channel ' + channel)
+        return node
+
+    result = color_node('background')
+    for layer, channel in (('land', 'R'), ('grid', 'G'), ('markers', 'B')):
+        lerp = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate)
+        alpha = mask(channel)
+        if not (mel.connect_material_expressions(result, '', lerp, 'A')
+                and mel.connect_material_expressions(color_node(layer), '', lerp, 'B')
+                and mel.connect_material_expressions(alpha, '', lerp, 'Alpha')):
+            raise RuntimeError('Cannot connect WorldMap_Comp ' + layer + ' palette layer')
+        result = lerp
+    unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    if not mel.connect_material_property(result, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR):
+        raise RuntimeError('Cannot connect WorldMap_Comp calibrated colorization')
+    return result
+
+
 def build_deferred_decal_material(name, definition):
-    """Build the bounded RGB-plus-alpha UE5 material for one decal texture."""
-    if definition.get('method') != 'single_texture_deferred_decal_v1':
+    """Build the single default-allowlisted Sanctuary graffiti decal recipe."""
+    if definition.get('method') != 'grafitto_dark_ink_deferred_decal_v1':
         raise RuntimeError('Unsupported decal material method: ' + str(definition.get('method')))
     material_path = destination + '/Assets/M_OpenWillowDecal_' + name
     material = (unreal.load_asset(material_path)
@@ -150,15 +213,29 @@ def build_deferred_decal_material(name, definition):
     sample.set_editor_property('texture', texture)
     sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
     opacity_source = definition.get('opacity_source', 'Texture2D alpha channel')
-    if opacity_source == 'inverse_rgb_luminance_v1':
+    if opacity_source == 'grafitto_dark_ink_mask_v1':
         luminance = mel.create_material_expression(material, unreal.MaterialExpressionDotProduct)
         weights = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
         weights.set_editor_property('constant', unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0))
-        opacity = mel.create_material_expression(material, unreal.MaterialExpressionOneMinus)
+        ceiling = mel.create_material_expression(material, unreal.MaterialExpressionConstant)
+        ceiling.set_editor_property('r', SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING)
+        inverse = mel.create_material_expression(material, unreal.MaterialExpressionSubtract)
+        gain = mel.create_material_expression(material, unreal.MaterialExpressionConstant)
+        gain.set_editor_property('r', SANCTUARY_GRAFITTO_INK_OPACITY_GAIN)
+        scaled = mel.create_material_expression(material, unreal.MaterialExpressionMultiply)
+        opacity = mel.create_material_expression(material, unreal.MaterialExpressionSaturate)
+        ink = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+        ink.set_editor_property('constant', unreal.LinearColor(
+            SANCTUARY_GRAFITTO_INK_COLOR[0], SANCTUARY_GRAFITTO_INK_COLOR[1],
+            SANCTUARY_GRAFITTO_INK_COLOR[2], 1.0))
         connected = (mel.connect_material_expressions(sample, 'RGB', luminance, 'A')
                      and mel.connect_material_expressions(weights, '', luminance, 'B')
-                     and mel.connect_material_expressions(luminance, '', opacity, '')
-                     and mel.connect_material_property(sample, 'RGB', unreal.MaterialProperty.MP_BASE_COLOR)
+                     and mel.connect_material_expressions(ceiling, '', inverse, 'A')
+                     and mel.connect_material_expressions(luminance, '', inverse, 'B')
+                     and mel.connect_material_expressions(inverse, '', scaled, 'A')
+                     and mel.connect_material_expressions(gain, '', scaled, 'B')
+                     and mel.connect_material_expressions(scaled, '', opacity, '')
+                     and mel.connect_material_property(ink, '', unreal.MaterialProperty.MP_BASE_COLOR)
                      and mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY))
     elif opacity_source == 'Texture2D alpha channel':
         opacity = mel.create_material_expression(material, unreal.MaterialExpressionComponentMask)
@@ -492,6 +569,9 @@ for name, definition in scene['materials'].items():
     if unlit_recipe is not None and not mel.connect_material_property(
             unlit_recipe, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR):
         raise RuntimeError('Cannot connect inspected Unlit display layers: ' + name)
+    world_map_recipe = None
+    if recipe.get('method') == 'world_map_mask_colorization_v2':
+        world_map_recipe = build_world_map_mask_colorization(material, recipe)
     # Unlit uses Emissive Color for visible color. Retain the recovered diffuse
     # (or constant fallback) there when no explicit emissive channel exists.
     # This is Material v1 host policy, not reconstruction of the UE3 sky graph.
@@ -508,7 +588,7 @@ for name, definition in scene['materials'].items():
         if not mel.connect_material_property(visible, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR):
             raise RuntimeError('Cannot connect inspected Unlit constant color: ' + name)
     elif (shading_name == 'MLM_Unlit' and emissive_sample is None
-          and unlit_recipe is None and recipe_emissive is None):
+          and unlit_recipe is None and recipe_emissive is None and world_map_recipe is None):
         color_node = diffuse_sample if diffuse_sample is not None else fallback
         color_pin = 'RGB' if diffuse_sample is not None else ''
         multiplier = definition.get('unlit_color_multiplier')
@@ -548,8 +628,12 @@ for name, definition in scene['materials'].items():
     materials[name] = material
 
 decal_material_assets = {}
+decal_allowlist = {'Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito'}
 for name, definition in scene.get('decals', {}).get('materials', {}).items():
     if definition.get('status') == 'partial_unverified':
+        if definition.get('source') not in decal_allowlist:
+            raise RuntimeError('Scene manifest attempted a decal outside the default allowlist: ' +
+                               str(definition.get('source')))
         decal_material_assets[name] = build_deferred_decal_material(name, definition)
 
 # Sections whose preparer recorded no material (for example terrain whose
@@ -707,17 +791,24 @@ for instance in scene['actors']:
         count += 1
 
 decal_imported = 0
+decal_allowed_source = 'Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito'
 for decal in scene.get('decals', {}).get('actors', []):
     if decal.get('status') != 'partial_unverified':
         continue
+    if decal.get('material_source') != decal_allowed_source:
+        raise RuntimeError('Scene manifest attempted to import a non-allowlisted decal actor: ' +
+                           decal['source'])
     material_name = decal.get('material')
     if material_name not in decal_material_assets:
         raise RuntimeError('Supported source decal has no imported UE5 material: ' + decal['source'])
-    # UE3 near/far clipping is reduced to one host depth extent; this mapping is UNVERIFIED.
-    decal_size = unreal.Vector(*ue3_decal_dimensions_to_ue5(decal['dimensions']))
+    # The bounded UE5 volume is shifted inward from the source HitLocation so
+    # a decal whose source origin floats outside its wall still intersects it.
+    decal_size = unreal.Vector(*ue3_grafitto_dimensions_to_ue5(decal['dimensions']))
     basis = decal.get('projection_basis', {})
     normal = basis.get('HitNormal', [0.0, 0.0, 0.0])
     binormal = basis.get('HitBinormal', [0.0, 0.0, 0.0])
+    decal_location, normal = ue3_grafitto_projection_to_ue5(
+        decal['transform']['location'], normal, decal['dimensions'])
     if any(abs(float(value)) > 1e-5 for value in normal) and any(
             abs(float(value)) > 1e-5 for value in binormal):
         decal_rotation = unreal.MathLibrary.make_rot_from_xz(unreal.Vector(*normal),
@@ -726,7 +817,7 @@ for decal in scene.get('decals', {}).get('actors', []):
         pitch, yaw, roll = decal['transform']['rotation']
         decal_rotation = unreal.Rotator(pitch=float(pitch), yaw=float(yaw), roll=float(roll))
     decal_actor = actors.spawn_actor_from_class(unreal.DecalActor,
-        unreal.Vector(*decal['transform']['location']), decal_rotation)
+        unreal.Vector(*decal_location), decal_rotation)
     decal_actor.set_actor_label(actor_label(decal['level'], decal['source'], 0))
     decal_actor.set_folder_path('Decals/' + decal['level'])
     decal_actor.set_editor_property('tags', [unreal.Name(decal['source'])])
@@ -734,6 +825,7 @@ for decal in scene.get('decals', {}).get('actors', []):
     if decal_component is None:
         raise RuntimeError('UE5 DecalActor has no DecalComponent: ' + decal['source'])
     decal_component.set_editor_property('decal_size', decal_size)
+    decal_component.set_editor_property('sort_order', 0)
     decal_component.set_editor_property('decal_material', decal_material_assets[material_name])
     decal_imported += 1
 
@@ -765,6 +857,53 @@ world.get_world_settings().set_editor_property('default_game_mode', unreal.load_
 scene_extent = (scene_bounds_max - scene_bounds_min) * 0.5
 lighting_center = position
 source_lighting = scene.get('lighting', {})
+static_light_import = source_lighting.get('static_light_import', {})
+static_light_records = static_light_import.get('components', [])
+selected_static_lights = [item for item in static_light_records
+                          if item.get('status') == 'selected' and item.get('selected') is True]
+if static_light_import.get('counts', {}).get('imported', len(selected_static_lights)) != len(selected_static_lights):
+    raise RuntimeError('Static light manifest selected count does not match its component records')
+imported_static_lights = []
+for ordinal, source in enumerate(sorted(selected_static_lights, key=lambda item: item['source']), 1):
+    kind = source.get('kind')
+    if kind not in ('Point', 'Spot'):
+        raise RuntimeError('Unsupported selected Sanctuary light kind: ' + str(kind))
+    position = unreal.Vector(*source['position'])
+    rotation = unreal.Rotator(0.0, 0.0, 0.0)
+    if kind == 'Spot':
+        forward, up = source['forward'], source['up']
+        if (sum(float(value) ** 2 for value in forward) < 1e-8
+                or sum(float(value) ** 2 for value in up) < 1e-8):
+            raise RuntimeError('Selected Sanctuary spot light has a degenerate projection basis: ' +
+                               source['source'])
+        rotation = unreal.MathLibrary.make_rot_from_xz(unreal.Vector(*forward), unreal.Vector(*up))
+    light_actor = actors.spawn_actor_from_class(
+        unreal.PointLight if kind == 'Point' else unreal.SpotLight, position, rotation)
+    label = f'OpenWillow_Source{kind}Light_{ordinal:03d}'
+    light_actor.set_actor_label(label)
+    light_actor.set_folder_path('Lighting/SourceStaticComponents')
+    light_actor.set_editor_property('tags', [unreal.Name('OpenWillow_SourceStaticLight'),
+                                              unreal.Name(source['source'])])
+    light_component = light_actor.get_component_by_class(
+        unreal.PointLightComponent if kind == 'Point' else unreal.SpotLightComponent)
+    if light_component is None:
+        raise RuntimeError('Spawned Sanctuary ' + kind + ' actor has no matching light component')
+    light_component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
+    light_component.set_editor_property('intensity_units', unreal.LightUnits.CANDELAS)
+    light_component.set_editor_property('intensity', sanctuary_light_calibration(
+        kind, source['brightness'], source['light_color_rgb']))
+    light_component.set_editor_property('attenuation_radius', float(source['radius']))
+    color = ue3_color_linear(source['light_color_rgb'])
+    light_component.set_light_color(unreal.LinearColor(float(color[0]), float(color[1]),
+                                                        float(color[2]), 1.0))
+    light_component.set_editor_property('cast_shadows', False)
+    if kind == 'Spot':
+        light_component.set_editor_property('inner_cone_angle', float(source['inner_cone_angle']))
+        light_component.set_editor_property('outer_cone_angle', float(source['outer_cone_angle']))
+    imported_static_lights.append({'source': source['source'], 'label': label, 'kind': kind,
+                                   'intensity_candela': sanctuary_light_calibration(
+                                       kind, source['brightness'], source['light_color_rgb']),
+                                   'attenuation_radius': float(source['radius'])})
 source_directional = source_lighting.get('directional_light')
 sun_rotation = (source_directional['rotation'] if source_directional is not None
                 else [-45.0, -35.0, 0.0])
@@ -1037,6 +1176,24 @@ unreal.EditorAssetLibrary.save_directory(destination)
                           'blocking': sum(v.get('status') == 'blocking' for v in scene.get('volumes', [])),
                           'actor': volume_actor is not None},
     'lighting': {'sun_intensity': sun_intensity,
+                 'static_source_lights': {
+                     'source_components': static_light_import.get('counts', {}).get('source_components', 0),
+                     'imported': len(imported_static_lights),
+                     'skipped': static_light_import.get('counts', {}).get('skipped', 0),
+                     'skip_reasons': static_light_import.get('counts', {}).get('skip_reasons', {}),
+                     'intensity_units': 'candela',
+                     'point_candela_per_source_brightness': SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
+                     'spot_candela_per_source_brightness': SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
+                     'source_brightness_ceiling': SANCTUARY_LIGHT_BRIGHTNESS_CEILING,
+                     'orange_point_light_intensity_scale': SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE,
+                     'orange_point_lights_scaled': sum(
+                         1 for source in selected_static_lights
+                         if source.get('kind') == 'Point'
+                         and sanctuary_light_calibration('Point', source['brightness'],
+                                                         source['light_color_rgb'])
+                         < sanctuary_light_calibration('Point', source['brightness'])),
+                     'shadows': False,
+                     'actors': imported_static_lights},
                  'source_directional_rotation_applied': source_directional is not None,
                  'sun_intensity_scale': SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS
                                         if source_directional is not None
@@ -1065,7 +1222,9 @@ unreal.EditorAssetLibrary.save_directory(destination)
                'source_components': scene.get('decals', {}).get('census', {}).get('components', 0),
                'supported_candidates': scene.get('decals', {}).get('census', {}).get('supported_import_candidates', 0),
                'imported': decal_imported,
-               'unsupported': scene.get('decals', {}).get('census', {}).get('unsupported', 0),
+                'excluded_default_deny': scene.get('decals', {}).get('census', {}).get(
+                    'excluded_import_candidates', 0),
+                'unsupported': scene.get('decals', {}).get('census', {}).get('unsupported', 0),
                'unique_materials': scene.get('decals', {}).get('census', {}).get('unique_materials', 0),
                'supported_materials': scene.get('decals', {}).get('census', {}).get('supported_materials', 0),
                'static_mesh_candidate_placements': scene.get('decals', {}).get('census', {}).get(
