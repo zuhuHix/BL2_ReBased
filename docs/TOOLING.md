@@ -735,12 +735,13 @@ running and launches Sanctuary as Maya with `-owflashhud=<url>` and
 and "HUD movie ready" in the UE log.
 Since 2026-10-22 the movie is the default gameplay HUD: without `-owflashhud` the host opens
 `http://127.0.0.1:8767/` itself (so a running `serve.py` on that port is enough) and draws the canvas fallback until the
-page reports ready or if it fails to load; `-owcanvashud` forces the fallback. The log says `OpenWillow HUD path:
+page reports ready (and names this checkout's `tools/hud_overlay` as the directory its server serves) or if it fails
+to load; `-owcanvashud` forces the fallback (the scripted test and capture runs pass it). The log says `OpenWillow HUD path:
 movie|canvas (<reason>)` and, from the page, `OpenWillow HUD 3D path warp|affine: <why>` (the perspective warp of the
 turned clusters; add `?hud3d=affine` to the page URL for the 2D stand-in). Gameplay-HUD captures for a parity review:
 `./tools/run_hud_shots.ps1 -Game $game [-Level 36 -Shield] [-Affine]` (slice weapons, at rest and after three shots,
 checked by `tools/check_hud_shots.py`; output under `local/hudshots/`); real-game reads of the HUD texts, crosshair and
-ammo icon per weapon: `tools/real_game/hud_parity_capture.ps1` (PowerShell 7). See `docs/verification/HUD_PARITY.md`.
+ammo icon per weapon: `tools/real_game/hud_parity_capture.ps1 -Character <your save file>` (PowerShell 7). See `docs/verification/HUD_PARITY.md`.
 It is a prototype: see DECISIONS.md for what is driven and what is not.
 Maya's action-skill indicator (the icon's cooldown veil and the Siren emblem while Phaselock holds) needs the icon
 movie: `python tools/prepare_hud_icons.py --reader build/Release/ow-package.exe --game $game`. Its in-engine check,

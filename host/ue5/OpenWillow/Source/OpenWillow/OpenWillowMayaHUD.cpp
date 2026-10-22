@@ -42,6 +42,18 @@
 namespace
 {
 const TCHAR* DefaultFlashHudUrl = TEXT("http://127.0.0.1:8767/");
+
+// The overlay page's ready line names the pages directory its server serves (tools/hud_overlay/serve.py's
+// X-OpenWillow-Pages header); the movie counts only when that is this checkout's tools/hud_overlay, so another
+// worktree's server answering on the same port (with its own, possibly older, pages) is not used.
+bool IsOwnHudPages(FString Pages)
+{
+    FString Own = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../tools/hud_overlay")));
+    Pages.TrimStartAndEndInline();
+    FPaths::NormalizeDirectoryName(Own);
+    FPaths::NormalizeDirectoryName(Pages);
+    return !Pages.IsEmpty() && Own.Equals(Pages, ESearchCase::IgnoreCase);
+}
 const FLinearColor Backing(0.02f, 0.03f, 0.04f, 0.65f);
 const FLinearColor Frame(0.85f, 0.85f, 0.8f, 0.9f);
 const FLinearColor Legendary(1.f, 0.55f, 0.08f);
@@ -190,10 +202,20 @@ void AOpenWillowMayaHUD::BeginPlay()
             {
                 UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD console: %s (%s:%d)"), *Message, *Source, Line);
                 AOpenWillowMayaHUD* Hud = WeakThis.Get();
-                if (Hud && !Hud->bFlashHudReady && Message.Contains(TEXT("OpenWillow HUD movie ready")))
+                if (Hud && !Hud->bFlashHudReady && !Hud->bFlashHudFailed && Message.StartsWith(TEXT("OpenWillow HUD movie ready")))
                 {
-                    Hud->bFlashHudReady = true;
-                    UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: movie (page reported ready)"));
+                    FString Pages;
+                    Message.Split(TEXT("pages="), nullptr, &Pages);
+                    if (IsOwnHudPages(Pages))
+                    {
+                        Hud->bFlashHudReady = true;
+                        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: movie (page reported ready)"));
+                    }
+                    else
+                    {
+                        Hud->bFlashHudFailed = true;
+                        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (the page is served from '%s', not this checkout's tools/hud_overlay)"), *Pages);
+                    }
                 }
             });
     FlashHudRoot = SNew(SBox).Visibility(EVisibility::HitTestInvisible)[FlashHud.ToSharedRef()];
@@ -864,7 +886,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     // Rounds left in the held magazine (a no-cost weapon like the Infinity shows its full magazine size, as before).
     const int32 MagazineLeft = bArmed ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0;
     const float MagazineFill = bArmed ? float(MagazineLeft) / UOpenWillowInventory::MagazineSize(*Weapon) : 1.f;
-    // "<magazine> / <reserve>" as the game writes it (live read 2026-10-22: "2 / 78", the spaces no-break U+00A0,
+    // "<magazine> / <reserve>" as the game writes it (live read 2026-10-22: the spaces around "/" are no-break U+00A0,
     // sent as JSON escapes). The reserve is the pool the weapon draws from. A no-cost weapon (Infinity)
     // shows the magazine only: the game's display for it is not observed (UNVERIFIED).
     FString AmmoText;
@@ -889,12 +911,12 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
                 break;
             }
     const FString ShieldText = bShield ? FString::Printf(TEXT("%d"), ShieldCapacity) : FString();
-    // Grenades: the grenade pool's Current / Max, shown only when its capacity is known (real frames show "3 / 3").
+    // Grenades: the grenade pool's Current / Max, shown only when its capacity is known (count / max, as the game shows it).
     const FOpenWillowAmmoPool GrenadePool = Inventory ? Inventory->AmmoPool(EOpenWillowAmmoType::Grenade) : FOpenWillowAmmoPool();
     const bool bGrenades = Inventory && GrenadePool.Max > 0;
     const float GrenadeFill = bGrenades ? FMath::Clamp(float(GrenadePool.Current) / GrenadePool.Max, 0.f, 1.f) : 0.f;
     const FString GrenadeText = bGrenades ? FString::Printf(TEXT("%d\\u00a0/\\u00a0%d"), GrenadePool.Current, GrenadePool.Max) : FString();
-    // Health: the fraction for the bar, and the rounded number for the text (live read: pool 429.07, text "429").
+    // Health: the fraction for the bar, and the rounded number for the text (live read: the pool rounded to the nearest integer).
     const float Health = Maya.GetHealth();
     const float HealthFill = FMath::Clamp(Health / FMath::Max(1.f, Maya.GetMaxHealth()), 0.f, 1.f);
     const int32 HealthNow = FMath::RoundToInt(FMath::Max(0.f, Health));
@@ -919,9 +941,13 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
         *AmmoText,
         SkillActive < 0.f ? TEXT("null") : *FString::Printf(TEXT("%.2f"), SkillActive),
         SkillCooldown);
-    // The values pushed, once per change, for the in-engine checks (OWHUDSTATE).
-    const FString HudLine = FString::Printf(TEXT("health=%.3f healthText=%d shield=%s ammoText=%s grenadeText=%s level=%02d"),
-        HealthFill, HealthNow, bShield ? TEXT("1.000") : TEXT("null"), *AmmoText, *GrenadeText, Level);
+    // The values pushed, once per change, for the in-engine checks (OWHUDSTATE), written as the page's OWHUDPAGE line
+    // echoes the state it applied (tools/hud_overlay/hud_fields.js, pageLine).
+    const FString HudLine = FString::Printf(TEXT("health=%.3f shield=%s ammo=%.3f grenades=%s weaponOut=%d weaponType=%s ")
+        TEXT("healthText=%d shieldText=%s ammoText=%s grenadeText=%s level=%02d"),
+        HealthFill, bShield ? TEXT("1.000") : TEXT("null"), MagazineFill,
+        bGrenades ? *FString::Printf(TEXT("%.3f"), GrenadeFill) : TEXT("null"), bArmed ? 1 : 0,
+        bAmmoType ? UOpenWillowInventory::AmmoTypeKey(HeldAmmo) : TEXT("-"), HealthNow, *ShieldText, *AmmoText, *GrenadeText, Level);
     if (HudLine != LastHudStateLine)
     {
         UE_LOG(LogTemp, Display, TEXT("OWHUDSTATE %s"), *HudLine);

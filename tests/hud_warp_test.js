@@ -147,7 +147,7 @@ const tree = {
     bounds: {xMin: -300, xMax: 300, yMin: -30, yMax: 30}, kids: ['bar', 'panel', 'label', 'empty']},
   'p1.a.bar': {_x: 0, _y: 0, _xscale: 100, _yscale: 100, _rotation: 0, _visible: true, _alpha: 100, bounds: {xMin: 0, xMax: 180, yMin: -10, yMax: 10}},
   'p1.a.panel': {_x: -300, _y: -30, _xscale: 100, _yscale: 100, _rotation: 0, _visible: false, _alpha: 100, bounds: {xMin: 0, xMax: 600, yMin: 0, yMax: 60}},
-  'p1.a.label': {_x: 5, _y: -20, _width: 40, _height: 15, _visible: true, _alpha: 100, text: '181', bounds: null},
+  'p1.a.label': {_x: 5, _y: -20, _width: 40, _height: 15, _visible: true, _alpha: 100, text: '250', bounds: null},
   'p1.a.empty': {_x: 50, _y: 20, _width: 300, _height: 15, _visible: true, _alpha: 100, text: '', bounds: null},
   'p1.b': {_x: 900, _y: 600, _xscale: 100, _yscale: 100, _rotation: 0, _yrotation: -25, _visible: true, _alpha: 100,
     bounds: {xMin: -50, xMax: 10, yMin: -5, yMax: 5}, kids: ['dot']},

@@ -2,18 +2,21 @@
 
 The log (local/hudshots/<stamp>/run.log) must show BL2's HUD movie on the Ruffle warp path (the
 `OpenWillow HUD path: movie` line, a `HUD 3D path warp` line, and no canvas or affine fallback), at least one
-OWHUDSTATE line and every one in the host's format (healthText an integer, level two digits, ammoText and
-grenadeText with the no-break spaces the host writes as the JSON escape, shield null or a fraction), the
-`OWHUDSHOTS fire 1` lines with the magazine dropping by one each time and the reserve unchanged, and the
-`OWHUDSHOTS done` line. With --expect-shield the log must also show the shield being equipped. The captures
-(OWHud_rest.png and OWHud_fired.png, 1280x720) must be complete PNGs (every chunk's CRC, IHDR first, IEND last,
-the IDAT stream inflating to the image's size), not blank, and show the health bar (red) and the ammo bar
-(blue/violet) in fixed screen boxes. Whether the captures look like the game is the critic's call
-(docs/verification/HUD_PARITY.md), not this check's.
-Prints one `OWHUDSHOTSTEST PASS|FAIL <name> <detail>` line per check and a summary. Exit code 0 only when every
+OWHUDSTATE line and every one in the host's format (fractions with three decimals, weaponOut 0 or 1, healthText an
+integer, level two digits or more, ammoText and grenadeText with the no-break spaces the host writes as the JSON
+escape, shield and grenades null or a fraction), the `OWHUDSHOTS fire 1` lines with the magazine dropping by one each
+time and the reserve unchanged, and the `OWHUDSHOTS done` line. The page read-back (OWHUDPAGE, logged through the page
+console) must come from at least three page reads, each echoing a host state, with the frames and texts the page
+should show for that state, and the last page must show the final magazine. With --expect-shield the log must also
+show the shield being equipped. The captures (OWHud_rest.png and OWHud_fired.png, 1280x720) must be complete PNGs
+(every chunk's CRC, IHDR first, IEND last, the IDAT stream inflating to the image's size), not blank, and show the
+health bar (red) and the ammo bar (blue/violet) in fixed screen boxes. Whether the captures look like the game is the
+critic's call (docs/verification/HUD_PARITY.md), not this check's.
+Prints one `OWHUDSHOTSTEST PASS|FAIL|SKIP <name> <detail>` line per check and a summary. Exit code 0 only when every
 check passes; without --shots the summary is PARTIAL and the exit code 2.
 """
 import argparse
+import math
 import re
 import struct
 import sys
@@ -24,6 +27,7 @@ PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 SHOT_SIZE = (1280, 720)
 SHOTS = ('OWHud_rest.png', 'OWHud_fired.png')
 FIRE_SHOTS = 3                     # run_hud_shots.ps1 fires three rounds
+PAGE_MIN = 3                       # OWHUDPAGE read-backs a run must log
 # Screen boxes (x0, y0, x1, y1) of the health bar and the ammo bar on the 1280x720 HUD, and the pixel counts
 # the colour tests need inside them. The real run local/hudshots/20261022-173219 has about 3040 red pixels in the
 # health box and 2800 to 4300 blue/violet in the ammo box; the minimum is about a third of the lowest of those.
@@ -32,13 +36,38 @@ HEALTH_MIN, AMMO_MIN = 1000, 1000
 NOT_BLANK_MIN_COLOURS = 64
 # The host writes each no-break space as this six-character JSON escape, not as a character.
 NBSP = r'\\u00a0'
-STATE = re.compile(r'OWHUDSTATE health=(\S*) healthText=(\S*) shield=(\S*) ammoText=(\S*) grenadeText=(\S*) level=(\S*)\s*$')
+FRACTION = r'[0-9]+\.[0-9]{3}'
+# The 11 fields OWHUDSTATE and the echo part of OWHUDPAGE share, in the host's order.
+STATE_FIELDS = ('health', 'shield', 'ammo', 'grenades', 'weaponOut', 'weaponType',
+                'healthText', 'shieldText', 'ammoText', 'grenadeText', 'level')
+STATE = re.compile(r'OWHUDSTATE health=(?P<health>\S*) shield=(?P<shield>\S*) ammo=(?P<ammo>\S*) '
+                   r'grenades=(?P<grenades>\S*) weaponOut=(?P<weaponOut>\S*) weaponType=(?P<weaponType>\S*) '
+                   r'healthText=(?P<healthText>\S*) shieldText=(?P<shieldText>\S*) ammoText=(?P<ammoText>\S*) '
+                   r'grenadeText=(?P<grenadeText>\S*) level=(?P<level>\S*)\s*$')
+# The page's echo of the state, then what the page showed: the frames of the health, shield, bullets and grenade
+# rings, the texts, and the weapon's outer, spread and icon frames. Texts may be empty and are checked by equality.
+PAGE = re.compile(r'OWHUDPAGE health=(?P<health>\S*) shield=(?P<shield>\S*) ammo=(?P<ammo>\S*) '
+                  r'grenades=(?P<grenades>\S*) weaponOut=(?P<weaponOut>\S*) weaponType=(?P<weaponType>\S*) '
+                  r'healthText=(?P<healthText>.*?) shieldText=(?P<shieldText>.*?) ammoText=(?P<ammoText>.*?) '
+                  r'grenadeText=(?P<grenadeText>.*?) level=(?P<level>\S*) '
+                  r'fHealth=(?P<fHealth>\S*) fShield=(?P<fShield>\S*) fBullets=(?P<fBullets>\S*) '
+                  r'fGrenades=(?P<fGrenades>\S*) tHealth=(?P<tHealth>.*?) tShield=(?P<tShield>.*?) '
+                  r'tAmmo=(?P<tAmmo>.*?) tGrenade=(?P<tGrenade>.*?) tLevel=(?P<tLevel>.*?) '
+                  r'outer=(?P<outer>\S*) spread=(?P<spread>\S*) icon=(?P<icon>\S*)\s*$')
+PAGE_SUFFIX = re.compile(r'\s*\(https?://[^)\s]*\)\s*$')      # the console's " (http://...:<line>)" tail
+SHAPES = {'pistol': ('3', '9', '3'), 'shotgun': ('7', '17', '5')}   # weaponType: outer, spread, icon frames
 FORMATS = {
+    'health': re.compile(FRACTION),
+    'shield': re.compile(rf'null|{FRACTION}'),
+    'ammo': re.compile(FRACTION),
+    'grenades': re.compile(rf'null|{FRACTION}'),
+    'weaponOut': re.compile(r'[01]'),
+    'weaponType': re.compile(r'[A-Za-z0-9_]+|-'),
     'healthText': re.compile(r'[0-9]+'),
-    'shield': re.compile(r'null|[0-9]+\.[0-9]+'),
-    'level': re.compile(r'[0-9]{2}'),
+    'shieldText': re.compile(r'[0-9]*'),
     'ammoText': re.compile(rf'(?:[0-9]+(?:{NBSP}/{NBSP}[0-9]+)?)?'),
     'grenadeText': re.compile(rf'(?:[0-9]+{NBSP}/{NBSP}[0-9]+)?'),
+    'level': re.compile(r'[0-9]{2}|[1-9][0-9]{2,}'),
 }
 AMMO_PAIR = re.compile(rf'([0-9]+){NBSP}/{NBSP}([0-9]+)')
 FIRE = re.compile(r'OWHUDSHOTS fire 1\b')
@@ -60,6 +89,14 @@ def magazine(ammo):
     return None, None
 
 
+def frame(value):
+    """The frame a fraction shows, as the page computes it: 1 + round((1 - clamp(f, 0, 1)) * 99), round half up (JS Math.round)."""
+    if not re.fullmatch(FRACTION, value):
+        return None
+    clamped = min(max(float(value), 0.0), 1.0)
+    return 1 + math.floor((1 - clamped) * 99 + 0.5)
+
+
 def read_log(text):
     """The state lines (format problems included) and the fire and shield lines, in the order the log has them."""
     lines = text.splitlines()
@@ -69,14 +106,13 @@ def read_log(text):
             found = STATE.search(line)
             if not found:
                 bad.append(f'line {number}: not the host\'s state format')
-                events.append(('state', number, None, (None, None)))
+                events.append(('state', number, None, (None, None), None))
                 continue
-            health_text, shield, ammo, grenade, level = found[2], found[3], found[4], found[5], found[6]
-            fields = {'healthText': health_text, 'shield': shield, 'ammoText': ammo, 'grenadeText': grenade, 'level': level}
-            problems = [name for name, value in fields.items() if not FORMATS[name].fullmatch(value)]
+            fields = found.groupdict()
+            problems = [name for name in STATE_FIELDS if not FORMATS[name].fullmatch(fields[name])]
             if problems:
                 bad.append(f'line {number}: {", ".join(problems)}')
-            events.append(('state', number, shield, magazine(ammo)))
+            events.append(('state', number, fields['shield'], magazine(fields['ammoText']), fields))
         elif FIRE.search(line):
             events.append(('fire', number))
         elif SHIELD.search(line):
@@ -96,6 +132,87 @@ def fire_steps(events):
     return steps
 
 
+def page_problems(page):
+    """What one OWHUDPAGE read-back shows wrongly for its own echoed state (an empty list when it is right)."""
+    problems = []
+
+    def want(name, got, expected):
+        if got != str(expected):
+            problems.append(f'{name} {got} (want {expected})')
+
+    def above_hundred(name, got):
+        if not (got.isdigit() and int(got) > 100):
+            problems.append(f'{name} {got} (want over 100)')
+
+    want('fHealth', page['fHealth'], frame(page['health']))
+    if page['shield'] == 'null':
+        above_hundred('fShield', page['fShield'])
+    else:
+        want('fShield', page['fShield'], frame(page['shield']))
+    if page['grenades'] == 'null':
+        above_hundred('fGrenades', page['fGrenades'])
+    else:
+        want('fGrenades', page['fGrenades'], frame(page['grenades']))
+    if page['weaponOut'] == '1':
+        want('fBullets', page['fBullets'], frame(page['ammo']))
+    else:
+        above_hundred('fBullets', page['fBullets'])
+    for shown, echoed in (('tHealth', 'healthText'), ('tShield', 'shieldText'), ('tAmmo', 'ammoText'),
+                          ('tGrenade', 'grenadeText'), ('tLevel', 'level')):
+        if page[shown] != page[echoed]:
+            problems.append(f'{shown} "{page[shown]}" != {echoed} "{page[echoed]}"')
+    if page['weaponType'] in SHAPES:
+        outer, spread, icon = SHAPES[page['weaponType']]
+        want('outer', page['outer'], outer)
+        want('spread', page['spread'], spread)
+        want('icon', page['icon'], icon)
+    return problems
+
+
+def check_pages(lines, states):
+    """The OWHUDPAGE read-backs against the host's states; states is a list of (line, fields dict or None)."""
+    pages = []
+    for number, line in enumerate(lines, 1):
+        if 'OWHUDPAGE' in line:
+            body = PAGE_SUFFIX.sub('', line[line.index('OWHUDPAGE'):])
+            pages.append((number, PAGE.match(body)))
+    results = [('page_lines', len(pages) >= PAGE_MIN, f'{len(pages)} OWHUDPAGE lines, need at least {PAGE_MIN}')]
+    if not pages:
+        for name in ('page_state_from_host', 'page_frames_match_state', 'page_follows_fire'):
+            results.append((name, False, 'no OWHUDPAGE lines'))
+        return results
+    parsed = [(number, found) for number, found in pages if found]
+    malformed = [number for number, found in pages if not found]
+    hosts = {tuple(fields[name] for name in STATE_FIELDS) for _, fields in states if fields}
+    unmatched = [number for number, found in parsed
+                 if tuple(found[name] for name in STATE_FIELDS) not in hosts]
+    if malformed:
+        echo_detail = f'lines {malformed[:3]} not the page format'
+    elif unmatched:
+        echo_detail = f'lines {unmatched[:3]} echo no OWHUDSTATE line'
+    else:
+        echo_detail = f'{len(parsed)} page echoes match a host state'
+    results.append(('page_state_from_host', not malformed and not unmatched, echo_detail))
+    wrong = [(number, problems) for number, found in parsed for problems in [page_problems(found)] if problems]
+    frame_detail = (f'{len(wrong)} of {len(parsed)} pages off, first ' + '; '.join(
+        f'line {number}: {", ".join(problems)}' for number, problems in wrong[:3])) if wrong else \
+        f'{len(parsed)} pages show the frames and texts of their state'
+    results.append(('page_frames_match_state', bool(parsed) and not malformed and not wrong, frame_detail))
+    last_page = pages[-1][1]
+    last_state = states[-1][1] if states else None
+    if last_page is None:
+        follow = (False, f'last OWHUDPAGE line (line {pages[-1][0]}) is not the page format')
+    elif not states:
+        follow = (False, 'no OWHUDSTATE line to compare')
+    elif last_state is None:
+        follow = (False, f'last OWHUDSTATE line (line {states[-1][0]}) is not the host format')
+    else:
+        follow = (last_page['ammoText'] == last_state['ammoText'],
+                  f'last page ammoText "{last_page["ammoText"]}", last state "{last_state["ammoText"]}"')
+    results.append(('page_follows_fire', follow[0], follow[1]))
+    return results
+
+
 def check_log(text, expect_shield):
     lines, events, bad = read_log(text)
     states = [e for e in events if e[0] == 'state']
@@ -111,6 +228,7 @@ def check_log(text, expect_shield):
         ('state_format', bool(states) and not bad,
          f'{len(bad)} of {len(states)} off-format, first {bad[:2]}' if bad else f'{len(states)} lines in the host format'),
     ]
+    results += check_pages(lines, [(e[1], e[4]) for e in states])
     if expect_shield:
         shields = [e for e in events if e[0] == 'shield']
         drawn = [e for e in events if e[0] == 'state' and e[2] is not None and e[2] != 'null'

@@ -48,6 +48,7 @@
   let warp = null, p1Origin = null, clipNames = [], warpReadAt = 0, warpKey = '';   // hud_warp.js, when it can read Ruffle's canvas
   const shown = {};   // every field applied so far: the warp re-reads its regions when this changes
   let skill = {}, lastSkillPage = '';   // the action-skill fields last applied (action_skill.js plans from the change)
+  let lastHudPage = '';   // the last OWHUDPAGE line (hud_fields.js pageLine)
   const P1 = '_level1.p1';
   const call = (target, op, a, b) => player.ow(target, op, a, b);
   const setText = (field, text) => call(...window.owHudFields.textCall(field, text));
@@ -106,6 +107,9 @@
     // bench), so only when the applied state changes (the host resends it every second) or every 5 s for the movie's
     // own animations.
     Object.assign(shown, s);
+    // Acknowledge what the movie now shows for the host's fields (OWHUDPAGE; tools/check_hud_shots.py), once per change.
+    const hudLine = window.owHudFields.pageLine(shown, (t, k) => call(t, 'get', k));
+    if (hudLine !== lastHudPage) { console.log(hudLine); lastHudPage = hudLine; }
     const key = JSON.stringify(shown), now = performance.now();
     if (warp && warp.path === 'warp' && (key !== warpKey && now - warpReadAt > 250 || now - warpReadAt > 5000)) {
       warpKey = key; warpReadAt = now;
@@ -142,7 +146,10 @@
     call(P1 + '.bossModule', 'set', '_visible', false);
     ready = true;
     readyAt = performance.now();
-    console.log('OpenWillow HUD movie ready');
+    // The ready line names the checkout serving these pages (serve.py's X-OpenWillow-Pages header): the host shows the
+    // movie only when that is its own checkout, since another worktree's server can answer on the same port.
+    fetch('hud_fields.js', {cache: 'no-store'}).then(r => r.headers.get('X-OpenWillow-Pages') || 'unknown', () => 'unknown')
+      .then(pages => console.log('OpenWillow HUD movie ready pages=' + pages));
     window.owHud({});
   }, 200);
 </script></body></html>

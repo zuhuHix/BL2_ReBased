@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-# HUD parity ground truth (Maya level 8 in Sanctuary, 1280x720 windowed): reads the player's HUD movie, equipped weapon,
+# HUD parity ground truth (a Maya save in Sanctuary, 1280x720 windowed): reads the player's HUD movie, equipped weapon,
 # ammo and vitals in the running game (scripts/hud_parity.py). Cycles the quick-select keys 1-4 and records each weapon
 # (weapon_<k>.png), returns to the starting weapon, samples the crosshair while moving and while firing, fires three
 # shots at nothing and reads the same values again (after_fire.png). Takes the screen and keyboard.
@@ -9,7 +9,8 @@
 param(
     [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
     [string]$Lane = 'hudparity',
-    [string]$Character = 'Save0008.sav'   # quick_startup's -Character slot: the level-8 Maya, loaded into Sanctuary
+    # quick_startup's -Character slot: the user's own Maya save file name, loaded into Sanctuary.
+    [Parameter(Mandatory=$true)][string]$Character
 )
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }

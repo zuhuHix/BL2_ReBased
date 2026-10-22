@@ -13,32 +13,43 @@ captures stay under ignored `local/`.
   The movie counts only once the page logs `OpenWillow HUD movie ready`; until then, or after a load error (the overlay
   is then removed), the canvas fallback draws. `-owcanvashud` forces the fallback. The log line
   `OpenWillow HUD path: movie|canvas (<reason>)` says which path is in use.
+* **Only this checkout's pages.** Another worktree's `serve.py` can answer on the same port with its own, possibly
+  older, pages. The page's ready line names the pages directory its server serves (`serve.py`'s `X-OpenWillow-Pages`
+  header, `OpenWillow HUD movie ready pages=<dir>`); the host shows the movie only when that is its own
+  `tools/hud_overlay` and otherwise falls back to the canvas. Checked in UE against another checkout's older server
+  (its ready line names no directory): `OpenWillow HUD path: canvas (the page is served from '', not this checkout's
+  tools/hud_overlay)`.
+* **Test and capture runs keep the canvas HUD.** `tools/test_quest.ps1`, `tools/test_mover.ps1`,
+  `tools/run_phaselock_shots.ps1` and `tools/run_ue_character.ps1` pass `-owcanvashud`, so their outcome cannot depend
+  on whether an overlay server happens to be listening (the Maya HUD exists only with `-owwalk -owmaya`; the ambient,
+  UE-viewer and probe runs have no Maya HUD). The interactive `tools/run_quest.ps1` keeps the default.
 * **The temporary skill indicator is gone.** The canvas fallback no longer draws the violet ring, orb and countdown it
   used for Phaselock; it keeps a crosshair, the shield and health bars, the XP bar with the level and the weapon panel,
   with no skill indicator at all. Maya's action-skill indicator is the movie's own (`ACTION_SKILL_HUD.md`).
 * **True perspective for the turned clusters** (`tools/hud_overlay/hud_warp.js`, below), replacing the 2D stand-in
   for every turned clip except the minimap (`minimapEcho` keeps the stand-in; another lane owns it).
-* **Real values** pushed by `PushFlashHudState` (below) and the crosshair, spread and ammo icon per weapon type
-  (`tools/hud_overlay/hud_fields.js`).
+* **Real values** pushed by `PushFlashHudState` (below) and the crosshair style, its idle (at-rest) spread and the ammo
+  icon per weapon type (`tools/hud_overlay/hud_fields.js`). Not done: the crosshair does not widen while firing (the host
+  has no live spread or bloom state to drive it from; the game's widening rule was not read).
 
 ## Real-game reads (2026-10-22)
 
-`tools/real_game/hud_parity_capture.ps1` with `tools/real_game/scripts/hud_parity.py`: Maya level 8 (Save0008),
-Sanctuary, 1280x720 windowed, saving blocked, save folder and `WillowEngine.ini` compared afterwards (two changed files
-restored from the backup). One save, one PC; the save held a Torgue pistol and a Jakobs shotgun, so only those two
-weapon types were read.
+`tools/real_game/hud_parity_capture.ps1` with `tools/real_game/scripts/hud_parity.py`: Maya in Sanctuary, 1280x720
+windowed, saving blocked, save folder and `WillowEngine.ini` compared afterwards (changed files restored from the
+backup). One character, one PC; only a pistol and a shotgun were available, so only those two weapon types were read.
+What a save holds (its items, counts and pool values) is not recorded here; the rules below are what the HUD showed.
 
-| Read | Pistol (`WeaponType_Torgue_Pistol`) | Shotgun (`WT_Jakobs_Shotgun`) |
+| Read | Pistol | Shotgun |
 |---|---|---|
 | `p1.crosshairs.outer` frame (crosshair style) | 3 | 7 |
-| `p1.crosshairs.outer.weapon` frame (spread) at rest | 9 | 17 (18-29 while firing, 18 after) |
+| `p1.crosshairs.outer.weapon` frame (spread) at rest | 9 | 17 (it widened while firing and settled one frame wider) |
 | `p1.bullets.bullet_icon` frame (ammo icon) | 3 | 5 |
-| `p1.bullets.bullet_c.text` | `10 / 168` | `2 / 78`, after three shots `1 / 76` |
 
-* The spaces around `/` in the ammo and grenade texts are no-break spaces (U+00A0), not ASCII spaces: `3 / 3` for
-  grenades. Health and shield texts are the pools rounded to the nearest integer (429.07 shows `429`, 180.59 `181`). The
-  level text is zero-padded to two digits (`08`); the class-mod text was empty.
-* Ammo text is magazine / reserve: the shotgun's pool of 80 is 2 in the magazine and 78 in reserve.
+* The ammo text is `<magazine> / <reserve>` and the grenade text `<count> / <max>`; the spaces around `/` are no-break
+  spaces (U+00A0), not ASCII spaces. Example with invented numbers: `12 / 340`.
+* Health and shield texts are the pools rounded to the nearest integer (an invented pool of 250.4 would show `250`, 250.6
+  `251`). The level text is zero-padded to two digits (`07`); the class-mod text was empty.
+* Firing three shots lowered the magazine by three and left the reserve unchanged in the text.
 
 ## Perspective warp (`tools/hud_overlay/hud_warp.js`)
 
@@ -110,9 +121,13 @@ keeps the field's own format (seen in the bench).
   shots, quit; `-Shield` equips the first gear-manifest shield the level allows, `-Level` sets Maya's level, `-Affine`
   selects the stand-in for A/B captures). Checks: the movie path, the warp path, the state line format (level padding,
   ` ` separators), the shield shown, each shot one round lower with the reserve unchanged, the run finished, both
-  captures valid 1280x720 PNGs, not blank, with the health bar's red and the ammo bar's blue in fixed boxes.
-* In-engine, this PC: `tools/run_hud_shots.ps1 -Level 36 -Shield` 11/11 (magazine 7, 6, 5, 4; reserve 200; shield
-  The Bee); `tools/test_action_skill_hud.ps1` 19/19 (three runs during the lane: one 18/19, see below, then 19/19 twice).
+  captures valid 1280x720 PNGs, not blank, with the health bar's red and the ammo bar's blue in fixed boxes. Movie
+  read-backs: after each change the page logs `OWHUDPAGE`, the state it applied (written as the host's `OWHUDSTATE`)
+  and what the movie shows for it (the health, shield, ammo and grenade bar frames, the five texts, the crosshair style,
+  spread and ammo-icon frames; `hud_fields.js`, `pageLine`); the checker requires every echoed state to be one the host
+  logged, every frame and text to equal what that state maps to, and the last page ammo text to be the host's last.
+* In-engine, this PC: `tools/run_hud_shots.ps1 -Level 36 -Shield` 15/15 with the page read-backs (11/11 before them) (magazine 7, 6, 5, 4; reserve 200; shield
+  the first equippable gear-manifest shield); `tools/test_action_skill_hud.ps1` 19/19 (three runs during the lane: one 18/19, see below, then 19/19 twice).
   The 18/19 run pushed the state before the scripted cast in the same frame, so the full pool appeared one frame late
   (0.152 s against 0.15 s); the cast now runs first.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):

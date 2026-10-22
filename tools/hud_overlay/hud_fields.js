@@ -2,7 +2,7 @@
 // tests/hud_fields_test.js.
 //
 // Text: Ruffle hands non-ASCII strings from JavaScript to the movie as their UTF-8 bytes (the no-break spaces the
-// game puts in "2 / 78" showed as an A-circumflex and a space), so such text goes in through htmlText as numeric
+// game puts around "/" showed as an A-circumflex and a space), so such text goes in through htmlText as numeric
 // entities, which keeps the field's own format (seen in the bench).
 // Weapon frames: what the game shows per held weapon type, read live on 2026-10-22 (docs/verification/HUD_PARITY.md):
 // the crosshair style (p1.crosshairs.outer), its idle spread (p1.crosshairs.outer.weapon; the game widens it while
@@ -30,7 +30,27 @@
       [P1 + '.bullets.bullet_icon', 'gotoAndStop', f.ammoIcon]];
   }
 
-  const api = {WEAPON_FRAMES, textCall, weaponCalls};
+  // The OWHUDPAGE line: the state the page has applied, written as the host's OWHUDSTATE line writes it, and what the
+  // movie shows for it, read back from its clips (f* bar frames, t* texts, the crosshair and ammo-icon frames).
+  // tools/check_hud_shots.py pairs it with the host's lines. `get(target, prop)` is the harness getter; characters
+  // outside printable ASCII are written as \uXXXX, as the host writes the no-break spaces.
+  function pageLine(shown, get) {
+    const fix = v => (v === null || v === undefined ? 'null' : Number(v).toFixed(3));
+    const esc = t => String(t ?? '').replace(/\r/g, '')
+      .replace(/[^\x21-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+    const frame = clip => get(`${P1}.${clip}`, '_currentframe');
+    const text = field => esc(get(`${P1}.${field}`, 'text'));
+    return `OWHUDPAGE health=${fix(shown.health)} shield=${fix(shown.shield)} ammo=${fix(shown.ammo)}`
+      + ` grenades=${fix(shown.grenades)} weaponOut=${shown.weaponOut ? 1 : 0} weaponType=${shown.weaponType || '-'}`
+      + ` healthText=${esc(shown.healthText)} shieldText=${esc(shown.shieldText)} ammoText=${esc(shown.ammoText)}`
+      + ` grenadeText=${esc(shown.grenadeText)} level=${esc(shown.levelText)}`
+      + ` fHealth=${frame('health')} fShield=${frame('shield')} fBullets=${frame('bullets')} fGrenades=${frame('grenades')}`
+      + ` tHealth=${text('health.health_disp')} tShield=${text('shield.shield_disp')} tAmmo=${text('bullets.bullet_c')}`
+      + ` tGrenade=${text('grenades.grenadesDisp')} tLevel=${text('levelClassMod.level')}`
+      + ` outer=${frame('crosshairs.outer')} spread=${frame('crosshairs.outer.weapon')} icon=${frame('bullets.bullet_icon')}`;
+  }
+
+  const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
