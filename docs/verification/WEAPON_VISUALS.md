@@ -282,3 +282,57 @@ first-person frames is 126/116 (Infinity), 209/211 (Jakobs pistol), 230/228 (Mal
 near-white (cell median `#b7b9bd`), and the real first-person frames are lit blue where the host's Sanctuary street is neutral, so a pale
 metal reads whiter next to a grey street. No exposure error found; a small highlight excess on the Maliwan pistol (6 percent of pixels at
 250 or more, none in the real frame) is left alone. Light constants stay `UNVERIFIED`.
+
+## 11. Lane E round 1 host bridge (2026-10-22)
+
+The ignored per-recipe `weapon_view.json` may overlay fields read from the local live-measurement note; those measurements take precedence over
+cooked weapon-type fields when present. The note, exports and generated manifests remain under ignored `local/`.
+
+- Right mouse is the host hold-to-aim input; F remains the Phaselock input. Aim uses the live item zoom FOV where measured and the cooked type
+  value otherwise. Converting the zoom value to the host camera's aspect convention is `UNVERIFIED`. The selected eye socket centres the
+  host weapon during aim; the stock view-model motion formula is `UNVERIFIED`.
+- Reload uses the last unconditioned type animation until the type expression conditions are evaluated. It plays on the imported weapon
+  skeleton; a separate first-person hand reload gesture is not imported in this round. Scaling clip length to the item's full `ReloadTime` is
+  `UNVERIFIED`; the host has not captured the stock animation choice or playback rate.
+- The two-layer host muzzle flash uses the type duration when available. The host interpretation of that duration and the 3.5 cm fallback flash
+  radius are `UNVERIFIED`. Shell casing actors are enabled only when the type names a casing template; their right/up impulse is `UNVERIFIED`.
+  Tracers are enabled only when the type names a tracer template; the fallback tracer size and lifetime (0.8 cm and 0.09 s) are `UNVERIFIED`.
+- Recoil reads each type's directional kick channels and ADS scale. Mapping the channel average to the old additive recoil clip's 0.45 baseline
+  is `UNVERIFIED`; the figure-eight spread proxy remains unchanged.
+
+## 12. Lane E round 2 implementation and host captures (2026-10-22)
+
+This pass reused the existing local UModel MD5 exports; no new game package or capture was added to the repository. The host owns recipe
+staging, reload-clip selection, socket resolution, the procedural scope, and repeatable captures. The 16 host frames are under ignored
+`local/laneE/host_r2/`; `python local/laneE/make_pairs.py r2` produced 14 pairs because the real-game reference set has no mission-pistol ADS
+or reload frames.
+
+- **Capture identity and ADS state:** the mission-lent recipe was absent from the regular demo inventory. `tools/weapon_capture_items.py`
+  creates a local-only copy that admits it as a capture fixture, normalizes the SMG type key for the existing ammo resolver, and leaves source
+  recipes unchanged. `RunGunShots` verifies the equipped ID before capturing, releases aim and waits for the blend before hip-fire, and samples
+  the muzzle frame about 0.12 s after the final shot. The capture log records all four named IDs and weapon names; the HUD labels in the host
+  images match those IDs.
+- **Flash and casings:** the round orb was replaced with four camera-facing tapered rays and a yellow core, capped at 0.16 s; muzzle and casing
+  meshes use UE5's first-person primitive path. Casings remain small brass cylinders launched up and right. The selected cooked muzzle/ejection
+  sockets and live `MuzzleFlashDuration` supply identity and timing; shape, scale, color, socket-parent fallback and casing impulse are
+  `UNVERIFIED` host choices. The AR and SMG frames show a compact plume at the forward muzzle area; casing silhouettes remain only a few pixels.
+- **SMG scope:** the selected Tediore sight has a live `FirstPersonParticle` field and `ZoomedEndFOV` 25.2809. A procedural dark side mask and
+  yellow ring/ticks now appear only while aiming with that sight. The mask extent, reticle geometry, and interpretation of the particle field
+  are `UNVERIFIED`; the host still shows more of the gun behind the ring than the real scope frame.
+- **ADS framing:** the host now passes the measured `ZoomedEndFOV` directly as UE5's horizontal camera FOV (50 pistol, 45 rifle, 25.2809 SMG),
+  replacing the previous 4:3 conversion. Base foreground FOV and arm placement continue to use the live `FirstPersonMeshFOV` and
+  `PlayerViewOffset`. Selected cooked eye-socket transforms drive aim translation; if the imported mesh omits that socket's parent bone, the host
+  composes it against `Root`. The horizontal-FOV reading and parent fallback are `UNVERIFIED`. The round-2 AR sight still sits low and small versus
+  the real ADS frame, and the pistol remains left of its reference; these offsets need a better verified view-model rule.
+- **Reload:** clip choice now compares the recipe's base card `ReloadTime` with the live `WeaponMaxFastReloadAnimTime` (1.5 pistol, 1.1667 Maliwan,
+  2.0 AR, 2.5 SMG). The host selected the normal Jakobs/Maliwan clips for the first three items and `Reload_Hyperion_Fast` for the SMG. The
+  sequences are time-scaled to the recipe's base card time and were captured at normalized fractions 0.501-0.502, independent of the live skill
+  that shortened the original game's held reloads. Clip-condition interpretation and the length/card-time rule are `UNVERIFIED`. The weapon
+  clip plays on the gun mesh only; the host lacks the matching first-person arm reload, so the pistol and long-gun midpoint poses still differ.
+- **Arms and materials:** no arm mesh/material change was made. The imported Siren hands still show a narrower forearm and black glove than the
+  real frames. Weapon material values were left alone; several host surfaces still read pale under the Sanctuary lighting.
+
+Host evidence: `local/laneE/host_r2/` (16 PNGs), `local/laneE/pairs_r2/` (14 JPGs), and `local/laneE/host_r2/logs/capture-final-sockets.log`.
+The capture log records four verified IDs, four reload starts, four normalized midpoint captures, no stale-item warning, and no ADS-release
+warning. This is host runtime and visual validation against the existing real-game reference frames; no fresh original-game runtime validation
+was performed in this pass.
