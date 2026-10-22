@@ -58,7 +58,9 @@ TARGETS = {
                      # Location. Live (2026-10-21, local/realgame/phaselock/target_anim run2): Mesh.Translation.Z went from
                      # -102.1 at rest to -221.5 through the hold (-119.5); the host's bone-box centring moved it -60.8. The
                      # host therefore centres the bones' box this much below the Location (a fit for this pawn, UNVERIFIED).
-                     'centre_bias': 58.7},
+                     'centre_bias': 58.7,
+                     # Round 19 host fit (UNVERIFIED): the matched 3.00 s frame's silhouette was about 10% larger than the game.
+                     'host_visual_scale': 0.90},
     },
 }
 
@@ -166,7 +168,8 @@ def host_target(name, target):
     observed = target['observed']
     # UE3 places the mesh at Location + Translation (the cylinder centre is the pawn's Location); the host target's root
     # is on the floor, so the mesh goes at CollisionHeight + Translation.Z above it.
-    scale = float(props.get('scale', 1.0))
+    # Keep the archetype component scale as the starting point; apply the capture fit separately so it stays explicit.
+    scale = float(props.get('scale', 1.0)) * float(observed.get('host_visual_scale', 1.0))
     # Translation is in the pawn's frame (not scaled by the mesh's own Scale).
     z = observed['collision_height'] + float(props.get('translation', {}).get('Z', 0.0))
     anim = lambda role: f'{dest}/Animations/Anim_{name}_{role}.Anim_{name}_{role}'  # noqa: E731
