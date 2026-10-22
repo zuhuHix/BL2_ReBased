@@ -43,6 +43,32 @@ namespace
 {
 const TCHAR* DefaultFlashHudUrl = TEXT("http://127.0.0.1:8767/");
 
+// Url with its query's owid parameter set to Id: inserted before any #fragment, replacing an owid already there.
+FString WithPageId(const FString& Url, const FString& Id)
+{
+    FString Rest = Url, Fragment, Base, Query;
+    int32 Hash = INDEX_NONE;
+    if (Rest.FindChar(TEXT('#'), Hash)) { Fragment = Rest.Mid(Hash); Rest.LeftInline(Hash); }
+    if (!Rest.Split(TEXT("?"), &Base, &Query)) Base = Rest;
+    TArray<FString> Params;
+    Query.ParseIntoArray(Params, TEXT("&"));
+    Params.RemoveAll([](const FString& Param) { return Param.StartsWith(TEXT("owid=")); });
+    Params.Add(TEXT("owid=") + Id);
+    return Base + TEXT("?") + FString::Join(Params, TEXT("&")) + Fragment;
+}
+
+// The id the page echoes in its ready line, exactly "OpenWillow HUD movie ready id=<id> pages=<dir>" (hud_fields.js
+// readyLine); empty for any other form.
+FString ReadyLineId(const FString& Message)
+{
+    static const FString Prefix = TEXT("OpenWillow HUD movie ready id=");
+    FString Id, Rest;
+    if (!Message.StartsWith(Prefix, ESearchCase::CaseSensitive)
+        || !Message.Mid(Prefix.Len()).Split(TEXT(" "), &Id, &Rest, ESearchCase::CaseSensitive)
+        || !Rest.StartsWith(TEXT("pages="), ESearchCase::CaseSensitive)) return FString();
+    return Id;
+}
+
 const FLinearColor Backing(0.02f, 0.03f, 0.04f, 0.65f);
 const FLinearColor Frame(0.85f, 0.85f, 0.8f, 0.9f);
 const FLinearColor Legendary(1.f, 0.55f, 0.08f);
@@ -159,7 +185,7 @@ void AOpenWillowMayaHUD::BeginPlay()
     // the movie counts only when the page answering is one that speaks this protocol, so another checkout's server
     // with older pages on the same port gives the canvas. No path is compared, so junctions and aliases do not matter.
     const FString PageId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
-    Url += (Url.Contains(TEXT("?")) ? TEXT("&owid=") : TEXT("?owid=")) + PageId;
+    Url = WithPageId(Url, PageId);
     // SWebBrowser only creates a window once the WebBrowser module is loaded;
     // the WebBrowserWidget plugin normally does that, and we do not use it.
     if (!IWebBrowserModule::Get().IsWebModuleAvailable())
@@ -198,7 +224,7 @@ void AOpenWillowMayaHUD::BeginPlay()
                 AOpenWillowMayaHUD* Hud = WeakThis.Get();
                 if (Hud && !Hud->bFlashHudReady && !Hud->bFlashHudFailed && Message.StartsWith(TEXT("OpenWillow HUD movie ready")))
                 {
-                    if (Message.Contains(TEXT(" id=") + PageId + TEXT(" ")))
+                    if (ReadyLineId(Message).Equals(PageId, ESearchCase::CaseSensitive))
                     {
                         Hud->bFlashHudReady = true;
                         UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: movie (page reported ready)"));
@@ -210,7 +236,9 @@ void AOpenWillowMayaHUD::BeginPlay()
                     }
                 }
             });
-    FlashHudRoot = SNew(SBox).Visibility(EVisibility::HitTestInvisible)[FlashHud.ToSharedRef()];
+    // Hidden (the page still loads and runs, as the preloaded menu pages do) until the page is accepted; DrawHUD shows
+    // it where it stops drawing the canvas fallback, so the two HUDs never show together.
+    FlashHudRoot = SNew(SBox).Visibility(EVisibility::Hidden)[FlashHud.ToSharedRef()];
     GEngine->GameViewport->AddViewportWidgetContent(FlashHudRoot.ToSharedRef(), 5);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD overlay: %s"), *Url);
 }
@@ -519,7 +547,7 @@ void AOpenWillowMayaHUD::CloseSkills()
     PendingInventoryActions.Reset();
     PendingInventoryVmMoves.Reset();
     bInventoryOpen = false;
-    if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
+    if (FlashHudRoot) FlashHudRoot->SetVisibility(bFlashHudReady ? EVisibility::HitTestInvisible : EVisibility::Hidden);
     if (PlayerOwner)
     {
         PlayerOwner->SetInputMode(FInputModeGameOnly());
@@ -1205,6 +1233,8 @@ void AOpenWillowMayaHUD::DrawHUD()
         if (bFlashHudReady)
         {
             // The movie draws the crosshair, bars and weapon panel; damage numbers are not driven in it yet.
+            if (FlashHudRoot && FlashHudRoot->GetVisibility() != EVisibility::HitTestInvisible)
+                FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
             DrawDamagePopups(Large);
             return;
         }

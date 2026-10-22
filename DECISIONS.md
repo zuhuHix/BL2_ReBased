@@ -4820,7 +4820,7 @@ AI-assisted (Claude Opus 5.5 orchestrating, Opus and Haiku sub-agents; critic GP
   widening while firing: not done) and ammo icon per weapon type from a live read (pistol 3/9/3, shotgun 7/17/5); other types UNVERIFIED and left alone.
   Ruffle hands non-ASCII ExternalInterface strings to AVM1 as UTF-8 bytes, so such text is set through `htmlText`
   entities (bench-verified).
-- **Checks.** `tests/hud_warp_test.js`, `tests/hud_fields_test.js`, `tests/check_hud_shots_test.py` (35 synthetic cases); in-engine
+- **Checks.** `tests/hud_warp_test.js`, `tests/hud_fields_test.js`, `tests/check_hud_shots_test.py` (36 synthetic cases); in-engine
   `tools/run_hud_shots.ps1` 17/17, `tools/test_action_skill_hud.ps1` 19/19, `tools/test_inventory_actions.ps1` 49/49
   (bounded recipe set). Critic 8.0, then 7.7 measured (crosshair spread per gun and 1-4 px side placement remain); blind
   A/B warp 8 vs stand-in 6, warp preferred in 6 of 6.

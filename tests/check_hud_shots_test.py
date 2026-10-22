@@ -191,8 +191,20 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(found['page_identity'][0])
         self.assertIn('owid', found['page_identity'][1])
 
+    def test_spoofed_ready_lines_do_not_count(self):
+        # The genuine ready line replaced by look-alikes: another console's envelope, the text inside another HUD
+        # console message, and the right envelope with trailing junk after the id. None may pass as the page's line.
+        genuine = READY
+        for spoof in ('LogTemp: Display: OpenWillow Skills console: ' + READY[len(CONSOLE):],
+                      CONSOLE + 'echo: ' + READY[len(CONSOLE):],
+                      CONSOLE + f'OpenWillow HUD movie ready id={OWID}x pages=y (http://127.0.0.1:8795/:152)'):
+            with self.subTest(spoof=spoof[:60]):
+                found = outcome(synthetic_log().replace(genuine, spoof))
+                self.assertFalse(found['page_identity'][0])
+
     def test_ready_line_without_id_fails(self):
-        found = outcome(synthetic_log().replace(f' id={OWID}', ''))
+        # An older page's line, as logged against another checkout's server: no id and no pages.
+        found = outcome(synthetic_log().replace(f' id={OWID} pages=C:\\Test\\tools\\hud_overlay', ''))
         self.assertFalse(found['page_identity'][0])
         self.assertIn('no id=', found['page_identity'][1])
 

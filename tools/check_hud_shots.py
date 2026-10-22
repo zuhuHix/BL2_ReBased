@@ -61,7 +61,11 @@ PAGE_SUFFIX = re.compile(r'\s*\(https?://[^)\s]*\)\s*$')      # the console's " 
 # The overlay URL the host logs (its last query value is the run's owid, 32 letters or digits) and the page's ready line
 # (`id=` is the owid the page echoes, or `-` when the page has none to echo).
 OVERLAY = re.compile(r'OpenWillow Flash HUD overlay: \S*?[?&]owid=(?P<owid>[0-9A-Za-z]{32})(?![0-9A-Za-z])')
-READY = re.compile(r'OpenWillow HUD movie ready(?: id=(?P<id>\S+))?')
+# Only the page's own ready line counts: the host's HUD-console envelope, then the line exactly as the page writes it
+# (tools/hud_overlay/hud_fields.js readyLine) with the console's " (http://...)" tail; an older page writes no id.
+READY_ENVELOPE = re.compile(r'LogTemp: Display: OpenWillow Flash HUD console: OpenWillow HUD movie ready(?: |$)')
+READY = re.compile(r'LogTemp: Display: OpenWillow Flash HUD console: OpenWillow HUD movie ready'
+                   r'(?: id=(?P<id>\S+) pages=.*?)? \(https?://[^)\s]*\)\s*$')
 SHAPES = {'pistol': ('3', '9', '3'), 'shotgun': ('7', '17', '5')}   # weaponType: outer, spread, icon frames
 FORMATS = {
     'health': re.compile(FRACTION),
@@ -194,7 +198,7 @@ def describe(fields):
 def check_identity(lines):
     """page_identity: the overlay URL carries this run's owid and the page's ready line echoes exactly that id."""
     overlay = [line for line in lines if 'OpenWillow Flash HUD overlay:' in line]
-    ready = [line for line in lines if 'OpenWillow HUD movie ready' in line]
+    ready = [line for line in lines if READY_ENVELOPE.search(line)]
     if not overlay:
         return 'page_identity', False, 'no "OpenWillow Flash HUD overlay:" line'
     found = OVERLAY.search(overlay[-1])
@@ -203,7 +207,10 @@ def check_identity(lines):
     owid = found['owid']
     if not ready:
         return 'page_identity', False, 'no "OpenWillow HUD movie ready" line'
-    echoed = READY.search(ready[-1])['id']
+    form = READY.search(ready[-1])
+    if not form:
+        return 'page_identity', False, f"ready line not in the page's form: {ready[-1].strip()[-120:]}"
+    echoed = form['id']
     if echoed is None:
         return 'page_identity', False, 'ready line has no id= (older pages)'
     if echoed != owid:
