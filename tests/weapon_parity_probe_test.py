@@ -13,7 +13,7 @@ class WeaponParityRecipeMappingTests(unittest.TestCase):
             "balance": "Test.Balance",
             "manufacturer": "Test.Manufacturer",
             "weapon_type": "Test.WeaponType",
-            "game_stage": 8,
+            "game_stage": 13,
             "parts": {
                 "Body": {"part": "Test.Body"},
                 "Grip": {"part": "Test.Grip"},
@@ -28,8 +28,8 @@ class WeaponParityRecipeMappingTests(unittest.TestCase):
         }
         fields = probe.definition_fields(recipe)
         self.assertEqual(fields["BalanceDefinition"], "Test.Balance")
-        self.assertEqual(fields["ManufacturerGradeIndex"], 8)
-        self.assertEqual(fields["GameStage"], 8)
+        self.assertEqual(fields["ManufacturerGradeIndex"], 13)
+        self.assertEqual(fields["GameStage"], 13)
         self.assertEqual(fields["BodyPartDefinition"], "Test.Body")
         self.assertEqual(fields["Accessory1PartDefinition"], "Test.NoneAccessory")
         self.assertEqual(fields["MaterialPartDefinition"], "Test.Material")
@@ -45,9 +45,9 @@ class WeaponParityRecipeMappingTests(unittest.TestCase):
     def test_omits_absent_optional_slots_and_honours_explicit_grade(self):
         fields = probe.definition_fields({
             "balance": "Test.Balance", "manufacturer": "Test.Manufacturer", "weapon_type": "Test.Type",
-            "game_stage": 9, "manufacturer_grade_index": 3, "parts": {"Body": "Test.Body", "Grip": None},
+            "game_stage": 17, "manufacturer_grade_index": 3, "parts": {"Body": "Test.Body", "Grip": None},
         })
-        self.assertEqual(fields["GameStage"], 9)
+        self.assertEqual(fields["GameStage"], 17)
         self.assertEqual(fields["ManufacturerGradeIndex"], 3)
         self.assertEqual(fields["BodyPartDefinition"], "Test.Body")
         self.assertNotIn("GripPartDefinition", fields)

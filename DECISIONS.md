@@ -4732,3 +4732,7 @@ AI-assisted (Claude, with Codex sub-agents). `host/ue5/import_weapon_items.py`, 
   `Root`-parented sockets; SMG hip size; reload poses; ADS widths; metal tint; sound) in `WEAPON_VISUALS.md` section 15.
 - **Checks:** CTest 10/10; packages 9/9; Python tests 53/53; JS tests 2/2; quest suite 79/0 and resume 11/0; inventory suite 49 / 0 / 0 / 0
   (bounded item set).
+- `ReloadCompletePercent` now drives the one-time magazine transfer and keeps the missing-field `1.0` fallback for the previous full-duration
+  refill; the host check covered cancellations before and after that point.
+- Successful Phaselock lifts cancel reload before the cast action, and arms cleanup only clears an active reload clip; the host check passed with a
+  test-only slower cast rate so the clip spans the former reload end. Original-game notes confirm only successful-cast abort behavior.

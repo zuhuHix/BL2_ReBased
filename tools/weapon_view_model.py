@@ -21,6 +21,7 @@ import weapon_recipe  # noqa: E402
 SCHEMA_ADDITIONS = [
     'FirstPersonMeshFOV=FloatProperty',
     'PlayerViewOffset=StructProperty:Vector',
+    'ReloadCompletePercent=FloatProperty',
     'ZoomedEndFOV=FloatProperty',
     'ZoomTime=FloatProperty',
     'ZoomSocketPreferred=NameProperty',
@@ -213,6 +214,15 @@ def parse_live_measurements(markdown):
                 sections[current]['fast_reload_threshold'] = threshold
                 sections[current]['fast_reload_threshold_source'] = 'live measurement: WeaponMaxFastReloadAnimTime'
             continue
+        if name == 'ReloadCompletePercent':
+            try:
+                fraction = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(fraction) and 0.0 <= fraction <= 1.0:
+                sections[current]['reload_complete_percent'] = fraction
+                sections[current]['reload_complete_percent_source'] = 'live measurement: WeaponTypeDefinition'
+            continue
         if value is None:
             if name in ('TracerTemplate', 'ShellCasingPSCTemplate'):
                 field = 'tracer_template' if name == 'TracerTemplate' else 'shell_casing_template'
@@ -256,6 +266,7 @@ def apply_live_measurement(entry, measurement):
     for field in ('player_view_offset', 'first_person_fov', 'zoom_fov', 'zoom_blend_time',
                   'zoomed_recoil_animation_scale', 'muzzle_flash_duration', 'tracer_color',
                   'tracer_template', 'shell_casing_template', 'muzzle_socket', 'shell_casing_socket',
+                  'reload_complete_percent',
                   'muzzle_flash_collection', 'fast_reload_threshold'):
         if field in measurement:
             result[field] = measurement[field]
@@ -341,6 +352,16 @@ def type_view_fields(recipe_id, class_defaults, type_properties):
     zoom_fov = data.get('ZoomedEndFOV')
     zoom_time = data.get('ZoomTime')
     muzzle_duration = data.get('MuzzleFlashDuration')
+    try:
+        reload_complete_percent = float(type_properties['ReloadCompletePercent'])
+        b_has_reload_complete_percent = math.isfinite(reload_complete_percent) and 0.0 <= reload_complete_percent <= 1.0
+    except (KeyError, TypeError, ValueError):
+        reload_complete_percent = 1.0
+        b_has_reload_complete_percent = False
+    if not b_has_reload_complete_percent:
+        reload_complete_percent = 1.0
+    reload_complete_percent_source = ('cooked type' if b_has_reload_complete_percent else
+                                      'default: missing cooked type field; legacy full-duration refill')
     tracer = data.get('TracerColor')
     if isinstance(tracer, list):
         tracer = {v.get('name'): v.get('value') for v in tracer if isinstance(v, dict)}
@@ -372,6 +393,8 @@ def type_view_fields(recipe_id, class_defaults, type_properties):
         'weapon_preview_mesh': mesh,
         'reload_animations': reloads,
         'reload_animation': reload_name,
+        'reload_complete_percent': reload_complete_percent,
+        'reload_complete_percent_source': reload_complete_percent_source,
         'fast_reload_threshold': threshold,
         'fast_reload_threshold_source': ('cooked type AnimThresholdValues' if threshold is not None else 'unavailable'),
         'reload_animation_source': 'cooked type WeaponReloadAnimations; unconditioned fallback (UNVERIFIED selection)',

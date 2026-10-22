@@ -396,3 +396,8 @@ Open, most visible first:
   Maliwan accents read pinker; Maya's forearm reads narrower and paler than the real blue-white sleeve.
 - **Not covered:** sound (no host gun audio), impact effects beyond the existing stand-in, recoil feel (kick channels are read; the mapping onto
   the additive clip is a fit).
+- **Reload timing:** the source-labelled `ReloadCompletePercent` now transfers ammo once at its configured fraction; missing fields use `1.0` to
+  preserve the old full-duration refill. The host check confirmed an early successful cast leaves the magazine empty and a late cast keeps the refill.
+- **Phaselock abort:** a successful lift cancels reload before playing the cast action, and reload cleanup clears arms only while the reload clip is
+  still active. The host check kept the cast clip past the old reload deadline with the test-only `-owcastrate=0.4`; failed/blocked cast behavior
+  remains unconfirmed in the original game and does not abort reload in the host.

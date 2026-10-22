@@ -568,12 +568,25 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     if (bGunShots && bMayaActive && Controller) RunGunShots(Now);
     static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
+    static const bool bReloadPhaselockTest = FParse::Param(FCommandLine::Get(), TEXT("owreloadphaselocktest"));
     FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
+    if (bReloading && !bReloadRefilled && Now >= ReloadRefillAt)
+    {
+        bReloadRefilled = true;
+        ReloadAmmoMoved = Weapon ? Inventory->CompleteReload(*Weapon) : 0;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow reload refilled: +%d, magazine %d at %.3f (%s)"), ReloadAmmoMoved,
+            Weapon ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0, ReloadCompletePercent,
+            *ReloadCompletePercentSource);
+    }
     if (bReloading && Now >= ReloadEndsAt)
     {
         bReloading = false;
-        const int32 Moved = Weapon ? Inventory->CompleteReload(*Weapon) : 0;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow reload finished: +%d, magazine %d"), Moved,
+        if (!bReloadRefilled)
+        {
+            bReloadRefilled = true;
+            ReloadAmmoMoved = Weapon ? Inventory->CompleteReload(*Weapon) : 0;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow reload finished: +%d, magazine %d"), ReloadAmmoMoved,
             Weapon ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0);
         if (WeaponVisual && WeaponReloadAnim)
         {
@@ -581,9 +594,10 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
             WeaponVisual->SetPosition(0.f, false); // reload clips start at the weapon's idle pose
         }
         WeaponReloadAnim = nullptr;
-        if (ArmsAnim && ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
+        if (ArmsAnim && ArmsReloadAnim && ArmsAnim->Action == ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
         ArmsReloadAnim = nullptr;
     }
+    if (bReloadPhaselockTest && bMayaActive && Controller) RunReloadPhaselockTest(Now);
     if (bMayaActive && bWeaponOut && Weapon && bFireHeld && !bReloading && Now >= NextShotAt)
     {
         if (Inventory->ConsumeShot(*Weapon))
@@ -662,6 +676,10 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
         double Number = 0.0;
         if ((*Entry)->TryGetNumberField(TEXT("zoom_fov"), Number)) Model.ZoomFov = float(Number);
         if ((*Entry)->TryGetNumberField(TEXT("zoom_blend_time"), Number)) Model.ZoomBlendTime = FMath::Max(0.01f, float(Number));
+        if ((*Entry)->TryGetNumberField(TEXT("reload_complete_percent"), Number)
+            && FMath::IsFinite(float(Number)) && Number >= 0.0 && Number <= 1.0)
+            Model.ReloadCompletePercent = float(Number);
+        (*Entry)->TryGetStringField(TEXT("reload_complete_percent_source"), Model.ReloadCompletePercentSource);
         if ((*Entry)->TryGetNumberField(TEXT("muzzle_flash_duration"), Number)) Model.MuzzleFlashDuration = FMath::Max(0.01f, float(Number));
         if ((*Entry)->TryGetNumberField(TEXT("muzzle_flash_radius_cm"), Number)) Model.MuzzleFlashRadius = FMath::Max(0.1f, float(Number));
         if ((*Entry)->TryGetNumberField(TEXT("tracer_radius_cm"), Number)) Model.TracerRadius = FMath::Max(0.01f, float(Number));
@@ -720,9 +738,10 @@ void AOpenWillowWalker::ApplyViewModel(const FString& ItemId)
     if (Model)
     {
         Model->ZoomOffset = FVector::ZeroVector;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow view model %s type FOV %.2f, hip offset %s, ADS fit %s"),
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow view model %s type FOV %.2f, hip offset %s, ADS fit %s, reload fill %.3f (%s)"),
             *ItemId, Model->Fov, *Model->Offset.ToString(),
-            *Model->ZoomPositionFit.ToString());
+            *Model->ZoomPositionFit.ToString(), Model->ReloadCompletePercent,
+            *Model->ReloadCompletePercentSource);
     }
     if (Model && bAimHeld) BeginAimTransition(GetWorld()->GetTimeSeconds());
 }
@@ -1113,11 +1132,19 @@ bool AOpenWillowWalker::StartReload(float Now)
 {
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     if (bReloading || !Weapon || !Inventory->CanReload(*Weapon)) return false;
+    const float ReloadTime = FMath::Max(0.1f, Weapon->ReloadTime);
+    const FViewModel* Model = ViewModels.Find(Weapon->Id);
     bReloading = true;
-    ReloadEndsAt = Now + FMath::Max(0.1f, Weapon->ReloadTime);
+    ReloadEndsAt = Now + ReloadTime;
+    ReloadCompletePercent = Model ? FMath::Clamp(Model->ReloadCompletePercent, 0.f, 1.f) : 1.f;
+    ReloadCompletePercentSource = Model ? Model->ReloadCompletePercentSource
+        : TEXT("default: missing cooked type field; legacy full-duration refill");
+    ReloadRefillAt = Now + ReloadTime * ReloadCompletePercent;
+    ReloadAmmoMoved = 0;
+    bReloadRefilled = false;
     WeaponReloadAnim = nullptr;
     ArmsReloadAnim = nullptr;
-    if (const FViewModel* Model = ViewModels.Find(Weapon->Id); Model && !Model->ReloadAsset.IsEmpty())
+    if (Model && !Model->ReloadAsset.IsEmpty())
     {
         WeaponReloadAnim = LoadObject<UAnimSequence>(nullptr, *Model->ReloadAsset);
         ArmsReloadAnim = (!Model->ArmsAnimSet.IsEmpty() && !Model->ReloadAnimation.IsEmpty())
@@ -1147,6 +1174,8 @@ bool AOpenWillowWalker::StartReload(float Now)
         }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload started: %s, %.1f s"), *Weapon->Name, Weapon->ReloadTime);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow reload refill scheduled: %.3f (%s)"), ReloadCompletePercent,
+        *ReloadCompletePercentSource);
     return true;
 }
 void AOpenWillowWalker::CancelReload()
@@ -1158,7 +1187,7 @@ void AOpenWillowWalker::CancelReload()
         WeaponVisual->SetPosition(0.f, false);
     }
     WeaponReloadAnim = nullptr;
-    if (ArmsAnim && ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
+    if (ArmsAnim && ArmsReloadAnim && ArmsAnim->Action == ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
     ArmsReloadAnim = nullptr;
 }
 void AOpenWillowWalker::FireWeapon()
@@ -1407,6 +1436,9 @@ void AOpenWillowWalker::UsePhaselock()
             Target ? TEXT("target cannot be phaselocked") : TEXT("no preferred target"), Phaselock.ReleaseBufferTime);
         return;
     }
+    // The real game aborts a manual reload when Phaselock successfully lifts a target (OnAbortReload).
+    // A miss or blocked target returns above and leaves the reload running.
+    CancelReload();
     bPhaselockHit = true;
     PhaselockTarget = Target;
     // The cooldown manager holds the pool from OnSelectedTarget (the cast) to OnReleasedTarget.
@@ -1900,6 +1932,144 @@ void AOpenWillowWalker::RunGunShots(float Now)
         ++GunShotStep;
         break;
     }
+    default:
+        return;
+    }
+}
+void AOpenWillowWalker::RunReloadPhaselockTest(float Now)
+{
+    if (ReloadPhaselockTestStep == 99) return;
+    auto Fail = [this](const TCHAR* Reason)
+    {
+        UE_LOG(LogTemp, Error, TEXT("OWRELOADPHASELOCK result=FAIL %s"), Reason);
+        ReloadPhaselockTestStep = 99;
+        if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+    };
+    FString ItemId(TEXT("slice_assault_rifle"));
+    FParse::Value(FCommandLine::Get(), TEXT("owreloadtestitem="), ItemId);
+    auto PrepareReload = [this, &Fail, &ItemId, Now]() -> bool
+    {
+        const FOpenWillowWeaponItem* Current = Inventory->ActiveWeapon();
+        if (!Current || Current->Id != ItemId)
+        {
+            int32 Index = INDEX_NONE;
+            for (int32 I = 0; I < Inventory->Items().Num(); ++I)
+                if (Inventory->Items()[I].Id == ItemId) { Index = I; break; }
+            if (Index == INDEX_NONE || !EquipItem(Index, 0))
+            {
+                Fail(TEXT("could not equip requested recipe"));
+                return false;
+            }
+        }
+        FOpenWillowWeaponItem* Item = Inventory->ActiveWeaponMutable();
+        if (!Item || Item->Id != ItemId)
+        {
+            Fail(TEXT("requested recipe is not active"));
+            return false;
+        }
+        Item->MagazineLeft = 0;
+        EOpenWillowAmmoType AmmoType;
+        if (!UOpenWillowInventory::ResolveAmmoType(*Item, AmmoType))
+        {
+            Fail(TEXT("active recipe has no supported ammo category"));
+            return false;
+        }
+        Inventory->SetAmmoCurrent(AmmoType, Inventory->AmmoPool(AmmoType).Max);
+        AimAt(CombatTarget->AimPoint());
+        if (!StartReload(Now))
+        {
+            Fail(TEXT("reload could not start"));
+            return false;
+        }
+        ReloadPhaselockTestRefillAt = ReloadRefillAt;
+        ReloadPhaselockTestEndsAt = ReloadEndsAt;
+        return true;
+    };
+    auto ActiveItem = [this]() -> FOpenWillowWeaponItem*
+    {
+        return Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
+    };
+
+    switch (ReloadPhaselockTestStep)
+    {
+    case 0:
+        if (Now > 20.f && !CombatTarget.IsValid()) { Fail(TEXT("combat target was not spawned")); return; }
+        if (Now < 7.f || !CombatTarget.IsValid()) return;
+        if (!PrepareReload()) return;
+        ReloadPhaselockTestStep = 1;
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK scenario=after-refill started fraction=%.3f end=%.3f"),
+            ReloadCompletePercent, ReloadEndsAt);
+        return;
+    case 1:
+        if (Now < ReloadPhaselockTestRefillAt + 0.08f) return;
+        if (!bReloading || !bReloadRefilled || !ActiveItem() || ActiveItem()->MagazineLeft <= 0)
+        {
+            Fail(TEXT("after-refill scenario did not transfer ammo before cast"));
+            return;
+        }
+        AimAt(CombatTarget->AimPoint());
+        bPhaselockHit = false;
+        UsePhaselock();
+        if (!bPhaselockHit || bReloading || !ActiveItem() || ActiveItem()->MagazineLeft <= 0)
+        {
+            Fail(TEXT("after-refill Phaselock did not succeed and preserve the magazine"));
+            return;
+        }
+        ReloadPhaselockTestCastAt = Now;
+        ReloadPhaselockTestStep = 2;
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK scenario=after-refill cast=success ammo=%d reload_active=%d refill_kept=%d"),
+            ActiveItem()->MagazineLeft, bReloading, bReloadRefilled);
+        return;
+    case 2:
+        if (Now < ReloadPhaselockTestEndsAt + 0.08f) return;
+        {
+            static const float CastRate = [] { float R = 0.85f; FParse::Value(FCommandLine::Get(), TEXT("owcastrate="), R); return R; }();
+            const bool bCastActionCurrent = ArmsAnim && PhaselockAnim && ArmsAnim->Action == PhaselockAnim;
+            const bool bCastClipStillRunning = bCastActionCurrent &&
+                (Now - ReloadPhaselockTestCastAt) * CastRate < PhaselockAnim->GetPlayLength();
+            const bool bPassed = bCastClipStillRunning && !bReloading && ActiveItem() && ActiveItem()->MagazineLeft > 0;
+            FScreenshotRequest::RequestScreenshot(TEXT("OWReloadCast_after_refill_end.png"), false, false);
+            UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK scenario=after-refill past_original_end=1 cast_action=%d clip_running=%d ammo=%d result=%s"),
+                bCastActionCurrent, bCastClipStillRunning, ActiveItem() ? ActiveItem()->MagazineLeft : -1,
+                bPassed ? TEXT("PASS") : TEXT("FAIL"));
+            if (!bPassed) { Fail(TEXT("cast action did not continue past the would-be reload end")); return; }
+            ReloadPhaselockTestStep = 3;
+        }
+        return;
+    case 3:
+        if (PhaselockRemaining() > 0.f || !CombatTarget.IsValid()) return;
+        if (!PrepareReload()) return;
+        ReloadPhaselockTestStep = 4;
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK scenario=before-refill started fraction=%.3f end=%.3f"),
+            ReloadCompletePercent, ReloadEndsAt);
+        return;
+    case 4:
+        if (Now >= ReloadPhaselockTestRefillAt - 0.08f) return;
+        if (!bReloading || bReloadRefilled || !ActiveItem() || ActiveItem()->MagazineLeft != 0)
+        {
+            Fail(TEXT("before-refill scenario transferred ammo too early"));
+            return;
+        }
+        AimAt(CombatTarget->AimPoint());
+        bPhaselockHit = false;
+        UsePhaselock();
+        if (!bPhaselockHit || bReloading || bReloadRefilled || !ActiveItem() || ActiveItem()->MagazineLeft != 0)
+        {
+            Fail(TEXT("before-refill Phaselock did not abort with an empty magazine"));
+            return;
+        }
+        ReloadPhaselockTestCastAt = Now;
+        ReloadPhaselockTestStep = 5;
+        FScreenshotRequest::RequestScreenshot(TEXT("OWReloadCast_before_refill.png"), false, false);
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK scenario=before-refill cast=success ammo=%d reload_active=%d refilled=%d result=PASS"),
+            ActiveItem()->MagazineLeft, bReloading, bReloadRefilled);
+        return;
+    case 5:
+        if (Now < ReloadPhaselockTestCastAt + 1.f) return;
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK result=PASS after-refill-kept before-refill-empty cast-action-persisted"));
+        if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+        ReloadPhaselockTestStep = 6;
+        return;
     default:
         return;
     }
