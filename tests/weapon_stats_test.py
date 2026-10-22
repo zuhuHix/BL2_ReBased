@@ -271,6 +271,111 @@ class CardFieldTests(unittest.TestCase):
         self.assertEqual(stats['card']['fun_stats'], 'Overridden')
 
 
+class CardTextTests(unittest.TestCase):
+    """Invented fixtures for card text sources, ordering, localization and colors."""
+
+    def test_zoom_uses_type_fov_and_activated_sight_grade(self):
+        objects = card_world()
+        objects['Type']['ZoomedEndFOV'] = 45.0
+        objects['Type']['AttributeSlotEffects'].append({
+            'SlotName': 'WeaponZoomFOV', 'AttributeToModify': s.ZOOM_ATTRIBUTE,
+            'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0),
+            'PerGradeUpgrade': const(-0.13), 'bEnforceMinimumGrade': True,
+        })
+        objects['Sight'] = {
+            'AttributeSlotUpgrades': [{'SlotName': 'WeaponZoomFOV', 'GradeIncrease': 7, 'bActivateSlot': True}],
+            'WeaponCardAttributes': [{'Attribute': s.ZOOM_ATTRIBUTE, 'PriorityIncrease': 0.3}],
+        }
+        item = recipe()
+        item['parts']['Sight'] = {'part': 'Sight'}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['display']['weapon_zoom'], 3.4)
+        self.assertIn('3.4x Weapon Zoom', card['fun_stats'])
+        self.assertEqual(card['fun_stats_lines'], [{'text': '3.4x Weapon Zoom', 'color': '#FFFFFF'}])
+
+    def test_card_lines_keep_source_order_and_definition_colors(self):
+        objects = card_world()
+        objects['Type'].update({'CustomPresentations': ['Type.Text']})
+        objects['Type.Text'] = {'Description': 'A weapon type note.', 'bDontDisplayNumber': True}
+        objects['Sight'] = {'WeaponCardAttributes': [{'Attribute': s.ZOOM_ATTRIBUTE, 'PriorityIncrease': 0.3}]}
+        objects['Type']['ZoomedEndFOV'] = 40.0
+        objects['Type']['AttributeSlotEffects'].append({
+            'SlotName': 'WeaponZoomFOV', 'AttributeToModify': s.ZOOM_ATTRIBUTE,
+            'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0), 'PerGradeUpgrade': const(0),
+        })
+        objects['Barrel']['WeaponCardAttributes'] = [{'Attribute': s.SHOT_COST_ATTRIBUTE, 'PriorityIncrease': 0.5}]
+        objects['Barrel']['WeaponAttributeEffects'].append({
+            'AttributeToModify': s.SHOT_COST_ATTRIBUTE, 'ModifierType': 'MT_PreAdd', 'BaseModifierValue': const(1),
+        })
+        objects['FirePart'] = {'CustomDamageTypeDefinition': 'DamageType.Fire'}
+        objects['DamageType.Fire'] = {'WeaponCardPresentations': ['DamageType.Effectiveness']}
+        objects['DamageType.Effectiveness'] = {
+            'Description': 'Effective against a target type.', 'bDontDisplayNumber': True,
+            'TextColor': {'R': 255, 'G': 128, 'B': 0, 'A': 255},
+        }
+        item = recipe()
+        item.update({'title': {'part': 'Title'}})
+        item['parts'].update({'Sight': {'part': 'Sight'}, 'Elemental': {'part': 'FirePart'}})
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual([line['text'] for line in card['fun_stats_lines']], [
+            'Red, line', '2.0x Weapon Zoom', 'Consumes 2 ammo per shot.',
+            'A weapon type note.', 'Effective against a target type.',
+        ])
+        self.assertEqual(card['fun_stats_lines'][-1]['color'], '#FF8000')
+        self.assertIn('<font color="#DC4646">Red, line</font>', card['fun_stats_markup'])
+        self.assertIn('<font color="#FF8000">Effective against a target type.</font>', card['fun_stats_markup'])
+
+    def test_inline_damage_tag_uses_the_definition_color_when_line_color_is_disabled(self):
+        objects = card_world()
+        objects['Type']['DefaultDamageTypeDefinition'] = 'DamageType.Basic'
+        objects['DamageType.Basic'] = {'WeaponCardPresentations': ['DamageType.Bonus']}
+        objects['DamageType.Bonus'] = {
+            'Description': 'Deals bonus [explosive]accent[-explosive] damage.',
+            'bDontDisplayNumber': True, 'bEnableTextColor': False,
+            'TextColor': {'R': 255, 'G': 255, 'B': 0, 'A': 255},
+        }
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(card['fun_stats'], 'Deals bonus accent damage.')
+        self.assertIn('<font color="#FFFFFF">Deals bonus ', card['fun_stats_markup'])
+        self.assertIn('<font color="#FFFF00">accent</font>', card['fun_stats_markup'])
+
+    def test_part_presentation_supplies_reduced_ammo_text(self):
+        objects = card_world()
+        objects['Barrel']['CustomPresentations'] = ['Barrel.Text']
+        objects['Barrel.Text'] = {
+            'NoConstraintText': 'A part grants reduced ammunition use.', 'bDontDisplayNumber': True,
+        }
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(card['shot_cost'], 1.0)
+        self.assertEqual(card['fun_stats'], 'A part grants reduced ammunition use.')
+
+    def test_description_localization_uses_its_own_property_key(self):
+        objects = card_world()
+        objects['Type']['CustomPresentations'] = ['Type.Text']
+        objects['Type.Text'] = {'Description': 'Default note.', 'bDontDisplayNumber': True}
+        observed = []
+
+        def localize(path, default, property_name):
+            observed.append(property_name)
+            return 'Localized note.' if property_name == 'Description' else default
+
+        card = s.evaluate(FakePackage(objects), recipe(), level=1, localize=localize)['card']
+        self.assertIn('Description', observed)
+        self.assertEqual(card['fun_stats'], 'Localized note.')
+
+    def test_red_flavour_can_be_owned_by_a_balance_and_collapses_whitespace(self):
+        objects = card_world()
+        objects['Balance'] = {'CustomPresentations': ['Balance.Red']}
+        objects['Balance.Red'] = {
+            'NoConstraintText': 'A   compact     flavour line.',
+            'TextColor': {'R': 220, 'G': 70, 'B': 70, 'A': 255},
+        }
+        item = dict(recipe(), balance='Balance')
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['fun_stats'], 'A compact flavour line.')
+        self.assertEqual(card['fun_stats_lines'][0]['color'], '#DC4646')
+
+
 class NativeRuleTests(unittest.TestCase):
     """Rules read from the game's code (NATIVE_WEAPON_RULES.md), on invented values."""
 

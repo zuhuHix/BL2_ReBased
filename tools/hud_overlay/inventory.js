@@ -249,7 +249,15 @@ function gearPlaceholder(item) {
 }
 const equippedIdFor = item => {
   const gearSlot = gearSlotForItem(item);
-  return gearSlot ? state?.gearSlots?.[gearSlot] || null : state?.slots?.[targetSlot] || null;
+  if (gearSlot) return state?.gearSlots?.[gearSlot] || null;
+  // GetEquippedAnalogue uses the pawn's live weapon, then the controller's
+  // ActiveWeaponSlot. The snapshot exposes that active slot; targetSlot is the
+  // last equipment cell visited and is only a destination choice. UNVERIFIED:
+  // when ActiveWeaponSlot has no placed weapon, the host cannot walk the native
+  // inventory chain by QuickSelectSlot.
+  const activeSlot = Number(state?.activeSlot);
+  if (Number.isInteger(activeSlot) && activeSlot >= 0 && activeSlot < 4) return state?.slots?.[activeSlot] || null;
+  return state?.slots?.[targetSlot] || null;
 };
 const equippedItems = () => [
   ...(state?.slots || []),
@@ -262,6 +270,7 @@ const selectedSlotIndex = () => {
   return gearSlot ? 4 + gearSlots.findIndex(slot => slot.key === gearSlot)
     : targetGearSlot ? 4 + gearSlots.findIndex(slot => slot.key === targetGearSlot) : targetSlot;
 };
+const equippedSelectionIndex = () => navigationPanel === 'equipped' || transferFromEquipped ? selectedSlotIndex() : -1;
 
 // Optional host field: how many of the four weapon slots are open (a new Maya has 2).
 // Absent or invalid means all four, so older hosts keep working.
@@ -373,7 +382,12 @@ const sortComparators = {
     if (isWeapon(a) !== isWeapon(b)) return isWeapon(a) ? -1 : 1;
     if (isWeapon(a)) {
       return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || (rarityLevel(b) - rarityLevel(a))
-        || (categoryKey(a) === categoryKey(b) ? levelTie(a, b) : 0);
+        || (categoryKey(a) === categoryKey(b) ? levelTie(a, b)
+          // UNVERIFIED empirical tie rule: D20's ALL captures put equal-rarity
+          // cross-type weapons in descending category-key order (Volcano,
+          // Hellfire, Nukem). The native comparator reports these pairs equal;
+          // this host tie-break matches the captured order without item names.
+          : compareKeys(categoryKey(b), categoryKey(a)));
     }
     return compareKeys(categoryKey(a), categoryKey(b)) || rarityThenLevel(a, b);
   },
@@ -581,6 +595,8 @@ function beginBackpackTransfer() {
   navigationPanel = 'equipped';
   targetGearSlot = gearSlotForItem(source);
   compareId = equippedIdFor(source);
+  const compareWeaponSlot = state.slots.indexOf(compareId);
+  if (!targetGearSlot && compareWeaponSlot >= 0) targetSlot = compareWeaponSlot;
   firstRow = scrollForSelected(backpackEntries());
   render();
 }
@@ -934,7 +950,7 @@ const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left 
 // single: 6 px left and 15 px up from the round-15 fit, after the round-18 frames with the 3D turn (frame corner 218, 123 against
 // 212, 108 on the real equipped view).
 const CARD_FIT = {single:fitTarget(307, 209, 97), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
-  inspect:fitTarget(285, 55, 44)};  // the level strip sits about 14 px above the frame's clip, so the frame is at 44 for a strip at 30
+  inspect:fitTarget(316, 28, 43)};  // UNVERIFIED D5 fit: visible frame about x20-352, y31-284 after the movie inset
 function fitCard(card, target) {
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
@@ -989,10 +1005,11 @@ function drawCard() {
   // the background clip's first frame (its other two are the yellow and green ones SetBackgroundStyle names).
   if (inspectMode) player.ow(INV + '.mainCard.bkgd', 'gotoAndStop', 1);
   setCompareLayout(Boolean(compare) || Boolean(transferSourceId), fromLeft);
-  const gearSlot = gearSlotForItem(item);
-  const compareSlotLabel = gearSlot
-    ? gearSlots.find(slot => slot.key === gearSlot)?.label || 'gear slot'
-    : `slot ${targetSlot+1}`;
+  const compareGearSlot = gearSlotForItem(compare);
+  const compareWeaponSlot = compare ? state.slots.indexOf(compare.id) : -1;
+  const compareSlotLabel = compareGearSlot
+    ? gearSlots.find(slot => slot.key === compareGearSlot)?.label || 'gear slot'
+    : compareWeaponSlot >= 0 ? `slot ${compareWeaponSlot+1}` : `slot ${targetSlot+1}`;
   // Match the observed stock tooltip line. Extra host keys remain available.
   const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
@@ -1016,7 +1033,7 @@ function syncSelection() {
   if (!ready || !state) return;
   if (backpackFocused() !== appliedFocus) { render(); return; }
   const equipped = INV + '.equippedPanel';
-  const selectedCell = selectedSlotIndex();
+  const selectedCell = equippedSelectionIndex();
   for (let i=0; i<8; i++) {
     call(`${equipped}.cell${i+1}`, 'SetSelected', i === selectedCell);
     const cellButton = document.querySelector(`#controls [data-kind="slot"][data-slot="${i}"]`);
@@ -1052,8 +1069,17 @@ function scrollForSelected(entries) {
   let height = 0;
   for (let i = start; i <= index; i++) height += entryHeight(entries[i]);
   while (height > viewHeight() && start < index) height -= entryHeight(entries[start++]);
+  // In the D20 empty-cell capture the selected cell sits in the last visible
+  // row. The old minimal-fit position left one full row below it. Move the list
+  // up one entry when it needs to scroll, retaining an almost-full last row;
+  // this placement is UNVERIFIED until the host is rendered in-engine.
+  if (start > firstRow && isEmptyCellId(selectedId)) start = Math.max(0, start - 1);
   return Math.min(start, Math.max(maximum, 0));
 }
+
+// One extra 8 px of scroll clip lets the last empty cell stay fully visible
+// after the D20 one-row alignment above. Position and fit remain UNVERIFIED.
+const listPeekHeight = () => isEmptyCellId(selectedId) ? 24 : PEEK_HEIGHT;
 
 function scrollBackpack(delta) {
   const entries = backpackEntries();
@@ -1063,13 +1089,13 @@ function scrollBackpack(delta) {
   render();
 }
 
-// PageDown / PageUp: the next / previous stock mode, wrapping. Every change selects the first item (observed).
+// PageDown / PageUp: the next / previous stock mode, wrapping. Every change selects the first entry (observed).
 // Only the backpack sorts: with an equipped cell selected, or a transfer under way, nothing happens.
 function changeSort(direction = 1) {
   if (transferSourceId || navigationPanel !== 'backpack') return;
   sortIndex = (sortIndex + direction + sortModes.length) % sortModes.length;
   const rows = backpackItems();
-  selectedId = rows[0]?.id || null;
+  selectedId = rows[0]?.id || backpackEntries().find(entry => entry.empty)?.id || null;
   lastBackpackId = selectedId;
   targetGearSlot = gearSlotForItem(itemById(selectedId));
   firstRow = 0;
@@ -1088,10 +1114,11 @@ function announce(message) {
 // hidden. The picture is the native 3D frame (it rotates with a drag); that frame has its own near-black
 // background, which the `lighten` blend lets the backdrop replace. A larger frame with a transparent
 // background would look better (needs a change to the preview actor, not made here).
-const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
-// The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
-const INSPECT_ZOOM = 1.75; // the real model spans x 329-949 (620 px) where ours spanned 463 px at 1.3
+const INSPECT_CARD_LEFT = 28, INSPECT_CARD_TOP = 43; // movie-space target for visible frame x20,y31; fit UNVERIFIED
+// UNVERIFIED D5 fit: resize and move the host render to the captured real bounds (x about 300-983).
+const INSPECT_ZOOM = 1.54;
 const INSPECT_HINT_DX = 53;
+const INSPECT_HINT_FONT_SIZE = 14; // UNVERIFIED D5 width fit: larger type plus a wider gap approaches the real 817 px span
 const INSPECT_CARD_INSET_X = 0.03, INSPECT_CARD_INSET_TOP = -0.06, INSPECT_CARD_INSET_BOTTOM = -0.05; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
 const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
@@ -1176,8 +1203,8 @@ function updateInspect() {
   inspect.appendChild(picture);
   inspect.hidden = false;
   const markup = INSPECT_HINTS.map(([label, enabled]) =>
-    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('  ');
-  set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="13">${markup}</font></p>`);
+    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
+  set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="${INSPECT_HINT_FONT_SIZE}">${markup}</font></p>`);
 }
 
 function toggleInspect() {
@@ -1266,15 +1293,21 @@ inspectSurface.addEventListener('pointercancel', endInspectDrag);
 // never bleed over card text. Full-size stock comparisons intentionally cover
 // parts of both panels, including host category arrows and mark hit targets.
 function applyCardOcclusion() {
-  const stage = document.getElementById('stage').getBoundingClientRect();
-  const scale = stage.width / 1280;
+  // Use the untransformed stage origin/scale and project movie bounds forward.
+  // Comparing an unturned card rectangle with turned HTML cell rectangles hid
+  // every sorted thumbnail in the 2026-10-22 D20 host frames.
+  const presentation = document.getElementById('presentation').getBoundingClientRect();
+  const scale = presentation.width / 1280;
   const covers = [];
   if (itemById(selectedId) && !inspectMode) covers.push(readBounds(INV + '.mainCard.bkgd'));
   if (compareId && itemById(compareId)) covers.push(readBounds(INV + '.compareCard.bkgd'));
-  const rects = covers.filter(Boolean).map(bounds => ({
-    left:stage.left + bounds.xMin * scale, right:stage.left + bounds.xMax * scale,
-    top:stage.top + bounds.yMin * scale, bottom:stage.top + bounds.yMax * scale
-  }));
+  const rects = covers.filter(Boolean).map(bounds => {
+    const projected = window.owMenu3d.projectBounds(bounds);
+    return {
+      left:presentation.left + projected.xMin * scale, right:presentation.left + projected.xMax * scale,
+      top:presentation.top + projected.yMin * scale, bottom:presentation.top + projected.yMax * scale
+    };
+  });
   for (const button of document.querySelectorAll('#controls .cell')) {
     const box = button.getBoundingClientRect();
     // A sliver of overlap (card glow art) does not count; a fifth of the cell does.
@@ -1758,7 +1791,7 @@ function render() {
   applySlotNumbers();
   const equipped = INV + '.equippedPanel';
   const slotIds = equippedItems();
-  const selectedCell = selectedSlotIndex();
+  const selectedCell = equippedSelectionIndex();
   // Locked weapon slots are drawn empty whatever the snapshot says.
   const shownIds = slotIds.map((id, index) => slotLocked(index) ? null : id);
   call(equipped, 'SetCellInfo', ...shownIds.map(id => itemById(id) ? color(itemById(id)) : 0));
@@ -1820,7 +1853,7 @@ function render() {
   // Draw the visible entries top to bottom; cells are numbered owRow0.. in draw order.
   let y = 0, row = 0;
   const headers = [];
-  for (let k = firstRow; k < entries.length && y < viewHeight() + PEEK_HEIGHT && row < RENDERED_ROWS + 1; k++) {
+  for (let k = firstRow; k < entries.length && y < viewHeight() + listPeekHeight() && row < RENDERED_ROWS + 1; k++) {
     const entry = entries[k];
     if (entry.header !== undefined) {
       const header = drawListHeader(rowGroup, entry.header, y);
@@ -1858,6 +1891,8 @@ function render() {
     const rowSelected = (item ? item.id : entry.id) === selectedId;
     // Backpack-origin compare: the moved item's tile has a green frame like its card, not the gold selection.
     const greenFrame = rowSelected && transferSourceId && !transferFromEquipped;
+    // The gold tile fill comes from the movie's SetSelected frame. The host
+    // page applies no global opacity/tint; a cell-only correction is unverified.
     call(path, 'SetSelected', rowSelected && !greenFrame);
     if (greenFrame) drawTileFrame(path);
     // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
@@ -1879,7 +1914,7 @@ function render() {
   drawSelectionBands(rowGroup, bands, localPanelBounds, rowWidth);
   const headerRowBounds = readBounds(rowGroup+'.owRow0');
   if (rowWidth) {
-    const height = viewHeight() + PEEK_HEIGHT;
+    const height = viewHeight() + listPeekHeight();
     // owRow0 may sit below the list origin when a header comes first.
     const top = headerRowBounds ? headerRowBounds.yMin - (firstCellY || 0) * panelPose().scaleY * COMPOSITION_SCALE : null;
     // The selection highlight is a band wider than the cell (it bleeds to the panel's edges in the original), so the
