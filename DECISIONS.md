@@ -4756,6 +4756,30 @@ collision record: `COLLISION_WALKING_VERIFICATION.md` (2026-10-22).
   `p_diffmod` in the way the host does.
 - **Schema (`tools/level-arrays.schema`).** Declares `StaticLightCollectionActor.LightComponents` as an object array. This is bulk
   decode metadata only; the resolved elements are point and spot light components, 1,023 of them, of which 128 are spawned.
+  The schema is keyed by property name only, so it applies to every package that has such a property. **Declaration
+  census (verified, all 914 base-game packages, 0 failures):** 129 packages carry the name; the only exports named
+  `LightComponents` are `StaticLightCollectionActor.LightComponents`, a `Core.ArrayProperty`, and its inner
+  `Core.ComponentProperty` (an object-reference property). A tagged property's type comes from its declaring class, so every
+  serialized `LightComponents` is that array of object references. An instance decode pass (stopped at a 30-minute budget after
+  666 packages) agreed: 119 of 119 occurrences decoded as `ObjectProperty` arrays owned by `StaticLightCollectionActor`.
+  Scratch scripts under `local/laneA-census/` (ignored).
+- **Light array tail (`UNVERIFIED` layout).** The 64-byte-per-element tail after a `StaticLightCollectionActor`'s properties is
+  size-checked and skipped, not decoded. Its per-component layout (presumed 4x4 transform, as for `StaticMeshCollectionActor`)
+  is `UNVERIFIED`. Placement uses each component's decoded `CachedParentToWorld`. Reader coverage: `tests/properties_test.py`
+  (a real-reader N = 2 `ObjectProperty` array with a 128-byte tail, and refusals when the declared size disagrees).
+- **Malformed light arrays contribute nothing.** A `LightComponents` array that fails any check now stages its records and adds
+  them only after the whole array validates (`tools/prepare_level.py`, `static_light_collection_records`). Synthetic test:
+  `test_malformed_light_array_contributes_no_lights`.
+- **Lighting is Sanctuary-only.** `scene.json` gets `lighting` only when the persistent map is `Sanctuary_P`
+  (`sanctuary_lighting_enabled`); other maps have no `lighting` key. Decals stay generic and default-deny: a non-allowlisted
+  material is excluded for any map, so a non-Sanctuary map places no decals. Synthetic test:
+  `test_sanctuary_lighting_policy_is_limited_to_sanctuary_persistent_map`.
+- **Host opt-in (documented, implemented by the other lane-A agent).** `OPENWILLOW_SANCTUARY_OPT_IN` lists `grade`,
+  `diffuse_tint`, `xmas_bulbs`, `static_lights`, `graffiti_decals`; all default OFF, Sanctuary_P only, and the 0.14 cloud cap
+  stays on. Source inputs are still recorded in `scene.json`.
+- **Test values replaced.** The visual-rules test uses invented colours and intensities (the 1.25 directional brightness,
+  50/100/150 sky colour, post-process 4.0/1.3-1.5/0.05-0.07/2.5) and checks calibration formulas against the host constants,
+  not literal calibrated outputs. The grafitto ink check is structural, and a far plane is 900.
 - **Colour conversion.** UE3 FColor values are converted to linear with a 2.2 power curve, following the UE3 FLinearColor
   conversion as we understand it. **UNVERIFIED** against the game's output.
 - **Host calibration (`host/ue5/scene_import_rules.py`).** The sun's 5.0 lux per source brightness unit, sky light 1.5, sky tint

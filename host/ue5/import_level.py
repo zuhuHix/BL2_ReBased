@@ -28,7 +28,10 @@ from scene_import_rules import (SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS,
                                 ue3_directional_brightness_to_ue5,
                                 sanctuary_light_calibration,
                                 ue3_sky_light_color_to_ue5,
-                                ue3_world_post_process_to_ue5)
+                                ue3_world_post_process_to_ue5,
+                                effective_scene_recipe, host_sky_cloud_opacity,
+                                sanctuary_opt_ins, sanctuary_profile,
+                                sanctuary_source_lighting, SANCTUARY_OPT_IN_ENV)
 
 root = Path(os.environ['OPENWILLOW_SCENE']).resolve()
 if not (Path(os.environ['OPENWILLOW_BL2']) / 'Binaries/Win32/Borderlands2.exe').is_file():
@@ -38,6 +41,12 @@ scene = json.loads((root / 'scene.json').read_text(encoding='utf-8'))
 if scene['schema'] != 1 or scene['dynamic_policy'] != 'frozen':
     raise RuntimeError('Unsupported scene schema/policy')
 destination = '/Game/OpenWillow/' + scene['map']
+# Sanctuary host flags are parsed before any spawn so a typo fails early. Opt-ins
+# only take effect on Sanctuary_P; the same rule is used by verify_level.py.
+sanctuary_env_value = os.environ.get(SANCTUARY_OPT_IN_ENV, '')
+opt_ins = sanctuary_opt_ins(sanctuary_env_value, scene)
+if sanctuary_env_value.strip() and not sanctuary_profile(scene):
+    unreal.log('OpenWillow: ' + SANCTUARY_OPT_IN_ENV + ' ignored for map ' + scene['map'])
 tools = unreal.AssetToolsHelpers.get_asset_tools()
 mel = unreal.MaterialEditingLibrary
 
@@ -322,7 +331,7 @@ def build_sky_approximation(material, name, sky):
     opacity = new(unreal.MaterialExpressionConstant)
     # Round-4 host calibration: the source cap is kept in scene.json, but the
     # cloud band is scaled down to match the game's plainer blue dome.
-    opacity.set_editor_property('r', sanctuary_sky_cloud_opacity(scalars['cloud_cap_opacity']))
+    opacity.set_editor_property('r', host_sky_cloud_opacity(scene, scalars['cloud_cap_opacity']))
     coverage = new(unreal.MaterialExpressionMultiply)
     connect(material, coverage_sample, sky['cloud_channel'], coverage, 'A')
     connect(material, opacity, '', coverage, 'B')
@@ -469,7 +478,7 @@ for name, definition in scene['materials'].items():
         'MLM_Unlit': unreal.MaterialShadingModel.MSM_UNLIT,
         'MLM_DefaultLit': unreal.MaterialShadingModel.MSM_DEFAULT_LIT,
     }
-    recipe = definition.get('scene_recipe', {})
+    recipe = effective_scene_recipe(definition, opt_ins)
     unlit_constant = definition.get('unlit_constant_color')
     blend_name = definition.get('host_blend_mode', 'BLEND_Opaque' if unlit_constant else
                                 definition.get('blend_mode', 'BLEND_Opaque'))
@@ -563,7 +572,7 @@ for name, definition in scene['materials'].items():
                 and mel.connect_material_property(multiplied, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
             raise RuntimeError('Cannot connect inspected emissive scale: ' + name)
         emissive_output, emissive_output_pin = multiplied, ''
-    diffuse_tint = definition.get('diffuse_tint')
+    diffuse_tint = definition.get('diffuse_tint') if 'diffuse_tint' in opt_ins else None
     if diffuse_tint is not None and diffuse_sample is not None and shading_name != 'MLM_Unlit':
         # Master_World p_diffmod multiplies the diffuse texture (see
         # prepare_level.diffuse_tint); the rest of that graph is omitted (UNVERIFIED).
@@ -655,7 +664,8 @@ for name, definition in scene.get('decals', {}).get('materials', {}).items():
         if definition.get('source') not in decal_allowlist:
             raise RuntimeError('Scene manifest attempted a decal outside the default allowlist: ' +
                                str(definition.get('source')))
-        decal_material_assets[name] = build_deferred_decal_material(name, definition)
+        if 'graffiti_decals' in opt_ins:
+            decal_material_assets[name] = build_deferred_decal_material(name, definition)
 
 # Sections whose preparer recorded no material (for example terrain whose
 # alpha maps did not decode, labeled 'neutral_constant') must not fall through
@@ -813,7 +823,7 @@ for instance in scene['actors']:
 
 decal_imported = 0
 decal_allowed_source = 'Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito'
-for decal in scene.get('decals', {}).get('actors', []):
+for decal in (scene.get('decals', {}).get('actors', []) if 'graffiti_decals' in opt_ins else []):
     if decal.get('status') != 'partial_unverified':
         continue
     if decal.get('material_source') != decal_allowed_source:
@@ -877,12 +887,13 @@ world.get_world_settings().set_editor_property('default_game_mode', unreal.load_
 # keep the rig at the imported start camera so the local scene is illuminated.
 scene_extent = (scene_bounds_max - scene_bounds_min) * 0.5
 lighting_center = position
-source_lighting = scene.get('lighting', {})
+source_lighting = sanctuary_source_lighting(scene)
 static_light_import = source_lighting.get('static_light_import', {})
 static_light_records = static_light_import.get('components', [])
+static_lights_on = 'static_lights' in opt_ins
 selected_static_lights = [item for item in static_light_records
-                          if item.get('status') == 'selected' and item.get('selected') is True]
-if static_light_import.get('counts', {}).get('imported', len(selected_static_lights)) != len(selected_static_lights):
+                          if static_lights_on and item.get('status') == 'selected' and item.get('selected') is True]
+if static_lights_on and static_light_import.get('counts', {}).get('imported', len(selected_static_lights)) != len(selected_static_lights):
     raise RuntimeError('Static light manifest selected count does not match its component records')
 imported_static_lights = []
 for ordinal, source in enumerate(sorted(selected_static_lights, key=lambda item: item['source']), 1):
@@ -1128,20 +1139,24 @@ if source_post_process is not None:
         source_post_process['color_gain'][2], 1.0))
     post_settings.set_editor_property('override_bloom_intensity', True)
     post_settings.set_editor_property('bloom_intensity', source_post_process['bloom_intensity'])
-# Round-4 host grade (UNVERIFIED, screenshot-tuned): warm white balance, a
-# little extra saturation and contrast, and a small shadow lift added to the
-# source color offset (zero when no WorldInfo grade was decoded). Values live
-# in scene_import_rules.py.
+# Round-4 host grade (UNVERIFIED, screenshot-tuned, opt-in 'grade'): warm white
+# balance, a little extra saturation and contrast, and a small shadow lift added
+# to the source color offset. Off, only the decoded source offset is kept.
+# Values live in scene_import_rules.py.
+grade_on = 'grade' in opt_ins
 grade_offset = (source_post_process['color_offset'] if source_post_process is not None
                 else [0.0, 0.0, 0.0])
-grade_offset = [float(base) + float(lift) for base, lift in zip(grade_offset, SANCTUARY_HOST_SHADOW_LIFT)]
-for property_name, value in (
+grade_offset = [float(base) + float(lift) for base, lift in zip(
+    grade_offset, SANCTUARY_HOST_SHADOW_LIFT if grade_on else (0.0, 0.0, 0.0))]
+grade_properties = (
         ('override_white_temp', True), ('white_temp', SANCTUARY_HOST_WHITE_TEMP),
         ('override_white_tint', True), ('white_tint', SANCTUARY_HOST_WHITE_TINT),
         ('override_color_saturation', True),
         ('color_saturation', unreal.Vector4(*SANCTUARY_HOST_COLOR_SATURATION)),
         ('override_color_contrast', True),
         ('color_contrast', unreal.Vector4(*SANCTUARY_HOST_COLOR_CONTRAST)),
+    ) if grade_on else ()
+for property_name, value in grade_properties + (
         ('override_color_offset', True),
         ('color_offset', unreal.Vector4(grade_offset[0], grade_offset[1], grade_offset[2], 0.0))):
     try:
@@ -1180,6 +1195,7 @@ hidden_visual_placements = sum(1 for item in scene['actors'] if item.get('hidden
 level.save_current_level()
 unreal.EditorAssetLibrary.save_directory(destination)
 (root / 'ue-import.json').write_text(json.dumps({'imported': True, 'map': map_path, 'section_actors': count,
+    'sanctuary_host': {'profile': sanctuary_profile(scene), 'opt_ins': sorted(opt_ins)},
     'source_placements': len(scene['actors']), 'issues': len(scene['issues']),
     'neutral_fallback_sections': neutral_fallback_sections,
     'native_skybox': {'placements': native_skybox_placements,
@@ -1216,7 +1232,8 @@ unreal.EditorAssetLibrary.save_directory(destination)
                  'static_source_lights': {
                      'source_components': static_light_import.get('counts', {}).get('source_components', 0),
                      'imported': len(imported_static_lights),
-                     'skipped': static_light_import.get('counts', {}).get('skipped', 0),
+                     'skipped': (static_light_import.get('counts', {}).get('skipped', 0) if static_lights_on
+                                 else len(static_light_records)),
                      'skip_reasons': static_light_import.get('counts', {}).get('skip_reasons', {}),
                      'intensity_units': 'candela',
                      'point_candela_per_source_brightness': SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,

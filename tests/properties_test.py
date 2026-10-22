@@ -14,7 +14,8 @@ names = ['None', 'Root', 'Child', 'Class', 'IntProperty', 'FloatProperty',
          'BoolProperty', 'NameProperty', 'ObjectProperty', 'StrProperty',
          'ByteProperty', 'StructProperty', 'ArrayProperty', 'Test', 'Enum',
          'Choice', 'Vector', 'UnknownProperty', 'Wide😀', 'Quoted"\\\n', 'Plane', 'Matrix', 'Box',
-         'Engine', 'Terrain', 'TerrainComponent', 'TerrainLayerSetup', 'StaticMeshComponent']
+         'Engine', 'Terrain', 'TerrainComponent', 'TerrainLayerSetup', 'StaticMeshComponent',
+         'LightComponents']
 def fname(name, number=0):
     return ints(names.index(name), number)
 
@@ -144,4 +145,28 @@ with tempfile.TemporaryDirectory() as folder:
     # A terrain struct-array schema must never decode ordinary mesh arrays.
     result = run(bytes(8) + fname('None'), '--terrain-records', str(schema), engine_class='StaticMeshComponent')
     assert 'data' not in json.loads(result.stdout)[0]
+    # StaticLightCollectionActor shape: an ObjectProperty array of N references,
+    # then an N*64-byte tail that the reader reports as trailing bytes. The tail
+    # layout is UNVERIFIED; this only checks the size bookkeeping of the real reader.
+    light_schema = Path(folder) / 'light_arrays.schema'
+    light_schema.write_text('LightComponents=ObjectProperty\n')
+    light_options = (*options, '--array-schema', str(light_schema))
+    light_refs = ints(2, -1, 0)
+    light_tail = bytes(2 * 64)
+    light_payload = ints(0) + tag('ArrayProperty', light_refs, name='LightComponents') + fname('None') + light_tail
+    result = run(light_payload, *light_options)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    light = data['properties'][0]
+    assert light['name'] == 'LightComponents' and light['status'] == 'decoded', light
+    assert light['element_type'] == 'ObjectProperty' and light['element_count'] == 2, light
+    assert light['value'] == [{'index': -1, 'path': 'Root'}, {'index': 0, 'path': None}], light
+    assert data['trailing_bytes'] == 2 * 64, data
+    # Declared property size larger than the decoded array: decoding must be refused.
+    light_data = ints(2, -1, 0)
+    bad_size = fname('LightComponents') + fname('ArrayProperty') + ints(len(light_data) + 4, 0) + light_data
+    assert run(ints(0) + bad_size + fname('None') + light_tail, *light_options).returncode != 0
+    # Declared property size smaller than the decoded array: also refused.
+    short_size = fname('LightComponents') + fname('ArrayProperty') + ints(len(light_data) - 4, 0) + light_data
+    assert run(ints(0) + short_size + fname('None') + light_tail, *light_options).returncode != 0
 print('Property values, unsupported fields, Unicode, references, cycles and bounds passed.')

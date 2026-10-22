@@ -77,6 +77,19 @@ moves by a few tenths between rounds; these scores are not a measured improvemen
   brightness unit with a brightness ceiling of 3.0 (75 cd maximum), and two saturated-orange point lights get a 0.01
   intensity scale. All of these are host calibrations (`UNVERIFIED`). The orange pool is toned down, but the HQ is still
   greyer than the game's teal practicals.
+  **Serialized tail (schema condition, `UNVERIFIED`).** After a `StaticLightCollectionActor`'s properties the reader finds
+  an N x 64-byte tail, one 64-byte entry per `LightComponents` element. The reader size-checks it and skips it; it is not
+  decoded. Its per-component layout is presumed to be a 4x4 transform, as for `StaticMeshCollectionActor`, and that is
+  **UNVERIFIED**. Placement uses each component's decoded `CachedParentToWorld`. Synthetic reader coverage:
+  `tests/properties_test.py` (N = 2 array, tail = 128 bytes, and both size-mismatch refusals).
+  **Schema census (2026-10-22).** Declarations, over all 914 base-game `CookedPCConsole` packages (0 reader failures):
+  129 packages have `LightComponents` in their name table, and the only exports of that name are
+  `StaticLightCollectionActor.LightComponents` (`Core.ArrayProperty`) and its inner (`Core.ComponentProperty`, an
+  object-reference property). Since a tagged property takes its type from the declaring class, every serialized
+  `LightComponents` in the install is an array of object references, which is what the schema line declares. Instances, as a
+  cross-check: a decode pass batched per export class with `--properties-batch --array-schema` stopped at its 30-minute
+  budget after 666 packages; within those, 48 packages carry 119 occurrences, all owned by `StaticLightCollectionActor` and all
+  decoded as `ObjectProperty` arrays, with no reader failure.
 - **Decals and graffiti.** The census has 293 DecalActor/component records over 27 materials. **Default-deny** keeps 33
   placements that use only `Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito`. The other 78 otherwise-supported candidates
   are excluded with a reason recorded per actor and material in `scene.json`: `DMat_WallConcrete_02` (66),
@@ -93,6 +106,17 @@ moves by a few tenths between rounds; these scores are not a measured improvemen
   Multiply with the diffuse texture, and `verify_level.py` checks 18 of 18. The rust and orange facades still read pale
   in cams 02, 06 and 07. The likely cause is the omitted `Master_World` colour ramps and vertex paint (recorded in each
   material's `omitted` list). Game-side behaviour is `UNVERIFIED`.
+
+### Host opt-in flags (current state)
+
+Every round-4 host visual is behind an opt-in flag, default OFF, read from the environment variable
+`OPENWILLOW_SANCTUARY_OPT_IN`: a comma-separated list of `grade` (round-4 warm white balance 8200 K, saturation, contrast
+and shadow lift), `diffuse_tint` (the `p_diffmod` Base Color multiplier), `xmas_bulbs` (the `xmas_bulb_emissive_v1`
+emissive hue and scale), `static_lights` (spawning the `StaticLightCollectionActor` point and spot lights with the
+calibrated intensities) and `graffiti_decals` (the allowlisted `DMat_GrafittoBurrito` decal projectors). The 0.14
+cloud-cap scale stays on. All of this applies only when `scene.json`'s map is `Sanctuary_P`. The source inputs are still
+decoded and recorded in `scene.json` whatever the flags are. Only the Sanctuary persistent map gets the `lighting` key;
+other maps have none. (Host side: `host/ue5/*.py`, implemented by the other lane-A agent.)
 
 ### Ranked remaining gaps (round-4 critic)
 

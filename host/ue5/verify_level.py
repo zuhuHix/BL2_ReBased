@@ -27,7 +27,10 @@ from scene_import_rules import (SANCTUARY_GRAFITTO_INK_COLOR,
                                 ue3_directional_brightness_to_ue5,
                                 sanctuary_light_calibration,
                                 ue3_sky_light_color_to_ue5,
-                                ue3_world_post_process_to_ue5)
+                                ue3_world_post_process_to_ue5,
+                                sanctuary_opt_ins, sanctuary_profile,
+                                sanctuary_source_lighting, effective_scene_recipe,
+                                SANCTUARY_OPT_IN_ENV, SANCTUARY_XMAS_BULB_METHOD)
 
 
 def xyz(v):
@@ -106,6 +109,9 @@ def verify_world_map_recipe(material, name, recipe):
 
 root = Path(os.environ['OPENWILLOW_SCENE']).resolve()
 scene = json.loads((root / 'scene.json').read_text(encoding='utf-8'))
+# Same opt-in rule as import_level.py: each round-4 flag is checked on or off below.
+opt_ins = sanctuary_opt_ins(os.environ.get(SANCTUARY_OPT_IN_ENV, ''), scene)
+source_lighting = sanctuary_source_lighting(scene)
 import_report = json.loads((root / 'ue-import.json').read_text(encoding='utf-8'))
 (root / 'ue-verify.json').unlink(missing_ok=True)
 base = '/Game/OpenWillow/' + scene['map']
@@ -113,7 +119,7 @@ level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level(base + '/' + scene['map'])
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
 sky_policy = temporary_sky_policy(scene)
-source_fog_expected = scene.get('lighting', {}).get('height_fog') is not None
+source_fog_expected = source_lighting.get('height_fog') is not None
 lighting_labels = {'OpenWillow_Sun', 'OpenWillow_SkyFill', 'OpenWillow_SkyAtmosphere',
                    'OpenWillow_SkyFallback', 'OpenWillow_SourceHeightFog',
                    'OpenWillow_ReflectionCapture', 'OpenWillow_Exposure'}
@@ -140,7 +146,7 @@ if source_fog_expected:
 assert set(lighting) == expected_lighting
 sun_component = lighting['OpenWillow_Sun'].get_component_by_class(unreal.DirectionalLightComponent)
 assert sun_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
-source_directional = scene.get('lighting', {}).get('directional_light')
+source_directional = source_lighting.get('directional_light')
 expected_sun_intensity = (ue3_directional_brightness_to_ue5(source_directional['light_brightness'])
                           if source_directional is not None
                           and 'light_brightness' in source_directional else 1.0)
@@ -157,7 +163,7 @@ sky_component = lighting['OpenWillow_SkyFill'].get_component_by_class(unreal.Sky
 assert sky_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
 assert sky_component.get_editor_property('source_type') == unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP
 assert sky_component.get_editor_property('cubemap').get_path_name() == '/Engine/EngineResources/GrayLightTextureCube.GrayLightTextureCube'
-source_sky = scene.get('lighting', {}).get('sky_light')
+source_sky = source_lighting.get('sky_light')
 expected_sky_intensity = SANCTUARY_SKY_INTENSITY_CALIBRATION if source_sky is not None else 0.5
 assert abs(sky_component.get_editor_property('intensity') - expected_sky_intensity) < .01
 if source_sky is not None:
@@ -215,7 +221,7 @@ for name in ('override_auto_exposure_method', 'override_auto_exposure_min_bright
         except Exception:
             continue
     assert not value, name
-world_info = next((item for item in scene.get('lighting', {}).get('world_info', [])
+world_info = next((item for item in source_lighting.get('world_info', [])
                    if item.get('default_post_process_settings')), None)
 source_post_process = (ue3_world_post_process_to_ue5(world_info['default_post_process_settings'])
                        if world_info is not None else None)
@@ -231,25 +237,36 @@ if source_post_process is not None:
             close([actual.x, actual.y, actual.z], expected, 1e-5)
         else:
             assert abs(float(actual) - float(expected)) < 1e-5, (value_name, actual, expected)
-# Round-4 host grade: the expected values are written out here, not imported,
-# so a silent edit to scene_import_rules.py fails this check.
-for override_name in ('override_white_temp', 'override_white_tint',
-                      'override_color_saturation', 'override_color_contrast',
-                      'override_color_offset'):
-    assert post_settings.get_editor_property(override_name), override_name
-assert abs(float(post_settings.get_editor_property('white_temp')) - 8200.0) < 1e-3
-assert abs(float(post_settings.get_editor_property('white_tint')) - 0.0) < 1e-6
-for value_name, expected in (('color_saturation', [1.12, 1.02, 0.92, 1.0]),
-                             ('color_contrast', [1.10, 1.10, 1.10, 1.0])):
-    actual = post_settings.get_editor_property(value_name)
-    close([actual.x, actual.y, actual.z, actual.w], expected, 1e-5)
-# Source offset (zero when the WorldInfo grade is not decoded) plus the literal host lift.
-source_offset = (source_post_process['color_offset'] if source_post_process is not None
-                 else [0.0, 0.0, 0.0])
-actual_offset = post_settings.get_editor_property('color_offset')
-close([actual_offset.x, actual_offset.y, actual_offset.z],
-      [source_offset[0] + 0.03, source_offset[1] + 0.03, source_offset[2] + 0.035], 1e-5)
-source_volume_records = scene.get('lighting', {}).get('post_process_volumes', [])
+grade_on = 'grade' in opt_ins
+if grade_on:
+    # Round-4 host grade: the expected values are written out here, not imported,
+    # so a silent edit to scene_import_rules.py fails this check.
+    for override_name in ('override_white_temp', 'override_white_tint',
+                          'override_color_saturation', 'override_color_contrast',
+                          'override_color_offset'):
+        assert post_settings.get_editor_property(override_name), override_name
+    assert abs(float(post_settings.get_editor_property('white_temp')) - 8200.0) < 1e-3
+    assert abs(float(post_settings.get_editor_property('white_tint')) - 0.0) < 1e-6
+    for value_name, expected in (('color_saturation', [1.12, 1.02, 0.92, 1.0]),
+                                 ('color_contrast', [1.10, 1.10, 1.10, 1.0])):
+        actual = post_settings.get_editor_property(value_name)
+        close([actual.x, actual.y, actual.z, actual.w], expected, 1e-5)
+    # Source offset (zero when the WorldInfo grade is not decoded) plus the literal host lift.
+    source_offset = (source_post_process['color_offset'] if source_post_process is not None
+                     else [0.0, 0.0, 0.0])
+    actual_offset = post_settings.get_editor_property('color_offset')
+    close([actual_offset.x, actual_offset.y, actual_offset.z],
+          [source_offset[0] + 0.03, source_offset[1] + 0.03, source_offset[2] + 0.035], 1e-5)
+else:
+    # Off: no round-4 grade overrides; only the decoded source offset remains.
+    for override_name in ('override_white_temp', 'override_white_tint',
+                          'override_color_saturation', 'override_color_contrast'):
+        assert not post_settings.get_editor_property(override_name), override_name
+    off_offset = (source_post_process['color_offset'] if source_post_process is not None
+                  else [0.0, 0.0, 0.0])
+    off_actual = post_settings.get_editor_property('color_offset')
+    close([off_actual.x, off_actual.y, off_actual.z], off_offset, 1e-5)
+source_volume_records = source_lighting.get('post_process_volumes', [])
 host_post_process_volumes = [actor for actor in actors
                              if isinstance(actor, unreal.PostProcessVolume)]
 assert [actor.get_actor_label() for actor in host_post_process_volumes] == ['OpenWillow_Exposure']
@@ -269,70 +286,77 @@ assert len(source_decals) == decal_manifest.get('census', {}).get('actors', len(
 assert all(item.get('material_source') in decal_allowlist for item in supported_decals)
 assert all(item.get('exclusion_reason') and item.get('material_source') not in decal_allowlist
            for item in excluded_decals)
-assert len(decal_actors) == len(supported_decals), (len(decal_actors), len(supported_decals))
+graffiti_on = 'graffiti_decals' in opt_ins
+if not graffiti_on:
+    # Off: the decals stay recorded in scene.json and no DecalActor is spawned.
+    assert not any(isinstance(actor, unreal.DecalActor) for actor in actors)
+    assert not decal_actors
+else:
+    assert len(decal_actors) == len(supported_decals), (len(decal_actors), len(supported_decals))
 expected_excluded = decal_manifest.get('census', {}).get('excluded_import_candidates', 0)
 assert len(excluded_decals) == expected_excluded
-for source in supported_decals:
-    label = actor_label(source['level'], source['source'], 0)
-    actor = decal_actors[label]
-    basis = source.get('projection_basis', {})
-    normal = basis.get('HitNormal', [0.0, 0.0, 0.0])
-    expected_location, expected_forward = ue3_grafitto_projection_to_ue5(
-        source['transform']['location'], normal, source['dimensions'])
-    close(xyz(actor.get_actor_location()), expected_location, .01)
-    close(xyz(actor.get_actor_forward_vector()), expected_forward, .001)
-    component = actor.get_component_by_class(unreal.DecalComponent)
-    assert component is not None
-    size = component.get_editor_property('decal_size')
-    close(xyz(size), ue3_grafitto_dimensions_to_ue5(source['dimensions']), .001)
-    material = component.get_editor_property('decal_material')
-    assert material is not None and material.get_name() == 'M_OpenWillowDecal_' + source['material']
-    assert material.get_editor_property('material_domain') == unreal.MaterialDomain.MD_DEFERRED_DECAL
-    assert material.get_editor_property('blend_mode') == unreal.BlendMode.BLEND_TRANSLUCENT
-    source_material = decal_manifest.get('materials', {}).get(source['material'], {})
-    diffuse = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
-    opacity = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_OPACITY)
-    assert source_material.get('method') == 'grafitto_dark_ink_deferred_decal_v1'
-    assert source_material.get('opacity_source') == 'grafitto_dark_ink_mask_v1'
-    assert source_material.get('ink_color_linear') == list(SANCTUARY_GRAFITTO_INK_COLOR)
-    assert source_material.get('opacity_luminance_ceiling') == SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING
-    assert source_material.get('opacity_gain') == SANCTUARY_GRAFITTO_INK_OPACITY_GAIN
-    assert isinstance(diffuse, unreal.MaterialExpressionConstant3Vector)
-    ink = diffuse.get_editor_property('constant')
-    close([ink.r, ink.g, ink.b], SANCTUARY_GRAFITTO_INK_COLOR, 1e-6)
-    assert isinstance(opacity, unreal.MaterialExpressionSaturate)
-    _, opacity_nodes, opacity_inputs = material_graph(material, unreal.MaterialProperty.MP_OPACITY)
-    assert any(isinstance(node, unreal.MaterialExpressionDotProduct)
-               and len(opacity_inputs[expression_key(node)]) == 2
-               and isinstance(opacity_inputs[expression_key(node)][1], unreal.MaterialExpressionConstant3Vector)
-               and all(abs(actual - expected) < 1e-6 for actual, expected in zip(
-                   [opacity_inputs[expression_key(node)][1].get_editor_property('constant').r,
-                    opacity_inputs[expression_key(node)][1].get_editor_property('constant').g,
-                    opacity_inputs[expression_key(node)][1].get_editor_property('constant').b],
-                    [0.2126, 0.7152, 0.0722]))
-               for node in opacity_nodes.values())
-    assert any(isinstance(node, unreal.MaterialExpressionConstant)
-               and abs(float(node.get_editor_property('r'))
-                       - SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING) < 1e-6
-               for node in opacity_nodes.values())
-    assert any(isinstance(node, unreal.MaterialExpressionConstant)
-               and abs(float(node.get_editor_property('r')) - SANCTUARY_GRAFITTO_INK_OPACITY_GAIN) < 1e-6
-               for node in opacity_nodes.values())
-    assert any(isinstance(node, unreal.MaterialExpressionTextureSample)
-               and node.get_editor_property('texture').get_name()
-               == Path(source_material['texture_file']).stem for node in opacity_nodes.values())
-    tags = [str(tag) for tag in actor.get_editor_property('tags')]
-    assert source['source'] in tags
-    # Read the axes as values: a bound method of a UE actor left in a module
-    # global crashed python311.dll when the commandlet finalized Python (exit 3).
-    for vector_name, host_axis in (('HitTangent', actor.get_actor_right_vector()),
-                                   ('HitBinormal', actor.get_actor_up_vector())):
-        expected_axis = source.get('projection_basis', {}).get(vector_name, [0.0, 0.0, 0.0])
-        magnitude = math.sqrt(sum(float(value) ** 2 for value in expected_axis))
-        if magnitude > 1e-5:
-            close(xyz(host_axis), [float(value) / magnitude for value in expected_axis], .002)
+if graffiti_on:
+    for source in supported_decals:
+        label = actor_label(source['level'], source['source'], 0)
+        actor = decal_actors[label]
+        basis = source.get('projection_basis', {})
+        normal = basis.get('HitNormal', [0.0, 0.0, 0.0])
+        expected_location, expected_forward = ue3_grafitto_projection_to_ue5(
+            source['transform']['location'], normal, source['dimensions'])
+        close(xyz(actor.get_actor_location()), expected_location, .01)
+        close(xyz(actor.get_actor_forward_vector()), expected_forward, .001)
+        component = actor.get_component_by_class(unreal.DecalComponent)
+        assert component is not None
+        size = component.get_editor_property('decal_size')
+        close(xyz(size), ue3_grafitto_dimensions_to_ue5(source['dimensions']), .001)
+        material = component.get_editor_property('decal_material')
+        assert material is not None and material.get_name() == 'M_OpenWillowDecal_' + source['material']
+        assert material.get_editor_property('material_domain') == unreal.MaterialDomain.MD_DEFERRED_DECAL
+        assert material.get_editor_property('blend_mode') == unreal.BlendMode.BLEND_TRANSLUCENT
+        source_material = decal_manifest.get('materials', {}).get(source['material'], {})
+        diffuse = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
+        opacity = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_OPACITY)
+        assert source_material.get('method') == 'grafitto_dark_ink_deferred_decal_v1'
+        assert source_material.get('opacity_source') == 'grafitto_dark_ink_mask_v1'
+        assert source_material.get('ink_color_linear') == list(SANCTUARY_GRAFITTO_INK_COLOR)
+        assert source_material.get('opacity_luminance_ceiling') == SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING
+        assert source_material.get('opacity_gain') == SANCTUARY_GRAFITTO_INK_OPACITY_GAIN
+        assert isinstance(diffuse, unreal.MaterialExpressionConstant3Vector)
+        ink = diffuse.get_editor_property('constant')
+        close([ink.r, ink.g, ink.b], SANCTUARY_GRAFITTO_INK_COLOR, 1e-6)
+        assert isinstance(opacity, unreal.MaterialExpressionSaturate)
+        _, opacity_nodes, opacity_inputs = material_graph(material, unreal.MaterialProperty.MP_OPACITY)
+        assert any(isinstance(node, unreal.MaterialExpressionDotProduct)
+                   and len(opacity_inputs[expression_key(node)]) == 2
+                   and isinstance(opacity_inputs[expression_key(node)][1], unreal.MaterialExpressionConstant3Vector)
+                   and all(abs(actual - expected) < 1e-6 for actual, expected in zip(
+                       [opacity_inputs[expression_key(node)][1].get_editor_property('constant').r,
+                        opacity_inputs[expression_key(node)][1].get_editor_property('constant').g,
+                        opacity_inputs[expression_key(node)][1].get_editor_property('constant').b],
+                        [0.2126, 0.7152, 0.0722]))
+                   for node in opacity_nodes.values())
+        assert any(isinstance(node, unreal.MaterialExpressionConstant)
+                   and abs(float(node.get_editor_property('r'))
+                           - SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING) < 1e-6
+                   for node in opacity_nodes.values())
+        assert any(isinstance(node, unreal.MaterialExpressionConstant)
+                   and abs(float(node.get_editor_property('r')) - SANCTUARY_GRAFITTO_INK_OPACITY_GAIN) < 1e-6
+                   for node in opacity_nodes.values())
+        assert any(isinstance(node, unreal.MaterialExpressionTextureSample)
+                   and node.get_editor_property('texture').get_name()
+                   == Path(source_material['texture_file']).stem for node in opacity_nodes.values())
+        tags = [str(tag) for tag in actor.get_editor_property('tags')]
+        assert source['source'] in tags
+        # Read the axes as values: a bound method of a UE actor left in a module
+        # global crashed python311.dll when the commandlet finalized Python (exit 3).
+        for vector_name, host_axis in (('HitTangent', actor.get_actor_right_vector()),
+                                       ('HitBinormal', actor.get_actor_up_vector())):
+            expected_axis = source.get('projection_basis', {}).get(vector_name, [0.0, 0.0, 0.0])
+            magnitude = math.sqrt(sum(float(value) ** 2 for value in expected_axis))
+            if magnitude > 1e-5:
+                close(xyz(host_axis), [float(value) / magnitude for value in expected_axis], .002)
 
-static_light_manifest = scene.get('lighting', {}).get('static_light_import', {})
+static_light_manifest = source_lighting.get('static_light_import', {})
 static_light_records = static_light_manifest.get('components', [])
 selection_policy = static_light_manifest.get('selection_policy', {})
 assert selection_policy.get('min_radius') == SANCTUARY_LIGHT_MIN_RADIUS
@@ -381,28 +405,32 @@ for item in static_light_records:
 source_light_actors = [actor for actor in actors
                        if 'OpenWillow_SourceStaticLight' in
                        [str(tag) for tag in actor.get_editor_property('tags')]]
+imported_light_sources = expected_light_sources if 'static_lights' in opt_ins else set()
+if 'static_lights' not in opt_ins:
+    # Off: no source point/spot light actor may exist; the import reports zero imported.
+    assert not any(isinstance(actor, (unreal.PointLight, unreal.SpotLight)) for actor in actors)
 reported_static_lights = import_report.get('lighting', {}).get('static_source_lights', {})
 expected_orange_scaled = sum(
-    1 for item in static_light_records if item.get('source') in expected_light_sources
+    1 for item in static_light_records if item.get('source') in imported_light_sources
     and item.get('kind') == 'Point'
     and sanctuary_light_calibration('Point', item['brightness'], item['light_color_rgb'])
     < sanctuary_light_calibration('Point', item['brightness']))
 assert reported_static_lights.get('source_components') == len(static_light_records)
-assert reported_static_lights.get('imported') == len(expected_light_sources)
-assert reported_static_lights.get('skipped') == len(static_light_records) - len(expected_light_sources)
+assert reported_static_lights.get('imported') == len(imported_light_sources)
+assert reported_static_lights.get('skipped') == len(static_light_records) - len(imported_light_sources)
 assert reported_static_lights.get('source_brightness_ceiling') == SANCTUARY_LIGHT_BRIGHTNESS_CEILING
 assert reported_static_lights.get('orange_point_light_intensity_scale') == SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE
 assert reported_static_lights.get('orange_point_lights_scaled') == expected_orange_scaled
-assert len(source_light_actors) == len(expected_light_sources)
+assert len(source_light_actors) == len(imported_light_sources)
 source_actor_by_source = {}
 for actor in source_light_actors:
     tags = [str(tag) for tag in actor.get_editor_property('tags')]
-    matching = [tag for tag in tags if tag in expected_light_sources]
+    matching = [tag for tag in tags if tag in imported_light_sources]
     assert len(matching) == 1, (actor.get_actor_label(), matching)
     source_actor_by_source[matching[0]] = actor
-assert set(source_actor_by_source) == expected_light_sources
+assert set(source_actor_by_source) == imported_light_sources
 for source in static_light_records:
-    if source['source'] not in expected_light_sources:
+    if source['source'] not in imported_light_sources:
         continue
     actor = source_actor_by_source[source['source']]
     close(xyz(actor.get_actor_location()), source['position'], .01)
@@ -786,7 +814,15 @@ verified_diffuse_tints = []
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
     assert material.get_editor_property('two_sided') == bool(definition.get('two_sided', False)), name
-    recipe = definition.get('scene_recipe', {})
+    recipe = effective_scene_recipe(definition, opt_ins)
+    if (definition.get('scene_recipe', {}).get('method') == SANCTUARY_XMAS_BULB_METHOD
+            and 'xmas_bulbs' not in opt_ins):
+        bulb_name = definition['scene_recipe']['emissive_layers'][0]['texture'].split('.')[-1]
+        _, emissive_nodes, _ = material_graph(material, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        assert not any(isinstance(node, unreal.MaterialExpressionTextureSample)
+                       and node.get_editor_property('texture') is not None
+                       and node.get_editor_property('texture').get_name() == bulb_name
+                       for node in emissive_nodes.values()), (name, 'bulb emissive while opt-in is off')
     if recipe.get('method') == 'world_map_mask_colorization_v2':
         verified_world_map_recipe.append(verify_world_map_recipe(material, name, recipe))
     host_shading_name = recipe.get('host_lighting_model',
@@ -863,7 +899,7 @@ for name, definition in scene['materials'].items():
             assert any(has_emissive_alpha_mask(graph_nodes, graph_inputs, sample)
                        for sample in emissive_samples), (name, filename, 'missing RGB/alpha emissive mask')
             node = emissive_samples[0]
-        elif (channel == 'diffuse' and definition.get('diffuse_tint') is not None
+        elif (channel == 'diffuse' and 'diffuse_tint' in opt_ins and definition.get('diffuse_tint') is not None
               and host_shading_name != 'MLM_Unlit' and not definition.get('terrain_blend')):
             node = verify_diffuse_tint(material, name, definition)
             verified_diffuse_tints.append(name)
@@ -889,7 +925,8 @@ if scene['map'] == 'MaterialV1Smoke':
     ordinary = placed[actor_label('Synthetic_P', 'Synthetic.Mesh', 0)]
     close(xyz(ordinary.get_actor_location()), [100, 210, 300])
     close(xyz(ordinary.get_actor_scale3d()), [2, 3, 4])
-report = {'verified_section_actors': len(placed), 'verified_channels': sorted(verified_channels),
+report = {'sanctuary_host': {'profile': sanctuary_profile(scene), 'opt_ins': sorted(opt_ins)},
+          'verified_section_actors': len(placed), 'verified_channels': sorted(verified_channels),
           'verified_unlit_materials': verified_unlit_materials,
           'verified_native_skybox_placements': verified_native_skybox,
           'verified_sky_approximation_materials': verified_sky_approximations,
@@ -899,7 +936,7 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_constant_materials': verified_unlit_constants,
           'verified_diffuse_tint_materials': len(verified_diffuse_tints),
           'expected_diffuse_tint_materials': sum(
-              1 for d in scene['materials'].values() if d.get('diffuse_tint') is not None
+              1 for d in scene['materials'].values() if 'diffuse_tint' in opt_ins and d.get('diffuse_tint') is not None
               and d['channels'].get('diffuse') and not d.get('terrain_blend')
               and d.get('scene_recipe', {}).get('host_lighting_model',
                                                 'MLM_Unlit' if d.get('unlit_constant_color') else
