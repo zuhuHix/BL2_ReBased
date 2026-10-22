@@ -8,10 +8,12 @@ from scene_import_rules import (SANCTUARY_OPT_IN_ENV, SANCTUARY_OPT_IN_NAMES,
                                 SANCTUARY_XMAS_BULB_METHOD,
                                 effective_scene_recipe, host_sky_cloud_opacity,
                                 sanctuary_opt_ins, sanctuary_profile,
-                                sanctuary_source_lighting)
+                                sanctuary_source_lighting, sanctuary_verifier_checks)
 
 SANCTUARY_SCENE = {'map': 'Sanctuary_P', 'lighting': {'sky_light': {'light_brightness': 1.0}}}
 OTHER_SCENE = {'map': 'Other_P', 'lighting': {'sky_light': {'light_brightness': 1.0}}}
+OTHER_SCENE_NO_LIGHTING = {'map': 'Other_P'}
+SANCTUARY_SCENE_NO_LIGHTING = {'map': 'Sanctuary_P'}
 XMAS_DEFINITION = {'scene_recipe': {'method': SANCTUARY_XMAS_BULB_METHOD,
                                     'emissive_layers': [{'texture': 'Pkg.Tex.Bulbs', 'channel': 'RGB'}]}}
 
@@ -57,6 +59,23 @@ class SanctuaryHostFlagsTest(unittest.TestCase):
                          frozenset())
         self.assertEqual(sanctuary_source_lighting(OTHER_SCENE), {})
         self.assertEqual(sanctuary_source_lighting(SANCTUARY_SCENE), SANCTUARY_SCENE['lighting'])
+
+    def test_verifier_runs_sanctuary_checks_only_for_sanctuary_p_with_lighting(self):
+        self.assertTrue(sanctuary_verifier_checks(SANCTUARY_SCENE))
+        self.assertFalse(sanctuary_verifier_checks(OTHER_SCENE))
+        self.assertFalse(sanctuary_verifier_checks(OTHER_SCENE_NO_LIGHTING))
+        self.assertFalse(sanctuary_verifier_checks({}))
+
+    def test_other_map_without_lighting_has_no_source_lighting_for_import_or_verify(self):
+        self.assertEqual(sanctuary_source_lighting(OTHER_SCENE_NO_LIGHTING), {})
+        self.assertEqual(sanctuary_opt_ins('static_lights,graffiti_decals', OTHER_SCENE_NO_LIGHTING),
+                         frozenset())
+
+    def test_sanctuary_p_without_lighting_runs_checks_but_has_no_source_lighting(self):
+        # Edge case: the Sanctuary checks stay on, but the importer and the verifier both
+        # see an empty source-lighting record, so no selection policy is asserted.
+        self.assertTrue(sanctuary_verifier_checks(SANCTUARY_SCENE_NO_LIGHTING))
+        self.assertEqual(sanctuary_source_lighting(SANCTUARY_SCENE_NO_LIGHTING), {})
 
     def test_non_sanctuary_map_keeps_the_raw_cloud_cap(self):
         self.assertEqual(host_sky_cloud_opacity(OTHER_SCENE, 2.0), 2.0)

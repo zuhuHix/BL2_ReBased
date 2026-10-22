@@ -87,7 +87,10 @@ moves by a few tenths between rounds; these scores are not a measured improvemen
   129 packages have `LightComponents` in their name table, and the only exports of that name are
   `StaticLightCollectionActor.LightComponents` (`Core.ArrayProperty`) and its inner (`Core.ComponentProperty`, an
   object-reference property). Since a tagged property takes its type from the declaring class, every serialized
-  `LightComponents` in the install is an array of object references, which is what the schema line declares. Instances, as a
+  `LightComponents` in the install is an array of object references, which is what the schema line declares. DLC, same method over all 1,096 `.upk` files under the install's `DLC` directory (the `--include-dlc` scope): 151 carry
+  the name (instances of the base-game class) and none declares a property named `LightComponents`; 2 files failed with
+  "invalid package magic" (`Mancana_Textures_Data.upk`, `Mancana_Textures_Meta.upk`, texture payload files with a `.upk`
+  extension, which the reader cannot open at all). Instances, as a
   cross-check: a decode pass batched per export class with `--properties-batch --array-schema` stopped at its 30-minute
   budget after 666 packages; within those, 48 packages carry 119 occurrences, all owned by `StaticLightCollectionActor` and all
   decoded as `ObjectProperty` arrays, with no reader failure.

@@ -297,6 +297,16 @@ def sanctuary_source_lighting(scene):
     return scene.get('lighting', {}) if sanctuary_profile(scene) else {}
 
 
+def sanctuary_verifier_checks(scene):
+    """True when verify_level.py runs the Sanctuary-only checks (same gate as the importer).
+
+    Other maps get the generic inspection-rig checks instead. A Sanctuary_P scene
+    without a 'lighting' record still runs these checks, but its source-lighting
+    records are empty, so the verifier skips the selection-policy asserts.
+    """
+    return sanctuary_profile(scene)
+
+
 def host_sky_cloud_opacity(scene, source_opacity):
     """Sanctuary cloud-band calibration only on Sanctuary_P; the source cap otherwise."""
     if sanctuary_profile(scene):
