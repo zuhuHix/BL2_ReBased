@@ -1271,3 +1271,49 @@ instance). The 8/10 target is not reached. Open, in the order the last critics r
   move now joins the queue, and the dispatcher decides the boundary rule against the current selection.
 - Two synthetic checks (both fail on the round-19 code): navigation 32/32. Suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE**
   (bounded item set).
+
+## Rounds 20-22 (2026-10-22, lane D): matched references
+
+AI-assisted (Claude, with Codex sub-agents for analysis, page fits and critics). Machine: the second PC. Real frames, host frames,
+critic reports and the rejected round's diffs stay under ignored `local/realgame/d20/` and `local/orch/D20/`.
+
+**Matched real-game session.** The earlier references came from other saves (other level and items, some third-party console
+shots). A new session (`tools/real_game/realgame.ps1`, hub lock, saves backed up and restored with every file hash-checked, driver
+removed) put the real game in the host's capture state: the six bounded recipes spawned by full definition into the same slots,
+Maya at level 36 (set in memory), two weapon slots, $0, keyboard glyphs, Phaselock 1/1 and 31 points; 1280x720 windowed. Left
+different: the map (Windshear Waste), the character view (from behind), ammo maximums (the save's upgrades) and the name prefixes
+the game rolled for four legendaries. The host side runs `-owinvshots` with `-owlevel=36`, an empty gear manifest and
+`-owslots=2 -owmoney=0 -owerid=0`; the capture block drops the old Mind's Eye points and adds a D6b frame (Down x4 after leaving the
+overview). Seen in the session (**confirmed in game** for what the frames show): each sort selects its first entry, an empty ITEMS
+sort selects an (EMPTY) cell, Right from Equipped returns to the remembered backpack cell (also an empty one), F closes Inspect
+although its hint says Escape, Down x4 from Phaselock reaches Sustenance. Three mouse clicks on the backpack moved the focus to the
+Equipped panel; where the game's own cursor was is not known, so the mouse-click question stays open.
+
+**Round 20** (baseline critic 5.95/10 on 14 pairs). Card content from the parts (`docs/verification/INVENTORY_CARD_STATS.md`):
+Accuracy rows, coloured text lines, Burn/Ignite rows, prices. Page: thumbnails kept after a sort, sort focus as observed, a backpack
+weapon compared with the active slot's weapon (`WillowInventoryManager.GetEquippedAnalogue`, reached from the equipped panel's
+script), Skills Up/Down between tiers (`SkillTreeGFxObject.HandleInputKey` -> native `Navigate`; see
+`SKILL_TREE_NAVIGATION.md`). Critic **7.39**.
+
+**Round 21.** A glass-sheet stand-in drawn by the page (`glass_sheet.js`; the game's brightening blend cannot be reproduced over a
+viewport composited with alpha), Left from the Backpack to the equipped analogue, the Torgue explosive badge, Inspect, scroll and
+gear-cell fits. Two bugs found by the captures: `serve.py` did not route `skill_nav.js` (404), and rebuilding the Skills hit layer
+under a resting cursor selected the tile under it. Critic **7.85** (its D6/D7 remarks mixed the two pairs up; fair scores there would
+put the mean near 8.0, but that is our reading, not a measurement).
+
+**Round 22** (card, focus-panel, plate and glass fits; stable order for equal sort keys) scored **7.57**: the tie change moved the ALL
+selection off the Volcano and blanked the BRANDS thumbnails. A fourth attempt (not committed) still left the VALUE thumbnails blank
+and clipped the Inspect hint. The page files are back at round 21.
+
+**Where the pages are (round 21, 7.85).** Open, in the critic's order:
+
+1. VALUE sort thumbnails are blank (the thumbnail placement in that sort is wrong; round 20's occlusion test hides them).
+2. Within-brand order in BRANDS differs from the real frame: the real ALL and BRANDS frames order the same equal-key pairs
+   differently, so no single tie-break fits both (the sort is native, UNVERIFIED).
+3. Card frame a few pixels short and less turned than real; focus panel 13 px tall; count and ammo plates a few pixels off.
+4. Inspect: no 3D turn on the card and hint line (the real hint rises to the right), no emblem, backdrop slightly light.
+5. Zoom lines 0.1 high on two cards; one flavour line wraps differently (Ruffle's text metrics).
+6. Number keys choose a weapon slot for a backpack transfer (a host control; the game's behaviour is not observed).
+
+Checks on the final state: inventory suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set; the first run
+failed step 20 and skipped seven, fixed by item 6 above), navigation 39/39, skill navigation 6/6, CTest 10/10, packages 9/9.

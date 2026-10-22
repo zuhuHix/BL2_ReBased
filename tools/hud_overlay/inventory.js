@@ -146,6 +146,7 @@ const HEADER_SHRINK = 0.93, HEADER_SHIFT_X = 15, HINT_LIFT = 2, HINT_SHIFT_X = -
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
+let slotKeyChoiceFor = null; // the backpack item a number key last chose a weapon slot for
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
@@ -613,7 +614,10 @@ function beginBackpackTransfer() {
   targetGearSlot = gearSlotForItem(source);
   compareId = equippedIdFor(source);
   const compareWeaponSlot = state.slots.indexOf(compareId);
-  if (!targetGearSlot && compareWeaponSlot >= 0) targetSlot = compareWeaponSlot;
+  // The transfer starts on the equipped analogue (the compare partner) unless a number key already chose a slot for
+  // this item (a host control; the original's number-key behaviour here is not observed).
+  if (!targetGearSlot && compareWeaponSlot >= 0 && slotKeyChoiceFor !== source.id) targetSlot = compareWeaponSlot;
+  else if (!targetGearSlot && slotKeyChoiceFor === source.id) compareId = state.slots[targetSlot] || null;
   firstRow = scrollForSelected(backpackEntries());
   render();
 }
@@ -2064,7 +2068,7 @@ function handleKey(event) {
   else if (key === 'escape' && transferSourceId) { event.preventDefault(); finishTransfer(true); syncSelection(); }
   else if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
-  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); setTargetSlot(Number(event.key)-1); }
+  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); setTargetSlot(Number(event.key)-1); slotKeyChoiceFor = selectedId; }
   else if (key === 'enter') { event.preventDefault(); equip(); }
   else if (key === 'e') { event.preventDefault(); equip(); }
   else if (key === 'c') { event.preventDefault(); toggleCompare(); }

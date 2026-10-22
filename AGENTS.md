@@ -106,6 +106,9 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   Rounds 16-19 (2026-10-21) apply the movie's own 3D turn (`menu3d.js`), make empty backpack cells selectable and follow
   fresh real-game captures (critic 7.27 before, 7.57-7.67 after). Open: the curved glass sheet, residual perspective,
   gear compare (not yet observed in the real game), white flavour lines on cards.
+  Rounds 20-22 (2026-10-22) compare against matched real-game frames (same items, level 36, keyboard): card text lines and
+  rows from the parts, compare with the equipped analogue, Skills Up/Down, a glass-sheet stand-in (critic 5.95 baseline,
+  7.85 best; round 22 regressed and was not kept). Open: VALUE-sort thumbnails, BRANDS tie order, Inspect 3D turn.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
 - **Action-skill HUD (2026-10-22):** Maya's Phaselock icon (cooldown veil) and Siren emblem (drains while the target is
   held) drive BL2's own HUD clips from the host's Phaselock state, with frame rules read from the live movie; a 2D
