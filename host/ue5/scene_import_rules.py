@@ -10,6 +10,20 @@ SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS = 5.0
 SANCTUARY_SKY_INTENSITY_CALIBRATION = 1.5
 SANCTUARY_SKY_LIGHT_COLOR_CALIBRATION = (3.0, 2.1, 1.0)
 SANCTUARY_AUTO_EXPOSURE_CALIBRATION_BIAS = -1.5
+# Round-4 host grade, UNVERIFIED and tuned only against the matched Sanctuary
+# captures (outdoor 02/05/06 washed and neutral, interior 01/03/08 too dark).
+# The game is warm (sand, rust facades, warm highlights) with firmer contrast.
+# UE white temp above 6500 warms the image; these are not UE3 units.
+SANCTUARY_HOST_WHITE_TEMP = 8200.0
+SANCTUARY_HOST_WHITE_TINT = 0.0
+SANCTUARY_HOST_COLOR_SATURATION = (1.12, 1.02, 0.92, 1.0)
+SANCTUARY_HOST_COLOR_CONTRAST = (1.10, 1.10, 1.10, 1.0)
+# Added to the source color offset (or zero): lifts interiors that were too dark.
+SANCTUARY_HOST_SHADOW_LIFT = (0.03, 0.03, 0.035)
+# Round-4 sky calibration, UNVERIFIED: the recorded cloud_cap_opacity drives
+# broad bright streaks that the game sky does not show at this strength. The
+# cloud band is scaled down; the recorded source value stays in scene.json.
+SANCTUARY_SKY_CLOUD_OPACITY_CALIBRATION = 0.14
 
 # Sanctuary-only host choices. Light units and these thresholds are screenshot
 # calibration, not a UE3-to-UE5 unit conversion.
@@ -224,6 +238,14 @@ def native_sky_approximated(scene):
                for material in materials):
             return True
     return False
+
+
+def sanctuary_sky_cloud_opacity(source_opacity):
+    """Host cloud-band opacity: recorded source value times the round-4 calibration."""
+    if (not isinstance(source_opacity, (int, float)) or isinstance(source_opacity, bool)
+            or not math.isfinite(source_opacity) or source_opacity < 0):
+        raise ValueError('Sky cloud opacity must be a finite non-negative number')
+    return min(float(source_opacity) * SANCTUARY_SKY_CLOUD_OPACITY_CALIBRATION, 1.0)
 
 
 def temporary_sky_policy(scene):
