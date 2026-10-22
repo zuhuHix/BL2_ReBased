@@ -365,3 +365,34 @@ This final pass reuses the existing UModel / UE Viewer build 1590 exports under 
 - **Metal and smaller items:** Jakobs metal is unchanged because the Inspect calibration has not established a safe material-only correction. The pistol ADS hold remains broad; the Maliwan paint accents remain pinker. `OpenWillowGunLook` exposes a shared emissive scalar, not a per-weapon hue control, so no hue override was added.
 
 Validation: the UE5 Development module build succeeded; the generated material import succeeded with 0 errors and 0 warnings. Final host evidence is 16 PNGs in ignored `local/laneE/host_r4/`; `python local/laneE/make_pairs.py r4` produced 14 comparisons in ignored `local/laneE/pairs_r4/` (no mission-pistol ADS or reload reference). Synthetic checks passed: `python tests/weapon_view_model_test.py` (12/12) and `python tests/weapon_reload_anims_test.py` (2/2). UModel extraction was reused, with no extraction rerun. Visual checks compare the host captures to the existing real-game frames; there was no fresh original-game runtime or gameplay validation.
+
+## 15. Lane E status after four rounds (2026-10-22)
+
+Guns: the starting Jakobs pistol (`slice_pistol`), the lent Maliwan Fire pistol (`slice_mission_pistol_fire`), the Jakobs assault rifle
+(`slice_assault_rifle`) and the Hyperion SMG (`slice_smg`). Real-game reference: one SDK session on 2026-10-22 (`tools/real_game/scripts/
+weapon_parity_probe.py`; output, frames and the measurement note under ignored `local/realgame/laneE/`). In that session one live skill effect
+doubled fire rate and damage and halved reload time on every held gun (identity not read), so the host keeps the card base values; the base
+values read live equal the cards. The Fire pistol vanished from the inventory when the probe readied it (cause `UNVERIFIED`, probably mission-item
+handling), so it has no live ADS or reload frames; its older idle and burst frames (`local/realgame/orchC/`) were used.
+
+Read live and used: `ReloadCompletePercent` (ammo refills at 0.55 / 0.65 / 0.70 of the reload; matched by the refill tick), `ZoomTime` 0.2 s
+(zoom-in measured 0.18-0.20 s), `ZoomedEndFOV` 50 / 45 / 25.28, `WeaponMaxFastReloadAnimTime`, the muzzle and eject sockets, `MuzzleFlashDuration`
+(0.33 s in the data; the visible flash is gone 0.12-0.13 s after the last shot in the frames), no `TracerTemplate` on any of the four types.
+
+Independent critic (a separate agent scoring only host/real pairs, 0-10): round 1 5.8, round 2 5.5 (round 1's Fire-pistol frames held the wrong
+gun, so the two are not comparable), round 3 6.3, round 4 6.5 (Jakobs pistol 6.7, Maliwan 7.5, AR 6.3, SMG 6.0). The 8/10 target was not reached
+in four rounds. Final pairs: `local/laneE/pairs_r4/` and the hub gallery; report `local/laneE/critic_r4.md`.
+
+Open, most visible first:
+
+- **SMG flash at the rear of the gun.** The SMG's (and the shotguns') cooked muzzle socket hangs off `Root` with a -Y offset
+  (`SMG_Barrel_Maliwan_Muzzle` at about (0, -27, 12)), while the pistol and AR sockets hang off `Barrel` with the offset on X. The host draws the
+  SMG flash about 27 cm behind the receiver, which fits a Y mirror between the cooked bone frame and the imported mesh's `Root`. Suspected,
+  not tested; the eye sockets are on `Root` too, so a fix must recheck the ADS fit (lateral alignment does not depend on that sign, depth does).
+- **SMG hip size:** about 370 px wide against 242 px in the real idle frame with scale 1.0 and the correct arms set; cause not found.
+- **Reload mid-poses** of the AR (fills too much of the view) and SMG (hand placement, cant) still differ although both clips start together.
+- **ADS widths:** pistol about 20 percent too broad, AR about 20 percent too narrow.
+- **Look:** Jakobs metal reads warmer and greyer than the real frames (different scene light; not changed without an Inspect-safe cause); the
+  Maliwan accents read pinker; Maya's forearm reads narrower and paler than the real blue-white sleeve.
+- **Not covered:** sound (no host gun audio), impact effects beyond the existing stand-in, recoil feel (kick channels are read; the mapping onto
+  the additive clip is a fit).
