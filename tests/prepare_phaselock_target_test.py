@@ -32,13 +32,14 @@ def test_clip_file_picks_the_named_set():
 def test_host_target():
     target = {'dest': '/Game/X/Beast', 'skeletal_mesh': {'path': 'Char_Fake.Mesh.Skel_Fake'},
               'mesh_component_properties': {'translation': {'X': 0, 'Y': 0, 'Z': -50}, 'scale': 0.8},
-              'observed': {'collision_radius': 70.0, 'collision_height': 48.0, 'source': 'made up'}}
+              'observed': {'collision_radius': 70.0, 'collision_height': 48.0, 'source': 'made up',
+                           'host_visual_scale': 0.9}}
     host = t.host_target('Beast', target)
     assert host['mesh'] == '/Game/X/Beast/Meshes/Skel_Fake/SkeletalMeshes/Skel_Fake.Skel_Fake'
     assert host['idle'] == '/Game/X/Beast/Animations/Anim_Beast_Idle.Anim_Beast_Idle'
     # Floor-based origin: the cylinder centre is CollisionHeight above the floor, the mesh hangs by Translation.Z.
     assert host['mesh_offset_z'] == -2.0
-    assert (host['mesh_scale'], host['collision_radius'], host['collision_height']) == (0.8, 70.0, 48.0)
+    assert (round(host['mesh_scale'], 2), host['collision_radius'], host['collision_height']) == (0.72, 70.0, 48.0)
     # The host derives the clip paths from the idle path by replacing "Idle".
     assert host['idle'].replace('Idle', 'PhaseLock_Lift').endswith('Anim_Beast_PhaseLock_Lift.Anim_Beast_PhaseLock_Lift')
 

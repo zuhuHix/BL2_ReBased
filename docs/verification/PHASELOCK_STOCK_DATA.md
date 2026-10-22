@@ -1165,3 +1165,27 @@ bullymong's Sanctuary colour and pose, and the screen-refraction effect remain o
 weighting, FOV conversion used for these captures, outer-edge threshold, and material/shader stand-ins are **UNVERIFIED**
 as exact stock behavior. The 8/10 critic target was not evaluated in this implementation turn; hand the pair set to the
 parent for review.
+
+## Round 19 (2026-10-22): target scale, dark interior, and wash/orb fits
+
+Frames: host captures and host-left/game-right pairs under ignored `local/laneB/r3/`, matched against
+`local/realgame/phaselock/matched_650/run2/frames_at/`. Final pairs use the Round 18 switches
+`-owfov=62.15 -owfpfov=45 -owphaselockpitch=3.5 -owcombatpawyawoffset=0 -owcombatpawn=Bullymong` at 1280 x 720.
+Every Round 19 fit below is **UNVERIFIED** as stock rendering behavior.
+
+| Concern | Evidence and change | Result / remaining |
+|---|---|---|
+| Target scale and facing | The Round 2 visual review measured the host silhouette about 10% larger at 3.00 s. The archetype scale remains 0.70; `tools/prepare_phaselock_target.py` now applies a separate 0.90 host fit, for 0.63. A host-only 180-degree yaw check made the target show its back at 3.00 s, so the existing zero offset is retained. | The final 3.00 s pair shows a smaller target. It remains cool silver/lavender and its face is still less readable than the brown/tan reference. |
+| Target material | The resolved parent is `WillowGame.Common_Materials.Creature.Master_Creature`, but the UModel property listing and local shader-cache lookup still provide no graph or shader-map GUID. The host continues to use the Phaselock target's zone-material instance; no hue was fitted by eye across Sanctuary and Three Horns lighting. | Cause remains unconfirmed. The stock shader/material mismatch is open. |
+| Bubble interior | Restored `ModulateBlack` `DarkCap=1` and `FadeFloor=1` for the loop and end templates, and restored `Mat_EnemyOrbCoreColor` to its decoded weight and texture colour (removed the host x3 weight and blue-violet tint). Using the Round 14 ridge detector's 0.45-0.8 normalized annulus at 4.50 s, RGB moved from Round 2 `[42,41,89]` to final Round 3 `[36,31,60]`; the matched game frame measured `[31,36,80]`. | The host annulus is darker; its blue is below the reference in this detector. The single lower-interior point cited by the Round 2 critic is not the same statistic as this annulus and should not be compared directly. The fit remains open. |
+| 0.80 s wash | The host log shows three large `InitialFlash` sprites active at 0.80 s. Restored `Mat_SirenGlowMOD`'s 0.4 default from 1.0 and clamped the screen-material hue stand-in to the stock shader's saturate range. On the same 920 x 360 host ROI, mean RGB changed from `[197.3,229.3,244.5]` to `[144.1,196.1,226.3]`; the game ROI was `[157.4,214.8,247.2]`. RGB distance to that game ROI fell from 42.5 to 31.1. | The pane is less white and shows more variation. The host still has a visible straight lower seam; the surface-quad scene-colour stand-in is **UNVERIFIED**. The two scenes differ, so ROI colour distance is only a visual proxy. |
+| Hand orb | Added a 0.8 scale for the `Center` emitter and a red/green texture fit while preserving blue. A 20 x 20 px center sample changed from Round 2 `[184.9,221.0,251.0]` to final Round 3 `[161.6,210.7,251.2]`; the matched game sample was `[138.3,182.6,252.6]`. | The orb is smaller and less pale, but it still looks cyan and smooth compared with the game's royal-blue core and filaments. The red/green fit remains **UNVERIFIED**. |
+| 4.50 s rim | The shader's noise/normal displacement already frills the ring, but the host capped late push at 0.7. The capture log reads `Dyn=0.74` at 4.50 s; the host fit now ramps to 1.0 by `Dyn=0.75` while retaining the small early push. | The edge is more irregular in the final pair. The band remains broader and more purple than the reference; detached lower flecks remain. |
+
+### Validation
+
+* **Automated checks:** `tests/prepare_phaselock_target_test.py` passed 4/4. CMake Release libraries built successfully. The UE 5.8 `OpenWillowEditor Win64 Development` build succeeded with the 14.50 toolchain (4 actions, 26.6 s). The FX importer completed twice; each run reported 18 material instances, 21 textures, 3 meshes, and 3 skipped materials (impact half-moon without exported texture parameters, unresolved energy-spike modulate graph, and screen-distortion SirenSuction).
+* **Visual validation:** final host-left/game-right JPG pairs are `local/laneB/r3/pairs/phaselock_{0.25,0.50,0.80,1.50,3.00,4.50}s.jpg`, each 1920 x 570. The 0.50, 0.80, and 4.50 s comparisons were reviewed at full size. No independent critic score was produced in this implementation turn.
+* **Runtime/gameplay validation:** the UE host capture run exited successfully and wrote the timed frames. Borderlands 2 was not launched in this round; the captures do not establish gameplay parity. No new UModel extraction was run; the Round 18 material inspection remains the shader-identity evidence.
+
+The target's brown/ochre colour and more readable face, the 0.80 s straight seam, the orb's missing filament detail, the ring's purple breadth, and the lower detached flecks remain open. The 8/10 critic target was not evaluated here; pass the final pairs to the parent for review.

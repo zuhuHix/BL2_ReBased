@@ -274,18 +274,22 @@ def build(name, blend, domain_fn=None):
     elif domain_fn == 'screen':
         # Host stand-in for the compiled screen shader (Round 6): preserve the particle colour's hue, then modulate the
         # view by that tint through the screen mask. Using the mask's brightest RGB channel without the old 0.6 floor
-        # keeps texture gaps between streaks. The stock scene-colour expression remains UNVERIFIED in this surface-domain
-        # stand-in because UE5 did not provide a usable scene sample in either tested post-process location.
+        # keeps texture gaps between streaks. Clamp the hue to the stock shader's saturate range; the 0.80 s particle's
+        # blue channel is HDR and otherwise drives the whole pane toward white through UE5's film curve. The stock
+        # scene-colour expression remains UNVERIFIED in this surface-domain stand-in because UE5 did not provide a usable
+        # scene sample in either tested post-process location.
         luminance = node(unreal.MaterialExpressionDotProduct, 400, 1800)
         mel.connect_material_expressions(color_rgb, '', luminance, 'A')
         mel.connect_material_expressions(node(unreal.MaterialExpressionConstant3Vector, 250, 1900,
                                               constant=unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0)), '', luminance, 'B')
         hue = op(D, color_rgb, '', op(unreal.MaterialExpressionMax, luminance, '', const(0.001, 400, 1950), '', 550, 1800), '', 700, 1700)
+        hue_clip = node(unreal.MaterialExpressionSaturate, 850, 1750)
+        mel.connect_material_expressions(hue, '', hue_clip, '')
         weight = node(unreal.MaterialExpressionSaturate, 700, 1500)
         mel.connect_material_expressions(op(M, brightest, '', color_a, 'A', 550, 1500), '', weight, '')
         emissive = node(unreal.MaterialExpressionLinearInterpolate, 850, 1500)
         mel.connect_material_expressions(const(1.0, 700, 1400), '', emissive, 'A')
-        mel.connect_material_expressions(hue, '', emissive, 'B')
+        mel.connect_material_expressions(hue_clip, '', emissive, 'B')
         mel.connect_material_expressions(weight, '', emissive, 'Alpha')
     elif blend == unreal.BlendMode.BLEND_MODULATE or domain_fn == 'darken':
         # lerp(1, target, weight): weight = mask, x the particle alpha (1 - alpha with AlphaInvert) when UseAlpha, x the
@@ -484,8 +488,8 @@ float2 n2 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 1.5 * t) + 0.5).xy * 
 float n2z = sqrt(saturate(1.0 - dot(n2, n2)));
 float2 direction = float2(n2.y + n1.x, n2z + n1.x);
 // Host calibration (UNVERIFIED): the full push frills the rim on every frame, but the game's rim is a clean ring at 1.5 and
-// 3.0 s and frayed at 4.5 s. The strength therefore grows with the collapse value (Dyn, 0 at the start, 0.75 at the end).
-float strength = lerp(0.15, 0.7, saturate(Dyn / 0.6));
+// 3.0 s and frayed at 4.5 s. The strength therefore grows with the collapse value (Dyn, 0 at the start, 0.74 at 4.5 s).
+float strength = lerp(0.15, 1.0, saturate(Dyn / 0.75));
 float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).rgb;
 // Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
 // reduced and blue raised (round 8: red 0.7 to 0.55, blue 1.3 to 1.4, because a pink fringe remained on the rim).
@@ -513,12 +517,11 @@ float2 viewXY = float2(0.0, 0.0);
 float4 core = Texture2DSample(T1, T1Sampler, uv + parallax * viewXY);
 float2 centred = uv - 0.5;
 float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
-// Host calibration (UNVERIFIED): x3 on the weight (the shader's own weights give a haze several times fainter than the
-// game frames show between core and rim) and a blue-violet tint (the texture is magenta, the game's band is blue-violet).
-float weight = 3.0 * core.r * Col.a * mask * dot(centred, centred);
-// Round 17 fit: the previous blue multiplier 1.6 measured about 108 in the inner annulus against 86 in the game
-// (Round 14's matched capture); keep the red/green fit and reduce only blue. UNVERIFIED against a rebuilt material capture.
-float3 colour = Col.rgb * core.rgb * float3(0.3, 0.5, 1.0);
+// Round 19: restore the stock shader's weight and texture colour. The Round 2 matched 4.50 s frame measured a much
+// brighter, bluer host interior than the game (host 67/40/119, game 8/19/23); the Round 7-17 x3 weight and blue-violet
+// tint contributed light there. The rendering fit remains UNVERIFIED until this rebuilt material is captured.
+float weight = core.r * Col.a * mask * dot(centred, centred);
+float3 colour = Col.rgb * core.rgb;
 float softFade = saturate((SD - PD) / 41.0);
 return float4(min(4.0, colour) * weight * softFade, 1.0);
 """)
@@ -662,9 +665,9 @@ float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
 float base = saturate(2.0 * m2);
 float k = base + mixWeight * (m1 - base);
 float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;   // host calibration (UNVERIFIED): deeper blue, as the game's palm orb
-// Host calibration (UNVERIFIED): the orb texture is scaled by 0.6 instead of the shader's 1.25. At 1.25 the orb's centre is
-// white-blue; the game's palm orb is a saturated deep blue with a bright highlight and thin arcs.
-float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9;
+// Host fit (UNVERIFIED): the first tint changed a matched 20x20 px center sample from 185/221/251 to 164/208/251;
+// the game sample is 138/183/253. Apply the remaining measured host/game ratios to red and green, preserving blue.
+float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9 * float3(0.55, 0.70, 1.0);
 return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
 
