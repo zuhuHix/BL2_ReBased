@@ -6,6 +6,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from collision_geometry import hulls, shapes
 from collision_volumes import apply_live_state, live_observations, volume_record
+from refresh_collision import generated_skeletal_mesh, mesh_export
 
 
 def tags(**values):
@@ -69,6 +70,28 @@ class Collision(unittest.TestCase):
         bad = tags(AggGeom=[{'name': 'ConvexElems', 'status': 'unsupported', 'value': None}])
         with self.assertRaisesRegex(ValueError, 'Undecoded'): hulls(bad)
 
+    def test_refresh_accepts_wiring_mesh(self):
+        # prepare_level places a WiringActor's cable mesh; refresh must find it too.
+        records = [{'path': 'P.WiringMesh_14', 'class': 'GearboxFramework.WiringMesh', 'index': 3},
+                   {'path': 'P.WiringActor_0', 'class': 'GearboxFramework.WiringActor', 'index': 4},
+                   {'path': 'M.Box', 'class': 'Engine.StaticMesh', 'index': 5}]
+        self.assertEqual(mesh_export(records, 'L:P.WiringMesh_14', 'P.WiringMesh_14')['index'], 3)
+        self.assertEqual(mesh_export(records, 'L:M.Box', 'M.Box')['index'], 5)
+        for path in ('P.WiringActor_0', 'P.Missing'):
+            with self.assertRaisesRegex(ValueError, 'Ambiguous mesh'):
+                mesh_export(records, 'L:' + path, path)
+        with self.assertRaisesRegex(ValueError, 'Ambiguous mesh'):
+            mesh_export(records + [dict(records[2], index=6)], 'L:M.Box', 'M.Box')
+
+    def test_refresh_skips_only_prepared_skeletal_mesh_collision(self):
+        mesh = {'source': 'Dynamic:Art.SkeletalPillar',
+                'pose': {'source': 'UModel MD5 animation'}}
+        records = [{'path': 'Art.SkeletalPillar', 'class': 'Engine.SkeletalMesh', 'index': 7}]
+        self.assertTrue(generated_skeletal_mesh(mesh, records))
+        self.assertFalse(generated_skeletal_mesh(
+            {'source': mesh['source']}, records))
+        with self.assertRaisesRegex(ValueError, 'Ambiguous generated skeletal mesh'):
+            generated_skeletal_mesh(mesh, records + [dict(records[0], index=8)])
 
 
 class Volumes(unittest.TestCase):

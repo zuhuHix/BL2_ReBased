@@ -32,6 +32,8 @@ def issue_category(issue):
 def gap_status(material):
     """Explain what kind of follow-up a diffuse gap needs."""
     channels = material.get('channels', {})
+    if material.get('scene_recipe') or material.get('unlit_constant_color'):
+        return 'partial_scene_recipe'
     if material.get('surface_approximation'):
         return 'partial_surface_approximation'
     resource = material.get('cooked_texture_resource')
@@ -111,6 +113,8 @@ def audit(scene):
                 cause, disposition = 'explicit_material_fallback', 'explicit_manifest_material_fallback_partial_unverified'
             elif definition.get('channels', {}).get('diffuse'):
                 cause, disposition = 'recovered_diffuse', 'inspect_native_graph_parity'
+            elif definition.get('scene_recipe') or definition.get('unlit_constant_color'):
+                cause, disposition = 'inspected_material_recipe', 'partial_unverified_scene_recipe'
             elif 'terrain_blend' in definition:
                 # Host weighted-sum of the terrain's layer diffuses
                 # (prepare_terrain.py); it has no single diffuse channel.
@@ -128,6 +132,7 @@ def audit(scene):
                                    else 'intentional hidden collision helper' if cause == 'intentional_helper_hidden'
                                    else 'present geometry with explicit host fallback' if cause == 'explicit_neutral_material_fallback'
                                    else 'present geometry with explicit material fallback' if cause == 'explicit_material_fallback'
+                                   else 'present geometry with inspected material recipe' if cause == 'inspected_material_recipe'
                                    else 'separate building/prop material issue' if scope == 'building_or_prop' and cause not in ('recovered_diffuse', 'terrain_weighted_blend')
                                    else 'present geometry with incomplete material' if cause not in ('recovered_diffuse', 'terrain_weighted_blend')
                                    else 'present geometry with recovered diffuse'),
@@ -142,6 +147,10 @@ def audit(scene):
     partial_surfaces = []
     counts = Counter()
     gap_status_counts = Counter()
+    for name, material in scene['materials'].items():
+        if material.get('scene_recipe') or material.get('unlit_constant_color'):
+            counts['inspected_material_recipes'] += 1
+            counts['inspected_material_recipe_placed_sections'] += len(uses[name])
     for name, material in scene['materials'].items():
         if 'surface_approximation' in material:
             partial_surfaces.append({'source': material['source'],
@@ -159,6 +168,8 @@ def audit(scene):
             continue
         if 'constant_diffuse' in material:
             counts['constant_diffuse'] += 1
+            continue
+        if material.get('scene_recipe') or material.get('unlit_constant_color'):
             continue
         blend = material.get('blend_mode', 'BLEND_Opaque')
         neutral = not any(material['channels'].values())

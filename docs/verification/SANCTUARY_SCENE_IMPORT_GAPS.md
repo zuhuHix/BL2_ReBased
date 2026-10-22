@@ -4,6 +4,74 @@ AI-assisted (Claude), lane A, branch `feature/scene-materials-owners`. Evidence 
 through this repository's reader, a census over every base-game package and one live read of the running game.
 Every report, texture, scene and capture stays under ignored `local/` (`local/lanea/`, `local/realgame/`).
 
+## Matched-viewpoint parity pass (2026-10-21, feature/sanctuary-parity-r2)
+
+This pass uses the five matched pairs in `C:\Users\yorad\Documents\BL2_ReBased\local\hub-gallery\2026-10-21\`
+(host left, game right) and reads the local cooked packages. The screenshots stayed outside the repository. The material
+recipes below record `partial_unverified`; no post-change UE import, screenshot comparison, or real-game check was run
+in this lane.
+
+| Gap | Package finding and change | Remaining work | Confidence |
+| --- | --- | --- | --- |
+| Customization machine | `CM_Mat` already had named `p_emissive` -> `CM_Comp`, but the importer omitted the chain's `p_EmissiveScale`; it now reads and applies that vector. The second machine material used a generic gradient despite cooked `CM_MachineBanner` and `EnergySwirls_Dif_Tex`; `customization_banner_swirl_v1` uses the banner as color and swirls as cyan emissive. The masked Unlit Hyperion eye had no supported channels, so Material v1 made it transparent; exact eye instances now use their parent `p_EyeColorA` as an opaque Unlit constant. | The runtime side-panel instance reported in the prior live read is not decoded. The panel color, swirls, mask and animation are still approximations. | High for resource identity and missing scale; medium for layer choice; `UNVERIFIED` visually. |
+| Moxxi entrance | `Mat_SanctuaryMoxxis` has the diffuse plus two sparse mask atlases; `Mati_LightStrips_01` has `LightStrip_Comp` plus a diffuse. Existing inference treated only diffuse as visible. `moxxi_neon_masks_v1` maps inspected mask channels to emissive colors, and `light_strip_component_emissive_v1` uses the component atlas as emissive RGB. | Native palette, bulb emission strength and bloom are not decoded. These host colors are approximations. | High for texture dependencies; medium for mask-to-color mapping; `UNVERIFIED` visually. |
+| Distant mountain | `Mat_MountainDistant` cooked both `SkyboxMountain_Dif` and `SkyboxMountainSnow_Dif`; the previous fallback chose the dark rock-and-snow photo and omitted the mostly snowy layer. `distant_mountain_snow_color_fallback_v1` now selects the snowy texture. | Rock/snow blend and UV modulation are not decoded. | High for texture identity; medium for intended layer; `UNVERIFIED` visually. |
+| HQ map table/projector | `Mat_WorldMap` cooks `WorldMap_Comp` and a reflection cube. The texture has separate R/G/B masks, not pre-colored land/route pixels; the former unsupported-channel path left the neutral table face. `world_map_mask_colorization_v1` colorizes R as cyan land, G as red routes/grid and B as green markers, then emits an Unlit display. The ClapTrap lens now has a teal Unlit constant. | The projector avatar is an `Engine.Emitter`/particle component omitted by this mesh-only importer; its scene placement is visible in the records but its system is not imported. The table palette and animated markers remain approximations. | High for texture/channel evidence; medium for palette; projector effect remains open; `UNVERIFIED` visually. |
+| Sky and lighting | The scene already carries the observed `Prop_Skybox.Meshes.Sky_Dome` approximation. When an accepted dome is present, the host now omits its temporary UE5 `SkyAtmosphere` and blue shell. `lighting` now exports the placed SkyLight, HeightFog, all decoded post-process settings, the directional actor transform, WorldInfo presence and baked-light component counts. The host reuses `OpenWillow_SkyFill` with the decoded SkyLight colors and adds the decoded HeightFog color, density and start distance. | UE3-to-UE5 intensity/density interpretation is `UNVERIFIED`. The directional component properties fail with `invalid FName`, so only transform is known and the host Sun remains an inspection stand-in. Four PostProcessVolume settings sets are decoded, but brush bounds/unbound flags are not; they are exported and not applied. WorldInfo properties contain no `DefaultPostProcessSettings`. Baked collections are not spawned as dynamic lights. | High for decoded actor/property identity; low-to-medium for host light interpretation; `UNVERIFIED` visually. |
+
+The generated local light census finds one `DominantDirectionalLight`, one `SkyLightToggleable`, one HeightFog and four
+PostProcessVolume actors; there are no placed PointLight or SpotLight actors in the loaded levels. The directional
+actor's decoded rotation now aims the host Sun, while host intensity/color remain stand-ins. Its component properties
+still fail with `invalid FName`. The 13 `StaticLightCollectionActor` records contain 962 point and 61 spot components;
+six more point components belong to `InteractiveObjectDefinition` records and one belongs to a `WillowAIPawn`. All
+are left out of the static scene import: the collection lights are baked and the other components have definition or
+AI owners rather than verified placed light actors. Four PostProcessVolume settings records are retained in
+`local/sanctuary/scene.json` with `settings_only_unverified` status.
+
+### External-tool check
+
+UModel / UE Viewer was benchmarked against the customization-machine mesh with
+`tools/export_with_umodel.ps1 -UModel 'C:\Users\yorad\Tools\UEViewer\umodel.exe' -Cooked 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2\WillowGame\CookedPCConsole' -Package Sanctuary_P -Object CustomizationMachine`.
+It was UE Viewer build 1590 (source: [Gildor/UEViewer](https://github.com/gildor2/UEViewer)); the object-only run took
+about 0.13 seconds and wrote three files total (run log, glTF and binary payload; 103,047 bytes) under ignored
+`local/external/umodel/Sanctuary_P-20261021-231419985-dcdca202`. It emitted no texture files and no duplicate exports.
+Warnings included unsupported `RB_BodySetup`, missing `Common_Materials.Master_World` dependency resolution and unknown
+material-expression editor fields. The test confirms a useful geometry/material-dependency inspection path, but it did
+not replace the package reader for material identity or texture extraction.
+
+### Regeneration and import
+
+The fresh run used `build/Release/ow-package.exe` and produced 4,446 base placements, 386 base materials and 141 issues;
+terrain preparation added 15 components and 19 materials, BSP preparation read 2 models / 24 components / 105 sections,
+and the pillar exporter added its four local sections. `prepare_sanctuary_pillar.py` required NumPy in addition to the
+installed Pillow; NumPy 2.5.4 was installed with `python -m pip install --target local/python-deps numpy` under ignored
+`local/python-deps` for that run. Commands:
+
+```powershell
+python tools/prepare_level.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --map Sanctuary_P --output local/sanctuary
+python tools/prepare_terrain.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --scene local/sanctuary --collision
+python tools/prepare_bsp.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --scene local/sanctuary --collision
+$env:PYTHONPATH = Join-Path (Get-Location) 'local/python-deps'
+python tools/prepare_sanctuary_pillar.py --umodel 'C:/Users/yorad/Tools/UEViewer/umodel.exe' --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --reader build/Release/ow-package.exe --scene local/sanctuary/scene.json --output local/sanctuary
+python tools/refresh_collision.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --scene local/sanctuary
+```
+
+`refresh_collision.py` records three statically blocking volumes and four `dynamic_unobserved` volumes without a live
+volume capture. The expected count of five blockers was not verified; a parent-provided `--live-volumes` observation is
+needed to determine whether the dynamic volumes raise the count to five. A prepared UModel SkeletalMesh pillar has no StaticMesh collision export,
+so collision refresh skips that one exact pose-tagged asset and records `skeletal_meshes_skipped: 1`; ordinary
+StaticMesh and WiringMesh provenance checks still run. This invocation printed 312 supported, 115 absent, 2 unsupported,
+518 convex hulls, 4 triangle-mesh policies, 3 blocking volumes, 4 dynamic-unobserved volumes, 4 non-blocking volumes,
+0 live mismatches and 0 unsupported volume records.
+
+The follow-up manifest audit reports 4,914 placed sections, six partial scene recipes covering 13 sections, zero
+unassigned sections, and two remaining opaque missing-diffuse definitions with no placed sections. Those counts describe
+manifest coverage; they do not validate rendered appearance.
+
+After this scene is ready, import in the UE editor with
+`tools/run_ue_level.ps1 -ImportOnly`; then the parent can compare with `tools/test_ue_viewer.ps1 -Inspect`. The importer
+must be rebuilt only if C++ changes; this pass changes only Python import code, so no editor module rebuild is needed.
+
 ## Counts before and after
 
 Both columns are the full Sanctuary pipeline (`prepare_level.py`, `prepare_terrain.py --collision`,
@@ -39,12 +107,12 @@ the inputs it omits, refuses to apply when the named texture is missing from the
 | --- | --- | --- | --- |
 | `Mat_Icicles` (16) | `Ice_Dif` is the named `P_InternalGlowTexture`, tinted by `P_InternalGlowColor`; the cube is `P_SimpleReflect` | `SnowDrift_01_Dif`, the one unnamed `_Dif` left; the named `IcicleMultiple_Nrm` stays the normal | internal glow, reflection |
 | `Mat_PatchySnow_Skybox01` (10) | no named samplers; `C1`/`C2` tint and fresnel vectors | `DirtySnow_Dif` (same reading as `Mat_PatchySnow`) | noise-masked snow/gravel blend, tints |
-| `Mat_MountainDistant` (5) | no named samplers; `SkyboxMountain_Dif` is a rock-and-snow photo, `SkyboxMountainSnow_Dif` mostly white | `SkyboxMountain_Dif` | snow layer |
+| `Mat_MountainDistant` (5) | no named samplers; `SkyboxMountain_Dif` is a rock-and-snow photo, `SkyboxMountainSnow_Dif` mostly white | previously `SkyboxMountain_Dif`; changed in the matched-viewpoint pass below to `SkyboxMountainSnow_Dif` | rock/snow layer |
 | `Mat_DirtySnowDistant` (1) | as PatchySnow_Skybox01 | `DirtySnow_Dif` | snow blend, tints |
 | `Mat_ChemTank02` (1) | the tank atlas next to a smoke overlay `_Dif`; cube is `P_SimpleReflect` | `ChemTank02_Dif` | packed `_Comp` mask, six colour vectors, reflection, smoke |
 | `Mati_SancSpire_Base` / `_Tile` (6) | `Master_SancSpire` HLS master | already baked by `prepare_sanctuary_pillar.py` (DECISIONS 2026-09-23), which also serves the static spire arm and base placements | as recorded there |
 
-`Mat_WorldMap` (one section, Roland's map table): not changed. Its cooked list is `WorldMap_Comp` and the named `cube`. The live capture of the table shows pale cyan land on a darker sea with red routes and green markers, while `WorldMap_Comp` holds a red landmass, green grid and blue markers: the channels are masks that the stripped graph recolours. Using the texture as RGB would be wrong, and no recolouring is recovered, so the section keeps the neutral fallback. It is the one remaining placed opaque gap.
+`Mat_WorldMap` (one section, Roland's map table): this was the state before the matched-viewpoint pass. The local importer now uses the three inspected `WorldMap_Comp` channels through `world_map_mask_colorization_v1`; the channel-to-palette mapping is still `UNVERIFIED`, and the map section has not yet been visually rechecked.
 
 Not changed: `Mati_DryGrassRocks` and `Mat_IceRoad` have no effective placed section; the 13 non-opaque gaps
 (collision, water, fog sheets, title cards, transition planes, the masked `_Teleported` hull) keep their existing
@@ -115,8 +183,8 @@ this machine: `run_ue_level.ps1 -ImportOnly` (4,914 section actors, 0 material c
 collision and UV verifiers passed) then `test_ue_viewer.ps1 -Inspect` (6 views, Success). Views: town entrance,
 plaza spire, Moxxi's (star lights, tapestries), Roland's HQ map table, customization machine, bounty board.
 
-Independent critic (Codex GPT-6-Luna, given only the file paths), verbatim overall: **4.5/10**. Its top five
-differences, in its order:
+Historical critic result, before the matched-viewpoint changes below (Codex GPT-6-Luna, given only the file paths),
+verbatim overall: **4.5/10**. Its top five differences, in its order:
 
 1. The host lacks the reference's nighttime lighting and blue, teal and warm practical-light palette across nearly
    all six views.
@@ -129,13 +197,12 @@ differences, in its order:
 5. The tapestry star lights have oversized black rectangular backings, and the spire monument is cropped at the top
    in the host.
 
-Reading for this lane: the object set at all six viewpoints matches (the newly placed piano area, customization
+Reading for that earlier pass: the object set at all six viewpoints matches (the newly placed piano area, customization
 machine, bounty board and wiring are where the game draws them); the scores are dominated by lighting and time of day,
-which this lane does not touch. Open items it surfaced that belong to materials: the map table (the documented
-remaining gap), the customization machine's side panels (the game shows a runtime instance,
-`MaterialInstanceConstant_113`, where the package has no override; not investigated), the star-light backings and the
-graffiti decals. The distant mountain behind Scooter's is missing from the host start view; its cause was not
-established in this pass. No "before" host capture was taken, so the score is not a before/after comparison.
+which that pass did not touch. Its open material items were the map table, customization machine's side panels (runtime
+instance `MaterialInstanceConstant_113` still not decoded), star-light backings and graffiti decals. The distant
+mountain cause is now traced to the selected dark texture fallback, with a snowy texture fallback in the matched-viewpoint
+pass below. No "before" host capture was taken, so the score is not a before/after comparison.
 
 ## Ash and Southpaw re-measured
 
