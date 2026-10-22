@@ -15,11 +15,62 @@ import prepare_character_anims as converter  # noqa: E402
 
 
 FAMILIES = {
-    'Pistol': ('umodel-benchmark-r1-pistol', 'umodel-pistol-preview-r1'),
-    'AssaultRifle': ('umodel-assault-rifle-r1', 'umodel-assault-rifle-preview-r1'),
-    'SMG': ('umodel-smg-r1', 'umodel-smg-preview-r1'),
+    'Pistol': ('umodel-benchmark-r1-pistol', 'umodel-pistol-preview-r1',
+               'umodel-arms-reloads-r3/GD_Siren_Streaming_SF/AnimSet/1st_Person_Pistol'),
+    'AssaultRifle': ('umodel-assault-rifle-r1', 'umodel-assault-rifle-preview-r1',
+                     'umodel-arms-reloads-r3/GD_Siren_Streaming_SF/AnimSet/1st_Person_AssaultRifle'),
+    'SMG': ('umodel-smg-r1', 'umodel-smg-preview-r1',
+            'umodel-arms-reloads-r3/GD_Siren_Streaming_SF/AnimSet/1st_Person_SMG'),
 }
 DEFAULT_IDS = ('slice_pistol', 'slice_mission_pistol_fire', 'slice_assault_rifle', 'slice_smg')
+DEFAULT_ARMS_MESH = (ROOT / 'local/laneE/umodel-hands-r3/GD_Siren_Streaming_SF'
+                     / 'SkeletalMesh3/Hands_Siren.md5mesh')
+DEFAULT_ARMS_REFERENCE = ROOT / 'local/character/anim/ref_pose.json'
+
+
+def arms_reload_groups(view, recipe_ids=DEFAULT_IDS):
+    """Group the selected weapon reload clips by first-person arms AnimSet."""
+    groups = {}
+    for recipe_id in recipe_ids:
+        entry = view.get(recipe_id)
+        if not isinstance(entry, dict):
+            raise ValueError(f'{recipe_id}: missing weapon view data')
+        anim_set = str(entry.get('weapon_anim_set') or '').rsplit('.', 1)[-1]
+        clip = str(entry.get('reload_animation') or '')
+        if anim_set not in FAMILIES or not clip:
+            raise ValueError(f'{recipe_id}: missing or unsupported arms reload set/clip ({anim_set}, {clip})')
+        groups.setdefault(anim_set, set()).add(clip)
+    return {family: tuple(sorted(clips)) for family, clips in sorted(groups.items())}
+
+
+def prepare_arms_reloads(view_path, lane_dir, output_dir, arms_mesh=DEFAULT_ARMS_MESH,
+                         arms_reference=DEFAULT_ARMS_REFERENCE, recipe_ids=DEFAULT_IDS):
+    """Convert the selected normal/fast type clips onto Maya's first-person skeleton."""
+    view_path = Path(view_path)
+    lane_dir = Path(lane_dir)
+    arms_mesh = Path(arms_mesh)
+    arms_reference = Path(arms_reference)
+    output_dir = Path(output_dir)
+    view = json.loads(view_path.read_text(encoding='utf-8'))
+    if not arms_mesh.is_file() or not arms_reference.is_file():
+        raise FileNotFoundError(f'first-person arms reference mesh/pose missing: {arms_mesh}, {arms_reference}')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summaries = []
+    for family, clips in arms_reload_groups(view, recipe_ids).items():
+        anim_root = lane_dir / FAMILIES[family][2]
+        animations = {}
+        for clip in clips:
+            matches = list(anim_root.rglob(f'{clip}.md5anim'))
+            if len(matches) != 1:
+                raise ValueError(f'{family}: expected one {clip}.md5anim in {anim_root}; found {len(matches)}')
+            animations[clip] = matches[0]
+        result = converter.convert(arms_mesh, arms_reference, animations, anchor='Camera')
+        output = output_dir / f'{family}.json'
+        output.write_text(json.dumps(result), encoding='utf-8')
+        summaries.append({'anim_set': family, 'clips': [
+            {'clip': clip, 'frames': result[clip]['frames'], 'source_rate': result[clip]['rate']}
+            for clip in clips], 'output': str(output)})
+    return summaries
 
 
 def prepare(items_dir, references_dir, lane_dir, output_dir, recipe_ids=DEFAULT_IDS):
@@ -37,7 +88,7 @@ def prepare(items_dir, references_dir, lane_dir, output_dir, recipe_ids=DEFAULT_
         family = anim_set_path.rsplit('.', 1)[-1]
         if not clip or family not in FAMILIES:
             raise ValueError(f'{recipe_id}: missing or unsupported reload set/clip ({anim_set_path}, {clip})')
-        anim_root, mesh_root = FAMILIES[family]
+        anim_root, mesh_root = FAMILIES[family][:2]
         anim_matches = list((Path(lane_dir) / anim_root).rglob(f'{clip}.md5anim'))
         mesh_matches = list((Path(lane_dir) / mesh_root).rglob('*.md5mesh'))
         if len(anim_matches) != 1 or len(mesh_matches) != 1:
@@ -61,10 +112,18 @@ def main():
     parser.add_argument('--references-dir', type=Path, default=ROOT / 'local/laneE/weapon-refs')
     parser.add_argument('--lane-dir', type=Path, default=ROOT / 'local/laneE')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'local/laneE/prepared-reloads')
+    parser.add_argument('--arms-output-dir', type=Path, default=ROOT / 'local/laneE/prepared-arms-reloads')
+    parser.add_argument('--arms-mesh', type=Path, default=DEFAULT_ARMS_MESH)
+    parser.add_argument('--arms-reference', type=Path, default=DEFAULT_ARMS_REFERENCE)
     parser.add_argument('--ids', nargs='+', default=DEFAULT_IDS)
     args = parser.parse_args()
-    print(json.dumps(prepare(args.items_dir, args.references_dir, args.lane_dir,
-                             args.output_dir, args.ids), indent=2))
+    weapon_summaries = prepare(args.items_dir, args.references_dir, args.lane_dir,
+                               args.output_dir, args.ids)
+    arms_summaries = prepare_arms_reloads(args.items_dir / 'weapon_view.json', args.lane_dir,
+                                          args.arms_output_dir, args.arms_mesh,
+                                          args.arms_reference, args.ids)
+    print(json.dumps({'weapon_reload_imports': weapon_summaries,
+                      'arms_reload_imports': arms_summaries}, indent=2))
 
 
 if __name__ == '__main__':

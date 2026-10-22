@@ -17,6 +17,20 @@ class WeaponViewModelTests(unittest.TestCase):
         self.assertEqual(merged['ZoomedEndFOV'], 50)
         self.assertEqual(merged['ZoomSocketPreferred'], 'EyeSocket1')
 
+    def test_first_person_scale_fits_are_explicit_and_default_to_one(self):
+        self.assertEqual(view.first_person_scale_fit('slice_smg'),
+                         (0.54, 'UNVERIFIED fit to lane E idle frame size'))
+        self.assertEqual(view.first_person_scale_fit('slice_assault_rifle'),
+                         (0.75, 'UNVERIFIED fit to lane E idle frame size'))
+        self.assertEqual(view.first_person_scale_fit('slice_pistol'),
+                         (1.0, 'no recipe-specific fit'))
+
+    def test_ads_frame_fit_is_separate_from_the_selected_cooked_socket(self):
+        self.assertEqual(view.zoom_position_fit_cm('slice_pistol'),
+                         ([0.0, -3.2, 11.0], 'UNVERIFIED fit to lane E ADS frame'))
+        self.assertEqual(view.zoom_position_fit_cm('slice_assault_rifle'),
+                         ([0.0, 0.0, 0.0], 'no recipe-specific fit'))
+
     def test_reload_fallback_uses_last_unconditioned_type_animation(self):
         animations = view.reload_animation_names([
             {'AnimationName': 'Reload_Jakobs', 'Expression': None},
@@ -89,6 +103,8 @@ class WeaponViewModelTests(unittest.TestCase):
         self.assertEqual(entry['zoom_fov'], 50.0)
         self.assertEqual(entry['zoom_fov_source'], 'cooked type')
         self.assertEqual(entry['zoom_blend_time'], 0.2)
+        self.assertEqual(entry['first_person_scale_fit'], 1.0)
+        self.assertEqual(entry['zoom_position_fit_cm'], [0.0, 0.0, 0.0])
         self.assertEqual(entry['zoom_socket_preferred'], 'EyeSocket1')
         self.assertEqual(entry['reload_animation'], 'Reload_Jakobs')
         self.assertIn('UNVERIFIED selection', entry['reload_animation_source'])
