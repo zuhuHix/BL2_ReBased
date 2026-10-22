@@ -128,7 +128,7 @@ public:
     // System deactivation: no more spawning; emitters with bKillOnDeactivate drop their particles.
     void StopEmitting();
     bool IsFinished() const { return bPlaying && bFinished; }
-    // Screen particle: each particle is drawn as a quad covering the camera's view (host stand-in).
+    // Screen particle: draw its quad across the camera view (host stand-in for the stock screen-space effect).
     bool bFillScreen = false;
     // Draw the sprites in the first-person primitive space (UE 5.8's first-person field of view), as the arms are when the walker
     // runs with -owfpfov: effects attached to the hand then stay on it. Set before the first Render.

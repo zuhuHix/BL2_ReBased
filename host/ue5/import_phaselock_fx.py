@@ -162,6 +162,8 @@ def build(name, blend, domain_fn=None):
     # emitter order (sort priority), as Cascade draws a system. In UE5's default after-DOF pass a modulate is applied to
     # the scene separately and the additive layer is added over it, which lost the bubble's dark core (host choice).
     material.set_editor_property('translucency_pass', unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF)
+    if domain_fn == 'screen':
+        material.set_editor_property('disable_depth_test', True)
     nodes = []
 
     def node(cls, x, y, **props):
@@ -270,23 +272,17 @@ def build(name, blend, domain_fn=None):
         emissive = op(unreal.MaterialExpressionMin, op(M, op(M, rgb, '', color_rgb, '', 100, 0), '', color_a, 'A', 250, 0), '',
                       const(1.0, 250, 100), '', 400, 0)
     elif domain_fn == 'screen':
-        # Screen particle stand-in (a modulate quad over the view): the scene x the particle colour divided by its
-        # luminance (Rec. 709 weights), so that the tint keeps the scene's brightness and pushes it toward the hue (blue
-        # x4 for (4, 6, 30)), weighted by alpha and, from 0.6 to 1, by the mask texture's green streaks. Chosen from the
-        # texture's name (a UV mask) and the 2026-10-02 game frames (a saturated blue flash, then a world that stays
-        # blue and bright), not from the stripped graph (UNVERIFIED). Round 2 divided by the largest channel, which
-        # darkened the scene to grey-brown.
+        # Host stand-in for the compiled screen shader (Round 6): preserve the particle colour's hue, then modulate the
+        # view by that tint through the screen mask. Using the mask's brightest RGB channel without the old 0.6 floor
+        # keeps texture gaps between streaks. The stock scene-colour expression remains UNVERIFIED in this surface-domain
+        # stand-in because UE5 did not provide a usable scene sample in either tested post-process location.
         luminance = node(unreal.MaterialExpressionDotProduct, 400, 1800)
         mel.connect_material_expressions(color_rgb, '', luminance, 'A')
         mel.connect_material_expressions(node(unreal.MaterialExpressionConstant3Vector, 250, 1900,
                                               constant=unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0)), '', luminance, 'B')
         hue = op(D, color_rgb, '', op(unreal.MaterialExpressionMax, luminance, '', const(0.001, 400, 1950), '', 550, 1800), '', 700, 1700)
-        streaks = node(unreal.MaterialExpressionLinearInterpolate, 400, 1500)
-        mel.connect_material_expressions(const(0.6, 250, 1450), '', streaks, 'A')
-        mel.connect_material_expressions(const(1.0, 250, 1520), '', streaks, 'B')
-        mel.connect_material_expressions(mask(tex, 'RGB', 'G', 250, 1600), '', streaks, 'Alpha')
         weight = node(unreal.MaterialExpressionSaturate, 700, 1500)
-        mel.connect_material_expressions(op(M, streaks, '', color, 'A', 550, 1500), '', weight, '')
+        mel.connect_material_expressions(op(M, brightest, '', color_a, 'A', 550, 1500), '', weight, '')
         emissive = node(unreal.MaterialExpressionLinearInterpolate, 850, 1500)
         mel.connect_material_expressions(const(1.0, 700, 1400), '', emissive, 'A')
         mel.connect_material_expressions(hue, '', emissive, 'B')
@@ -379,8 +375,6 @@ def build(name, blend, domain_fn=None):
                      '', 1000, 400)
         emissive = op(unreal.MaterialExpressionMin, op(M, rgb, '', color_rgb, '', 250, 0), '', ceiling, '', 1100, 0)
     mel.connect_material_property(emissive, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    if domain_fn == 'screen':
-        material.set_editor_property('disable_depth_test', True)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     return material
