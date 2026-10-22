@@ -95,7 +95,7 @@ Gunzerker dual wield or vehicles.
   frame) and the call economy.
 * `python tests/check_action_skill_hud_test.py`: the log checker on synthetic logs and generated PNGs, including its
   failure paths (no page read-back, the icon not following the state, the bar two frames late, a read-back state the host
-  never sent, missing, empty or wrong-size captures, blank captures, the indicator in the wrong state, a run that never
+  never sent, missing, empty, wrong-size, truncated or corrupt captures, blank captures, the indicator in the wrong state, a run that never
   finished its shots, no `--shots`).
 * `tools/test_action_skill_hud.ps1`: the in-engine run and `tools/check_action_skill_hud.py` on its log, in three groups.
   Host state (`OWSKILLHUD` lines, quantized to 1/100, the clips' resolution, so they change only when a drawn frame can):
@@ -106,7 +106,8 @@ Gunzerker dual wield or vehicles.
   frames that state maps to, every echoed state is one the host logged (so no lag allowance is needed), at least 20
   read-backs, the emblem bar from full (5 or less) to nearly empty (90 or more: a capture stall near the end can skip the last values), icon frames 2, 50-99 and a final 100.
   Captures (`--shots`, required for a PASS; without it the result is PARTIAL, exit 2): all 47 scheduled `OWSkillHud_*.png`
-  of this run exist as 1280x720 PNG files, `OWSKILLHUDSHOTS done` is logged, and three of them, decoded with zlib only,
+  of this run are complete 1280x720 PNG files (every chunk's CRC, IHDR,
+  IDAT and a final IEND, the IDAT stream inflating to the image's byte count), `OWSKILLHUDSHOTS done` is logged, and three of them, decoded with zlib only,
   show the indicator by colour counts in fixed screen boxes: green icon and no magenta emblem before the cast, gold
   icon and magenta emblem at +2.5 s, red icon and no emblem at +12 s. A run that has not exited within the timeout fails
   without running the checker. How close the captures look to the game is judged by the critic, not by this check.

@@ -16,13 +16,14 @@ GREEN, GOLD, RED, MAGENTA, GREY = (60, 220, 60), (240, 170, 40), (170, 30, 30), 
 def png(path, size=(1280, 720), boxes=(), background=GREY):
     """An RGB PNG (filter 0) of one colour with filled boxes [(x0, y0, x1, y1, rgb)]."""
     width, height = size
+    plain = b'\0' + bytes(background) * width
     raw = bytearray()
     for y in range(height):
-        row = [background] * width
+        row = bytearray(plain)
         for x0, y0, x1, y1, rgb in boxes:
             if y0 <= y < y1:
-                row[x0:x1] = [rgb] * (x1 - x0)
-        raw += b'\0' + bytes(c for px in row for c in px)
+                row[1 + 3 * x0:1 + 3 * x1] = bytes(rgb) * (x1 - x0)
+        raw += row
 
     def chunk(kind, body):
         return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
@@ -85,7 +86,7 @@ class CheckTest(unittest.TestCase):
         # Shots: the three the content check reads carry the indicator; the rest only need to be valid PNG files.
         cls.folder = tempfile.TemporaryDirectory()
         folder = Path(cls.folder.name)
-        png(folder / 'blank.png', size=(8, 8))
+        png(folder / 'plain.png')
         for i in range(chk.EXPECTED_SHOTS):
             name = folder / f'OWSkillHud_{i:03d}.png'
             if i == 0:
@@ -95,7 +96,7 @@ class CheckTest(unittest.TestCase):
             elif i == 26:
                 png(name, boxes=[icon(RED)])
             else:
-                name.write_bytes((folder / 'blank.png').read_bytes()[:16] + struct.pack('>II', 1280, 720))
+                name.write_bytes((folder / 'plain.png').read_bytes())   # complete PNGs with nothing drawn
 
     @classmethod
     def tearDownClass(cls):
@@ -152,6 +153,19 @@ class CheckTest(unittest.TestCase):
             self.assertFalse(found['shots_written'][0])
             for name in ('OWSkillHud_010.png', 'OWSkillHud_011.png', 'OWSkillHud_012.png'):
                 self.assertIn(name, found['shots_written'][1])
+
+    def test_truncated_or_corrupt_shot_fails_and_names_it(self):
+        with self.copy_shots() as folder:
+            whole = (Path(folder) / 'OWSkillHud_020.png').read_bytes()
+            (Path(folder) / 'OWSkillHud_020.png').write_bytes(whole[:len(whole) // 2])     # header intact, IDAT cut off
+            corrupt = bytearray(whole)
+            corrupt[60] ^= 0xFF                                                          # a byte inside IDAT: CRC fails
+            (Path(folder) / 'OWSkillHud_021.png').write_bytes(bytes(corrupt))
+            self.assertTrue(chk.valid_shot(Path(folder) / 'OWSkillHud_022.png'))
+            found = {n: (ok, d) for n, ok, d in chk.run_checks(synthetic_log(), folder)}
+            self.assertFalse(found['shots_written'][0])
+            self.assertIn('OWSkillHud_020.png', found['shots_written'][1])
+            self.assertIn('OWSkillHud_021.png', found['shots_written'][1])
 
     def test_blank_or_uniform_captures_fail(self):
         with self.copy_shots() as folder:
