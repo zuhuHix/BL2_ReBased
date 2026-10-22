@@ -4760,7 +4760,9 @@ collision record: `COLLISION_WALKING_VERIFICATION.md` (2026-10-22).
   census (verified, all 914 base-game packages, 0 failures):** 129 packages carry the name; the only exports named
   `LightComponents` are `StaticLightCollectionActor.LightComponents`, a `Core.ArrayProperty`, and its inner
   `Core.ComponentProperty` (an object-reference property). A tagged property's type comes from its declaring class, so every
-  serialized `LightComponents` is that array of object references. An instance decode pass (stopped at a 30-minute budget after
+  serialized `LightComponents` is that array of object references. The same declaration census over the 1,096 DLC `.upk` files
+  (the `--include-dlc` scope) finds no declaration of that name (151 files carry it as instances; 2 texture payload files
+  with no package magic cannot be opened). An instance decode pass (stopped at a 30-minute budget after
   666 packages) agreed: 119 of 119 occurrences decoded as `ObjectProperty` arrays owned by `StaticLightCollectionActor`.
   Scratch scripts under `local/laneA-census/` (ignored).
 - **Light array tail (`UNVERIFIED` layout).** The 64-byte-per-element tail after a `StaticLightCollectionActor`'s properties is

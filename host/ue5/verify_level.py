@@ -29,7 +29,8 @@ from scene_import_rules import (SANCTUARY_GRAFITTO_INK_COLOR,
                                 ue3_sky_light_color_to_ue5,
                                 ue3_world_post_process_to_ue5,
                                 sanctuary_opt_ins, sanctuary_profile,
-                                sanctuary_source_lighting, effective_scene_recipe,
+                                sanctuary_source_lighting, sanctuary_verifier_checks,
+                                effective_scene_recipe,
                                 SANCTUARY_OPT_IN_ENV, SANCTUARY_XMAS_BULB_METHOD)
 
 
@@ -112,6 +113,8 @@ scene = json.loads((root / 'scene.json').read_text(encoding='utf-8'))
 # Same opt-in rule as import_level.py: each round-4 flag is checked on or off below.
 opt_ins = sanctuary_opt_ins(os.environ.get(SANCTUARY_OPT_IN_ENV, ''), scene)
 source_lighting = sanctuary_source_lighting(scene)
+# Sanctuary-only data (decal census, selection policy) is checked only when this is true.
+sanctuary_checks = sanctuary_verifier_checks(scene)
 import_report = json.loads((root / 'ue-import.json').read_text(encoding='utf-8'))
 (root / 'ue-verify.json').unlink(missing_ok=True)
 base = '/Game/OpenWillow/' + scene['map']
@@ -275,7 +278,8 @@ assert all(isinstance(item.get('settings'), dict) and item.get('bounds_status')
 
 # Independently match only the default-allowlisted graffiti to a saved UE5
 # decal; all other source decal materials must stay excluded.
-decal_manifest = scene.get('decals', {})
+# Other maps have no decal manifest: the census and default-deny checks then see zero actors.
+decal_manifest = scene.get('decals', {}) if sanctuary_checks else {}
 source_decals = decal_manifest.get('actors', [])
 supported_decals = [item for item in source_decals if item.get('status') == 'partial_unverified']
 excluded_decals = [item for item in source_decals if item.get('status') == 'excluded_default_deny']
@@ -359,11 +363,14 @@ if graffiti_on:
 static_light_manifest = source_lighting.get('static_light_import', {})
 static_light_records = static_light_manifest.get('components', [])
 selection_policy = static_light_manifest.get('selection_policy', {})
-assert selection_policy.get('min_radius') == SANCTUARY_LIGHT_MIN_RADIUS
-assert selection_policy.get('min_brightness') == SANCTUARY_LIGHT_MIN_BRIGHTNESS
-assert selection_policy.get('cell_size') == SANCTUARY_LIGHT_CELL_SIZE
-assert selection_policy.get('max_per_cell') == SANCTUARY_LIGHT_MAX_PER_CELL
-assert selection_policy.get('max_imported') == SANCTUARY_LIGHT_MAX_IMPORTED
+# No source lighting (other maps, or Sanctuary_P without a 'lighting' record): the importer
+# selects nothing, so there is no policy to assert.
+if source_lighting:
+    assert selection_policy.get('min_radius') == SANCTUARY_LIGHT_MIN_RADIUS
+    assert selection_policy.get('min_brightness') == SANCTUARY_LIGHT_MIN_BRIGHTNESS
+    assert selection_policy.get('cell_size') == SANCTUARY_LIGHT_CELL_SIZE
+    assert selection_policy.get('max_per_cell') == SANCTUARY_LIGHT_MAX_PER_CELL
+    assert selection_policy.get('max_imported') == SANCTUARY_LIGHT_MAX_IMPORTED
 candidate_records = []
 for item in static_light_records:
     if item.get('enabled') is False or item.get('status') == 'unsupported':

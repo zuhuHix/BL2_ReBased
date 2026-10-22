@@ -148,8 +148,8 @@ with tempfile.TemporaryDirectory() as folder:
     # StaticLightCollectionActor shape: an ObjectProperty array of N references,
     # then an N*64-byte tail that the reader reports as trailing bytes. The tail
     # layout is UNVERIFIED; this only checks the size bookkeeping of the real reader.
-    light_schema = Path(folder) / 'light_arrays.schema'
-    light_schema.write_text('LightComponents=ObjectProperty\n')
+    # Uses the checked-in schema so removing or changing its LightComponents line fails here.
+    light_schema = Path(__file__).resolve().parents[1] / 'tools' / 'level-arrays.schema'
     light_options = (*options, '--array-schema', str(light_schema))
     light_refs = ints(2, -1, 0)
     light_tail = bytes(2 * 64)
