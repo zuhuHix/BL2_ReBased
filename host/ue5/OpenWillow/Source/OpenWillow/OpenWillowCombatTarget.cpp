@@ -232,11 +232,9 @@ float AOpenWillowCombatTarget::MeshBoundsRadius() const
         }
     }
     if (Override.Num() > 0) return Override[FMath::Clamp(BubbleStageNow, 0, Override.Num() - 1)] ;
-    // Host reading (UNVERIFIED): the game's bounds behave as if the mesh component's own Scale were not applied. The bullymong
-    // renders at its archetype Scale 0.7 (frame sizes), yet the SDK read 290 / about 230-260 / 193 uu at the three bubble
-    // spawns; the host's bounds of the unscaled mesh give 307 / 245 / 200 and of the 0.7 mesh 215 / 169 / 140. So the
-    // radius is divided by the component scale (1 for the slice dummy).
-    if (StockMesh) return StockMesh->Bounds.SphereRadius / FMath::Max(StockMesh->GetRelativeScale3D().X, KINDA_SMALL_NUMBER);
+    // Round 20 host reading (UNVERIFIED): use the live component scale of 1.0, so do not undo component scale here.
+    // The raw host radii are 307 / 245 / 200 uu at the three spawns versus live-game reads 290 / 230-260 / 193 uu.
+    if (StockMesh) return StockMesh->Bounds.SphereRadius;
     FBoxSphereBounds Bounds = Post->Bounds;
     Bounds = Bounds + Torso->Bounds;
     Bounds = Bounds + Head->Bounds;
