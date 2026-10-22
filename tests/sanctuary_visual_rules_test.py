@@ -452,6 +452,63 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         self.assertEqual(ue3_color_linear([0.0, 1.0, 0.5])[:2], [0.0, 1.0])
         self.assertAlmostEqual(ue3_color_linear([0.5])[0], 0.5 ** 2.2)
 
+    def test_xmas_bulb_recipe_is_warm_emissive_from_its_own_atlas(self):
+        # Synthetic check of the table shape only; the atlas itself is game data
+        # and stays under local/.
+        entry = prepare.INSPECTED_SCENE_MATERIAL_RECIPES[
+            'Sanctuary_P:Prop_Wiretech.MAT_WireXMasWhite']
+        self.assertEqual(entry['base'], 'Sanctuary_P:Prop_Wiretech.MAT_WireXMasWhite')
+        self.assertNotIn('diffuse', entry)
+        layers = entry['emissive_layers']
+        self.assertEqual(len(layers), 1)
+        self.assertEqual(layers[0]['texture'], 'Sanctuary_P:Prop_Wiretech.XmasLightBulbs_Dif')
+        red, green, blue = layers[0]['color']
+        self.assertGreater(red, green)
+        self.assertGreater(green, blue)
+        self.assertGreater(entry['emissive_calibration_scale'], 1.0)
+
+    def test_diffuse_tint_is_scoped_by_base_parameter_and_lit_only(self):
+        # Synthetic fixture only: names mirror the rule, values are invented.
+        old = prepare.INSPECTED_DIFFUSE_TINTS
+        prepare.INSPECTED_DIFFUSE_TINTS = {
+            ('Synthetic:Base', 'p_tint'): {'method': 'synthetic_diffuse_tint_v1', 'scope': 'Synthetic:Scoped.',
+                                           'omitted': ['graph']},
+        }
+        try:
+            scene = object.__new__(prepare.Scene)
+            identities = {('S', 1): 'Synthetic:Scoped.Inst', ('S', 2): 'Synthetic:Base',
+                          ('S', 3): 'Synthetic:Other.Inst'}
+            scene.identity = lambda key: identities[key]
+            chain = {}
+            scene.named_chain_parameters = lambda key: chain[key]
+            lit = {'lighting_model': 'MLM_Lit'}
+            chain[('S', 1)] = (('S', 2), {}, {}, {'p_tint': {'R': 1.0, 'G': 0.5, 'B': 0.25, 'A': 1.0}})
+            record = scene.diffuse_tint(('S', 1), lit)
+            self.assertEqual(record['rgb'], [1.0, 0.5, 0.25])
+            self.assertEqual(record['status'], 'partial_unverified')
+            self.assertEqual(record['source_material'], 'Synthetic:Base')
+            # Outside the scope, or without the parameter, adds nothing.
+            chain[('S', 3)] = (('S', 2), {}, {}, {'p_tint': {'R': 1.0, 'G': 1.0, 'B': 1.0}})
+            self.assertIsNone(scene.diffuse_tint(('S', 3), lit))
+            chain[('S', 1)] = (('S', 2), {}, {}, {})
+            self.assertIsNone(scene.diffuse_tint(('S', 1), lit))
+            # Unlit instances keep their own colour path, and bad values are rejected.
+            chain[('S', 1)] = (('S', 2), {}, {}, {'p_tint': {'R': 1.0, 'G': 1.0, 'B': 1.0}})
+            self.assertIsNone(scene.diffuse_tint(('S', 1), {'lighting_model': 'MLM_Unlit'}))
+            chain[('S', 1)] = (('S', 2), {}, {}, {'p_tint': {'R': -1.0, 'G': 1.0, 'B': 1.0}})
+            with self.assertRaisesRegex(ValueError, 'invalid'):
+                scene.diffuse_tint(('S', 1), lit)
+        finally:
+            prepare.INSPECTED_DIFFUSE_TINTS = old
+    def test_sky_cloud_opacity_is_scaled_and_bounded(self):
+        from scene_import_rules import sanctuary_sky_cloud_opacity
+        self.assertAlmostEqual(sanctuary_sky_cloud_opacity(1.0), 0.14)
+        self.assertAlmostEqual(sanctuary_sky_cloud_opacity(0.0), 0.0)
+        self.assertAlmostEqual(sanctuary_sky_cloud_opacity(10.0), 1.0)
+        for bad in (-0.1, float('nan'), True, 'one'):
+            with self.assertRaises(ValueError):
+                sanctuary_sky_cloud_opacity(bad)
+
 
 if __name__ == '__main__':
     unittest.main()

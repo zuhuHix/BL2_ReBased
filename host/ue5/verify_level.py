@@ -223,15 +223,32 @@ if source_post_process is not None:
     for override_name, value_name in (
             ('override_auto_exposure_bias', 'auto_exposure_bias'),
             ('override_color_gain', 'color_gain'),
-            ('override_color_offset', 'color_offset'),
             ('override_bloom_intensity', 'bloom_intensity')):
         assert post_settings.get_editor_property(override_name), override_name
         actual = post_settings.get_editor_property(value_name)
         expected = source_post_process[value_name]
-        if value_name in ('color_gain', 'color_offset'):
+        if value_name == 'color_gain':
             close([actual.x, actual.y, actual.z], expected, 1e-5)
         else:
             assert abs(float(actual) - float(expected)) < 1e-5, (value_name, actual, expected)
+# Round-4 host grade: the expected values are written out here, not imported,
+# so a silent edit to scene_import_rules.py fails this check.
+for override_name in ('override_white_temp', 'override_white_tint',
+                      'override_color_saturation', 'override_color_contrast',
+                      'override_color_offset'):
+    assert post_settings.get_editor_property(override_name), override_name
+assert abs(float(post_settings.get_editor_property('white_temp')) - 8200.0) < 1e-3
+assert abs(float(post_settings.get_editor_property('white_tint')) - 0.0) < 1e-6
+for value_name, expected in (('color_saturation', [1.12, 1.02, 0.92, 1.0]),
+                             ('color_contrast', [1.10, 1.10, 1.10, 1.0])):
+    actual = post_settings.get_editor_property(value_name)
+    close([actual.x, actual.y, actual.z, actual.w], expected, 1e-5)
+# Source offset (zero when the WorldInfo grade is not decoded) plus the literal host lift.
+source_offset = (source_post_process['color_offset'] if source_post_process is not None
+                 else [0.0, 0.0, 0.0])
+actual_offset = post_settings.get_editor_property('color_offset')
+close([actual_offset.x, actual_offset.y, actual_offset.z],
+      [source_offset[0] + 0.03, source_offset[1] + 0.03, source_offset[2] + 0.035], 1e-5)
 source_volume_records = scene.get('lighting', {}).get('post_process_volumes', [])
 host_post_process_volumes = [actor for actor in actors
                              if isinstance(actor, unreal.PostProcessVolume)]
@@ -595,7 +612,8 @@ def verify_sky_approximation(material, name, sky):
     coverage_uv = [item for item in inputs(coverage_sample) if item is not None]
     assert len(coverage_uv) == 1 and coverage_uv[0] == dome_uv
     assert isinstance(opacity, unreal.MaterialExpressionConstant)
-    close([opacity.get_editor_property('r')], [sky['scalars']['cloud_cap_opacity']], 1e-6)
+    # Round-4 host sky calibration: literal 0.14 keeps this independent of the importer.
+    close([opacity.get_editor_property('r')], [0.14 * sky['scalars']['cloud_cap_opacity']], 1e-6)
 
 
 def verify_terrain_blend(material, name, definition):

@@ -571,6 +571,21 @@ INSPECTED_SCENE_MATERIAL_RECIPES = {
              'channel': 'RGB', 'color': [2.0, 2.0, 2.0], 'srgb': True}],
         'omitted': ['native bulb palette and bloom'],
         'issue': 'Approximation: inspected colored LightStrip_Comp atlas drives emissive RGB; native bulb shader and bloom are not reconstructed'},
+    # Christmas-light bulbs on WiringMesh_14 (cable section 0). The sole cooked
+    # _Dif texture is the bulb atlas: its bright texels are the lit bulbs and
+    # the rest is dark wire. The bulbs are emissive in the game, so the warm
+    # tint below is applied to that atlas's own RGB, scaled like LightStrip.
+    'Sanctuary_P:Prop_Wiretech.MAT_WireXMasWhite': {
+        'method': 'xmas_bulb_emissive_v1',
+        'base': 'Sanctuary_P:Prop_Wiretech.MAT_WireXMasWhite',
+        # UNVERIFIED host calibration; no host capture here shows the bulbs lit.
+        'emissive_calibration_scale': 4.0,
+        'emissive_calibration_evidence': 'round2 matched cameras 05/07: string bulbs not visible in the host',
+        'emissive_layers': [
+            {'texture': 'Sanctuary_P:Prop_Wiretech.XmasLightBulbs_Dif',
+             'channel': 'RGB', 'color': [1.0, 0.62, 0.28], 'srgb': True}],
+        'omitted': ['bulb glow and bloom', 'native bulb palette'],
+        'issue': 'UNVERIFIED approximation: XmasLightBulbs_Dif atlas drives a warm emissive on the bulbs; the diffuse stays the same atlas; glow and bloom not reconstructed'},
     'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap': {
         'method': 'world_map_mask_colorization_v2',
         'base': 'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap',
@@ -662,6 +677,21 @@ INSPECTED_UNLIT_COLOR_MULTIPLIERS = {
                     'Moon_Comp crater relief', 'p_Basecolor2 secondary color',
                     'p_DarkColor', 'Transition_Track time-of-day tint',
                     'p_moonTime/p_moonRotation UV motion']},
+}
+
+# Lit instances whose diffuse is multiplied by a named vector on a shared base
+# master. Keyed by (base master, parameter); only instances whose identity
+# starts with the scope are considered. Sanctuary buildings override p_diffmod
+# per instance (plain grey, rust orange, green), and scene.json otherwise
+# carries no tint. The host multiplies Base Color by the recorded rgb.
+INSPECTED_DIFFUSE_TINTS = {
+    ('WillowGame:Common_Materials.Environment.Master_World', 'p_diffmod'): {
+        'method': 'diffuse_tint_v1',
+        'scope': 'Sanctuary_P:Prop_SancBuildings.',
+        'omitted': ['Master_World colour ramps, vertex paint and snow vectors',
+                    'p_vertexnoisemod / p_highlightsintensity / p_shadowsintensity',
+                    'p_speccolor_specpow specular and the glow channel'],
+    },
 }
 
 
@@ -1286,6 +1316,31 @@ class Scene:
                 'parameter': entry['parameter'], 'source_material': self.identity(base),
                 'rgb': [float(value[c]) for c in 'RGB'], 'omitted': entry['omitted']}
 
+    def diffuse_tint(self, key, material):
+        """Recorded RGB diffuse multiplier for a scoped lit instance, or None.
+
+        The rule matches the exact base master and parameter name in
+        INSPECTED_DIFFUSE_TINTS. The value is read from the instance chain,
+        with instance overrides last. The host applies it to Base Color.
+        """
+        identity = self.identity(key)
+        scoped = [(k, e) for k, e in INSPECTED_DIFFUSE_TINTS.items() if identity.startswith(e['scope'])]
+        if not scoped or material.get('lighting_model') == 'MLM_Unlit':
+            return None
+        base, _, _, vectors = self.named_chain_parameters(key)
+        for (base_identity, parameter), entry in scoped:
+            if self.identity(base) != base_identity or parameter.casefold() not in vectors:
+                continue
+            value = vectors[parameter.casefold()]
+            if not isinstance(value, dict) or not all(
+                    isinstance(value.get(c), (int, float)) and not isinstance(value.get(c), bool)
+                    and math.isfinite(value[c]) and 0 <= value[c] <= 64 for c in 'RGB'):
+                raise ValueError(f"Diffuse tint {parameter} is missing or invalid")
+            return {'method': entry['method'], 'status': 'partial_unverified',
+                    'parameter': parameter, 'source_material': base_identity,
+                    'rgb': [float(value[c]) for c in 'RGB'], 'omitted': entry['omitted']}
+        return None
+
     def inspected_color_parameter(self, key, material, table):
         """Read one exact-chain RGB parameter for an inspected host recipe."""
         entry = table.get(self.identity(key))
@@ -1579,6 +1634,15 @@ class Scene:
                         material['host_blend_mode'] = 'BLEND_Opaque'
                         self.issue(material['source'],
                                    'Approximation: inspected p_EyeColorA is shown as a constant Unlit color; masked eye graph is not reconstructed')
+                try:
+                    tint = self.diffuse_tint(key, material)
+                except ValueError as error:
+                    tint = None
+                    self.issue(material['source'] + ':diffuse-tint', error)
+                if tint is not None:
+                    material['diffuse_tint'] = tint
+                    self.issue(material['source'],
+                               f"Approximation: diffuse scaled by {tint['parameter']} from the shared Master_World chain; rest of the graph not reconstructed")
                 regular_fallback = REGULAR_DIFFUSE_FALLBACKS.get(material['source'])
                 if regular_fallback is not None:
                     parent = self.resolve(key[0], props(self.load(key[0])[key[1]]).get('Parent', 0))

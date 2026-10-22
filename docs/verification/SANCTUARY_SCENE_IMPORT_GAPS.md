@@ -355,3 +355,30 @@ one MD5 mesh, two animations, four material descriptors, five textures, four sid
 `ERROR:` markers or duplicate basenames. Its unknown SkeletalMesh3/LODInfo and material-expression fields and four
 trailing bytes lost from each texture export remain documented in the benchmark notes above. All outputs stayed in
 ignored `local/`.
+
+## Round 4a (lane A, UNVERIFIED notes)
+
+- **Customization machine front (cam 01).** Section 0 is `CM_Mat` (emissive atlas plus
+  `p_EmissiveScale`). Its emissive texture lights only the door's top bar, which the host already shows. The door
+  interior is near-black in both the CM_Mat diffuse and its emissive atlas. The game's cyan hologram silhouette is
+  not in any cooked texture of this material, so no recipe was added. Likely an animated panel overlay, which is
+  omitted. UNVERIFIED; no change.
+- **Moxxi string lights (cams 05/07).** `LightStrip_02` (3 placements, not hidden, not excluded) carries the
+  `light_strip_component_emissive_v1` recipe with effective scale 8.0 from `LightStrip_Comp`. This is already in
+  scene.json; the host capture still does not show it, so the cause is open. `WiringMesh_14` used
+  `MAT_WireXMasWhite` with no recipe. Added `xmas_bulb_emissive_v1` in `INSPECTED_SCENE_MATERIAL_RECIPES`: a warm
+  emissive `[1.0, 0.62, 0.28]` times the UNVERIFIED calibration 4.0 from its own `XmasLightBulbs_Dif` atlas.
+  Synthetic test added. Host effect UNVERIFIED.
+- **Rust facade (cam 07).** The rounded-roof building uses `SancBuild1Roof` / `SancBuild1RoofCap` with
+  `Mati_SancBuild1d` as the mesh section material. Several placements override it at actor level to
+  `Mati_SancBuild1d_orange` or `_green`. Those two share `Mati_SancBuild1d`'s grey diffuse
+  (`b16ed4212f578f3f5e5ac60c`). The rust tint is an instance vector that is not recorded in scene.json.
+  Cause: missing tint parameter; no fix made. Next step is reading the orange instance's vector parameter.
+- **Rust tint recorded (lane A, UNVERIFIED).** The missing instance vector is `p_diffmod`, which the
+  shared `Master_World` base carries on every Sanctuary building material. Placed values differ per instance
+  (plain grey, `_orange`, `_green`). `prepare_level.py` now records them as `material['diffuse_tint']`
+  (`diffuse_tint_v1`, `partial_unverified`) through `INSPECTED_DIFFUSE_TINTS`, scoped to `Sanctuary_P:Prop_SancBuildings.`.
+  The regenerated scene has 18 tinted materials. That includes the plain `Mati_SancBuild1d` at grey 0.8 and
+  `Mati_SancWall01` at 0.25. The host does not yet multiply Base Color by the field, so the grey buildings stay grey.
+  Still needed: host import and verify must apply it. Game-side multiplication by `p_diffmod` is not confirmed by
+  running the game.

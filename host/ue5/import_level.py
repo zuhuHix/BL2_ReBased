@@ -14,7 +14,13 @@ from scene_import_rules import (SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS,
                                 SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE,
                                 SANCTUARY_POINT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
                                 SANCTUARY_SPOT_LIGHT_CANDELA_PER_SOURCE_BRIGHTNESS,
+                                SANCTUARY_HOST_COLOR_CONTRAST,
+                                SANCTUARY_HOST_COLOR_SATURATION,
+                                SANCTUARY_HOST_SHADOW_LIFT,
+                                SANCTUARY_HOST_WHITE_TEMP,
+                                SANCTUARY_HOST_WHITE_TINT,
                                 SANCTUARY_SKY_INTENSITY_CALIBRATION,
+                                sanctuary_sky_cloud_opacity,
                                 temporary_sky_policy,
                                 ue3_color_linear,
                                 ue3_grafitto_dimensions_to_ue5,
@@ -314,7 +320,9 @@ def build_sky_approximation(material, name, sky):
     coverage_sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
     connect(material, dome_uv, '', coverage_sample, 'UVs')
     opacity = new(unreal.MaterialExpressionConstant)
-    opacity.set_editor_property('r', float(scalars['cloud_cap_opacity']))
+    # Round-4 host calibration: the source cap is kept in scene.json, but the
+    # cloud band is scaled down to match the game's plainer blue dome.
+    opacity.set_editor_property('r', sanctuary_sky_cloud_opacity(scalars['cloud_cap_opacity']))
     coverage = new(unreal.MaterialExpressionMultiply)
     connect(material, coverage_sample, sky['cloud_channel'], coverage, 'A')
     connect(material, opacity, '', coverage, 'B')
@@ -1105,12 +1113,28 @@ if source_post_process is not None:
     post_settings.set_editor_property('color_gain', unreal.Vector4(
         source_post_process['color_gain'][0], source_post_process['color_gain'][1],
         source_post_process['color_gain'][2], 1.0))
-    post_settings.set_editor_property('override_color_offset', True)
-    post_settings.set_editor_property('color_offset', unreal.Vector4(
-        source_post_process['color_offset'][0], source_post_process['color_offset'][1],
-        source_post_process['color_offset'][2], 0.0))
     post_settings.set_editor_property('override_bloom_intensity', True)
     post_settings.set_editor_property('bloom_intensity', source_post_process['bloom_intensity'])
+# Round-4 host grade (UNVERIFIED, screenshot-tuned): warm white balance, a
+# little extra saturation and contrast, and a small shadow lift added to the
+# source color offset (zero when no WorldInfo grade was decoded). Values live
+# in scene_import_rules.py.
+grade_offset = (source_post_process['color_offset'] if source_post_process is not None
+                else [0.0, 0.0, 0.0])
+grade_offset = [float(base) + float(lift) for base, lift in zip(grade_offset, SANCTUARY_HOST_SHADOW_LIFT)]
+for property_name, value in (
+        ('override_white_temp', True), ('white_temp', SANCTUARY_HOST_WHITE_TEMP),
+        ('override_white_tint', True), ('white_tint', SANCTUARY_HOST_WHITE_TINT),
+        ('override_color_saturation', True),
+        ('color_saturation', unreal.Vector4(*SANCTUARY_HOST_COLOR_SATURATION)),
+        ('override_color_contrast', True),
+        ('color_contrast', unreal.Vector4(*SANCTUARY_HOST_COLOR_CONTRAST)),
+        ('override_color_offset', True),
+        ('color_offset', unreal.Vector4(grade_offset[0], grade_offset[1], grade_offset[2], 0.0))):
+    try:
+        post_settings.set_editor_property(property_name, value)
+    except Exception as error:
+        raise RuntimeError('Cannot apply host grade property: ' + property_name) from error
 for property_name, value in (
         # Leave exposure automatic: the imported map has large sparse areas
         # and a fixed manual override turns the Lit preview black at this
