@@ -25,6 +25,7 @@ matched cameras. It scores out of 10.
 | Round 2 | 4.1 | Lighting, map table and decal changes. Decal noise regression: round-2 projected decals produced rainbow noise and magenta/violet quads. |
 | Round 3 | 4.3 | Decal default-deny, calibrated map table and bounded static lights. |
 | Round 4 | 4.4 | Warm host grade, thinner cloud cap, bulb emissive and `p_diffmod` diffuse tint. |
+| PR #51 default state | 5.0 | After review 1: the round-4 grade, `p_diffmod` tint, bulb emissive, calibrated static lights and graffiti decals are opt-in and off; the 0.14 cloud cap, decoded source lighting, round-2 sun/sky calibration and the v2 map palette stay on. Per camera 4.2-6.1; top gaps: interior teal light, machine/Moxxi/screen emissive, graffiti and posters, sky bands, exterior grime and contrast. |
 
 The gate of 8/10 was **not reached**. The lane stopped after four rounds, as briefed. One critic on eight cameras
 moves by a few tenths between rounds; these scores are not a measured improvement.

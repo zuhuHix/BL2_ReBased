@@ -4792,7 +4792,7 @@ collision record: `COLLISION_WALKING_VERIFICATION.md` (2026-10-22).
   passed. The loop now reads the axis vectors as values; the full gate exits 0. The root cause inside the plugin's teardown is
   not analysed.
 - **Visual review:** independent critic (Codex GPT-6-Luna, host and reference paths only, eight matched cameras). Baseline before
-  round 1 4.5/10; round 1 4.7; round 2 4.1 (decal noise regression); round 3 4.3; round 4 4.4. **The 8/10 gate was not reached;
+  round 1 4.5/10; round 1 4.7; round 2 4.1 (decal noise regression); round 3 4.3; round 4 4.4; after review 1, the default state (round-4 guesses opt-in and off) 5.0. **The 8/10 gate was not reached;
   the lane stopped after four rounds as briefed.** Remaining gaps are listed in the gaps document, round-4 ranking.
 - **Checks:** CTest 10/10; packages 9/9; Python tests 42 pass (the 8 reader-argument suites run inside CTest); JS 9 and 32/32;
   UE import gate exit 0 after the crash fix; OpenWillow.Walking and BspWalking pass; TerrainWalking 23/24 (the known
