@@ -6,7 +6,14 @@ from pathlib import Path
 import unreal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scene_geometry import actor_label, host_obj
-from scene_import_rules import temporary_sky_policy, ue3_color_linear
+from scene_import_rules import (SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS,
+                                SANCTUARY_SKY_INTENSITY_CALIBRATION,
+                                temporary_sky_policy,
+                                ue3_color_linear,
+                                ue3_decal_dimensions_to_ue5,
+                                ue3_directional_brightness_to_ue5,
+                                ue3_sky_light_color_to_ue5,
+                                ue3_world_post_process_to_ue5)
 
 root = Path(os.environ['OPENWILLOW_SCENE']).resolve()
 if not (Path(os.environ['OPENWILLOW_BL2']) / 'Binaries/Win32/Borderlands2.exe').is_file():
@@ -118,6 +125,56 @@ def build_texture_layers(material, layers):
             result = add
         unreal.EditorAssetLibrary.save_loaded_asset(texture)
     return result
+
+
+def build_deferred_decal_material(name, definition):
+    """Build the bounded RGB-plus-alpha UE5 material for one decal texture."""
+    if definition.get('method') != 'single_texture_deferred_decal_v1':
+        raise RuntimeError('Unsupported decal material method: ' + str(definition.get('method')))
+    material_path = destination + '/Assets/M_OpenWillowDecal_' + name
+    material = (unreal.load_asset(material_path)
+                if unreal.EditorAssetLibrary.does_asset_exist(material_path)
+                else tools.create_asset('M_OpenWillowDecal_' + name, destination + '/Assets',
+                                        unreal.Material, unreal.MaterialFactoryNew()))
+    mel.delete_all_material_expressions(material)
+    material.set_editor_property('material_domain', unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_TRANSLUCENT)
+    filename = definition['texture_file']
+    texture = textures.get(filename)
+    if texture is None:
+        texture = imported(filename, unreal.Texture2D)
+        textures[filename] = texture
+    texture.set_editor_property('srgb', True)
+    texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
+    sample = mel.create_material_expression(material, unreal.MaterialExpressionTextureSample)
+    sample.set_editor_property('texture', texture)
+    sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+    opacity_source = definition.get('opacity_source', 'Texture2D alpha channel')
+    if opacity_source == 'inverse_rgb_luminance_v1':
+        luminance = mel.create_material_expression(material, unreal.MaterialExpressionDotProduct)
+        weights = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+        weights.set_editor_property('constant', unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0))
+        opacity = mel.create_material_expression(material, unreal.MaterialExpressionOneMinus)
+        connected = (mel.connect_material_expressions(sample, 'RGB', luminance, 'A')
+                     and mel.connect_material_expressions(weights, '', luminance, 'B')
+                     and mel.connect_material_expressions(luminance, '', opacity, '')
+                     and mel.connect_material_property(sample, 'RGB', unreal.MaterialProperty.MP_BASE_COLOR)
+                     and mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY))
+    elif opacity_source == 'Texture2D alpha channel':
+        opacity = mel.create_material_expression(material, unreal.MaterialExpressionComponentMask)
+        for channel in ('r', 'g', 'b', 'a'):
+            opacity.set_editor_property(channel, channel == 'a')
+        connected = (mel.connect_material_expressions(sample, '', opacity, '')
+                     and mel.connect_material_property(sample, 'RGB', unreal.MaterialProperty.MP_BASE_COLOR)
+                     and mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY))
+    else:
+        raise RuntimeError('Unsupported decal opacity source: ' + str(opacity_source))
+    if not connected:
+        raise RuntimeError('Cannot connect deferred decal color/opacity material: ' + name)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    unreal.EditorAssetLibrary.save_loaded_asset(material)
+    return material
 
 
 def build_sky_approximation(material, name, sky):
@@ -490,6 +547,11 @@ for name, definition in scene['materials'].items():
     unreal.EditorAssetLibrary.save_loaded_asset(material)
     materials[name] = material
 
+decal_material_assets = {}
+for name, definition in scene.get('decals', {}).get('materials', {}).items():
+    if definition.get('status') == 'partial_unverified':
+        decal_material_assets[name] = build_deferred_decal_material(name, definition)
+
 # Sections whose preparer recorded no material (for example terrain whose
 # alpha maps did not decode, labeled 'neutral_constant') must not fall through
 # to UE's WorldGridMaterial checkerboard. Bind an explicit lit neutral gray so
@@ -644,6 +706,37 @@ for instance in scene['actors']:
                                          max(scene_bounds_max.z, origin.z + extent.z))
         count += 1
 
+decal_imported = 0
+for decal in scene.get('decals', {}).get('actors', []):
+    if decal.get('status') != 'partial_unverified':
+        continue
+    material_name = decal.get('material')
+    if material_name not in decal_material_assets:
+        raise RuntimeError('Supported source decal has no imported UE5 material: ' + decal['source'])
+    # UE3 near/far clipping is reduced to one host depth extent; this mapping is UNVERIFIED.
+    decal_size = unreal.Vector(*ue3_decal_dimensions_to_ue5(decal['dimensions']))
+    basis = decal.get('projection_basis', {})
+    normal = basis.get('HitNormal', [0.0, 0.0, 0.0])
+    binormal = basis.get('HitBinormal', [0.0, 0.0, 0.0])
+    if any(abs(float(value)) > 1e-5 for value in normal) and any(
+            abs(float(value)) > 1e-5 for value in binormal):
+        decal_rotation = unreal.MathLibrary.make_rot_from_xz(unreal.Vector(*normal),
+                                                             unreal.Vector(*binormal))
+    else:
+        pitch, yaw, roll = decal['transform']['rotation']
+        decal_rotation = unreal.Rotator(pitch=float(pitch), yaw=float(yaw), roll=float(roll))
+    decal_actor = actors.spawn_actor_from_class(unreal.DecalActor,
+        unreal.Vector(*decal['transform']['location']), decal_rotation)
+    decal_actor.set_actor_label(actor_label(decal['level'], decal['source'], 0))
+    decal_actor.set_folder_path('Decals/' + decal['level'])
+    decal_actor.set_editor_property('tags', [unreal.Name(decal['source'])])
+    decal_component = decal_actor.get_component_by_class(unreal.DecalComponent)
+    if decal_component is None:
+        raise RuntimeError('UE5 DecalActor has no DecalComponent: ' + decal['source'])
+    decal_component.set_editor_property('decal_size', decal_size)
+    decal_component.set_editor_property('decal_material', decal_material_assets[material_name])
+    decal_imported += 1
+
 camera_pose = scene['camera'] or {'location': [0, 0, 1000], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]}
 position = unreal.Vector(*camera_pose['location'])
 pitch, yaw, roll = camera_pose['rotation']
@@ -683,8 +776,18 @@ sun.set_actor_label('OpenWillow_Sun')
 sun.set_folder_path('Lighting')
 sun_component = sun.get_component_by_class(unreal.DirectionalLightComponent)
 sun_component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
-sun_component.set_editor_property('intensity', 1.0)
-sun_component.set_light_color(unreal.LinearColor(1.0, 0.94, 0.82, 1.0))
+sun_intensity = (ue3_directional_brightness_to_ue5(source_directional['light_brightness'])
+                 if source_directional is not None and 'light_brightness' in source_directional else 1.0)
+sun_component.set_editor_property('intensity', sun_intensity)
+# UE3 stores this as FColor; hand UE5 the corresponding linear-light value.
+sun_color = (ue3_color_linear(source_directional['light_color_rgb'])
+             if source_directional is not None and source_directional.get('light_color_rgb') is not None
+             else None)
+if sun_color is None:
+    # Host stand-in for maps with no supported directional component record.
+    sun_color = [1.0, 0.94, 0.82]
+sun_component.set_light_color(unreal.LinearColor(float(sun_color[0]), float(sun_color[1]),
+                                                 float(sun_color[2]), 1.0))
 sun_component.set_editor_property('light_source_angle', 0.5357)
 sun_component.set_editor_property('dynamic_shadow_distance_movable_light',
                                    min(max(scene_extent.x, scene_extent.y, scene_extent.z) * 2.0, 50000.0))
@@ -723,11 +826,11 @@ sky_component.set_intensity(0.5)
 sky_component.set_light_color(unreal.LinearColor(0.72, 0.82, 1.0, 1.0))
 source_sky = source_lighting.get('sky_light')
 if source_sky is not None:
-    rgb = ue3_color_linear(source_sky['light_color_rgb'])
+    rgb = ue3_sky_light_color_to_ue5(source_sky['light_color_rgb'])
     lower = ue3_color_linear(source_sky['lower_color_rgb'])
     lower_scale = float(source_sky.get('lower_brightness') or 0.0)
     sky_component.set_light_color(unreal.LinearColor(float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0))
-    sky_component.set_intensity(1.0)
+    sky_component.set_intensity(SANCTUARY_SKY_INTENSITY_CALIBRATION)
     sky_component.set_editor_property('lower_hemisphere_color', unreal.LinearColor(
         float(lower[0]) * lower_scale, float(lower[1]) * lower_scale,
         float(lower[2]) * lower_scale, 1.0))
@@ -850,6 +953,25 @@ post.set_editor_property('unbound', True)
 post.set_editor_property('priority', 100.0)
 post.set_editor_property('blend_weight', 1.0)
 post_settings = post.get_editor_property('settings')
+world_info = next((item for item in source_lighting.get('world_info', [])
+                   if item.get('default_post_process_settings')), None)
+source_post_process = (ue3_world_post_process_to_ue5(
+    world_info['default_post_process_settings']) if world_info is not None else None)
+if source_post_process is not None:
+    # The source values are recorded, but the UE3 tone curve is not decoded.
+    # This simple UE5 mapping and the named -1.5 EV screenshot bias are UNVERIFIED.
+    post_settings.set_editor_property('override_auto_exposure_bias', True)
+    post_settings.set_editor_property('auto_exposure_bias', source_post_process['auto_exposure_bias'])
+    post_settings.set_editor_property('override_color_gain', True)
+    post_settings.set_editor_property('color_gain', unreal.Vector4(
+        source_post_process['color_gain'][0], source_post_process['color_gain'][1],
+        source_post_process['color_gain'][2], 1.0))
+    post_settings.set_editor_property('override_color_offset', True)
+    post_settings.set_editor_property('color_offset', unreal.Vector4(
+        source_post_process['color_offset'][0], source_post_process['color_offset'][1],
+        source_post_process['color_offset'][2], 0.0))
+    post_settings.set_editor_property('override_bloom_intensity', True)
+    post_settings.set_editor_property('bloom_intensity', source_post_process['bloom_intensity'])
 for property_name, value in (
         # Leave exposure automatic: the imported map has large sparse areas
         # and a fixed manual override turns the Lit preview black at this
@@ -914,18 +1036,42 @@ unreal.EditorAssetLibrary.save_directory(destination)
     'collision_volumes': {'policy': scene.get('volume_policy'),
                           'blocking': sum(v.get('status') == 'blocking' for v in scene.get('volumes', [])),
                           'actor': volume_actor is not None},
-    'lighting': {'sun_intensity': 1.0,
+    'lighting': {'sun_intensity': sun_intensity,
                  'source_directional_rotation_applied': source_directional is not None,
-                 'sky_intensity': 1.0 if source_sky is not None else 0.5,
+                 'sun_intensity_scale': SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS
+                                        if source_directional is not None
+                                        and 'light_brightness' in source_directional else None,
+                 'sky_intensity': (SANCTUARY_SKY_INTENSITY_CALIBRATION
+                                  if source_sky is not None else 0.5),
                  'source_sky_light': bool(source_sky),
+                 'source_sky_light_brightness_status': (source_sky or {}).get(
+                     'light_brightness_status'),
+                 'source_directional_light_values': bool(
+                     source_directional and 'light_brightness' in source_directional
+                     and 'light_color_rgb' in source_directional),
                  'source_height_fog': bool(source_fog),
                  'source_height_fog_actor': source_fog_label,
                  'source_post_process_volumes_exported': len(source_lighting.get('post_process_volumes', [])),
+                 'source_world_info_post_process_applied': world_info is not None,
+                 'source_post_process_volume_bounds_applied': False,
+                 'post_process_mapping': 'ue3_world_settings_tone_to_ue5_gain_offset_v1',
                  'source_directional_light_status': (source_lighting.get('directional_light') or {}).get('status'),
                  'reflection_capture_radius': max(capture_radius, 1000.0),
                  'exposure': 'auto', 'ambient_occlusion': 0.35,
                  'temporary_sky_fallback': ('none_native_dome_approximation'
                                             if native_sky_approximated
                                             else 'UE5_SkyAtmosphere+OpenWillow_SkyFallback')},
+    'decals': {'source_actors': scene.get('decals', {}).get('census', {}).get('actors', 0),
+               'source_components': scene.get('decals', {}).get('census', {}).get('components', 0),
+               'supported_candidates': scene.get('decals', {}).get('census', {}).get('supported_import_candidates', 0),
+               'imported': decal_imported,
+               'unsupported': scene.get('decals', {}).get('census', {}).get('unsupported', 0),
+               'unique_materials': scene.get('decals', {}).get('census', {}).get('unique_materials', 0),
+               'supported_materials': scene.get('decals', {}).get('census', {}).get('supported_materials', 0),
+               'static_mesh_candidate_placements': scene.get('decals', {}).get('census', {}).get(
+                   'static_mesh_candidate_placements', 0),
+               'policy': scene.get('decals', {}).get('policy')},
     'visual_validation': 'pending'}, indent=2))
-unreal.log(f'OpenWillow: imported {count} mesh sections, including {native_skybox_placements} native skybox placements and {hidden_visual_placements} hidden collision helpers, with lighting rig and temporary UE5 sky fallback. Play: WASD + mouse, E/Q vertical flight.')
+unreal.log(f'OpenWillow: imported {count} mesh sections, {decal_imported} partial Sanctuary decals, '
+           f'{native_skybox_placements} native skybox placements and {hidden_visual_placements} hidden collision helpers. '
+           'Play: WASD + mouse, E/Q vertical flight.')

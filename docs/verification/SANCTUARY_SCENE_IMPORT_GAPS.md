@@ -4,6 +4,26 @@ AI-assisted (Claude), lane A, branch `feature/scene-materials-owners`. Evidence 
 through this repository's reader, a census over every base-game package and one live read of the running game.
 Every report, texture, scene and capture stays under ignored `local/` (`local/lanea/`, `local/realgame/`).
 
+## Matched-viewpoint round 2 (2026-10-22, lane A)
+
+The eight matched host/game pairs are under `C:\Users\yorad\Documents\BL2_ReBased\local\hub-gallery\2026-10-22\laneA\round2\pairs` (host left); host captures are in the sibling `round2\host`. These are visual checks of the static Sanctuary import, not gameplay or original-game parity tests. No game assets or exports were added to git.
+
+| Gap | Change and evidence | Result and remaining work |
+| --- | --- | --- |
+| Lighting and grading | The directional component has a serialized lightmap prefix before its UProperties. The previous offset-zero read started on non-property bytes. `prepare_level.py` now locates the exact `LightmassSettings` FName in the component payload and accepts only a complete property stream whose first decoded property is that anchor and which contains the required light fields with no trailing bytes. It also exports WorldInfo defaults and all four PostProcessVolume settings records. | Named, screenshot-calibrated host constants in `scene_import_rules.py`: `SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS=20.0` (140 UE5 lux for the observed source brightness), `SANCTUARY_SKY_INTENSITY_CALIBRATION=0.75`, and `SANCTUARY_AUTO_EXPOSURE_CALIBRATION_BIAS=-1.5`. These are host calibration, not decoded UE3 units, and remain `UNVERIFIED`. Round-2 shots reduced the clipped highlights, but outdoor views still have hard bright surfaces and dark blue shadows; the HQ remains bluer than the game's green-cyan ambient. The sky-light component has no serialized main Brightness. The WorldInfo mapping (tone scale to exposure stops, midtones to gain, shadows to offset, bloom to intensity) is `UNVERIFIED`. Four local volume settings are recorded but not applied because `bUnbound` and brush bounds were not decoded. |
+| Roland's HQ map table | `world_map_mask_colorization_v1` maps `WorldMap_Comp` R artwork to pale cyan, G grid to dark teal, and B markers to dark teal. | Camera 03 now reads cyan instead of the round-1 red/white grid, but the route markings remain faint and the display is flatter than the reference. Palette, reflection, and marker animation remain `UNVERIFIED`. |
+| Tower graffiti and decals | Census: 293 DecalActors/components, 27 unique material references, 245 supported candidates across 16 materials, and 48 unsupported candidates across 11 unresolved materials. Supported actors are imported as deferred decals and independently checked for transform, normal, size, material graph and source tag. A further 46 water-effect `DecalPlane_LiquidDev` placements stay on the already-verified static-mesh path. `DMat_GrafittoBurrito` is a single-texture Modulate material; its local exported PNG has fully opaque alpha, so using alpha painted the white background. The host now derives opacity as `1 - Rec.709 RGB luminance` for Modulate decals. | The inverse-luminance rule is a narrow `UNVERIFIED` approximation of the native Modulate graph. Its material graph and all 245 supported decal actors pass the UE import verifier (0 errors); a post-change screenshot is still pending. Other unsupported materials remain enumerated in the ignored scene manifest. |
+| Map-table projector | The map-table-near `Engine.Emitter` records resolve to `FX_MysteryMeat.Particles.Props.Part_HeaterSteam`; three nearby emitters share that template. Sanctuary_P has seven Emitter actors in total. | This is an identity candidate from package data, not a verified match for the cyan beam/symbol. No particle importer was added. |
+| Moxxi string lights | Three `Prop_Carnival.LightStrip_02` placements and one `WiringMesh` placement are present. The inspected `LightStrip_Comp` recipe drives emissive RGB at `[2,2,2]`. | Geometry/import coverage exists; the host string-light appearance still differs from cameras 05/07. Native bulb palette and bloom are `UNVERIFIED`. |
+| Moxxi sign | The scoped `moxxi_neon_masks_v1` recipe uses a named emissive calibration scale of 1.8 against round-1 camera 05. | The host sign is brighter, but its hue, legibility and glow still differ from the reference. The scale is not decoded from the source game. |
+| Distant mountains | Five `SkyboxMountains_low` placements use the inspected `Mat_MountainDistant` and the mostly snowy `SkyboxMountainSnow_Dif` fallback. | The snow silhouette is visible in camera 02; its layer blend, size and sky lighting remain different and `UNVERIFIED`. |
+| Customization machine | `customization_banner_swirl_v1` and the scoped emissive calibration use a host scale of 1.8. | Camera 01 still lacks the reference's bright cyan display/hologram. Banner, mask and animation are approximations. |
+| Sky | No separate cloud tuning was added in this pass. | Camera 04/07 still shows broader, brighter cloud bands than the game. Low priority and `UNVERIFIED`. |
+
+### External-tool benchmark
+
+UE Viewer / UModel was used locally for the selected Sanctuary central-pillar skeletal mesh: `prepare_sanctuary_pillar.py --umodel 'C:/Users/yorad/Tools/UEViewer/umodel.exe' --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --reader build/Release/ow-package.exe --scene local/sanctuary/scene.json --output local/sanctuary`. The installed build is 1590 (compiled 2022-12-23), from the [UE Viewer repository](https://github.com/gildor2/UEViewer), whose source states the MIT license. The end-to-end command took 19.5 seconds. It exported one MD5 mesh and two animation files, plus four material descriptors, five textures and four text sidecars (18 files including two logs); the reconstructed mesh has four sections, 5,811 vertices and 5,280 triangles in ignored `local/sanctuary/center-pillar-umodel-5b97e151`. There were zero `ERROR:` markers and zero duplicate basenames. UModel logged unknown SkeletalMesh3/LODInfo and material-expression editor-coordinate fields and dropped four bytes from each of five texture exports; those fields are not used as parser truth. This is a bounded pillar benchmark only; other asset categories were not benchmarked. Our parser/importer continues to own package/object identity, references, transforms, materials, provenance and verification.
+
 ## Matched-viewpoint parity pass (2026-10-21, feature/sanctuary-parity-r2)
 
 This pass uses the five matched pairs in `C:\Users\yorad\Documents\BL2_ReBased\local\hub-gallery\2026-10-21\`
@@ -243,3 +263,59 @@ python tests/level_test.py; python tests/material_audit_test.py
 
 The live read is `tools/real_game/scripts/scene_owners.py` through `Invoke-GamePyFile` (docs/TOOLING.md, "Driving
 the real game").
+
+## Round 2 matched shots (2026-10-22)
+
+The eight same-camera reference frames are under ignored `local/hub-gallery/2026-10-22/laneA/reference/`;
+final host captures and side-by-side pairs are under `round2/host/` and `round2/pairs/`. Host is the left image.
+`capture_host.ps1` ran directly and acquired/released the shared lock itself. The capture automation completed all
+eight views (`Inspection`, Success); visual validation is the matched screenshot comparison, not gameplay validation.
+
+The import gate (`local/laneA/r2-import11.log`) ended `Success - 0 error(s), 0 warning(s)`. It imported 4,914
+section actors. `ue-verify.json` independently verifies 111 of 293 source decal components, records 182 unsupported,
+confirms four source PostProcessVolume records and the WorldInfo defaults, and verifies the colorized map recipe.
+Collision verification reports 635 mesh sections and 3,254 enabled components with zero errors; UV verification
+reports 583,965 corners and 194,655 triangles. Collision refresh matched all five blocking volumes.
+
+### Round 2 findings and remaining gaps
+
+- **Lighting and grading:** the directional component's property stream is found by the exact `LightmassSettings`
+  FName anchor, fixing the previous invalid-FName read. Brightness and color decode; the SkyLight color decodes, while
+  its Brightness is absent from that component. WorldInfo tone scale, midtones, shadows and bloom decode into the
+  local manifest. Four volume Settings/Priority records decode, but `bUnbound` is not serialized on those actors and
+  brush bounds were not decoded, so their local grading is not applied. **UNVERIFIED host screenshot calibrations:**
+  5 UE5 lux per source brightness unit (35 lux); SkyLight intensity 1.5; linear sky tint multipliers (3.0, 2.1, 1.0),
+  giving RGB approximately (0.296, 0.510, 0.554); exposure bias calibration -1.5 EV, combined with the local
+  WorldInfo tone-scale mapping. HQ highlights and the warm outdoor tone still differ in the matched shots.
+- **Roland's map table:** local channel images show `WorldMap_Comp` R is land/contours, G is the grid and B is route
+  markers. The `world_map_mask_colorization_v1` recipe now maps R to pale cyan (0.16, 0.58, 0.68), G to dark teal
+  (0.035, 0.09, 0.105) and B to teal (0.08, 0.24, 0.27). Camera 03 now shows cyan land with dark markings.
+  Palette intensity, reflection and animated markers remain **UNVERIFIED**.
+- **Decals:** census: 293 DecalActors/components, 27 unique material references, 111 imported candidates across six
+  supported materials, 182 unsupported, and 46 separate planar static-mesh candidates already imported by the mesh
+  path. Direct `Texture2D --properties --property-offset 8` reads now supply compression flags omitted by scene
+  records; Modulate maps with `CompressionNoAlpha=true` stay unsupported because channel roles are unresolved. The
+  33 placements using `DMat_GrafittoBurrito` use the single `GraffitoBurrito_Dif` texture and inverse RGB luminance;
+  camera 06 shows the tower graffiti, still fainter than the reference. This opacity and UE3-to-UE5 projection are
+  **UNVERIFIED**. The host uses a translucent deferred decal because the native graph/blend is not reconstructed.
+- **Projector:** the placed `IO_RolandHQProjector` has five particle components referencing
+  `Part_Gen_RaidersRotating`, `Part_Ep10_Objects`, `Part_Gen_AngelRotating`, `Part_Ep13_Objects` and
+  `Part_HoloVid_Glows_Looping`. This identifies a nearby projector system set, not which one draws the map-table
+  beam; particle rendering remains out of scope and the beam match is **UNVERIFIED**.
+- **Moxxi string lights/sign:** three `LightStrip_02` placements use `Mati_LightStrips_01` and its
+  `LightStrip_Comp` atlas; one world-space `WiringMesh_14` placement uses `MAT_WireXMasWhite` and `Wire_Dif`. The
+  light-strip emissive calibration is 4.0; the Moxxi sign recipe scale is 2.8. The sign is brighter, but the host
+  still does not show the reference's dotted bulb line clearly. Bulb mapping and bloom remain **UNVERIFIED**.
+- **Distant mountains:** the visible low skybox mesh is `SkyboxMountains_low` (five placements) with
+  `Mat_MountainDistant`; its approximation uses `SkyboxMountainSnow_Dif` and omits the `SkyboxMountain_Dif` rock
+  blend. The host snow reads smaller/darker in cameras 02/06. Mesh/material identity is inspected; scale and the
+  native snow/rock blend remain unresolved.
+- **Customization/sky:** the customization display recipe scale is 3.0 and the cyan panel is brighter, but the
+  projector hologram remains dim. Broad host cloud bands still differ from the finer reference streaks. These are
+  **UNVERIFIED** visual approximations; neither particle effects nor native sky grading was reconstructed.
+
+The local UE Viewer benchmark for the pillar remains bounded: build 1590 (MIT repository, linked above), 19.5 s,
+one MD5 mesh, two animations, four material descriptors, five textures, four sidecars and two logs (18 files); no
+`ERROR:` markers or duplicate basenames. Its unknown SkeletalMesh3/LODInfo and material-expression fields and four
+trailing bytes lost from each texture export remain documented in the benchmark notes above. All outputs stayed in
+ignored `local/`.
