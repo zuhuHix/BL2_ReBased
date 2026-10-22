@@ -128,6 +128,10 @@ private:
     // Starts a timed reload of the held weapon; false when it cannot reload.
     bool StartReload(float Now);
     void CancelReload();
+    // Moves the magazine refill once the reload passes its ReloadCompletePercent point, into the weapon
+    // that started the reload (never a weapon swapped in since).
+    void RefillIfDue(float Now);
+    FOpenWillowWeaponItem* ReloadingWeapon();
     void FireWeapon();
     void BeginAimTransition(float Now);
     void UpdateAim(float Now);
@@ -210,6 +214,7 @@ private:
     FString ReloadCompletePercentSource = TEXT("default: missing cooked type field; legacy full-duration refill");
     int32 ReloadAmmoMoved = 0;
     bool bReloadRefilled = false;
+    FString ReloadItemId; // weapon the running reload belongs to
     UPROPERTY() TObjectPtr<class UAnimSequence> WeaponReloadAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> ArmsReloadAnim;
     bool bOutOfAmmoLogged = false;

@@ -569,25 +569,14 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
     static const bool bReloadPhaselockTest = FParse::Param(FCommandLine::Get(), TEXT("owreloadphaselocktest"));
-    FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
-    if (bReloading && !bReloadRefilled && Now >= ReloadRefillAt)
-    {
-        bReloadRefilled = true;
-        ReloadAmmoMoved = Weapon ? Inventory->CompleteReload(*Weapon) : 0;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow reload refilled: +%d, magazine %d at %.3f (%s)"), ReloadAmmoMoved,
-            Weapon ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0, ReloadCompletePercent,
-            *ReloadCompletePercentSource);
-    }
+    RefillIfDue(Now);
     if (bReloading && Now >= ReloadEndsAt)
     {
+        RefillIfDue(ReloadEndsAt); // the refill point is never after the end (fraction <= 1)
+        const FOpenWillowWeaponItem* Reloaded = ReloadingWeapon();
         bReloading = false;
-        if (!bReloadRefilled)
-        {
-            bReloadRefilled = true;
-            ReloadAmmoMoved = Weapon ? Inventory->CompleteReload(*Weapon) : 0;
-        }
         UE_LOG(LogTemp, Display, TEXT("OpenWillow reload finished: +%d, magazine %d"), ReloadAmmoMoved,
-            Weapon ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0);
+            Reloaded ? UOpenWillowInventory::MagazineLeft(*Reloaded) : 0);
         if (WeaponVisual && WeaponReloadAnim)
         {
             WeaponVisual->Stop();
@@ -598,6 +587,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         ArmsReloadAnim = nullptr;
     }
     if (bReloadPhaselockTest && bMayaActive && Controller) RunReloadPhaselockTest(Now);
+    FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
     if (bMayaActive && bWeaponOut && Weapon && bFireHeld && !bReloading && Now >= NextShotAt)
     {
         if (Inventory->ConsumeShot(*Weapon))
@@ -857,10 +847,10 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     if (!bMayaActive || !ArmsAnim) return;
     const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot);
     if (!Item) return; // an empty slot keeps the current weapon, as in BL2
+    CancelReload(); // before the active weapon changes, so a due refill reaches the reloading weapon
     Inventory->SetActiveSlot(Slot);
     bWeaponOut = true;
     bFireHeld = false;
-    CancelReload();
     bOutOfAmmoLogged = false;
     // Each rolled weapon imports as SK_<recipe id> (or names its mesh); fall back to the older
     // single Infinity assembly when that item has not been imported.
@@ -912,6 +902,7 @@ bool AOpenWillowWalker::UnequipSlot(int32 Slot)
 {
     if (!Inventory || !Inventory->SlotItem(Slot)) return false;
     const bool bWasActive = Inventory->GetActiveSlot() == Slot;
+    if (bWasActive) RefillIfDue(GetWorld()->GetTimeSeconds()); // while the weapon is still in hand
     if (!Inventory->Unequip(Slot)) return false;
     if (bWasActive)
     {
@@ -975,6 +966,7 @@ bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTake
     if (!Inventory) return false;
     const FOpenWillowWeaponItem* Active = Inventory->ActiveWeapon();
     const bool bWasActiveWeapon = Active && UOpenWillowInventory::StableId(*Active) == Id;
+    if (bWasActiveWeapon) RefillIfDue(GetWorld()->GetTimeSeconds()); // while the weapon is still in hand
     if (!Inventory->TakeById(Id, OutItem)) return false;
     if (bWasActiveWeapon)
     {
@@ -1062,9 +1054,9 @@ void AOpenWillowWalker::Holster()
     if (!bMayaActive || !ArmsAnim) return;
     AimReleased();
     bWeaponOut = false;
+    CancelReload(); // before the active weapon changes
     Inventory->SetActiveSlot(INDEX_NONE);
     bFireHeld = false;
-    CancelReload();
     WeaponVisual->SetHiddenInGame(true);
     IdleAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Idle"));
     RunAnim = LoadArmsAnim(TEXT("Unarmed"), TEXT("Run_F"));
@@ -1142,6 +1134,7 @@ bool AOpenWillowWalker::StartReload(float Now)
     ReloadRefillAt = Now + ReloadTime * ReloadCompletePercent;
     ReloadAmmoMoved = 0;
     bReloadRefilled = false;
+    ReloadItemId = Weapon->Id;
     WeaponReloadAnim = nullptr;
     ArmsReloadAnim = nullptr;
     if (Model && !Model->ReloadAsset.IsEmpty())
@@ -1178,8 +1171,26 @@ bool AOpenWillowWalker::StartReload(float Now)
         *ReloadCompletePercentSource);
     return true;
 }
+FOpenWillowWeaponItem* AOpenWillowWalker::ReloadingWeapon()
+{
+    // The inventory exposes only the active weapon mutably, so a reload whose weapon has left the hands
+    // refills nothing rather than the weapon swapped in.
+    FOpenWillowWeaponItem* Active = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
+    return Active && Active->Id == ReloadItemId ? Active : nullptr;
+}
+void AOpenWillowWalker::RefillIfDue(float Now)
+{
+    if (!bReloading || bReloadRefilled || Now < ReloadRefillAt) return;
+    bReloadRefilled = true;
+    FOpenWillowWeaponItem* Weapon = ReloadingWeapon();
+    ReloadAmmoMoved = Weapon ? Inventory->CompleteReload(*Weapon) : 0;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow reload refilled: +%d, magazine %d at %.3f (%s)"), ReloadAmmoMoved,
+        Weapon ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0, ReloadCompletePercent, *ReloadCompletePercentSource);
+}
 void AOpenWillowWalker::CancelReload()
 {
+    // A cancel processed after the refill point but before this frame's Tick still keeps the refill.
+    if (UWorld* World = GetWorld()) RefillIfDue(World->GetTimeSeconds());
     bReloading = false;
     if (WeaponVisual && WeaponReloadAnim)
     {
@@ -2024,6 +2035,7 @@ void AOpenWillowWalker::RunReloadPhaselockTest(float Now)
         if (Now < ReloadPhaselockTestEndsAt + 0.08f) return;
         {
             static const float CastRate = [] { float R = 0.85f; FParse::Value(FCommandLine::Get(), TEXT("owcastrate="), R); return R; }();
+            if (CastRate <= 0.f) { Fail(TEXT("-owcastrate must be positive for the clip-running check")); return; }
             const bool bCastActionCurrent = ArmsAnim && PhaselockAnim && ArmsAnim->Action == PhaselockAnim;
             const bool bCastClipStillRunning = bCastActionCurrent &&
                 (Now - ReloadPhaselockTestCastAt) * CastRate < PhaselockAnim->GetPlayLength();
@@ -2066,7 +2078,17 @@ void AOpenWillowWalker::RunReloadPhaselockTest(float Now)
         return;
     case 5:
         if (Now < ReloadPhaselockTestCastAt + 1.f) return;
-        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK result=PASS after-refill-kept before-refill-empty cast-action-persisted"));
+        // Cancel in the frame the refill falls due, before Tick has moved it: the refill must still land.
+        if (!PrepareReload()) return;
+        ReloadRefillAt = Now;
+        CancelReload();
+        if (bReloading || !bReloadRefilled || !ActiveItem() || ActiveItem()->MagazineLeft <= 0)
+        {
+            Fail(TEXT("cancel at the refill point dropped the refill"));
+            return;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK scenario=cancel-at-refill ammo=%d result=PASS"), ActiveItem()->MagazineLeft);
+        UE_LOG(LogTemp, Display, TEXT("OWRELOADPHASELOCK result=PASS after-refill-kept before-refill-empty cast-action-persisted cancel-at-refill-kept"));
         if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
         ReloadPhaselockTestStep = 6;
         return;
