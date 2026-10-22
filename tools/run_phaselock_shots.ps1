@@ -39,7 +39,7 @@ try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $outDir "run-$stamp.log"
     $started = Get-Date
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcombattest', '-owphaselockshots',
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', '-owcombattest', '-owphaselockshots',
         "-owitems=`"$itemDir`"", "-owlevel=$gearLevel") + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")

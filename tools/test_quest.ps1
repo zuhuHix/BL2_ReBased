@@ -54,7 +54,7 @@ function Invoke-Run([string]$Mode, [string[]]$Extra) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $repo ('local/quest/run-' + $Mode + '-' + $stamp + '.log')
     $started = Get-Date
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud',
         "-owmover=`"$Manifest`"", "-owslice=`"$World`"", "-ownpcs=`"$Npcs`"", "-owaudio=`"$Audio`"",
         '-owquest', '-owquesttest', "-owquestsave=`"$save`"", "-owitems=`"$itemDir`"",
         "-owactionskill=`"$actionSkill`"", "-owlevel=$gearLevel") + $Extra + @(

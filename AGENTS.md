@@ -114,6 +114,12 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   held) drive BL2's own HUD clips from the host's Phaselock state, with frame rules read from the live movie; a 2D
   stand-in for the HUD clusters' 3D turn fixes the overall HUD layout. In-engine 9/9 against real timings, critic 9/10.
   `docs/verification/ACTION_SKILL_HUD.md`.
+- **Gameplay HUD (2026-10-22):** BL2's HUD movie is the default gameplay HUD (canvas fallback only while it is not
+  ready; the temporary Phaselock ring is gone). The turned side clusters are drawn in true perspective by a WebGL warp of
+  the movie's canvas; health, shield capacity, magazine / reserve, grenades and the level come from host state, the
+  crosshair and ammo icon from live reads (pistol, shotgun). Critic 8.0 and 7.7/10; blind A/B warp 8 vs 2D stand-in 6
+  (preferred 6 of 6).
+  `docs/verification/HUD_PARITY.md`.
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
   model, interpreter, Core natives, default-state sweep and scalar trace replay exist.
