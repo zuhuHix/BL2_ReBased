@@ -1,5 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
+#include "Blueprint/UserWidget.h"
 #include "GameFramework/Character.h"
 #include "OpenWillowPhaselock.h"
 #include "OpenWillowPhaselockFx.h"
@@ -7,6 +8,18 @@
 
 struct FOpenWillowTakenInventoryItem;
 struct FOpenWillowWeaponItem;
+
+// Procedural scope mask and reticle for recipes whose selected sight carries a
+// first-person particle component. Its match to the stock scope presentation is UNVERIFIED.
+UCLASS()
+class OPENWILLOW_API UOpenWillowScopeOverlay : public UUserWidget
+{
+    GENERATED_BODY()
+protected:
+    virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
+        const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
+        const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
+};
 
 UCLASS()
 class OPENWILLOW_API AOpenWillowWalker : public ACharacter
@@ -93,6 +106,8 @@ public:
     // set for (start, XP level-up, test fixtures); does nothing otherwise.
     void RefreshHealthForLevel();
 private:
+    struct FViewModel;
+    struct FWeaponSocketData;
     void Forward(float Value);
     void Right(float Value);
     void Turn(float Value);
@@ -107,17 +122,22 @@ private:
     void SelectSlot4() { SelectSlot(3); }
     void FirePressed();
     void FireReleased();
+    void AimPressed();
+    void AimReleased();
     void ReloadPressed();
     // Starts a timed reload of the held weapon; false when it cannot reload.
     bool StartReload(float Now);
     void CancelReload();
     void FireWeapon();
+    void BeginAimTransition(float Now);
+    void UpdateAim(float Now);
+    const FViewModel* ActiveViewModel() const;
+    FTransform WeaponSocketWorld(const FWeaponSocketData& Socket) const;
     void PickupNearby();
     // Arms are shown while a pose clip set is loaded (a drawn weapon, or Unarmed clips if imported) and no menu covers them.
     void UpdateArmsVisibility();
     void RunCombatShots(float Now);
-    // -owgunshots -owgunids=a,b,c: equips each named item in turn and writes a first-person frame and a side-view frame
-    // of it (lane C review captures; docs/verification/WEAPON_VISUALS.md).
+    // -owgunshots -owgunids=a,b,c: captures idle, ADS, firing, reload and side-view frames per named item.
     void RunGunShots(float Now);
     void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
@@ -133,6 +153,7 @@ private:
     UPROPERTY() TObjectPtr<class UOpenWillowSkills> Skills;
     UPROPERTY() TObjectPtr<class UOpenWillowMover> Mover;
     UPROPERTY() TObjectPtr<class UOpenWillowQuest> Quest;
+    UPROPERTY() TObjectPtr<UOpenWillowScopeOverlay> ScopeOverlayWidget;
     // Host stand-ins (UNVERIFIED) unless -owquest supplies the slice data: then health follows the recovered
     // formula and respawn the decoded station selection (UOpenWillowQuest).
     float MaxHealth = 400.f;
@@ -163,19 +184,62 @@ private:
     int32 PickupAttempts = 0;
     bool bLastPickupAccepted = false;
     bool bFireHeld = false;
+    bool bAimHeld = false;
+    float WorldFovDefault = 90.f;
+    float CameraAspect = 16.f / 9.f;
+    float AimTransitionStart = 0.f;
+    float AimTransitionDuration = 0.2f;
+    float AimTransitionStartAlpha = 0.f;
+    float AimTransitionTargetAlpha = 0.f;
+    float AimAlpha = 0.f;
+    FString AimTransitionWeaponId;
     int32 ShotCount = 0;
     int32 CombatShotStep = 0;
     int32 GunShotStep = 0;
+    int32 GunShotBurstCount = 0;
+    float GunShotNextBurstAt = 0.f;
+    float GunShotPhaseAt = 0.f;
+    float GunShotFinishedAt = -1.f;
     TWeakObjectPtr<class AOpenWillowInventoryPreviewActor> GunShotPreview;
     float NextShotAt = 0;
     bool bReloading = false;
     float ReloadEndsAt = 0;
+    UPROPERTY() TObjectPtr<class UAnimSequence> WeaponReloadAnim;
     bool bOutOfAmmoLogged = false;
     float LandUntil = 0;
     float TargetHitAt = -10;
-    // First-person view model (lane C, docs/verification/WEAPON_VISUALS.md section 10). Per recipe id, from weapon_view.json beside the
-    // recipes (tools/weapon_view_model.py): the weapon type's PlayerViewOffset and FirstPersonMeshFOV. Applied in SelectSlot.
-    struct FViewModel { FVector Offset = FVector::ZeroVector; float Fov = 0.f; };
+    // Per-recipe first-person presentation from weapon_view.json (tools/weapon_view_model.py): cooked view/FOV/kick/reload
+    // values and the selected recipe fragments' socket transforms.
+    struct FWeaponSocketData
+    {
+        bool bValid = false;
+        FString Name;
+        FString Bone;
+        FVector Location = FVector::ZeroVector;
+        FRotator Rotation = FRotator::ZeroRotator;
+    };
+    struct FViewModel
+    {
+        FVector Offset = FVector::ZeroVector;
+        float Fov = 0.f;
+        float ZoomFov = 0.f;
+        float ZoomBlendTime = 0.2f;
+        FVector ZoomOffset = FVector::ZeroVector;
+        FWeaponSocketData ZoomSocket;
+        FWeaponSocketData MuzzleSocket;
+        FWeaponSocketData ShellSocket;
+        bool bScopeOverlay = false;
+        bool bTracerEnabled = false;
+        bool bShellCasingEnabled = false;
+        float MuzzleFlashDuration = 0.33f;
+        float MuzzleFlashRadius = 3.5f; // UNVERIFIED host stand-in; WeaponTypeDefinition has no scalar flash size.
+        float TracerRadius = 0.8f;      // UNVERIFIED host stand-in; no type tracer template is present in the measured slice.
+        float TracerLife = 0.09f;       // UNVERIFIED host stand-in; no type tracer template is present in the measured slice.
+        FLinearColor TracerColor = FLinearColor(200.f / 255.f, 200.f / 255.f, 200.f / 255.f, 1.f);
+        float RecoilWeight = 0.45f;
+        float ZoomedRecoilScale = 1.f;
+        FString ReloadAsset;
+    };
     TMap<FString, FViewModel> ViewModels;
     bool bViewModelActive = false;      // foreground FOV on (the default; -owfpfov=0 turns it and the offsets off)
     bool bViewFovForced = false;        // -owfpfov=<n> given: that value for every weapon
