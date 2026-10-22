@@ -49,9 +49,9 @@ TARGETS = {
                   ('PhaseLock_Lift', 'PhaseLock_Lift'), ('PhaseLock_Loop', 'PhaseLock_Loop'),
                   ('PhaseLock_Fall', 'PhaseLock_Fall'), ('PhaseLock_Land', 'PhaseLock_Land')],
         # Collision cylinder observed on the live adult bullymong (local/realgame/phaselock/size_rule/adult68, SDK reads
-        # 2026-10-03): 150 x 90 (the archetype says 100 x 90). The same read gave Mesh.Scale 1.0, but at that scale the host's
-        # bullymong is about 1.45x too large against the matched_650 frames (same distance and field of view, curled loop pose
-        # and idle), while the archetype's component Scale 0.7 matches them; the host uses 0.7 and the conflict stays UNVERIFIED.
+        # 2026-10-03): 150 x 90 (the archetype says 100 x 90). A live component read on 2026-10-21 recorded Mesh.Scale 1.0,
+        # while the archetype data says 0.7. The corrected-FOV Round 20 frame boxes match the live 1.0 read better; use
+        # the measured component scale. UE3-to-UE5 rendering remains UNVERIFIED.
         'observed': {'collision_radius': 150.0, 'collision_height': 90.0,
                      'source': 'local/realgame/phaselock/size_rule/adult68 (SDK read)',
                      # UpdateLiftedPawnMeshOffset centres Mesh.Bounds (the stock physics asset, not imported) on the pawn's
@@ -59,8 +59,8 @@ TARGETS = {
                      # -102.1 at rest to -221.5 through the hold (-119.5); the host's bone-box centring moved it -60.8. The
                      # host therefore centres the bones' box this much below the Location (a fit for this pawn, UNVERIFIED).
                      'centre_bias': 58.7,
-                     # Round 19 host fit (UNVERIFIED): the matched 3.00 s frame's silhouette was about 10% larger than the game.
-                     'host_visual_scale': 0.90},
+                     'host_mesh_scale': 1.0,
+                     'host_mesh_scale_source': 'local/realgame/phaselock/size_rule/adult68 (2026-10-21 SDK read)'},
     },
 }
 
@@ -168,8 +168,9 @@ def host_target(name, target):
     observed = target['observed']
     # UE3 places the mesh at Location + Translation (the cylinder centre is the pawn's Location); the host target's root
     # is on the floor, so the mesh goes at CollisionHeight + Translation.Z above it.
-    # Keep the archetype component scale as the starting point; apply the capture fit separately so it stays explicit.
-    scale = float(props.get('scale', 1.0)) * float(observed.get('host_visual_scale', 1.0))
+    # Prefer the live component read when available; otherwise use the archetype's package scale. The rendering decision
+    # is UNVERIFIED, but Round 20's corrected-FOV comparison favoured the live 1.0 read over the smaller package value.
+    scale = float(observed.get('host_mesh_scale', props.get('scale', 1.0)))
     # Translation is in the pawn's frame (not scaled by the mesh's own Scale).
     z = observed['collision_height'] + float(props.get('translation', {}).get('Z', 0.0))
     anim = lambda role: f'{dest}/Animations/Anim_{name}_{role}.Anim_{name}_{role}'  # noqa: E731
@@ -177,7 +178,9 @@ def host_target(name, target):
             'idle': anim('Idle'), 'death': anim('Death'), 'mesh_offset_z': z, 'mesh_scale': scale,
             'collision_radius': observed['collision_radius'], 'collision_height': observed['collision_height'],
             'centre_bias': observed.get('centre_bias', 0.0),
-            'source': {'translation_and_scale': 'archetype mesh component (our reader)', 'cylinder': observed['source']}}
+            'source': {'translation': 'archetype mesh component (our reader)',
+                       'mesh_scale': observed.get('host_mesh_scale_source', 'archetype mesh component (our reader)'),
+                       'cylinder': observed['source']}}
 
 
 def editor_job_step(args):

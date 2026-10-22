@@ -487,9 +487,9 @@ float2 n1 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 3.0 * t) + 0.5).xy * 
 float2 n2 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 1.5 * t) + 0.5).xy * 2.0 - 1.0;
 float n2z = sqrt(saturate(1.0 - dot(n2, n2)));
 float2 direction = float2(n2.y + n1.x, n2z + n1.x);
-// Host calibration (UNVERIFIED): the full push frills the rim on every frame, but the game's rim is a clean ring at 1.5 and
-// 3.0 s and frayed at 4.5 s. The strength therefore grows with the collapse value (Dyn, 0 at the start, 0.74 at 4.5 s).
-float strength = lerp(0.15, 1.0, saturate(Dyn / 0.75));
+// Round 20 fit (UNVERIFIED): Round 3's ramp reached about 0.99 at Dyn=0.74 and produced a jagged edge. Restore the earlier
+// 0.7 cap (about 0.70 at the same capture point) while retaining the small early displacement; the game rim is cloudlike.
+float strength = lerp(0.15, 0.7, saturate(Dyn / 0.6));
 float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).rgb;
 // Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
 // reduced and blue raised (round 8: red 0.7 to 0.55, blue 1.3 to 1.4, because a pink fringe remained on the rim).
@@ -664,9 +664,10 @@ float oneMinus = 1.0 - m2;
 float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
 float base = saturate(2.0 * m2);
 float k = base + mixWeight * (m1 - base);
-float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;   // host calibration (UNVERIFIED): deeper blue, as the game's palm orb
-// Host fit (UNVERIFIED): the first tint changed a matched 20x20 px center sample from 185/221/251 to 164/208/251;
-// the game sample is 138/183/253. Apply the remaining measured host/game ratios to red and green, preserving blue.
+// Round 20 tint trial (UNVERIFIED): applying the measured red/green ratios barely changed the matched 40x40 px host crop
+// (157.8/206.6/252.6 before, 156.9/205.9/252.6 after; game 117.3/171.0/252.4). The crop includes glow and overlapping
+// layers may dominate it, but their contribution is unresolved. Retain the prior fit instead of stacking on another guess.
+float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;
 float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9 * float3(0.55, 0.70, 1.0);
 return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
