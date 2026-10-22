@@ -18,7 +18,8 @@ The state lines prove the host's inputs only. Two more groups prove the movie dr
   host logged, and together they must show the emblem's bar running out, the icon's cooldown
   frames and the ready frame. Pairing each read-back with its own state needs no lag allowance.
 - the run's captures (--shots, required for a PASS): every scheduled `OWSKILLHUDSHOTS shot`
-  must exist as a 1280x720 PNG (signature and header checked) and the run must have logged
+  must be a complete 1280x720 PNG (every chunk's CRC, IHDR first, IDAT, IEND last, and the IDAT stream
+  inflating to the image's byte count) and the run must have logged
   `OWSKILLHUDSHOTS done`; three of them, decoded with zlib only, must show the indicator: the
   icon green before the cast, gold with the magenta emblem while the skill runs, red without
   the emblem in the cooldown (colour counts in fixed screen boxes). Whether the captures look
@@ -136,8 +137,33 @@ def colours(rows, box):
 
 
 def valid_shot(path):
-    head = path.read_bytes()[:24] if path.is_file() else b''
-    return head[:8] == PNG_SIGNATURE and head[12:16] == b'IHDR' and struct.unpack('>II', head[16:24]) == SHOT_SIZE
+    """A complete 1280x720 8-bit RGB/RGBA PNG: every chunk's CRC right, IHDR first, IDAT data, IEND last, and the
+    IDAT stream inflating to exactly the image's filtered byte count (no full pixel decode)."""
+    data = path.read_bytes() if path.is_file() else b''
+    if data[:8] != PNG_SIGNATURE:
+        return False
+    pos, kinds, idat, header = 8, [], [], None
+    while pos + 12 <= len(data):
+        length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+        body, crc = data[pos + 8:pos + 8 + length], data[pos + 8 + length:pos + 12 + length]
+        if len(body) != length or len(crc) != 4 or zlib.crc32(kind + body) != struct.unpack('>I', crc)[0]:
+            return False
+        kinds.append(kind)
+        if kind == b'IHDR' and length == 13:
+            header = struct.unpack('>IIBBBBB', body)
+        elif kind == b'IDAT':
+            idat.append(body)
+        pos += 12 + length
+    if pos != len(data) or not kinds or kinds[0] != b'IHDR' or kinds[-1] != b'IEND' or not idat or not header:
+        return False
+    width, height, depth, colour, _, _, interlace = header
+    if (width, height) != SHOT_SIZE or depth != 8 or colour not in (2, 6) or interlace:
+        return False
+    try:
+        inflated = zlib.decompress(b''.join(idat))
+    except zlib.error:
+        return False
+    return len(inflated) == height * (1 + width * (3 if colour == 2 else 4))
 
 
 def check_shots(text, folder):
