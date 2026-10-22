@@ -8,15 +8,31 @@ ready -> cast -> emblem on -> emblem off -> cooldown -> ready against the timing
 read from the live HUD movie during a real cast (docs/verification/ACTION_SKILL_HUD.md):
 emblem from 0.70 s to 5.70 s with its bar emptying evenly, the cooldown pool full
 from the cast until the skill ends, then draining at 1/13 per second, ready at 18.73 s.
-`active` is -1 while the emblem is off. Prints one PASS/FAIL line per check and a
-summary; exit code 0 only when every check passes.
+`active` is -1 while the emblem is off.
+
+The state lines prove the host's inputs only. Two more groups prove the movie drew them:
+- the page's read-back lines `OWSKILLPAGE emblem=<frame> bar=<frame> cooldown=<frame>`
+  (tools/hud_overlay/index.html reads `_currentframe` back from the movie after each change,
+  the host logs the page console) must show the emblem, its bar running out, the cooldown
+  frames and the ready frame, and each must agree within a frame with one of the host's
+  recent state lines (the console reaches the log a little later than the state);
+- with --shots, every `OWSKILLHUDSHOTS shot <name>` the run scheduled must exist in that
+  folder, all of them, and the run must have logged `OWSKILLHUDSHOTS done`.
+Prints one PASS/FAIL line per check and a summary; exit code 0 only when every check passes.
 """
 import argparse
+import math
 import re
 import sys
+from pathlib import Path
 
 LINE = re.compile(r'OWSKILLHUD t=([-\d.]+) cast=([-\d.]+) active=([-\d.]+) cooldown=([-\d.]+)')
 CAST = re.compile(r'OWSKILLHUDSHOTS cast t=([-\d.]+) hit=(\d)')
+PAGE = re.compile(r'OWSKILLPAGE emblem=(\d+) bar=(\d+) cooldown=(\d+)')
+SHOT = re.compile(r'OWSKILLHUDSHOTS shot (\S+\.png)')
+DONE = 'OWSKILLHUDSHOTS done'
+EXPECTED_SHOTS = 47          # every 0.5 s from 1 s before the cast to 22 s after (OpenWillowMayaHUD.cpp)
+RECENT_STATES = 6            # state lines a page line may trail behind
 # Real game, one hit cast on an Adult Bullymong (ACTION_SKILL_HUD.md); host timeline from the same data.
 LOCK_AT, SKILL_END, POOL_SECONDS, READY_AT = 0.70, 5.70, 13.0, 18.73
 
@@ -25,6 +41,46 @@ def parse(text):
     rows = [(float(m[1]), float(m[3]), float(m[4])) for m in LINE.finditer(text)]
     cast = CAST.search(text)
     return rows, (float(cast[1]), cast[2] == '1') if cast else (None, False)
+
+
+def expected_frames(active, cooldown):
+    """The movie frames tools/hud_overlay/action_skill.js sets for one state line."""
+    if active < 0:
+        emblem, bar = 1, 0
+    else:
+        emblem, bar = 3, min(100, math.floor(1 + 99 * (1 - min(1.0, active))))
+    return emblem, bar, min(100, math.floor(2 + 98 * (1 - min(1.0, max(0.0, cooldown)))))
+
+
+def check_page(text):
+    """The page's read-back lines against the host's state lines, in log order."""
+    results = []
+    recent, pages, agree = [], [], 0
+    for line in text.splitlines():
+        if (m := LINE.search(line)):
+            recent = (recent + [expected_frames(float(m[3]), float(m[4]))])[-RECENT_STATES:]
+        elif (m := PAGE.search(line)):
+            page = (int(m[1]), int(m[2]), int(m[3]))
+            pages.append(page)
+            if any(e[0] == page[0] and abs(e[1] - page[1]) <= 1 and abs(e[2] - page[2]) <= 1 for e in recent):
+                agree += 1
+    results.append(('page_lines', len(pages) >= 20, f'{len(pages)} read-back lines'))
+    shown = [p for p in pages if p[0] == 3]
+    results.append(('page_emblem_drawn', shown and min(p[1] for p in shown) <= 5 and max(p[1] for p in shown) >= 95,
+                    f'{len(shown)} lines, bar {min(p[1] for p in shown) if shown else None}..{max(p[1] for p in shown) if shown else None}'))
+    frames = [p[2] for p in pages]
+    results.append(('page_cooldown_drawn', 2 in frames and any(50 <= f < 100 for f in frames) and frames and frames[-1] == 100,
+                    f'icon frames seen {sorted(set(frames))[:3]}..{sorted(set(frames))[-3:] if frames else []}, last {frames[-1] if frames else None}'))
+    results.append(('page_agrees_with_state', pages and agree >= 0.95 * len(pages), f'{agree} of {len(pages)} within a frame'))
+    return results
+
+
+def check_shots(text, folder):
+    names = SHOT.findall(text)
+    missing = [n for n in names if not (Path(folder) / n).is_file()]
+    return [('shots_scheduled', len(names) == EXPECTED_SHOTS and DONE in text,
+             f'{len(names)} of {EXPECTED_SHOTS} scheduled, done logged: {DONE in text}'),
+            ('shots_written', names and not missing, f'missing {missing[:8]}{"..." if len(missing) > 8 else ""}' if missing else f'{len(names)} present')]
 
 
 def check(rows, cast_at, hit, tolerance=0.15):
@@ -65,12 +121,21 @@ def check(rows, cast_at, hit, tolerance=0.15):
     return results
 
 
+def run_checks(text, shots=None):
+    rows, (cast_at, hit) = parse(text)
+    results = check(rows, cast_at, hit) + check_page(text)
+    if shots is not None:
+        results += check_shots(text, shots)
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('log')
+    parser.add_argument('--shots', help='folder holding the OWSkillHud_*.png captures of this run')
     args = parser.parse_args()
-    rows, (cast_at, hit) = parse(open(args.log, encoding='utf-8', errors='replace').read())
-    results = check(rows, cast_at, hit)
+    text = open(args.log, encoding='utf-8', errors='replace').read()
+    results = run_checks(text, args.shots)
     for name, ok, detail in results:
         print(f'OWSKILLHUDTEST {"PASS" if ok else "FAIL"} {name} {detail}')
     failed = sum(1 for _, ok, _ in results if not ok)

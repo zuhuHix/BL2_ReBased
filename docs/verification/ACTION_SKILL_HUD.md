@@ -93,16 +93,25 @@ Gunzerker dual wield or vehicles.
 
 * `node tests/hud_action_skill_test.js`: the mapping over a synthetic cast against the formulas above (within one
   frame) and the call economy.
-* `python tests/check_action_skill_hud_test.py`: the log checker on synthetic logs.
-* `tools/test_action_skill_hud.ps1`: the in-engine run and `tools/check_action_skill_hud.py` on its log (cast logged,
-  ready before the cast, pool full at the cast and held while the emblem shows, emblem on at 0.70 s and off at 5.70 s
-  within 0.15 s, emblem draining, drain rate 1 pool-second per second within 3 %, ready again at 18.73 s within 0.3 s).
+* `python tests/check_action_skill_hud_test.py`: the log checker on synthetic logs, including its failure paths (no page
+  read-back, the icon not following the state, bar frames off, a missing capture, a run that never finished its shots).
+* `tools/test_action_skill_hud.ps1`: the in-engine run and `tools/check_action_skill_hud.py` on its log, in three groups.
+  Host state (`OWSKILLHUD` lines): cast logged, ready before the cast, pool full at the cast and held while the emblem
+  shows, emblem on at 0.70 s and off at 5.70 s within 0.15 s, emblem draining, drain rate 1 pool-second per second
+  within 3 %, ready again at 18.73 s within 0.3 s. Movie (`OWSKILLPAGE` lines: after each change the page reads
+  `_currentframe` back from the emblem, its bar and the icon clip, and the host logs the page console): at least 20
+  read-backs, the emblem drawn with its bar from full (frame 5 or less) to empty (95 or more), icon frames 2, 50-99 and a
+  final 100, and 95 % of read-backs within a frame of one of the six latest state lines. Captures: all 47 scheduled
+  `OWSkillHud_*.png` written by this run and `OWSKILLHUDSHOTS done` logged. A run that has not exited within the timeout
+  fails without running the checker. What the captures look like is judged by the critic, not by this check.
 
 ## Results (2026-10-22, this PC)
 
 * In-engine (`tools/test_action_skill_hud.ps1`, three runs): 9/9 checks each time. Last run: emblem on 0.713 s and off
   5.702 s after the cast, pool held through the lock, drain 1.000 pool-second per second, ready again at 18.698 s
   (game 18.73 s).
+* With the movie read-back and capture checks (review round 1): 15/15. 175 read-backs, all within a frame of the host
+  state; emblem bar seen from frame 1 to 99, icon frames 2 to 100; 47 of 47 captures written.
 * Visual (independent critic, GPT-6-Luna, host and real frames at eight moments plus a drain strip; frames under ignored
   `local/laneC/pairs_r1`, `pairs_r2`): round 1 **7/10** (icon about 30 px right and 12 px high, emblem about 10 %
   narrower: the missing 3D layout); round 2, with `hud3d.js`, **9/10**. Remaining, ranked: the emblem's outer haze and
