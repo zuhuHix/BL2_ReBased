@@ -29,5 +29,25 @@ window.owMenu3d = (() => {
       const d = ds * FOCAL_LENGTH / (cos * FOCAL_LENGTH - ds * sin);
       return {x:view.x + d, y:view.y + (ys - view.y) * (FOCAL_LENGTH + d * sin) / FOCAL_LENGTH};
     },
+    // Forward projection in the 1280x720 stage's coordinates. Callers add the
+    // untransformed presentation's client offset and scale afterwards.
+    toScreen(x, y) {
+      if (![view.deg, view.x, view.y].every(Number.isFinite)) return {x, y};
+      const a = view.deg * Math.PI / 180, sin = Math.sin(a), cos = Math.cos(a);
+      const dx = x - view.x, dy = y - view.y, k = FOCAL_LENGTH / (FOCAL_LENGTH + dx * sin);
+      return {x:view.x + dx * cos * k, y:view.y + dy * k};
+    },
+    // A Flash getBounds rectangle becomes a projected quadrilateral. Its
+    // screen-space AABB matches getBoundingClientRect() for HTML hit boxes.
+    projectBounds(bounds) {
+      const points = [
+        this.toScreen(bounds.xMin, bounds.yMin), this.toScreen(bounds.xMax, bounds.yMin),
+        this.toScreen(bounds.xMax, bounds.yMax), this.toScreen(bounds.xMin, bounds.yMax)
+      ];
+      return {
+        xMin:Math.min(...points.map(point => point.x)), yMin:Math.min(...points.map(point => point.y)),
+        xMax:Math.max(...points.map(point => point.x)), yMax:Math.max(...points.map(point => point.y))
+      };
+    },
   };
 })();

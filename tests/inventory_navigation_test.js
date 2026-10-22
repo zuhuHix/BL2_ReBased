@@ -156,7 +156,7 @@ const listFor = mode => {
 };
 check('Stock sort list: ALL, TYPES, BRANDS, ITEMS and VALUE orders and sub-headers', () => {
   const empties = n => Array(n).fill('_');
-  assert.deepEqual(listFor(0), ['#WEAPONS','p2','p1','a1','s1','m1','#RELICS','rl','#CLASS MODS','cm','#SHIELDS','sh1',...empties(4)]);
+  assert.deepEqual(listFor(0), ['#WEAPONS','p2','m1','s1','p1','a1','#RELICS','rl','#CLASS MODS','cm','#SHIELDS','sh1',...empties(4)]);
   assert.deepEqual(listFor(1), ['#ASSAULT RIFLES','a1','#PISTOLS','p2','p1','#SHOTGUNS','s1','#SUB-MACHINE GUNS','m1',...empties(7)]);
   assert.deepEqual(listFor(2), ['#BANDIT MADE','a1','#HYPERION','p2','m1','#JAKOBS','p1','s1','#TEDIORE','sh1','rl','cm',...empties(4)]);
   assert.deepEqual(listFor(3), ['#RELICS','rl','#CLASS MODS','cm','#SHIELDS','sh1',...empties(9)]);
@@ -166,14 +166,58 @@ check('PageDown cycles ALL > TYPES > BRANDS > ITEMS > VALUE, PageUp reverses; ea
   listFor(0);
   run("navigationPanel='equipped'"); press('PageUp'); assert.equal(run('sortIndex'), 0); // only the backpack sorts
   run("selectedId='p1'; navigationPanel='backpack'");
-  const modes = [];
-  for (let i = 0; i < 5; i++) { press('PageDown'); modes.push(run('sortIndex')); }
+  const modes = [], first = [];
+  for (let i = 0; i < 5; i++) {
+    press('PageDown'); modes.push(run('sortIndex'));
+    first.push(run('(backpackEntries().find(entry => entry.item || entry.empty)?.item?.id || backpackEntries().find(entry => entry.empty)?.id)'));
+  }
   assert.deepEqual(modes, [1,2,3,4,0]);
+  assert.deepEqual(first, ['a1','a1','rl','p2','p2']);
   assert.equal(selected(), 'p2');
   press('PageUp'); assert.equal(run('sortIndex'), 4); assert.equal(selected(), 'p2');
   press('PageUp'); assert.equal(run('sortIndex'), 3); assert.equal(selected(), 'rl');
   run("sortIndex=0; selectedId='w0'; navigationPanel='equipped'"); // equipped selection: PageDown does not sort
   press('PageDown'); assert.equal(run('sortIndex'), 0);
+});
+check('ALL equal-rarity cross-type weapons use the captured descending type-key tie order (UNVERIFIED)', () => {
+  const items = [
+    {id:'weapon_ar',type:'Assault Rifle',rarity:2,level:5},
+    {id:'weapon_rocket',type:'Rocket Launcher',rarity:2,level:5},
+    {id:'weapon_smg',type:'Sub-Machine Gun',rarity:2,level:5},
+    {id:'weapon_sniper',type:'Sniper Rifle',rarity:2,level:5}
+  ];
+  run(`reset(); window.owInventory({level:10,activeSlot:0,slotsUnlocked:4,slots:[null,null,null,null],gearSlots:{},backpackCapacity:8,items:${JSON.stringify(items)}}); sortIndex=0`);
+  assert.deepEqual(JSON.parse(run("JSON.stringify(backpackItems().map(item=>item.id))")),
+    ['weapon_sniper','weapon_smg','weapon_rocket','weapon_ar']);
+});
+check('Sort with no ITEMS selects the first empty backpack cell and keeps backpack focus', () => {
+  run(`reset(2,false); window.owInventory({level:10,activeSlot:0,slotsUnlocked:2,slots:['w0','w1',null,null],gearSlots:{},backpackCapacity:39,
+    items:[{id:'w0',name:'w0',type:'Pistol',level:1},{id:'w1',name:'w1',type:'Pistol',level:1}]});
+    sortIndex=2; navigationPanel='backpack'; selectedId='w0'; targetSlot=1; changeSort(1)`);
+  assert.equal(run('sortIndex'), 3);
+  assert.equal(selected(), 'empty:0');
+  assert.equal(run('lastBackpackId'), 'empty:0');
+  assert.equal(run('navigationPanel'), 'backpack');
+  assert.equal(run('equippedSelectionIndex()'), -1);
+});
+check('Backpack weapon compare uses the active weapon, not the last destination slot', () => {
+  run("reset(); setTargetSlot(1); select('b0'); toggleCompare()");
+  assert.equal(run('targetSlot'), 1); // still the separate destination choice
+  assert.equal(run('compareId'), 'w0'); // activeSlot 0, even though slot 2 was visited
+  run("compareId=null; navigationPanel='backpack'; beginBackpackTransfer()");
+  assert.equal(run('compareId'), 'w0');
+  assert.equal(run('targetSlot'), 0); // transfer starts at its compare partner
+  run('finishTransfer(true)');
+});
+check('Equipped-origin weapon compare keeps the selected weapon slot and a backpack candidate (D4)', () => {
+  run("reset(); selectEquipmentSlot(0); beginEquippedTransfer()");
+  assert.equal(run('transferSourceId'), 'w0');
+  assert.equal(run('compareId'), 'w0');
+  assert.equal(run('targetSlot'), 0);
+  assert.equal(selected(), 'b0');
+  assert.equal(run('transferFromEquipped'), true);
+  assert.equal(run('equippedSelectionIndex()'), 0);
+  run('finishTransfer(true)');
 });
 check('Gamepad D-pad shares keyboard navigation', () => {
   run('reset(); gamepadActions[13]()'); assert.equal(selected(), 'w1');
@@ -291,7 +335,22 @@ check('Down past the last backpack item selects the empty cells; item actions ig
   // A new snapshot keeps the empty selection; Left/Right come back to it.
   run('window.owInventory({...state, money:5})'); assert.equal(selected(), 'empty:1');
   press('ArrowLeft', 'ArrowRight'); assert.equal(selected(), 'empty:1');
+  run('selectEquipmentSlot(1)'); press('ArrowRight');
+  assert.equal(selected(), 'empty:1'); // D20 M6: Right restores the remembered empty cell.
   press('ArrowUp', 'ArrowUp'); assert.equal(selected(), 'spare');
+});
+check('An empty selection scrolls into the last visible row (D20 D2g, placement UNVERIFIED)', () => {
+  run(`reset(2,false); window.owInventory({level:10,activeSlot:0,slotsUnlocked:2,slots:['w0','w1',null,null],gearSlots:{},backpackCapacity:39,
+    items:[{id:'w0',name:'equipped0',type:'Pistol',level:1},{id:'w1',name:'equipped1',type:'Pistol',level:1},
+      {id:'sniper',type:'Sniper Rifle',rarity:2,level:1},{id:'smg',type:'Sub-Machine Gun',rarity:2,level:1},
+      {id:'launcher',type:'Rocket Launcher',rarity:2,level:1},{id:'ar',type:'Assault Rifle',rarity:2,level:1}]});
+    navigationPanel='equipped'; selectEquipmentSlot(0); navigateInventory('right'); for(let i=0;i<17;i++) navigateInventory('down')`);
+  assert.equal(selected(), 'empty:13');
+  const index = run('backpackEntries().findIndex(entry=>entry.id===selectedId)');
+  const relative = index - run('firstRow');
+  assert.equal(relative, 7); // eighth cell row, with the next cell clipped
+  assert.ok((relative + 1) * run('ROW_PITCH') <= run('viewHeight()+listPeekHeight()+1'));
+  assert.ok((relative + 1) * run('ROW_PITCH') + run('ROW_PITCH') > run('viewHeight()+listPeekHeight()'));
 });
 check('The VM is not asked to move onto or between empty cells', () => {
   run("reset(); window.owInventory({...state, backpackCapacity:15}); inventoryVm.enabled = true; inventoryVm.failed = false; select('spare'); navigationPanel = 'backpack'");
@@ -337,7 +396,18 @@ check('The menu turn maps measured screen points back to movie points (menu3d.js
   assert.ok(m.x > 300 && m.x < 320, `x ${m.x}`);
   const a = 11 * Math.PI / 180, d = m.x - 640, k = 1229 / (1229 + d * Math.sin(a));
   assert.ok(Math.abs(640 + d * Math.cos(a) * k - 300) < 1e-6 && Math.abs(360 + (m.y - 360) * k - 200) < 1e-6);
+  const projected = JSON.parse(run(`JSON.stringify(window.owMenu3d.toScreen(${m.x},${m.y}))`));
+  assert.ok(Math.abs(projected.x - 300) < 1e-6 && Math.abs(projected.y - 200) < 1e-6);
+  const projectedBounds = JSON.parse(run("JSON.stringify(window.owMenu3d.projectBounds({xMin:300,yMin:200,xMax:340,yMax:230}))"));
+  assert.ok(projectedBounds.xMin < 300 && projectedBounds.xMax < 340);
   run('window.owMenu3d.setScale(1)'); // back to no turn for later checks
   run(`window.owMenu3d.apply({style:{setProperty(){}}}, 0, 640, 360)`);
+});
+check('D5 Inspect fit, zoom and hint text track the measured targets (UNVERIFIED)', () => {
+  assert.equal(run('INSPECT_CARD_LEFT'), 28); // movie-space target accounts for the visible frame inset
+  assert.equal(run('INSPECT_CARD_TOP'), 43);
+  assert.equal(run('INSPECT_ZOOM'), 1.54);
+  assert.equal(run('INSPECT_HINT_FONT_SIZE'), 14);
+  assert.equal(run('CARD_FIT.inspect.width * FRAME_INSET'), 316);
 });
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);

@@ -43,13 +43,18 @@ Card fields beyond the five main stats (docs/verification/INVENTORY_CARD_STATS.m
 - level_requirement / level_line (level_requirement()): mission balances 0,
   else the item level minus the player's bonus, at least 1; the line is
   printed only above 1. Read from script; pass the recipe's `balance`.
-- fun_stats: the red flavour line, the title part's CustomPresentations text.
-  White stat lines (zoom, ammo per shot, ...) are not derived.
+- weapon_zoom: inverse zoom from the type's ZoomedEndFOV and the active
+  WeaponZoomFOV slot effects, using the card presentation's 80-degree reference.
+- fun_stats: red flavour followed by the card's additional text lines, sourced
+  from CustomPresentations, WeaponCardPresentations, WeaponCardAttributes and
+  the evaluated shot cost. `fun_stats_markup` preserves their card colors.
 """
 import argparse
+import html
 import json
 import math
 from pathlib import Path
+import re
 
 import skill_stats
 import weapon_recipe
@@ -91,6 +96,10 @@ WEAPON_DEFAULTS = {
 }
 
 ACCURACY_PRESENTATION = 'GD_AttributePresentation.Weapons.AttrPresent_WeaponSpread'
+ZOOM_PRESENTATION = 'GD_AttributePresentation.Weapons.AttrPresent_WeaponZoomEndFOV'
+ZOOM_ATTRIBUTE = ATTR + 'WeaponZoomEndFOV'
+SHOT_COST_ATTRIBUTE = ATTR + 'WeaponShotCost'
+SHOT_COST_PRESENTATION = 'GD_AttributePresentation.Weapons.AttrPresent_WeaponShotCost'
 PART_PRICE_TOTAL = 'D_Attributes.Inventory.InventoryPartMonetaryValueModifierTotal'
 # Price calculators whose output was compared with real item cards (parts unknown,
 # so every part combination was tried): 2026-09-29, an integer-exact match exists for
@@ -119,6 +128,7 @@ PRESENTATIONS = {
     'fire_rate': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponFireRate', 'ATTRROUNDING_Float'),
     'reload_time': ('GD_AttributePresentation.Weapons.AttrPresent_WeaponReloadSpeed', 'ATTRROUNDING_Float'),
     'accuracy': (ACCURACY_PRESENTATION, 'ATTRROUNDING_Float'),
+    'weapon_zoom': (ZOOM_PRESENTATION, 'ATTRROUNDING_Float'),
 }
 # The status rows' presentations (GD_AttributePresentation.Weapons_ElementalDamage, decoded locally):
 # AttrPresent_Weapon<Element>CombinedStatusEffectChance and ...StatusEffectDamage, both RoundingMode
@@ -135,11 +145,17 @@ SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     'AttributeSlotEffects=StructProperty:AttributeSlotEffectData',
     'AttributeSlotUpgrades=StructProperty:AttributeSlotUpgradeData',
     'CustomPresentations=ObjectProperty',
+    'WeaponCardAttributes=StructProperty:WeaponCardAttributeData',
+    'WeaponCardPresentations=ObjectProperty',
     'DamageSurfaceChanceModifiers=StructProperty:StatusEffectChanceModifier',
     'RarityLevelColors=StructProperty:RarityLevelColor',
 ]
 # Title parts' CustomPresentations carry the red flavour line, TextColor (220, 70, 70).
 RED_TEXT_COLOR = {'R': 220, 'G': 70, 'B': 70}
+WHITE_TEXT_COLOR = {'R': 255, 'G': 255, 'B': 255}
+CARD_ZOOM_REFERENCE_FOV = 80.0
+GAME_TEXT_TAG = re.compile(r'\[([A-Za-z][A-Za-z0-9_]*)\](.*?)\[-\1\]', re.S)
+UNMATCHED_GAME_TAG = re.compile(r'\[-?[A-Za-z][A-Za-z0-9_]*\]')
 
 
 def resolver_constant(package, attribute):
@@ -263,14 +279,172 @@ def red_text(package, recipe, localize=None):
         return None
     lines = []
     for path in package.props(title).get('CustomPresentations') or []:
-        props = package.props(path)
-        color = props.get('TextColor') or {}
-        text = props.get('NoConstraintText')
-        if localize:
-            text = localize(path, text)
-        if text and all(color.get(k) == v for k, v in RED_TEXT_COLOR.items()):
-            lines.append(text.replace(';', ','))
+        line = presentation_line(package, path, localize)
+        if line and _is_red(line['source_color']):
+            lines.append(line['text'])
     return '; '.join(lines) or None
+
+
+def _is_red(color):
+    return all(color.get(k) == v for k, v in RED_TEXT_COLOR.items())
+
+
+def _hex_color(color):
+    return '#%02X%02X%02X' % tuple(int(color.get(k, 255)) for k in ('R', 'G', 'B'))
+
+
+def _localize_presentation(localize, path, default, property_name):
+    if not localize:
+        return default
+    try:
+        return localize(path, default, property_name)
+    except TypeError:
+        # Keep the existing public two-argument callback contract for callers/tests.
+        return localize(path, default)
+
+
+def _plain_game_text(text):
+    """Remove inline style tags and normalize card-line whitespace."""
+    text = GAME_TEXT_TAG.sub(lambda match: match.group(2), str(text or ''))
+    text = UNMATCHED_GAME_TAG.sub('', text)
+    text = re.sub(r'<[^>]*>', '', text)
+    return re.sub(r'\s+', ' ', html.unescape(text)).strip().replace(';', ',')
+
+
+def presentation_line(package, path, localize=None):
+    """One text-only presentation, with its color and inline emphasis retained."""
+    props = package.props(path)
+    key = 'NoConstraintText' if props.get('NoConstraintText') else 'Description'
+    raw = _localize_presentation(localize, path, props.get(key), key)
+    text = _plain_game_text(raw)
+    if not text:
+        return None
+    source_color = props.get('TextColor') or WHITE_TEXT_COLOR
+    # A disabled TextColor leaves the line white; an explicit inline tag may still use
+    # the definition's color (for example, an emphasized damage-type word).
+    line_color = WHITE_TEXT_COLOR if props.get('bEnableTextColor') is False else source_color
+    return {'text': text, 'color': _hex_color(line_color), 'source_color': source_color,
+            'raw': re.sub(r'\s+', ' ', str(raw or '')).strip().replace(';', ','),
+            'tag_color': _hex_color(source_color)}
+
+
+def _presentation_sources(recipe, weapon_type_path, parts):
+    sources = []
+    for path in (recipe.get('balance'), weapon_type_path):
+        if path and path not in sources:
+            sources.append(path)
+    for path in parts:
+        if path and path not in sources:
+            sources.append(path)
+    for key in ('prefix', 'title'):
+        path = name_part_path(recipe.get(key))
+        if path and path not in sources:
+            sources.append(path)
+    return sources
+
+
+def _optional_props(package, path):
+    try:
+        return package.props(path)
+    except KeyError:
+        # Synthetic fixtures may carry a balance name for level tests without a
+        # corresponding balance export; real recipes resolve it from the package.
+        return {}
+
+
+def has_card_attribute(package, sources, attribute):
+    """Whether a type/part explicitly asks the card to present this attribute."""
+    return any(entry.get('Attribute') == attribute
+               for path in sources
+               for entry in (_optional_props(package, path).get('WeaponCardAttributes') or []))
+
+
+def zoom_multiplier(weapon_type, modifiers):
+    """Return the card's zoom multiplier from the type FOV and active slot modifier.
+
+    The card's WeaponZoomEndFOV presentation is an inverse float stat. Its displayed
+    reference is 80 degrees; `ZoomedEndFOV` is the weapon-type base and the type's
+    WeaponZoomFOV AttributeSlotEffect applies the grade collected from its parts.
+    The reference conversion remains UNVERIFIED against the game's native resolver.
+    """
+    fov = weapon_type.get('ZoomedEndFOV')
+    if fov is None or fov <= 0:
+        return None
+    effective_fov = combine(f32(fov), modifiers or {})
+    if effective_fov <= 0:
+        return None
+    return f32(CARD_ZOOM_REFERENCE_FOV / effective_fov)
+
+
+def shot_cost_text(package, shot_cost):
+    """The numeric ammo line from the shot-cost attribute presentation."""
+    if shot_cost is None or shot_cost <= 1:
+        return None
+    amount = str(math.trunc(shot_cost)) if float(shot_cost).is_integer() else f'{shot_cost:g}'
+    props = _optional_props(package, SHOT_COST_PRESENTATION)
+    prefix = _plain_game_text(props.get('Prefix')) or 'Consumes'
+    suffix = _plain_game_text(props.get('Suffix')) or 'ammo per shot.'
+    return f'{prefix} {amount} {suffix}'
+
+
+def _markup_text(raw, color, tag_color):
+    """Escape game-provided text while translating its named inline color tags."""
+    out, cursor = [], 0
+    for match in GAME_TEXT_TAG.finditer(raw):
+        out.append(html.escape(UNMATCHED_GAME_TAG.sub('', raw[cursor:match.start()]), quote=False))
+        tag = match.group(1).lower()
+        span_color = tag_color if tag in ('explosive', 'corrosive', 'shock', 'fire') else color
+        out.append(f'<font color="{span_color}">{html.escape(match.group(2), quote=False)}</font>')
+        cursor = match.end()
+    out.append(html.escape(UNMATCHED_GAME_TAG.sub('', raw[cursor:]), quote=False))
+    return ''.join(out)
+
+
+def card_text_lines(package, recipe, parts, damage_type, shot_cost, zoom, localize=None):
+    """The card's ordered text lines, with plain text and rich-color payloads."""
+    sources = _presentation_sources(recipe, recipe['weapon_type'], parts)
+    if damage_type and damage_type not in sources:
+        sources.append(damage_type)
+    red, custom, seen = [], [], set()
+
+    def add(target, line):
+        if not line or line['text'] in seen:
+            return
+        seen.add(line['text'])
+        target.append(line)
+
+    for owner in sources:
+        for path in _optional_props(package, owner).get('CustomPresentations') or []:
+            line = presentation_line(package, path, localize)
+            if not line:
+                continue
+            if _is_red(line['source_color']):
+                add(red, line)
+            elif package.props(path).get('bDontDisplayNumber'):
+                add(custom, line)
+
+    ordered = list(red)
+    if zoom is not None:
+        zoom_text = f'{zoom:.1f}x Weapon Zoom'
+        ordered.append({'text': zoom_text, 'color': '#FFFFFF', 'raw': zoom_text, 'tag_color': '#FFFFFF'})
+    ammo_text = shot_cost_text(package, shot_cost)
+    if ammo_text:
+        ordered.append({'text': ammo_text, 'color': '#FFFFFF', 'raw': ammo_text, 'tag_color': '#FFFFFF'})
+    ordered.extend(custom)
+
+    for owner in sources:
+        for path in _optional_props(package, owner).get('WeaponCardPresentations') or []:
+            props = package.props(path)
+            if props.get('bDontDisplayNumber'):
+                add(ordered, presentation_line(package, path, localize))
+    return ordered
+
+
+def fun_stats_markup(lines):
+    """Scaleform markup for the card TextField; never insert this into browser HTML."""
+    return '\n'.join('• <font color="%s">%s</font>' %
+                     (line['color'], _markup_text(line['raw'], line['color'], line['tag_color']))
+                     for line in lines) or None
 
 
 SCALE_RULE = 'split'
@@ -583,6 +757,12 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
     damage_type = damage_type_of(package, recipe, weapon_type)
     status = status_rows(package, damage_type, final, value)
     projectiles = stat('WeaponProjectilesPerShot')
+    card_sources = _presentation_sources(recipe, recipe['weapon_type'], parts)
+    zoom = (zoom_multiplier(weapon_type, mods.get(ZOOM_ATTRIBUTE))
+            if has_card_attribute(package, card_sources, ZOOM_ATTRIBUTE) else None)
+    text_lines = card_text_lines(package, recipe, parts, damage_type, stat('WeaponShotCost'),
+                                 display({'weapon_zoom': zoom}, presentation_rounding(package)).get('weapon_zoom'),
+                                 localize)
     # A barrel's CustomFiringModeDefinition replaces the type's default (62 barrels carry one).
     firing_mode = barrel.get('CustomFiringModeDefinition') or weapon_type.get('DefaultFiringModeDefinition')
     bullet_speed = package.props(firing_mode).get('Speed') if firing_mode else None
@@ -622,7 +802,10 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
         'accuracy_known': SCALE_RULE == 'split',
         'sale_value': price,
         'sale_value_known': price_checked,
-        'fun_stats': red_text(package, recipe, localize),
+        'weapon_zoom': zoom,
+        'fun_stats': '; '.join(line['text'] for line in text_lines) or None,
+        'fun_stats_lines': [{'text': line['text'], 'color': line['color']} for line in text_lines],
+        'fun_stats_markup': fun_stats_markup(text_lines),
         'projectiles': int(projectiles) if projectiles is not None else None,
         'firing_mode': firing_mode,
         # FiringModeDefinition.Speed (unreal units/s) * WeaponProjectileSpeedMultiplier: UNVERIFIED product.
@@ -641,7 +824,8 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
                              'manufacturer grades not applied',
                              'accuracy = presentation remap of the spread, input clamped (read)',
                              'sale value = trunc(price calculator(part and name-part MonetaryValueMod product, level))',
-                             'white stat lines of the fun text are not derived',
+                             'weapon zoom = 80 / effective type FOV after WeaponZoomFOV slot effects; native resolver UNVERIFIED',
+                             'fun text uses card CustomPresentations, WeaponCardPresentations, WeaponCardAttributes and shot cost',
                              'status chance = Generic BaseChance * base * chance modifiers; per-shot use is native',
                              'display rounding from the presentation data (read), in single precision '
                              '(x87 precision setting inferred from a card); status rows one decimal (data)',
@@ -669,12 +853,12 @@ def main():
     game = Path(args.game) if args.game else Path(args.package).resolve().parents[2]
     files = {}
 
-    def localize(path, default):
+    def localize(path, default, property_name='NoConstraintText'):
         # <Package>.int overrides the cooked English string (skill_stats does the same).
         name = path.split('.', 1)[0]
         if name not in files:
             files[name] = skill_stats.localization_for(game, name)
-        return files[name].get((skill_stats.localization_key(path, package.classes), 'NoConstraintText'), default)
+        return files[name].get((skill_stats.localization_key(path, package.classes), property_name), default)
     recipe['stats'] = evaluate(package, recipe, level, localize)
     recipe_path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
     print(json.dumps(recipe['stats']['card'], indent=1))

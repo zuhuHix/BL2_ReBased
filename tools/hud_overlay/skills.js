@@ -38,6 +38,7 @@ let displayedStates = new Map();
 let overview = false;
 const OVERVIEW_HINT_DROP = 0, OVERVIEW_LOCKED_ALPHA = 55;
 const OVERVIEW_POSES = [{x:-283, y:16, sx:98.6, sy:92.7}, {x:-31, y:17.6, sx:90, sy:89.7}, {x:206.3, y:18.7, sx:85.5, sy:86.9}];
+const OVERVIEW_SHIFT = {x:9, y:7}; // D7 host boards begin about 9 px left and 7 px high; keep selected-tree poses unchanged.
 
 // Open-time instrumentation, the same "OWINVTIME js_<event> ..." lines inventory.js sends through the
 // console bridge. The host preloads this page hidden at level start (as it does the inventory page) and
@@ -203,13 +204,27 @@ function updateOverview(immediate = false) {
   call(SKILLS, 'BubbleSortBranchDepths', selectedBranch + 1);
   data.branches.forEach((_, i) => {
     const pose = OVERVIEW_POSES[Math.min(i, OVERVIEW_POSES.length - 1)];
-    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3, pose.x, pose.y, 0, pose.sx, pose.sy, 100);
+    call(SKILLS, 'TweenBranch', i + 1, immediate, 0.3,
+      pose.x + OVERVIEW_SHIFT.x, pose.y + OVERVIEW_SHIFT.y, 0, pose.sx, pose.sy, 100);
     set(`${SKILLS}.Tree${i + 1}.TreeName`, '_visible', true);
   });
 }
 
 function spendSelected() {
   if (selected && canSpend(selected)) reportSpend(selected.branch, selected.tier, selected.branch < 0 ? -1 : selected.skill.cell);
+}
+
+function navigateSkill(direction) {
+  if (!ready || overview || !selected) return;
+  if (!window.owSkillNav || typeof window.owSkillNav.move !== 'function') {
+    console.error('OpenWillow Skills: navigation helper did not initialize');
+    return;
+  }
+  const next = window.owSkillNav.move(data.branches, selectedBranch, selected, direction);
+  if (!next) return;
+  const target = next.branch < 0 ? actionTarget() : hitTargets.find(hit =>
+    hit.branch === next.branch && hit.tier === next.tier && hit.skill.cell === next.cell);
+  if (target) select(target);
 }
 
 function drawBranch(index, branch) {
@@ -376,15 +391,23 @@ function addHit(path, onEnter, onClick, label, parent, kind = '') {
   button.style.width = `${100 * (bounds.xMax - bounds.xMin) / STAGE_WIDTH}%`;
   button.style.height = `${100 * (bounds.yMax - bounds.yMin) / STAGE_HEIGHT}%`;
   if (onEnter) {
-    button.addEventListener('pointerenter', onEnter);
+    button.addEventListener('pointerenter', () => { if (pointerMoved) onEnter(); });
     button.addEventListener('focus', onEnter);
   }
   if (onClick) button.addEventListener('click', onClick);
   parent.appendChild(button);
 }
 
+// Rebuilding the hit layer under a resting cursor fires pointerenter on whatever tile is now under it, which took the
+// selection away from the keyboard (the capture's Down presses started from the tile under the window centre). Hover
+// selects only once the pointer has really moved since the last rebuild; the browser's own layout-driven moves carry
+// no movement.
+let pointerMoved = false;
+window.addEventListener('pointermove', event => { if (event.movementX || event.movementY) pointerMoved = true; });
+
 function layoutHits() {
   if (!ready) return;
+  pointerMoved = false;
   const layer = document.getElementById('hit-layer');
   layer.replaceChildren();
   // ActiveAbility's bounds reach over the first tier (an invisible child), so
@@ -433,6 +456,12 @@ window.addEventListener('keydown', event => {
   } else if (event.key === 'Enter') {
     event.preventDefault();
     if (!overview) spendSelected();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    if (!overview) navigateSkill('up');
+  } else if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    if (!overview) navigateSkill('down');
   } else if (event.key === 'ArrowLeft') {
     event.preventDefault();
     if (!overview) updateBranch(selectedBranch - 1);
@@ -479,12 +508,12 @@ function populate() {
 }
 
 // Placement measured on the 2026-10-04 real capture (1280x720): the header group is a little smaller and centred about
-// x 695; the trees column sits 130 px right of where the harness puts it; the Phaselock card is 320 px wide at (205, 140);
+// x 695; the trees column sits 130 px right of where the harness puts it; the D20 card target is x 210, y 146, width 315;
 // the Siren / Skill Points block is a child of the card clip, so it grows with it (the original's own 20% bigger plate sits
 // at (225, 530); here it follows the card). Moves are done on the movie clips in
 // ROOT coordinates (a host fit; the original gets these from its 3D camera).
 const SKILLS_LAYOUT = {headerScale:1.02, headerDY:5, headerCentreX:707, treesDX:130, treesDY:25, hintDY:56, hintDX:137, // the real footer is centred near x 575 and sits at y 657, clear of the Siren plate
-  card:{left:205, top:140, width:320, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106},
+  card:{left:210, top:146, width:315, boundsShare:0.867, insetLeft:0.0685, insetTop:0.0106},
   plateDX:15, plateDY:-18, plateScaleX:103, plateScaleY:128}; // the Phaselock plate's green frame is 202x72 at (576, 83) on the real frame (ours 197x56), above the taller trees (fit)
 let layoutApplied = false;
 function boundsOf(path) { const b = call(path, 'getBounds', ROOT); return b && Number.isFinite(b.xMin) && b.xMax > b.xMin ? b : null; }
@@ -545,6 +574,9 @@ function apply3d() {
 function applySkillsLayout() {
   if (layoutApplied) return;
   layoutApplied = true;
+  // The movie's ring is the curved glass sheet in game, but at this page's depth it becomes a blue rectangle
+  // with a hard right edge. The game-side blend is not available over the transparent host viewport.
+  set(`${ROOT}.ring`, '_visible', false);
   const header = `${ROOT}.header`;
   set(header, '_xscale', SKILLS_LAYOUT.headerScale * 100);
   set(header, '_yscale', SKILLS_LAYOUT.headerScale * 100);

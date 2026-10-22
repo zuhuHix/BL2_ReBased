@@ -4637,3 +4637,19 @@ Implemented in `tools/hud_overlay/action_skill.js`, `hud3d.js`, `index.html` and
 (`ActionSkillHudState`, `-owskillhudshots`), with `tools/prepare_hud_icons.py` for the icon movie. Checked: synthetic
 mapping and checker tests, the in-engine run 9/9 against the real timings, critic 7/10 then 9/10. Not reproduced: the
 one-frame lag of the game's HUD, a post-ready highlight whose clip was not found, other classes.
+
+## 2026-10-22: Skills keyboard vertical movement fit (partly UNVERIFIED)
+
+AI-assisted. `tools/hud_overlay/skills.html`, `skills.js`, `skill_nav.js`, the synthetic navigation test and
+`docs/verification/SKILL_TREE_NAVIGATION.md`; no UE or game process launched and no installed game data added.
+
+- `StatusMenuExGFxMovie.HandleSkillsInputKey` forwards arrows to `SkillTreeGFxObject.HandleInputKey`; `Nav_Up` and `Nav_Down`
+  call native `Navigate` with vertical direction values, then `PostNav`. The matched 2026-10-21 observation confirms that four
+  Down presses from the action skill end on the middle branch's fourth-tier center cell (tier index 3, cell 1).
+- The native chooser's grid policy was not recovered from the package or the read-only Ghidra query. The host moves to the
+  closest cell in the adjacent tier, treats the action skill as centered, breaks ties toward the lower cell, and clamps at
+  the ends. The capture checks the four-Down destination; the column tie-breaks and edge policy remain `UNVERIFIED`.
+- `Nav_Left` and `Nav_Right` call the same native chooser with horizontal directions; `PostNav` updates the branch view when
+  its returned selection changes branches. Their cell-versus-branch priority remains `UNVERIFIED`, so the existing host
+  Left/Right tree step is retained.
+- **Checks:** skill navigation 5/5; inventory navigation 32/32; CTest 10/10; package verification 9/9.
