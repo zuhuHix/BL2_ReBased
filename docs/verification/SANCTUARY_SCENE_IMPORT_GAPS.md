@@ -382,3 +382,22 @@ ignored `local/`.
   `Mati_SancWall01` at 0.25. The host does not yet multiply Base Color by the field, so the grey buildings stay grey.
   Still needed: host import and verify must apply it. Game-side multiplication by `p_diffmod` is not confirmed by
   running the game.
+- **Rust tint applied on the host (lane A, round 4d, UNVERIFIED in game).** For lit materials with a diffuse
+  texture, `import_level.py` now feeds Base Color through Multiply(diffuse TextureSample, Constant3Vector `p_diffmod`).
+  `verify_level.py` independently requires that Multiply as the Base Color input, the recorded diffuse texture as
+  input A and the exact rgb (1e-6) as input B. It reports `verified_diffuse_tint_materials` 18 of 18 expected.
+  The 87 placements that override to the `_orange` / `_green` / `_Color` instances get the tint. In the round-4
+  host shots (cams 02, 06, 07) the rust facades are still not visibly reproduced; at most a slight warm shift.
+  The omitted `Master_World` colour ramps and vertex paint (recorded in `omitted`) are the next suspects.
+  This is not confirmed.
+- **Import gate shutdown crash fixed (lane A, round 4d).** Since round 3 every `-ImportOnly` run failed with
+  `Saved scene verification failed: 3`: `verify_level.py` finished ("Success - 0 error(s)"), then
+  `EXCEPTION_ACCESS_VIOLATION` in `python311.dll` under `UnrealEditor-PythonScriptPlugin.dll` while the
+  commandlet finalized Python. Bisected by running the first N top-level statements: N 89 exits 0, N 90 (the
+  graffiti decal loop) exits 3. Deleting only the loop variable `host_getter`, a bound method of a UE actor
+  (`actor.get_actor_right_vector`) left in a module global, makes both N 90 and the full script exit 0. Deleting
+  every other loop global but keeping it still exits 3. The loop now reads the axis vectors as values. The full
+  gate then exits 0. The root cause inside the UE Python plugin's teardown is not analysed.
+- **Unlit emissive-recipe verify gap fixed.** An Unlit material whose visible colour is a recipe `emissive_layers`
+  graph (the round-4 bulb) fell into the plain-diffuse assertion; the crash had hidden this. It is now covered
+  only by `verify_texture_layers`.

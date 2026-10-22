@@ -323,12 +323,14 @@ for source in supported_decals:
                == Path(source_material['texture_file']).stem for node in opacity_nodes.values())
     tags = [str(tag) for tag in actor.get_editor_property('tags')]
     assert source['source'] in tags
-    for vector_name, host_getter, sign in (('HitTangent', actor.get_actor_right_vector, 1.0),
-                                           ('HitBinormal', actor.get_actor_up_vector, 1.0)):
+    # Read the axes as values: a bound method of a UE actor left in a module
+    # global crashed python311.dll when the commandlet finalized Python (exit 3).
+    for vector_name, host_axis in (('HitTangent', actor.get_actor_right_vector()),
+                                   ('HitBinormal', actor.get_actor_up_vector())):
         expected_axis = source.get('projection_basis', {}).get(vector_name, [0.0, 0.0, 0.0])
         magnitude = math.sqrt(sum(float(value) ** 2 for value in expected_axis))
         if magnitude > 1e-5:
-            close(xyz(host_getter()), [sign * float(value) / magnitude for value in expected_axis], .002)
+            close(xyz(host_axis), [float(value) / magnitude for value in expected_axis], .002)
 
 static_light_manifest = scene.get('lighting', {}).get('static_light_import', {})
 static_light_records = static_light_manifest.get('components', [])
@@ -760,11 +762,27 @@ def verify_emissive_multiplier(material, name, definition):
     return True
 
 
+def verify_diffuse_tint(material, name, definition):
+    """Require Base Color = Multiply(diffuse TextureSample, recorded p_diffmod rgb)."""
+    root = mel.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
+    assert isinstance(root, unreal.MaterialExpressionMultiply), (name, 'diffuse tint is not a Multiply')
+    pair = mel.get_inputs_for_material_expression(material, root)
+    assert len(pair) == 2, (name, len(pair))
+    sample, tint = pair
+    assert isinstance(sample, unreal.MaterialExpressionTextureSample), (name, 'tint input A')
+    assert sample.get_editor_property('texture').get_name() == Path(definition['channels']['diffuse']).stem, name
+    assert isinstance(tint, unreal.MaterialExpressionConstant3Vector), (name, 'tint input B')
+    value = tint.get_editor_property('constant')
+    close([value.r, value.g, value.b], definition['diffuse_tint']['rgb'], 1e-6)
+    return sample
+
+
 verified_scene_recipe_layers = 0
 verified_scene_recipe_materials = set()
 verified_world_map_recipe = []
 verified_emissive_multipliers = []
 verified_unlit_constants = []
+verified_diffuse_tints = []
 for name, definition in scene['materials'].items():
     material = unreal.load_asset(base + '/Assets/M_' + name)
     assert material.get_editor_property('two_sided') == bool(definition.get('two_sided', False)), name
@@ -806,7 +824,9 @@ for name, definition in scene['materials'].items():
             value = visible.get_editor_property('constant')
             close([value.r, value.g, value.b], expected_color, 1e-6)
             verified_unlit_constants.append(name)
-        elif recipe.get('unlit_color_layers'):
+        elif recipe.get('unlit_color_layers') or recipe.get('emissive_layers'):
+            # The recipe layers (not the plain diffuse) are the visible color;
+            # verify_texture_layers checked them above.
             pass
         elif recipe.get('method') == 'world_map_mask_colorization_v2':
             # The custom R/G/B mask graph was independently checked above.
@@ -843,6 +863,10 @@ for name, definition in scene['materials'].items():
             assert any(has_emissive_alpha_mask(graph_nodes, graph_inputs, sample)
                        for sample in emissive_samples), (name, filename, 'missing RGB/alpha emissive mask')
             node = emissive_samples[0]
+        elif (channel == 'diffuse' and definition.get('diffuse_tint') is not None
+              and host_shading_name != 'MLM_Unlit' and not definition.get('terrain_blend')):
+            node = verify_diffuse_tint(material, name, definition)
+            verified_diffuse_tints.append(name)
         else:
             node = mel.get_material_property_input_node(material, channels[channel])
             assert isinstance(node, unreal.MaterialExpressionTextureSample), (name, channel)
@@ -873,6 +897,13 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
           'verified_unlit_multiplier_materials': verified_unlit_multipliers,
           'verified_emissive_multiplier_materials': verified_emissive_multipliers,
           'verified_unlit_constant_materials': verified_unlit_constants,
+          'verified_diffuse_tint_materials': len(verified_diffuse_tints),
+          'expected_diffuse_tint_materials': sum(
+              1 for d in scene['materials'].values() if d.get('diffuse_tint') is not None
+              and d['channels'].get('diffuse') and not d.get('terrain_blend')
+              and d.get('scene_recipe', {}).get('host_lighting_model',
+                                                'MLM_Unlit' if d.get('unlit_constant_color') else
+                                                d.get('lighting_model', 'MLM_DefaultLit')) != 'MLM_Unlit'),
           'verified_scene_recipe_material_count': len(verified_scene_recipe_materials),
           'verified_scene_recipe_layer_count': verified_scene_recipe_layers,
           'verified_world_map_recipes': verified_world_map_recipe,
@@ -899,5 +930,6 @@ report = {'verified_section_actors': len(placed), 'verified_channels': sorted(ve
                                      else 'UE5_SkyAtmosphere+OpenWillow_SkyFallback'),
           'visual_validation': 'pending'}
 assert report['verified_outer_shell_replacements'] == report['expected_outer_shell_replacements']
+assert report['verified_diffuse_tint_materials'] == report['expected_diffuse_tint_materials']
 (root / 'ue-verify.json').write_text(json.dumps(report, indent=2))
 unreal.log('OpenWillow saved-scene verification: ' + json.dumps(report))
