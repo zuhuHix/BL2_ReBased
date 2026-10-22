@@ -1213,3 +1213,26 @@ All presentation choices and ratios below are **UNVERIFIED** as stock behavior.
 * **Runtime/gameplay validation:** the host capture runs succeeded and wrote all requested timings. Borderlands 2 was not launched, and the captures do not establish gameplay parity.
 
 The target's curled pose and colour, the 0.80 s shell, the palm orb's facets/arcs, and the settled rim's width/colour remain open. The 8/10 critic target was not independently evaluated; pass the final pairs to the parent for review.
+
+### Visual review, rounds 17-20 (independent critic, matched frames; scores as given)
+
+Each round was scored by a separate agent that saw only the host-left / game-right pairs (no code or docs). Round 17 was
+scored on three frames, rounds 18-20 on six; critics differ from round to round, so small changes are within their noise.
+
+| Round | Frames | 0.25 s | 0.50 s | 0.80 s | 1.50 s | 3.00 s | 4.50 s | Overall |
+|---|---|---|---|---|---|---|---|---|
+| 17 | `local/laneB/r1` | 6.0 | - | 5.6 | 6.0 | - | - | 5.9 |
+| 18 | `local/laneB/r2` | 6.7 | 5.8 | 4.7 | 5.5 | 5.5 | 5.7 | 5.6 |
+| 19 | `local/laneB/r3` | 6.5 | 6.5 | 4.5 | 5.8 | 6.0 | 5.5 | about 5.8 |
+| 20 | `local/laneB/r4` | 6.0 | 5.0 | 4.5 | 6.0 | 5.5 | 5.5 | about 5.4 |
+
+The 8/10 target was not reached; the lane stopped after four rounds as briefed. Closed or improved over the rounds: the
+0.80 s cut line (the game has the same soft-particle cut; the camera pitch was the difference), the capture field of view
+(the 4:3 / 16:9 conversion bug that made round 17's frames too wide), the bubble's size (420 vs 422 px), the held target
+facing the player, the dark bubble interior (the shader's own `ModulateBlack` values; round 20's critic now calls it slightly
+too uniform). Still open, most visible first, per the round 20 critic: the held pose (the host hangs folded with limbs high,
+the game's is compact and head-forward; uniform scale cannot fix it), the 0.80 s burst (a broad cyan wash with a straight
+lower edge against the game's rounded shell that hides the target), the bullymong's colour (icy white-lilac against dark
+brown; no material graph or shader identity found), the rim (smooth against the game's irregular cyan edge) and the palm
+orb (pale and flat against saturated cobalt with strands). The eye motif low in the game's view is the HUD's action-skill
+indicator, not an effect.
