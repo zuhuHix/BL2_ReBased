@@ -33,7 +33,7 @@ run(`
   function reset(open=4, gear=true) {
     selectedId=null; targetSlot=0; targetGearSlot=null; firstRow=0;
     navigationPanel='equipped'; lastBackpackId=null; lastEquippedIndex=0;
-    transferSourceId=null; transferFromEquipped=false; compareId=null;
+    transferSourceId=null; transferFromEquipped=false; compareId=null; slotKeyChoiceFor=null;
     categoryIndex=sortIndex=0; inspectMode=false; state=null; lastState='';
     const weapons=['w0','w1','w2','w3'].map((id,i)=>i<open?id:null);
     window.owInventory({level:10,activeSlot:0,slotsUnlocked:open,
@@ -79,6 +79,14 @@ check('Left in the backpack returns to the equipped analogue, even after another
   assert.equal(selected(), 'w0');
   run('reset(); selectEquipmentSlot(2)'); press('ArrowRight', 'ArrowLeft');
   assert.equal(selected(), 'w0');
+});
+check('A number key that names a locked slot does not count as a slot choice for the transfer', () => {
+  // Control: 2 on the selected item is a choice, so the transfer starts on slot 2 rather than the analogue.
+  run('reset(2)'); press('ArrowRight', '2', 'Enter');
+  assert.equal(run('transferSourceId'), 'b0'); assert.equal(run('targetSlot'), 1); assert.equal(run('compareId'), 'w1');
+  // 2 on b0, then 4 (locked) on b1: b1 has no choice, so its transfer starts on the analogue (active slot 1).
+  run('reset(2)'); press('ArrowRight', '2', 'ArrowDown', '4', 'Enter');
+  assert.equal(run('transferSourceId'), 'b1'); assert.equal(run('targetSlot'), 0); assert.equal(run('compareId'), 'w0');
 });
 check('Backpack keeps its row when re-entered and stops at the top', () => {
   run('reset()'); press('ArrowRight', 'ArrowUp'); assert.equal(selected(), 'b0');

@@ -206,7 +206,6 @@ alpha, inline/TFC and LZO paths, small mips and corrupt-input rejection.
 Native sky shading and in-game visual parity remain UNVERIFIED.
 See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
 
-
 ## 2026-09-14: Glacier primary-layer approximation
 
 The inspected `Mat_Glacier` and `Mati_Glacier2x` now have an explicit, narrowly
@@ -3048,7 +3047,6 @@ gear/pickup passes are not parity evidence. CTest 8/8 and navigation 22/22 pass;
 nine package differential checks match. Engine test used launch-only cache
 fallback/D3D11 after two startup stalls; no project renderer/cache changes.
 
-
 ## 2026-10-01: one placed Sanctuary mover before broad world behavior
 
 Reuse one prepared door mesh/material/convex-collision chain. Follow the installed
@@ -4657,7 +4655,11 @@ AI-assisted (Claude, with Codex sub-agents). Lane D of the 2026-10-21 orchestrat
   elemental part sets it (the Torgue explosive badge). Numeric `stats.card` changes: Wild Rifle `fire_rate` 6.557 to 5.56
   (it also changes the host's firing interval; reported to lane E), Hellfire `fire_rate` 9.09 to 8.96 and `damage` 659.2
   to 621.6, Volcano `damage` 2625.6 to 2481.0, and accuracy, reload, magazine and spread corrections listed in the
-  verification record. The real-card comparison over the earlier ground-truth set matches all six slice cards. **Not
+  verification record. Real-card comparison on cooked data (what the host's recipes use; 69 recorded cards, 67
+  supported): damage 63/67, accuracy, fire rate, projectiles and price 67/67, reload 62/67, magazine 55/67, status DPS
+  16/16, status chance 15/16; of the six slice cards, the two shotguns still differ in reload and magazine (4/6). An
+  earlier "all match" log used the `--live-data` overlay of values read from the running game (67/67 with it); the
+  difference between the cooked and live values is open (DECISIONS 2026-10-02: not online hotfixes). **Not
   solved:** the zoom line is 0.1 high on two of six cards (raw values 3.264 and 2.471 show as 3.2 and 2.4; no rounding
   rule fits all six, UNVERIFIED); the Nukem price differs because the bounded recipe has a different name part.
 - **Navigation (read from script where named; each case matches the matched real frames).** A backpack weapon is compared with the active slot's weapon
@@ -4675,7 +4677,7 @@ AI-assisted (Claude, with Codex sub-agents). Lane D of the 2026-10-21 orchestrat
   game's brightening blend cannot be reproduced by a page composited with alpha.
 - **Critic** (a fresh independent agent per round, 14 matched pairs): round 0b 5.95, round 20 7.39, round 21 7.85,
   round 22 7.57. Round 22 and a fourth attempt regressed and were not kept; the pages are at round 21. 8/10 not reached.
-- **Checks:** CTest 10/10, packages 9/9, inventory navigation 39/39, skill navigation 6/6, weapon stats 36/36 (all 46
+- **Checks:** CTest 10/10, packages 9/9, inventory navigation 40/40, skill navigation 6/6, weapon stats 36/36 (all 46
   standalone Python/JS tests under `tests/` pass; the other 8 need the reader and run inside CTest); inventory suite
   49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE with `-Items local/inventory-actions/bounded-recipes`. The suite first
   failed step 20 (and skipped the seven steps after it) because a transfer started on the analogue even after a number key had

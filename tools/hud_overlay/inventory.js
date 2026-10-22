@@ -1555,16 +1555,17 @@ function navigateInventory(direction) {
   else if (Number.isInteger(next)) selectEquipmentSlot(next);
 }
 
+// Returns whether the slot was taken as the target (false for a locked or out-of-range slot, or a gear transfer).
 function setTargetSlot(slot) {
-  if (transferSourceId && !transferFromEquipped && targetGearSlot) return;
-  if (slot < 0 || slot > 3 || slotLocked(slot)) return;
+  if (transferSourceId && !transferFromEquipped && targetGearSlot) return false;
+  if (slot < 0 || slot > 3 || slotLocked(slot)) return false;
   if (slot !== targetSlot) compareId = null;
   targetGearSlot = null;
   targetSlot = slot;
   if (transferSourceId && !transferFromEquipped) {
     compareId = state.slots[slot] || null;
     render();
-    return;
+    return true;
   }
   const held = state.slots[targetSlot];
   const selectedIsBackpack = itemById(selectedId) && !equippedIds().has(selectedId);
@@ -1574,6 +1575,7 @@ function setTargetSlot(slot) {
     compareId = null;
   }
   render();
+  return true;
 }
 
 function cycleTargetSlot(direction) {
@@ -2068,7 +2070,7 @@ function handleKey(event) {
   else if (key === 'escape' && transferSourceId) { event.preventDefault(); finishTransfer(true); syncSelection(); }
   else if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
-  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); setTargetSlot(Number(event.key)-1); slotKeyChoiceFor = selectedId; }
+  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); if (setTargetSlot(Number(event.key)-1)) slotKeyChoiceFor = selectedId; }
   else if (key === 'enter') { event.preventDefault(); equip(); }
   else if (key === 'e') { event.preventDefault(); equip(); }
   else if (key === 'c') { event.preventDefault(); toggleCompare(); }

@@ -224,8 +224,11 @@ same decoded attribute/presentation path; accuracy remaps spread to the card per
 size rounds down. The comparison report under ignored `local/orch/D20/` records the numeric capture audit.
 
 The Round 1 comparison log from 2026-10-22 reported all fields matching across 67 supported records, with 2
-unsupported. The Round 2 cooked-package rerun below, explicitly without a `--live-data` overlay, produced a different
-tally; use its counts as the current reproducible result. Neither run validates the new element string or zoom parity.
+unsupported. That run used the `--live-data` overlay (`local/realgame/cards/live_weapon_data.json`, values read from the
+running game): rerunning it with the overlay on the review's request reproduces it (every printed stat 67/67, status
+16/16; report `local/realgame/cards/golden_compare_r2_live.json`). The host's recipes are generated from the cooked
+packages without that overlay, so the Round 2 cooked-package counts below are the ones that describe the host's cards.
+Neither run validates the new element string or zoom parity.
 
 The adapter reads stats.card.fun_stats_markup into Item.FunStatsMarkup, and
 inventory.js passes funStatsMarkup to the movie. The forwarding path is present;
