@@ -107,6 +107,10 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   fresh real-game captures (critic 7.27 before, 7.57-7.67 after). Open: the curved glass sheet, residual perspective,
   gear compare (not yet observed in the real game), white flavour lines on cards.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
+- **Action-skill HUD (2026-10-22):** Maya's Phaselock icon (cooldown veil) and Siren emblem (drains while the target is
+  held) drive BL2's own HUD clips from the host's Phaselock state, with frame rules read from the live movie; a 2D
+  stand-in for the HUD clusters' 3D turn fixes the overall HUD layout. In-engine 9/9 against real timings, critic 9/10.
+  `docs/verification/ACTION_SKILL_HUD.md`.
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
   model, interpreter, Core natives, default-state sweep and scalar trace replay exist.

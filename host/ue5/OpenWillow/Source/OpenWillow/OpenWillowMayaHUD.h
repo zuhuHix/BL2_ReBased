@@ -78,10 +78,21 @@ private:
     // -owflashhud=<url>: BL2's own HUD movie in Ruffle, in a transparent
     // web page over the viewport (tools/hud_overlay). Prototype only.
     void PushFlashHudState(const class AOpenWillowWalker& Maya);
+    // The action-skill indicator's inputs (tools/hud_overlay/action_skill.js): OutActive is the running skill's
+    // remaining fraction (-1 when none), OutCooldown the cooldown's remaining fraction (0 = ready).
+    // docs/verification/ACTION_SKILL_HUD.md.
+    static void ActionSkillHudState(const class AOpenWillowWalker& Maya, float& OutActive, float& OutCooldown);
 
     TSharedPtr<SWebBrowser> FlashHud;
     TSharedPtr<SWidget> FlashHudRoot;
     FString LastFlashState;
+    FString LastSkillHudLine;
+    // -owskillhudshots (with -owflashhud and -owcombattest): one unattended Phaselock cast with HUD captures
+    // (OWSkillHud_*.png) through the cooldown, then quit.
+    void TickSkillHudShots(class AOpenWillowWalker& Maya);
+    int32 SkillShotStep = 0;
+    float SkillShotCastAt = 0.f;
+    bool bSkillShotCast = false;
     float NextFlashPush = 0.f;
     // -owflashskills=<url>: StatusMenu Skills frame, populated from local
     // package data by tools/hud_overlay/skills.js.

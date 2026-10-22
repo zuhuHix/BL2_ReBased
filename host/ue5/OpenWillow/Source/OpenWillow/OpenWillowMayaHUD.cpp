@@ -699,6 +699,67 @@ void AOpenWillowMayaHUD::EndPlay(const EEndPlayReason::Type Reason)
     Super::EndPlay(Reason);
 }
 
+void AOpenWillowMayaHUD::ActionSkillHudState(const AOpenWillowWalker& Maya, float& OutActive, float& OutCooldown)
+{
+    OutActive = -1.f;
+    OutCooldown = 0.f;
+    const UWorld* World = Maya.GetWorld();
+    if (!World || !Maya.GetPhaselockData().bLoaded) return;
+    const float Now = World->GetTimeSeconds();
+    // The game's emblem shows from the lock (end of the lift) to the skill's end and its bar empties evenly over that
+    // time (real casts, ACTION_SKILL_HUD.md); the release and the release buffer do not extend it.
+    const FOpenWillowPhaselockTimeline& Timeline = Maya.LastPhaselockTimeline();
+    const float SinceCast = Now - Maya.LastPhaselockCastAt();
+    const float Lock = Timeline.SkillDuration - Timeline.LockedAt;
+    if (Maya.IsPhaselockActive() && Lock > 0.f && SinceCast >= Timeline.LockedAt && SinceCast < Timeline.SkillDuration)
+        OutActive = FMath::Clamp(1.f - (SinceCast - Timeline.LockedAt) / Lock, 0.f, 1.f);
+    // The icon follows the cooldown pool (seconds left / max), which the game fills at the cast and drains only after
+    // the skill ends; the host's pool model does the same (PhaselockRemaining).
+    if (Maya.PhaselockCooldown() > 0.f)
+        OutCooldown = FMath::Clamp(Maya.PhaselockRemaining() / Maya.PhaselockCooldown(), 0.f, 1.f);
+}
+void AOpenWillowMayaHUD::TickSkillHudShots(AOpenWillowWalker& Maya)
+{
+    // Unattended: once the movie has had time to load and the -owcombattest dummy stands, aim at it, cast Phaselock and
+    // capture the screen with the HUD every 0.5 s from 1 s before the cast until 22 s after (past the cooldown), then quit.
+    // tools/test_action_skill_hud.ps1 runs it; the OWSKILLHUD lines carry the pushed state on the same clock.
+    const float Now = GetWorld()->GetTimeSeconds();
+    constexpr float First = -1.f, Step = 0.5f, Last = 22.f, CastAt = 14.f;
+    if (SkillShotStep < 0) return;
+    if (SkillShotStep == 0)
+    {
+        AOpenWillowCombatTarget* Target = nullptr;
+        for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It) { Target = *It; break; }
+        if (Now < CastAt - 2.f || !Target || !PlayerOwner || !PlayerOwner->PlayerCameraManager) return;
+        // As -owphaselockshots: level aim at a stock pawn, the chest of the engine-shape dummy.
+        const FVector Aim = Target->AimPoint();
+        const FVector View = PlayerOwner->PlayerCameraManager->GetCameraLocation();
+        PlayerOwner->SetControlRotation(((Target->IsStockPawn() ? FVector(Aim.X, Aim.Y, View.Z) : Aim - FVector(0, 0, 20)) - View).Rotation());
+        SkillShotCastAt = FMath::Max(Now + 1.5f, CastAt);
+        SkillShotStep = 1;
+        return;
+    }
+    const float Offset = First + (SkillShotStep - 1) * Step;
+    if (Offset > Last)
+    {
+        if (Now - SkillShotCastAt < Last + 1.f) return;
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLHUDSHOTS done"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        SkillShotStep = -1;
+        return;
+    }
+    if (!bSkillShotCast && Now >= SkillShotCastAt)
+    {
+        Maya.UsePhaselock();
+        bSkillShotCast = true;
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLHUDSHOTS cast t=%.3f hit=%d"), Now, Maya.LastPhaselockHit() ? 1 : 0);
+    }
+    if (Now - SkillShotCastAt < Offset) return;
+    const FString Name = FString::Printf(TEXT("OWSkillHud_%03d.png"), SkillShotStep - 1);
+    FScreenshotRequest::RequestScreenshot(Name, true, false);
+    UE_LOG(LogTemp, Display, TEXT("OWSKILLHUDSHOTS shot %s scheduled %+.2f actual %+.3f t=%.3f"), *Name, Offset, Now - SkillShotCastAt, Now);
+    ++SkillShotStep;
+}
 void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
 {
     // Only state the host really has: Maya takes no damage and has no
@@ -714,14 +775,27 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     // shows its full magazine size, as before).
     const int32 MagazineLeft = bArmed ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0;
     const float MagazineFill = bArmed ? float(MagazineLeft) / UOpenWillowInventory::MagazineSize(*Weapon) : 1.f;
+    float SkillActive = -1.f, SkillCooldown = 0.f;
+    ActionSkillHudState(Maya, SkillActive, SkillCooldown);
     const FString State = FString::Printf(
-        TEXT("{\"character\":\"siren\",\"health\":1,\"shield\":1,\"healthText\":\"\",\"shieldText\":\"\","
-             "\"xp\":%.3f,\"levelText\":\"%d\",\"grenades\":null,\"weaponOut\":%s,\"ammo\":%.3f,\"ammoText\":\"%s\"}"),
+        TEXT("{\"character\":6,\"skillIcon\":\"/ package/UI_HUD_AAIcons/AA-Siren\",\"health\":1,\"shield\":1,\"healthText\":\"\",\"shieldText\":\"\","
+             "\"xp\":%.3f,\"levelText\":\"%d\",\"grenades\":null,\"weaponOut\":%s,\"ammo\":%.3f,\"ammoText\":\"%s\","
+             "\"skillActive\":%s,\"skillCooldown\":%.3f}"),
         Skills ? Skills->LevelProgress() : 0.f,
         Skills ? Skills->GetLevel() : 1,
         bArmed ? TEXT("true") : TEXT("false"),
         MagazineFill,
-        bArmed ? *FString::Printf(TEXT("%d"), MagazineLeft) : TEXT(""));
+        bArmed ? *FString::Printf(TEXT("%d"), MagazineLeft) : TEXT(""),
+        SkillActive < 0.f ? TEXT("null") : *FString::Printf(TEXT("%.3f"), SkillActive),
+        SkillCooldown);
+    // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
+    // (tools/check_action_skill_hud.py reads them).
+    const FString SkillLine = FString::Printf(TEXT("active=%.3f cooldown=%.3f"), SkillActive, SkillCooldown);
+    if (SkillLine != LastSkillHudLine)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLHUD t=%.3f cast=%.3f %s"), GetWorld()->GetTimeSeconds(), Maya.LastPhaselockCastAt(), *SkillLine);
+        LastSkillHudLine = SkillLine;
+    }
     // Resend once a second too: the page may not have loaded the first time.
     const float Now = GetWorld()->GetRealTimeSeconds();
     if (State == LastFlashState && Now < NextFlashPush) return;
@@ -959,6 +1033,8 @@ void AOpenWillowMayaHUD::DrawHUD()
     {
         // The movie draws the crosshair, bars and weapon panel; damage
         // numbers are not driven in it yet.
+        static const bool bSkillHudShots = FParse::Param(FCommandLine::Get(), TEXT("owskillhudshots"));
+        if (bSkillHudShots) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         PushFlashHudState(*Maya);
         DrawDamagePopups(Large);
         return;
