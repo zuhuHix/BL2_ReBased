@@ -563,6 +563,19 @@ for name, definition in scene['materials'].items():
                 and mel.connect_material_property(multiplied, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
             raise RuntimeError('Cannot connect inspected emissive scale: ' + name)
         emissive_output, emissive_output_pin = multiplied, ''
+    diffuse_tint = definition.get('diffuse_tint')
+    if diffuse_tint is not None and diffuse_sample is not None and shading_name != 'MLM_Unlit':
+        # Master_World p_diffmod multiplies the diffuse texture (see
+        # prepare_level.diffuse_tint); the rest of that graph is omitted (UNVERIFIED).
+        tint = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector)
+        rgb = diffuse_tint['rgb']
+        tint.set_editor_property('constant', unreal.LinearColor(float(rgb[0]), float(rgb[1]),
+                                                                  float(rgb[2]), 1.0))
+        tinted = mel.create_material_expression(material, unreal.MaterialExpressionMultiply)
+        if not (mel.connect_material_expressions(diffuse_sample, 'RGB', tinted, 'A')
+                and mel.connect_material_expressions(tint, '', tinted, 'B')
+                and mel.connect_material_property(tinted, '', unreal.MaterialProperty.MP_BASE_COLOR)):
+            raise RuntimeError('Cannot connect inspected diffuse tint: ' + name)
     recipe_emissive = build_texture_layers(material, recipe.get('emissive_layers', []))
     if recipe_emissive is not None:
         if emissive_output is not None:
