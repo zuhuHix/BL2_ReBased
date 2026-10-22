@@ -4640,16 +4640,44 @@ one-frame lag of the game's HUD, a post-ready highlight whose clip was not found
 
 ## 2026-10-22: Skills keyboard vertical movement fit (partly UNVERIFIED)
 
-AI-assisted. `tools/hud_overlay/skills.html`, `skills.js`, `skill_nav.js`, the synthetic navigation test and
-`docs/verification/SKILL_TREE_NAVIGATION.md`; no UE or game process launched and no installed game data added.
+## 2026-10-22: Inventory and Skills rounds 20-22 against matched real-game references; card content from the parts
 
-- `StatusMenuExGFxMovie.HandleSkillsInputKey` forwards arrows to `SkillTreeGFxObject.HandleInputKey`; `Nav_Up` and `Nav_Down`
-  call native `Navigate` with vertical direction values, then `PostNav`. The matched 2026-10-21 observation confirms that four
-  Down presses from the action skill end on the middle branch's fourth-tier center cell (tier index 3, cell 1).
-- The native chooser's grid policy was not recovered from the package or the read-only Ghidra query. The host moves to the
-  closest cell in the adjacent tier, treats the action skill as centered, breaks ties toward the lower cell, and clamps at
-  the ends. The capture checks the four-Down destination; the column tie-breaks and edge policy remain `UNVERIFIED`.
-- `Nav_Left` and `Nav_Right` call the same native chooser with horizontal directions; `PostNav` updates the branch view when
-  its returned selection changes branches. Their cell-versus-branch priority remains `UNVERIFIED`, so the existing host
-  Left/Right tree step is retained.
-- **Checks:** skill navigation 5/5; inventory navigation 32/32; CTest 10/10; package verification 9/9.
+AI-assisted (Claude, with Codex sub-agents). Lane D of the 2026-10-21 orchestration. `tools/hud_overlay/inventory.*`,
+`skills.*`, new `skill_nav.js` and `glass_sheet.js` (both routed by `serve.py`), `tools/weapon_stats.py`, the weapon
+`fun_stats_markup` forwarding in `OpenWillowInventory.*`, and the `-owinvshots` capture block in `OpenWillowMayaHUD.cpp`
+(capture-only, approved by the hub).
+
+- **Matched references.** New real-game frames (`local/realgame/d20/`, ignored) have the host's capture state: the six
+  bounded recipes in the same slots (spawned by full definition), Maya at level 36 (set in memory; saves restored and
+  hash-checked), two weapon slots, $0, keyboard glyphs, Phaselock 1/1 and 31 points. The host captures run with
+  `-owlevel=36`, an empty gear manifest, `-owslots=2 -owmoney=0 -owerid=0`.
+- **Cards (parsing of game data; `docs/verification/INVENTORY_CARD_STATS.md`).** `weapon_stats.py` now emits the Accuracy
+  row where it was missing, the coloured text lines (flavour, weapon zoom, ammo per shot, bonus damage, elemental
+  effectiveness), Burn Damage / sec. and Ignite Chance, the price, and the element from the resolved damage type when no
+  elemental part sets it (the Torgue explosive badge). Numeric `stats.card` changes: Wild Rifle `fire_rate` 6.557 to 5.56
+  (it also changes the host's firing interval; reported to lane E), Hellfire `fire_rate` 9.09 to 8.96 and `damage` 659.2
+  to 621.6, Volcano `damage` 2625.6 to 2481.0, and accuracy, reload, magazine and spread corrections listed in the
+  verification record. The real-card comparison over the earlier ground-truth set matches all six slice cards. **Not
+  solved:** the zoom line is 0.1 high on two of six cards (raw values 3.264 and 2.471 show as 3.2 and 2.4; no rounding
+  rule fits all six, UNVERIFIED); the Nukem price differs because the bounded recipe has a different name part.
+- **Navigation (read from script where named; each case matches the matched real frames).** A backpack weapon is compared with the active slot's weapon
+  (`StatusMenuEquippedPanelGFxObject.GetTypeCellSuffixBasedOnThing` -> `WillowInventoryManager.GetEquippedAnalogue`: the
+  current weapon, then the active quick-select slot); Left from the Backpack returns to that analogue; each sort selects
+  its first entry and an empty ITEMS sort selects an (EMPTY) cell. Skills: Up/Down move between tiers
+  (`SkillTreeGFxObject.HandleInputKey` -> native `Navigate`); Down x4 from Phaselock reaches Harmony's Sustenance in the
+  game and in the host. The column choice between tiers of different widths, ties and the edges are UNVERIFIED. The
+  ALL list breaks equal-rarity ties by descending type key (fits ALL; the BRANDS frame orders the same pair the other
+  way, so one of the two always differs; the sort is native, UNVERIFIED).
+- **Fixes found on the way.** `serve.py` served only listed files, so `skill_nav.js` returned 404 (a test now checks every
+  script a page loads is routed); rebuilding the Skills hit layer under a resting cursor selected the tile under it, so
+  hover now selects only after real pointer movement; a stale overlay server from an earlier run kept serving old routes.
+- **Stand-ins (UNVERIFIED):** the glass sheet is our own drawing (normal-alpha wash, scanlines, curved edges); the
+  game's brightening blend cannot be reproduced by a page composited with alpha.
+- **Critic** (a fresh independent agent per round, 14 matched pairs): round 0b 5.95, round 20 7.39, round 21 7.85,
+  round 22 7.57. Round 22 and a fourth attempt regressed and were not kept; the pages are at round 21. 8/10 not reached.
+- **Checks:** CTest 10/10, packages 9/9, inventory navigation 39/39, skill navigation 6/6, weapon stats 36/36 (all 46
+  standalone Python/JS tests under `tests/` pass; the other 8 need the reader and run inside CTest); inventory suite
+  49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE with `-Items local/inventory-actions/bounded-recipes`. The suite first
+  failed step 20 (and skipped the seven steps after it) because a transfer started on the analogue even after a number key had
+  chosen slot 2; a number-key choice for the selected item now wins (host control, the game's behaviour is not observed).
+

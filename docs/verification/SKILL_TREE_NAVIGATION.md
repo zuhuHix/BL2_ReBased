@@ -46,13 +46,14 @@ cell 1. This
 confirms the existing one-tier-per-press fit for this path; it does not verify
 ties or other tree edges.
 
-The D20 host log records a `move` TypeError on each of the four Down events.
-`skills.html` loaded `skills.js`, but `serve.py` returned HTTP 404 for the new
-`/skill_nav.js` URL because its page allowlist does not include that file. The
-page now defines the browser helper inline; `skill_nav.js` remains its Node-test
-counterpart. The page's `toggleOverview()` already reselects the action skill
-when Q exits overview. The 1.5 s delay exceeds the 0.3 s branch tween, so the
-capture table needs no timing change.
+The first D20 host log records a `move` TypeError on each of the four Down events:
+`serve.py` serves only the files it lists and returned HTTP 404 for `/skill_nav.js`. It now routes the file, and
+`tests/skill_navigation_test.js` checks that every script the Skills page loads is routed. The next capture still
+ended on the wrong tile: rebuilding the hit layer when Q left the overview fired `pointerenter` on the tile under the
+resting cursor (the window centre), which took the selection off the action skill. Hover now selects only after the
+pointer has really moved since the last rebuild. With both fixes the host's D6b frame (round 21) shows Sustenance
+focused, as in the real frame. The 1.5 s delay exceeds the 0.3 s branch tween, so the capture table needs no timing
+change.
 
 Frame measurements at 1280×720: the host's incorrect skill card is about
 x=204–527, y=140–339; the real D6 card is about x=212–526, y=149–389, and
@@ -72,9 +73,10 @@ the selected-tree transform was left unchanged.
 The host Skills frame also shows the movie's `ring` clip as a blue rectangle
 with a hard right edge near x=935. The clip is hidden on the Skills page to
 remove that edge; the curved glass sheet remains unrendered because its game
-blend is unavailable over the transparent host viewport. The layout offsets
-and placement fits remain `UNVERIFIED` until compared in a fresh host capture.
+blend is unavailable over the transparent host viewport; round 21 draws an own-made stand-in instead
+(`glass_sheet.js`, `UNVERIFIED`). The layout offsets are fits to the frames (`UNVERIFIED`); the round-21 critic
+scored the three Skills pairs 6.7-8.4, its D6/D7 remarks mixing the two pairs up, and the round-22 critic 8.3-8.5.
 
 `tests/skill_navigation_test.js` uses synthetic tiers and checks the observed
 four-step destination shape, column matching, tie handling and limits. It also
-loads the inline browser helper and compares it with the tested module.
+checks that `serve.py` routes every script the Skills page loads.
