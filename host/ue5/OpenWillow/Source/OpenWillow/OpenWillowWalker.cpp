@@ -1417,10 +1417,10 @@ void AOpenWillowWalker::SpawnCombatTarget()
         ECC_Visibility, Query)) Location = Floor.ImpactPoint;
     FActorSpawnParameters Params;
     Params.Owner = this;
-    // The exported bullymong mesh presents its rear when the actor faces the camera under the old +180 test offset.
-    // Zero is the visual fit for this test pawn; UNVERIFIED against a live actor rotation. Override with
-    // -owcombatpawyawoffset=<degrees> when checking another orientation.
-    float FacingYawOffset = 0.f;
+    // Other -owcombattest runs keep the +180 offset (the stand-in's hit reactions read the damage direction in actor space).
+    // Phaselock captures use 0: the exported bullymong presents its rear under +180, while the game frames show its front
+    // (visual fit, UNVERIFIED against a live actor rotation). -owcombatpawyawoffset=<degrees> overrides either.
+    float FacingYawOffset = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots")) ? 0.f : 180.f;
     FParse::Value(FCommandLine::Get(), TEXT("owcombatpawyawoffset="), FacingYawOffset);
     const FRotator Facing(0, GetControlRotation().Yaw + FacingYawOffset, 0);
     CombatTarget = GetWorld()->SpawnActor<AOpenWillowCombatTarget>(Location, Facing, Params);
