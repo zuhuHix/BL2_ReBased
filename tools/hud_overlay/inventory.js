@@ -46,7 +46,7 @@ const LIST_TOP = 47, LIST_TOP_COMPARE = 40, LIST_TOP_FOCUS = 38; // the focus pa
 const SCROLLED_LIST_ORIGIN = 28; // movie px; with focus scaling this is about 30 screen px
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
-const FOCUS_PANEL = {scale:0.92, scaleY:0.979, left:497, top:67}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
+const FOCUS_PANEL = {scale:0.931, scaleY:0.957, left:496, top:72}; // D20 focus bounds: x518..777, y77..634
 const FOCUS_EQUIPPED = {scale:0.59, centreX:412, centreY:395}; // row pitch 42 px like the real mini column (37 at 0.52)
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
 // 2026-10-04; comparators, filters and headers are read from native code in
@@ -392,6 +392,7 @@ const rarityLevel = item => Number(item?.rarityLevel ?? item?.rarity ?? 0) || 0;
 const levelTie = (a, b) => (Number(a.level) >= 51 || Number(b.level) >= 51) ? Number(b.level || 0) - Number(a.level || 0) : 0;
 const rarityThenLevel = (a, b) => (rarityLevel(b) - rarityLevel(a)) || levelTie(a, b);
 const compareKeys = (a, b) => String(a).localeCompare(String(b), 'en', {sensitivity:'base'});
+const compareCategoryKeys = (a, b) => compareKeys(categoryKey(a), categoryKey(b));
 const sortComparators = {
   // IST_MajorTypeThenRarityThenSubtype: weapons first (mission weapons before the rest, rarity, and the level
   // rule only between equal types); other items by category key, then rarity.
@@ -400,18 +401,16 @@ const sortComparators = {
     if (isWeapon(a)) {
       return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || (rarityLevel(b) - rarityLevel(a))
         || (categoryKey(a) === categoryKey(b) ? levelTie(a, b)
-          // UNVERIFIED empirical tie rule: D20's ALL captures put equal-rarity
-          // cross-type weapons in descending category-key order (Volcano,
-          // Hellfire, Nukem). The native comparator reports these pairs equal;
-          // this host tie-break matches the captured order without item names.
-          : compareKeys(categoryKey(b), categoryKey(a)));
+          // UNVERIFIED host tie policy: the native comparator reports equal
+          // for different types. Stable input order is the shared fallback.
+          : 0);
     }
     return compareKeys(categoryKey(a), categoryKey(b)) || rarityThenLevel(a, b);
   },
   // IST_MajorTypeThenSubtypeThenRarity
   types(a, b) {
     if (isWeapon(a) !== isWeapon(b)) return isWeapon(a) ? -1 : 1;
-    return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || compareKeys(categoryKey(a), categoryKey(b)) || rarityThenLevel(a, b);
+    return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || compareCategoryKeys(a, b) || rarityThenLevel(a, b);
   },
   // IST_Manufacturer: the game reports "equal" for an item without a manufacturer, which is not a total order;
   // the host puts those last.
@@ -955,25 +954,31 @@ function fitFunStats(card, hasFunStats) {
   call(card, 'SetDirectHeight', height + extra);
 }
 
-// Card size and place. The original's cards are about 15% larger than the movie's own layout gives (it draws them
-// nearer the camera), so each visible card is rescaled to the widths measured on the 2026-10-04 captures: a single
-// card 307 px wide with its frame's top left at (215, 112); in the compare view the left card 273 wide ending at
-// x 483 (top 94) and the right one 253 wide starting at x 600 (top 118); in Inspect 292 wide at (60, 44). Only the
-// width is set, the card keeps its aspect ratio and its own height. Idempotent: a card within 1.5 px is left alone.
+// Card size and placement are fitted to the captured screen-space bounds. The D20 single-card view also needs a
+// vertical content stretch to match its text baselines and lower frame edge; compare and Inspect keep their own fits.
+// Idempotent: a card within 1.5 px is left alone.
 // The numbers below are for the clip's `bkgd`, which is wider than the visible frame by FRAME_INSET (visible/bkgd, measured
 // 0.896 on the host captures): the visible frame widths wanted are 307, 273, 253 and 292.
 const FRAME_INSET = 0.896;
 const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
-// single: 6 px left and 15 px up from the round-15 fit, after the round-18 frames with the 3D turn (frame corner 218, 123 against
-// 212, 108 on the real equipped view).
-const CARD_FIT = {single:fitTarget(307, 209, 97), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
+// D20 single-card fit: the text row pitch is slightly compressed against the real card, so the Y scale grows with its content.
+// The measured frame moves about 5 px right, 3 px up and 15 px down; the 6% Y correction is a fit, UNVERIFIED beyond D20.
+const CARD_FIT = {single:{...fitTarget(309, 214, 94), heightScale:1.06}, left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
   inspect:{...fitTarget(293, 56, 50), aspect:306/241}}; // D20 D5: UNVERIFIED fit from host x20-350,y29-300 to real x48-354,y36-277
-const cardAspectCorrection = new Map();
+const cardYCorrection = new Map();
 function fitCard(card, target) {
-  const previousAspect = cardAspectCorrection.get(card) || 1;
-  if (!target.aspect && Math.abs(previousAspect - 1) > 0.001) {
-    set(card, '_yscale', Number(get(card, '_yscale')) / previousAspect);
-    cardAspectCorrection.set(card, 1);
+  const previousCorrection = cardYCorrection.get(card) || 1;
+  if (target.aspect) {
+    if (Math.abs(previousCorrection - 1) > 0.001) {
+      set(card, '_yscale', Number(get(card, '_yscale')) / previousCorrection);
+      cardYCorrection.set(card, 1);
+    }
+  } else {
+    const correction = Number(target.heightScale) || 1;
+    if (Math.abs(previousCorrection - correction) > 0.001) {
+      set(card, '_yscale', Number(get(card, '_yscale')) * correction / previousCorrection);
+      cardYCorrection.set(card, correction);
+    }
   }
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
@@ -994,7 +999,7 @@ function fitCard(card, target) {
     const factorY = targetHeight / currentHeight;
     if (Number.isFinite(factorY) && factorY > 0.3 && factorY < 3 && Math.abs(factorY - 1) > 0.001) {
       set(card, '_yscale', Number(get(card, '_yscale')) * factorY);
-      cardAspectCorrection.set(card, previousAspect * factorY);
+      cardYCorrection.set(card, factorY);
       fitted = readBounds(card + '.bkgd');
       if (!fitted) return;
     }
@@ -1047,9 +1052,7 @@ function drawCard() {
   // Match the observed stock tooltip line. Extra host keys remain available.
   const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
-  // Seen in the real compare views: from the equipped item the Sort entry stays, from a backpack item it is gone.
-  if ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped)
-      || (!transferSourceId && isEmptyCellId(selectedId)))
+  if (shouldShowSortHint(item))
     hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
@@ -1109,6 +1112,13 @@ function scrollForSelected(entries) {
   // this placement is UNVERIFIED until the host is rendered in-engine.
   if (start > firstRow && isEmptyCellId(selectedId)) start = Math.max(0, start - 1);
   return Math.min(start, Math.max(maximum, 0));
+}
+
+// D20's real compare captures and the installed-menu trace agree: the
+// equipped-origin compare keeps Sort; the backpack-origin compare omits it.
+function shouldShowSortHint(item) {
+  return ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped)
+    || (!transferSourceId && isEmptyCellId(selectedId)));
 }
 
 // One extra 8 px of scroll clip lets the last empty cell stay fully visible
@@ -1335,8 +1345,15 @@ function applyCardOcclusion() {
   const presentation = document.getElementById('presentation').getBoundingClientRect();
   const scale = presentation.width / 1280;
   const covers = [];
-  if (itemById(selectedId) && !inspectMode) covers.push(readBounds(INV + '.mainCard.bkgd'));
-  if (compareId && itemById(compareId)) covers.push(readBounds(INV + '.compareCard.bkgd'));
+  // In the ordinary inventory layout the single card stays to the left of the
+  // backpack. Its SWF bounds can still extend over the cells after switching
+  // from the empty ITEMS list to headerless VALUE, hiding every row thumbnail
+  // even though the painted card and cells do not overlap. Only compare cards
+  // can cover the backpack in the captured layouts.
+  if (cardsCanCoverBackpack()) {
+    if (itemById(selectedId) && !inspectMode) covers.push(readBounds(INV + '.mainCard.bkgd'));
+    if (compareId && itemById(compareId)) covers.push(readBounds(INV + '.compareCard.bkgd'));
+  }
   const rects = covers.filter(Boolean).map(bounds => {
     const projected = window.owMenu3d.projectBounds(bounds);
     return {
@@ -1721,6 +1738,56 @@ function placeEquippedPanel() {
   appliedFocus = focus;
 }
 
+// Fit the separate count and ammo clips to the same D20 backpack-focus bounds
+// as the storage panel. These clips are siblings of the panel in the movie, so
+// they need their own screen-space fit; their offsets are not caused by its Y
+// scale. Values are measured on D2 / D2b-D2g and remain UNVERIFIED outside
+// those 1280x720 captures.
+const FOCUS_CHROME_TARGETS = [
+  [INV + '.storageCount', {left:796, top:540, width:125, height:78}],
+  [INV + '.ammo', {left:238, top:496, width:246, height:142}]
+];
+const focusChromeHomes = new Map();
+function fitFocusChromeClip(path, target) {
+  if (!focusChromeHomes.has(path)) focusChromeHomes.set(path, {
+    x:Number(get(path, '_x')), y:Number(get(path, '_y')),
+    xs:Number(get(path, '_xscale')), ys:Number(get(path, '_yscale'))
+  });
+  const parentX = Number(get(INV, '_xscale')) / 100 || 1;
+  const parentY = Number(get(INV, '_yscale')) / 100 || 1;
+  for (let step=0; step<2; step++) {
+    const bounds = readBounds(path);
+    if (!bounds) return;
+    const projected = window.owMenu3d.projectBounds(bounds);
+    const width = projected.xMax - projected.xMin, height = projected.yMax - projected.yMin;
+    if (!(width > 1 && height > 1)) return;
+    const sx = Number(get(path, '_xscale')) || 100, sy = Number(get(path, '_yscale')) || 100;
+    const xFactor = target.width / width, yFactor = target.height / height;
+    if (Math.abs(xFactor - 1) > 0.001) set(path, '_xscale', sx * xFactor);
+    if (Math.abs(yFactor - 1) > 0.001) set(path, '_yscale', sy * yFactor);
+  }
+  const bounds = readBounds(path);
+  if (!bounds) return;
+  const projected = window.owMenu3d.projectBounds(bounds);
+  const screenX = (projected.xMin + projected.xMax) / 2;
+  const screenY = (projected.yMin + projected.yMax) / 2;
+  const movieFrom = toMovie(screenX, screenY), movieTo = toMovie(target.left + target.width / 2, target.top + target.height / 2);
+  const dx = movieTo.x - movieFrom.x, dy = movieTo.y - movieFrom.y;
+  if (Math.abs(dx) > 0.1) set(path, '_x', Number(get(path, '_x')) + dx / parentX);
+  if (Math.abs(dy) > 0.1) set(path, '_y', Number(get(path, '_y')) + dy / parentY);
+}
+function restoreFocusChrome() {
+  for (const [path, home] of focusChromeHomes) {
+    set(path, '_x', home.x); set(path, '_y', home.y);
+    set(path, '_xscale', home.xs); set(path, '_yscale', home.ys);
+  }
+  focusChromeHomes.clear();
+}
+function fitFocusChrome() {
+  if (!backpackFocused()) { restoreFocusChrome(); return; }
+  for (const [path, target] of FOCUS_CHROME_TARGETS) fitFocusChromeClip(path, target);
+}
+
 // True when the compare view (a transfer in progress) is for an item the equipped cell `index` cannot take:
 // every gear cell for a weapon, anything but the matching cell for a gear item.
 function compareRefusesCell(index) {
@@ -1729,6 +1796,8 @@ function compareRefusesCell(index) {
   const gearSlot = gearSlotForItem(source);
   return gearSlot ? index !== 4 + gearSlots.findIndex(slot => slot.key === gearSlot) : index >= 4;
 }
+
+function cardsCanCoverBackpack() { return Boolean(transferSourceId || compareId); }
 // In D20 D3/D4 the red gear rows measured 59 px high, versus 47 px in round 1.
 // Expand each rejected gear cell locally and keep the bottom row's lower edge
 // fixed; move the upper row up by one added row-height so the two rows stay joined.
@@ -1853,6 +1922,7 @@ function render() {
   applyMovieVisibility();
   placeStoragePanel();
   applyStatus();
+  fitFocusChrome();
   applySlotNumbers();
   const equipped = INV + '.equippedPanel';
   const slotIds = equippedItems();
