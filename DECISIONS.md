@@ -4736,3 +4736,41 @@ AI-assisted (Claude, with Codex sub-agents). `host/ue5/import_weapon_items.py`, 
   refill; the host check covered cancellations before and after that point.
 - Successful Phaselock lifts cancel reload before the cast action, and arms cleanup only clears an active reload clip; the host check passed with a
   test-only slower cast rate so the clip spans the former reload end. Original-game notes confirm only successful-cast abort behavior.
+
+## 2026-10-22: Sanctuary matched-viewpoint rounds 1-4: WiringMesh collision refresh, source lighting, decal default-deny, host calibration
+
+AI-assisted (Claude), lane A. Details, counts and per-round history: `docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md`;
+collision record: `COLLISION_WALKING_VERIFICATION.md` (2026-10-22).
+
+- **Collision refresh (`tools/refresh_collision.py`).** Accepts `GearboxFramework.WiringMesh` exports as well as
+  `StaticMesh` (`MESH_CLASSES`). Before this, the Sanctuary_P cable mesh raised "Ambiguous mesh" and the refreshed scene had no
+  volumes. Synthetic test `test_refresh_accepts_wiring_mesh`. Still skips the one UModel-prepared skeletal pillar. **Verified:** the
+  refresh printed supported 312, absent 115, unsupported 2, hulls 518, blocking volumes 5, non-blocking 6, live mismatches 0;
+  the live capture matches the committed record (`DynamicBlockingVolume_1`/`_2` collide, `_0`/`_3` do not). The full UE import
+  now spawns `OpenWillow_Volumes` itself.
+- **Scene manifest (`tools/prepare_level.py`, `scene.json`).** Gains `lighting` (decoded SkyLight, HeightFog, WorldInfo and
+  PostProcessVolume settings, and the directional light component after its `LightmassSettings` anchor), `decals` with
+  default-deny exclusions and a reason per actor and material, and `diffuse_tint` (`diffuse_tint_v1`, `partial_unverified`) for 18
+  Sanctuary building materials, read from `Master_World` instances. **Verified:** the decoded records and counts (33 kept, 78
+  excluded, 182 unsupported; 46 decal-like mesh placements stay on the mesh path). **UNVERIFIED:** that the game multiplies Base Color by
+  `p_diffmod` in the way the host does.
+- **Schema (`tools/level-arrays.schema`).** Declares `StaticLightCollectionActor.LightComponents` as an object array. This is bulk
+  decode metadata only; the resolved elements are point and spot light components, 1,023 of them, of which 128 are spawned.
+- **Colour conversion.** UE3 FColor values are converted to linear with a 2.2 power curve, following the UE3 FLinearColor
+  conversion as we understand it. **UNVERIFIED** against the game's output.
+- **Host calibration (`host/ue5/scene_import_rules.py`).** The sun's 5.0 lux per source brightness unit, sky light 1.5, sky tint
+  (3.0, 2.1, 1.0), exposure bias -1.5 EV, white balance 8200 K, saturation, contrast, shadow lift, the cloud-cap 0.14, the 25 cd
+  per brightness unit with the 3.0 ceiling, the 0.01 orange-point scale, and the graffiti ink and 128 cm depth cap are
+  **screenshot calibrations tuned against the matched cameras. They are not decoded from the game** and are `UNVERIFIED`.
+- **Verifier crash fix (`host/ue5/verify_level.py`, decal check loop).** A module-level bound method of a UE actor
+  (`actor.get_actor_right_vector`) was kept alive to interpreter shutdown. After a successful run the UE Python plugin crashed
+  in `python311.dll` (access violation), so `-ImportOnly` reported `Saved scene verification failed: 3` although the assertions
+  passed. The loop now reads the axis vectors as values; the full gate exits 0. The root cause inside the plugin's teardown is
+  not analysed.
+- **Visual review:** independent critic (Codex GPT-6-Luna, host and reference paths only, eight matched cameras). Baseline before
+  round 1 4.5/10; round 1 4.7; round 2 4.1 (decal noise regression); round 3 4.3; round 4 4.4. **The 8/10 gate was not reached;
+  the lane stopped after four rounds as briefed.** Remaining gaps are listed in the gaps document, round-4 ranking.
+- **Checks:** CTest 10/10; packages 9/9; Python tests 42 pass (the 8 reader-argument suites run inside CTest); JS 9 and 32/32;
+  UE import gate exit 0 after the crash fix; OpenWillow.Walking and BspWalking pass; TerrainWalking 23/24 (the known
+  pre-existing Terrain_2 hole endpoint). Not run: RouteWalking/CollisionShapes (no route traces on this machine), live-game
+  gameplay.

@@ -195,3 +195,26 @@ python tools/refresh_collision.py --reader build/Release/ow-package.exe --game $
 
 The hand-made flights, switchback and open-ground walk used here were appended to the candidate list by hand;
 `walking_capture.ps1` loads `Save0008.sav` through the installed `quick_startup` mod's `-Character` option by default.
+
+## 2026-10-22: WiringMesh volumes in the refresh, and the full import
+
+AI-assisted (Claude), lane A. Branch `feature/sanctuary-parity-r2`. Context: `docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md`.
+
+After #43 placed the Sanctuary_P `WiringActor` cable mesh (a `GearboxFramework.WiringMesh` export, read with the StaticMesh
+layout), `tools/refresh_collision.py` raised "Ambiguous mesh" because it only accepted `StaticMesh` exports. A refreshed
+scene therefore had no volume records. The script now accepts `WiringMesh` exports as well (`MESH_CLASSES`), and it still
+skips the one UModel-prepared skeletal pillar, which has no StaticMesh collision export. Synthetic test:
+`tests/collision_test.py::test_refresh_accepts_wiring_mesh`. The full UE import (`host/ue5/import_level.py`) now spawns the
+`OpenWillow_Volumes` actor itself, so a separate apply step is no longer needed for the volumes.
+
+Re-run on the second machine with a fresh live capture (`walking_capture.ps1` with an empty probe list, Save0008, saves
+restored):
+
+- `DynamicBlockingVolume_1` and `_2` collide; `_0` and `_3` do not. This matches the committed record.
+- `refresh_collision.py` printed: supported 312, absent 115, unsupported 2, hulls 518, volumes blocking 5, non_blocking 6,
+  live_mismatch 0.
+
+In-engine (2026-10-22, this branch): `OpenWillow.Walking` pass; `OpenWillow.BspWalking` pass;
+`OpenWillow.TerrainWalking` 23/24 hole endpoints, the known pre-existing `Terrain_2` endpoint failure (not caused by this
+change). `RouteWalking` and `CollisionShapes` were **not run** on this machine: it has no recorded route traces
+(`walk-routes.json`), so the route checks remain `UNVERIFIED` here.
