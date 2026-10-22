@@ -43,13 +43,15 @@ body.compare-wide ruffle-player,body.inspect-wide ruffle-player{-webkit-mask-ima
  white-space:nowrap;border:0}
 /* Full-screen Inspect (see updateInspect in inventory.js): an opaque dark backdrop under the movie, and a
    transparent surface over everything that carries the item picture and takes the drag/wheel. */
-/* Our own drawing after the 2026-10-04 Inspect frames (a fit, UNVERIFIED): a grey light from the top centre (about 84 there, 55 in the
-   top corners, 30 in the bottom ones), soft concentric bands about 85 px apart centred on the model, and a faint 6 px grid. */
+/* UNVERIFIED Inspect backdrop fit from D5. The large rings are an own-drawn abstract stand-in for the faint emblem. */
 #inspect-backdrop{position:absolute;z-index:1;inset:0;background:
- repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 6px),
- repeating-linear-gradient(90deg,rgba(255,255,255,.012) 0 1px,transparent 1px 6px),
+ repeating-linear-gradient(0deg,rgba(255,255,255,.018) 0 1px,transparent 1px 6px),
+ repeating-linear-gradient(90deg,rgba(255,255,255,.018) 0 1px,transparent 1px 6px),
+ radial-gradient(ellipse 31.6% 42.5% at 52.7% 48%,transparent 98.7%,rgba(255,255,255,.024) 99% 99.35%,transparent 99.7%),
+ radial-gradient(ellipse 22.5% 31% at 52.7% 48%,transparent 98.2%,rgba(255,255,255,.019) 98.6% 99%,transparent 99.5%),
+ radial-gradient(ellipse 12.2% 17% at 52.7% 48%,transparent 97%,rgba(255,255,255,.015) 97.5% 98.2%,transparent 98.8%),
  repeating-radial-gradient(circle at 51% 50%,rgba(255,255,255,0) 0,rgba(255,255,255,.022) 42px,rgba(255,255,255,0) 84px),
- radial-gradient(ellipse 85% 110% at 50% 5%,#56565a 0%,#3a3a3f 50%,#18181c 100%)}
+ radial-gradient(ellipse 85% 110% at 50% 5%,#494a50 0%,#313235 50%,#0b0c12 100%)}
 #inspect-backdrop[hidden]{display:none}
 #inspect-preview{position:absolute;z-index:5;inset:0;display:grid;place-items:center;--zoom:1;
  pointer-events:auto;touch-action:none;cursor:grab}

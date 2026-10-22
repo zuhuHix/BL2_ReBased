@@ -139,7 +139,7 @@ check('Inspect blocks navigation', () => {
   run('reset(); inspectMode=true'); press('ArrowDown'); assert.equal(selected(), 'w0');
   run('inspectMode=false');
 });
-// Stock sort list (docs/verification/NATIVE_INVENTORY_SORT.md; header texts and orders seen in the original game).
+// Stock comparators and headers (docs/verification/NATIVE_INVENTORY_SORT.md); native ties use the documented stable host choice.
 const sortItems = [
   {id:'p1',name:'p1',type:'Pistol',manufacturer:'Jakobs',rarity:1,value:30,level:5},
   {id:'p2',name:'p2',type:'Pistol',manufacturer:'Hyperion',rarity:2,value:80,level:5},
@@ -156,7 +156,7 @@ const listFor = mode => {
 };
 check('Stock sort list: ALL, TYPES, BRANDS, ITEMS and VALUE orders and sub-headers', () => {
   const empties = n => Array(n).fill('_');
-  assert.deepEqual(listFor(0), ['#WEAPONS','p2','m1','s1','p1','a1','#RELICS','rl','#CLASS MODS','cm','#SHIELDS','sh1',...empties(4)]);
+  assert.deepEqual(listFor(0), ['#WEAPONS','p2','p1','a1','s1','m1','#RELICS','rl','#CLASS MODS','cm','#SHIELDS','sh1',...empties(4)]);
   assert.deepEqual(listFor(1), ['#ASSAULT RIFLES','a1','#PISTOLS','p2','p1','#SHOTGUNS','s1','#SUB-MACHINE GUNS','m1',...empties(7)]);
   assert.deepEqual(listFor(2), ['#BANDIT MADE','a1','#HYPERION','p2','m1','#JAKOBS','p1','s1','#TEDIORE','sh1','rl','cm',...empties(4)]);
   assert.deepEqual(listFor(3), ['#RELICS','rl','#CLASS MODS','cm','#SHIELDS','sh1',...empties(9)]);
@@ -179,7 +179,7 @@ check('PageDown cycles ALL > TYPES > BRANDS > ITEMS > VALUE, PageUp reverses; ea
   run("sortIndex=0; selectedId='w0'; navigationPanel='equipped'"); // equipped selection: PageDown does not sort
   press('PageDown'); assert.equal(run('sortIndex'), 0);
 });
-check('ALL equal-rarity cross-type weapons use the captured descending type-key tie order (UNVERIFIED)', () => {
+check('ALL equal-rarity cross-type weapons preserve source order for native ties (UNVERIFIED host choice)', () => {
   const items = [
     {id:'weapon_ar',type:'Assault Rifle',rarity:2,level:5},
     {id:'weapon_rocket',type:'Rocket Launcher',rarity:2,level:5},
@@ -188,7 +188,54 @@ check('ALL equal-rarity cross-type weapons use the captured descending type-key 
   ];
   run(`reset(); window.owInventory({level:10,activeSlot:0,slotsUnlocked:4,slots:[null,null,null,null],gearSlots:{},backpackCapacity:8,items:${JSON.stringify(items)}}); sortIndex=0`);
   assert.deepEqual(JSON.parse(run("JSON.stringify(backpackItems().map(item=>item.id))")),
-    ['weapon_sniper','weapon_smg','weapon_rocket','weapon_ar']);
+    ['weapon_ar','weapon_rocket','weapon_smg','weapon_sniper']);
+});
+// The D20 ALL captures order Volcano before Hellfire and Nukem before Pounder;
+// BRANDS captures the opposite order within each corresponding manufacturer.
+// The native comparator says those pairs are ties, so no single type-key rule
+// fits both modes. Stable backpack input order is the documented host choice.
+const d20TieItems = [
+  {id:'tie_sniper',type:'Sniper Rifle',manufacturer:'Maker A',gradeIndex:1,rarity:5,level:35,value:300},
+  {id:'tie_smg',type:'Sub-Machine Gun',manufacturer:'Maker A',gradeIndex:1,rarity:5,level:35,value:200},
+  {id:'tie_launcher',type:'Rocket Launcher',manufacturer:'Maker B',gradeIndex:1,rarity:5,level:35,value:400},
+  {id:'tie_shotgun',type:'Shotgun',manufacturer:'Maker B',gradeIndex:1,rarity:5,level:35,value:100}
+];
+const d20OrderFor = mode => {
+  run(`reset(4,false); window.owInventory({level:40,activeSlot:0,slotsUnlocked:4,slots:[null,null,null,null],gearSlots:{},backpackCapacity:4,items:${JSON.stringify(d20TieItems)}}); sortIndex=${mode}`);
+  return JSON.parse(run("JSON.stringify(backpackItems().map(item=>item.id))"));
+};
+check('One stable tie policy covers ALL, TYPES, BRANDS and VALUE (UNVERIFIED; BRANDS capture differs)', () => {
+  assert.deepEqual(d20OrderFor(0), ['tie_sniper','tie_smg','tie_launcher','tie_shotgun']);
+  assert.deepEqual(d20OrderFor(1), ['tie_launcher','tie_shotgun','tie_smg','tie_sniper']);
+  assert.deepEqual(d20OrderFor(2), ['tie_sniper','tie_smg','tie_launcher','tie_shotgun']);
+  assert.deepEqual(d20OrderFor(4), ['tie_launcher','tie_sniper','tie_smg','tie_shotgun']);
+});
+check('Sorted rows keep each item preview URL attached to that item in every mode', () => {
+  const previewItems = [...d20TieItems, {id:'preview_gear',itemType:'relic',manufacturer:'Maker C',rarity:2,value:50}];
+  for (let mode=0; mode<5; mode++) {
+    run(`reset(4,false); window.owInventory({level:40,activeSlot:0,slotsUnlocked:4,slots:[null,null,null,null],gearSlots:{},backpackCapacity:5,items:${JSON.stringify(previewItems)}}); sortIndex=${mode}`);
+    const actual = JSON.parse(run("JSON.stringify(backpackEntries().filter(entry=>entry.item).map(entry=>[entry.item.id,previewUrls(entry.item)[0] || null]))"));
+    const expected = JSON.parse(run("JSON.stringify(backpackItems().map(item=>[item.id,'/previews/'+encodeURIComponent(item.id)+'.png']))"));
+    assert.deepEqual(actual, expected);
+  }
+});
+check('Sort hint follows the compare origin seen in D20 D3 and D4', () => {
+  run("reset(); navigationPanel='backpack'; selectedId='b0'");
+  assert.equal(run('shouldShowSortHint(itemById(selectedId))'), true);
+  run("navigationPanel='equipped'; selectedId='w0'");
+  assert.equal(run('shouldShowSortHint(itemById(selectedId))'), false);
+  run("transferSourceId='b0'; transferFromEquipped=false; selectedId='w0'");
+  assert.equal(run('shouldShowSortHint(itemById(selectedId))'), false);
+  run("transferSourceId='w0'; transferFromEquipped=true; selectedId='b0'");
+  assert.equal(run('shouldShowSortHint(itemById(selectedId))'), true);
+});
+check('Only comparison cards can occlude backpack thumbnails', () => {
+  run('reset()');
+  assert.equal(run('cardsCanCoverBackpack()'), false);
+  run("transferSourceId='b0'; transferFromEquipped=false");
+  assert.equal(run('cardsCanCoverBackpack()'), true);
+  run("transferSourceId=null; compareId='b1'");
+  assert.equal(run('cardsCanCoverBackpack()'), true);
 });
 check('Sort with no ITEMS selects the first empty backpack cell and keeps backpack focus', () => {
   run(`reset(2,false); window.owInventory({level:10,activeSlot:0,slotsUnlocked:2,slots:['w0','w1',null,null],gearSlots:{},backpackCapacity:39,
