@@ -4,6 +4,42 @@ AI-assisted (Claude), lane A, branch `feature/scene-materials-owners`. Evidence 
 through this repository's reader, a census over every base-game package and one live read of the running game.
 Every report, texture, scene and capture stays under ignored `local/` (`local/lanea/`, `local/realgame/`).
 
+## Matched-viewpoint round 3 (2026-10-22, lane A, `feature-sanctuary-parity-r2`)
+
+This round uses the installed-package reader and project-owned scene importer for package identity, object references,
+scene manifests, materials, decals, lights and verification. UE Viewer/UModel build 1590 (local install; repository:
+[Gildor/UEViewer](https://github.com/gildor2/UEViewer)) remains the external extraction path for the selected central
+pillar mesh. All extracted outputs and captures stayed under ignored `local/` or
+`C:\Users\yorad\Documents\BL2_ReBased\local\hub-gallery\2026-10-22\laneA\round3`. The acceptance checks for this
+visual slice are the saved-scene verifier, the touched synthetic/import tests and eight matched captures; no gameplay
+or live-game parity was tested here.
+
+| Area | Round-3 change and evidence | Remaining work / confidence |
+| --- | --- | --- |
+| Decal default-deny | Census: 293 DecalActors/components, 27 unique materials. Kept 33 placements using only `Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito`. Excluded 78 otherwise-supported candidates across five materials, with the reason recorded per actor and material in `scene.json`: no channel/blend recipe validated against the matched reference; round-2 imports produced rainbow noise or magenta/violet projected quads. Exclusions: `DMat_WallConcrete_02` (66), `DMat_StainedWall_03` (4), `Dmat_WaterTank_Burst_Decal` (4), `Decal_Parent_BloodModulate` (3), and `SlaughterArena_Posters` (1). 182 candidates across 21 unresolved materials remain unsupported. The 46 `DecalPlane_LiquidDev` placements remain on the static-mesh path. | The kept graffiti uses inverse Rec.709 luminance (`ceiling=0.55`, `gain=6.0`) and dark ink `[0.001, 0.003, 0.008]`. Its local-X projection uses HitNormal and a 128 cm depth cap, with UE3 NearPlane/FarPlane and HitNormal/Tangent/Binormal to UE5 local X/Y/Z mapping. The tower writing reads darker and stays on its receiver in camera 06; blend, axis mapping and cap remain `UNVERIFIED`, and the paint is less crisp than the game. |
+| HQ map table | `WorldMap_Comp` R/G/B remain calibrated as land/contours, grid and markers. The `world_map_mask_colorization_v2` recipe uses a pale-cyan backing and land layer with darker teal grid/marker layers. Cameras 03/08 show the pale-cyan table and darker grid without round-2 blotches. | The route markings remain limited in the static view. The floating map symbol/beam is not present; emitter/particle behavior is outside this importer. Palette and channel mapping remain `UNVERIFIED`. |
+| Customization machine | Default-deny removes the violet/magenta projected quads seen in round 2; the cyan `EnergySwirls` layer stays in the machine material recipe. Camera 01 has no purple streaks. | The front display still lacks the game's cyan silhouette. A separate machine overlay/emitter or unreconstructed instance graph is a plausible cause, not verified. |
+| HQ static lights | Exported components from `StaticLightCollectionActor.LightComponents`; 128 of 1,023 point/spot components imported, 895 skipped (161 below radius/brightness thresholds, 650 spatial quota, 58 global cap, 26 unsupported). Imported lights preserve decoded radius/color, cast no shadows, and apply 25 candela per source-brightness unit capped at source brightness 3.0 (75 cd maximum); two saturated-orange point lights receive a 0.01 intensity scale. | Unit conversion, general ceiling and orange-point scale are named `UNVERIFIED` host calibrations. The round-3 capture tones down the artificial orange pool; the HQ remains greyer than the game's teal practicals and the projected beam is absent. |
+| Outdoor/Moxxi/sky | Retained round-2 outdoor light calibration. Camera 02 remains brighter and more readable than round 1. | Cameras 04/07 still show broad cloud bands; camera 05 string bulbs/sign remain dim or cropped; camera 02 distant mountain contrast remains flatter than the reference. These are lower-priority visual gaps. |
+
+Per-camera review against round 1: 01 better (no purple projection; front cyan panel absent); 02 better (outdoor lighting;
+mountain contrast still open); 03 better overall (cyan table, but route/projector detail remains open); 04 better overall
+(sky banding remains); 05 better overall (Moxxi lights remain faint); 06 better (dark graffiti); 07 better overall (sky
+and bulbs remain); 08 better overall (cyan table and decoded source lights, with HQ teal fill/projector still open).
+Round-3 host shots, host-left reference pairs and four-way comparisons are stored in `round3/host`, `round3/pairs`
+and `round3/review` beneath the local gallery path above. Visual checks are separate from automation: the eight-view
+Inspection test succeeded, while the UE commandlet's Python verification script reported success and wrote
+`ue-verify.json` (4,914 section actors, 33 verified decals, 78 default-denied, 182 unsupported, 128 verified lights,
+895 skipped; zero script errors). `UnrealEditor-Cmd` then raised a Python 3.11 shutdown access violation and
+`run_ue_level.ps1` reported `Saved scene verification failed: 3`; therefore the saved-scene assertions passed, but the
+commandlet process exit did not. No Smart App Control block occurred.
+
+The refreshed local pipeline produced 4,446 base placements and 386 base materials; terrain added 15 components,
+5,195 cells and 10,390 triangles; BSP preparation read 2 models, 24 components and 105 sections; the UModel pillar has
+four sections. Collision refresh found 312 supported, 115 absent and 2 unsupported mesh collision records, 518 hulls,
+five blocking volumes and zero live-volume mismatches. Material audit covered 413 materials / 4,914 placed sections
+with zero unassigned sections. These are extraction/manifest counts, not visual or gameplay validation.
+
 ## Matched-viewpoint round 2 (2026-10-22, lane A)
 
 The eight matched host/game pairs are under `C:\Users\yorad\Documents\BL2_ReBased\local\hub-gallery\2026-10-22\laneA\round2\pairs` (host left); host captures are in the sibling `round2\host`. These are visual checks of the static Sanctuary import, not gameplay or original-game parity tests. No game assets or exports were added to git.

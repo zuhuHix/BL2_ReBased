@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import re
+from collections import Counter
 from pathlib import Path
 import struct
 import subprocess
@@ -79,6 +80,85 @@ def byte_color_rgb(value):
             and 0 <= value[c] <= 255 for c in 'RGB'):
         raise ValueError('Expected a decoded byte color')
     return [value[c] / 255.0 for c in 'RGB']
+
+
+SANCTUARY_LIGHT_SELECTION = {
+    'min_radius': 128.0,
+    'min_brightness': 0.1,
+    'cell_size': 1500.0,
+    'max_per_cell': 2,
+    'max_imported': 128,
+    'score': 'source brightness multiplied by source radius',
+    'status': 'UNVERIFIED host performance cap; shadows disabled on imported lights',
+}
+
+
+def select_sanctuary_light_components(components):
+    """Apply deterministic thresholds, spatial quota and total light cap."""
+    records = [dict(item) for item in components]
+    candidates, counts = [], {'below_threshold': 0, 'cell_quota': 0,
+                              'global_cap': 0, 'unsupported': 0}
+    for item in records:
+        if item.get('status') != 'candidate':
+            item['selected'] = False
+            item.setdefault('skip_reason', 'unsupported_source_data')
+            counts['unsupported'] += 1
+            continue
+        radius, brightness = item.get('radius'), item.get('brightness')
+        position, color = item.get('position'), item.get('light_color_rgb')
+        if (not isinstance(radius, (int, float)) or isinstance(radius, bool)
+                or not math.isfinite(radius) or not isinstance(brightness, (int, float))
+                or isinstance(brightness, bool) or not math.isfinite(brightness)
+                or not isinstance(position, list) or len(position) != 3
+                or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                       or not math.isfinite(value) for value in position)
+                or not isinstance(color, list) or len(color) != 3
+                or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                       or not math.isfinite(value) or value < 0 or value > 1 for value in color)):
+            item.update({'status': 'skipped', 'selected': False,
+                         'skip_reason': 'invalid_source_light_values'})
+            counts['unsupported'] += 1
+            continue
+        if radius < SANCTUARY_LIGHT_SELECTION['min_radius'] or brightness < SANCTUARY_LIGHT_SELECTION['min_brightness']:
+            item.update({'status': 'skipped', 'selected': False,
+                         'skip_reason': 'below_radius_or_brightness_threshold'})
+            counts['below_threshold'] += 1
+            continue
+        item['selection_score'] = float(radius) * float(brightness)
+        cell = tuple(math.floor(float(value) / SANCTUARY_LIGHT_SELECTION['cell_size']
+                                ) for value in position)
+        item['_selection_cell'] = cell
+        candidates.append(item)
+
+    buckets = {}
+    for item in candidates:
+        buckets.setdefault(item['_selection_cell'], []).append(item)
+    cell_winners, cell_skipped = [], []
+    for cell in sorted(buckets):
+        ranked = sorted(buckets[cell], key=lambda item: (-item['selection_score'], item['source']))
+        quota = SANCTUARY_LIGHT_SELECTION['max_per_cell']
+        cell_winners.extend(ranked[:quota])
+        cell_skipped.extend(ranked[quota:])
+    for item in cell_skipped:
+        item.update({'status': 'skipped', 'selected': False, 'skip_reason': 'spatial_cell_quota'})
+        counts['cell_quota'] += 1
+
+    winners = sorted(cell_winners, key=lambda item: (-item['selection_score'], item['source']))
+    selected = winners[:SANCTUARY_LIGHT_SELECTION['max_imported']]
+    global_skipped = winners[SANCTUARY_LIGHT_SELECTION['max_imported']:]
+    for item in global_skipped:
+        item.update({'status': 'skipped', 'selected': False, 'skip_reason': 'global_light_cap'})
+        counts['global_cap'] += 1
+    for item in selected:
+        item.update({'status': 'selected', 'selected': True})
+    for item in records:
+        item.pop('_selection_cell', None)
+    return records, {'source_components': len(records),
+                     'eligible_before_spatial_quota': len(candidates),
+                     'eligible_after_spatial_quota': len(cell_winners),
+                     'imported': len(selected),
+                     'skipped': len(records) - len(selected),
+                     'skip_reasons': counts}
 
 
 def decoded_settings(value):
@@ -492,21 +572,29 @@ INSPECTED_SCENE_MATERIAL_RECIPES = {
         'omitted': ['native bulb palette and bloom'],
         'issue': 'Approximation: inspected colored LightStrip_Comp atlas drives emissive RGB; native bulb shader and bloom are not reconstructed'},
     'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap': {
-        'method': 'world_map_mask_colorization_v1',
+        'method': 'world_map_mask_colorization_v2',
         'base': 'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap',
-        # UNVERIFIED host palette calibration against matched round-2 cameras
-        # 03/08; R/G/B channel identities were inspected, palette values were not decoded.
+        # UNVERIFIED palette calibration against the matched camera 03/08 crops.
+        # R land artwork, G grid and B markers were re-read from WorldMap_Comp;
+        # zero-mask regions use a cyan backing so they do not render black.
         'host_lighting_model': 'MLM_Unlit',
-        'unlit_color_layers': [
-            {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
-             'channel': 'R', 'color': [0.16, 0.58, 0.68], 'srgb': False},
-            {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
-             'channel': 'G', 'color': [0.035, 0.09, 0.105], 'srgb': False},
-            {'texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
-             'channel': 'B', 'color': [0.08, 0.24, 0.27], 'srgb': False}],
+        'mask_texture': 'Sanctuary_P:Prop_Electronics.Textures.WorldMap_Comp',
+        'mask_channels': {'land': 'R', 'grid': 'G', 'markers': 'B'},
+        'palette': {'background': [0.11, 0.38, 0.50],
+                    'land': [0.30, 0.72, 0.82],
+                    'grid': [0.004, 0.020, 0.028],
+                    'markers': [0.006, 0.030, 0.045]},
         'omitted': ['RolandsControlRoom02_Cube reflection', 'native map palette and animated markers'],
-        'issue': 'UNVERIFIED approximation: inspected WorldMap_Comp R carries land/contour artwork, G carries the grid, and B carries markers; host maps these to pale cyan land and dark teal markings; palette and reflection remain unreconstructed'},
+        'issue': 'UNVERIFIED calibration: WorldMap_Comp R carries land/contour artwork, G carries the grid, and B carries markers; a pale-cyan backing fills zero-mask areas and the G/B masks select darker teal; native palette and animated markers remain unreconstructed'},
 }
+
+SANCTUARY_DECAL_MATERIAL_ALLOWLIST = {
+    'Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito',
+}
+DECAL_DEFAULT_DENY_REASON = (
+    'Excluded by the round-3 default-deny rule: this single-texture material has no '
+    'channel/blend recipe validated against the matched Sanctuary reference; round-2 '
+    'imports produced rainbow noise or magenta/violet projected quads.')
 
 # The cooked Engine package serializes Height, FieldOfView and FarPlane on
 # Default__DecalComponent. The remaining fallback values below follow the
@@ -965,7 +1053,8 @@ class Scene:
                 self.packages.setdefault(path.stem.casefold(), []).append(path)
             elif path.suffix.lower() == '.tfc':
                 self.texture_caches.setdefault(path.name.casefold(), []).append(path)
-        self.records, self.materials, self.meshes, self.textures = {}, {}, {}, {}
+        self.records, self.export_records = {}, {}
+        self.materials, self.meshes, self.textures = {}, {}, {}
         self.resolved, self.imports = {}, {}
         self.issues = []
         self.output.mkdir(parents=True, exist_ok=True)
@@ -1037,6 +1126,12 @@ class Scene:
         if package not in self.records:
             self.records[package] = {r['index']: r for r in self.call(package, '--scene-records', self.schema)}
         return self.records[package]
+
+    def export_rows(self, package):
+        if package not in self.export_records:
+            self.export_records[package] = {
+                r['index']: r for r in self.call(package, '--exports')}
+        return self.export_records[package]
 
     def resolve(self, package, ref):
         index = ref.get('index', 0) if isinstance(ref, dict) else ref
@@ -1237,6 +1332,10 @@ class Scene:
                 'evidence': entry.get('emissive_calibration_evidence', 'named host calibration')}
         if entry.get('host_lighting_model'):
             result['host_lighting_model'] = entry['host_lighting_model']
+        if entry.get('mask_channels'):
+            result['mask_channels'] = dict(entry['mask_channels'])
+        if entry.get('palette'):
+            result['palette'] = {name: list(rgb) for name, rgb in entry['palette'].items()}
         if entry.get('diffuse'):
             diffuse = inspected(entry['diffuse'])
             result['diffuse'] = self.texture(diffuse, 'diffuse')
@@ -1253,6 +1352,10 @@ class Scene:
                                'file': self.texture(texture, f'recipe_{channel}_{index}')})
             if layers:
                 result[channel] = layers
+        if entry.get('mask_texture'):
+            texture = inspected(entry['mask_texture'])
+            result['mask_texture_file'] = self.texture(texture, 'recipe_mask')
+            result['mask_texture_source'] = self.identity(texture)
         return result
 
     def native_sky_approximation(self, key):
@@ -1808,6 +1911,16 @@ class Scene:
                           'unless CompressionNoAlpha is explicitly true, '
                           'or texture alpha for Masked; native graph and exact blend behavior '
                           'remain unreconstructed')})
+            if identity in SANCTUARY_DECAL_MATERIAL_ALLOWLIST:
+                material.update({
+                    'method': 'grafitto_dark_ink_deferred_decal_v1',
+                    'opacity_source': 'grafitto_dark_ink_mask_v1',
+                    'ink_color_linear': [0.001, 0.003, 0.008],
+                    'opacity_luminance_ceiling': 0.55,
+                    'opacity_gain': 6.0,
+                    'issue': ('UNVERIFIED host calibration: the white-backed Modulate atlas uses '
+                              'inverse-luminance coverage and a constant dark navy ink color; '
+                              'the native DecalMaterial graph remains unreconstructed')})
         except (ValueError, KeyError, TypeError) as error:
             material['issue'] = str(error)
         return filename, material
@@ -1901,29 +2014,67 @@ class Scene:
                 projection_basis = {name: vector(component_props.get(name, {}))
                                     for name in ('HitLocation', 'HitNormal', 'HitTangent', 'HitBinormal')}
                 supported = (material_name is not None
-                             and decal_materials[material_name]['status'] == 'partial_unverified')
-                actors.append({
+                             and decal_materials[material_name]['status'] == 'partial_unverified'
+                             and material_source in SANCTUARY_DECAL_MATERIAL_ALLOWLIST)
+                excluded = (material_name is not None
+                            and decal_materials[material_name]['status'] == 'excluded_default_deny')
+                actor_record = {
                     'source': source, 'level': level,
                     'component_source': package + ':' + component['path'],
                     'material': material_name, 'material_source': material_source,
                     'transform': {'location': location, 'rotation': rotation},
                     'projection_basis': projection_basis,
                     'dimensions': dimensions, 'dimension_evidence': dimension_evidence,
-                    'status': 'partial_unverified' if supported else 'unsupported',
-                    'issue': ('UNVERIFIED UE3 projection axes and blend are approximated by a UE5 deferred decal'
-                              if supported else 'No supported single-texture DecalMaterial resource')})
+                    'status': ('partial_unverified' if supported else
+                               'excluded_default_deny' if excluded else 'unsupported'),
+                    'projection_policy': ('UE3 HitNormal/HitTangent/HitBinormal map to UE5 local X/Y/Z; '
+                                          'the UE5 center shifts inward by NearPlane plus half the bounded '
+                                          'FarPlane-NearPlane depth (128 cm cap, UNVERIFIED calibration)'),
+                    'issue': ('UNVERIFIED UE3 decal projection and blend are approximated by a UE5 deferred decal'
+                              if supported else
+                              DECAL_DEFAULT_DENY_REASON if excluded else
+                              'No supported single-texture DecalMaterial resource')}
+                if excluded:
+                    actor_record['exclusion_reason'] = DECAL_DEFAULT_DENY_REASON
+                actors.append(actor_record)
+
+        candidate_materials = [material for material in decal_materials.values()
+                               if material.get('status') == 'partial_unverified']
+        for material in candidate_materials:
+            if material.get('source') not in SANCTUARY_DECAL_MATERIAL_ALLOWLIST:
+                material.update({'status': 'excluded_default_deny',
+                                 'exclusion_reason': DECAL_DEFAULT_DENY_REASON,
+                                 'issue': DECAL_DEFAULT_DENY_REASON})
+        # Actors were classified before the material table's final deny pass;
+        # apply that decision from exact source identity to every placement.
+        for actor in actors:
+            material = decal_materials.get(actor.get('material'), {})
+            if material.get('status') == 'excluded_default_deny':
+                actor.update({'status': 'excluded_default_deny',
+                              'exclusion_reason': DECAL_DEFAULT_DENY_REASON,
+                              'issue': DECAL_DEFAULT_DENY_REASON})
 
         supported = sum(item.get('status') == 'partial_unverified' for item in actors)
+        excluded = sum(item.get('status') == 'excluded_default_deny' for item in actors)
         unique_supported_materials = sum(item.get('status') == 'partial_unverified'
                                          for item in decal_materials.values())
+        unique_excluded_materials = sum(item.get('status') == 'excluded_default_deny'
+                                        for item in decal_materials.values())
         return {'status': 'partial_unverified',
-                'policy': 'single_texture_deferred_decal_v1',
+                'policy': 'round3_default_deny_graffitto_only_v1',
+                'projection_policy': ('UE3 HitNormal/HitTangent/HitBinormal map to UE5 local X/Y/Z; '
+                                      'graffiti uses source Width/Height, shifts the centered UE5 volume '
+                                      'inward by NearPlane plus half the bounded FarPlane-NearPlane depth '
+                                      '(128 cm cap, UNVERIFIED calibration)'),
                 'census': {'actors': actor_count, 'components': component_count,
                            'supported_import_candidates': supported,
-                           'unsupported': len(actors) - supported,
+                           'excluded_import_candidates': excluded,
+                           'unsupported': len(actors) - supported - excluded,
                            'unique_materials': len(decal_materials),
                            'supported_materials': unique_supported_materials,
-                           'unresolved_materials': len(decal_materials) - unique_supported_materials},
+                           'excluded_materials': unique_excluded_materials,
+                           'unresolved_materials': (len(decal_materials) - unique_supported_materials
+                                                   - unique_excluded_materials)},
                 'materials': decal_materials, 'actors': actors, 'issues': issues,
                 'defaults_status': 'local CDO values plus labelled UNVERIFIED defaults'}
 
@@ -1952,6 +2103,180 @@ class Scene:
                                         'Decal projection conversion is not confirmed for this mesh.')})
         return result
 
+    def light_component_class_defaults(self):
+        """Decode the installed Engine CDO values used when an instance omits a field."""
+        exports = self.export_rows('Engine')
+        result = {}
+        for path, required in (
+                ('Default__LightComponent', {'Brightness', 'LightColor'}),
+                ('Default__PointLightComponent', {'Radius'}),
+                ('Default__SpotLightComponent', {'OuterConeAngle'})):
+            row = next((item for item in exports.values() if item['path'] == path), None)
+            if row is None:
+                raise ValueError('Engine package is missing ' + path)
+            record = self.call('Engine', '--properties', row['index'], '--property-offset', 4)
+            if record.get('trailing_bytes') != 0:
+                raise ValueError(path + ' property stream is incomplete')
+            properties = values(record.get('properties', []))
+            if not required <= set(properties):
+                raise ValueError(path + ' is missing required light defaults')
+            result[path] = properties
+        return result
+
+    def static_light_collection_records(self, level, rows, class_defaults, issues):
+        """Read collection references and their placed point/spot component values."""
+        exports = self.export_rows(level)
+        collections = [row for row in rows.values()
+                       if row['class'].rsplit('.', 1)[-1] == 'StaticLightCollectionActor'
+                       and row['path'].startswith('TheWorld.PersistentLevel.')]
+        component_records, membership_errors = [], []
+        for actor in collections:
+            source = level + ':' + actor['path']
+            try:
+                data = self.call(level, '--properties', actor['index'], '--property-offset', 4,
+                                 '--array-schema', self.schema)
+                properties = data.get('properties', [])
+                light_list = next((item for item in properties if item.get('name') == 'LightComponents'), None)
+                if (light_list is None or light_list.get('status') != 'decoded'
+                        or light_list.get('element_type') != 'ObjectProperty'
+                        or not isinstance(light_list.get('value'), list)):
+                    raise ValueError('LightComponents object-reference array is not decoded')
+                references = light_list['value']
+                if light_list.get('element_count') != len(references):
+                    raise ValueError('LightComponents count does not match its decoded references')
+                if data.get('trailing_bytes') != len(references) * 64:
+                    raise ValueError('StaticLightCollectionActor tail does not match its component count')
+                for reference in references:
+                    component = rows.get(reference.get('index'))
+                    if component is None:
+                        raise ValueError('LightComponents contains an unresolved component reference')
+                    component_kind = component['class'].rsplit('.', 1)[-1]
+                    if component_kind not in ('PointLightComponent', 'SpotLightComponent'):
+                        raise ValueError('LightComponents contains an unsupported light component class')
+                    if component.get('outer') != actor['index']:
+                        raise ValueError('Light component outer does not match collection owner')
+                    component_records.append((component, component_kind))
+            except (ValueError, KeyError, TypeError) as error:
+                issues.append({'source': source, 'error': str(error)})
+                membership_errors.append(source)
+
+        seen = set()
+        unique = []
+        for component, kind in component_records:
+            if component['index'] in seen:
+                issues.append({'source': level + ':' + component['path'],
+                               'error': 'Light component appears in more than one collection array'})
+                continue
+            seen.add(component['index'])
+            unique.append((component, kind))
+        if not unique:
+            return [], {'collection_actors': len(collections), 'components': 0,
+                        'membership_errors': membership_errors}
+
+        component_props = self.properties_batch(level, [row['index'] for row, _ in unique],
+                                                8, 'light-components')
+        if level not in self.imports:
+            self.imports[level] = {item['index']: item for item in self.call(level, '--imports')}
+
+        def archetype_path(component):
+            info = exports.get(component['index'], {})
+            reference = info.get('archetype_index', 0)
+            if reference > 0:
+                return (exports.get(reference) or {}).get('path')
+            if reference < 0:
+                return (self.imports[level].get(reference) or {}).get('path')
+            return None
+
+        base_defaults = class_defaults['Default__LightComponent']
+        point_defaults = class_defaults['Default__PointLightComponent']
+        spot_defaults = class_defaults['Default__SpotLightComponent']
+        records_out = []
+        for component, component_class in unique:
+            source = level + ':' + component['path']
+            parsed = component_props.get(component['index'], {})
+            if 'error' in parsed or parsed.get('trailing_bytes') != 0:
+                records_out.append({'source': source,
+                                    'kind': 'Point' if component_class == 'PointLightComponent' else 'Spot',
+                                    'status': 'unsupported',
+                                    'skip_reason': 'component_properties_incomplete'})
+                continue
+            instance = values(parsed.get('properties', []))
+            kind = 'Point' if component_class == 'PointLightComponent' else 'Spot'
+            archetype = archetype_path(component)
+            standard_archetype = (archetype == ('Engine.Default__PointLight.PointLightComponent0'
+                                                 if kind == 'Point'
+                                                 else 'Engine.Default__SpotLight.SpotLightComponent0'))
+            inherited = dict(base_defaults)
+            inherited.update(point_defaults)
+            if kind == 'Spot':
+                inherited.update(spot_defaults)
+            fields = dict(inherited if standard_archetype else {})
+            fields.update(instance)
+            required = {'Brightness', 'LightColor', 'Radius', 'CachedParentToWorld'}
+            if kind == 'Spot':
+                required.add('OuterConeAngle')
+            if not required <= set(fields):
+                records_out.append({'source': source, 'kind': kind, 'archetype': archetype,
+                                    'status': 'unsupported',
+                                    'skip_reason': 'missing_instance_or_class_default_light_value'})
+                continue
+            try:
+                brightness = fields['Brightness']
+                radius = fields['Radius']
+                if (not isinstance(brightness, (int, float)) or isinstance(brightness, bool)
+                        or not math.isfinite(brightness) or not isinstance(radius, (int, float))
+                        or isinstance(radius, bool) or not math.isfinite(radius)):
+                    raise ValueError('Light brightness/radius is not finite')
+                matrix = fields['CachedParentToWorld']
+                if not isinstance(matrix, dict):
+                    raise ValueError('CachedParentToWorld is not a decoded matrix')
+                position = [matrix['WPlane'][axis] for axis in ('X', 'Y', 'Z')]
+                forward = [matrix['XPlane'][axis] for axis in ('X', 'Y', 'Z')]
+                up = [matrix['ZPlane'][axis] for axis in ('X', 'Y', 'Z')]
+                if any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                       or not math.isfinite(value) for value in position + forward + up):
+                    raise ValueError('Light transform matrix contains a nonfinite value')
+                light_color = byte_color_rgb(fields['LightColor'])
+                light = {'source': source, 'level': level, 'kind': kind,
+                         'archetype': archetype, 'archetype_defaults_used': standard_archetype,
+                         'position': [float(value) for value in position],
+                         'forward': [float(value) for value in forward],
+                         'up': [float(value) for value in up],
+                         'brightness': float(brightness), 'radius': float(radius),
+                         'light_color_rgb': light_color,
+                         'brightness_source': ('component instance' if 'Brightness' in instance
+                                               else 'Engine.Default__LightComponent'),
+                         'color_source': ('component instance' if 'LightColor' in instance
+                                          else 'Engine.Default__LightComponent'),
+                         'radius_source': ('component instance' if 'Radius' in instance
+                                           else 'Engine.Default__PointLightComponent'),
+                         'transform_source': 'CachedParentToWorld',
+                         'enabled': fields.get('bEnabled', True) is not False,
+                         'status': 'candidate'}
+                enabled = fields.get('bEnabled', True)
+                if enabled is False:
+                    light.update({'status': 'unsupported', 'skip_reason': 'source_light_disabled'})
+                if kind == 'Spot':
+                    outer = fields['OuterConeAngle']
+                    inner = fields.get('InnerConeAngle', 0.0)
+                    if (not isinstance(outer, (int, float)) or isinstance(outer, bool)
+                            or not math.isfinite(outer) or not 0 < outer < 90
+                            or not isinstance(inner, (int, float)) or isinstance(inner, bool)
+                            or not math.isfinite(inner) or inner < 0 or inner > outer):
+                        raise ValueError('Spot light cone angles are outside the supported range')
+                    light['outer_cone_angle'] = float(outer)
+                    light['inner_cone_angle'] = float(inner)
+                    light['inner_cone_source'] = ('component instance' if 'InnerConeAngle' in instance
+                                                  else 'class default zero (UNVERIFIED)')
+                records_out.append(light)
+            except (ValueError, KeyError, TypeError) as error:
+                records_out.append({'source': source, 'kind': kind, 'archetype': archetype,
+                                    'status': 'unsupported',
+                                    'skip_reason': 'invalid_source_light_value', 'issue': str(error)})
+        return records_out, {'collection_actors': len(collections),
+                             'components': len(unique),
+                             'membership_errors': membership_errors}
+
     def lighting_manifest(self, levels):
         """Export the decoded Sanctuary light actors and explicitly unresolved inputs."""
         manifest = {'status': 'partial_unverified', 'source_levels': list(levels),
@@ -1965,6 +2290,10 @@ class Scene:
                                                  'spot_components': 0},
                     'light_component_owners': {'PointLightComponent': {},
                                                'SpotLightComponent': {}},
+                    'static_light_import': {'status': 'not decoded', 'components': [],
+                                             'selection_policy': SANCTUARY_LIGHT_SELECTION,
+                                             'counts': {'source_components': 0, 'imported': 0,
+                                                        'skipped': 0, 'skip_reasons': {}}},
                     'issues': []}
 
         def read_properties(level, record, offset):
@@ -2090,6 +2419,47 @@ class Scene:
         if manifest['directional_light'] is not None and manifest['directional_light'].get('component_error'):
             manifest['issues'].append({'source': manifest['directional_light']['source'] + ':LightComponent',
                                        'error': manifest['directional_light']['component_error']})
+        if manifest['static_light_collections']['actors']:
+            try:
+                class_defaults = self.light_component_class_defaults()
+                source_components = []
+                membership = []
+                for level in levels:
+                    rows = self.load(level)
+                    if not any(row['class'].rsplit('.', 1)[-1] == 'StaticLightCollectionActor'
+                               and row['path'].startswith('TheWorld.PersistentLevel.')
+                               for row in rows.values()):
+                        continue
+                    level_components, level_membership = self.static_light_collection_records(
+                        level, rows, class_defaults, manifest['issues'])
+                    source_components.extend(level_components)
+                    membership.append({'level': level, **level_membership})
+                selected_components, counts = select_sanctuary_light_components(source_components)
+                expected_count = (manifest['static_light_collections']['point_components']
+                                  + manifest['static_light_collections']['spot_components'])
+                if len(source_components) != expected_count:
+                    manifest['issues'].append({
+                        'source': 'StaticLightCollectionActor.LightComponents',
+                        'error': f'Component arrays decoded {len(source_components)} of {expected_count} counted components'})
+                manifest['static_light_import'] = {
+                    'status': 'partial_unverified',
+                    'policy': 'collection_light_decode_threshold_spatial_quota_cap_v1',
+                    'selection_policy': SANCTUARY_LIGHT_SELECTION,
+                    'membership': membership,
+                    'counts': counts,
+                    'skip_reason_counts': dict(sorted(Counter(
+                        item.get('skip_reason') for item in selected_components
+                        if item.get('skip_reason')).items())),
+                    'class_default_sources': [
+                        'Engine:Default__LightComponent',
+                        'Engine:Default__PointLightComponent',
+                        'Engine:Default__SpotLightComponent'],
+                    'class_defaults_used_only_for_standard_point_spot_archetypes': True,
+                    'components': selected_components,
+                }
+            except (ValueError, KeyError, TypeError) as error:
+                manifest['issues'].append({'source': 'StaticLightCollectionActor.LightComponents',
+                                           'error': str(error)})
         return manifest
 
     def build(self, persistent):

@@ -8,10 +8,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'host' / 'ue5'))
 import prepare_level as prepare
 from scene_import_rules import (temporary_sky_policy, ue3_color_linear,
+                                SANCTUARY_GRAFITTO_INK_COLOR,
+                                SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING,
+                                SANCTUARY_GRAFITTO_INK_OPACITY_GAIN,
+                                SANCTUARY_LIGHT_BRIGHTNESS_CEILING,
+                                SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE,
+                                SANCTUARY_WORLD_MAP_PALETTE,
                                 ue3_decal_dimensions_to_ue5,
+                                ue3_grafitto_dimensions_to_ue5,
+                                ue3_grafitto_projection_to_ue5,
                                 ue3_directional_brightness_to_ue5,
                                 ue3_sky_light_color_to_ue5,
-                                ue3_world_post_process_to_ue5)
+                                ue3_world_post_process_to_ue5,
+                                sanctuary_grafitto_opacity,
+                                sanctuary_light_calibration,
+                                sanctuary_world_map_color)
 
 
 def property_tags(**values):
@@ -57,6 +68,10 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
                 'emissive_calibration_evidence': 'synthetic matched frame',
                 'emissive_layers': [{'texture': 'Synthetic:Swirl', 'channel': 'RGB',
                                      'color': [0.1, 0.5, 1.0], 'srgb': True}],
+                'mask_texture': 'Synthetic:MapMask',
+                'mask_channels': {'land': 'R', 'grid': 'G', 'markers': 'B'},
+                'palette': {'background': [0.1, 0.2, 0.3], 'land': [0.2, 0.3, 0.4],
+                            'grid': [0.01, 0.02, 0.03], 'markers': [0.04, 0.05, 0.06]},
                 'omitted': ['synthetic graph'], 'issue': 'UNVERIFIED synthetic approximation',
             },
         }
@@ -65,14 +80,19 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
             identities = {('Synthetic', 1): 'Synthetic:Panel',
                           ('Synthetic', 2): 'Synthetic:Base',
                           ('Synthetic', 3): 'Synthetic:Banner',
-                          ('Synthetic', 4): 'Synthetic:Swirl'}
+                          ('Synthetic', 4): 'Synthetic:Swirl',
+                          ('Synthetic', 5): 'Synthetic:MapMask'}
             scene.identity = lambda key: identities[key]
-            scene.load = lambda package: {i: {'class': 'Engine.Texture2D'} for i in (3, 4)}
+            scene.load = lambda package: {i: {'class': 'Engine.Texture2D'} for i in (3, 4, 5)}
             scene.texture = lambda key, channel: f'{key[1]}_{channel}.png'
             result = scene.inspected_scene_material_recipe(
-                ('Synthetic', 1), ('Synthetic', 1), [('Synthetic', 3), ('Synthetic', 4)])
+                ('Synthetic', 1), ('Synthetic', 1), [('Synthetic', 3), ('Synthetic', 4), ('Synthetic', 5)])
             self.assertEqual(result['diffuse'], '3_diffuse.png')
             self.assertEqual(result['emissive_layers'][0]['file'], '4_recipe_emissive_layers_0.png')
+            self.assertEqual(result['mask_texture_file'], '5_recipe_mask.png')
+            self.assertEqual(result['mask_texture_source'], 'Synthetic:MapMask')
+            self.assertEqual(result['mask_channels'], {'land': 'R', 'grid': 'G', 'markers': 'B'})
+            self.assertEqual(result['palette']['background'], [0.1, 0.2, 0.3])
             self.assertEqual(result['emissive_layers'][0]['color'], [0.2, 1.0, 2.0])
             self.assertEqual(result['emissive_calibration']['scale'], 2.0)
             with self.assertRaisesRegex(ValueError, 'inspected base material'):
@@ -114,7 +134,7 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
             4: {'index': 4, 'path': 'World.HeightFog_0.Component', 'class': 'Engine.HeightFogComponent'},
             5: {'index': 5, 'path': 'World.PostProcessVolume_0', 'class': 'Engine.PostProcessVolume'},
             6: {'index': 6, 'path': 'World.WorldInfo_0', 'class': 'Engine.WorldInfo'},
-            7: {'index': 7, 'path': 'World.StaticLightCollectionActor_0',
+            7: {'index': 7, 'path': 'TheWorld.PersistentLevel.StaticLightCollectionActor_0',
                 'class': 'Engine.StaticLightCollectionActor'},
             8: {'index': 8, 'path': 'World.PointLightComponent_0', 'class': 'Engine.PointLightComponent', 'outer': 7},
             9: {'index': 9, 'path': 'World.SpotLightComponent_0', 'class': 'Engine.SpotLightComponent', 'outer': 7},
@@ -150,6 +170,15 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         scene.resolve = lambda level, reference: (level, reference['index'])
         scene.anchored_properties = lambda package, index, anchor, required: (
             17, {'Brightness': 1.75, 'LightColor': {'R': 255, 'G': 192, 'B': 128, 'A': 255}}, [])
+        scene.light_component_class_defaults = lambda: {}
+        scene.static_light_collection_records = lambda level, package_rows, defaults, issues: ([
+            {'source': 'SyntheticLevel:PointLightComponent_0', 'kind': 'Point',
+             'status': 'candidate', 'position': [0.0, 0.0, 0.0], 'radius': 256.0,
+             'brightness': 1.0, 'light_color_rgb': [1.0, 0.5, 0.25]},
+            {'source': 'SyntheticLevel:SpotLightComponent_0', 'kind': 'Spot',
+             'status': 'candidate', 'position': [2000.0, 0.0, 0.0], 'radius': 512.0,
+             'brightness': 0.5, 'light_color_rgb': [0.2, 0.8, 1.0]},
+        ], {'collection_actors': 1, 'components': 2, 'membership_errors': []})
 
         def call(level, *args):
             index = int(args[1])
@@ -171,6 +200,9 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         self.assertEqual(result['world_info'][0]['default_post_process_settings']['Bloom_Scale'], 1.5)
         self.assertEqual(result['static_light_collections'], {
             'actors': 1, 'point_components': 1, 'spot_components': 1})
+        self.assertEqual(result['static_light_import']['counts']['imported'], 2)
+        self.assertEqual([item['status'] for item in result['static_light_import']['components']],
+                         ['selected', 'selected'])
         self.assertEqual(result['placed_actor_counts']['SkyLightToggleable'], 1)
         self.assertEqual(result['placed_actor_counts']['HeightFog'], 1)
         self.assertEqual(result['placed_actor_counts']['PostProcessVolume'], 1)
@@ -281,21 +313,119 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
             {2: {'properties': property_tags(DecalMaterial={'index': 3},
                                              Width=500, Height=400, HitNormal={'X': 0, 'Y': -1, 'Z': 0},
                                              HitBinormal={'X': 0, 'Y': 0, 'Z': 1})}})
+        allowlisted_source = 'Sanctuary_P:Prop_Decals.DMat_GrafittoBurrito'
+        material_identity = [allowlisted_source]
         scene.resolve = lambda package, ref: ((package, ref['index']) if ref.get('index') == 2
-                                              else ('SyntheticMat', ref['index']))
-        scene.identity = lambda key: f'{key[0]}:DecalMaterial'
+                                              else ('Sanctuary_P', ref['index']))
+        scene.identity = lambda key: material_identity[0] if key[0] == 'Sanctuary_P' else f'{key[0]}:DecalMaterial'
         scene.filename = lambda key, suffix: 'synthetic_decal'
         scene.decal_material_definition = lambda key: ('synthetic_decal', {
-            'status': 'partial_unverified', 'source': 'SyntheticMat:DecalMaterial',
-            'method': 'single_texture_deferred_decal_v1'})
+            'status': 'partial_unverified', 'source': allowlisted_source,
+            'method': 'grafitto_dark_ink_deferred_decal_v1'})
         result = scene.decals_manifest(['SyntheticLevel'])
         self.assertEqual(result['census'], {
             'actors': 1, 'components': 1, 'supported_import_candidates': 1,
-            'unsupported': 0, 'unique_materials': 1, 'supported_materials': 1,
+            'excluded_import_candidates': 0, 'unsupported': 0, 'unique_materials': 1,
+            'supported_materials': 1, 'excluded_materials': 0,
             'unresolved_materials': 0})
         self.assertEqual(result['actors'][0]['dimensions']['width'], 500.0)
         self.assertEqual(result['actors'][0]['projection_basis']['HitNormal'], [0.0, -1.0, 0.0])
         self.assertEqual(result['actors'][0]['status'], 'partial_unverified')
+
+        scene.decal_material_definition = lambda key: ('synthetic_noise', {
+            'status': 'partial_unverified', 'source': 'SyntheticMat:NoiseMaterial',
+            'method': 'single_texture_deferred_decal_v1'})
+        material_identity[0] = 'SyntheticMat:NoiseMaterial'
+        denied = scene.decals_manifest(['SyntheticLevel'])
+        self.assertEqual(denied['census']['supported_import_candidates'], 0)
+        self.assertEqual(denied['census']['excluded_import_candidates'], 1)
+        self.assertEqual(denied['census']['supported_materials'], 0)
+        self.assertEqual(denied['census']['excluded_materials'], 1)
+        self.assertEqual(denied['actors'][0]['status'], 'excluded_default_deny')
+        self.assertIn('round-3 default-deny', denied['actors'][0]['exclusion_reason'])
+
+    def test_graffito_mask_and_projection_are_tightly_calibrated(self):
+        self.assertEqual(sanctuary_grafitto_opacity([1.0, 1.0, 1.0]), 0.0)
+        self.assertEqual(sanctuary_grafitto_opacity([0.0, 0.0, 0.0]), 1.0)
+        self.assertEqual(sanctuary_grafitto_opacity([0.6, 0.6, 0.6]), 0.0)
+        self.assertEqual(SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING, 0.55)
+        self.assertEqual(SANCTUARY_GRAFITTO_INK_OPACITY_GAIN, 6.0)
+        self.assertEqual(SANCTUARY_GRAFITTO_INK_COLOR, (0.001, 0.003, 0.008))
+        self.assertEqual(ue3_grafitto_dimensions_to_ue5({
+            'width': 500, 'height': 400, 'thickness': 10,
+            'near_plane': 0, 'far_plane': 300}), [64.0, 250.0, 200.0])
+        self.assertEqual(ue3_grafitto_dimensions_to_ue5({
+            'width': 500, 'height': 400, 'thickness': 10,
+            'near_plane': 0, 'far_plane': 806}), [64.0, 250.0, 200.0])
+        location, forward = ue3_grafitto_projection_to_ue5(
+            [100.0, 200.0, 300.0], [0.0, -1.0, 0.0], {
+                'width': 500, 'height': 400, 'thickness': 10,
+                'near_plane': 0, 'far_plane': 300})
+        self.assertEqual(location, [100.0, 264.0, 300.0])
+        self.assertEqual(forward, [0.0, -1.0, 0.0])
+        with self.assertRaises(ValueError):
+            sanctuary_grafitto_opacity([1.2, 0.0, 0.0])
+        with self.assertRaises(ValueError):
+            ue3_grafitto_projection_to_ue5([0, 0, 0], [0, 0, 0], {
+                'width': 100, 'height': 100, 'thickness': 10,
+                'near_plane': 0, 'far_plane': 100})
+
+    def test_world_map_palette_has_cyan_backing_and_dark_mask_channels(self):
+        palette = prepare.INSPECTED_SCENE_MATERIAL_RECIPES[
+            'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap']['palette']
+        for masks, expected in (([0.0, 0.0, 0.0], palette['background']),
+                                ([1.0, 0.0, 0.0], palette['land']),
+                                ([0.0, 1.0, 0.0], palette['grid']),
+                                ([0.0, 0.0, 1.0], palette['markers'])):
+            for actual_channel, expected_channel in zip(sanctuary_world_map_color(masks), expected):
+                self.assertAlmostEqual(actual_channel, expected_channel, places=7)
+        self.assertGreater(palette['background'][2], palette['background'][0])
+        self.assertLess(palette['grid'][1], palette['land'][1])
+        self.assertGreater(palette['land'][1] - palette['background'][1], 0.3)
+        self.assertLess(palette['markers'][1], palette['background'][1] * 0.1)
+        self.assertEqual({key: tuple(value) for key, value in palette.items()},
+                         SANCTUARY_WORLD_MAP_PALETTE)
+        with self.assertRaises(ValueError):
+            sanctuary_world_map_color([0.0, float('nan'), 0.0])
+
+    def test_static_light_selection_enforces_thresholds_spatial_quota_and_global_cap(self):
+        candidates = [
+            {'source': 'same-a', 'kind': 'Point', 'status': 'candidate', 'position': [0, 0, 0],
+             'radius': 256.0, 'brightness': 10.0, 'light_color_rgb': [1.0, 1.0, 1.0]},
+            {'source': 'same-b', 'kind': 'Point', 'status': 'candidate', 'position': [1, 0, 0],
+             'radius': 256.0, 'brightness': 9.0, 'light_color_rgb': [1.0, 1.0, 1.0]},
+            {'source': 'same-c', 'kind': 'Point', 'status': 'candidate', 'position': [2, 0, 0],
+             'radius': 256.0, 'brightness': 8.0, 'light_color_rgb': [1.0, 1.0, 1.0]},
+            {'source': 'small', 'kind': 'Point', 'status': 'candidate', 'position': [0, 5000, 0],
+             'radius': 64.0, 'brightness': 1.0, 'light_color_rgb': [1.0, 1.0, 1.0]},
+            {'source': 'unsupported', 'kind': 'Spot', 'status': 'unsupported',
+             'skip_reason': 'missing_values'},
+        ]
+        candidates.extend(
+            {'source': f'grid-{index:03d}', 'kind': 'Point', 'status': 'candidate',
+             'position': [index * 2000.0, 50000.0, 0.0], 'radius': 256.0,
+             'brightness': 1.0, 'light_color_rgb': [1.0, 1.0, 1.0]}
+            for index in range(130))
+        result, counts = prepare.select_sanctuary_light_components(candidates)
+        self.assertEqual(counts['source_components'], 135)
+        self.assertEqual(counts['imported'], 128)
+        self.assertEqual(counts['skipped'], 7)
+        by_source = {item['source']: item for item in result}
+        self.assertEqual(by_source['same-a']['status'], 'selected')
+        self.assertEqual(by_source['same-b']['status'], 'selected')
+        self.assertEqual(by_source['same-c']['skip_reason'], 'spatial_cell_quota')
+        self.assertEqual(by_source['small']['skip_reason'], 'below_radius_or_brightness_threshold')
+        self.assertEqual(by_source['unsupported']['skip_reason'], 'missing_values')
+        self.assertEqual(counts['skip_reasons']['global_cap'], 4)
+        self.assertEqual(sanctuary_light_calibration('Point', 2.0), 50.0)
+        self.assertEqual(sanctuary_light_calibration('Spot', 2.0), 50.0)
+        self.assertEqual(sanctuary_light_calibration('Point', 40.0),
+                         SANCTUARY_LIGHT_BRIGHTNESS_CEILING * 25.0)
+        self.assertEqual(sanctuary_light_calibration('Point', 40.0, [1.0, 0.44, 0.0]),
+                         SANCTUARY_LIGHT_BRIGHTNESS_CEILING * 25.0
+                         * SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE)
+        self.assertEqual(sanctuary_light_calibration('Spot', 40.0, [1.0, 0.44, 0.0]),
+                         SANCTUARY_LIGHT_BRIGHTNESS_CEILING * 25.0)
 
     def test_decal_like_mesh_candidates_stay_on_verified_mesh_path(self):
         old = prepare.DECAL_LIKE_STATIC_MESH_IDENTITIES
