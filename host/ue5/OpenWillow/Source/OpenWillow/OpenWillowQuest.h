@@ -64,6 +64,11 @@ public:
     //  - Behavior_Transform: WillowAIPawn.TransformType and the target name it selects (GetTargetName).
     bool IsRegisteredTargetable(const AActor* Actor) const;
     FString DummyTargetName() const;
+    // The mission's minimap icons (OpenWillowMinimap): Marcus's "eligible" mark before the mission is accepted and its
+    // "turnin" mark once it is ready to turn in, and an "objective" mark on the active objective: the stock range
+    // cylinder for GoToRange, the dummy for Fire. Which actor the game's objective marker follows for this mission was
+    // not observed (UNVERIFIED); the kinds are tools/hud_overlay/minimap.js's.
+    void MinimapMarkers(TArray<TPair<FString, FVector>>& Out) const;
 
 private:
     struct FImpl;

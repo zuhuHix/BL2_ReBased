@@ -1,4 +1,5 @@
 #include "OpenWillowMayaHUD.h"
+#include "OpenWillowMinimap.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryVm.h"
@@ -943,7 +944,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     const int32 Level = Skills ? Skills->GetLevel() : 1;
     float SkillActive = -1.f, SkillCooldown = 0.f;
     ActionSkillHudState(Maya, SkillActive, SkillCooldown);
-    const FString State = FString::Printf(
+    FString State = FString::Printf(
         TEXT("{\"character\":6,\"skillIcon\":\"/ package/UI_HUD_AAIcons/AA-Siren\",\"health\":%.3f,\"shield\":%s,\"healthText\":\"%d\",\"shieldText\":\"%s\","
              "\"xp\":%.3f,\"levelText\":\"%02d\",\"grenades\":%s,\"grenadeText\":\"%s\",\"weaponOut\":%s,\"weaponType\":\"%s\",\"ammo\":%.3f,\"ammoText\":\"%s\","
              "\"skillActive\":%s,\"skillCooldown\":%.2f}"),
@@ -973,6 +974,8 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
         UE_LOG(LogTemp, Display, TEXT("OWHUDSTATE %s"), *HudLine);
         LastHudStateLine = HudLine;
     }
+    const FString Minimap = PlayerOwner ? OpenWillowMinimap::StateField(Maya, *PlayerOwner) : FString();
+    if (!Minimap.IsEmpty()) State = State.LeftChop(1) + TEXT(",\"minimap\":") + Minimap + TEXT("}");
     // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
     // (tools/check_action_skill_hud.py reads them).
     const FString SkillLine = FString::Printf(TEXT("active=%.2f cooldown=%.2f"), SkillActive, SkillCooldown);
@@ -1229,6 +1232,7 @@ void AOpenWillowMayaHUD::DrawHUD()
         if (bSkillHudShots && bFlashHudReady) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         static const bool bHudShots = FParse::Param(FCommandLine::Get(), TEXT("owhudshots"));
         if (bHudShots && bFlashHudReady) TickHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+        if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
         if (bFlashHudReady)
         {
