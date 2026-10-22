@@ -1087,7 +1087,8 @@ mixing rule remains **UNVERIFIED** for the bullymong. No colour vectors were gue
 
 ### Facing and remaining limitations
 
-The test pawn now faces the view at the 0-degree default, with `-owcombatpawyawoffset=<degrees>` retained as a capture
+The test pawn now faces the view at a 0-degree offset in Phaselock captures (`-owphaselockshots`; other `-owcombattest` runs keep
++180 so the stand-in's hit-reaction direction is unchanged), with `-owcombatpawyawoffset=<degrees>` retained as an
 override; the 1.50 s capture presents its torso toward the camera. The exact stock yaw rule and pose alignment remain
 **UNVERIFIED**, and the short screenshots do not settle whether the lift still reads too airborne. The HUD skill sigil is
 still excluded as a separate HUD lane. These are host-render captures only, not gameplay parity validation; an independent

@@ -52,12 +52,12 @@ def test_host_target_uses_component_scale_without_visual_fit():
 
 def test_host_target_prefers_live_mesh_scale_over_archetype_scale():
     target = {'dest': '/Game/X/Beast', 'skeletal_mesh': {'path': 'Char_Fake.Mesh.Skel_Fake'},
-              'mesh_component_properties': {'translation': {'Z': 0}, 'scale': 0.7},
+              'mesh_component_properties': {'translation': {'Z': 0}, 'scale': 0.4},
               'observed': {'collision_radius': 70.0, 'collision_height': 48.0, 'source': 'made up',
-                           'host_mesh_scale': 1.0, 'host_mesh_scale_source': 'measured live'}}
+                           'host_mesh_scale': 1.3, 'host_mesh_scale_source': 'synthetic override'}}
     host = t.host_target('Beast', target)
-    assert host['mesh_scale'] == 1.0
-    assert host['source']['mesh_scale'] == 'measured live'
+    assert host['mesh_scale'] == 1.3
+    assert host['source']['mesh_scale'] == 'synthetic override'
 
 
 def test_roles_keep_the_host_naming():
