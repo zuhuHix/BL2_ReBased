@@ -4841,9 +4841,11 @@ so its rules were read from the running game through the mod SDK (AI-assisted; r
 in the packages; one health machine is spawned another way), `tools/hud_overlay/minimap.js` maps the state to the
 clips (exact against 652 live values; the "N" within one twip), `OpenWillowMinimap.cpp` sends the state with the
 quest's markers (`UOpenWillowQuest::MinimapMarkers`; the marker's actor for this mission is UNVERIFIED). The panel's
-3D turn gets a least-squares affine stand-in in `minimap.js` because `hud3d.js` sized it from bounds inflated by hidden
-icon templates. Checked: node 15, Python 18 + 15 + 3, in-engine 15/15, action-skill suite 19/19, CTest 10/10, packages 9/9;
-critic 7.5 then 8.0/10. Not done: the true perspective trapezoid (after the HUD-parity warp lands), threats, allies,
+3D turn is drawn by PR #54's perspective warp over the panel's own rectangle (the clip's visible children include the
+movie's parked library icons); without the warp a least-squares affine stand-in in `minimap.js` replaces `hud3d.js`'s,
+which sized it from bounds inflated by those templates. Checked after rebasing onto #54: node 16, Python 19 + 15 + 3,
+in-engine 15/15, action-skill suite 19/19, HUD shots 16/16, CTest 10/10, packages 9/9; critic 7.5, 8.0 (affine), 8.2/10
+(warp). Not done: threats, allies,
 vehicles, fog state other than "not uncovered", the absolute-minimap option, the full-screen map. Review 1: the
 capture script and the prep tool refuse output paths outside the ignored folders (game data cannot be written into
 tracked folders), and the in-engine checker requires each capture spot exactly once.

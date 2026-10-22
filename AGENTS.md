@@ -122,7 +122,8 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   `docs/verification/HUD_PARITY.md`.
 - **HUD minimap (2026-10-22):** BL2's own minimap clip shows Sanctuary's tactical map movie, turned with the view,
   with station icons from stock data and the slice mission's markers; rules read from the live game (exact against
-  652 live values), in-engine 15/15, critic 8.0/10 (open: the panel's perspective trapezoid, border glow).
+  652 live values), drawn through the HUD's perspective warp; in-engine 15/15, critic 8.2/10 (open: 2-4 px panel and
+  map registration, rim halo).
   `docs/verification/HUD_MINIMAP.md`.
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object

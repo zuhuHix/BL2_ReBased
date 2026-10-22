@@ -180,4 +180,29 @@ test('placeEcho: the nested clips reproduce the fitted projection of the panel',
   assert.ok(tr < tl, 'top edge rises to the right');
 });
 
+test('warpClips: the warp gets the panel own rectangle for minimapEcho, others untouched', () => {
+  const values = {
+    '_level1.p1.minimapEcho': {_x: 980, _y: 74, _xscale: 90, _yscale: 100},
+    [mm.MM]: {_x: -58, _y: 3.5}, [mm.MM + '.mapmask']: {_x: 0, _y: -0.25},
+  };
+  const call = (t, op, a) => {
+    if (op === 'get') return (values[t] || {})[a] ?? 0;
+    if (op === 'apply' && a === 'getBounds') return {xMin: -58, xMax: 58, yMin: -48, yMax: 48};
+  };
+  const origin = {x: 216, y: 30};
+  // readClips' union of visible children reaches the parked library icons far right of and above the panel.
+  const clips = [{name: 'health', a: 25, ox: 300, rect: [1, 2, 3, 4]},
+    {name: 'minimapEcho', a: -20, ox: 1196, rect: [1100, -120, 1750, 180]}];
+  const out = mm.warpClips(clips, call, '_level1.p1', origin);
+  assert.deepStrictEqual(out[0], clips[0]);
+  assert.strictEqual(out[1].a, -20); assert.strictEqual(out[1].ox, 1196);
+  const [x0, y0, x1, y1] = out[1].rect;
+  near(x0, 216 + 980 + 0.9 * (-58 - 58 - 14), 1e-9, 'left');
+  near(x1, 216 + 980 + 0.9 * (-58 + 58 + 14), 1e-9, 'right');
+  near(y0, 30 + 74 + (3.5 - 0.25 - 48 - 26), 1e-9, 'top (room for the N marker)');
+  near(y1, 30 + 74 + (3.5 - 0.25 + 48 + 14), 1e-9, 'bottom');
+  // No mask bounds (movie not ready): the reader's rectangle is kept.
+  assert.deepStrictEqual(mm.warpClips(clips, () => null, '_level1.p1', origin)[1].rect, clips[1].rect);
+});
+
 console.log(`${passed} passed`);

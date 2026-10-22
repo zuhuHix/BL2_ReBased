@@ -72,12 +72,15 @@ object at the 1/125 scale (12 objects; mission-giver and objective icons come fr
   machine at (8388, -4248), spawned by something other than a population point (not traced).
 * `tools/hud_overlay/minimap.js` turns the host state into clip calls with the rules above, through the movie's own
   `setMapMovie` and `toggleFogOfWarBlob`, attaches the icons from the movie's library, and logs `OWMINIMAPPAGE` lines
-  with values read back from the clips. It also re-projects `minimapEcho` for the 3D-turn stand-in (`hud3d.js`): that
-  stand-in sizes a turned clip from `getBounds`, which counts the hidden icon templates (the game reads
-  `minimap._width` 731 too) and put the panel about 30 px too far right and high. `placeEcho` uses the map mask's
-  extent and a least-squares 2D affine map of the same projection over a 5 x 5 grid (worst residual 1.3 px), split
-  into `minimapEcho`'s rotation and scale and a rotation of the `minimap` inside it, so the panel's top edge slants as
-  in the game (a true trapezoid is not possible in a 2D player).
+  with values read back from the clips. The panel's 3D turn (`_yrotation` -20) is drawn by the HUD's perspective warp
+  (`hud_warp.js`, from PR #54) like the other turned clusters: `warpClips` gives the warp the panel's own rectangle
+  (the map mask plus room for edge icons and the "N" marker), because the union of the clip's visible children reaches
+  the movie's parked library icons (fastTravel, customize, newMission, ... are not hidden by the movie's
+  `HideAllIcons`) about 400 px to the right and 190 px above. Without the warp (no readable WebGL canvas, or
+  `?hud3d=affine`), `placeEcho` stands in: the same projection fitted as a least-squares 2D affine map over a 5 x 5
+  grid on the mask (worst residual 1.3 px), split into `minimapEcho`'s rotation and scale and a rotation of the
+  `minimap` inside it; `hud3d.js`'s own stand-in sized the panel from `getBounds`, inflated by those templates, and put
+  it about 30 px off.
 * `OpenWillowMinimap.cpp` sends `{movie, centre, blobs, x, y, yaw, icons}` with the view yaw and the pawn location,
   plus the quest's markers (`UOpenWillowQuest::MinimapMarkers`: Marcus "eligible" before accept, "turnin" when ready,
   "objective" on the range cylinder then the dummy; which actor the game's marker follows for this mission is
@@ -90,9 +93,10 @@ health machine 3 and the level-travel and turn-in icons' symbols.
 
 ## Checks
 
-* `node tests/hud_minimap_test.js` (15): the rules as plain arithmetic, names, clamping and hiding, objective scale,
-  the call economy of `plan`, fog calls, the affine split and `placeEcho`'s nested clips against the projection.
-* `python tests/check_hud_minimap_test.py` (18) and `python tests/prepare_minimap_test.py` (15): the log checker's pass and
+* `node tests/hud_minimap_test.js` (16): the rules as plain arithmetic, names, clamping and hiding, objective scale,
+  the call economy of `plan`, fog calls, the affine split and `placeEcho`'s nested clips against the projection, and
+  the warp rectangle `warpClips` gives the warp.
+* `python tests/check_hud_minimap_test.py` (19) and `python tests/prepare_minimap_test.py` (15): the log checker's pass and
   failure paths with synthetic logs and PNGs (including review 1's case: the shots must cover each capture spot once,
   under distinct files; eight shots of one spot fail); PlaceObject name parsing, fog blob names, volume centre and the
   population chain with fake readers; the tool's outputs refused outside the repository's `local/`.
@@ -111,21 +115,22 @@ health machine 3 and the level-travel and turn-in icons' symbols.
   8 shots at their spots and states, read back from the movie; 8 complete 1280x720 captures showing the panel (cyan map
   lines) and the arrow (gold) at its centre.
 
-## Results (2026-10-22, this PC)
+## Results (2026-10-22, this PC; after rebasing onto PR #54)
 
-* In-engine: 15/15 (worst map position 0.062 units, rotation 0.000 degrees, "N" 0.054 units).
-* `tools/test_action_skill_hud.ps1` with the minimap hooks: 19/19.
+* In-engine: 15/15 (worst map position 0.062 units, rotation 0.000 degrees, "N" 0.054 units); the page took the warp
+  path ("3D path warp: Ruffle webgl2", warp regions including `minimapEcho`).
+* `tools/test_action_skill_hud.ps1`: 19/19; PR #54's `tools/run_hud_shots.ps1` with the minimap present: 16/16.
 * Visual (independent critic, GPT-6-Luna, host and real 1280x720 frames at eight matched spots and yaws, crops at 3x;
-  frames under ignored `local/minimap/pairs_r1`, `pairs_r2`, reports `critic_r1`, `critic_r2`): round 1 **7.5/10**
-  (panel a level rectangle where the game's slants: its top edge rises 8-12 px to the right, the right side 6-10 px
-  taller); round 2, with the affine fit, **8.0/10** (top edge rise 8 px against 11 px). Remaining, ranked: the
-  trapezoid itself (needs a true perspective warp, below), the cyan border and halo about 1 px thicker with 2-4 px more
-  glow (Ruffle's rendering of the movie's own art and filters, as in the action-skill record), the plate 10-15 %
-  lighter by eye, and map strokes and icons within 2-4 px (the affine fit's error, worst residual 1.3 px). The plate is
-  translucent: measured, it is 49.5 luma over black in a browser, 61.8 in the game over a background of 12 and 69.6 in
-  the host over 30.9, so most of that gap is the brighter host world behind it (Sanctuary lighting lane), not the
-  minimap. Mission icons differ by design (the real save is on "Plan B").
-* Next step, not done here: the parallel HUD lane's perspective warp (`hud_warp.js`, branch `feature/hud-parity`)
-  draws true perspective for the other turned clusters but leaves `minimapEcho` on the affine stand-in. Once it is on
-  main, letting the warp draw `minimapEcho` over the map mask's extent (not `getBounds`, which counts the hidden icon
-  templates) should close the trapezoid and the residual alignment; `placeEcho` then has to be skipped.
+  frames under ignored `local/minimap/pairs_r1..r3`, reports `critic_r1..r3`):
+  * round 1 **7.5/10**: the panel a level rectangle where the game's slants (top edge rising 8-12 px to the right,
+    right side 6-10 px taller);
+  * round 2, with the affine fit, **8.0/10** (top edge rise 8 px against 11 px, no trapezoid);
+  * round 3, through the perspective warp, **8.2/10**: a true trapezoid, top edge rise about 10 px against 11 px, no
+    seam, clipped glow, doubled pixels or cut-off "N" or edge icon.
+  Remaining, ranked: the panel about 2-4 px high and its right edge about 3 px left; map strokes and icons within 2-4 px
+  with slight softening from the warp's resampling; the rim halo 1-2 px wider at the bright corners (Ruffle's rendering
+  of the movie's filters). The plate is translucent: measured, 49.5 luma over black in a browser, 61.8 in the game over
+  a background of 12 and 69.6 in the host over 30.9, so its brightness gap comes mostly from the brighter host world
+  behind it (Sanctuary lighting lane), not the minimap. Mission icons differ by design (the real save is on "Plan B").
+  The panel offset follows the warp's projection model (F / D = 1.095 fitted, UNVERIFIED in `hud3d.js`), shared with
+  the other clusters.
