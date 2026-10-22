@@ -93,17 +93,23 @@ Gunzerker dual wield or vehicles.
 
 * `node tests/hud_action_skill_test.js`: the mapping over a synthetic cast against the formulas above (within one
   frame) and the call economy.
-* `python tests/check_action_skill_hud_test.py`: the log checker on synthetic logs, including its failure paths (no page
-  read-back, the icon not following the state, bar frames off, a missing capture, a run that never finished its shots).
+* `python tests/check_action_skill_hud_test.py`: the log checker on synthetic logs and generated PNGs, including its
+  failure paths (no page read-back, the icon not following the state, the bar two frames late, a read-back state the host
+  never sent, missing, empty or wrong-size captures, blank captures, the indicator in the wrong state, a run that never
+  finished its shots, no `--shots`).
 * `tools/test_action_skill_hud.ps1`: the in-engine run and `tools/check_action_skill_hud.py` on its log, in three groups.
-  Host state (`OWSKILLHUD` lines): cast logged, ready before the cast, pool full at the cast and held while the emblem
-  shows, emblem on at 0.70 s and off at 5.70 s within 0.15 s, emblem draining, drain rate 1 pool-second per second
-  within 3 %, ready again at 18.73 s within 0.3 s. Movie (`OWSKILLPAGE` lines: after each change the page reads
-  `_currentframe` back from the emblem, its bar and the icon clip, and the host logs the page console): at least 20
-  read-backs, the emblem drawn with its bar from full (frame 5 or less) to empty (95 or more), icon frames 2, 50-99 and a
-  final 100, and 95 % of read-backs within a frame of one of the six latest state lines. Captures: all 47 scheduled
-  `OWSkillHud_*.png` written by this run and `OWSKILLHUDSHOTS done` logged. A run that has not exited within the timeout
-  fails without running the checker. What the captures look like is judged by the critic, not by this check.
+  Host state (`OWSKILLHUD` lines, quantized to 1/100, the clips' resolution, so they change only when a drawn frame can):
+  cast logged, ready before the cast, pool full at the cast and held while the emblem shows, emblem on at 0.70 s and off
+  at 5.70 s within 0.15 s, emblem draining, drain rate 1 pool-second per second within 3 %, ready again at 18.73 s
+  within 0.3 s. Movie (`OWSKILLPAGE` lines: after each change the page logs the state it applied and `_currentframe` read
+  back from the emblem, its bar and the icon clip; the host logs the page console): every read-back's frames equal the
+  frames that state maps to, every echoed state is one the host logged (so no lag allowance is needed), at least 20
+  read-backs, the emblem bar from full (5 or less) to nearly empty (90 or more: a capture stall near the end can skip the last values), icon frames 2, 50-99 and a final 100.
+  Captures (`--shots`, required for a PASS; without it the result is PARTIAL, exit 2): all 47 scheduled `OWSkillHud_*.png`
+  of this run exist as 1280x720 PNG files, `OWSKILLHUDSHOTS done` is logged, and three of them, decoded with zlib only,
+  show the indicator by colour counts in fixed screen boxes: green icon and no magenta emblem before the cast, gold
+  icon and magenta emblem at +2.5 s, red icon and no emblem at +12 s. A run that has not exited within the timeout fails
+  without running the checker. How close the captures look to the game is judged by the critic, not by this check.
 
 ## Results (2026-10-22, this PC)
 
@@ -112,6 +118,10 @@ Gunzerker dual wield or vehicles.
   (game 18.73 s).
 * With the movie read-back and capture checks (review round 1): 15/15. 175 read-backs, all within a frame of the host
   state; emblem bar seen from frame 1 to 99, icon frames 2 to 100; 47 of 47 captures written.
+* Review round 2 (state quantized to 1/100, read-backs paired with their own state, captures decoded): 19/19. 169
+  read-backs, all equal to the frames of their state; 47 of 47 valid 1280x720 captures; colour counts before the cast
+  (icon green 970), at +2.5 s (icon gold 868, emblem magenta 1786) and at +12 s (icon red 215, no emblem). Quantizing
+  cut the run's state lines from 1178 to 172 (page pushes alike); the drain rate read 1.003 and ready 18.700 s.
 * Visual (independent critic, GPT-6-Luna, host and real frames at eight moments plus a drain strip; frames under ignored
   `local/laneC/pairs_r1`, `pairs_r2`): round 1 **7/10** (icon about 30 px right and 12 px high, emblem about 10 %
   narrower: the missing 3D layout); round 2, with `hud3d.js`, **9/10**. Remaining, ranked: the emblem's outer haze and
