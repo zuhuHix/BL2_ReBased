@@ -107,7 +107,7 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   fresh real-game captures (critic 7.27 before, 7.57-7.67 after). Open: the curved glass sheet, residual perspective,
   gear compare (not yet observed in the real game), white flavour lines on cards.
   Rounds 20-22 (2026-10-22) compare against matched real-game frames (same items, level 36, keyboard): card text lines and
-  rows from the parts, compare with the equipped analogue, Skills Up/Down, a glass-sheet stand-in (critic 5.95 baseline,
+  rows from the parts (cooked data: reload 62/67 and magazine 55/67 real cards, the two slice shotguns differ), compare with the equipped analogue, Skills Up/Down, a glass-sheet stand-in (critic 5.95 baseline,
   7.85 best; round 22 regressed and was not kept). Open: VALUE-sort thumbnails, BRANDS tie order, Inspect 3D turn.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
 - **Action-skill HUD (2026-10-22):** Maya's Phaselock icon (cooldown veil) and Siren emblem (drains while the target is

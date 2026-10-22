@@ -1316,4 +1316,4 @@ and clipped the Inspect hint. The page files are back at round 21.
 6. Number keys choose a weapon slot for a backpack transfer (a host control; the game's behaviour is not observed).
 
 Checks on the final state: inventory suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set; the first run
-failed step 20 and skipped seven, fixed by item 6 above), navigation 39/39, skill navigation 6/6, CTest 10/10, packages 9/9.
+failed step 20 and skipped seven, fixed by item 6 above), navigation 40/40 (after the PR review fix), skill navigation 6/6, CTest 10/10, packages 9/9.
