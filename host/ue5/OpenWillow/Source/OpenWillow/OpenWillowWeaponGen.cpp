@@ -151,6 +151,7 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     }
     Item.Material = FromUtf8(Result.material);
     Item.GestaltMesh = FromUtf8(Result.gestalt);
+    Item.WeaponType = FromUtf8(Result.weaponType);
     return Item;
 }
 
@@ -205,6 +206,7 @@ TSharedPtr<FJsonObject> ItemJson(const FOpenWillowWeaponItem& Item)
     Json->SetArrayField(TEXT("parts"), Parts);
     Json->SetStringField(TEXT("material"), Item.Material);
     Json->SetStringField(TEXT("gestalt"), Item.GestaltMesh);
+    Json->SetStringField(TEXT("weapon_type"), Item.WeaponType);
     return Json;
 }
 

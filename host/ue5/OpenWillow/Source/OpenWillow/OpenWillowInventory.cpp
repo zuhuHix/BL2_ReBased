@@ -135,6 +135,7 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
     }
     Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
     Recipe->TryGetStringField(TEXT("material"), Item.Material);
+    Recipe->TryGetStringField(TEXT("weapon_type"), Item.WeaponType);
     // `gestalt` is a path string in tools/weapon_recipe.py recipes; some recipe writers store {"path": ...}.
     const TSharedPtr<FJsonObject>* GestaltObject = nullptr;
     if (Recipe->TryGetObjectField(TEXT("gestalt"), GestaltObject)) (*GestaltObject)->TryGetStringField(TEXT("path"), Item.GestaltMesh);

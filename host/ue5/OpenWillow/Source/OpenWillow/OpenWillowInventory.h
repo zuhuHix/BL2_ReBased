@@ -99,6 +99,7 @@ struct FOpenWillowWeaponItem
     }
     FString Material;      // gestalt material object path (recipe `material`, generator `material`)
     FString GestaltMesh;   // gestalt mesh object path (recipe `gestalt`, generator `gestalt`), e.g. Weap_Pistol.GestaltDef_Pistol
+    FString WeaponType;    // WeaponTypeDefinition object path (recipe `weapon_type`, generator `weapon_type`); Type stays the card label
     bool bFavorite = false;
     bool bTrash = false;
     bool bFavoriteKnown = false;
