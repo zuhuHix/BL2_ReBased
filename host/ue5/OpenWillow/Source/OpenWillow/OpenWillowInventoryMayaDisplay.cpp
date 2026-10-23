@@ -1,5 +1,6 @@
 #include "OpenWillowInventoryMayaDisplay.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowWeaponAssembly.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PostProcessComponent.h"
@@ -95,12 +96,13 @@ void AOpenWillowInventoryMayaDisplay::SetPreviewWeapon(const FOpenWillowWeaponIt
     const FString RecipeId = Item ? Item->Id : FString();
     if (PreviewRecipeId == RecipeId || !bHasMeshes) return;
     PreviewRecipeId = RecipeId;
-    USkeletalMesh* Mesh = Item ? UOpenWillowInventory::LoadWeaponMesh(*Item) : nullptr;
+    USkeletalMesh* Mesh = Item ? OpenWillowWeaponAssembly::Show(Weapon, Item) : nullptr;
     UAnimSequence* Idle = LoadObject<UAnimSequence>(nullptr, Mesh ? *WeaponIdleAnimation : *IdleAnimation);
     // Missing armed animation must not put a weapon through the unarmed hand.
     if (Mesh && !Idle) Mesh = nullptr;
-    Weapon->SetSkeletalMesh(Mesh);
+    if (!Mesh) Weapon->SetSkeletalMesh(nullptr);
     WeaponOutline->SetSkeletalMesh(Mesh);
+    OpenWillowWeaponAssembly::CopyVisibility(Weapon, WeaponOutline);
     UMaterialInterface* Outline = Mesh && OutlineThicknessCm > 0.f ? LoadObject<UMaterialInterface>(nullptr, OutlinePath) : nullptr;
     WeaponOutline->SetVisibility(Outline != nullptr);
     if (Outline)

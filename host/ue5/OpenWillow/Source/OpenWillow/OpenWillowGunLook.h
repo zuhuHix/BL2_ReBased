@@ -27,6 +27,8 @@ FLook Current();
 // bSceneCapture: the mesh is shown by a SceneCapture (inventory preview), whose exposure is 4 times darker than the world camera's
 // (measured with the material's debug ramp), so the material's output scale is 1 instead of 0.25.
 void Apply(USkeletalMeshComponent* Mesh, bool bSceneCapture = false);
+// Sets the current look on one paint instance (the weapon assembly's shared instance, OpenWillowWeaponAssembly.cpp).
+void Configure(class UMaterialInstanceDynamic* Instance, bool bSceneCapture = false);
 // Sets the emissive gain of every paint material on Mesh to the look's value times (1 + Impulse): the weapon glow after shots.
 void SetGlow(USkeletalMeshComponent* Mesh, float Impulse);
 }

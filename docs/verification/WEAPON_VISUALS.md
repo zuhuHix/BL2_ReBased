@@ -401,3 +401,9 @@ Open, most visible first:
 - **Phaselock abort:** a successful lift cancels reload before playing the cast action, and reload cleanup clears arms only while the reload clip is
   still active. The host check kept the cast clip past the old reload deadline with the test-only `-owcastrate=0.4`; failed/blocked cast behavior
   remains unconfirmed in the original game and does not abort reload in the host.
+
+## 16. Part library and run-time assembly (2026-10-23)
+
+The per-recipe meshes of section 2 are now the fallback: guns are assembled at run time from their part lists on one library
+mesh per weapon type, with one material instance per skin. The fragment rule of section 2 and the material rule of
+NATIVE_WEAPON_VISUALS.md section 1 were checked on 39 more spawned guns. See [WEAPON_PART_ASSETS.md](WEAPON_PART_ASSETS.md).

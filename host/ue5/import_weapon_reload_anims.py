@@ -2,6 +2,9 @@
 
 OPENWILLOW_WEAPON_RELOAD_ANIMS is a semicolon-separated list of
 `recipe_id=local-json-path` pairs written by tools/weapon_reload_anims.py.
+With OPENWILLOW_WEAPON_RELOAD_TARGET=library the keys are weapon part library types (Pistol, SMG, ...) and the same
+tracks go onto the library gestalt's skeleton, /Game/OpenWillow/Weapons/Library/<Type>/Anims (the per-recipe meshes are
+cut from that gestalt, so bone names and bind pose are the same; OpenWillowWalker picks these when the gun is assembled).
 """
 import json
 import math
@@ -15,8 +18,13 @@ eal = unreal.EditorAssetLibrary
 root = f'{destination}/WeaponAnims'
 
 
+library = os.environ.get('OPENWILLOW_WEAPON_RELOAD_TARGET') == 'library'
+if library:
+    root = '/Game/OpenWillow/Weapons/Library'
+
+
 def import_one(recipe_id, json_path):
-    mesh = unreal.load_asset(f'{destination}/SK_{recipe_id}')
+    mesh = unreal.load_asset(f'{root}/{recipe_id}/SK_Gestalt_{recipe_id}' if library else f'{destination}/SK_{recipe_id}')
     if mesh is None:
         raise RuntimeError(f'{recipe_id}: weapon mesh is missing from {destination}')
     skeleton = mesh.get_editor_property('skeleton')
@@ -25,7 +33,7 @@ def import_one(recipe_id, json_path):
     animations = json.loads(Path(json_path).read_text(encoding='utf-8'))
     for clip, data in animations.items():
         name = f'Anim_WeaponReload_{clip}'
-        folder = f'{root}/{recipe_id}'
+        folder = f'{root}/{recipe_id}/Anims' if library else f'{root}/{recipe_id}'
         asset_path = f'{folder}/{name}'
         if eal.does_asset_exist(asset_path) and not eal.delete_asset(asset_path):
             raise RuntimeError(f'{recipe_id}: could not replace {asset_path}')
@@ -66,6 +74,20 @@ for pair in pairs:
     count += 1
 if count == 0:
     raise RuntimeError('OPENWILLOW_WEAPON_RELOAD_ANIMS is empty')
+if library and os.environ.get('OPENWILLOW_WEAPON_LIBRARY'):
+    # Remember what went onto the library skeletons: a meshes re-import (import_weapon_library.py) deletes each type's
+    # folder, Anims included, and tools/import_weapon_library.ps1 re-imports these clips afterwards from this record.
+    record = Path(os.environ['OPENWILLOW_WEAPON_LIBRARY']) / 'reloads.json'
+    known = json.loads(record.read_text(encoding='utf-8')) if record.exists() else {}
+    repo = Path(__file__).resolve().parents[2]
+    for pair in filter(None, os.environ.get('OPENWILLOW_WEAPON_RELOAD_ANIMS', '').split(';')):
+        kind, json_path = pair.split('=', 1)
+        # Repository-relative, so the record survives moving or re-provisioning the worktree (resolved again at import).
+        try:
+            known[kind] = Path(json_path).resolve().relative_to(repo).as_posix()
+        except ValueError:
+            known[kind] = json_path
+    record.write_text(json.dumps(known, indent=1), encoding='utf-8')
 if not eal.save_directory(root, only_if_is_dirty=False, recursive=True):
     raise RuntimeError(f'Could not save weapon animation folder {root}')
 unreal.log(f'OW_WEAPON_ANIMS imported={count}')

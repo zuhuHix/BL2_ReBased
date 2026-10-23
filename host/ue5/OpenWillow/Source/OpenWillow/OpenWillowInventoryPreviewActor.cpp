@@ -1,6 +1,7 @@
 #include "OpenWillowInventoryPreviewActor.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowGunLook.h"
+#include "OpenWillowWeaponAssembly.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/PointLightComponent.h"
@@ -82,17 +83,18 @@ bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FOpenWillowWeaponIte
 
     if (Item)
     {
-        if (USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(*Item))
+        OpenWillowWeaponAssembly::FReport Report;
+        if (OpenWillowWeaponAssembly::Show(PreviewWeapon, Item, true, &Report))
         {
-            PreviewWeapon->SetSkeletalMesh(Mesh);
-            OpenWillowGunLook::Apply(PreviewWeapon, true);
             PreviewWeapon->RefreshBoneTransforms();  // the component never ticks; a new mesh must not keep the old pose
             // Match the orientation used by the held weapon. Center the mesh
-            // and frame it from its own imported bounds so different gun
-            // lengths fit the same card.
-            PreviewWeapon->SetRelativeRotation(FRotator(0.f, 90.f, 0.f));
-            const FBoxSphereBounds Bounds = PreviewWeapon->GetLocalBounds();
-            PreviewWeapon->SetRelativeLocation(-Bounds.Origin);
+            // and frame it from its bounds so different gun lengths fit the
+            // same card: an assembled gun from its shown fragments (the mesh's
+            // own bounds hold the whole gestalt), a pre-built one from the mesh.
+            const FRotator Turn(0.f, 90.f, 0.f);
+            PreviewWeapon->SetRelativeRotation(Turn);
+            const FBoxSphereBounds Bounds = Report.Bounds.IsValid ? FBoxSphereBounds(Report.Bounds) : PreviewWeapon->GetLocalBounds();
+            PreviewWeapon->SetRelativeLocation(Report.Bounds.IsValid ? -Turn.RotateVector(Bounds.Origin) : -Bounds.Origin);
             const float Radius = FMath::Max(Bounds.SphereRadius, 20.f);
             const FVector CameraOffset(Radius * 2.2f, -Radius * 5.2f, Radius * 1.2f);
             Capture->SetRelativeLocation(CameraOffset);
