@@ -13,6 +13,9 @@ executable"; `docs/NATIVE_ANALYSIS.md`); the repository still never contains gam
 data, decompiler output or code transcribed from it, and project code is written from
 the understanding of what the game does.
 
+The project's go-to tools (bl-sdk live reads, REA for decoding, UModel, `ow-package`, Ruffle, ...) are
+listed in `docs/TOOLING.md`, "Main tools at a glance". Check there before writing a one-off decoder.
+
 Use mature community tools as external extraction backends whenever they can
 save substantial time. Investigate UModel / UE Viewer first for supported UE3
 assets. Use UPK Explorer or other community tools as secondary inspection or

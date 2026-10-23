@@ -9,6 +9,12 @@ non-negotiable: no game files, asset dumps or other game-derived data in the rep
 source, no decompiler output and no code transcribed or converted from it, record provenance and
 licenses, disclose AI assistance, keep verification claims honest.
 
+## Main tools
+
+`docs/TOOLING.md` "Main tools at a glance" lists the project's go-to tools. In short: bl-sdk live reads
+and hooks (the RTSE way) first for anything the running game shows, and REA (the `rea` MCP server) for
+any decoding. Put that line in every worker and sub-agent brief.
+
 ## Analysing the game executable (allowed since 2026-10-01)
 
 The maintainer changed the policy: disassembling and decompiling `Borderlands2.exe` locally is
