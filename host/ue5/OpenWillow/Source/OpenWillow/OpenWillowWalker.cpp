@@ -19,6 +19,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "OpenWillowShotFx.h"
 #include "OpenWillowGunLook.h"
+#include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowInventoryPreviewActor.h"
 #include "HAL/FileManager.h"
 #include "ShaderCompiler.h"
@@ -852,13 +853,16 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     bWeaponOut = true;
     bFireHeld = false;
     bOutOfAmmoLogged = false;
-    // Each rolled weapon imports as SK_<recipe id> (or names its mesh); fall back to the older
-    // single Infinity assembly when that item has not been imported.
-    USkeletalMesh* WeaponMesh = UOpenWillowInventory::LoadWeaponMesh(*Item);
-    if (!WeaponMesh) WeaponMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy"));
+    // The gun is assembled from its parts on the weapon type's library gestalt (OpenWillowWeaponAssembly); a gun the
+    // library cannot build uses its pre-built SK_<recipe id>, and the older single Infinity assembly is the last resort.
+    USkeletalMesh* WeaponMesh = OpenWillowWeaponAssembly::Show(WeaponVisual, Item);
+    if (!WeaponMesh)
+    {
+        WeaponMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy"));
+        WeaponVisual->SetSkeletalMesh(WeaponMesh);
+        OpenWillowGunLook::Apply(WeaponVisual);
+    }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
-    WeaponVisual->SetSkeletalMesh(WeaponMesh);
-    OpenWillowGunLook::Apply(WeaponVisual);
     ApplyViewModel(Item->Id);
     GlowImpulse = 0.f;
     AppliedGlow = 0.f;
@@ -1139,7 +1143,16 @@ bool AOpenWillowWalker::StartReload(float Now)
     ArmsReloadAnim = nullptr;
     if (Model && !Model->ReloadAsset.IsEmpty())
     {
-        WeaponReloadAnim = LoadObject<UAnimSequence>(nullptr, *Model->ReloadAsset);
+        // An assembled gun uses its library gestalt's skeleton (OpenWillowWeaponAssembly): the same clip imported there
+        // (import_weapon_reload_anims.py, library target) lives in <library type folder>/Anims.
+        FString ReloadAsset = Model->ReloadAsset;
+        const USkinnedAsset* Held = WeaponVisual ? WeaponVisual->GetSkinnedAsset() : nullptr;
+        if (Held && Held->GetPathName().StartsWith(TEXT("/Game/OpenWillow/Weapons/Library/")))
+        {
+            const FString Library = FPaths::GetPath(Held->GetPathName()) / TEXT("Anims") / FPaths::GetCleanFilename(ReloadAsset);
+            if (FPackageName::DoesPackageExist(FPackageName::ObjectPathToPackageName(Library))) ReloadAsset = Library;
+        }
+        WeaponReloadAnim = LoadObject<UAnimSequence>(nullptr, *ReloadAsset);
         ArmsReloadAnim = (!Model->ArmsAnimSet.IsEmpty() && !Model->ReloadAnimation.IsEmpty())
             ? LoadArmsAnim(*Model->ArmsAnimSet, *Model->ReloadAnimation) : nullptr;
         const float Rate = WeaponReloadAnim
@@ -1150,10 +1163,10 @@ bool AOpenWillowWalker::StartReload(float Now)
             // UNVERIFIED timing rule inferred from the requested whole-reload span.
             WeaponVisual->PlayAnimation(WeaponReloadAnim, false);
             WeaponVisual->SetPlayRate(Rate);
-            UE_LOG(LogTemp, Display, TEXT("OpenWillow reload clip %s rate %.3f"), *Model->ReloadAsset, Rate);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow reload clip %s rate %.3f"), *ReloadAsset, Rate);
         }
         else if (!WeaponReloadAnim)
-            UE_LOG(LogTemp, Warning, TEXT("OpenWillow reload animation not found: %s"), *Model->ReloadAsset);
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow reload animation not found: %s"), *ReloadAsset);
         if (ArmsReloadAnim && ArmsAnim)
         {
             ArmsAnim->PlayAction(ArmsReloadAnim, 1.f, Rate);
@@ -1738,6 +1751,20 @@ void AOpenWillowWalker::RunGunShots(float Now)
                 && CommandLine[EndAt] != TEXT('\n')) ++EndAt;
             List = CommandLine.Mid(StartAt, EndAt - StartAt).Replace(TEXT("\""), TEXT(""));
         }
+        // -owgunexec=<cmd>|<cmd>: console commands run once before the captures (e.g. ow.RollGun <pool> 30 1 adds a generated
+        // gun, whose id gen_<balance>_<stage>_<seed> can then be listed in -owgunids). '|' separates commands, '+' stands for a space.
+        FString Exec;
+        if (FParse::Value(FCommandLine::Get(), TEXT("owgunexec="), Exec, false) && GEngine)
+        {
+            TArray<FString> Commands;
+            Exec.Replace(TEXT("\""), TEXT("")).ParseIntoArray(Commands, TEXT("|"));
+            for (const FString& Command : Commands)
+            {
+                const FString Line = Command.Replace(TEXT("+"), TEXT(" ")).TrimStartAndEnd();
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots exec: %s"), *Line);
+                GEngine->Exec(GetWorld(), *Line);
+            }
+        }
         List.ParseIntoArray(Ids, TEXT(","));
         for (FString& Id : Ids) Id = Id.TrimStartAndEnd().Replace(TEXT("\""), TEXT(""));
         if (Ids.Num() == 0) Ids.Add(TEXT("none"));
@@ -1835,6 +1862,8 @@ void AOpenWillowWalker::RunGunShots(float Now)
                 *Rel(Arms->GetBoneLocation(TEXT("R_Weapon_Bone"))), *Rel(WeaponVisual->GetBoneLocation(TEXT("WeaponOffset"))),
                 *Rel(WeaponVisual->GetBoneLocation(TEXT("Barrel"))), *Rel(Arms->GetBoneLocation(TEXT("Camera"))));
         }
+        // -owgunquick (weapon part assets sweep): first-person idle and the side view only.
+        if (FParse::Param(FCommandLine::Get(), TEXT("owgunquick"))) { GunShotStep = Gun * 8 + 7; GunShotPhaseAt = Now; break; }
         ++GunShotStep;
         break;
     case 2:
@@ -1935,7 +1964,9 @@ void AOpenWillowWalker::RunGunShots(float Now)
         GunShotPreview = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(GetActorLocation() + FVector(0, 0, 4000), FRotator::ZeroRotator);
         if (const FOpenWillowWeaponItem* Item = Inventory->SlotItem(0); Item && GunShotPreview.IsValid() && GunShotPreview->SetItemPreview(Item))
         {
-            float Radius = Item->Type == TEXT("Pistol") ? 30.f : 45.f;  // framing in cm; the mesh bounds count the whole gestalt
+            // Framing in cm; the mesh bounds count the whole gestalt. Launchers and sniper rifles are longer than the 45 cm frame.
+            float Radius = Item->Type == TEXT("Pistol") ? 30.f : Item->Type.Contains(TEXT("Launcher")) ? 70.f
+                : Item->Type.Contains(TEXT("Sniper")) ? 60.f : 45.f;
             FParse::Value(FCommandLine::Get(), TEXT("owgunradius="), Radius);
             const bool bSaved = GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_side.png"), *Id), 0.f, 0.f, Radius, 1280, 720);
             UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s side view %s"), *Id, bSaved ? TEXT("saved") : TEXT("FAILED"));

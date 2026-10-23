@@ -1,5 +1,6 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMinimap.h"
+#include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryVm.h"
@@ -1025,8 +1026,10 @@ void AOpenWillowMayaHUD::DrawHUD()
                 bWeaponMeshesPreloaded = true;
                 const double Started = FPlatformTime::Seconds();
                 int32 Meshes = 0;
-                for (const FOpenWillowWeaponItem& Item : Held->Items())
-                    if (USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(Item)) { PreloadedMenuAssets.Add(Mesh); ++Meshes; }
+                // Assembled guns: their library mesh and skin (OpenWillowWeaponAssembly::Preload); others: the pre-built mesh.
+                TArray<UObject*> Assets;
+                for (const FOpenWillowWeaponItem& Item : Held->Items()) OpenWillowWeaponAssembly::Preload(Item, Assets);
+                for (UObject* Asset : Assets) { PreloadedMenuAssets.Add(Asset); ++Meshes; }
                 TimeLog(TEXT("preload_weapon_meshes"), FString::Printf(TEXT("items=%d meshes=%d dur=%.1fms"),
                     Held->Items().Num(), Meshes, (FPlatformTime::Seconds() - Started) * 1000.));
             }

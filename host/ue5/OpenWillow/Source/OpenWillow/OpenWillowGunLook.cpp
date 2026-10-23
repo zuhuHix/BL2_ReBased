@@ -39,11 +39,11 @@ FLook Current()
 
 void Apply(USkeletalMeshComponent* Mesh, bool bSceneCapture)
 {
-    if (!Mesh || FParse::Param(FCommandLine::Get(), TEXT("owgunnolook"))) return;  // -owgunnolook: leave the imported material alone (A/B)
-    const FLook Look = Current();
+    if (!Mesh) return;
     // SetSkeletalMesh keeps the component's override materials by slot, so a swapped-in gun would inherit the previous gun's
-    // instances. Start from the mesh asset's own materials.
+    // instances. Start from the mesh asset's own materials (with -owgunnolook too, which then leaves them as imported: A/B).
     Mesh->EmptyOverrideMaterials();
+    if (FParse::Param(FCommandLine::Get(), TEXT("owgunnolook"))) return;
     const USkeletalMesh* Asset = Mesh->GetSkeletalMeshAsset();
     if (!Asset) return;
     for (int32 Slot = 0; Slot < Asset->GetMaterials().Num(); ++Slot)
@@ -55,17 +55,23 @@ void Apply(USkeletalMeshComponent* Mesh, bool bSceneCapture)
         if (!Base->GetScalarParameterDefaultValue(Info, Probe)) continue;  // not a paint material
         UMaterialInstanceDynamic* Instance = Mesh->CreateAndSetMaterialInstanceDynamicFromMaterial(Slot, Base);
         if (!Instance) continue;
-        Instance->SetScalarParameterValue(TEXT("OW_Diffuse"), Look.Diffuse);
-        Instance->SetScalarParameterValue(TEXT("OW_Ambient"), Look.Ambient);
-        Instance->SetScalarParameterValue(TEXT("OW_Key"), Look.Key);
-        Instance->SetScalarParameterValue(TEXT("OW_Fill"), Look.Fill);
-        Instance->SetScalarParameterValue(TEXT("OW_Emissive"), Look.Emissive);
-        Instance->SetScalarParameterValue(TEXT("OW_Debug"), Look.Debug);
-        Instance->SetScalarParameterValue(TEXT("OW_Clip"), Look.Clip);
-        Instance->SetScalarParameterValue(TEXT("OW_ViewScale"), bSceneCapture ? 1.f : 0.25f);
-        Instance->SetVectorParameterValue(TEXT("OW_KeyDir"), FLinearColor(Look.KeyDir.X, Look.KeyDir.Y, Look.KeyDir.Z));
-        Instance->SetVectorParameterValue(TEXT("OW_FillDir"), FLinearColor(Look.FillDir.X, Look.FillDir.Y, Look.FillDir.Z));
+        Configure(Instance, bSceneCapture);
     }
+}
+void Configure(UMaterialInstanceDynamic* Instance, bool bSceneCapture)
+{
+    if (!Instance || FParse::Param(FCommandLine::Get(), TEXT("owgunnolook"))) return;
+    const FLook Look = Current();
+    Instance->SetScalarParameterValue(TEXT("OW_Diffuse"), Look.Diffuse);
+    Instance->SetScalarParameterValue(TEXT("OW_Ambient"), Look.Ambient);
+    Instance->SetScalarParameterValue(TEXT("OW_Key"), Look.Key);
+    Instance->SetScalarParameterValue(TEXT("OW_Fill"), Look.Fill);
+    Instance->SetScalarParameterValue(TEXT("OW_Emissive"), Look.Emissive);
+    Instance->SetScalarParameterValue(TEXT("OW_Debug"), Look.Debug);
+    Instance->SetScalarParameterValue(TEXT("OW_Clip"), Look.Clip);
+    Instance->SetScalarParameterValue(TEXT("OW_ViewScale"), bSceneCapture ? 1.f : 0.25f);
+    Instance->SetVectorParameterValue(TEXT("OW_KeyDir"), FLinearColor(Look.KeyDir.X, Look.KeyDir.Y, Look.KeyDir.Z));
+    Instance->SetVectorParameterValue(TEXT("OW_FillDir"), FLinearColor(Look.FillDir.X, Look.FillDir.Y, Look.FillDir.Z));
 }
 
 void SetGlow(USkeletalMeshComponent* Mesh, float Impulse)

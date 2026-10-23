@@ -1444,6 +1444,39 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   foreground FOV from it when a gun is selected; rerun it when a recipe folder changes (a recipe without an entry gets
   no offset and 45).
 
+Weapon part library (2026-10-23, `docs/verification/WEAPON_PART_ASSETS.md`): every gestalt mesh once and every skin as a
+material instance, guns assembled from their parts at run time (`OpenWillowWeaponAssembly`).
+
+```powershell
+python tools/weapon_part_census.py --game $env:OPENWILLOW_BL2 --live local/realgame/wpa/live_visual_census.json `
+  --output local/wpa/census/visual_census.json          # cooked census (+ comparison with the live one)
+pwsh tools/real_game/weapon_part_session.ps1 -Mode Census   # live census (game, saves blocked; RTSE-style find_all)
+python tools/export_weapon_skins.py --umodel <umodel.exe>    # UModel 1590: every skin MIC + textures, inventoried
+python tools/weapon_library.py meshes                        # one glTF primitive (UE slot) per gestalt fragment
+python tools/weapon_library.py skins --game $env:OPENWILLOW_BL2
+python tools/weapon_library.py index                         # local/weapon_library/library.json (parts, skins, bones)
+powershell -File tools/import_weapon_library.ps1 [-Only meshes|skins] [-Reloads 'Pistol=<prepared reload json>,...']
+python tools/weapon_assembly_sample.py --game $env:OPENWILLOW_BL2  # sample: type x manufacturer, legendaries, skin sweep
+powershell -File tools/run_weapon_assembly_shots.ps1 -Items local/wpa/sample -Quick   # host frames + assembly log
+python tools/weapon_assembly_oracle.py --log <run.log...> --index local/wpa/sample/sample_index.json `
+  --live local/realgame/wpa/live_guns.json                   # triangle oracle: game = host per gun
+pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList <file of recipe paths>
+```
+
+- The host backpack holds 39 items (the game's maximum), so `run_weapon_assembly_shots.ps1` shows at most 39 guns per run;
+  split a larger sample into folders. Run `weapon_view_model.py` on each folder so the guns are held at their type's offset.
+- `-owweaponprebuilt` forces the old per-recipe meshes (A/B); a recipe with an explicit `MeshPath` always uses it. A gun the
+  library cannot build completely falls back too, with `fallback to the pre-built mesh ... (<reason>)` in the log.
+- `OpenWillow.WeaponAssembly` is a UE automation test of the planning rules on a synthetic library; run it in `-game` mode
+  (`UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit"`).
+- A meshes import re-imports the reload clips recorded in `local/weapon_library/reloads.json`.
+- `-owgunexec=<cmd>|<cmd>` (with `-owgunshots`) runs console commands before the captures, `+` for a space, e.g.
+  `-owgunexec=ow.RollGun+GD_Itempools.WeaponPools.Pool_Weapons_All_06_Legendary+30+1 -owgunids=gen_Pistol_Torgue_5_Calla_30_1`
+  shows a generated gun (`-ExecCmds` did not reach the console in a map launch here).
+- The capture session spawns guns in memory only, empties the save's backpack in memory for Inspect (saves are blocked and
+  compared afterwards), closes the queued "Unlocked!" notices through the SDK, and holds each gun through the inventory
+  manager (the quick-slot key did not switch to a freshly spawned gun).
+
 - `research/behavior_census.py` and `research/struct_defaults_census.py` are the structural
   oracles behind the behavior variable-data decode and the struct-default reader fix.
 - `ow-package --properties-batch` reads many objects from one package in one process; the weapon

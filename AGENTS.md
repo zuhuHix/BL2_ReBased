@@ -182,6 +182,11 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   Since 2026-10-22 (lane E) four slice guns have hold-to-aim (RMB), per-type weapon and arms reload clips, a flame flash at the cooked
   muzzle socket and an SMG scope, measured against one live SDK session; critic 6.5/10 after four rounds, open items (SMG flash drawn at the
   rear, SMG hip size, reload poses) in `WEAPON_VISUALS.md` section 15. Non-Infinity guns now use their prepared paint (the white Wild Rifle).
+- **Weapon part library (2026-10-23):** every weapon gestalt mesh (6, one UE slot per fragment) and skin (300 of 301) is
+  imported once, and guns are assembled from their part lists at run time (`OpenWillowWeaponAssembly`; per-recipe meshes are
+  the fallback). Fragment names and triangles equal the running game's for 39 spawned guns (one per type x manufacturer plus
+  legendaries), material parent and vectors too; critic Inspect 7.32/10, first person 5.36/10.
+  `docs/verification/WEAPON_PART_ASSETS.md`.
 - **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
   about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
   shows its page ~126-156 ms after the key press (screen capture, different method;
