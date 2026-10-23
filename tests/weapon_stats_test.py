@@ -406,6 +406,22 @@ class CardTextTests(unittest.TestCase):
         self.assertIn('<font color="#DC4646">Red, line</font>', card['fun_stats_markup'])
         self.assertIn('<font color="#FF8000">Effective against a target type.</font>', card['fun_stats_markup'])
 
+    def test_null_presentation_entries_are_skipped(self):
+        # Cooked data holds null references in these lists (in Startup.upk the Torgue pistol weapon type's and one
+        # minigun barrel's CustomPresentations); a null has no text, so it adds no card line and must not raise.
+        objects = card_world()
+        objects['Type'].update({'CustomPresentations': [None, 'Type.Text', None]})
+        objects['Type.Text'] = {'Description': 'A weapon type note.', 'bDontDisplayNumber': True}
+        objects['Title']['CustomPresentations'] = [None, 'Title.Red', 'Title.White']
+        objects['FirePart'] = {'CustomDamageTypeDefinition': 'DamageType.Fire'}
+        objects['DamageType.Fire'] = {'WeaponCardPresentations': [None, 'DamageType.Effectiveness']}
+        objects['DamageType.Effectiveness'] = {'Description': 'Effective against a target type.', 'bDontDisplayNumber': True}
+        item = recipe()
+        item.update({'title': {'part': 'Title'}})
+        item['parts']['Elemental'] = {'part': 'FirePart'}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['fun_stats'], 'Red, line; A weapon type note.; Effective against a target type.')
+
     def test_inline_damage_tag_uses_the_definition_color_when_line_color_is_disabled(self):
         objects = card_world()
         objects['Type']['DefaultDamageTypeDefinition'] = 'DamageType.Basic'

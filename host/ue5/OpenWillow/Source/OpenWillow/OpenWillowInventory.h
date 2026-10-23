@@ -91,6 +91,12 @@ struct FOpenWillowWeaponItem
     // Chosen parts in slot order (Body..Material), as the generator or the recipe's `parts` chose them. Empty slots are
     // left out. The parallel weapon-assembly work reads these; the part paths are game object paths, not UE assets.
     TArray<FOpenWillowWeaponPart> Parts;
+    // The part path in Slot, or nullptr when the slot is empty (a lookup by slot, as a map would give).
+    const FString* FindPart(const FString& Slot) const
+    {
+        const FOpenWillowWeaponPart* Found = Parts.FindByPredicate([&Slot](const FOpenWillowWeaponPart& P) { return P.Slot == Slot; });
+        return Found ? &Found->Part : nullptr;
+    }
     FString Material;      // gestalt material object path (recipe `material`, generator `material`)
     FString GestaltMesh;   // gestalt mesh object path (recipe `gestalt`, generator `gestalt`), e.g. Weap_Pistol.GestaltDef_Pistol
     bool bFavorite = false;
