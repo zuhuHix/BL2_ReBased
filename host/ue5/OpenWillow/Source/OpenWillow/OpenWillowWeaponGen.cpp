@@ -443,7 +443,7 @@ void FOpenWillowWeaponGen::RunSelfCheck(const FString& RewardSourcePath)
         CappedPool = PoolCheck(80, Seed, bRolled, Capped);
         if (!bRolled) continue;
         UE_LOG(LogTemp, Display, TEXT("OWWEAPONGEN check stage cap: stage 80 pool gun level %d (%s, cap %d)"), Capped.Level,
-            Capped.Level <= NormalStageCap ? TEXT("PASS") : TEXT("FAIL"), NormalStageCap);
+            Capped.Level == NormalStageCap ? TEXT("PASS") : TEXT("FAIL"), NormalStageCap);
         break;
     }
 

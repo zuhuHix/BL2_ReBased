@@ -189,10 +189,14 @@ game's weapon balances do not use that path.
 
 **Stage of a pool roll** (`ItemPool.SpawnBalancedInventoryFromPool`): the caller's game stage (an enemy's or object's
 `GetGameStage`); if the pool has `bSupportsGameStageVariance` (class default true) **and** the caller passed a
-variance formula, the evaluated variance is added (then at least 1 when the stage was at least 1, else at least 0); then
-clamped into the pool's `MinGameStageRequirement` / `MaxGameStageRequirement` attributes when those are positive. Enemy
-drops (`WillowPawn.DropLootOnDeath`) pass no variance formula; interactive objects have
-`LootGameStageVarianceFormula`. The candidate list also caps the stage at a maximum level (an argument, or a global
+variance formula, the evaluated variance is added (then at least 1 when the stage was at least 1, else at least 0) and
+the result is clamped into the pool's `MinGameStageRequirement` / `MaxGameStageRequirement` attributes when those are
+positive. **Correction (2026-10-23):** that clamp sits inside the variance step; without a variance formula the stage is
+neither changed nor clamped. The same two attributes also **gate** the pool: a pool is eligible only when the stage lies
+within its positive bounds and it holds at least one item balance or eligible sub-pool (recursively). An ineligible
+pool spawns nothing, and an ineligible sub-pool weighs 0 among its parent's entries. Enemy drops
+(`WillowPawn.DropLootOnDeath`) pass no variance formula, so for them the bounds only gate; interactive objects have
+`LootGameStageVarianceFormula` (variance and its clamp not modelled). Read from native code, `UNVERIFIED` in game. The candidate list also caps the stage at a maximum level (an argument, or a global
 default, not read).
 
 **Grade.** Each manufacturer entry of a balance lists grades with a game-stage window; the eligible grade's weight is its

@@ -325,6 +325,29 @@ class WeaponGenTests(unittest.TestCase):
                          encoding='utf-8')
         self.assertEqual(self.gun(1, 1, other)['title']['part'], 'Name.BodyTitle')
 
+    def test_pool_eligibility(self):
+        # Wrap holds only the sub-pool gated to stage >= 10: below it Wrap has no eligible entry, so it spawns
+        # nothing (no clamp of the stage into the gate; the native clamps only after a caller's variance).
+        wrap = [('O', 19, 'WillowGame.ItemPoolDefinition', 'Pool.Wrap'), ('F', 19, 'Quantity', '1.0'),
+                ('F', 19, 'Gate', '-', '-'), ('F', 19, 'Entry', 'pool', 16, '1.0')]
+        manifest = self.variant('wrap', wrap)
+        self.assertEqual(self.run_gen('--pool', 'Pool.Wrap', '--stage', 1, '--seed', 1, manifest=manifest)[0]['drops'], [])
+        self.assertEqual(self.run_gen('--pool', 'Pool.Wrap', '--stage', 20, '--seed', 1, manifest=manifest)[0]['drops'],
+                         ['Test.Bal'])
+
+    def test_version_4_requires_the_footer(self):
+        body = [r for r in RECORDS if r[0] != 'V']
+        v4 = [('V', 'weapon_gen_manifest', '4')] + body
+        good = Path(self.dir.name) / 'v4_good.txt'
+        good.write_text(''.join('\t'.join(map(str, r)) + '\n' for r in v4 + [('E', len(v4))]), encoding='utf-8')
+        self.assertEqual(self.gun(1, 1, good)['balance'], 'Test.Bal')
+        self.assertIn('missing', self.load_error('v4_no_footer', v4))
+        self.assertIn('footer counts', self.load_error('v4_wrong_count', v4 + [('E', len(v4) + 1)]))
+        self.assertIn('after', self.load_error('v4_after_footer', v4 + [('E', len(v4)), ('G', 'round', 'x', 'y', '1')]))
+        # Cut right after a pool's O record: its fields and the footer are gone, so the load fails.
+        cut = next(i for i, r in enumerate(v4) if r[0] == 'O' and r[2].endswith('ItemPoolDefinition')) + 1
+        self.assertIn('missing', self.load_error('v4_truncated', v4[:cut]))
+
     def test_count_and_bad_manifest(self):
         guns = self.run_gen('--balance', 'Test.Bal', '--stage', 1, '--seed', 1, '--count', 3)
         self.assertEqual([g['seed'] for g in guns], [1, 2, 3])
@@ -349,7 +372,7 @@ class WeaponGenTests(unittest.TestCase):
         body = [r for r in RECORDS if r[0] != 'V']
         self.assertIn('missing', self.load_error('no_header', body))
         self.assertIn('header', self.load_error('empty', ''))
-        self.assertIn('unsupported', self.load_error('v4', [('V', 'weapon_gen_manifest', '4')] + body))
+        self.assertIn('unsupported', self.load_error('v5', [('V', 'weapon_gen_manifest', '5')] + body))
         self.assertIn('unsupported', self.load_error('other', [('V', 'other_manifest', '3')] + body))
         # A huge id is rejected before any table grows; a sparse one (a hole in a table) after parsing.
         self.assertIn('bad init id 9999999', self.load_error('huge', RECORDS + [('I', 9999999, '1.0', -1, -1, '-')]))

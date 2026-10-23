@@ -115,6 +115,9 @@ std::vector<GenTerm> Terms(const std::string& field) {
 struct ParseState {
     size_t idLimit = 0;  // the manifest's line count
     bool header = false;
+    int version = 0;
+    size_t records = 0;   // records before the footer, V included
+    bool footer = false;  // the 'E <record count>' line was read
     std::vector<char> attributes, inits, definitions, objects;  // defined flags, one per table slot
 };
 
@@ -302,15 +305,30 @@ int SlotIndex(const std::string& slot) {
 void ParseLine(WeaponGenManifest& m, ParseState& state, const std::string& line) {
     std::vector<std::string> f = Split(line, '\t');
     const std::string& tag = f[0];
-    if (!state.header && tag != "V") throw ParseError("missing 'V weapon_gen_manifest <1..3>' header line");
+    if (!state.header && tag != "V") throw ParseError("missing 'V weapon_gen_manifest <1..4>' header line");
+    if (state.footer) throw ParseError("record after the 'E' footer line");
+    if (tag == "E") {
+        // Version 4's footer: the number of records before it (V included). Validate() requires it from version 4,
+        // so a manifest cut short anywhere fails to load instead of losing its last records.
+        Need(f, 2);
+        int count = Int(f[1]);
+        if (count < 0 || static_cast<size_t>(count) != state.records)
+            throw ParseError("footer counts " + f[1] + " records, the manifest has " + std::to_string(state.records) +
+                             " (truncated or edited)");
+        state.footer = true;
+        return;
+    }
+    ++state.records;
     if (tag == "V") {
         Need(f, 3);
         // Version 2 added MonetaryBase, SaleCap and status_remap; a version 1 manifest keeps the old results.
         // Version 3 writes name expressions as NameExpr fields (qualify 'expr'); older ones keep maker:<A,B>.
-        if (f[1] != "weapon_gen_manifest" || (f[2] != "1" && f[2] != "2" && f[2] != "3"))
-            throw ParseError("unsupported manifest header '" + f[1] + " " + f[2] + "' (want weapon_gen_manifest 1..3)");
+        // Version 4 is version 3 plus the required 'E' footer; versions 1..3 load without one.
+        if (f[1] != "weapon_gen_manifest" || (f[2] != "1" && f[2] != "2" && f[2] != "3" && f[2] != "4"))
+            throw ParseError("unsupported manifest header '" + f[1] + " " + f[2] + "' (want weapon_gen_manifest 1..4)");
         if (state.header) throw ParseError("second V header line");
         state.header = true;
+        state.version = Int(f[2]);
     } else if (tag == "A") {
         Need(f, 4);
         int id = Int(f[1]);
@@ -390,7 +408,9 @@ void ParseLine(WeaponGenManifest& m, ParseState& state, const std::string& line)
 // field allows none), so evaluation needs no checks. An initializer chain that refers back to itself is
 // rejected too (evaluation would recurse forever).
 void Validate(const WeaponGenManifest& m, const ParseState& state) {
-    if (!state.header) throw ParseError("missing 'V weapon_gen_manifest <1..3>' header line");
+    if (!state.header) throw ParseError("missing 'V weapon_gen_manifest <1..4>' header line");
+    if (state.version >= 4 && !state.footer)
+        throw ParseError("missing 'E <record count>' footer line (truncated manifest?)");
     auto dense = [](const std::vector<char>& defined, const char* kind, char tag) {
         for (size_t id = 0; id < defined.size(); ++id)
             if (!defined[id])
@@ -1303,18 +1323,38 @@ struct PoolWalk {
         return depth > 12 || std::find(seen.begin(), seen.end(), pool) != seen.end();
     }
 
+    // loot_pools.expand's 'eligible': the gate is not false and some entry is an item or an eligible sub-pool
+    // (entry weights do not count). A cycle stays eligible, like the Python tree. Read from the native, UNVERIFIED.
+    bool Eligible(int poolId, int depth, std::vector<int>& seen) const {
+        if (Cycle(seen, poolId, depth)) return true;
+        const GenObject& pool = Obj(m, poolId);
+        if (PoolGate(pool, stage) == false) return false;
+        seen.push_back(poolId);
+        bool any = false;
+        for (const GenPoolEntry& e : pool.entries) {
+            if (!e.isPool || Eligible(e.object, depth + 1, seen)) {
+                any = true;
+                break;
+            }
+        }
+        seen.pop_back();
+        return any;
+    }
+
     // One firing of a pool: round-half-even(Quantity) draws (missing or 0 counts 1); each takes
     // r = total * rand() / 32767 over the eligible shares and the first interval holding r.
     void Roll(int poolId, int depth, std::vector<int>& seen) {
         if (Cycle(seen, poolId, depth)) return;
+        // An ineligible pool spawns nothing (no draw); reached only at the top, sub-pools are filtered below.
+        if (!Eligible(poolId, depth, seen)) return;
         const GenObject& pool = Obj(m, poolId);
-        // Shares among eligible entries: a sub-pool whose gate is false is not eligible.
+        // Shares among eligible entries: an ineligible sub-pool weighs nothing.
         std::vector<std::pair<const GenPoolEntry*, double>> weights;
         double total = 0.0;
         seen.push_back(poolId);
         for (const GenPoolEntry& e : pool.entries) {
             bool eligible = true;
-            if (e.isPool && !Cycle(seen, e.object, depth + 1)) eligible = PoolGate(Obj(m, e.object), stage) != false;
+            if (e.isPool) eligible = Eligible(e.object, depth + 1, seen);
             bool counted = e.weight && *e.weight != 0 && eligible;
             weights.push_back({&e, counted ? *e.weight : 0.0});
             if (counted) total += *e.weight;
@@ -1571,14 +1611,16 @@ std::vector<std::string> RollPool(const WeaponGenManifest& m, const std::string&
     return walk.drops;
 }
 
-// loot_pools.roll_crt: each listed pool draws one rand() (none when its probability is unresolved or its
-// gate is false) and fires when the probability is >= 1 or rand() / 32767 is below it.
+// loot_pools.roll_crt: each listed pool draws one rand() (none when its probability is unresolved or the pool
+// is not eligible) and fires when the probability is >= 1 or rand() / 32767 is below it.
 std::vector<std::string> RollSource(const WeaponGenManifest& m, const std::string& source, int stage, CrtRand& rng) {
     auto found = m.objectByPath.find(source);
     if (found == m.objectByPath.end()) return {};
     std::vector<std::string> drops;
+    PoolWalk check{m, stage, rng, {}};
     for (const GenListed& listed : Obj(m, found->second).listed) {
-        if (listed.pool < 0 || !listed.probability || PoolGate(Obj(m, listed.pool), stage) == false) continue;
+        std::vector<int> seen;
+        if (listed.pool < 0 || !listed.probability || !check.Eligible(listed.pool, 0, seen)) continue;
         double draw = static_cast<double>(rng.Rand()) / 32767.0;
         if (*listed.probability >= 1.0 || draw < *listed.probability) {
             std::vector<std::string> more = RollPool(m, Obj(m, listed.pool).path, stage, rng);

@@ -64,6 +64,7 @@ resolve from it. The full list is in [NATIVE_WEAPON_RULES.md](NATIVE_WEAPON_RULE
 | attribute-slot value | grade = base grade (half up) + increases, max clamp then min clamp on the full grade; value = (grade - 1) * PerGradeUpgrade + BaseModifierValue | none on the golden cards; differs only when a clamp bites (negative zoom sums) |
 | part-pick weight hook | gated by a definition flag that every weapon type leaves off (only relics use it) | none for weapons |
 | pool grade choice and stage cap | first grade whose window holds the stage, weight interpolated across it; stage = min(stage, cap), cap 50 in normal and TVHM, the level cap in UVHM | stage 80 rolls change when capped (opt-in) |
+| pool stage requirements | a pool's own min/max stage requirement gates it (eligible only inside the bounds and with an eligible entry); the clamp into those bounds happens only after a caller's variance (interactive objects; not modelled) | pools now also drop out when all their entries are ineligible |
 | status chance on the card | the damage type's mapped presentation remaps the combined modifier, input clamped (slag [0, 3.33]) | slag chances print 0.1 higher; no golden card has slag |
 | name-part expressions | all expressions must hold; `WeaponDamage_Is_<Element>` compares the weapon's damage type | 170 of 36,675 parity guns (elemental SMG barrel titles) change name; one confirmed live |
 

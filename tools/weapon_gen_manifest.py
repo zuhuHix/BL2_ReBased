@@ -14,8 +14,9 @@ to each other by integer id; ids index a table per record kind, and a record may
 refer to an id defined on a later line. The V line must come first, and each table's ids must be dense
 (0..n-1, every id defined); the C++ reader rejects anything else.
 
-  V  weapon_gen_manifest  <format version 3>   (version 1 lacked MonetaryBase / SaleCap / status_remap;
-                                               version 2 wrote maker:<A,B> qualifiers and no NameExpr)
+  V  weapon_gen_manifest  <format version 4>   (version 1 lacked MonetaryBase / SaleCap / status_remap;
+                                               version 2 wrote maker:<A,B> qualifiers and no NameExpr;
+                                               version 3 had no E footer)
   A  <attr id>  <attribute path>  <ConstantValue of its ConstantAttributeValueResolver, or ->
   I  <init id>  <BaseValueConstant>  <attr id or -1>  <definition id or -1>  <BaseValueScaleConstant or ->
        one AttributeInitializationData; init 0 is the empty one ({}, evaluates to 0)
@@ -27,6 +28,10 @@ refer to an id defined on a later line. The V line must come first, and each tab
   F  <object id>  <field>  <values...>      one field of an object (list below); repeatable fields repeat
   B  <balance object id>  <type object id>  <manufacturer path or ->  <mission 0|1>
   S  <balance object id>  <slot>  <part object id>  <weight>  <min-stage init or -1>  <max-stage init or -1>
+  E  <record count>                         the last line (version 4): the number of records before it, V
+                                            included. The C++ reader requires it from version 4 and rejects a
+                                            wrong count or a record after it, so a truncated manifest fails to
+                                            load; versions 1..3 still load without it.
        merged slot candidates in merge order (root first, EPRM_* applied); weight: 'flat' (empty
        Manufacturers list: 100), 'none' (index out of range), or the init id the weapon's
        manufacturer selects (its own entry, else DefaultWeightIndex), resolved here per balance
@@ -72,7 +77,7 @@ import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
 BALANCE_CLASSES = ('WillowGame.WeaponBalanceDefinition', 'WillowGame.MissionWeaponBalanceDefinition')
 SOURCE_CLASSES = ('ItemPoolListDefinition', 'AIPawnBalanceDefinition')
 RUNTIME_ATTRIBUTES = ('D_Attributes.Weapon.WeaponLevel', weapon_stats.PART_PRICE_TOTAL)
@@ -520,6 +525,7 @@ def main():
     written = [b for b in balances if builder.balance(b)]
     pools, sources = builder.pools(loot_pools.Values(package))
     builder.globals()
+    builder.lines.append(f'E\t{len(builder.lines)}')  # footer: the record count before it (format docstring)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text('\n'.join(builder.lines) + '\n', encoding='utf-8')
     runtime = sorted(p for p in builder.attrs if weapon_stats.resolver_constant(package, p) is None)
