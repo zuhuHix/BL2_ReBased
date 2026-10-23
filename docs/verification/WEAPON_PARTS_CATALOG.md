@@ -90,7 +90,8 @@ loot sources. It builds in about 16 s. Base game only: DLC balances are not in t
 an optional stage cap and a seed it returns the parts per slot, manufacturer, type, gestalt fragments, material,
 prefix and title, rarity, level, level line and the card stats with the card's rounding.
 
-**Parity, Python against C++** (`tools/weapon_gen_parity.py`): every Startup weapon balance at stages 1, 8, 15, 30, 50
+**Parity, Python against C++** (`tools/weapon_gen_parity.py`; it checks the identity fields the C++ echoes against each
+request and exits 1 on any mismatch, Python error, missing comparison or misaligned output): every Startup weapon balance at stages 1, 8, 15, 30, 50
 and 80 with 20 seeds each (29,880 guns), 7,680 pool rolls over 64 weapon pools and lists and the 6,795 guns they
 dropped: 2,919,834 fields compared, strings and integers equal, floats bit for bit. **0 mismatches**, uncapped and
 with a stage cap of 50. Not ported: the evaluator's diagnostic outputs (modifier list, unresolved attributes, merge
@@ -109,7 +110,8 @@ inventory's `FOpenWillowWeaponItem` the same way recipe-loaded items are filled.
 weapon-assembly lane: `Parts` (slot and part object path, slot order Body .. Material), `Material`, `GestaltMesh`.
 Loot: the slice quest's turn-in reward is rolled from the stand-in's source pool at the mission level (seed from
 `-owrewardseed`, default 1); when the manifest is missing or the roll drops no weapon the pre-rolled stand-in is used,
-as before. `ow.RollGun <balance or pool> [stage] [seed]` puts a rolled gun in the backpack.
+as before. `ow.RollGun <balance or pool> [stage] [seed]` puts a rolled gun in the backpack. Pool rolls in the host cap the gun's stage at 50 (normal mode and
+TVHM; section 2, `UNVERIFIED` in game; UVHM is not modelled); the drops themselves use the raw stage.
 
 Checks (in engine, this machine): `-owweapongentest` rolls a fixed list and logs the converted items; against
 `ow-weapongen` 7 balance cases and a pool case agree on all 245 compared fields (floats within a relative 1e-4, since the

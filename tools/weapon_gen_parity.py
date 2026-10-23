@@ -12,6 +12,9 @@ puts on the card except EXCLUDED_CARD_FIELDS. Guns whose Python evaluation raise
 and listed, not compared. The report goes to local/weapons/gen/ (game-derived; ignored).
 --stage-cap N rolls every gun (balances and pool drops) with weapon_recipe.roll(stage_cap=N) on the
 Python side and the batch line's cap field on the C++ side; pool gates keep the spawn stage.
+The identity fields ow-weapongen echoes (balance, stage, seed, spawn stage, cap; pool, stage, seed) are checked
+against each request. Exit status 1 when any field mismatches, any Python evaluation raises, fewer comparisons
+than requested were made, or the C++ output has too few or too many lines (verdict()); 0 otherwise.
 """
 import argparse
 import json
@@ -36,7 +39,6 @@ EXCLUDED_CARD_FIELDS = ('fun_stats_lines',)
 # integer (3), the manifest keeps the float (3.0). Compared as floats (as the name-part priority is).
 FLOAT_PROPERTY_FIELDS = ('spin_start_interval_scale',)
 # Request identity the C++ echoes back (the card's level carries the capped stage).
-IDENTITY_FIELDS = ('balance', 'stage', 'seed', 'spawn_stage', 'stage_cap')
 
 
 def python_gun(package, localize, balance, stage, seed, stage_cap=None):
@@ -104,6 +106,36 @@ class Diff:
             self.examples.append({'request': where, 'field': path, 'python': ours, 'cpp': theirs, 'kind': kind})
 
 
+def expected_identity(path, stage, seed, stage_cap):
+    """The identity fields ow-weapongen must echo for a gun rolled from `path` (a balance) at `stage` with `seed`."""
+    if stage_cap is None:
+        return {'balance': path, 'stage': stage, 'seed': seed, 'spawn_stage': None, 'stage_cap': None}
+    return {'balance': path, 'stage': min(stage, stage_cap), 'seed': seed, 'spawn_stage': stage, 'stage_cap': stage_cap}
+
+
+def check_identity(diff, where, cpp, expected):
+    """Compare the echoed identity fields with the request, then drop them so the gun comparison sees only results."""
+    echoed = {key: cpp.pop(key, None) for key in expected}
+    diff.compare(where, 'identity', expected, echoed)
+
+
+def verdict(report, requested_guns, requested_pools):
+    """Problems that make the run fail (exit 1): mismatches, Python errors, fewer comparisons than requested,
+    or C++ output that does not line up with the requests. An empty list means the run passed."""
+    problems = []
+    if report['mismatches']:
+        problems.append(f"{report['mismatches']} mismatching field(s)")
+    if report['python_errors']:
+        problems.append(f"{report['python_errors']} Python error(s)")
+    if report['guns_compared'] < requested_guns:
+        problems.append(f"{report['guns_compared']} of {requested_guns} balance rolls compared")
+    if report['pool_rolls_compared'] < requested_pools:
+        problems.append(f"{report['pool_rolls_compared']} of {requested_pools} pool rolls compared")
+    if report.get('output_problem'):
+        problems.append(report['output_problem'])
+    return problems
+
+
 def pool_drops(package, values, pool, stage, seed):
     """Python CRT pool roll: a source (list/pawn) via roll_crt, a pool via roll_pool_crt."""
     rng = weapon_recipe.CrtRand(seed)
@@ -152,43 +184,50 @@ def main():
 
     diff, errors = Diff(), []
     guns = pools_compared = pool_guns = 0
-    for kind, path, stage, seed in requests:
-        where = f'{kind} {path} stage {stage} seed {seed}'
-        if kind == 'balance':
-            cpp = json.loads(next(cpp_lines))
+    output_problem = None
+    try:
+        for kind, path, stage, seed in requests:
+            where = f'{kind} {path} stage {stage} seed {seed}'
+            if kind == 'balance':
+                cpp = json.loads(next(cpp_lines))
+                try:
+                    ours = python_gun(package, localize, path, stage, seed, args.stage_cap)
+                except Exception as error:  # noqa: BLE001 - every Python failure is reported, none hidden
+                    errors.append({'request': where, 'error': f'{type(error).__name__}: {error}'})
+                    continue
+                guns += 1
+                check_identity(diff, where, cpp, expected_identity(path, stage, seed, args.stage_cap))
+                diff.compare(where, 'gun', ours, cpp)
+                continue
+            header = json.loads(next(cpp_lines))
+            diff.compare(where, 'pool.identity', {'pool': path, 'stage': stage, 'seed': seed},
+                         {key: header.get(key) for key in ('pool', 'stage', 'seed')})
+            cpp_guns = [json.loads(next(cpp_lines)) for d in header['drops']
+                        if package.classes.get(d, '') in weapon_gen_manifest.BALANCE_CLASSES]
             try:
-                ours = python_gun(package, localize, path, stage, seed, args.stage_cap)
-            except Exception as error:  # noqa: BLE001 - every Python failure is reported, none hidden
+                drops = pool_drops(package, values, path, stage, seed)
+            except Exception as error:  # noqa: BLE001
                 errors.append({'request': where, 'error': f'{type(error).__name__}: {error}'})
                 continue
-            guns += 1
-            for key in IDENTITY_FIELDS:
-                cpp.pop(key, None)
-            diff.compare(where, 'gun', ours, cpp)
-            continue
-        header = json.loads(next(cpp_lines))
-        cpp_guns = [json.loads(next(cpp_lines)) for d in header['drops']
-                    if package.classes.get(d, '') in weapon_gen_manifest.BALANCE_CLASSES]
-        try:
-            drops = pool_drops(package, values, path, stage, seed)
-        except Exception as error:  # noqa: BLE001
-            errors.append({'request': where, 'error': f'{type(error).__name__}: {error}'})
-            continue
-        pools_compared += 1
-        diff.compare(where, 'pool.drops', drops, header['drops'])
-        if drops != header['drops']:
-            continue
-        weapons = [(k, d) for k, d in enumerate(drops) if package.classes.get(d, '') in weapon_gen_manifest.BALANCE_CLASSES]
-        for (k, drop), cpp in zip(weapons, cpp_guns):
-            try:
-                ours = python_gun(package, localize, drop, stage, seed + k, args.stage_cap)
-            except Exception as error:  # noqa: BLE001
-                errors.append({'request': f'{where} drop {k}', 'error': f'{type(error).__name__}: {error}'})
+            pools_compared += 1
+            diff.compare(where, 'pool.drops', drops, header['drops'])
+            if drops != header['drops']:
                 continue
-            pool_guns += 1
-            for key in IDENTITY_FIELDS:
-                cpp.pop(key, None)
-            diff.compare(f'{where} drop {k}', 'gun', ours, cpp)
+            weapons = [(k, d) for k, d in enumerate(drops) if package.classes.get(d, '') in weapon_gen_manifest.BALANCE_CLASSES]
+            for (k, drop), cpp in zip(weapons, cpp_guns):
+                try:
+                    ours = python_gun(package, localize, drop, stage, seed + k, args.stage_cap)
+                except Exception as error:  # noqa: BLE001
+                    errors.append({'request': f'{where} drop {k}', 'error': f'{type(error).__name__}: {error}'})
+                    continue
+                pool_guns += 1
+                check_identity(diff, f'{where} drop {k}', cpp, expected_identity(drop, stage, seed + k, args.stage_cap))
+                diff.compare(f'{where} drop {k}', 'gun', ours, cpp)
+    except StopIteration:
+        output_problem = 'ow-weapongen printed fewer lines than the requests need'
+    leftover = sum(1 for _ in cpp_lines)
+    if leftover and not output_problem:
+        output_problem = f'ow-weapongen printed {leftover} line(s) more than the requests need'
 
     report = {
         'balances': len(balances), 'stages': list(STAGES), 'stage_cap': args.stage_cap, 'seeds': args.seeds,
@@ -199,11 +238,17 @@ def main():
         'excluded_card_fields': list(EXCLUDED_CARD_FIELDS), 'seconds': round(time.time() - started, 1),
         'examples': diff.examples, 'errors': errors[:40],
         'error_kinds': sorted({e['error'] for e in errors})[:20],
+        'output_problem': output_problem,
     }
     args.output.write_text(json.dumps(report, indent=1, default=str), encoding='utf-8')
     print(json.dumps({k: v for k, v in report.items() if k not in ('examples', 'errors')}, indent=1, default=str))
     for example in diff.examples[:10]:
         print(json.dumps(example, default=str))
+    problems = verdict(report, sum(1 for r in requests if r[0] == 'balance'), sum(1 for r in requests if r[0] == 'pool'))
+    if problems:
+        print('PARITY FAILED: ' + '; '.join(problems))
+        sys.exit(1)
+    print('PARITY PASSED')
 
 
 if __name__ == '__main__':

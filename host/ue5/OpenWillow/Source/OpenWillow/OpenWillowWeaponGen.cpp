@@ -15,6 +15,7 @@
 #include "Serialization/JsonWriter.h"
 #include "weapon_gen.hpp"
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -333,7 +334,8 @@ bool FOpenWillowWeaponGen::RollBalance(const FString& Balance, int32 Stage, uint
     return true;
 }
 
-bool FOpenWillowWeaponGen::RollPoolWeapon(const FString& Pool, int32 Stage, uint32 Seed, FOpenWillowWeaponItem& OutItem, TArray<FString>* OutDrops)
+bool FOpenWillowWeaponGen::RollPoolWeapon(const FString& Pool, int32 Stage, uint32 Seed, FOpenWillowWeaponItem& OutItem, TArray<FString>* OutDrops,
+    int32 StageCap)
 {
     const weapongen::WeaponGenManifest* M = Manifest();
     if (!M) return false;
@@ -350,7 +352,8 @@ bool FOpenWillowWeaponGen::RollPoolWeapon(const FString& Pool, int32 Stage, uint
     for (size_t K = 0; K < Drops.size(); ++K)
     {
         if (!IsWeaponBalanceUtf8(*M, Drops[K])) continue;
-        const weapongen::WeaponGenResult Result = weapongen::RollWeapon(*M, Drops[K], Stage, Seed + uint32(K));
+        const std::optional<int> Cap = StageCap > 0 ? std::optional<int>(StageCap) : std::nullopt;
+        const weapongen::WeaponGenResult Result = weapongen::RollWeapon(*M, Drops[K], Stage, Seed + uint32(K), Cap);
         if (!Result.ok) continue;
         OutItem = ToItem(Result);
         return true;
@@ -408,25 +411,45 @@ void FOpenWillowWeaponGen::RunSelfCheck(const FString& RewardSourcePath)
             *Case.Balance, Case.Stage, Case.Seed, *Item.Name, *Item.Type, Item.Level, Item.Damage, Item.FireRate, Item.Magazine, Item.Parts.Num());
         Items.Add(MakeShared<FJsonValueObject>(ItemJson(Item)));
     }
-    // The reward source: its drops and the first weapon, as the quest turn-in would roll it at stage 8.
-    TSharedPtr<FJsonObject> Pool = MakeShared<FJsonObject>();
-    TArray<FString> Drops;
+    // The reward source: its drops and the first weapon, as the quest turn-in would roll it at stage 8; then at stage
+    // 80, where the normal-mode cap must hold the gun at level 50 (the first seed from 1 whose roll drops a weapon).
+    auto PoolCheck = [&RewardSourcePath](int32 Stage, uint32 Seed, bool& bOutRolled, FOpenWillowWeaponItem& OutPoolItem)
+    {
+        TSharedPtr<FJsonObject> Pool = MakeShared<FJsonObject>();
+        TArray<FString> Drops;
+        bOutRolled = !RewardSourcePath.IsEmpty() && RollPoolWeapon(RewardSourcePath, Stage, Seed, OutPoolItem, &Drops);
+        Pool->SetStringField(TEXT("pool"), RewardSourcePath);
+        Pool->SetNumberField(TEXT("stage"), Stage);
+        Pool->SetNumberField(TEXT("seed"), Seed);
+        Pool->SetNumberField(TEXT("stage_cap"), NormalStageCap);
+        TArray<TSharedPtr<FJsonValue>> DropValues;
+        for (const FString& Drop : Drops) DropValues.Add(MakeShared<FJsonValueString>(Drop));
+        Pool->SetArrayField(TEXT("drops"), DropValues);
+        if (bOutRolled) Pool->SetObjectField(TEXT("item"), ItemJson(OutPoolItem));
+        UE_LOG(LogTemp, Display, TEXT("OWWEAPONGEN check pool %s stage %d seed %u: %d drop(s), weapon %s"), *RewardSourcePath, Stage, Seed,
+            Drops.Num(), bOutRolled ? *OutPoolItem.Name : TEXT("none"));
+        return Pool;
+    };
+    bool bPoolRolled = false;
     FOpenWillowWeaponItem PoolItem;
-    const bool bPoolRolled = !RewardSourcePath.IsEmpty() && RollPoolWeapon(RewardSourcePath, 8, 1, PoolItem, &Drops);
-    Pool->SetStringField(TEXT("pool"), RewardSourcePath);
-    Pool->SetNumberField(TEXT("stage"), 8);
-    Pool->SetNumberField(TEXT("seed"), 1);
-    TArray<TSharedPtr<FJsonValue>> DropValues;
-    for (const FString& Drop : Drops) DropValues.Add(MakeShared<FJsonValueString>(Drop));
-    Pool->SetArrayField(TEXT("drops"), DropValues);
-    if (bPoolRolled) Pool->SetObjectField(TEXT("item"), ItemJson(PoolItem));
-    UE_LOG(LogTemp, Display, TEXT("OWWEAPONGEN check pool %s stage 8 seed 1: %d drop(s), weapon %s"), *RewardSourcePath, Drops.Num(),
-        bPoolRolled ? *PoolItem.Name : TEXT("none"));
+    TSharedPtr<FJsonObject> Pool = PoolCheck(8, 1, bPoolRolled, PoolItem);
+    TSharedPtr<FJsonObject> CappedPool;
+    for (uint32 Seed = 1; Seed <= 50 && !RewardSourcePath.IsEmpty(); ++Seed)
+    {
+        bool bRolled = false;
+        FOpenWillowWeaponItem Capped;
+        CappedPool = PoolCheck(80, Seed, bRolled, Capped);
+        if (!bRolled) continue;
+        UE_LOG(LogTemp, Display, TEXT("OWWEAPONGEN check stage cap: stage 80 pool gun level %d (%s, cap %d)"), Capped.Level,
+            Capped.Level <= NormalStageCap ? TEXT("PASS") : TEXT("FAIL"), NormalStageCap);
+        break;
+    }
 
     TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
     Root->SetStringField(TEXT("manifest"), ManifestPath());
     Root->SetArrayField(TEXT("items"), Items);
     Root->SetObjectField(TEXT("pool"), Pool);
+    if (CappedPool) Root->SetObjectField(TEXT("pool_capped"), CappedPool);
     FString Text;
     auto Writer = TJsonWriterFactory<>::Create(&Text);
     FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
