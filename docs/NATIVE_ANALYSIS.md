@@ -106,6 +106,42 @@ are recorded in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATC
 `UNVERIFIED` in game) are the other `verification/NATIVE_*.md` files, including Phaselock presentation, weapon visuals,
 ambient NPC movement and the backpack sort (2026-10-04).
 
+## Using REA on Borderlands2.exe
+
+REA (npm `rea-agents` 6.0.0, MCP server `rea`) drives the same Ghidra 12.1.4 headlessly. What was measured on
+2026-10-23 on the second machine:
+
+- **Why `open_binary` "works" and the first query then times out.** `open_binary` only binds the target; the first
+  analysis call imports the executable into a throwaway Ghidra project and runs Ghidra's full default auto-analysis
+  before it answers. REA allows 330 s for that (`GHIDRA_STARTUP_TIMEOUT_MS` in
+  `dist/ghidra/GhidraDefaults.js`, a constant: no option or environment variable sets it). This executable needs
+  about 19 to 22 minutes inside REA (864 s with `tools/ghidra_import.ps1`), so every session failed with
+  `provider_timeout`.
+- **Workaround (local edit of the installed package, lost on `rea update` or reinstall).** Copy the file to
+  `local/analysis/rea/` as a backup, then raise the constant, for example to `3_600_000` (one hour).
+  REA servers that are already running keep the old value until their client restarts.
+- **Snapshots do not help with Ghidra in this version.** A snapshot only replays queries REA classes as
+  cacheable, and REA 6.0.0 marks every Ghidra operation as writing the filesystem (its temporary project). Its
+  cache therefore skips them. `close_binary` with `snapshot_path` writes a valid file, with zero replayable
+  entries. Opening with that snapshot and repeating a recorded query still started a fresh analysis. REA also
+  cannot open an existing Ghidra project or `.gzf` (only Hopper databases), so our `tools/ghidra_import.ps1`
+  project cannot be reused.
+- **Recipe.** Pay the analysis once per agent session and keep that session open. Call `open_binary` with the
+  executable's absolute path, then make one cheap call (`list_documents`) and let it run for about 20 minutes. After
+  that, queries are fast. The headless session holds one program, named `target-<first 12 hex of the sha256>.exe`;
+  pass it as `document`. Call `close_binary` when done. The MCP client's per-call timeout must allow the
+  warm-up. A client that cancels the call at its own timeout (an MCP SDK client defaults to 60 s) also aborts REA's
+  analysis, and later calls in that session then fail at once.
+- **Timings after warm-up** (two runs): warm-up 1,326 s and 1,151 s; `binary_overview` 5 s; `list_segments`,
+  `search_strings`, `search_procedures` and `procedure_pseudo_code` each under 0.1 s; `close_binary` under 1 s.
+- **Codex (Luna reviewers).** Not registered yet. Codex also gives MCP tools a short default per-call timeout, so a
+  registration would also need `tool_timeout_sec` raised (for example 1800) under `[mcp_servers.rea]`, or the
+  warm-up call fails (not yet tested from Codex). Register with `GHIDRA_INSTALL_DIR` and `JAVA_HOME` set in the same shell, since `rea setup`
+  drops them otherwise: `rea setup --client codex --dry-run` first, then without `--dry-run`.
+
+For batch work that would pay the warm-up many times, `tools/ghidra/run.ps1` against the saved project
+(about 15 s per run) is still the faster path.
+
 ## Working on two machines
 
 Everything the tools generate from the installed game is regenerable and stays machine-local. The files
