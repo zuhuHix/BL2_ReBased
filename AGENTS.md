@@ -187,6 +187,13 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   the fallback). Fragment names and triangles equal the running game's for 39 spawned guns (one per type x manufacturer plus
   legendaries), material parent and vectors too; critic Inspect 7.32/10, first person 5.36/10.
   `docs/verification/WEAPON_PART_ASSETS.md`.
+- **Weapon firing (2026-10-23):** what a shot does comes from the gun's parts: `tools/weapon_firing.py` writes a recipe's
+  `firing` block (firing mode, pellets, pattern, spread, burst, spin-up, light bullet or rocket, splash, status effect,
+  Tediore throw) and the host fires from it (`src/weapon_firing.*`, `OpenWillowFiring`, `OpenWillowProjectile`,
+  `OpenWillowStatusEffect`). Live sessions confirmed bullet and rocket speeds, gyrojet growth, splash (no falloff on rockets),
+  per-pellet damage (4 of 5 guns), the DOT clock and the Tediore throw; the status proc rate (game 2-3 x the card) is open.
+  In-engine firing test 14/14; matched-frame critic 4.2/10 (stand-in effects; needs the stock particle templates).
+  `docs/verification/WEAPON_PROJECTILES.md`.
 - **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
   about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
   shows its page ~126-156 ms after the key press (screen capture, different method;

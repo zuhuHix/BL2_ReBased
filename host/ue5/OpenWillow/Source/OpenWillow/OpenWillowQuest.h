@@ -133,6 +133,8 @@ private:
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;
     int32 DummyShots = 0;
+    // A shot step fires once, then waits for the hit: light bullets reach the dummy after their flight (OpenWillowProjectile).
+    int32 ShotsBeforeFire = -1;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
     int32 PointsBeforeReward = 0;
     float HealthBeforeReward = 0, MaxHealthBeforeReward = 0;

@@ -1346,6 +1346,12 @@ python tools/weapon_slice_gear.py --reader $reader --game $game --level 8 --seed
 python tools/loot_pools.py --reader $reader --package "$cooked\Startup.upk" table --help
 python tools/weapon_card_audit.py --reader $reader --package "$cooked\Startup.upk" --trace <ui trace .jsonl>
 
+# What a shot does (docs/verification/WEAPON_PROJECTILES.md): add the "firing" block to a recipe that has stats
+python tools/weapon_firing.py --reader $reader --package "$cooked\Startup.upk" --recipe <recipe .json> [--print]
+pwsh -File tools/test_weapon_firing.ps1 [-Guns a,b,c] [-SkipBuild]      # in-engine -owfiringtest + check_weapon_firing.py
+powershell -File tools/capture_firing_frames.ps1                       # host frames at the real frames' pose (-owfiringshots)
+python tools/firing_contact_sheet.py --offsets=-2:10                   # real / host sheets under local/firing/frames/sheets
+
 # Audio identity chain (no decoding): UE3 AkEvent -> Wwise event -> bank -> .wem
 python tools/audio_census.py census
 python tools/audio_slice_chain.py --reader $reader                     # local/slice/audio.json

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "OpenWillowFiring.h"
 #include "OpenWillowInventory.generated.h"
 
 // BL2 ammo pools, in the order the inventory screen lists them. The pool
@@ -105,6 +106,8 @@ struct FOpenWillowWeaponItem
     bool bFavoriteKnown = false;
     bool bTrashKnown = false;
     int32 MagazineLeft = -1; // rounds in the magazine; -1 means a full magazine, not yet fired
+    // What a shot does (the recipe's "firing" block from tools/weapon_firing.py); not loaded = the older trace path.
+    FOpenWillowFiringData Firing;
 };
 
 // Generic, host-authored gear entry. Optional card fields are only populated
@@ -174,6 +177,8 @@ public:
     // Loads every *.json recipe with stats under Directory; returns the count. Mission weapons and the turn-in loot
     // stand-in are skipped: the quest lends or drops them (FindRecipe).
     int32 LoadRecipes(const FString& Directory);
+    // -owitemids=a,b,c (test runs): when not empty, LoadRecipes loads only the recipe ids in this set.
+    TSet<FString> RecipeFilter;
     // One evaluated recipe file as an item; false when it is not one. OutProvenanceKind: the recipe's
     // provenance.kind ("mission_weapon", "pool_roll", or empty).
     static bool ReadRecipe(const FString& File, FOpenWillowWeaponItem& OutItem, FString* OutProvenanceKind = nullptr);

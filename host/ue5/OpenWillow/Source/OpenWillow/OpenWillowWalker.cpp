@@ -18,6 +18,8 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "OpenWillowShotFx.h"
+#include "OpenWillowProjectile.h"
+#include "OpenWillowStatusEffect.h"
 #include "OpenWillowGunLook.h"
 #include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowInventoryPreviewActor.h"
@@ -32,6 +34,9 @@
 #include "EngineUtils.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+#include "Components/StaticMeshComponent.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -203,6 +208,7 @@ void AOpenWillowWalker::Respawn()
     // stand-in: back to where this session started. Full health either way; mission state is not touched.
     Health = MaxHealth;
     bFireHeld = false;
+    Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
     CancelReload();
     FVector Location = RespawnLocation;
@@ -385,8 +391,32 @@ void AOpenWillowWalker::BeginPlay()
     int32 DemoBackpack = UOpenWillowInventory::MaximumBackpackCapacity;
     FParse::Value(FCommandLine::Get(), TEXT("owbackpack="), DemoBackpack);
     Inventory->SetBackpackCapacity(DemoBackpack);
+    // -owitemids=a,b,c: load only these recipes from every folder (the firing test names its guns; the folders hold more
+    // recipes than the backpack takes).
+    FString ItemIds;   // FParse stops at a comma unless told not to
+    if (FParse::Value(FCommandLine::Get(), TEXT("owitemids="), ItemIds, false))
+    {
+        TArray<FString> Ids;
+        ItemIds.ParseIntoArray(Ids, TEXT(","));
+        for (const FString& Id : Ids) Inventory->RecipeFilter.Add(Id.TrimStartAndEnd().Replace(TEXT("\""), TEXT("")));
+    }
     const int32 Loaded = Inventory->LoadRecipes(ItemDir);
     LoadViewModels(ItemDir);
+    // -owitemdir=<dir>[;<dir>...]: more recipe folders, loaded after -owitems (the firing coverage set under
+    // local/items/firing/coverage, the slice set under local/items/slice). Their weapon_view.json entries are added too.
+    FString ExtraItemDirs;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owitemdir="), ExtraItemDirs))
+    {
+        TArray<FString> Dirs;
+        ExtraItemDirs.ParseIntoArray(Dirs, TEXT(";"));
+        for (FString& Dir : Dirs)
+        {
+            Dir = FPaths::ConvertRelativePathToFull(Dir.TrimStartAndEnd());
+            const int32 Extra = Inventory->LoadRecipes(Dir);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow extra recipe folder %s: %d recipes"), *Dir, Extra);
+            LoadViewModels(Dir);
+        }
+    }
     // Skill tree from tools/prepare_skill_tree.py, the same file the Skills
     // page shows (-owskilltree=<file>). The host earns no XP yet, so
     // -owlevel=<N> sets Maya's starting level (default 1, no skill points).
@@ -567,6 +597,10 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     if (bCombatShots && bMayaActive && Controller) RunCombatShots(Now);
     static const bool bGunShots = FParse::Param(FCommandLine::Get(), TEXT("owgunshots"));
     if (bGunShots && bMayaActive && Controller) RunGunShots(Now);
+    static const bool bFiringTest = FParse::Param(FCommandLine::Get(), TEXT("owfiringtest"));
+    if (bFiringTest && bMayaActive && Controller) RunFiringTest(Now);
+    static const bool bFiringShots = FParse::Param(FCommandLine::Get(), TEXT("owfiringshots"));
+    if (bFiringShots && bMayaActive && Controller) RunFiringShots(Now);
     static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
     static const bool bReloadPhaselockTest = FParse::Param(FCommandLine::Get(), TEXT("owreloadphaselocktest"));
@@ -589,12 +623,35 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     }
     if (bReloadPhaselockTest && bMayaActive && Controller) RunReloadPhaselockTest(Now);
     FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeaponMutable();
-    if (bMayaActive && bWeaponOut && Weapon && bFireHeld && !bReloading && Now >= NextShotAt)
+    // The burst belongs to the weapon in hand: a weapon change or holster drops the shots a burst still owes (an
+    // automatic weapon swapped in mid-burst must not keep firing with the trigger released).
+    // Anything else that stops the weapon firing while it stays in hand (a reload, the menus, Maya inactive) drops them
+    // too; StartReload and Respawn also reset it at once.
+    const FString HeldId = bWeaponOut && Weapon ? Weapon->InstanceId : FString();
+    if (HeldId != BurstWeaponId) { Burst.reset(); BurstWeaponId = HeldId; }
+    else if (Burst.active() && (bReloading || bInventoryPresentation || !bMayaActive)) Burst.interrupt();
+    const bool bTrigger = Burst.wantsFire(bFireHeld);
+    // Barrel spin-up (TickBarrelSpinUp): up at 1/SpinUpDuration while the weapon is firing (a burst still firing after
+    // the trigger is let go counts), down at 1/SpinDownDuration otherwise.
+    if (Weapon && Weapon->Firing.bSpinsToFullRate)
+    {
+        FOpenWillowFiringState& Spin = FiringStateFor(*Weapon);
+        Spin.SpinPercent = float(weapon_firing::tickSpin(Spin.SpinPercent, DeltaSeconds, bTrigger && !bReloading,
+            Weapon->Firing.SpinUpDuration, Weapon->Firing.SpinDownDuration));
+    }
+    if (bMayaActive && bWeaponOut && Weapon && bTrigger && !bReloading && Now >= NextShotAt)
     {
         if (Inventory->ConsumeShot(*Weapon))
         {
             FireWeapon();
-            NextShotAt = Now + 1.f / Weapon->FireRate; // evaluated item-card fire rate
+            // Evaluated item-card fire interval, spun up when the barrel spins (GetFireInterval).
+            const float Base = 1.f / Weapon->FireRate;
+            const float Interval = OpenWillowFiring::FireInterval(Weapon->Firing, Base, FiringStateFor(*Weapon));
+            NextShotAt = Now + Interval;
+            // AutomaticBurstCount (weapon_firing::Burst): count 1 (the slice pistol and rifle) is one shot per press, as
+            // observed live; after a longer burst the next one waits GetBurstInterval.
+            if (Burst.shot(Weapon->Firing.BurstCount))
+                NextShotAt = Now + float(weapon_firing::burstInterval(Weapon->Firing.BurstInterval, Interval, Base));
         }
         else if (!StartReload(Now) && !bOutOfAmmoLogged)
         {
@@ -1095,17 +1152,11 @@ void AOpenWillowWalker::FirePressed()
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     if (!bMayaActive || !bWeaponOut || !Weapon) return;
     bFireHeld = true;
-    // BSM_SpinUpToFullFireRate (the Vladof pistol type) fires at once while the
-    // barrel spins up; the name reads as a fire-interval ramp from
-    // StartingSpinUpFireIntervalMultiplier x interval down to the interval.
-    // The Infinity's multiplier is the class default 1, so that ramp is flat
-    // and is not modelled. Other modes keep the older wait-for-spin-up guess.
-    // Both readings are UNVERIFIED against the native weapon code.
-    if (Weapon->SpinMode != TEXT("BSM_SpinUpToFullFireRate"))
-        NextShotAt = FMath::Max(NextShotAt, GetWorld()->GetTimeSeconds() + Weapon->SpinUp);
-    else if (Weapon->SpinStartIntervalScale != 1.f)
-        UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s: spin-up fire-rate ramp (start x%.2f) is not modelled"),
-            *Weapon->Name, Weapon->SpinStartIntervalScale);
+    Burst.press();
+    // Only BSM_SpinUpToFullFireRate changes firing: GetFireInterval ramps the interval from
+    // StartingSpinUpFireIntervalMultiplier x interval down to the interval as the barrel spins up (Tick; NATIVE_WEAPON_FIRING
+    // 1.5; the Infinity's multiplier is the class default 1, so its ramp is flat). BSM_SpinBarrelWithEachShot (launchers)
+    // only turns the barrel; the host's former wait for the spin-up on other modes had no native basis and is gone.
 }
 void AOpenWillowWalker::FireReleased() { bFireHeld = false; }
 void AOpenWillowWalker::AimPressed()
@@ -1131,6 +1182,7 @@ bool AOpenWillowWalker::StartReload(float Now)
     const float ReloadTime = FMath::Max(0.1f, Weapon->ReloadTime);
     const FViewModel* Model = ViewModels.Find(Weapon->Id);
     bReloading = true;
+    Burst.interrupt();   // a reload ends the burst in progress; firing again needs a new press
     ReloadEndsAt = Now + ReloadTime;
     ReloadCompletePercent = Model ? FMath::Clamp(Model->ReloadCompletePercent, 0.f, 1.f) : 1.f;
     ReloadCompletePercentSource = Model ? Model->ReloadCompletePercentSource
@@ -1180,6 +1232,7 @@ bool AOpenWillowWalker::StartReload(float Now)
         }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload started: %s, %.1f s"), *Weapon->Name, Weapon->ReloadTime);
+    if (Weapon->Firing.ReloadThrow) StartReloadThrow(*Weapon);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload refill scheduled: %.3f (%s)"), ReloadCompletePercent,
         *ReloadCompletePercentSource);
     return true;
@@ -1216,6 +1269,7 @@ void AOpenWillowWalker::CancelReload()
 }
 void AOpenWillowWalker::FireWeapon()
 {
+    ++OpenWillowFiring::Counts.Shots;
     // ADD_Fire_Recoil is a UE3 additive clip; layer it on the held pose.
     const FViewModel* Model = ActiveViewModel();
     float RecoilWeight = Model ? Model->RecoilWeight : 0.45f;
@@ -1223,34 +1277,27 @@ void AOpenWillowWalker::FireWeapon()
     if (ArmsAnim && FirePistolAnim && RecoilWeight > 0.f) ArmsAnim->PlayAdditive(FirePistolAnim, RecoilWeight);
     GlowImpulse = FMath::Min(GlowImpulse + 0.25f, 5.f);
     LastGlowShotAt = GetWorld()->GetTimeSeconds();
-    // A deterministic figure-eight is a visual proxy for the installed
-    // FiringPatternLines array, whose serialized elements remain unsupported.
-    const float Phase = ShotCount++ * (PI / 8.f);
-    const float Spread = FMath::Tan(FMath::DegreesToRadians(2.1f));
-    const FVector ForwardAim = Camera->GetForwardVector();
-    const FVector Direction = (ForwardAim + Spread * (FMath::Sin(Phase) * Camera->GetRightVector()
-        + 0.5f * FMath::Sin(2.f * Phase) * Camera->GetUpVector())).GetSafeNormal();
+    const FOpenWillowWeaponItem* FiredItem = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    // What the shot does comes from the weapon's parts (the recipe's firing block, OpenWillowFiring): pellets, pattern
+    // and spread, then a trace, a light bullet or a rocket per pellet. A recipe without the block keeps the older
+    // instant trace, now with the card's pellets and spread.
+    static const FOpenWillowFiringData TraceOnly;
+    const FOpenWillowFiringData& Firing = FiredItem && FiredItem->Firing.bLoaded ? FiredItem->Firing : TraceOnly;
+    TArray<FVector> Directions;
+    OpenWillowFiring::PelletDirections(Firing, FiredItem ? FiredItem->Spread : 0.f, FiredItem ? FiredItem->Projectiles : 1,
+        Camera->GetComponentRotation(), FiredItem ? FiringStateFor(*FiredItem) : FiringStates.FindOrAdd(FString()), Directions);
     const FVector Start = Camera->GetComponentLocation();
-    const FVector End = Start + Direction * 10000.f;
-    FHitResult Hit;
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowInfinity), true, this);
-    const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query);
-    const FVector Impact = bHit ? Hit.ImpactPoint : End;
     const FVector Muzzle = MuzzleLocation();
+    // Lane E's flame tint for plain and fire guns; elemental guns take their element's colour (the real Maliwan shock
+    // pistol flashes blue; the per-element template pick is native, NATIVE_WEAPON_VISUALS 5).
     FLinearColor MuzzleTint(1.f, 0.22f, 0.025f, 1.f);
-    if (const FOpenWillowWeaponItem* FiredItem = Inventory ? Inventory->ActiveWeapon() : nullptr;
-        FiredItem && (FiredItem->DamageType.Contains(TEXT("Fire"), ESearchCase::IgnoreCase)
+    const FString Element = FiredItem ? FiredItem->Element : FString();
+    if (FiredItem && (FiredItem->DamageType.Contains(TEXT("Fire"), ESearchCase::IgnoreCase)
             || FiredItem->DamageType.Contains(TEXT("Incendiary"), ESearchCase::IgnoreCase)))
         MuzzleTint = FLinearColor(1.f, 0.075f, 0.012f, 1.f);
+    else if (OpenWillowFiring::IsElemental(Element)) MuzzleTint = OpenWillowFiring::ElementColor(Element);
     AOpenWillowShotFx::MuzzleFlash(GetWorld(), Muzzle, Model ? Model->MuzzleFlashRadius : 3.5f,
         Model ? Model->MuzzleFlashDuration : 0.33f, MuzzleTint);
-    // Live WeaponTypeDefinition data names no tracer template for this four-gun slice; suppress the generic line for them.
-    // Keep the previous fallback for other items until their weapon type is present in weapon_view.json.
-    // The 30 cm start offset is an UNVERIFIED host stand-in; live data-gated tracers are absent for the four measured guns.
-    if (!Model || Model->bTracerEnabled)
-        AOpenWillowShotFx::Tracer(GetWorld(), Muzzle + (Impact - Muzzle).GetSafeNormal() * 30.f, Impact,
-            Model ? Model->TracerColor : FLinearColor(200.f / 255.f, 200.f / 255.f, 200.f / 255.f, 1.f),
-            Model ? Model->TracerRadius : 0.8f, Model ? Model->TracerLife : 0.09f);
     if (Model && Model->bShellCasingEnabled && Model->ShellSocket.bValid
         && (WeaponVisual->DoesSocketExist(FName(*Model->ShellSocket.Name))
             || WeaponVisual->GetBoneIndex(FName(*Model->ShellSocket.Bone)) != INDEX_NONE))
@@ -1261,32 +1308,125 @@ void AOpenWillowWalker::FireWeapon()
             + Camera->GetForwardVector() * 18.f;
         AOpenWillowShotFx::Casing(GetWorld(), Shell, Velocity);
     }
+    for (const FVector& Direction : Directions)
+    {
+        ++OpenWillowFiring::Counts.Pellets;
+        if (Firing.Kind == EOpenWillowShotKind::Trace)
+        {
+            TracePellet(Start, Direction, Muzzle);
+            continue;
+        }
+        AOpenWillowProjectile::FLaunch Launch;
+        Launch.Data = &Firing;
+        Launch.Shooter = this;
+        Launch.Start = Start;
+        Launch.Direction = Direction;
+        Launch.VisualStart = Muzzle;
+        Launch.Damage = FiredItem ? FiredItem->Damage : 0.f;
+        Launch.DamageType = FiredItem ? FiredItem->DamageType : FString();
+        // Lane E: the measured slice types name no tracer template, so their bullets fly unseen.
+        // Elemental bullets draw their element's trail (seen on the real shock pistol); others follow lane E's rule.
+        Launch.bDrawStreak = !Model || Model->bTracerEnabled || OpenWillowFiring::IsElemental(Element);
+        if (Model) Launch.Color = Model->TracerColor;
+        if (OpenWillowFiring::IsElemental(Element)) Launch.Color = OpenWillowFiring::ElementColor(Element);
+        // Own-motion bullets (gyrojets): a yellow-olive trail, as in the real frames.
+        if (Firing.AirFriction < 0.f) { Launch.bDrawStreak = true; Launch.Color = FLinearColor(0.84f, 0.76f, 0.3f); }
+        Launch.Element = Element;
+        if (Firing.Kind == EOpenWillowShotKind::Rocket)
+        {
+            // ProjectileDefinitionFire: a player's rocket leaves the muzzle toward the screen-centre hit point, when
+            // that direction stays within 90 degrees of the aim (NATIVE_WEAPON_FIRING 2.1).
+            FHitResult Aim;
+            FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRocketAim), true, this);
+            const FVector Far = Start + Direction * Firing.TraceRange;
+            const FVector Point = GetWorld()->LineTraceSingleByChannel(Aim, Start, Far, ECC_Visibility, Query) ? Aim.ImpactPoint : Far;
+            const FVector FromMuzzle = (Point - Muzzle).GetSafeNormal();
+            if (FVector::DotProduct(FromMuzzle, Direction) > 0.f) { Launch.Start = Muzzle; Launch.Direction = FromMuzzle; }
+        }
+        if (AOpenWillowProjectile::Launch(GetWorld(), Launch)) ++OpenWillowFiring::Counts.Launches;
+    }
+}
+void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Direction, const FVector& Muzzle)
+{
+    const FViewModel* Model = ActiveViewModel();
+    const FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    // WeaponTypeDefinition.Range (16384 on the measured types) when the recipe has it, else the older 10000.
+    const FVector End = Start + Direction * (Held && Held->Firing.bLoaded ? Held->Firing.TraceRange : 10000.f);
+    FHitResult Hit;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowInfinity), true, this);
+    const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query);
+    const FVector Impact = bHit ? Hit.ImpactPoint : End;
+    // Live WeaponTypeDefinition data names no tracer template for this four-gun slice; suppress the generic line for them.
+    // Keep the previous fallback for other items until their weapon type is present in weapon_view.json.
+    // The 30 cm start offset is an UNVERIFIED host stand-in; live data-gated tracers are absent for the four measured guns.
+    if (!Model || Model->bTracerEnabled)
+        AOpenWillowShotFx::Tracer(GetWorld(), Muzzle + (Impact - Muzzle).GetSafeNormal() * 30.f, Impact,
+            Model ? Model->TracerColor : FLinearColor(200.f / 255.f, 200.f / 255.f, 200.f / 255.f, 1.f),
+            Model ? Model->TracerRadius : 0.8f, Model ? Model->TracerLife : 0.09f);
     if (!bHit) return;
-    AOpenWillowShotFx::Flash(GetWorld(), Impact + Hit.ImpactNormal * 2.f,
-        FLinearColor(1.f, 0.75f, 0.35f), 5.f, 0.3f, 60.f);
+    ++OpenWillowFiring::Counts.Impacts;
+    AOpenWillowProjectile::ImpactFx(GetWorld(), Impact, Hit.ImpactNormal, Held ? Held->Element : FString());
     AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
     if (!Target)
     {
         if (UMaterialInterface* Hole = LoadObject<UMaterialInterface>(nullptr,
             TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
-            UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 7.f, 7.f), Impact,
+            UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 4.f, 4.f), Impact,
                 (-Hit.ImpactNormal).Rotation(), 12.f);
         return;
     }
-    {
-        // Evaluated item-card damage (tools/weapon_stats.py); no crits, element
-        // or target resistances yet.
-        const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
-        // The shot carries the item's stock damage type path (card damage_type); the target reads it while the
-        // damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded.
-        ShotDamageTypeInFlight = Weapon ? Weapon->DamageType : FString();
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s (damage type %s)"), Weapon ? *Weapon->Id : TEXT("-"),
-            *Target->GetName(), ShotDamageTypeInFlight.IsEmpty() ? TEXT("None") : *ShotDamageTypeInFlight);
-        UGameplayStatics::ApplyPointDamage(Target, Weapon ? Weapon->Damage : 0.f, Direction, Hit,
-            GetController(), this, UDamageType::StaticClass());
-        ShotDamageTypeInFlight.Reset();
-        TargetHitAt = GetWorld()->GetTimeSeconds();
-    }
+    // Evaluated item-card damage per pellet (tools/weapon_stats.py); no crits or target resistances yet.
+    const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
+    static const FOpenWillowFiringData TraceOnly;
+    ++OpenWillowFiring::Counts.TargetHits;
+    OpenWillowFiring::Counts.Direct += Weapon ? Weapon->Damage : 0.f;
+    AOpenWillowProjectile::HitTarget(this, Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly, Target,
+        Weapon ? Weapon->Damage : 0.f, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f);
+}
+FOpenWillowFiringState& AOpenWillowWalker::FiringStateFor(const FOpenWillowWeaponItem& Weapon)
+{
+    return FiringStates.FindOrAdd(Weapon.InstanceId);
+}
+void AOpenWillowWalker::StartReloadThrow(const FOpenWillowWeaponItem& Weapon)
+{
+    // Tediore reload: the type's behaviour sequence throws the gun as a projectile (reload_throw). Measured live
+    // (2026-10-23): its damage is the card damage x the rounds left in the magazine; half lands on what it strikes and
+    // half is a radius-120 splash with the damage type's falloff. The thrown rounds leave with the gun: the magazine is
+    // emptied here, so the refill takes a full magazine from the reserve (Tediore's design; the live session measured the
+    // damage, not the ammo count: UNVERIFIED). An empty magazine throws nothing here (UNVERIFIED).
+    const int32 Left = UOpenWillowInventory::MagazineLeft(Weapon);
+    if (Left <= 0 || !Weapon.Firing.ReloadThrow) return;
+    const FOpenWillowFiringData& Throw = *Weapon.Firing.ReloadThrow;
+    AOpenWillowProjectile::FLaunch Launch;
+    Launch.Data = &Throw;
+    Launch.Shooter = this;
+    Launch.Start = MuzzleLocation();
+    Launch.Direction = Camera->GetForwardVector();
+    Launch.VisualStart = Launch.Start;
+    Launch.Damage = Weapon.Damage * Left;
+    Launch.SplashDamage = Launch.Damage * (Throw.Splash.Damage / FMath::Max(1e-3f, Weapon.Damage));
+    Launch.DamageType = Weapon.DamageType;
+    Launch.Color = FLinearColor(0.35f, 0.75f, 1.f);
+    UE_LOG(LogTemp, Display, TEXT("OWFIRING reload throw %s: %d rounds, damage %.1f"), *Weapon.Id, Left, Launch.Damage);
+    AOpenWillowProjectile::Launch(GetWorld(), Launch);
+    if (FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable(); Held && Held->InstanceId == Weapon.InstanceId)
+        Held->MagazineLeft = 0;
+}
+void AOpenWillowWalker::ApplyShotDamage(AActor* Target, float Amount, const FString& DamageType, const FVector& Direction,
+    const FHitResult& Hit)
+{
+    if (!Target) return;
+    // The shot carries the item's stock damage type path (card damage_type); the target reads it while the
+    // damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded.
+    const FString Outer = ShotDamageTypeInFlight;   // restored after, should damage ever nest
+    ShotDamageTypeInFlight = DamageType;
+    if (Cast<AOpenWillowCombatTarget>(Target)) OpenWillowFiring::Counts.Damage += Amount;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s for %.2f (damage type %s)"),
+        Inventory && Inventory->ActiveWeapon() ? *Inventory->ActiveWeapon()->Id : TEXT("-"), *Target->GetName(), Amount,
+        DamageType.IsEmpty() ? TEXT("None") : *DamageType);
+    UGameplayStatics::ApplyPointDamage(Target, Amount, Direction, Hit, GetController(), this, UDamageType::StaticClass());
+    ShotDamageTypeInFlight = Outer;
+    TargetHitAt = GetWorld()->GetTimeSeconds();
 }
 bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
 {
@@ -1732,6 +1872,27 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     }
     ++CombatShotStep;
 }
+// -owgunids=a,b,c (shared by -owgunshots and -owfiringtest): the named recipe ids in order, or "none"; List gets the raw text.
+TArray<FString> GunIdsFromCommandLine(FString& List)
+{
+    const FString CommandLine = FCommandLine::Get();
+    const FString Key = TEXT("owgunids=");
+    const int32 KeyAt = CommandLine.Find(Key, ESearchCase::IgnoreCase);
+    if (KeyAt != INDEX_NONE)
+    {
+        const int32 StartAt = KeyAt + Key.Len();
+        int32 EndAt = StartAt;
+        while (EndAt < CommandLine.Len() && CommandLine[EndAt] != TEXT(' ')
+            && CommandLine[EndAt] != TEXT('\t') && CommandLine[EndAt] != TEXT('\r')
+            && CommandLine[EndAt] != TEXT('\n')) ++EndAt;
+        List = CommandLine.Mid(StartAt, EndAt - StartAt).Replace(TEXT("\""), TEXT(""));
+    }
+    TArray<FString> Ids;
+    List.ParseIntoArray(Ids, TEXT(","));
+    for (FString& Id : Ids) Id = Id.TrimStartAndEnd().Replace(TEXT("\""), TEXT(""));
+    if (Ids.Num() == 0) Ids.Add(TEXT("none"));
+    return Ids;
+}
 void AOpenWillowWalker::RunGunShots(float Now)
 {
     // Capture idle, ADS, a visible burst, reload midpoint and side view for each requested recipe.
@@ -1739,18 +1900,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
     if (Ids.Num() == 0)
     {
         FString List;
-        const FString CommandLine = FCommandLine::Get();
-        const FString Key = TEXT("owgunids=");
-        const int32 KeyAt = CommandLine.Find(Key, ESearchCase::IgnoreCase);
-        if (KeyAt != INDEX_NONE)
-        {
-            const int32 StartAt = KeyAt + Key.Len();
-            int32 EndAt = StartAt;
-            while (EndAt < CommandLine.Len() && CommandLine[EndAt] != TEXT(' ')
-                && CommandLine[EndAt] != TEXT('\t') && CommandLine[EndAt] != TEXT('\r')
-                && CommandLine[EndAt] != TEXT('\n')) ++EndAt;
-            List = CommandLine.Mid(StartAt, EndAt - StartAt).Replace(TEXT("\""), TEXT(""));
-        }
+        Ids = GunIdsFromCommandLine(List);
         // -owgunexec=<cmd>|<cmd>: console commands run once before the captures (e.g. ow.RollGun <pool> 30 1 adds a generated
         // gun, whose id gen_<balance>_<stage>_<seed> can then be listed in -owgunids). '|' separates commands, '+' stands for a space.
         FString Exec;
@@ -1765,9 +1915,6 @@ void AOpenWillowWalker::RunGunShots(float Now)
                 GEngine->Exec(GetWorld(), *Line);
             }
         }
-        List.ParseIntoArray(Ids, TEXT(","));
-        for (FString& Id : Ids) Id = Id.TrimStartAndEnd().Replace(TEXT("\""), TEXT(""));
-        if (Ids.Num() == 0) Ids.Add(TEXT("none"));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots parsed %d recipe IDs: %s"), Ids.Num(), *List);
     }
     // New materials compile while the first frames render; -owgunsettle=<s> is the wait after each equip.
