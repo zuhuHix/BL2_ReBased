@@ -86,7 +86,7 @@ void AOpenWillowShotFx::Tracer(UWorld* World, const FVector& Start, const FVecto
 }
 
 void AOpenWillowShotFx::Flash(UWorld* World, const FVector& Location, const FLinearColor& Color,
-    float Radius, float Life, float LightIntensity)
+    float Radius, float Life, float LightIntensity, float Intensity)
 {
     if (!World) return;
     const FTransform Pose(FRotator(FMath::FRandRange(0.f, 360.f), FMath::FRandRange(0.f, 360.f), 0.f),
@@ -94,7 +94,7 @@ void AOpenWillowShotFx::Flash(UWorld* World, const FVector& Location, const FLin
     auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
     Fx->FinishSpawning(Pose);
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")),
-        Color, 8.f, Life, LightIntensity);
+        Color, Intensity, Life, LightIntensity);
 }
 
 void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, float Radius, float Life,
@@ -134,6 +134,18 @@ void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, floa
     Core->FinishSpawning(CorePose);
     Core->Setup(Plane, Color, 2.5f, PlumeLife, 90.f, true, 1.f);
     Core->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+}
+
+void AOpenWillowShotFx::Spark(UWorld* World, const FVector& Location, const FVector& Velocity, const FLinearColor& Color,
+    float Radius, float Life, float Intensity)
+{
+    if (!World) return;
+    const FTransform Pose(FRotator::ZeroRotator, Location, FVector(FMath::Max(0.01f, Radius) / 50.f));
+    auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
+    Fx->FinishSpawning(Pose);
+    Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")), Color, Intensity, Life, 0.f);
+    Fx->bIsCasing = true;   // the casing motion: velocity with gravity
+    Fx->CasingVelocity = Velocity;
 }
 
 void AOpenWillowShotFx::Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale)

@@ -4,6 +4,7 @@
 #include "GameFramework/Character.h"
 #include "OpenWillowPhaselock.h"
 #include "OpenWillowPhaselockFx.h"
+#include "OpenWillowFiring.h"
 #include "OpenWillowWalker.generated.h"
 
 struct FOpenWillowTakenInventoryItem;
@@ -57,6 +58,12 @@ public:
     bool FireOnce();
     // Stock damage type path of the shot being applied right now (the held item's card damage type); "" otherwise.
     const FString& ShotDamageType() const { return ShotDamageTypeInFlight; }
+    // True while a burst still owes shots (the -owfiringtest harness waits for it before the next pull).
+    bool IsBurstFiring() const { return Burst.active(); }
+    // Damage from one of Maya's shots, its projectile, splash or status tick: the target reads DamageType (the stock
+    // damage type path) while the damage is applied.
+    void ApplyShotDamage(AActor* Target, float Amount, const FString& DamageType, const FVector& Direction,
+        const FHitResult& Hit);
     // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).
     void UsePhaselock();
     // Whether a cast would start now; otherwise why not (not bought, cooldown, or the failing skill constraint).
@@ -144,6 +151,12 @@ private:
     void RunCombatShots(float Now);
     // -owgunshots -owgunids=a,b,c: captures idle, ADS, firing, reload and side-view frames per named item.
     void RunGunShots(float Now);
+    // -owfiringtest -owgunids=a,b,c (with -owcombattest): fires each named gun at the dummy, at a wall and (status guns)
+    // at the dummy again, then logs one OWFIRING result line per gun (tools/test_weapon_firing.ps1).
+    void RunFiringTest(float Now);
+    // -owfiringshots -owgunids=a,b,c: per gun, the real reference's pose (pitch 0, yaw 90, FOV 77.55), a flat wall 465.9 uu ahead,
+    // one trigger pull and a frame every ~46 ms from two frames before the shot (tools/capture_firing_frames.ps1).
+    void RunFiringShots(float Now);
     void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
     void AimAt(const FVector& Point);
@@ -304,6 +317,15 @@ private:
     FOpenWillowPhaselockTimeline PhaselockTimeline;
     TWeakObjectPtr<class AOpenWillowCombatTarget> PhaselockTarget;
     FString ShotDamageTypeInFlight;
+    // Pattern index, barrel spin and the host random stream between shots, per weapon (OpenWillowFiring).
+    TMap<FString, FOpenWillowFiringState> FiringStates;
+    FOpenWillowFiringState& FiringStateFor(const struct FOpenWillowWeaponItem& Weapon);
+    // AutomaticBurstCount (ShouldRefire): a burst finishes its shots even if the trigger is let go, then waits for a
+    // new press; 0 fires while the trigger is held.
+    weapon_firing::Burst Burst;
+    FString BurstWeaponId;     // the weapon the burst state belongs to
+    void StartReloadThrow(const struct FOpenWillowWeaponItem& Weapon);
+    void TracePellet(const FVector& Start, const FVector& Direction, const FVector& Muzzle);
     int32 PreLendSlot = INDEX_NONE;
     bool bWantsCombatTarget = false;
     bool bBarrelAxisLogged = false;

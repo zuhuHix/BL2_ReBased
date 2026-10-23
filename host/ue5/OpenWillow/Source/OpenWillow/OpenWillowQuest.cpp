@@ -994,8 +994,10 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 14: {
         if (TestWait < 0.5f) return;
-        const int32 Before = DummyShots;
-        Walker->FireOnce();
+        if (ShotsBeforeFire < 0) { ShotsBeforeFire = DummyShots; Walker->FireOnce(); return; }
+        if (DummyShots == ShotsBeforeFire && TestWait < 1.5f) return;
+        const int32 Before = ShotsBeforeFire;
+        ShotsBeforeFire = -1;
         Check(DummyShots == Before + 1 && LastDummyDamageType == WrongType && Status() == 1
             && Impl->ObjectiveState(Data.DummyObjective) == "Active", TEXT("wrong_element_shot_reaches_dummy_and_does_not_complete"));
         Walker->DrawItemById(MissionWeapon.Id);
@@ -1003,8 +1005,10 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 15: {
         if (TestWait < 0.5f) return;
-        const int32 Before = DummyShots;
-        Walker->FireOnce();
+        if (ShotsBeforeFire < 0) { ShotsBeforeFire = DummyShots; Walker->FireOnce(); return; }
+        if (DummyShots == ShotsBeforeFire && TestWait < 1.5f) return;
+        const int32 Before = ShotsBeforeFire;
+        ShotsBeforeFire = -1;
         Check(DummyShots == Before + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
         Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
         const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();

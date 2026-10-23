@@ -157,6 +157,16 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
             }
         }
     }
+    if (const TSharedPtr<FJsonObject>* Firing = nullptr; Recipe->TryGetObjectField(TEXT("firing"), Firing)
+        && FOpenWillowFiringData::Parse(**Firing, Item.Damage, Item.Firing))
+    {
+        // The barrel spin-up comes with the card (weapon_stats.py), not the firing block.
+        Item.Firing.bSpinsToFullRate = Item.SpinMode == TEXT("BSM_SpinUpToFullFireRate");
+        Item.Firing.SpinStartMultiplier = Item.SpinStartIntervalScale;
+        Item.Firing.SpinUpDuration = Item.SpinUp;
+        for (const FString& Gap : Item.Firing.Unsupported)
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s firing: not supported by the host: %s"), *Item.Id, *Gap);
+    }
     const TSharedPtr<FJsonObject>* Provenance = nullptr;
     if (OutProvenanceKind)
         *OutProvenanceKind = Recipe->TryGetObjectField(TEXT("provenance"), Provenance) ? (*Provenance)->GetStringField(TEXT("kind")) : FString();
@@ -217,6 +227,7 @@ int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
     for (const FString& File : Files)
     {
         const FString ItemId = FPaths::GetBaseFilename(File);
+        if (RecipeFilter.Num() > 0 && !RecipeFilter.Contains(ItemId)) continue;
         // Recipe stems are stable IDs for this recipe-backed prototype. One
         // recipe currently represents one item instance, so loading twice
         // must not duplicate that instance.
