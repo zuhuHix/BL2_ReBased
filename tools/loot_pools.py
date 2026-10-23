@@ -22,7 +22,28 @@ editor-like context (designer attributes 0, NumberOfPlayers 1) and counts agreem
 UNVERIFIED (ItemPool.SpawnBalancedInventoryFromPool is native code):
 - a list entry fires independently with probability min(1, PoolProbability);
 - a pool picks Quantity entries, each by weight among its eligible entries;
-- a sub-pool is expanded the same way; game-stage requirements gate a whole pool.
+- a sub-pool is expanded the same way, at the caller's stage.
+Read from the native (2026-10-23, docs/verification/NATIVE_WEAPON_RULES.md section 4; not confirmed in game):
+a pool is eligible when the stage meets its own positive MinGameStageRequirement / MaxGameStageRequirement
+and it holds at least one item balance or eligible sub-pool (recursively). An ineligible pool spawns nothing;
+an ineligible sub-pool weighs 0. The native also clamps the stage into the requirements of the pool holding an
+item, but only after adding a caller's variance formula (interactive objects); enemy drops pass none and the
+variance is not modelled here, so a drop keeps the spawn stage. The gate's extra test that Min is at most the
+stage cap is not modelled (no Startup pool has a Min above 50).
+
+Two seeded rolls exist. roll() / roll_pool() use Python's random.Random (existing
+callers keep their outputs). roll_crt() / roll_pool_crt() draw from
+weapon_recipe.CrtRand (the MSVC rand()), the rule the C++ port (src/weapon_gen.cpp)
+reproduces exactly:
+- each listed pool of a source draws one rand() (skipped without a draw when its
+  probability is unresolved or the pool is not eligible) and fires when the probability
+  is >= 1 or rand()/32767 < probability;
+- a pool makes round-half-even(Quantity) draws; each draw takes r = total *
+  rand()/32767 over the eligible entries' shares (total = their sum in data
+  order) and the first entry with running sum <= r <= running sum + share wins
+  (pick()'s interval walk, without its de-duplication); a sub-pool recurses.
+The seeding is ours; the game's own sequence is not reproduced (UNVERIFIED that
+its pool roll uses the CRT rand() directly).
 Nothing game-derived is written into the repository; tables go under local/.
 """
 import argparse
@@ -198,7 +219,7 @@ def source_lists(package, source):
 
 
 def expand(package, values, pool, stage, depth=0, seen=()):
-    """Pool -> {path, quantity, gate, entries: [{..., share, pool?}]} (shares among eligible entries)."""
+    """Pool -> {path, quantity, gate, eligible, entries: [{..., share, pool?}]} (shares among eligible entries)."""
     if pool in seen or depth > 12:
         return {'path': pool, 'cycle': True, 'entries': []}
     gate = pool_gate(package, values, pool, stage)
@@ -209,13 +230,16 @@ def expand(package, values, pool, stage, depth=0, seen=()):
         node = dict(entry)
         if entry['kind'] == 'pool':
             node['pool'] = expand(package, values, entry['path'], stage, depth + 1, seen + (pool,))
-            if node['pool'].get('gate') is False:
+            if node['pool'].get('eligible') is False:
                 node['eligible'] = False
         children.append(node)
     total = sum(c['weight'] for c in children if c['weight'] and c.get('eligible', True))
     for c in children:
         c['share'] = (c['weight'] / total) if total > 0 and c['weight'] and c.get('eligible', True) else 0.0
-    return {'path': pool, 'quantity': quantity, 'gate': gate, 'entries': children}
+    # Eligible (module docstring): the gate is not False and some entry is an item or an eligible sub-pool.
+    # Entry weights do not count; an unknown gate and a cycle stay eligible.
+    eligible = gate is not False and any(c['kind'] == 'item' or c.get('eligible', True) for c in children)
+    return {'path': pool, 'quantity': quantity, 'gate': gate, 'eligible': eligible, 'entries': children}
 
 
 def flatten(tree, factor=1.0, out=None):
@@ -237,7 +261,7 @@ def roll_pool(tree, rng, chain=()):
     """Seeded roll of one firing: [{'item', 'chain'}] (UNVERIFIED native selection rule)."""
     drops = []
     eligible = [e for e in tree['entries'] if e['share'] > 0]
-    if not eligible:
+    if not eligible or tree.get('eligible') is False:
         return drops
     for _ in range(max(0, int(round(tree.get('quantity') or 1)))):
         entry = rng.choices(eligible, [e['share'] for e in eligible])[0]
@@ -245,6 +269,47 @@ def roll_pool(tree, rng, chain=()):
             drops.append({'item': entry['path'], 'chain': list(chain + (tree['path'],))})
         else:
             drops.extend(roll_pool(entry['pool'], rng, chain + (tree['path'],)))
+    return drops
+
+
+def crt_choice(entries, rng):
+    """One draw among entries with share > 0: r = total * rand()/32767, the first interval holding r."""
+    total = sum(e['share'] for e in entries)
+    r = total * rng.rand() / 32767.0
+    running = 0.0
+    for entry in entries:
+        if running <= r <= running + entry['share']:
+            return entry
+        running += entry['share']
+    return entries[-1]  # r == total after float rounding: the last entry
+
+
+def roll_pool_crt(tree, rng, chain=()):
+    """roll_pool() with weapon_recipe.CrtRand draws (module docstring); [{'item', 'chain'}].
+    An ineligible pool spawns nothing (no draw)."""
+    drops = []
+    eligible = [e for e in tree['entries'] if e['share'] > 0]
+    if not eligible or tree.get('eligible') is False:
+        return drops
+    for _ in range(max(0, int(round(tree.get('quantity') or 1)))):
+        entry = crt_choice(eligible, rng)
+        if entry['kind'] == 'item':
+            drops.append({'item': entry['path'], 'chain': list(chain + (tree['path'],))})
+        else:
+            drops.extend(roll_pool_crt(entry['pool'], rng, chain + (tree['path'],)))
+    return drops
+
+
+def roll_crt(loot, rng):
+    """roll() with weapon_recipe.CrtRand draws: a listed pool fires when probability >= 1 or rand()/32767 < it."""
+    drops = []
+    for pool in loot['pools']:
+        chance = pool['probability']
+        if chance is None or pool['tree'].get('eligible') is False:
+            continue
+        draw = rng.rand() / 32767.0
+        if chance >= 1.0 or draw < chance:
+            drops.extend(roll_pool_crt(pool['tree'], rng))
     return drops
 
 
@@ -256,7 +321,7 @@ def table(package, values, source, stage):
             continue
         chance = values.init(probability)
         tree = expand(package, values, pool, stage)
-        items = flatten(tree) if tree.get('gate') is not False else {}
+        items = flatten(tree) if tree.get('eligible') is not False else {}
         by_class = {}
         for item, count in items.items():
             kind = package.classes.get(item, '?').rsplit('.', 1)[-1]
@@ -272,7 +337,7 @@ def roll(loot, seed):
     drops = []
     for pool in loot['pools']:
         chance = pool['probability']
-        if chance is None or pool['tree'].get('gate') is False:
+        if chance is None or pool['tree'].get('eligible') is False:
             continue
         if rng.random() < min(1.0, chance):
             drops.extend(roll_pool(pool['tree'], rng))

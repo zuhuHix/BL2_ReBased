@@ -114,8 +114,9 @@ private:
     bool PhaselockTableMatchesManifest() const;
 
     FOpenWillowWeaponItem MissionWeapon;    // the lent recipe (identity, card stats, damage type, mesh path)
-    // Turn-in loot STAND-IN (not stock: the mission reward and the dummy carry no items), prepared by
-    // tools/weapon_slice_gear.py --reward-only; dropped as a pickup at turn-in when present.
+    // Turn-in loot (not stock: the mission reward and the dummy carry no items): a gun rolled by the weapon generator from
+    // the stand-in's source when the manifest is loaded (-owrewardseed=, default 1), else the STAND-IN recipe prepared by
+    // tools/weapon_slice_gear.py --reward-only. Dropped as a pickup at turn-in when present.
     FOpenWillowWeaponItem RewardItem;
     bool bHasReward = false;
     void DropReward();

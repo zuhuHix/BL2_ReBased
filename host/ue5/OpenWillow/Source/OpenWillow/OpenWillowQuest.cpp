@@ -7,6 +7,7 @@
 #include "OpenWillowSkills.h"
 #include "OpenWillowSliceData.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowWeaponGen.h"
 #include "slice.hpp"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -79,6 +80,13 @@ void UOpenWillowQuest::BeginPlay()
     bEnabled = FParse::Param(FCommandLine::Get(), TEXT("owquest"));
     bTesting = FParse::Param(FCommandLine::Get(), TEXT("owquesttest"));
     bResume = FParse::Param(FCommandLine::Get(), TEXT("owquestresume"));
+    // -owweapongentest: the weapon generator's host self-check (local/weapons/gen/host_check); runs with or without the quest.
+    if (FParse::Param(FCommandLine::Get(), TEXT("owweapongentest")))
+    {
+        FString CheckItems;
+        FParse::Value(FCommandLine::Get(), TEXT("owitems="), CheckItems);
+        FOpenWillowWeaponGen::RunSelfCheck(CheckItems.IsEmpty() ? FString() : FOpenWillowWeaponGen::RewardSource(CheckItems));
+    }
     if (!bEnabled) { SetComponentTickEnabled(false); return; }
     try {
         FString Save, World, Npcs, Audio;
@@ -109,10 +117,6 @@ void UOpenWillowQuest::BeginPlay()
             const FString OwnMesh = FString::Printf(TEXT("/Game/OpenWillow/Weapons/SliceItems/SK_%s.SK_%s"), *MissionWeapon.Id, *MissionWeapon.Id);
             MissionWeapon.MeshPath = FPackageName::DoesPackageExist(OwnMesh.Left(OwnMesh.Find(TEXT(".")))) ? OwnMesh : Impl->Data.PistolMesh;
         }
-        bHasReward = UOpenWillowInventory::FindRecipe(ItemDir, TEXT("reward_roll"), FString(), RewardItem);
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in: %s"), bHasReward
-            ? *FString::Printf(TEXT("%s \"%s\" (%s; host stand-in, the stock reward has no items)"), *RewardItem.Id, *RewardItem.Name, *RewardItem.Balance)
-            : TEXT("none prepared (tools/weapon_slice_gear.py --reward-only)"));
         FString GearText;
         TSharedPtr<FJsonObject> Gear;
         if (!FFileHelper::LoadFileToString(GearText, *FPaths::Combine(ItemDir, TEXT("slice_manifest.json")))
@@ -121,6 +125,27 @@ void UOpenWillowQuest::BeginPlay()
         UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon %s -> recipe %s \"%s\" level %d, %.2f damage, %.2f/s, magazine %.2f, damage type %s, mesh %s; gear level %d (slice choice, UNVERIFIED)"),
             *WeaponDefinition, *MissionWeapon.Id, *MissionWeapon.Name, MissionWeapon.Level, MissionWeapon.Damage, MissionWeapon.FireRate,
             MissionWeapon.Magazine, *MissionWeapon.DamageType, *MissionWeapon.MeshPath, GearLevel);
+        // Turn-in reward: a gun rolled by the weapon generator (-owweapongen manifest, tools/weapon_gen_manifest.py) from the
+        // pool the stand-in names, at the gear level, seeded by -owrewardseed= (default 1). The stand-in recipe from
+        // tools/weapon_slice_gear.py --reward-only is the fallback when the manifest is missing or the roll drops no weapon.
+        int32 RewardSeed = 1;
+        FParse::Value(FCommandLine::Get(), TEXT("owrewardseed="), RewardSeed);
+        bHasReward = UOpenWillowInventory::FindRecipe(ItemDir, TEXT("reward_roll"), FString(), RewardItem);
+        FOpenWillowWeaponItem Generated;
+        const FString RewardSource = FOpenWillowWeaponGen::RewardSource(ItemDir);
+        if (!RewardSource.IsEmpty() && FOpenWillowWeaponGen::RollPoolWeapon(RewardSource, GearLevel, uint32(RewardSeed), Generated))
+        {
+            RewardItem = Generated;
+            bHasReward = true;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in reward rolled by the weapon generator: %s \"%s\" (%s, level %d) from %s at stage %d seed %d (generator rules UNVERIFIED)"),
+                *RewardItem.Id, *RewardItem.Name, *RewardItem.Type, RewardItem.Level, *RewardSource, GearLevel, RewardSeed);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in: %s"), bHasReward
+                ? *FString::Printf(TEXT("%s \"%s\" (%s; host stand-in, the stock reward has no items)"), *RewardItem.Id, *RewardItem.Name, *RewardItem.Balance)
+                : TEXT("none prepared (tools/weapon_slice_gear.py --reward-only) and the generator rolled no weapon"));
+        }
         const auto& D = Impl->Data;
         TArray<FString> Overrides;
         for (const auto& O : D.StageOverrides) Overrides.Add(FString::Printf(TEXT("%s %d..%d"), *O.Mission, O.Min, O.Max));

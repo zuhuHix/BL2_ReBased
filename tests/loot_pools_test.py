@@ -5,6 +5,7 @@ import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import loot_pools as L
+import weapon_recipe as W
 
 
 def const(value, attribute=None, init=None, scale=1.0):
@@ -52,6 +53,13 @@ def world():
         'Pool.Rare': {'Quantity': const(2), 'BalancedItems': [{'InvBalanceDefinition': 'Gun.R', 'Probability': const(1)}]},
         'Pool.Late': {'MinGameStageRequirement': 'Stage9',
                       'BalancedItems': [{'InvBalanceDefinition': 'Gun.L', 'Probability': const(1)}]},
+        # Eligibility (module docstring): Wrap holds only the gated Late; Empty holds nothing.
+        'Pool.Wrap': {'BalancedItems': [{'ItmPoolDefinition': 'Pool.Late', 'Probability': const(1)}]},
+        'Pool.Empty': {},
+        'Pool.Outer': {'BalancedItems': [
+            {'ItmPoolDefinition': 'Pool.Wrap', 'Probability': const(3)},
+            {'ItmPoolDefinition': 'Pool.Empty', 'Probability': const(5)},
+            {'ItmPoolDefinition': 'Pool.Rare', 'Probability': const(1)}]},
         'List': {'ItemPools': [{'ItemPool': 'Pool.Guns', 'PoolProbability': const(0, 'Odds')},
                                {'ItemPool': 'Pool.Rare', 'PoolProbability': const(0, 'Unknown.Attr')}]},
         'Pawn': {'DefaultItemPoolIncludedLists': ['List'], 'PlayThroughs': [
@@ -64,7 +72,7 @@ def world():
                     'Stage9.Const_0': 'GearboxFramework.ConstantAttributeValueResolver',
                     'D.CommonMod': 'WillowGame.DesignerAttributeDefinition',
                     'List': 'WillowGame.ItemPoolListDefinition', 'Pawn': 'WillowGame.AIPawnBalanceDefinition'})
-    for pool in ('Pool.Guns', 'Pool.Common', 'Pool.Rare', 'Pool.Late'):
+    for pool in ('Pool.Guns', 'Pool.Common', 'Pool.Rare', 'Pool.Late', 'Pool.Wrap', 'Pool.Empty', 'Pool.Outer'):
         classes[pool] = 'WillowGame.ItemPoolDefinition'
     for gun in ('Gun.A', 'Gun.B', 'Gun.R', 'Gun.L'):
         classes[gun] = 'WillowGame.WeaponBalanceDefinition'
@@ -124,6 +132,57 @@ class TableTests(unittest.TestCase):
         package = world()
         tree = L.expand(package, L.Values(package), 'Pool.Rare', stage=1)
         self.assertEqual([d['item'] for d in L.roll_pool(tree, random.Random(1))], ['Gun.R', 'Gun.R'])
+
+    def test_crt_pool_roll_walks_shares(self):
+        package = world()
+        tree = L.expand(package, L.Values(package), 'Pool.Common', stage=5)  # Gun.A 0.75, Gun.B 0.25
+        # srand(1) draws 41 then 18467: r = 0.00125 -> Gun.A; then 0.5636 -> Gun.A (A covers [0, 0.75]).
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(tree, W.CrtRand(1))], ['Gun.A'])
+        rng = W.CrtRand(1)
+        rng.rand(), rng.rand(), rng.rand()  # next draw 26500: r = 0.8088 -> Gun.B
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(tree, rng)], ['Gun.B'])
+        rare = L.expand(package, L.Values(package), 'Pool.Rare', stage=1)
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(rare, W.CrtRand(9))], ['Gun.R', 'Gun.R'])  # Quantity 2
+
+    def test_crt_source_roll_probability_and_gates(self):
+        package = world()
+        loot = L.table(package, L.Values(package), 'Pawn', stage=10)
+        # Pool.Guns probability 0.5: srand(1) draws 41 (0.00125 < 0.5, fires; one more draw inside),
+        # Pool.Rare is unresolved (no draw), Pool.Late probability 1 always fires.
+        drops = L.roll_crt(loot, W.CrtRand(1))
+        self.assertEqual(drops[-1]['item'], 'Gun.L')
+        self.assertEqual(len(drops), 2)
+        self.assertEqual(L.roll_crt(loot, W.CrtRand(1)), drops)
+        # srand(6000) starts (6000 * 214013 + 2531011) >> 16 = 19632: 0.599 >= 0.5 skips Pool.Guns.
+        self.assertEqual(W.CrtRand(6000).rand(), 19632)
+        self.assertEqual([d['item'] for d in L.roll_crt(loot, W.CrtRand(6000))], ['Gun.L'])
+
+    def test_gated_top_pool_spawns_nothing_and_draws_nothing(self):
+        package = world()
+        late = L.expand(package, L.Values(package), 'Pool.Late', stage=5)  # Min 9: the native gates, no clamp
+        self.assertEqual((late['gate'], late['eligible']), (False, False))
+        rng = W.CrtRand(1)
+        self.assertEqual(L.roll_pool_crt(late, rng), [])
+        self.assertEqual(rng.rand(), 41)  # no draw was taken
+        self.assertEqual(L.roll_pool(late, random.Random(1)), [])
+        at_nine = L.expand(package, L.Values(package), 'Pool.Late', stage=9)
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(at_nine, W.CrtRand(1))], ['Gun.L'])
+
+    def test_sub_pool_without_eligible_entries_weighs_nothing(self):
+        package = world()
+        tree = L.expand(package, L.Values(package), 'Pool.Outer', stage=5)
+        shares = {e['path']: e['share'] for e in tree['entries']}
+        # Wrap's only entry (Late) is gated at stage 5 and Empty holds nothing: both ineligible, Rare takes all.
+        self.assertEqual(shares, {'Pool.Wrap': 0.0, 'Pool.Empty': 0.0, 'Pool.Rare': 1.0})
+        self.assertTrue(tree['eligible'])
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(tree, W.CrtRand(1))], ['Gun.R', 'Gun.R'])
+        later = L.expand(package, L.Values(package), 'Pool.Outer', stage=9)
+        self.assertEqual({e['path']: e['share'] for e in later['entries']},
+                         {'Pool.Wrap': 0.75, 'Pool.Empty': 0.0, 'Pool.Rare': 0.25})
+        # A pool whose only entries are ineligible is itself ineligible (and spawns nothing at the top).
+        wrap = L.expand(package, L.Values(package), 'Pool.Wrap', stage=5)
+        self.assertEqual((wrap['gate'], wrap['eligible']), (True, False))
+        self.assertEqual(L.roll_pool_crt(wrap, W.CrtRand(1)), [])
 
     def test_display_check_counts_agreement(self):
         package = world()

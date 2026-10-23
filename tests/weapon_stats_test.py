@@ -120,6 +120,33 @@ class WeaponStatsTests(unittest.TestCase):
         objects['Status.Burn']['bDoesDamageOverTime'] = False
         self.assertIsNone(s.evaluate(FakePackage(objects), item, level=1)['card']['status_dps'])
 
+    def test_status_card_chance_is_the_mapped_presentation_remap(self):
+        objects = world()
+        objects['Type']['BaseStatusEffectChanceModifier'] = const(0.6)
+        objects['Type']['WeaponAttributeEffects'] = [{'AttributeToModify': A + 'WeaponStatusEffectChanceModifier',
+                                                      'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0.5)}]
+        objects['Slag'] = {'CustomDamageTypeDefinition': 'DmgType.Amp'}
+        objects['DmgType.Amp'] = {'StatusEffect': 'Status.Amp'}
+        objects['Status.Amp'] = {'StatusEffectType': 'STATUS_EFFECT_Amp', 'DamageSurfaceChanceModifiers': [
+            {'SurfaceType': 'DMGSURFACE_Generic', 'BaseChance': const(30)}]}
+        objects['Present.Amp'] = {'bValueRemappingEnabled': True, 'RemappingData': {
+            'InputValueMx': {'BaseValueConstant': 3.32999992}, 'OutputValueMx': {'BaseValueConstant': 100}}}
+        item = dict(recipe(), parts=dict(recipe()['parts'], Elemental={'part': 'Slag'}))
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertAlmostEqual(card['status_chance'], 27.0, places=5)   # no mapping: Generic 30 * 0.9
+        objects[s.STATUS_CHANCE_MAPPING] = {'MappingData': [
+            {'DamageType': 'DmgType.Amp', 'Presentation': 'Present.Amp'}]}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        f32 = s.weapon_recipe.f32
+        slope = f32(100 / f32(3.33))                                    # 30.03003
+        self.assertEqual(card['status_chance'], f32(f32(f32(0.6) * 1.5) * slope))
+        self.assertEqual(card['display']['status_chance'], 27.0)        # 27.027 prints 27.0
+        self.assertAlmostEqual(card['status_chance_by_surface']['generic'], 27.0, places=5)  # unchanged
+        objects['Type']['BaseStatusEffectChanceModifier'] = const(6.0)  # input clamps at 3.33
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['status_chance'], 100.0)
+        self.assertAlmostEqual(card['status_chance_by_surface']['generic'], 270.0, places=3)
+
     def test_element_badge_uses_type_default_when_elemental_part_is_none(self):
         objects = world()
         objects['Type']['DefaultDamageTypeDefinition'] = 'Damage.Explosive'
@@ -214,6 +241,8 @@ def card_world():
         'Title.White': {'NoConstraintText': 'Not red', 'TextColor': {'R': 255, 'G': 255, 'B': 255, 'A': 255}},
     })
     objects['Type']['MonetaryValue'] = {'BaseValueAttribute': 'Att.Maker', 'InitializationDefinition': CALC}
+    # Every player gun type sets 1; the class default (unset) is 0.
+    objects['Type']['BaseMonetaryValueModifier'] = 1.0
     objects['Barrel']['MonetaryValueMod'] = 'ModA'
     objects['Grip']['MonetaryValueMod'] = 'ModB'
     return objects
@@ -294,6 +323,26 @@ class CardFieldTests(unittest.TestCase):
         self.assertEqual((plain['sale_value'], named['sale_value']), (1132, 566))
         self.assertEqual(fully_named['sale_value'], 396)  # both name-part modifiers multiply before truncation
 
+    def test_sale_value_part_total_starts_at_the_type_modifier(self):
+        objects = card_world()
+        objects['Type']['BaseMonetaryValueModifier'] = 2.0
+        # 1.51 * (2.0 type * 2.0 * 1.25 * level 3 * 100) = 2265 (2265.0002 in single precision)
+        self.assertEqual(self.card(objects)['sale_value'], 2265)
+        del objects['Type']['BaseMonetaryValueModifier']
+        self.assertEqual(self.card(objects)['sale_value'], 0)  # class default 0
+
+    def test_sale_value_is_capped_by_the_currency(self):
+        objects = card_world()
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_Eridium'
+        self.assertEqual(self.card(objects)['sale_value'], 500)
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_SeraphCrystals'
+        self.assertEqual(self.card(objects)['sale_value'], 999)
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_MAX'
+        self.assertEqual(self.card(objects)['sale_value'], 0)
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_Credits'
+        objects['Type']['BaseMonetaryValueModifier'] = 1e6
+        self.assertEqual(self.card(objects)['sale_value'], 99999999)
+
     def test_fun_stats_uses_the_localized_override(self):
         objects = card_world()
         stats = s.evaluate(FakePackage(objects), dict(recipe(), title={'part': 'Title'}), level=1,
@@ -356,6 +405,22 @@ class CardTextTests(unittest.TestCase):
         self.assertEqual(card['fun_stats_lines'][-1]['color'], '#FF8000')
         self.assertIn('<font color="#DC4646">Red, line</font>', card['fun_stats_markup'])
         self.assertIn('<font color="#FF8000">Effective against a target type.</font>', card['fun_stats_markup'])
+
+    def test_null_presentation_entries_are_skipped(self):
+        # Cooked data holds null references in these lists (in Startup.upk the Torgue pistol weapon type's and one
+        # minigun barrel's CustomPresentations); a null has no text, so it adds no card line and must not raise.
+        objects = card_world()
+        objects['Type'].update({'CustomPresentations': [None, 'Type.Text', None]})
+        objects['Type.Text'] = {'Description': 'A weapon type note.', 'bDontDisplayNumber': True}
+        objects['Title']['CustomPresentations'] = [None, 'Title.Red', 'Title.White']
+        objects['FirePart'] = {'CustomDamageTypeDefinition': 'DamageType.Fire'}
+        objects['DamageType.Fire'] = {'WeaponCardPresentations': [None, 'DamageType.Effectiveness']}
+        objects['DamageType.Effectiveness'] = {'Description': 'Effective against a target type.', 'bDontDisplayNumber': True}
+        item = recipe()
+        item.update({'title': {'part': 'Title'}})
+        item['parts']['Elemental'] = {'part': 'FirePart'}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['fun_stats'], 'Red, line; A weapon type note.; Effective against a target type.')
 
     def test_inline_damage_tag_uses_the_definition_color_when_line_color_is_disabled(self):
         objects = card_world()
@@ -452,6 +517,34 @@ class NativeRuleTests(unittest.TestCase):
         objects['Barrel']['AttributeSlotUpgrades'][0]['bActivateSlot'] = False
         card = s.evaluate(FakePackage(objects), recipe(), level=3)['card']
         self.assertAlmostEqual(card['damage'], 120.0, places=3)      # nothing activated the slot
+
+    def test_slot_base_grade_enters_the_grade_and_one_is_subtracted(self):
+        objects = world()
+        objects['Type']['AttributeSlotBaseGrade'] = const(1.5)  # rounds half up to 2
+        card = s.evaluate(FakePackage(objects), recipe(), level=3)['card']
+        # grade 2 + 3 = 5; value (5 - 1) * 0.1 = 0.4
+        self.assertAlmostEqual(card['damage'], 120 * 1.4, places=3)
+
+    def test_slot_clamps_act_on_the_full_grade_maximum_first(self):
+        effect = {'bEnforceMaximumGrade': True, 'MaximumGrade': 2, 'bEnforceMinimumGrade': True, 'MinimumGrade': 4}
+        self.assertEqual(s.slot_grade(1.0, 9, effect), 4)          # 10 -> max 2 -> min 4
+        self.assertEqual(s.slot_grade(None, -2, {'bEnforceMinimumGrade': True, 'MinimumGrade': 0}), 0)
+        self.assertEqual(s.slot_grade(1.0, -2, {}), -1)
+        self.assertEqual(s.slot_value(0, 0.0, -0.13), s.weapon_recipe.f32(0.13))
+
+    def test_negative_zoom_sum_clamps_to_minimum_grade_zero(self):
+        objects = card_world()
+        objects['Type']['ZoomedEndFOV'] = 45.0
+        objects['Type']['AttributeSlotEffects'].append({
+            'SlotName': 'WeaponZoomFOV', 'AttributeToModify': s.ZOOM_ATTRIBUTE, 'ModifierType': 'MT_Scale',
+            'BaseModifierValue': const(0), 'PerGradeUpgrade': const(-0.13), 'bEnforceMinimumGrade': True})
+        objects['Sight'] = {
+            'AttributeSlotUpgrades': [{'SlotName': 'WeaponZoomFOV', 'GradeIncrease': -2, 'bActivateSlot': True}],
+            'WeaponCardAttributes': [{'Attribute': s.ZOOM_ATTRIBUTE}]}
+        item = dict(recipe(), parts=dict(recipe()['parts'], Sight={'part': 'Sight'}))
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        # grade 1 - 2 = -1 clamps to 0: value (0 - 1) * -0.13 = +0.13, FOV 45 * 1.13
+        self.assertAlmostEqual(card['weapon_zoom'], 80.0 / (45.0 * 1.13), places=5)
 
     def test_rarity_is_a_sum_looked_up_in_the_globals_table(self):
         objects = world()

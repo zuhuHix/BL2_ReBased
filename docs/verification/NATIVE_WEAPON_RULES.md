@@ -20,7 +20,7 @@ Implemented in `tools/weapon_recipe.py`, `tools/weapon_stats.py`, `tools/weapon_
 |---|---|---|---|
 | 1 | Modifier stack: `(base + PreAdd) * (1 + up) / (1 - down) + PostAdd`, no clamp, single precision, integers truncate | native | high (read; 9 of 9 cards) |
 | 1 | Effect order: type, parts in slot order, attribute slots, prefix, title | script | high (read) |
-| 1 | Slot value = `BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease)` on activated slots | grade bookkeeping native; value formula not read | medium (form fits 9 of 9; adding the base grade fits 0 of 9) |
+| 1 | Slot value = `BaseModifierValue + PerGradeUpgrade * (grade - 1)`, grade = base grade + increases, max then min clamp (section 12) | native (read 2026-10-23) | high (read; 69 of 69 golden cards) |
 | 2 | Card rounding from each stat's presentation data; Float = half up to `FloatPrecision` decimals | native + data | high (read; 9 of 9 cards) |
 | 2 | Float rounding scales and adds the half in single precision | native shape + one golden card | medium (x87 precision setting inferred; 69 of 69 golden cards) |
 | 2 | Status rows: their own presentations, Float, one decimal; chance = remap of the combined chance modifier | data | high for the rounding (16 of 16 golden rows); remap vs BaseChance differs only for slag (no slag card) |
@@ -30,7 +30,7 @@ Implemented in `tools/weapon_recipe.py`, `tools/weapon_stats.py`, `tools/weapon_
 | 4 | Item level = the game stage it spawned at (`bInterpolateExpLevel` default true) | native + data | high (read) |
 | 4 | Rarity level = sum of truncated part rarities; tier from `RarityLevelColors` | native + data | high (read) |
 | 5 | Prefix/title: deterministic, type lists first, then parts in slot order, highest priority, later wins ties | native | high (read; 9 of 9 card titles) |
-| 6 | Sale value: name parts' `MonetaryValueMod` in the part product; integer truncation | script order + data | high (value function not read; 69 of 69 golden cards, 4 of them launchers) |
+| 6 | Sale value: type `BaseMonetaryValueModifier` times parts' and name parts' `MonetaryValueMod`; truncation; currency cap (section 12) | native (read 2026-10-23) + data | high (read; 69 of 69 golden cards, 4 of them launchers) |
 
 ## 1. The attribute modifier stack
 
@@ -189,10 +189,14 @@ game's weapon balances do not use that path.
 
 **Stage of a pool roll** (`ItemPool.SpawnBalancedInventoryFromPool`): the caller's game stage (an enemy's or object's
 `GetGameStage`); if the pool has `bSupportsGameStageVariance` (class default true) **and** the caller passed a
-variance formula, the evaluated variance is added (then at least 1 when the stage was at least 1, else at least 0); then
-clamped into the pool's `MinGameStageRequirement` / `MaxGameStageRequirement` attributes when those are positive. Enemy
-drops (`WillowPawn.DropLootOnDeath`) pass no variance formula; interactive objects have
-`LootGameStageVarianceFormula`. The candidate list also caps the stage at a maximum level (an argument, or a global
+variance formula, the evaluated variance is added (then at least 1 when the stage was at least 1, else at least 0) and
+the result is clamped into the pool's `MinGameStageRequirement` / `MaxGameStageRequirement` attributes when those are
+positive. **Correction (2026-10-23):** that clamp sits inside the variance step; without a variance formula the stage is
+neither changed nor clamped. The same two attributes also **gate** the pool: a pool is eligible only when the stage lies
+within its positive bounds and it holds at least one item balance or eligible sub-pool (recursively). An ineligible
+pool spawns nothing, and an ineligible sub-pool weighs 0 among its parent's entries. Enemy drops
+(`WillowPawn.DropLootOnDeath`) pass no variance formula, so for them the bounds only gate; interactive objects have
+`LootGameStageVarianceFormula` (variance and its clamp not modelled). Read from native code, `UNVERIFIED` in game. The candidate list also caps the stage at a maximum level (an argument, or a global
 default, not read).
 
 **Grade.** Each manufacturer entry of a balance lists grades with a game-stage window; the eligible grade's weight is its
@@ -413,11 +417,53 @@ manufacturer strata; 2,175,422 part combinations over all stages (base game only
 | Jakobs fire rate | **data** plus the firing loop | type `FireRate` (interval) and `AutomaticBurstCount` 1, `MinFireAnimDuration`; `ShouldRefire` is script, `GetFireInterval` native; the card's fire rate is the inverse interval (one observed Jakobs card shows it) |
 | Maliwan elements | **data** for the card, **native** per shot | fixed elemental parts in the balances, type status-chance and status-damage effects, status-effect definitions; the per-shot chance (`GetStatusEffectChanceModifier` and friends) is native |
 
+## 12. Gaps closed on 2026-10-23
+
+Read statically (lane notes in ignored `local/analysis/weapon_gaps/`), each `UNVERIFIED` in game; implemented in
+`tools/weapon_stats.py`, `tools/weapon_recipe.py` and the C++ generator ([WEAPON_PARTS_CATALOG.md](WEAPON_PARTS_CATALOG.md)).
+
+- **Value function** (section 6). The vtable was found through each class's registration record, which names its
+  internal constructor; the exec thunks' slots resolve from it. The part total starts at the type's
+  `BaseMonetaryValueModifier` (declared on `WillowInventoryDefinition`, class default unset, so 0; every player gun type
+  sets 1), then multiplies the nine parts', the prefix's and the title's `MonetaryValueMod`, rounding to a float after
+  each step. The value is the type's `MonetaryValue` initialization evaluated on the weapon, truncated, then capped by
+  `FormOfCurrency`: Credits 99,999,999, Eridium 500, other currencies 999. The rarity level read beside it also sums
+  both name parts (all have rarity 0). No card changes: the formula of section 6 is now read, not only fitted.
+- **Slot value** (section 1). The slot's grade is the type's base grade (rounded half up) plus every increase; the
+  maximum clamp applies first, then the minimum, both on that full grade. The value is
+  `f32(f32((grade - 1) * PerGradeUpgrade) + BaseModifierValue)`. With base grade 1 (every weapon type) this equals the
+  old form except when a clamp bites, for example a negative `WeaponZoomFOV` sum under its minimum of 0.
+- **Weight hook** (section 3). A virtual on the item definition, used only when `bAllowInventoryDefToModifyPartWeight`
+  is set: false on all 81 weapon types, true on the 49 relic definitions. Weapons never use it.
+- **Grade choice and stage cap** (section 4). The candidate list takes the first grade whose stage window holds the
+  stage (both ends inclusive) and interpolates its weight between `MinSpawnProbabilityModifier` and
+  `MaxSpawnProbabilityModifier` across the window; a balance with no candidate tries its `BaseDefinition`. The stage is
+  `min(stage, cap)`: 50 outside the third playthrough, the current level cap there, with the Overpower level added at the
+  full cap (not modelled). The capped stage becomes the item level; that the part pick uses it too is implied, not read.
+  `roll(stage_cap=...)` applies it on request (default: no cap, so existing callers do not change).
+- **Status chance on the card** (section 2). Data, not native: a presentation mapping picks the row per damage type
+  (fire, corrosive, shock `_Impact` types and the slag "Amp" presentation), and the row remaps the combined modifier
+  (`WeaponBaseStatusEffectChanceModifier * WeaponStatusEffectChanceModifier`) with the input clamped, so a card never
+  shows more than 100 %. Slag's slope is 30.03, not its `BaseChance` 30: a slag chance prints 0.1 higher than the old
+  rule. The native that walks the mapping was not read; the per-surface chances keep `BaseChance`.
+
+- **Name-part expressions** (section 5). The name chooser evaluates a name part's `Expressions` with the shared
+  expression-list evaluator, stopping at the first false one (so all must hold; an empty list holds); an attribute that
+  cannot be resolved makes its expression false; the six comparison operators apply to the constant. Census of the 748
+  name parts in `Startup.upk`: 593 expressions, only two forms, all `== 1`: `Weapon_Is_<Maker>` (573) and
+  `WeaponDamage_Is_<Element>` (20, the second expression of a few elemental SMG barrel titles). The latter
+  resolves through a damage-type resolver: 1 when the weapon's damage type (the elemental part's custom damage type,
+  else the type's default) is in its list, else `ValueIfNotMatched` (0). **Confirmed live once** (2026-10-23): a
+  generated Maliwan SMG with a shock elemental spawned in the game with exactly that title, which the old rule (only
+  the manufacturer form) missed; with the new rule 40 of 40 spawned sample guns carry the generator's prefix and title.
+
+No golden card covers a stage cap, a clamped slot grade, slag or a base grade other than 1; the 69 golden cards stay at
+69 / 69 / 68 with these rules.
+
 ## What was not read
 
-The slot modifier value computation; the value function (`ComputeMonetaryValue`, a vtable call not resolved twice) and
-the regular shop price; the per-type weight hook in the part pick; the grade choice and the stage cap in the pool's
-candidate list; how the combined status-chance modifier is computed and which status presentation a card picks; how
-the game sets the x87 precision; expression evaluation for name parts beyond the manufacturer form; the game's random
-sequence. Everything
-above is `UNVERIFIED` until a golden card or a trace confirms it.
+The regular shop price (`GetSellingPriceForInventory`); the native that walks the status presentation mapping; how the
+game sets the x87 precision; expression evaluation for name parts beyond the manufacturer form; the game's random
+sequence; whether the part pick uses the capped stage. (Closed on 2026-10-23, section 12: the slot value, the value
+function, the weight hook, the grade choice and stage cap.) Everything above is `UNVERIFIED` until a golden card or a
+trace confirms it.
