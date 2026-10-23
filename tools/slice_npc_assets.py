@@ -31,6 +31,7 @@ import argparse
 import datetime
 import json
 import os
+import random
 from pathlib import Path
 import re
 import sqlite3
@@ -648,7 +649,8 @@ def pistol_step(args, rolls_only=False):
     summary = {'tool': TOOL, 'generated': now(), 'rules_status': 'UNVERIFIED (tools/weapon_recipe.py rules)',
                'balances': {}}
     for balance in PISTOL_BALANCES:
-        recipe = weapon_recipe.roll(package, balance, 1, 30)
+        # Python's generator, as before CrtRand became roll()'s default, so these rolls stay the same.
+        recipe = weapon_recipe.roll(package, balance, 1, 30, rng=random.Random(1))
         (out / f'recipe_{leaf(balance)}.json').write_text(json.dumps(recipe, indent=1), encoding='utf-8')
         slots = {}
         for slot, chosen in recipe['parts'].items():

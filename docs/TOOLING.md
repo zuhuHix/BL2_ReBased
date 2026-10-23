@@ -703,6 +703,21 @@ python tools/filter_gestalt_gltf.py --gltf <gestalt glTF> --gestalt local/infini
 The recipe lists the merge chain, candidates, weights, name parts and the
 rules that are still UNVERIFIED.
 
+`roll()` now seeds `CrtRand` (the MSVC `rand()`), so the C++ generator can reproduce it; the slice tools pin
+Python's own generator. The weapon parts census, the generator manifest and the C++ generator
+(docs/verification/WEAPON_PARTS_CATALOG.md):
+
+```powershell
+python tools/weapon_catalog.py packages; python tools/weapon_catalog.py crosscheck; python tools/weapon_catalog.py summary
+python tools/weapon_gen_manifest.py            # -> local/weapons/gen/weapon_gen_manifest.txt (base game)
+./build/Release/ow-weapongen.exe local/weapons/gen/weapon_gen_manifest.txt --balance <balance> --stage 30 --seed 1
+python tools/weapon_gen_parity.py              # Python vs C++ on every balance, stages and seeds; report under local/
+```
+
+In the host, `-owweapongen=<manifest>` overrides the default path, `ow.RollGun <balance or pool> [stage] [seed]` adds a
+rolled gun to the backpack and `-owweapongentest` writes a host self-check under `local/weapons/gen/host_check/`. Live
+confirmation: `tools/real_game/gen_confirm_capture.ps1` then `python -I tools/real_game/gen_confirm.py stats ...`.
+
 Import with `OPENWILLOW_PISTOL_GLTF` pointing at the filtered glTF and
 `OPENWILLOW_INFINITY_TEXTURES` at UModel's PNG export of
 `Mati_VladofLegendaryPistol_Infinity`, running

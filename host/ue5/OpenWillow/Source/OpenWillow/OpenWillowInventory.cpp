@@ -134,6 +134,25 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
         Item.StatusChance = float(StatusChance);
     }
     Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
+    Recipe->TryGetStringField(TEXT("material"), Item.Material);
+    Recipe->TryGetStringField(TEXT("gestalt"), Item.GestaltMesh);
+    // The recipe's `parts` is keyed by slot; the item lists them in the game's slot order.
+    const TSharedPtr<FJsonObject>* Parts = nullptr;
+    if (Recipe->TryGetObjectField(TEXT("parts"), Parts))
+    {
+        for (const TCHAR* Slot : {TEXT("Body"), TEXT("Grip"), TEXT("Barrel"), TEXT("Sight"), TEXT("Stock"),
+                                  TEXT("Elemental"), TEXT("Accessory1"), TEXT("Accessory2"), TEXT("Material")})
+        {
+            const TSharedPtr<FJsonObject>* Chosen = nullptr;
+            FString Part;
+            if ((*Parts)->TryGetObjectField(Slot, Chosen) && (*Chosen)->TryGetStringField(TEXT("part"), Part))
+            {
+                FOpenWillowWeaponPart& Entry = Item.Parts.AddDefaulted_GetRef();
+                Entry.Slot = Slot;
+                Entry.Part = Part;
+            }
+        }
+    }
     const TSharedPtr<FJsonObject>* Provenance = nullptr;
     if (OutProvenanceKind)
         *OutProvenanceKind = Recipe->TryGetObjectField(TEXT("provenance"), Provenance) ? (*Provenance)->GetStringField(TEXT("kind")) : FString();

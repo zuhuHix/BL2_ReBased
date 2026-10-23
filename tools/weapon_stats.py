@@ -18,11 +18,14 @@ until a running-game check confirms them; each output lists them.
   WeaponAttributeEffects apply like a part's. Bases a type leaves unset come from
   the class defaults (TYPE_DEFAULTS, WEAPON_DEFAULTS). Plain float bases enter
   in single precision, like every other value in the stack.
-- A slot effect applies BaseModifierValue + PerGradeUpgrade * grade to slots
-  some upgrade activated (bActivateSlot); the grade sums every GradeIncrease for
-  that SlotName on the type and the parts. The game also adds the type's
-  AttributeSlotBaseGrade (default 1) when a slot is first activated; how that
-  enters the value is not read (SLOT_BASE_GRADE_IN_VALUE, see the note).
+- A slot effect applies to slots some upgrade activated (bActivateSlot). Grade =
+  round-half-up(type AttributeSlotBaseGrade, class default 1) + every
+  GradeIncrease for that SlotName on the type and the parts; MaximumGrade then
+  MinimumGrade clamp the full grade (when enforced); value =
+  f32(f32((grade - 1) * PerGradeUpgrade) + BaseModifierValue) (slot_grade(),
+  slot_value(); read from native code 2026-10-23, UNVERIFIED in game). With base
+  grade 1 this equals the earlier BaseModifierValue + PerGradeUpgrade *
+  sum(GradeIncrease) except where a clamp bites (a negative zoom sum).
 - Attribute operands resolve for Weapon_Is_<Maker> (1 for the weapon's own
   manufacturer, else 0), WeaponLevel (the requested level) and attributes with
   a ConstantAttributeValueResolver. Anything else is reported as unresolved.
@@ -31,15 +34,19 @@ until a running-game check confirms them; each output lists them.
   [MinLevel, MaxLevel] holds it. `rarity` keeps the host's 1..5 scale.
 - Manufacturer grades on the balance and skill/class effects are not applied.
 - Status effect rows (status_rows()) and projectile count reproduce real cards;
+  the card's chance is the mapped presentation's remap of the combined chance
+  modifier (STATUS_CHANCE_MAPPING); the per-surface chances stay BaseChance-based;
   `display` holds the numbers rounded as the card prints them (present()).
 
 Card fields beyond the five main stats (docs/verification/INVENTORY_CARD_STATS.md):
 - accuracy: the game's own presentation for WeaponSpread remaps spread linearly
   (0 -> 100, RemappingData.InputValueMx -> 0), the input clamped to its range.
-- sale_value: the weapon type's MonetaryValue calculator, fed the product of
-  every part's MonetaryValueMod including the prefix and title name parts (the
-  game recomputes the part value after choosing them) and the item level,
-  truncated. See PRICE_CALCULATORS_CHECKED.
+- sale_value: the weapon type's MonetaryValue calculator, fed the part total
+  (the type's BaseMonetaryValueModifier times every part's MonetaryValueMod,
+  then the prefix's and the title's, single precision after each step; the game
+  recomputes the part value after choosing the name parts) and the item level,
+  truncated and capped by the type's FormOfCurrency (sale_value_cap()). Read
+  from native code 2026-10-23. See PRICE_CALCULATORS_CHECKED.
 - level_requirement / level_line (level_requirement()): mission balances 0,
   else the item level minus the player's bonus, at least 1; the line is
   printed only above 1. Read from script; pass the recipe's `balance`.
@@ -96,6 +103,9 @@ WEAPON_DEFAULTS = {
 }
 
 ACCURACY_PRESENTATION = 'GD_AttributePresentation.Weapons.AttrPresent_WeaponSpread'
+# WeaponStatusEffectAttributePresentationDefinition whose MappingData pairs a damage type with the
+# presentation the card uses for its chance row (Incendiary/Corrosive/Shock/Amp _Impact, decoded locally).
+STATUS_CHANCE_MAPPING = 'GD_AttributePresentation.Weapons.WeapStatusEffectAttrPresent_CombinedStatusEffectChance'
 ZOOM_PRESENTATION = 'GD_AttributePresentation.Weapons.AttrPresent_WeaponZoomEndFOV'
 ZOOM_ATTRIBUTE = ATTR + 'WeaponZoomEndFOV'
 SHOT_COST_ATTRIBUTE = ATTR + 'WeaponShotCost'
@@ -136,10 +146,17 @@ PRESENTATIONS = {
 # from [0, 5] onto [0, 100] (slope 20, equal to the Generic BaseChance status_rows() uses for fire,
 # shock and corrosive; slag's is [0, 3.33], slope 30.03 against a BaseChance of 30, UNVERIFIED).
 STATUS_ROUNDING = 'ATTRROUNDING_Float'
-# How the activation base grade (type AttributeSlotBaseGrade, default 1) enters a slot's value
-# is not read. False: value = BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease), the form
-# that reproduces the audited cards. True adds the base grade (compare with the audit).
-SLOT_BASE_GRADE_IN_VALUE = False
+# WillowInventoryDefinition defaults (Engine.upk Default__WillowInventoryDefinition, decoded locally):
+# BaseMonetaryValueModifier is not serialized there, so a type that omits it starts the part total at 0
+# (every player gun type in Startup.upk sets 1); FormOfCurrency defaults to the first ECurrencyType
+# entry, Credits; AttributeSlotBaseGrade defaults to the constant 1.
+BASE_MONETARY_VALUE_MODIFIER_DEFAULT = 0.0
+# ECurrencyType in Engine.upk order. Sale value cap per currency (read from native code 2026-10-23,
+# UNVERIFIED in game): Credits 99,999,999, Eridium 500, every other valid currency 999, else 0.
+CURRENCIES = ('CURRENCY_Credits', 'CURRENCY_Eridium', 'CURRENCY_SeraphCrystals') + tuple(
+    f'CURRENCY_Reserved_{letter}' for letter in 'ABCDEFGHIJ')
+CURRENCY_CAPS = {'CURRENCY_Credits': 99999999, 'CURRENCY_Eridium': 500}
+OTHER_CURRENCY_CAP = 999
 SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     'WeaponAttributeEffects=StructProperty:AttributeEffectData',
     'AttributeSlotEffects=StructProperty:AttributeSlotEffectData',
@@ -149,6 +166,8 @@ SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     'WeaponCardPresentations=ObjectProperty',
     'DamageSurfaceChanceModifiers=StructProperty:StatusEffectChanceModifier',
     'RarityLevelColors=StructProperty:RarityLevelColor',
+    # Struct elements are tagged, so the struct name is only a label.
+    'MappingData=StructProperty:WeaponStatusEffectPresentationMapping',
 ]
 # Title parts' CustomPresentations carry the red flavour line, TextColor (220, 70, 70).
 RED_TEXT_COLOR = {'R': 220, 'G': 70, 'B': 70}
@@ -187,16 +206,42 @@ def accuracy_percent(package, spread):
     remap = package.props(ACCURACY_PRESENTATION).get('RemappingData')
     if not isinstance(remap, dict):
         return None
+    return remap_value(remap_bounds(remap), spread)
 
-    def constant(name):
-        return (remap.get(name) or {}).get('BaseValueConstant') or 0.0
-    in_low, in_high = constant('InputValueMn'), constant('InputValueMx')
-    out_low, out_high = constant('OutputValueMn'), constant('OutputValueMx')
+
+def remap_bounds(remap):
+    """RemappingData -> (input low, input high, output low, output high); an absent bound is 0."""
+    return tuple((remap.get(name) or {}).get('BaseValueConstant') or 0.0
+                 for name in ('InputValueMn', 'InputValueMx', 'OutputValueMn', 'OutputValueMx'))
+
+
+def remap_value(bounds, value):
+    """A presentation's linear remap, input clamped; an empty input range gives the output low."""
+    in_low, in_high, out_low, out_high = bounds
     if in_high <= in_low:
         return f32(out_low)
     slope = f32((out_high - out_low) / (in_high - in_low))
-    clamped = min(in_high, max(in_low, spread))
+    clamped = min(in_high, max(in_low, value))
     return f32((clamped - in_low) * slope + out_low)
+
+
+def status_chance_remaps(package):
+    """{damage type path: remap bounds} from STATUS_CHANCE_MAPPING's MappingData ({} if absent).
+
+    The native code that walks MappingData was not read; an exact damage-type match (first entry
+    wins) is the natural reading, UNVERIFIED. Only presentations with remapping enabled count.
+    """
+    if STATUS_CHANCE_MAPPING not in getattr(package, 'index', {}):
+        return {}
+    found = {}
+    for row in package.props(STATUS_CHANCE_MAPPING).get('MappingData') or []:
+        damage_type, presentation = row.get('DamageType'), row.get('Presentation')
+        if not damage_type or not presentation or damage_type in found:
+            continue
+        props = package.props(presentation)
+        if props.get('bValueRemappingEnabled') and isinstance(props.get('RemappingData'), dict):
+            found[damage_type] = remap_bounds(props['RemappingData'])
+    return found
 
 
 def price_init(package, init, known, unresolved):
@@ -235,11 +280,15 @@ def price_init(package, init, known, unresolved):
 
 
 def sale_value(package, recipe, weapon_type, level, unresolved):
-    """(rounded-down sale price, whether the calculator was checked), or (None, False)."""
+    """(rounded-down sale price, whether the calculator was checked), or (None, False).
+
+    The part total starts at the type's BaseMonetaryValueModifier (native ComputeValueOfParts,
+    read 2026-10-23); the truncated result is capped by the type's currency (sale_value_cap()).
+    """
     init = weapon_type.get('MonetaryValue')
     if not isinstance(init, dict):
         return None, False
-    total = 1.0
+    total = f32(weapon_type.get('BaseMonetaryValueModifier', BASE_MONETARY_VALUE_MODIFIER_DEFAULT))
     # Every part in slot order, then the prefix and title name parts: the game recomputes the
     # part value after choosing the name parts (script WillowWeapon.InitializeInternal), and
     # launcher prefixes carry a MonetaryValueMod (Att_Price_RarityMultiplier_01_Common).
@@ -258,7 +307,31 @@ def sale_value(package, recipe, weapon_type, level, unresolved):
     if value is None:
         return None, False
     # The stored MonetaryValue is an integer; the conversion truncates (consistent with every card).
-    return math.trunc(value), init.get('InitializationDefinition') in PRICE_CALCULATORS_CHECKED
+    return (min(math.trunc(value), sale_value_cap(weapon_type)),
+            init.get('InitializationDefinition') in PRICE_CALCULATORS_CHECKED)
+
+
+def sale_value_cap(weapon_type):
+    """The sale value cap for the type's FormOfCurrency (absent: Credits; not an ECurrencyType entry: 0)."""
+    currency = weapon_type.get('FormOfCurrency') or CURRENCIES[0]
+    if currency in CURRENCY_CAPS:
+        return CURRENCY_CAPS[currency]
+    return OTHER_CURRENCY_CAP if currency in CURRENCIES else 0
+
+
+def slot_grade(base_grade, increases, effect):
+    """An activated slot's grade: round-half-up base grade + increases, clamped max first, then min."""
+    grade = math.floor((1.0 if base_grade is None else base_grade) + 0.5) + increases
+    if effect.get('bEnforceMaximumGrade') and grade > (effect.get('MaximumGrade') or 0):
+        grade = effect.get('MaximumGrade') or 0
+    if effect.get('bEnforceMinimumGrade') and grade < (effect.get('MinimumGrade') or 0):
+        grade = effect.get('MinimumGrade') or 0
+    return grade
+
+
+def slot_value(grade, base_modifier, per_grade):
+    """f32(f32((grade - 1) * PerGradeUpgrade) + BaseModifierValue): a constant 1, not the base grade."""
+    return f32(f32((grade - 1) * per_grade) + base_modifier)
 
 
 def ordered_parts(recipe):
@@ -279,6 +352,8 @@ def red_text(package, recipe, localize=None):
         return None
     lines = []
     for path in package.props(title).get('CustomPresentations') or []:
+        if not path:  # a null reference (one Vladof minigun barrel lists one) has no text
+            continue
         line = presentation_line(package, path, localize)
         if line and _is_red(line['source_color']):
             lines.append(line['text'])
@@ -415,6 +490,8 @@ def card_text_lines(package, recipe, parts, damage_type, shot_cost, zoom, locali
 
     for owner in sources:
         for path in _optional_props(package, owner).get('CustomPresentations') or []:
+            if not path:  # a null reference (one Vladof minigun barrel lists one) has no text
+                continue
             line = presentation_line(package, path, localize)
             if not line:
                 continue
@@ -434,6 +511,8 @@ def card_text_lines(package, recipe, parts, damage_type, shot_cost, zoom, locali
 
     for owner in sources:
         for path in _optional_props(package, owner).get('WeaponCardPresentations') or []:
+            if not path:
+                continue
             props = package.props(path)
             if props.get('bDontDisplayNumber'):
                 add(ordered, presentation_line(package, path, localize))
@@ -473,15 +552,12 @@ def combine(start, m, integer=False):
 def damage_type_of(package, recipe, weapon_type):
     """The elemental part's CustomDamageTypeDefinition, else any part's, else the type's default.
 
-    Precedence between parts is UNVERIFIED; in the decoded data only elemental parts
-    and a few unique barrels carry one.
+    weapon_recipe.weapon_damage_type. Precedence between parts is UNVERIFIED; in the decoded data
+    only elemental parts and a few unique barrels carry one. The name rule uses the native resolver
+    instead (weapon_recipe.native_damage_type: elemental part, else the type's default).
     """
-    ordered = sorted(recipe['parts'].items(), key=lambda item: item[0] != 'Elemental')
-    for _, choice in ordered:
-        custom = package.props(choice['part']).get('CustomDamageTypeDefinition')
-        if custom:
-            return custom
-    return weapon_type.get('DefaultDamageTypeDefinition')
+    return weapon_recipe.weapon_damage_type(
+        package, {slot: choice['part'] for slot, choice in recipe['parts'].items()}, weapon_type)
 
 
 ELEMENTS_BY_DAMAGE_TYPE = {
@@ -510,9 +586,13 @@ def card_element(package, recipe, damage_type):
 def status_rows(package, damage_type, final, value):
     """Status-effect card rows for the weapon's damage type ({} when it applies none).
 
-    Reproduces the observed cards (docs/verification/WEAPON_BALANCE_DECODE.md):
-    chance % = the status effect's Generic-surface BaseChance
-               * WeaponBaseStatusEffectChanceModifier * WeaponStatusEffectChanceModifier,
+    chance % (the card row) = the remap of WeaponCombinedStatusEffectChanceModifier (a data math
+               resolver: f32(WeaponBaseStatusEffectChanceModifier * WeaponStatusEffectChanceModifier))
+               by the presentation STATUS_CHANCE_MAPPING maps the damage type to, input clamped
+               (Fire/Corrosive/Shock [0, 5] -> [0, 100], slag [0, 3.33] -> [0, 100]). A damage type
+               without a mapping keeps the earlier card rule, the Generic-surface BaseChance * modifier
+               (docs/verification/WEAPON_BALANCE_DECODE.md);
+    status_chance_by_surface = each surface's BaseChance * the modifier (gameplay; unchanged);
     damage / sec = WeaponStatusEffectDamage (only for damage-over-time effects).
     The per-surface chances and the duration are listed for gameplay use; how the
     native code applies them per shot (e.g. GetFireIntervalChanceModifier) is UNVERIFIED.
@@ -528,10 +608,11 @@ def status_rows(package, damage_type, final, value):
         chance = value(row.get('BaseChance'))
         if chance is not None:
             surfaces[(row.get('SurfaceType') or '').removeprefix('DMGSURFACE_').lower()] = chance * factor
+    bounds = status_chance_remaps(package).get(damage_type)
     return {
         'status_effect': effect.get('StatusEffectType'),
         'status_effect_definition': effect_path,
-        'status_chance': surfaces.get('generic'),
+        'status_chance': remap_value(bounds, f32(factor)) if bounds else surfaces.get('generic'),
         'status_chance_by_surface': surfaces,
         'status_dps': final.get(ATTR + 'WeaponStatusEffectDamage') if effect.get('bDoesDamageOverTime') else None,
         'status_duration': value(effect.get('BaseDuration')),
@@ -751,15 +832,9 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
         # Only activated internal slots modify the weapon (external ones go to the owner's pools).
         if name not in activated or effect.get('bExternalSlot'):
             continue
-        grade = grades.get(name, 0)
-        if SLOT_BASE_GRADE_IN_VALUE:
-            grade += math.floor((base_grade or 0.0) + 0.5)
-        if effect.get('bEnforceMinimumGrade'):
-            grade = max(grade, effect.get('MinimumGrade') or 0)
-        if effect.get('bEnforceMaximumGrade'):
-            grade = min(grade, effect.get('MaximumGrade') or 0)
+        grade = slot_grade(base_grade, grades.get(name, 0), effect)
         per_grade = value(effect.get('PerGradeUpgrade')) or 0.0
-        amount = f32((value(effect.get('BaseModifierValue')) or 0.0) + f32(per_grade * grade))
+        amount = slot_value(grade, value(effect.get('BaseModifierValue')) or 0.0, per_grade)
         add(effect['AttributeToModify'], effect['ModifierType'], amount, f"slot {name} grade {grade}")
     for path in [p for p in (name_part_path(recipe.get('prefix')), name_part_path(recipe.get('title'))) if p]:
         apply_effects(path, package.props(path))
@@ -841,15 +916,18 @@ def evaluate(package, recipe, level, localize=None, level_bonus=0.0):
         'card': card, 'attributes': final, 'grades': grades, 'modifiers': sources,
         'unresolved_attributes': sorted(unresolved),
         'unverified_rules': [f'scale rule {SCALE_RULE!r}: read from native code (see combine())',
-                             'slot value = BaseModifierValue + PerGradeUpgrade * sum(GradeIncrease); '
-                             'base-grade term not read (SLOT_BASE_GRADE_IN_VALUE)',
+                             'slot value = BaseModifierValue + PerGradeUpgrade * (grade - 1), grade = base grade '
+                             '+ sum(GradeIncrease) clamped max then min (read from native code)',
                              'rarity = sum of truncated part rarities, tier from RarityLevelColors (read)',
                              'manufacturer grades not applied',
                              'accuracy = presentation remap of the spread, input clamped (read)',
-                             'sale value = trunc(price calculator(part and name-part MonetaryValueMod product, level))',
+                             'sale value = min(trunc(price calculator(type BaseMonetaryValueModifier * part and '
+                             'name-part MonetaryValueMod product, level)), currency cap) (read from native code)',
                              'weapon zoom = 80 / effective type FOV after WeaponZoomFOV slot effects; native resolver UNVERIFIED',
                              'fun text uses card CustomPresentations, WeaponCardPresentations, WeaponCardAttributes and shot cost',
-                             'status chance = Generic BaseChance * base * chance modifiers; per-shot use is native',
+                             'card status chance = mapped presentation remap of the combined chance modifier '
+                             '(data; exact damage-type match UNVERIFIED); per-surface chance = BaseChance * '
+                             'modifiers; per-shot use is native',
                              'display rounding from the presentation data (read), in single precision '
                              '(x87 precision setting inferred from a card); status rows one decimal (data)',
                              'level line: requirement = 0 for mission balances, else max(level - player bonus, 1); '

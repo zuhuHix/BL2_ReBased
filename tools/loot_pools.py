@@ -23,6 +23,20 @@ UNVERIFIED (ItemPool.SpawnBalancedInventoryFromPool is native code):
 - a list entry fires independently with probability min(1, PoolProbability);
 - a pool picks Quantity entries, each by weight among its eligible entries;
 - a sub-pool is expanded the same way; game-stage requirements gate a whole pool.
+
+Two seeded rolls exist. roll() / roll_pool() use Python's random.Random (existing
+callers keep their outputs). roll_crt() / roll_pool_crt() draw from
+weapon_recipe.CrtRand (the MSVC rand()), the rule the C++ port (src/weapon_gen.cpp)
+reproduces exactly:
+- each listed pool of a source draws one rand() (skipped without a draw when its
+  probability is unresolved or its gate is False) and fires when the probability
+  is >= 1 or rand()/32767 < probability;
+- a pool makes round-half-even(Quantity) draws; each draw takes r = total *
+  rand()/32767 over the eligible entries' shares (total = their sum in data
+  order) and the first entry with running sum <= r <= running sum + share wins
+  (pick()'s interval walk, without its de-duplication); a sub-pool recurses.
+The seeding is ours; the game's own sequence is not reproduced (UNVERIFIED that
+its pool roll uses the CRT rand() directly).
 Nothing game-derived is written into the repository; tables go under local/.
 """
 import argparse
@@ -245,6 +259,46 @@ def roll_pool(tree, rng, chain=()):
             drops.append({'item': entry['path'], 'chain': list(chain + (tree['path'],))})
         else:
             drops.extend(roll_pool(entry['pool'], rng, chain + (tree['path'],)))
+    return drops
+
+
+def crt_choice(entries, rng):
+    """One draw among entries with share > 0: r = total * rand()/32767, the first interval holding r."""
+    total = sum(e['share'] for e in entries)
+    r = total * rng.rand() / 32767.0
+    running = 0.0
+    for entry in entries:
+        if running <= r <= running + entry['share']:
+            return entry
+        running += entry['share']
+    return entries[-1]  # r == total after float rounding: the last entry
+
+
+def roll_pool_crt(tree, rng, chain=()):
+    """roll_pool() with weapon_recipe.CrtRand draws (module docstring); [{'item', 'chain'}]."""
+    drops = []
+    eligible = [e for e in tree['entries'] if e['share'] > 0]
+    if not eligible:
+        return drops
+    for _ in range(max(0, int(round(tree.get('quantity') or 1)))):
+        entry = crt_choice(eligible, rng)
+        if entry['kind'] == 'item':
+            drops.append({'item': entry['path'], 'chain': list(chain + (tree['path'],))})
+        else:
+            drops.extend(roll_pool_crt(entry['pool'], rng, chain + (tree['path'],)))
+    return drops
+
+
+def roll_crt(loot, rng):
+    """roll() with weapon_recipe.CrtRand draws: a listed pool fires when probability >= 1 or rand()/32767 < it."""
+    drops = []
+    for pool in loot['pools']:
+        chance = pool['probability']
+        if chance is None or pool['tree'].get('gate') is False:
+            continue
+        draw = rng.rand() / 32767.0
+        if chance >= 1.0 or draw < chance:
+            drops.extend(roll_pool_crt(pool['tree'], rng))
     return drops
 
 

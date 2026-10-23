@@ -5,6 +5,7 @@ import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import loot_pools as L
+import weapon_recipe as W
 
 
 def const(value, attribute=None, init=None, scale=1.0):
@@ -124,6 +125,30 @@ class TableTests(unittest.TestCase):
         package = world()
         tree = L.expand(package, L.Values(package), 'Pool.Rare', stage=1)
         self.assertEqual([d['item'] for d in L.roll_pool(tree, random.Random(1))], ['Gun.R', 'Gun.R'])
+
+    def test_crt_pool_roll_walks_shares(self):
+        package = world()
+        tree = L.expand(package, L.Values(package), 'Pool.Common', stage=5)  # Gun.A 0.75, Gun.B 0.25
+        # srand(1) draws 41 then 18467: r = 0.00125 -> Gun.A; then 0.5636 -> Gun.A (A covers [0, 0.75]).
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(tree, W.CrtRand(1))], ['Gun.A'])
+        rng = W.CrtRand(1)
+        rng.rand(), rng.rand(), rng.rand()  # next draw 26500: r = 0.8088 -> Gun.B
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(tree, rng)], ['Gun.B'])
+        rare = L.expand(package, L.Values(package), 'Pool.Rare', stage=1)
+        self.assertEqual([d['item'] for d in L.roll_pool_crt(rare, W.CrtRand(9))], ['Gun.R', 'Gun.R'])  # Quantity 2
+
+    def test_crt_source_roll_probability_and_gates(self):
+        package = world()
+        loot = L.table(package, L.Values(package), 'Pawn', stage=10)
+        # Pool.Guns probability 0.5: srand(1) draws 41 (0.00125 < 0.5, fires; one more draw inside),
+        # Pool.Rare is unresolved (no draw), Pool.Late probability 1 always fires.
+        drops = L.roll_crt(loot, W.CrtRand(1))
+        self.assertEqual(drops[-1]['item'], 'Gun.L')
+        self.assertEqual(len(drops), 2)
+        self.assertEqual(L.roll_crt(loot, W.CrtRand(1)), drops)
+        # srand(6000) starts (6000 * 214013 + 2531011) >> 16 = 19632: 0.599 >= 0.5 skips Pool.Guns.
+        self.assertEqual(W.CrtRand(6000).rand(), 19632)
+        self.assertEqual([d['item'] for d in L.roll_crt(loot, W.CrtRand(6000))], ['Gun.L'])
 
     def test_display_check_counts_agreement(self):
         package = world()
