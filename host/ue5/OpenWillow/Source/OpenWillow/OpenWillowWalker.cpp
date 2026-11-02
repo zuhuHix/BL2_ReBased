@@ -1378,6 +1378,10 @@ void AOpenWillowWalker::FireWeapon()
         Launch.Direction = Direction;
         Launch.VisualStart = Muzzle;
         Launch.Damage = PelletDamage;
+        // The level-up weapon damage scale reaches splash in the same ratio as the direct hit (UNVERIFIED: the native
+        // splash path under the scale has not been observed); without a running scale the recipe's splash is used as is.
+        if (FiredItem && PelletDamage != FiredItem->Damage && FiredItem->Damage > 0.f)
+            Launch.SplashDamage = Firing.Splash.Damage * (PelletDamage / FiredItem->Damage);
         Launch.DamageType = FiredItem ? FiredItem->DamageType : FString();
         // Lane E: the measured slice types name no tracer template, so their bullets fly unseen.
         // Elemental bullets draw their element's trail (seen on the real shock pistol); others follow lane E's rule.
@@ -1460,7 +1464,8 @@ void AOpenWillowWalker::StartReloadThrow(const FOpenWillowWeaponItem& Weapon)
     Launch.Start = MuzzleLocation();
     Launch.Direction = Camera->GetForwardVector();
     Launch.VisualStart = Launch.Start;
-    Launch.Damage = Weapon.Damage * Left;
+    // The running level-up weapon damage scale applies to the thrown gun as to a shot (UNVERIFIED).
+    Launch.Damage = ShotDamage(Weapon, GetWorld()->GetTimeSeconds()) * Left;
     Launch.SplashDamage = Launch.Damage * (Throw.Splash.Damage / FMath::Max(1e-3f, Weapon.Damage));
     Launch.DamageType = Weapon.DamageType;
     Launch.Color = FLinearColor(0.35f, 0.75f, 1.f);

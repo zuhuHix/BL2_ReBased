@@ -3049,8 +3049,9 @@ for this merge.
   `bullet_has_not_landed_in_the_pressing_frame` (trace guns exempt), `wrong_element_shot_...`, `multi_pellet_gun_fires_its_pellet_count_in_one_press`,
   `damage_called_once_per_pellet_that_hits`; `ammo_taken_once_per_press_not_per_pellet` unchanged. Dropped because they tested
   the replaced implementation's internals: `pellet_directions_inside_pattern_and_cone_bounds`, `shot_momentum_is_type_momentum_times_100`,
-  `*_bullet_lands_after_its_flight_time`, `firing_pattern_lines_sequential_scaled_random_rules` (main's pattern and flight rules are
-  covered by CTest `weapon-firing-math` and the in-engine `tools/test_weapon_firing.ps1`).
+  `*_bullet_lands_after_its_flight_time`, `firing_pattern_lines_sequential_scaled_random_rules` (main's pattern rules and the flight
+  step (speed, gravity, own-motion friction) are unit-tested by CTest `weapon-firing-math`; no in-engine check now compares a
+  projectile's impact delay with distance and speed, so runtime flight timing is OPEN).
 - **Muzzle point.** Main's view-model `MuzzleSocket` (`weapon_view.json`) first, then the branch's recipe `sockets` Muzzle
   (`GunSocketLocation`, WEAPON_VISUALS.md section 17, renumbered from 11), then main's camera-space fallback (logged once per gun).
   The base's Barrel + 27 cm estimate, which main had dropped, stays dropped. Whether the recipe socket's bone frame holds on
