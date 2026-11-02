@@ -88,7 +88,8 @@ prototypes, so the repository's clock started a little after the work did.
   and the golden card compare (69/69, automated; DECISIONS 2026-10-03); parts and
   card stats read from the running game; first-person placement from the weapon
   type's view offset; four rounds on four slice guns (hold-to-aim, reload clips,
-  muzzle flash, casings). Critic 5.8-6.5/10 over the last four rounds, 8/10 not
+  muzzle flash, casings). Independent critic agent 5.8, 5.5, 6.3, 6.5/10 over the
+  last four rounds (a judgement against real frames, not parity), 8/10 not
   reached ([record](docs/verification/WEAPON_VISUALS.md); DECISIONS 2026-10-04,
   2026-10-05, 2026-10-22).
 - **2026-10-04 to 2026-10-09, native notes** (#41, #59): about thirty own-words
@@ -129,22 +130,23 @@ prototypes, so the repository's clock started a little after the work did.
   inspected material fallbacks and component owners, blocking volumes and
   sphere/capsule collision, recorded walking routes, then four matched-viewpoint
   rounds (source lighting on Sanctuary only, decal default-deny, host
-  calibrations opt-in). Critic 4.5/10 before round 1, 5.0/10 for the default
-  state after review; 8/10 not reached
+  calibrations opt-in). Independent critic agent (not parity) 4.5/10 before
+  round 1, 5.0/10 for the default state after review; 8/10 not reached
   ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md),
   [walking](COLLISION_WALKING_VERIFICATION.md); DECISIONS 2026-10-21, 2026-10-22).
 - **2026-10-22, the HUD** (#47, #54, #53): Maya's action-skill indicator on BL2's
   own HUD movie with its rules read from the live movie; the HUD movie is the
   default gameplay HUD, with the turned clusters drawn through a perspective warp;
   the minimap drives BL2's own minimap clip from rules read in the live game.
-  Critic 9/10 (action skill), 7.7/10 (HUD), 8.2/10 (minimap)
+  Independent critic agent (not parity): 9/10 (action skill), 7.7/10 (HUD),
+  8.2/10 (minimap)
   ([action skill](docs/verification/ACTION_SKILL_HUD.md),
   [HUD](docs/verification/HUD_PARITY.md),
   [minimap](docs/verification/HUD_MINIMAP.md); DECISIONS 2026-10-22).
 - **2026-10-23, weapon parts catalog, loot generator, part library and firing
   from the parts** (#57, #58, #56): a census of every weapon balance and part; the
-  loot generator ported to C++; every gestalt mesh and skin imported into UE once,
-  guns assembled from their parts at run time; what a shot does read from the
+  loot generator ported to C++; every gestalt mesh and 300 of 301 skins imported
+  into UE once (the BuzzAxe melee material is unsupported), guns assembled from their parts at run time; what a shot does read from the
   gun's parts (firing modes, light bullets, rockets, splash, status effects, the
   Tediore throw) ([catalog](docs/verification/WEAPON_PARTS_CATALOG.md),
   [part library](docs/verification/WEAPON_PART_ASSETS.md),
@@ -156,10 +158,11 @@ prototypes, so the repository's clock started a little after the work did.
   (Phase 0 entries, 2026-09-10). Scripts: 12,968 of 12,978 functions decode
   structurally ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)). Both are
   structural agreement, not runtime compatibility.
-- Suites at 683a083 (PR #59, 2026-11-02): CTest 19/19, packages 9/9, quest suite
-  111/111 first run and 11/11 resume, UE5 module builds. `tools/test_weapon_firing.ps1`
-  was not run on the merge (the worktree had no generated firing recipes).
-  Automated checks only.
+- Suites on PR #59 (DECISIONS 2026-11-02): quest suite first run 111/111 and
+  resume 11/11 at 5be3581 and again at a8a3dd5 (the tree merged as 683a083);
+  CTest 19/19, packages 9/9 and the UE5 module build at 5be3581.
+  `tools/test_weapon_firing.ps1` was not run (the worktree had no generated
+  firing recipes). Automated host checks only, not parity.
 - Weapon generator (DECISIONS 2026-10-23,
   [record](docs/verification/WEAPON_PARTS_CATALOG.md)): `ow-weapongen` reproduces
   the Python roll and evaluation in 2,919,834 fields over 29,880 balance rolls,
@@ -167,7 +170,8 @@ prototypes, so the repository's clock started a little after the work did.
   yet). Golden cards 69 / 69 / 68 of 69. Automated.
 - Part library (DECISIONS 2026-10-23,
   [record](docs/verification/WEAPON_PART_ASSETS.md)): 300 of 301 skins imported;
-  the oracle passes 210/210 sample guns on fragments and triangles. Critic 7.32/10
+  the oracle passes 210/210 sample guns on fragments and triangles. Independent
+  critic agent (not parity) 7.32/10
   Inspect, 5.36/10 first person on 39 matched guns.
 - HUD (DECISIONS 2026-10-22): HUD shots 17/17, action-skill suite 19/19, minimap
   in-engine 15/15 (host suites, not parity).
@@ -179,7 +183,7 @@ prototypes, so the repository's clock started a little after the work did.
   blends, the hold's mesh lowering observed live); CTest 10/10, packages 9/9, quest suite 79/0 and 11/0. Critic overall
   5.8 / 5.7 / 5.5 over three rounds (target 4.5); an agent's judgement against real frames, not parity.
 - Inventory and Skills rounds 16-19 (DECISIONS 2026-10-21): the pages apply the movie's own 3D turn, empty backpack cells are
-  selectable, Inspect and Skills details follow fresh real-game captures; critic 7.27 before, 7.57-7.67 after (8/10 not reached).
+  selectable, Inspect and Skills details follow fresh real-game captures; independent critic agent (not parity) 7.27 before, 7.57-7.67 after (8/10 not reached).
   Inventory suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE (bounded item set), navigation 30/30, CTest 10/10, packages 9/9.
 - Suites after the Phaselock, ambient-citizen, gun and menu rounds (DECISIONS 2026-10-05): CTest 10/10,
   packages 9/9, quest suite 79/79 first run and 11/11 resume, door suite 16/16, inventory suite 49 PASS /
@@ -272,9 +276,11 @@ prototypes, so the repository's clock started a little after the work did.
 - Captures of the original game now exist for the Fire mission's event order
   (lane L2), a bullymong fight on another map (lanes L3-L9), Phaselock frames and
   the menus and HUD; none covers the whole slice loop in Sanctuary yet.
-- The UE host has no enemy AI, no attack on Maya, no down state (health 0 is an
-  immediate respawn) and no loot drop from a kill; those run only on the VM
-  (`--combat-run`). The AI itself (plan step S-h) is not implemented anywhere.
+- The UE host has no attack on Maya, no down state (health 0 is an immediate
+  respawn) and no loot drop from a kill. The VM (`--combat-run`) runs the hit,
+  death, kill-XP, down and loot steps; its melee blow is a guaranteed-hit fixture
+  ([record](docs/verification/COMBAT_MELEE.md)). Enemy AI and target choice
+  (plan step S-h) are not implemented anywhere, neither in the host nor on the VM.
 - Runtime flight timing of projectiles has no in-engine check since the #59 merge
   (DECISIONS 2026-11-02), and the spread distribution and status proc rate are
   not measured ([record](docs/verification/WEAPON_PROJECTILES.md)).
@@ -292,10 +298,6 @@ No phase after Phase 0 has passed its gate.
 ---
 
 ## Now / next
-
-In flight (2026-11-02): four parallel workstreams on the HUD, the menus, the
-weapons and Phaselock. Nothing about their outcome is claimed here; results will
-be recorded in DECISIONS.md and `docs/verification/` as they land.
 
 The first world-object connection is a bounded Sanctuary Matinee door: installed
 movement keys drive the existing mesh/collision, and original mover notification
@@ -749,11 +751,16 @@ Gate progress (2026-11-02; "in the host" means the UE5 build, with labelled
 stand-ins; none of it is parity):
 
 - [~] **Spawn:** Maya spawns in Sanctuary with animated first-person arms and
-  walks with collision ([walking](COLLISION_WALKING_VERIFICATION.md)).
-- [~] **Fight:** Maya shoots from the parts at the Fire dummy and an opt-in stock
-  bullymong test target, which take damage and die; enemies do not fight back in
-  the host. The bullymong's hit, death, kill XP and melee blow run on the VM only,
-  and no AI exists ([firing](docs/verification/WEAPON_PROJECTILES.md),
+  walks with collision ([arms and held guns](docs/verification/WEAPON_VISUALS.md),
+  [walking](COLLISION_WALKING_VERIFICATION.md)).
+- [~] **Fight:** in the host Maya fires from the parts; the in-engine firing
+  test runs against the host dummy on Sanctuary_P
+  ([firing](docs/verification/WEAPON_PROJECTILES.md)). Enemies do not fight back
+  in the host and no enemy AI exists. A bullymong's hit, death and kill XP run on
+  the VM only, from scripted steps, and its blow on Maya is a VM fixture that
+  always connects, not a fight in UE
+  ([hit](docs/verification/COMBAT_HIT_CHAIN.md),
+  [death](docs/verification/COMBAT_DEATH.md),
   [melee](docs/verification/COMBAT_MELEE.md)).
 - [~] **Loot a gun:** the host can drop a gun and pick it up again (inventory
   suite), and `ow.RollGun` generates guns; no kill, chest or mission drops one in
@@ -764,16 +771,20 @@ stand-ins; none of it is parity):
   suite 49/0 on the bounded item set;
   [record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)).
 - [~] **Phaselock:** cast, lift and release on a stock bullymong from stock data;
-  bob and cast gates confirmed in game; critic 5.4-5.9/10
+  bob and cast gates confirmed in game; independent critic agent 5.4-5.9/10
+  (not parity)
   ([record](docs/verification/PHASELOCK_STOCK_DATA.md)).
 - [~] **One mission:** the stock Fire mission plays to turn-in in the host (quest
-  suite 111/111 and resume 11/11 at 683a083), its event order compared with a
+  suite 111/111 and resume 11/11 at a8a3dd5, DECISIONS 2026-11-02), its event order compared with a
   live trace ([record](docs/verification/SANCTUARY_RPG_MISSION.md),
   [golden trace](docs/verification/FIRE_MISSION_GOLDEN_TRACE.md)).
 - [~] **Die and respawn:** in the host, health 0 respawns Maya at the decoded
   station exit point with full health (a quest-suite check; nothing in the host
-  damages her in play); the down state, bleed-out and second wind run on the VM
-  only ([record](docs/verification/COMBAT_DOWN_RESPAWN.md)).
+  damages her in play;
+  [host record](docs/verification/SANCTUARY_RPG_MISSION.md), its "Death" line). The down
+  state, bleed-out and second wind run on the VM only, where the station and
+  exit-point choice do not run (a bare `PlayerStart` stands in;
+  [VM record](docs/verification/COMBAT_DOWN_RESPAWN.md), verdict 4).
 
 ---
 

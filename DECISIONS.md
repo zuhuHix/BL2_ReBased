@@ -3035,8 +3035,12 @@ native notes: `docs/verification/NATIVE_WEAPON_FIRING.md` (new, own words, raw o
 ## 2026-11-02: merge of main into `t3/ai-melee-and-bleedout` (host firing, muzzle, turn-in loot)
 
 AI-assisted (Claude). One merge commit; where both lines of work implemented the same host behaviour, main's implementation
-is kept and the branch's callers adapted. Nothing here was re-checked in the running game; the in-engine suites were not run
-for this merge.
+is kept and the branch's callers adapted. Nothing here was re-checked in the running game. The paragraph as first written said
+the in-engine suites were not run for this merge; that was before the hub ran them. Recorded afterwards (PR #59 body):
+`tools/test_quest.ps1` at 5be3581 (the merge) and again at a8a3dd5 (after review fixes 1), each first run PASS 111/111 and
+resume PASS 11/11 (host behaviour only, not parity with the original game); CTest 19/19 and `verify_packages` 9/9 at 5be3581,
+with the UE5 module compiling. `tools/test_weapon_firing.ps1` was not run (no generated firing recipes in that worktree).
+683a083 merges a8a3dd5 into an unmoved main, so it is the same tree.
 
 - **Gun firing.** The branch's in-walker bullets (lane Hf, 2026-10-08: card `firing` block from `tools/weapon_refresh_firing.py`,
   `FOpenWillowFiringMode`, `AdvanceBullets`, `FShotRecord`) are replaced by main's firing from the parts (`OpenWillowFiring`,
