@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-10-02
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-11-02
 
 ---
 
@@ -35,13 +35,15 @@ deferred until that gate is met; they move to Phase 5/6.
 
 The project is worked on actively. There are no completion dates, no time
 estimates and no completion percentages here; this section only records what
-the repository shows as of 2026-10-02, and each line names the record that
+the repository shows as of 2026-11-02 (`origin/main` at 683a083), and each line names the record that
 backs it ([DECISIONS.md](DECISIONS.md) entry date or verification file). Where
 a number is an automated check it says so; "passes" is never parity with the
 original game.
 
-**Elapsed.** First commit 2026-09-10, so 22 calendar days. 191 commits on
-`origin/main` across 17 days with at least one commit. Built with heavy AI
+**Elapsed.** First commit 2026-09-10, so 53 calendar days. 401 commits on
+`origin/main` (`git rev-list --count`, which includes the commits of merged
+branches) across 28 days with at least one commit (author dates; the 98 commits
+merged as #59 carry their 2026-10-05 to 2026-10-09 dates). Built with heavy AI
 assistance (see the README). The first commit imported earlier local
 prototypes, so the repository's clock started a little after the work did.
 
@@ -73,6 +75,80 @@ prototypes, so the repository's clock started a little after the work did.
   curve, maximum health, skill points, the Fire mission's XP and the Phaselock
   bob and cast gates confirmed in game; 69 golden weapon cards with their exact
   parts ([record](docs/verification/REALGAME_GROUND_TRUTH.md)).
+- **2026-10-03 to 2026-10-22, Phaselock rounds 2-20** (#40, #41, #45, #50):
+  presentation compared with matched real-game frames; the bubble size rule read
+  from the game's emitters in the running game (DECISIONS 2026-10-03); from round
+  16 a stock bullymong is the lifted target with its own PhaseLock clips and stock
+  blends; rounds 17-20 corrected the capture FOV and pitch. An independent critic
+  agent's scores stayed between 4.5 and 6.3/10 (rounds 17-20: 5.4-5.9; the 8/10
+  target was not reached)
+  ([record](docs/verification/PHASELOCK_STOCK_DATA.md); DECISIONS 2026-10-03 to
+  2026-10-05, 2026-10-21, 2026-10-22).
+- **2026-10-03 to 2026-10-22, guns parity** (#40, #41, #48): weapon card rules
+  and the golden card compare (69/69, automated; DECISIONS 2026-10-03); parts and
+  card stats read from the running game; first-person placement from the weapon
+  type's view offset; four rounds on four slice guns (hold-to-aim, reload clips,
+  muzzle flash, casings). Critic 5.8-6.5/10 over the last four rounds, 8/10 not
+  reached ([record](docs/verification/WEAPON_VISUALS.md); DECISIONS 2026-10-04,
+  2026-10-05, 2026-10-22).
+- **2026-10-04 to 2026-10-09, native notes** (#41, #59): about thirty own-words
+  notes written from Ghidra readings (Phaselock presentation, weapon visuals and
+  firing, the mission script bridge, dialog, skills, use key, save/load,
+  attributes, hit pipeline, death, loot, AI targeting, melee and awareness, the
+  down state), all `UNVERIFIED` unless a line says how it was confirmed
+  ([index](docs/verification/NATIVE_INDEX.md); DECISIONS 2026-10-04 to 2026-10-09).
+- **2026-10-05 to 2026-10-09, merged 2026-11-02 as #59** (record per step below):
+  script swaps 1-11 put Fire mission pieces on the script VM (accept and turn-in,
+  experience, objectives, Marcus's use chain and dialog choice, level-up refill
+  and cooldown reset); real-game lanes L1-L9 recorded the level-up, the Fire
+  mission's event order, a bullymong fight, kill XP, projectiles, and bullymong
+  targeting, melee and awareness; and the combat steps S-a to S-g run on the VM
+  through `ow-package --combat-run` (not in the UE host): pawn health, the hit
+  chain, the death chain, kill XP, a bullymong's melee blow as a fixture without
+  AI, Maya's down state with bleed-out, second wind and respawn, and loot on death
+  as item records. `tools/verify_combat_pawn.py --vm` 97 PASS / 0 FAIL / 4
+  MISSING / 1 OPEN (automated; "the VM reproduces the live row", the native
+  bodies stay `UNVERIFIED`)
+  ([down/respawn](docs/verification/COMBAT_DOWN_RESPAWN.md),
+  [loot](docs/verification/COMBAT_LOOT.md),
+  [awareness live](docs/verification/AI_AWARENESS_LIVE.md); DECISIONS 2026-10-05
+  to 2026-10-09 and 2026-11-02).
+- **2026-10-07 and 2026-10-23, REA native analysis** (#55): REA installed as an
+  analysis front end over Ghidra (DECISIONS 2026-10-07); why its first query timed
+  out on this executable, and the one-session warm-up recipe (about 20 minutes)
+  ([NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md), "Using REA on Borderlands2.exe").
+- **2026-10-21 and 2026-10-22, inventory and Skills rounds 16-22** (#46, #49): the
+  movie's own 3D turn, selectable empty backpack cells, card content from the
+  parts, Skills keyboard navigation against matched real-game references. Critic
+  7.27 before round 16, 7.67 and 7.57 at rounds 18 and 19, 7.85 at round 21
+  (kept; round 22 scored lower and was reverted); 8/10 not reached
+  ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md),
+  [cards](docs/verification/INVENTORY_CARD_STATS.md); DECISIONS 2026-10-21,
+  2026-10-22).
+- **2026-10-21 and 2026-10-22, Sanctuary parity rounds 1-4** (#43, #44, #51):
+  inspected material fallbacks and component owners, blocking volumes and
+  sphere/capsule collision, recorded walking routes, then four matched-viewpoint
+  rounds (source lighting on Sanctuary only, decal default-deny, host
+  calibrations opt-in). Critic 4.5/10 before round 1, 5.0/10 for the default
+  state after review; 8/10 not reached
+  ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md),
+  [walking](COLLISION_WALKING_VERIFICATION.md); DECISIONS 2026-10-21, 2026-10-22).
+- **2026-10-22, the HUD** (#47, #54, #53): Maya's action-skill indicator on BL2's
+  own HUD movie with its rules read from the live movie; the HUD movie is the
+  default gameplay HUD, with the turned clusters drawn through a perspective warp;
+  the minimap drives BL2's own minimap clip from rules read in the live game.
+  Critic 9/10 (action skill), 7.7/10 (HUD), 8.2/10 (minimap)
+  ([action skill](docs/verification/ACTION_SKILL_HUD.md),
+  [HUD](docs/verification/HUD_PARITY.md),
+  [minimap](docs/verification/HUD_MINIMAP.md); DECISIONS 2026-10-22).
+- **2026-10-23, weapon parts catalog, loot generator, part library and firing
+  from the parts** (#57, #58, #56): a census of every weapon balance and part; the
+  loot generator ported to C++; every gestalt mesh and skin imported into UE once,
+  guns assembled from their parts at run time; what a shot does read from the
+  gun's parts (firing modes, light bullets, rockets, splash, status effects, the
+  Tediore throw) ([catalog](docs/verification/WEAPON_PARTS_CATALOG.md),
+  [part library](docs/verification/WEAPON_PART_ASSETS.md),
+  [firing](docs/verification/WEAPON_PROJECTILES.md); DECISIONS 2026-10-23).
 
 **Measured** (automated checks and timings; one PC unless stated)
 
@@ -80,6 +156,25 @@ prototypes, so the repository's clock started a little after the work did.
   (Phase 0 entries, 2026-09-10). Scripts: 12,968 of 12,978 functions decode
   structurally ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)). Both are
   structural agreement, not runtime compatibility.
+- Suites at 683a083 (PR #59, 2026-11-02): CTest 19/19, packages 9/9, quest suite
+  111/111 first run and 11/11 resume, UE5 module builds. `tools/test_weapon_firing.ps1`
+  was not run on the merge (the worktree had no generated firing recipes).
+  Automated checks only.
+- Weapon generator (DECISIONS 2026-10-23,
+  [record](docs/verification/WEAPON_PARTS_CATALOG.md)): `ow-weapongen` reproduces
+  the Python roll and evaluation in 2,919,834 fields over 29,880 balance rolls,
+  7,680 pool rolls and 6,795 pool guns with 0 mismatches (base game only; DLC not
+  yet). Golden cards 69 / 69 / 68 of 69. Automated.
+- Part library (DECISIONS 2026-10-23,
+  [record](docs/verification/WEAPON_PART_ASSETS.md)): 300 of 301 skins imported;
+  the oracle passes 210/210 sample guns on fragments and triangles. Critic 7.32/10
+  Inspect, 5.36/10 first person on 39 matched guns.
+- HUD (DECISIONS 2026-10-22): HUD shots 17/17, action-skill suite 19/19, minimap
+  in-engine 15/15 (host suites, not parity).
+- Shot effects (DECISIONS 2026-10-23,
+  [record](docs/verification/WEAPON_PROJECTILES.md)): matched-frame critic 2.1,
+  3.9, 4.2/10 over three rounds, stalled; host shot effects are additive stand-ins,
+  not BL2's particle systems.
 - Phaselock round 16 (DECISIONS 2026-10-21): a stock bullymong as the lifted target (its four PhaseLock clips, stock
   blends, the hold's mesh lowering observed live); CTest 10/10, packages 9/9, quest suite 79/0 and 11/0. Critic overall
   5.8 / 5.7 / 5.5 over three rounds (target 4.5); an agent's judgement against real frames, not parity.
@@ -123,36 +218,66 @@ prototypes, so the repository's clock started a little after the work did.
   rolled parts matches 52 of 69 cards in every printed stat. Inventory open in
   the original game: ~126-156 ms to the first page frame. Paint: an independent
   critic agent scored the host guns 3-4.5/10 against real captures.
+- Real game, 2026-10-03 to 2026-10-23 (bl-sdk sessions with saves blocked; the
+  record of each is named): a level-up refills health to the new maximum and a
+  natural level-up adds a 30 s weapon-damage scale (lane L1, DECISIONS 2026-10-07);
+  the Fire mission's event order recorded and compared with the VM, 38 events
+  matching, 4 out of order, 5 missing, 4 extra before script swap 8 followed it
+  ([record](docs/verification/FIRE_MISSION_GOLDEN_TRACE.md)); a bullymong fight,
+  kill XP and the Defense Boost factor (lanes L3, L5b, L6,
+  [record](docs/verification/COMBAT_GOLDEN_TRACE.md)); a bullymong's target
+  priority formula on 134 samples to 5e-8 (lane L8,
+  [record](docs/verification/AI_MELEE_TARGETING_LIVE.md)); the den-based notice
+  rules (sight, and proximity at 768) and the threat level over time (lane L9,
+  [record](docs/verification/AI_AWARENESS_LIVE.md)); light bullet flight, air
+  friction, rocket speed, per-pellet damage on 4 of 5 guns, splash with and
+  without falloff, the status-effect damage clock and the Tediore throw
+  ([record](docs/verification/WEAPON_PROJECTILES.md), "confirmed live" rows);
+  40/40 spawned generated guns carry the generated balance, parts, level, name and
+  value, and 39/39 spawned guns show the fragments and skin the part library
+  predicts (DECISIONS 2026-10-23); the action-skill HUD and minimap rules read
+  from the live movie (DECISIONS 2026-10-22).
 
 **UNVERIFIED** (read or fitted, not confirmed by running the original game)
 
-- Every native rule in the dispatch, progression and Phaselock-targeting notes
-  not listed as confirmed above (progression sections 2-4 and the Phaselock bob
-  and reload/put-away gates were confirmed in game on 2026-10-02), and the
-  executor behaviour built on the dispatch notes: synthetic tests show
-  the executors follow the notes, not that the notes are right
+- Every native rule in the native notes not listed as confirmed above, and the
+  executor and VM behaviour built on them: synthetic tests show the code follows
+  the notes, not that the notes are right
   ([dispatch](docs/verification/NATIVE_MISSION_DISPATCH.md),
   [progression](docs/verification/NATIVE_PROGRESSION.md),
-  [targeting](docs/verification/NATIVE_PHASELOCK_TARGETING.md)). The
-  progression rules are implemented in the tools and host (quest suite 75/75
-  and 11/11); the Phaselock targeting, constraint and presentation changes are
-  written but have not passed a suite (module DLL blocked by Windows
-  Application Control, DECISIONS 2026-10-02).
+  [targeting](docs/verification/NATIVE_PHASELOCK_TARGETING.md),
+  [index](docs/verification/NATIVE_INDEX.md)). The Phaselock targeting,
+  constraint and presentation changes that were blocked on 2026-10-02 have since
+  passed the quest suite and the Phaselock shots (DECISIONS 2026-10-21,
+  2026-10-22); the targeting rules themselves are still not compared with the
+  game.
+- The VM combat steps S-a to S-g reproduce recorded live rows; the bodies of the
+  natives they bind are role-level readings, and the respawn station, timers,
+  shields and the live 3-item money drop are stand-ins or `OPEN`
+  ([down/respawn](docs/verification/COMBAT_DOWN_RESPAWN.md),
+  [loot](docs/verification/COMBAT_LOOT.md)).
+- Sanctuary's host lighting calibrations (sun, sky light, exposure, white
+  balance, cloud cap) are screenshot fits, not decoded
+  ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md)).
 - The whole weapon paint and decal reading, its display scale and shading
   inputs (`USE_SHADER_SHADING` stays off until the scene lighting is
   calibrated); environment reflection, emissive and in-game lighting are not
   modelled.
 - The slice host stand-ins: kickoff played right after acceptance, dialog
   outputs selected together, a save-state fixture for the dependency mission, a
-  a lent
-  mission weapon ([route record](docs/verification/SANCTUARY_RPG_MISSION.md)).
+  lent mission weapon ([route record](docs/verification/SANCTUARY_RPG_MISSION.md)).
 
 **Blocked or open**
 
-- No capture of the original game exists for any slice behaviour: it needs the
-  game driven interactively with exclusive keyboard and screen
-  ([capture blocker](docs/verification/SANCTUARY_RPG_MISSION.md#capture-blocker-needs-the-maintainer)),
-  and a launch under the logged-in Steam account failed (DECISIONS 2026-10-02).
+- Captures of the original game now exist for the Fire mission's event order
+  (lane L2), a bullymong fight on another map (lanes L3-L9), Phaselock frames and
+  the menus and HUD; none covers the whole slice loop in Sanctuary yet.
+- The UE host has no enemy AI, no attack on Maya, no down state (health 0 is an
+  immediate respawn) and no loot drop from a kill; those run only on the VM
+  (`--combat-run`). The AI itself (plan step S-h) is not implemented anywhere.
+- Runtime flight timing of projectiles has no in-engine check since the #59 merge
+  (DECISIONS 2026-11-02), and the spread distribution and status proc rate are
+  not measured ([record](docs/verification/WEAPON_PROJECTILES.md)).
 - Sanctuary visual parity, the stripped sky graph, native material graphs and
   the 79 untouched maps (see Now / next and Phase 1).
 - Audio is looked up and logged, never played; choosing a decoder is a
@@ -167,6 +292,10 @@ No phase after Phase 0 has passed its gate.
 ---
 
 ## Now / next
+
+In flight (2026-11-02): four parallel workstreams on the HUD, the menus, the
+weapons and Phaselock. Nothing about their outcome is claimed here; results will
+be recorded in DECISIONS.md and `docs/verification/` as they land.
 
 The first world-object connection is a bounded Sanctuary Matinee door: installed
 movement keys drive the existing mesh/collision, and original mover notification
@@ -186,8 +315,8 @@ completion), all `UNVERIFIED`. Recorded checks (DECISIONS 2026-10-02): quest sui
 16/16, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9.
 All of it is host behaviour with labelled stand-ins (native auto-aim selection and constraint evaluation for
 Phaselock, a save-state fixture for the dependency mission; the turn-in loot stand-in was removed on 2026-10-07, the
-mission gives XP only as the stock data does) and `UNVERIFIED` rules; nothing has been compared against the original game, and every
-parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
+mission gives XP only as the stock data does) and `UNVERIFIED` rules; at that date nothing had been compared against the original game (the
+Fire mission's event order was compared with a live trace on 2026-10-07, lane L2), and every parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
 [the route record](docs/verification/SANCTUARY_RPG_MISSION.md) and
 [the dispatch notes](docs/verification/NATIVE_MISSION_DISPATCH.md).
 
@@ -282,9 +411,11 @@ well-bounded ones are marked *good first task*.
       laptop, GPU-bound with ~72% of the frame in TSR; `-LowEnd` reaches the
       60 FPS cap. Candidate anti-aliasing change recorded, not applied. See
       [performance record](docs/verification/PERFORMANCE.md).
-- [ ] Matched-viewpoint screenshots against the original game: the plan's
-      per-map verification method. Needs someone with the game and both
-      builds open.
+- [~] Matched-viewpoint screenshots against the original game: the plan's
+      per-map verification method. Sanctuary has eight matched cameras and four
+      critic rounds (5.0/10 for the default state, 2026-10-22); 8/10 not
+      reached, other maps not started. See the
+      [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
 - [x] Cross-check the census against umodel's view of the same packages:
       4,750,427 exports over 2006 base and DLC packages, no offset, size or
       class disagreement; the 7 name-only differences are umodel-side
@@ -394,9 +525,9 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 - [ ] Static mesh importer for all meshes
   - [ ] External visual-payload adapter after the Phase 0.5 gate
   - [x] All render LODs, all UV sets, section material references
-  - [x] Collision hulls from `RB_BodySetup` (box and convex) *Caveat:*
-        sphere, capsule and cooked PhysX shapes unsupported; refreshed on
-        Sanctuary only
+  - [x] Collision hulls from `RB_BodySetup` (box and convex; sphere and
+        capsule elements and blocking volumes since 2026-10-21) *Caveat:*
+        cooked PhysX shapes unsupported; refreshed on Sanctuary only
   - [ ] Source mesh data
 - [ ] Texture importer with TFC streaming
   - [ ] External texture-payload adapter after the Phase 0.5 gate
@@ -433,6 +564,10 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 - [ ] Lighting
   - [x] Inspection rig: movable sun, neutral skylight, reflection capture,
         auto exposure, AO. For geometry/material checks only
+  - [~] Source lighting: Sanctuary's decoded directional light, sky light,
+        height fog and post-process settings drive the host (2026-10-22)
+        *Caveat:* Sanctuary only; the calibrations to UE5 units are screenshot
+        fits, `UNVERIFIED`
   - [ ] Modern: dynamic GI
   - [ ] Fidelity: parse SM3 lightmaps from `Lighting.tfc`
 - [ ] Camera and movement
@@ -450,8 +585,9 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
   - [ ] Loading times and memory profile *Caveat:* one settled frame-time
         and process-memory sample on Sanctuary recorded; no load-time
         measurement
-- [ ] Verification: side-by-side screenshots against the real game per map
-      (not yet started; needs matched viewpoints)
+- [~] Verification: side-by-side screenshots against the real game per map.
+      Sanctuary: eight matched cameras, critic 5.0/10 for the default state
+      (2026-10-22); other maps not started
 
 **Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually
 verified against the real game → work moves on to Phase 2 for the vertical
@@ -488,9 +624,16 @@ coverage.
       full states/latent behavior and opcode semantics remain unverified.
       First UE5 inventory connection executes original `MoveDelta` on item-only
       backpack rows; the rest of the menu remains on the host adapter.
+      Class export bodies decode 3,339 / 3,339 in `verify_packages` (structural,
+      DECISIONS 2026-10-06).
 - [ ] Interpreter: expressions, locals, `out` params, structs, dynamic arrays,
       casts, `foreach`, `switch`, `goto`, delegates, `super`, states and
       transitions, latent functions, timers
+      *Progress (work dated 2026-10-05 to 2026-10-09, merged 2026-11-02 in #59):*
+      script swaps 1-11 run Fire mission pieces as installed script on the VM,
+      and the combat steps S-a to S-g run the installed hit, death, down and
+      loot scripts there (`ow-package --combat-run`). The Fire event-order
+      tool's 32 rules hold. Latent state code is still out of scope; not ticked.
 - [ ] Native dispatch table: all 7,141 natives registered as stubs that log
       `UNIMPLEMENTED name(args)`
       *Note (2026-10-02):* a scan of the executable's own registration tables
@@ -547,33 +690,90 @@ rule down in our own words, implement from that note, then confirm it with the
 golden-file loop: hook the native in the real game, log every call's inputs
 and outputs during play, implement until our engine reproduces the log, extend
 the log on mismatch. Decompiler output never enters the repository.
-Status (2026-10-02): the Ghidra tooling exists (`tools/ghidra/`) and three note sets
-have been written (mission/behavior/Kismet dispatch, progression, Phaselock targeting), all `UNVERIFIED`; the dispatch
-notes are implemented in the slice executors, the others are not yet. No native rule has been confirmed against the
-running game.
+Status (2026-11-02): over thirty native notes exist
+([index](docs/verification/NATIVE_INDEX.md)); every rule in them is `UNVERIFIED` unless a line says how it was
+confirmed. Since 2026-10-02 some rules have been confirmed in the running game through bl-sdk hooks and reads, each
+named in its record: the progression rules and the Phaselock bob and cast gates (2026-10-02,
+[record](docs/verification/REALGAME_GROUND_TRUTH.md)); the Phaselock bubble size rule (DECISIONS 2026-10-03); the
+light bullet, air friction, rocket speed, per-pellet damage, splash, status-damage clock and Tediore throw rules (the
+"confirmed live" rows of [WEAPON_PROJECTILES.md](docs/verification/WEAPON_PROJECTILES.md)); the generator's level,
+name rule and part choice on spawned guns and the weapon material build on 39 guns (DECISIONS 2026-10-23); and, for
+den-spawned bullymongs on one map, the notice rules, `ValidTarget` (six answers), the threat gate of
+`ValidCurrentTarget`, `TargetChanged`'s flag and counters, and the target priority formula (lanes L8 and L9,
+[awareness](docs/verification/AI_AWARENESS_LIVE.md), [targeting](docs/verification/AI_MELEE_TARGETING_LIVE.md); the
+lone-bullymong case, the cone boundary and the leaps are still `UNVERIFIED`). The VM combat steps reproduce recorded
+live numbers, which confirms the numbers, not the native bodies.
 
 Priority order:
 - [ ] Stat core (~120): `AttributeDefinition*`, `SkillDefinition`,
       `WeaponPartDefinition`, `InventoryBalanceDefinition`,
       `WillowDamageTypeDefinition`
+      *Progress:* weapon card rules (golden cards 69/69) and the C++ generator
+      (0 mismatches against the Python tools) for weapons; level-up attributes
+      on the VM. Other item kinds and the general attribute system are not done.
 - [ ] `WillowPawn` (246), `WillowPlayerPawn` (65): health/shield, FFYL, damage
+      *Progress:* health, the hit and death chains and FFYL (down, bleed-out,
+      second wind, respawn) run on the VM against recorded live rows; shields and
+      the host's down state are not done.
 - [ ] `WillowPlayerController` (298): input, aiming, skills, interaction
 - [ ] `WillowWeapon` (121), `WillowProjectile` (95): fire, reload, spread,
       recoil, elemental procs
+      *Progress:* firing modes, light bullets, rockets, splash, status damage and
+      the Tediore throw from the parts in the host (rules confirmed live, see
+      above); spread distribution, proc rate, elemental impacts, beams and
+      ricochets are not.
 - [ ] `WillowInventory` (50), `WillowItem` (39), item generation from parts
+      *Progress:* weapon generation from parts in C++ and the host
+      (`ow.RollGun`); guns assembled from their parts; non-weapon items not
+      generated.
 - [ ] AI: `WillowAIPawn` (121), `WillowMind` (47), `WillowAIComponent` (45),
       GearboxFramework `AIComponent` (48), `GearboxMind` (32),
       `GearboxCoverStateManager` (48)
+      *Progress:* notes and live observations for bullymong targeting, melee
+      and awareness; a melee blow as a VM fixture without AI. No AI runs.
 - [ ] `WillowInteractiveObject` (134): doors, chests, vendors, switches
 - [ ] `WillowVehicle` (156)
 - [ ] Scaleform bridge (512), `WillowHUDGFxMovie` (98), `WillowUIInteraction`
       (41) via an SWF VM; debug HUD until then
+      *Progress:* BL2's own HUD, inventory and Skills movies run in a Ruffle
+      overlay; the action-skill indicator and minimap follow rules read from the
+      live movie. Ruffle is a stand-in for Scaleform, not this step.
 - [ ] Wwise audio (17 + `AkAudio`), Bink video
 
 **Gate:** a full loop on Sanctuary with Maya: spawn, fight enemies, loot a
 gun, equip it, use Phaselock, complete one hand-picked mission, die, respawn.
 This is the vertical slice; once met, broad map and character coverage
 (Phase 5/6) becomes the priority again.
+
+Gate progress (2026-11-02; "in the host" means the UE5 build, with labelled
+stand-ins; none of it is parity):
+
+- [~] **Spawn:** Maya spawns in Sanctuary with animated first-person arms and
+  walks with collision ([walking](COLLISION_WALKING_VERIFICATION.md)).
+- [~] **Fight:** Maya shoots from the parts at the Fire dummy and an opt-in stock
+  bullymong test target, which take damage and die; enemies do not fight back in
+  the host. The bullymong's hit, death, kill XP and melee blow run on the VM only,
+  and no AI exists ([firing](docs/verification/WEAPON_PROJECTILES.md),
+  [melee](docs/verification/COMBAT_MELEE.md)).
+- [~] **Loot a gun:** the host can drop a gun and pick it up again (inventory
+  suite), and `ow.RollGun` generates guns; no kill, chest or mission drops one in
+  the host (the Fire mission gives XP only, by maintainer decision on
+  2026-10-07). Loot on death runs on the VM as item records
+  ([loot](docs/verification/COMBAT_LOOT.md)).
+- [~] **Equip:** the inventory movie equips, swaps and compares guns (inventory
+  suite 49/0 on the bounded item set;
+  [record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)).
+- [~] **Phaselock:** cast, lift and release on a stock bullymong from stock data;
+  bob and cast gates confirmed in game; critic 5.4-5.9/10
+  ([record](docs/verification/PHASELOCK_STOCK_DATA.md)).
+- [~] **One mission:** the stock Fire mission plays to turn-in in the host (quest
+  suite 111/111 and resume 11/11 at 683a083), its event order compared with a
+  live trace ([record](docs/verification/SANCTUARY_RPG_MISSION.md),
+  [golden trace](docs/verification/FIRE_MISSION_GOLDEN_TRACE.md)).
+- [~] **Die and respawn:** in the host, health 0 respawns Maya at the decoded
+  station exit point with full health (a quest-suite check; nothing in the host
+  damages her in play); the down state, bleed-out and second wind run on the VM
+  only ([record](docs/verification/COMBAT_DOWN_RESPAWN.md)).
 
 ---
 
