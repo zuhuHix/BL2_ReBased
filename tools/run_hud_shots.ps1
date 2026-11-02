@@ -8,6 +8,11 @@ param(
     [switch]$Shield,
     # -Affine: the page's 2D stand-in for the clusters' 3D turn instead of the perspective warp (A/B captures).
     [switch]$Affine,
+    # -Down: the down-state sequence instead (-owhuddownshots with the -owcombattest dummy: down, bleed-out, respawn, second
+    # wind), checked by tools/check_hud_down.py. -Tracker: the quest's unattended loop (-owquest -owquesttest) with the movie
+    # HUD and a capture after each tracker change (-owhudtrackshots), checked by check_hud_down.py --mode tracker.
+    [switch]$Down,
+    [switch]$Tracker,
     [int]$WaitForEditorSeconds = 1800,
     # Extra command-line switches, e.g. '-owcanvashud' for the fallback HUD.
     [string[]]$Extra = @()
@@ -28,6 +33,18 @@ foreach ($file in @($gear, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf')))
 }
 $level = if ($Level -gt 0) { $Level } else { [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level }
 if ($Shield) { $Extra += '-owhudshield' }
+if ($Down -and $Tracker) { throw 'Pick -Down or -Tracker, not both' }
+$mode = if ($Down) { @('-owhuddownshots', '-owcombattest') } elseif ($Tracker) {
+    $sliceFiles = @((Join-Path $repo 'local/doors/mover.json'), (Join-Path $repo 'local/slice/world.json'),
+        (Join-Path $repo 'local/slice/npc_assets.json'), (Join-Path $repo 'local/slice/audio.json'))
+    foreach ($file in $sliceFiles) { if (!(Test-Path -LiteralPath $file)) { throw "Missing $file (see tools/test_quest.ps1)" } }
+    $trackSave = Join-Path $repo 'local/hudshots/track_save.json'
+    if (Test-Path -LiteralPath $trackSave) { Remove-Item -LiteralPath $trackSave -Force }
+    @("-owmover=`"$($sliceFiles[0])`"", "-owslice=`"$($sliceFiles[1])`"", "-ownpcs=`"$($sliceFiles[2])`"", "-owaudio=`"$($sliceFiles[3])`"",
+      '-owquest', '-owquesttest', "-owquestsave=`"$trackSave`"", '-owhudtrackshots')
+} else { @('-owhudshots') }
+$shotFilter = if ($Down) { 'OWHudDown_*.png' } elseif ($Tracker) { 'OWHudTrack_*.png' } else { 'OWHud_*.png' }
+if ($Tracker -and $TimeoutSeconds -lt 600) { $TimeoutSeconds = 600 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outDir = Join-Path $repo "local/hudshots/$stamp"
 New-Item -ItemType Directory -Force $outDir | Out-Null
@@ -45,21 +62,23 @@ try {
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
     $started = Get-Date
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url",
-        "-owitems=`"$(Split-Path -Parent $gear)`"", "-owlevel=$level", '-owhudshots') + $Extra + @(
+        "-owitems=`"$(Split-Path -Parent $gear)`"", "-owlevel=$level") + $mode + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Host "Launched HUD shots pid $($process.Id); log: $log"
     $finished = $process.WaitForExit($TimeoutSeconds * 1000)
     if (Test-Path -LiteralPath $shots) {
-        Get-ChildItem -LiteralPath $shots -Filter 'OWHud_*.png' | Where-Object { $_.LastWriteTime -ge $started } |
+        Get-ChildItem -LiteralPath $shots -Filter $shotFilter | Where-Object { $_.LastWriteTime -ge $started } |
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $outDir -Force }
     }
     # A run that timed out fails here without the checker; a finished one is checked (its exit code is ours).
     $code = 1
     if ($finished) {
-        $checkArgs = @((Join-Path $PSScriptRoot 'check_hud_shots.py'), $log, '--shots', $outDir)
-        if ($Shield) { $checkArgs += '--expect-shield' }
+        $checkArgs = if ($Down) { @((Join-Path $PSScriptRoot 'check_hud_down.py'), $log, '--mode', 'down', '--shots', $outDir) }
+            elseif ($Tracker) { @((Join-Path $PSScriptRoot 'check_hud_down.py'), $log, '--mode', 'tracker') }
+            else { @((Join-Path $PSScriptRoot 'check_hud_shots.py'), $log, '--shots', $outDir) }
+        if ($Shield -and -not ($Down -or $Tracker)) { $checkArgs += '--expect-shield' }
         & python @checkArgs
         $code = $LASTEXITCODE
     }

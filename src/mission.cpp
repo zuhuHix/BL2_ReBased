@@ -100,6 +100,7 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
                     if (const Value* count = runtime_.property(*objective, "ObjectiveCount")) parsed.count = int(count->integer());
                     parsed.mask = flag(runtime_, *objective, "bRememberItemsWithinObjective", false);
                     parsed.optional = flag(runtime_, *objective, "bObjectiveIsOptional", false);
+                    parsed.message = text(runtime_, *objective, "ProgressMessage");
                     objectives_[objectiveName] = parsed;
                 }
             }
@@ -406,6 +407,18 @@ bool MissionSystem::updateObjectiveByPath(const std::string& objectivePath, int 
 // NATIVE_BEHAVIOR_POPULATION.md section B (UNVERIFIED), the tracker's own classification: Complete when the mission is Active, ReadyToTurnIn
 // or Complete and the progress equals the count exactly; else Active when the mission is Active, the objective is in the active
 // set and the progress is below the count; else NotStarted. "" when the path is not one of the mission's objectives.
+std::vector<MissionSystem::TrackerLine> MissionSystem::trackerLines() const {
+    std::vector<TrackerLine> lines;
+    const ObjectiveSet* active = findSet(activeSet_);
+    if (!active) return lines;
+    for (const auto& name : active->objectives) {
+        const auto objective = objectives_.find(name);
+        lines.push_back({name, objective != objectives_.end() ? objective->second.message : "", objectiveComplete(name),
+                         objective != objectives_.end() && objective->second.optional});
+    }
+    return lines;
+}
+
 std::string MissionSystem::objectiveState(const std::string& objectivePath) const {
     bool known = false, inActiveSet = false;
     std::string name;

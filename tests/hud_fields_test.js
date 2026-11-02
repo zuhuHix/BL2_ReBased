@@ -56,4 +56,47 @@ assert.strictEqual(fields.readyLine('', undefined), 'OpenWillow HUD movie ready 
 // Only the id's own characters: a crafted value cannot smuggle a second " id=" field in.
 assert.strictEqual(fields.readyLine(`?owid=${ID}%20id=other`, 'x'), `OpenWillow HUD movie ready id=${ID} pages=x`);
 
+// ---- down state, second wind, tracker (invented texts and values) ----
+const D = '_level1.p1.dying1';
+const S = {injured: 'DOWN TITLE', injuredTip: 'DOWN HINT', secondWind: 'WIND', turnIn: 'HAND IN'};
+// The bleed-out bar maps like the vitals bars: full = frame 1, empty = frame 100, clamped.
+assert.deepStrictEqual([1, 0.5, 0, -1, 2].map(fields.barFrame), [1, 51, 100, 100, 1]);
+// Up and dead hide the panel; injured shows `fight` with the bar and both texts.
+assert.deepStrictEqual(fields.downCalls(null, S), [[D, 'gotoAndStop', 'off']]);
+assert.deepStrictEqual(fields.downCalls({phase: 'dead', bleed: 0}, S), [[D, 'gotoAndStop', 'off']]);
+assert.deepStrictEqual(fields.downCalls({phase: 'injured', bleed: 0.25}, S), [[D, 'gotoAndStop', 'fight'],
+  [D + '.bleedout', 'gotoAndStop', 75], [D + '.fight', 'set', 'text', 'DOWN TITLE'], [D + '.suicide', 'set', 'text', 'DOWN HINT']]);
+// Without the strings file the movie's own texts are left alone.
+assert.deepStrictEqual(fields.downCalls({phase: 'injured', bleed: 1}, {}), [[D, 'gotoAndStop', 'fight'], [D + '.bleedout', 'gotoAndStop', 1]]);
+// The banner plays once per increase of the count, never for the same or a lower count.
+const W = '_level1.p1.secondwind';
+assert.deepStrictEqual(fields.secondWindCalls(1, 0, S), [[W + '.inner.text1', 'set', 'text', 'WIND'],
+  [W + '.inner.text2', 'set', 'text', 'WIND'], [W, 'gotoAndPlay', 'go']]);
+assert.deepStrictEqual(fields.secondWindCalls(1, 1, S), []);
+assert.deepStrictEqual(fields.secondWindCalls(0, undefined, S), []);
+assert.deepStrictEqual(fields.secondWindCalls(2, 1, {}), [[W, 'gotoAndPlay', 'go']]);
+// Tracker: the mission name, one module per objective line (state from complete / optional), the rest off.
+const M = k => `_level1.p1.MissionNotifications.Module${k}`;
+const rows = calls => calls.filter(c => c[2] !== 'NoMovement' && c[1] !== 'set').map(c => [c[0], c[2]]);
+const t1 = fields.trackerCalls({mission: 'Mission X', lines: [{text: 'Step one', complete: true}, {text: 'Step two', optional: true}, {text: 'Step three'}]}, S);
+assert.deepStrictEqual(rows(t1), [[M(1) + '.inner', 'MissionName'], [M(2) + '.inner', 'Complete'], [M(3) + '.inner', 'Optional'],
+  [M(4) + '.inner', 'NotComplete'], [M(5), 'Off'], [M(6), 'Off']]);
+assert.deepStrictEqual(t1.filter(c => c[1] === 'set').map(c => c[3]), ['Mission X', 'Step one', 'Step two', 'Step three']);
+// Ready to turn in: the name and one TurnIn module with the turn-in label; no mission: every module off.
+const t2 = fields.trackerCalls({mission: 'Mission X', turnIn: true, lines: [{text: 'Step one', complete: true}]}, S);
+assert.deepStrictEqual(rows(t2).slice(0, 3), [[M(1) + '.inner', 'MissionName'], [M(2) + '.inner', 'TurnIn'], [M(3), 'Off']]);
+assert.deepStrictEqual(t2.filter(c => c[1] === 'set').map(c => c[3]), ['Mission X', 'HAND IN']);
+assert.deepStrictEqual(fields.trackerCalls(null, S), [1, 2, 3, 4, 5, 6].map(k => [M(k), 'gotoAndStop', 'Off']));
+// More objective lines than modules: the extra lines are dropped, never written past Module6.
+const many = fields.trackerCalls({mission: 'M', lines: Array.from({length: 9}, (_, i) => ({text: `L${i}`}))}, S);
+assert.ok(many.every(c => !c[0].includes('Module7')));
+// Page lines: the down line reads the movie's frames and title through the getter; the tracker line lists each module.
+const fake = {[D]: {_currentframe: 2}, [D + '.bleedout']: {_currentframe: 75}, [D + '.fight']: {text: 'DOWN TITLE'}, [W]: {_currentframe: 1}};
+const get = (t, k) => (fake[t] || {})[k] ?? 1;
+assert.strictEqual(fields.downLine({down: {phase: 'injured', bleed: 0.25}, secondWind: 0}, get),
+  'OWHUDDOWNPAGE phase=injured bleed=0.25 secondWind=0 dying=2 bleedout=75 title=DOWN\\u0020TITLE windFrame=1');
+// Up: the bar and title are not read (the getter's dying frame is whatever the movie shows).
+assert.strictEqual(fields.downLine({}, get), 'OWHUDDOWNPAGE phase=up bleed=1.00 secondWind=0 dying=2 bleedout=- title=- windFrame=1');
+assert.strictEqual(fields.trackerLine({tracker: null}, get), 'OWHUDTRACKPAGE mission= turnIn=0 lines=0 m1=1 m2=1 m3=1 m4=1 m5=1 m6=1');
+
 console.log('hud_fields_test: all checks passed');

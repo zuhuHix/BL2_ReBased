@@ -17,6 +17,11 @@
     skillIcon                  the class's HUD icon movie, e.g. "/ package/UI_HUD_AAIcons/AA-Siren"
                                (clip mapping in action_skill.js)
     minimap                    {movie, centre, blobs, x, y, yaw, icons}: the minimap (minimap.js)
+    down                       null when up, else {phase: 'injured' | 'dead', bleed: bleed-out left 0..1} (Fight For Your Life)
+    secondWind                 how many second winds so far: the banner plays once per increase
+    tracker                    null, or {mission, turnIn, lines: [{text, complete, optional}]}: the mission tracker
+  Down state, second wind and tracker rules: hud_fields.js. Their texts come from UI_HUD/hud_strings.json
+  (tools/prepare_hud_strings.py), loaded once at start.
   Clip names and frame directions were observed in the Ruffle bench
   (DECISIONS.md 2026-09-26), not read from the game's scripts:
     health, shield, grenades, bullets: 100 bar frames, frame 1 full;
@@ -51,6 +56,10 @@
   const shown = {};   // every field applied so far: the warp re-reads its regions when this changes
   let skill = {}, lastSkillPage = '';   // the action-skill fields last applied (action_skill.js plans from the change)
   let lastHudPage = '';   // the last OWHUDPAGE line (hud_fields.js pageLine)
+  let lastDownPage = '', lastTrackPage = '', lastSecondWind = 0, trackerStale = false;   // hud_fields.js downLine / trackerLine; the banners played
+  let hudStrings = {};   // UI_HUD/hud_strings.json (the game's own texts, under local/); {} without it
+  fetch('UI_HUD/hud_strings.json', {cache: 'no-store'}).then(r => (r.ok ? r.json() : {}), () => ({}))
+    .then(j => { hudStrings = j || {}; trackerStale = true; console.log('OpenWillow HUD strings ' + (Object.keys(hudStrings).length || 'none')); });
   const P1 = '_level1.p1';
   const call = (target, op, a, b) => player.ow(target, op, a, b);
   const setText = (field, text) => call(...window.owHudFields.textCall(field, text));
@@ -89,6 +98,17 @@
       if (line !== lastSkillPage) { console.log(line); lastSkillPage = line; }
     }
     if ('minimap' in s) window.owMinimap.apply(call, s.minimap);
+    const F = window.owHudFields;
+    if ('down' in s) for (const c of F.downCalls(s.down, hudStrings)) call(c[0], c[1], c[2], c[3]);
+    if ('secondWind' in s) {
+      for (const c of F.secondWindCalls(s.secondWind, lastSecondWind, hudStrings)) call(c[0], c[1], c[2], c[3]);
+      lastSecondWind = Math.max(lastSecondWind, Number(s.secondWind) || 0);
+    }
+    // The tracker is redrawn when it changes, and once more when the strings arrive (its turn-in label is one of them).
+    if ('tracker' in s && (trackerStale || JSON.stringify(s.tracker) !== JSON.stringify(shown.tracker))) {
+      for (const c of F.trackerCalls(s.tracker, hudStrings)) call(c[0], c[1], c[2], c[3]);
+      trackerStale = false;
+    }
     // The stand-in for the clusters' 3D turn (hud3d.js), once the character frame is set and the clips have had a
     // second to settle (bounds read on the boot frame came out wrong in UE); the host resends its state every second.
     if ('character' in s) characterSet = true;
@@ -115,6 +135,10 @@
     // Acknowledge what the movie now shows for the host's fields (OWHUDPAGE; tools/check_hud_shots.py), once per change.
     const hudLine = window.owHudFields.pageLine(shown, (t, k) => call(t, 'get', k));
     if (hudLine !== lastHudPage) { console.log(hudLine); lastHudPage = hudLine; }
+    const get = (t, k) => call(t, 'get', k);
+    const downPage = window.owHudFields.downLine(shown, get), trackPage = window.owHudFields.trackerLine(shown, get);
+    if (downPage !== lastDownPage) { console.log(downPage); lastDownPage = downPage; }
+    if (trackPage !== lastTrackPage) { console.log(trackPage); lastTrackPage = trackPage; }
     const key = JSON.stringify(shown), now = performance.now();
     if (warp && warp.path === 'warp' && (key !== warpKey && now - warpReadAt > 250 || now - warpReadAt > 5000)) {
       warpKey = key; warpReadAt = now;

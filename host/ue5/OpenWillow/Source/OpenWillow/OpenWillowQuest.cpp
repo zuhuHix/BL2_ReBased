@@ -891,6 +891,22 @@ bool UOpenWillowQuest::PlayerTouchesTrigger() const
     return TouchesTrigger(Cast<AOpenWillowWalker>(GetOwner()));
 }
 
+bool UOpenWillowQuest::HudTracker(FString& OutMission, TArray<FHudTrackerLine>& OutLines, bool& bOutTurnIn) const
+{
+    using S = vm::MissionSystem::Status;
+    OutLines.Reset();
+    bOutTurnIn = false;
+    if (!Impl || !Impl->Slice || bFailed) return false;
+    const auto& Mission = Impl->Slice->mission();
+    const S Current = Mission.status();
+    if (Current != S::Active && Current != S::ReadyToTurnIn) return false;
+    OutMission = UTF8_TO_TCHAR(Mission.name().c_str());
+    bOutTurnIn = Current == S::ReadyToTurnIn;
+    for (const auto& Line : Mission.trackerLines())
+        OutLines.Add({UTF8_TO_TCHAR(Line.message.c_str()), Line.complete, Line.optional});
+    return true;
+}
+
 void UOpenWillowQuest::UpdateHints()
 {
     using S = vm::MissionSystem::Status;

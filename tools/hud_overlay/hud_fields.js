@@ -57,7 +57,78 @@
     return `OpenWillow HUD movie ready id=${id || '-'} pages=${pages || 'unknown'}`;
   }
 
-  const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine};
+  // ---- Fight For Your Life, second wind, mission tracker (docs/verification/HUD_PARITY.md) ----
+  // Clip names, labels and frame directions read from the movie in the Ruffle bench: p1.dying1 has the labels off / fight /
+  // revive / duel; on `fight` its bleedout bar has 100 frames, frame 1 full and frame 100 empty (as the vitals bars), with
+  // the title field `fight` and the hint field `suicide`. p1.secondwind plays its banner from `go` (about 1 s) with two
+  // text layers. p1.MissionNotifications holds Module1..Module6 stacked 22 px apart; a module's inner clip shows a mission
+  // name (`MissionName`), an objective (`NotComplete`, `Complete`, `Optional`) or `TurnIn`. Which of these the game drives,
+  // and with what, is native and was not observed live (UNVERIFIED). Texts come from hud_strings.json
+  // (tools/prepare_hud_strings.py: the game's own localization, kept under local/); without it they stay as the movie has them.
+  const DYING = P1 + '.dying1', SECONDWIND = P1 + '.secondwind', TRACKER = P1 + '.MissionNotifications';
+  const TRACKER_MODULES = 6;
+  const barFrame = fill => 1 + Math.round((1 - Math.min(1, Math.max(0, Number(fill) || 0))) * 99);
+
+  // down: null (up) or {phase: 'injured' | 'dead', bleed: the bleed-out left, 0..1}. Only `injured` shows the panel.
+  function downCalls(down, strings) {
+    if (!down || down.phase !== 'injured') return [[DYING, 'gotoAndStop', 'off']];
+    const calls = [[DYING, 'gotoAndStop', 'fight'], [DYING + '.bleedout', 'gotoAndStop', barFrame(down.bleed)]];
+    if (strings && strings.injured) calls.push(textCall(DYING + '.fight', strings.injured));
+    if (strings && strings.injuredTip) calls.push(textCall(DYING + '.suicide', strings.injuredTip));
+    return calls;
+  }
+
+  // secondWind: how many second winds the host has had; the banner plays once per increase.
+  function secondWindCalls(count, previous, strings) {
+    if (!(Number(count) > Number(previous || 0))) return [];
+    const calls = [];
+    if (strings && strings.secondWind)
+      for (const layer of ['text1', 'text2']) calls.push(textCall(`${SECONDWIND}.inner.${layer}`, strings.secondWind));
+    calls.push([SECONDWIND, 'gotoAndPlay', 'go']);
+    return calls;
+  }
+
+  // tracker: null (no mission shown) or {mission, turnIn: bool, lines: [{text, complete, optional}]}. Module1 is the mission
+  // name, then one module per objective line (or one TurnIn module when the mission is ready to turn in), the rest off.
+  function trackerCalls(tracker, strings) {
+    const rows = [];
+    if (tracker && tracker.mission) {
+      rows.push(['MissionName', tracker.mission]);
+      if (tracker.turnIn) rows.push(['TurnIn', (strings && strings.turnIn) || '']);
+      else for (const line of tracker.lines || [])
+        rows.push([line.complete ? 'Complete' : line.optional ? 'Optional' : 'NotComplete', line.text || '']);
+    }
+    const calls = [];
+    for (let k = 1; k <= TRACKER_MODULES; ++k) {
+      const module = `${TRACKER}.Module${k}`;
+      const row = rows[k - 1];
+      if (!row) { calls.push([module, 'gotoAndStop', 'Off']); continue; }
+      calls.push([module, 'gotoAndStop', 'NoMovement'], [module + '.inner', 'gotoAndStop', row[0]], textCall(module + '.inner.text', row[1]));
+    }
+    return calls;
+  }
+
+  // OWHUDDOWNPAGE / OWHUDTRACKPAGE: what the page applied and what the movie shows for it (tools/check_hud_down.py).
+  const esc = t => String(t ?? '').replace(/\r/g, '').replace(/[^\x21-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+  function downLine(shown, get) {
+    const d = shown.down;
+    return `OWHUDDOWNPAGE phase=${d ? d.phase : 'up'} bleed=${d ? Number(d.bleed).toFixed(2) : '1.00'}`
+      + ` secondWind=${shown.secondWind || 0} dying=${get(DYING, '_currentframe')} bleedout=${d && d.phase === 'injured' ? get(DYING + '.bleedout', '_currentframe') : '-'}`
+      + ` title=${d && d.phase === 'injured' ? esc(get(DYING + '.fight', 'text')) : '-'} windFrame=${get(SECONDWIND, '_currentframe')}`;
+  }
+  function trackerLine(shown, get) {
+    const t = shown.tracker;
+    const parts = [];
+    for (let k = 1; k <= TRACKER_MODULES; ++k) {
+      const module = `${TRACKER}.Module${k}`;
+      const frame = get(module, '_currentframe');
+      parts.push(`m${k}=${frame}` + (frame > 1 ? `/${get(module + '.inner', '_currentframe')}/${esc(get(module + '.inner.text', 'text'))}` : ''));
+    }
+    return `OWHUDTRACKPAGE mission=${esc(t && t.mission)} turnIn=${t && t.turnIn ? 1 : 0} lines=${t ? (t.lines || []).length : 0} ${parts.join(' ')}`;
+  }
+
+  const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine, barFrame, downCalls, secondWindCalls, trackerCalls,
+    downLine, trackerLine, TRACKER_MODULES};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
