@@ -74,6 +74,7 @@ public:
     // no set is active. That the game's tracker shows exactly these lines is UNVERIFIED (HUD_PARITY.md, "Mission tracker").
     struct TrackerLine { std::string name, message; bool complete = false, optional = false; };
     std::vector<TrackerLine> trackerLines() const;
+    bool plotCritical() const;              // MissionDefinition.bPlotCritical (story vs optional mission)
 
     // Every dependency mission is in `completed` (paths), and the ObjectiveDependency, if any, holds: `objectiveStates`
     // maps objective paths of other missions to "Complete" / "Active" (B6).

@@ -144,6 +144,10 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     }
 }
 
+bool MissionSystem::plotCritical() const {
+    return definition_ && flag(runtime_, *definition_, "bPlotCritical", false);
+}
+
 bool MissionSystem::hasOptionalObjective() const {
     return std::any_of(objectives_.begin(), objectives_.end(), [](const auto& entry) { return entry.second.optional; });
 }

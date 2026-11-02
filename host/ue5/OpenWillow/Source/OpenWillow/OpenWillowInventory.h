@@ -262,6 +262,8 @@ public:
     // pickup economy yet, so nothing changes it during play.
     void SetMoney(int32 Value) { Money = FMath::Max(0, Value); bMoneyKnown = true; }
     void SetEridium(int32 Value) { Eridium = FMath::Max(0, Value); bEridiumKnown = true; }
+    // The money when the host has set it (the mission log shows it); false while unknown.
+    bool GetMoney(int32& Out) const { Out = Money; return bMoneyKnown; }
     // Synthetic-item round trip of equip/unequip/take/re-add/favorite/trash
     // and the slot lock; logs each failure. Uses a transient instance.
     static bool RunSelfTest();
