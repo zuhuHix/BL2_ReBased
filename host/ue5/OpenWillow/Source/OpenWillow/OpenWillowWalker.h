@@ -117,6 +117,21 @@ public:
         class AController* EventInstigator, AActor* DamageCauser) override;
     float GetHealth() const { return Health; }
     float GetMaxHealth() const { return MaxHealth; }
+    // ---- Fight For Your Life: the host's down state (rules and their live numbers: docs/verification/COMBAT_DOWN_RESPAWN.md) ----
+    // Health reaching 0 puts Maya down (Injured) instead of respawning her at once. 2.28 s later the bleed-out timer starts
+    // (12 s, cut for successive injuries); a kill while Injured is a second wind (health back to 25 % of the maximum); the end
+    // of the bleed-out is death (Dead), and the respawn follows 5.76 s later. Read by the HUD (AOpenWillowMayaHUD) and the checks.
+    enum class EDownPhase : uint8 { Up, Injured, Dead };
+    EDownPhase GetDownPhase() const { return DownPhase; }
+    bool IsDown() const { return DownPhase != EDownPhase::Up; }
+    // The bleed-out left as a fraction of its total: 1 until its timer starts, falling to 0 at death; 0 while Dead, 1 when up.
+    float DownBleedLeft() const;
+    float DownBleedTotal() const { return DownBleedSeconds; }
+    float LastDownAt() const { return DownAt; }
+    float LastSecondWindAt() const { return SecondWindAt; }
+    float LastRespawnAt() const { return RespawnAt; }
+    // Maya killed an enemy (AOpenWillowCombatTarget calls it with her as the damage causer): while Injured, a second wind.
+    void NotifyKilledEnemy();
     // -owquest: sets maximum health from the recovered formula when Maya's level differs from the level it was last
     // set for (start, XP level-up, test fixtures); does nothing otherwise.
     void RefreshHealthForLevel();
@@ -213,6 +228,14 @@ private:
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;
     void Respawn();
+    // The down state (see EDownPhase above). LastInjuryAt starts far in the past: the game's default for its counterpart is not
+    // known (COMBAT_DOWN_RESPAWN.md, UNVERIFIED), and this keeps a first injury early in a session uncut.
+    EDownPhase DownPhase = EDownPhase::Up;
+    float DownAt = -1000.f, DownBleedSeconds = 12.f, DeadAt = -1000.f, SecondWindAt = -1000.f, RespawnAt = -1000.f;
+    float LastInjuryAt = -1000.f;
+    int32 SuccessiveInjuries = 0;
+    void GoDown();
+    void TickDown(float Now);
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;

@@ -69,6 +69,12 @@ public:
     // cylinder for GoToRange, the dummy for Fire. Which actor the game's objective marker follows for this mission was
     // not observed (UNVERIFIED); the kinds are tools/hud_overlay/minimap.js's.
     void MinimapMarkers(TArray<TPair<FString, FVector>>& Out) const;
+    // The HUD's mission tracker (read-only; AOpenWillowMayaHUD): the mission's name and the active objective set's lines as the VM
+    // has them (vm::MissionSystem::trackerLines: each objective's ProgressMessage from the package and whether it is complete),
+    // and whether the mission is ready to turn in. False when no mission is shown: not accepted yet, complete, or no slice data.
+    // That the game's tracker shows exactly these lines is UNVERIFIED (docs/verification/HUD_PARITY.md, "Mission tracker").
+    struct FHudTrackerLine { FString Text; bool bComplete = false; bool bOptional = false; };
+    bool HudTracker(FString& OutMission, TArray<FHudTrackerLine>& OutLines, bool& bOutTurnIn) const;
 
 private:
     struct FImpl;

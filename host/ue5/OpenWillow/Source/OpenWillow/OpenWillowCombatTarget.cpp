@@ -674,6 +674,8 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         if (StockMesh && StockDeath) PlayStock(StockDeath, false);
         AOpenWillowShotFx::Flash(GetWorld(), AimPoint(), FLinearColor(1.f, 0.55f, 0.2f), 70.f, 0.25f, 4000.f);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnSeconds);
+        // A kill by Maya: while she is down it is her second wind.
+        if (auto* Killer = Cast<AOpenWillowWalker>(DamageCauser)) Killer->NotifyKilledEnemy();
     }
     return Applied;
 }

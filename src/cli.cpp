@@ -748,7 +748,15 @@ int main(int argc, char** argv) {
                 std::cout << ",\"script\":";
                 printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->playerLevel(), script->experiencePool(), script->expEarned(), script->stubs(), script->notes(), script->playerInteractionDistance());
             }
-            std::cout << "}\n";
+            // The active objective set as the HUD's mission tracker lists it (MissionSystem::trackerLines).
+            std::cout << ",\"tracker\":[";
+            first = true;
+            for (const auto& line : mission.trackerLines()) {
+                std::cout << (first ? "" : ",") << "{\"objective\":" << quote(line.name) << ",\"message\":" << quote(line.message)
+                          << ",\"complete\":" << (line.complete ? "true" : "false") << ",\"optional\":" << (line.optional ? "true" : "false") << "}";
+                first = false;
+            }
+            std::cout << "]}\n";
             return mission.errors.empty() && (!script || script->errors.empty()) ? 0 : 1;
         }
         if (mode == "--slice-run") {

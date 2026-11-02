@@ -99,6 +99,22 @@ private:
     // -owhudshots (with -owitems): gameplay-HUD captures for the parity critic (OWHud_*.png): the held weapon at rest,
     // then after three shots, then quit.
     void TickHudShots(class AOpenWillowWalker& Maya);
+    // -owhuddownshots (with -owcombattest): the down-state HUD for the checks (tools/check_hud_down.py) and the critic
+    // (OWHudDown_*.png): Maya goes down through her own TakeDamage and bleeds out, dies and respawns; then goes down again
+    // and kills the dummy (a second wind); then quit.
+    void TickHudDownShots(class AOpenWillowWalker& Maya);
+    int32 DownShotStep = 0;
+    float DownShotAt = 0.f;
+    // The fields for the down state, the second wind and the mission tracker (PushFlashHudState): the second winds seen so
+    // far (the page plays the banner once per increase) and the last OWHUDDOWN / OWHUDTRACK lines logged.
+    FString DownHudFields(const class AOpenWillowWalker& Maya);
+    FString TrackerHudField(const class AOpenWillowWalker& Maya);
+    int32 SecondWinds = 0;
+    float SeenSecondWindAt = -1000.f;
+    FString LastDownLine, LastTrackLine;
+    // -owhudtrackshots: a capture (OWHudTrack_<n>.png) 1.5 s after each tracker change, for the critic.
+    float TrackShotAt = -1.f;
+    int32 TrackShots = 0;
     int32 HudShotStep = 0;
     float HudShotAt = 0.f;
     int32 SkillShotStep = 0;

@@ -69,6 +69,11 @@ public:
     std::string objectiveState(const std::string& objectivePath) const;
     // Whether this objective set (by path) is the mission's active set (collection sets and sub-sets are not modelled).
     bool setActive(const std::string& setPath) const { return !setPath.empty() && setPath == activeSet_; }
+    // The active objective set's objectives as the HUD's mission tracker lists them: the objective name, its ProgressMessage
+    // (MissionObjectiveDefinition, read from the package; "" when the property is absent) and whether it is complete. Empty when
+    // no set is active. That the game's tracker shows exactly these lines is UNVERIFIED (HUD_PARITY.md, "Mission tracker").
+    struct TrackerLine { std::string name, message; bool complete = false, optional = false; };
+    std::vector<TrackerLine> trackerLines() const;
 
     // Every dependency mission is in `completed` (paths), and the ObjectiveDependency, if any, holds: `objectiveStates`
     // maps objective paths of other missions to "Complete" / "Active" (B6).
@@ -146,7 +151,7 @@ private:
         bool canCompleteMission = true, autoEnableNext = false;
         std::vector<std::string> objectives, objectivePaths;
     };
-    struct Objective { std::string path; int count = 1; bool mask = false, optional = false; };
+    struct Objective { std::string path, message; int count = 1; bool mask = false, optional = false; };
     std::vector<ObjectiveSet> sets_;
     std::map<std::string, Objective> objectives_;    // by objective name
     std::string initialSet_, weaponObjective_, dependencyObjective_;

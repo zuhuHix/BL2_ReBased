@@ -190,16 +190,74 @@ AOpenWillowWalker::AOpenWillowWalker()
 float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
     if (!bMayaActive && !bRespawnPointCaptured) return 0.f;
+    // Live: damage still reaches the injured state's TakeDamage, but health does not move (COMBAT_GOLDEN_TRACE.md step 12).
+    if (IsDown()) return 0.f;
     const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
     Health -= Applied;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.0f damage, health %.0f/%.0f"), Applied, Health, MaxHealth);
     // Going down while a target is held: Skill_Phaselock's while-active HealthState constraint fails and deactivates the
-    // skill, which ends the lock (native reading, UNVERIFIED). The host has no injured state: health 0 is death.
+    // skill, which ends the lock (native reading, UNVERIFIED). Health 0 puts Maya down (GoDown).
     FString Failed;
     if (Health <= 0.f && IsPhaselockActive() && !Phaselock.GateOpen(PhaselockGateState(), false, Failed))
         EndPhaselockEarly(TEXT("skill constraint ") + Failed);
-    if (Health <= 0.f) Respawn();
+    if (Health <= 0.f) GoDown();
     return Applied;
+}
+
+// ---- Fight For Your Life (host down state) ----
+// The numbers are the live ones of COMBAT_GOLDEN_TRACE.md section D and COMBAT_DOWN_RESPAWN.md, which the VM's run of the
+// installed script reproduces: the weapon put-away special move ends 2.28 s after the injury and starts the bleed-out timer;
+// the total is 12 s cut by 12 / 3 per successive injury (the counter as it was before this one; at least 1 s), and an injury
+// less than 30 s after the previous one counts as successive; the death camera ends 5.76 s after the dead state began and
+// the respawn follows in the same frame; a second wind raises health to 25 % of the maximum. Not modelled: crawling speed,
+// the sidearm switch, the injured bonus damage, the shield half, the Defense Boost, a partner revive, the respawn fee.
+namespace
+{
+constexpr float DownTargetedDelay = 2.28f, DownBaseBleed = 12.f, DownSuccessiveWindow = 30.f, DownDeathCamera = 5.76f;
+constexpr float DownSecondWindHealth = 0.25f;
+constexpr int32 DownMaxSuccessive = 3;
+}
+
+void AOpenWillowWalker::GoDown()
+{
+    const float Now = GetWorld()->GetTimeSeconds();
+    Health = 0.f;
+    bFireHeld = false;
+    DownPhase = EDownPhase::Injured;
+    DownAt = Now;
+    DownBleedSeconds = FMath::Max(DownBaseBleed - DownBaseBleed / DownMaxSuccessive * SuccessiveInjuries, 1.f);
+    SuccessiveInjuries = Now - LastInjuryAt < DownSuccessiveWindow ? SuccessiveInjuries + 1 : 0;
+    LastInjuryAt = Now;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya down t=%.3f bleedout=%.2fs successive=%d"), Now, DownBleedSeconds, SuccessiveInjuries);
+}
+
+float AOpenWillowWalker::DownBleedLeft() const
+{
+    if (DownPhase == EDownPhase::Up) return 1.f;
+    if (DownPhase == EDownPhase::Dead || !GetWorld()) return 0.f;
+    const float Bled = GetWorld()->GetTimeSeconds() - (DownAt + DownTargetedDelay);
+    return FMath::Clamp(1.f - FMath::Max(0.f, Bled) / DownBleedSeconds, 0.f, 1.f);
+}
+
+void AOpenWillowWalker::NotifyKilledEnemy()
+{
+    if (DownPhase != EDownPhase::Injured) return;
+    const float Now = GetWorld()->GetTimeSeconds();
+    Health = FMath::Max(Health, MaxHealth * DownSecondWindHealth);
+    DownPhase = EDownPhase::Up;
+    SecondWindAt = Now;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya second wind t=%.3f health %.0f/%.0f"), Now, Health, MaxHealth);
+}
+
+void AOpenWillowWalker::TickDown(float Now)
+{
+    if (DownPhase == EDownPhase::Injured && Now - (DownAt + DownTargetedDelay) > DownBleedSeconds)
+    {
+        DownPhase = EDownPhase::Dead;
+        DeadAt = Now;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya bled out t=%.3f"), Now);
+    }
+    if (DownPhase == EDownPhase::Dead && Now - DeadAt >= DownDeathCamera) Respawn();
 }
 
 void AOpenWillowWalker::Respawn()
@@ -207,6 +265,10 @@ void AOpenWillowWalker::Respawn()
     // With -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host
     // stand-in: back to where this session started. Full health either way; mission state is not touched.
     Health = MaxHealth;
+    // The game's ResurrectPlayer resets the successive-injury counter (COMBAT_DOWN_RESPAWN.md).
+    DownPhase = EDownPhase::Up;
+    SuccessiveInjuries = 0;
+    RespawnAt = GetWorld()->GetTimeSeconds();
     bFireHeld = false;
     Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
@@ -598,6 +660,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         AddMovementInput(FRotator(0, GetControlRotation().Yaw, 0).Vector(), 1);
     }
     const float Now = GetWorld()->GetTimeSeconds();
+    TickDown(Now);
     for (int32 I = DamageScales.Num() - 1; I >= 0; --I)
         if (Now >= DamageScales[I].EndsAt)
         {
@@ -1521,13 +1584,14 @@ FOpenWillowPhaselockGateState AOpenWillowWalker::PhaselockGateState() const
 {
     // Host mapping (UNVERIFIED): a weapon in any slot is the pawn's WillowWeapon; holstered (no weapon drawn) is its
     // Inactive state; the host's weapon swaps have no put-away phase, and it has no melee, grenade, weapon
-    // restriction, injured state or vehicle, so those inputs stay false. A reload is reported but does not block.
+    // restriction or vehicle, so those inputs stay false. A reload is reported but does not block. Injured: the down state.
     FOpenWillowPhaselockGateState State;
     for (int32 Slot = 0; Inventory && Slot < UOpenWillowInventory::SlotCount; ++Slot)
         State.bHoldsWeapon |= Inventory->SlotItem(Slot) != nullptr;
     State.bWeaponInactive = State.bHoldsWeapon && !bWeaponOut;
     State.bReloading = bReloading;
     State.bAlive = Health > 0.f;
+    State.bInjured = IsDown();
     return State;
 }
 bool AOpenWillowWalker::IsPhaselockActive() const

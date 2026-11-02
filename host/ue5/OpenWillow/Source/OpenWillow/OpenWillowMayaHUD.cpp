@@ -12,6 +12,8 @@
 #include "OpenWillowInventoryPreviewActor.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowQuest.h"
+#include "Engine/DamageEvents.h"
 #include "CanvasItem.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
@@ -977,6 +979,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     }
     const FString Minimap = PlayerOwner ? OpenWillowMinimap::StateField(Maya, *PlayerOwner) : FString();
     if (!Minimap.IsEmpty()) State = State.LeftChop(1) + TEXT(",\"minimap\":") + Minimap + TEXT("}");
+    State = State.LeftChop(1) + TEXT(",") + DownHudFields(Maya) + TEXT(",\"tracker\":") + TrackerHudField(Maya) + TEXT("}");
     // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
     // (tools/check_action_skill_hud.py reads them).
     const FString SkillLine = FString::Printf(TEXT("active=%.2f cooldown=%.2f"), SkillActive, SkillCooldown);
@@ -991,6 +994,114 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     FlashHud->ExecuteJavascript(FString::Printf(TEXT("window.owHud && window.owHud(%s)"), *State));
     LastFlashState = State;
     NextFlashPush = Now + 1.f;
+}
+
+FString AOpenWillowMayaHUD::DownHudFields(const AOpenWillowWalker& Maya)
+{
+    // Fight For Your Life (the Walker's down state): the phase and the bleed-out left, quantized to the bar's 100 frames so the
+    // state, the page push and the log line change only when a drawn frame can. A second wind is counted once per new time.
+    if (Maya.LastSecondWindAt() > SeenSecondWindAt) { SeenSecondWindAt = Maya.LastSecondWindAt(); ++SecondWinds; }
+    const AOpenWillowWalker::EDownPhase Phase = Maya.GetDownPhase();
+    const TCHAR* PhaseName = Phase == AOpenWillowWalker::EDownPhase::Injured ? TEXT("injured")
+        : Phase == AOpenWillowWalker::EDownPhase::Dead ? TEXT("dead") : TEXT("up");
+    const float Bleed = FMath::CeilToFloat(Maya.DownBleedLeft() * 100.f) / 100.f;
+    const FString Line = FString::Printf(TEXT("phase=%s bleed=%.2f secondWind=%d"), PhaseName, Phase == AOpenWillowWalker::EDownPhase::Up ? 1.f : Bleed, SecondWinds);
+    if (Line != LastDownLine)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWHUDDOWN t=%.3f %s"), GetWorld()->GetTimeSeconds(), *Line);
+        LastDownLine = Line;
+    }
+    const FString Down = Phase == AOpenWillowWalker::EDownPhase::Up ? FString(TEXT("null"))
+        : FString::Printf(TEXT("{\"phase\":\"%s\",\"bleed\":%.2f}"), PhaseName, Bleed);
+    return FString::Printf(TEXT("\"down\":%s,\"secondWind\":%d"), *Down, SecondWinds);
+}
+
+FString AOpenWillowMayaHUD::TrackerHudField(const AOpenWillowWalker& Maya)
+{
+    // The mission tracker from the quest's read-only view (UOpenWillowQuest::HudTracker); null without a mission to show.
+    auto Json = [](const FString& Text) { return TEXT("\"") + Text.Replace(TEXT("\\"), TEXT("\\\\")).Replace(TEXT("\""), TEXT("\\\"")) + TEXT("\""); };
+    FString Mission, Field = TEXT("null"), Line = TEXT("none");
+    TArray<UOpenWillowQuest::FHudTrackerLine> Lines;
+    bool bTurnIn = false;
+    if (const UOpenWillowQuest* Quest = Maya.GetQuest(); Quest && Quest->Enabled() && Quest->HudTracker(Mission, Lines, bTurnIn))
+    {
+        TArray<FString> Items, Logged;
+        for (const UOpenWillowQuest::FHudTrackerLine& L : Lines)
+        {
+            Items.Add(FString::Printf(TEXT("{\"text\":%s,\"complete\":%s,\"optional\":%s}"), *Json(L.Text),
+                L.bComplete ? TEXT("true") : TEXT("false"), L.bOptional ? TEXT("true") : TEXT("false")));
+            Logged.Add(FString::Printf(TEXT("%s%s"), L.bComplete ? TEXT("[x]") : TEXT("[ ]"), *L.Text));
+        }
+        Field = FString::Printf(TEXT("{\"mission\":%s,\"turnIn\":%s,\"lines\":[%s]}"), *Json(Mission), bTurnIn ? TEXT("true") : TEXT("false"),
+            *FString::Join(Items, TEXT(",")));
+        Line = FString::Printf(TEXT("mission=%s turnIn=%d lines=%s"), *Mission, bTurnIn ? 1 : 0, *FString::Join(Logged, TEXT("|")));
+    }
+    static const bool bTrackShots = FParse::Param(FCommandLine::Get(), TEXT("owhudtrackshots"));
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Line != LastTrackLine)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWHUDTRACK t=%.3f %s"), Now, *Line);
+        LastTrackLine = Line;
+        if (bTrackShots) TrackShotAt = Now + 1.5f;
+    }
+    if (TrackShotAt >= 0.f && Now >= TrackShotAt)
+    {
+        const FString Name = FString::Printf(TEXT("OWHudTrack_%02d.png"), TrackShots++);
+        FScreenshotRequest::RequestScreenshot(Name, true, false);
+        UE_LOG(LogTemp, Display, TEXT("OWHUDTRACKSHOTS shot %s t=%.3f"), *Name, Now);
+        TrackShotAt = -1.f;
+    }
+    return Field;
+}
+
+void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
+{
+    // Unattended: once the movie has settled, Maya goes down through her own TakeDamage (no attacker: the host's enemies do
+    // not attack her yet), bleeds out, dies and respawns; 3 s after the respawn she goes down again and, 3 s later, the dummy
+    // is killed with her as the damage causer (the kill-while-down path: a second wind). Captures at fixed moments, then quit.
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (DownShotStep < 0) return;
+    auto Shot = [this, Now](const TCHAR* Name)
+    {
+        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWHudDown_%s.png"), Name), true, false);
+        UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS shot %s t=%.3f"), Name, Now);
+    };
+    auto Injure = [&Maya, Now]()
+    {
+        const float Applied = Maya.TakeDamage(Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
+        UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS injure t=%.3f applied=%.0f down=%d"), Now, Applied, Maya.IsDown() ? 1 : 0);
+    };
+    switch (DownShotStep)
+    {
+    case 0: DownShotAt = FMath::Max(Now + 4.f, 12.f); DownShotStep = 1; return;
+    case 1: if (Now < DownShotAt) return; Shot(TEXT("up")); Injure(); DownShotAt = Now + 1.f; break;
+    case 2: if (Now < DownShotAt) return; Shot(TEXT("down_start")); DownShotAt = Now + 6.f; break;
+    case 3: if (Now < DownShotAt) return; Shot(TEXT("down_mid")); break;
+    case 4: if (Maya.GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead) return; DownShotAt = Now + 1.f; break;
+    case 5: if (Now < DownShotAt) return; Shot(TEXT("dead")); break;
+    case 6: if (Maya.IsDown()) return; DownShotAt = Now + 1.f; break;
+    case 7: if (Now < DownShotAt) return; Shot(TEXT("respawned")); DownShotAt = Now + 2.f; break;
+    case 8: if (Now < DownShotAt) return; Injure(); DownShotAt = Now + 3.f; break;
+    case 9:
+    {
+        if (Now < DownShotAt) return;
+        AOpenWillowCombatTarget* Target = nullptr;
+        for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It) { Target = *It; break; }
+        const float Applied = Target ? Target->TakeDamage(1.e6f, FDamageEvent(), PlayerOwner, &Maya) : 0.f;
+        UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS kill t=%.3f target=%d applied=%.0f down=%d health=%.0f"), Now, Target ? 1 : 0, Applied,
+            Maya.IsDown() ? 1 : 0, Maya.GetHealth());
+        DownShotAt = Now + 0.3f;
+        break;
+    }
+    case 10: if (Now < DownShotAt) return; Shot(TEXT("second_wind")); DownShotAt = Now + 2.f; break;
+    default:
+        if (Now < DownShotAt) return;
+        UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS done"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        DownShotStep = -1;
+        return;
+    }
+    ++DownShotStep;
 }
 
 void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
@@ -1235,6 +1346,8 @@ void AOpenWillowMayaHUD::DrawHUD()
         if (bSkillHudShots && bFlashHudReady) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         static const bool bHudShots = FParse::Param(FCommandLine::Get(), TEXT("owhudshots"));
         if (bHudShots && bFlashHudReady) TickHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+        static const bool bHudDownShots = FParse::Param(FCommandLine::Get(), TEXT("owhuddownshots"));
+        if (bHudDownShots && bFlashHudReady) TickHudDownShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
         if (bFlashHudReady)
