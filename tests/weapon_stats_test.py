@@ -136,6 +136,59 @@ class WeaponStatsTests(unittest.TestCase):
         objects['Status.Burn']['bDoesDamageOverTime'] = False
         self.assertIsNone(s.evaluate(FakePackage(objects), item, level=1)['card']['status_dps'])
 
+    def test_status_card_chance_is_the_mapped_presentation_remap(self):
+        objects = world()
+        objects['Type']['BaseStatusEffectChanceModifier'] = const(0.6)
+        objects['Type']['WeaponAttributeEffects'] = [{'AttributeToModify': A + 'WeaponStatusEffectChanceModifier',
+                                                      'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0.5)}]
+        objects['Slag'] = {'CustomDamageTypeDefinition': 'DmgType.Amp'}
+        objects['DmgType.Amp'] = {'StatusEffect': 'Status.Amp'}
+        objects['Status.Amp'] = {'StatusEffectType': 'STATUS_EFFECT_Amp', 'DamageSurfaceChanceModifiers': [
+            {'SurfaceType': 'DMGSURFACE_Generic', 'BaseChance': const(30)}]}
+        objects['Present.Amp'] = {'bValueRemappingEnabled': True, 'RemappingData': {
+            'InputValueMx': {'BaseValueConstant': 3.32999992}, 'OutputValueMx': {'BaseValueConstant': 100}}}
+        item = dict(recipe(), parts=dict(recipe()['parts'], Elemental={'part': 'Slag'}))
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertAlmostEqual(card['status_chance'], 27.0, places=5)   # no mapping: Generic 30 * 0.9
+        objects[s.STATUS_CHANCE_MAPPING] = {'MappingData': [
+            {'DamageType': 'DmgType.Amp', 'Presentation': 'Present.Amp'}]}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        f32 = s.weapon_recipe.f32
+        slope = f32(100 / f32(3.33))                                    # 30.03003
+        self.assertEqual(card['status_chance'], f32(f32(f32(0.6) * 1.5) * slope))
+        self.assertEqual(card['display']['status_chance'], 27.0)        # 27.027 prints 27.0
+        self.assertAlmostEqual(card['status_chance_by_surface']['generic'], 27.0, places=5)  # unchanged
+        objects['Type']['BaseStatusEffectChanceModifier'] = const(6.0)  # input clamps at 3.33
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['status_chance'], 100.0)
+        self.assertAlmostEqual(card['status_chance_by_surface']['generic'], 270.0, places=3)
+
+    def test_element_badge_uses_type_default_when_elemental_part_is_none(self):
+        objects = world()
+        objects['Type']['DefaultDamageTypeDefinition'] = 'Damage.Explosive'
+        objects['Damage.Explosive'] = {'DamageType': 'DAMAGE_TYPE_Explosive'}
+        objects['Element.None'] = {}
+        item = recipe()
+        item['parts']['Elemental'] = {'part': 'Element.None'}
+
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+
+        self.assertEqual(card['damage_type'], 'Damage.Explosive')
+        self.assertEqual(card['element'], 'Explosive')
+        without_elemental_part = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(without_elemental_part['element'], 'Explosive')
+
+    def test_element_badge_maps_damage_type_enum_to_existing_icon_names(self):
+        objects = world()
+        objects['Damage.Fire'] = {'DamageType': 'DAMAGE_TYPE_Incindiary'}
+        objects['Element.Fire'] = {'CustomDamageTypeDefinition': 'Damage.Fire'}
+        item = recipe()
+        item['parts']['Elemental'] = {'part': 'Element.Fire'}
+
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+
+        self.assertEqual(card['element'], 'Fire')
+
     def test_barrel_firing_mode_overrides_the_type_and_speed_scales(self):
         objects = world()
         objects['Type'].update({'DefaultFiringModeDefinition': 'Mode.Default', 'WeaponAttributeEffects': [
@@ -204,6 +257,8 @@ def card_world():
         'Title.White': {'NoConstraintText': 'Not red', 'TextColor': {'R': 255, 'G': 255, 'B': 255, 'A': 255}},
     })
     objects['Type']['MonetaryValue'] = {'BaseValueAttribute': 'Att.Maker', 'InitializationDefinition': CALC}
+    # Every player gun type sets 1; the class default (unset) is 0.
+    objects['Type']['BaseMonetaryValueModifier'] = 1.0
     objects['Barrel']['MonetaryValueMod'] = 'ModA'
     objects['Grip']['MonetaryValueMod'] = 'ModB'
     return objects
@@ -272,19 +327,166 @@ class CardFieldTests(unittest.TestCase):
         objects = card_world()
         objects['Prefix.Cheap'] = {'PartName': 'Cheap', 'MonetaryValueMod': 'ModC', 'WeaponAttributeEffects': [
             {'AttributeToModify': A + 'WeaponDamage', 'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0.5)}]}
-        objects.update({'ModC': {}, 'ModC.ConstantAttributeValueResolver_0': {'ConstantValue': 0.5}})
+        objects['Title.Cheap'] = {'MonetaryValueMod': 'ModD'}
+        objects.update({'ModC': {}, 'ModC.ConstantAttributeValueResolver_0': {'ConstantValue': 0.5},
+                        'ModD': {}, 'ModD.ConstantAttributeValueResolver_0': {'ConstantValue': 0.7}})
         plain = self.card(objects)
         named = self.card(objects, prefix={'part': 'Prefix.Cheap'})
+        fully_named = self.card(objects, prefix={'part': 'Prefix.Cheap'}, title={'part': 'Title.Cheap'})
         # 120 * (1 + 0.3 slot + 0.5 prefix) at level 3 vs 120 * 1.3; the value halves (1132.5 -> 566.25).
         self.assertAlmostEqual(plain['damage'], 120 * 1.3, places=3)
         self.assertAlmostEqual(named['damage'], 120 * 1.8, places=3)
         self.assertEqual((plain['sale_value'], named['sale_value']), (1132, 566))
+        self.assertEqual(fully_named['sale_value'], 396)  # both name-part modifiers multiply before truncation
+
+    def test_sale_value_part_total_starts_at_the_type_modifier(self):
+        objects = card_world()
+        objects['Type']['BaseMonetaryValueModifier'] = 2.0
+        # 1.51 * (2.0 type * 2.0 * 1.25 * level 3 * 100) = 2265 (2265.0002 in single precision)
+        self.assertEqual(self.card(objects)['sale_value'], 2265)
+        del objects['Type']['BaseMonetaryValueModifier']
+        self.assertEqual(self.card(objects)['sale_value'], 0)  # class default 0
+
+    def test_sale_value_is_capped_by_the_currency(self):
+        objects = card_world()
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_Eridium'
+        self.assertEqual(self.card(objects)['sale_value'], 500)
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_SeraphCrystals'
+        self.assertEqual(self.card(objects)['sale_value'], 999)
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_MAX'
+        self.assertEqual(self.card(objects)['sale_value'], 0)
+        objects['Type']['FormOfCurrency'] = 'CURRENCY_Credits'
+        objects['Type']['BaseMonetaryValueModifier'] = 1e6
+        self.assertEqual(self.card(objects)['sale_value'], 99999999)
 
     def test_fun_stats_uses_the_localized_override(self):
         objects = card_world()
         stats = s.evaluate(FakePackage(objects), dict(recipe(), title={'part': 'Title'}), level=1,
                            localize=lambda path, default: 'Overridden' if path == 'Title.Red' else default)
         self.assertEqual(stats['card']['fun_stats'], 'Overridden')
+
+
+class CardTextTests(unittest.TestCase):
+    """Invented fixtures for card text sources, ordering, localization and colors."""
+
+    def test_zoom_uses_type_fov_and_activated_sight_grade(self):
+        objects = card_world()
+        objects['Type']['ZoomedEndFOV'] = 45.0
+        objects['Type']['AttributeSlotEffects'].append({
+            'SlotName': 'WeaponZoomFOV', 'AttributeToModify': s.ZOOM_ATTRIBUTE,
+            'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0),
+            'PerGradeUpgrade': const(-0.13), 'bEnforceMinimumGrade': True,
+        })
+        objects['Sight'] = {
+            'AttributeSlotUpgrades': [{'SlotName': 'WeaponZoomFOV', 'GradeIncrease': 7, 'bActivateSlot': True}],
+            'WeaponCardAttributes': [{'Attribute': s.ZOOM_ATTRIBUTE, 'PriorityIncrease': 0.3}],
+        }
+        item = recipe()
+        item['parts']['Sight'] = {'part': 'Sight'}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        # Current model: 80 / (45 / (1 + 0.13 * 7)); resolver conversion is UNVERIFIED.
+        self.assertAlmostEqual(card['weapon_zoom'], 80.0 / (45.0 / 1.91), places=5)
+        self.assertEqual(card['display']['weapon_zoom'], 3.4)
+        self.assertIn('3.4x Weapon Zoom', card['fun_stats'])
+        self.assertEqual(card['fun_stats_lines'], [{'text': '3.4x Weapon Zoom', 'color': '#FFFFFF'}])
+
+    def test_card_lines_keep_source_order_and_definition_colors(self):
+        objects = card_world()
+        objects['Type'].update({'CustomPresentations': ['Type.Text']})
+        objects['Type.Text'] = {'Description': 'A weapon type note.', 'bDontDisplayNumber': True}
+        objects['Sight'] = {'WeaponCardAttributes': [{'Attribute': s.ZOOM_ATTRIBUTE, 'PriorityIncrease': 0.3}]}
+        objects['Type']['ZoomedEndFOV'] = 40.0
+        objects['Type']['AttributeSlotEffects'].append({
+            'SlotName': 'WeaponZoomFOV', 'AttributeToModify': s.ZOOM_ATTRIBUTE,
+            'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0), 'PerGradeUpgrade': const(0),
+        })
+        objects['Barrel']['WeaponCardAttributes'] = [{'Attribute': s.SHOT_COST_ATTRIBUTE, 'PriorityIncrease': 0.5}]
+        objects['Barrel']['WeaponAttributeEffects'].append({
+            'AttributeToModify': s.SHOT_COST_ATTRIBUTE, 'ModifierType': 'MT_PreAdd', 'BaseModifierValue': const(1),
+        })
+        objects['FirePart'] = {'CustomDamageTypeDefinition': 'DamageType.Fire'}
+        objects['DamageType.Fire'] = {'WeaponCardPresentations': ['DamageType.Effectiveness']}
+        objects['DamageType.Effectiveness'] = {
+            'Description': 'Effective against a target type.', 'bDontDisplayNumber': True,
+            'TextColor': {'R': 255, 'G': 128, 'B': 0, 'A': 255},
+        }
+        item = recipe()
+        item.update({'title': {'part': 'Title'}})
+        item['parts'].update({'Sight': {'part': 'Sight'}, 'Elemental': {'part': 'FirePart'}})
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual([line['text'] for line in card['fun_stats_lines']], [
+            'Red, line', '2.0x Weapon Zoom', 'Consumes 2 ammo per shot.',
+            'A weapon type note.', 'Effective against a target type.',
+        ])
+        self.assertEqual(card['fun_stats_lines'][-1]['color'], '#FF8000')
+        self.assertIn('<font color="#DC4646">Red, line</font>', card['fun_stats_markup'])
+        self.assertIn('<font color="#FF8000">Effective against a target type.</font>', card['fun_stats_markup'])
+
+    def test_null_presentation_entries_are_skipped(self):
+        # Cooked data holds null references in these lists (in Startup.upk the Torgue pistol weapon type's and one
+        # minigun barrel's CustomPresentations); a null has no text, so it adds no card line and must not raise.
+        objects = card_world()
+        objects['Type'].update({'CustomPresentations': [None, 'Type.Text', None]})
+        objects['Type.Text'] = {'Description': 'A weapon type note.', 'bDontDisplayNumber': True}
+        objects['Title']['CustomPresentations'] = [None, 'Title.Red', 'Title.White']
+        objects['FirePart'] = {'CustomDamageTypeDefinition': 'DamageType.Fire'}
+        objects['DamageType.Fire'] = {'WeaponCardPresentations': [None, 'DamageType.Effectiveness']}
+        objects['DamageType.Effectiveness'] = {'Description': 'Effective against a target type.', 'bDontDisplayNumber': True}
+        item = recipe()
+        item.update({'title': {'part': 'Title'}})
+        item['parts']['Elemental'] = {'part': 'FirePart'}
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['fun_stats'], 'Red, line; A weapon type note.; Effective against a target type.')
+
+    def test_inline_damage_tag_uses_the_definition_color_when_line_color_is_disabled(self):
+        objects = card_world()
+        objects['Type']['DefaultDamageTypeDefinition'] = 'DamageType.Basic'
+        objects['DamageType.Basic'] = {'WeaponCardPresentations': ['DamageType.Bonus']}
+        objects['DamageType.Bonus'] = {
+            'Description': 'Deals bonus [explosive]accent[-explosive] damage.',
+            'bDontDisplayNumber': True, 'bEnableTextColor': False,
+            'TextColor': {'R': 255, 'G': 255, 'B': 0, 'A': 255},
+        }
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(card['fun_stats'], 'Deals bonus accent damage.')
+        self.assertIn('<font color="#FFFFFF">Deals bonus ', card['fun_stats_markup'])
+        self.assertIn('<font color="#FFFF00">accent</font>', card['fun_stats_markup'])
+
+    def test_part_presentation_supplies_reduced_ammo_text(self):
+        objects = card_world()
+        objects['Barrel']['CustomPresentations'] = ['Barrel.Text']
+        objects['Barrel.Text'] = {
+            'NoConstraintText': 'A part grants reduced ammunition use.', 'bDontDisplayNumber': True,
+        }
+        card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
+        self.assertEqual(card['shot_cost'], 1.0)
+        self.assertEqual(card['fun_stats'], 'A part grants reduced ammunition use.')
+
+    def test_description_localization_uses_its_own_property_key(self):
+        objects = card_world()
+        objects['Type']['CustomPresentations'] = ['Type.Text']
+        objects['Type.Text'] = {'Description': 'Default note.', 'bDontDisplayNumber': True}
+        observed = []
+
+        def localize(path, default, property_name):
+            observed.append(property_name)
+            return 'Localized note.' if property_name == 'Description' else default
+
+        card = s.evaluate(FakePackage(objects), recipe(), level=1, localize=localize)['card']
+        self.assertIn('Description', observed)
+        self.assertEqual(card['fun_stats'], 'Localized note.')
+
+    def test_red_flavour_can_be_owned_by_a_balance_and_collapses_whitespace(self):
+        objects = card_world()
+        objects['Balance'] = {'CustomPresentations': ['Balance.Red']}
+        objects['Balance.Red'] = {
+            'NoConstraintText': 'A   compact     flavour line.',
+            'TextColor': {'R': 220, 'G': 70, 'B': 70, 'A': 255},
+        }
+        item = dict(recipe(), balance='Balance')
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        self.assertEqual(card['fun_stats'], 'A compact flavour line.')
+        self.assertEqual(card['fun_stats_lines'][0]['color'], '#DC4646')
 
 
 class NativeRuleTests(unittest.TestCase):
@@ -331,6 +533,34 @@ class NativeRuleTests(unittest.TestCase):
         objects['Barrel']['AttributeSlotUpgrades'][0]['bActivateSlot'] = False
         card = s.evaluate(FakePackage(objects), recipe(), level=3)['card']
         self.assertAlmostEqual(card['damage'], 120.0, places=3)      # nothing activated the slot
+
+    def test_slot_base_grade_enters_the_grade_and_one_is_subtracted(self):
+        objects = world()
+        objects['Type']['AttributeSlotBaseGrade'] = const(1.5)  # rounds half up to 2
+        card = s.evaluate(FakePackage(objects), recipe(), level=3)['card']
+        # grade 2 + 3 = 5; value (5 - 1) * 0.1 = 0.4
+        self.assertAlmostEqual(card['damage'], 120 * 1.4, places=3)
+
+    def test_slot_clamps_act_on_the_full_grade_maximum_first(self):
+        effect = {'bEnforceMaximumGrade': True, 'MaximumGrade': 2, 'bEnforceMinimumGrade': True, 'MinimumGrade': 4}
+        self.assertEqual(s.slot_grade(1.0, 9, effect), 4)          # 10 -> max 2 -> min 4
+        self.assertEqual(s.slot_grade(None, -2, {'bEnforceMinimumGrade': True, 'MinimumGrade': 0}), 0)
+        self.assertEqual(s.slot_grade(1.0, -2, {}), -1)
+        self.assertEqual(s.slot_value(0, 0.0, -0.13), s.weapon_recipe.f32(0.13))
+
+    def test_negative_zoom_sum_clamps_to_minimum_grade_zero(self):
+        objects = card_world()
+        objects['Type']['ZoomedEndFOV'] = 45.0
+        objects['Type']['AttributeSlotEffects'].append({
+            'SlotName': 'WeaponZoomFOV', 'AttributeToModify': s.ZOOM_ATTRIBUTE, 'ModifierType': 'MT_Scale',
+            'BaseModifierValue': const(0), 'PerGradeUpgrade': const(-0.13), 'bEnforceMinimumGrade': True})
+        objects['Sight'] = {
+            'AttributeSlotUpgrades': [{'SlotName': 'WeaponZoomFOV', 'GradeIncrease': -2, 'bActivateSlot': True}],
+            'WeaponCardAttributes': [{'Attribute': s.ZOOM_ATTRIBUTE}]}
+        item = dict(recipe(), parts=dict(recipe()['parts'], Sight={'part': 'Sight'}))
+        card = s.evaluate(FakePackage(objects), item, level=1)['card']
+        # grade 1 - 2 = -1 clamps to 0: value (0 - 1) * -0.13 = +0.13, FOV 45 * 1.13
+        self.assertAlmostEqual(card['weapon_zoom'], 80.0 / (45.0 * 1.13), places=5)
 
     def test_rarity_is_a_sum_looked_up_in_the_globals_table(self):
         objects = world()

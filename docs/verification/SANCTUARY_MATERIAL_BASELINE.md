@@ -1,5 +1,8 @@
 # Sanctuary material baseline and glacier investigation (2026-09-14)
 
+> Current counts (2026-10-21, full pipeline): see
+> [SANCTUARY_SCENE_IMPORT_GAPS.md](SANCTUARY_SCENE_IMPORT_GAPS.md). The tables below are the 2026-09-14 baseline.
+
 Checkout: `t3code-409c3042`, branch `fix/missing-materials`.
 Freshly prepared from the installed base game using this checkout's reader.
 No material selection policy or binary-layout interpretation changed in this pass.

@@ -8,6 +8,27 @@ the ignored `local/` directory.
 Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3. The UE5
 host additionally needs Unreal Engine 5.8 installed.
 
+## Main tools at a glance (maintainer, 2026-10-22)
+
+Reach for these first, roughly in this order, before writing a one-off decoder. Every rule below
+(outputs under ignored `local/`, nothing game-derived in git, UNVERIFIED until confirmed in the game)
+still applies.
+
+| Need | Tool | Where / how |
+|---|---|---|
+| A value or behaviour the running game shows | **bl-sdk (unrealsdk + pyunrealsdk) live reads and hooks**, the way the maintainer's [RTSE](https://github.com/zuhuHix/Bl2_RTSE) save editor works (`find_object`/`find_all`, hooks, a game-thread job queue) | `tools/real_game/` (`realgame.ps1`, `scripts/*.py`, `openwillow_realgame` SDK mod); see "Driving the real game" below |
+| Decoding anything: native functions, binary formats, movies, runtime call tracing | **REA** ("reverse engineer anything", npm `rea-agents` 6.0.0, used through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/` (docs/NATIVE_ANALYSIS.md) |
+| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 | `C:\Users\yorad\Tools\`, `tools/ghidra_import.ps1` |
+| Meshes, textures, animations, sounds | UModel / UE Viewer build 1590 | "UModel / UE Viewer" below |
+| Package identity, properties, scene records | `ow-package` (ours) | "`ow-package`: the package reader" below |
+| UnrealScript bytecode | `research/script_disasm.py` (ours) | "Reading the game's UnrealScript" below |
+| The game's object dumps as an oracle | OpenBLCMM datapack | `tools/blcmm_dumps.py`, THIRD_PARTY.md |
+| BL2's Scaleform UI movies | Ruffle (desktop and web builds) | "BL2's HUD movie over UE5" below |
+| Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `C:\Users\yorad\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
+
+REA and Gibbed have no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open
+(2026-10-22).
+
 ## External tools
 
 External tools are optional local dependencies. Keep their binaries outside the
@@ -494,6 +515,19 @@ Use WASD and mouse, with Space to jump. Omit `-Walk` for the free-flight viewer.
 This uses UE5 movement defaults tuned for inspection; it does not reproduce BL2
 movement physics. See [collision preparation, checks and limits](../COLLISION_WALKING_VERIFICATION.md).
 
+Blocking volumes and recorded routes (2026-10-21): `tools/refresh_collision.py` also writes the map's blocking
+volumes (`tools/collision_volumes.py`) and `volumes-runtime.json`; pass `--live-volumes` with a walking capture to
+settle dynamic ones. `tools/walking_routes.py candidates` proposes stair probes, `tools/real_game/walking_capture.ps1`
+walks them in the running game (takes the screen and keyboard; output under `local/realgame/walking/`),
+`tools/walking_routes.py routes` writes `walk-routes.json`, and `tools/test_ue_viewer.ps1 -Route` runs
+`OpenWillow.RouteWalking` and `OpenWillow.CollisionShapes`.
+
+Sanctuary visual opt-in (2026-10-22): `tools/prepare_level.py` writes the decoded lighting, decal and diffuse-tint records
+into `scene.json` for `Sanctuary_P` only (other maps get no `lighting` key, and their decals default-deny). The host applies
+the round-4 visuals only when the environment variable `OPENWILLOW_SANCTUARY_OPT_IN` lists them: `grade`, `diffuse_tint`,
+`xmas_bulbs`, `static_lights`, `graffiti_decals` (comma-separated; all default OFF). The 0.14 cloud-cap scale stays on. See
+[SANCTUARY_SCENE_IMPORT_GAPS.md](verification/SANCTUARY_SCENE_IMPORT_GAPS.md) for the calibrations, all `UNVERIFIED`.
+
 ### Selecting an installed map
 
 `tools/viewer.py` lists persistent packages in the base-game cooked directory.
@@ -634,6 +668,21 @@ python tools/filter_gestalt_gltf.py --gltf <gestalt glTF> --gestalt local/infini
 The recipe lists the merge chain, candidates, weights, name parts and the
 rules that are still UNVERIFIED.
 
+`roll()` now seeds `CrtRand` (the MSVC `rand()`), so the C++ generator can reproduce it; the slice tools pin
+Python's own generator. The weapon parts census, the generator manifest and the C++ generator
+(docs/verification/WEAPON_PARTS_CATALOG.md):
+
+```powershell
+python tools/weapon_catalog.py packages; python tools/weapon_catalog.py crosscheck; python tools/weapon_catalog.py summary
+python tools/weapon_gen_manifest.py            # -> local/weapons/gen/weapon_gen_manifest.txt (base game)
+./build/Release/ow-weapongen.exe local/weapons/gen/weapon_gen_manifest.txt --balance <balance> --stage 30 --seed 1
+python tools/weapon_gen_parity.py              # Python vs C++ on every balance, stages and seeds; report under local/
+```
+
+In the host, `-owweapongen=<manifest>` overrides the default path, `ow.RollGun <balance or pool> [stage] [seed]` adds a
+rolled gun to the backpack and `-owweapongentest` writes a host self-check under `local/weapons/gen/host_check/`. Live
+confirmation: `tools/real_game/gen_confirm_capture.ps1` then `python -I tools/real_game/gen_confirm.py stats ...`.
+
 Import with `OPENWILLOW_PISTOL_GLTF` pointing at the filtered glTF and
 `OPENWILLOW_INFINITY_TEXTURES` at UModel's PNG export of
 `Mati_VladofLegendaryPistol_Infinity`, running
@@ -664,7 +713,25 @@ The script starts `tools/hud_overlay/serve.py` on port 8767 if it is not
 running and launches Sanctuary as Maya with `-owflashhud=<url>` and
 `-owflashskills=<url>`. The HUD overlay logs "OpenWillow Flash HUD page loaded"
 and "HUD movie ready" in the UE log.
+Since 2026-10-22 the movie is the default gameplay HUD: without `-owflashhud` the host opens
+`http://127.0.0.1:8767/` itself (so a running `serve.py` on that port is enough) and draws the canvas fallback until the
+page reports ready (echoing the per-run id the host put in its URL) or if it fails to load; `-owcanvashud` forces the fallback (the scripted test and capture runs pass it). The log says `OpenWillow HUD path:
+movie|canvas (<reason>)` and, from the page, `OpenWillow HUD 3D path warp|affine: <why>` (the perspective warp of the
+turned clusters; add `?hud3d=affine` to the page URL for the 2D stand-in). Gameplay-HUD captures for a parity review:
+`./tools/run_hud_shots.ps1 -Game $game [-Level 36 -Shield] [-Affine]` (slice weapons, at rest and after three shots,
+checked by `tools/check_hud_shots.py`; output under `local/hudshots/`); real-game reads of the HUD texts, crosshair and
+ammo icon per weapon: `tools/real_game/hud_parity_capture.ps1 -Character <your save file>` (PowerShell 7). See `docs/verification/HUD_PARITY.md`.
 It is a prototype: see DECISIONS.md for what is driven and what is not.
+Maya's action-skill indicator (the icon's cooldown veil and the Siren emblem while Phaselock holds) needs the icon
+movie: `python tools/prepare_hud_icons.py --reader build/Release/ow-package.exe --game $game`. Its in-engine check,
+`./tools/test_action_skill_hud.ps1 -Game $game [-SharedLock <file>]`, casts once and checks the logged state against
+the real game's timings; real-game capture: `tools/real_game/action_skill_hud_capture.ps1`, layout read:
+`tools/real_game/hud_layout_capture.ps1` (`docs/verification/ACTION_SKILL_HUD.md`).
+The minimap (`p1.minimapEcho.minimap`, `docs/verification/HUD_MINIMAP.md`) needs the level's map movie and an icon
+manifest: `python tools/prepare_minimap.py --reader build/Release/ow-package.exe --game $game` (writes
+`local/ui/run/UI_TacticalMap_Sanctuary/`, `SharedWillowTacMaps/` and `local/slice/minimap.json`; the host reads the
+manifest by default or from `-owminimap=<json>`). Its in-engine check, `./tools/test_hud_minimap.ps1 -Game $game
+[-SharedLock <file>]`, puts Maya at eight real-game capture spots; live reads: `tools/real_game/scripts/minimap.py`.
 The BL2-style StatusMenu Inventory movie is enabled by default; press **Tab** (or **I**) for Inventory and **K** for
 Skills; the header tabs and the K/I keys switch between the two pages. Pass `-NoInventoryMovie` only to use the
 fallback host inventory panel. Equip, transfer and comparison flows follow the observed stock behaviour: see
@@ -825,6 +892,9 @@ lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-
 `amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
 Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials and attached meshes (hair, hats, gear);
 `amb_view_*`, `amb_cam` and `amb_aim_at` frame a pawn.
+`scripts/scene_owners.py` (`Invoke-GamePyFile ... scene_owners.py lanea`, then `so_dump('owners', [materials])`) lists the
+live components of interactive objects, mission spawners and wiring actors with their hidden flags and poses; `so_view` and
+`so_camera` place the player and read the exact view (`GetPlayerViewPoint`, FOV) for a matched host inspection viewpoint.
 
 ## Sanctuary ambient NPCs (host, behind a flag)
 
@@ -951,6 +1021,7 @@ Weapon paint and effects (detail in "Weapon paint: where the Master_Gun reading 
 | `tools/weapon_paint_model.py` | Library: our own-words reading of Master_Gun's colour model, shared by the preparer, the thumbnail renderer and the tests (not a command) | `python tests/weapon_paint_test.py` |
 | `research/d3d9_bytecode.py` | Library: our own SM3 (vs_3_0 / ps_3_0) token reader, written from Microsoft's public D3D9 bytecode description; `disassemble(code)` prints a plain register listing; listings are game-derived and stay under `local/` | imported by the paint research; checked in `python tests/weapon_paint_test.py` |
 | `research/particle_system.py` | Reads cooked `ParticleSystem` templates (emitters, LODs, modules, baked distributions, `BurstList`, `DynamicParams`) to JSON under `local/phaselock/emitters/`; reads only, renders nothing | `python research/particle_system.py [Part_SirenASHandOrb ...] [--package GD_Siren_Streaming_SF] [--oracle]`, tests `python tests/particle_system_test.py` |
+| `tools/prepare_phaselock_target.py` + `tools/import_phaselock_target.ps1` | A stock Phaselock target for the host: the bullymong's mesh, zone-colour material, idle, death and its four `PhaseLock_*` clips (our reader for identities, UModel for the exports, the slice NPC clip conversion), imported under the ignored `/Game/OpenWillow/Characters/PhaselockTarget`; `host_target.json` tells the host the paths, mesh offset and scale | `powershell -File tools/import_phaselock_target.ps1 -Game <BL2> -UModel <umodel.exe>` (under the UE lock), then `tools/run_phaselock_shots.ps1 -Extra '-owcombatpawn=Bullymong'`; tests `python tests/prepare_phaselock_target_test.py` |
 
 Inventory open-time benchmark (DECISIONS 2026-10-02; results in the 2026-10-02 section of
 [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md); one PC, no original-game figure):
@@ -1119,6 +1190,12 @@ python tools/weapon_slice_gear.py --reader $reader --game $game --level 8 --seed
 python tools/loot_pools.py --reader $reader --package "$cooked\Startup.upk" table --help
 python tools/weapon_card_audit.py --reader $reader --package "$cooked\Startup.upk" --trace <ui trace .jsonl>
 
+# What a shot does (docs/verification/WEAPON_PROJECTILES.md): add the "firing" block to a recipe that has stats
+python tools/weapon_firing.py --reader $reader --package "$cooked\Startup.upk" --recipe <recipe .json> [--print]
+pwsh -File tools/test_weapon_firing.ps1 [-Guns a,b,c] [-SkipBuild]      # in-engine -owfiringtest + check_weapon_firing.py
+powershell -File tools/capture_firing_frames.ps1                       # host frames at the real frames' pose (-owfiringshots)
+python tools/firing_contact_sheet.py --offsets=-2:10                   # real / host sheets under local/firing/frames/sheets
+
 # Audio identity chain (no decoding): UE3 AkEvent -> Wwise event -> bank -> .wem
 python tools/audio_census.py census
 python tools/audio_slice_chain.py --reader $reader                     # local/slice/audio.json
@@ -1193,6 +1270,39 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   recipes: each recipe's weapon-type `PlayerViewOffset` and `FirstPersonMeshFOV`. The walker places the arms and sets the
   foreground FOV from it when a gun is selected; rerun it when a recipe folder changes (a recipe without an entry gets
   no offset and 45).
+
+Weapon part library (2026-10-23, `docs/verification/WEAPON_PART_ASSETS.md`): every gestalt mesh once and every skin as a
+material instance, guns assembled from their parts at run time (`OpenWillowWeaponAssembly`).
+
+```powershell
+python tools/weapon_part_census.py --game $env:OPENWILLOW_BL2 --live local/realgame/wpa/live_visual_census.json `
+  --output local/wpa/census/visual_census.json          # cooked census (+ comparison with the live one)
+pwsh tools/real_game/weapon_part_session.ps1 -Mode Census   # live census (game, saves blocked; RTSE-style find_all)
+python tools/export_weapon_skins.py --umodel <umodel.exe>    # UModel 1590: every skin MIC + textures, inventoried
+python tools/weapon_library.py meshes                        # one glTF primitive (UE slot) per gestalt fragment
+python tools/weapon_library.py skins --game $env:OPENWILLOW_BL2
+python tools/weapon_library.py index                         # local/weapon_library/library.json (parts, skins, bones)
+powershell -File tools/import_weapon_library.ps1 [-Only meshes|skins] [-Reloads 'Pistol=<prepared reload json>,...']
+python tools/weapon_assembly_sample.py --game $env:OPENWILLOW_BL2  # sample: type x manufacturer, legendaries, skin sweep
+powershell -File tools/run_weapon_assembly_shots.ps1 -Items local/wpa/sample -Quick   # host frames + assembly log
+python tools/weapon_assembly_oracle.py --log <run.log...> --index local/wpa/sample/sample_index.json `
+  --live local/realgame/wpa/live_guns.json                   # triangle oracle: game = host per gun
+pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList <file of recipe paths>
+```
+
+- The host backpack holds 39 items (the game's maximum), so `run_weapon_assembly_shots.ps1` shows at most 39 guns per run;
+  split a larger sample into folders. Run `weapon_view_model.py` on each folder so the guns are held at their type's offset.
+- `-owweaponprebuilt` forces the old per-recipe meshes (A/B); a recipe with an explicit `MeshPath` always uses it. A gun the
+  library cannot build completely falls back too, with `fallback to the pre-built mesh ... (<reason>)` in the log.
+- `OpenWillow.WeaponAssembly` is a UE automation test of the planning rules on a synthetic library; run it in `-game` mode
+  (`UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit"`).
+- A meshes import re-imports the reload clips recorded in `local/weapon_library/reloads.json`.
+- `-owgunexec=<cmd>|<cmd>` (with `-owgunshots`) runs console commands before the captures, `+` for a space, e.g.
+  `-owgunexec=ow.RollGun+GD_Itempools.WeaponPools.Pool_Weapons_All_06_Legendary+30+1 -owgunids=gen_Pistol_Torgue_5_Calla_30_1`
+  shows a generated gun (`-ExecCmds` did not reach the console in a map launch here).
+- The capture session spawns guns in memory only, empties the save's backpack in memory for Inspect (saves are blocked and
+  compared afterwards), closes the queued "Unlocked!" notices through the SDK, and holds each gun through the inventory
+  manager (the quick-slot key did not switch to a freshly spawned gun).
 
 - `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
   yet; picking one is a maintainer decision (license and provenance entry first).

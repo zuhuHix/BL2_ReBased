@@ -61,7 +61,8 @@ def summarize_parts(parts):
 
 
 def build_recipe(package, balance, seed, level, localize, provenance):
-    recipe = weapon_recipe.roll(package, balance, seed, level)
+    # random.Random keeps the slice recipes as they were before CrtRand became roll()'s default.
+    recipe = weapon_recipe.roll(package, balance, seed, level, rng=random.Random(seed))
     recipe['stats'] = weapon_stats.evaluate(package, recipe, level, localize)
     recipe['type'] = card_type(package, recipe['weapon_type'])
     legal = weapon_balance.legal_parts(package, balance, level)
@@ -100,7 +101,7 @@ def attach_sockets(recipe, gestalt_dir):
     Reads <Kind>.sockets.json from tools/gestalt_sockets.py. Each entry is that fragment's socket (mangled name, bone,
     bone-local location, rotation, scale, reference-pose mesh_location). When several drawn fragments define the same
     original name (body variants share RearSight) the first fragment in name order is kept and the others are listed
-    under `also_from`. The host reads Muzzle and EjectPort (docs/verification/WEAPON_VISUALS.md section 11).
+    under `also_from`. The host reads Muzzle and EjectPort (docs/verification/WEAPON_VISUALS.md section 17).
     """
     recipe.pop('sockets', None)
     table = gestalt_dir / f'{gestalt_kind(recipe)}.sockets.json'

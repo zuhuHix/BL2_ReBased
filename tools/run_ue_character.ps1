@@ -76,7 +76,7 @@ $shot = Join-Path $out "preview-$View.png"
 $level = @('/Game/OpenWillow/Characters/Maya/MayaPreview')
 if ($Sanctuary) {
     $shot = Join-Path $out 'sanctuary-maya.png'
-    $level = @('/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya')
+    $level = @('/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud')
     if ($Spawn) {
         if ($Spawn.Count -ne 3) { throw '-Spawn requires X,Y,Z' }
         $level += @("-owspawnx=$($Spawn[0])", "-owspawny=$($Spawn[1])", "-owspawnz=$($Spawn[2])")

@@ -12,7 +12,7 @@ and behavior events. This note **extends and does not repeat**: [NATIVE_SKILLS.m
 stack, the resource-pool drain formula, the per-frame skill refresh), [NATIVE_PHASELOCK_TARGETING.md](NATIVE_PHASELOCK_TARGETING.md)
 (target score, the three skill constraints, lift bob), [NATIVE_PHASELOCK_PRESENTATION.md](NATIVE_PHASELOCK_PRESENTATION.md)
 (clips, hand effect, bubble), [PHASELOCK_STOCK_DATA.md](PHASELOCK_STOCK_DATA.md) (identities, behavior chain),
-[NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) (the reload abort), [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md).
+[NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) (the reload abort), [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md).
 Overlap: lane G7 (skills), G5 (HUD movie), G4 (controller helpers), G3 (resource pools).
 
 ## Summary
@@ -485,7 +485,7 @@ called from the manager tick; `ActionSkill.HandleTimerEvent` / `ITimerBehavior` 
 - **PHASELOCK_STOCK_DATA UNVERIFIED** ("when exactly `ActionSkillCallback` refills the pool relative to `OnSelectedTarget`"): after it
   (section 5). Also "what `Skill_Phaselock.InitialDuration` 120 does": it is the skill object's backstop duration, the value
   `GetActionSkillDuration` returns, and the base of `ActionSkillTime` (sections 7, 12a, 13).
-- **NATIVE_WEAPON_FIRING** (reload abort callers: "the start of an `ExecuteActionSkill` (Phaselock is one)"): for Phaselock the abort comes
+- **NATIVE_WEAPON_TRIGGER_AMMO** (reload abort callers: "the start of an `ExecuteActionSkill` (Phaselock is one)"): for Phaselock the abort comes
   from the cast special move with `bBlocksWeaponActions` through `PerformSharedWeaponActions` (12b); `ExecuteActionSkill` is a
   different action skill class that calls `StopReloading` itself.
 - **NATIVE_PHASELOCK_TARGETING sections 1 and 4**: confirmed that `Skill.Activate` makes the constraint check (its first

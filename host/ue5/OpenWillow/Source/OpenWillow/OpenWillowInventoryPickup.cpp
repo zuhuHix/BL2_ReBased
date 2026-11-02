@@ -1,4 +1,5 @@
 #include "OpenWillowInventoryPickup.h"
+#include "OpenWillowWeaponAssembly.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -49,8 +50,7 @@ void AOpenWillowInventoryPickup::Initialize(FOpenWillowTakenInventoryItem InItem
     {
         // Recipe ID identifies an imported mesh; instance ID may have a #N
         // suffix and must never be used as a package path.
-        USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(Item.Weapon);
-        WeaponVisual->SetSkeletalMesh(Mesh);
+        USkeletalMesh* Mesh = OpenWillowWeaponAssembly::Show(WeaponVisual, &Item.Weapon);
         WeaponVisual->SetVisibility(Mesh != nullptr);
     }
 }

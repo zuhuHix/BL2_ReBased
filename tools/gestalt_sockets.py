@@ -7,7 +7,7 @@ Writes, under ignored local/gestalt/ (game-derived data, never committed):
                       (Muzzle, EjectPort, FrontSight, ...). Each socket has the mangled name, bone, location, rotation, scale
                       and, when a UModel glTF is given, `mesh_location`: the same point in mesh space in the reference pose.
 
-How it fits together (docs/verification/WEAPON_VISUALS.md section 11):
+How it fits together (docs/verification/WEAPON_VISUALS.md section 17):
 - A GestaltSocketMapping says "fragment F calls its socket <Original>; in the shared mesh that socket is <Mangled>".
 - The shared GestaltSkeletalMesh holds the sockets (SkeletalMeshSocket objects: bone, relative location/rotation/scale).
   The cooked stream omits fields that equal the engine default, so a missing rotation is 0 and a missing scale is 1.

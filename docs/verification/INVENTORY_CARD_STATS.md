@@ -126,14 +126,13 @@ was not decoded. Green/purple/orange status lines are likewise absent.
 
 ## Host forwarding
 
-`OpenWillowInventory.cpp` reads `accuracy`, `accuracy_known`, `sale_value`,
-`sale_value_known`, `fun_stats` from `stats.card` and writes weapon snapshot
-items with `accuracy` and `value` only when present, `accuracyKnown` and
-`valueKnown` always (false when absent or unverified), and `funStats` only when
-non-empty. Items whose recipe has no display type (the Infinity recipes) now get
-a `type` label (`Pistol`, `SMG`, `Assault Rifle`, `Shotgun`, `Sniper Rifle`,
-`Launcher`) resolved from the balance/ammo type; a recipe-provided type is
-unchanged.
+OpenWillowInventory.cpp reads element, accuracy, accuracy_known, sale_value,
+sale_value_known, fun_stats, and fun_stats_markup from stats.card. It copies the
+element key to the weapon snapshot and writes accuracy/value only when present,
+their known flags always, and non-empty fun text/markup. inventory.js lowercases
+the element key for the movie's SetTitle element argument and passes funStatsMarkup
+to the movie. No adapter or page change is needed for the explosive badge; a host
+capture with the regenerated recipes remains unverified.
 
 ## Populated for the local recipes
 
@@ -150,16 +149,16 @@ local/items/<id>.json` after this change (the recipes are ignored local files).
 
 ## Still unknown
 
-- Why spread differs from real cards (accuracy).
-- Launcher pricing; pistol and sniper pricing accuracy.
-- White fun-text lines, status lines, level requirement text for weapons.
-- Whether the real card's accuracy uses player-side modifiers.
+- Whether the inferred zoom reference conversion matches the native attribute resolver.
+- Whether the real card's accuracy uses player-side modifiers beyond the item spread.
+- Host rendering of the regenerated element badge has not been captured.
 
 ## Automated checks (synthetic)
 
-`tests/weapon_stats_test.py` (11 tests, 8 new) covers the remap, clamping and
-absence, the scaled-base price calculator with rounding, the checked/unchecked
-flag, unresolved attributes, red-only fun text and the INT override. It is not
+`tests/weapon_stats_test.py` (36 synthetic tests) covers the remap, clamping and
+absence, damage-type element mapping, the scaled-base price calculator with name-part
+modifiers, the checked/unchecked flag, unresolved attributes, red flavour and card
+text sources, zoom, ammo and markup. It is not
 registered with CTest (that needs `CMakeLists.txt`, a sensitive file); run it
 with `python tests/weapon_stats_test.py`.
 
@@ -188,7 +187,100 @@ lane. The page did not print some things the real cards have, and now does:
 - **Value colour.** Row values print in the label cyan (`#a4e8f3`), as the real card does; they were white.
 - **Compare arrows.** Arrow only, no difference figure; damage compares as damage x projectiles.
 
-Still not derived (weapon lane): the white flavour lines ("Consumes 2 ammo per shot.", "3.1x Weapon Zoom", "Sustained fire
-increases accuracy.", and the orange "Highly effective vs Flesh." line), so the slice SMG and shotgun cards carry fewer lines
-than the real ones. One more difference found by the golden comparison: the real game names the slice SMG "Inspiring
-Projectile Convergence", the host recipe says "Inspiring" (name composition, not a page matter).
+At the time of these captures the page did not receive the white flavour lines, zoom, sustained-fire note or orange
+effectiveness line, so the cards carried fewer lines than the real ones. The text-source and recipe-card work below
+supersedes that text gap. One other difference from this earlier comparison remains: a captured real-game name can
+differ from the bounded recipe's name-part combination.
+
+## Weapon card text and refreshed recipes (2026-10-22)
+
+The bounded recipe cards now retain their existing stat keys and add `weapon_zoom`, `fun_stats_lines` and
+`fun_stats_markup`. Text comes from installed definitions rather than per-item literals:
+
+- Red flavour is selected by the presentation's red `TextColor`, across the balance, weapon type, parts and name parts.
+  `NoConstraintText` and `Description` are both accepted; whitespace is collapsed before sending the line so long gaps
+  in flavour text do not consume the card's width.
+- Other text-only `CustomPresentations` from those same definitions are included when `bDontDisplayNumber` is set.
+  The selected damage type's `WeaponCardPresentations` supplies its bonus/effectiveness phrases. The definition's
+  `TextColor` sets the line color unless `bEnableTextColor` is false; the embedded damage-type color tag is preserved
+  as nested Scaleform markup.
+- A sight or accessory requests the zoom row through `WeaponCardAttributes.Attribute`. The type's `ZoomedEndFOV` is
+  modified by the activated `WeaponZoomFOV` slot effect using the sum of the selected parts' grade increases. The
+  model uses the presentation's inverse-zoom form (`80 / effective FOV`) and its one-decimal precision. The 80-degree
+  reference conversion is inferred from card captures; the native resolver's unit conversion is still **UNVERIFIED**.
+- The generic ammo line is made from the evaluated `shot_cost` when it exceeds one. Phrases such as reduced ammo use
+  are read from the part's own text-only presentation. Lines are ordered flavour, zoom, numeric ammo cost, part/type
+  presentations, then damage-type presentations.
+- Existing `status_dps` and `status_chance` are emitted from the selected damage type and its status effect. They are
+  not synthesized as text; the host already turns them into status rows. The same applies to `accuracy` and `sale_value`:
+  they remain numeric card fields consumed by the host.
+
+The recipe refresh uses the installed type, balance, chosen parts and the evaluator's single-precision modifier stack.
+For a fire-rate attribute, the card presentation is inverse: first form the final `WeaponFireInterval` from its base,
+part effects and activated slot grade using `(base + PreAdd) * (1 + positive scales) / (1 + abs(negative scales)) +
+PostAdd`, then display `1 / interval` to one decimal. This is why the corrected rifle rate comes from the installed
+type and parts, rather than visually adjusting the displayed digit. Damage, accuracy, reload and clip size follow the
+same decoded attribute/presentation path; accuracy remaps spread to the card percent, damage rounds up, and magazine
+size rounds down. The comparison report under ignored `local/orch/D20/` records the numeric capture audit.
+
+The Round 1 comparison log from 2026-10-22 reported all fields matching across 67 supported records, with 2
+unsupported. That run used the `--live-data` overlay (`local/realgame/cards/live_weapon_data.json`, values read from the
+running game): rerunning it with the overlay on the review's request reproduces it (every printed stat 67/67, status
+16/16; report `local/realgame/cards/golden_compare_r2_live.json`). The host's recipes are generated from the cooked
+packages without that overlay, so the Round 2 cooked-package counts below are the ones that describe the host's cards.
+Neither run validates the new element string or zoom parity.
+
+The adapter reads stats.card.fun_stats_markup into Item.FunStatsMarkup, and
+inventory.js passes funStatsMarkup to the movie. The forwarding path is present;
+its in-game rendering has not been checked.
+
+Recipe-only regeneration (never the separately owned `weapon_view.json`):
+
+```powershell
+$weaponStatsReader = (Resolve-Path build/Release/ow-package.exe).Path
+$weaponStatsPackage = Join-Path $env:OPENWILLOW_BL2 'WillowGame/CookedPCConsole/Startup.upk'
+Get-ChildItem local/inventory-actions/bounded-recipes -Filter '*.json' |
+  Where-Object Name -ne 'weapon_view.json' |
+  ForEach-Object { python tools/weapon_stats.py --reader $weaponStatsReader --package $weaponStatsPackage --recipe $_.FullName --game $env:OPENWILLOW_BL2 }
+```
+
+The earlier zoom and price caveats are updated by the Round 2 audit below. Card-text
+markup forwarding is in the adapter, but its in-game rendering has not been checked.
+
+## Round 2 audit (2026-10-22)
+
+The card's `element` is the resolved damage type's elemental kind. `card_element()` maps the installed `DamageType`
+enum to the card's existing element names, then falls back to the selected `Elemental` part name. This preserves
+the existing Fire icon and also handles explosive weapons whose `Elemental_None` part leaves the type's default
+explosive damage active. The D20 capture shows the real explosive badge; the host already forwards
+`stats.card.element` and lowercases it for the movie's `SetTitle` element key, so this field requires no adapter or
+page change. The new recipe output has not been checked in a host capture.
+
+The sale calculator is unchanged. The D20 spawned record has the bounded launcher recipe's same balance, level and
+non-name parts, but a different prefix. Evaluating an in-memory copy with the captured prefix reproduces the
+recorded sale value exactly. This isolates that price difference to the bounded recipe's name-part choice; the
+calculator already multiplies every selected part and name-part `MonetaryValueMod`. The bounded recipe set remains
+unchanged, so its computed value still describes its selected prefix.
+
+The zoom model still computes `80 / effective ZoomedEndFOV`, including the selected parts' active
+`WeaponZoomFOV` slot grade. The D20 comparison matches three of the five zoom labels; two differ by one tenth.
+The paired capture uses the same weapon parts as the bounded recipes, and neither one global nearest-rounding rule
+nor floor explains all five labels. The checked type FOV and slot-grade inputs do not establish why those two
+values differ, so the native resolver conversion and those recipe zoom outputs remain **UNVERIFIED**. No per-item
+zoom adjustment was added. The synthetic zoom test checks the implemented FOV/grade arithmetic, not game parity.
+
+The Round 2 cooked-package golden comparison used
+tools/real_game/golden_card_compare.py without a --live-data overlay, writing
+local/realgame/cards/golden_compare_r2.json. It compared 69 entries: 2 unsupported;
+among 67 supported, damage matched 63, projectile count 67, accuracy 67, fire rate
+67, reload 62, magazine 55, and sale value 67. Status DPS matched 16/16 and status
+chance 15/16. Within slice_exact, damage, projectile count, accuracy, fire rate and
+sale value matched 6/6; reload and magazine matched 4/6. This automated run does
+not verify the new element string or zoom parity.
+
+Synthetic regression coverage now includes a default explosive type with an `Elemental_None` part, the existing Fire
+icon mapping, prefix and title price multipliers together, and the current zoom FOV/grade calculation. In-game
+validation remains pending because this lane does not own the host/page or run a UE capture. Regenerating the six
+bounded recipes changed only the element field in the three Torgue recipes; numeric card fields did not change, and
+weapon_view.json was excluded and left untouched. Automated checks: weapon_stats_test.py
+36/36, CTest 10/10, and verify_packages.py 9/9.

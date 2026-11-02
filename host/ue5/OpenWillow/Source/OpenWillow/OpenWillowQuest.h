@@ -64,6 +64,11 @@ public:
     //  - Behavior_Transform: WillowAIPawn.TransformType and the target name it selects (GetTargetName).
     bool IsRegisteredTargetable(const AActor* Actor) const;
     FString DummyTargetName() const;
+    // The mission's minimap icons (OpenWillowMinimap): Marcus's "eligible" mark before the mission is accepted and its
+    // "turnin" mark once it is ready to turn in, and an "objective" mark on the active objective: the stock range
+    // cylinder for GoToRange, the dummy for Fire. Which actor the game's objective marker follows for this mission was
+    // not observed (UNVERIFIED); the kinds are tools/hud_overlay/minimap.js's.
+    void MinimapMarkers(TArray<TPair<FString, FVector>>& Out) const;
 
 private:
     struct FImpl;
@@ -169,9 +174,11 @@ private:
     FString LastDummyDamageType;
     int32 DummyShots = 0;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
-    // test: bullets fly, so a case fires, waits for the landing and checks; ShotPhase is the case's own sub-step, ShotsBefore the dummy's
+    // test: bullets fly (OpenWillowProjectile), so a case fires, waits for the landing and checks; ShotPhase is the case's own sub-step, ShotsBefore the dummy's
     // damage calls before the press, MagazineBefore the held magazine before it, ShotgunId and ShotgunSlot the multi-pellet gun readied for the pellet checks (DisplacedId the gun it took the slot from).
     int32 ShotPhase = 0, ShotsBefore = 0, MagazineBefore = 0, ShotgunSlot = INDEX_NONE;
+    float PressDamage = 0;              // test: the per-pellet damage at the shotgun press (AOpenWillowWalker::ShotDamage)
+    FOpenWillowFiringStats CountsBefore; // test: OpenWillowFiring::Counts before the press (pellets, direct hits, direct damage)
     FString ShotgunId, DisplacedId;
     int32 PointsBeforeReward = 0, BackpackBeforeReward = 0;
     float HealthBeforeReward = 0, MaxHealthBeforeReward = 0;

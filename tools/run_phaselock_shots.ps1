@@ -3,7 +3,7 @@ param(
     [string]$Out = 'local/phaselock/b2',
     [int]$TimeoutSeconds = 240,
     [int]$WaitForEditorSeconds = 900,
-    # Extra command-line switches (e.g. '-owfov=100').
+    # Extra command-line switches (e.g. '-owfov=62.15' for 77.55 degrees at 16:9, '-owfpfov=45', '-owphaselockpitch=3.5').
     [string[]]$Extra = @()
 )
 # AI-assisted. Captures the host Phaselock presentation on Sanctuary: Maya (-owmaya) with a slice gun, the host
@@ -39,7 +39,7 @@ try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $outDir "run-$stamp.log"
     $started = Get-Date
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcombattest', '-owphaselockshots',
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', '-owcombattest', '-owphaselockshots',
         "-owitems=`"$itemDir`"", "-owlevel=$gearLevel") + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")

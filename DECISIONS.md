@@ -1765,7 +1765,7 @@ All UNVERIFIED in game.
 
 ## 2026-10-06: native notes on weapon firing, ammo, accuracy, recoil and reload (UNVERIFIED)
 
-AI-assisted (Claude), analyst lane G13, Ghidra; own-words note `docs/verification/NATIVE_WEAPON_FIRING.md`, no listing text;
+AI-assisted (Claude), analyst lane G13, Ghidra; own-words note `docs/verification/NATIVE_WEAPON_TRIGGER_AMMO.md` (named NATIVE_WEAPON_FIRING.md until the 2026-11-02 merge), no listing text;
 builds on NATIVE_WEAPON_RULES.md. A press fires once in `WeaponFiring`, then on a timer re-armed per shot with
 `GetFireInterval`; auto-reload one interval after the last round. The slice pistols fire Bullet (a light projectile with
 travel time), not hit-scan; range `WeaponRange` 16,384. Clip and pool are separate counters (clip = max(min(clip, ClipSize,
@@ -1848,7 +1848,7 @@ second press during the lock or cooldown does nothing); injured and weapon state
 skill's `OnActivated`, then the state delegate that refills the 13 s cooldown pool; the drain starts at `OnReleasedTarget`. The 120 s
 `InitialDuration` is a backstop that asks once to deactivate. Base first-lock timeline (cast, lock 0.7 s, release 5.7 s, end 6.7 s,
 ready 18.7 s) and every early end are listed. The reload abort comes from the cast special move's `bBlocksWeaponActions`, which
-corrects NATIVE_WEAPON_FIRING; other corrections (NATIVE_SKILLS, PHASELOCK_STOCK_DATA, NATIVE_PHASELOCK_PRESENTATION) are in the note.
+corrects NATIVE_WEAPON_TRIGGER_AMMO; other corrections (NATIVE_SKILLS, PHASELOCK_STOCK_DATA, NATIVE_PHASELOCK_PRESENTATION) are in the note.
 All UNVERIFIED in game.
 
 ## 2026-10-06: native notes on the attribute system (resolvers, modifier stacks, change notification) (UNVERIFIED)
@@ -1883,7 +1883,7 @@ cooked movement data (GroundSpeed 440 from the class default, AirSpeed 500, Jump
 1500, PlayerAirControl 0.11, cylinder 80 x 42, crouch 50, eye height 70, sprint FootSpeed +0.35 = 594), the script rules for sprint
 entry and exit, crouch, jump and falling damage, and native behaviour in our own words: pawn speed fraction, velocity step and
 braking, falling step, eye-height and bob update, WeaponBob, view location and the FOV helpers. Supersedes the Walker's estimates
-(450 / 420 / 650 / 45 degrees). Correction to NATIVE_WEAPON_FIRING: sprint does add to the accuracy pool. Open: the native that copies
+(450 / 420 / 650 / 45 degrees). Correction to NATIVE_WEAPON_TRIGGER_AMMO: sprint does add to the accuracy pool. Open: the native that copies
 class speeds onto the pawn, walking/ladder/step physics, and a measured jump (gravity -500 with JumpZ 630 predicts a high apex).
 All UNVERIFIED in game.
 
@@ -2531,3 +2531,533 @@ unless a random source is set (only the death setup sets one). Results (seed 202
 `Pool_Eridium_Stick` false at item stage 6 (minimum stage 7) and true at 7, the ammo pools always false for a player with no low ammo (the live false trials), `Pool_Health_All` true and dropped, `Pool_VehicleSkins_All` made but not dropped (`bDropOnDeath` false), the adult's item stage 4..7 (the live 4 and 7) and the baby's 6, item level = roll stage.
 **Not reproduced (OPEN):** `Pool_Money_1or2` made 3 items for an adult live; the data's quantity is a random integer in -1..2 (at least 1), so the VM makes 1 or 2 (0.75 / 0.25); analyst read requested (the random variance's integer mapping, and any change of the quantity after it). Stand-ins: the health drop weight (linear below the 40 percent threshold, 0.1 to 0.25), the ammo weights
 (no ammo pools: 0), items not initialised (no parts or stats). `tools/verify_combat_pawn.py` gained 43 `loot.*` rows and an OPEN status (97 PASS / 0 FAIL / 4 MISSING / 1 OPEN with the S-a to S-f run; that run alone stays 55 / 0 / 4). `CMakeLists.txt` got the new source. Slice byte-identical. Verified only as "the VM reproduces the live row".
+
+## 2026-10-21: Sanctuary scene import: inspected material fallbacks, component owners, doubled colour buffers
+
+AI-assisted (Claude), lane A. Details and counts: `docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md`.
+
+- **Reader (`src/assets.cpp`, sensitive).** Three of the Sanctuary packages' meshes (27 of 17,605 StaticMesh exports
+  in the 914 base packages) store a colour buffer of stride 4 whose count and bulk count are exactly twice the vertex
+  count. The reader now accepts `vertexCount` or `2 × vertexCount`, reads the first `vertexCount` entries and skips
+  the rest. It also accepts the export class `GearboxFramework.WiringMesh` with the StaticMesh layout. Oracle: with
+  both changes every one of the 17,605 StaticMesh/WiringMesh exports decodes and leaves the same 73-byte trailer
+  after its LODs; no export failed. Which colour entries the original renderer binds is `UNVERIFIED` (colours are
+  not exported). No bounds check was loosened.
+- **Owners (`tools/prepare_level.py`).** Owner actors outside the bulk scene records are read per actor with the
+  observed 26-byte actor prefix and must end at the object end. `WiringActor` and `WillowInteractiveObject` components
+  are placed like a `StaticMeshActor`'s; mission pickup spawners and failsafes, whose component is the actor's
+  `PreviewMesh`, are listed in `excluded_components` (`mission_item_preview_mesh`), as is the second exact copy of a
+  component on the same interactive object (`duplicate_component`; the copy must also match on `HiddenGame`, shadow and collision flags, so a visible component is never dropped for a hidden one). Confirmed in the running game (Plan B save):
+  spawners and failsafes have no primitive component; every placed interactive-object component is attached, not
+  hidden, with the package's mesh and relative pose; each vault-symbol actor attaches one plane, not two. Their
+  visibility in other mission or challenge states is `UNVERIFIED`. The rules are not map-specific: on Ash they place 21 interactive-object components and list 17 duplicates (271 unsupported owners left, from 325), on Southpaw 4 (1 left, from 10); placement on those maps was not compared with the running game and is `UNVERIFIED`.
+- **Materials.** Five more exact `INSPECTED_COLOR_FALLBACKS` (icicles, two distant snow fields, distant mountains,
+  Roland's chemical tank), each from its parameter chain, cooked list and the decoded candidates; the icicles'
+  `Ice_Dif` is the named internal-glow sampler and is not used as colour. All `partial_unverified`. The spire
+  instances stay with the `prepare_sanctuary_pillar.py` bake (2026-09-23). `Mat_WorldMap` stays a gap: in game its
+  packed `_Comp` channels are recoloured (pale cyan land, red markers), so the texture is not an RGB colour.
+- **Host (`host/ue5/import_level.py`).** A Modulate material with no recovered colour gets a white neutral instead of
+  0.5 grey, so the newly placed vault symbols and blood decal do not darken what is behind them.
+- **Audit.** Terrain weighted-sum materials are counted as `terrain_weighted_blend`, not as "no supported channels";
+  exclusions are counted by reason.
+
+## 2026-10-21: Blocking volumes, sphere/capsule elements and recorded walking routes (Sanctuary)
+
+AI-assisted (Claude), lane B. Tools (`collision_geometry.py`, new `collision_volumes.py`, `refresh_collision.py`,
+new `walking_routes.py`, `real_game/scripts/walking.py`, `real_game/walking_capture.ps1`, `test_ue_viewer.ps1 -Route`)
+and host (`OpenWillowCollision.*`, `WalkingTest.cpp`, `apply_collision.py`, `verify_collision.py`). No change to `src/`,
+`CMakeLists.txt`, `prepare_level.py` or `OpenWillowWalker.*`. Details: `COLLISION_WALKING_VERIFICATION.md`, 2026-10-21.
+
+- Blocking volumes are read from `BrushComponent.BrushAggGeom` (tagged `KAggregateGeom`) with the existing decoder;
+  blocking comes from `bCollideActors`/`bBlockActors` with class defaults read from the installed `Engine` package.
+  Rotated, scaled or pre-pivoted volumes are refused rather than guessed. Dynamic volumes enter the host only in the
+  state observed in the running game. **Confirmed in game:** decoded geometry equals the live bounds for all seven
+  brush volumes; brush components do not block zero-extent traces; path-blocking volumes do not collide.
+- `KSphereElem`/`KSphylElem` are decoded (scaled frames refused); the capsule axis convention is `UNVERIFIED` and no
+  placed Sanctuary mesh uses either.
+- `refresh_collision.py` now keeps `prepare_level`'s triangle floors and `placement_collision()` exception (it had
+  re-enabled one landed placement) and skips BSP/terrain entries.
+- Routes are compared on ground height under the centre, not feet height: the running game's cylinder stands 35-42 cm
+  above a 33 degree ramp hull (rim contact), a UE5 capsule lower. Its floor normal matches the hull, so stairs use the
+  simple hull in the original as in the host. Results: 29/29 of the probes the original finished, volumes 5/5.
+  Read but not observed: `JumpZ` 630 (the walker keeps its 420 estimate). The host walks two probes the original
+  could not; unexplained.
+
+## 2026-10-21: Phaselock presentation round 16: a stock bullymong as the lifted target, cast-arm blends, intro flash
+
+AI-assisted (Claude). Host, tools and docs (`OpenWillowCombatTarget.*`, new `OpenWillowTargetAnimInstance.*`,
+`OpenWillowArmsAnimInstance.*`, `OpenWillowPhaselockFx.cpp`, `import_phaselock_fx.py`, a few lines in the shared
+`OpenWillowWalker.cpp`; new `prepare_phaselock_target.py`, `import_phaselock_target.ps1`, `phaselock_target_editor.py`,
+`real_game/scripts/phaselock_target_anim.py`); no change to `src/`, `CMakeLists.txt` or package parsing. Details:
+`docs/verification/PHASELOCK_STOCK_DATA.md` "Round 16".
+
+- **Target animation (maintainer item 2):** the slice dummy has no `PhaseLock_*` clips, so the host's lifted-target chain
+  had never run. `-owcombatpawn=Bullymong` puts the stock bullymong (all four clips) in as the test target, with the stock
+  move blends (lift in over 0.4 s, others 0.1 s, fall stretched to `DropTime`), the bubble sized from its own bounds (no
+  `-owbubbleradius` stand-in) and the mesh centring. Observed in the real game (SDK probe, two casts): the mesh is lowered
+  119.5 uu through the hold and the base pose blends out over about 0.4 s after the cast; the host's centring is fitted to
+  the first (58.7 uu bias), the second matches the stock blend.
+- **Mesh scale open:** the live component reads `Scale` 1.0, the archetype 0.7; frame sizes favour 0.7, the live head
+  height favours 1.0. The host uses 0.7 and divides the bounds by it (`UNVERIFIED` reading).
+- **Cast arm (item 3):** stock 0.1 s blends with the blend-out ending; the round 8 rate 0.85 stays (the arm drops about
+  0.1 s early at rate 1). The hand smear was UE5's per-bone motion blur, now off on the arms and the stock pawn.
+- **Bubble (item 1):** the intro's `Mat_SirenGlowMOD` flashes use the shader's own overbright (1) instead of the hand's
+  0.4 fit.
+- **Visual review:** three independent critic rounds against the matched real-game frames: overall 5.8, 5.7, 5.5 (bubble
+  6.0 / 5.5 / 5.5, target 4.5 / 4.5 / 4.5, arm 7.0 / 7.0 / 6.5). The 8/10 target was not reached. Open: the held pose shows
+  the back where the game shows the front, the lift still reads early at 0.5 s, the bullymong's skin colour, the opening
+  cyan sweep and the plain rim, the eye motif under the target (HUD, not this lane).
+- **Checks:** CTest 10/10; `verify_packages` 9/9; `tests/prepare_phaselock_target_test.py` 4 OK, `particle_system_test`
+  OK, `prepare_action_skill_test` 9 OK; Phaselock shots 28 frames; quest suite 79/0 and 11/0 (a first run failed checks
+  45 and 47 because this worktree had no turn-in reward data; passed after `weapon_slice_gear.py --reward-only`).
+
+## 2026-10-21: Inventory and Skills pages round 16: skill tiles, Phaselock plate, overview, Inspect card, card title lines
+
+AI-assisted (Claude). Page code (`skills.js`, `inventory.js`, `inventory.html`) and the `-owinvshots` key sequence in
+`OpenWillowMayaHUD.cpp`; no change to `src/`, `CMakeLists.txt` or package parsing. Details and the 2026-10-21 real-game session:
+`docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` ("Rounds 16-19").
+
+- Two movie states Ruffle never cleared are cleared by the page: the skill cell's `overclocked` outline (now only with a class-mod
+  bonus, UNVERIFIED rule) and the Phaselock plate's pink "disabled" tint (icon in an untinted clip once trained).
+- Ruffle lacks Scaleform's `TextField.getLineLength`, so the card's `SetTitle` counted every name as two lines; the page now passes
+  the field's `bottomScroll` to `SetRequiredTitleLines`.
+- Skills overview poses, tree height, plate size and position, description leading, Inspect zoom and the hint line are fits to
+  captured frames (UNVERIFIED). Inspect uses the card background's first (blue) frame and hides the movie's `ring` layer.
+- The capture sequence selects weapon slot 2 and backpack row 2 so the engine frames show the reference frames' states.
+- **Visual review:** baseline critic 7.27/10, round-16 critic (another instance) 6.85/10 on the same 11 pairs; see the record for why.
+- **Checks:** navigation 27/27, skill info 9/9; inventory suite 49 / 0 / 0 / 0 with the bounded item set, 24 / 3 / 22 / 0 with this
+  machine's default item set (over capacity, local data).
+
+## 2026-10-21: Inventory round 17: selectable empty backpack cells, compare column anchor, ITEMS headers confirmed
+
+AI-assisted (Claude). `inventory.js`, `tests/inventory_navigation_test.js`, the `-owinvshots` sequence in `OpenWillowMayaHUD.cpp`.
+
+- The trailing "(EMPTY)" backpack cells can be selected, as observed in the original game on 2026-10-21: no card, item actions
+  ignored, Sort hint kept. The VM's `MoveDelta` still receives item rows only; moves involving empty cells are host code (UNVERIFIED
+  against the VM's own handling of empty entries).
+- The compare view places the Equipped column by slot 1's cell instead of the panel's bounds (a transient child skewed those).
+- Live category keys of a class mod, relic, grenade mod and shield (`comm`, `Artifact`, `mod`, `Shield`) and the ITEMS headers
+  RELICS, CLASS MODS, GRENADE MODS, SHIELDS were read in the running game; the host's labels and order already matched.
+- **Visual review:** critic 7.21/10 (11 pairs). **Checks:** navigation 29/29; inventory suite 49 / 0 / 0 / 0 (bounded item set).
+
+## 2026-10-21: Menu pages apply the movie's own 3D turn (round 18)
+
+AI-assisted (Claude). New `tools/hud_overlay/menu3d.js` (served by `serve.py`), `inventory.*`, `skills.*`, the page report in
+`OpenWillowMayaHUD.cpp`, `tests/inventory_navigation_test.js`.
+
+- The StatusMenu movie turns the inventory clip 11 degrees and the skills clip 7.24 degrees about the vertical axis (`_yrotation`,
+  read live); Ruffle ignores it. The pages apply the same turn as a CSS 3D transform at Flash's default 55-degree field of view
+  (focal length 1229 px; Scaleform's value not read, UNVERIFIED; one panel-edge ratio agrees to 0.001). This replaces the "perspective
+  tilt Ruffle ignores" open item for the inventory and Skills views; the curved glass sheet (`ring`, far behind with a brightening
+  blend) is still not reproduced.
+- Measured screen fits are mapped back through the projection before use; the Skills overview poses were refitted.
+- The page report's row-alignment check uses layout offsets, since the hit layer and the movie share the turn.
+- **Visual review:** critic 7.67/10 (round 17: 7.21). **Checks:** navigation 30/30; inventory suite 49 / 0 / 0 / 0.
+
+## 2026-10-21: Inventory round 19: Inspect backdrop, card anchor, hint line; lane stops after four rounds
+
+AI-assisted (Claude). `inventory.html`, `inventory.js`.
+
+- Inspect backdrop drawn in CSS after the real frames (light from the top centre, soft bands, faint grid; our own drawing, a fit).
+  Single card anchor and hint line moved to measured real positions (fits, UNVERIFIED).
+- **Visual review:** critic 7.57/10 (round 18: 7.67; unchanged pairs moved by up to 0.6 between reviewers). The 8/10 target was not
+  reached in four rounds; open items are listed at the end of `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` ("Rounds 16-19").
+- **Checks:** inventory suite 49 / 0 / 0 / 0 (bounded item set); navigation 30/30; CTest 10/10; packages 9/9.
+
+## 2026-10-22: Maya's action-skill indicator drives BL2's own HUD clips; the HUD clusters' 3D turn gets a 2D stand-in
+
+The maintainer asked for the purple indicator that runs out while Phaselock holds its target. It is two clips of the HUD
+movie, driven in the game by native code (`WillowHUDGFxMovie.UpdateActionSkill` and its neighbours are native), so the
+rules were read from the live movie during real casts (AI-assisted capture; record
+`docs/verification/ACTION_SKILL_HUD.md`):
+- `p1.activeAbility` shows the Siren emblem (`siren_action`) from the lock (0.70 s) to the skill's end (5.70 s); its bar
+  is `floor(1 + 99 * elapsed / lock time)`. This emblem is also the "sigil under the target" that the Phaselock effect
+  record had flagged as HUD.
+- `p1.character.cooldown` follows the cooldown pool: `floor(2 + 98 * (1 - pool / 13))`, 2 while the skill runs (the pool
+  is held at 13 through lift, lock and release), 100 when ready. The icon picture is `UI_HUD_AAIcons.AA-Siren`, loaded
+  into `cooldown.icon.placeholderTexture`; `p1.character` sits on frame 6. A miss refills the pool, which drains and
+  snaps to 0 after about 1 s. The host's existing pool model already matched; no Phaselock code changed.
+- The whole HUD looked smaller in the host because the side clusters carry `_yrotation` (+-25, 15, -20) that Ruffle
+  ignores, projected with the movie's 70-degree FOV; the unturned plane appears 1.095 times larger about the centre
+  (fitted, UNVERIFIED). `tools/hud_overlay/hud3d.js` approximates it with per-clip 2D transforms (no trapezoid).
+Implemented in `tools/hud_overlay/action_skill.js`, `hud3d.js`, `index.html` and `AOpenWillowMayaHUD`
+(`ActionSkillHudState`, `-owskillhudshots`), with `tools/prepare_hud_icons.py` for the icon movie. Checked: synthetic
+mapping and checker tests, the in-engine run 9/9 against the real timings, critic 7/10 then 9/10. Not reproduced: the
+one-frame lag of the game's HUD, a post-ready highlight whose clip was not found, other classes.
+
+## 2026-10-22: Skills keyboard vertical movement fit (partly UNVERIFIED)
+
+## 2026-10-22: Inventory and Skills rounds 20-22 against matched real-game references; card content from the parts
+
+AI-assisted (Claude, with Codex sub-agents). Lane D of the 2026-10-21 orchestration. `tools/hud_overlay/inventory.*`,
+`skills.*`, new `skill_nav.js` and `glass_sheet.js` (both routed by `serve.py`), `tools/weapon_stats.py`, the weapon
+`fun_stats_markup` forwarding in `OpenWillowInventory.*`, and the `-owinvshots` capture block in `OpenWillowMayaHUD.cpp`
+(capture-only, approved by the hub).
+
+- **Matched references.** New real-game frames (`local/realgame/d20/`, ignored) have the host's capture state: the six
+  bounded recipes in the same slots (spawned by full definition), Maya at level 36 (set in memory; saves restored and
+  hash-checked), two weapon slots, $0, keyboard glyphs, Phaselock 1/1 and 31 points. The host captures run with
+  `-owlevel=36`, an empty gear manifest, `-owslots=2 -owmoney=0 -owerid=0`.
+- **Cards (parsing of game data; `docs/verification/INVENTORY_CARD_STATS.md`).** `weapon_stats.py` now emits the Accuracy
+  row where it was missing, the coloured text lines (flavour, weapon zoom, ammo per shot, bonus damage, elemental
+  effectiveness), Burn Damage / sec. and Ignite Chance, the price, and the element from the resolved damage type when no
+  elemental part sets it (the Torgue explosive badge). Numeric `stats.card` changes: Wild Rifle `fire_rate` 6.557 to 5.56
+  (it also changes the host's firing interval; reported to lane E), Hellfire `fire_rate` 9.09 to 8.96 and `damage` 659.2
+  to 621.6, Volcano `damage` 2625.6 to 2481.0, and accuracy, reload, magazine and spread corrections listed in the
+  verification record. Real-card comparison on cooked data (what the host's recipes use; 69 recorded cards, 67
+  supported): damage 63/67, accuracy, fire rate, projectiles and price 67/67, reload 62/67, magazine 55/67, status DPS
+  16/16, status chance 15/16; of the six slice cards, the two shotguns still differ in reload and magazine (4/6). An
+  earlier "all match" log used the `--live-data` overlay of values read from the running game (67/67 with it); the
+  difference between the cooked and live values is open (DECISIONS 2026-10-02: not online hotfixes). **Not
+  solved:** the zoom line is 0.1 high on two of six cards (raw values 3.264 and 2.471 show as 3.2 and 2.4; no rounding
+  rule fits all six, UNVERIFIED); the Nukem price differs because the bounded recipe has a different name part.
+- **Navigation (read from script where named; each case matches the matched real frames).** A backpack weapon is compared with the active slot's weapon
+  (`StatusMenuEquippedPanelGFxObject.GetTypeCellSuffixBasedOnThing` -> `WillowInventoryManager.GetEquippedAnalogue`: the
+  current weapon, then the active quick-select slot); Left from the Backpack returns to that analogue; each sort selects
+  its first entry and an empty ITEMS sort selects an (EMPTY) cell. Skills: Up/Down move between tiers
+  (`SkillTreeGFxObject.HandleInputKey` -> native `Navigate`); Down x4 from Phaselock reaches Harmony's Sustenance in the
+  game and in the host. The column choice between tiers of different widths, ties and the edges are UNVERIFIED. The
+  ALL list breaks equal-rarity ties by descending type key (fits ALL; the BRANDS frame orders the same pair the other
+  way, so one of the two always differs; the sort is native, UNVERIFIED).
+- **Fixes found on the way.** `serve.py` served only listed files, so `skill_nav.js` returned 404 (a test now checks every
+  script a page loads is routed); rebuilding the Skills hit layer under a resting cursor selected the tile under it, so
+  hover now selects only after real pointer movement; a stale overlay server from an earlier run kept serving old routes.
+- **Stand-ins (UNVERIFIED):** the glass sheet is our own drawing (normal-alpha wash, scanlines, curved edges); the
+  game's brightening blend cannot be reproduced by a page composited with alpha.
+- **Critic** (a fresh independent agent per round, 14 matched pairs): round 0b 5.95, round 20 7.39, round 21 7.85,
+  round 22 7.57. Round 22 and a fourth attempt regressed and were not kept; the pages are at round 21. 8/10 not reached.
+- **Checks:** CTest 10/10, packages 9/9, inventory navigation 40/40, skill navigation 6/6, weapon stats 36/36 (all 46
+  standalone Python/JS tests under `tests/` pass; the other 8 need the reader and run inside CTest); inventory suite
+  49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE with `-Items local/inventory-actions/bounded-recipes`. The suite first
+  failed step 20 (and skipped the seven steps after it) because a transfer started on the analogue even after a number key had
+  chosen slot 2; a number-key choice for the selected item now wins (host control, the game's behaviour is not observed).
+
+## 2026-10-22: Phaselock presentation rounds 17-20: capture FOV, camera pitch, stock dark interior, live mesh scale
+
+AI-assisted (Claude orchestrating, Codex GPT-6 Luna implementing and critiquing). Host, tools and docs
+(`OpenWillowPhaselockFx.*`, `OpenWillowCombatTarget.cpp`, `import_phaselock_fx.py`, `prepare_phaselock_target.py` and its
+test, `run_phaselock_shots.ps1`, a few additive lines in the shared `OpenWillowWalker.cpp`); no change to `src/`,
+`CMakeLists.txt` or package parsing. Details: `docs/verification/PHASELOCK_STOCK_DATA.md` "Round 17" to "Round 20".
+
+- **Captures:** the `-owfov` value was converted from 4:3 to 16:9 a second time, so round 17's host frames were about 94
+  degrees wide instead of 77.6; with the corrected input the bubble rim measures 420 px against the game's 422 px (no scale
+  fitted). The capture camera is now pitched like the game's (`-owphaselockpitch`, set after target selection so the cast
+  still hits).
+- **0.80 s line:** not a host bug in kind. The game frame has the same cut where the ground passes through the huge
+  `InitialFlash` sprites' soft-particle fade; the host's sat higher because its camera was level. The flash overbright is
+  back to the 0.4 fit (round 16's 1.0 over-bleached the view; `UNVERIFIED`).
+- **Bubble interior:** the bubble's `ModulateBlack` uses the shader's own values (cap 1, fade floor 1) instead of the round
+  7-14 compensations, which had made it see-through.
+- **Mesh scale:** the bullymong uses the live component scale 1.0 and the plain mesh bounds (307 / 245 / 200 uu against the
+  game's 290 / 230-260 / 193), replacing 0.7 and the "bounds divided by scale" reading. The earlier frames favouring 0.7
+  predate the FOV fix. Archetype (0.7) and live (1.0) still disagree; `UNVERIFIED`. A 0.9 multiplier fitted from a critic's
+  estimate in round 19 was removed again.
+- **Facing:** the test pawn's yaw offset is 0 (the held pawn faces the player, as in the game frames); the stock rule was
+  not read (`UNVERIFIED`).
+- **Visual review:** independent critic, frames only: 5.9 (round 17, three frames), 5.6, about 5.8, about 5.4 (six frames).
+  The 8/10 target was not reached. Open: the held pose (folded, limbs high, against compact and head-forward), the 0.80 s
+  shell that hides the target in the game, the bullymong's brown colour (no material graph found), the irregular cyan rim,
+  the palm orb's cobalt core and strands. The eye motif low in the view is the HUD's action-skill indicator.
+- **Checks:** CTest 10/10; `verify_packages` 9/9; Python tests 49 files and JS tests 2 files pass; quest suite 79/0 and
+  11/0; Phaselock shots 28 frames (cast hits the bullymong). No flaky test seen.
+
+## 2026-10-22: Weapon paint fallback fix and first-person parity rounds for four slice guns (lane E)
+
+AI-assisted (Claude, with Codex sub-agents). `host/ue5/import_weapon_items.py`, `tools/weapon_item_materials.py`, `OpenWillowWalker.*`,
+`OpenWillowShotFx.*`, `tools/weapon_view_model.py`, `tools/weapon_reload_anims.py`, `tools/weapon_capture_items.py`,
+`host/ue5/import_weapon_reload_anims.py`, `host/ue5/import_weapon_fx.py`, `tools/real_game/scripts/weapon_parity_probe.py`.
+
+- **White Wild Rifle (bounded item set):** the item importer gave every gun except the Infinity the neutral stand-in, even when a prepared
+  per-item paint material existed. It now uses `/Game/OpenWillow/Weapons/Paint/<id>/M_OW_PaintApprox` when present and warns with the missing
+  path otherwise (synthetic tests in `tests/weapon_paint_test.py`). The Inspect preview and the held weapon load the same mesh, so both are fixed;
+  confirmed by a UE preview render, not yet by an Inspect capture.
+- **Live probe first:** one SDK session read the four guns' type fields and captured idle, ADS, burst and reload frames (`weapon_parity_probe.py`,
+  output under ignored `local/realgame/laneE/`). A live skill effect doubled fire rate and halved reload on held guns, so the host keeps card base
+  values; base values read live equal the cards. Values used and their sources: `docs/verification/WEAPON_VISUALS.md` sections 11-15.
+- **Host:** hold-to-aim on the right mouse (live zoom FOV and zoom time, eye-socket alignment fitted to the real frames), per-type weapon and arms
+  reload clips chosen by the fast-reload threshold and scaled to the card reload time, a host-drawn flame flash at the cooked muzzle socket, brass
+  casings, a procedural SMG scope, data-driven kick. Rule versus fit is labelled per item; every fit and the reload-rate rule are `UNVERIFIED`.
+- **Visual review:** critic 5.8, 5.5, 6.3, 6.5/10 over four rounds; 8/10 not reached. Open items (SMG flash drawn at the rear, suspected Y mirror of
+  `Root`-parented sockets; SMG hip size; reload poses; ADS widths; metal tint; sound) in `WEAPON_VISUALS.md` section 15.
+- **Checks:** CTest 10/10; packages 9/9; Python tests 53/53; JS tests 2/2; quest suite 79/0 and resume 11/0; inventory suite 49 / 0 / 0 / 0
+  (bounded item set).
+- `ReloadCompletePercent` now drives the one-time magazine transfer and keeps the missing-field `1.0` fallback for the previous full-duration
+  refill; the host check covered cancellations before and after that point.
+- Successful Phaselock lifts cancel reload before the cast action, and arms cleanup only clears an active reload clip; the host check passed with a
+  test-only slower cast rate so the clip spans the former reload end. Original-game notes confirm only successful-cast abort behavior.
+
+## 2026-10-22: Sanctuary matched-viewpoint rounds 1-4: WiringMesh collision refresh, source lighting, decal default-deny, host calibration
+
+AI-assisted (Claude), lane A. Details, counts and per-round history: `docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md`;
+collision record: `COLLISION_WALKING_VERIFICATION.md` (2026-10-22).
+
+- **Collision refresh (`tools/refresh_collision.py`).** Accepts `GearboxFramework.WiringMesh` exports as well as
+  `StaticMesh` (`MESH_CLASSES`). Before this, the Sanctuary_P cable mesh raised "Ambiguous mesh" and the refreshed scene had no
+  volumes. Synthetic test `test_refresh_accepts_wiring_mesh`. Still skips the one UModel-prepared skeletal pillar. **Verified:** the
+  refresh printed supported 312, absent 115, unsupported 2, hulls 518, blocking volumes 5, non-blocking 6, live mismatches 0;
+  the live capture matches the committed record (`DynamicBlockingVolume_1`/`_2` collide, `_0`/`_3` do not). The full UE import
+  now spawns `OpenWillow_Volumes` itself.
+- **Scene manifest (`tools/prepare_level.py`, `scene.json`).** Gains `lighting` (decoded SkyLight, HeightFog, WorldInfo and
+  PostProcessVolume settings, and the directional light component after its `LightmassSettings` anchor), `decals` with
+  default-deny exclusions and a reason per actor and material, and `diffuse_tint` (`diffuse_tint_v1`, `partial_unverified`) for 18
+  Sanctuary building materials, read from `Master_World` instances. **Verified:** the decoded records and counts (33 kept, 78
+  excluded, 182 unsupported; 46 decal-like mesh placements stay on the mesh path). **UNVERIFIED:** that the game multiplies Base Color by
+  `p_diffmod` in the way the host does.
+- **Schema (`tools/level-arrays.schema`).** Declares `StaticLightCollectionActor.LightComponents` as an object array. This is bulk
+  decode metadata only; the resolved elements are point and spot light components, 1,023 of them, of which 128 are spawned.
+  The schema is keyed by property name only, so it applies to every package that has such a property. **Declaration
+  census (verified, all 914 base-game packages, 0 failures):** 129 packages carry the name; the only exports named
+  `LightComponents` are `StaticLightCollectionActor.LightComponents`, a `Core.ArrayProperty`, and its inner
+  `Core.ComponentProperty` (an object-reference property). A tagged property's type comes from its declaring class, so every
+  serialized `LightComponents` is that array of object references. The same declaration census over the 1,096 DLC `.upk` files
+  (the `--include-dlc` scope) finds no declaration of that name (151 files carry it as instances; 2 texture payload files
+  with no package magic cannot be opened). An instance decode pass (stopped at a 30-minute budget after
+  666 packages) agreed: 119 of 119 occurrences decoded as `ObjectProperty` arrays owned by `StaticLightCollectionActor`.
+  Scratch scripts under `local/laneA-census/` (ignored).
+- **Light array tail (`UNVERIFIED` layout).** The 64-byte-per-element tail after a `StaticLightCollectionActor`'s properties is
+  size-checked and skipped, not decoded. Its per-component layout (presumed 4x4 transform, as for `StaticMeshCollectionActor`)
+  is `UNVERIFIED`. Placement uses each component's decoded `CachedParentToWorld`. Reader coverage: `tests/properties_test.py`
+  (a real-reader N = 2 `ObjectProperty` array with a 128-byte tail, and refusals when the declared size disagrees).
+- **Malformed light arrays contribute nothing.** A `LightComponents` array that fails any check now stages its records and adds
+  them only after the whole array validates (`tools/prepare_level.py`, `static_light_collection_records`). Synthetic test:
+  `test_malformed_light_array_contributes_no_lights`.
+- **Lighting is Sanctuary-only.** `scene.json` gets `lighting` only when the persistent map is `Sanctuary_P`
+  (`sanctuary_lighting_enabled`); other maps have no `lighting` key. Decals stay generic and default-deny: a non-allowlisted
+  material is excluded for any map, so a non-Sanctuary map places no decals. Synthetic test:
+  `test_sanctuary_lighting_policy_is_limited_to_sanctuary_persistent_map`.
+- **Host opt-in (documented, implemented by the other lane-A agent).** `OPENWILLOW_SANCTUARY_OPT_IN` lists `grade`,
+  `diffuse_tint`, `xmas_bulbs`, `static_lights`, `graffiti_decals`; all default OFF, Sanctuary_P only, and the 0.14 cloud cap
+  stays on. Source inputs are still recorded in `scene.json`.
+- **Test values replaced.** The visual-rules test uses invented colours and intensities (the 1.25 directional brightness,
+  50/100/150 sky colour, post-process 4.0/1.3-1.5/0.05-0.07/2.5) and checks calibration formulas against the host constants,
+  not literal calibrated outputs. The grafitto ink check is structural, and a far plane is 900.
+- **Colour conversion.** UE3 FColor values are converted to linear with a 2.2 power curve, following the UE3 FLinearColor
+  conversion as we understand it. **UNVERIFIED** against the game's output.
+- **Host calibration (`host/ue5/scene_import_rules.py`).** The sun's 5.0 lux per source brightness unit, sky light 1.5, sky tint
+  (3.0, 2.1, 1.0), exposure bias -1.5 EV, white balance 8200 K, saturation, contrast, shadow lift, the cloud-cap 0.14, the 25 cd
+  per brightness unit with the 3.0 ceiling, the 0.01 orange-point scale, and the graffiti ink and 128 cm depth cap are
+  **screenshot calibrations tuned against the matched cameras. They are not decoded from the game** and are `UNVERIFIED`.
+- **Verifier crash fix (`host/ue5/verify_level.py`, decal check loop).** A module-level bound method of a UE actor
+  (`actor.get_actor_right_vector`) was kept alive to interpreter shutdown. After a successful run the UE Python plugin crashed
+  in `python311.dll` (access violation), so `-ImportOnly` reported `Saved scene verification failed: 3` although the assertions
+  passed. The loop now reads the axis vectors as values; the full gate exits 0. The root cause inside the plugin's teardown is
+  not analysed.
+- **Visual review:** independent critic (Codex GPT-6-Luna, host and reference paths only, eight matched cameras). Baseline before
+  round 1 4.5/10; round 1 4.7; round 2 4.1 (decal noise regression); round 3 4.3; round 4 4.4; after review 1, the default state (round-4 guesses opt-in and off) 5.0. **The 8/10 gate was not reached;
+  the lane stopped after four rounds as briefed.** Remaining gaps are listed in the gaps document, round-4 ranking.
+- **Checks:** CTest 10/10; packages 9/9; Python tests 42 pass (the 8 reader-argument suites run inside CTest); JS 9 and 32/32;
+  UE import gate exit 0 after the crash fix; OpenWillow.Walking and BspWalking pass; TerrainWalking 23/24 (the known
+  pre-existing Terrain_2 hole endpoint). Not run: RouteWalking/CollisionShapes (no route traces on this machine), live-game
+  gameplay.
+
+## 2026-10-22: Gameplay HUD parity: the movie by default, true perspective for the turned clusters, real values
+
+AI-assisted (Claude Opus 5.5 orchestrating, Opus and Haiku sub-agents; critic GPT-6-Luna). Record:
+`docs/verification/HUD_PARITY.md`. No parser behaviour changed.
+
+- **Default HUD.** BL2's HUD movie (Ruffle overlay) is the gameplay HUD whenever its page reports ready; the host opens
+  `http://127.0.0.1:8767/` without `-owflashhud`. The canvas HUD is a fallback (not ready, load error, `-owcanvashud`)
+  and no longer draws the temporary Phaselock ring and orb. The movie counts only when the page's ready line echoes the fresh
+  id the host put in its URL (`?owid=`); an older page from another checkout's server gives the canvas. The quest, mover, Phaselock-shots and character-capture runs pass `-owcanvashud` so their outcome does not
+  depend on a server being up.
+- **Perspective.** `tools/hud_overlay/hud_warp.js` draws the turned clusters through a per-clip homography from the
+  fitted projection (F 914 derived from the definition's View3DFOV 70, read live; scale 1.095 fitted, UNVERIFIED), reading
+  Ruffle's WebGL canvas (forced `preserveDrawingBuffer`) at 2x into an overlay canvas. The 2D stand-in (`hud3d.js`) stays
+  for the minimap and as the fallback. Residuals against a real frame: 1-4 px, side clusters slightly nearer the centre.
+- **Values.** Health and its rounded text, the equipped shield's card capacity (bar full: no shield model), magazine /
+  reserve and grenade current / max with the game's no-break spaces, zero-padded level. Crosshair style, idle spread only (no
+  widening while firing: not done) and ammo icon per weapon type from a live read (pistol 3/9/3, shotgun 7/17/5); other types UNVERIFIED and left alone.
+  Ruffle hands non-ASCII ExternalInterface strings to AVM1 as UTF-8 bytes, so such text is set through `htmlText`
+  entities (bench-verified).
+- **Checks.** `tests/hud_warp_test.js`, `tests/hud_fields_test.js`, `tests/check_hud_shots_test.py` (36 synthetic cases); in-engine
+  `tools/run_hud_shots.ps1` 17/17, `tools/test_action_skill_hud.ps1` 19/19, `tools/test_inventory_actions.ps1` 49/49
+  (bounded recipe set). Critic 8.0, then 7.7 measured (crosshair spread per gun and 1-4 px side placement remain); blind
+  A/B warp 8 vs stand-in 6, warp preferred in 6 of 6.
+
+## 2026-10-22: The HUD minimap drives BL2's own minimap clip from rules read in the live game
+
+The maintainer asked for the HUD's map. The minimap's driver (`HUDWidget_Minimap.Init/Update/SetMapMovie`) is native,
+so its rules were read from the running game through the mod SDK (AI-assisted; record
+`docs/verification/HUD_MINIMAP.md`; no native code was disassembled):
+- each level has a tactical map movie (`WillowMapInfo.TacticalMapMovie`; Sanctuary: one bitmap and two fog blobs) that
+  the HUD movie's own `MinimapController.setMapMovie` loads into `mapPlaceholder`; the map's origin is the
+  `WillowTacticalMapVolume`'s bounds centre, 128 uu per map unit, shown at 102.4 %;
+- the map turns by -yaw (view yaw) about the player; one minimap unit is WorldRadius / 48 = 125 uu; station icons hide
+  outside a 58 x 48 box, mission and objective icons are pulled onto its edge; the objective shrinks beyond 6000 uu as
+  140 x (1 - (d - 6000) / 18000) (fitted, seen to 9000 uu); the "N" marker sits on the box edge;
+- which world objects get icons follows their interactive-object definition's `CompassIcon`, reached for vending
+  machines through their population opportunity point's definition chain.
+`tools/prepare_minimap.py` converts the map movie and writes the icon manifest (11 of the 12 live icon objects found
+in the packages; one health machine is spawned another way), `tools/hud_overlay/minimap.js` maps the state to the
+clips (exact against 652 live values; the "N" within one twip), `OpenWillowMinimap.cpp` sends the state with the
+quest's markers (`UOpenWillowQuest::MinimapMarkers`; the marker's actor for this mission is UNVERIFIED). The panel's
+3D turn is drawn by PR #54's perspective warp over the panel's own rectangle (the clip's visible children include the
+movie's parked library icons); without the warp a least-squares affine stand-in in `minimap.js` replaces `hud3d.js`'s,
+which sized it from bounds inflated by those templates. Checked after rebasing onto #54: node 16, Python 19 + 15 + 3,
+in-engine 15/15, action-skill suite 19/19, HUD shots 16/16, CTest 10/10, packages 9/9; critic 7.5, 8.0 (affine), 8.2/10
+(warp). Not done: threats, allies,
+vehicles, fog state other than "not uncovered", the absolute-minimap option, the full-screen map. Review 1: the
+capture script and the prep tool refuse output paths outside the ignored folders (game data cannot be written into
+tracked folders), and the in-engine checker requires each capture spot exactly once.
+
+## 2026-10-23: Weapon parts catalog and the loot generator in C++ (census, native gaps, exact port, live checks)
+
+AI-assisted (Claude Opus 5.5 orchestrating; Opus and Haiku sub-agents; review GPT-6-Luna). Record:
+`docs/verification/WEAPON_PARTS_CATALOG.md`; rules in `docs/verification/NATIVE_WEAPON_RULES.md` section 12. No package
+parsing behaviour changed (`src/package.cpp` and `src/container.*` untouched).
+
+- **Census.** `tools/weapon_catalog.py` over every installed package (2,010 files, 315 with weapon data) and
+  `tools/real_game/scripts/weapon_parts_census.py` in the running game: 369 weapon balances, 908 parts, 89 weapon types, 22
+  manufacturers, 876 name parts, 2,014 item pools, packages and OpenBLCMM agreeing except 7 remaster gestalts and one
+  pool path. Catalog under ignored `local/weapons/catalog/`; counts only in the record.
+- **Rules read from native code** (UNVERIFIED in game unless stated): the value function (type base modifier, part and
+  name-part product, truncation, currency cap), the slot value ((grade - 1) * per-grade, max then min clamp), the
+  part-weight hook (relics only), the grade choice and stage cap (opt-in `stage_cap`), the status card chance through the
+  damage type's presentation remap (slag prints 0.1 higher), and name-part expressions (all must hold;
+  `WeaponDamage_Is_<Element>` checks the weapon's damage type, confirmed live on one gun). REA's `open_binary` could not
+  use the existing analysis database and its analysis calls failed, so the reading used `tools/ghidra/run.ps1`.
+- **Generator.** `weapon_recipe.roll()` now defaults to `CrtRand` (the MSVC `rand()`), our seeding; the slice tools pin
+  Python's generator so pre-rolled slice guns are unchanged. `tools/weapon_gen_manifest.py` writes a line-based manifest
+  (base game `Startup.upk` only: 249 balances; DLC not yet); `src/weapon_gen.{hpp,cpp}` (in `ow-core`) and `ow-weapongen`
+  reproduce `roll()` + `evaluate()`: 2,919,834 fields over 29,880 balance rolls, 7,680 pool rolls and 6,795 pool guns,
+  **0 mismatches** (floats bit for bit), uncapped and with a stage cap of 50.
+- **Host.** `OpenWillowWeaponGen.{h,cpp}`: manifest load (missing = off), conversion to `FOpenWillowWeaponItem`, new
+  shared item fields `Parts` (slot order), `Material`, `GestaltMesh` for the weapon-assembly lane, `ow.RollGun`, and the
+  quest turn-in reward rolled from the stand-in's own source pool (fallback: the pre-rolled stand-in).
+- **Live** (real game, saves blocked and unchanged): 40/40 spawned generated guns carry the generated balance, parts,
+  level, prefix, title (after the expression rule) and value; part frequencies of two common balances consistent with the
+  weights (2 x 400 rolls per session, two sessions); level = stage and the name rule on 1,600 of 1,600 game rolls. Read
+  stats of 44 spawned guns: 366 of 484 values equal to the generator bit for bit on cooked data, 26 explained by runtime
+  data, **92 not triaged** (some look like read errors); no card captured. The Dahl rifle 9.5 % above its card (Weapons 3)
+  is runtime data: the live overlay reproduces it exactly.
+- **Checks.** CTest 11/11 (new `weapon-gen-synthetic`: hand-worked synthetic manifest plus parser robustness);
+  `verify_packages.py` all match; Python unit tests (weapon_recipe 20, weapon_stats 42, weapon_gen 13, loot_pools,
+  weapon_catalog 18, gen_confirm 15); golden cards 69 / 69 / 68 of 69, 0 unsupported (was 67 / 67 / 66 with 2 unsupported:
+  an empty card presentation entry made the evaluator raise). In engine: host against `ow-weapongen` 245 fields, 0
+  differences; `tools/test_inventory_actions.ps1` 49/49; the quest self-test stops before turn-in on this machine (Marcus
+  not imported), so pickup of a generated reward is not checked.
+- **Sensitive file:** `CMakeLists.txt` (adds `src/weapon_gen.cpp` to `ow-core`, the `ow-weapongen` executable and the
+  `weapon-gen-synthetic` test; verified by the build and CTest).
+
+## 2026-10-23: Weapon part library: every gestalt mesh and skin in UE once, guns assembled from their parts at run time
+
+AI-assisted (Claude Opus 5.5 orchestrating; Haiku sub-agents for the census, skin export, sample and tests; critic GPT-6-Luna).
+Record: `docs/verification/WEAPON_PART_ASSETS.md`. No change to `src/`, `CMakeLists.txt` or package parsing.
+
+- **Census.** `tools/weapon_part_census.py` reads every weapon part, weapon type and gestalt in the base and DLC packages
+  (904 parts, 301 skins, 6 weapon gestalts with 279 fragments; every fragment is referenced). A live SDK census of the running
+  game (`tools/real_game/scripts/weapon_visual_census.py`) agrees: the six fragment tables are identical, and the 814 parts
+  loaded live have the same fragments and skin. 22 Torgue Material parts carry a `p_EmissiveColor` only in the running game (the
+  documented live-versus-cooked data difference); the library takes the live value.
+- **Extraction.** UModel 1590 exports all 301 skin MICs with their parent chains and textures (`tools/export_weapon_skins.py`,
+  301 of 301 resolvable, inventoried; one root per skin because leaf names repeat across packages).
+- **Library.** Each gestalt glTF is regrouped into one primitive (UE material slot) per fragment and imported once
+  (`tools/weapon_library.py`, `host/ue5/import_weapon_library.py`); the paint reading of `import_weapon_paint.py` became one
+  parameterised master material plus one instance per skin (300 of 301 imported; the BuzzAxe melee material is unsupported).
+  The per-recipe meshes and materials stay as the fallback.
+- **Assembly.** `OpenWillowWeaponAssembly` shows exactly the fragments a gun's parts draw on its type's library mesh, gives every
+  slot one instance of the Material part's skin with the parts' vector parameters, and hides the type's bones. Used by the held
+  gun, inventory preview, Maya's menu weapon and pickups. Item fields added: `Parts`, `WeaponType`, `Gestalt`, `Skin` (read from
+  the recipe the generator already writes). `-owweaponprebuilt` forces the old path; an explicit `MeshPath` keeps it.
+- **Confirmed in game (39 spawned guns, one per type x manufacturer plus 7 legendaries):** fragment names and triangle totals
+  equal the host's for 39 of 39 (and the cooked prediction for all 210 sample guns), and each gun's material instance has the
+  Material part's skin as parent and the parts' vectors (39 of 39), confirming the native BuildWeaponMaterial reading for them.
+- **Visual (critic, 39 matched guns):** Inspect 7.32/10, first person 5.36/10 (round 1: 8.25 on six guns / 4.26). 9/10 not
+  reached; the gaps are the shared first-person view model (sniper and launcher arm sets not imported) and the paint calibration
+  (HDR zone colours clipped per channel under a stand-in light level), not the library. UNVERIFIED: the paint reading itself, the
+  material on the pistol gestalt's second section, elemental first-person particles (not drawn).
+- **Checks:** CTest 10/10, packages 9/9, Python 157 synthetic tests OK, inventory suite 49/49 (bounded recipe set) with assembled
+  guns.
+
+## 2026-10-23: Weapon part library, PR #58 review round 1
+
+AI-assisted (Claude Opus 5.5; review GPT-6-Luna). Record: `docs/verification/WEAPON_PART_ASSETS.md` section 6b.
+
+- **Part list:** the item uses PR #57's shape (ordered `{Slot, Part}` array with `FindPart`, `Material`, `GestaltMesh`) plus
+  `WeaponType`; the assembler reads only these, so generated guns assemble once #57 lands (rebase pending, by the hub's order).
+- **No partial guns:** a gun with no part list, an unknown part, skin or section material, or a fragment missing from the library
+  mesh uses the pre-built mesh, and the reason is logged. Pure planning step with a synthetic automation test
+  (`OpenWillow.WeaponAssembly`, `-game` mode).
+- **Per-slot material, confirmed in game:** the pistol gestalt's second section shows the mesh's own `Mati_DahlUncommon` on every
+  pistol read live (4 guns, Infinity included); the host now does the same for section-1 fragments.
+- **Preview framing** from the shown fragments' bounds (offline from the glTF; host check against the imported bounds caught a
+  mirrored axis and is now quiet). Reload clips are re-imported after a meshes import. Material instances are cached; the menu
+  preload loads library meshes and skins (39 items, 46 assets, 424.5 ms); first show 50 ms, later 0.2-0.9 ms.
+- **Oracle:** exact fragment-name sets plus triangles, explicit `fallback` / `not_shown` / `no_reference`, nonzero exit on any
+  non-pass. 210/210 sample guns pass; 39/39 against the running game.
+- **Checks:** CTest 10/10, packages 9/9, Python 164 synthetic tests OK, `OpenWillow.WeaponAssembly` and `OpenWillow.Skills` pass,
+  in-engine gun shots (full sequence on the slice guns, quick on 210), inventory suite 49/49 (bounded recipe set).
+
+## 2026-10-23: Weapon part library, PR #58 review round 2
+
+AI-assisted (Claude Opus 5.5; review GPT-6-Luna). Record: `docs/verification/WEAPON_PART_ASSETS.md` section 6c.
+
+- Material instances are per component (a held gun's glow no longer reaches a pickup of the same gun); a gun needs Body, Grip,
+  Barrel and Material parts and a known weapon type; unmapped or unloadable section materials fall back instead of taking the
+  gun's skin; the oracle fails an empty or short index; the reload record is repository-relative; `-owgunnolook` clears old
+  overrides.
+- Checks: `OpenWillow.WeaponAssembly` and `OpenWillow.Skills` pass; gun shots with oracle 39/39 (`--expect 39`), no fallback;
+  CTest 10/10, packages 9/9.
+- After rebasing onto PR #57: eight generated guns (`ow.RollGun` from pools, every weapon type) assemble with no fallback and match
+  the generator's parts exactly (fragments and triangles); inventory suite 49/49; CTest 12/12, packages 9/9.
+
+## 2026-10-23: What a shot does comes from the gun's parts: firing modes, light bullets, rockets, splash, status effects (Weapons 3)
+
+AI-assisted (Claude, with Claude and Codex sub-agents). Record and numbers: `docs/verification/WEAPON_PROJECTILES.md`;
+native notes: `docs/verification/NATIVE_WEAPON_FIRING.md` (new, own words, raw output under ignored `local/analysis/projectiles/`).
+
+- **What.** `tools/weapon_firing.py` adds a `firing` block to any evaluated recipe, resolved from its parts (barrel or type
+  firing mode, `FireType`, pattern lines, projectile definition and behaviours, the explode behaviour's splash with the
+  damage type's falloff bands, the status effect, the Tediore reload throw). The host reads that block
+  (`FOpenWillowWeaponItem::Firing`, one new field) and fires accordingly: `src/weapon_firing.*` (rules as maths, CTest
+  `weapon-firing-math`), `OpenWillowFiring`, `OpenWillowProjectile`, `OpenWillowStatusEffect`, and a smaller
+  `OpenWillowWalker::FireWeapon` (one direction per pellet; trace, light bullet or rocket). No per-gun code.
+- **Behaviour change.** Bullets now take time to arrive (light bullets, as in the game: damage when they reach the
+  target); the card spread and pattern place the pellets (the old fixed figure-eight is gone; the Infinity fires along
+  its own pattern lines); `AutomaticBurstCount` 1 guns (slice pistol and rifle) fire once per press; only
+  `BSM_SpinUpToFullFireRate` ramps the fire interval (the former wait for the spin-up on other modes is gone). The
+  quest suite's two shot checks now wait for the hit.
+- **Confirmed in game** (three bl-sdk sessions, skills off, saves byte-identical): light bullets fly straight at their
+  speed; `AirFriction` grows speed x(1 - F dt) per frame; rocket speed = `SpeedFormula` x projectile speed multiplier
+  (the tool's first version left the multiplier out: fixed); weapon rockets do not fall, thrown guns fall at
+  GravityScaling x 1,000; per-pellet damage = card on 4 of 5 guns; rocket and gyrojet splash has no falloff, the Tediore
+  throw's follows the damage type's bands; the DOT clock (0.33 s, DPS x built-up time, final partial tick); the Tediore
+  throw (card damage x rounds left, half direct, half splash).
+- **UNVERIFIED / open.** The spread distribution (no impact points could be logged); the status proc rate (game 2-3 x the
+  card chance on Maliwan pistols; the host uses the card chance); elemental impact explosions of elemental and Torgue
+  bullets, element-vs-surface factors, slag, beams, ricochets, homing and kick are not modelled; host shot effects are
+  additive stand-ins, not BL2's particle systems: matched-frame critic (Codex) 2.1, 3.9, 4.2 / 10 over three rounds,
+  stalled; the rest needs the stock particle templates.
+- **For other lanes.** The Dahl AR's card damage is 9.5 % below the live gun with the same parts (generation lane). A
+  small `AOpenWillowShotFx::Spark` and an `Intensity` argument on `Flash` were added for impacts and explosions.
+- **Checks.** See the PR: CTest, packages, Python tests, in-engine firing test, quest and action-skill HUD suites.
+
+## 2026-11-02: merge of main into `t3/ai-melee-and-bleedout` (host firing, muzzle, turn-in loot)
+
+AI-assisted (Claude). One merge commit; where both lines of work implemented the same host behaviour, main's implementation
+is kept and the branch's callers adapted. Nothing here was re-checked in the running game; the in-engine suites were not run
+for this merge.
+
+- **Gun firing.** The branch's in-walker bullets (lane Hf, 2026-10-08: card `firing` block from `tools/weapon_refresh_firing.py`,
+  `FOpenWillowFiringMode`, `AdvanceBullets`, `FShotRecord`) are replaced by main's firing from the parts (`OpenWillowFiring`,
+  `OpenWillowProjectile`, `src/weapon_firing.*`, recipe-level `firing` from `tools/weapon_firing.py`). Kept from the branch: the
+  level-up weapon damage scale (`ShotDamage`, script swap 9) now sets main's per-pellet damage for light bullets, rockets and
+  traces. Not carried over: the per-bullet momentum (type `InstantHitMomentum` x 100; main passes none) and the branch's
+  `TraceExtent` box sweep.
+- **Quest suite, shot cases 14/15.** They keep the branch's structure (fire, wait for the landing, multi-pellet shotgun
+  fixture) and now read main's tally (`OpenWillowFiring::Counts`) and the live `AOpenWillowProjectile` count. Re-expressed:
+  `bullet_has_not_landed_in_the_pressing_frame` (trace guns exempt), `wrong_element_shot_...`, `multi_pellet_gun_fires_its_pellet_count_in_one_press`,
+  `damage_called_once_per_pellet_that_hits`; `ammo_taken_once_per_press_not_per_pellet` unchanged. Dropped because they tested
+  the replaced implementation's internals: `pellet_directions_inside_pattern_and_cone_bounds`, `shot_momentum_is_type_momentum_times_100`,
+  `*_bullet_lands_after_its_flight_time`, `firing_pattern_lines_sequential_scaled_random_rules` (main's pattern and flight rules are
+  covered by CTest `weapon-firing-math` and the in-engine `tools/test_weapon_firing.ps1`).
+- **Muzzle point.** Main's view-model `MuzzleSocket` (`weapon_view.json`) first, then the branch's recipe `sockets` Muzzle
+  (`GunSocketLocation`, WEAPON_VISUALS.md section 17, renumbered from 11), then main's camera-space fallback (logged once per gun).
+  The base's Barrel + 27 cm estimate, which main had dropped, stays dropped. Whether the recipe socket's bone frame holds on
+  main's assembled library meshes is UNVERIFIED.
+- **Turn-in loot.** The branch's maintainer decision (2026-10-07: no item reward) wins over main's generator-rolled reward:
+  the quest rolls and drops nothing; the generator itself and `-owweapongentest` are unchanged.
+- **Lent weapon.** The branch's rule (grant to the backpack, not equipped; kept after the objective) is kept; main's
+  `PreLendSlot` is dropped with it.
+- **Notes.** The branch's `NATIVE_WEAPON_FIRING.md` (lane G13) is now `NATIVE_WEAPON_TRIGGER_AMMO.md`; main's note keeps the
+  name. Links in NATIVE_INDEX, NATIVE_ACTION_SKILL, NATIVE_PLAYER_MOVEMENT and PROJECTILE_FIRING_PATTERNS_LIVE point to the new name.

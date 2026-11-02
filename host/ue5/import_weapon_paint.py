@@ -54,6 +54,36 @@ FALLBACK_SRGB = {'p_Masks': False, 'p_Diffuse': False, 'p_NormalScopesEmissive':
                  'p_Decal': True, 'P_SimpleReflect': True}
 
 
+SHADE_INPUTS = ['A', 'N', 'Diff', 'Amb', 'Key', 'Fill', 'KD', 'FD', 'Em', 'EC', 'EmGain', 'Dbg', 'SP', 'VS', 'Clp']
+
+
+def shade_code():
+    """HLSL of the analytic shading node (inputs SHADE_INPUTS); shared by the per-recipe material and the library master."""
+    n_tone = len(TONE_TT)
+    tone = (f'float TT[{n_tone}]={{' + ','.join(f'{x:.5f}' for x in TONE_TT) + '};\n'
+            f'float LV[{n_tone}]={{' + ','.join(f'{x:.4f}' for x in TONE_LV) + '};\n')
+    return ('float3 n=normalize(N);\n'
+            'float light=Amb+Key*saturate(dot(n,normalize(KD)))+Fill*saturate(dot(n,normalize(FD)));\n'
+            'float3 lit=A*Diff*light;\n'
+            'if (Clp>0.5) lit=saturate(lit); else lit/=max(1.0,max(lit.r,max(lit.g,lit.b)));  // OW_Clip 0: HDR zone colours keep their hue; 1: per-channel clip\n'
+            'float3 glow=min(Em*EC*EmGain, 4.0);\n'
+            'if (Dbg>0.5 && Dbg<1.5) return A/max(1.0,max(A.r,max(A.g,A.b)));\n'
+            'if (Dbg>2.5) { float v=exp2(lerp(-5.5,2.8,saturate((SP.x-0.33)/0.42))); return float3(v,v,v); }\n'
+            'if (Dbg>1.5) return glow;\n'
+            'float3 want=(Dbg>3.5) ? float3(1,1,1) : lit+glow;\n'
+            + tone +
+            'float3 outc=float3(0,0,0);\n'
+            'for (int ch=0; ch<3; ch++)\n'
+            '{\n'
+            '    float t=min(want[ch], TT[' + str(n_tone - 1) + ']);\n'
+            '    float v=0;\n'
+            '    for (int i=1; i<' + str(n_tone) + '; i++)\n'
+            '        if (t>TT[i-1]) v=exp2(lerp(LV[i-1],LV[i],saturate((t-TT[i-1])/(TT[i]-TT[i-1]))));\n'
+            '    outc[ch]=v;\n'
+            '}\n'
+            'return outc*VS;')
+
+
 def channel_code(texel, channels):
     """HLSL for a static component mask: one channel broadcasts, several keep their places."""
     picked = [c for c in 'rgb' if c.upper() in channels]
@@ -166,32 +196,7 @@ def apply(data):
                         default_value=unreal.LinearColor(x, y, z, 1))
 
         to_view = view_normal
-        n_tone = len(TONE_TT)
-        tone = (f'float TT[{n_tone}]={{' + ','.join(f'{x:.5f}' for x in TONE_TT) + '};\n'
-                f'float LV[{n_tone}]={{' + ','.join(f'{x:.4f}' for x in TONE_LV) + '};\n')
-        shade = custom(
-            'float3 n=normalize(N);\n'
-            'float light=Amb+Key*saturate(dot(n,normalize(KD)))+Fill*saturate(dot(n,normalize(FD)));\n'
-            'float3 lit=A*Diff*light;\n'
-            'if (Clp>0.5) lit=saturate(lit); else lit/=max(1.0,max(lit.r,max(lit.g,lit.b)));  // OW_Clip 0: HDR zone colours keep their hue; 1: per-channel clip\n'
-            'float3 glow=min(Em*EC*EmGain, 4.0);\n'
-            'if (Dbg>0.5 && Dbg<1.5) return A/max(1.0,max(A.r,max(A.g,A.b)));\n'
-            'if (Dbg>2.5) { float v=exp2(lerp(-5.5,2.8,saturate((SP.x-0.33)/0.42))); return float3(v,v,v); }\n'
-            'if (Dbg>1.5) return glow;\n'
-            'float3 want=(Dbg>3.5) ? float3(1,1,1) : lit+glow;\n'
-            + tone +
-            'float3 outc=float3(0,0,0);\n'
-            'for (int ch=0; ch<3; ch++)\n'
-            '{\n'
-            '    float t=min(want[ch], TT[' + str(n_tone - 1) + ']);\n'
-            '    float v=0;\n'
-            '    for (int i=1; i<' + str(n_tone) + '; i++)\n'
-            '        if (t>TT[i-1]) v=exp2(lerp(LV[i-1],LV[i],saturate((t-TT[i-1])/(TT[i]-TT[i-1]))));\n'
-            '    outc[ch]=v;\n'
-            '}\n'
-            'return outc*VS;',
-            unreal.CustomMaterialOutputType.CMOT_FLOAT3,
-            ['A', 'N', 'Diff', 'Amb', 'Key', 'Fill', 'KD', 'FD', 'Em', 'EC', 'EmGain', 'Dbg', 'SP', 'VS', 'Clp'])
+        shade = custom(shade_code(), unreal.CustomMaterialOutputType.CMOT_FLOAT3, SHADE_INPUTS)
         links = {'A': (albedo, ''), 'N': (to_view, ''), 'Diff': (scalar_param('OW_Diffuse'), ''),
                  'Amb': (scalar_param('OW_Ambient'), ''), 'Key': (scalar_param('OW_Key'), ''),
                  'Fill': (scalar_param('OW_Fill'), ''), 'KD': (vector_param('OW_KeyDir'), ''),
@@ -340,6 +345,264 @@ def apply(data):
                f'srgb {sorted(k for k in data["textures"] if is_srgb(k))}, shader UNVERIFIED')
 
 
-data = json.loads(Path(os.environ['OPENWILLOW_WEAPON_PAINT']).read_text())
-for entry in data if isinstance(data, list) else [data]:
-    apply(entry)
+# ---- Weapon part library: one master material, one instance per skin (host/ue5/import_weapon_library.py) ----
+# The per-recipe material above bakes each skin's values in as constants, one compiled material per gun. The library
+# master evaluates the same reading with every value as a parameter, so ~300 skins share one shader; each skin is a
+# MaterialInstanceConstant. Differences from apply(), all exact rewrites rather than new readings: static channel picks
+# become selector vectors (OW_*Sel: rgb weights, alpha 1 broadcasts one channel), the optional pattern/decal/reflection
+# layers are gated by OW_Use* scalars, every texture is imported linear and decoded by its installed SRGB flag in the
+# shader (OW_SRGB_*), and p_EmissiveColor is a parameter the host sets from the parts (native BuildWeaponMaterial).
+MASTER_TEXTURES = ['p_Masks', 'p_Diffuse', 'p_NormalScopesEmissive', 'p_Pattern', 'p_Decal', 'P_SimpleReflect']
+MASTER_SRGB_ORDER = ['p_Masks', 'p_Diffuse', 'p_Pattern', 'p_Decal', 'P_SimpleReflect', 'p_NormalScopesEmissive']
+
+
+def selector(channels):
+    """(r, g, b, broadcast) weights for a static component mask, matching channel_code()."""
+    picked = [c for c in 'RGB' if c in channels.upper()]
+    return tuple(1.0 if c in picked else 0.0 for c in 'RGB') + (1.0 if len(picked) == 1 else 0.0,)
+
+
+def png_rgb(width, height, rgb):
+    """A minimal solid-colour 8-bit RGB PNG (bytes)."""
+    import struct
+    import zlib
+    row = b'\x00' + bytes(rgb) * width
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(row * height)) + chunk(b'IEND', b''))
+
+
+def linear_white(folder):
+    """A 4x4 white texture imported linear. The master samples every texture linear (sRGB is decoded in the shader), and UE
+    refuses to compile a linear sampler whose default texture is sRGB, as the engine's WhiteSquareTexture is."""
+    import tempfile
+    path = f'{folder}/T_OW_LinearWhite'
+    if not unreal.EditorAssetLibrary.does_asset_exist(path):
+        source = Path(tempfile.gettempdir()) / 'T_OW_LinearWhite.png'
+        source.write_bytes(png_rgb(4, 4, (255, 255, 255)))
+        task = unreal.AssetImportTask()
+        task.filename, task.destination_path, task.destination_name = str(source), folder, 'T_OW_LinearWhite'
+        task.automated, task.replace_existing, task.save = True, True, False
+        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+        asset = unreal.load_asset(path)
+        asset.set_editor_property('srgb', False)
+        asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
+        unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False)
+    return unreal.load_asset(path)
+
+
+def build_master(path):
+    """Create (or rebuild) the library master material at `path`; returns it."""
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    eal = unreal.EditorAssetLibrary
+    mel = unreal.MaterialEditingLibrary
+    folder, name = path.rsplit('/', 1)
+    material = unreal.load_asset(path) if eal.does_asset_exist(path) else tools.create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    mel.delete_all_material_expressions(material)
+    material.set_editor_property('used_with_skeletal_mesh', True)
+
+    def node(cls, **properties):
+        value = mel.create_material_expression(material, cls, -500, 0)
+        for key, prop in properties.items():
+            value.set_editor_property(key, prop)
+        return value
+
+    def custom(code, output, names):
+        effect = node(unreal.MaterialExpressionCustom, code=code, output_type=output)
+        entries = []
+        for entry_name in names:
+            entry = unreal.CustomInput()
+            entry.set_editor_property('input_name', entry_name)
+            entries.append(entry)
+        effect.set_editor_property('inputs', entries)
+        return effect
+
+    def scalar(param, default=0.0):
+        return node(unreal.MaterialExpressionScalarParameter, parameter_name=param, default_value=default)
+
+    def vector(param, default=(0.0, 0.0, 0.0, 0.0)):
+        return node(unreal.MaterialExpressionVectorParameter, parameter_name=param,
+                    default_value=unreal.LinearColor(*default))
+
+    white = linear_white(folder)
+
+    def texture(param):
+        return node(unreal.MaterialExpressionTextureSampleParameter2D, parameter_name=param, texture=white,
+                    sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+
+    def uv(index):
+        return node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=index)
+
+    def link(source, output, target, pin):
+        mel.connect_material_expressions(source, output, target, pin)
+
+    srgb_a, srgb_b = vector('OW_SRGB_A'), vector('OW_SRGB_B')  # rgb: sRGB flags of MASTER_SRGB_ORDER[0:3] and [3:6]
+    # p_Masks: upper half light/dark map, lower half zone mask (tools/weapon_paint_model.py).
+    light, mask = texture('p_Masks'), texture('p_Masks')
+    top = custom('return float2(UV.x, UV.y*0.5);', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['UV'])
+    bottom = custom('return float2(UV.x, UV.y*0.5+0.5);', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['UV'])
+    link(uv(0), '', top, 'UV')
+    link(uv(0), '', bottom, 'UV')
+    link(top, '', light, 'UVs')
+    link(bottom, '', mask, 'UVs')
+    detail = texture('p_Diffuse')
+    packed = texture('p_NormalScopesEmissive')
+    link(uv(0), '', packed, 'UVs')
+    pattern = texture('p_Pattern')
+    # Vector parameters reach a custom node as float3; the fourth component comes through the parameter's A output.
+    pattern_uv = custom('return UV*SP.xy+float2(SP.z, SW);', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['UV', 'SP', 'SW'])
+    link(uv(1), '', pattern_uv, 'UV')
+    pattern_place = vector('p_PatternScalePosition', (1, 1, 0, 0))
+    link(pattern_place, '', pattern_uv, 'SP')
+    link(pattern_place, 'A', pattern_uv, 'SW')
+    link(pattern_uv, '', pattern, 'UVs')
+    decal = texture('p_Decal')
+    decal_uv = custom('float2 t=UV+float2(SP.z, SW)-0.5; float a=R*3.14159265; float s=sin(a), c=cos(a);\n'
+                      'float2 r=float2(c*t.x-s*t.y, s*t.x+c*t.y)+0.5;\n'
+                      'return r*SP.xy+(1-SP.xy)*0.5;', unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['UV', 'SP', 'SW', 'R'])
+    link(uv(1), '', decal_uv, 'UV')
+    decal_place = vector('p_DecalScalePosition', (1, 1, 0, 0))
+    link(decal_place, '', decal_uv, 'SP')
+    link(decal_place, 'A', decal_uv, 'SW')
+    link(scalar('p_DecalRotate'), '', decal_uv, 'R')
+    link(decal_uv, '', decal, 'UVs')
+    env = texture('P_SimpleReflect')
+    unpack = custom('float2 xy=P.rg*2-1; return normalize(float3(xy, 0.8*sqrt(saturate(1-dot(xy,xy)))));',
+                    unreal.CustomMaterialOutputType.CMOT_FLOAT3, ['P'])
+    link(packed, 'RGB', unpack, 'P')
+    view_normal = node(unreal.MaterialExpressionTransform,
+                       transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_TANGENT,
+                       transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_VIEW)
+    link(unpack, '', view_normal, '')
+    env_uv = custom('float3 n=normalize(N); float3 v=float3(0,0,-1); float3 r=2*dot(n,v)*n-v; return r.xy;',
+                    unreal.CustomMaterialOutputType.CMOT_FLOAT2, ['N'])
+    link(view_normal, '', env_uv, 'N')
+    link(env_uv, '', env, 'UVs')
+
+    # Textures through their RGBA output (the default output is RGB, a float3); everything else is used as .rgb or a scalar.
+    textures = {'Light': light, 'Mask': mask, 'Detail': detail, 'Pattern': pattern, 'Decal': decal, 'Env': env}
+    inputs = {'SA': srgb_a, 'SB': srgb_b, 'PatternBroadcast': scalar('OW_PatternBroadcast'),
+              'DecalBroadcast': scalar('OW_DecalBroadcast'),
+              'DetailSel': vector('OW_DetailSel', (0, 0, 1, 1)), 'PatternSel': vector('OW_PatternSel', (1, 1, 1, 0)),
+              'DecalSel': vector('OW_DecalSel', (1, 1, 1, 0)),
+              'UsePattern': scalar('OW_UsePattern'), 'UseDecal': scalar('OW_UseDecal'), 'UseReflect': scalar('OW_UseReflect'),
+              'DColor': vector('p_DColor', (1, 1, 1, 1)),
+              'HiI': scalar('p_HighlightsIntensity'), 'ShI': scalar('p_ShadowsIntensity'),
+              'PatternColor': vector('p_PatternColor', (1, 1, 1, 1)),
+              'PatternWeight': vector('p_PatternChannelScale'), 'PatternReplace': scalar('p_ReplacePattern'),
+              'DecalColor': vector('p_DecalColor', (1, 1, 1, 1)), 'DecalWeight': vector('p_DecalChannel'),
+              'DecalFull': scalar('p_UseFullColorDecal'), 'DecalReplace': scalar('p_ReplaceDecal'),
+              'ReflectColor': vector('p_ReflectColor'), 'ReflectWeight': vector('p_ReflectionChannelScale'),
+              'ReflectScale': scalar('p_ReflectColorScale')}
+    for zone in 'ABC':
+        for tone in ['Shadow', 'Midtone', 'Hilight']:
+            inputs[zone + tone] = vector(f'p_{zone}Color{tone}', (1, 1, 1, 1))
+
+    def decode(texel, flag):
+        """Inline sRGB decode of one sample by its installed flag (textures are imported linear)."""
+        rgb = f'max({texel}.rgb,0)'
+        exact = f'lerp(pow(({rgb}+0.055)/1.055, 2.4), {rgb}/12.92, step({rgb}, 0.04045))'
+        return f'float4 {texel}L=float4(lerp({texel}.rgb, {exact}, {flag}), {texel}.a);\n'
+    code = (decode('Light', 'SA.x') + decode('Mask', 'SA.x') + decode('Detail', 'SA.y') + decode('Pattern', 'SA.z')
+            + decode('Decal', 'SB.x') + decode('Env', 'SB.y'))  # vector parameters arrive as float3
+    code += ('float high=saturate(LightL.r*HiI), low=saturate(LightL.g*ShI);\n'
+             'float3 c=DColor.rgb;\n')
+    for zone, channel in zip('ABC', 'rgb'):
+        code += f'c=lerp(c, lerp(lerp({zone}Midtone.rgb,{zone}Hilight.rgb,high),{zone}Shadow.rgb,low), MaskL.{channel});\n'
+    code += ('float3 ps=PatternBroadcast>0.5 ? dot(PatternL.rgb, PatternSel.rgb).xxx : PatternL.rgb*PatternSel.rgb;\n'
+             'float3 p=ps*PatternColor.rgb;\n'
+             'float pw=saturate(dot(MaskL.rgb*PatternWeight.rgb, MaskL.rgb*PatternWeight.rgb));\n'
+             'float3 cp=lerp(c*lerp(float3(1,1,1),p,pw), lerp(c,p,pw), PatternReplace);\n'
+             'c=lerp(c, cp, UsePattern);\n'
+             'float3 d=DecalBroadcast>0.5 ? dot(DecalL.rgb, DecalSel.rgb).xxx : DecalL.rgb*DecalSel.rgb;\n'
+             'float3 dt=lerp(DecalColor.rgb, DecalColor.rgb*d, DecalFull);\n'
+             'float dw=saturate(dot(MaskL.rgb*DecalWeight.rgb, MaskL.rgb*DecalWeight.rgb));\n'
+             'float3 da=lerp(d*dw, dw*DecalL.a, DecalFull);\n'
+             'float3 cd=lerp(c*lerp(float3(1,1,1),dt,da), lerp(c,dt,da), DecalReplace);\n'
+             'c=lerp(c, cd, UseDecal);\n'
+             'c*=dot(DetailL.rgb, DetailSel.rgb);\n'
+             'float rw=saturate(dot(MaskL.rgb*ReflectWeight.rgb, MaskL.rgb*ReflectWeight.rgb));\n'
+             'float3 R=EnvL.rgb*ReflectColor.rgb*rw;\n'
+             'c=c+UseReflect*lerp(R, R*c, ReflectScale);\n'
+             'return c;\n')
+    albedo = custom(code, unreal.CustomMaterialOutputType.CMOT_FLOAT3, list(textures) + list(inputs))
+    for pin, source in textures.items():
+        link(source, 'RGBA', albedo, pin)
+    for pin, source in inputs.items():
+        link(source, '', albedo, pin)
+
+    shade = custom(shade_code(), unreal.CustomMaterialOutputType.CMOT_FLOAT3, SHADE_INPUTS)
+
+    def look_scalar(param):
+        return scalar(param, LOOK_DEFAULTS[param])
+
+    def look_vector(param):
+        x, y, z = LOOK_DEFAULTS[param]
+        return vector(param, (x, y, z, 1))
+    links = {'A': (albedo, ''), 'N': (view_normal, ''), 'Diff': (look_scalar('OW_Diffuse'), ''),
+             'Amb': (look_scalar('OW_Ambient'), ''), 'Key': (look_scalar('OW_Key'), ''),
+             'Fill': (look_scalar('OW_Fill'), ''), 'KD': (look_vector('OW_KeyDir'), ''),
+             'FD': (look_vector('OW_FillDir'), ''), 'Em': (packed, 'B'),
+             'EC': (vector('p_EmissiveColor'), ''),
+             'EmGain': (look_scalar('OW_Emissive'), ''), 'Dbg': (look_scalar('OW_Debug'), ''),
+             'SP': (node(unreal.MaterialExpressionScreenPosition), ''), 'VS': (look_scalar('OW_ViewScale'), ''),
+             'Clp': (look_scalar('OW_Clip'), '')}
+    for pin, (source, output) in links.items():
+        link(source, output, shade, pin)
+    material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+    mel.connect_material_property(shade, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    mel.recompile_material(material)
+    eal.save_loaded_asset(material, only_if_is_dirty=False)
+    return material
+
+
+def skin_parameters(data):
+    """(scalars, vectors, textures by parameter) a library skin instance sets, from one prepare_weapon_paint result."""
+    vec, sca = data['params']['vector'], data['params']['scalar']
+    pattern, decal = data.get('pattern_used', False), data.get('decal') or {}
+    reflection = data.get('reflection') or {}
+    use_decal, use_reflect = bool(decal.get('used')), bool(reflection.get('used'))
+    vectors = {name: tuple(vec[name]) for name in ['p_DColor'] + [f'p_{z}Color{t}' for z in 'ABC'
+                                                               for t in ('Shadow', 'Midtone', 'Hilight')]}
+    scalars = {'p_HighlightsIntensity': sca['p_HighlightsIntensity'], 'p_ShadowsIntensity': sca['p_ShadowsIntensity'],
+               'OW_UsePattern': 1.0 if pattern else 0.0, 'OW_UseDecal': 1.0 if use_decal else 0.0,
+               'OW_UseReflect': 1.0 if use_reflect else 0.0}
+    detail = [0.0, 0.0, 0.0, 1.0]
+    detail[data['detail_channel']] = 1.0
+    vectors['OW_DetailSel'] = tuple(detail)
+    vectors['OW_PatternSel'] = selector(data.get('pattern_channels', 'RGB'))
+    vectors['OW_DecalSel'] = selector(data.get('decal_channels', 'RGB'))
+    scalars['OW_PatternBroadcast'] = vectors['OW_PatternSel'][3]  # vector parameters reach the shader as float3
+    scalars['OW_DecalBroadcast'] = vectors['OW_DecalSel'][3]
+    if pattern:
+        for name in ('p_PatternColor', 'p_PatternChannelScale', 'p_PatternScalePosition'):
+            vectors[name] = tuple(vec[name])
+        scalars['p_ReplacePattern'] = sca['p_ReplacePattern']
+    if use_decal:
+        vectors['p_DecalScalePosition'] = tuple(decal['scale_position'])
+        vectors['p_DecalColor'] = tuple(decal['color'])
+        vectors['p_DecalChannel'] = tuple(decal['channel'])
+        scalars.update({'p_DecalRotate': decal['rotate'], 'p_UseFullColorDecal': decal['full_color'],
+                        'p_ReplaceDecal': decal['replace']})
+    if use_reflect:
+        vectors['p_ReflectColor'] = tuple(reflection['p_ReflectColor'])
+        vectors['p_ReflectionChannelScale'] = tuple(reflection['p_ReflectionChannelScale'])
+        scalars['p_ReflectColorScale'] = reflection['p_ReflectColorScale']
+    if 'p_EmissiveColor' in vec:
+        vectors['p_EmissiveColor'] = tuple(vec['p_EmissiveColor'])
+    flags = data.get('srgb') or {}
+    srgb = [1.0 if (flags.get(name) if flags.get(name) is not None else FALLBACK_SRGB[name]) else 0.0
+            for name in MASTER_SRGB_ORDER]
+    vectors['OW_SRGB_A'] = tuple(srgb[:3]) + (0.0,)
+    vectors['OW_SRGB_B'] = tuple(srgb[3:6]) + (0.0,)
+    textures = {name: data['textures'][name] for name in MASTER_TEXTURES if name in data['textures']}
+    return scalars, vectors, textures
+
+
+if os.environ.get('OPENWILLOW_WEAPON_PAINT'):
+    data = json.loads(Path(os.environ['OPENWILLOW_WEAPON_PAINT']).read_text())
+    for entry in data if isinstance(data, list) else [data]:
+        apply(entry)

@@ -8,10 +8,11 @@ param(
     [switch]$Selector,
     [switch]$Profile,
     [switch]$Inspect,
+    [switch]$Route,
     [switch]$LowEnd
 )
 $ErrorActionPreference = 'Stop'
-if (@($Walk, $Terrain, $Bsp, $Selector, $Profile, $Inspect | Where-Object { $_ }).Count -gt 1) { throw 'Choose one of -Walk, -Terrain, -Bsp, -Selector, -Profile or -Inspect' }
+if (@($Walk, $Terrain, $Bsp, $Selector, $Profile, $Inspect, $Route | Where-Object { $_ }).Count -gt 1) { throw 'Choose one of -Walk, -Terrain, -Bsp, -Selector, -Profile, -Inspect or -Route' }
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
@@ -22,6 +23,7 @@ $manifest = Get-Content -LiteralPath (Join-Path $root 'scene.json') -Raw | Conve
 if (($Walk -or $Terrain) -and $manifest.collision_policy -ne 'observed_convex_and_box_v1') { throw 'Prepare and import collision before testing walking' }
 if ($Terrain -and !(Test-Path -LiteralPath (Join-Path $root 'terrain-runtime.json'))) { throw 'Run tools/prepare_terrain.py --collision and import before testing terrain' }
 if ($Bsp -and !(Test-Path -LiteralPath (Join-Path $root 'bsp-runtime.json'))) { throw 'Run tools/prepare_bsp.py --collision and import before testing BSP' }
+if ($Route -and !(Test-Path -LiteralPath (Join-Path $root 'walk-routes.json'))) { throw 'Run tools/walking_routes.py routes before testing recorded routes' }
 if ($Inspect -and !(Test-Path -LiteralPath (Join-Path $root 'inspection-views.json'))) { throw 'Create inspection-views.json in the scene directory before capturing viewpoints' }
 if ($manifest.map -notmatch '^[A-Za-z0-9_]+_P$') { throw 'Invalid persistent map name' }
 $mapFile = Join-Path (Split-Path $project) "Content/OpenWillow/$($manifest.map)/$($manifest.map).umap"
@@ -29,7 +31,7 @@ if (!(Test-Path -LiteralPath $mapFile)) { throw 'Import this map before testing 
 $log = Join-Path $root ('viewer-' + [guid]::NewGuid().ToString('N') + '.log')
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $env:OPENWILLOW_SCENE = $root
-$testName = if ($Walk) { 'Walking' } elseif ($Terrain) { 'TerrainWalking' } elseif ($Bsp) { 'BspWalking' } elseif ($Selector) { 'MapSelector' } elseif ($Profile) { 'Profile' } elseif ($Inspect) { 'Inspection' } else { 'Viewer' }
+$testName = if ($Walk) { 'Walking' } elseif ($Route) { 'RouteWalking+OpenWillow.CollisionShapes' } elseif ($Terrain) { 'TerrainWalking' } elseif ($Bsp) { 'BspWalking' } elseif ($Selector) { 'MapSelector' } elseif ($Profile) { 'Profile' } elseif ($Inspect) { 'Inspection' } else { 'Viewer' }
 # -LowEnd mirrors run_ue_level.ps1's runtime-only DX11/SM5 path so the
 # profile test can sample both render routes. Keep the two lists identical.
 $resolution = @('-ResX=1280', '-ResY=720')
@@ -52,16 +54,18 @@ $argsList = @("`"$project`"", "/Game/OpenWillow/$($manifest.map)/$($manifest.map
     "-ExecCmds=`"$execCmds`"",
     '-TestExit="Automation Test Queue Empty"', "-abslog=`"$log`"") + $lowEndArgs
 # Only this temporary game process belongs to the harness; never close an editor.
-if ($Walk -or $Terrain -or $Bsp) { $argsList += '-owwalk' }
+if ($Walk -or $Terrain -or $Bsp -or $Route) { $argsList += '-owwalk' }
 $process = Start-Process -FilePath $editor -ArgumentList $argsList -WindowStyle Hidden -PassThru
-$deadline = (Get-Date).AddMinutes(8)
+$deadline = (Get-Date).AddMinutes($(if ($Route) { 20 } else { 8 }))
 try {
     while (!$process.WaitForExit(1000)) {
         if ((Get-Date) -gt $deadline) { throw "Viewer test timed out; see $log" }
     }
-    $result = Select-String -LiteralPath $log -SimpleMatch "Test Completed. Result={Success} Name={$testName}"
-    if (!$result -or $process.ExitCode -ne 0) { throw "Viewer test failed; see $log" }
-    Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Viewer diagnostic:|Requested screenshot:|Inspection (view|captured)|Map selector|Profile (start|turned) view|BSP (stand|walk|runtime summary):|Terrain (probes|runtime summary)|Terrain_[0-9]+ (stand(\[[0-9]+\])?|hole|seam):|covered by other geometry|Test Completed.' | ForEach-Object { $_.Line }
+    foreach ($name in $testName -split '\+OpenWillow\.') {
+        $result = Select-String -LiteralPath $log -SimpleMatch "Test Completed. Result={Success} Name={$name}"
+        if (!$result -or $process.ExitCode -ne 0) { throw "Viewer test $name failed; see $log" }
+    }
+    Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Viewer diagnostic:|Requested screenshot:|Inspection (view|captured)|Map selector|Profile (start|turned) view|BSP (stand|walk|runtime summary):|Terrain (probes|runtime summary)|Terrain_[0-9]+ (stand(\[[0-9]+\])?|hole|seam):|covered by other geometry|Route |Host walker:|blocks a pawn sweep|OpenWillow volumes:|Test Completed.' | ForEach-Object { $_.Line }
     Write-Output "Log: $log"
 } finally {
     if (!$process.HasExited) { Stop-Process -Id $process.Id }

@@ -342,7 +342,7 @@ All angles are degrees. The game's "VFOV/HFOV" pair assumes a fixed 16:9 referen
 
 ## Corrections to earlier notes
 
-- NATIVE_WEAPON_FIRING.md says no movement or stance modifier exists in the stock data for the player's accuracy pool. The stock sprint definition
+- NATIVE_WEAPON_TRIGGER_AMMO.md says no movement or stance modifier exists in the stock data for the player's accuracy pool. The stock sprint definition
   `SprintDefinition_Default` does add to the pool while sprinting: min +15, max +15 (post-add) and idle regeneration rate +3. That scan only covered weapon, part, artifact
   and class-mod objects. UNVERIFIED in game; firing is blocked while sprinting, so the effect shows mainly in the first shots after sprint ends.
 - The host Walker uses estimates (450 / 420 / 650 / 45 degrees); the data here gives 440 / 630 / 594 / 0.7 floor Z.

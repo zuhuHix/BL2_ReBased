@@ -162,6 +162,8 @@ def build(name, blend, domain_fn=None):
     # emitter order (sort priority), as Cascade draws a system. In UE5's default after-DOF pass a modulate is applied to
     # the scene separately and the additive layer is added over it, which lost the bubble's dark core (host choice).
     material.set_editor_property('translucency_pass', unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF)
+    if domain_fn == 'screen':
+        material.set_editor_property('disable_depth_test', True)
     nodes = []
 
     def node(cls, x, y, **props):
@@ -270,26 +272,24 @@ def build(name, blend, domain_fn=None):
         emissive = op(unreal.MaterialExpressionMin, op(M, op(M, rgb, '', color_rgb, '', 100, 0), '', color_a, 'A', 250, 0), '',
                       const(1.0, 250, 100), '', 400, 0)
     elif domain_fn == 'screen':
-        # Screen particle stand-in (a modulate quad over the view): the scene x the particle colour divided by its
-        # luminance (Rec. 709 weights), so that the tint keeps the scene's brightness and pushes it toward the hue (blue
-        # x4 for (4, 6, 30)), weighted by alpha and, from 0.6 to 1, by the mask texture's green streaks. Chosen from the
-        # texture's name (a UV mask) and the 2026-10-02 game frames (a saturated blue flash, then a world that stays
-        # blue and bright), not from the stripped graph (UNVERIFIED). Round 2 divided by the largest channel, which
-        # darkened the scene to grey-brown.
+        # Host stand-in for the compiled screen shader (Round 6): preserve the particle colour's hue, then modulate the
+        # view by that tint through the screen mask. Using the mask's brightest RGB channel without the old 0.6 floor
+        # keeps texture gaps between streaks. Clamp the hue to the stock shader's saturate range; the 0.80 s particle's
+        # blue channel is HDR and otherwise drives the whole pane toward white through UE5's film curve. The stock
+        # scene-colour expression remains UNVERIFIED in this surface-domain stand-in because UE5 did not provide a usable
+        # scene sample in either tested post-process location.
         luminance = node(unreal.MaterialExpressionDotProduct, 400, 1800)
         mel.connect_material_expressions(color_rgb, '', luminance, 'A')
         mel.connect_material_expressions(node(unreal.MaterialExpressionConstant3Vector, 250, 1900,
                                               constant=unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0)), '', luminance, 'B')
         hue = op(D, color_rgb, '', op(unreal.MaterialExpressionMax, luminance, '', const(0.001, 400, 1950), '', 550, 1800), '', 700, 1700)
-        streaks = node(unreal.MaterialExpressionLinearInterpolate, 400, 1500)
-        mel.connect_material_expressions(const(0.6, 250, 1450), '', streaks, 'A')
-        mel.connect_material_expressions(const(1.0, 250, 1520), '', streaks, 'B')
-        mel.connect_material_expressions(mask(tex, 'RGB', 'G', 250, 1600), '', streaks, 'Alpha')
+        hue_clip = node(unreal.MaterialExpressionSaturate, 850, 1750)
+        mel.connect_material_expressions(hue, '', hue_clip, '')
         weight = node(unreal.MaterialExpressionSaturate, 700, 1500)
-        mel.connect_material_expressions(op(M, streaks, '', color, 'A', 550, 1500), '', weight, '')
+        mel.connect_material_expressions(op(M, brightest, '', color_a, 'A', 550, 1500), '', weight, '')
         emissive = node(unreal.MaterialExpressionLinearInterpolate, 850, 1500)
         mel.connect_material_expressions(const(1.0, 700, 1400), '', emissive, 'A')
-        mel.connect_material_expressions(hue, '', emissive, 'B')
+        mel.connect_material_expressions(hue_clip, '', emissive, 'B')
         mel.connect_material_expressions(weight, '', emissive, 'Alpha')
     elif blend == unreal.BlendMode.BLEND_MODULATE or domain_fn == 'darken':
         # lerp(1, target, weight): weight = mask, x the particle alpha (1 - alpha with AlphaInvert) when UseAlpha, x the
@@ -379,8 +379,6 @@ def build(name, blend, domain_fn=None):
                      '', 1000, 400)
         emissive = op(unreal.MaterialExpressionMin, op(M, rgb, '', color_rgb, '', 250, 0), '', ceiling, '', 1100, 0)
     mel.connect_material_property(emissive, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    if domain_fn == 'screen':
-        material.set_editor_property('disable_depth_test', True)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     return material
@@ -489,8 +487,8 @@ float2 n1 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 3.0 * t) + 0.5).xy * 
 float2 n2 = Texture2DSample(T1, T1Sampler, OWSPIN(centred, 1.5 * t) + 0.5).xy * 2.0 - 1.0;
 float n2z = sqrt(saturate(1.0 - dot(n2, n2)));
 float2 direction = float2(n2.y + n1.x, n2z + n1.x);
-// Host calibration (UNVERIFIED): the full push frills the rim on every frame, but the game's rim is a clean ring at 1.5 and
-// 3.0 s and frayed at 4.5 s. The strength therefore grows with the collapse value (Dyn, 0 at the start, 0.75 at the end).
+// Round 20 fit (UNVERIFIED): Round 3's ramp reached about 0.99 at Dyn=0.74 and produced a jagged edge. Restore the earlier
+// 0.7 cap (about 0.70 at the same capture point) while retaining the small early displacement; the game rim is cloudlike.
 float strength = lerp(0.15, 0.7, saturate(Dyn / 0.6));
 float3 ring = Texture2DSample(T2, T2Sampler, uv + strength * push * direction).rgb;
 // Host calibration (UNVERIFIED): the texture's ring is pink-violet; the game frames show a white-blue rim, so red is
@@ -519,10 +517,11 @@ float2 viewXY = float2(0.0, 0.0);
 float4 core = Texture2DSample(T1, T1Sampler, uv + parallax * viewXY);
 float2 centred = uv - 0.5;
 float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
-// Host calibration (UNVERIFIED): x3 on the weight (the shader's own weights give a haze several times fainter than the
-// game frames show between core and rim) and a blue-violet tint (the texture is magenta, the game's band is blue-violet).
-float weight = 3.0 * core.r * Col.a * mask * dot(centred, centred);
-float3 colour = Col.rgb * core.rgb * float3(0.3, 0.5, 1.6);
+// Round 19: restore the stock shader's weight and texture colour. The Round 2 matched 4.50 s frame measured a much
+// brighter, bluer host interior than the game (host 67/40/119, game 8/19/23); the Round 7-17 x3 weight and blue-violet
+// tint contributed light there. The rendering fit remains UNVERIFIED until this rebuilt material is captured.
+float weight = core.r * Col.a * mask * dot(centred, centred);
+float3 colour = Col.rgb * core.rgb;
 float softFade = saturate((SD - PD) / 41.0);
 return float4(min(4.0, colour) * weight * softFade, 1.0);
 """)
@@ -665,10 +664,11 @@ float oneMinus = 1.0 - m2;
 float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
 float base = saturate(2.0 * m2);
 float k = base + mixWeight * (m1 - base);
-float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;   // host calibration (UNVERIFIED): deeper blue, as the game's palm orb
-// Host calibration (UNVERIFIED): the orb texture is scaled by 0.6 instead of the shader's 1.25. At 1.25 the orb's centre is
-// white-blue; the game's palm orb is a saturated deep blue with a bright highlight and thin arcs.
-float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9;
+// Round 20 tint trial (UNVERIFIED): applying the measured red/green ratios barely changed the matched 40x40 px host crop
+// (157.8/206.6/252.6 before, 156.9/205.9/252.6 after; game 117.3/171.0/252.4). The crop includes glow and overlapping
+// layers may dominate it, but their contribution is unresolved. Retain the prior fit instead of stacking on another guess.
+float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;
+float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9 * float3(0.55, 0.70, 1.0);
 return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
 
@@ -694,13 +694,14 @@ return float4(min(4.0, a * Col.rgb), saturate(a * Col.a) * saturate((SD - PD) / 
 
 # Mat_SirenGlowMOD (modulate, overbright): the scene is multiplied by 1 + min(3, soft fade over 16 x particle alpha x a
 # mirrored soft mask at twice the UV x particle colour). UE5 draws modulate after the translucent layers, not in emitter
-# order. Host calibration (UNVERIFIED): the overbright is scaled by 0.4, because at 0.55 s the host's whole street is washed
-# out while the game frame keeps its contrast (the game's wash comes at 0.72 s).
+# order. Host calibration (UNVERIFIED): the overbright is scaled by Overbright, 0.4 by default, because at 0.55 s the host's
+# whole street is washed out while the game frame keeps its contrast; the bubble intro's flashes, which make the game's wash
+# at 0.72 s, set their own value per emitter (OpenWillowPhaselockFx.cpp EmitterScalars).
 exact('Mat_SirenGlowMOD', 'mod', ['EnergyOrbSoftMod_Dif_Mirror'], r"""
 float g = Texture2DSample(T0, T0Sampler, 2.0 * UV).r;
 float3 boost = min(3.0, saturate((SD - PD) / 16.0) * Col.a * g * Col.rgb);
-return float4(1.0 + 0.4 * boost, 1.0);
-""")
+return float4(1.0 + Overbright * boost, 1.0);
+""", params=(('Overbright', 0.4),))
 
 
 def exact_material(name):

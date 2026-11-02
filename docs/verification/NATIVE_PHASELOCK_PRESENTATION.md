@@ -107,6 +107,11 @@ below the clip length the blend is dropped), loop from its end, stretch the fall
 down; hold the AI and uncloak; add the mesh-centring offset after 0.35 s; allow shots through during the 0.7 s lift but
 block the player only after it.
 
+Status (2026-10-21, [PHASELOCK_STOCK_DATA.md](PHASELOCK_STOCK_DATA.md) "Round 16"): exercised for the first time on a stock pawn, the
+bullymong (`-owcombatpawn=Bullymong`): lift at the cast with the 0.4 s blend-in, loop from the lift clip's end, fall stretched to
+`DropTime`, land on touch-down, the mesh centring after 0.35 s (on the bones' box; the stock physics asset is not imported). Not done:
+the AI hold and uncloak (the test target has no AI), the collision switch during the lift.
+
 ## 3. The first-person arm / hand cast effect
 
 * The cast move on Maya's own components is `GD_Siren_Skills.Misc.Phaselock_1st3rd_SM` (hit) or
@@ -153,9 +158,9 @@ press, attached at the arms socket with the offsets above; no parameter to set.
 
 | Statement | What would confirm it |
 |---|---|
-| Lift clip starts at the cast with 0.4 s blend-in; loop follows | Original game, SDK trace (`tools/real_game/`) of the target's current special move and clip name over time after a cast |
+| Lift clip starts at the cast with 0.4 s blend-in; loop follows (partly observed 2026-10-21: the base idle's weight falls to 0 over about 0.4 s after the cast; the clip names were not readable) | Original game, SDK trace (`tools/real_game/`) of the target's current special move and clip name over time after a cast |
 | Fall clip time-stretched to 0.5 s | Trace of the playing clip's rate during release, or a 60 fps capture of a Psycho (0.2 s clip) dropping |
-| Mesh centring offset after 0.35 s | Trace of the target mesh's relative Z translation during the hold |
+| Mesh centring offset after 0.35 s | **Observed 2026-10-21** on a bullymong: `Mesh.Translation.Z` -102 at rest, -114 at 0.5 s, -162 at 1.0 s, -221.5 through the hold (PHASELOCK_STOCK_DATA.md round 16) |
 | Hand orb appears 0.25 s into the lift clip | Frame-accurate capture of the cast, or a trace of `RunCustomEvent` against the cast time |
 | Bubble parameter values | Trace of the loop emitter's two instance parameters |
 | Collision (non-blocking while rising) | Walk into a rising target |

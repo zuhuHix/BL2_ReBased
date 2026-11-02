@@ -67,6 +67,39 @@ class MaterialAuditTest(unittest.TestCase):
             'invalid_color_stream': 1, 'unsupported_component_owner': 1})
         self.assertEqual(report['issue_examples']['unsupported_component_owner'][0]['object'], 'A:Mesh')
 
+    def test_terrain_blends_are_not_diffuse_gaps_and_exclusions_are_counted(self):
+        scene = dict(schema=1, dynamic_policy='frozen', map='Synthetic_P', issues=[],
+                     materials={'terrain': dict(source='T:weighted_material', channels={},
+                                                terrain_blend={'layers': []}),
+                                'neutral': dict(source='N', channels={})},
+                     meshes={'mesh': {'source': 'mesh', 'sections': [{'slot': 0, 'material': 'terrain'},
+                                                                     {'slot': 1, 'material': 'neutral'}]}},
+                     actors=[{'source': 'c', 'level': 'Synthetic_P', 'mesh': 'mesh', 'materials': [],
+                              'terrain': True}],
+                     excluded_components=[{'reason': 'mission_item_preview_mesh'},
+                                          {'reason': 'mission_item_preview_mesh'}])
+        report = audit(scene)
+        self.assertEqual(report['counts']['terrain_weighted_blend'], 1)
+        self.assertEqual(report['counts']['terrain_weighted_blend_placed_sections'], 1)
+        self.assertEqual(report['counts']['missing_diffuse'], 1)
+        self.assertEqual([row['cause'] for row in report['section_audit']],
+                         ['terrain_weighted_blend', 'no_supported_channels'])
+        self.assertEqual(report['excluded_components'], {'mission_item_preview_mesh': 2})
+
+    def test_inspected_unlit_recipe_is_reported_as_partial_not_neutral_fallback(self):
+        scene = dict(schema=1, dynamic_policy='frozen', map='Synthetic_P', issues=[],
+                     materials={'map': dict(source='Synthetic:Map', channels={},
+                                            scene_recipe={'method': 'synthetic_map_v1',
+                                                          'status': 'partial_unverified',
+                                                          'unlit_color_layers': []})},
+                     meshes={'mesh': {'source': 'mesh', 'sections': [{'slot': 0, 'material': 'map'}]}},
+                     actors=[{'source': 'c', 'level': 'Synthetic_P', 'mesh': 'mesh', 'materials': []}])
+        report = audit(scene)
+        self.assertEqual(report['counts']['inspected_material_recipes'], 1)
+        self.assertEqual(report['counts']['inspected_material_recipe_placed_sections'], 1)
+        self.assertEqual(report['section_audit'][0]['cause'], 'inspected_material_recipe')
+        self.assertEqual(report['gap_status_counts'], {})
+
 
 if __name__ == '__main__':
     unittest.main()

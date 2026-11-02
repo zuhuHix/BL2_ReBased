@@ -14,28 +14,31 @@ class OPENWILLOW_API AOpenWillowShotFx : public AActor
 public:
     AOpenWillowShotFx();
     virtual void Tick(float DeltaSeconds) override;
+    // The fallback line size/lifetime are UNVERIFIED host stand-ins; data-backed weapons with no tracer template suppress it.
     static void Tracer(UWorld* World, const FVector& Start, const FVector& End,
         const FLinearColor& Color = FLinearColor(1.f, 0.78f, 0.45f), float Radius = 0.8f, float Life = 0.09f);
-    // A tracer that flies from Start to End at Speed (uu/s) as a streak of Length, the way a bullet's tracer follows the bullet
-    // (bStartParticleTracerAtWeapon); Tracer() above is the instant one.
-    static void TracerFlight(UWorld* World, const FVector& Start, const FVector& End, float Speed, float Length,
-        const FLinearColor& Color = FLinearColor(1.f, 0.78f, 0.45f), float Radius = 0.8f);
     static void Flash(UWorld* World, const FVector& Location, const FLinearColor& Color,
-        float Radius, float Life, float LightIntensity);
+        float Radius, float Life, float LightIntensity, float Intensity = 8.f);
+    // Soft, procedural host muzzle plume. Radius remains an UNVERIFIED stand-in because the type has no scalar size field.
+    static void MuzzleFlash(UWorld* World, const FVector& Location, float Radius, float Life,
+        const FLinearColor& Color);
+    // Low-cost brass cylinder stand-in, launched from the selected type/body socket toward the right. Its size, life and
+    // ballistic constants are UNVERIFIED host values; the type data only identifies the casing template/socket.
+    // A small glowing sphere thrown from an impact or explosion (falls like a casing; no spin of note). Host stand-in for
+    // the impact and explosion particle debris (weapons projectile lane).
+    static void Spark(UWorld* World, const FVector& Location, const FVector& Velocity, const FLinearColor& Color,
+        float Radius, float Life, float Intensity = 4.f);
+    static void Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale = 1.f);
 private:
-    void Setup(UStaticMesh* Mesh, const FLinearColor& Color, float Intensity, float Life, float LightIntensity);
+    void Setup(UStaticMesh* Mesh, const FLinearColor& Color, float Intensity, float Life, float LightIntensity,
+        bool bSoftFlame = false, float CoreStrength = 0.f);
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> Visual;
     UPROPERTY() TObjectPtr<class UPointLightComponent> Light;
     UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> Material;
-    // TracerFlight: the streak's head runs Start + Dir * min(Speed * age, Distance) and its tail trails by FlightLength.
-    bool bFlying = false;
-    FVector FlightStart = FVector::ZeroVector;
-    FVector FlightDir = FVector::ForwardVector;
-    float FlightDistance = 0;
-    float FlightSpeed = 0;
-    float FlightLength = 0;
     float Born = 0;
     float Lifetime = 0.05f;
     float StartIntensity = 0;
     float StartLight = 0;
+    FVector CasingVelocity = FVector::ZeroVector;
+    bool bIsCasing = false;
 };

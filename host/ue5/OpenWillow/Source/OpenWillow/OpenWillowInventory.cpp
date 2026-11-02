@@ -27,47 +27,6 @@ bool ReadVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, FVect
     return true;
 }
 
-// The card's "firing" block (tools/weapon_refresh_firing.py). Pattern offsets arrive in degrees.
-bool ReadRotator(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, FRotator& Out)
-{
-    FVector Degrees;
-    if (!ReadVector(Object, Field, Degrees)) return false;
-    Out = FRotator(Degrees.X, Degrees.Y, Degrees.Z);
-    return true;
-}
-
-void ReadFiringMode(const TSharedPtr<FJsonObject>& Block, FOpenWillowFiringMode& Mode)
-{
-    Block->TryGetStringField(TEXT("mode"), Mode.Mode);
-    Block->TryGetStringField(TEXT("fire_type"), Mode.FireType);
-    Block->TryGetStringField(TEXT("tracer"), Mode.Tracer);
-    Block->TryGetStringField(TEXT("projectile_definition"), Mode.ProjectileDefinition);
-    Mode.Speed = Number(Block, TEXT("speed"), 0);
-    Mode.AirFriction = Number(Block, TEXT("air_friction"), 0);
-    Mode.NumRicochets = int32(Number(Block, TEXT("num_ricochets"), 0));
-    ReadVector(Block, TEXT("trace_extent"), Mode.TraceExtent);
-    Block->TryGetBoolField(TEXT("suppress_weapon_spread"), Mode.bSuppressWeaponSpread);
-    Block->TryGetBoolField(TEXT("fire_randomly_from_pattern"), Mode.bFireRandomlyFromPattern);
-    Block->TryGetBoolField(TEXT("scale_pattern_by_weapon_spread"), Mode.bScalePatternByWeaponSpread);
-    Block->TryGetBoolField(TEXT("reset_pattern_after_each_shot"), Mode.bResetPatternAfterEachShot);
-    Mode.BasePatternSpread = Number(Block, TEXT("base_pattern_spread"), 1);
-    Mode.MinPatternScale = Number(Block, TEXT("min_pattern_scale"), 0);
-    Mode.InstantHitMomentum = Number(Block, TEXT("instant_hit_momentum"), Mode.InstantHitMomentum);
-    const TArray<TSharedPtr<FJsonValue>>* Lines = nullptr;
-    if (!Block->TryGetArrayField(TEXT("pattern_lines"), Lines)) return;
-    for (const TSharedPtr<FJsonValue>& Value : *Lines)
-    {
-        const TSharedPtr<FJsonObject>* Entry = nullptr;
-        FOpenWillowPatternLine Line;
-        FString Kind;
-        if (!Value || !Value->TryGetObject(Entry) || !(*Entry)->TryGetStringField(TEXT("kind"), Kind)
-            || !ReadRotator(*Entry, TEXT("start"), Line.Start)) continue;
-        Line.bPoint = Kind != TEXT("rectangle");
-        if (!Line.bPoint && !ReadRotator(*Entry, TEXT("end"), Line.End)) continue;
-        Mode.Lines.Add(Line);
-    }
-}
-
 bool IsGearItemType(const FString& Type)
 {
     return Type == TEXT("shield") || Type == TEXT("grenade_mod")
@@ -183,14 +142,9 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
         (*Card)->TryGetBoolField(TEXT("sale_value_known"), Item.bSaleValueKnown);
     }
     (*Card)->TryGetStringField(TEXT("fun_stats"), Item.FunStats);
+    (*Card)->TryGetStringField(TEXT("fun_stats_markup"), Item.FunStatsMarkup);
     if ((*Card)->TryGetNumberField(TEXT("projectiles"), Extra) && FMath::IsFinite(Extra) && Extra >= 1 && Extra <= 1000)
         Item.Projectiles = int32(Extra);
-    Item.ProjectileSpeed = Number(*Card, TEXT("projectile_speed"), 0);
-    if (const TSharedPtr<FJsonObject>* Firing = nullptr; (*Card)->TryGetObjectField(TEXT("firing"), Firing))
-    {
-        Item.bHasFiring = true;
-        ReadFiringMode(*Firing, Item.Firing);
-    }
     double StatusDps = 0, StatusChance = 0;
     if ((*Card)->TryGetNumberField(TEXT("status_dps"), StatusDps) && (*Card)->TryGetNumberField(TEXT("status_chance"), StatusChance)
         && FMath::IsFinite(StatusDps) && FMath::IsFinite(StatusChance) && StatusDps >= 0 && StatusChance >= 0)
@@ -213,6 +167,39 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
             Socket.bHasMeshLocation = ReadVector(*Entry, TEXT("mesh_location"), Socket.MeshLocation);
             Item.Sockets.Add(FString(*Pair.Key), Socket);
         }
+    Recipe->TryGetStringField(TEXT("material"), Item.Material);
+    Recipe->TryGetStringField(TEXT("weapon_type"), Item.WeaponType);
+    // `gestalt` is a path string in tools/weapon_recipe.py recipes; some recipe writers store {"path": ...}.
+    const TSharedPtr<FJsonObject>* GestaltObject = nullptr;
+    if (Recipe->TryGetObjectField(TEXT("gestalt"), GestaltObject)) (*GestaltObject)->TryGetStringField(TEXT("path"), Item.GestaltMesh);
+    else Recipe->TryGetStringField(TEXT("gestalt"), Item.GestaltMesh);
+    // The recipe's `parts` is keyed by slot; the item lists them in the game's slot order.
+    const TSharedPtr<FJsonObject>* Parts = nullptr;
+    if (Recipe->TryGetObjectField(TEXT("parts"), Parts))
+    {
+        for (const TCHAR* Slot : {TEXT("Body"), TEXT("Grip"), TEXT("Barrel"), TEXT("Sight"), TEXT("Stock"),
+                                  TEXT("Elemental"), TEXT("Accessory1"), TEXT("Accessory2"), TEXT("Material")})
+        {
+            const TSharedPtr<FJsonObject>* Chosen = nullptr;
+            FString Part;
+            if ((*Parts)->TryGetObjectField(Slot, Chosen) && (*Chosen)->TryGetStringField(TEXT("part"), Part))
+            {
+                FOpenWillowWeaponPart& Entry = Item.Parts.AddDefaulted_GetRef();
+                Entry.Slot = Slot;
+                Entry.Part = Part;
+            }
+        }
+    }
+    if (const TSharedPtr<FJsonObject>* Firing = nullptr; Recipe->TryGetObjectField(TEXT("firing"), Firing)
+        && FOpenWillowFiringData::Parse(**Firing, Item.Damage, Item.Firing))
+    {
+        // The barrel spin-up comes with the card (weapon_stats.py), not the firing block.
+        Item.Firing.bSpinsToFullRate = Item.SpinMode == TEXT("BSM_SpinUpToFullFireRate");
+        Item.Firing.SpinStartMultiplier = Item.SpinStartIntervalScale;
+        Item.Firing.SpinUpDuration = Item.SpinUp;
+        for (const FString& Gap : Item.Firing.Unsupported)
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s firing: not supported by the host: %s"), *Item.Id, *Gap);
+    }
     const TSharedPtr<FJsonObject>* Provenance = nullptr;
     if (OutProvenanceKind)
         *OutProvenanceKind = Recipe->TryGetObjectField(TEXT("provenance"), Provenance) ? (*Provenance)->GetStringField(TEXT("kind")) : FString();
@@ -273,6 +260,7 @@ int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
     for (const FString& File : Files)
     {
         const FString ItemId = FPaths::GetBaseFilename(File);
+        if (RecipeFilter.Num() > 0 && !RecipeFilter.Contains(ItemId)) continue;
         // Recipe stems are stable IDs for this recipe-backed prototype. One
         // recipe currently represents one item instance, so loading twice
         // must not duplicate that instance.
@@ -804,6 +792,7 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
         if (Item.bHasSaleValue) Value->SetNumberField(TEXT("value"), Item.SaleValue);
         Value->SetBoolField(TEXT("valueKnown"), Item.bHasSaleValue && Item.bSaleValueKnown);
         if (!Item.FunStats.IsEmpty()) Value->SetStringField(TEXT("funStats"), Item.FunStats);
+        if (!Item.FunStatsMarkup.IsEmpty()) Value->SetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
         if (Item.Projectiles > 1) Value->SetNumberField(TEXT("projectiles"), Item.Projectiles);
         if (Item.bHasStatus)
         {

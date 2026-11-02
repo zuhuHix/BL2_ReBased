@@ -295,12 +295,16 @@ def static_choices(chain, params, kind, facts):
 
 
 def prepare(recipe_path, materials, mesh=None, facts=None):
-    if not re.fullmatch(r'[A-Za-z0-9_]+', recipe_path.stem):
+    return prepare_recipe(json.loads(recipe_path.read_text()), recipe_path.stem, materials, mesh, facts)
+
+
+def prepare_recipe(recipe, recipe_id, materials, mesh=None, facts=None):
+    """prepare() for a recipe already in memory; the weapon part library prepares each skin from {'material', 'weapon_type'}."""
+    if not re.fullmatch(r'[A-Za-z0-9_]+', recipe_id):
         raise ValueError('Invalid recipe ID')
-    mesh = mesh or f'{MESH_ROOT}Items/SK_{recipe_path.stem}'
+    mesh = mesh or f'{MESH_ROOT}Items/SK_{recipe_id}'
     if not re.fullmatch(re.escape(MESH_ROOT) + r'[A-Za-z0-9_/]+', mesh):
         raise ValueError(f'Mesh must be a /Game/OpenWillow/Weapons/ asset path: {mesh}')
-    recipe = json.loads(recipe_path.read_text())
     identity = recipe['material']
     resolved = resolve_material(identity.split('.')[-1], [materials], facts.base_defaults if facts else None)
     if resolved is None:
@@ -343,7 +347,7 @@ def prepare(recipe_path, materials, mesh=None, facts=None):
     for name in scalars:
         if not isinstance(params['scalar'].get(name), (int, float)):
             raise ValueError(f'Missing scalar parameter {name} (base defaults need --reader)')
-    return {'recipe_id': recipe_path.stem, 'material_identity': identity,
+    return {'recipe_id': recipe_id, 'material_identity': identity,
             'parent_chain': chain, 'weapon_class': kind, 'detail_channel': channel,
             'pattern_channels': pattern_channels, 'decal_channels': decal_channels,
             'channel_source': channel_source, 'params': params, 'textures': paths, 'srgb': srgb,

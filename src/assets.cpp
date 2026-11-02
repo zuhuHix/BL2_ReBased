@@ -327,16 +327,23 @@ MeshLod readLod(const Package& package, Reader& reader) {
 
     const auto colorStride = reader.u32();
     const auto colors = reader.u32();
-    check(colors == 0 || (colors == vertexCount && colorStride == 4),
+    // A few cooked meshes (3 of the Sanctuary packages' 585, e.g. Tapestry_01)
+    // store exactly twice as many colour entries as vertices, with a matching
+    // bulk count, and then end like every other mesh. Indices stay below
+    // vertexCount, so only the first vertexCount entries are read; the rest are
+    // skipped. Which entries the original renderer binds is UNVERIFIED (colours
+    // are not exported). See DECISIONS 2026-10-21.
+    check(colors == 0 || (colorStride == 4 && (colors == vertexCount || colors == 2 * vertexCount)),
           "invalid color stream");
     if (colors) {
         check(reader.u32() == colorStride, "color bulk stride mismatch");
-        check(count(reader, colorStride) == vertexCount, "color bulk count mismatch");
+        check(count(reader, colorStride) == colors, "color bulk count mismatch");
         for (auto& vertex : lod.vertices) {
             reader.require(4);
             for (auto& component : vertex.color) component = reader.bytes()[reader.pos++];
             vertex.hasColor = true;
         }
+        reader.skip(size_t(colors - vertexCount) * colorStride);
     }
 
     check(reader.u32() == vertexCount, "LOD vertex count mismatch");
@@ -504,8 +511,11 @@ std::string texture(const Package& package, int32_t index, size_t propertyOffset
 
 MeshAsset readMesh(const Package& package, int32_t index, size_t propertyOffset) {
     const auto& object = package.object(index);
-    check(object.cls && package.object(object.cls).name == "StaticMesh",
-          "export is not StaticMesh");
+    // GearboxFramework.WiringMesh (generated cables) serializes as a StaticMesh:
+    // every Sanctuary/base-game WiringMesh passed the same structural checks and
+    // left the same trailer as ordinary meshes (DECISIONS 2026-10-21).
+    const auto className = object.cls ? package.object(object.cls).name : std::string{};
+    check(className == "StaticMesh" || className == "WiringMesh", "export is not StaticMesh");
     Reader reader = package.reader();
     package.properties(reader, index, propertyOffset);
     reader.skip(28);

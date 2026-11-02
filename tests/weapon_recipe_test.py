@@ -92,6 +92,15 @@ class WeaponRecipeTests(unittest.TestCase):
         late = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=60)
         self.assertEqual(len(late['parts']['Grip']['candidates']), 2)
 
+    def test_stage_cap_caps_the_item_level_and_the_part_pick(self):
+        capped = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=60, stage_cap=2)
+        early = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=2)
+        self.assertEqual((capped['game_stage'], capped['spawn_stage'], capped['stage_cap']), (2, 60, 2))
+        self.assertEqual(capped['parts'], early['parts'])
+        self.assertEqual(w.roll(FakePackage(world()), 'Leaf', seed=1, stage=60, stage_cap=80)['game_stage'], 60)
+        self.assertEqual((w.default_stage_cap(1), w.default_stage_cap(2), w.default_stage_cap(3, 72),
+                          w.default_stage_cap(3, 90)), (50, 50, 72, 80))
+
     def test_manufacturer_expressions_gate_name_parts(self):
         recipe = w.roll(FakePackage(world()), 'Leaf', seed=1, stage=2)
         self.assertEqual(recipe['manufacturer'], 'Makers.Vladof')
@@ -154,6 +163,28 @@ class WeaponRecipeTests(unittest.TestCase):
         self.assertEqual(w.pick(entries, Fixed(13107))[0], 'C')   # just over 2.0
         self.assertEqual(w.pick([('A', 0.0)], Fixed(0)), (None, {}))
 
+    def test_crt_rand_matches_the_msvc_sequence(self):
+        # srand(1); rand() x 5 on the MSVC runtime: the well-known 41, 18467, 6334, 26500, 19169.
+        rng = w.CrtRand(1)
+        self.assertEqual([rng.rand() for _ in range(5)], [41, 18467, 6334, 26500, 19169])
+        self.assertEqual(w.CrtRand(0).rand(), 38)                 # 2531011 >> 16
+        self.assertEqual(w.CrtRand(2 ** 32 + 1).rand(), 41)       # the seed is taken mod 2^32
+        self.assertEqual(w.CrtRand(5).randint(0, 32767), w.CrtRand(5).rand())
+        with self.assertRaises(ValueError):
+            w.CrtRand(1).randint(0, 10)
+
+    def test_pick_with_crt_rand_and_default_roll_generator(self):
+        # srand(1): first draw 41, r = 5 * 41 / 32767 = 0.006 -> the first candidate (B, weight 2).
+        entries = [('B', 2.0), ('C', 3.0)]
+        self.assertEqual(w.pick(entries, w.CrtRand(1))[0], 'B')
+        # Draw 18467 (second value of srand(1)): r = 2.818, past B's [0, 2] -> C.
+        rng = w.CrtRand(1)
+        rng.rand()
+        self.assertEqual(w.pick(entries, rng)[0], 'C')
+        # roll() without rng uses CrtRand(seed): same result as passing it explicitly.
+        package = FakePackage(world())
+        self.assertEqual(w.roll(package, 'Leaf', 3, 60)['parts'], w.roll(package, 'Leaf', 3, 60, rng=w.CrtRand(3))['parts'])
+
     def test_zero_weight_slot_is_left_empty(self):
         objects = world()
         objects['Root.List']['GripPartData']['WeightedParts'] = [
@@ -182,6 +213,77 @@ class WeaponRecipeTests(unittest.TestCase):
         self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 20)[0], 'Name.Late')
         objects['Name.Generic']['Priority'] = 1                                  # tie: the later list wins
         self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 5)[0], 'Name.Tie')
+
+    def test_damage_type_expressions_gate_name_parts(self):
+        """Invented element gate: a title on the elemental part needs the maker and the Zap damage type."""
+        objects = world()
+        zap = 'Attr.WeaponDamage_Is_Zap'
+        objects.update({
+            zap: {'ValueResolverChain': [zap + '.DamageTypeAttributeValueResolver_0']},
+            zap + '.DamageTypeAttributeValueResolver_0': {'DamageTypes': [
+                {'AssociatedDamageTypeName': 'DmgType_Zap', 'ValueIfMatched': const(1)},
+                {'AssociatedDamageTypeName': 'DmgType_Zap_NoDoT', 'ValueIfMatched': const(1)}]},
+            'Elem.Zap': {'CustomDamageTypeDefinition': 'Dmg.DmgType_Zap_NoDoT', 'TitleList': ['Name.ZapTitle']},
+            'Elem.Plain': {'TitleList': ['Name.ZapTitle']},
+            'Name.ZapTitle': {'PartName': 'Zapper', 'Priority': 2, 'Expressions': [
+                {'AttributeOperand1': 'Attr.Weapon_Is_Vladof', 'ComparisonOperator': 'OPERATOR_EqualTo',
+                 'AttributeOperand2': None, 'ConstantOperand2': 1},
+                {'AttributeOperand1': zap, 'ComparisonOperator': 'OPERATOR_EqualTo',
+                 'AttributeOperand2': None, 'ConstantOperand2': 1}]},
+        })
+        package = FakePackage(objects)
+        shock = {'Body': 'Body.A', 'Elemental': 'Elem.Zap'}
+        plain = {'Body': 'Body.A', 'Elemental': 'Elem.Plain'}
+        self.assertEqual(w.weapon_damage_type(package, shock, 'Type'), 'Dmg.DmgType_Zap_NoDoT')
+        self.assertEqual(w.choose_name_parts(package, 'Type', shock, 'Makers.Vladof', 5)[1], 'Name.ZapTitle')
+        self.assertEqual(w.choose_name_parts(package, 'Type', plain, 'Makers.Vladof', 5)[1], 'Name.TypeTitle')
+        # Both expressions must hold: the right element on another maker's gun does not qualify.
+        self.assertEqual(w.choose_name_parts(package, 'Type', shock, 'Makers.Bandit', 5)[1], 'Name.TypeTitle')
+        # The type's default damage type counts when no part sets one.
+        objects['Type']['DefaultDamageTypeDefinition'] = 'Dmg.DmgType_Zap'
+        self.assertEqual(w.choose_name_parts(package, 'Type', plain, 'Makers.Vladof', 5)[1], 'Name.ZapTitle')
+
+    def test_name_rule_reads_only_the_elemental_part_damage_type(self):
+        """Native resolver: the elemental part's custom damage type, else the type's; other parts are ignored.
+
+        The card keeps its any-part fallback (weapon_damage_type), so the two differ here.
+        """
+        objects = world()
+        zap = 'Attr.WeaponDamage_Is_Zap'
+        objects.update({
+            zap: {'ValueResolverChain': [zap + '.DamageTypeAttributeValueResolver_0']},
+            zap + '.DamageTypeAttributeValueResolver_0': {'DamageTypes': [
+                {'AssociatedDamageTypeName': 'DmgType_Zap', 'ValueIfMatched': const(1)}]},
+            'Elem.Plain': {'TitleList': ['Name.ZapTitle']},
+            'Name.ZapTitle': {'PartName': 'Zapper', 'Priority': 2, 'Expressions': [
+                {'AttributeOperand1': zap, 'ComparisonOperator': 'OPERATOR_EqualTo',
+                 'AttributeOperand2': None, 'ConstantOperand2': 1}]},
+        })
+        objects['Body.A']['CustomDamageTypeDefinition'] = 'Dmg.DmgType_Zap'  # a non-elemental part sets one
+        package = FakePackage(objects)
+        parts = {'Body': 'Body.A', 'Elemental': 'Elem.Plain'}
+        self.assertEqual(w.weapon_damage_type(package, parts, 'Type'), 'Dmg.DmgType_Zap')  # card rule
+        self.assertIsNone(w.native_damage_type(package, parts, 'Type'))
+        self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 5)[1], 'Name.TypeTitle')
+        objects['Type']['DefaultDamageTypeDefinition'] = 'Dmg.DmgType_Zap'  # the type default does count
+        self.assertEqual(w.native_damage_type(package, parts, 'Type'), 'Dmg.DmgType_Zap')
+        self.assertEqual(w.choose_name_parts(package, 'Type', parts, 'Makers.Vladof', 5)[1], 'Name.ZapTitle')
+
+    def test_name_expression_operators_and_unresolvable_forms(self):
+        package = FakePackage(world())
+
+        def holds(operator, constant, attribute='Attr.Weapon_Is_Vladof', operand2=None):
+            return w.name_expressions_hold(package, [
+                {'AttributeOperand1': attribute, 'ComparisonOperator': operator, 'AttributeOperand2': operand2,
+                 'ConstantOperand2': constant}], 'Makers.Vladof', None)
+        # Weapon_Is_Vladof is 1 on this gun.
+        self.assertEqual([holds(op, 1) for op in w.COMPARISONS],
+                         [True, False, False, True, False, True])  # ==, !=, <, <=, >, >=
+        self.assertEqual([holds(op, 0.5) for op in w.COMPARISONS],
+                         [False, True, False, False, True, True])
+        self.assertTrue(w.name_expressions_hold(package, [], 'Makers.Vladof', None))  # an empty list holds
+        self.assertFalse(holds('OPERATOR_EqualTo', 1, attribute='Attr.Unknown'))     # unresolvable: excluded
+        self.assertFalse(holds('OPERATOR_EqualTo', 1, operand2='Attr.Weapon_Is_Vladof'))
 
     def test_evaluator_order_mode_scale_clamp_round(self):
         objects = world()

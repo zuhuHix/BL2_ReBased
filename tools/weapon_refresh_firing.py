@@ -1,5 +1,9 @@
 """Add the live firing-mode data (a `firing` block) to the item cards of existing local recipes.
 
+Since the 2026-11-02 merge of main the UE host no longer reads this card block: it fires from the recipe-level `firing` block
+that tools/weapon_firing.py writes (OpenWillowFiring, src/weapon_firing.*). The card block stays a record of the live dump and a
+cross-check for that tool; whether to retire this script is a maintainer decision.
+
 Why: the host fired every gun as one instant ray with a made-up wobble. Lane L7 read the real firing modes from the running game
 (docs/verification/PROJECTILE_FIRING_PATTERNS_LIVE.md): the mode's speed, pattern lines and flags decide how many bullets a press
 makes, where they go and how fast they fly. The cooked reader cannot decode `FiringPatternLines`, so the lines come from the live

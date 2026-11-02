@@ -18,6 +18,9 @@ executable"; `docs/NATIVE_ANALYSIS.md`); the repository still never contains gam
 data, decompiler output or code transcribed from it, and project code is written from
 the understanding of what the game does.
 
+The project's go-to tools (bl-sdk live reads, REA for decoding, UModel, `ow-package`, Ruffle, ...) are
+listed in `docs/TOOLING.md`, "Main tools at a glance". Check there before writing a one-off decoder.
+
 Use mature community tools as external extraction backends whenever they can
 save substantial time. Investigate UModel / UE Viewer first for supported UE3
 assets. Use UPK Explorer or other community tools as secondary inspection or
@@ -108,9 +111,28 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   origin and the compare and Skills layout (critic 7.3/10); rounds 12-15 the selection band, focus-view extents,
   list height, compare hints and frames and the Skills plate (each preferred over the previous round in a blind A/B;
   round 15 about 7.4/10).
-  Open: the perspective tilt and glass sheen (3D transforms Ruffle ignores), selectable empty
-  backpack cells, gear compare (not yet observed in the real game), white flavour lines on cards.
+  Rounds 16-19 (2026-10-21) apply the movie's own 3D turn (`menu3d.js`), make empty backpack cells selectable and follow
+  fresh real-game captures (critic 7.27 before, 7.57-7.67 after). Open: the curved glass sheet, residual perspective,
+  gear compare (not yet observed in the real game), white flavour lines on cards.
+  Rounds 20-22 (2026-10-22) compare against matched real-game frames (same items, level 36, keyboard): card text lines and
+  rows from the parts (cooked data: reload 62/67 and magazine 55/67 real cards, the two slice shotguns differ), compare with the equipped analogue, Skills Up/Down, a glass-sheet stand-in (critic 5.95 baseline,
+  7.85 best; round 22 regressed and was not kept). Open: VALUE-sort thumbnails, BRANDS tie order, Inspect 3D turn.
   State and evidence: `docs/verification/INVENTORY_MOVIE_PROTOTYPE.md` (last sections).
+- **Action-skill HUD (2026-10-22):** Maya's Phaselock icon (cooldown veil) and Siren emblem (drains while the target is
+  held) drive BL2's own HUD clips from the host's Phaselock state, with frame rules read from the live movie; a 2D
+  stand-in for the HUD clusters' 3D turn fixes the overall HUD layout. In-engine 9/9 against real timings, critic 9/10.
+  `docs/verification/ACTION_SKILL_HUD.md`.
+- **Gameplay HUD (2026-10-22):** BL2's HUD movie is the default gameplay HUD (canvas fallback only while it is not
+  ready; the temporary Phaselock ring is gone). The turned side clusters are drawn in true perspective by a WebGL warp of
+  the movie's canvas; health, shield capacity, magazine / reserve, grenades and the level come from host state, the
+  crosshair and ammo icon from live reads (pistol, shotgun). Critic 8.0 and 7.7/10; blind A/B warp 8 vs 2D stand-in 6
+  (preferred 6 of 6).
+  `docs/verification/HUD_PARITY.md`.
+- **HUD minimap (2026-10-22):** BL2's own minimap clip shows Sanctuary's tactical map movie, turned with the view,
+  with station icons from stock data and the slice mission's markers; rules read from the live game (exact against
+  652 live values), drawn through the HUD's perspective warp; in-engine 15/15, critic 8.2/10 (open: 2-4 px panel and
+  map registration, rim halo).
+  `docs/verification/HUD_MINIMAP.md`.
 - **Phase 2 (script VM):** Python and C++ loaders structurally decode 12,968 of 12,978
   script functions; record in `docs/verification/SCRIPT_BYTECODE_DISASM.md`. C++ object
   model, interpreter, Core natives, default-state sweep and scalar trace replay exist.
@@ -162,6 +184,21 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   (`-owfpfov=0` opts out); critic 7.2 then 6.8/10, round 2 closer on every pair. Since 2026-10-05 the arms sit at the
   weapon type's `PlayerViewOffset` with its `FirstPersonMeshFOV` (read live and from the cooked types; how the engine
   applies them is `UNVERIFIED`); a blind A/B preferred that on five of six guns (`docs/verification/WEAPON_VISUALS.md`).
+  Since 2026-10-22 (lane E) four slice guns have hold-to-aim (RMB), per-type weapon and arms reload clips, a flame flash at the cooked
+  muzzle socket and an SMG scope, measured against one live SDK session; critic 6.5/10 after four rounds, open items (SMG flash drawn at the
+  rear, SMG hip size, reload poses) in `WEAPON_VISUALS.md` section 15. Non-Infinity guns now use their prepared paint (the white Wild Rifle).
+- **Weapon part library (2026-10-23):** every weapon gestalt mesh (6, one UE slot per fragment) and skin (300 of 301) is
+  imported once, and guns are assembled from their part lists at run time (`OpenWillowWeaponAssembly`; per-recipe meshes are
+  the fallback). Fragment names and triangles equal the running game's for 39 spawned guns (one per type x manufacturer plus
+  legendaries), material parent and vectors too; critic Inspect 7.32/10, first person 5.36/10.
+  `docs/verification/WEAPON_PART_ASSETS.md`.
+- **Weapon firing (2026-10-23):** what a shot does comes from the gun's parts: `tools/weapon_firing.py` writes a recipe's
+  `firing` block (firing mode, pellets, pattern, spread, burst, spin-up, light bullet or rocket, splash, status effect,
+  Tediore throw) and the host fires from it (`src/weapon_firing.*`, `OpenWillowFiring`, `OpenWillowProjectile`,
+  `OpenWillowStatusEffect`). Live sessions confirmed bullet and rocket speeds, gyrojet growth, splash (no falloff on rockets),
+  per-pellet damage (4 of 5 guns), the DOT clock and the Tediore throw; the status proc rate (game 2-3 x the card) is open.
+  In-engine firing test 14/14; matched-frame critic 4.2/10 (stand-in effects; needs the stock particle templates).
+  `docs/verification/WEAPON_PROJECTILES.md`.
 - **Inventory open time (2026-10-02):** first open 443 ms to 234 ms by moving one-time work to level start; repeat opens
   about 60 ms; opening in the first ~5 s of play still waits about 5.5 s for the movie player. One PC. The original game
   shows its page ~126-156 ms after the key press (screen capture, different method;

@@ -142,7 +142,7 @@ come from is still unexplained, so this chooses a data source for the host's car
 - The world FOV: the game reads 77.55 where the host assumes 90 (106 degrees horizontal at 16:9); a rotation test to
   settle it (`local/orch/C/rg2.ps1`) was not run: a person was using the machine when it was due.
 - Muzzle flash: the game uses the type's `Muzzle` socket, an orange/yellow particle flash for 0.33 s and ejected shell casings. The
-  host's flash and tracer origin now come from the decoded `Muzzle` socket (section 11; it was a point estimated 27 cm past the `Barrel`
+  host's flash and tracer origin now come from the decoded `Muzzle` socket (section 17; it was a point estimated 27 cm past the `Barrel`
   bone). The host still draws a sphere flash and no shell casings; the eject port is exposed only. The emissive glow after shots is
   wired (Lane E's rule) but not captured.
 - First-person lighting: the real frames were taken in the HQ under cool light and the host's in Sanctuary daylight; the gun
@@ -284,8 +284,134 @@ near-white (cell median `#b7b9bd`), and the real first-person frames are lit blu
 metal reads whiter next to a grey street. No exposure error found; a small highlight excess on the Maliwan pistol (6 percent of pixels at
 250 or more, none in the real frame) is left alone. Light constants stay `UNVERIFIED`.
 
-## 11. Gun sockets from the decode: the muzzle flash origin (lane I5, 2026-10-07)
+## 11. Lane E round 1 host bridge (2026-10-22)
 
+The ignored per-recipe `weapon_view.json` may overlay fields read from the local live-measurement note; those measurements take precedence over
+cooked weapon-type fields when present. The note, exports and generated manifests remain under ignored `local/`.
+
+- Right mouse is the host hold-to-aim input; F remains the Phaselock input. Aim uses the live item zoom FOV where measured and the cooked type
+  value otherwise. Converting the zoom value to the host camera's aspect convention is `UNVERIFIED`. The selected eye socket centres the
+  host weapon during aim; the stock view-model motion formula is `UNVERIFIED`.
+- Reload uses the last unconditioned type animation until the type expression conditions are evaluated. It plays on the imported weapon
+  skeleton; a separate first-person hand reload gesture is not imported in this round. Scaling clip length to the item's full `ReloadTime` is
+  `UNVERIFIED`; the host has not captured the stock animation choice or playback rate.
+- The two-layer host muzzle flash uses the type duration when available. The host interpretation of that duration and the 3.5 cm fallback flash
+  radius are `UNVERIFIED`. Shell casing actors are enabled only when the type names a casing template; their right/up impulse is `UNVERIFIED`.
+  Tracers are enabled only when the type names a tracer template; the fallback tracer size and lifetime (0.8 cm and 0.09 s) are `UNVERIFIED`.
+- Recoil reads each type's directional kick channels and ADS scale. Mapping the channel average to the old additive recoil clip's 0.45 baseline
+  is `UNVERIFIED`; the figure-eight spread proxy remains unchanged.
+
+## 12. Lane E round 2 implementation and host captures (2026-10-22)
+
+This pass reused the existing local UModel MD5 exports; no new game package or capture was added to the repository. The host owns recipe
+staging, reload-clip selection, socket resolution, the procedural scope, and repeatable captures. The 16 host frames are under ignored
+`local/laneE/host_r2/`; `python local/laneE/make_pairs.py r2` produced 14 pairs because the real-game reference set has no mission-pistol ADS
+or reload frames.
+
+- **Capture identity and ADS state:** the mission-lent recipe was absent from the regular demo inventory. `tools/weapon_capture_items.py`
+  creates a local-only copy that admits it as a capture fixture, normalizes the SMG type key for the existing ammo resolver, and leaves source
+  recipes unchanged. `RunGunShots` verifies the equipped ID before capturing, releases aim and waits for the blend before hip-fire, and samples
+  the muzzle frame about 0.12 s after the final shot. The capture log records all four named IDs and weapon names; the HUD labels in the host
+  images match those IDs.
+- **Flash and casings:** the round orb was replaced with four camera-facing tapered rays and a yellow core, capped at 0.16 s; muzzle and casing
+  meshes use UE5's first-person primitive path. Casings remain small brass cylinders launched up and right. The selected cooked muzzle/ejection
+  sockets and live `MuzzleFlashDuration` supply identity and timing; shape, scale, color, socket-parent fallback and casing impulse are
+  `UNVERIFIED` host choices. The AR and SMG frames show a compact plume at the forward muzzle area; casing silhouettes remain only a few pixels.
+- **SMG scope:** the selected Tediore sight has a live `FirstPersonParticle` field and `ZoomedEndFOV` 25.2809. A procedural dark side mask and
+  yellow ring/ticks now appear only while aiming with that sight. The mask extent, reticle geometry, and interpretation of the particle field
+  are `UNVERIFIED`; the host still shows more of the gun behind the ring than the real scope frame.
+- **ADS framing:** the host now passes the measured `ZoomedEndFOV` directly as UE5's horizontal camera FOV (50 pistol, 45 rifle, 25.2809 SMG),
+  replacing the previous 4:3 conversion. Base foreground FOV and arm placement continue to use the live `FirstPersonMeshFOV` and
+  `PlayerViewOffset`. Selected cooked eye-socket transforms drive aim translation; if the imported mesh omits that socket's parent bone, the host
+  composes it against `Root`. The horizontal-FOV reading and parent fallback are `UNVERIFIED`. The round-2 AR sight still sits low and small versus
+  the real ADS frame, and the pistol remains left of its reference; these offsets need a better verified view-model rule.
+- **Reload:** clip choice now compares the recipe's base card `ReloadTime` with the live `WeaponMaxFastReloadAnimTime` (1.5 pistol, 1.1667 Maliwan,
+  2.0 AR, 2.5 SMG). The host selected the normal Jakobs/Maliwan clips for the first three items and `Reload_Hyperion_Fast` for the SMG. The
+  sequences are time-scaled to the recipe's base card time and were captured at normalized fractions 0.501-0.502, independent of the live skill
+  that shortened the original game's held reloads. Clip-condition interpretation and the length/card-time rule are `UNVERIFIED`. The weapon
+  clip plays on the gun mesh only; the host lacks the matching first-person arm reload, so the pistol and long-gun midpoint poses still differ.
+- **Arms and materials:** no arm mesh/material change was made. The imported Siren hands still show a narrower forearm and black glove than the
+  real frames. Weapon material values were left alone; several host surfaces still read pale under the Sanctuary lighting.
+
+Host evidence: `local/laneE/host_r2/` (16 PNGs), `local/laneE/pairs_r2/` (14 JPGs), and `local/laneE/host_r2/logs/capture-final-sockets.log`.
+The capture log records four verified IDs, four reload starts, four normalized midpoint captures, no stale-item warning, and no ADS-release
+warning. This is host runtime and visual validation against the existing real-game reference frames; no fresh original-game runtime validation
+was performed in this pass.
+
+## 13. Lane E round 3 implementation and host captures (2026-10-22)
+
+The host owns the recipe fits, arms animation import, ADS positioning, scope drawing, and shot presentation. Cooked weapon and socket fields
+continue to supply the selected weapon type, socket identity, zoom FOV, reload clip choice, and clip duration. All exported animation payloads,
+manifests, captures, and pairs remain under ignored `local/`.
+
+- **Extraction benchmark:** UModel / UE Viewer build 1590 (compiled 2022-12-23; source and downloads: [gildor.org/projects/umodel](https://www.gildor.org/en/projects/umodel)) was run against the local BL2 install using `umodel.exe -path=<BL2 CookedPCConsole> -game=border -export -md5 -out=local/laneE/umodel-arms-reloads-r3 GD_Siren_Streaming_SF 1st_Person_<Pistol|AssaultRifle|SMG> AnimSet`. Elapsed times for the three family exports were 0.465 s, 0.749 s, and 0.490 s; they produced 118 MD5Anim files. There were no export failures or unsupported entries; 42 animation names repeat across family sets, with no duplicate selected name within a family. Output is `local/laneE/umodel-arms-reloads-r3/`. The selected weapon and arms sequences were converted onto their respective host rigs and imported by the UE pipeline; import logs had no errors (only UE Python deprecation/reference warnings).
+- **1. ADS alignment:** selected-fragment socket exports provide candidate socket identity and transform; the reference frames set the visual target. Cooked sockets selected by the host are `EyeSocket2` on the Jakobs and Maliwan pistol bodies, `EyeSocket2` on the Jakobs AR body, and `EyeSocket1` on the Tediore SMG scope. The host moves the selected socket to a point 18 px below the reticle on the 568 px reference panel. Final frames put the visible pistol and AR sight lines near the reference's 10–25 px-below-crosshair range. The target and per-recipe `zoom_position_fit_cm` are `UNVERIFIED` fits; the Jakobs pistol retains an extra 11 cm up / 3.2 cm lateral camera-local correction because its body socket does not coincide with the visible sight line. Live `ViewModelRotationOriginOffset` data exists (150, 0, 0 for the measured types), but its use in native zoom placement remains unconfirmed. `Sight_Idle` was inspected but showed negligible pose change after conversion and was not used.
+- **2. Arms reload:** the selected normal/fast weapon clips now play with the corresponding first-person arms clips at a shared rate, captured at normalized fraction 0.500–0.502. The arm clip names and source rates are cooked/converted data; applying them to Maya's host rig and synchronizing to the weapon clip is a host interpretation. Selected clips were `Reload_Jakobs` and `Reload_Maliwan` for pistols, `Reload_Jakobs` for the AR, and `Reload_Hyperion_Fast` for the SMG. Midpoint poses now include the arm gesture; native blend and rate semantics remain `UNVERIFIED`.
+- **3. Hip scale:** host recipe scale fits are 0.75 for the AR and 0.54 for the SMG; pistol and Maliwan pistol remain 1.0. These are `UNVERIFIED` fits to idle-frame dimensions, not cooked type fields. The SMG fit uses the supplied 205/380 pixel-width ratio; the AR was reduced because its round-2 frame read too wide. The SMG and AR remain somewhat small in the final side-by-side pairs, so these values are visual approximations rather than confirmed scale rules. Cooked/live `FirstPersonMeshFOV` and `PlayerViewOffset` still apply in hip mode; the aim transition only changes arms location/FOV and returns to the hip base on release.
+- **4. Muzzle flash:** capture now occurs 30–37 ms after the last shot. A host eight-ray starburst, warm core and short point light replace the tiny glint; the Fire pistol receives a red-orange tint. The muzzle socket and live duration are data-backed; shape, dimensions, light strength, tint mapping, lifetime cap (0.12 s) and the 1.35 Fire size multiplier are `UNVERIFIED` fits. The result is visible in the captured firing frames but remains a simple host effect, not the native particle system.
+- **5. SMG scope:** at full scope blend the host hides the weapon and arms, retaining the dark side mask and adding a yellow ring, arrows, interrupted inner arcs, and lower rangefinder marks. Scope selection is cooked/live data; threshold, mask, and reticle geometry are procedural `UNVERIFIED` fits. The comparison is close, though the reticle detail is not native particle/UI data.
+- **6. Metal hue:** no material change was made. The host metal still reads more neutral than the cool blue real-game captures; the available comparisons point to scene lighting and did not reveal a clear material-only cause.
+
+Validation is separated by type: UModel extraction and conversion completed with the counts above; host visual validation used 16 captures in `local/laneE/host_r3/` and `python local/laneE/make_pairs.py r3` produced 14 comparisons in `local/laneE/pairs_r3/` (the real reference set has no mission-pistol ADS or reload frame). The UE5 host build/import/capture run completed successfully; both weapon and arms imports completed without errors. Synthetic checks passed: `python tests/weapon_view_model_test.py` (12/12) and `python tests/weapon_reload_anims_test.py` (2/2). The real-game comparison uses previously captured reference frames; no fresh original-game runtime or gameplay parity validation was performed.
+
+## 14. Lane E round 4 (2026-10-22)
+
+This final pass reuses the existing UModel / UE Viewer build 1590 exports under ignored `local/`; it does not rerun extraction. The project owns manifest projection and socket resolution, host view-model math, reticle drawing, and shot presentation.
+
+- **Hip placement and scale:** comparing `ApplyViewModel` with `917242f~1` shows the default path still uses `PlayerViewOffset + CameraBoneOffset` and `FirstPersonMeshFOV`; `UpdateAim` adds `ZoomOffset * AimAlpha`. Round-4 hip logs record `AimAlpha=0.000` and component scale `1.000` for all four guns, so no ADS offset or blend leaked into hip. The round-3 `first_person_scale_fit` fields are removed from the projection and host. Type offsets/FOV are live-measured overlays of the same cooked type fields; their application remains an UNVERIFIED native interpretation.
+- **SMG idle-set mismatch:** the capture fixture changes its category from `Sub-Machine Gun` to `SMG` for ammo resolution. `SelectSlot` only recognized the display label, so the `slice_smg` fixture silently used the pistol idle set while its reload path used the SMG set. `SelectSlot` now accepts both type keys and logs the selected set; round-4 capture selects `SMG` for `slice_smg`. This fixes the host pose selection. In the 960×540 idle panels, approximate bounds are pistol host 170×225 at y≈274 vs real 180×225 at y≈276; Maliwan host 195×215 at y≈285 vs real 185×215 at y≈294; AR host 270×200 at y≈343 vs real 255×185 at y≈355; SMG host at least 370 px wide from y≈288 vs real 242×220 at y≈320. The AR returns close to the reference without a scale fit. The SMG remains too large/high in the no-scale capture; the baseline projection rule has not been confirmed against this current SMG reference.
+- **Muzzle flash and casing:** a generated host-only additive material uses a noisy radial mask with six rotated/scaled quads and a warm core anchored at the selected muzzle socket. The socket and type duration are live/cooked data; shader mask, colors, sizes, light, and 0.12 s cap are UNVERIFIED fits. The AR flash reads softer than the old star; the Maliwan flash still has sharper points than its real frame. The casing is a short cylinder from the selected ejection socket; its 0.3 cm diameter, 1.2 cm length, and 0.22 s life are UNVERIFIED host values.
+- **SMG scope:** the two side masks leave 580/960 of the panel width clear. The closed outer circle is replaced by four arc pieces and wider inward arrows. The aperture is measured from the real frame; reticle geometry, color, and inner marks remain UNVERIFIED fits.
+- **Reload choreography:** the AR and SMG select matching weapon/arms clips (`Reload_Jakobs` / `AssaultRifle/Reload_Jakobs`, and `Reload_Hyperion_Fast` / `SMG/Reload_Hyperion_Fast`). Both start in the same `StartReload` call and receive the same `clip length / item ReloadTime` rate; the capture log records matching starts and rates (AR 0.908, SMG 1.123). The open-hand midpoint poses still differ from the real frames, so the remaining gap is clip shape/retargeting; native animation semantics are UNVERIFIED.
+- **Metal and smaller items:** Jakobs metal is unchanged because the Inspect calibration has not established a safe material-only correction. The pistol ADS hold remains broad; the Maliwan paint accents remain pinker. `OpenWillowGunLook` exposes a shared emissive scalar, not a per-weapon hue control, so no hue override was added.
+
+Validation: the UE5 Development module build succeeded; the generated material import succeeded with 0 errors and 0 warnings. Final host evidence is 16 PNGs in ignored `local/laneE/host_r4/`; `python local/laneE/make_pairs.py r4` produced 14 comparisons in ignored `local/laneE/pairs_r4/` (no mission-pistol ADS or reload reference). Synthetic checks passed: `python tests/weapon_view_model_test.py` (12/12) and `python tests/weapon_reload_anims_test.py` (2/2). UModel extraction was reused, with no extraction rerun. Visual checks compare the host captures to the existing real-game frames; there was no fresh original-game runtime or gameplay validation.
+
+## 15. Lane E status after four rounds (2026-10-22)
+
+Guns: the starting Jakobs pistol (`slice_pistol`), the lent Maliwan Fire pistol (`slice_mission_pistol_fire`), the Jakobs assault rifle
+(`slice_assault_rifle`) and the Hyperion SMG (`slice_smg`). Real-game reference: one SDK session on 2026-10-22 (`tools/real_game/scripts/
+weapon_parity_probe.py`; output, frames and the measurement note under ignored `local/realgame/laneE/`). In that session one live skill effect
+doubled fire rate and damage and halved reload time on every held gun (identity not read), so the host keeps the card base values; the base
+values read live equal the cards. The Fire pistol vanished from the inventory when the probe readied it (cause `UNVERIFIED`, probably mission-item
+handling), so it has no live ADS or reload frames; its older idle and burst frames (`local/realgame/orchC/`) were used.
+
+Read live and used: `ReloadCompletePercent` (ammo refills at 0.55 / 0.65 / 0.70 of the reload; matched by the refill tick), `ZoomTime` 0.2 s
+(zoom-in measured 0.18-0.20 s), `ZoomedEndFOV` 50 / 45 / 25.28, `WeaponMaxFastReloadAnimTime`, the muzzle and eject sockets, `MuzzleFlashDuration`
+(0.33 s in the data; the visible flash is gone 0.12-0.13 s after the last shot in the frames), no `TracerTemplate` on any of the four types.
+
+Independent critic (a separate agent scoring only host/real pairs, 0-10): round 1 5.8, round 2 5.5 (round 1's Fire-pistol frames held the wrong
+gun, so the two are not comparable), round 3 6.3, round 4 6.5 (Jakobs pistol 6.7, Maliwan 7.5, AR 6.3, SMG 6.0). The 8/10 target was not reached
+in four rounds. Final pairs: `local/laneE/pairs_r4/` and the hub gallery; report `local/laneE/critic_r4.md`.
+
+Open, most visible first:
+
+- **SMG flash at the rear of the gun.** The SMG's (and the shotguns') cooked muzzle socket hangs off `Root` with a -Y offset
+  (`SMG_Barrel_Maliwan_Muzzle` at about (0, -27, 12)), while the pistol and AR sockets hang off `Barrel` with the offset on X. The host draws the
+  SMG flash about 27 cm behind the receiver, which fits a Y mirror between the cooked bone frame and the imported mesh's `Root`. Suspected,
+  not tested; the eye sockets are on `Root` too, so a fix must recheck the ADS fit (lateral alignment does not depend on that sign, depth does).
+- **SMG hip size:** about 370 px wide against 242 px in the real idle frame with scale 1.0 and the correct arms set; cause not found.
+- **Reload mid-poses** of the AR (fills too much of the view) and SMG (hand placement, cant) still differ although both clips start together.
+- **ADS widths:** pistol about 20 percent too broad, AR about 20 percent too narrow.
+- **Look:** Jakobs metal reads warmer and greyer than the real frames (different scene light; not changed without an Inspect-safe cause); the
+  Maliwan accents read pinker; Maya's forearm reads narrower and paler than the real blue-white sleeve.
+- **Not covered:** sound (no host gun audio), impact effects beyond the existing stand-in, recoil feel (kick channels are read; the mapping onto
+  the additive clip is a fit).
+- **Reload timing:** the source-labelled `ReloadCompletePercent` now transfers ammo once at its configured fraction; missing fields use `1.0` to
+  preserve the old full-duration refill. The host check confirmed an early successful cast leaves the magazine empty and a late cast keeps the refill.
+- **Phaselock abort:** a successful lift cancels reload before playing the cast action, and reload cleanup clears arms only while the reload clip is
+  still active. The host check kept the cast clip past the old reload deadline with the test-only `-owcastrate=0.4`; failed/blocked cast behavior
+  remains unconfirmed in the original game and does not abort reload in the host.
+
+## 16. Part library and run-time assembly (2026-10-23)
+
+The per-recipe meshes of section 2 are now the fallback: guns are assembled at run time from their part lists on one library
+mesh per weapon type, with one material instance per skin. The fragment rule of section 2 and the material rule of
+NATIVE_WEAPON_VISUALS.md section 1 were checked on 39 more spawned guns. See [WEAPON_PART_ASSETS.md](WEAPON_PART_ASSETS.md).
+
+## 17. Gun sockets from the decode: the muzzle flash origin (lane I5, 2026-10-07)
+
+Numbered 17 at the 2026-11-02 merge of main (it was section 11 on its branch; main's sections 11-16 kept their numbers).
 AI-assisted (Claude). The gestalt definitions carry, per fragment, a socket mapping (the fragment's own socket name, for example
 `Muzzle` or `EjectPort`, and the mangled name of that socket in the shared mesh), and the shared mesh carries the sockets themselves
 (bone, bone-local location, optional rotation and scale). Our reader already decodes both exactly: 544 of 544 mappings and 541 of 544

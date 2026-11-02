@@ -34,7 +34,7 @@ $log = Join-Path $repo ('local/doors/run-' + (Get-Date -Format 'yyyyMMdd-HHmmss'
 $code = 2
 try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud',
         "-owmover=`"$Manifest`"", '-owmovertest', '-game', '-windowed', '-ResX=1280', '-ResY=720',
         '-nosplash', '-unattended', '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru

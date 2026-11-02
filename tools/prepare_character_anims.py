@@ -60,11 +60,12 @@ def to_quat(r):
     return [float(v) for v in q]
 
 
-def frames(path, joints):
+def frames(path, joints, allow_subset=False):
     text = Path(path).read_text(encoding='utf-8')
     names = [line.split('"')[1] for line in block(text, 'hierarchy').splitlines() if line.strip()]
     mesh_names = [joint[0] for joint in joints]
-    if sorted(names) != sorted(mesh_names):
+    if (sorted(names) != sorted(mesh_names)
+            and (not allow_subset or not set(names).issubset(mesh_names))):
         raise ValueError(f'{path}: animation bones differ from the mesh')
     # The assault-rifle set lists the same bones in another order. The locals are looked up by bone name and composed along
     # the mesh's own parents, exactly as before for the sets whose order already matched.
@@ -75,9 +76,10 @@ def frames(path, joints):
         values = [numbers(line) for line in block(text, f'frame {index}').splitlines() if line.strip()]
         local_by_name = dict(zip(names, values))
         world = []
-        for (name, parent, _, _) in joints:
-            local = local_by_name[name]
-            position, orientation = local[:3], quaternion(local[3:])
+        for (name, parent, bind_position, bind_orientation) in joints:
+            local = local_by_name.get(name)
+            position = local[:3] if local is not None else bind_position
+            orientation = quaternion(local[3:]) if local is not None else bind_orientation
             if parent >= 0:
                 parent_position, parent_rotation = world[parent]
                 position = tuple(a + b for a, b in zip(parent_position, rotate(parent_rotation, position)))
@@ -87,7 +89,7 @@ def frames(path, joints):
     return rate, result
 
 
-def convert(mesh_path, reference_path, animations, anchor='Camera'):
+def convert(mesh_path, reference_path, animations, anchor='Camera', allow_subset=False):
     joints = read_joints(Path(mesh_path).read_text(encoding='utf-8'))
     reference = {bone['name']: bone for bone in json.loads(Path(reference_path).read_text(encoding='utf-8'))}
     names = [joint[0] for joint in joints]
@@ -109,7 +111,7 @@ def convert(mesh_path, reference_path, animations, anchor='Camera'):
     camera = names.index(anchor) if anchor else None
     output = {}
     for label, path in animations.items():
-        rate, clip = frames(path, joints)
+        rate, clip = frames(path, joints, allow_subset=allow_subset)
         tracks = {name: {'pos': [], 'rot': []} for name in names}
         for world in clip:
             ue = [c @ w @ d for w, d in zip(world, fix)]
@@ -132,9 +134,12 @@ def main():
     parser.add_argument('--clips', nargs='+', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--anchor', default='Camera', help="bone placed at the origin each frame, or 'none'")
+    parser.add_argument('--allow-subset', action='store_true',
+                        help='allow an animation hierarchy to omit mesh bones; omitted bones keep the MD5 bind pose')
     args = parser.parse_args()
     clips = {clip: args.animset / f'{clip}.md5anim' for clip in args.clips}
-    result = convert(args.mesh, args.reference, clips, None if args.anchor.lower() == 'none' else args.anchor)
+    result = convert(args.mesh, args.reference, clips, None if args.anchor.lower() == 'none' else args.anchor,
+                     allow_subset=args.allow_subset)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result), encoding='utf-8')
     print(json.dumps({k: {'frames': v['frames'], 'rate': v['rate']} for k, v in result.items()}))

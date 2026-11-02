@@ -1,4 +1,6 @@
 #include "OpenWillowMayaHUD.h"
+#include "OpenWillowMinimap.h"
+#include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryVm.h"
@@ -34,18 +36,47 @@
 #include "GlobalRenderResources.h"
 
 // Host HUD laid out after BL2's (slanted shield/health bottom-left, XP bar
-// bottom-centre with the action skill, angled ammo panel bottom-right). It is
-// drawn with canvas primitives, not BL2's Scaleform movies, so shapes, fonts
-// and icons are approximations. Controls: LMB fire, F Phaselock, 1/0 equip.
+// bottom-centre, angled ammo panel bottom-right). The default gameplay HUD is
+// BL2's own movie (PushFlashHudState); this canvas drawing is the fallback
+// while the movie is not ready, or when -owcanvashud is given. It is drawn with
+// canvas primitives, so shapes, fonts and icons are approximations, and it has
+// no action-skill indicator. Controls: LMB fire, F Phaselock, 1/0 equip.
 namespace
 {
+const TCHAR* DefaultFlashHudUrl = TEXT("http://127.0.0.1:8767/");
+
+// Url with its query's owid parameter set to Id: inserted before any #fragment, replacing an owid already there.
+FString WithPageId(const FString& Url, const FString& Id)
+{
+    FString Rest = Url, Fragment, Base, Query;
+    int32 Hash = INDEX_NONE;
+    if (Rest.FindChar(TEXT('#'), Hash)) { Fragment = Rest.Mid(Hash); Rest.LeftInline(Hash); }
+    if (!Rest.Split(TEXT("?"), &Base, &Query)) Base = Rest;
+    TArray<FString> Params;
+    Query.ParseIntoArray(Params, TEXT("&"));
+    Params.RemoveAll([](const FString& Param) { return Param.StartsWith(TEXT("owid=")); });
+    Params.Add(TEXT("owid=") + Id);
+    return Base + TEXT("?") + FString::Join(Params, TEXT("&")) + Fragment;
+}
+
+// The id the page echoes in its ready line, exactly "OpenWillow HUD movie ready id=<id> pages=<dir>" (hud_fields.js
+// readyLine); empty for any other form.
+FString ReadyLineId(const FString& Message)
+{
+    static const FString Prefix = TEXT("OpenWillow HUD movie ready id=");
+    FString Id, Rest;
+    if (!Message.StartsWith(Prefix, ESearchCase::CaseSensitive)
+        || !Message.Mid(Prefix.Len()).Split(TEXT(" "), &Id, &Rest, ESearchCase::CaseSensitive)
+        || !Rest.StartsWith(TEXT("pages="), ESearchCase::CaseSensitive)) return FString();
+    return Id;
+}
+
 const FLinearColor Backing(0.02f, 0.03f, 0.04f, 0.65f);
 const FLinearColor Frame(0.85f, 0.85f, 0.8f, 0.9f);
 const FLinearColor Legendary(1.f, 0.55f, 0.08f);
 const FLinearColor ShieldBlue(0.2f, 0.7f, 1.f);
 const FLinearColor HealthRed(0.85f, 0.1f, 0.08f);
 const FLinearColor Experience(0.95f, 0.75f, 0.15f);
-const FLinearColor PhaselockViolet(0.7f, 0.35f, 1.f);
 
 // BL2's item rarity colours: white, green, blue, purple, orange.
 FLinearColor RarityColor(int32 Rarity)
@@ -138,14 +169,35 @@ void AOpenWillowMayaHUD::BeginPlay()
         UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills movie preloading: %s"), *SkillsUrl);
     }
     FString Url;
-    if (!FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url) || !GEngine || !GEngine->GameViewport) return;
+    const bool bExplicitUrl = FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url);
+    if (!GEngine || !GEngine->GameViewport)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (no game viewport)"));
+        return;
+    }
+    if (FParse::Param(FCommandLine::Get(), TEXT("owcanvashud")))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (-owcanvashud)"));
+        return;
+    }
+    // Without -owflashhud=<url> the movie comes from the local HUD server (tools/hud_overlay/serve.py). Either way it
+    // only counts once its page reports ready (see the console handler below); until then the canvas fallback draws.
+    if (!bExplicitUrl) Url = DefaultFlashHudUrl;
+    // A fresh id in the page URL that the page echoes in its ready line (tools/hud_overlay/hud_fields.js, readyLine):
+    // the movie counts only when the page answering is one that speaks this protocol, so another checkout's server
+    // with older pages on the same port gives the canvas. No path is compared, so junctions and aliases do not matter.
+    const FString PageId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    Url = WithPageId(Url, PageId);
     // SWebBrowser only creates a window once the WebBrowser module is loaded;
     // the WebBrowserWidget plugin normally does that, and we do not use it.
     if (!IWebBrowserModule::Get().IsWebModuleAvailable())
     {
         UE_LOG(LogTemp, Warning, TEXT("OpenWillow Flash HUD: the engine's web browser (CEF) is not available"));
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (the engine's web browser is not available)"));
         return;
     }
+    // Weak, because the browser's callbacks can outlive the HUD actor.
+    const TWeakObjectPtr<AOpenWillowMayaHUD> WeakThis(this);
     // Transparent and hit-test invisible, so mouse and keys still reach the game.
     FlashHud = SNew(SWebBrowser)
         .InitialURL(Url)
@@ -157,10 +209,38 @@ void AOpenWillowMayaHUD::BeginPlay()
         .BackgroundColor(FColor(0, 0, 0, 0))
         .BrowserFrameRate(30)
         .OnLoadCompleted_Lambda([] { UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD page loaded")); })
-        .OnLoadError_Lambda([] { UE_LOG(LogTemp, Warning, TEXT("OpenWillow Flash HUD page failed to load; is tools/hud_overlay/serve.py running?")); })
-        .OnConsoleMessage_Lambda([](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
-            { UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD console: %s (%s:%d)"), *Message, *Source, Line); });
-    FlashHudRoot = SNew(SBox).Visibility(EVisibility::HitTestInvisible)[FlashHud.ToSharedRef()];
+        .OnLoadError_Lambda([WeakThis]
+            {
+                UE_LOG(LogTemp, Warning, TEXT("OpenWillow Flash HUD page failed to load; is tools/hud_overlay/serve.py running?"));
+                // Only flags it: DrawHUD removes the overlay, since the browser is still inside this callback.
+                AOpenWillowMayaHUD* Hud = WeakThis.Get();
+                if (Hud && !Hud->bFlashHudReady)
+                {
+                    Hud->bFlashHudFailed = true;
+                    UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (page failed to load)"));
+                }
+            })
+        .OnConsoleMessage_Lambda([WeakThis, PageId](const FString& Message, const FString& Source, int32 Line, EWebBrowserConsoleLogSeverity)
+            {
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD console: %s (%s:%d)"), *Message, *Source, Line);
+                AOpenWillowMayaHUD* Hud = WeakThis.Get();
+                if (Hud && !Hud->bFlashHudReady && !Hud->bFlashHudFailed && Message.StartsWith(TEXT("OpenWillow HUD movie ready")))
+                {
+                    if (ReadyLineId(Message).Equals(PageId, ESearchCase::CaseSensitive))
+                    {
+                        Hud->bFlashHudReady = true;
+                        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: movie (page reported ready)"));
+                    }
+                    else
+                    {
+                        Hud->bFlashHudFailed = true;
+                        UE_LOG(LogTemp, Display, TEXT("OpenWillow HUD path: canvas (the page did not echo this run's id: another server or older pages)"));
+                    }
+                }
+            });
+    // Hidden (the page still loads and runs, as the preloaded menu pages do) until the page is accepted; DrawHUD shows
+    // it where it stops drawing the canvas fallback, so the two HUDs never show together.
+    FlashHudRoot = SNew(SBox).Visibility(EVisibility::Hidden)[FlashHud.ToSharedRef()];
     GEngine->GameViewport->AddViewportWidgetContent(FlashHudRoot.ToSharedRef(), 5);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD overlay: %s"), *Url);
 }
@@ -246,12 +326,12 @@ void AOpenWillowMayaHUD::TickInvShots()
     if (InvShotAt == 0)
     {
         InvShotAt = Now + 2.;
-        // Skills state of the real-game capture (Maya L8): Phaselock trained, three points in Mind's Eye, none left.
+        // Skills state of the 2026-10-21 matched real-game capture (Maya L36 with -owlevel=36): Phaselock trained,
+        // every other point unspent.
         if (UOpenWillowSkills* Skills = Maya->GetSkills())
         {
             FString Why;
             Skills->TrySpend(-1, -1, -1, Why);
-            for (int32 I = 0; I < 3; ++I) Skills->TrySpend(1, 0, 0, Why);
         }
         return;
     }
@@ -265,8 +345,10 @@ void AOpenWillowMayaHUD::TickInvShots()
     // One entry per step: {action, argument, wait after}. Actions: key, shot, open, tab, closeSkills.
     struct FInvShotStep { const TCHAR* Action; const TCHAR* Arg; double Wait; };
     static const FInvShotStep Steps[] = {
-        {TEXT("open"), TEXT(""), 4.}, {TEXT("shot"), TEXT("D1_Inventory"), .6},
-        {TEXT("key"), TEXT("ArrowRight"), 1.5}, {TEXT("shot"), TEXT("D2_Backpack"), .5},
+        // Down before D1 and after entering the Backpack: the reference frames (i09, i06 of 2026-10-04) have weapon slot 2
+        // and backpack row 2 selected, so the captures show the same states.
+        {TEXT("open"), TEXT(""), 4.}, {TEXT("key"), TEXT("ArrowDown"), .8}, {TEXT("shot"), TEXT("D1_Inventory"), .6},
+        {TEXT("key"), TEXT("ArrowRight"), 1.2}, {TEXT("key"), TEXT("ArrowDown"), 1.}, {TEXT("shot"), TEXT("D2_Backpack"), .5},
         {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2b_SortTypes"), .5},
         {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2c_SortBrands"), .5},
         {TEXT("key"), TEXT("PageDown"), 1.2}, {TEXT("shot"), TEXT("D2d_SortItems"), .5},
@@ -275,9 +357,20 @@ void AOpenWillowMayaHUD::TickInvShots()
         {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D3_CompareFromBackpack"), .5},   // compare, backpack origin
         {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("ArrowLeft"), 1.2},
         {TEXT("key"), TEXT("e"), 1.8}, {TEXT("shot"), TEXT("D4_CompareFromEquipped"), .5}, // compare, equipped origin
-        {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("f"), 2.}, {TEXT("shot"), TEXT("D5_Inspect"), .5},
-        {TEXT("key"), TEXT("f"), .8}, {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
+        // Inspect slot 1's pistol (the reference Inspect frame shows a pistol), then walk the Backpack onto its empty cells.
+        {TEXT("key"), TEXT("Escape"), 1.2}, {TEXT("key"), TEXT("ArrowUp"), .8}, {TEXT("key"), TEXT("f"), 2.}, {TEXT("shot"), TEXT("D5_Inspect"), .5},
+        {TEXT("key"), TEXT("f"), .8}, {TEXT("key"), TEXT("ArrowRight"), 1.}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25}, {TEXT("key"), TEXT("ArrowDown"), .25},
+        {TEXT("key"), TEXT("ArrowDown"), 1.2}, {TEXT("shot"), TEXT("D2g_EmptyCell"), .5},
+        {TEXT("tab"), TEXT(""), 1.}, {TEXT("shot"), TEXT("D6_SkillsOneSecondAfterTab"), 1.},
         {TEXT("key"), TEXT("q"), 1.5}, {TEXT("shot"), TEXT("D7_SkillsOverview"), .5},
+        // Back out of the overview, then Down x4 from Phaselock: the real game lands on Harmony's Sustenance (D6b).
+        {TEXT("key"), TEXT("q"), 1.5}, {TEXT("key"), TEXT("ArrowDown"), .5}, {TEXT("key"), TEXT("ArrowDown"), .5},
+        {TEXT("key"), TEXT("ArrowDown"), .5}, {TEXT("key"), TEXT("ArrowDown"), 1.}, {TEXT("shot"), TEXT("D6b_SkillsSustenance"), .5},
         {TEXT("closeSkills"), TEXT(""), 1.5}};
     if (InvShotStep >= UE_ARRAY_COUNT(Steps))
     {
@@ -456,7 +549,7 @@ void AOpenWillowMayaHUD::CloseSkills()
     PendingInventoryActions.Reset();
     PendingInventoryVmMoves.Reset();
     bInventoryOpen = false;
-    if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
+    if (FlashHudRoot) FlashHudRoot->SetVisibility(bFlashHudReady ? EVisibility::HitTestInvisible : EVisibility::Hidden);
     if (PlayerOwner)
     {
         PlayerOwner->SetInputMode(FInputModeGameOnly());
@@ -610,10 +703,12 @@ void AOpenWillowMayaHUD::RequestPageReport()
         "backpack:backpackItems().map(i=>i.id),firstRow:firstRow,visibleBackpack:Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).map(n=>n.dataset.itemId),"
         "listEntries:backpackEntries().map(function(e){return e.header!==undefined?'#'+e.header:e.empty?'_':e.item.id}),"
         "visibleHeaders:Array.from(new Set(listHeaderNames)).length,"
-        "backpackRowsAligned:(function(){var stage=document.getElementById('stage').getBoundingClientRect(),scale=stage.width/1280;"
+        // Layout offsets, not screen rectangles: the hit layer and the movie share the page's 3D turn (menu3d.js).
+        "backpackRowsAligned:(function(){var stage=document.getElementById('stage'),scale=stage.offsetWidth/1280;"
+        "function at(n){var x=0,y=0;for(;n&&n!==stage;n=n.offsetParent){x+=n.offsetLeft;y+=n.offsetTop}return {x:x,y:y}}"
         "return Array.from(document.querySelectorAll('[data-kind=backpack]:not([data-partial=true])')).every(function(n,i){"
-        "var a=readBounds(INV+'.storagePanel.owRows.owRow'+i+'.hitTestClip'),b=n.getBoundingClientRect();"
-        "return !!a&&Math.abs(stage.left+a.xMin*scale-b.left)<2&&Math.abs(stage.top+a.yMin*scale-b.top)<2})})(),"
+        "var a=readBounds(INV+'.storagePanel.owRows.owRow'+i+'.hitTestClip'),b=at(n);"
+        "return !!a&&Math.abs(a.xMin*scale-b.x)<2&&Math.abs(a.yMin*scale-b.y)<2})})(),"
         "mainCardBounds:readBounds(INV+'.mainCard.bkgd'),compareCardBounds:readBounds(INV+'.compareCard.bkgd'),"
         "compareStatsVisible:!!get(INV+'.mainCard.stat1.mainField','_visible')&&!!get(INV+'.compareCard.stat1.mainField','_visible'),"
         "level:state?state.level:null,slots:state?state.slots:null,gearSlots:state?state.gearSlots:null,"
@@ -687,29 +782,209 @@ void AOpenWillowMayaHUD::EndPlay(const EEndPlayReason::Type Reason)
     Super::EndPlay(Reason);
 }
 
+void AOpenWillowMayaHUD::ActionSkillHudState(const AOpenWillowWalker& Maya, float& OutActive, float& OutCooldown)
+{
+    OutActive = -1.f;
+    OutCooldown = 0.f;
+    const UWorld* World = Maya.GetWorld();
+    if (!World || !Maya.GetPhaselockData().bLoaded) return;
+    const float Now = World->GetTimeSeconds();
+    // The game's emblem shows from the lock (end of the lift) to the skill's end and its bar empties evenly over that
+    // time (real casts, ACTION_SKILL_HUD.md); the release and the release buffer do not extend it.
+    const FOpenWillowPhaselockTimeline& Timeline = Maya.LastPhaselockTimeline();
+    const float SinceCast = Now - Maya.LastPhaselockCastAt();
+    const float Lock = Timeline.SkillDuration - Timeline.LockedAt;
+    if (Maya.IsPhaselockActive() && Lock > 0.f && SinceCast >= Timeline.LockedAt && SinceCast < Timeline.SkillDuration)
+        OutActive = FMath::Clamp(1.f - (SinceCast - Timeline.LockedAt) / Lock, 0.f, 1.f);
+    // The icon follows the cooldown pool (seconds left / max), which the game fills at the cast and drains only after
+    // the skill ends; the host's pool model does the same (PhaselockRemaining).
+    if (Maya.PhaselockCooldown() > 0.f)
+        OutCooldown = FMath::Clamp(Maya.PhaselockRemaining() / Maya.PhaselockCooldown(), 0.f, 1.f);
+    // Quantized to the clips' resolution (about 1/100 per frame), rounded up so the emblem starts full and the icon is
+    // ready only when the pool is empty: the state, and so the page push and the log line, change only when a drawn
+    // frame can.
+    if (OutActive >= 0.f) OutActive = FMath::CeilToFloat(OutActive * 100.f) / 100.f;
+    OutCooldown = FMath::CeilToFloat(OutCooldown * 100.f) / 100.f;
+}
+void AOpenWillowMayaHUD::TickSkillHudShots(AOpenWillowWalker& Maya)
+{
+    // Unattended: once the movie has had time to load and the -owcombattest dummy stands, aim at it, cast Phaselock and
+    // capture the screen with the HUD every 0.5 s from 1 s before the cast until 22 s after (past the cooldown), then quit.
+    // tools/test_action_skill_hud.ps1 runs it; the OWSKILLHUD lines carry the pushed state on the same clock.
+    const float Now = GetWorld()->GetTimeSeconds();
+    constexpr float First = -1.f, Step = 0.5f, Last = 22.f, CastAt = 14.f;
+    if (SkillShotStep < 0) return;
+    if (SkillShotStep == 0)
+    {
+        AOpenWillowCombatTarget* Target = nullptr;
+        for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It) { Target = *It; break; }
+        if (Now < CastAt - 2.f || !Target || !PlayerOwner || !PlayerOwner->PlayerCameraManager) return;
+        // As -owphaselockshots: level aim at a stock pawn, the chest of the engine-shape dummy.
+        const FVector Aim = Target->AimPoint();
+        const FVector View = PlayerOwner->PlayerCameraManager->GetCameraLocation();
+        PlayerOwner->SetControlRotation(((Target->IsStockPawn() ? FVector(Aim.X, Aim.Y, View.Z) : Aim - FVector(0, 0, 20)) - View).Rotation());
+        SkillShotCastAt = FMath::Max(Now + 1.5f, CastAt);
+        SkillShotStep = 1;
+        return;
+    }
+    const float Offset = First + (SkillShotStep - 1) * Step;
+    if (Offset > Last)
+    {
+        if (Now - SkillShotCastAt < Last + 1.f) return;
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLHUDSHOTS done"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        SkillShotStep = -1;
+        return;
+    }
+    if (!bSkillShotCast && Now >= SkillShotCastAt)
+    {
+        Maya.UsePhaselock();
+        bSkillShotCast = true;
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLHUDSHOTS cast t=%.3f hit=%d"), Now, Maya.LastPhaselockHit() ? 1 : 0);
+    }
+    if (Now - SkillShotCastAt < Offset) return;
+    const FString Name = FString::Printf(TEXT("OWSkillHud_%03d.png"), SkillShotStep - 1);
+    FScreenshotRequest::RequestScreenshot(Name, true, false);
+    UE_LOG(LogTemp, Display, TEXT("OWSKILLHUDSHOTS shot %s scheduled %+.2f actual %+.3f t=%.3f"), *Name, Offset, Now - SkillShotCastAt, Now);
+    ++SkillShotStep;
+}
+void AOpenWillowMayaHUD::TickHudShots(AOpenWillowWalker& Maya)
+{
+    // Unattended: once the movie has settled (the 3D-turn stand-in waits a second after ready), capture the held weapon
+    // at rest, fire three shots 0.3 s apart, capture again, quit. tools/run_hud_shots.ps1 runs it; the OWHUDSTATE lines
+    // carry what was pushed.
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (HudShotStep < 0) return;
+    if (HudShotStep == 0)
+    {
+        // -owhudshield: equip the first shield of the gear manifest that Maya's level allows, as the inventory screen
+        // would, so the shield bar shows (the real-game reference frames carry one).
+        if (FParse::Param(FCommandLine::Get(), TEXT("owhudshield")) && Maya.GetInventory())
+        {
+            const int32 Level = Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 1;
+            bool bEquipped = false;
+            for (const FOpenWillowGearItem& Item : Maya.GetInventory()->GearItemList())
+                if (Item.ItemType == TEXT("shield") && Maya.GetInventory()->EquipGearById(Item.Id, TEXT("shield"), Level))
+                {
+                    UE_LOG(LogTemp, Display, TEXT("OWHUDSHOTS shield %s"), *Item.Name);
+                    bEquipped = true;
+                    break;
+                }
+            if (!bEquipped) UE_LOG(LogTemp, Display, TEXT("OWHUDSHOTS shield none equippable at level %d"), Level);
+        }
+        HudShotAt = FMath::Max(Now + 4.f, 12.f);
+        HudShotStep = 1;
+        return;
+    }
+    if (Now < HudShotAt) return;
+    auto Shot = [this, Now](const TCHAR* Name)
+    {
+        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWHud_%s.png"), Name), true, false);
+        UE_LOG(LogTemp, Display, TEXT("OWHUDSHOTS shot %s t=%.3f"), Name, Now);
+    };
+    switch (HudShotStep++)
+    {
+    case 1: Shot(TEXT("rest")); HudShotAt = Now + 1.f; break;
+    case 2: case 3: case 4:
+        UE_LOG(LogTemp, Display, TEXT("OWHUDSHOTS fire %d"), Maya.FireOnce() ? 1 : 0);
+        HudShotAt = Now + (HudShotStep == 5 ? 1.5f : 0.3f);
+        break;
+    case 5: Shot(TEXT("fired")); HudShotAt = Now + 1.f; break;
+    default:
+        UE_LOG(LogTemp, Display, TEXT("OWHUDSHOTS done"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        HudShotStep = -1;
+    }
+}
 void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
 {
-    // Only state the host really has: Maya takes no damage and has no
-    // grenade or magazine tracking yet, so vitals stay full, grenades are
-    // hidden and the ammo text is the magazine size. XP and the level come
-    // from UOpenWillowSkills. Field meanings are in
-    // tools/hud_overlay/index.html.
+    // Only state the host really has. Health is Maya's own; the shield is the equipped shield's Capacity stat, if it
+    // has one (the host has no shield damage or recharge model, so that bar stays full); ammo and grenades come from
+    // UOpenWillowInventory; XP and the level from UOpenWillowSkills. Field meanings are in tools/hud_overlay/index.html.
     const UOpenWillowInventory* Inventory = Maya.GetInventory();
     const UOpenWillowSkills* Skills = Maya.GetSkills();
     const FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeapon() : nullptr;
     const bool bArmed = Maya.HasWeaponOut() && Weapon;
-    // Rounds left in the held magazine (a no-cost weapon like the Infinity
-    // shows its full magazine size, as before).
+    // Rounds left in the held magazine (a no-cost weapon like the Infinity shows its full magazine size, as before).
     const int32 MagazineLeft = bArmed ? UOpenWillowInventory::MagazineLeft(*Weapon) : 0;
     const float MagazineFill = bArmed ? float(MagazineLeft) / UOpenWillowInventory::MagazineSize(*Weapon) : 1.f;
-    const FString State = FString::Printf(
-        TEXT("{\"character\":\"siren\",\"health\":1,\"shield\":1,\"healthText\":\"\",\"shieldText\":\"\","
-             "\"xp\":%.3f,\"levelText\":\"%d\",\"grenades\":null,\"weaponOut\":%s,\"ammo\":%.3f,\"ammoText\":\"%s\"}"),
+    // "<magazine> / <reserve>" as the game writes it (live read 2026-10-22: the spaces around "/" are no-break U+00A0,
+    // sent as JSON escapes). The reserve is the pool the weapon draws from. A no-cost weapon (Infinity)
+    // shows the magazine only: the game's display for it is not observed (UNVERIFIED).
+    FString AmmoText;
+    EOpenWillowAmmoType HeldAmmo = EOpenWillowAmmoType::Pistol;
+    const bool bAmmoType = bArmed && UOpenWillowInventory::ResolveAmmoType(*Weapon, HeldAmmo);
+    if (bArmed)
+    {
+        AmmoText = FString::Printf(TEXT("%d"), MagazineLeft);
+        if (Weapon->ShotCost > 0.f && bAmmoType)
+            AmmoText += FString::Printf(TEXT("\\u00a0/\\u00a0%d"), Inventory->AmmoPool(HeldAmmo).Current);
+    }
+    // Shield: the card's "Capacity" stat (label as the local card data writes it, tools/hud_overlay/inventory.js; not
+    // seen on a real card yet, UNVERIFIED). With no shield, or none with that stat, the movie's "none" frame is sent.
+    bool bShield = false;
+    int32 ShieldCapacity = 0;
+    if (const FOpenWillowGearItem* Shield = Inventory ? Inventory->GearSlotItem(TEXT("shield")) : nullptr)
+        for (const FOpenWillowGearStat& Stat : Shield->Stats)
+            if (Stat.Label.Equals(TEXT("Capacity"), ESearchCase::IgnoreCase))
+            {
+                bShield = true;
+                ShieldCapacity = FMath::RoundToInt(FCString::Atof(*Stat.Value.Replace(TEXT(","), TEXT(""))));
+                break;
+            }
+    const FString ShieldText = bShield ? FString::Printf(TEXT("%d"), ShieldCapacity) : FString();
+    // Grenades: the grenade pool's Current / Max, shown only when its capacity is known (count / max, as the game shows it).
+    const FOpenWillowAmmoPool GrenadePool = Inventory ? Inventory->AmmoPool(EOpenWillowAmmoType::Grenade) : FOpenWillowAmmoPool();
+    const bool bGrenades = Inventory && GrenadePool.Max > 0;
+    const float GrenadeFill = bGrenades ? FMath::Clamp(float(GrenadePool.Current) / GrenadePool.Max, 0.f, 1.f) : 0.f;
+    const FString GrenadeText = bGrenades ? FString::Printf(TEXT("%d\\u00a0/\\u00a0%d"), GrenadePool.Current, GrenadePool.Max) : FString();
+    // Health: the fraction for the bar, and the rounded number for the text (live read: the pool rounded to the nearest integer).
+    const float Health = Maya.GetHealth();
+    const float HealthFill = FMath::Clamp(Health / FMath::Max(1.f, Maya.GetMaxHealth()), 0.f, 1.f);
+    const int32 HealthNow = FMath::RoundToInt(FMath::Max(0.f, Health));
+    const int32 Level = Skills ? Skills->GetLevel() : 1;
+    float SkillActive = -1.f, SkillCooldown = 0.f;
+    ActionSkillHudState(Maya, SkillActive, SkillCooldown);
+    FString State = FString::Printf(
+        TEXT("{\"character\":6,\"skillIcon\":\"/ package/UI_HUD_AAIcons/AA-Siren\",\"health\":%.3f,\"shield\":%s,\"healthText\":\"%d\",\"shieldText\":\"%s\","
+             "\"xp\":%.3f,\"levelText\":\"%02d\",\"grenades\":%s,\"grenadeText\":\"%s\",\"weaponOut\":%s,\"weaponType\":\"%s\",\"ammo\":%.3f,\"ammoText\":\"%s\","
+             "\"skillActive\":%s,\"skillCooldown\":%.2f}"),
+        HealthFill,
+        bShield ? TEXT("1") : TEXT("null"),
+        HealthNow,
+        *ShieldText,
         Skills ? Skills->LevelProgress() : 0.f,
-        Skills ? Skills->GetLevel() : 1,
+        Level,
+        bGrenades ? *FString::Printf(TEXT("%.3f"), GrenadeFill) : TEXT("null"),
+        *GrenadeText,
         bArmed ? TEXT("true") : TEXT("false"),
+        bAmmoType ? UOpenWillowInventory::AmmoTypeKey(HeldAmmo) : TEXT(""),
         MagazineFill,
-        bArmed ? *FString::Printf(TEXT("%d"), MagazineLeft) : TEXT(""));
+        *AmmoText,
+        SkillActive < 0.f ? TEXT("null") : *FString::Printf(TEXT("%.2f"), SkillActive),
+        SkillCooldown);
+    // The values pushed, once per change, for the in-engine checks (OWHUDSTATE), written as the page's OWHUDPAGE line
+    // echoes the state it applied (tools/hud_overlay/hud_fields.js, pageLine).
+    const FString HudLine = FString::Printf(TEXT("health=%.3f shield=%s ammo=%.3f grenades=%s weaponOut=%d weaponType=%s ")
+        TEXT("healthText=%d shieldText=%s ammoText=%s grenadeText=%s level=%02d"),
+        HealthFill, bShield ? TEXT("1.000") : TEXT("null"), MagazineFill,
+        bGrenades ? *FString::Printf(TEXT("%.3f"), GrenadeFill) : TEXT("null"), bArmed ? 1 : 0,
+        bAmmoType ? UOpenWillowInventory::AmmoTypeKey(HeldAmmo) : TEXT("-"), HealthNow, *ShieldText, *AmmoText, *GrenadeText, Level);
+    if (HudLine != LastHudStateLine)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWHUDSTATE %s"), *HudLine);
+        LastHudStateLine = HudLine;
+    }
+    const FString Minimap = PlayerOwner ? OpenWillowMinimap::StateField(Maya, *PlayerOwner) : FString();
+    if (!Minimap.IsEmpty()) State = State.LeftChop(1) + TEXT(",\"minimap\":") + Minimap + TEXT("}");
+    // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
+    // (tools/check_action_skill_hud.py reads them).
+    const FString SkillLine = FString::Printf(TEXT("active=%.2f cooldown=%.2f"), SkillActive, SkillCooldown);
+    if (SkillLine != LastSkillHudLine)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLHUD t=%.3f cast=%.3f %s"), GetWorld()->GetTimeSeconds(), Maya.LastPhaselockCastAt(), *SkillLine);
+        LastSkillHudLine = SkillLine;
+    }
     // Resend once a second too: the page may not have loaded the first time.
     const float Now = GetWorld()->GetRealTimeSeconds();
     if (State == LastFlashState && Now < NextFlashPush) return;
@@ -751,8 +1026,10 @@ void AOpenWillowMayaHUD::DrawHUD()
                 bWeaponMeshesPreloaded = true;
                 const double Started = FPlatformTime::Seconds();
                 int32 Meshes = 0;
-                for (const FOpenWillowWeaponItem& Item : Held->Items())
-                    if (USkeletalMesh* Mesh = UOpenWillowInventory::LoadWeaponMesh(Item)) { PreloadedMenuAssets.Add(Mesh); ++Meshes; }
+                // Assembled guns: their library mesh and skin (OpenWillowWeaponAssembly::Preload); others: the pre-built mesh.
+                TArray<UObject*> Assets;
+                for (const FOpenWillowWeaponItem& Item : Held->Items()) OpenWillowWeaponAssembly::Preload(Item, Assets);
+                for (UObject* Asset : Assets) { PreloadedMenuAssets.Add(Asset); ++Meshes; }
                 TimeLog(TEXT("preload_weapon_meshes"), FString::Printf(TEXT("items=%d meshes=%d dur=%.1fms"),
                     Held->Items().Num(), Meshes, (FPlatformTime::Seconds() - Started) * 1000.));
             }
@@ -937,6 +1214,13 @@ void AOpenWillowMayaHUD::DrawHUD()
     }
     // Resend once a second too: the page may not have loaded the first time.
     if (SkillsBrowser && GetWorld()->GetRealTimeSeconds() >= NextSkillsPush) PushSkillsState();
+    // A page that failed to load is dropped here, not in its callback, so it costs nothing after that.
+    if (bFlashHudFailed && FlashHudRoot)
+    {
+        if (GEngine && GEngine->GameViewport) GEngine->GameViewport->RemoveViewportWidgetContent(FlashHudRoot.ToSharedRef());
+        FlashHudRoot.Reset();
+        FlashHud.Reset();
+    }
     if (SkillsBrowser) return; // The gameplay HUD is hidden behind the menu.
     if (!Canvas || !PlayerOwner) return;
     const AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
@@ -945,12 +1229,24 @@ void AOpenWillowMayaHUD::DrawHUD()
     UFont* Large = GEngine->GetLargeFont();
     if (FlashHud)
     {
-        // The movie draws the crosshair, bars and weapon panel; damage
-        // numbers are not driven in it yet.
+        // The scripted cast first, so its state goes out in the same frame; the state is pushed as soon as the
+        // overlay exists, so the page has it when it becomes ready.
+        static const bool bSkillHudShots = FParse::Param(FCommandLine::Get(), TEXT("owskillhudshots"));
+        if (bSkillHudShots && bFlashHudReady) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+        static const bool bHudShots = FParse::Param(FCommandLine::Get(), TEXT("owhudshots"));
+        if (bHudShots && bFlashHudReady) TickHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+        if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
-        DrawDamagePopups(Large);
-        return;
+        if (bFlashHudReady)
+        {
+            // The movie draws the crosshair, bars and weapon panel; damage numbers are not driven in it yet.
+            if (FlashHudRoot && FlashHudRoot->GetVisibility() != EVisibility::HitTestInvisible)
+                FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);
+            DrawDamagePopups(Large);
+            return;
+        }
     }
+    // Canvas fallback: the movie is not ready yet (or the overlay failed or was never made).
     const float W = Canvas->ClipX;
     const float H = Canvas->ClipY;
     const float Now = GetWorld()->GetTimeSeconds();
@@ -984,36 +1280,6 @@ void AOpenWillowMayaHUD::DrawHUD()
     const float XpW = W * 0.34f;
     SlantBar(*Canvas, X - XpW * 0.5f, H - 26.f, XpW, 7.f, 4.f, Skills ? Skills->LevelProgress() : 0.f, Experience);
     Outlined(*this, FString::FromInt(Skills ? Skills->GetLevel() : 1), Experience, X - XpW * 0.5f - 22.f, H - 34.f, Large, 1.f);
-
-    // Phaselock icon above the XP bar: a ring that refills over the cooldown.
-    const float Remaining = Maya->PhaselockRemaining();
-    const float Ready = 1.f - Remaining / FMath::Max(1.f, Maya->PhaselockCooldown());
-    const float IconY = H - 72.f;
-    const int32 Segments = 40;
-    for (int32 I = 0; I < Segments; ++I)
-    {
-        const float A0 = 2.f * PI * I / Segments - PI * 0.5f;
-        const float A1 = 2.f * PI * (I + 1) / Segments - PI * 0.5f;
-        const bool bFilled = float(I) / Segments < Ready;
-        DrawLine(X + 27.f * FMath::Cos(A0), IconY + 27.f * FMath::Sin(A0),
-            X + 27.f * FMath::Cos(A1), IconY + 27.f * FMath::Sin(A1),
-            bFilled ? PhaselockViolet : FLinearColor(0.15f, 0.15f, 0.2f, 0.8f), 4.f);
-    }
-    Slant(*Canvas, X - 16.f, IconY - 16.f, 30.f, 32.f, 2.f,
-        Remaining > 0.f ? FLinearColor(0.12f, 0.06f, 0.18f, 0.85f) : FLinearColor(0.4f, 0.16f, 0.62f, 0.9f));
-    // Phaselock glyph: a small orb with a ring, not BL2's icon texture.
-    const FLinearColor Glyph = Remaining > 0.f ? FLinearColor(0.5f, 0.4f, 0.6f) : FLinearColor::White;
-    for (int32 I = 0; I < 16; ++I)
-    {
-        const float A0 = 2.f * PI * I / 16.f;
-        const float A1 = 2.f * PI * (I + 1) / 16.f;
-        DrawLine(X + 9.f * FMath::Cos(A0), IconY + 5.f * FMath::Sin(A0),
-            X + 9.f * FMath::Cos(A1), IconY + 5.f * FMath::Sin(A1), Glyph, 1.5f);
-    }
-    DrawRect(Glyph, X - 3.f, IconY - 3.f, 6.f, 6.f);
-    if (Remaining > 0.f)
-        Outlined(*this, FString::Printf(TEXT("%.0f"), FMath::CeilToFloat(Remaining)), FLinearColor::White,
-            X + 30.f, IconY - 12.f, Large, 1.f);
 
     // Angled weapon panel, bottom right: rarity-coloured name, manufacturer,
     // ammo (infinite when the evaluated shot cost is 0) and the four slots.

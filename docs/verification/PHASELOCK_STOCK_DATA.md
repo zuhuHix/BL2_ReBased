@@ -949,3 +949,291 @@ Changes (all `UNVERIFIED` calibrations):
 * The 0.30 s void: not changed; with first-person space on it is solid black (the hand's black orb uses the shader's values).
 * Not done: side streaks 80-100 px left and right of the sphere (the streak sprites take the template's random rotation; orienting them
   horizontally needs a rotation rule that was not read).
+
+## Round 16 (2026-10-21): a stock enemy as the lifted target, the cast arm's timing, the intro flash
+
+AI-assisted (Claude). The maintainer's three visible problems (2026-10-02) were the bubble and its effects, the lifted target's
+animation and the first-person cast "missing something". Rounds 1-15 worked on the bubble and the hand; the target never animated,
+because the slice's target dummy has no `PhaseLock_*` clips. Frames: host `local/laneC/r6`-`r8` (ignored), game
+`matched_650/run2` (same distance and field of view) and `cast_close`. All calibrations below are `UNVERIFIED`.
+
+### A stock enemy with the four clips
+
+* `tools/prepare_phaselock_target.py` / `tools/import_phaselock_target.ps1` export the bullymong (`GD_PrimalBeast.Character.Pawn_PrimalBeast`
+  in `Ice_Dynamic`, the enemy of every real-game Phaselock capture): mesh, the component's material instance, and from
+  `Anim_PrimalBeast.Unarmed` (105 clips, all four `PhaseLock_*` present) the idle, a death and the four Phaselock clips (lift 1.2 s,
+  loop 1.47 s, fall 0.53 s, land 0.47 s at 30 fps; MD5-to-UE fit error 4e-7). Identities come from our reader, exports from UModel
+  build 1590 (4 of 4 jobs), the clip conversion and editor import from the slice NPC pipeline. The zone-colour material of the
+  ambient citizens (`M_OW_NPC_Zone`) is reused because the bullymong's `p_Masks` has the same two-halves layout (checked by eye);
+  the skin still reads grey-blue under Sanctuary's light (open, not this lane's).
+* Host: `-owcombattest -owcombatpawn=Bullymong` shows it as the test target (`AOpenWillowCombatTarget::UseCommandLinePawn`); the hit
+  volume is the observed 150 x 90 collision cylinder (a UE capsule cannot be flatter than a sphere, so its radius is 90).
+* **Mesh scale.** The archetype's component `Scale` is 0.7; the 2026-10-03 SDK read of a live adult reported `Mesh.Scale` 1.0. At 1.0
+  the host's bullymong is about 1.45x the game's on the matched frames (same distance and field of view, checked against the bubble
+  rim, 1.21 px/uu against the game's 1.226), at 0.7 it matches. The host uses 0.7; which read is wrong is open (the real-game probe
+  below reads the rendered bone spread).
+* **Bubble size from the real pawn, no stand-in.** With the stock clips, the host's mesh bounds at the three bubble spawns are
+  307 / 245 / 200 uu for the unscaled mesh (game 290 / 230-260 / 193) and 215 / 169 / 140 at Scale 0.7. The game's numbers behave as if
+  the component scale were not applied to the bounds, so the host divides the bounds radius by the component scale (host reading,
+  `UNVERIFIED`). The pose-dependent shrink of the bubble that round 8 had to imitate with `-owbubbleradius=290,233,210` now comes from
+  the clips themselves (lock pose, then the curled loop pose); the stand-in switch is no longer needed for this target.
+* **Lift blend.** `PhaseLock_Lift` raises the hips by itself (from 61 to about 240 uu above the root in the clip). Played as a cut (UE5's
+  single-clip player), the body jumped up at the cast; the critic saw the host's target "rising earlier and higher" although the lifted
+  location follows the game's sampled curve within 10 uu (0 to 191 uu by 0.70 s in the game, 0 to 201 in the host). A small anim
+  instance (`UOpenWillowTargetAnimInstance`) now crossfades the stock moves: lift in over 0.4 s (the default definition's override),
+  loop, fall and land over 0.1 s, the fall stretched to `DropTime`, cuts where the stock ending forces a 0 blend-out. Linear blend
+  shape (not read).
+* **Centring.** `UpdateLiftedPawnMeshOffset` centres `Mesh.Bounds` on the pawn's Location. The host had centred it on the floor-level
+  pivot (90 uu low for this pawn) and UE5's auto-generated physics asset is not the stock one, so the host centres the box around the
+  bones (the skinless root excluded). Centred on the Location that moved the mesh 61 uu during the hold; the live pawn's
+  `Mesh.Translation.Z` moved 119.5 uu (probe below), so the box is centred 58.7 uu below the Location (`centre_bias`, a fit for this
+  pawn). Host log: mesh shift -81 at 1.0 s and -119.2 / -119.5 at 2.0 / 3.0 s; game -60 at 1.0 s and -118.5 at 2.0 s.
+* No motion blur on the stock mesh or the arms (`bPerBoneMotionBlur` off) and none in the Phaselock captures (`r.MotionBlurQuality 0`):
+  Borderlands 2 has none, and UE5's smeared the hand and the rising body.
+
+### The cast arm
+
+* `Anim_Phaselock` (`SpecialMove_FirstPerson`) has the `GearboxAnimDefinition` defaults: rate 1, blend in and out 0.1 s, `EC_OnBlendOut`.
+  The host now uses those blends. At rate 1 the arm drops about 0.1 s before the game's (raised at 0.55 s in the game, low in the host);
+  the round 8 rate 0.85 stays (`-owcastrate=<r>` overrides it). With it the fist closes around the orb at 0.65 s in both.
+* The hand's smear at 0.55-0.75 s (critics since round 6) was UE5's per-bone motion blur, not an effect: crisp with it off.
+
+### The intro flash
+
+`Mat_SirenGlowMOD`'s overbright was scaled by 0.4 for every emitter (round 7, fitted on the hand at 0.55 s). The bubble intro's
+`InitialFlash` emitters now use the shader's own value 1 (material scalar `Overbright`, set per emitter): the 0.75-0.80 s frames
+change from a faint blue tint to a pale wash close to the game's. The game's wash is already full at 0.72 s, the host's at 0.75 s.
+
+### Real-game probe (2026-10-21)
+
+`tools/real_game/scripts/phaselock_target_anim.py` on a live Adult Bullymong in Ice_P (two casts, 650 uu, camera pitched onto the
+target; ignored `local/realgame/phaselock/target_anim/`, notes and report there):
+
+* **Observed:** the skill states (lift 0.02-0.71 s, hold to 4.615 s, release to 5.72 s) match the host's timeline (0.70 / 4.60 /
+  5.70 s). The pawn's `Mesh.Translation.Z` is -102.1 at rest, -114 at 0.5 s, -162 at 1.0 s and -221.5 ± 1 through the hold, and back to
+  -102 after landing: the mesh centring is real and large (119.5 uu). The base idle sequence's weight falls from 0.94 to 0 over about
+  0.4 s after the cast and comes back over about 0.1 s after the landing, which fits the lift move's 0.4 s blend-in and the land move's
+  ending (the special-move node's own sequence players were not exposed to the sampler, so the PhaseLock clip names, rates and the fall's
+  stretch were **not** read).
+* **Mesh scale, still open:** the live component reads `Scale` 1.0 (and `Translation.Z` -107.8, not the archetype's -92). The head sits
+  105.5 uu above the root bone, which fits the unscaled skeleton in the idle clip (108-117); the hips (23 against 60-67) and the
+  hand-to-hand distance (94 against 211) fit neither scale, so the live pose was not the idle clip alone. The frame sizes and the body
+  to bubble ratio favour 0.7. The host keeps 0.7; `UNVERIFIED`.
+* Mesh bounds sphere radius in the hold: 191 (both casts), at rest 220-304 depending on the idle phase.
+* Not read: the drop clip's rate, the land clip's start, the AI hold and uncloak.
+
+### Visual review (independent critic, matched frames; scores verbatim)
+
+| Round | Frames | Bubble | Lifted target | Cast arm | Overall |
+|---|---|---|---|---|---|
+| 1 | `local/laneC/r6` (stock pawn, centring on the bones, no blur on the arms) | 6.0 | 4.5 | 7.0 | 5.8 |
+| 2 | `r8` (+ lift blend, intro overbright 1, no motion blur in captures) | 5.5 | 4.5 | 7.0 | 5.7 |
+| 3 | `r9` (+ observed hold lowering) | 5.5 | 4.5 | 6.5 | 5.5 |
+
+The 8/10 target was not reached. The critics' remaining differences, most visible first: the held bullymong shows its back
+where the game shows its front (the same clip; cause not found: the clip conversion, the lift pose or a yaw the game applies
+were not separated); the host's body still looks airborne at 0.5 s where the game's still crouches (the location curves agree
+within 10 uu, so the body's offset during the lift is the open part); the opening cyan swirl around the hand is broader than the
+game's thin wisps; the rim is a cleaner, steadier ring than the game's cloudy, flickering one; the palm orb is paler and larger.
+The pink eye under the target is the HUD's action-skill indicator (round 6), not an effect. The critics' "collapse late at 5.3 s"
+is the matched_650 reference's second lock of the same pawn (round 5); adult68 and the 2026-10-21 probe show the release
+from 4.615 s with the ring still up at 5.0 s.
+
+## Round 17 (2026-10-22): capture framing, foreground hand effect, haze fit
+
+Host captures are in ignored `local/laneB/r1` and are paired with the 2026-10-21 Three Horns references in
+`local/laneB/r1/pairs/06_0.25s.jpg`, `07_0.80s.jpg` and `08_1.50s.jpg` (host left; both at 1280x720 before pairing).
+The UE 5.8 module built successfully. The FX importer re-ran from the existing local manifest and UModel-prepared exports:
+18 material instances, 21 textures and 3 meshes; 3 materials stayed skipped: the impact half-moon has no exported texture
+parameters, the energy-spike modulate shader's dark streaks remain unexplained, and SirenSuction is a screen-distortion
+material. These imports are not validation that every template renders correctly.
+
+### Capture camera and intro wash
+
+`-owphaselockpitch=<degrees>` is now applied after `UsePhaselock` selects its target, so capture framing does not change the
+target query. The first attempt applied +3.5 degrees before the cast and missed by a small amount: offset 0.262 exceeded the
+0.259 magnet radius. After moving the capture-only adjustment, the logged hit at depth 650 uu scored 0.686 with offset 0.159
+inside a 0.258 magnet radius. The host's +0.80 s wash boundary, measured as the strongest row-to-row luminance change over
+x=80..1199, moved from row 470 in the previous host frame to row 533; the real-game boundary spans rows 517-523 (peak at
+518). This is a 63 px correction from the old host frame and leaves the new boundary about 15 px below the reference.
+The host remains slightly brighter in the same broad strip (mean RGB at rows 500-509: 183,225,249; reference: 172,214,241),
+but the scenes differ (Sanctuary versus Three Horns), so that is not an isolated material measurement. `InitialFlash`
+Overbright remains at its existing value 1; this pair does not justify changing it.
+
+### Hand void and first-person depth
+
+The dark field belongs to `Part_SirenASHandOrb`'s `ModulateBlack` emitter (`Mat_SirenOrbBlackMOD`), while the later blue tint
+belongs to `Part_PhaseLockScreenEffect`. The UE5 component now sets the first-person primitive type and foreground depth
+priority for hand-space effects, preserving the material's depth behaviour. The +0.25 s capture still shows a broad dark
+quad with a sharp lower intersection; the change has not made its outline match the real game's soft circular disc. The
+textureless material has no stock texture inputs in the prepared export and is drawn with our radial material stand-in, so
+the exact truncation/depth interaction remains **UNVERIFIED**. Do not treat this as a resolved visual gap.
+
+### Bubble interior and target material
+
+The `Mat_EnemyOrbCoreColor` haze's blue coefficient changed from 1.6 to 1.0 (a 37.5% reduction). Round 14's prior
+matched-frame measurement was host mean (26,32,108), game (28,32,86); that was the reason for reducing the excess blue.
+The new 1.50 s pair still looks lighter and bluer in the host. A direct RGB annulus mean is not comparable here because the
+new host bubble sits over Sanctuary and the reference sits over snow/rock in Three Horns; the before/after isolated shader
+value remains **UNVERIFIED** until measured on equivalent background pixels. The annulus mean from round 14 must not be
+presented as a measurement of this new import.
+
+The target component loaded `/Game/OpenWillow/Characters/PhaselockTarget/Bullymong/Materials/MI_Mati_Bullymong_Zone`; the
+editor report says all nine `p_A/B/CColor{Hilight,Midtone,Shadow}` vectors were applied. The prepared property manifest
+records, for example, `p_AColorMidtone=(0.780899,0.534723,0.424757,1)` and
+`p_CColorMidtone=(0.449438,0.368965,0.316917,1)`. These package values are data evidence, not a visual-parity result: the
+capture still reads cool grey/blue under the host lighting. The ambient citizen zone shader is reused by analogy, and its
+mixing rule remains **UNVERIFIED** for the bullymong. No colour vectors were guessed or edited this round.
+
+### Facing and remaining limitations
+
+The test pawn now faces the view at a 0-degree offset in Phaselock captures (`-owphaselockshots`; other `-owcombattest` runs keep
++180 so the stand-in's hit-reaction direction is unchanged), with `-owcombatpawyawoffset=<degrees>` retained as an
+override; the 1.50 s capture presents its torso toward the camera. The exact stock yaw rule and pose alignment remain
+**UNVERIFIED**, and the short screenshots do not settle whether the lift still reads too airborne. The HUD skill sigil is
+still excluded as a separate HUD lane. These are host-render captures only, not gameplay parity validation; an independent
+critic review is still required.
+
+## Round 18 (2026-10-22): bubble framing, startup scheduling, screen mask
+
+Round 1's independent visual review scored the matched-frame set 5.9/10. This round addresses the measurable bubble-size error, the
+missing zero-time hand burst, and the screen effect's texture weighting. The valid host run is
+`local/laneB/r2/run-20261022-013146.log`; host-left/game-right pairs are in `local/laneB/r2/pairs/` at 0.25, 0.50, 0.80,
+1.50, 3.00 and 4.50 s. The capture used `-owfov=62.15 -owfpfov=45 -owphaselockpitch=3.5 -owcombatpawyawoffset=0
+-owcombatpawn=Bullymong` at 1280 x 720. The shot tool's comment now explains the aspect conversion for its FOV override.
+
+### Bubble size and capture FOV
+
+The old shot command used `-owfov=77.55`, but `OpenWillowWalker.cpp` treats this as a 4:3 horizontal FOV and converts it to the
+current aspect ratio. At 16:9 this produced 93.931 degrees, not the 77.55 degrees used by the matched game frames. Using
+`-owfov=62.15` produces 77.565 degrees at 16:9. No bubble scale was changed: a horizontal framing mismatch had made the old
+comparison misleading.
+
+For an outer-edge check at 1.50 s, on the 1280 x 720 source images, take mean RGB over rows 264-276 and columns 400-879; mark
+pixels where B > 170, B-R > 25 and G > 100, then use the first qualifying run of at least 3 pixels left of x=640 and last such
+run right of x=640. This reads the outer blue ring edge (the older `rim_width` ridge detector selects an inner host ridge).
+The span is 355 px in the Round 1 host, 420 px in this host, and 422 px in the matched game frame. This is an image-edge
+measurement, not a decoded particle size; it supports keeping the existing scale and leaves the host 2 px narrower by this
+criterion. The detector and the capture calibration remain **UNVERIFIED** as stock rendering rules.
+
+### Hit-notify hand effect and screen mask
+
+`NATIVE_PHASELOCK_PRESENTATION.md` places the `Phase_Lock_Lift` hand-effect notification at 0.25 s. The Round 1 host log had
+zero hand particles at +0.256 s; this host log reports seven. `UOpenWillowFxComponent::Play` now simulates each emitter at
+zero delta and renders it once on activation, so a component activated after its tick group still processes time-zero bursts.
+That fixes the scheduling count, but the +0.25 s pair still has a broad dark quad and lacks the game's conspicuous blue arcs.
+The host's +0.30 s frame has a visible blue swirl, so these captures do not justify shifting all hand emitters earlier; the
+stock swirl and disc timing, hand attachment translation, and the quad's sharp lower edge remain **UNVERIFIED**.
+
+Round 6's compiled `Mat_PhaseLockScreenEffect` listing says the mask contributes RGB to the screen colour. The importer had
+used only the green channel with a 0.6 floor. It now weights the hue-preserving scene-modulation stand-in with the mask's
+brightest RGB channel and no floor; the screen quad also disables depth testing. The +0.80 s host pair shows more radial
+texture between streaks, but the wash remains brighter and more uniform/white-cyan than the game's blue streaked wash. A
+post-process scene-sampling attempt blacked out the scene in both tested pass/input configurations and was reverted to the
+surface-quad stand-in. The stock scene-colour expression and the host wash's final brightness remain **UNVERIFIED**. The
+pink/white eye sigil remains HUD-owned and is excluded.
+
+### Target colour and remaining comparisons
+
+The +1.50 s bubble outer span now matches by the detector above, while the host interior still reads lighter and bluer than
+the game's dark navy centre. The target still reads cool grey-blue in Sanctuary where the Three Horns reference is brown/ochre;
+no colour fit was made because the scenes have different lighting and the material graph was not recovered. As a bounded
+inspection, UModel / UE Viewer build 1590 (MIT, `https://www.gildor.org/en/projects/umodel`) ran against the local
+`Master_Creature` in `WillowGame.upk`. Command: `C:\Users\yorad\Tools\UEViewer\umodel.exe -export -game=border
+-path="C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2\WillowGame\CookedPCConsole" -obj=Master_Creature
+-out=local/analysis/round18-master-creature -uc -png -nomesh -noanim -nostat WillowGame.upk Master_Creature Material`.
+The invocation took about 0.17 s. The output under ignored `local/analysis/round18-master-creature/` contained 1 `.log`,
+1 `.mat`, 10 `.png`, and 1 `.txt` file; it reported no export errors or duplicate outputs. This bounded run intentionally
+did not request meshes or animations. It did not return a material shader graph: the `.mat` property listing and local
+shader-cache lookup had no parent graph or corresponding shader map/GUID. This did not establish the bullymong's shader
+or albedo under neutral lighting. The brown/ochre mismatch and the target's host pose/framing remain open rather than
+fitted by eye.
+
+### Validation and open items
+
+* **Automated extraction/build/capture:** the existing local UModel inspection completed as counted above; the UE 5.8
+  Development build succeeded; the importer reported 18 material instances, 21 textures and 3 meshes imported, with 3
+  materials skipped (impact half-moon without exported texture parameters, unresolved energy-spike modulate graph, and the
+  screen-distortion SirenSuction). The valid host capture run exited successfully and produced all requested timings.
+* **Visual validation:** the 0.25/0.50/0.80/1.50/3.00/4.50 s host-left/game-right pairs were generated for the parent
+  critic. The outer bubble edge was measured with the stated threshold; the remaining differences above are visual
+  inspection only. No independent critic score is available yet.
+* **Gameplay validation:** none was run in this round. The captures test presentation in the host and do not establish
+  gameplay or stock behavior parity.
+
+The 0.25 s black void/blue arcs, the 0.80 s hand aura position and wash brightness, the bubble's interior colour, the
+bullymong's Sanctuary colour and pose, and the screen-refraction effect remain open. The zero-delta burst handling, mask
+weighting, FOV conversion used for these captures, outer-edge threshold, and material/shader stand-ins are **UNVERIFIED**
+as exact stock behavior. The 8/10 critic target was not evaluated in this implementation turn; hand the pair set to the
+parent for review.
+
+## Round 19 (2026-10-22): target scale, dark interior, and wash/orb fits
+
+Frames: host captures and host-left/game-right pairs under ignored `local/laneB/r3/`, matched against
+`local/realgame/phaselock/matched_650/run2/frames_at/`. Final pairs use the Round 18 switches
+`-owfov=62.15 -owfpfov=45 -owphaselockpitch=3.5 -owcombatpawyawoffset=0 -owcombatpawn=Bullymong` at 1280 x 720.
+Every Round 19 fit below is **UNVERIFIED** as stock rendering behavior.
+
+| Concern | Evidence and change | Result / remaining |
+|---|---|---|
+| Target scale and facing | The Round 2 visual review measured the host silhouette about 10% larger at 3.00 s. The archetype scale remains 0.70; `tools/prepare_phaselock_target.py` now applies a separate 0.90 host fit, for 0.63. A host-only 180-degree yaw check made the target show its back at 3.00 s, so the existing zero offset is retained. | The final 3.00 s pair shows a smaller target. It remains cool silver/lavender and its face is still less readable than the brown/tan reference. |
+| Target material | The resolved parent is `WillowGame.Common_Materials.Creature.Master_Creature`, but the UModel property listing and local shader-cache lookup still provide no graph or shader-map GUID. The host continues to use the Phaselock target's zone-material instance; no hue was fitted by eye across Sanctuary and Three Horns lighting. | Cause remains unconfirmed. The stock shader/material mismatch is open. |
+| Bubble interior | Restored `ModulateBlack` `DarkCap=1` and `FadeFloor=1` for the loop and end templates, and restored `Mat_EnemyOrbCoreColor` to its decoded weight and texture colour (removed the host x3 weight and blue-violet tint). Using the Round 14 ridge detector's 0.45-0.8 normalized annulus at 4.50 s, RGB moved from Round 2 `[42,41,89]` to final Round 3 `[36,31,60]`; the matched game frame measured `[31,36,80]`. | The host annulus is darker; its blue is below the reference in this detector. The single lower-interior point cited by the Round 2 critic is not the same statistic as this annulus and should not be compared directly. The fit remains open. |
+| 0.80 s wash | The host log shows three large `InitialFlash` sprites active at 0.80 s. Restored `Mat_SirenGlowMOD`'s 0.4 default from 1.0 and clamped the screen-material hue stand-in to the stock shader's saturate range. On the same 920 x 360 host ROI, mean RGB changed from `[197.3,229.3,244.5]` to `[144.1,196.1,226.3]`; the game ROI was `[157.4,214.8,247.2]`. RGB distance to that game ROI fell from 42.5 to 31.1. | The pane is less white and shows more variation. The host still has a visible straight lower seam; the surface-quad scene-colour stand-in is **UNVERIFIED**. The two scenes differ, so ROI colour distance is only a visual proxy. |
+| Hand orb | Added a 0.8 scale for the `Center` emitter and a red/green texture fit while preserving blue. A 20 x 20 px center sample changed from Round 2 `[184.9,221.0,251.0]` to final Round 3 `[161.6,210.7,251.2]`; the matched game sample was `[138.3,182.6,252.6]`. | The orb is smaller and less pale, but it still looks cyan and smooth compared with the game's royal-blue core and filaments. The red/green fit remains **UNVERIFIED**. |
+| 4.50 s rim | The shader's noise/normal displacement already frills the ring, but the host capped late push at 0.7. The capture log reads `Dyn=0.74` at 4.50 s; the host fit now ramps to 1.0 by `Dyn=0.75` while retaining the small early push. | The edge is more irregular in the final pair. The band remains broader and more purple than the reference; detached lower flecks remain. |
+
+### Validation
+
+* **Automated checks:** `tests/prepare_phaselock_target_test.py` passed 4/4. CMake Release libraries built successfully. The UE 5.8 `OpenWillowEditor Win64 Development` build succeeded with the 14.50 toolchain (4 actions, 26.6 s). The FX importer completed twice; each run reported 18 material instances, 21 textures, 3 meshes, and 3 skipped materials (impact half-moon without exported texture parameters, unresolved energy-spike modulate graph, and screen-distortion SirenSuction).
+* **Visual validation:** final host-left/game-right JPG pairs are `local/laneB/r3/pairs/phaselock_{0.25,0.50,0.80,1.50,3.00,4.50}s.jpg`, each 1920 x 570. The 0.50, 0.80, and 4.50 s comparisons were reviewed at full size. No independent critic score was produced in this implementation turn.
+* **Runtime/gameplay validation:** the UE host capture run exited successfully and wrote the timed frames. Borderlands 2 was not launched in this round; the captures do not establish gameplay parity. No new UModel extraction was run; the Round 18 material inspection remains the shader-identity evidence.
+
+The target's brown/ochre colour and more readable face, the 0.80 s straight seam, the orb's missing filament detail, the ring's purple breadth, and the lower detached flecks remain open. The 8/10 critic target was not evaluated here; pass the final pairs to the parent for review.
+
+## Round 20 (2026-10-22): final scale test, shell review and rim reversion
+
+Round 20 uses host captures and pairs under ignored `local/laneB/r4/`, matched to
+`local/realgame/phaselock/matched_650/run2/frames_at/`. The captures use
+`-owfov=62.15 -owfpfov=45 -owphaselockpitch=3.5 -owcombatpawyawoffset=0 -owcombatpawn=Bullymong` at 1280 x 720.
+All presentation choices and ratios below are **UNVERIFIED** as stock behavior.
+
+| Concern | Evidence and change | Result / remaining |
+|---|---|---|
+| Target scale and bubble bounds | Removed Round 19's fitted `host_visual_scale=0.90`. With corrected FOV and plain bounds, manual full-resolution boxes around the visible mesh (excluding HUD; ratios divide width and height by the outer rim's horizontal width) were: 1.50 s host 195 x 220 / 420 = 0.46 x 0.52, game 210 x 185 / 420 = 0.50 x 0.44; 3.00 s host 150 x 200 / 420 = 0.36 x 0.48, game 215 x 165 / 420 = 0.51 x 0.39; 4.50 s host 170 x 210 / 430 = 0.40 x 0.49, game 215 x 175 / 420 = 0.51 x 0.42. Measurements are manual and rounded to about 5-10 px. The 0.70 trial shrank both host dimensions by 30%, making the width ratios farther from the reference. `tools/prepare_phaselock_target.py` now uses the live component read of `1.0`; `MeshBoundsRadius()` uses raw bounds (307 / 245 / 200 uu versus live-game reads 290 / 230-260 / 193). | Scale 1.0 is the closer overall match, particularly in width, after correcting the earlier FOV conversion. It remains too upright/tall, a shape mismatch a uniform scale cannot fix. The live SDK read of 1.0 and archetype value of 0.70 still conflict; the host rendering choice is **UNVERIFIED**. |
+| Facing, pose and colour | The previous 180-degree yaw check showed the target's back; zero yaw remains. The Round 20 pair set uses the same 3.5-degree pitch as Round 18. No new live read establishes an additional yaw/pitch correction or loop-clip conversion. The target remains cool silver/lavender. The available UModel property list and shader-cache lookup still provide no material graph or shader-map identity. | No further pose or colour fit was made without evidence. The stock curl and brown/tan material remain open. |
+| 0.80 s shell | The final capture (`040022`) log at +0.806 s has three `InitialFlash` emitters: 2587 x 4743, alpha 1.00; 3924 x 1873, alpha 0.15; and 8233 x 3617, alpha 1.00. The scene still has a broad cyan wash with the target visible, while the reference forms a shell around and largely obscures the target. The material reader skips `Mat_SirenSuction`, a screen-distortion material. | No emitter size/alpha was guessed: the three overlapping flashes and skipped distortion layer do not identify a supported shell-only correction. The 0.80 s mismatch remains open. |
+| 0.50 s orb | Tested additional red/green multipliers `0.74` / `0.83` on the base and texture fills, then reverted them after the trial had no material effect. In the 40 x 40 px crop, the host changed from `[157.8,206.6,252.6]` before to `[156.9,205.9,252.6]` with the tint trial; the final restored-material capture was `[157.7,205.7,251.4]`. The matched game crop was `[117.3,171.0,252.4]` (host box x410-450/y324-364; game box x410-450/y345-385). The crop includes glow and overlapping layers, so their contribution is unresolved. | The color gap remains about 40 red and 35 green levels. The tint trial's near-zero change does not establish which layer dominates; retain the Round 19 shader fit rather than guess. The host still lacks the game's radial facets and bright arcs. |
+| Settled rim | Reverted Round 3's displacement ramp `lerp(0.15,1.0,saturate(Dyn/0.75))` to `lerp(0.15,0.7,saturate(Dyn/0.6))`. At the capture's `Dyn=0.74`, strength is about 0.70 instead of 0.99. | The high-strength frill is reduced; the edge remains violet and broader than the cloudlike cyan-white game rim, with detached lower flecks. |
+
+### Validation
+
+* **Automated build/extraction:** the UE 5.8 Development module build succeeded after the raw-bounds C++ change (14.50 toolchain; 4 actions, 20.63 s). The final FX import completed after restoring the Round 19 orb fit and reported 18 material instances, 21 textures and 3 meshes imported, and 3 skipped (impact half-moon without texture parameters, unresolved energy-spike modulate graph, and screen-distortion SirenSuction). No new UModel extraction was run.
+* **Visual validation:** the final capture (`run-20261022-040022.log`) wrote all requested timings. The six host-left/game-right pairs are `local/laneB/r4/pairs/phaselock_{0.25,0.50,0.80,1.50,3.00,4.50}s.jpg`, each 1920 x 570. No independent critic score was produced in this implementation turn.
+* **Automated checks:** `tests/prepare_phaselock_target_test.py` passed 6/6; `tests/particle_system_test.py` passed 16/16; CTest passed 10/10; `tools/verify_packages.py --reader build/Release/ow-package.exe` passed 9/9 packages; Python compilation and `git diff --check` passed.
+* **Runtime/gameplay validation:** the host capture runs succeeded and wrote all requested timings. Borderlands 2 was not launched, and the captures do not establish gameplay parity.
+
+The target's curled pose and colour, the 0.80 s shell, the palm orb's facets/arcs, and the settled rim's width/colour remain open. The 8/10 critic target was not independently evaluated; pass the final pairs to the parent for review.
+
+### Visual review, rounds 17-20 (independent critic, matched frames; scores as given)
+
+Each round was scored by a separate agent that saw only the host-left / game-right pairs (no code or docs). Round 17 was
+scored on three frames, rounds 18-20 on six; critics differ from round to round, so small changes are within their noise.
+
+| Round | Frames | 0.25 s | 0.50 s | 0.80 s | 1.50 s | 3.00 s | 4.50 s | Overall |
+|---|---|---|---|---|---|---|---|---|
+| 17 | `local/laneB/r1` | 6.0 | - | 5.6 | 6.0 | - | - | 5.9 |
+| 18 | `local/laneB/r2` | 6.7 | 5.8 | 4.7 | 5.5 | 5.5 | 5.7 | 5.6 |
+| 19 | `local/laneB/r3` | 6.5 | 6.5 | 4.5 | 5.8 | 6.0 | 5.5 | about 5.8 |
+| 20 | `local/laneB/r4` | 6.0 | 5.0 | 4.5 | 6.0 | 5.5 | 5.5 | about 5.4 |
+
+The 8/10 target was not reached; the lane stopped after four rounds as briefed. Closed or improved over the rounds: the
+0.80 s cut line (the game has the same soft-particle cut; the camera pitch was the difference), the capture field of view
+(the 4:3 / 16:9 conversion bug that made round 17's frames too wide), the bubble's size (420 vs 422 px), the held target
+facing the player, the dark bubble interior (the shader's own `ModulateBlack` values; round 20's critic now calls it slightly
+too uniform). Still open, most visible first, per the round 20 critic: the held pose (the host hangs folded with limbs high,
+the game's is compact and head-forward; uniform scale cannot fix it), the 0.80 s burst (a broad cyan wash with a straight
+lower edge against the game's rounded shell that hides the target), the bullymong's colour (icy white-lilac against dark
+brown; no material graph or shader identity found), the rim (smooth against the game's irregular cyan edge) and the palm
+orb (pale and flat against saturated cobalt with strands). The eye motif low in the game's view is the HUD's action-skill
+indicator, not an effect.

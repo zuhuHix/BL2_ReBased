@@ -31,20 +31,35 @@ UNVERIFIED in game, flagged in every recipe):
   its later weight; r = total * u with u = rand()/32767, and the first entry with
   running sum <= r <= running sum + weight wins. A slot with no candidate left
   gets no part. The game's own random sequence is not reproduced (seeded here).
+- Random numbers (CrtRand): roll() draws from the MSVC C runtime rand() seeded
+  with srand(seed) unless a caller passes another generator, so the C++ port
+  (src/weapon_gen.cpp) reproduces a roll exactly. The seeding is ours; that the
+  game's pick uses the CRT rand() directly is UNVERIFIED. Callers that must keep
+  older outputs (tools/weapon_slice_gear.py) pass random.Random(seed).
 - Name (choose_name_parts()): deterministic, no random draw. Start from the
   weapon type's PrefixList/TitleList, then each part in slot order; within a list
   the qualifying entry (MinExpLevelRequirement <= level <= MaxExpLevelRequirement,
   Priority > 0, Expressions true) with the highest Priority wins, a later one on
   ties; a later list replaces the current pick when its Priority is >= the
-  current one. Class defaults: Priority 1, level window 1..100. Only expressions
-  of the form Weapon_Is_<Manufacturer> == 1 are evaluated here; any other form
-  excludes the name part (UNVERIFIED shortcut, the game evaluates them all).
+  current one. Class defaults: Priority 1, level window 1..100.
+- Name expressions (name_expressions_hold(); read from native code 2026-10-23,
+  UNVERIFIED in game except the one live case below): every entry of a name part's
+  Expressions must hold (the list evaluator stops at the first false one; an empty
+  list holds). One entry compares AttributeOperand1's value with ConstantOperand2
+  by ComparisonOperator (==, !=, <, <=, >, >=). Operands resolved here: Weapon_Is_<Maker>
+  (1 for the weapon's own manufacturer, else 0) and an attribute whose value resolver is
+  a DamageTypeAttributeValueResolver (WeaponDamage_Is_<Element>): the weapon's damage
+  type (native_damage_type()) is compared by object name with each DamageTypes entry's
+  AssociatedDamageTypeName; a match gives its ValueIfMatched, otherwise
+  ValueIfNotMatched (class default 0). Any other operand, or an AttributeOperand2,
+  excludes the name part. Startup.upk has only these two forms (593 entries, all == 1).
+  Live check 2026-10-23: a Maliwan SMG with a shock elemental part showed the
+  Maliwan TechBoost Shock barrel title, which this rule picks.
 """
 import argparse
 import json
 import math
 import os
-import random
 import struct
 import subprocess
 import tempfile
@@ -58,6 +73,9 @@ SCHEMA_LINES = [
     'TitleList=ObjectProperty',
     'PrefixList=ObjectProperty',
     'Expressions=StructProperty:AttributeExpressionData',
+    'ValueResolverChain=ObjectProperty',
+    # DamageTypeAttributeValueResolver.DamageTypes (DamageTypeSelectorData); struct elements are tagged.
+    'DamageTypes=StructProperty:DamageTypeSelectorData',
 ]
 
 
@@ -330,6 +348,28 @@ def slot_candidates(package, collection, stage, manufacturer=None):
     return slots, props.get('PartReplacementMode') or 'EPRM_Additive'
 
 
+class CrtRand:
+    """The MSVC C runtime rand(): state = state * 214013 + 2531011 (mod 2^32), value = bits 16..30.
+
+    srand(seed) sets the state to the seed. Plain integer arithmetic, so the C++ port
+    (CrtRand in src/weapon_gen.hpp) gives the same sequence for the same seed.
+    """
+    MAX = 32767
+
+    def __init__(self, seed):
+        self.state = int(seed) & 0xFFFFFFFF
+
+    def rand(self):
+        self.state = (self.state * 214013 + 2531011) & 0xFFFFFFFF
+        return (self.state >> 16) & 0x7FFF
+
+    def randint(self, low, high):
+        """random.Random.randint(0, 32767) stand-in, so pick() accepts either generator."""
+        if (low, high) != (0, self.MAX):
+            raise ValueError('CrtRand only draws 0..32767')
+        return self.rand()
+
+
 def pick(entries, rng):
     """The game's weighted pick in one slot -> (part or None, candidates {part: weight}).
 
@@ -355,8 +395,112 @@ def pick(entries, rng):
     return part, candidates  # r == total after float rounding: the last entry
 
 
-def name_part_qualifies(package, name_part, level, manufacturer):
-    """Level window, positive priority and the manufacturer expression form (see module docstring)."""
+def weapon_damage_type(package, parts, weapon_type):
+    """The weapon's damage type: the elemental part's CustomDamageTypeDefinition, else any part's, else the type's.
+
+    `parts` is {slot: part path} in slot order; `weapon_type` the type's path or its props.
+    Used by the card (weapon_stats.damage_type_of). The game's own lookup (the one
+    WillowWeapon.StaticGetWeaponDamageType uses, read from native code 2026-10-23) reads only
+    the elemental part and then the type default; that is native_damage_type(), which the name
+    rule uses. The any-part fallback here is the card's earlier rule (UNVERIFIED precedence).
+    """
+    ordered = sorted(parts.items(), key=lambda item: item[0] != 'Elemental')
+    for _, part in ordered:
+        custom = package.props(part).get('CustomDamageTypeDefinition') if part else None
+        if custom:
+            return custom
+    props = package.props(weapon_type) if isinstance(weapon_type, str) else (weapon_type or {})
+    return props.get('DefaultDamageTypeDefinition')
+
+
+
+def native_damage_type(package, parts, weapon_type):
+    """The damage type the native resolver gives: the elemental part's CustomDamageTypeDefinition, else the type's.
+
+    Read from native code 2026-10-23 (NATIVE_WEAPON_RULES.md section 12; UNVERIFIED in game):
+    no other part is consulted. `parts` and `weapon_type` as for weapon_damage_type(). The name
+    expressions use this.
+    """
+    elemental = parts.get('Elemental')
+    custom = package.props(elemental).get('CustomDamageTypeDefinition') if elemental else None
+    if custom:
+        return custom
+    props = package.props(weapon_type) if isinstance(weapon_type, str) else (weapon_type or {})
+    return props.get('DefaultDamageTypeDefinition')
+
+# EComparisonOperator, in the order the native comparison switches on (read 2026-10-23).
+COMPARISONS = {
+    'OPERATOR_EqualTo': lambda a, b: a == b, 'OPERATOR_NotEqualTo': lambda a, b: a != b,
+    'OPERATOR_LessThan': lambda a, b: a < b, 'OPERATOR_LessThanOrEqualTo': lambda a, b: a <= b,
+    'OPERATOR_GreaterThan': lambda a, b: a > b, 'OPERATOR_GreaterThanOrEqualTo': lambda a, b: a >= b,
+}
+DAMAGE_TYPE_RESOLVER = 'DamageTypeAttributeValueResolver'
+
+
+def damage_type_selector(package, attribute):
+    """([(damage type object name, value if matched)], value if not matched) for an attribute whose
+    only value resolver is a DamageTypeAttributeValueResolver; None for any other attribute or when
+    a value needs runtime state."""
+    classes = getattr(package, 'classes', {})
+    chain = package.props(attribute).get('ValueResolverChain') or [
+        path for path, cls in classes.items() if path.startswith(attribute + '.') and cls.endswith(DAMAGE_TYPE_RESOLVER)]
+    if len(chain) != 1 or not (classes.get(chain[0], '').endswith(DAMAGE_TYPE_RESOLVER)
+                               or chain[0].rsplit('.', 1)[-1].startswith(DAMAGE_TYPE_RESOLVER)):
+        return None
+    props = package.props(chain[0])
+    matched = []
+    for row in props.get('DamageTypes') or []:
+        value = attribute_value(package, row.get('ValueIfMatched') or {}, None)
+        if value is None:
+            return None
+        matched.append((row.get('AssociatedDamageTypeName'), value))
+    default = attribute_value(package, props.get('ValueIfNotMatched') or {}, None)  # class default: constant 0
+    return None if default is None else (matched, default)
+
+
+def name_operand(package, attribute):
+    """How a name expression's attribute resolves: ('maker', name), ('damage', selector) or None."""
+    if '.Weapon_Is_' in attribute:
+        return 'maker', attribute.rsplit('Weapon_Is_', 1)[1]
+    try:
+        selector = damage_type_selector(package, attribute) if attribute else None
+    except KeyError:  # not an export of this package
+        selector = None
+    return None if selector is None else ('damage', selector)
+
+
+def name_operand_value(operand, manufacturer, damage_type):
+    kind, data = operand
+    if kind == 'maker':
+        return 1.0 if manufacturer and data == manufacturer.rsplit('.', 1)[1] else 0.0
+    matched, default = data
+    name = damage_type.rsplit('.', 1)[-1] if damage_type else None
+    return next((value for key, value in matched if key == name), default)
+
+
+def name_expression(package, expression):
+    """(operand, operator, constant) for an expression the tools can evaluate, else None."""
+    operator = expression.get('ComparisonOperator') or 'OPERATOR_EqualTo'
+    if operator not in COMPARISONS or expression.get('AttributeOperand2'):
+        return None
+    operand = name_operand(package, expression.get('AttributeOperand1') or '')
+    return None if operand is None else (operand, operator, f32(expression.get('ConstantOperand2') or 0.0))
+
+
+def name_expressions_hold(package, expressions, manufacturer, damage_type):
+    """Every expression holds (see module docstring); an unresolvable one excludes the name part."""
+    for expression in expressions or []:
+        parsed = name_expression(package, expression)
+        if parsed is None:
+            return False
+        operand, operator, constant = parsed
+        if not COMPARISONS[operator](name_operand_value(operand, manufacturer, damage_type), constant):
+            return False
+    return True
+
+
+def name_part_qualifies(package, name_part, level, manufacturer, damage_type=None):
+    """Level window, positive priority and every expression (see module docstring)."""
     props = package.props(name_part)
     if not props.get('PartName'):
         return False
@@ -368,14 +512,7 @@ def name_part_qualifies(package, name_part, level, manufacturer):
         return False
     if not name_priority(package, name_part) > 0:
         return False
-    for expression in props.get('Expressions') or []:
-        attribute = expression.get('AttributeOperand1') or ''
-        if (expression.get('ComparisonOperator') != 'OPERATOR_EqualTo' or expression.get('AttributeOperand2')
-                or expression.get('ConstantOperand2') != 1 or '.Weapon_Is_' not in attribute):
-            return False
-        if not manufacturer or attribute.rsplit('Weapon_Is_', 1)[1] != manufacturer.rsplit('.', 1)[1]:
-            return False
-    return True
+    return name_expressions_hold(package, props.get('Expressions'), manufacturer, damage_type)
 
 
 def name_priority(package, name_part):
@@ -384,26 +521,31 @@ def name_priority(package, name_part):
     return 1.0 if value is None else value
 
 
-def best_name_part(package, names, level, manufacturer):
+def best_name_part(package, names, level, manufacturer, damage_type=None):
     """The qualifying entry of one TitleList/PrefixList with the highest priority, a later one on ties."""
     best = None
     for name_part in names or []:
-        if name_part_qualifies(package, name_part, level, manufacturer) and (
+        if name_part_qualifies(package, name_part, level, manufacturer, damage_type) and (
                 best is None or name_priority(package, best) <= name_priority(package, name_part)):
             best = name_part
     return best
 
 
 def choose_name_parts(package, weapon_type, parts, manufacturer, level):
-    """(prefix, title) name parts for {slot: part path}: type lists first, then parts in slot order."""
+    """(prefix, title) name parts for {slot: part path}: type lists first, then parts in slot order.
+
+    Runs after the parts are chosen, so the damage-type expressions see the final parts.
+    """
     chosen = {}
+    damage_type = native_damage_type(package, {s: parts[s] for s in SLOTS if parts.get(s)}, weapon_type)
     for list_name in ('PrefixList', 'TitleList'):
-        current = best_name_part(package, package.props(weapon_type).get(list_name), level, manufacturer) if weapon_type else None
+        current = best_name_part(package, package.props(weapon_type).get(list_name), level, manufacturer,
+                                 damage_type) if weapon_type else None
         for slot in SLOTS:
             part = parts.get(slot)
             if not part:
                 continue
-            candidate = best_name_part(package, package.props(part).get(list_name), level, manufacturer)
+            candidate = best_name_part(package, package.props(part).get(list_name), level, manufacturer, damage_type)
             if current is None or (candidate is not None and
                                    name_priority(package, current) <= name_priority(package, candidate)):
                 current = candidate
@@ -447,12 +589,33 @@ def merge(package, balance, stage):
             'history': history, 'manufacturers': makers}
 
 
-def roll(package, balance, seed, stage):
+# Pool spawns cap the stage a balance's candidate is built at (read from native code 2026-10-23,
+# UNVERIFIED in game): 50 in playthroughs 1 and 2; in the third (UVHM) the current level cap
+# (50 + 11 + 11 + 8 = 80 with every cap pack). Overpower levels on top of the full cap are not modelled.
+NORMAL_STAGE_CAP = 50
+FULL_LEVEL_CAP = 80
+
+
+def default_stage_cap(playthrough, level_cap=FULL_LEVEL_CAP):
+    """The stage cap a pool spawn uses: 50 before UVHM (playthrough 3), else the level cap."""
+    return min(level_cap, FULL_LEVEL_CAP) if playthrough >= 3 else NORMAL_STAGE_CAP
+
+
+def roll(package, balance, seed, stage, rng=None, stage_cap=None):
+    """Roll one gun. `rng` defaults to CrtRand(seed); pass random.Random(seed) for the pre-2026-10-22 sequence.
+
+    `stage_cap` (None: no cap) caps the spawn stage like a pool spawn: the item level is
+    min(stage, cap) (read from native code). The part pick uses the same capped stage; that
+    follows from the candidate storing the capped stage, the part-list use itself was not read.
+    """
+    spawn_stage = stage
+    if stage_cap is not None and stage is not None:
+        stage = min(stage, stage_cap)
     merged_chain = merge(package, balance, stage)
     weapon_type, manufacturer = merged_chain['weapon_type'], merged_chain['manufacturer']
     merged, history = merged_chain['merged'], merged_chain['history']
 
-    rng = random.Random(seed)
+    rng = CrtRand(seed) if rng is None else rng
     parts, notes = {}, []
     for slot in SLOTS:
         entries = merged.get(slot) or []
@@ -481,6 +644,7 @@ def roll(package, balance, seed, stage):
     title, prefix = described(title), described(prefix)
     return {
         'balance': balance, 'manufacturer': manufacturer, 'seed': seed, 'game_stage': stage, 'weapon_type': weapon_type,
+        'spawn_stage': spawn_stage, 'stage_cap': stage_cap,
         'gestalt': package.props(weapon_type).get('GestaltMesh') if weapon_type else None,
         'name': ' '.join(x for x in (prefix['text'] if prefix else None, title['text'] if title else None) if x),
         'title': title,
@@ -491,7 +655,7 @@ def roll(package, balance, seed, stage):
         'merge': history,
         'notes': notes,
         'unverified_rules': ['part replacement semantics', 'part weights and pick read from native code',
-                             'manufacturer grades ignored', 'name choice read from native code (expressions simplified)'],
+                             'manufacturer grades ignored', 'name choice and name expressions read from native code'],
     }
 
 
@@ -502,13 +666,14 @@ def main():
     parser.add_argument('--balance', required=True, help='e.g. GD_Weap_Pistol.A_Weapons_Legendary.Pistol_Vladof_5_Infinity')
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--stage', type=float, default=30, help='game stage (level) used for part filtering')
+    parser.add_argument('--stage-cap', type=float, help='cap the stage like a pool spawn (50; UVHM: the level cap)')
     parser.add_argument('--output', help='write JSON here instead of stdout')
     args = parser.parse_args()
     schema = Path(args.output or 'local/weapon_recipe.json').parent / 'weapon_recipe.schema'
     schema.parent.mkdir(parents=True, exist_ok=True)
     schema.write_text('\n'.join(SCHEMA_LINES) + '\n', encoding='utf-8')
     package = Package(str(Path(args.reader).resolve()), Path(args.package), str(schema.resolve()))
-    recipe = roll(package, args.balance, args.seed, args.stage)
+    recipe = roll(package, args.balance, args.seed, args.stage, stage_cap=args.stage_cap)
     text = json.dumps(recipe, indent=1)
     if args.output:
         Path(args.output).write_text(text, encoding='utf-8')

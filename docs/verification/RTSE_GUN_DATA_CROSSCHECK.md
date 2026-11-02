@@ -149,7 +149,7 @@ anything about the meshes themselves.
   socket and the eject port are decoded data (`NATIVE_WEAPON_VISUALS.md` names the eject port as the shell-casing socket).
   **Done (2026-10-07, lane I5):** the schema is tracked (`tools/gestalt-arrays.schema`), `tools/gestalt_sockets.py` writes the
   sockets, recipes carry `sockets`, and the host's muzzle flash and tracer start at the decoded `Muzzle` socket
-  ([WEAPON_VISUALS.md](WEAPON_VISUALS.md) section 11). The eject port is exposed; the host spawns no shell casings.
+  ([WEAPON_VISUALS.md](WEAPON_VISUALS.md) section 17). The eject port is exposed; the host spawns no shell casings.
 
 ## 8. The mod as an oracle for the evaluator and the assembly (proposal, nothing run)
 

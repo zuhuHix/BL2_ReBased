@@ -11,8 +11,36 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import prepare_weapon_paint as paint
 from render_weapon_previews import resolve_material
+from weapon_item_materials import INFINITY_MIC, choose_item_material, paint_material_path
 
 DETAIL = 'Weap_LauncherShotgunPistol_Comp'  # a DETAIL_CHANNELS key; the PNG itself is synthetic
+
+
+class WeaponItemMaterialTests(unittest.TestCase):
+    def test_prepared_paint_material_wins_over_neutral(self):
+        choice, warning = choose_item_material('synthetic_rifle', 'Fake.ManufacturerMaterial',
+                                                paint_available=True, infinity_available=False)
+        self.assertEqual(choice, 'paint')
+        self.assertIsNone(warning)
+        self.assertEqual(paint_material_path('synthetic_rifle'),
+                         '/Game/OpenWillow/Weapons/Paint/synthetic_rifle/M_OW_PaintApprox')
+
+    def test_infinity_approximation_remains_a_fallback(self):
+        choice, warning = choose_item_material('synthetic_pistol', INFINITY_MIC, paint_available=False,
+                                               infinity_available=True)
+        self.assertEqual(choice, 'infinity')
+        self.assertIsNone(warning)
+
+    def test_missing_paint_for_other_items_uses_neutral(self):
+        choice, warning = choose_item_material('synthetic_rifle', 'Fake.ManufacturerMaterial', paint_available=False,
+                                               infinity_available=True)
+        self.assertEqual(choice, 'neutral')
+        self.assertIn('synthetic_rifle/M_OW_PaintApprox', warning)
+        self.assertIn('Fake.ManufacturerMaterial', warning)
+
+    def test_paint_asset_path_rejects_unsafe_recipe_ids(self):
+        with self.assertRaises(ValueError):
+            paint_material_path('../synthetic')
 
 
 def props(parent, scalars=(), vectors=(), textures=()):

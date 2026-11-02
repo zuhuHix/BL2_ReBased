@@ -6,8 +6,16 @@ window.owInventoryStartedAt = startupAt;
 window.owInventoryMovieReady = false;
 window.owInventoryReady = false;
 const player = window.RufflePlayer.newest().createPlayer();
-document.getElementById('presentation').prepend(player);
-document.getElementById('presentation').prepend(document.getElementById('inspect-backdrop')); // under the movie
+const presentation = document.getElementById('presentation');
+const glassSheet = document.getElementById('ow-glass-sheet');
+const inspectBackdrop = document.getElementById('inspect-backdrop');
+if (glassSheet && inspectBackdrop && typeof presentation.insertBefore === 'function') {
+  presentation.insertBefore(inspectBackdrop, glassSheet.nextSibling);
+  presentation.insertBefore(player, inspectBackdrop.nextSibling);
+} else {
+  presentation.prepend(player);
+  presentation.prepend(inspectBackdrop); // under the movie
+}
 window.owPlayer = player;
 
 const ROOT = '_level1', INV = ROOT + '.inventory';
@@ -35,6 +43,7 @@ const PANEL_SCALE = 0.62, PANEL_SCALE_Y = 0.70, PANEL_LEFT = 754, PANEL_TOP = 12
 // The small and compare views start the list lower than the real frames did by 34 and 30 px ("WEAPONS" at y 205/213 against 171/170),
 // which is where the old category chevrons' sub-label used to sit.
 const LIST_TOP = 47, LIST_TOP_COMPARE = 40, LIST_TOP_FOCUS = 38; // the focus panel moved up 8 px (title at y 100), the list stays where it was
+const SCROLLED_LIST_ORIGIN = 28; // movie px; with focus scaling this is about 30 screen px
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
 const FOCUS_PANEL = {scale:0.92, scaleY:0.979, left:497, top:67}; // bkgd's left: the visible frame is 23 px inside it (520 on the real capture)
@@ -133,10 +142,11 @@ const FUN_STATS_OVERLAP = 6;
 const ARROW_VALUE_GAP = 2;
 // Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
 const CARD_TEXT_SIZE = 16;
-const HEADER_SHRINK = 0.93, HINT_LIFT = 13, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // hint 10 px right and 4 low, plate 3 low (critic round 13)
+const HEADER_SHRINK = 0.93, HEADER_SHIFT_X = 15, HINT_LIFT = 2, HINT_SHIFT_X = -10, PLATE_LIFT = 3; // D20 inventory title group is 15 px left in every paired state
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
+let slotKeyChoiceFor = null; // the backpack item a number key last chose a weapon slot for
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
@@ -249,7 +259,15 @@ function gearPlaceholder(item) {
 }
 const equippedIdFor = item => {
   const gearSlot = gearSlotForItem(item);
-  return gearSlot ? state?.gearSlots?.[gearSlot] || null : state?.slots?.[targetSlot] || null;
+  if (gearSlot) return state?.gearSlots?.[gearSlot] || null;
+  // GetEquippedAnalogue uses the pawn's live weapon, then the controller's
+  // ActiveWeaponSlot. The snapshot exposes that active slot; targetSlot is the
+  // last equipment cell visited and is only a destination choice. UNVERIFIED:
+  // when ActiveWeaponSlot has no placed weapon, the host cannot walk the native
+  // inventory chain by QuickSelectSlot.
+  const activeSlot = Number(state?.activeSlot);
+  if (Number.isInteger(activeSlot) && activeSlot >= 0 && activeSlot < 4) return state?.slots?.[activeSlot] || null;
+  return state?.slots?.[targetSlot] || null;
 };
 const equippedItems = () => [
   ...(state?.slots || []),
@@ -262,6 +280,15 @@ const selectedSlotIndex = () => {
   return gearSlot ? 4 + gearSlots.findIndex(slot => slot.key === gearSlot)
     : targetGearSlot ? 4 + gearSlots.findIndex(slot => slot.key === targetGearSlot) : targetSlot;
 };
+const equippedSelectionIndex = () => navigationPanel === 'equipped' || transferFromEquipped ? selectedSlotIndex() : -1;
+function equippedAnalogueIndexFor(item) {
+  const analogue = equippedIdFor(item);
+  const index = analogue ? equippedItems().indexOf(analogue) : -1;
+  if (index >= 0 && !slotLocked(index)) return index;
+  const activeSlot = Number(state?.activeSlot);
+  if (Number.isInteger(activeSlot) && activeSlot >= 0 && activeSlot < 4 && !slotLocked(activeSlot)) return activeSlot;
+  return slotLocked(lastEquippedIndex) ? 0 : lastEquippedIndex;
+}
 
 // Optional host field: how many of the four weapon slots are open (a new Maya has 2).
 // Absent or invalid means all four, so older hosts keep working.
@@ -292,12 +319,16 @@ function ammoKeyForItem(item) {
   return weaponAmmoKeys.get(String(item.type || 'pistol').trim().toLowerCase()) || null;
 }
 
+// `inventory.html?logsnapshot` writes every new host snapshot to the console (the UE log), so a captured state can be
+// replayed in a plain browser while tuning the layout. Off by default.
+const LOG_SNAPSHOTS = /[?&]logsnapshot\b/.test(String(location.search || ''));
 window.owInventory = snapshot => {
   if (!snapshot || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.slots)
       || snapshot.slots.length !== 4) return;
   const firstSnapshot = state === null;
   const serial = JSON.stringify(snapshot);
   if (serial === lastState) return;
+  if (LOG_SNAPSHOTS) console.log(`OWINVSNAPSHOT ${serial}`);
   lastState = serial;
   state = snapshot;
   if (transferSourceId && !itemById(transferSourceId)) finishTransfer();
@@ -314,7 +345,8 @@ window.owInventory = snapshot => {
     const id = targetGearSlot ? state.gearSlots?.[targetGearSlot] : state.slots[targetSlot];
     selectedId = itemById(id)?.id || null;
   }
-  if (!itemById(selectedId)) {
+  if (!itemById(selectedId) && !(isEmptyCellId(selectedId) && navigationPanel === 'backpack' && !transferSourceId
+      && backpackEntries().some(entry => entry.id === selectedId))) {
     const heldId = state.slots[targetSlot];
     // An intentionally selected empty equipment cell must stay empty when
     // unrelated ammo/currency snapshots arrive.
@@ -368,7 +400,12 @@ const sortComparators = {
     if (isWeapon(a) !== isWeapon(b)) return isWeapon(a) ? -1 : 1;
     if (isWeapon(a)) {
       return (Boolean(b.missionWeapon) - Boolean(a.missionWeapon)) || (rarityLevel(b) - rarityLevel(a))
-        || (categoryKey(a) === categoryKey(b) ? levelTie(a, b) : 0);
+        || (categoryKey(a) === categoryKey(b) ? levelTie(a, b)
+          // UNVERIFIED empirical tie rule: D20's ALL captures put equal-rarity
+          // cross-type weapons in descending category-key order (Volcano,
+          // Hellfire, Nukem). The native comparator reports these pairs equal;
+          // this host tie-break matches the captured order without item names.
+          : compareKeys(categoryKey(b), categoryKey(a)));
     }
     return compareKeys(categoryKey(a), categoryKey(b)) || rarityThenLevel(a, b);
   },
@@ -429,8 +466,17 @@ function backpackEntries() {
   }
   const capacity = Number.isFinite(state?.backpackCapacity) && state.backpackCapacity > 0 ? state.backpackCapacity : 0;
   const empties = capacity ? Math.max(0, capacity - items.length) : Math.max(0, VISIBLE_ROWS + 1 - items.length);
-  for (let i = 0; i < empties; i++) entries.push({empty:true});
+  for (let i = 0; i < empties; i++) entries.push({empty:true, id:emptyCellId(i)});
   return entries;
+}
+// The trailing "(EMPTY)" cells are selectable in the original (2026-10-21 capture: Down past the last item moves the selection
+// onto them, no card is shown). They are selected by these ids; outside a transfer only (a transfer lists weapons only).
+const emptyCellId = index => `empty:${index}`;
+const isEmptyCellId = id => typeof id === 'string' && id.startsWith('empty:');
+function selectableRows() {
+  const items = backpackItems();
+  if (transferSourceId) return items;
+  return [...items, ...backpackEntries().filter(entry => entry.empty)];
 }
 
 function requestAction(action, fields = {}) {
@@ -526,6 +572,8 @@ function equip() {
 }
 
 function unequip() {
+  // An empty backpack cell has no item; without this, U/Delete fell through to the remembered weapon slot (review of PR #46).
+  if (isEmptyCellId(selectedId)) return;
   const item = itemById(selectedId);
   if (targetGearSlot) {
     if (state?.gearSlots?.[targetGearSlot]) requestAction('unequip', {gearSlot:targetGearSlot});
@@ -565,6 +613,11 @@ function beginBackpackTransfer() {
   navigationPanel = 'equipped';
   targetGearSlot = gearSlotForItem(source);
   compareId = equippedIdFor(source);
+  const compareWeaponSlot = state.slots.indexOf(compareId);
+  // The transfer starts on the equipped analogue (the compare partner) unless a number key already chose a slot for
+  // this item (a host control; the original's number-key behaviour here is not observed).
+  if (!targetGearSlot && compareWeaponSlot >= 0 && slotKeyChoiceFor !== source.id) targetSlot = compareWeaponSlot;
+  else if (!targetGearSlot && slotKeyChoiceFor === source.id) compareId = state.slots[targetSlot] || null;
   firstRow = scrollForSelected(backpackEntries());
   render();
 }
@@ -833,6 +886,11 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
   call(card, 'SetTitle', String(item.manufacturer || '').toLowerCase(), escapeHtml(item.name), color(item),
     movieTypeIcon(item), element === 'None' ? 'none' : element.toLowerCase(),
     equippedIds().has(item.id));
+  // SetTitle counts the name's lines with Scaleform's getLineLength, which Ruffle lacks, so every name counted as two lines
+  // and the stats started a line low (real cards put them right under a one-line name). The field's bottomScroll is the
+  // number of lines it shows (all of them: the field is two lines tall).
+  const titleLines = Number(get(`${card}.titleLine`, 'bottomScroll'));
+  if (titleLines >= 1 && titleLines <= 2) call(card, 'SetRequiredTitleLines', titleLines);
   call(card, 'TurnOffAllTopStats');
   const stats = cardStats(item), otherStats = cardStats(compareItem || {});
   for (let index=0; index<7; index++) {
@@ -858,11 +916,12 @@ function configureCard(card, item, compareItem = null, style = 'highlight') {
     statVisibility.set(`${row}.auxField`, false);
     statVisibility.set(`${row}.arrow`, arrowShown);
     if (arrowShown) set(`${row}.arrow`, '_visible', true);
-    // The value is right-aligned to the same edge as the arrow, so with an arrow showing it moves left by
-    // the arrow's width (its natural x is remembered per field).
+    // On real cards a value without an arrow ends at the arrow column's right edge and one with an arrow ends just before
+    // the arrow (2026-10-21 elemental and compare cards); the movie's field ended at the arrow's left edge, so values sat
+    // about 15 px left of the real ones. The field's natural x is remembered per field.
     if (!statMainX.has(`${row}.mainField`)) statMainX.set(`${row}.mainField`, Number(get(`${row}.mainField`, '_x')));
-    const arrowWidth = arrowShown ? Number(get(`${row}.arrow`, '_width')) : 0;
-    set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) - (arrowWidth > 0 ? arrowWidth + ARROW_VALUE_GAP : 0));
+    const arrowWidth = Number(get(`${row}.arrow`, '_width')) || 0;
+    set(`${row}.mainField`, '_x', statMainX.get(`${row}.mainField`) + arrowWidth - (arrowShown ? arrowWidth + ARROW_VALUE_GAP : 0));
   });
   // Legacy plain-text payloads are '; '-joined. The weapon contract puts red
   // text first; observed gear formatting below overrides this fallback.
@@ -909,23 +968,45 @@ function fitFunStats(card, hasFunStats) {
 // 0.896 on the host captures): the visible frame widths wanted are 307, 273, 253 and 292.
 const FRAME_INSET = 0.896;
 const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
-const CARD_FIT = {single:fitTarget(307, 215, 112), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
-  inspect:fitTarget(285, 55, 44)};  // the level strip sits about 14 px above the frame's clip, so the frame is at 44 for a strip at 30
+// single: 6 px left and 15 px up from the round-15 fit, after the round-18 frames with the 3D turn (frame corner 218, 123 against
+// 212, 108 on the real equipped view).
+const CARD_FIT = {single:fitTarget(307, 209, 97), left:{...fitTarget(273, 210, 94)}, right:fitTarget(253, 600, 118),
+  inspect:{...fitTarget(293, 56, 50), aspect:306/241}}; // D20 D5: UNVERIFIED fit from host x20-350,y29-300 to real x48-354,y36-277
+const cardAspectCorrection = new Map();
 function fitCard(card, target) {
+  const previousAspect = cardAspectCorrection.get(card) || 1;
+  if (!target.aspect && Math.abs(previousAspect - 1) > 0.001) {
+    set(card, '_yscale', Number(get(card, '_yscale')) / previousAspect);
+    cardAspectCorrection.set(card, 1);
+  }
   const bounds = readBounds(card + '.bkgd');
   if (!bounds) return;
   const width = bounds.xMax - bounds.xMin;
-  if (!(width > 20) || Math.abs(width - target.width) > 1.5) {
-    const factor = target.width / width;
+  const left = target.x !== undefined ? target.x : target.right - target.width;
+  const targetWidth = toMovie(left + target.width, target.y).x - toMovie(left, target.y).x;
+  if (!(width > 20) || Math.abs(width - targetWidth) > 1.5) {
+    const factor = targetWidth / width;
     if (!Number.isFinite(factor) || factor < 0.3 || factor > 3) return;
     set(card, '_xscale', Number(get(card, '_xscale')) * factor);
     set(card, '_yscale', Number(get(card, '_yscale')) * factor);
   }
-  const fitted = readBounds(card + '.bkgd');
+  let fitted = readBounds(card + '.bkgd');
   if (!fitted) return;
-  const left = target.x !== undefined ? target.x : target.right - target.width;
+  if (target.aspect) {
+    const currentHeight = fitted.yMax - fitted.yMin;
+    const targetHeight = (fitted.xMax - fitted.xMin) / target.aspect;
+    const factorY = targetHeight / currentHeight;
+    if (Number.isFinite(factorY) && factorY > 0.3 && factorY < 3 && Math.abs(factorY - 1) > 0.001) {
+      set(card, '_yscale', Number(get(card, '_yscale')) * factorY);
+      cardAspectCorrection.set(card, previousAspect * factorY);
+      fitted = readBounds(card + '.bkgd');
+      if (!fitted) return;
+    }
+  }
+  const screenLeft = target.x !== undefined ? target.x : target.right - target.width;
+  const topLeft = toMovie(screenLeft, target.y);
   const scale = Number(get(INV, '_xscale')) / 100 || 1;
-  const dx = left - fitted.xMin, dy = target.y - fitted.yMin;
+  const dx = topLeft.x - fitted.xMin, dy = topLeft.y - fitted.yMin;
   if (Math.abs(dx) > 1) set(card, '_x', Number(get(card, '_x')) + dx / scale);
   if (Math.abs(dy) > 1) set(card, '_y', Number(get(card, '_y')) + dy / scale);
 }
@@ -954,19 +1035,25 @@ function drawCard() {
   // item being moved is green, the card it is compared with is yellow. The main card is the moved item.
   // A backpack item with an equipped counterpart also shows arrows against it without a second card.
   const arrowsAgainst = compare || (item && !equippedIds().has(item.id) ? itemById(equippedIdFor(item)) : null);
-  const movedStyle = transferSourceId ? 'compare' : 'highlight', otherStyle = transferSourceId ? 'highlight' : 'compare';
+  const movedStyle = transferSourceId ? 'compare' : 'highlight';
+  const otherStyle = transferSourceId ? 'highlight' : 'compare';
   configureCard(INV + '.mainCard', fromLeft ? compare : item, fromLeft ? item : arrowsAgainst, movedStyle);
   configureCard(INV + '.compareCard', fromLeft ? item : compare, fromLeft ? compare : item, otherStyle);
+  // Inspect shows the card in its plain blue frame (2026-10-04 Inspect captures, both items), not the selection yellow:
+  // the background clip's first frame (its other two are the yellow and green ones SetBackgroundStyle names).
+  if (inspectMode) player.ow(INV + '.mainCard.bkgd', 'gotoAndStop', 1);
   setCompareLayout(Boolean(compare) || Boolean(transferSourceId), fromLeft);
-  const gearSlot = gearSlotForItem(item);
-  const compareSlotLabel = gearSlot
-    ? gearSlots.find(slot => slot.key === gearSlot)?.label || 'gear slot'
-    : `slot ${targetSlot+1}`;
+  const compareGearSlot = gearSlotForItem(compare);
+  const compareWeaponSlot = compare ? state.slots.indexOf(compare.id) : -1;
+  const compareSlotLabel = compareGearSlot
+    ? gearSlots.find(slot => slot.key === compareGearSlot)?.label || 'gear slot'
+    : compareWeaponSlot >= 0 ? `slot ${compareWeaponSlot+1}` : `slot ${targetSlot+1}`;
   // Match the observed stock tooltip line. Extra host keys remain available.
   const hints = [[transferSourceId ? (compare ? '[E] Swap' : '[E] Equip') : '[E] Select/Compare', !!item],
     ['[Q] Drop', !!item && !transferSourceId]];
   // Seen in the real compare views: from the equipped item the Sort entry stays, from a backpack item it is gone.
-  if ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped))
+  if ((!transferSourceId && item && !equippedIds().has(item.id)) || (transferSourceId && transferFromEquipped)
+      || (!transferSourceId && isEmptyCellId(selectedId)))
     hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
@@ -984,7 +1071,7 @@ function syncSelection() {
   if (!ready || !state) return;
   if (backpackFocused() !== appliedFocus) { render(); return; }
   const equipped = INV + '.equippedPanel';
-  const selectedCell = selectedSlotIndex();
+  const selectedCell = equippedSelectionIndex();
   for (let i=0; i<8; i++) {
     call(`${equipped}.cell${i+1}`, 'SetSelected', i === selectedCell);
     const cellButton = document.querySelector(`#controls [data-kind="slot"][data-slot="${i}"]`);
@@ -995,7 +1082,7 @@ function syncSelection() {
   for (const entry of backpackEntries().slice(firstRow)) {
     if (entry.header !== undefined) continue;
     if (cell >= RENDERED_ROWS) break;
-    if (entry.item) call(`${INV}.storagePanel.owRows.owRow${cell}`, 'SetSelected', entry.item.id === selectedId);
+    if (entry.item || entry.empty) call(`${INV}.storagePanel.owRows.owRow${cell}`, 'SetSelected', (entry.item?.id ?? entry.id) === selectedId);
     cell++;
   }
   for (const button of document.querySelectorAll('#controls [data-kind="backpack"]'))
@@ -1010,7 +1097,7 @@ function maxFirstRow(entries) {
   return index;
 }
 function scrollForSelected(entries) {
-  const index = entries.findIndex(entry => entry.item?.id === selectedId);
+  const index = entries.findIndex(entry => (entry.item?.id ?? entry.id) === selectedId);
   const maximum = maxFirstRow(entries);
   let start = Math.max(0, Math.min(maximum, firstRow));
   if (index < 0) return start;
@@ -1020,8 +1107,17 @@ function scrollForSelected(entries) {
   let height = 0;
   for (let i = start; i <= index; i++) height += entryHeight(entries[i]);
   while (height > viewHeight() && start < index) height -= entryHeight(entries[start++]);
+  // In the D20 empty-cell capture the selected cell sits in the last visible
+  // row. The old minimal-fit position left one full row below it. Move the list
+  // up one entry when it needs to scroll, retaining an almost-full last row;
+  // this placement is UNVERIFIED until the host is rendered in-engine.
+  if (start > firstRow && isEmptyCellId(selectedId)) start = Math.max(0, start - 1);
   return Math.min(start, Math.max(maximum, 0));
 }
+
+// One extra 8 px of scroll clip lets the last empty cell stay fully visible
+// after the D20 one-row alignment above. Position and fit remain UNVERIFIED.
+const listPeekHeight = () => isEmptyCellId(selectedId) ? 24 : PEEK_HEIGHT;
 
 function scrollBackpack(delta) {
   const entries = backpackEntries();
@@ -1031,13 +1127,13 @@ function scrollBackpack(delta) {
   render();
 }
 
-// PageDown / PageUp: the next / previous stock mode, wrapping. Every change selects the first item (observed).
+// PageDown / PageUp: the next / previous stock mode, wrapping. Every change selects the first entry (observed).
 // Only the backpack sorts: with an equipped cell selected, or a transfer under way, nothing happens.
 function changeSort(direction = 1) {
   if (transferSourceId || navigationPanel !== 'backpack') return;
   sortIndex = (sortIndex + direction + sortModes.length) % sortModes.length;
   const rows = backpackItems();
-  selectedId = rows[0]?.id || null;
+  selectedId = rows[0]?.id || backpackEntries().find(entry => entry.empty)?.id || null;
   lastBackpackId = selectedId;
   targetGearSlot = gearSlotForItem(itemById(selectedId));
   firstRow = 0;
@@ -1056,17 +1152,20 @@ function announce(message) {
 // hidden. The picture is the native 3D frame (it rotates with a drag); that frame has its own near-black
 // background, which the `lighten` blend lets the backdrop replace. A larger frame with a transparent
 // background would look better (needs a change to the preview actor, not made here).
-const INSPECT_CARD_LEFT = 55, INSPECT_CARD_TOP = 35;
-// The native frame frames the gun small (about 45% of its width); the picture is drawn this much larger.
-const INSPECT_ZOOM = 1.3;
+const INSPECT_CARD_LEFT = 56, INSPECT_CARD_TOP = 50; // D20 D5 target inputs for visible frame x48,y36; fit UNVERIFIED
+// UNVERIFIED D5 fit: resize and move the host render to the captured real bounds (x about 300-983).
+const INSPECT_ZOOM = 1.54;
 const INSPECT_HINT_DX = 53;
+const INSPECT_HINT_FONT_SIZE = 12; // UNVERIFIED D20 D5 fit: the full hint is one centered line near y670
+const INSPECT_HINT_GAP = '  ';
 const INSPECT_CARD_INSET_X = 0.03, INSPECT_CARD_INSET_TOP = -0.06, INSPECT_CARD_INSET_BOTTOM = -0.05; // measured on the round-12 frame
 const STORAGE_PLATE_SIZE = 24; // host choice, matched by eye to the plate in the 2026-10-04 capture
 const INSPECT_HINTS = [['[Mouse-1] Rotate', true], ['[Mouse-2] Pan', false],
   ['[Mouse-Wheel-Up/Mouse-Wheel-Down] Zoom', true], ['[P] Screenshot', false], ['[Escape] Close', true]];
 let inspectCardHome = null, inspectZoom = 1, inspectApplied = false, inspectShownImage = '';
 const INSPECT_HIDDEN_CLIPS = () => [INV+'.equippedPanel', INV+'.storagePanel', INV+'.ammo', INV+'.currencyPanel',
-  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header', ROOT+'.sway', ROOT+'.scanlines', ROOT+'.tooltips.scanlines'];
+  INV+'.arrowLeft', INV+'.arrowRight', ROOT+'.header', ROOT+'.sway', ROOT+'.scanlines', ROOT+'.tooltips.scanlines',
+  ROOT+'.ring']; // the ring layer drew the pale box behind the card and the grey bar under the hints (critic round 16)
 // Moves the main card to the top left (remembering where it was) or puts it back.
 function placeInspectCard(on) {
   const card = INV + '.mainCard';
@@ -1112,11 +1211,13 @@ function updateInspect() {
     inspectApplied = on;
     backdrop.hidden = !on;
     document.body.classList.toggle('inspect-wide', on); // no right-edge fade: the hint strip reaches x 1030
+    window.owGlassSheet?.setVisible(!on);
     document.getElementById('controls').style.display = on ? 'none' : '';
     for (const path of INSPECT_HIDDEN_CLIPS()) set(path, '_visible', !on);
     // The real hint strip is centred about 53 px right of where the movie puts it.
     set(ROOT + '.tooltips', '_x', Number(get(ROOT + '.tooltips', '_x')) + (on ? INSPECT_HINT_DX : -INSPECT_HINT_DX));
     if (!on) { player.style.clipPath = ''; applyMovieVisibility(); }
+    update3d();
   }
   if (on) { fitCards(); clipMovieToInspectParts(); }
   if (!on) { inspect.hidden = true; return; }
@@ -1142,11 +1243,12 @@ function updateInspect() {
   inspect.appendChild(picture);
   inspect.hidden = false;
   const markup = INSPECT_HINTS.map(([label, enabled]) =>
-    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('  ');
-  set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="13">${markup}</font></p>`);
+    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join(INSPECT_HINT_GAP);
+  set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="${INSPECT_HINT_FONT_SIZE}">${markup}</font></p>`);
 }
 
 function toggleInspect() {
+  if (!inspectMode && !itemById(selectedId)) return; // nothing to inspect (an empty cell: the real hint shows Inspect dimmed)
   inspectMode = !inspectMode;
   if (inspectMode) inspectItemId = null;
   // Leaving inspect brings the hidden card back through the normal draw path.
@@ -1231,15 +1333,21 @@ inspectSurface.addEventListener('pointercancel', endInspectDrag);
 // never bleed over card text. Full-size stock comparisons intentionally cover
 // parts of both panels, including host category arrows and mark hit targets.
 function applyCardOcclusion() {
-  const stage = document.getElementById('stage').getBoundingClientRect();
-  const scale = stage.width / 1280;
+  // Use the untransformed stage origin/scale and project movie bounds forward.
+  // Comparing an unturned card rectangle with turned HTML cell rectangles hid
+  // every sorted thumbnail in the 2026-10-22 D20 host frames.
+  const presentation = document.getElementById('presentation').getBoundingClientRect();
+  const scale = presentation.width / 1280;
   const covers = [];
   if (itemById(selectedId) && !inspectMode) covers.push(readBounds(INV + '.mainCard.bkgd'));
   if (compareId && itemById(compareId)) covers.push(readBounds(INV + '.compareCard.bkgd'));
-  const rects = covers.filter(Boolean).map(bounds => ({
-    left:stage.left + bounds.xMin * scale, right:stage.left + bounds.xMax * scale,
-    top:stage.top + bounds.yMin * scale, bottom:stage.top + bounds.yMax * scale
-  }));
+  const rects = covers.filter(Boolean).map(bounds => {
+    const projected = window.owMenu3d.projectBounds(bounds);
+    return {
+      left:presentation.left + projected.xMin * scale, right:presentation.left + projected.xMax * scale,
+      top:presentation.top + projected.yMin * scale, bottom:presentation.top + projected.yMax * scale
+    };
+  });
   for (const button of document.querySelectorAll('#controls .cell')) {
     const box = button.getBoundingClientRect();
     // A sliver of overlap (card glow art) does not count; a fifth of the cell does.
@@ -1280,6 +1388,10 @@ function dispatchInventoryMove() {
   if (!inventoryVm.enabled || navigationPanel !== 'backpack' || transferSourceId || inspectMode) {
     inventoryVm.queue.length = 0; return;
   }
+  // The boundary rule is decided here, against the selection the earlier moves left: a queued Down that now starts on the last
+  // item (or on an empty cell) is the host's, since the VM only knows the item rows.
+  while (inventoryVm.queue.length && isHostBoundaryMove(inventoryVm.queue[0])) hostBackpackMove(inventoryVm.queue.shift());
+  if (!inventoryVm.queue.length) return;
   const rows = backpackItems();
   if (!rows.length) { inventoryVm.queue.length = 0; return; }
   const start = rows.findIndex(item => item.id === selectedId);
@@ -1311,31 +1423,46 @@ window.owInventoryVmResult = result => {
 };
 
 function applyBackpackSelection(rows, index) {
+  const wasEmpty = isEmptyCellId(selectedId);
   selectedId = rows[index].id;
   navigationPanel = 'backpack';
   lastBackpackId = selectedId;
-  targetGearSlot = gearSlotForItem(rows[index]);
+  targetGearSlot = rows[index].empty ? null : gearSlotForItem(rows[index]);
   compareId = transferSourceId;
   const nextFirstRow = scrollForSelected(backpackEntries());
-  if (nextFirstRow !== firstRow) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
+  if (nextFirstRow !== firstRow || wasEmpty !== isEmptyCellId(selectedId)) { firstRow = nextFirstRow; render(); focusItem(selectedId); }
   else { syncSelection(); drawCard(); focusItem(selectedId); }
-  announce(itemAriaLabel(itemById(selectedId)));
+  announce(isEmptyCellId(selectedId) ? 'Empty backpack slot' : itemAriaLabel(itemById(selectedId)));
 }
 
+// The VM's MoveDelta is given the item rows only, so a move that starts on an empty cell or leaves the last item downwards
+// is the host's (onto the empty cells, as observed; the VM's own handling of empty entries is not run here).
+function isHostBoundaryMove(delta) {
+  const rows = selectableRows(), itemCount = backpackItems().length;
+  const index = rows.findIndex(row => row.id === selectedId);
+  return index >= 0 && index >= itemCount - 1 && (index >= itemCount || delta > 0);
+}
+function hostBackpackMove(delta) {
+  const rows = selectableRows();
+  if (!rows.length) return;
+  let index = rows.findIndex(row => row.id === selectedId);
+  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
+  applyBackpackSelection(rows, index);
+}
 function moveSelection(delta) {
   if (transferSourceId && !transferFromEquipped) {
     if (!targetGearSlot) cycleTargetSlot(delta);
     return;
   }
-  const rows = backpackItems();
-  if (!rows.length) return;
-  if (inventoryVm.failed && navigationPanel === 'backpack' && !transferSourceId) return;
-  if (inventoryVm.enabled && navigationPanel === 'backpack' && !transferSourceId) {
-    requestInventoryMove(delta); return;
-  }
-  let index = rows.findIndex(item => item.id === selectedId);
-  index = index < 0 ? 0 : Math.max(0, Math.min(rows.length-1, index + delta));
-  applyBackpackSelection(rows, index);
+  if (!selectableRows().length) return;
+  const vmPanel = navigationPanel === 'backpack' && !transferSourceId;
+  // While a VM move is pending or queued every move joins the queue, so the moves keep their order; the dispatcher decides
+  // there which ones are host boundary moves.
+  if (vmPanel && inventoryVm.enabled && (inventoryVm.pending || inventoryVm.queue.length)) { requestInventoryMove(delta); return; }
+  const hostMove = isHostBoundaryMove(delta);
+  if (!hostMove && inventoryVm.failed && vmPanel) return;
+  if (!hostMove && inventoryVm.enabled && vmPanel) { requestInventoryMove(delta); return; }
+  hostBackpackMove(delta);
 }
 
 // Host spatial navigation uses the movie's actual cell centers rather than
@@ -1393,6 +1520,10 @@ function enterBackpack() {
   const entries = backpackEntries();
   const id = entries.find(entry => entry.item?.id === lastBackpackId)?.item.id
     || entries.slice(firstRow).find(entry => entry.item)?.item.id;
+  if (isEmptyCellId(lastBackpackId) && entries.some(entry => entry.id === lastBackpackId)) {
+    selectedId = lastBackpackId; navigationPanel = 'backpack'; targetGearSlot = null; compareId = null;
+    firstRow = scrollForSelected(backpackEntries()); render(); return;
+  }
   if (id) { select(id); firstRow = scrollForSelected(backpackEntries()); render(); focusItem(id); }
 }
 
@@ -1413,9 +1544,10 @@ function navigateInventory(direction) {
   }
   if (navigationPanel === 'backpack') {
     if (!horizontal) moveSelection(direction === 'up' ? -1 : 1);
-    // Observed: Left returns to the equipped cell last selected there, not to the cell the
-    // selected backpack item would occupy.
-    else if (direction === 'left') selectEquipmentSlot(lastEquippedIndex);
+    // D20 Esc/Left/E capture: Left returns to the equipped analogue for the
+    // selected backpack item (the active weapon for weapons), not the last
+    // destination slot visited while configuring a transfer.
+    else if (direction === 'left') selectEquipmentSlot(equippedAnalogueIndexFor(itemById(selectedId)));
     return;
   }
   const next = equipmentNeighbour(selectedSlotIndex(), direction);
@@ -1423,16 +1555,17 @@ function navigateInventory(direction) {
   else if (Number.isInteger(next)) selectEquipmentSlot(next);
 }
 
+// Returns whether the slot was taken as the target (false for a locked or out-of-range slot, or a gear transfer).
 function setTargetSlot(slot) {
-  if (transferSourceId && !transferFromEquipped && targetGearSlot) return;
-  if (slot < 0 || slot > 3 || slotLocked(slot)) return;
+  if (transferSourceId && !transferFromEquipped && targetGearSlot) return false;
+  if (slot < 0 || slot > 3 || slotLocked(slot)) return false;
   if (slot !== targetSlot) compareId = null;
   targetGearSlot = null;
   targetSlot = slot;
   if (transferSourceId && !transferFromEquipped) {
     compareId = state.slots[slot] || null;
     render();
-    return;
+    return true;
   }
   const held = state.slots[targetSlot];
   const selectedIsBackpack = itemById(selectedId) && !equippedIds().has(selectedId);
@@ -1442,6 +1575,7 @@ function setTargetSlot(slot) {
     compareId = null;
   }
   render();
+  return true;
 }
 
 function cycleTargetSlot(direction) {
@@ -1526,11 +1660,21 @@ function refreshBackpackHeader() {
 // Which of the two panel arrangements applies: the Backpack focus view, or the Equipped view (also used by the
 // compare view, which has its own card tween).
 const backpackFocused = () => navigationPanel === 'backpack' && !transferSourceId && !inspectMode;
+
+// The movie turns the inventory clip 11 degrees about the vertical axis (read live, see menu3d.js); the page applies the turn.
+// Inspect shows the card square-on in the real frames, so the turn is off there.
+function update3d() {
+  return window.owMenu3d.apply(document.getElementById('presentation'), inspectMode ? 0 : Number(get(INV, '_yrotation')) || 0,
+    Number(get(INV, '_x')), Number(get(INV, '_y')));
+}
+const toMovie = (x, y) => window.owMenu3d.toMovie(x, y);
 // Compare view (a transfer): the Equipped panel is narrowed into the gap between the two cards and the Backpack panel
 // moves right so its "(COMPARE)" header stays readable beside the second card. Measured on the 2026-10-04 captures
 // (cells about 112 px wide at x 487-599; Backpack panel 800-1000); the movie's own tween is a 3D one.
 const COMPARE_BACKPACK = {scale:0.73, scaleY:0.79, left:781, top:135 - 13}; // title at y 150 like the real frame
-const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, top:118};
+// Placed by weapon slot 1's cell (centre x 542, top y 158 on the 2026-10-04 compare captures): the panel's own bounds
+// include a child that leaves after the compare tween, which dropped the column about 140 px (critic round 16).
+const COMPARE_EQUIPPED = {scale:0.83, scaleY:0.95, centreX:542, cell1Top:158};
 let appliedFocus = false, equippedHome = null;
 const panelPose = () => backpackFocused() ? FOCUS_PANEL : transferSourceId ? COMPARE_BACKPACK
   : {scale:PANEL_SCALE, scaleY:PANEL_SCALE_Y, left:PANEL_LEFT, top:PANEL_TOP};
@@ -1545,7 +1689,8 @@ function placeStoragePanel() {
   }
   const bounds = readBounds(panel + '.bkgd');
   if (!bounds) return;
-  const dx = pose.left - bounds.xMin, dy = pose.top - bounds.yMin;
+  const target = toMovie(pose.left, pose.top);
+  const dx = target.x - bounds.xMin, dy = target.y - bounds.yMin;
   if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
   if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
   placeEquippedPanel();
@@ -1556,7 +1701,7 @@ function placeStoragePanel() {
 function placeEquippedPanel() {
   const panel = INV + '.equippedPanel', focus = backpackFocused(), compare = Boolean(transferSourceId);
   // The mini column behind the card shows no title in the original (a clipped "QUIPPED" peeked out below short cards).
-  set(panel + '.equippedLabel', '_visible', !focus);
+  set(panel + '.equippedLabel', '_visible', !focus || isEmptyCellId(selectedId)); // shown again when no card covers it (2026-10-21)
   if (focus || compare) {
     if (!equippedHome) equippedHome = {x:Number(get(panel, '_x')), y:Number(get(panel, '_y')),
       xs:Number(get(panel, '_xscale')), ys:Number(get(panel, '_yscale'))};
@@ -1566,11 +1711,12 @@ function placeEquippedPanel() {
       set(panel, '_xscale', xs);
       set(panel, '_yscale', ys);
     }
-    const bounds = call(panel, 'getBounds', ROOT);
+    const bounds = compare ? readBounds(panel + '.cell1.hitTestClip') : call(panel, 'getBounds', ROOT);
     if (!bounds) return;
-    const centreX = compare ? COMPARE_EQUIPPED.centreX : FOCUS_EQUIPPED.centreX;
-    const dx = centreX - (bounds.xMin + bounds.xMax) / 2;
-    const dy = compare ? COMPARE_EQUIPPED.top - bounds.yMin : FOCUS_EQUIPPED.centreY - (bounds.yMin + bounds.yMax) / 2;
+    const target = compare ? toMovie(COMPARE_EQUIPPED.centreX, COMPARE_EQUIPPED.cell1Top)
+      : toMovie(FOCUS_EQUIPPED.centreX, FOCUS_EQUIPPED.centreY);
+    const dx = target.x - (bounds.xMin + bounds.xMax) / 2;
+    const dy = target.y - (compare ? bounds.yMin : (bounds.yMin + bounds.yMax) / 2);
     if (Math.abs(dx) > 0.5) set(panel, '_x', Number(get(panel, '_x')) + dx / COMPOSITION_SCALE);
     if (Math.abs(dy) > 0.5) set(panel, '_y', Number(get(panel, '_y')) + dy / COMPOSITION_SCALE);
   } else if (equippedHome) {
@@ -1588,6 +1734,34 @@ function compareRefusesCell(index) {
   if (!source) return false;
   const gearSlot = gearSlotForItem(source);
   return gearSlot ? index !== 4 + gearSlots.findIndex(slot => slot.key === gearSlot) : index >= 4;
+}
+// In D20 D3/D4 the red gear rows measured 59 px high, versus 47 px in round 1.
+// Expand each rejected gear cell locally and keep the bottom row's lower edge
+// fixed; move the upper row up by one added row-height so the two rows stay joined.
+// This geometry fit is UNVERIFIED until the host is captured again.
+const COMPARE_BAD_CELL_HEIGHT_RATIO = 59 / 47;
+const compareGearCellHome = new Map();
+function placeCompareGearCell(index, expanded) {
+  if (index < 4) return;
+  const panel = INV + '.equippedPanel', cell = `${panel}.cell${index+1}`;
+  const hitClip = `${cell}.hitTestClip`;
+  let home = compareGearCellHome.get(index);
+  if (!home) {
+    const bounds = call(hitClip, 'getBounds', panel);
+    const y = Number(get(cell, '_y')), yscale = Number(get(cell, '_yscale'));
+    if (!bounds || ![bounds.yMin,bounds.yMax,y,yscale].every(Number.isFinite) || yscale === 0) return;
+    home = {y, yscale, bounds};
+    compareGearCellHome.set(index, home);
+  }
+  set(cell, '_y', home.y);
+  set(cell, '_yscale', expanded ? home.yscale * COMPARE_BAD_CELL_HEIGHT_RATIO : home.yscale);
+  if (!expanded) return;
+  const bounds = call(hitClip, 'getBounds', panel);
+  if (!bounds || ![bounds.yMin,bounds.yMax].every(Number.isFinite)) return;
+  const addedHeight = (home.bounds.yMax - home.bounds.yMin) * (COMPARE_BAD_CELL_HEIGHT_RATIO - 1);
+  const upperRow = index === 4 || index === 6;
+  const targetBottom = home.bounds.yMax - (upperRow ? addedHeight : 0);
+  set(cell, '_y', home.y + targetBottom - bounds.yMax);
 }
 
 // One sub-header row of the list, drawn with the movie's own header clip (the clip that carries the backpack's
@@ -1673,6 +1847,7 @@ function placeListHeaders(headers, rowWidth) {
 }
 
 function render() {
+  update3d();
   if (!ready || !state) return;
   // The host's right-edge fade of the movie would cut the Backpack panel when it moves right for the compare view.
   document.body.classList.toggle('compare-wide', Boolean(transferSourceId));
@@ -1687,7 +1862,7 @@ function render() {
   applySlotNumbers();
   const equipped = INV + '.equippedPanel';
   const slotIds = equippedItems();
-  const selectedCell = selectedSlotIndex();
+  const selectedCell = equippedSelectionIndex();
   // Locked weapon slots are drawn empty whatever the snapshot says.
   const shownIds = slotIds.map((id, index) => slotLocked(index) ? null : id);
   call(equipped, 'SetCellInfo', ...shownIds.map(id => itemById(id) ? color(itemById(id)) : 0));
@@ -1701,6 +1876,7 @@ function render() {
     // a padlocked one). Seen with a weapon compared from either origin: the four gear cells turn red. The
     // gear-item case below applies the same rule and was not observed (UNVERIFIED).
     const refused = compareRefusesCell(i);
+    placeCompareGearCell(i, refused);
     call(cell, 'SetCellState', locked ? (refused ? 'lockedbad' : 'locked') : (refused ? 'bad' : 'normal'));
     if (i < 4) set(cell+'.emptyLabel', '_visible', !locked && !item);
     call(cell, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
@@ -1747,9 +1923,13 @@ function render() {
   listHeaderNames = [];
   const bands = [];
   // Draw the visible entries top to bottom; cells are numbered owRow0.. in draw order.
-  let y = 0, row = 0;
+  // The real focus view keeps a partial first cell at the top as its scroll
+  // origin advances. Integer entry scrolling alone shows an extra row and puts
+  // D20's selected empty cell about 30 px too low. Keep the clip origin fixed
+  // and place the scrolled content 28 movie px above it (UNVERIFIED outside D20).
+  let y = backpackFocused() && firstRow > 0 ? -SCROLLED_LIST_ORIGIN : 0, row = 0;
   const headers = [];
-  for (let k = firstRow; k < entries.length && y < viewHeight() + PEEK_HEIGHT && row < RENDERED_ROWS + 1; k++) {
+  for (let k = firstRow; k < entries.length && y < viewHeight() + listPeekHeight() && row < RENDERED_ROWS + 1; k++) {
     const entry = entries[k];
     if (entry.header !== undefined) {
       const header = drawListHeader(rowGroup, entry.header, y);
@@ -1784,14 +1964,16 @@ function render() {
     call(path, 'SetTrashFavoriteMark', item?.trash ? 1 : item?.favorite ? 2 : 0);
     // Equipped-origin compare (2026-10-04 capture): the chosen equipped slot carries the highlight, the backpack row only
     // marks the candidate whose card is on the right, so it gets no band.
-    const rowSelected = Boolean(item && item.id === selectedId);
+    const rowSelected = (item ? item.id : entry.id) === selectedId;
     // Backpack-origin compare: the moved item's tile has a green frame like its card, not the gold selection.
     const greenFrame = rowSelected && transferSourceId && !transferFromEquipped;
+    // The gold tile fill comes from the movie's SetSelected frame. The host
+    // page applies no global opacity/tint; a cell-only correction is unverified.
     call(path, 'SetSelected', rowSelected && !greenFrame);
     if (greenFrame) drawTileFrame(path);
     // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
     if (rowSelected && backpackFocused()) bands.push(y);
-    const partial = y + ROW_PITCH > viewHeight() + 1;
+    const partial = y < 0 || y + ROW_PITCH > viewHeight() + 1;
     y += ROW_PITCH;
     row++;
     if (!item) continue;
@@ -1808,7 +1990,7 @@ function render() {
   drawSelectionBands(rowGroup, bands, localPanelBounds, rowWidth);
   const headerRowBounds = readBounds(rowGroup+'.owRow0');
   if (rowWidth) {
-    const height = viewHeight() + PEEK_HEIGHT;
+    const height = viewHeight() + listPeekHeight();
     // owRow0 may sit below the list origin when a header comes first.
     const top = headerRowBounds ? headerRowBounds.yMin - (firstCellY || 0) * panelPose().scaleY * COMPOSITION_SCALE : null;
     // The selection highlight is a band wider than the cell (it bleeds to the panel's edges in the original), so the
@@ -1818,9 +2000,11 @@ function render() {
     const stage = document.getElementById('stage').getBoundingClientRect();
     for (const button of layer.querySelectorAll('[data-partial=true]')) {
       const bounds = button.getBoundingClientRect();
-      const limit = stage.top + bottom * stage.width / 1280;
-      const cropped = Math.max(0, Math.min(100, (bounds.bottom-limit) / bounds.height * 100));
-      button.style.clipPath = `inset(0 0 ${cropped}% 0)`;
+      const topLimit = top === null ? stage.top : stage.top + top * stage.width / 1280;
+      const bottomLimit = stage.top + bottom * stage.width / 1280;
+      const croppedTop = Math.max(0, Math.min(100, (topLimit-bounds.top) / bounds.height * 100));
+      const croppedBottom = Math.max(0, Math.min(100, (bounds.bottom-bottomLimit) / bounds.height * 100));
+      button.style.clipPath = `inset(${croppedTop}% 0 ${croppedBottom}% 0)`;
     }
   }
 
@@ -1886,7 +2070,7 @@ function handleKey(event) {
   else if (key === 'escape' && transferSourceId) { event.preventDefault(); finishTransfer(true); syncSelection(); }
   else if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
-  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); setTargetSlot(Number(event.key)-1); }
+  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); if (setTargetSlot(Number(event.key)-1)) slotKeyChoiceFor = selectedId; }
   else if (key === 'enter') { event.preventDefault(); equip(); }
   else if (key === 'e') { event.preventDefault(); equip(); }
   else if (key === 'c') { event.preventDefault(); toggleCompare(); }
@@ -1917,6 +2101,7 @@ dragLayer.addEventListener('wheel', event => {
 function layoutStage() {
   const scale = Math.min(innerWidth / 1280, innerHeight / 720);
   const width = 1280 * scale, height = 720 * scale;
+  window.owMenu3d?.setScale(scale);
   Object.assign(document.getElementById('presentation').style, {
     left:`${(innerWidth - width) / 2}px`, top:`${(innerHeight - height) / 2}px`,
     width:`${width}px`, height:`${height}px`
@@ -2028,6 +2213,7 @@ function watchLayout() {
   if (!ready || !state) return;
   try {
     applyMovieVisibility();
+    if (update3d()) { render(); return; }
     const signature = movieLayoutSignature();
     if (signature && signature !== renderedLayout) {
       if (signature !== pendingLayout) { pendingLayout = signature; pendingSince = performance.now(); }
@@ -2090,7 +2276,8 @@ function pollReady() {
     set(headerPath, '_xscale', Number(get(headerPath, '_xscale')) * HEADER_SHRINK);
     set(headerPath, '_yscale', Number(get(headerPath, '_yscale')) * HEADER_SHRINK);
     const headerAfter = readBounds(headerPath);
-    if (headerBefore && headerAfter) set(headerPath, '_x', Number(get(headerPath, '_x')) + (headerBefore.xMin - headerAfter.xMin));
+    if (headerBefore && headerAfter)
+      set(headerPath, '_x', Number(get(headerPath, '_x')) + (headerBefore.xMin - headerAfter.xMin) + HEADER_SHIFT_X);
     set(ROOT + '.tooltips', '_y', Number(get(ROOT + '.tooltips', '_y')) - HINT_LIFT);
     set(ROOT + '.tooltips', '_x', Number(get(ROOT + '.tooltips', '_x')) + HINT_SHIFT_X);
     set(INV + '.storageCount', '_y', Number(get(INV + '.storageCount', '_y')) - PLATE_LIFT);

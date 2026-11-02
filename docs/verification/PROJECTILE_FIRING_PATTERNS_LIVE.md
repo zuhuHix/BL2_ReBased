@@ -4,7 +4,7 @@ AI-assisted (Claude), real-game lane L7. One launch of the original game driven 
 `-Character=Save0008.sav`, saves blocked from the first frame, memory-only changes, run lock, closed through its window). This record holds
 counts, conclusions and formulas only: no dump, no listing, no game data. The raw rows (firing modes, projectile definitions, barrel and type
 tables, 27 shot recordings) stay under the ignored `local/realgame/L7/`. Every rule is labelled **OBSERVED** (seen in this run, with how) or
-**UNVERIFIED**. This record answers the questions left open at the end of [NATIVE_WEAPON_FIRING.md](NATIVE_WEAPON_FIRING.md) (sections 3 and 4)
+**UNVERIFIED**. This record answers the questions left open at the end of [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) (sections 3 and 4)
 and extends [RTSE_GUN_DATA_CROSSCHECK.md](RTSE_GUN_DATA_CROSSCHECK.md) to the firing side; it changes no earlier record.
 
 ## 1. Method
@@ -120,7 +120,7 @@ never `AddProj`.
 **R2. Aim before the pellet (OBSERVED).** `GetAdjustedAimFor` returns the view rotation plus a random offset inside a disc of radius
 `AccuracyPool/2` degrees (observed ratio offset / bound at most 1.022 on 20 of the 23 analysed builds; the excess is rounding of the integer rotator), the same for
 all pellets of a shot (it is called once per shot). Exceptions: the SMG and Lascaux bursts (ratio 4.0 and 4.8: the view kick moves the base aim,
-consistent with NATIVE_WEAPON_FIRING section 5, not separated) and, unexplained, the four shots of the Infinity pistol (ratio up to 1.8 of a 0.40 deg
+consistent with NATIVE_WEAPON_TRIGGER_AMMO section 5, not separated) and, unexplained, the four shots of the Infinity pistol (ratio up to 1.8 of a 0.40 deg
 cone; **UNVERIFIED**). The pool value at the moment of each shot was read: it sat at its minimum between
 single shots 1.3 s apart (1.39, 0.88, 2.19, 0.40 for the pistols, the shotgun and the rifle) and **fell** during a Hyperion SMG burst
 (8.57 to 4.76 over 9 shots, about 6.7 per second): the reverse-recoil gun gets more accurate while firing.
@@ -144,7 +144,7 @@ single shots 1.3 s apart (1.39, 0.88, 2.19, 0.40 for the pistols, the shotgun an
 
 **R4. Weapon spread cone (OBSERVED).** Unless `bSuppressWeaponSpread` is true, `AddSpread` runs once per pellet on the pattern-adjusted aim and
 returns it rotated by a random offset whose magnitude never exceeded `Spread/2` degrees (271 pellet rows over 19 guns, 0 outside; the largest
-radius was 1.018 of the bound on the 0.714 deg SMG, rotator rounding of a 65-unit radius, and 0.997 on the others). The draw shape (an ellipse per NATIVE_WEAPON_FIRING section 4, formula `yaw = r1*acc`, `pitch = r2*sqrt(1-(2 r1)^2)*acc`
+radius was 1.018 of the bound on the 0.714 deg SMG, rotator rounding of a 65-unit radius, and 0.997 on the others). The draw shape (an ellipse per NATIVE_WEAPON_TRIGGER_AMMO section 4, formula `yaw = r1*acc`, `pitch = r2*sqrt(1-(2 r1)^2)*acc`
 with r in (-0.5, 0.5)) is consistent with the bound but its density was not fitted (**UNVERIFIED**). With `bSuppressWeaponSpread` true (Blockhead,
 Teeth, Infinity, Lascaux, 11 of 150 modes) `AddSpread` was not called at all and the pellet direction was exactly aim plus pattern (the pattern
 offsets above were read from the `AddProj` ray, which equalled `aim + offset * scale` to within a few rotator units).

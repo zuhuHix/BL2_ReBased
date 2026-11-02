@@ -1143,3 +1143,177 @@ green tile frame is thicker and tinted. Small and compare views start their list
 AI-assisted, page-only. Equipped-view panel title moved up 13 px so it no longer collides with the "WEAPONS" sub-header; compare lists show 7.6 rows; the moved tile has a translucent lime fill;
 Skills trees, card height, plate and description size adjusted; the Inspect hint strip is moved right and unfaded. Suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE. Fits, UNVERIFIED.
 Final open items are listed in the lane handoff (tilt/glass, Skills pitch and tile brightness, Inspect card height and keyed holes, empty cells, gear compare, Phaselock HUD sigil).
+
+## Rounds 16-19 (2026-10-21, lane D of the 2026-10-21 orchestration)
+
+AI-assisted (Claude). Machine: the second PC (not the maintainer's main one). Real-game frames, engine frames, critic reports and
+the snapshot used for headless replays stay under ignored `local/realgame/d16/` and `local/orch/D16/`.
+
+**Method.** Each round: engine frames from the `-owinvshots` sequence (one locked UE run), an independent critic (a fresh agent each
+round, given only the frame paths and the out-of-scope list) scoring 11 screen pairs against the 2026-10-04 real frames, fixes, the
+action suite. Between locked runs the pages were tuned in a headless Edge at 1280x720 replaying a snapshot the engine logged
+(`inventory.html?logsnapshot` prints each host snapshot as an `OWINVSNAPSHOT` console line); the headless frames match the engine's
+for the inventory and Skills views (the compare view needed the fix of round 17 to agree).
+
+**Real-game session (2026-10-21).** `tools/real_game/realgame.ps1` with the hub lock, saves backed up and restored (one `.sav.bak`
+differed and was restored), the driver removed afterwards. Continue loaded a different save than on 2026-10-04: Maya level 17 in Tundra
+Express, five weapons in a 15-slot backpack, community mods as before. Two Maliwan weapons were added from their balances and removed
+before quitting. Seen (screen captures, **confirmed in game** only for what the frames show):
+
+- **Skills overview (Q)**: the three trees on a plane receding to the right (visible panels x 238-478 / 497-700 / 720-900, y 170-610 /
+  185-595 / 198-580), every tree name shown (MOTION included), the action plate where it is outside the overview, the footer not moved.
+- **Empty backpack cells are selectable**: Down past the last item moves the gold selection onto the "(EMPTY)" cells; no card is shown,
+  the mini Equipped column shows its EQUIPPED title, the list scrolls so the selected empty cell is the last visible row, and the hint
+  line keeps Sort and Close lit with Select/Compare, Drop and Inspect dimmed.
+- **Elemental card**: "Burn Damage / sec." and "Ignite Chance" rows after Magazine Size; a value with an arrow ends right before the
+  arrow, a value without one ends at the arrow column's right edge; the stats start directly under a one-line name.
+- An item above the player's level has a red card frame and a red "LEVEL REQUIREMENT" strip (not reproduced yet).
+
+### Round 16
+
+Baseline critic on fresh frames of the round-15 state: **7.27/10** (11 pairs). Changes:
+
+- **Skills tiles**: the movie's skill cell places a cyan `overclocked` outline on its first frame and no frame removes it, so Ruffle drew
+  it on every tile; the real page shows dark (locked) and white (open) borders. It is now shown only for a class-mod bonus (that rule is
+  UNVERIFIED). Found with a local SWF tag walk of the converted StatusMenu (output stays under `local/`).
+- **Phaselock plate**: the portrait sat in a clip with a pink colour transform from the plate's "disabled" frame that no later frame
+  clears; past "disabled" the icon is loaded into an untinted sibling clip. The plate is placed absolutely (the movie resets it after the
+  layout pass), 15 px right and 18 px up, scaled 103% x 128% (the real plate is taller, a fit for the missing 3D), and drawn over the trees.
+- **Skills trees** 7% taller than wide (real panel y 158-620 against 172-612); description text keeps size 16 with leading -3 (line pitch
+  22.5 px against 21.8 real, real wrap kept). **Overview** follows the real frame above: one pose per tree, all names shown, no footer drop.
+- **Inspect**: card in its plain blue frame (the background clip's first frame; both real Inspect frames), the movie's `ring` layer hidden
+  (it drew a pale box behind the card and a grey bar under the hints), model drawn 1.75x (the real pistol spans 622 px; ours 463 at 1.3).
+- **Cards**: Ruffle lacks the Scaleform `getLineLength` that `SetTitle` uses, so every name counted as two lines and the stats started a
+  line low; the field's `bottomScroll` now sets `SetRequiredTitleLines`. Values end at the arrow column like the real cards.
+- Hint line 5 px lower (real text centred near y 657). Capture sequence: Down before D1 and after entering the Backpack, so the frames
+  show weapon slot 2 and backpack row 2 like the reference frames (the game enters the Backpack at row 1, seen on 2026-10-21).
+
+Critic (a different agent instance): **6.85/10** on the 11 pairs, 8.2 on the new overview pair. It ranked the Maya display model first
+(not shown in our sessions; the third-party reference `local/ui/ref/inventory_maya_real.jpg` shows it, so it stays and later critics are
+told so), then perspective and the glass sheet, the Equipped column about 140 px low in the backpack-origin compare (a placement race,
+fixed in round 17), and the Inspect model, which now showed slot 2's rifle instead of a pistol. Suite: **49 PASS / 0 FAIL / 0 NOT_RUN /
+0 KNOWN_DIVERGENCE** with `-Items local/inventory-actions/bounded-recipes`; with this machine's default item set 24 / 3 / 22 / 0, because
+that set starts over the backpack capacity and the host (correctly) refuses unequips (same result in a 2026-10-15 log of the source
+worktree). All placements are fits to captured frames (UNVERIFIED).
+
+### Round 17
+
+- **Empty backpack cells are selectable** (observed 2026-10-21): Down past the last item moves onto the "(EMPTY)" cells (ids
+  `empty:N`), the cards are hidden, the mini Equipped column shows its title, Select/Compare, Drop, Favourite/Trash and Inspect do nothing,
+  and the Sort hint stays lit. The installed `MoveDelta` is still given the item rows only, so moves onto or between empty cells are the
+  host's; how the VM itself treats empty entries is not run (UNVERIFIED). Two synthetic navigation checks were added (29/29).
+- **Compare view**: the Equipped column is placed by weapon slot 1's cell (centre x 542, top y 158 on the compare captures). The panel's
+  own bounds included a child that leaves after the compare tween, which put the column about 140 px low in round 16's backpack-origin
+  compare and in the headless replays.
+- **Capture sequence**: Inspect is taken on slot 1's pistol (the reference Inspect frame shows a pistol; round 16 inspected a rifle) and a
+  new frame D2g walks the Backpack onto its empty cells.
+- **Second real-game session (same day, same save)**: a class mod, relic, grenade mod and shield were spawned from their balances, read
+  and removed. Live `GetCategoryKey()`: `comm`, `Artifact`, `mod`, `Shield`. The ITEMS sort with one of each shows RELICS, CLASS MODS,
+  GRENADE MODS, SHIELDS (with ALL: WEAPONS first, then the same four), which is what the host draws. The PERSONAL header of the
+  2026-10-04 pack therefore belonged to some other category (not identified); no change. Saves restored (one `.sav.bak`), driver removed.
+
+Critic (fresh instance; told that the Maya model is out of scope): **7.21/10** on the 11 pairs, 7.22 over 13 (overview 7.6, empty cell 6.9).
+Its top items: perspective and the curved glass (both missing), the hint line in the equipped view about 40 px higher than the real one,
+the Inspect backdrop (grid and circular motif), the Skills action strip about 20 px high, the selected row of some sorts lower than real.
+Suite: **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set).
+
+### Round 18: the movie's 3D turn
+
+The movie's open questions about "perspective tilt" had a plain cause: the StatusMenu turns the `inventory` clip 11 degrees about the
+vertical axis (`_yrotation` 11 at the screen centre, read live from the running movie) and the `skills` clip 7.24 degrees; Ruffle
+ignores `_yrotation`. The pages now apply the same turn to the player and the hit layer as a CSS 3D transform (`tools/hud_overlay/menu3d.js`),
+at the focal length of Flash's default 55-degree field of view (1229 px for a 1280 px stage; Scaleform's own camera is not read,
+UNVERIFIED). On the 2026-10-04 backpack frame the panel's right edge is 0.963 of its left edge's height; this projection gives 0.962.
+The engine frames show the turn (card frame edges 205 and 192 px tall, against 207 and 200 before). Inspect stays square-on, as in the
+real frames. Measured fits are screen positions, so the page maps each target back through the projection before comparing it with the
+movie's own bounds; the Skills overview poses were refitted with the turn on (they become nearly uniform: x-scale 99/90/86, was 105/89/79).
+The page report's `backpackRowsAligned` (suite steps 9 and 15) compared movie bounds with the hit boxes' screen rectangles, which the turn
+changes for both alike; it now compares layout offsets (`OpenWillowMayaHUD.cpp`).
+
+Not reproduced: the curved cyan glass sheet. The movie's `ring` clip is that sheet (a dark teal grid with a curved lower edge here); the
+game draws it far behind at `_z` -22000 with a blend that brightens the world, which a transparent page over the UE viewport cannot do.
+
+Critic (fresh instance): **7.67/10** on the 11 pairs, 7.65 over 13 (compare views 8.0, Skills 7.9, Inspect 7.0, empty cell 7.4). Its top items:
+the glass field, the Inspect backdrop, the card about 15 px low, the hint line about 6 px high. Suite **49 PASS / 0 FAIL / 0 NOT_RUN /
+0 KNOWN_DIVERGENCE** after the report fix (47 / 2 / 0 / 0 before it); navigation 30/30.
+
+### Round 19
+
+- **Inspect backdrop**: our own drawing after the real Inspect frames: grey light from the top centre (sampled 84 there, 55 in the top
+  corners, 30 in the bottom ones; ours within 4 grey levels at eight sample points), soft concentric bands about 85 px apart and a faint
+  6 px grid. The game's circular emblem is not drawn.
+- **Card anchor**: the single card's frame corner moved 6 px left and 15 px up (now 210, 108 against 212, 108 on the real equipped view).
+- **Hint line** 6 px lower in the inventory views.
+
+Critic (fresh instance): **7.57/10** on the 11 pairs, 7.57 over 13 (Inspect 7.6 from 7.0, Skills 8.1, overview 7.9). Pairs that did not change
+moved by up to 0.6 between the round-18 and round-19 critics, so 7.67 against 7.57 is within the reviewers' spread, not a regression we can
+point at. Suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE**.
+
+### Where rounds 16-19 leave the pages
+
+Critic means on the same 11 pairs: baseline 7.27, round 16 6.85, round 17 7.21, round 18 7.67, round 19 7.57 (each a different reviewer
+instance). The 8/10 target is not reached. Open, in the order the last critics ranked them:
+
+1. The curved cyan glass sheet (the movie's `ring` clip, drawn by the game far behind with a brightening blend) and the panels' edge
+   bloom. A transparent page composited over the UE viewport cannot brighten the world; this needs host compositing or a drawn stand-in.
+2. Residual perspective: the real panel's left edge leans about 16 px over its height; a turn about the vertical axis cannot lean
+   vertical edges, so the game's camera likely also pitches or uses a different projection (not read; UNVERIFIED).
+3. The focus view scrolls an empty-cell selection one row higher than the real list does; tab strip about 10 px left; ammo and count
+   plates a few pixels off.
+4. Cards: no flavour lines; a red frame and red level strip for items above the player's level are not reproduced.
+
+### PR #46 review fixes (2026-10-21)
+
+- On an empty backpack cell U, Delete and Backspace fell through to the remembered weapon slot and unequipped it; `unequip()` now
+  returns on an empty-cell selection.
+- The host-side boundary rule for empty cells was applied only when a key was pressed, so a Down queued behind a pending VM move was
+  still sent to the VM after the first move reached the last item (the VM only knows the item rows). While a VM move is pending, every
+  move now joins the queue, and the dispatcher decides the boundary rule against the current selection.
+- Two synthetic checks (both fail on the round-19 code): navigation 32/32. Suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE**
+  (bounded item set).
+
+## Rounds 20-22 (2026-10-22, lane D): matched references
+
+AI-assisted (Claude, with Codex sub-agents for analysis, page fits and critics). Machine: the second PC. Real frames, host frames,
+critic reports and the rejected round's diffs stay under ignored `local/realgame/d20/` and `local/orch/D20/`.
+
+**Matched real-game session.** The earlier references came from other saves (other level and items, some third-party console
+shots). A new session (`tools/real_game/realgame.ps1`, hub lock, saves backed up and restored with every file hash-checked, driver
+removed) put the real game in the host's capture state: the six bounded recipes spawned by full definition into the same slots,
+Maya at level 36 (set in memory), two weapon slots, $0, keyboard glyphs, Phaselock 1/1 and 31 points; 1280x720 windowed. Left
+different: the map (Windshear Waste), the character view (from behind), ammo maximums (the save's upgrades) and the name prefixes
+the game rolled for four legendaries. The host side runs `-owinvshots` with `-owlevel=36`, an empty gear manifest and
+`-owslots=2 -owmoney=0 -owerid=0`; the capture block drops the old Mind's Eye points and adds a D6b frame (Down x4 after leaving the
+overview). Seen in the session (**confirmed in game** for what the frames show): each sort selects its first entry, an empty ITEMS
+sort selects an (EMPTY) cell, Right from Equipped returns to the remembered backpack cell (also an empty one), F closes Inspect
+although its hint says Escape, Down x4 from Phaselock reaches Sustenance. Three mouse clicks on the backpack moved the focus to the
+Equipped panel; where the game's own cursor was is not known, so the mouse-click question stays open.
+
+**Round 20** (baseline critic 5.95/10 on 14 pairs). Card content from the parts (`docs/verification/INVENTORY_CARD_STATS.md`):
+Accuracy rows, coloured text lines, Burn/Ignite rows, prices. Page: thumbnails kept after a sort, sort focus as observed, a backpack
+weapon compared with the active slot's weapon (`WillowInventoryManager.GetEquippedAnalogue`, reached from the equipped panel's
+script), Skills Up/Down between tiers (`SkillTreeGFxObject.HandleInputKey` -> native `Navigate`; see
+`SKILL_TREE_NAVIGATION.md`). Critic **7.39**.
+
+**Round 21.** A glass-sheet stand-in drawn by the page (`glass_sheet.js`; the game's brightening blend cannot be reproduced over a
+viewport composited with alpha), Left from the Backpack to the equipped analogue, the Torgue explosive badge, Inspect, scroll and
+gear-cell fits. Two bugs found by the captures: `serve.py` did not route `skill_nav.js` (404), and rebuilding the Skills hit layer
+under a resting cursor selected the tile under it. Critic **7.85** (its D6/D7 remarks mixed the two pairs up; fair scores there would
+put the mean near 8.0, but that is our reading, not a measurement).
+
+**Round 22** (card, focus-panel, plate and glass fits; stable order for equal sort keys) scored **7.57**: the tie change moved the ALL
+selection off the Volcano and blanked the BRANDS thumbnails. A fourth attempt (not committed) still left the VALUE thumbnails blank
+and clipped the Inspect hint. The page files are back at round 21.
+
+**Where the pages are (round 21, 7.85).** Open, in the critic's order:
+
+1. VALUE sort thumbnails are blank (the thumbnail placement in that sort is wrong; round 20's occlusion test hides them).
+2. Within-brand order in BRANDS differs from the real frame: the real ALL and BRANDS frames order the same equal-key pairs
+   differently, so no single tie-break fits both (the sort is native, UNVERIFIED).
+3. Card frame a few pixels short and less turned than real; focus panel 13 px tall; count and ammo plates a few pixels off.
+4. Inspect: no 3D turn on the card and hint line (the real hint rises to the right), no emblem, backdrop slightly light.
+5. Zoom lines 0.1 high on two cards; one flavour line wraps differently (Ruffle's text metrics).
+6. Number keys choose a weapon slot for a backpack transfer (a host control; the game's behaviour is not observed).
+
+Checks on the final state: inventory suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set; the first run
+failed step 20 and skipped seven, fixed by item 6 above), navigation 40/40 (after the PR review fix), skill navigation 6/6, CTest 10/10, packages 9/9.

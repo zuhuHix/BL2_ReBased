@@ -80,6 +80,12 @@ prototypes, so the repository's clock started a little after the work did.
   (Phase 0 entries, 2026-09-10). Scripts: 12,968 of 12,978 functions decode
   structurally ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)). Both are
   structural agreement, not runtime compatibility.
+- Phaselock round 16 (DECISIONS 2026-10-21): a stock bullymong as the lifted target (its four PhaseLock clips, stock
+  blends, the hold's mesh lowering observed live); CTest 10/10, packages 9/9, quest suite 79/0 and 11/0. Critic overall
+  5.8 / 5.7 / 5.5 over three rounds (target 4.5); an agent's judgement against real frames, not parity.
+- Inventory and Skills rounds 16-19 (DECISIONS 2026-10-21): the pages apply the movie's own 3D turn, empty backpack cells are
+  selectable, Inspect and Skills details follow fresh real-game captures; critic 7.27 before, 7.57-7.67 after (8/10 not reached).
+  Inventory suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE (bounded item set), navigation 30/30, CTest 10/10, packages 9/9.
 - Suites after the Phaselock, ambient-citizen, gun and menu rounds (DECISIONS 2026-10-05): CTest 10/10,
   packages 9/9, quest suite 79/79 first run and 11/11 resume, door suite 16/16, inventory suite 49 PASS /
   0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE, navigation 27/27. Automated checks only; the visual state is in the
@@ -209,15 +215,16 @@ well-bounded ones are marked *good first task*.
       [sky approximation record](docs/verification/NATIVE_SKY_APPROXIMATION.md),
       the [native skybox record](docs/verification/NATIVE_SKYBOX_VERIFICATION.md)
       and [sky census](docs/verification/SKY_CENSUS.md).
-- [ ] Material fallbacks: Sanctuary now has 44 materials lacking diffuse,
-      including 12 opaque definitions (42 placed sections). Of those, nine have
-      no supported channels (20 sections). Two glacier materials (33 sections)
-      have an explicit primary-layer approximation with instance tiling; snow
-      blend, reflection/glow and static UV selection remain unresolved. See the
-      [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and
+- [~] Material fallbacks: the full Sanctuary pipeline now has 3 opaque
+      materials lacking diffuse with 1 placed section (Roland's map table,
+      whose packed `_Comp` channels are recoloured in game), down from 8 / 34
+      on 2026-10-21; five more inspected single-texture fallbacks (icicles,
+      distant snow and mountains, a chemical tank) are `partial_unverified`.
+      Layer blends, tints, glow and reflection remain unreconstructed. Ash is
+      unchanged at 13 opaque gaps / 117 sections; Southpaw has none. See the
+      [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md),
+      the [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and the
       [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
-      Ash and Southpaw counts not yet re-measured. Any new binary-layout
-      interpretation remains subject to the sensitive-area policy.
 - [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
       meshes with corroborated topology and host triangle collision, and the
       two persistent-level root Models emit 228 cross-checked polygons (571
@@ -246,13 +253,26 @@ well-bounded ones are marked *good first task*.
       its own `p_moonColor`; the station shadow mask, relief and
       time-of-day tint remain omitted pending an in-game reference. See the
       [moon base record](docs/verification/MOON_BASE_SURFACE.md).
-- [ ] Unsupported component owners (33 in Sanctuary) and color-stream variants
-      (4 in Sanctuary).
-- [ ] Complete walking collision: initial Sanctuary convex/box collision and
-      placeholder walking are verified; full routes and stairs remain open.
-      Ash and Southpaw scenes are not refreshed; sphere/capsule/PhysX shapes
-      and blocking volumes remain unsupported; terrain uses triangle collision
-      verified by `OpenWillow.TerrainWalking` on Sanctuary only. See
+- [~] Unsupported component owners and color-stream variants: Sanctuary has
+      none left (2026-10-21). Interactive objects and the wiring cable are
+      placed (checked against the running game at Plan B), mission-item preview
+      meshes and duplicate components are listed with reasons, and the reader
+      accepts the doubled colour buffers found on 27 base-game meshes. The same
+      owner rules place 21 interactive objects on Ash and 4 on Southpaw
+      (`UNVERIFIED` there: not compared with the running game). Ash still has
+      271 unclassified owners (AI markers, vehicle stations, props) and
+      Southpaw one. See the
+      [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
+- [~] Complete walking collision: initial Sanctuary convex/box collision and
+      placeholder walking are verified. Since 2026-10-21 blocking volumes
+      (static, and dynamic ones in the state observed live) and sphere/capsule
+      elements are imported, and `OpenWillow.RouteWalking` replays 35 stair and
+      route probes recorded in the running game: 29/29 of the probes the
+      original finished pass, volumes 5/5. Open: town-wide routes, two probes
+      the host walks but the original does not, Kismet volume toggles, the
+      jump arc, Ash and Southpaw refreshes; terrain uses triangle collision
+      verified by `OpenWillow.TerrainWalking` on Sanctuary only (one hole
+      assertion fails on this machine's probe data, not from this change). See
       [walking verification](COLLISION_WALKING_VERIFICATION.md).
 - [ ] Broader map coverage. Command-line and in-game selectors exist; the
       in-game list only offers already imported scenes (2026-09-14).

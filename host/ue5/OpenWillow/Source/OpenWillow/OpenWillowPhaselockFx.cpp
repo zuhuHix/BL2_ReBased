@@ -29,16 +29,15 @@ constexpr float QuadSize = 100.f;
 // Screen particle quad distance in front of the camera (host stand-in; beyond the 10 uu near plane).
 constexpr float ScreenQuadDistance = 15.f;
 
-// Host calibration (UNVERIFIED): per-emitter material scalars. The bubble's black orb (Mat_SirenOrbBlackMOD) is capped and
-// has a soft-fade floor because the game's interior is a translucent navy-violet in which the target shows at about a third
-// of its brightness, where the shader alone would make a black hole that spares the target's near surface. The hand's
-// dark blob keeps the shader's values (pure black at 0.30 s in the game).
+// Host calibration (UNVERIFIED): the bubble's black orb uses the material shader's own DarkCap/FadeFloor defaults after
+// the matched 4.50 s comparison showed the host interior much brighter than the game. The hand's dark blob also keeps
+// the shader's values (pure black at 0.30 s in the game).
 struct FOwFxEmitterScalar { const TCHAR* Template; const TCHAR* Emitter; const TCHAR* Parameter; float Value; };
 const FOwFxEmitterScalar EmitterScalars[] = {
-    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.8f},
-    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.65f},
-    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 0.65f},
-    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 0.5f},
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("DarkCap"), 1.0f},
+    {TEXT("Part_SirenASEnemyOrb"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 1.0f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("DarkCap"), 1.0f},
+    {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("ModulateBlack"), TEXT("FadeFloor"), 1.0f},
     // Round 11 (UNVERIFIED): the release keeps its shards out of the interior and less bright: spikes and ribbons at half strength.
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("BlueSpikeys"), TEXT("Gain"), 0.5f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_01"), TEXT("Gain"), 0.4f},
@@ -46,6 +45,9 @@ const FOwFxEmitterScalar EmitterScalars[] = {
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_03"), TEXT("Gain"), 0.4f},
     // The star-burst at the fist (0.5-0.95 s): the game has no rays there; most of it is removed.
     {TEXT("Part_SirenASHandOrb"), TEXT("EndBrightness"), TEXT("Gain"), 0.15f},
+    // Host fit (UNVERIFIED): these three large flash particles washed the 0.80 s capture nearly white at 1.0. Restore
+    // Mat_SirenGlowMOD's 0.4 default, which is used by the hand glow and retains the game's streak detail better.
+    {TEXT("Part_SirenASEnemyOrbBegin"), TEXT("InitialFlash"), TEXT("Overbright"), 0.4f},
 };
 
 // Host calibration (UNVERIFIED): the hand effect's palm orb ("Center") and dark disc ("ModulateBlack") start 0.05 s (orb) and 0.1 s (disc) into their
@@ -58,10 +60,11 @@ const FOwFxAgeShift AgeShifts[] = {
     {TEXT("Part_SirenASHandOrb"), TEXT("ModulateBlack"), 0.10f},
 };
 
-// Host calibration (UNVERIFIED): sprite size multipliers (none in use). Scaling the hand's dark disc 1.6x, or widening its core 1.5x
-// in the shader, made the void fade out instead of grow (cause not found), so it stays at about 200 px against the game's 330.
+// Host calibration (UNVERIFIED): the hand's Center orb is scaled to 0.8 after its 0.50 s measured diameter was about
+// 85-90 px against the game's 65-75 px. The dark disc stays at its imported size.
 struct FOwFxSizeScale { const TCHAR* Template; const TCHAR* Emitter; float Scale; };
 const FOwFxSizeScale SizeScales[] = {
+    {TEXT("Part_SirenASHandOrb"), TEXT("Center"), 0.8f},
     {TEXT("Part_SirenASHandOrb"), TEXT("ModulateBlack"), 1.0f},
 };
 
@@ -488,6 +491,11 @@ void UOpenWillowFxComponent::Play(const FOwFxTemplate* InTemplate, float DrawSca
             UE_LOG(LogTemp, Display, TEXT("OpenWillow FX %s: emitter %s modules not played: %s"), *Template->Name, *E.Name,
                 *FString::Join(E.Unsupported, TEXT(", ")));
     }
+    // Cascade's zero-time bursts are visible on the activation frame. A host component can be played from a Walker or
+    // target tick after its own tick group has already run; process only events at the current emitter time and render
+    // once here so a capture on that frame does not miss the intro swirl/flash. This zero-delta priming is UNVERIFIED.
+    for (FEmitterState& S : States) Simulate(S, 0.f);
+    for (int32 Index = 0; Index < States.Num(); ++Index) Render(States[Index], Index);
 }
 
 void UOpenWillowFxComponent::StopEmitting()
@@ -712,7 +720,13 @@ void UOpenWillowFxComponent::Render(FEmitterState& S, int32 EmitterIndex)
                     Mid->SetScalarParameterValue(FName(*Parts[2]), FCString::Atof(*Parts[3]));
             }
         }
-        if (bFirstPersonSpace) C->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+        if (bFirstPersonSpace)
+        {
+            C->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+            // Candidate UE3-to-UE5 mapping: draw this hand-space sprite above ordinary world geometry. Whether the
+            // stock first-person draw path uses this depth group, and how it interacts with depth fading, is UNVERIFIED.
+            C->SetDepthPriorityGroup(SDPG_Foreground);
+        }
         for (int32 Slot = 0; Slot < FMath::Max(1, C->GetNumMaterials()); ++Slot) C->SetMaterial(Slot, Mid);
         C->RegisterComponent();
         S.Pool.Add(C);

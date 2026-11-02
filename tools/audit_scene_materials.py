@@ -32,6 +32,8 @@ def issue_category(issue):
 def gap_status(material):
     """Explain what kind of follow-up a diffuse gap needs."""
     channels = material.get('channels', {})
+    if material.get('scene_recipe') or material.get('unlit_constant_color'):
+        return 'partial_scene_recipe'
     if material.get('surface_approximation'):
         return 'partial_surface_approximation'
     resource = material.get('cooked_texture_resource')
@@ -111,6 +113,12 @@ def audit(scene):
                 cause, disposition = 'explicit_material_fallback', 'explicit_manifest_material_fallback_partial_unverified'
             elif definition.get('channels', {}).get('diffuse'):
                 cause, disposition = 'recovered_diffuse', 'inspect_native_graph_parity'
+            elif definition.get('scene_recipe') or definition.get('unlit_constant_color'):
+                cause, disposition = 'inspected_material_recipe', 'partial_unverified_scene_recipe'
+            elif 'terrain_blend' in definition:
+                # Host weighted-sum of the terrain's layer diffuses
+                # (prepare_terrain.py); it has no single diffuse channel.
+                cause, disposition = 'terrain_weighted_blend', 'inspect_native_graph_parity'
             elif 'constant_diffuse' in definition:
                 cause, disposition = 'constant_diffuse', 'explicit_manifest_color'
             else:
@@ -124,8 +132,9 @@ def audit(scene):
                                    else 'intentional hidden collision helper' if cause == 'intentional_helper_hidden'
                                    else 'present geometry with explicit host fallback' if cause == 'explicit_neutral_material_fallback'
                                    else 'present geometry with explicit material fallback' if cause == 'explicit_material_fallback'
-                                   else 'separate building/prop material issue' if scope == 'building_or_prop' and cause != 'recovered_diffuse'
-                                   else 'present geometry with incomplete material' if cause != 'recovered_diffuse'
+                                   else 'present geometry with inspected material recipe' if cause == 'inspected_material_recipe'
+                                   else 'separate building/prop material issue' if scope == 'building_or_prop' and cause not in ('recovered_diffuse', 'terrain_weighted_blend')
+                                   else 'present geometry with incomplete material' if cause not in ('recovered_diffuse', 'terrain_weighted_blend')
                                    else 'present geometry with recovered diffuse'),
                 'geometry_file': section.get('file'),
                 'material_policy': policy,
@@ -139,6 +148,10 @@ def audit(scene):
     counts = Counter()
     gap_status_counts = Counter()
     for name, material in scene['materials'].items():
+        if material.get('scene_recipe') or material.get('unlit_constant_color'):
+            counts['inspected_material_recipes'] += 1
+            counts['inspected_material_recipe_placed_sections'] += len(uses[name])
+    for name, material in scene['materials'].items():
         if 'surface_approximation' in material:
             partial_surfaces.append({'source': material['source'],
                                      'placed_sections': len(uses[name]),
@@ -149,8 +162,14 @@ def audit(scene):
         if material['channels'].get('diffuse'):
             counts['textured_diffuse'] += 1
             continue
+        if 'terrain_blend' in material:
+            counts['terrain_weighted_blend'] += 1
+            counts['terrain_weighted_blend_placed_sections'] += len(uses[name])
+            continue
         if 'constant_diffuse' in material:
             counts['constant_diffuse'] += 1
+            continue
+        if material.get('scene_recipe') or material.get('unlit_constant_color'):
             continue
         blend = material.get('blend_mode', 'BLEND_Opaque')
         neutral = not any(material['channels'].values())
@@ -190,6 +209,9 @@ def audit(scene):
             'section_policy_counts': dict(sorted(section_policy_counts.items())),
             'resolved_policy_sections': sum(section_policy_counts.values()),
             'native_null_sections': native_null_sections,
+            # Components the preparer deliberately did not place, by reason.
+            'excluded_components': dict(sorted(Counter(
+                item.get('reason') for item in scene.get('excluded_components', [])).items())),
             'unassigned_placed_sections': len(unassigned_placements),
             'unassigned_placements': unassigned_placements, 'gaps': gaps,
             'partial_surfaces': partial_surfaces,
