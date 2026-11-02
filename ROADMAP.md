@@ -120,8 +120,8 @@ prototypes, so the repository's clock started a little after the work did.
   ([NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md), "Using REA on Borderlands2.exe").
 - **2026-10-21 and 2026-10-22, inventory and Skills rounds 16-22** (#46, #49): the
   movie's own 3D turn, selectable empty backpack cells, card content from the
-  parts, Skills keyboard navigation against matched real-game references. Critic
-  7.27 before round 16, 7.67 and 7.57 at rounds 18 and 19, 7.85 at round 21
+  parts, Skills keyboard navigation against matched real-game references. An independent
+  critic agent's scores (judgement, not parity): 7.27 before round 16, 7.67 and 7.57 at rounds 18 and 19, 7.85 at round 21
   (kept; round 22 scored lower and was reverted); 8/10 not reached
   ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md),
   [cards](docs/verification/INVENTORY_CARD_STATS.md); DECISIONS 2026-10-21,
@@ -176,7 +176,8 @@ prototypes, so the repository's clock started a little after the work did.
 - HUD (DECISIONS 2026-10-22): HUD shots 17/17, action-skill suite 19/19, minimap
   in-engine 15/15 (host suites, not parity).
 - Shot effects (DECISIONS 2026-10-23,
-  [record](docs/verification/WEAPON_PROJECTILES.md)): matched-frame critic 2.1,
+  [record](docs/verification/WEAPON_PROJECTILES.md)): an independent critic agent's
+  matched-frame scores (judgement, not parity) 2.1,
   3.9, 4.2/10 over three rounds, stalled; host shot effects are additive stand-ins,
   not BL2's particle systems.
 - Phaselock round 16 (DECISIONS 2026-10-21): a stock bullymong as the lifted target (its four PhaseLock clips, stock
@@ -415,7 +416,8 @@ well-bounded ones are marked *good first task*.
       [performance record](docs/verification/PERFORMANCE.md).
 - [~] Matched-viewpoint screenshots against the original game: the plan's
       per-map verification method. Sanctuary has eight matched cameras and four
-      critic rounds (5.0/10 for the default state, 2026-10-22); 8/10 not
+      independent critic-agent rounds (judgement, not parity; 5.0/10 for the
+      default state, 2026-10-22); 8/10 not
       reached, other maps not started. See the
       [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
 - [x] Cross-check the census against umodel's view of the same packages:
