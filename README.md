@@ -127,7 +127,7 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
 | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
-I work on this actively, and I'm not promising completion dates. As of 2026-10-02 the repository is 22 days old, with 191 commits on `origin/main` across 17 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
+I work on this actively, and I'm not promising completion dates. As of 2026-11-02 the repository is 53 days old, with 401 commits on `origin/main` across 28 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
 
 ## Related project: BL2_RTSE
 
