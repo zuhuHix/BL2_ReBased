@@ -75,6 +75,13 @@ public:
     // That the game's tracker shows exactly these lines is UNVERIFIED (docs/verification/HUD_PARITY.md, "Mission tracker").
     struct FHudTrackerLine { FString Text; bool bComplete = false; bool bOptional = false; };
     bool HudTracker(FString& OutMission, TArray<FHudTrackerLine>& OutLines, bool& bOutTurnIn) const;
+    // The mission log's snapshot for tools/hud_overlay/missions.js (owMissions), as JSON: {"enabled", "missions": [{"id", "name",
+    // "status" (notstarted / active / turnin / complete), "statusNumber" (EMissionStatus), "plot", "description", "giver", "turnIn",
+    // "level", "xp", "tracked", "objectives": [{"name", "text", "progress", "count", "done", "optional"}]}], "player": {"level", "xp",
+    // "xpLevelStart", "xpNext", "credits" (only when known)}}. Without -owquest only "enabled": false and the player block. The objectives
+    // are the active set's (MissionSystem::activeObjectives); "tracked" is true while the mission is Active or ReadyToTurnIn (the one
+    // mission is the tracker's active mission then). Docs: docs/verification/MENUS_MISSION_LOG.md.
+    FString MissionLogJson() const;
 
 private:
     struct FImpl;

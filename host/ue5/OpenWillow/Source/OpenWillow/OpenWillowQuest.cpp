@@ -219,6 +219,65 @@ void UOpenWillowQuest::MinimapMarkers(TArray<TPair<FString, FVector>>& Out) cons
     else if (Dummy && Impl->ObjectiveState(Impl->Data.DummyObjective) == "Active") Out.Emplace(TEXT("objective"), Dummy->GetActorLocation());
 }
 
+FString UOpenWillowQuest::MissionLogJson() const
+{
+    TSharedRef<FJsonObject> Log = MakeShared<FJsonObject>();
+    Log->SetBoolField(TEXT("enabled"), Impl.IsValid());
+    TArray<TSharedPtr<FJsonValue>> Missions;
+    if (Impl)
+    {
+        using S = vm::MissionSystem::Status;
+        const vm::MissionSystem& Mission = Impl->Slice->mission();
+        const S Current = Mission.status();
+        static const TCHAR* const Names[] = {TEXT("notstarted"), TEXT("active"), TEXT("turnin"), TEXT("complete")};
+        TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+        Entry->SetStringField(TEXT("id"), UTF8_TO_TCHAR(Mission.path().c_str()));
+        Entry->SetStringField(TEXT("name"), UTF8_TO_TCHAR(Mission.name().c_str()));
+        Entry->SetStringField(TEXT("status"), Names[int32(Current)]);
+        Entry->SetNumberField(TEXT("statusNumber"), Mission.statusNumber());
+        Entry->SetBoolField(TEXT("plot"), Mission.plotCritical());
+        Entry->SetStringField(TEXT("description"), UTF8_TO_TCHAR(Mission.description().c_str()));
+        Entry->SetStringField(TEXT("giver"), UTF8_TO_TCHAR(Mission.giver().c_str()));
+        Entry->SetStringField(TEXT("turnIn"), UTF8_TO_TCHAR(Mission.turnIn().c_str()));
+        // The mission level is the region stage once it is fixed (FixRegionStage); its XP reward the slice data's formula (MissionXp).
+        Entry->SetNumberField(TEXT("level"), RegionStage);
+        Entry->SetNumberField(TEXT("xp"), RegionStage > 0 ? Impl->Data.MissionXp(RegionStage) : 0);
+        Entry->SetBoolField(TEXT("tracked"), Current == S::Active || Current == S::ReadyToTurnIn);
+        TArray<TSharedPtr<FJsonValue>> Objectives;
+        for (const auto& Objective : Mission.activeObjectives())
+        {
+            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+            Row->SetStringField(TEXT("name"), UTF8_TO_TCHAR(Objective.name.c_str()));
+            Row->SetStringField(TEXT("text"), UTF8_TO_TCHAR(Objective.message.c_str()));
+            Row->SetNumberField(TEXT("progress"), Mission.objectiveProgress(Objective.name));
+            Row->SetNumberField(TEXT("count"), Objective.count);
+            Row->SetBoolField(TEXT("done"), Mission.objectiveComplete(Objective.name));
+            Row->SetBoolField(TEXT("optional"), Objective.optional);
+            Objectives.Add(MakeShared<FJsonValueObject>(Row));
+        }
+        Entry->SetArrayField(TEXT("objectives"), Objectives);
+        Missions.Add(MakeShared<FJsonValueObject>(Entry));
+    }
+    Log->SetArrayField(TEXT("missions"), Missions);
+    const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    if (const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr)
+    {
+        TSharedRef<FJsonObject> Player = MakeShared<FJsonObject>();
+        const int32 Level = Skills->GetLevel();
+        Player->SetNumberField(TEXT("level"), Level);
+        Player->SetNumberField(TEXT("xp"), double(Skills->GetExperience()));
+        Player->SetNumberField(TEXT("xpLevelStart"), double(UOpenWillowSkills::ExperienceForLevel(Level)));
+        Player->SetNumberField(TEXT("xpNext"), double(UOpenWillowSkills::ExperienceForLevel(Level + 1)));
+        Player->SetNumberField(TEXT("maxLevel"), UOpenWillowSkills::MaxLevel);
+        int32 Money = 0;
+        if (Walker->GetInventory() && Walker->GetInventory()->GetMoney(Money)) Player->SetNumberField(TEXT("credits"), Money);
+        Log->SetObjectField(TEXT("player"), Player);
+    }
+    FString Text;
+    FJsonSerializer::Serialize(Log, TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text));
+    return Text;
+}
+
 void UOpenWillowQuest::Fail(const FString& Error)
 {
     bFailed = true;
