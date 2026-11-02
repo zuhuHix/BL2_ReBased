@@ -16,6 +16,17 @@ float Number(const TSharedPtr<FJsonObject>& Card, const TCHAR* Field, float Fall
     return Card->TryGetNumberField(Field, Value) ? float(Value) : Fallback;
 }
 
+bool ReadVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, FVector& Out)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Numbers = nullptr;
+    if (!Object->TryGetArrayField(Field, Numbers) || Numbers->Num() != 3) return false;
+    double X = 0, Y = 0, Z = 0;
+    if (!(*Numbers)[0]->TryGetNumber(X) || !(*Numbers)[1]->TryGetNumber(Y) || !(*Numbers)[2]->TryGetNumber(Z)) return false;
+    if (!FMath::IsFinite(X) || !FMath::IsFinite(Y) || !FMath::IsFinite(Z)) return false;
+    Out = FVector(X, Y, Z);
+    return true;
+}
+
 bool IsGearItemType(const FString& Type)
 {
     return Type == TEXT("shield") || Type == TEXT("grenade_mod")
@@ -100,6 +111,15 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
     (*Card)->TryGetStringField(TEXT("rarity_color"), Item.RarityColor);
     Item.Level = int32(Number(*Card, TEXT("level"), 1));
     Item.Damage = Number(*Card, TEXT("damage"), 0);
+    if (const TSharedPtr<FJsonObject>* Stack = nullptr; (*Card)->TryGetObjectField(TEXT("damage_stack"), Stack))
+    {
+        Item.bHasDamageStack = true;
+        Item.DamageBase = Number(*Stack, TEXT("base"), 0);
+        Item.DamagePreAdd = Number(*Stack, TEXT("pre_add"), 0);
+        Item.DamagePostAdd = Number(*Stack, TEXT("post_add"), 0);
+        Item.DamageScaleUp = Number(*Stack, TEXT("scale_up"), 0);
+        Item.DamageScaleDown = Number(*Stack, TEXT("scale_down"), 0);
+    }
     Item.FireRate = FMath::Max(0.1f, Number(*Card, TEXT("fire_rate"), 1));
     Item.ReloadTime = Number(*Card, TEXT("reload_time"), 0);
     Item.Magazine = Number(*Card, TEXT("magazine"), 0);
@@ -134,6 +154,19 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
         Item.StatusChance = float(StatusChance);
     }
     Recipe->TryGetStringArrayField(TEXT("gestalt_fragments"), Item.Fragments);
+    const TSharedPtr<FJsonObject>* Sockets = nullptr;
+    if (Recipe->TryGetObjectField(TEXT("sockets"), Sockets))
+        for (const auto& Pair : (*Sockets)->Values)
+        {
+            const TSharedPtr<FJsonObject>* Entry = nullptr;
+            FOpenWillowGunSocket Socket;
+            if (!Pair.Value || !Pair.Value->TryGetObject(Entry)) continue;
+            (*Entry)->TryGetStringField(TEXT("bone"), Socket.Bone);
+            (*Entry)->TryGetStringField(TEXT("fragment"), Socket.Fragment);
+            if (Socket.Bone.IsEmpty() || !ReadVector(*Entry, TEXT("location"), Socket.Location)) continue;
+            Socket.bHasMeshLocation = ReadVector(*Entry, TEXT("mesh_location"), Socket.MeshLocation);
+            Item.Sockets.Add(FString(*Pair.Key), Socket);
+        }
     Recipe->TryGetStringField(TEXT("material"), Item.Material);
     Recipe->TryGetStringField(TEXT("weapon_type"), Item.WeaponType);
     // `gestalt` is a path string in tools/weapon_recipe.py recipes; some recipe writers store {"path": ...}.
@@ -235,9 +268,8 @@ int32 UOpenWillowInventory::LoadRecipes(const FString& Directory)
         FOpenWillowWeaponItem Item;
         FString Provenance;
         if (!ReadRecipe(FPaths::Combine(Directory, File), Item, &Provenance)) continue;
-        // tools/weapon_slice_gear.py provenance: a mission weapon is lent by its mission and the reward roll is dropped
-        // at turn-in; neither is carried from the start.
-        if (Provenance == TEXT("mission_weapon") || Provenance == TEXT("reward_roll")) continue;
+        // tools/weapon_slice_gear.py provenance: a mission weapon is lent by its mission, not carried from the start.
+        if (Provenance == TEXT("mission_weapon")) continue;
         if (!CanAddToBackpack())
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow inventory: backpack full (%d), skipped recipe %s"), BackpackCapacity, *ItemId);

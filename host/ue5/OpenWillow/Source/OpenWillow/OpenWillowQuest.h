@@ -79,6 +79,30 @@ private:
     bool bWeaponLent = false;
     bool bFailed = false;
     int32 Rewards = 0;
+    // The use key's press on Marcus runs his stock OnUsed chain on the VM (FireMissionSlice::useMarcus): how many times it opened the mission
+    // interface (the host answers that call), the movie definition it named, and the behaviors of the last run ("name(sequence) -> output ids").
+    int32 MissionInterfacesOpened = 0;
+    FString LastInterfaceMovie;
+    // The on-use dialog his chain asked for (WillowAIPawn.PlayOnUseDialog -> the component's TriggerEvent): the global VO_NPC_OnUse_* tag of the last press.
+    // Reported only: the line is not played (the generic group's no-match output and Trigger act, then Marcus's own group, are not dispatched here).
+    FString LastOnUseTag;
+    // The lines the dialog data chose for those presses (Marcus's own DET_NPC_OnUse_* lines, reached through the generic group's no-match output): how many, and
+    // the last one's event tag and AkEvent. They go through the same hook as the mission's lines (the manifest lookup); no audio device plays them.
+    int32 OnUseLines = 0, OnUseLinesBeforeTurnIn = 0;
+    FString LastOnUseLineTag, LastOnUseLineAk;
+    // The tag the director raised on his component when a mission was turned in (WillowAIPawn.PlayMissionTurnedInDialog; the stock data gives it no line): how many, and the last one's path.
+    int32 TurnInDialogTags = 0;
+    FString LastTurnInTag;
+    TArray<FString> LastUseCascade;
+    // Marcus's mission screen after its open (swap 11, FIRE_MISSION_GOLDEN_TRACE.md): the VM closes it inside the accept (the dismissal tag raised on him, then the
+    // interface closed), and at the turn-in the reward page waits (RewardPages) until the use key confirms it (RewardsReceived). PumpEvents numbers the events the
+    // host has handled, so the checks can compare the order of the three that matter at the accept (dismissal tag, closed, status Active).
+    int32 DismissalTags = 0, MissionScreensClosed = 0, RewardPages = 0, RewardsReceived = 0;
+    int32 PumpEvents = 0, DismissalAt = -1, ClosedAt = -1, ActiveAt = -1;
+    FString LastDismissalTag;
+    bool bRewardChecked = false;        // test: the reward_received_on_confirmation check ran (step 19 waits one tick for the second press)
+    int32 ClosesBeforeConfirm = 0, DismissalsBeforeConfirm = 0;   // test: the counts when the page was waiting
+    bool bRewardWaited = false;         // test: after the turn-in the page was shown, the reward not yet received, and the controller still owed the rewards
     int32 Respawns = 0;
     int32 Checks = 0;
     int32 Errors = 0;
@@ -99,7 +123,12 @@ private:
     void Save();
     void RunTest(float Delta);
     bool PlayerTouchesTrigger() const;
+    bool TouchesTrigger(const class AActor* Actor) const;
+    bool bPlayerInRange = false, bMarcusInRange = false;     // the waypoint cylinder overlap last reported to the slice
     bool InTalkReach() const;
+    // What Marcus's mission screen offers for this mission (NATIVE_USE_INTERACTION.md): his own list scripts run on the VM; the screen itself is
+    // not hosted. bOffered: the mission is in the redeemable or eligible list (redeemable entries come first).
+    void MissionScreen(bool& bRedeemable, bool& bEligible) const;
     void SpawnMarcus();
     void SpawnDummy();
     void ProcessArrivals();
@@ -109,18 +138,12 @@ private:
     void PressUse();
     void Shot(const TCHAR* Name);
     void LendMissionWeapon();
-    void GrantExperience();
+    void ApplyScriptExperience(int32 Amount);
+    void SyncScriptInputs();
     bool RunPhaselockTest();            // the Phaselock steps after the mission; false while waiting
     bool PhaselockTableMatchesManifest() const;
 
     FOpenWillowWeaponItem MissionWeapon;    // the lent recipe (identity, card stats, damage type, mesh path)
-    // Turn-in loot (not stock: the mission reward and the dummy carry no items): a gun rolled by the weapon generator from
-    // the stand-in's source when the manifest is loaded (-owrewardseed=, default 1), else the STAND-IN recipe prepared by
-    // tools/weapon_slice_gear.py --reward-only. Dropped as a pickup at turn-in when present.
-    FOpenWillowWeaponItem RewardItem;
-    bool bHasReward = false;
-    void DropReward();
-    UPROPERTY() TObjectPtr<class AOpenWillowInventoryPickup> RewardPickup;
     FString ItemDir;
     int32 GearLevel = 0;                // slice_manifest.json "level": the level the slice gear was rolled at
     // The mission's level: the GameStageRegion's stage, fixed per player and playthrough the first time it is asked
@@ -128,15 +151,36 @@ private:
     int32 RegionStage = 0, RegionStageLevel = 0;
     bool bRegionStageFromSave = false;
     void FixRegionStage(int32 PlayerLevel);
+    void LogScriptStubs(const TCHAR* When) const;   // the natives the mission script reached that have no implementation
     int32 LastXpAmount = 0;
+    // What the script's level-up reported (swap 7): the skill points its ExpLevelUp awarded (the data's per-level formula; -1 until one arrives, the
+    // number of such events) and the new maximum health (the health pool's base maximum, a stand-in trigger). The host compares them with its own.
+    int32 ScriptSkillPoints = -1, ScriptSkillPointEvents = 0;
+    float ScriptMaxHealth = -1.f;
+    // The Health event: maximum and current health after the script's level-up, which the host adopts (swap 7b). HealthHoldTicks: how many ticks the
+    // walker's own refresh waits for it after a script experience level-up.
+    float ScriptHealthCurrent = -1.f, ScriptHealthMaximum = -1.f;
+    int32 ScriptHealthEvents = 0, HealthHoldTicks = 0;
+    bool bHealthAdoptedThisTick = false;
+    // The WeaponDamageScale events (swap 9): how many came, the last one's value and duration, and the game time the host handed it to the walker.
+    // The ActionSkillCooldown events (swap 9's sibling, swap 10): how many came, the last one's modifier type and value, the cooldown left just before and after the host applied it.
+    int32 ScriptCooldownEvents = 0, ScriptCooldownType = -1;
+    float ScriptCooldownValue = -1.f, CooldownBeforeScript = -1.f, CooldownAfterScript = -1.f;
+    bool bScriptCooldownEnded = false;
+    int32 ScriptDamageScaleEvents = 0;
+    float ScriptDamageScale = 0.f, ScriptDamageScaleSeconds = 0.f, ScriptDamageScaleAt = -1.f;
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;
     int32 DummyShots = 0;
-    // A shot step fires once, then waits for the hit: light bullets reach the dummy after their flight (OpenWillowProjectile).
-    int32 ShotsBeforeFire = -1;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
-    int32 PointsBeforeReward = 0;
+    // test: bullets fly (OpenWillowProjectile), so a case fires, waits for the landing and checks; ShotPhase is the case's own sub-step, ShotsBefore the dummy's
+    // damage calls before the press, MagazineBefore the held magazine before it, ShotgunId and ShotgunSlot the multi-pellet gun readied for the pellet checks (DisplacedId the gun it took the slot from).
+    int32 ShotPhase = 0, ShotsBefore = 0, MagazineBefore = 0, ShotgunSlot = INDEX_NONE;
+    float PressDamage = 0;              // test: the per-pellet damage at the shotgun press (AOpenWillowWalker::ShotDamage)
+    FOpenWillowFiringStats CountsBefore; // test: OpenWillowFiring::Counts before the press (pellets, direct hits, direct damage)
+    FString ShotgunId, DisplacedId;
+    int32 PointsBeforeReward = 0, BackpackBeforeReward = 0;
     float HealthBeforeReward = 0, MaxHealthBeforeReward = 0;
     float PhaselockCastSeen = 0;
     bool bLendPending = false;
@@ -155,7 +199,8 @@ private:
     bool bDummyDestroyedBySequence = false;
     bool bSendBackFromProvider = false;
     int32 MissionEventsMatched = 0;
-    int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0;
+    bool bAcceptChecked = false;        // test: the use_key_accepts_mission check ran (step 4 may wait for the walk)
+    int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0, DialogAkMismatches = 0;
     TArray<int32> ArrivalMotions;       // door motion requested by each entered ArrivedAtMoveNode event
     FVector DummySpawnedAt = FVector::ZeroVector;
     FVector DummyAttachedAt = FVector::ZeroVector;   // dummy location right after the attach op ran

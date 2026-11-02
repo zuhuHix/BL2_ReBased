@@ -1,4 +1,5 @@
 #pragma once
+#include "dialog.hpp"
 #include "vm.hpp"
 
 #include <deque>
@@ -21,26 +22,38 @@ namespace vm {
 // fired with, objective progress, set completion, AdvanceObjectiveSet's target rule, status transitions) follow the
 // behaviour note docs/verification/NATIVE_MISSION_DISPATCH.md section B, read from native code: all UNVERIFIED in the
 // running game. Not modelled: RequiredObjectivesComplete and Failed, bRepeatable, collection/branching sets, the
-// level-load replay (B5), blocking sets, the mission weapon at status Active/Complete (kept on its objective).
+// level-load replay (B5), blocking sets.
 class MissionSystem {
 public:
     enum class Status { NotStarted, Active, ReadyToTurnIn, Complete };
 
     // Everything the host must do or show, in order. Nothing here has been executed by this class.
     struct Effect {
-        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated };
+        enum class Kind { RemoteEvent, Dialog, SetSequence, ObjectiveSetActive, ObjectiveComplete, StatusChanged, Reward, MissionWeaponGranted, MissionWeaponRemoved, ObjectiveUpdated, TurnInDialog,
+                          DismissalDialog, InterfaceClosed, RewardPage, RewardReceived };
         Kind kind;
-        std::string a, b, c;        // RemoteEvent: a=event; Dialog: a=event tag, b=group, c=name tag;
+        std::string a, b, c;        // RemoteEvent: a=event; Dialog (a line chosen by Behavior_TriggerDialogEvent): a=event tag, b=group,
+                                    // c=the talker's name tag, detail = "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>";
                                     // SetSequence: a=provider path, b=sequence, c=action (CHANGE_Enable/Disable/Toggle);
                                     // ObjectiveSet*: a=name; ObjectiveUpdated: a=name, b=new count;
                                     // StatusChanged: a=status; Reward: a=XP attribute path;
-                                    // MissionWeapon*: a=MissionWeaponBalanceDefinition path
+                                    // MissionWeapon*: a=MissionWeaponBalanceDefinition path;
+                                    // TurnInDialog: the tag raised on the director's dialog component by PlayMissionTurnedInDialog
+                                    // (a=tag path, b=speaker path, c=the other object's class);
+                                    // DismissalDialog: the tag raised on the director's component when the player's use of him ends (WillowAIPawn.PlayDismissalDialog;
+                                    // same fields as TurnInDialog); InterfaceClosed: Marcus's mission screen closed (a=the director's path);
+                                    // RewardPage: the screen is open, so the reward page waits for the player (a=the mission's path);
+                                    // RewardReceived: the player confirmed it, MissionRewardsReceived ran (a=the mission's path)
         double time = 0;
+        std::string detail;
     };
 
     MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath);
 
     Status status() const { return status_; }
+    bool hasOptionalObjective() const;
+    bool lendsWeapon() const;               // the mission lends its MissionWeapon: granted inside Active, removed inside Complete
+    int statusNumber() const;               // the EMissionStatus number the script sees (Active 1, ReadyToTurnIn 3, Complete 4)
     const std::string& activeSet() const { return activeSet_; }
     const std::string& path() const { return missionPath_; }
     const std::string& name() const { return missionName_; }
@@ -54,18 +67,65 @@ public:
     // "NotStarted", "Active" (in the active objective set, not complete) or "Complete", for an objective path of this
     // mission; "" when the path is not one of its objectives. The mapping onto the game's objective states is UNVERIFIED.
     std::string objectiveState(const std::string& objectivePath) const;
+    // Whether this objective set (by path) is the mission's active set (collection sets and sub-sets are not modelled).
+    bool setActive(const std::string& setPath) const { return !setPath.empty() && setPath == activeSet_; }
 
     // Every dependency mission is in `completed` (paths), and the ObjectiveDependency, if any, holds: `objectiveStates`
     // maps objective paths of other missions to "Complete" / "Active" (B6).
     bool available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates = {}) const;
+    // The tracker's availability queries (NATIVE_MISSION_SCRIPT_BRIDGE.md, "Availability queries", UNVERIFIED), the predicates accept() and the
+    // mission screen's lists share. canStart: status NotStarted and the dependencies met (Failed, repeatable Complete and the blocked-mission
+    // test are not modelled: nothing in this mission blocks). canEnd: ReadyToTurnIn (RequiredObjectivesComplete is not modelled).
+    bool canStart(const std::set<std::string>& completed) const { return status_ == Status::NotStarted && available(completed); }
+    bool canEnd() const { return status_ == Status::ReadyToTurnIn; }
+    // GetCompletedBranch (NATIVE_USE_INTERACTION.md, UNVERIFIED): 0 (EMBE_None) unless the mission is ReadyToTurnIn or Complete; then follow NextSet from
+    // the initial set to the last set; for the objective-set class that lists ObjectiveDefinitions, 2 when any of its objectives is not complete, 1 when
+    // all are; 0 when there is no initial set or the last set is of another class.
+    int completedBranch() const;
     // ActivateMission: NotStarted -> Active ("Default" id 7), then the initial set only when bActivateInitialObjectiveSet.
+    // Acceptance also writes the pending kickoff record (SetActiveMission), which the next tick() consumes.
     bool accept(const std::set<std::string>& completed);
-    // PlayKickoff / PlayKickoffDialogOnly: "Default" with id 12 / 13. What calls it after acceptance is not known.
+    // PlayKickoff / PlayKickoffDialogOnly: "Default" with id 12 / 13. The tracker's tick calls it for the pending record
+    // (bridge note, "Kickoff after acceptance"); calling it here plays it at once and consumes the record, the test path
+    // (--mission-run "accept kickoff ...") used before the tick existed.
     bool kickoff(bool dialogOnly = false);
+    bool kickoffPending() const { return kickoffPending_; }
+    // PlayTurnIn: "Default" with id 14 (the script ServerCompleteMission calls it after CompleteMission).
+    void playTurnIn();
+    // Behavior_TriggerDialogEvent's dialog (NATIVE_DIALOG.md): the host sets a line player or a test line length, registers its talkers.
+    DialogSystem& dialog() { return dialog_; }
+    // A named Kismet variable of the mission's provider (the mission behaviors' BVAR_NamedKismetVariable links, e.g. TargetDummy) bound to a world object;
+    // None clears it. See BehaviorProvider::bindKismetVariable. No effect when the mission has no provider.
+    void bindKismetVariable(const std::string& name, ObjectPtr object);
+    // The MissionDefinition object the script functions take as their Mission argument.
+    ObjectPtr definition() const { return definition_; }
+    // Script hooks of the bridge (src/mission_script.*): the native status routine calls UpdateMissionStatus on the local
+    // controller after the status changed and before the observers and the "Default" event, and the tracker tick calls
+    // IsMissionMoviePlaying on the accepting controller when it consumes the pending kickoff. Empty = no script runs.
+    std::function<void(int nativeStatus)> onStatusChanged;
+    std::function<void()> onKickoffTick;
+    // The tracker's observer notifications (NATIVE_BEHAVIOR_POPULATION.md section A, UNVERIFIED), raised after the tracker changed its
+    // own state: the status changed (after the script hook, before the Default event), the active set switched (before the set's
+    // event), an objective's progress was written (before its id-3 event) and an objective completed (before the set evaluation).
+    // LevelLoad is the immediate call an observer gets when it registers, raised by the observer's owner. ObjectiveCleared is not modelled.
+    enum class Notification { LevelLoad, StatusChanged, ObjectiveSetChanged, ObjectiveUpdated, ObjectiveCleared, ObjectiveComplete };
+    std::function<void(Notification)> onNotification;
+    // An objective update was applied (not refused by the tracker's own gate): called after the observers' "objective updated" reaction and
+    // before the objective's id-3 event, with the objective's path and the bit. The script bridge tells the local controller here
+    // (NATIVE_OBJECTIVE_TRIGGERS.md, UpdateObjective fan-out, UNVERIFIED).
+    std::function<void(const std::string& objectivePath, int bit)> onObjectiveUpdated;
     // MissionTracker.UpdateObjective: one queued update (+1, or the bit OR-ed in for a bit-mask objective).
     bool updateObjective(const std::string& objectiveName, int bit = 0);
     bool updateObjectiveByPath(const std::string& objectivePath, int bit = 0);   // what Behavior_UpdateMissionObjective names
     bool customEvent(const std::string& name);
+    // The script bridge reports the turned-in dialog's tag here so that it sits in the effect order (after the status routine, before the line it chooses).
+    void noteTurnInDialog(const std::string& tag, const std::string& speaker, const std::string& other) { emit(Effect::Kind::TurnInDialog, tag, speaker, other); }
+    // The same for the mission screen's host side (docs/verification/FIRE_MISSION_GOLDEN_TRACE.md, "The mission screen's close and the reward page"):
+    // the dismissal tag raised when the screen closes, the close itself, the reward page that waits, and the player's confirmation of it.
+    void noteDismissalDialog(const std::string& tag, const std::string& speaker, const std::string& other) { emit(Effect::Kind::DismissalDialog, tag, speaker, other); }
+    void noteInterfaceClosed(const std::string& director) { emit(Effect::Kind::InterfaceClosed, director); }
+    void noteRewardPage(const std::string& mission) { emit(Effect::Kind::RewardPage, mission); }
+    void noteRewardReceived(const std::string& mission) { emit(Effect::Kind::RewardReceived, mission); }
     // Turn-in: ReadyToTurnIn -> Complete and a Reward effect.
     bool turnInMission();
     void tick(double seconds);              // delayed behavior links
@@ -98,6 +158,12 @@ private:
     std::set<std::string> completedSets_;
     std::deque<std::pair<std::string, int>> updates_;
     bool draining_ = false;
+    ObjectPtr definition_;
+    DialogSystem dialog_;
+    void updateTrackedMission();
+    // The tracker's PendingMissionKickoff record (SetActiveMission writes it while the mission becomes Active) and the
+    // mission's bHeardKickoff flag. Plot-critical missions overwrite a pending record; the Fire mission does not (not modelled).
+    bool kickoffPending_ = false, kickoffFromActivation_ = false, heardKickoff_ = false;
     struct Impl;
     std::shared_ptr<Impl> impl_;
     std::vector<Effect> effects_;

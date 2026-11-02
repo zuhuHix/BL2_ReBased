@@ -9,6 +9,11 @@ non-negotiable: no game files, asset dumps or other game-derived data in the rep
 source, no decompiler output and no code transcribed or converted from it, record provenance and
 licenses, disclose AI assistance, keep verification claims honest.
 
+**Subagents and short tasks:** read [docs/LANE_BRIEF.md](docs/LANE_BRIEF.md) (the binding rules on one page) and
+[docs/verification/GATES.md](docs/verification/GATES.md) (gate commands and the current baseline) instead of reading every long
+document; open the long documents only for the part your task touches. Read recent decisions with
+`python tools/decisions_index.py --tail N` and look up natives with `python tools/native_index_find.py <name>`.
+
 ## Main tools
 
 `docs/TOOLING.md` "Main tools at a glance" lists the project's go-to tools. In short: bl-sdk live reads

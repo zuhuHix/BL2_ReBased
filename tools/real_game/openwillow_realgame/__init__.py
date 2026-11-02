@@ -117,6 +117,11 @@ def on_tick(*_args):
 
 add_hook(TICK, Type.POST_UNCONDITIONAL, HOOK_ID, on_tick)
 
+# Install-Driver -BlockSavesAtStart writes this flag: the game then refuses save calls from the first frame, which is
+# needed when a startup mod loads a character before any command can run (the main-menu call is too late).
+if Path(__file__).with_name("autoblock.flag").is_file():
+    block_saves()
+
 mod = build_mod(cls=Library, name="OpenWillow Real Game Driver", author="OpenWillow",
                 description="Local command channel for OpenWillow ground-truth captures.",
                 version="0.1.0", inject_version_from_pyproject=False)

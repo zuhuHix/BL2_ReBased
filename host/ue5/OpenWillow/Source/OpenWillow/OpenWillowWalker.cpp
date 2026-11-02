@@ -231,20 +231,60 @@ void AOpenWillowWalker::RefreshHealthForLevel()
     // -owquest: maximum health from the recovered Init_PlayerHealth formula at Maya's level (skills, class mods and
     // relics not applied); otherwise the 400 host stand-in stays.
     float FormulaHealth = 0.f;
-    if (!Skills || Skills->GetLevel() == HealthLevel || !Quest || !Quest->Enabled()
+    if (bHealthHeldForScript || !Skills || Skills->GetLevel() == HealthLevel || !Quest || !Quest->Enabled()
         || !Quest->PlayerMaxHealth(Skills->GetLevel(), FormulaHealth))
         return;
-    // Current health becomes the new maximum, at start and on every level change. For a level-up this follows the
-    // installed data: WillowPlayerController.OnExpLevelChange (script) calls the native
-    // RecalculateAttributeInitializedState, then, with bFeedback, runs PlayerClassDefinition.OnLevelUp
-    // (GD_PlayerShared.Behaviors.PlayerBehavior_LevelUp), whose SkillDefinition_0 adds HealthMaxValue x 1 to
-    // HealthCurrentValue (MT_PostAdd). UNVERIFIED (native): that the pool clamps the sum at the new maximum and the
-    // timed effect acts once as a heal; OnExpLevelChange's 1 s guard (LastLevelUpTime) is not modelled; a level that
-    // goes down (test fixtures only) is treated the same.
+    // Current health becomes the new maximum, at start and on any level change the script did not handle (test fixtures,
+    // a level that goes down). A level-up from the mission's experience is handled by the VM instead (ApplyScriptHealth):
+    // OnExpLevelChange (script) rebases the health pool and, past its 1 s guard, runs the OnLevelUp behaviors that refill it
+    // (NATIVE_LEVEL_UP_ATTRIBUTES.md; the refill was observed in game).
     const int32 FromLevel = HealthLevel;
     MaxHealth = Health = FormulaHealth;
     HealthLevel = Skills->GetLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f for level %d (was level %d)"), Health, MaxHealth, HealthLevel, FromLevel);
+}
+
+void AOpenWillowWalker::ApplyScriptHealth(float NewMax, float NewCurrent)
+{
+    // The VM's health pool after a level-up: its effective maximum and its current value (the refill included).
+    const float FromMax = MaxHealth, FromHealth = Health;
+    MaxHealth = NewMax;
+    Health = NewCurrent;
+    if (Skills) HealthLevel = Skills->GetLevel();
+    bHealthHeldForScript = false;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f from the script's level-up (was %.1f/%.1f)"), Health, MaxHealth, FromHealth, FromMax);
+}
+
+void AOpenWillowWalker::AddWeaponDamageScale(float Scale, float Seconds)
+{
+    if (Scale <= 0.f)      // only a positive Scale is handed over (the stack formula puts a negative one in the divisor, which the host does not model)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow weapon damage scale %.3f ignored: not positive"), Scale);
+        return;
+    }
+    const float Now = GetWorld()->GetTimeSeconds();
+    DamageScales.Add({Scale, Now + Seconds});
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon damage scale +%.3f for %.1f s from the script's natural level-up (until game time %.2f, %d running)"),
+        Scale, Seconds, Now + Seconds, DamageScales.Num());
+}
+
+float AOpenWillowWalker::WeaponDamageScaleAt(float Now) const
+{
+    // The skill expires when its start time plus its duration is no later than now (NATIVE_SKILLS.md section 4.5), so a modifier runs while Now < EndsAt.
+    float Sum = 0.f;
+    for (const FDamageScale& Entry : DamageScales)
+        if (Now < Entry.EndsAt) Sum += Entry.Scale;
+    return Sum;
+}
+
+float AOpenWillowWalker::ShotDamage(const FOpenWillowWeaponItem& Weapon, float Now) const
+{
+    const float Scale = WeaponDamageScaleAt(Now);
+    if (Scale == 0.f) return Weapon.Damage;
+    // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: the sum 2.017 to 3.017 took 41.40 to 61.92): the Scale joins the up-sum.
+    if (Weapon.bHasDamageStack)
+        return (Weapon.DamageBase + Weapon.DamagePreAdd) * (1.f + Weapon.DamageScaleUp + Scale) / (1.f + Weapon.DamageScaleDown) + Weapon.DamagePostAdd;
+    return Weapon.Damage * (1.f + Scale);      // fallback without the stack: S taken as 1 (UNVERIFIED, see the header)
 }
 
 void AOpenWillowWalker::BeginPlay()
@@ -558,6 +598,12 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         AddMovementInput(FRotator(0, GetControlRotation().Yaw, 0).Vector(), 1);
     }
     const float Now = GetWorld()->GetTimeSeconds();
+    for (int32 I = DamageScales.Num() - 1; I >= 0; --I)
+        if (Now >= DamageScales[I].EndsAt)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon damage scale +%.3f ended at game time %.2f"), DamageScales[I].Scale, Now);
+            DamageScales.RemoveAt(I);
+        }
     if (bWantsCombatTarget && !CombatTarget.IsValid() && Now > 1.f
         && GetCharacterMovement()->IsMovingOnGround())
     {
@@ -921,6 +967,9 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
     ApplyViewModel(Item->Id);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow gun sockets %s: Muzzle %s, EjectPort %s (no shell casings are spawned yet)"), *Item->Id,
+        Item->Sockets.Contains(TEXT("Muzzle")) ? TEXT("decoded") : TEXT("missing (estimate used)"),
+        Item->Sockets.Contains(TEXT("EjectPort")) ? TEXT("decoded") : TEXT("missing"));
     GlowImpulse = 0.f;
     AppliedGlow = 0.f;
     WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr || bInventoryPresentation);
@@ -977,32 +1026,31 @@ bool AOpenWillowWalker::UnequipSlot(int32 Slot)
 }
 bool AOpenWillowWalker::LendWeapon(const FOpenWillowWeaponItem& Item)
 {
+    // The grant inside ActivateMission adds the weapon to the backpack and nothing more: observed in the real game (FIRE_MISSION_GOLDEN_TRACE.md, lane L2),
+    // AddInventory was called with bReady false and the weapon went to the backpack, not equipped; the player readied it from the inventory page before shooting.
+    // So it is not placed in a slot and not drawn here. Mission weapons are never saved (re-granted to the backpack on load). Level requirement: none.
     if (!Inventory || Inventory->FindItemIndexById(Item.Id) != INDEX_NONE || !Inventory->AddToBackpack(Item)) return false;
-    const int32 Index = Inventory->FindItemIndexById(Item.Id);
-    // Where the game puts a lent weapon is native (MissionTracker) and not observed. Host rule (UNVERIFIED): the first
-    // empty unlocked slot, else the last unlocked slot (its weapon goes back to the backpack); drawn at once. The
-    // level requirement is not checked for a lent weapon.
-    int32 Slot = Inventory->GetWeaponSlotsUnlocked() - 1;
-    for (int32 Candidate = 0; Candidate < Inventory->GetWeaponSlotsUnlocked(); ++Candidate)
-        if (!Inventory->SlotItem(Candidate)) { Slot = Candidate; break; }
-    PreLendSlot = Inventory->GetActiveSlot();
-    if (Index == INDEX_NONE || !Inventory->Equip(Index, Slot)) return false;
-    SelectSlot(Slot);
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow lent weapon %s (%s, level %d, %.1f damage, %s) in slot %d"), *Item.Id, *Item.Name,
-        Item.Level, Item.Damage, *Item.DamageType, Slot + 1);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow lent weapon %s (%s, level %d, %.1f damage, %s) added to the backpack, not equipped"), *Item.Id, *Item.Name,
+        Item.Level, Item.Damage, *Item.DamageType);
     return true;
 }
 bool AOpenWillowWalker::ReturnLentWeapon(const FString& Id)
 {
+    // The removal takes the weapon out of the slots and the backpack alike (NATIVE_INVENTORY_EQUIP.md); the held weapon is replaced only when it was this one.
+    const FOpenWillowWeaponItem* Active = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    const bool bWasHeld = Active && UOpenWillowInventory::StableId(*Active) == Id;
     FOpenWillowTakenInventoryItem Taken;
     if (!TakeInventoryItemById(Id, Taken)) return false;
-    // Draw what was held before the lend, else the first equipped weapon (host rule, UNVERIFIED).
-    int32 Slot = Inventory->SlotItem(PreLendSlot) ? PreLendSlot : INDEX_NONE;
-    for (int32 Candidate = 0; Slot == INDEX_NONE && Candidate < UOpenWillowInventory::SlotCount; ++Candidate)
-        if (Inventory->SlotItem(Candidate)) Slot = Candidate;
-    if (Slot != INDEX_NONE) SelectSlot(Slot);
-    else Holster();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow returned lent weapon %s; holding slot %d"), *Id, Slot + 1);
+    int32 Slot = INDEX_NONE;
+    if (bWasHeld)
+    {
+        // Draw the first equipped weapon (host rule, UNVERIFIED: the game switches to the best remaining weapon).
+        for (int32 Candidate = 0; Slot == INDEX_NONE && Candidate < UOpenWillowInventory::SlotCount; ++Candidate)
+            if (Inventory->SlotItem(Candidate)) Slot = Candidate;
+        if (Slot != INDEX_NONE) SelectSlot(Slot);
+        else Holster();
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow returned lent weapon %s%s"), *Id, bWasHeld ? *FString::Printf(TEXT("; holding slot %d"), Slot + 1) : TEXT(" (it was not held)"));
     return true;
 }
 bool AOpenWillowWalker::DrawItemById(const FString& Id)
@@ -1276,8 +1324,15 @@ void AOpenWillowWalker::FireWeapon()
     if (bAimHeld && Model) RecoilWeight *= Model->ZoomedRecoilScale;
     if (ArmsAnim && FirePistolAnim && RecoilWeight > 0.f) ArmsAnim->PlayAdditive(FirePistolAnim, RecoilWeight);
     GlowImpulse = FMath::Min(GlowImpulse + 0.25f, 5.f);
-    LastGlowShotAt = GetWorld()->GetTimeSeconds();
+    const float Now = GetWorld()->GetTimeSeconds();
+    LastGlowShotAt = Now;
     const FOpenWillowWeaponItem* FiredItem = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    // Per-pellet damage fixed at the press: the card damage, or the stock stack with a natural level-up's running weapon
+    // damage scale (ShotDamage, script swap 9).
+    const float PelletDamage = FiredItem ? ShotDamage(*FiredItem, Now) : 0.f;
+    if (FiredItem && PelletDamage != FiredItem->Damage)
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow shot damage %.2f (card %.2f, weapon damage scale +%.3f running)"), PelletDamage,
+            FiredItem->Damage, WeaponDamageScaleAt(Now));
     // What the shot does comes from the weapon's parts (the recipe's firing block, OpenWillowFiring): pellets, pattern
     // and spread, then a trace, a light bullet or a rocket per pellet. A recipe without the block keeps the older
     // instant trace, now with the card's pellets and spread.
@@ -1322,7 +1377,11 @@ void AOpenWillowWalker::FireWeapon()
         Launch.Start = Start;
         Launch.Direction = Direction;
         Launch.VisualStart = Muzzle;
-        Launch.Damage = FiredItem ? FiredItem->Damage : 0.f;
+        Launch.Damage = PelletDamage;
+        // The level-up weapon damage scale reaches splash in the same ratio as the direct hit (UNVERIFIED: the native
+        // splash path under the scale has not been observed); without a running scale the recipe's splash is used as is.
+        if (FiredItem && PelletDamage != FiredItem->Damage && FiredItem->Damage > 0.f)
+            Launch.SplashDamage = Firing.Splash.Damage * (PelletDamage / FiredItem->Damage);
         Launch.DamageType = FiredItem ? FiredItem->DamageType : FString();
         // Lane E: the measured slice types name no tracer template, so their bullets fly unseen.
         // Elemental bullets draw their element's trail (seen on the real shock pistol); others follow lane E's rule.
@@ -1375,13 +1434,15 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
                 (-Hit.ImpactNormal).Rotation(), 12.f);
         return;
     }
-    // Evaluated item-card damage per pellet (tools/weapon_stats.py); no crits or target resistances yet.
+    // Evaluated item-card damage per pellet (tools/weapon_stats.py) with any running level-up weapon damage scale
+    // (ShotDamage); no crits or target resistances yet.
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     static const FOpenWillowFiringData TraceOnly;
+    const float Damage = Weapon ? ShotDamage(*Weapon, GetWorld()->GetTimeSeconds()) : 0.f;
     ++OpenWillowFiring::Counts.TargetHits;
-    OpenWillowFiring::Counts.Direct += Weapon ? Weapon->Damage : 0.f;
+    OpenWillowFiring::Counts.Direct += Damage;
     AOpenWillowProjectile::HitTarget(this, Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly, Target,
-        Weapon ? Weapon->Damage : 0.f, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f);
+        Damage, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f);
 }
 FOpenWillowFiringState& AOpenWillowWalker::FiringStateFor(const FOpenWillowWeaponItem& Weapon)
 {
@@ -1403,7 +1464,8 @@ void AOpenWillowWalker::StartReloadThrow(const FOpenWillowWeaponItem& Weapon)
     Launch.Start = MuzzleLocation();
     Launch.Direction = Camera->GetForwardVector();
     Launch.VisualStart = Launch.Start;
-    Launch.Damage = Weapon.Damage * Left;
+    // The running level-up weapon damage scale applies to the thrown gun as to a shot (UNVERIFIED).
+    Launch.Damage = ShotDamage(Weapon, GetWorld()->GetTimeSeconds()) * Left;
     Launch.SplashDamage = Launch.Damage * (Throw.Splash.Damage / FMath::Max(1e-3f, Weapon.Damage));
     Launch.DamageType = Weapon.DamageType;
     Launch.Color = FLinearColor(0.35f, 0.75f, 1.f);
@@ -1551,6 +1613,7 @@ void AOpenWillowWalker::UsePhaselock()
     const float Now = GetWorld()->GetTimeSeconds();
     // ActionSkillCallback refills the cooldown pool at activation, hit or miss.
     PhaselockCastAt = Now;
+    PhaselockCooldownAdjust = 0.f;
     PhaselockTimeline = FOpenWillowPhaselockTimeline();
     bPhaselockBlocked = false;
     PhaselockEndReason.Reset();
@@ -1799,7 +1862,21 @@ float AOpenWillowWalker::PhaselockRemaining() const
     if (Now >= PhaselockResetAt) return 0.f;
     const float Held = FMath::Clamp(Now, PhaselockCastAt, PhaselockHeldUntil) - PhaselockCastAt;
     const float Free = FMath::Max(0.f, Now - FMath::Max(PhaselockCastAt, PhaselockHeldUntil));
-    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * Phaselock.CooldownRate);
+    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * Phaselock.CooldownRate + PhaselockCooldownAdjust);
+}
+bool AOpenWillowWalker::ModifyPhaselockCooldown(int32 ModifierType, float Amount)
+{
+    // ModifierType: 0 Scale, 1 PreAdd, 2 PostAdd (EModifierType). The pool is clamped to its minimum (0) and maximum by the game's change notification; the
+    // adjustment is kept as an offset to the drain model, so the drain goes on from the new value. Nothing else of the cast is touched.
+    const float Before = PhaselockRemaining();
+    const float Wanted = ModifierType == 0 ? Before * Amount : Before + Amount;
+    const float After = FMath::Clamp(Wanted, 0.f, Phaselock.CooldownSeconds);
+    PhaselockCooldownAdjust += After - Before;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow action skill cooldown %s %.3f: %.2f -> %.2f of %.1f%s"), ModifierType == 0 ? TEXT("scaled by") : TEXT("raised by"),
+        Amount, Before, PhaselockRemaining(), Phaselock.CooldownSeconds, IsPhaselockActive() ? TEXT(" (the cast is still active)") : TEXT(""));
+    const bool bEnded = Before > 0.f && PhaselockRemaining() <= 0.f;
+    if (bEnded) UE_LOG(LogTemp, Display, TEXT("OpenWillow action skill cooldown complete (the game's ActionSkillCooldownComplete; the host has no handler, the HUD ring reads the cooldown)"));
+    return bEnded;
 }
 void AOpenWillowWalker::RunCombatShots(float Now)
 {
@@ -2008,6 +2085,12 @@ void AOpenWillowWalker::RunGunShots(float Now)
             UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s R_Weapon_Bone %s WeaponOffset %s Barrel %s Camera bone %s"), *Id,
                 *Rel(Arms->GetBoneLocation(TEXT("R_Weapon_Bone"))), *Rel(WeaponVisual->GetBoneLocation(TEXT("WeaponOffset"))),
                 *Rel(WeaponVisual->GetBoneLocation(TEXT("Barrel"))), *Rel(Arms->GetBoneLocation(TEXT("Camera"))));
+            // The decoded sockets in the same camera space (WEAPON_VISUALS.md section 17); the check line comes from GunSocketLocation.
+            FVector MuzzleWorld = FVector::ZeroVector, EjectWorld = FVector::ZeroVector;
+            const bool bMuzzle = GunSocketLocation(TEXT("Muzzle"), MuzzleWorld);
+            const bool bEject = GunSocketLocation(TEXT("EjectPort"), EjectWorld);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s Muzzle socket %s EjectPort socket %s"), *Id,
+                bMuzzle ? *Rel(MuzzleWorld) : TEXT("none"), bEject ? *Rel(EjectWorld) : TEXT("none"));
         }
         // -owgunquick (weapon part assets sweep): first-person idle and the side view only.
         if (FParse::Param(FCommandLine::Get(), TEXT("owgunquick"))) { GunShotStep = Gun * 8 + 7; GunShotPhaseAt = Now; break; }
@@ -2306,6 +2389,32 @@ void AOpenWillowWalker::AimAt(const FVector& Point)
 {
     if (Controller) Controller->SetControlRotation((Point - Camera->GetComponentLocation()).Rotation());
 }
+bool AOpenWillowWalker::GunSocketLocation(const TCHAR* Name, FVector& OutWorld) const
+{
+    const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
+    const FOpenWillowGunSocket* Socket = Item ? Item->Sockets.Find(Name) : nullptr;
+    if (!Socket || !WeaponVisual->GetSkinnedAsset()) return false;
+    // The cooked offset is bone-local and in cm. Applying it in the imported bone's frame unchanged is our choice (UNVERIFIED
+    // axis/scale conversion): the glTF import keeps the cooked axes (the host's mesh space equals the cooked one, checked against
+    // fragment bounds) and bone frames are converted like the points. The tool also gives the same point in mesh space; the two
+    // are compared once per gun and socket, and the mesh-space point wins when they disagree by more than 1 cm.
+    FVector Reference = FVector::ZeroVector;
+    if (Socket->bHasMeshLocation) Reference = WeaponVisual->GetComponentTransform().TransformPosition(Socket->MeshLocation);
+    const FName Bone(*Socket->Bone);
+    const bool bBone = WeaponVisual->GetBoneIndex(Bone) != INDEX_NONE;
+    if (!bBone && !Socket->bHasMeshLocation) return false;
+    OutWorld = bBone ? WeaponVisual->GetBoneTransform(Bone).TransformPosition(Socket->Location) : Reference;
+    const FString Key = Item->Id + TEXT("/") + Name;
+    if (bBone && Socket->bHasMeshLocation && !GunSocketLogged.Contains(Key))
+    {
+        GunSocketLogged.Add(Key);
+        const float Difference = FVector::Dist(Reference, OutWorld);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gun socket %s: fragment %s bone %s, bone-based point and reference mesh point differ by %.2f cm%s"),
+            *Key, *Socket->Fragment, *Socket->Bone, Difference, Difference > 1.f ? TEXT(" (over 1 cm: the mesh-space point is used)") : TEXT(""));
+    }
+    if (bBone && Socket->bHasMeshLocation && FVector::Dist(Reference, OutWorld) > 1.f) OutWorld = Reference;
+    return true;
+}
 FVector AOpenWillowWalker::MuzzleLocation() const
 {
     if (const FViewModel* Model = ActiveViewModel(); Model && Model->MuzzleSocket.bValid)
@@ -2315,6 +2424,19 @@ FVector AOpenWillowWalker::MuzzleLocation() const
             return WeaponSocketWorld(Model->MuzzleSocket).GetLocation();
         UE_LOG(LogTemp, Warning, TEXT("OpenWillow muzzle socket bone missing for %s: %s"),
             Inventory->ActiveWeapon() ? *Inventory->ActiveWeapon()->Id : TEXT("unknown"), *Model->MuzzleSocket.Bone);
+    }
+    // No view-model socket (weapon_view.json): the recipe's decoded Muzzle socket (WEAPON_VISUALS.md section 17).
+    FVector Socket;
+    if (GunSocketLocation(TEXT("Muzzle"), Socket)) return Socket;
+    // Neither: the camera-space point below. Logged once per gun, counted per shot.
+    ++MuzzleFallbackShots;
+    const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
+    const FString Key = (Item ? Item->Id : FString(TEXT("none"))) + TEXT("/MuzzleFallback");
+    if (!GunSocketLogged.Contains(Key))
+    {
+        GunSocketLogged.Add(Key);
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow muzzle fallback for %s (no Muzzle socket in the view model or the recipe, or no weapon mesh); estimated point used, fallback shots so far %d"),
+            Item ? *Item->Id : TEXT("none"), MuzzleFallbackShots);
     }
     // Fallback only for meshes without a resolved cooked socket (e.g. the Infinity proxy); the four slice recipes use
     // their selected barrel fragment's Muzzle socket when present. This location is an UNVERIFIED host stand-in.

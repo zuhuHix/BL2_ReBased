@@ -90,7 +90,7 @@ Under the hood, the engine still reads all 2,008 packages from a full BL2 instal
 
 Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
-The door and the mission: a Sanctuary Matinee door opens from its installed Kismet events ([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)), and the Fire mission runs in the host on stock world data with labelled stand-ins (for example Phaselock targeting and a turn-in loot stand-in). Audio is looked up and logged, never played. See the [mission record](docs/verification/SANCTUARY_RPG_MISSION.md).
+The door and the mission: a Sanctuary Matinee door opens from its installed Kismet events ([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)), and the Fire mission runs in the host on stock world data with labelled stand-ins (for example Phaselock targeting; the turn-in gives XP only, as the stock data does). Audio is looked up and logged, never played. See the [mission record](docs/verification/SANCTUARY_RPG_MISSION.md).
 
 **Next up:** finishing Sanctuary's last visual gaps and comparing the host-run Fire mission slice (Maya, a lent pistol, Phaselock from stock data) against the original game, which has not been done yet. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
 
@@ -128,6 +128,10 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
 I work on this actively, and I'm not promising completion dates. As of 2026-10-02 the repository is 22 days old, with 191 commits on `origin/main` across 17 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
+
+## Related project: BL2_RTSE
+
+I also make [BL2_RTSE](https://github.com/zuhuHix/Bl2_RTSE), a mod for the real, installed Borderlands 2 that reads and hooks the running game through the Python SDK. I use it as a ground-truth tool here: when I want to know what the game does (a value, the order of events, what a native returns), I look at the live game first and only then decode packages or read native code. Anything it dumps stays on my machine and never goes in this repository.
 
 ## Help me keep going
 

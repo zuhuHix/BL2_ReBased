@@ -54,7 +54,10 @@ def main():
                 continue
             level = args.level or int((recipe.get('provenance') or {}).get('level') or recipe['stats']['card'].get('level') or 8)
             before = recipe['stats']['card'].get('display', {})
+            firing = recipe['stats']['card'].get('firing')  # added by tools/weapon_refresh_firing.py; the card is rebuilt here
             recipe['stats'] = weapon_stats.evaluate(package, recipe, level)
+            if firing:
+                recipe['stats']['card']['firing'] = firing
             recipe['stats_source'] = 'live overlay (running game values)' if args.live_data else 'cooked packages'
             path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
             after = recipe['stats']['card']['display']

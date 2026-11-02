@@ -51,14 +51,14 @@ enum Op : uint8_t {
     EX_DebugInfo = 0x41, EX_DelegateFunction = 0x42, EX_DelegateProperty = 0x43, EX_LetDelegate = 0x44,
     EX_Conditional = 0x45, EX_DynArrayFind = 0x46, EX_DynArrayFindStruct = 0x47, EX_LocalOutVariable = 0x48,
     EX_DefaultParmValue = 0x49, EX_EmptyParmValue = 0x4A, EX_InstanceDelegate = 0x4B,
-    // 0x4C-0x50: present in this build, one plain i32 each. Meaning UNVERIFIED (they behave like
-    // typed local-variable slots in the listings; see the verification record).
+    // 0x4C-0x50: hidden typed temporaries (int, float, byte, bool, object); the i32 operand indexes the function's local-variable
+    // array (FunctionInfo::hiddenLocals). Meaning from NATIVE_BYTECODE_OPCODES.md, UNVERIFIED in the running game.
     EX_Op4C = 0x4C, EX_Op4D = 0x4D, EX_Op4E = 0x4E, EX_Op4F = 0x4F, EX_Op50 = 0x50,
     EX_InterfaceContext = 0x51, EX_InterfaceCast = 0x52, EX_EndOfScript = 0x53, EX_DynArrayAdd = 0x54,
     EX_DynArrayAddItem = 0x55, EX_DynArrayRemoveItem = 0x56, EX_DynArrayInsertItem = 0x57,
     EX_DynArrayIterator = 0x58, EX_DynArraySort = 0x59, EX_FilterEditorOnly = 0x5A,
-    EX_Op5E = 0x5E,  // one object reference, UNVERIFIED meaning (a property reference variant)
-    EX_Op5F = 0x5F,  // sits where Let does: lhs, rhs (a typed Let), UNVERIFIED
+    EX_Op5E = 0x5E,  // an attribute value property reference: the same handler as EX_InstanceVariable (UNVERIFIED in game)
+    EX_Op5F = 0x5F,  // "let attribute": lhs is a 5E (or a Context around one), rhs goes into the base companion (UNVERIFIED in game)
     // 0x60-0x6F: extended native call (two bytes, index = (op-0x60)*256 + next byte); 0x70+: native call.
     EX_ExtendedNative = 0x60, EX_FirstNative = 0x70,
 };
@@ -99,6 +99,9 @@ struct FunctionInfo {
     uint32_t memorySize = 0;      // ScriptBytecodeSize
     size_t scriptOffset = 0;      // offset of the script bytes inside the package data
     size_t scriptSize = 0;        // ScriptSize
+    // The Gearbox local-variable array of the header (NATIVE_BYTECODE_OPCODES.md): N 16-bit values read as N/2 pairs (frame offset, tag),
+    // one per hidden typed temporary. Opcode 4C-50 operand 2k+1 selects pair k. Empty for natives and for functions without temporaries.
+    std::vector<uint16_t> hiddenLocals;
     bool hasScript() const { return scriptSize != 0; }
 };
 

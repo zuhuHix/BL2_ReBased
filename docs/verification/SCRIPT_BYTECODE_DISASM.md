@@ -85,8 +85,15 @@ INVENTORY_MOVIE_PROTOTYPE.md does.
 
 - **Full semantic validation remains open.** The C++ loader, object model and interpreter
   exist; this historical structural record does not prove their runtime semantics.
-- Opcode operand layouts marked UNVERIFIED in the source table, including the meaning of
-  `0x4C`-`0x50`, `0x5E` and `0x5F` (a typed `Let`).
+- Opcode operand layouts marked UNVERIFIED in the source table. The meaning of `0x4C`-`0x50`
+  (hidden typed temporaries selected through the function header's local-variable array),
+  `0x5E` (an attribute property reference, the same handler as `0x01`) and `0x5F` ("let
+  attribute": the right side goes into the base companion and the value is recomputed from
+  the base and the modifier stack) is read in NATIVE_BYTECODE_OPCODES.md and implemented in
+  `src/interp.cpp` (2026-10-06); the implementation is checked against synthetic fixtures
+  only, so it stays UNVERIFIED against the running game. Still open there: the zero-fill of
+  the frame (assumed), byte attributes (never occur on the left of `0x5F`) and the classes
+  that override the replication-dirty hook (skipped).
 - Native function *names* come from `FriendlyName`/`iNative` of exports that happen to be
   loaded (the nine code packages); natives defined elsewhere print as `native_<n>`.
 - Decoding structure does not prove semantics. Running the code and comparing with the real

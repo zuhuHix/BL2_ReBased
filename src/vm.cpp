@@ -277,6 +277,7 @@ PropertyDecl Runtime::readProperty(const std::shared_ptr<const Package>& package
     if (typeAt + 4 <= at + size_t(object->size)) {
         decl.typeRef = int32_t(u32At(*package, typeAt));
         if (typeAt + 8 <= at + size_t(object->size)) decl.typeRef2 = int32_t(u32At(*package, typeAt + 4));
+        if (typeAt + 12 <= at + size_t(object->size)) decl.typeRef3 = int32_t(u32At(*package, typeAt + 8));
     }
     return decl;
 }
@@ -395,6 +396,95 @@ Class* Runtime::classAt(const std::shared_ptr<const Package>& package, int32_t i
     return loadClass(target.package, target.index);
 }
 
+bool Runtime::implementsStructurally(Class* cls, const Class* iface) {
+    if (!cls || !iface || iface->name.size() < 2 || iface->name[0] != 'I' || !std::isupper(static_cast<unsigned char>(iface->name[1]))) return false;
+    if (iface->functions.empty()) return false;
+    for (const auto& entry : iface->functions)
+        if (!findMethod(cls, entry.first)) return false;
+    return true;
+}
+
+bool Runtime::implements(Class* cls, const Class* iface) {
+    if (!cls || !iface) return false;
+    bool decoded = iface->bodyDecoded;
+    for (const Class* cursor = cls; cursor; cursor = cursor->super) decoded = decoded && cursor->bodyDecoded;
+    if (!decoded) return implementsStructurally(cls, iface);
+    if (!iface->isInterface()) return false;
+    for (Class* cursor = cls; cursor; cursor = cursor->super)
+        for (auto& entry : cursor->body.interfaces) {
+            if (!entry.resolved) {
+                entry.resolved = true;
+                try { entry.cls = classAt(cursor->package, entry.classRef); } catch (const std::exception&) { entry.cls = nullptr; }
+            }
+            if (entry.cls && entry.cls->isChildOf(iface)) return true;
+        }
+    return false;
+}
+
+// The Class export body (docs/verification/NATIVE_CLASS_SERIAL_LAYOUT.md; every size is from the note, fitted against the packages
+// by the oracle in checkClassBodies; UNVERIFIED in the running game). Fields that are only consumed are named "unknown" here.
+ClassBody decodeClassBody(const Package& package, int32_t index) {
+    if (index <= 0 || size_t(index) > package.exports.size()) throw RuntimeError("class export index out of range");
+    const auto& exported = package.exports[size_t(index) - 1];
+    if (exported.size < 0 || exported.offset < 0) throw RuntimeError("class export has a negative offset or size");
+    Reader reader(package.data);
+    reader.pos = size_t(exported.offset);
+    reader.limit = reader.pos + size_t(exported.size);
+    const auto imports = int32_t(package.imports.size()), exports = int32_t(package.exports.size());
+    const auto ref = [&] { return reader.reference(imports, exports); };
+    const auto name = [&] { return package.name(reader); };
+    const auto u16 = [&] { reader.require(2); const unsigned v = reader.byte(reader.pos) | (unsigned(reader.byte(reader.pos + 1)) << 8); reader.pos += 2; return v; };
+    const auto count = [&] {
+        const int32_t n = reader.i32();
+        if (n < 0 || n > 100000) throw RuntimeError("class body count out of range");
+        return n;
+    };
+    const auto nameList = [&] { for (int32_t n = count(), i = 0; i < n; ++i) name(); };
+
+    // Base object and struct part.
+    reader.i32();                       // unknown reference, deliberately not range checked: AkAudio.WwiseSoundVolume points one past the export table
+    ref();                              // next field of the field chain (null for classes)
+    if (ref() != exported.super) throw RuntimeError("class body super reference differs from the export table");
+    ref();                              // script-text slot (null)
+    ref();                              // first child
+    ref();                              // C++-text slot (null)
+    reader.i32(); reader.i32();         // source line and text position (unknown meaning)
+    const int32_t memorySize = reader.i32(), scriptSize = reader.i32();
+    if (memorySize < 0 || scriptSize < 0) throw RuntimeError("class body has a negative script size");
+    reader.require(size_t(scriptSize));
+    if (scriptSize && reader.byte(reader.pos + size_t(scriptSize) - 1) != script::EX_EndOfScript)
+        throw RuntimeError("class body script does not end in EndOfScript");
+    reader.skip(size_t(scriptSize));
+    // State part.
+    reader.u32();                       // probe mask
+    u16();                              // label table offset
+    u16();                              // state flags
+    for (int32_t n = count(), i = 0; i < n; ++i) { name(); ref(); }     // function map: (name, function export)
+
+    // Class part.
+    ClassBody body;
+    body.classFlags = reader.u32();
+    body.within = ref();
+    body.configName = name();
+    for (int32_t n = count(), i = 0; i < n; ++i) { name(); ref(); }     // component map: (name, default subobject export or null)
+    for (int32_t n = count(), i = 0; i < n; ++i) {
+        InterfaceEntry entry;
+        entry.classRef = ref();
+        entry.tableProperty = ref();
+        if (!entry.classRef) throw RuntimeError("class body interface entry names no class");
+        body.interfaces.push_back(entry);
+    }
+    for (int i = 0; i < 4; ++i) nameList();     // four name lists: (version >= 603), hide categories, auto-expand categories (guess), unused
+    reader.u32();                       // unknown number (0 or 1)
+    nameList();                         // name list (version >= 789)
+    reader.string();                    // group label (unknown meaning)
+    name();                             // discarded name
+    reader.require(1); ++reader.pos;    // unknown byte
+    body.defaultObject = ref();
+    if (reader.pos != reader.limit) throw RuntimeError("class body does not end at the serial size");
+    return body;
+}
+
 Class* Runtime::findClass(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("class path must be Package.Class: " + path);
@@ -415,6 +505,14 @@ Class* Runtime::loadClass(const std::shared_ptr<const Package>& package, int32_t
     cls->package = package;
     cls->index = index;
     classByExport_[key] = raw;          // registered first so a cyclic reference resolves
+    try {
+        raw->body = decodeClassBody(*package, index);
+        raw->bodyDecoded = true;
+    } catch (const std::exception& error) {
+        // Synthetic test classes carry no real body, so this is not an error here (and not logged: tests assert clean logs). On
+        // the installed packages every class decodes; `ow-package --class-check` fails loudly if one does not.
+        raw->bodyError = error.what();
+    }
     classes_[lower(cls->path)] = std::move(cls);
     if (exportObject.super) raw->super = classAt(package, exportObject.super);
     raw->properties = childProperties(package, index);
@@ -512,6 +610,17 @@ Function* Runtime::functionAt(const std::shared_ptr<const Package>& package, int
     return raw;
 }
 
+PropertyDecl Runtime::declAt(const std::shared_ptr<const Package>& package, int32_t ref) {
+    const auto resolved = resolveRef(package, ref);
+    if (!resolved) throw RuntimeError("unresolved property reference " + std::to_string(ref));
+    return readProperty(resolved.package, resolved.index);
+}
+
+std::vector<std::shared_ptr<const Package>> Runtime::codePackages() {
+    buildNativeIndex();
+    return codePackages_;
+}
+
 Function* Runtime::findFunction(const std::string& path) {
     const auto dot = path.find('.');
     if (dot == std::string::npos) throw RuntimeError("function path must be Package.Class.Function: " + path);
@@ -573,6 +682,31 @@ void Runtime::registerNative(const std::string& key, NativeFn fn) {
     // A function loaded before its implementation was registered binds now.
     for (auto& [_, function] : functions_)
         if (function->nativeKey == key) function->native = fn;
+}
+
+void Runtime::registerIterator(const std::string& key, IteratorFn fn) {
+    if (!iterators_.emplace(key, std::move(fn)).second) throw RuntimeError("duplicate iterator registration: " + key);
+}
+
+const IteratorFn* Runtime::iteratorFor(const Function& function) const {
+    if (function.nativeKey.empty()) return nullptr;
+    const auto found = iterators_.find(function.nativeKey);
+    return found == iterators_.end() ? nullptr : &found->second;
+}
+
+std::vector<ObjectPtr> Runtime::liveObjects(const Class* base) {
+    std::vector<ObjectPtr> found;
+    for (const auto& weak : live_) {
+        ObjectPtr object = weak.lock();
+        if (object && !object->destroyed && object->cls && (!base || object->cls->isChildOf(base))) found.push_back(std::move(object));
+    }
+    return found;
+}
+
+void Runtime::overrideScript(const std::string& path, NativeFn fn) {
+    Function* function = findFunction(path);
+    if (!function || function->isNative()) throw RuntimeError("overrideScript needs a script function: " + path);
+    function->native = std::move(fn);
 }
 
 // ------------------------------------------------------------------------------ defaults and objects
@@ -752,6 +886,11 @@ void Runtime::applyTaggedDefaults(Object& object, Class* cls, const std::shared_
         try {
             if (type == "IntProperty") value = Value::makeInt(tags.reader.i32());
             else if (type == "FloatProperty") value = Value::makeFloat(tags.floating());
+            // An attribute property's tag stores one plain 4-byte number, the same payload as the float or int tag (FITTED from the
+            // packages: every FloatAttributeProperty tag of a WillowPlayerController and a WillowPlayerPawn default object has size 4).
+            // Both the value property and its ...BaseValue companion are tagged, so both load; the modifier stack stays empty.
+            else if (type == "FloatAttributeProperty") value = Value::makeFloat(tags.floating());
+            else if (type == "IntAttributeProperty") value = Value::makeInt(tags.reader.i32());
             else if (type == "BoolProperty") value = Value::makeBool(boolean != 0);
             else if (type == "NameProperty") value = Value::makeName(tags.name());
             else if (type == "StrProperty") value = Value::makeString(tags.reader.string());
@@ -847,7 +986,13 @@ void TagReader::tagged(Store& target, const std::unordered_map<std::string, Prop
         reader.limit = savedLimit;
         reader.pos = end;
         if (!ok) continue;
-        if (Value* slot = target.field(propertyName)) *slot = std::move(value);
+        if (Value* slot = target.field(propertyName)) {
+            // A static array field (ArrayDim > 1) holds one tag per element, selected by the tag's array index.
+            if (found != declared.end() && found->second.arrayDim > 1 && found->second.type != "ArrayProperty") {
+                if (slot->kind == Value::Kind::Array && size_t(arrayIndex) < slot->elements().size())
+                    slot->elements()[size_t(arrayIndex)] = std::move(value);
+            } else *slot = std::move(value);
+        }
     }
 }
 
@@ -937,6 +1082,11 @@ ObjectPtr Runtime::instantiate(Class* cls, const std::string& name) {
     object->cls = cls;
     object->name = name.empty() ? cls->name + "_0" : name;
     object->props = defaults->props;
+    if (live_.size() >= liveCompactAt_) {
+        live_.erase(std::remove_if(live_.begin(), live_.end(), [](const std::weak_ptr<Object>& w) { return w.expired(); }), live_.end());
+        liveCompactAt_ = std::max<size_t>(1024, live_.size() * 2);
+    }
+    live_.push_back(object);
     return object;
 }
 

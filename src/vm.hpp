@@ -26,6 +26,7 @@ struct Class;
 struct Object;
 struct Function;
 struct Aggregate;
+struct Interp;
 class Runtime;
 using ObjectPtr = std::shared_ptr<Object>;
 
@@ -84,6 +85,9 @@ struct PropertyDecl {
     int32_t index = 0;                  // export index of the property
     int32_t typeRef = 0;                // struct / class / enum / inner property / function, package-relative
     int32_t typeRef2 = 0;               // metaclass (ClassProperty), source delegate (DelegateProperty)
+    int32_t typeRef3 = 0;               // attribute properties (NATIVE_BYTECODE_OPCODES.md): typeRef is the modifier stack and typeRef2 the paired
+                                        // property (base for a value property, value for a base property); a byte attribute carries its
+                                        // enum first, so there the stack is typeRef2 and the paired property typeRef3
     bool isParam() const { return flags & 0x80; }
     bool isOut() const { return flags & 0x100; }
     bool isOptional() const { return flags & 0x10; }
@@ -140,6 +144,30 @@ struct State {
     std::unordered_map<std::string, Function*> functions;   // lower-cased name
 };
 
+// One entry of a class's interface table: the interface class and the StructProperty that holds its table pointer
+// (VfTable_<Interface>, 0 for the native-only tables). Both are package-relative references into the declaring package.
+struct InterfaceEntry {
+    int32_t classRef = 0;
+    int32_t tableProperty = 0;
+    Class* cls = nullptr;               // classRef resolved on first use (Runtime::implements)
+    bool resolved = false;
+};
+
+// The part of a Class export this runtime keeps (docs/verification/NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running
+// game). The rest of the body is consumed for its size only: see decodeClassBody in vm.cpp for every field and what is unknown.
+struct ClassBody {
+    uint32_t classFlags = 0;
+    int32_t within = 0;                 // within class (reference)
+    int32_t defaultObject = 0;          // Default__<Class> (export reference)
+    std::string configName;
+    std::vector<InterfaceEntry> interfaces;     // interfaces this class names itself; super classes are not repeated
+};
+constexpr uint32_t CLASS_Interface = 0x4000;    // class flag bit 14 marks an interface class
+
+// Decodes the body of Class export `index` and checks it ends exactly at the export's serial size. Throws on any violation
+// (a reference outside the tables, a negative or oversized count, a bad name, trailing or missing bytes).
+ClassBody decodeClassBody(const Package& package, int32_t index);
+
 struct Class {
     std::string name;
     std::string path;                   // Package.Name
@@ -151,6 +179,10 @@ struct Class {
     std::unordered_map<std::string, State> states;          // lower-cased name
     ObjectPtr defaults;                 // the class default object (Default__Name), built on first use
     bool defaultsBuilt = false;
+    ClassBody body;                     // valid only when bodyDecoded
+    bool bodyDecoded = false;
+    std::string bodyError;              // why the body did not decode (synthetic packages, damaged exports)
+    bool isInterface() const { return bodyDecoded && (body.classFlags & CLASS_Interface); }
     bool isChildOf(const Class* other) const;
 };
 
@@ -186,6 +218,14 @@ struct NativeCall {
     bool has(size_t i) const { return i < args.size() && args[i].supplied; }
 };
 
+// An engine iterator native: the function a `foreach` calls (Actor.AllActors, Actor.DynamicActors). The implementation gets the call as the
+// interpreter bound it and returns the values the loop visits, in order; the loop assigns each one to the call's out parameter `outParam`.
+struct IteratorResult {
+    size_t outParam = 0;
+    std::vector<Value> items;
+};
+using IteratorFn = std::function<IteratorResult(NativeCall&)>;
+
 class Runtime {
 public:
     explicit Runtime(PackageStore& store);
@@ -194,6 +234,18 @@ public:
     std::vector<std::string> log;       // Log() output and every "UNIMPLEMENTED ..." native stub call
     size_t stepLimit = 5'000'000;       // executed expressions per top-level call (guards runaway scripts)
     size_t steps = 0;
+
+    // Call census, off unless `countCalls` is set (see Interp::invoke, the one place every call goes through).
+    // Keys are function paths (Package.Class.Function). Counters accumulate until the caller clears them.
+    bool countCalls = false;
+    std::map<std::string, size_t> scriptCalls;      // script functions entered
+    std::map<std::string, size_t> nativeCalls;      // natives that ran an implementation
+    std::map<std::string, size_t> stubCalls;        // natives with no implementation (logged stub, zero result)
+    std::map<std::string, size_t> noneContexts;     // script function -> Context expressions whose object was None
+    std::map<std::string, Function*> countedFunctions;   // path -> function, for every key in the counters above
+    // Call order, off unless set: every call (script or native, stub or not) appends its function path, in the order the calls start. The census above
+    // is by name; this is the order (the combat run compares a death with the live hook order).
+    std::vector<std::string>* callTrace = nullptr;
 
     // Loading. Class paths are "Package.Class"; function paths "Package.Class.Function".
     std::shared_ptr<const Package> package(const std::string& name);
@@ -208,7 +260,16 @@ public:
     // exist in the installed packages (some imports name engine-native objects that have no export).
     Resolved resolveRef(const std::shared_ptr<const Package>& package, int32_t ref);
     const PackageIndex& indexOf(const Package& package);
+    PropertyDecl declAt(const std::shared_ptr<const Package>& package, int32_t ref);   // a property export, by reference
+    std::vector<std::shared_ptr<const Package>> codePackages();                        // the loaded script packages
     int32_t findExport(const Package& package, const std::string& objectPath);   // fast Package::findExport
+    // Whether `cls` implements the interface class `iface`: `iface` is an interface class (class flag) and the interface table of `cls`
+    // or of a super class names `iface` or a class derived from it (NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running game).
+    // A class chain whose bodies did not decode (synthetic test packages) falls back to implementsStructurally.
+    bool implements(Class* cls, const Class* iface);
+    // The earlier stand-in, kept as the fallback and as the comparison baseline: the class chain defines every function the
+    // interface declares, and the interface is named I<Upper>... .
+    bool implementsStructurally(Class* cls, const Class* iface);
 
     // Objects and values.
     ObjectPtr instantiate(Class* cls, const std::string& name = "");
@@ -226,19 +287,38 @@ public:
     // `outs`, when given, receives every argument as it stands after the call (out parameters updated).
     Value call(Function& function, ObjectPtr self, std::vector<Value> args = {}, std::vector<Value>* outs = nullptr);
     Value callByName(ObjectPtr self, const std::string& name, std::vector<Value> args = {});
+    // Calls a script function from inside a native implementation. It runs on the interpreter that is executing the native, so the call
+    // depth and the step budget are shared with the script that made the native call (Runtime::call starts a new interpreter and a
+    // new step count). Outside a running script it is the same as call().
+    Value callFromNative(Function& function, ObjectPtr self, std::vector<Value> args = {});
+    unsigned stateChangeDepth = 0;      // nested Object.GotoState calls in progress (natives_core.cpp bounds it)
+
+    // Every object made by instantiate / instantiateExport that is still referenced and not marked destroyed, in creation order, whose class is
+    // `base` or a child of it. Class default objects and asset stand-ins are not live objects. This is what the engine iterators walk.
+    std::vector<ObjectPtr> liveObjects(const Class* base);
 
     // Native registry. Key: "Class.Name(type,type,...)", see Function::nativeKey.
     void registerNative(const std::string& key, NativeFn fn);
+    // An iterator native (same key form). A foreach over a native with no iterator registered is still skipped with a logged stub.
+    void registerIterator(const std::string& key, IteratorFn fn);
+    const IteratorFn* iteratorFor(const Function& function) const;
+    // Replaces a SCRIPT function (not a native) with a host binding, for a call that only presents something (a client RPC that opens a
+    // movie): the binding runs instead of the bytecode. `path` is Package.Class.Function; the function must exist and not be native.
+    void overrideScript(const std::string& path, NativeFn fn);
     void registerCoreNatives();
 
 private:
     friend struct Interp;
+    Interp* activeInterp_ = nullptr;    // the interpreter inside Runtime::call, for callFromNative
     PackageStore& store_;
     std::map<std::string, std::unique_ptr<Class>> classes_;
     std::map<std::pair<const Package*, int32_t>, std::unique_ptr<Function>> functions_;
     std::map<std::pair<const Package*, int32_t>, Class*> classByExport_;
     std::map<std::pair<const Package*, int32_t>, std::unique_ptr<StructDef>> structs_;
     std::unordered_map<std::string, NativeFn> natives_;
+    std::unordered_map<std::string, IteratorFn> iterators_;
+    std::vector<std::weak_ptr<Object>> live_;       // creation order; expired entries are dropped when the list doubles
+    size_t liveCompactAt_ = 1024;
     std::unordered_map<uint32_t, Function*> nativeIndex_;
     bool nativeIndexBuilt_ = false;
     std::vector<std::shared_ptr<const Package>> codePackages_;
@@ -254,6 +334,12 @@ private:
     void buildDefaults(Class* cls);
     void applyTaggedDefaults(Object& object, Class* cls, const std::shared_ptr<const Package>& package, int32_t exportIndex, size_t prefix = 4);
 };
+
+// Structural oracle over every Class export of a package: the body decodes and ends exactly at the serial size, the default
+// object is Default__<Class> of that class, and each interface entry names an interface-flagged class. JSON summary.
+std::string checkClassBodies(Runtime& runtime, const std::shared_ptr<const Package>& package, bool listFailures, size_t* failed = nullptr);
+// Old structural answer versus the interface table over every class of the nine code packages. JSON summary.
+std::string compareInterfaces(Runtime& runtime);
 
 struct SweepOptions {
     std::string classFilter;            // only functions of this class ("" = all)

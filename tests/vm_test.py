@@ -86,11 +86,11 @@ def build_package():
     p = Package()
     imp = {n: p.add_import('Class', n) for n in
            ('Class', 'Function', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty', 'ArrayProperty',
-            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty')}
+            'ObjectProperty', 'ByteProperty', 'Enum', 'NameProperty', 'ScriptStruct', 'StructProperty', 'ClassProperty', 'FloatAttributeProperty', 'IntAttributeProperty', 'State')}
     none = p.fname('None')
 
-    def prop(kind, owner, name, flags=0):
-        payload = w32(0) + none + w32(0) + u32(1) + u64(flags) + none + w32(0)
+    def prop(kind, owner, name, flags=0, dim=1, type_ref=None, tail=None):
+        payload = w32(0) + none + w32(0) + u32(dim) + u64(flags) + none + w32(0) + (tail if tail is not None else w32(type_ref) if type_ref else b'')
         return p.add_export(imp[kind], name, payload, outer=owner)
 
     def func(owner, name, params, body, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None, ret='Int'):
@@ -107,11 +107,30 @@ def build_package():
     return p, imp, none, prop, func
 
 
-def make(inventory=False, mover=False, broken_mover=False):
+CLASS_INTERFACE = 0x4000
+
+
+def class_body(p, super_ref, within, default, flags=2, interfaces=(), first_child=0, script=b''):
+    """A synthetic Class export body in the layout of docs/verification/NATIVE_CLASS_SERIAL_LAYOUT.md (invented values).
+    interfaces: [(interface class ref, table property ref)]."""
+    body = w32(7)                                   # first word (unknown meaning)
+    body += w32(0, super_ref, 0, first_child, 0)    # next field, super, script text, children, C++ text
+    body += w32(-1, -1)                             # source line, text position
+    body += w32(len(script), len(script)) + script  # script size in memory (no references here), size in the file
+    body += u32(0) + u16(65535) + u16(2) + w32(0)   # probe mask, label table offset, state flags, function map count
+    body += u32(flags) + w32(within) + p.fname('None') + w32(0)       # class flags, within, config name, component map count
+    body += w32(len(interfaces)) + b''.join(w32(c, t) for c, t in interfaces)
+    body += w32(0, 0, 0, 0)                         # four name lists
+    body += w32(0) + w32(0) + w32(0)                # unknown number, name list, empty string
+    body += p.fname('None') + bytes([1])            # discarded name, unknown byte
+    return body + w32(default)
+
+
+def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
     p, imp, none, prop, _ = build_package()
 
     def make_function(owner, name, declared, asm_fn, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None,
-                      result='Int', locals_=()):
+                      result='Int', locals_=(), result_ref=None, hidden=()):
         """declared: [(kind, name, extraflags)] in declaration order. asm_fn(ids) -> Asm (or None for natives)."""
         # Children first, in reverse declaration order (the real packages export them that way).
         first_child = len(p.exports) + 1
@@ -124,11 +143,11 @@ def make(inventory=False, mover=False, broken_mover=False):
         ordered = [(result_kind, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET) for result_kind in ([result] if result else [])] + children
         func_index = first_child + len(ordered)
         for kind, pname, flags_ in ordered:
-            ids[pname] = prop(kind + 'Property', func_index, pname, flags_)
+            ids[pname] = prop(kind + 'Property', func_index, pname, flags_, type_ref=result_ref if pname == 'ReturnValue' else None)
         asm = asm_fn(ids) if asm_fn else None
         script = bytes(asm.b) if asm else b''
         memory = (len(script) + 4 * asm.refs) if asm else 0
-        payload = u16(0) + w32(*([0] * 10)) + w32(memory, len(script)) + script
+        payload = u16(len(hidden)) + b''.join(u16(v) for v in hidden) + w32(*([0] * 10)) + w32(memory, len(script)) + script
         payload += u16(native) + bytes([0]) + u32(flags) + p.fname(friendly or name)
         index = p.add_export(imp['Function'], name, payload, outer=owner)
         assert index == func_index, (index, func_index)
@@ -136,7 +155,11 @@ def make(inventory=False, mover=False, broken_mover=False):
         return ids
 
     class_ids = {}
-    class_ids['Object'] = p.add_export(imp['Class'], 'Object', w32(0) * 4)
+    if interfaces:      # real class exports have class reference 0; Object comes with a decodable body and its default object
+        class_ids['Object'] = p.add_export(0, 'Object', class_body(p, 0, 1, 2))
+        p.add_export(1, 'Default__Object', w32(0) + none)
+    else:
+        class_ids['Object'] = p.add_export(imp['Class'], 'Object', w32(0) * 4)
     obj = class_ids['Object']
 
     def native(name, friendly, number, params, result):
@@ -233,6 +256,33 @@ def make(inventory=False, mover=False, broken_mover=False):
     p.add_export(foo, 'Default__Foo', w32(0) + tagged_int('Count', 7) + none)
     p.add_export(bar, 'Default__Bar', w32(0) + tagged_int('Count', 9) + none)
 
+    # ObjectConst of a class export. Class exports carry class reference 0 (as in the real packages), so the constant
+    # must be a class and a call through it must run against the class default object: Util.Level defaults to 31.
+    util = class_ids['Util'] = p.add_export(0, 'Util', w32(0) * 4, super_ref=obj)
+    level = prop('IntProperty', util, 'Level')
+    def get_level(ids):
+        a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x01); a.ref(level); a.end(); return a
+    util_get = make_function(util, 'GetLevel', [], get_level)['__self__']
+    p.add_export(util, 'Default__Util', w32(0) + p.fname('Level') + p.fname('IntProperty') + w32(4, 0) + w32(31) + none)
+    def level_through_class(ids):
+        a = Asm(); a.stmt(); a.raw(0x04)
+        a.raw(0x19); a.raw(0x20); a.ref(util); a.w(0); a.ref(0); a.raw(0)       # Context(ObjectConst(Util), ...)
+        a.raw(0x1C); a.ref(util_get); a.raw(0x16)                                  # FinalFunction GetLevel()
+        a.end(); return a
+    make_function(foo, 'LevelThroughClass', [], level_through_class)
+
+    # A struct with a static array field (ArrayDim 2) whose default tags set one element each (array index 0 and 1):
+    # a zero struct must hold a two-element array with those defaults, not one scalar overwritten by the last tag.
+    pair = p.add_export(imp['ScriptStruct'], 'Pair', b'')
+    prop('IntProperty', pair, 'Tag')
+    prop('IntProperty', pair, 'Slots', dim=2)
+    def indexed(name, index, value): return p.fname(name) + p.fname('IntProperty') + w32(4, index) + w32(value)
+    cls_, sup, outer, nm, _ = p.exports[pair - 1]
+    p.exports[pair - 1] = (cls_, sup, outer, nm, bytes(52) + indexed('Slots', 0, 5) + indexed('Slots', 1, 9) + none)
+    def make_pair(ids):
+        a = Asm(); a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+    make_function(foo, 'MakePair', [], make_pair, result='Struct', result_ref=pair)
+
     # Optional parameter with a default: Foo.Opt(int a, optional int b = 5) = a + b
     def opt(ids):
         a = Asm()
@@ -270,6 +320,21 @@ def make(inventory=False, mover=False, broken_mover=False):
         a.stmt(); a.raw(0x04); a.raw(0x36); local(a, ids, 'Items')
         a.end(); return a
     make_function(foo, 'Arr', [], arr, locals_=[('Array', 'Items', 0)])
+
+    # Appending through the length: Foo.Append() runs Items[Items.Length] = v for 7 and 8 and returns the length. One assignment stores one element
+    # (the assignment's own value must not evaluate its target a second time: that grew the array again and stored each element twice).
+    def append(ids):
+        a = Asm()
+        for v in (7, 8):
+            a.stmt(); a.raw(0x0F); a.raw(0x10); a.raw(0x36); local(a, ids, 'Items'); local(a, ids, 'Items'); intc(a, v)
+        a.stmt(); a.raw(0x04); a.raw(0x36); local(a, ids, 'Items')
+        a.end(); return a
+    make_function(foo, 'Append', [], append, locals_=[('Array', 'Items', 0)])
+
+    # Context on a None object: Foo.NoneCtx() = Context(None, 0) (yields a zero value; the census counts it)
+    def none_ctx(ids):
+        a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x19, 0x2A); a.w(1); a.ref(0); a.raw(0); a.raw(0x25); a.end(); return a
+    make_function(foo, 'NoneCtx', [], none_ctx)
     if inventory:
         # Entirely synthetic interface fixture: its MoveDelta deliberately returns
         # source-kind + list-length - 5, rather than implementing stock navigation.
@@ -326,6 +391,253 @@ def make(inventory=False, mover=False, broken_mover=False):
         make_function(mover_cls, 'Callback', [], callback, result=None)
         p.add_export(mover_cls, 'PlacedMover', bytes(26) + p.fname('Delay') + p.fname('FloatProperty') + w32(4, 0) + struct.pack('<f', 0.5) + none)
         p.add_export(action_cls, 'PlacedAction', w32(0) + none)
+    # Typed hidden temporaries 4C-50 (NATIVE_BYTECODE_OPCODES.md): each function declares one pair [frame offset, tag] per slot in its header
+    # (invented values) and operand 1 selects the first pair. A slot nothing wrote reads as the typed zero, not None.
+    for suffix, op, result in (('Int', 0x4C, 'Int'), ('Float', 0x4D, 'Float'), ('Byte', 0x4E, 'Byte'), ('Bool', 0x4F, 'Bool'), ('Object', 0x50, 'Object')):
+        def read_temp(ids, op=op):
+            a = Asm(); a.stmt(); a.raw(0x04, op); a.i32(1); a.end(); return a
+        make_function(foo, 'Temp' + suffix, [], read_temp, result=result, hidden=[0, 4])
+    def temp_byte(ids):      # a byte slot keeps wrapping to a byte: 300 -> 44
+        a = Asm(); a.stmt(); a.raw(0x0F, 0x4E); a.i32(1); a.raw(0x1D); a.i32(300); a.stmt(); a.raw(0x04, 0x4E); a.i32(1); a.end(); return a
+    make_function(foo, 'TempByteWrap', [], temp_byte, result='Byte', hidden=[0, 1 << 12])
+    def temp_bad(ids):       # operand 2 is even: not a valid index into [count, offset, tag, ...]
+        a = Asm(); a.stmt(); a.raw(0x04, 0x4C); a.i32(2); a.end(); return a
+    make_function(foo, 'TempEven', [], temp_bad, hidden=[0, 4])
+    def temp_far(ids):       # operand 3 would need a second pair
+        a = Asm(); a.stmt(); a.raw(0x04, 0x4C); a.i32(3); a.end(); return a
+    make_function(foo, 'TempFar', [], temp_far, hidden=[0, 4])
+    def temp_none(ids):      # no array in the header at all
+        a = Asm(); a.stmt(); a.raw(0x04, 0x4C); a.i32(1); a.end(); return a
+    make_function(foo, 'TempNoArray', [], temp_none)
+
+    # Attributes: a value property (flag bit 63) lists its modifier stack and base, the base (bit 62) lists nothing and the value
+    # (NATIVE_ATTRIBUTES.md layout, invented names). Opcode 5F stores into the base and recomputes the value from base and stack.
+    mod = p.add_export(imp['Class'], 'Mod', w32(0) * 4, super_ref=obj)
+    mod_type = prop('ByteProperty', mod, 'Type')
+    mod_value = prop('FloatProperty', mod, 'Value')
+    def attribute(name, kind, owner=foo):
+        first = len(p.exports) + 1                                   # stack's element property, then stack, base, value
+        stack, base, value = first + 1, first + 2, first + 3
+        prop('ObjectProperty', stack, name + 'ModifierStack_Element')
+        prop('ArrayProperty', owner, name + 'ModifierStack', type_ref=first)
+        prop(kind, owner, name + 'BaseValue', 1 << 62, tail=w32(0, value))
+        prop(kind, owner, name, 1 << 63, tail=w32(stack, base))
+        return value, base, stack
+    speed, speed_base, speed_stack = attribute('Speed', 'FloatAttributeProperty')
+    cap, cap_base, cap_stack = attribute('Cap', 'IntAttributeProperty')
+    def let_attribute(ref, param, kind):
+        def build(ids):
+            a = Asm(); a.stmt(); a.raw(0x5F, 0x5E); a.ref(ref); local(a, ids, param); a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        return build
+    make_function(foo, 'SetSpeed', [('Float', 'V', 0)], let_attribute(speed, 'V', 'Float'), result=None)
+    make_function(foo, 'SetCap', [('Int', 'V', 0)], let_attribute(cap, 'V', 'Int'), result=None)
+    def let_attribute_through(ref, source):      # 5F whose left side is Context(<object expression>) wrapping the 5E
+        def build(ids):
+            a = Asm(); a.stmt(); a.raw(0x5F, 0x19)
+            if source == 'Self': a.raw(0x17)
+            else: local(a, ids, source)
+            a.w(0); a.ref(0); a.raw(0); a.raw(0x5E); a.ref(ref); local(a, ids, 'V'); a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        return build
+    make_function(foo, 'SetSpeedSelf', [('Float', 'V', 0)], let_attribute_through(speed, 'Self'), result=None)
+    make_function(foo, 'SetSpeedOn', [('Float', 'V', 0), ('Object', 'Target', 0)], let_attribute_through(speed, 'Target'), result=None)
+    def instance_read(ref, op=0x01):
+        def build(ids):
+            a = Asm(); a.stmt(); a.raw(0x04, op); a.ref(ref); a.end(); return a
+        return build
+    make_function(foo, 'ReadSpeed', [], instance_read(speed, 0x5E), result='Float')
+    make_function(foo, 'ReadSpeedBase', [], instance_read(speed_base), result='Float')
+    make_function(foo, 'ReadCap', [], instance_read(cap, 0x5E), result='Int')
+    make_function(foo, 'ReadCapBase', [], instance_read(cap_base), result='Int')
+    def add_mod(stack_ref):
+        def build(ids):
+            a = Asm()
+            a.stmt(); a.raw(0x0F); local(a, ids, 'M'); a.raw(0x11, 0x2A, 0x25, 0x25, 0x20); a.ref(mod)        # M = new class'Mod'
+            for prop_ref, param in ((mod_type, 'Kind'), (mod_value, 'Amount')):
+                a.stmt(); a.raw(0x0F, 0x19); local(a, ids, 'M'); a.w(0); a.ref(0); a.raw(0); a.raw(0x01); a.ref(prop_ref); local(a, ids, param)
+            a.stmt(); a.raw(0x55, 0x01); a.ref(stack_ref); a.w(0); local(a, ids, 'M'); a.raw(0x16)              # stack.AddItem(M)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        return build
+    # Attribute properties in class defaults: Rig tags RigSpeed and its base as FloatAttributeProperty (a plain 4-byte float), RigCap and its
+    # base as IntAttributeProperty; RigPlus changes the speed pair only. Invented values; the layout is the one recovered from the packages.
+    rig = class_ids['Rig'] = p.add_export(imp['Class'], 'Rig', w32(0) * 4, super_ref=obj)
+    rig_speed, rig_speed_base, _ = attribute('RigSpeed', 'FloatAttributeProperty', rig)
+    rig_cap, rig_cap_base, _ = attribute('RigCap', 'IntAttributeProperty', rig)
+    rig_plus = class_ids['RigPlus'] = p.add_export(imp['Class'], 'RigPlus', w32(0) * 4, super_ref=rig)
+    make_function(rig, 'ReadRigSpeed', [], instance_read(rig_speed, 0x5E), result='Float')
+    make_function(rig, 'ReadRigSpeedBase', [], instance_read(rig_speed_base), result='Float')
+    make_function(rig, 'ReadRigCap', [], instance_read(rig_cap, 0x5E), result='Int')
+    make_function(rig, 'ReadRigCapBase', [], instance_read(rig_cap_base), result='Int')
+    make_function(rig, 'SetRigSpeed', [('Float', 'V', 0)], let_attribute(rig_speed, 'V', 'Float'), result=None)
+    def tagged_attribute(name, kind, packed): return p.fname(name) + p.fname(kind) + w32(4, 0) + packed
+    float_bytes = lambda v: struct.pack('<f', v)
+    p.add_export(rig, 'Default__Rig', w32(0) + tagged_attribute('RigSpeed', 'FloatAttributeProperty', float_bytes(2.5))
+                 + tagged_attribute('RigSpeedBaseValue', 'FloatAttributeProperty', float_bytes(2.5))
+                 + tagged_attribute('RigCap', 'IntAttributeProperty', w32(9)) + tagged_attribute('RigCapBaseValue', 'IntAttributeProperty', w32(9)) + none)
+    p.add_export(rig_plus, 'Default__RigPlus', w32(0) + tagged_attribute('RigSpeed', 'FloatAttributeProperty', float_bytes(6.0))
+                 + tagged_attribute('RigSpeedBaseValue', 'FloatAttributeProperty', float_bytes(6.0)) + none)
+    make_function(foo, 'AddSpeedMod', [('Int', 'Kind', 0), ('Float', 'Amount', 0)], add_mod(speed_stack), result=None, locals_=[('Object', 'M', 0)])
+    make_function(foo, 'AddCapMod', [('Int', 'Kind', 0), ('Float', 'Amount', 0)], add_mod(cap_stack), result=None, locals_=[('Object', 'M', 0)])
+    # Object.GotoState state events (natives_core.cpp). Mach declares states A, B, C, D and Loop; every BeginState / EndState appends a
+    # marker to Trace and keeps its argument, so the order and the arguments of the events can be read back. Invented names throughout.
+    state_class = imp['State']
+    mach = class_ids['Mach'] = p.add_export(imp['Class'], 'Mach', w32(0) * 4, super_ref=obj)
+    trace = prop('StrProperty', mach, 'Trace')
+    end_arg = prop('NameProperty', mach, 'EndArg')
+    begin_arg = prop('NameProperty', mach, 'BeginArg')
+    goto = make_function(obj, 'GotoState', [('Name', 'NewState', CPF_OPT), ('Name', 'Label', CPF_OPT), ('Bool', 'bForceEvents', CPF_OPT),
+                                            ('Bool', 'bKeepStack', CPF_OPT)],
+                         None, flags=FUNC_NATIVE | FUNC_FINAL | FUNC_PUBLIC, native=113, result=None)['__self__']
+    def append_marker(a, text):                                      # Trace = Trace $ "text"
+        a.stmt(); a.raw(0x0F, 0x01); a.ref(trace)
+        call(a, 112, lambda: (a.raw(0x01), a.ref(trace)), lambda: (a.raw(0x1F), a.raw(*text.encode(), 0)))
+    def do_goto(a, state, label=None, force=False):                  # GotoState(state, label, force)
+        a.stmt(); a.raw(0x1C); a.ref(goto)
+        a.raw(0x21); a.i32(p.name(state)); a.i32(0)
+        if label: a.raw(0x21); a.i32(p.name(label)); a.i32(0)
+        else: a.raw(0x0B)
+        a.raw(0x27 if force else 0x28); a.raw(0x16)
+    def state_events(state, on_begin=None, on_end=None):
+        at = p.add_export(state_class, state, w32(0) * 4, outer=mach)
+        def begin(ids):
+            a = Asm(); append_marker(a, f'b{state};')
+            a.stmt(); a.raw(0x0F, 0x01); a.ref(begin_arg); local(a, ids, 'PreviousStateName')
+            if on_begin: on_begin(a)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        def end(ids):
+            a = Asm(); append_marker(a, f'e{state};')
+            a.stmt(); a.raw(0x0F, 0x01); a.ref(end_arg); local(a, ids, 'NextStateName')
+            if on_end: on_end(a)
+            a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        def where(ids):
+            a = Asm(); a.stmt(); a.raw(0x04, 0x1F); a.raw(*state.encode(), 0); a.end(); return a
+        make_function(at, 'BeginState', [('Name', 'PreviousStateName', 0)], begin, flags=FUNC_DEFINED | FUNC_PUBLIC, result=None)
+        make_function(at, 'EndState', [('Name', 'NextStateName', 0)], end, flags=FUNC_DEFINED | FUNC_PUBLIC, result=None)
+        make_function(at, 'Where', [], where, flags=FUNC_DEFINED | FUNC_PUBLIC, result='Str')
+    state_events('A')
+    state_events('B')
+    state_events('C', on_begin=lambda a: do_goto(a, 'A'))                      # a GotoState inside BeginState
+    fired = prop('BoolProperty', mach, 'Fired')
+    def redirect_once(a):                                                      # if (!Fired) { Fired = true; GotoState('B'); }
+        a.stmt(); a.raw(0x07); to_redirect = len(a.b); a.w(0); a.raw(0x2D, 0x01); a.ref(fired)   # JumpIfNot(BoolVariable(Fired))
+        a.stmt(); a.raw(0x06); to_end = len(a.b); a.w(0)
+        struct.pack_into('<H', a.b, to_redirect, a.here())
+        a.stmt(); a.raw(0x0F, 0x01); a.ref(fired); a.raw(0x27)
+        do_goto(a, 'B')
+        struct.pack_into('<H', a.b, to_end, a.here())
+    state_events('D', on_end=redirect_once)                                    # a GotoState inside EndState
+    state_events('Loop', on_begin=lambda a: do_goto(a, 'Loop', force=True))    # never settles: the nesting bound stops it
+    def where_default(ids):
+        a = Asm(); a.stmt(); a.raw(0x04, 0x1F); a.raw(*b'-', 0); a.end(); return a
+    make_function(mach, 'Where', [], where_default, result='Str')
+    for name, args in (('GoA', ('A',)), ('GoB', ('B',)), ('GoC', ('C',)), ('GoD', ('D',)), ('GoLoop', ('Loop',)), ('GoNone', ('None',)),
+                       ('GoMissing', ('Nope',)), ('GoABegin', ('A', 'Begin')), ('GoAForce', ('A', None, True)), ('GoBForce', ('B', None, True))):
+        def build(ids, args=args):
+            a = Asm(); do_goto(a, *args); a.stmt(); a.raw(0x04, 0x0B); a.end(); return a
+        make_function(mach, name, [], build, result=None)
+    def call_where(ids):
+        a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x1B); a.i32(p.name('Where')); a.i32(0); a.raw(0x16); a.end(); return a
+    make_function(mach, 'CallWhere', [], call_where, result='Str')
+    make_function(mach, 'ReadTrace', [], instance_read(trace), result='Str')
+    make_function(mach, 'ReadEndArg', [], instance_read(end_arg), result='Name')
+    make_function(mach, 'ReadBeginArg', [], instance_read(begin_arg), result='Name')
+    # Engine iterators (foreach over Actor.AllActors / DynamicActors, interp.cpp EX_Iterator). Layout, as in the installed packages: Iterator
+    # [call of the iterator native, optionally under Context][u16 end]; the body; IteratorNext; IteratorPop. The end offset and a break are the
+    # IteratorPop, a continue is the IteratorNext. Invented classes: Beacon and Crate are Actors, BeaconRed is a Beacon.
+    actor = class_ids['Actor'] = p.add_export(imp['Class'], 'Actor', w32(0) * 4, super_ref=obj)
+    beacon = class_ids['Beacon'] = p.add_export(imp['Class'], 'Beacon', w32(0) * 4, super_ref=actor)
+    class_ids['BeaconRed'] = p.add_export(imp['Class'], 'BeaconRed', w32(0) * 4, super_ref=beacon)
+    class_ids['Crate'] = p.add_export(imp['Class'], 'Crate', w32(0) * 4, super_ref=actor)
+    class_ids['Ghost'] = p.add_export(imp['Class'], 'Ghost', w32(0) * 4, super_ref=actor)       # never instantiated
+    iterator_params = [('Class', 'BaseClass', 0), ('Object', 'Actor', CPF_OUT), ('Class', 'InterfaceClass', CPF_OPT)]
+    for name, number in (('AllActors', 304), ('DynamicActors', 313), ('ChildActors', 305)):    # ChildActors has no iterator bound
+        make_function(actor, name, iterator_params if name != 'ChildActors' else iterator_params[:2], None,
+                      flags=FUNC_NATIVE | FUNC_FINAL | FUNC_PUBLIC, native=number, result=None)
+    seeker = class_ids['Seeker'] = p.add_export(imp['Class'], 'Seeker', w32(0) * 4, super_ref=obj)
+
+    def foreach_native(a, ids, number, wrapped, base='C', arity=3):     # Iterator [Context(W, ...)] native(C, A, <omitted>) [end placeholder]
+        a.stmt(); a.raw(0x2F)
+        if wrapped: a.raw(0x19); local(a, ids, 'W'); a.w(0); a.ref(0); a.raw(0)
+        a.raw(0x60 + (number >> 8), number & 255); local(a, ids, base); local(a, ids, 'A')
+        if arity == 3: a.raw(0x4A)
+        a.raw(0x16)
+        at = len(a.b); a.w(0)
+        return at
+
+    def count(a, ids, step=1):                                          # N = N + step
+        a.stmt(); a.raw(0x0F); local(a, ids, 'N'); call(a, 146, L(a, ids, 'N'), C(a, step))
+
+    def loop_function(body, number=304, wrapped=False, result='Int', arity=3):
+        """int N = 0; foreach native(C, A) { body } return N (or A). body(a, ids, next_offset, end_offset); built twice to learn the offsets."""
+        def build(ids):
+            def once(next_off, end_off):
+                a = Asm()
+                a.stmt(); a.raw(0x0F); local(a, ids, 'N'); a.raw(0x25)
+                at = foreach_native(a, ids, number, wrapped, arity=arity)
+                body(a, ids, next_off, end_off)
+                here_next = a.here(); a.stmt(); a.raw(0x31)
+                here_end = a.here(); a.stmt(); a.raw(0x30)
+                struct.pack_into('<H', a.b, at, here_end)
+                a.stmt(); a.raw(0x04); local(a, ids, 'A' if result == 'Object' else 'N')
+                a.end()
+                return a, here_next, here_end
+            _, next_off, end_off = once(0, 0)
+            return once(next_off, end_off)[0]
+        return build
+    def jump(a, offset): a.stmt(); a.raw(0x06); a.w(offset)
+    iterator_locals = [('Object', 'A', 0), ('Int', 'N', 0)]
+    def declare(name, build, params=(('Class', 'C', 0),), result='Int'):
+        make_function(seeker, name, list(params), build, locals_=iterator_locals, result=result)
+    declare('CountAll', loop_function(lambda a, ids, n, e: count(a, ids)))
+    declare('CountDynamic', loop_function(lambda a, ids, n, e: count(a, ids), number=313))
+    declare('CountVia', loop_function(lambda a, ids, n, e: count(a, ids), wrapped=True), params=(('Class', 'C', 0), ('Object', 'W', 0)))
+    declare('CountBreak', loop_function(lambda a, ids, n, e: (count(a, ids), jump(a, e))))
+    declare('CountContinue', loop_function(lambda a, ids, n, e: (count(a, ids), jump(a, n), count(a, ids, 100))))
+    declare('FirstBreak', loop_function(lambda a, ids, n, e: jump(a, e), result='Object'), result='Object')
+    declare('LastAfterLoop', loop_function(lambda a, ids, n, e: count(a, ids), result='Object'), result='Object')
+    declare('CountChildren', loop_function(lambda a, ids, n, e: count(a, ids), number=305, arity=2))     # no iterator bound: skipped, logged
+    def nested(ids):        # Total = 0; foreach AllActors(C, A) { Total += 10; foreach AllActors(D, B) Total += 1 } return Total
+        a = Asm()
+        a.stmt(); a.raw(0x0F); local(a, ids, 'N'); a.raw(0x25)
+        outer = foreach_native(a, ids, 304, False)
+        count(a, ids, 10)
+        a.stmt(); a.raw(0x2F); a.raw(0x61, 0x30); local(a, ids, 'D'); local(a, ids, 'B'); a.raw(0x4A); a.raw(0x16)
+        inner = len(a.b); a.w(0)
+        count(a, ids)
+        a.stmt(); a.raw(0x31)
+        inner_end = a.here(); a.stmt(); a.raw(0x30)
+        struct.pack_into('<H', a.b, inner, inner_end)
+        a.stmt(); a.raw(0x31)
+        outer_end = a.here(); a.stmt(); a.raw(0x30)
+        struct.pack_into('<H', a.b, outer, outer_end)
+        a.stmt(); a.raw(0x04); local(a, ids, 'N')
+        a.end(); return a
+    make_function(seeker, 'Nested', [('Class', 'C', 0), ('Class', 'D', 0)], nested, locals_=[('Object', 'A', 0), ('Object', 'B', 0), ('Int', 'N', 0)])
+    if interfaces:
+        # Interface table fixture (all names and shapes invented). IThing and IThingChild declare no function, so the old structural
+        # rule could never say yes for them. Impl names IThing (with a VfTable_ StructProperty child), Derived inherits it, ChildImpl names
+        # the derived interface only, Plain names nothing.
+        def make_class(name, super_ref, flags=2, table=(), with_property=None):
+            at = len(p.exports) + 1
+            child = at + 1 if with_property else 0
+            ref_table = [(c, (child if with_property else 0)) for c in table]
+            p.add_export(0, name, class_body(p, super_ref, obj, at + 1 + (1 if with_property else 0), flags, ref_table, first_child=child),
+                         super_ref=super_ref)
+            if with_property: prop('StructProperty', at, with_property)
+            p.add_export(at, 'Default__' + name, w32(0) + none)
+            return at
+        thing = make_class('IThing', obj, flags=2 | CLASS_INTERFACE)
+        thing_child = make_class('IThingChild', thing, flags=2 | CLASS_INTERFACE)
+        impl = make_class('Impl', obj, table=[thing], with_property='VfTable_IThing')
+        make_class('Derived', impl)
+        make_class('ChildImpl', obj, table=[thing_child], with_property='VfTable_IThingChild')
+        make_class('Plain', obj)
+        query = make_function(obj, 'QueryInterface', [('Class', 'InterfaceClass', 0)], None, flags=FUNC_NATIVE | FUNC_PUBLIC, result='Object')['__self__']
+        def ask(target):
+            def build(ids):
+                a = Asm(); a.stmt(); a.raw(0x04); a.raw(0x1C); a.ref(query); a.raw(0x20); a.ref(target); a.raw(0x16); a.end(); return a
+            return build
+        make_function(obj, 'AskThing', [], ask(thing), result='Object')
+        make_function(obj, 'AskChild', [], ask(thing_child), result='Object')
     return p
 
 
@@ -357,6 +669,10 @@ with tempfile.TemporaryDirectory() as folder:
     assert run(root, 'Core.Foo.CallGet', self_class='Core.Bar')['result'] == '2'                # virtual dispatch
     assert run(root, 'Core.Foo.GetCount', self_class='Core.Foo')['result'] == '7'               # class default
     assert run(root, 'Core.Foo.GetCount', self_class='Core.Bar')['result'] == '9'               # subclass default
+    through = run(root, 'Core.Foo.LevelThroughClass')
+    assert through['result'] == '31', through                                                    # class ObjectConst, class default
+    made = run(root, 'Core.Foo.MakePair')
+    assert 'Slots=[5,9]' in made['result'], made                              # static array field, per-element tags
     assert run(root, 'Core.Foo.Opt', 'i:1')['result'] == '6'                                     # default b = 5
     assert run(root, 'Core.Foo.Opt', 'i:1', 'i:10')['result'] == '11'
     bumped = run(root, 'Core.Foo.Bump', 'i:41')
@@ -365,6 +681,230 @@ with tempfile.TemporaryDirectory() as folder:
     mystery = run(root, 'Core.Foo.CallMystery')
     assert mystery['result'] == '0' and any('UNIMPLEMENTED Object.Mystery(int)' in l for l in mystery['log']), mystery
     assert run(root, 'Core.Foo.Arr')['result'] == '2'
+    assert run(root, 'Core.Foo.Append')['result'] == '2'                      # one element per Items[Items.Length] = v, not two
+
+    # Hidden typed temporaries: an unwritten slot reads as the typed zero of its opcode (not None); a byte slot wraps; a bad operand fails loudly.
+    for suffix, zero in (('Int', '0'), ('Float', '0'), ('Byte', '0'), ('Bool', 'false'), ('Object', 'None')):
+        assert run(root, 'Core.Foo.Temp' + suffix)['result'] == zero, suffix
+    assert run(root, 'Core.Foo.TempByteWrap')['result'] == '44'
+    for broken in ('TempEven', 'TempFar', 'TempNoArray'):
+        done = subprocess.run([reader, str(root / 'Core.upk'), '--run', 'Core.Foo.' + broken, '--cooked', str(root)], capture_output=True, text=True, encoding='utf-8')
+        assert done.returncode != 0 and 'outside the local-variable array' in done.stdout + done.stderr, (broken, done.stdout, done.stderr)
+
+    # Opcode 5F (let attribute): the base is assigned and the value recomputed from base and stack in one step. Modifier Type 0 scale,
+    # 1 pre-add, 2 post-add; value = (base + pre) * ((1 + scale up) / (1 - scale down)) + post; int attributes truncate toward zero.
+    # Adding a modifier through script does not recompute (the add natives do that); only a later 5F does.
+    attributes = root / 'attributes.txt'
+    attributes.write_text("""new foo Core.Foo
+run Core.Foo.SetSpeed $foo f:10
+run Core.Foo.ReadSpeed $foo
+run Core.Foo.ReadSpeedBase $foo
+run Core.Foo.AddSpeedMod $foo i:1 f:5
+run Core.Foo.AddSpeedMod $foo i:0 f:0.5
+run Core.Foo.AddSpeedMod $foo i:2 f:3
+run Core.Foo.ReadSpeed $foo
+run Core.Foo.SetSpeed $foo f:20
+run Core.Foo.ReadSpeed $foo
+run Core.Foo.ReadSpeedBase $foo
+run Core.Foo.AddSpeedMod $foo i:0 f:-1
+run Core.Foo.SetSpeedSelf $foo f:2
+run Core.Foo.ReadSpeed $foo
+run Core.Foo.ReadSpeedBase $foo
+run Core.Foo.AddCapMod $foo i:0 f:0.25
+run Core.Foo.AddCapMod $foo i:2 f:0.9
+run Core.Foo.SetCap $foo i:10
+run Core.Foo.ReadCap $foo
+run Core.Foo.ReadCapBase $foo
+run Core.Foo.SetCap $foo i:-10
+run Core.Foo.ReadCap $foo
+run Core.Foo.ReadCapBase $foo
+""", encoding='utf-8')
+    done = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(attributes), '--cooked', str(root), '--no-static'],
+                          capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    entries = json.loads(done.stdout)['entries']
+    assert all(entry['status'] == 'completed' for entry in entries), entries
+    results = [entry.get("result") for entry in entries]
+    assert results[1:3] == ['10', '10'], results            # value and base both set by the 5F: no stale base
+    assert results[6] == '10', results                      # the three modifiers were added but nothing recomputed yet
+    assert results[8:10] == ['40.5', '20'], results         # (20 + 5) * 1.5 + 3; the stack never touches the base
+    assert results[12:14] == ['8.25', '2'], results         # scale -1 joins the denominator: (2 + 5) * (1.5 / 2) + 3, through Context(Self)
+    assert results[17:19] == ['13', '10'], results          # 10 * 1.25 + 0.9 = 13.4 truncated
+    assert results[20:22] == ['-11', '-10'], results        # -12.5 + 0.9 = -11.6 truncates toward zero, not to -12
+    # Attribute properties in class defaults load as plain numbers: value and base, int and float, a subclass overriding its parent's.
+    for cls, speed_value in (('Core.Rig', '2.5'), ('Core.RigPlus', '6')):
+        for function, expected in (('ReadRigSpeed', speed_value), ('ReadRigSpeedBase', speed_value), ('ReadRigCap', '9'), ('ReadRigCapBase', '9')):
+            read = run(root, 'Core.Rig.' + function, self_class=cls)
+            assert read['result'] == expected, (cls, function, read)
+            assert not any('defaults: skipped' in line for line in read['log']), read
+    # A later 5F stores into the base loaded from the defaults and recomputes the value from it (stack empty): both become the new number.
+    rig_steps = root / 'rig.txt'
+    rig_steps.write_text("""new rig Core.RigPlus
+run Core.Rig.SetRigSpeed $rig f:3
+run Core.Rig.ReadRigSpeed $rig
+run Core.Rig.ReadRigSpeedBase $rig
+""", encoding='utf-8')
+    reset = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(rig_steps), '--cooked', str(root), '--no-static'],
+                           capture_output=True, text=True, encoding='utf-8')
+    assert reset.returncode == 0, (reset.stdout, reset.stderr)
+    assert [e.get('result') for e in json.loads(reset.stdout)['entries']][1:] == ['3', '3'], reset.stdout
+    # A None context logs the error and changes nothing; the right side is still evaluated.
+    none = run(root, 'Core.Foo.SetSpeedOn', 'f:4', self_class='Core.Foo')
+    assert any('Attempt to assign attribute through None' in line for line in none['log']), none
+    # Object.GotoState state events: EndState(new state) on the old state, the name is set, BeginState(old state) on the new one; the same
+    # state runs nothing unless bForceEvents; a GotoState inside an event nests; one inside EndState replaces the outer change; an undeclared
+    # state only sets the name; a Label is logged and not run (latent code is not run). One object per scenario.
+    states = root / 'states.txt'
+    states.write_text("""new m Core.Mach
+run Core.Mach.CallWhere $m
+run Core.Mach.GoA $m
+run Core.Mach.CallWhere $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.ReadBeginArg $m
+run Core.Mach.GoA $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.GoB $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.ReadEndArg $m
+run Core.Mach.ReadBeginArg $m
+run Core.Mach.GoBForce $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.GoNone $m
+run Core.Mach.CallWhere $m
+run Core.Mach.ReadTrace $m
+run Core.Mach.ReadEndArg $m
+run Core.Mach.GoMissing $m
+run Core.Mach.ReadTrace $m
+new n Core.Mach
+run Core.Mach.GoC $n
+run Core.Mach.CallWhere $n
+run Core.Mach.ReadTrace $n
+run Core.Mach.ReadBeginArg $n
+new d Core.Mach
+run Core.Mach.GoD $d
+run Core.Mach.GoA $d
+run Core.Mach.CallWhere $d
+run Core.Mach.ReadTrace $d
+run Core.Mach.ReadEndArg $d
+run Core.Mach.ReadBeginArg $d
+new q Core.Mach
+run Core.Mach.GoLoop $q
+run Core.Mach.ReadTrace $q
+new l Core.Mach
+run Core.Mach.GoABegin $l
+run Core.Mach.ReadTrace $l
+""", encoding='utf-8')
+    done = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(states), '--cooked', str(root), '--no-static'],
+                          capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    entries = json.loads(done.stdout)['entries']
+    assert all(entry['status'] == 'completed' for entry in entries), entries
+    results = [entry.get('result') for entry in entries]
+    assert results[0] == '"-"', results                                   # the class-level Where: no state yet
+    assert [results[i] for i in (2, 3, 4, 6)] == ['"A"', '"bA;"', "'None'", '"bA;"'], results   # BeginState ran (previous None), EndState did not; same state: no events
+    assert [results[i] for i in (8, 9, 10)] == ['"bA;eA;bB;"', "'B'", "'A'"], results             # A -> B: EndState(B), then BeginState(A)
+    assert results[12] == '"bA;eA;bB;eB;bB;"', results                     # bForceEvents: both events although the state stays B
+    assert [results[i] for i in (14, 15, 16)] == ['"-"', '"bA;eA;bB;eB;bB;eB;"', "'None'"], results   # to None: EndState(None) only, the default Where answers again
+    assert results[18] == results[15], results                             # an undeclared state sets the name and runs no event
+    assert [results[i] for i in (20, 21, 22)] == ['"A"', '"bC;eC;bA;"', "'C'"], results          # BeginState(C) went to A: C ended once, A began
+    assert [results[i] for i in (25, 26, 27, 28)] == ['"B"', '"bD;eD;eD;bB;"', "'B'", "'D'"], results   # the redirect in EndState wins over the outer change
+    assert results[30] == '"bLoop;' + 'eLoop;bLoop;' * 7 + '"', results     # nesting bound: 8 levels run, the 9th is abandoned
+    assert results[32] == '"bA;"', results
+    assert any('state Nope is not declared on Mach' in line for line in run(root, 'Core.Mach.GoMissing', self_class='Core.Mach')['log'])
+    assert any('GotoState: Loop abandoned' in line for line in run(root, 'Core.Mach.GoLoop', self_class='Core.Mach')['log'])
+    assert any('label Begin not run' in line for line in run(root, 'Core.Mach.GoABegin', self_class='Core.Mach')['log'])
+    # Engine iterators: AllActors / DynamicActors visit the live objects of the class or its children in creation order; the out parameter is
+    # the loop variable; break (the IteratorPop), continue (the IteratorNext), a Context object that is None, an empty inner loop that must not
+    # pop the outer one, and an iterator native with nothing bound (skipped with the old stub line).
+    walkers = root / 'iterators.txt'
+    walkers.write_text("""new b1 Core.Beacon
+new b2 Core.BeaconRed
+new c1 Core.Crate
+new c2 Core.Crate
+new c3 Core.Crate
+new s Core.Seeker
+run Core.Seeker.CountAll $s class:Core.Beacon
+run Core.Seeker.CountAll $s class:Core.BeaconRed
+run Core.Seeker.CountAll $s class:Core.Actor
+run Core.Seeker.CountAll $s none
+run Core.Seeker.CountAll $s class:Core.Ghost
+run Core.Seeker.CountDynamic $s class:Core.Crate
+run Core.Seeker.CountVia $s class:Core.Crate $b1
+run Core.Seeker.CountVia $s class:Core.Crate none
+run Core.Seeker.CountBreak $s class:Core.Crate
+run Core.Seeker.CountBreak $s class:Core.Ghost
+run Core.Seeker.CountContinue $s class:Core.Crate
+run Core.Seeker.FirstBreak $s class:Core.Crate
+run Core.Seeker.LastAfterLoop $s class:Core.Crate
+run Core.Seeker.Nested $s class:Core.Beacon class:Core.Crate
+run Core.Seeker.Nested $s class:Core.Beacon class:Core.Ghost
+run Core.Seeker.Nested $s class:Core.Ghost class:Core.Crate
+""", encoding='utf-8')
+    done = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(walkers), '--cooked', str(root), '--no-static'],
+                          capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    entries = json.loads(done.stdout)['entries']
+    assert all(entry['status'] == 'completed' for entry in entries), entries
+    results = [entry.get('result') for entry in entries]
+    assert results[0:5] == ['2', '1', '5', '0', '0'], results             # a child class counts; every actor; None and a non-actor class match nothing
+    assert results[5:8] == ['3', '3', '0'], results                       # DynamicActors; through Context(b1); a None Context skips the loop
+    assert results[8:10] == ['1', '0'], results                           # break lands on the IteratorPop; an empty loop runs no pass
+    assert results[10] == '3', results                                    # continue lands on the IteratorNext: three passes, the +100 is never reached
+    assert 'c1' in results[11] and results[12] == 'None', results         # creation order (the first crate); exhausted loop leaves the variable None
+    assert results[13:16] == ['26', '20', '0'], results                   # 2 beacons x (10 + 3 crates); empty inner loops do not end the outer one
+    children = run(root, 'Core.Seeker.CountChildren', self_class='Core.Seeker')
+    assert children['result'] == '0' and 'UNIMPLEMENTED native iterator (foreach over an engine iterator)' in children['log'], children
+    assert not any('ChildActors' in line for line in children['log']), children       # nothing was evaluated or called
+    # Native census (--native-census): per-entry call counters (implemented natives, logged stubs, script functions,
+    # Context on None) plus the static closure, all on the synthetic package.
+    entries = root / 'census.txt'
+    entries.write_text("""# comment
+new foo Core.Foo
+new bar Core.Bar
+run Core.Foo.SumTo - i:3
+run Core.Foo.CallGet $foo
+run Core.Foo.CallGet $bar
+run Core.Foo.CallMystery $foo
+run Core.Foo.NoneCtx $foo
+runclass Core.Bar
+""", encoding='utf-8')
+    census_cmd = [reader, str(root / 'Core.upk'), '--native-census', str(entries), '--cooked', str(root)]
+    done = subprocess.run(census_cmd, capture_output=True, text=True, encoding='utf-8')
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    census = json.loads(done.stdout)
+    assert [e['status'] for e in census['entries']] == ['completed'] * 6, census['entries']
+    sum_to, get_foo, get_bar, mystery_run, none_run, bar_get = census['entries']
+    # SumTo(3): the loop test runs 4 times, the two additions 3 times each; one script function entered once.
+    assert sum_to['script_calls'] == 1 and sum_to['native_calls_implemented'] == 10 and sum_to['native_calls_stub'] == 0, sum_to
+    assert sum_to['result'] == '6', sum_to
+    # Virtual dispatch: the receiver's own Get runs.
+    assert get_foo['script_functions_entered'] == 2 and get_bar['script_functions_entered'] == 2, (get_foo, get_bar)
+    natives, scripts = census['natives'], census['script_functions']
+    assert natives['Core.Object.LessEq_IntInt']['dynamic_calls'] == 4 and natives['Core.Object.LessEq_IntInt']['implemented'], natives
+    assert natives['Core.Object.Add_IntInt']['dynamic_calls'] == 6, natives
+    assert scripts['Core.Foo.Get']['dynamic_calls'] == 1 and scripts['Core.Bar.Get']['dynamic_calls'] == 2, scripts   # Bar.Get: runclass too
+    # An unimplemented native is counted as a stub, not as an implemented call, and appears once in the table.
+    assert mystery_run['native_calls_stub'] == 1 and mystery_run['native_calls_implemented'] == 0, mystery_run
+    stub = natives['Core.Object.Mystery']
+    assert stub['dynamic_calls'] == 1 and not stub['implemented'] and stub['dynamic_by_entry'] == {'3': 1}, stub
+    # A Context whose object is None is recorded against the function that evaluated it.
+    assert none_run['none_contexts'] == {'Core.Foo.NoneCtx': 1}, none_run
+    # Static closure A follows the method visible at the receiver's class, B adds the subclass override.
+    assert scripts['Core.Foo.Get']['static_closure'] == 'A' and scripts['Core.Bar.Get']['static_closure'] in 'AB', scripts
+    assert get_foo['static_a_script_functions'] == 2 and get_foo['static_b_script_functions'] == 3, get_foo   # CallGet, Foo.Get (+ Bar.Get)
+    assert stub['static_sites_a'] == 1 and stub['static_entries_a'] == [3], stub
+    assert natives['Core.Object.Add_IntInt']['static_sites_a'] == 2 and natives['Core.Object.LessEq_IntInt']['static_sites_a'] == 1, natives
+    assert census['static']['dynamic_outside_static'] == [] and census['static']['unresolved_virtual'] == {}, census['static']
+    # Counters reset per entry; a step limit stops an entry and says so.
+    limited = subprocess.run(census_cmd + ['--steps', '30'], capture_output=True, text=True, encoding='utf-8')
+    assert limited.returncode == 0, limited.stderr
+    first = json.loads(limited.stdout)['entries'][0]
+    assert first['status'] == 'stopped' and first['stop_reason'] == 'step limit', first
+    # Static-only run keeps the dynamic entries but skips the closure.
+    quick = json.loads(subprocess.run(census_cmd + ['--no-static'], capture_output=True, text=True, encoding='utf-8').stdout)
+    assert 'static' not in quick and quick['natives']['Core.Object.Add_IntInt']['dynamic_calls'] == 6, quick
+    bad = subprocess.run([reader, str(root / 'Core.upk'), '--native-census', str(root / 'missing.txt'), '--cooked', str(root)], capture_output=True, text=True)
+    assert bad.returncode != 0
     # Complete the interrupted batch-replay path: named inputs, optional defaults,
     # strict malformed-input rejection, case ordering and per-case log isolation.
     batch = root / 'cases.tsv'
@@ -459,5 +999,37 @@ with tempfile.TemporaryDirectory() as folder:
     (root / 'Engine.upk').write_bytes(truncated.build())
     rejected = subprocess.run([reader, str(root / 'Engine.upk'), '--mover-probe', 'PlacedMover', 'PlacedAction', '--cooked', str(root)], capture_output=True, text=True)
     assert rejected.returncode != 0 and 'property prefix outside export' in rejected.stderr, rejected.stderr
+    # Class export body and interface table (NATIVE_CLASS_SERIAL_LAYOUT.md layout on an invented package). The fixture's Util class has the
+    # 16-byte stand-in body the other tests use, so the oracle must report exactly that one export as failing, loudly (exit code 1).
+    (root / 'Core.upk').write_bytes(make(interfaces=True).build())
+    def class_check(path):
+        done = subprocess.run([reader, str(path), '--class-check', '--cooked', str(root), '--failures'], capture_output=True, text=True, encoding='utf-8')
+        return done.returncode, json.loads(done.stdout)
+    code, checked = class_check(root / 'Core.upk')
+    assert code == 1 and checked['classes'] == 8 and checked['exact'] == 7 and checked['failed'] == 1, checked
+    assert checked['default_objects'] == 7 and checked['interface_classes'] == 2, checked
+    assert checked['classes_with_interfaces'] == 2 and checked['interface_entries'] == 2 and checked['entries_to_interface_classes'] == 2, checked
+    assert checked['table_struct_properties'] == 2 and checked['table_null'] == 0, checked
+    assert checked['failures'][0].startswith('Util:'), checked
+    ask = lambda function, cls: run(root, 'Core.Object.' + function, self_class='Core.' + cls)['result']
+    assert ask('AskThing', 'Impl').startswith("Impl'") and ask('AskThing', 'Derived').startswith("Derived'")     # own table, super class table
+    assert ask('AskThing', 'ChildImpl').startswith("ChildImpl'")        # names the derived interface, so it also implements the base
+    assert ask('AskThing', 'Plain') == 'None'
+    assert ask('AskChild', 'ChildImpl').startswith("ChildImpl'")
+    assert ask('AskChild', 'Impl') == 'None' and ask('AskChild', 'Derived') == 'None'          # a base-interface implementer is not the derived one
+    # Malformed bodies are rejected, never skipped: an extra byte (the body must end exactly at the serial size), a super reference that
+    # differs from the export table, and a negative count.
+    def mutate(change):
+        broken = make(interfaces=True)
+        for slot, export in enumerate(broken.exports):
+            if export[3] == broken.fname('Impl'):
+                payload = bytearray(export[4]); change(payload)
+                broken.exports[slot] = (*export[:4], bytes(payload))
+        (root / 'Broken.upk').write_bytes(broken.build())
+        return class_check(root / 'Broken.upk')[1]
+    assert mutate(lambda b: b.extend(b'\0')).get('failed') == 2, 'trailing byte'
+    assert mutate(lambda b: b.__setitem__(slice(8, 12), w32(3))).get('failed') == 2, 'super reference'
+    assert mutate(lambda b: b.__setitem__(slice(0, 4), w32(99999))).get('failed') == 1, 'the first word is not range checked'
+    assert mutate(lambda b: b.__setitem__(slice(48, 52), w32(-1))).get('failed') == 2, 'negative function map count'
     # a runaway script stops at the step limit instead of hanging is covered by the C++ limit, not here
 print('vm synthetic coverage passed.')

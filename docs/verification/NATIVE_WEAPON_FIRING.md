@@ -1,5 +1,7 @@
 # Native weapon firing: fire modes, pellets and spread, fire interval, kick, projectiles, splash, status effects (2026-10-22)
 
+Companion note: [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) (lane G13, 2026-10-05) covers trigger to shot, ammo, accuracy, recoil, reload and the shot-side status chance.
+
 AI-assisted (Claude). Behaviour notes written from a local reading of `Borderlands2.exe` in Ghidra 12.1.4 (the
 existing project, opened read-only through `tools/ghidra/run.ps1` and a small local helper that reads vtable slots) and
 of the installed WillowGame script disassembly (`research/script_disasm.py` output under ignored `local/disasm/`), under

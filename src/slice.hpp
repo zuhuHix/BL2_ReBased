@@ -1,6 +1,7 @@
 #pragma once
 #include "mission.hpp"
 #include "behavior.hpp"
+#include "mission_script.hpp"
 
 #include <memory>
 
@@ -19,13 +20,35 @@ namespace vm {
 //    state in the objective set) is UNVERIFIED;
 //  - the CompareObject verdict: ObjectA is the OnTakeDamage DamageType output, ObjectB a constant in the provider's
 //    variable value block (FireDamage: GD_Incendiary.DamageType.DmgType_Incendiary_Impact).
+// Accepting and turning in run the installed script (WillowPlayerController.AcceptMission / ServerCompleteMission, see
+// src/mission_script.hpp and docs/verification/NATIVE_MISSION_SCRIPT_BRIDGE.md, UNVERIFIED); the kickoff after acceptance is
+// a pending record that the next tick() consumes.
+// Experience also runs the script path (docs/verification/NATIVE_PROGRESSION.md, UNVERIFIED): the turn-in script reaches
+// GetExperienceReward (formula in src/progression.*) and ExpEarn (raises the VM-side pool), and tick() runs the pool update that
+// calls ExpLevelUp. The host supplies what it owns (region stage, the player's level and experience) and applies the Experience
+// event to its own state, adopts the Health event (maximum and current health after the level-up) and compares the Level, SkillPoints and MaxHealth events with its own.
 // Still host stand-ins: the damage type of the host's shot, the world ops listed in dummy().boundaryCalls.
 class FireMissionSlice {
 public:
     struct HostEvent {
-        enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete };
+        enum class Kind { RemoteEvent, Dialog, StatusEffect, MissionWeaponGranted, MissionWeaponRemoved, Reward, Status, ObjectiveSet, ObjectiveComplete,
+                          Experience, Level,   // Experience: a = experience the pool gained; Level: a = the level the pool update reached
+                          MissionInterface,    // the mission screen was opened (ClientGFxPlayMovie): a = movie definition path, b = the director's path
+                          OnUseDialog,         // the on-use dialog's TriggerEvent: a = the global VO_NPC_OnUse_* tag path, b = the speaker (Marcus), c = the other object's class
+                          SkillPoints,         // a = the unspent skill points the script's level-up awarded (the data's per-level formula; sent with a Level event, 0 included)
+                          MaxHealth,           // a = the new maximum health (the VM health pool's effective maximum, rebased by RecalculateAttributeInitializedState)
+                          Health,              // a = current health, b = maximum health after the level-up (the OnLevelUp refill included; sent with MaxHealth)
+                          SequenceChange,      // a behavior (the mission's or the dummy's own) changed a sequence of the dummy's provider: a = provider, b = sequence, c = CHANGE_Enable / _Disable / _Toggle
+                          TurnInDialog,        // PlayMissionTurnedInDialog's TriggerEvent on Marcus's component: a = the global VO_NPC_MissionTurnedIn tag path, b = the speaker, c = the other object's class
+                          ActionSkillCooldown, // the level-up skill's modifier on the action-skill cooldown's current value: a = Scale / PreAdd / PostAdd, b = its value (Scale 0 resets it)
+                          WeaponDamageScale,   // a natural level-up's OnLevelUpNaturally skill: a = the value added to the held weapon's damage scale sum, b = seconds it lasts (both from the skill's data)
+                          DismissalDialog,     // PlayDismissalDialog's TriggerEvent on Marcus's component when his mission screen closes: a = the global VO_NPC_GenericDismissal tag path, b = the speaker, c = the other object's class
+                          MissionInterfaceClosed, // Marcus's mission screen closed (the movie's OnClose ran): a = the director's path
+                          RewardPage,          // the turn-in's reward page is shown by the open screen and waits for the player: a = the mission's path
+                          RewardReceived };    // the player confirmed the reward page (MissionRewardsReceived ran): a = the mission's path
         Kind kind;
         std::string a, b, c;
+        std::string detail;       // Dialog: "act=...;ak=...;talker=echo|pawn;outcome=...;line=<id>" (see MissionSystem::Effect)
     };
 
     FireMissionSlice(Runtime& runtime, const std::string& missionPath, const std::string& dummyProviderPackage,
@@ -34,18 +57,68 @@ public:
     MissionSystem& mission() { return *mission_; }
     BehaviorProvider& dummy() { return *dummy_; }
     bool accept(const std::set<std::string>& completedMissions);
-    bool enterRange();                       // the GoToRange objective
+    // The use key's press on Marcus (after the host's use ray chose him): his stock OnUsed chain runs on the VM (MissionScript::useMarcus). The
+    // result says whether it reached the mission interface (a MissionInterface host event is queued) and lists the behaviors it ran.
+    MissionScript::MarcusUse useMarcus(const std::set<std::string>& completedMissions);
+    // The mission screen's three lists (Marcus's own script over his directive table and the tracker's availability queries): the host's use key
+    // confirms the entry offered here (a host stand-in for the button press) with accept / turnIn.
+    MissionScript::MissionLists screen(const std::set<std::string>& completedMissions);
+    // Marcus's mission screen after its open (MissionScript::closeScreen / confirmReward): the player leaves it (Escape), or confirms the reward page the open
+    // screen showed at the turn-in (Enter). The accept closes the screen by itself, inside the status routine.
+    bool closeScreen();
+    bool confirmReward();
+    bool screenOpen() const { return script_->screenOpen(); }
+    bool rewardPending() const { return script_->rewardPending(); }
+    bool enterRange();                       // the GoToRange objective: the player enters the waypoint's cylinder (touchWaypoint)
+    // The host's overlap of the waypoint's cylinder with the player pawn (or Marcus): begin / end. The stock WillowWaypoint script runs on
+    // the VM: Touch for a player-owned pawn updates GoToRange when it is updatable, and the set-changed reaction re-checks the actors
+    // already inside (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED).
+    void touchWaypoint(bool player, bool begin);
     // OnSpawned on the dummy: call when the host spawns it (the stock spawn is a population den tied to the Fire
-    // objective; not decoded here). With FireDamage enabled it emits RocksPaper_MoveTargetForward.
+    // objective; not decoded here). With FireDamage enabled it emits RocksPaper_MoveTargetForward. The pawn the VM holds for the dummy (the stock archetype
+    // GD_TargetDummy.Character.Pawn_TargetDummy) becomes a talker under its body class's dialog name tag, and, after the dummy's own spawn behaviors, the
+    // value of the mission's named Kismet variable TargetDummy (what the level's SeqEvent_PopulatedActor writes live): the mission behaviors linked to
+    // that variable (Behavior_TriggerDialogEvent_1184, the Targetable switch) then run on the dummy. Until this call the variable is empty, and a behavior
+    // applied then does not run (NATIVE_BEHAVIOR_CONTEXT.md; the live order and the empty-variable rule are in FIRE_MISSION_GOLDEN_TRACE.md, lane L4).
     bool spawnDummy();
     // OnTakeDamage on the dummy. `damageTypePath` is the stock object path of the damage type the host dealt (e.g.
     // "GD_Incendiary.DamageType.DmgType_Incendiary_Impact"); "" for None. It and `damageSourcePath` are written to the
     // variables the event links as its DamageType / DamageSource outputs.
-    bool damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath = "");
+    // With `damage` >= 0 and a pawn for the dummy, the player's hit goes through the stock chain on the VM (plan step S-b): the dummy pawn gets a mind and its
+    // health pool at its first hit (level and game stage: the mission's stage, else the player's level: a stand-in for the stock spawn), the pawn's installed
+    // TakeDamage runs with the VM controller as the instigator, health is lowered, and NotifyTakeHit then raises OnTakeDamage on the dummy's provider (this
+    // function's `damageTypePath` is the definition, `damageSourcePath` the WillowDmgSource_* class path, "" = Bullet). Without a damage (the host's call so far) or
+    // without a pawn the event is raised directly as before, with no health.
+    bool damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath = "", double damage = -1);
+    // The last pawn hit's report (health before and after, the damage applied, the natives of the chain in order) and the dummy pawn's health now (-1 before its first pawn hit).
+    const CombatSystem::HitReport& lastHit() const { return lastHit_; }
+    double dummyHealth();
+    MissionScript& script() { return *script_; }
     // Legacy convenience for the current host (true = the incendiary impact damage type, false = None). Prefer
     // damageDummy with the stock damage type of the shot.
     bool hitDummy(bool fireDamage);
     bool turnIn();
+    // One not-natural level-up (ExpLevelUp(true)); nothing in the slice calls it, the CLI step `cheatlevel` does, to check that no OnLevelUpNaturally effect follows it.
+    void cheatLevelUp() { script_->cheatLevelUp(); pump(); }
+    // Inputs the host owns (see MissionScript): the region's game stage (set before accept, it is locked when the mission becomes
+    // Active) and the player's level and experience (set before turnIn and whenever the host changes them).
+    void setRegionGameStage(int stage) { script_->setRegionGameStage(stage); }
+    void setPlayerExperience(int level, int64_t experience) { script_->setPlayerExperience(level, experience); }
+    // The host's current health (call after setPlayerExperience): the VM health pool is rebuilt with it, so the level-up's rebase and refill start from it.
+    void setPlayerHealth(float current) { script_->setPlayerHealth(current); }
+    // GlobalsDefinition.PlayerInteractionDistance of the installed data (350 uu): how far the use ray reaches (NATIVE_USE_INTERACTION.md).
+    float playerInteractionDistance() { return script_->playerInteractionDistance(); }
+    int scriptObjectiveUpdates() const { return script_->objectiveUpdates(); }   // applied objective updates the VM controller was told about
+    int scriptPlayerLevel() { return script_->playerLevel(); }
+    float scriptExperiencePool() const { return script_->experiencePool(); }
+    // expEarned() is what ExpEarn was called with.
+    const std::vector<MissionScript::ExpEarn>& expEarned() const { return script_->expEarned(); }
+    // The natives the mission script reached that have no implementation ("name xN") and other VM diagnostics.
+    std::vector<std::string> scriptStubs() const { return script_->stubs(); }
+    std::vector<std::string> scriptNotes() const { return script_->notes(); }
+    // The VM controller's own record of the mission (EMissionStatus number, -1 when it has none) and its bNeedsRewards.
+    int scriptPlayerStatus() { return script_->controllerStatus(); }
+    bool scriptPlayerNeedsRewards() { return script_->controllerNeedsRewards(); }
     // Persistence: the mission state only (the caller keeps the completed-mission set and rewards). The dummy's
     // sequences follow from the restored mission state through their enable conditions.
     std::string saveState() const { return mission_->saveState(); }
@@ -57,15 +130,26 @@ public:
 private:
     Runtime& runtime_;
     std::unique_ptr<MissionSystem> mission_;
+    std::unique_ptr<MissionScript> script_;
     std::unique_ptr<BehaviorProvider> dummy_;
+    std::shared_ptr<const Package> dummyPackage_;
+    ObjectPtr dummyPawn_;                    // the VM's pawn for the dummy, made at its first spawn (null when the data has no archetype)
+    bool dummyCombat_ = false;               // the pawn has its mind and health pool (its first pawn hit made them)
+    CombatSystem::HitReport lastHit_;
     std::vector<HostEvent> events_;
     std::set<std::string> completedMissions_;
     std::string dummyName_;
     std::vector<std::string> errors_;
     void pump();
+    void drainExperience();
     bool drainMission();
-    bool syncSequences();                    // applies the dummy's enable conditions; true if a sequence changed
+    // The dummy's enable conditions (NATIVE_BEHAVIOR_POPULATION.md section B, UNVERIFIED): the verdict of one condition from the
+    // tracker's current state, and the application of every condition's verdict (what each mission notification does).
     bool conditionHolds(Object& condition);
+    void applyConditions();
+    bool dummyRegistered_ = false;           // the dummy has been spawned: its provider is a consumer and its conditions observe the mission
+    int notifyDepth_ = 0;
+    void placeDummyPawn();
     void changeSequence(const std::string& sequence, const std::string& action);
 };
 

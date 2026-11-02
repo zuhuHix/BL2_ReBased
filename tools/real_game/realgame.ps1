@@ -56,12 +56,15 @@ function Backup-Saves {
     $dst
 }
 
-function Install-Driver {
+function Install-Driver([switch]$BlockSavesAtStart) {
     # Copy the command-channel mod into the game's sdk_mods (removed again by Remove-Driver).
+    # -BlockSavesAtStart: the driver blocks the save functions as soon as it loads (see the driver's autoblock.flag).
     $target = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
     New-Item -ItemType Directory -Force $target | Out-Null
     Copy-Item (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py') $target -Force
     Set-Content -LiteralPath (Join-Path $target 'cmd_dir.txt') -Value $script:CmdDir -NoNewline
+    $flag = Join-Path $target 'autoblock.flag'
+    if ($BlockSavesAtStart) { Set-Content -LiteralPath $flag -Value '1' -NoNewline } else { Remove-Item $flag -ErrorAction SilentlyContinue }
 }
 function Remove-Driver { Remove-Item -Recurse -Force (Join-Path $script:Game 'sdk_mods/openwillow_realgame') -ErrorAction SilentlyContinue }
 

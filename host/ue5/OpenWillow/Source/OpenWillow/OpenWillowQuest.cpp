@@ -4,15 +4,18 @@
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowMover.h"
 #include "OpenWillowNpc.h"
+#include "OpenWillowProjectile.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowSliceData.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowWeaponGen.h"
 #include "slice.hpp"
+#include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformMisc.h"
@@ -26,14 +29,13 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UnrealClient.h"
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 
 namespace {
 const char* const MissionPath = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire";
 const char* const DummyProvider = "GD_TargetDummy.Character.CharClass_TargetDummy.BehaviorProviderDefinition_5";
-// Host-chosen (UNVERIFIED): how close the player must be to Marcus for the use key to talk to him.
-constexpr float TalkReach = 250.f;
 
 // JSON text of an object. The test compares a saved block with a freshly built one this way: both come from
 // UOpenWillowSkills::ProgressionJson, so equal fields give equal text.
@@ -104,6 +106,23 @@ void UOpenWillowQuest::BeginPlay()
         for (const auto& Path : Impl->Fixture)
             UE_LOG(LogTemp, Display, TEXT("OWQUEST FIXTURE (save-state stand-in, not stock data): dependency %hs treated as complete"), Path.c_str());
         Impl->StationCounters.Init(0, Impl->Data.Stations.Num());
+        {
+            // Marcus can talk: the most common talker name tag of the manifest's dialog entries (HOST CHOICE; the quest has one giver).
+            // Without a registered pawn the stock dialog would use an echo caller.
+            TMap<FString, int32> Counts;
+            for (const auto& Pair : Impl->Data.Audio) {
+                const TSharedPtr<FJsonObject>* Trigger = nullptr;
+                FString NameTag;
+                if (Pair.Key.StartsWith(TEXT("dialog:")) && Pair.Value->TryGetObjectField(TEXT("trigger"), Trigger) && (*Trigger)->TryGetStringField(TEXT("name_tag"), NameTag) && !NameTag.IsEmpty())
+                    ++Counts.FindOrAdd(NameTag);
+            }
+            FString Best;
+            for (const auto& Pair : Counts) if (Best.IsEmpty() || Pair.Value > Counts[Best]) Best = Pair.Key;
+            if (!Best.IsEmpty()) {
+                Impl->Slice->mission().dialog().registerTalker(TCHAR_TO_UTF8(*Best));
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog talker registered: %s (host choice from the audio manifest)"), *Best);
+            }
+        }
         // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the
         // gear was rolled at (an UNVERIFIED slice choice; the mission level is the region stage, see FixRegionStage).
         if (!FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir) || ItemDir.IsEmpty())
@@ -125,27 +144,8 @@ void UOpenWillowQuest::BeginPlay()
         UE_LOG(LogTemp, Display, TEXT("OWQUEST mission weapon %s -> recipe %s \"%s\" level %d, %.2f damage, %.2f/s, magazine %.2f, damage type %s, mesh %s; gear level %d (slice choice, UNVERIFIED)"),
             *WeaponDefinition, *MissionWeapon.Id, *MissionWeapon.Name, MissionWeapon.Level, MissionWeapon.Damage, MissionWeapon.FireRate,
             MissionWeapon.Magazine, *MissionWeapon.DamageType, *MissionWeapon.MeshPath, GearLevel);
-        // Turn-in reward: a gun rolled by the weapon generator (-owweapongen manifest, tools/weapon_gen_manifest.py) from the
-        // pool the stand-in names, at the gear level, seeded by -owrewardseed= (default 1). The stand-in recipe from
-        // tools/weapon_slice_gear.py --reward-only is the fallback when the manifest is missing or the roll drops no weapon.
-        int32 RewardSeed = 1;
-        FParse::Value(FCommandLine::Get(), TEXT("owrewardseed="), RewardSeed);
-        bHasReward = UOpenWillowInventory::FindRecipe(ItemDir, TEXT("reward_roll"), FString(), RewardItem);
-        FOpenWillowWeaponItem Generated;
-        const FString RewardSource = FOpenWillowWeaponGen::RewardSource(ItemDir);
-        if (!RewardSource.IsEmpty() && FOpenWillowWeaponGen::RollPoolWeapon(RewardSource, GearLevel, uint32(RewardSeed), Generated))
-        {
-            RewardItem = Generated;
-            bHasReward = true;
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in reward rolled by the weapon generator: %s \"%s\" (%s, level %d) from %s at stage %d seed %d (generator rules UNVERIFIED)"),
-                *RewardItem.Id, *RewardItem.Name, *RewardItem.Type, RewardItem.Level, *RewardSource, GearLevel, RewardSeed);
-        }
-        else
-        {
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in: %s"), bHasReward
-                ? *FString::Printf(TEXT("%s \"%s\" (%s; host stand-in, the stock reward has no items)"), *RewardItem.Id, *RewardItem.Name, *RewardItem.Balance)
-                : TEXT("none prepared (tools/weapon_slice_gear.py --reward-only) and the generator rolled no weapon"));
-        }
+        // No turn-in loot: the stock data gives this mission no item reward (DECISIONS.md 2026-10-07); the weapon generator's
+        // reward roll from main (2026-10-23) is therefore not wired here. The generator stays available (-owweapongentest).
         const auto& D = Impl->Data;
         TArray<FString> Overrides;
         for (const auto& O : D.StageOverrides) Overrides.Add(FString::Printf(TEXT("%s %d..%d"), *O.Mission, O.Min, O.Max));
@@ -409,6 +409,7 @@ void UOpenWillowQuest::Pump()
     UOpenWillowMover* Mover = Walker ? Walker->GetMover() : nullptr;
     for (const auto& Event : Impl->Slice->drain()) {
         const FString A = UTF8_TO_TCHAR(Event.a.c_str());
+        ++PumpEvents;
         switch (Event.kind) {
         case K::RemoteEvent:
             // Mission behaviors name their mission (WillowSeqEvent_MissionRemoteEvent); the dummy provider's
@@ -423,20 +424,42 @@ void UOpenWillowQuest::Pump()
                 Event.b.empty() ? TEXT("dummy provider") : TEXT("mission"), Mover ? Mover->LastEventMatched : -1);
             break;
         case K::Dialog: {
-            // Dialog hook: stock event -> audio manifest entry. Nothing is decoded, so nothing plays.
+            if (A == LastDismissalTag) {
+                // The line behind the dismissal tag (the generic group's act, spoken by another NPC in the real game: FIRE_MISSION_GOLDEN_TRACE.md). The audio manifest
+                // is built from the mission's own steps and does not hold it, so it is reported here and neither counted as a lookup nor as a miss; nothing plays.
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST dismissal line %s (%hs; not in the audio manifest, not played)"), *A, Event.detail.c_str());
+                break;
+            }
+            // A line the stock dialog chose (NATIVE_DIALOG.md, UNVERIFIED): event tag, the talk act's AkEvent, the talker and what became of
+            // it. No audio device is modelled, so no line plays ("no audio device"); the audio manifest resolves the event to its files.
             ++DialogLookups;
+            auto Field = [&Event](const char* Key) {
+                const FString Detail = UTF8_TO_TCHAR(Event.detail.c_str());
+                TArray<FString> Parts;
+                Detail.ParseIntoArray(Parts, TEXT(";"));
+                for (const FString& Part : Parts) if (Part.StartsWith(FString(Key) + TEXT("="))) return Part.Mid(FCString::Strlen(UTF8_TO_TCHAR(Key)) + 1);
+                return FString();
+            };
+            const FString Ak = Field("ak"), Outcome = Field("outcome");
             const TSharedPtr<FJsonObject>* Entry = Impl->Data.Audio.Find(TEXT("dialog:") + A);
+            if (!Entry) Entry = Impl->Data.Audio.Find(TEXT("marcus_group:") + A);      // Marcus's own group (the on-use barks)
+            if (A.StartsWith(TEXT("GD_Dialog_NPCImplementation."))) { ++OnUseLines; LastOnUseLineTag = A; LastOnUseLineAk = Ak; }
             if (!Entry) {
                 ++DialogMisses;
                 UE_LOG(LogTemp, Warning, TEXT("OWQUEST dialog %s: no audio manifest entry"), *A);
                 break;
             }
+            // The VM's chosen AkEvent against the manifest's (derived separately from the data): they must name the same event.
+            const TSharedPtr<FJsonObject>* ManifestAk = nullptr;
+            FString ManifestPath;
+            if ((*Entry)->TryGetObjectField(TEXT("ak_event"), ManifestAk)) (*ManifestAk)->TryGetStringField(TEXT("ue3_path"), ManifestPath);
+            if (Ak != ManifestPath) { ++DialogAkMismatches; UE_LOG(LogTemp, Warning, TEXT("OWQUEST dialog %s: VM AkEvent %s differs from the manifest's %s"), *A, *Ak, *ManifestPath); }
             TArray<FString> Sources;
             for (const auto& Media : (*Entry)->GetArrayField(TEXT("media")))
                 Sources.Add(FString::Printf(TEXT("%.0f"), Media->AsObject()->GetNumberField(TEXT("source"))));
             const FString State = (*Entry)->GetStringField(TEXT("state"));
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog %s talker=%hs -> source %s state=%s (not played: no decoded audio)"),
-                *A, Event.c.c_str(), *FString::Join(Sources, TEXT(",")), *State);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog line %s ak=%s talker=%hs (%s) outcome=%s -> source %s state=%s (not played: no audio device)"),
+                *A, *Ak, Event.c.c_str(), *Field("talker"), *Outcome, *FString::Join(Sources, TEXT(",")), *State);
             break;
         }
         case K::StatusEffect: UE_LOG(LogTemp, Display, TEXT("OWQUEST status effect %s on dummy (not applied: no effect system)"), *A); break;
@@ -454,10 +477,119 @@ void UOpenWillowQuest::Pump()
         case K::Reward:
             ++Rewards;
             if (A != Impl->Data.XpRewardAttribute) { Fail(TEXT("reward attribute differs from world.json values.xp: ") + A); return; }
-            GrantExperience();
-            DropReward();
+            break;      // experience only: the stock reward data has no item (GetItemRewardsForPlayer in the script path returns none)
+        case K::Experience: ApplyScriptExperience(FCString::Atoi(*A)); break;   // what the script's ExpEarn put into the VM pool
+        case K::Level: {
+            // The pool update ran ExpLevelUp / OnExpLevelChange on the VM controller; the host's own level display follows from the
+            // experience it applied, so the two are compared (the skill points and maximum health come as their own events, below).
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up: VM level %s, host level %d (%s)"), *A, Skills ? Skills->GetLevel() : -1,
+                Skills && Skills->GetLevel() == FCString::Atoi(*A) ? TEXT("same") : TEXT("DIFFERENT"));
             break;
-        case K::Status: UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A); break;
+        }
+        case K::SkillPoints: {
+            // ExpLevelUp added int(GeneralSkillPointsPerLevelUp) per level, evaluated from the installed data (1 from level 5: NATIVE_SKILLS.md section 1,
+            // UNVERIFIED). The host's points are derived from the level (EarnedPointsAt), so this is compared with its own count for the same level change.
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            ScriptSkillPoints = FCString::Atoi(*A);
+            ++ScriptSkillPointEvents;
+            const int32 HostPoints = Skills ? UOpenWillowSkills::EarnedPointsAt(Skills->GetLevel()) - UOpenWillowSkills::EarnedPointsAt(LevelBeforeReward) : -1;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up skill points: VM awarded %d, host %d (%s)"), ScriptSkillPoints, HostPoints,
+                ScriptSkillPoints == HostPoints ? TEXT("same") : TEXT("DIFFERENT"));
+            break;
+        }
+        case K::MaxHealth: {
+            // The health pool's base maximum for the new level, evaluated from the installed data (80 x 1.13^level: NATIVE_PROGRESSION.md section 4; the base
+            // was confirmed in game, the trigger is a stand-in). The host's own formula (HealthForLevel) set its maximum health; the two are compared.
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            ScriptMaxHealth = FCString::Atof(*A);
+            float HostHealth = -1.f;
+            if (Skills) PlayerMaxHealth(Skills->GetLevel(), HostHealth);       // the host's own formula, the oracle
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up max health: VM %.3f at level %d, host formula %.3f (%s)"), ScriptMaxHealth, Skills ? Skills->GetLevel() : -1,
+                HostHealth, FMath::IsNearlyEqual(ScriptMaxHealth, HostHealth, 0.01f) ? TEXT("same") : TEXT("DIFFERENT"));
+            break;
+        }
+        case K::Health: {
+            // The VM's health pool after the level-up (NATIVE_LEVEL_UP_ATTRIBUTES.md, the refill observed in game): the host adopts it, so a level-up from half
+            // health ends at the new maximum. Compared with the host's own formula (the oracle) in the log and the suite.
+            const float Current = FCString::Atof(*A), Maximum = FCString::Atof(UTF8_TO_TCHAR(Event.b.c_str()));
+            const UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+            float Formula = -1.f;
+            if (Skills) PlayerMaxHealth(Skills->GetLevel(), Formula);
+            ScriptHealthCurrent = Current;
+            ScriptHealthMaximum = Maximum;
+            ++ScriptHealthEvents;
+            bHealthAdoptedThisTick = true;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up health: VM %.3f/%.3f adopted; host formula maximum %.3f (%s)"), Current, Maximum, Formula,
+                FMath::IsNearlyEqual(Maximum, Formula, 0.01f) ? TEXT("same") : TEXT("DIFFERENT"));
+            if (Walker) Walker->ApplyScriptHealth(Maximum, Current);
+            break;
+        }
+        case K::ActionSkillCooldown: {
+            // The first OnLevelUp skill's second effect (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game by lane L3: the cooldown went to 0 in the
+            // level-up call, at its maximum during a hold and at 7.99 during the drain): the VM read the modifier type and value from the installed data
+            // (Scale by the pool's minimum, 0); the host keeps the cooldown, so it applies it to that.
+            ScriptCooldownType = A == TEXT("Scale") ? 0 : A == TEXT("PreAdd") ? 1 : 2;
+            ScriptCooldownValue = FCString::Atof(UTF8_TO_TCHAR(Event.b.c_str()));
+            ++ScriptCooldownEvents;
+            CooldownBeforeScript = Walker ? Walker->PhaselockRemaining() : -1.f;
+            bScriptCooldownEnded = Walker && Walker->ModifyPhaselockCooldown(ScriptCooldownType, ScriptCooldownValue);
+            CooldownAfterScript = Walker ? Walker->PhaselockRemaining() : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up action skill cooldown: %s %.3f (the VM's, from the skill's data): %.2f -> %.2f"), *A, ScriptCooldownValue,
+                CooldownBeforeScript, CooldownAfterScript);
+            break;
+        }
+        case K::WeaponDamageScale: {
+            // A natural level-up's OnLevelUpNaturally skill (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game: the held weapon's damage scale sum
+            // +1.0 for 30 s): the VM read the value and the duration from the installed skill, the walker holds the weapon and applies it.
+            ScriptDamageScale = FCString::Atof(*A);
+            ScriptDamageScaleSeconds = FCString::Atof(UTF8_TO_TCHAR(Event.b.c_str()));
+            ScriptDamageScaleAt = GetWorld()->GetTimeSeconds();
+            ++ScriptDamageScaleEvents;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST script level-up weapon damage scale: +%.3f for %.1f s (the VM's, from the skill's data)"), ScriptDamageScale, ScriptDamageScaleSeconds);
+            if (Walker) Walker->AddWeaponDamageScale(ScriptDamageScale, ScriptDamageScaleSeconds);
+            break;
+        }
+        case K::OnUseDialog:   // PlayOnUseDialog's TriggerEvent on Marcus's dialog component: reported, not played (two-step group dispatch not implemented)
+            LastOnUseTag = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST on-use dialog tag from Marcus's chain: %s (speaker %s, other %s; not played)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
+            break;
+        case K::MissionInterface:   // Behavior_ShowMissionInterface reached the controller's ClientGFxPlayMovie; the screen itself is not hosted
+            ++MissionInterfacesOpened;
+            LastInterfaceMovie = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission interface opened by Marcus's use chain (movie %s, director %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()));
+            break;
+        case K::SequenceChange:   // a behavior changed a sequence of the dummy's provider (the VM already applied it): logged, with the game time of the run
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy sequence change: %s %s (%s)"), UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()), *A);
+            break;
+        case K::TurnInDialog:     // PlayMissionTurnedInDialog's TriggerEvent on Marcus's component after CompleteMission (observed in game); the stock data gives it no line
+            ++TurnInDialogTags;
+            LastTurnInTag = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in dialog tag raised on Marcus: %s (speaker %s, other %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
+            break;
+        case K::DismissalDialog:  // PlayDismissalDialog's TriggerEvent on Marcus's component when the use of him ends (observed in game); reported like the turn-in tag
+            ++DismissalTags;
+            DismissalAt = PumpEvents;
+            LastDismissalTag = A;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST dismissal dialog tag raised on Marcus: %s (speaker %s, other %s)"), *A, UTF8_TO_TCHAR(Event.b.c_str()), UTF8_TO_TCHAR(Event.c.c_str()));
+            break;
+        case K::MissionInterfaceClosed:   // the movie's OnClose ran on the VM (the accept's empty entry list, or the player leaving the screen); nothing is drawn
+            ++MissionScreensClosed;
+            ClosedAt = PumpEvents;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission interface closed (director %s)"), *A);
+            break;
+        case K::RewardPage:       // the open screen shows the reward page; MissionRewardsReceived waits for the player (the use key, TryUse)
+            ++RewardPages;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST reward page shown for %s; waiting for the use key"), *A);
+            break;
+        case K::RewardReceived:   // the player confirmed the page: the controller's MissionRewardsReceived ran
+            ++RewardsReceived;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST reward received for %s"), *A);
+            break;
+        case K::Status:
+            if (A == TEXT("Active") && ActiveAt < 0) ActiveAt = PumpEvents;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission status -> %s"), *A);
+            break;
         case K::ObjectiveSet: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective set active: %s"), *A); break;
         case K::ObjectiveComplete: UE_LOG(LogTemp, Display, TEXT("OWQUEST objective complete: %s"), *A); break;
         }
@@ -500,10 +632,35 @@ void UOpenWillowQuest::Pump()
     Save();
 }
 
+// Accept and turn-in run the installed controller script (AcceptMission, ServerCompleteMission; UNVERIFIED natives, see
+// docs/verification/SANCTUARY_RPG_MISSION.md "Script swap 1"). Natives the script reaches without an implementation are
+// logged stubs and never fail the quest.
+void UOpenWillowQuest::LogScriptStubs(const TCHAR* When) const
+{
+    TArray<FString> Stubs;
+    for (const auto& Stub : Impl->Slice->scriptStubs()) Stubs.Add(UTF8_TO_TCHAR(Stub.c_str()));
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST script stubs after %s: %d [%s]"), When, Stubs.Num(), *FString::Join(Stubs, TEXT("; ")));
+}
+
+// What the host owns and the script reads: the region's game stage (fixed per player and playthrough, locked into the mission when it
+// becomes Active) and Maya's level and experience (the VM-side pool starts from them).
+void UOpenWillowQuest::SyncScriptInputs()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
+    if (!Skills) return;
+    FixRegionStage(Skills->GetLevel());
+    Impl->Slice->setRegionGameStage(RegionStage);
+    Impl->Slice->setPlayerExperience(Skills->GetLevel(), Skills->GetExperience());
+    Impl->Slice->setPlayerHealth(Walker->GetHealth());      // the VM's health pool starts from Maya's current health (a level-up rebases and refills it)
+}
+
 bool UOpenWillowQuest::Accept()
 {
     if (!Impl || bFailed) return false;
+    SyncScriptInputs();
     const bool bOk = Impl->Slice->accept(Impl->Completed);
+    LogScriptStubs(TEXT("accept"));
     Pump();
     return bOk;
 }
@@ -511,30 +668,82 @@ bool UOpenWillowQuest::Accept()
 bool UOpenWillowQuest::TurnIn()
 {
     if (!Impl || bFailed) return false;
+    SyncScriptInputs();   // the script's GetExperienceReward and ExpEarn read the stage and Maya's experience
     const bool bOk = Impl->Slice->turnIn();
+    LogScriptStubs(TEXT("turn-in"));
     Pump();
     return bOk;
 }
 
+// Choosing the usable (NATIVE_USE_INTERACTION.md, "Per-frame usable evaluation", UNVERIFIED): one ray from the camera along the view,
+// GlobalsDefinition.PlayerInteractionDistance long (read from the installed data through the slice, 350 uu), the hits nearest first,
+// the first usable hit before a blocking hit wins; no cone, no radius. Marcus is the quest's only usable thing, so the ray tests his
+// capsule and the world's blocking geometry (the visibility channel, the player excluded). Not modelled: the 1/30 s throttle, the
+// cinematic lock, icons and prompts.
 bool UOpenWillowQuest::InTalkReach() const
 {
     const AActor* Owner = GetOwner();
-    return Marcus && Owner && FVector::Dist(Owner->GetActorLocation(), Marcus->GetActorLocation()) <= TalkReach;
+    const auto* Pawn = Cast<APawn>(Owner);
+    const UCameraComponent* Camera = Owner ? Owner->FindComponentByClass<UCameraComponent>() : nullptr;
+    const float Distance = Impl ? Impl->Slice->playerInteractionDistance() : 0.f;
+    if (!Marcus || !Pawn || !Camera || Distance <= 0.f || !GetWorld()) return false;
+    // The view point: the camera's position and the control rotation (current even in the frame of an aim change; the camera
+    // manager's cached view lags one frame).
+    const FVector Eye = Camera->GetComponentLocation();
+    const FRotator View = Pawn->GetViewRotation();
+    const FVector End = Eye + View.Vector() * Distance;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestUse), true, Owner);
+    FHitResult Usable;
+    if (!Marcus->GetHitVolume() || !Marcus->GetHitVolume()->LineTraceComponent(Usable, Eye, End, Query)) return false;
+    FHitResult Block;
+    Query.AddIgnoredActor(Marcus);   // Marcus is the usable; only what else blocks the ray in front of him matters
+    return !GetWorld()->LineTraceSingleByChannel(Block, Eye, End, ECC_Visibility, Query) || Block.Distance > Usable.Distance;
+}
+
+void UOpenWillowQuest::MissionScreen(bool& bRedeemable, bool& bEligible) const
+{
+    const auto Lists = Impl->Slice->screen(Impl->Completed);
+    const std::string Path = Impl->Slice->mission().path();
+    const auto Has = [&Path](const std::vector<std::string>& List) { return std::find(List.begin(), List.end(), Path) != List.end(); };
+    bRedeemable = Has(Lists.redeemable);
+    bEligible = Has(Lists.eligible);
 }
 
 bool UOpenWillowQuest::TryUse()
 {
-    if (!Impl || bFailed || !InTalkReach()) return false;
+    if (!Impl || bFailed) return false;
+    if (Impl->Slice->rewardPending()) {
+        // The reward page is up (the turn-in found Marcus's screen open): the page is modal and its key handler only takes the confirmation, so the use key is
+        // that confirmation (the movie's Enter), and the screen then closes (the stand-in for Escape: the dismissal tag, the interface closed).
+        const bool bReceived = Impl->Slice->confirmReward();
+        Pump();
+        const bool bClosed = Impl->Slice->closeScreen();
+        Pump();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST use key on the reward page: received=%d, screen closed=%d"), bReceived, bClosed);
+        return true;
+    }
+    if (!InTalkReach()) return false;
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
-    // The stock mission menu (accept / turn-in screen) is not hosted: the use key accepts or turns in directly.
-    // With nothing to accept or turn in, the key is not consumed (pickups and the door still get it).
+    // The key reached Marcus through the use ray above. His stock OnUsed chain runs on the VM (the nine sequence checks, the context dialog,
+    // HasMissions, ShowMissionInterface); it ends by asking the controller to open the mission interface, which Pump() sees as an event. The
+    // screen itself is not hosted: Marcus's own list scripts say what it would offer, and the host stands in for the button press by confirming
+    // the one offered entry (redeemable first, as the screen lists them), which runs the stock AcceptMission / ServerCompleteMission with Marcus
+    // as the director. With nothing offered the key is not consumed (pickups and the door still get it).
+    const int32 OpenedBefore = MissionInterfacesOpened;
+    const auto Use = Impl->Slice->useMarcus(Impl->Completed);
+    LastUseCascade.Reset();
+    for (const auto& Line : Use.cascade) LastUseCascade.Add(UTF8_TO_TCHAR(Line.c_str()));
+    Pump();
+    const bool bOpened = Use.interfaceOpened && MissionInterfacesOpened > OpenedBefore;
+    bool bRedeemable = false, bEligible = false;
+    if (bOpened) MissionScreen(bRedeemable, bEligible);
     const TCHAR* Action = TEXT("nothing to accept or turn in");
     bool bOk = true;
-    if (Current == S::NotStarted) { Action = TEXT("accept"); bOk = Accept(); }
-    else if (Current == S::ReadyToTurnIn) { Action = TEXT("turn in"); bOk = TurnIn(); }
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d)"), Action, bOk, int32(Current), Status());
-    return Current == S::NotStarted || Current == S::ReadyToTurnIn;
+    if (bRedeemable) { Action = TEXT("turn in"); bOk = TurnIn(); }
+    else if (bEligible) { Action = TEXT("accept"); bOk = Accept(); }
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d, interface %d)"), Action, bOk, int32(Current), Status(), bOpened);
+    return bRedeemable || bEligible;
 }
 
 void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FString& DamageType)
@@ -555,40 +764,28 @@ void UOpenWillowQuest::LendMissionWeapon()
     if (!bWeaponLent) UE_LOG(LogTemp, Error, TEXT("OWQUEST could not lend %s to Maya (backpack full or no walker)"), *MissionWeapon.Id);
 }
 
-void UOpenWillowQuest::DropReward()
-{
-    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
-    if (!bHasReward || !Walker) return;
-    // Host stand-in placement: on the floor 80 uu in front of the player.
-    const FVector Ahead = Walker->GetActorLocation() + FRotator(0, Walker->GetControlRotation().Yaw, 0).Vector() * 80.f;
-    FHitResult Floor;
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWQuestReward), true, Walker);
-    const FVector At = GetWorld()->LineTraceSingleByChannel(Floor, Ahead, Ahead - FVector(0, 0, 400), ECC_Visibility, Query) ? Floor.ImpactPoint : Ahead;
-    FActorSpawnParameters Params;
-    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-    RewardPickup = GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(At, FRotator::ZeroRotator, Params);
-    if (!RewardPickup) return;
-    FOpenWillowTakenInventoryItem Item;
-    Item.Weapon = RewardItem;
-    RewardPickup->Initialize(Item);
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST turn-in loot stand-in dropped: %s \"%s\" at %s (press E to pick up)"), *RewardItem.Id, *RewardItem.Name, *At.ToString());
-}
-
-void UOpenWillowQuest::GrantExperience()
+// The experience the script's ExpEarn put into the VM pool (MissionDefinition.GetExperienceReward: NATIVE_PROGRESSION section 2,
+// UNVERIFIED except the amount 395 at stage 8, confirmed in game): the host applies it to Maya's level and experience display.
+void UOpenWillowQuest::ApplyScriptExperience(int32 Amount)
 {
     auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     UOpenWillowSkills* Skills = Walker ? Walker->GetSkills() : nullptr;
     if (!Skills) return;
-    // MissionDefinition.GetExperienceReward as read from native code (UNVERIFIED in game): the mission level is its
-    // region's game stage, normally fixed at session start already.
-    FixRegionStage(Skills->GetLevel());
-    LastXpAmount = Impl->Data.MissionXp(RegionStage);
+    LastXpAmount = Amount;
     ExperienceBeforeReward = Skills->GetExperience();
     LevelBeforeReward = Skills->GetLevel();
-    Skills->AddExperience(LastXpAmount);
-    Walker->RefreshHealthForLevel();   // a level-up from this reward sets the new level's health at once
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s: trunc(%.4f x span) at region stage %d = %d XP (native reading, UNVERIFIED); experience %lld -> %lld, level %d -> %d, skill points %d"),
-        *Impl->Data.XpRewardAttribute, Impl->Data.XpPercentage, RegionStage, LastXpAmount, ExperienceBeforeReward,
+    const auto& Earned = Impl->Slice->expEarned();
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST script ExpEarn calls=%d amount=%d source=%d; pool gained %d"), int32(Earned.size()),
+        Earned.empty() ? 0 : Earned.back().amount, Earned.empty() ? -1 : Earned.back().source, Amount);
+    Skills->AddExperience(Amount);
+    // A level-up from this reward is the VM's: its pool update rebases the health pool and the OnLevelUp behaviors refill it, and the Health event sets Maya's
+    // health. The walker's own refresh waits for that event (the next tick) instead of setting the host formula at once.
+    if (Skills->GetLevel() != LevelBeforeReward) {
+        Walker->HoldHealthForScript(true);
+        HealthHoldTicks = 1;
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST XP reward %s from the script at region stage %d = %d XP (UNVERIFIED rules, amount at stage 8 confirmed); experience %lld -> %lld, level %d -> %d, skill points %d"),
+        *Impl->Data.XpRewardAttribute, RegionStage, LastXpAmount, ExperienceBeforeReward,
         Skills->GetExperience(), LevelBeforeReward, Skills->GetLevel(), Skills->AvailablePoints());
 }
 
@@ -677,24 +874,31 @@ bool UOpenWillowQuest::RespawnPoint(const FVector& DeathLocation, FTransform& Ou
     return true;
 }
 
+bool UOpenWillowQuest::TouchesTrigger(const AActor* Actor) const
+{
+    // The overlap of an actor's collision cylinder with the waypoint's (planar distance within the sum of radii, vertical gap within the
+    // sum of half heights). UE3's touch shape test: UNVERIFIED. The host owns this test; the slice's waypoint script decides what a touch means.
+    if (!Actor) return false;
+    const auto& Data = Impl->Data;
+    float Radius = 0.f, HalfHeight = 0.f;
+    Actor->GetSimpleCollisionCylinder(Radius, HalfHeight);
+    const FVector P = Actor->GetActorLocation();
+    return FVector::Dist2D(P, Data.TriggerCenter) <= Data.TriggerRadius + Radius && FMath::Abs(P.Z - Data.TriggerCenter.Z) <= Data.TriggerHalfHeight + HalfHeight;
+}
+
 bool UOpenWillowQuest::PlayerTouchesTrigger() const
 {
-    // WillowWaypoint.Touch with a cylinder: the player's capsule overlaps it (planar distance within the sum of
-    // radii, vertical gap within the sum of half heights). UE3 touch semantics in the host: UNVERIFIED.
-    const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
-    if (!Walker) return false;
-    const auto& Data = Impl->Data;
-    const UCapsuleComponent* Capsule = Walker->GetCapsuleComponent();
-    const FVector P = Walker->GetActorLocation();
-    return FVector::Dist2D(P, Data.TriggerCenter) <= Data.TriggerRadius + Capsule->GetScaledCapsuleRadius()
-        && FMath::Abs(P.Z - Data.TriggerCenter.Z) <= Data.TriggerHalfHeight + Capsule->GetScaledCapsuleHalfHeight();
+    return TouchesTrigger(Cast<AOpenWillowWalker>(GetOwner()));
 }
 
 void UOpenWillowQuest::UpdateHints()
 {
     using S = vm::MissionSystem::Status;
     const S Current = Impl->Slice->mission().status();
-    const bool bCanTalk = InTalkReach() && (Current == S::NotStarted || Current == S::ReadyToTurnIn);
+    bool bRedeemable = false, bEligible = false;
+    const bool bInReach = InTalkReach();
+    if (bInReach) MissionScreen(bRedeemable, bEligible);
+    const bool bCanTalk = bInReach && (bRedeemable || bEligible);
     if (bCanTalk && !bTalkHintLogged) UE_LOG(LogTemp, Display, TEXT("OWQUEST hint: press E (use) to talk to Marcus"));
     bTalkHintLogged = bCanTalk;
     if (!GEngine || bTesting) return;
@@ -735,15 +939,35 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
     }
     // Any other level change (the test fixtures' SetLevel) is picked up here, once a frame.
     if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->RefreshHealthForLevel();
+    bHealthAdoptedThisTick = false;
     Impl->Slice->tick(Delta);
     Pump();
+    // A script level-up that sent no Health event (no health pool data): the walker's own refresh takes over after this tick.
+    if (auto* HealthWalker = Cast<AOpenWillowWalker>(GetOwner()))
+        if (HealthWalker->IsHealthHeldForScript() && !bHealthAdoptedThisTick && --HealthHoldTicks <= 0) {
+            HealthWalker->HoldHealthForScript(false);
+            UE_LOG(LogTemp, Warning, TEXT("OWQUEST the script sent no health after the level-up: the host formula applies"));
+        }
     ProcessArrivals();
     if (bFailed) return;
-    // GoToRange: a player pawn touching the stock waypoint cylinder while its objective is active.
-    if (Impl->ObjectiveState(Impl->Data.TriggerObjective) == "Active" && PlayerTouchesTrigger()) {
-        UE_LOG(LogTemp, Display, TEXT("OWQUEST player touched %s"), *Impl->Data.TriggerObject);
-        Impl->Slice->enterRange();
-        Pump();
+    // GoToRange: the stock WillowWaypoint script runs on the VM (NATIVE_OBJECTIVE_TRIGGERS.md, UNVERIFIED). The host reports when the player
+    // pawn's and Marcus's collision begins or ends overlapping its cylinder, at any time; the script ignores Marcus, and for the player
+    // asks the tracker whether the objective is updatable (also when the set becomes active while the player stands inside).
+    {
+        const bool bPlayerIn = PlayerTouchesTrigger();
+        if (bPlayerIn != bPlayerInRange) {
+            bPlayerInRange = bPlayerIn;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST player %s %s"), bPlayerIn ? TEXT("touched") : TEXT("left"), *Impl->Data.TriggerObject);
+            Impl->Slice->touchWaypoint(true, bPlayerIn);
+            Pump();
+        }
+        const bool bMarcusIn = TouchesTrigger(Marcus);
+        if (bMarcusIn != bMarcusInRange) {
+            bMarcusInRange = bMarcusIn;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST Marcus %s %s (ignored by the waypoint script)"), bMarcusIn ? TEXT("touched") : TEXT("left"), *Impl->Data.TriggerObject);
+            Impl->Slice->touchWaypoint(false, bMarcusIn);
+            Pump();
+        }
     }
     // The Fire den spawns its dummy when the Fire objective is active (MissionPopulationAspect is native: UNVERIFIED).
     if (!bDummySpawned && Impl->ObjectiveState(Impl->Data.DummyObjective) == "Active") SpawnDummy();
@@ -767,6 +991,14 @@ void UOpenWillowQuest::PressUse()
         PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::E, IE_Pressed, 1.f));
         bReleaseUse = true;
     }
+}
+
+// Pellets still flying: main's light bullets and rockets are AOpenWillowProjectile actors (OpenWillowFiring); a trace pellet never flies.
+static int32 ProjectilesInFlight(UWorld* World)
+{
+    int32 Count = 0;
+    for (TActorIterator<AOpenWillowProjectile> It(World); It; ++It) ++Count;
+    return Count;
 }
 
 void UOpenWillowQuest::Shot(const TCHAR* Name)
@@ -857,6 +1089,11 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 1:
         Check(Status() == 0, TEXT("use_key_out_of_reach_ignored"));
+        {   // Marcus's own list scripts over his directive table (the data's seven entries): the Fire mission is offered to begin, none to end
+            bool bRedeemable = true, bEligible = false;
+            MissionScreen(bRedeemable, bEligible);
+            Check(bEligible && !bRedeemable, TEXT("mission_screen_offers_fire_from_marcus_directives"));
+        }
         PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 350.f + FVector(0, 0, 20), MarcusFront + FVector(0, 0, 20));
         break;
     case 2:
@@ -865,11 +1102,63 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     case 3:
         if (TestWait < 0.5f) return;
+        // The use ray (NATIVE_USE_INTERACTION.md, UNVERIFIED): Marcus is chosen only when the view line, PlayerInteractionDistance (350 uu
+        // from the data) long, reaches him; no radius or cone around the player stands in for it.
+        PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), MarcusFront);
+        Check(Impl->Slice->playerInteractionDistance() > 0.f && InTalkReach(), TEXT("use_ray_reaches_marcus_in_view"));
+        PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), Data.MarcusLocation + Marcus->GetActorForwardVector() * 300.f + FVector(0, 0, 20));
+        Check(!InTalkReach(), TEXT("use_ray_misses_marcus_looking_away"));
+        PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * (Impl->Slice->playerInteractionDistance() + 100.f) + FVector(0, 0, 20), MarcusFront);
+        Check(!InTalkReach(), TEXT("use_ray_stops_at_interaction_distance"));
         PlacePlayer(Data.MarcusLocation + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), MarcusFront);
         PressUse();
         break;
     case 4:
-        Check(Status() == 1, TEXT("use_key_accepts_mission"));
+        // Marcus's walk starts when the kickoff dialog behavior finishes: the tracker tick plays the kickoff (one tick after the accept) and
+        // the dialog is triggered one kernel wake after that (NATIVE_DIALOG.md); with no audio device the behavior finishes on that wake.
+        // So the walk begins a few frames after the use key, not in the frame of it (swap 4); the checks themselves are unchanged.
+        if (!bAcceptChecked) {
+            bAcceptChecked = true;
+            Check(Status() == 1, TEXT("use_key_accepts_mission"));
+            {   // The lent weapon is granted inside ActivateMission (observed in the real game, FIRE_MISSION_GOLDEN_TRACE.md): in the backpack, not equipped, and
+                // not drawn (the grant is AddInventory with bReady false); Maya readies it herself before she shoots (case 6).
+                const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+                bool bSlotted = false;
+                for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
+                    if (const FOpenWillowWeaponItem* Item = Walker->GetInventory()->SlotItem(Slot); Item && UOpenWillowInventory::StableId(*Item) == MissionWeapon.Id) bSlotted = true;
+                Check(bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) != INDEX_NONE && !bSlotted && !(Held && Held->Id == MissionWeapon.Id),
+                    TEXT("mission_weapon_granted_on_accept"));
+            }
+            // The use key went through his OnUsed chain: it opened the mission interface (HasMissions saw the Fire mission), after nine checks that
+            // all said "not enabled" (three names have no sequence, six belong to other missions)
+            Check(MissionInterfacesOpened == 1 && LastInterfaceMovie == TEXT("UI_Mission.MissionInterface_Definition"), TEXT("use_chain_reaches_mission_interface"));
+            // The accept emptied the screen's entry list, so the movie closed inside the status routine (observed in game; the order is the VM's, from the installed
+            // script): Marcus's dismissal tag, then the interface closed, then the status event; the VM no longer holds the screen open.
+            Check(DismissalTags == 1 && LastDismissalTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_GenericDismissal") && MissionScreensClosed == 1 && !Impl->Slice->screenOpen()
+                && DismissalAt > 0 && DismissalAt < ClosedAt && ClosedAt < ActiveAt, TEXT("accept_closes_mission_screen_with_dismissal"));
+            // PlayOnUseDialog picked its tag from Marcus's own lists: Fire is eligible, nothing redeemable, so "missions available"
+            Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionsAvailable"), TEXT("use_chain_picks_on_use_dialog_tag"));
+            // and the stock dialog data turned it into Marcus's own line: the global tag's generic act has no entry for him, its no-match output fires
+            // his DET_NPC_OnUse_MissionsAvailable on his own group (the manifest knows the AkEvent)
+            Check(OnUseLines == 1 && LastOnUseLineTag == TEXT("GD_Dialog_NPCImplementation.Events_MissionGiver.DET_NPC_OnUse_MissionsAvailable")
+                && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_New") && DialogMisses == 0, TEXT("use_chain_plays_on_use_line"));
+            // the chain again with the mission accepted: "all missions in progress" and its line (Fire is Active, not offered again). Run directly, not through
+            // the key: Marcus has already started to walk away, so the use ray would no longer reach him in this frame.
+            Impl->Slice->useMarcus(Impl->Completed);
+            Pump();
+            // That press opened the screen again (it lists only what is in progress); the player leaves it (Escape) before the next use, as the turn-in needs a screen
+            // that opens with the redeemable entry.
+            if (!Impl->Slice->closeScreen()) Fail(TEXT("the in-progress screen did not close"));
+            Pump();
+            Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_AllMissionsInProgress") && OnUseLines == 2
+                && LastOnUseLineTag == TEXT("GD_Dialog_NPCImplementation.Events_MissionGiver.DET_NPC_OnUse_AllMissionsInProgress")
+                && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_During"), TEXT("use_chain_plays_in_progress_line"));
+            int32 NotEnabled = 0, Seen = 0;
+            for (const FString& Line : LastUseCascade)
+                if (Line.StartsWith(TEXT("Behavior_IsSequenceEnabled"))) { ++Seen; if (Line.EndsWith(TEXT("-> 1"))) ++NotEnabled; }
+            Check(Seen == 9 && NotEnabled == 9, TEXT("use_chain_all_nine_checks_not_enabled"));
+        }
+        if (Waiting(MissionEventsMatched >= 1 && bWalkStarted && Marcus->IsWalking(), 2.f)) return;
         Check(MissionEventsMatched >= 1 && bWalkStarted && Marcus->IsWalking(), TEXT("installed_kismet_starts_marcus_walk"));
         Check(Marcus->IsPlaying(Marcus->WalkClip()), TEXT("marcus_walk_clip_playing"));
         break;
@@ -894,6 +1183,15 @@ void UOpenWillowQuest::RunTest(float Delta)
     case 6:
         if (TestWait < 2.0f) return;
         Check(Marcus->IsLookingAt(Walker, 10.f), TEXT("marcus_faces_player_after_walk"));
+        {   // Test fixture standing for the inventory page's equip action: the grant left the lent pistol in the backpack, so Maya readies it into a weapon
+            // slot (the first empty unlocked one, else the last: its weapon goes back to the backpack) and draws it before she can shoot with it.
+            UOpenWillowInventory* Inventory = Walker->GetInventory();
+            int32 Slot = Inventory->GetWeaponSlotsUnlocked() - 1;
+            for (int32 Candidate = 0; Candidate < Inventory->GetWeaponSlotsUnlocked(); ++Candidate)
+                if (!Inventory->SlotItem(Candidate)) { Slot = Candidate; break; }
+            const int32 Index = Inventory->FindItemIndexById(MissionWeapon.Id);
+            Check(Index != INDEX_NONE && Walker->EquipItem(Index, Slot) && Walker->DrawItemById(MissionWeapon.Id), TEXT("lent_pistol_readied_from_backpack_by_player"));
+        }
         // Outside the stock cylinder but inside the old 700 cm stand-in radius: must not complete.
         Check(Impl->ObjectiveState(Data.TriggerObjective) == "Active" && !PlayerTouchesTrigger(), TEXT("outside_stock_cylinder_does_not_trigger"));
         PlacePlayer(Data.TriggerCenter, Data.DummyLocation);
@@ -903,6 +1201,8 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Waiting(Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, 3.f)) return;
         Check(Impl->ObjectiveState(Data.TriggerObjective) == "Complete"
             && Impl->Slice->mission().activeSet().find("RocksPaper_FinalObj") != std::string::npos, TEXT("stock_cylinder_touch_advances_set"));
+        // Completed through the waypoint script: one applied update reached the VM controller (UpdateMissionObjective), none for Marcus's touches.
+        Check(Impl->Slice->scriptObjectiveUpdates() == 1, TEXT("objective_completed_through_waypoint_script_once"));
         Check(bWeaponLent, TEXT("mission_weapon_lent"));
         {
             const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
@@ -994,26 +1294,111 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 14: {
         if (TestWait < 0.5f) return;
-        if (ShotsBeforeFire < 0) { ShotsBeforeFire = DummyShots; Walker->FireOnce(); return; }
-        if (DummyShots == ShotsBeforeFire && TestWait < 1.5f) return;
-        const int32 Before = ShotsBeforeFire;
-        ShotsBeforeFire = -1;
-        Check(DummyShots == Before + 1 && LastDummyDamageType == WrongType && Status() == 1
-            && Impl->ObjectiveState(Data.DummyObjective) == "Active", TEXT("wrong_element_shot_reaches_dummy_and_does_not_complete"));
+        // Bullets fly (OpenWillowProjectile: the press launches them, the damage arrives about distance / speed later), so the case fires, waits for
+        // the landing and checks (phases 0 and 1), then does the same with the equipped multi-pellet gun (phases 2 and 3). The counts come from
+        // OpenWillowFiring::Counts, the firing code's own tally.
+        if (ShotPhase == 0)
+        {
+            ShotsBefore = DummyShots;
+            CountsBefore = OpenWillowFiring::Counts;
+            Walker->FireOnce();
+            const FOpenWillowWeaponItem* Wrong = Walker->GetInventory()->ActiveWeapon();
+            // A recipe without a firing block keeps the instant trace; a light bullet or rocket must not land in the pressing frame.
+            const bool bTrace = !Wrong || !Wrong->Firing.bLoaded || Wrong->Firing.Kind == EOpenWillowShotKind::Trace;
+            Check(bTrace || (DummyShots == ShotsBefore && OpenWillowFiring::Counts.Launches > CountsBefore.Launches),
+                TEXT("bullet_has_not_landed_in_the_pressing_frame"));
+            ShotPhase = 1;
+            return;
+        }
+        if (ShotPhase == 1)
+        {
+            if (Waiting(ProjectilesInFlight(GetWorld()) == 0 && DummyShots > ShotsBefore, 3.f)) return;
+            const FOpenWillowWeaponItem* Wrong = Walker->GetInventory()->ActiveWeapon();
+            const int32 Landed = DummyShots - ShotsBefore;
+            const int32 Hits = OpenWillowFiring::Counts.TargetHits - CountsBefore.TargetHits;
+            // Was "DummyShots == Before + 1": still exactly one damage call for a one-pellet gun; a multi-pellet gun makes one per pellet that hits.
+            Check((Wrong && Wrong->Projectiles > 1 ? Landed >= 1 : Landed == 1) && Landed == Hits && LastDummyDamageType == WrongType
+                && Status() == 1 && Impl->ObjectiveState(Data.DummyObjective) == "Active", TEXT("wrong_element_shot_reaches_dummy_and_does_not_complete"));
+            // Test fixture: the slice shotgun is in the backpack and the weapon slots are full, so ready it into the first slot that holds neither the
+            // lent pistol nor the wrong-element gun (that gun goes back to the backpack, and back into its slot after the checks).
+            UOpenWillowInventory* Inventory = Walker->GetInventory();
+            const int32 Slots = Inventory->GetWeaponSlotsUnlocked();
+            for (int32 Slot = 0; Slot < Slots && ShotgunSlot == INDEX_NONE; ++Slot)
+            {
+                const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot);
+                if (!Item) { ShotgunSlot = Slot; break; }
+                if (Item->Id != MissionWeapon.Id && UOpenWillowInventory::StableId(*Item) != WrongId) { ShotgunSlot = Slot; DisplacedId = UOpenWillowInventory::StableId(*Item); }
+            }
+            for (const FOpenWillowWeaponItem& Item : Inventory->Items())
+                if (ShotgunId.IsEmpty() && Item.Projectiles > 1) ShotgunId = UOpenWillowInventory::StableId(Item);
+            const int32 Index = Inventory->FindItemIndexById(ShotgunId);
+            if (ShotgunSlot == INDEX_NONE || Index == INDEX_NONE || !Walker->EquipItem(Index, ShotgunSlot) || !Walker->DrawItemById(ShotgunId))
+            {
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST pellet gun fixture: slot %d, item %s (backpack index %d), level %d"), ShotgunSlot, *ShotgunId, Index, Walker->GetSkills()->GetLevel());
+                Fail(TEXT("no multi-pellet gun to ready for the pellet checks"));
+                return;
+            }
+            ShotPhase = 2;
+            TestWait = 0;
+            return;
+        }
+        if (ShotPhase == 2)
+        {
+            if (TestWait < 0.3f) return;
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            ShotsBefore = DummyShots;
+            MagazineBefore = Held ? UOpenWillowInventory::MagazineLeft(*Held) : 0;
+            PressDamage = Held ? Walker->ShotDamage(*Held, GetWorld()->GetTimeSeconds()) : 0.f;
+            CountsBefore = OpenWillowFiring::Counts;
+            Walker->FireOnce();
+            ShotPhase = 3;
+            TestWait = 0;
+            return;
+        }
+        if (Waiting(ProjectilesInFlight(GetWorld()) == 0 && DummyShots > ShotsBefore, 3.f)) return;
+        {
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            const int32 Pellets = Held ? Held->Projectiles : 0;
+            const int32 Landed = DummyShots - ShotsBefore;
+            const int32 Fired = OpenWillowFiring::Counts.Pellets - CountsBefore.Pellets;
+            const int32 Hits = OpenWillowFiring::Counts.TargetHits - CountsBefore.TargetHits;
+            const float Direct = OpenWillowFiring::Counts.Direct - CountsBefore.Direct;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST shotgun press: %d pellet(s), %d landed on the dummy (%d direct hits, %.2f direct damage), magazine %d -> %d"),
+                Fired, Landed, Hits, Direct, MagazineBefore, Held ? UOpenWillowInventory::MagazineLeft(*Held) : 0);
+            Check(Held && Pellets > 1 && Fired == Pellets && OpenWillowFiring::Counts.Shots == CountsBefore.Shots + 1,
+                TEXT("multi_pellet_gun_fires_its_pellet_count_in_one_press"));
+            Check(Held && MagazineBefore - UOpenWillowInventory::MagazineLeft(*Held) == UOpenWillowInventory::ShotCostRounds(*Held),
+                TEXT("ammo_taken_once_per_press_not_per_pellet"));
+            // One damage call per pellet that hit (the dummy's own TakeDamage count and the firing code's direct-hit count agree), each with the
+            // per-pellet damage fixed at the press (the card's, no level-up scale is running here).
+            Check(Landed >= 1 && Landed <= Pellets && Landed == Hits && FMath::IsNearlyEqual(Direct, Hits * PressDamage, 1e-2f),
+                TEXT("damage_called_once_per_pellet_that_hits"));
+            Shot(TEXT("3b_ShotgunPelletsLanded"));
+        }
+        ShotPhase = 0;
+        Walker->UnequipSlot(ShotgunSlot);
+        if (!DisplacedId.IsEmpty()) Walker->EquipItem(Walker->GetInventory()->FindItemIndexById(DisplacedId), ShotgunSlot);
         Walker->DrawItemById(MissionWeapon.Id);
         break;
     }
     case 15: {
         if (TestWait < 0.5f) return;
-        if (ShotsBeforeFire < 0) { ShotsBeforeFire = DummyShots; Walker->FireOnce(); return; }
-        if (DummyShots == ShotsBeforeFire && TestWait < 1.5f) return;
-        const int32 Before = ShotsBeforeFire;
-        ShotsBeforeFire = -1;
-        Check(DummyShots == Before + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
+        if (ShotPhase == 0)
+        {
+            ShotsBefore = DummyShots;
+            Walker->FireOnce();
+            ShotPhase = 1;
+            return;
+        }
+        if (Waiting(ProjectilesInFlight(GetWorld()) == 0 && DummyShots > ShotsBefore, 3.f)) return;
+        ShotPhase = 0;
+        Check(DummyShots == ShotsBefore + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
         Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
+        // The lent pistol is NOT taken back when the objective completes (observed in the real game: it stays in the inventory until the turn-in's
+        // CompleteMission); it is removed at the turn-in (case 18). Meaning changed: this check was "mission_weapon_removed_after_objective".
         const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
-        Check(!bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE && Held && Held->Id != MissionWeapon.Id,
-            TEXT("mission_weapon_removed_after_objective"));
+        Check(bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) != INDEX_NONE && Held && Held->Id == MissionWeapon.Id,
+            TEXT("mission_weapon_kept_after_objective"));
         break;
     }
     case 16:
@@ -1030,6 +1415,13 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Gap > 0) Skills->AddExperience(Gap);
         UE_LOG(LogTemp, Display, TEXT("OWQUEST test fixture: experience +%lld so the reward crosses level %d"), FMath::Max<int64>(Gap, 0), Skills->GetLevel() + 1);
         PointsBeforeReward = Skills->AvailablePoints();
+        BackpackBeforeReward = Walker->GetInventory()->BackpackCount();
+        OnUseLinesBeforeTurnIn = OnUseLines;
+        {   // Ready to turn in: the redeemable list offers it, the eligible list no longer does
+            bool bRedeemable = false, bEligible = true;
+            MissionScreen(bRedeemable, bEligible);
+            Check(bRedeemable && !bEligible, TEXT("mission_screen_offers_turn_in_when_ready"));
+        }
         // Test fixture: half of Maya's health off, so that what the level-up does to current health is visible.
         FHitResult Hit;
         UGameplayStatics::ApplyPointDamage(Walker, Walker->GetMaxHealth() * 0.5f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
@@ -1040,26 +1432,112 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 18: {
         Check(Status() == 3, TEXT("use_key_turns_in_mission"));
+        {   // CompleteMission removes the lent weapon (observed in the real game), from the slot and the backpack alike; the held weapon is then another one
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            Check(!bWeaponLent && Walker->GetInventory()->FindItemIndexById(MissionWeapon.Id) == INDEX_NONE && Held && Held->Id != MissionWeapon.Id,
+                TEXT("mission_weapon_removed_on_turn_in"));
+        }
+        // OnPlayerTurnedInMission -> PlayMissionTurnedInDialog raised the generic turned-in tag on Marcus's component (observed in the real game, same tag);
+        // the stock data gives that event no line for this mission (its switch on the object parameter takes its no-match output).
+        Check(TurnInDialogTags == 1 && LastTurnInTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_MissionTurnedIn"), TEXT("turn_in_raises_mission_turned_in_dialog_tag"));
+        // the same press's on-use tag, now that Marcus's redeemable list has the mission: "mission complete"
+        Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_MissionComplete"), TEXT("use_chain_on_use_tag_follows_mission_state"));
+        // the data says this one is silent: the generic event has no act of its own, its link-table template act has an entry for Marcus without an audio
+        // event, so the act passes through and no line is chosen
+        Check(OnUseLines == OnUseLinesBeforeTurnIn, TEXT("use_chain_mission_complete_is_silent"));
         Check(Rewards == 1, TEXT("xp_reward_granted_once"));
         const UOpenWillowSkills* Skills = Walker->GetSkills();
         // The tool's own amount at the same stage (tools/slice_values.py evaluates the same truncation rule apart).
         const int32* Oracle = Data.XpCandidateByLevel.Find(RegionStage);
         Check(Oracle && LastXpAmount == *Oracle && LastXpAmount > 0 && Skills->GetExperience() == ExperienceBeforeReward + LastXpAmount,
             TEXT("xp_amount_is_truncated_rule_at_region_stage"));
+        {
+            // The turn-in ran ServerCompleteMission: UpdateMissionStatus(Complete) -> ServerGrantMissionRewards -> ExpEarn once, with
+            // GetExperienceReward's own amount (the host applied exactly that), source 4 (SideMissionAward; the Fire mission is not
+            // plot-critical), ExpType omitted (UNVERIFIED, bridge note).
+            const auto& Earned = Impl->Slice->expEarned();
+            Check(Earned.size() == 1 && Earned[0].amount == LastXpAmount && Earned[0].source == 4 && Earned[0].type == -1
+                && Impl->Slice->scriptPlayerStatus() == 4, TEXT("turn_in_script_calls_exp_earn_side_mission_award"));
+            // The pool update ran the script ExpLevelUp on the VM controller: its level is the host's after the same experience.
+            Check(Impl->Slice->scriptPlayerLevel() == Skills->GetLevel() && Skills->GetLevel() == LevelBeforeReward + 1,
+                TEXT("script_pool_update_levels_up_to_host_level"));
+        }
         Check(Skills->GetLevel() == LevelBeforeReward + 1 && Skills->GetExperience() >= UOpenWillowSkills::ExperienceForLevel(Skills->GetLevel())
             && Skills->AvailablePoints() == PointsBeforeReward + (Skills->GetLevel() >= 5 ? 1 : 0), TEXT("xp_reward_levels_up_when_requirement_met"));
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Skills->GetLevel()), 0.01f)
             && Walker->GetMaxHealth() > MaxHealthBeforeReward, TEXT("level_up_sets_formula_max_health"));
+        // Swap 7: the script's own numbers (the host's formulas above are the oracle). One SkillPoints event, equal to what the host's level change earned
+        // (a point at level 9: the data's "1 from level 5"); the VM's maximum health for the new level, from the health pool's data, equals the host's.
+        Check(ScriptSkillPointEvents == 1 && ScriptSkillPoints == Skills->AvailablePoints() - PointsBeforeReward && ScriptSkillPoints == (Skills->GetLevel() >= 5 ? 1 : 0),
+            TEXT("script_level_up_awards_skill_points"));
+        Check(ScriptMaxHealth > 0.f && FMath::IsNearlyEqual(ScriptMaxHealth, Walker->GetMaxHealth(), 0.01f)
+            && FMath::IsNearlyEqual(ScriptMaxHealth, Data.HealthForLevel(Skills->GetLevel()), 0.01f), TEXT("script_level_up_sets_max_health"));
         Check(HealthBeforeReward < MaxHealthBeforeReward && Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("level_up_refills_current_health"));
-        Check(bHasReward && RewardPickup && RewardPickup->DisplayName() == RewardItem.Name
-            && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) == INDEX_NONE, TEXT("turn_in_drops_loot_stand_in_pickup"));
-        PressUse();   // nothing left to turn in: the key falls through to the pickup
+        // Swap 7b: the refill is the VM's. Maya was at half health when the reward came; the VM's pool kept that current value through its rebase (not full, so it
+        // did not follow) and the OnLevelUp behavior refilled it: the one Health event is full at the new level's maximum, and the walker holds exactly those numbers.
+        Check(ScriptHealthEvents == 1 && HealthBeforeReward < MaxHealthBeforeReward * 0.51f && ScriptHealthCurrent == ScriptHealthMaximum
+            && FMath::IsNearlyEqual(ScriptHealthMaximum, Data.HealthForLevel(Skills->GetLevel()), 0.01f)
+            && Walker->GetHealth() == ScriptHealthCurrent && Walker->GetMaxHealth() == ScriptHealthMaximum && !Walker->IsHealthHeldForScript(),
+            TEXT("script_level_up_refills_health"));
+        {
+            // Swap 10: OnLevelUp's first skill also scales the action-skill cooldown's current value by the pool's minimum (data: 0 for Maya), so the one ActionSkillCooldown
+            // event is Scale by 0 and the host's cooldown reads 0 after it (observed in game by lane L3: the cooldown went to 0 in the level-up call, held or draining).
+            // No cooldown is running at this point of the suite (the cast steps come later), so what is checked is the event and the host's application; the modifier on a running
+            // cooldown is the check action_skill_cooldown_modifier_scales_then_resets_host_cooldown in the Phaselock steps.
+            Check(ScriptCooldownEvents == 1 && ScriptCooldownType == 0 && ScriptCooldownValue == 0.f && CooldownAfterScript == 0.f && Walker->PhaselockRemaining() == 0.f,
+                TEXT("level_up_resets_action_skill_cooldown"));
+        }
+        {
+            // Swap 9: the level-up came from earned experience, so it is natural: ExpLevelUp(false) -> OnExpLevelChange(true, true) ran OnLevelUpNaturally, whose
+            // timed skill scales the held weapon's damage. One event, with the numbers the stock skill carries (+1.0, 30 s: the in-game observation), and the
+            // walker applies it by the stack rule: the Scale joins the weapon's up-sum, (base + pre) x (1 + up + s) / (1 + down) + post, which is the observed
+            // (S + s) / S; the card damage once the duration is over. The suite does not wait 30 s of game time: the expiry is evaluated just before and at the end time.
+            const FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeapon();
+            const float EndAt = ScriptDamageScaleAt + ScriptDamageScaleSeconds;
+            const float Now = GetWorld()->GetTimeSeconds();
+            const float Expected = Held && Held->bHasDamageStack
+                ? (Held->DamageBase + Held->DamagePreAdd) * (1.f + Held->DamageScaleUp + ScriptDamageScale) / (1.f + Held->DamageScaleDown) + Held->DamagePostAdd : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST natural level-up weapon damage: card %.3f, with the scale %.3f (stack formula %.3f, factor %.3f), after %.3f"),
+                Held ? Held->Damage : -1.f, Held ? Walker->ShotDamage(*Held, Now) : -1.f, Expected, Held && Held->Damage > 0.f ? Expected / Held->Damage : 0.f,
+                Held ? Walker->ShotDamage(*Held, EndAt) : -1.f);
+            Check(ScriptDamageScaleEvents == 1 && FMath::IsNearlyEqual(ScriptDamageScale, 1.f, 1e-4f) && FMath::IsNearlyEqual(ScriptDamageScaleSeconds, 30.f, 1e-3f)
+                && Held && Held->bHasDamageStack && Held->Damage > 0.f && Now < EndAt
+                && FMath::IsNearlyEqual((Held->DamageBase + Held->DamagePreAdd) * (1.f + Held->DamageScaleUp) / (1.f + Held->DamageScaleDown) + Held->DamagePostAdd, Held->Damage, 1e-3f)
+                && FMath::IsNearlyEqual(Walker->ShotDamage(*Held, Now), Expected, 1e-3f) && Expected > Held->Damage
+                && FMath::IsNearlyEqual(Walker->ShotDamage(*Held, EndAt - 0.01f), Expected, 1e-3f)
+                && Walker->ShotDamage(*Held, EndAt) == Held->Damage && Walker->WeaponDamageScaleAt(EndAt + 1.f) == 0.f,
+                TEXT("natural_level_up_scales_weapon_damage_for_duration"));
+        }
+        {
+            // Stock data: the Fire mission's reward is experience only. The script's GetItemRewardsForPlayer found no item (it would list a
+            // "not implemented" entry otherwise), and the host spawned no pickup and added nothing to the backpack.
+            TArray<AActor*> Pickups;
+            UGameplayStatics::GetAllActorsOfClass(GetWorld(), AOpenWillowInventoryPickup::StaticClass(), Pickups);
+            bool bItemRewardListed = false;
+            for (const auto& Stub : Impl->Slice->scriptStubs()) bItemRewardListed |= Stub.find("GetItemRewardsForPlayer") != std::string::npos;
+            Check(Rewards == 1 && !bItemRewardListed && Pickups.IsEmpty() && Walker->GetInventory()->BackpackCount() == BackpackBeforeReward,
+                TEXT("turn_in_gives_no_item_reward"));
+        }
+        ClosesBeforeConfirm = MissionScreensClosed;
+        DismissalsBeforeConfirm = DismissalTags;
+        bRewardWaited = RewardPages == 1 && RewardsReceived == 0 && Impl->Slice->rewardPending() && Impl->Slice->scriptPlayerNeedsRewards();
+        PressUse();   // the reward page is up and waits: the key confirms it (and closes the screen); the key press after that gets Marcus's "no missions" line (step 19)
         break;
     }
     case 19:
+        if (!bRewardChecked) {
+            // The turn-in showed the reward page (the screen was open) and did not receive the reward: it was still pending when the key went in; that press confirmed
+            // it exactly once (the controller's MissionRewardsReceived) and the screen closed again.
+            bRewardChecked = true;
+            Check(bRewardWaited && RewardPages == 1 && RewardsReceived == 1 && !Impl->Slice->rewardPending() && !Impl->Slice->screenOpen() && MissionScreensClosed == ClosesBeforeConfirm + 1 && DismissalTags == DismissalsBeforeConfirm + 1
+                && !Impl->Slice->scriptPlayerNeedsRewards(), TEXT("reward_received_on_confirmation"));
+            PressUse();   // nothing left to turn in: the key reaches Marcus, who answers with his "no missions" line
+            return;
+        }
         Check(Status() == 3 && Rewards == 1, TEXT("turn_in_not_repeatable"));
-        Check(Walker->LastPickupAccepted() && Walker->GetInventory()->FindItemIndexById(RewardItem.Id) != INDEX_NONE
-            && !IsValid(RewardPickup), TEXT("use_key_collects_loot_pickup_into_backpack"));
+        // the press after completion: nothing left, so "no missions" and Marcus's line for it
+        Check(LastOnUseTag == TEXT("GD_Dialog_NPC.Events.VO_NPC_OnUse_NoMissions") && OnUseLines == OnUseLinesBeforeTurnIn + 1
+            && LastOnUseLineAk == TEXT("Ake_VOCT_Contextual.Ak_Play_VOCT_Marcus_Quest_No_New"), TEXT("use_chain_plays_no_missions_line"));
         PlacePlayer(Data.OracleDeathLocation, Data.DummyLocation);
         break;
     case 20: {
@@ -1085,6 +1563,8 @@ void UOpenWillowQuest::RunTest(float Delta)
     case 23:
         UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog lookups=%d misses=%d played=%d"), DialogLookups, DialogMisses, DialogPlayed);
         Check(DialogLookups > 0 && DialogMisses == 0 && DialogPlayed == 0, TEXT("dialog_hook_finds_every_line_and_plays_nothing"));
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog AkEvent mismatches=%d"), DialogAkMismatches);
+        Check(DialogAkMismatches == 0, TEXT("dialog_lines_name_the_manifest_ak_events"));
         Check(FPaths::FileExists(SavePath), TEXT("save_file_written"));
         // The Phaselock steps' fixture raised the level with SetLevel; this frame's tick has applied it to health.
         Check(FMath::IsNearlyEqual(Walker->GetMaxHealth(), Data.HealthForLevel(Walker->GetSkills()->GetLevel()), 0.01f),
@@ -1360,6 +1840,16 @@ bool UOpenWillowQuest::RunPhaselockTest()
         // A blocked cast is not a fizzle: nothing resets the cooldown after ReleaseBufferTime.
         if (PhaselockWait < P.ReleaseBufferTime + 0.1f) return false;
         Check(Walker->PhaselockRemaining() > 0.f, TEXT("phaselock_blocked_cast_keeps_cooldown"));
+        {
+            // Swap 10, the host's application of the level-up skill's cooldown modifier on a cooldown that is really running (the turn-in's level-up comes while it is 0):
+            // Scale by 0.5 halves what is left (no completion), Scale by 0 (the data's modifier) ends it at once and reports the completion; the drain then stays at 0.
+            const float Left = Walker->PhaselockRemaining();
+            const bool bHalfEnded = Walker->ModifyPhaselockCooldown(0, 0.5f);
+            const float Half = Walker->PhaselockRemaining();
+            const bool bEnded = Walker->ModifyPhaselockCooldown(0, 0.f);
+            Check(Left > 1.f && !bHalfEnded && FMath::IsNearlyEqual(Half, Left * 0.5f, 0.05f) && bEnded && Walker->PhaselockRemaining() == 0.f && !Walker->ModifyPhaselockCooldown(0, 0.f),
+                TEXT("action_skill_cooldown_modifier_scales_then_resets_host_cooldown"));
+        }
         PhaselockDummy->SetCanPhaseLockFlag(true);
         Next();
         return false;

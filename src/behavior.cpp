@@ -1,6 +1,7 @@
 #include "behavior.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <optional>
 
 namespace vm {
@@ -74,9 +75,19 @@ std::vector<std::string> enumNames(Runtime& runtime, const std::string& packageN
     return names;
 }
 
+std::string providerPathLeaf(const Value* components) {
+    if (!components) return "";
+    if (components->kind != Value::Kind::Array) return components->s;
+    std::string leaf;
+    for (const auto& element : components->elements())
+        if (!element.s.empty() && element.s != "None") leaf = element.s;
+    return leaf;
+}
+
 BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Package> package, int32_t exportIndex)
     : runtime_(runtime), package_(package), index_(exportIndex), path_(package->path(exportIndex)) {
     auto provider = runtime_.instantiateExport(package, exportIndex, 4);
+    definition_ = provider;
     if (provider->cls->path != "GearboxFramework.BehaviorProviderDefinition" &&
         provider->cls->path != "GearboxFramework.AIBehaviorProviderDefinition")
         throw RuntimeError("not a behavior provider: " + path_ + " (" + provider->cls->path + ")");
@@ -90,6 +101,8 @@ BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Packa
         const int sequenceIndex = int(sequences_.size());
         if (const Value* name = data.field("BehaviorSequenceName")) sequence.name = name->s;
         if (const Value* enabled = data.field("bEnabledOnSpawn")) sequence.enabled = enabled->truth();
+        sequence.enabledOnSpawn = sequence.enabled;
+        if (const Value* mutex = data.field("bSequenceEnabledMutex")) sequence.mutex = mutex->truth();
         if (const Value* condition = data.field("CustomEnableCondition"); condition && condition->o && condition->o->resourcePackage)
             sequence.condition = runtime_.instantiateExport(condition->o->resourcePackage, condition->o->resourceIndex, 4);
         if (const Value* links = data.field("ConsolidatedOutputLinkData"))
@@ -154,6 +167,7 @@ BehaviorProvider::BehaviorProvider(Runtime& runtime, std::shared_ptr<const Packa
                 parsed.object = runtime_.instantiateExport(reference->o->resourcePackage, reference->o->resourceIndex, 4);
                 parsed.cls = parsed.object->cls->path;
                 parsed.name = reference->o->name;
+                parsed.object->outer = provider;      // a behavior sits in its provider (BehaviorHelpers' Outer fallback)
                 parsed.sequence = sequenceIndex;
                 std::tie(parsed.start, parsed.length) = unpack(behavior.field("OutputLinks"));
                 parsed.variables = slice(behavior.field("LinkedVariables"));
@@ -225,13 +239,13 @@ void BehaviorProvider::decodeValues() {
 
 void BehaviorProvider::handle(const std::string& classPath, Handler handler) { handlers_[classPath] = std::move(handler); }
 
-void BehaviorProvider::reportAtBoundary(const std::string& classPath, Describe describe) {
-    handlers_[classPath] = [describe](BehaviorProvider& p, Behavior& b, const std::string& event) {
+void BehaviorProvider::reportAtBoundary(const std::string& classPath, Describe describe, std::vector<int> outputs) {
+    handlers_[classPath] = [describe, outputs](BehaviorProvider& p, Behavior& b, const std::string& event) {
         p.boundary.push_back(event + " -> " + b.cls + ":" + b.name);
         BoundaryCall call{event, b.cls, b.name, p.sequences_[size_t(b.sequence)].name, {}};
         if (describe) call.fields = describe(p, b);
         p.boundaryCalls.push_back(std::move(call));
-        return std::vector<int>();
+        return outputs;
     };
 }
 
@@ -267,6 +281,23 @@ const std::vector<BehaviorProvider::Behavior>& BehaviorProvider::behaviors(const
     return none;
 }
 
+std::vector<std::string> BehaviorProvider::graph(const std::string& name) const {
+    std::vector<std::string> lines;
+    for (const auto& sequence : sequences_) {
+        if (sequence.name != name) continue;
+        const auto describe = [&](const std::string& from, int start, int length) {
+            for (int i = 0; i < length; ++i) {
+                const Link& link = sequence.links[size_t(start + i)];
+                lines.push_back(from + " -> " + sequence.behaviors[size_t(link.behavior)].name + " id=" + std::to_string(link.id) +
+                                " delay=" + std::to_string(link.delay));
+            }
+        };
+        for (const auto& event : sequence.events) describe("event " + event.name, event.start, event.length);
+        for (const auto& behavior : sequence.behaviors) describe(behavior.cls + ":" + behavior.name, behavior.start, behavior.length);
+    }
+    return lines;
+}
+
 bool BehaviorProvider::hasEvent(const std::string& event) const {
     for (const auto& sequence : sequences_)
         for (const auto& e : sequence.events)
@@ -280,23 +311,104 @@ bool BehaviorProvider::setSequenceEnabled(const std::string& name, bool enabled)
         if (sequence.name != name) continue;
         found = true;
         if (sequence.enabled == enabled) continue;
-        sequence.enabled = enabled;
         // Sequence events fire for the changed sequence only.
         Call call(*this);
-        fireIn(size_t(&sequence - sequences_.data()), enabled ? "OnBehaviorSequenceEnabled" : "OnBehaviorSequenceDisabled", {}, -1);
+        const size_t index = size_t(&sequence - sequences_.data());
+        if (enabled) {
+            if (sequence.mutex)
+                for (auto& other : sequences_)
+                    if (&other != &sequence && other.enabled && other.mutex) { setSequenceEnabled(other.name, false); break; }
+            sequence.enabled = true;       // the enabled event is delivered after the bit is set ...
+            fireIn(index, "OnBehaviorSequenceEnabled", {}, -1, {});
+        } else {
+            fireIn(index, "OnBehaviorSequenceDisabled", {}, -1, {});      // ... the disabled event before it is cleared
+            sequence.enabled = false;
+        }
     }
     return found;
 }
 
-void BehaviorProvider::fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs, int linkId) {
+void BehaviorProvider::registerConsumer() {
+    if (registered_) return;
+    registered_ = true;
+    for (auto& sequence : sequences_) sequence.enabled = false;
+    std::vector<std::string> onSpawn;
+    for (const auto& sequence : sequences_) if (sequence.enabledOnSpawn) onSpawn.push_back(sequence.name);
+    for (const auto& name : onSpawn) setSequenceEnabled(name, true);
+}
+
+void BehaviorProvider::fireEvent(const std::string& event, const std::map<std::string, std::string>& outputs, int linkId,
+                                 const std::vector<ObjectPtr>& payload) {
     Call call(*this);
     for (size_t s = 0; s < sequences_.size(); ++s)
-        if (sequences_[s].enabled) fireIn(s, event, outputs, linkId);
+        if (sequences_[s].enabled) fireIn(s, event, outputs, linkId, payload);
+}
+
+std::vector<ObjectPtr> BehaviorProvider::linkedObjects(const Behavior& behavior, const VariableLink& link) const {
+    const auto& variables = sequences_[size_t(behavior.sequence)].variables;
+    std::vector<ObjectPtr> result;
+    for (const int index : link.variables) {
+        const Variable* variable = &variables[size_t(index)];
+        if (variable->type == "BVAR_NamedKismetVariable") {      // the level sequence's variable of that name, bound by the owner of the world
+            const auto bound = kismet_.find(variable->name);
+            if (bound != kismet_.end() && bound->second) result.push_back(bound->second);
+            continue;
+        }
+        if (variable->type == "BVAR_NamedVariable") {
+            const std::string name = variable->name;
+            variable = nullptr;
+            for (const auto& candidate : variables)
+                if (candidate.name == name && candidate.type != "BVAR_NamedVariable" && candidate.type != "BVAR_NamedKismetVariable") { variable = &candidate; break; }
+        }
+        if (variable && variable->type == "BVAR_Object" && variable->live) result.push_back(variable->live);
+    }
+    return result;
+}
+
+void BehaviorProvider::bindKismetVariable(const std::string& name, ObjectPtr object) {
+    if (object) kismet_[name] = std::move(object); else kismet_.erase(name);
+}
+
+std::vector<ObjectPtr> BehaviorProvider::contexts(const Behavior& behavior, ObjectPtr own) const {
+    for (const auto& link : behavior.variables)
+        if (link.type == "BVARLINK_Context") return linkedObjects(behavior, link);
+    return {own};
+}
+
+namespace {
+bool isContextData(const Value* property) {
+    const Aggregate* data = property && property->kind == Value::Kind::Struct ? property->aggregate() : nullptr;
+    if (!data) return false;
+    std::string type = data->typeName;
+    std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return type.size() >= 19 && type.compare(type.size() - 19, 19, "behaviorcontextdata") == 0;
+}
+}
+
+void BehaviorProvider::bindContextInputs(Behavior& behavior) {
+    for (const auto& link : behavior.variables) {
+        if (link.type != "BVARLINK_Input") continue;
+        Value* property = runtime_.property(*behavior.object, link.property);
+        if (!isContextData(property)) continue;
+        const auto objects = linkedObjects(behavior, link);
+        if (Value* object = property->field("ContextObject")) *object = Value::makeObject(objects.empty() ? nullptr : objects.front());
+        if (Value* selector = property->field("BehaviorContext")) *selector = Value::makeByte(4);
+    }
+}
+
+void BehaviorProvider::clearContextInputs(Behavior& behavior) {
+    for (const auto& link : behavior.variables) {
+        if (link.type != "BVARLINK_Input") continue;
+        Value* property = runtime_.property(*behavior.object, link.property);
+        if (!isContextData(property)) continue;
+        if (Value* object = property->field("ContextObject")) *object = Value::makeObject(nullptr);
+    }
 }
 
 // NATIVE_MISSION_DISPATCH.md A1 (UNVERIFIED): every matching entry of the sequence, gated, then its links in data order;
 // a due thread runs at once (depth-first) before the next link is considered. FilterObject is not evaluated.
-void BehaviorProvider::fireIn(size_t s, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId) {
+void BehaviorProvider::fireIn(size_t s, const std::string& event, const std::map<std::string, std::string>& outputs, int linkId,
+                              const std::vector<ObjectPtr>& payload) {
     auto& sequence = sequences_[s];
     for (auto& e : sequence.events) {
         if (e.name != event || !e.enabled) continue;
@@ -307,10 +419,22 @@ void BehaviorProvider::fireIn(size_t s, const std::string& event, const std::map
         // The event publishes its outputs into the variables it links (a property the caller did not supply is None).
         for (const auto& link : e.variables) {
             if (link.type != "BVARLINK_Output") continue;
+            if (!payload.empty()) {         // by connection index (the property name is not matched)
+                if (link.connection < 0 || size_t(link.connection) >= payload.size()) continue;
+                const ObjectPtr& element = payload[size_t(link.connection)];
+                for (const int v : link.variables)
+                    if (sequence.variables[size_t(v)].type == "BVAR_Object") {
+                        sequence.variables[size_t(v)].live = element;
+                        sequence.variables[size_t(v)].object = element && element->resourcePackage ? element->resourcePackage->path(element->resourceIndex) : "";
+                    }
+                continue;
+            }
             const auto value = outputs.find(link.property);
             for (const int v : link.variables)
-                if (sequence.variables[size_t(v)].type == "BVAR_Object")
+                if (sequence.variables[size_t(v)].type == "BVAR_Object") {
                     sequence.variables[size_t(v)].object = value == outputs.end() ? "" : value->second;
+                    sequence.variables[size_t(v)].live = nullptr;
+                }
         }
         for (int i = 0; i < e.length; ++i) {
             const Link link = sequence.links[size_t(e.start + i)];
@@ -377,30 +501,40 @@ std::optional<int32_t> BehaviorProvider::intInput(Behavior& behavior, const std:
     return own ? int32_t(own->integer()) : 0;
 }
 
+// Due threads run in due-time order and time advances to each due time, so a thread that parks during the call and falls due before the
+// end of it runs in the same call (a long frame passes through every wake). A thread parked at the current time (the 60-behavior
+// cap) waits for the next call.
 void BehaviorProvider::tick(double seconds) {
-    now_ += seconds;
+    const double target = now_ + seconds;
     Call call(*this);
-    // Due threads in due-time order; a thread parked during this call (order >= horizon) waits for the next tick.
     const uint64_t horizon = order_;
     while (true) {
         auto next = waiting_.end();
         for (auto it = waiting_.begin(); it != waiting_.end(); ++it)
-            if (it->due <= now_ && it->order < horizon &&
+            if (it->due <= target && (it->order < horizon || it->due > now_) &&
                 (next == waiting_.end() || it->due < next->due || (it->due == next->due && it->order < next->order))) next = it;
         if (next == waiting_.end()) break;
         const Thread thread = *next;
         waiting_.erase(next);
-        runThread(thread.sequence, thread.behavior, thread.event);
+        now_ = std::max(now_, thread.due);
+        if (onTime) onTime(now_);
+        // A latent thread whose sequence was disabled while it waited ends without running (NATIVE_BEHAVIOR_POPULATION.md G1; the check
+        // before each behavior of a running thread is not applied here).
+        if (thread.resumed && !sequences_[size_t(thread.sequence)].enabled) continue;
+        runThread(thread.sequence, thread.behavior, thread.event, thread.resumed, thread.state);
     }
+    now_ = target;
+    if (onTime) onTime(now_);
 }
 
 // NATIVE_MISSION_DISPATCH.md A2 (UNVERIFIED): run behaviors until the thread ends or waits; at most 60 per call (what the
 // game does with a capped thread was not read: here it waits for the next tick). Selected links: for each recorded id in
 // order, the behavior's links with that id in data order; the first continues this thread, the others start new threads
-// first. No deduplication. Latent behaviors are not modelled (no handler asks to wait).
-void BehaviorProvider::runThread(int s, int b, const std::string& event) {
+// first. No deduplication. A handler may make its behavior latent through run().wait (the thread parks and the behavior runs
+// again later; its selected links then all start new threads while this one waits).
+void BehaviorProvider::runThread(int s, int b, const std::string& event, bool resumed, std::shared_ptr<void> state) {
     for (int ran = 0;; ++ran) {
-        if (ran == 60) { waiting_.push_back({now_, order_++, s, b, event}); return; }
+        if (ran == 60) { waiting_.push_back({now_, order_++, s, b, event, resumed, state}); return; }
         if (budget_ == 0) {
             if (std::find(errors.begin(), errors.end(), "behavior execution limit exceeded in " + path_) == errors.end())
                 errors.push_back("behavior execution limit exceeded in " + path_);
@@ -416,12 +550,27 @@ void BehaviorProvider::runThread(int s, int b, const std::string& event) {
             errors.push_back("unsupported behavior class " + behavior.cls + " (" + behavior.name + ")");
             return;
         }
+        run_ = RunInfo();
+        run_.initialRun = !resumed;
+        run_.hasLinkedOutputs = behavior.length > 0;
+        run_.state = state;
+        bindContextInputs(behavior);
         auto ids = handler->second(*this, behavior, event);
+        clearContextInputs(behavior);
+        const double wait = run_.wait;
+        state = run_.state;
         if (behavior.defaultOutput) ids.push_back(-1);
         std::vector<Link> selected;
         for (const int id : ids)
             for (int i = 0; i < behavior.length; ++i)
                 if (sequence.links[size_t(behavior.start + i)].id == id) selected.push_back(sequence.links[size_t(behavior.start + i)]);
+        if (wait >= 0) {                                     // latent: every selected link starts a new thread, this one waits
+            for (const auto& link : selected) start(s, link.behavior, link.delay, event);
+            waiting_.push_back({now_ + std::max(wait, 1.0 / 60.0), order_++, s, b, event, true, state});
+            return;
+        }
+        resumed = false;
+        state = nullptr;
         if (selected.empty()) return;
         for (size_t i = 1; i < selected.size(); ++i) start(s, selected[i].behavior, selected[i].delay, event);
         if (selected[0].delay > 0) { waiting_.push_back({now_ + selected[0].delay, order_++, s, selected[0].behavior, event}); return; }

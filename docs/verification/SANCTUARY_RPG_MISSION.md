@@ -323,7 +323,7 @@ Route:
 4. Shoot it with a fire weapon. It rolls back and is removed.
 5. Press E at Marcus to turn in.
 
-Superseded for the player side by "Player side with stock data" below (lent stock pistol, XP, Phaselock, loot).
+Superseded for the player side by "Player side with stock data" below (lent stock pistol, XP, Phaselock).
 
 ## Player side with stock data (2026-10-01)
 
@@ -349,7 +349,7 @@ hand-play session are reported separately.
     not checked.
   - `MissionWeaponRemoved` takes it back and draws the weapon held before. A save made while it is lent re-lends it on
     the next launch (not exercised by the suite).
-  - Mission weapons and the loot stand-in are no longer loaded into the backpack at start.
+  - Mission weapons are no longer loaded into the backpack at start (the mission lends them).
 - **Damage type from the item.** A shot carries the held item's card `damage_type` path into the dummy's
   `OnTakeDamage` (`vm::FireMissionSlice::damageDummy`). The host fire-damage class `UOpenWillowFireDamageType` is
   removed. `DamageSource` is still passed empty: its stock value is not decoded.
@@ -403,13 +403,11 @@ hand-play session are reported separately.
   mission's `RewardData` tags only `ExperienceRewardPercentage` and `CreditRewardMultiplier` 0 (read with
   `--properties` on Startup export 24569). Two consequences:
   - The dummy does not drop anything.
-  - A **turn-in loot stand-in** sits behind the mission reward. `weapon_slice_gear.py --reward-only` rolls the slice
-    fallback list (`StandardEnemyGunsAndGear`) from seed 1 upward with the existing `loot_pools.roll` and keeps the
-    first seed whose roll drops a weapon. That is seed 31 of 31: Pool_GunsAndGear > Pool_Weapons_All > ..._01_Common
-    > Shotguns_01_Common > `SG_Bandit`, parts rolled with the same seed. Seeds 1-30 dropped nothing or money/eridium.
-  - The host drops that recipe as a pickup in front of the player at turn-in. The use key collects it: with nothing
-    to accept or turn in, E near Marcus is no longer consumed.
-  - This is a demonstration of the pickup path, **not stock behaviour**. The seed choice is deliberate and labelled.
+  - **The turn-in gives XP only, as the stock data says.** A turn-in loot stand-in used to sit behind the reward (`weapon_slice_gear.py
+    --reward-only` rolled `StandardEnemyGunsAndGear` to an `SG_Bandit` at seed 31 and the host dropped it as a pickup). **It was removed on
+    2026-10-07 by maintainer decision** ("that's not how missions are gonna look"): the tool flag, its recipe file and manifest key, the host's
+    spawn, and the two suite checks that picked it up are gone. The general pickup and backpack code stays (the lent pistol and the inventory
+    suite use it). The script's `GetItemRewardsForPlayer` returns no item for this mission and the host takes nothing from any other source.
 - **Pistol paint.** `prepare_weapon_paint.py` now accepts MIC chains with no pattern texture (as the thumbnail
   renderer already did) and a `--mesh` target. `Mati_MaliwanUncommon` -> `MasterMati_MaliwanUncommon` provides
   masks, the packed detail atlas (blue channel for pistols), the normal map and nine A/B/C zone colours.
@@ -417,7 +415,7 @@ hand-play session are reported separately.
   - Its `p_Decal` (`Pattern_MaliwanUncommon`, with `p_DecalScalePosition`/`p_DecalRotate`/`p_DecalChannel`) is not
     reproduced.
   - The Master_Gun graph is stripped, so the channel reading stays UNVERIFIED.
-  - The four pool-rolled slice guns and the loot stand-in have the grey stand-in material: their MICs have no local
+  - The four pool-rolled slice guns have the grey stand-in material: their MICs have no local
     UModel export.
 
 ### Automated checks (2026-10-01, CMake Release and UE module rebuilt first)
@@ -430,8 +428,7 @@ hand-play session are reported separately.
   `DmgType_Normal`), `lent_pistol_shot_carries_its_damage_type_to_dummy`,
   `incendiary_shot_completes_fire_objective_via_dummy_provider`, `mission_weapon_removed_after_objective`,
   `xp_amount_is_candidate_formula_at_mission_level` (396 = the tool's table), `xp_reward_levels_up_when_requirement_met`
-  (test fixture: experience topped up by 7,522 first; level 8 -> 9, points 4 -> 5), `turn_in_drops_loot_stand_in_pickup`,
-  `use_key_collects_loot_pickup_into_backpack`, `skill_point_buys_phaselock`, `phaselock_timelines_match_manifest_table`
+  (test fixture: experience topped up by 7,522 first; level 8 -> 9, points 4 -> 5), `skill_point_buys_phaselock`, `phaselock_timelines_match_manifest_table`
   (60 values, grades 0-5, first lock and re-lock; agreement between two readings of the same data, not a game check),
   `phaselock_miss_lifts_nothing_and_holds_skill`, `phaselock_miss_resets_cooldown_after_release_buffer`,
   `phaselock_hit_uses_manifest_timeline`, `phaselock_lifts_to_stock_height` (224 uu at 1.30 s, within 200 +- 30),
@@ -468,7 +465,7 @@ hand-play session are reported separately.
 
 The agent started a `run_quest.ps1 -Fresh` smoke window. A person then played it: sprint, reload, slot changes, accept
 at Marcus, the range touch, the dummy, one incendiary shot from the lent pistol completing Fire, the pistol taken back,
-turn-in, +396 XP (level 8 stays 8), and the loot stand-in picked up with E. Phaselock was not used in that session.
+turn-in, +396 XP (level 8 stays 8), and the loot stand-in picked up with E (the stand-in was removed on 2026-10-07). Phaselock was not used in that session.
 The agent then stopped that window about six minutes after the last input; the mission state had already been saved
 (`manual-save.json`, status Complete). This is the only hand-play evidence. It is not a game comparison.
 
@@ -478,7 +475,7 @@ The agent then stopped that window about six minutes after the last input; the m
 - The XP amount rule, the mission level, the experience and skill save, and health after a level-up.
 - `DamageSource`, the Incendiary status effect, the dummy's hit volume and health (20000).
 - Phaselock rows marked not done or partly above. Its sweep is a host stand-in.
-- Loot is a labelled stand-in. Ammo and money drops and pickups are not hosted.
+- The turn-in gives XP only (stock data; the loot stand-in was removed on 2026-10-07). Ammo and money drops and pickups are not hosted.
 - Paint: the decal, the Master_Gun lighting, and paint for the other slice guns.
 - Audio: unchanged (lookup only).
 - The inventory page's 3D preview still looks only in `Weapons/Items`, so slice guns show no preview mesh there.
@@ -519,8 +516,12 @@ data reproduced the recorded baseline: quest suite 57/57 and resume 7/7, door su
 - **Health follows the level.** Max health is recomputed from the same formula whenever the level changes, and a
   level-up refills current health. The refill is read from data: `OnExpLevelChange` (script) runs the class's
   `OnLevelUp` behaviours, whose skill definition adds `HealthMaxValue` to `HealthCurrentValue`. That the pool caps the
-  sum at the maximum, and that the effect acts once, are UNVERIFIED. The same definition also touches the action-skill
-  cooldown; that is not modelled.
+  sum at the maximum, and that the effect acts once, were UNVERIFIED and are **observed to hold** (lane L1, in game,
+  2026-10-07, two captures). The same skill also resets the action-skill cooldown (Scale by the pool's minimum), and a second
+  `OnLevelUp` skill boosts shield recharge for 4 s; neither is modelled. The 1 s guard is a strict "greater than" on game time since the previous level-up
+  and sits before both behavior sets (swap 7b runs it as script).
+  **Confirmed in game 2026-10-07 (lane L1):** the refill reaches the full new maximum (the cap holds) once, inside `OnExpLevelChange`. The same stock level-up skills also
+  boost the shield recharge (half the maximum per second for 4 s) and, for a natural level-up, add +1.0 weapon-damage scale for 30 s; neither is modelled here ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 - **Phaselock**, row by row (replaces the rows of the same name in the table above):
 
   | Row | Status |
@@ -590,3 +591,1032 @@ data reproduced the recorded baseline: quest suite 57/57 and resume 7/7, door su
 - The parking-lot floor in front of Scooter's garage was not checked: it needs a hand run on the machine that holds
   the hand-patched content.
 - Audio is unchanged (lookup only; the decoder choice is the maintainer's).
+
+## Script swap 1: accept and turn-in run the game's script (2026-10-05)
+
+AI-assisted (Claude), lane I1. First stand-in swap of the Phase 2 Fire-mission plan. Source of every rule below is the own-words
+note [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md) (read from native code, **UNVERIFIED in the running
+game**); the script itself is the installed WillowGame bytecode. Nothing here was compared with the real game's behaviour.
+
+### What now runs as script
+
+- **Accept** (`FireMissionSlice::accept`): the installed `WillowPlayerController.AcceptMission(Mission, MissionDirector = None)` on a
+  VM controller. It reads `Role`, `WorldInfo.GRI` (a `WillowGameReplicationInfo`) and its `MissionTracker` (a VM `MissionTracker`
+  object) and calls the native `MissionTracker.ActivateMission`. Before, `MissionSystem::accept` was called directly and the
+  kickoff was played at once (a labelled host stand-in).
+- **Turn-in** (`FireMissionSlice::turnIn`): `WillowPlayerController.ServerCompleteMission(Mission, None)`, which calls the native
+  `CompleteMission`, then `PlayTurnIn`. The slice still refuses a turn-in while the mission is not ReadyToTurnIn (the real UI
+  offers it only when `CanEndMission` holds; the native `CompleteMission` itself would still chain and untrack).
+- **Every status change** (also the ReadyToTurnIn that the host's objectives cause) calls the installed
+  `UpdateMissionStatus(Mission, NewStatus)` on the controller from `MissionSystem::setStatus`, **before** the observers and the
+  `Default` event, then `MissionTracker.TriggerMissionStatusChangedDelegates`. On Complete the script's old-status check passes
+  (the controller's record went Active -> ReadyToTurnIn), so it runs `ServerGrantMissionRewards`: currency type and amount, then
+  `GetExperienceReward` and `ExpEarn`, the reward struct, the reward UI path (`AcceptOrSaveUnclaimedReward`, which for the empty
+  reward ends in `MissionRewardsReceived`, clearing `bNeedsRewards`).
+- **Kickoff** is now the tracker's pending record: `setStatus(Active)` writes it (the `SetActiveMission` rule: kickoff not heard,
+  none pending); the next `tick()` consumes it (`IsMissionMoviePlaying` runs on the controller, `Default` id 12, heard flag set,
+  record cleared). The mission's first set therefore starts one tick after acceptance instead of inside `accept`. The explicit
+  `MissionSystem::kickoff()` stays as the test path (`--mission-run accept kickoff ...`) and consumes the record too.
+  `PlayTurnIn` fires `Default` id 14 (the Fire mission has nothing on that link).
+
+### Natives that are ours (all UNVERIFIED; `src/mission_script.*`, scoped to the bridge's objects like `src/mover.cpp`)
+
+| Native | Implementation | Note section |
+|---|---|---|
+| `MissionTracker.ActivateMission` | `MissionSystem::accept` (refuses silently: not NotStarted, dependencies unmet); role ignored | MissionTracker.ActivateMission |
+| `MissionTracker.CompleteMission` | `MissionSystem::turnInMission` (Complete from ReadyToTurnIn). **Not modelled:** `NextMissionInChain`, untracking, the unlock queue, the fast-forward prompt | MissionTracker.CompleteMission |
+| `MissionTracker.PlayTurnIn` | `Default` id 14 | Kickoff after acceptance |
+| `MissionTracker.GetMissionStatus` | the status number (Active 1, ReadyToTurnIn 3, Complete 4); another mission: NotStarted | Availability queries |
+| `MissionTracker.IsDataValid` | true (reading of the name; no native note) | none |
+| `WillowPlayerController.NativeGetMissionIndex` | index of the record whose `MissionDef` is the mission in the controller's playthrough-0 list, else -1 (inferred from how the script uses it; no native note) | none |
+| `WillowPlayerController.ExpEarn` | **records** `(amount, source, type)` and does nothing else | WillowPlayerController.ExpEarn |
+| `MissionDefinition.GetExperienceReward` | **HOST STAND-IN (replaced in swap 2 below):** returned the amount the host set (`FireMissionSlice::setExperienceReward`); the formula (NATIVE_PROGRESSION section 2) is not in `src/` yet | MissionDefinition.GetExperienceReward |
+
+XP is unchanged for the host: `OpenWillowQuest` still grants it from the `Reward` effect with its own amount. At turn-in the host
+supplies that same amount to the stand-in native, so the script reaches `ExpEarn`; the host logs `script ExpEarn calls=1
+amount=395 source=4 (host amount 395: same)`. The amounts agree by construction, so what this proves is the **path**: one
+`ExpEarn` call, source 4 (SideMissionAward, because the Fire mission is not plot-critical), type omitted, after the status
+callback. The XP swap (formula in `src/`, `ExpEarn` raising the pool) is the next step.
+
+### Stubs the script hits (logged, never fail the quest; `FireMissionSlice::scriptStubs()`)
+
+All return the zero value of their result. The host logs the list after accept and after turn-in
+(`OWQUEST script stubs after ...`); `--slice-run` prints it in its `script.stubs` field. From the real-data run (`accept` to
+`turnin`, 19 entries):
+
+- status callbacks: `WillowPlayerController.GetCurrentPlaythrough` (0 is the right answer for one playthrough),
+  `GetHUDMovie`, `Actor.SetTimer` (the contextual prompt's retry, because there is no HUD movie), `UpdateLcdMissionStatus`,
+  `PlayerController.IsPrimaryPlayer`, `PlayUIAkEvent`, `WorldInfo.IsMenuLevel`,
+  `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer` (telemetry), `MissionDefinition.GetGameStage`,
+  `MissionTracker.GetActivePrimaryObjectiveSet`, `GetObjectivesProgress`, `GetAllMissions`, `WillowGlobals.GetWillowGlobals`
+  (a static call through a class constant, which step 0 made reach its native; not checked without step 0);
+- reward path: `MissionDefinition.GetCurrencyRewardType`, `GetCurrencyReward`, `ShouldGrantAlternateReward`,
+  `GetItemRewardsForPlayer` (their zero results happen to equal the Fire mission's data: no credits, normal reward, no items),
+  `RefreshBalanceDataFromMissionCompletion`, `UnlockAchievementIfConditionsMet`.
+
+Other VM notes (`script.notes`): reads of the reward struct's static arrays (`WeaponRewards[0..1]`, `ItemRewards[0..1]`) report
+"accessed array out of bounds": a struct's zero value does not materialise its static-array fields. Reproduced with
+`--run WillowGame.WillowPlayerController.GetNumRewardChoices` and no argument. It does not change the Fire result (no
+items, 0 choices) but it is a VM gap for missions with item rewards.
+
+### Not modelled yet (differences from the note that this step leaves)
+
+`ClientReceiveMissionStatus` (remote players), the mission weapon at Active/Complete (the slice still lends it with the objective
+set; *done in swap 8, below*), timed and defend missions, `RequiredObjectivesComplete` and `Failed`, the `SetActiveMission` early-exit gate and tracked-mission
+choice, the "Loader" level wait, the kickoff's dialog request, and the note's order **initial objective set before the `Default`
+event** for `bActivateInitialObjectiveSet` missions (the Fire mission has it false; `MissionSystem::accept` keeps the old order for
+the toy data). The controller's mission record is rebuilt from the restored status after `loadState` (a restored mission has
+played its kickoff: an assumption).
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+
+- `ctest`: **11/11** (new: `mission-script-synthetic`, invented `Engine`/`WillowGame`/mission packages with hand-assembled
+  controller/tracker script: status hooks in order, kickoff consumed by the tick, refused second accept, reward call with the
+  host amount, no stubs); `vm-synthetic` gained the class-constant case (step 0). `tools/verify_packages.py`: 9/9 match.
+- Real-data CLI (`--slice-run ... accept tick:5 range spawn tick:6 damage:... turnin`): the 22 host events are identical to the run
+  before the swap; the three kickoff events (dialog, set, remote event) moved from the `accept` step to the next `tick`.
+  With `xp:395` before `turnin`: `exp_earned` = one call (395, source 4, type omitted), controller record status 4,
+  `bNeedsRewards` false.
+- **`tools/test_quest.ps1`: first run PASS checks=80 errors=0, resume PASS checks=11 errors=0** (before: 79 and 11). The one new
+  check is `turn_in_script_calls_exp_earn_side_mission_award`; no existing check changed, including
+  `installed_kismet_starts_marcus_walk` right after the use key (the kickoff now plays on the next tick of the same session).
+
+## Script swap 2: experience (2026-10-05)
+
+AI-assisted (Claude), lane I1. Second stand-in swap. The host no longer computes the mission XP: the amount, the pool and the level-up
+come from the script path and the natives under it, written from [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) (sections 1-3) and
+[NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md). **Every rule stays UNVERIFIED in the running game except the one
+amount confirmed on 2026-10-02: 395 at stage 8.**
+
+### What runs now
+
+1. `UpdateMissionStatus(Complete)` (script) reaches `ServerGrantMissionRewards` (script), which calls, in this order and all from
+   `src/mission_script.cpp`: `GetCurrencyRewardType`, `GetCurrencyReward`, `GetExperienceReward`, `ExpEarn(amount, 4)`,
+   `GetItemRewardsForPlayer`. Source 4 is SideMissionAward (the Fire mission is not plot-critical).
+2. **`MissionDefinition.GetExperienceReward`** (native, ours): `trunc(float(span x percentage x m))`, `span = R(L+1) - R(L)` over the
+   mission's game stage `L`, `m = 1` (first playthrough, player below level 50; other cases throw "not implemented" rather than
+   guess). The percentage is read from the installed data: `Reward.ExperienceRewardPercentage` is an attribute whose value chain is a
+   constant (0.05) times a conditional on `PlayThroughCount` (1 here), evaluated by `src/progression.*` (below). The curve is read
+   from `GD_Balance_Experience.Formulas.Init_ExperienceRequiredForLevel` (`60 x (n ^ 2.8 + 7.33)`, the level through a global-slot
+   attribute), `R(n) = max(0, trunc f(n) - trunc f(1))`, single precision.
+3. **`MissionDefinition.GetGameStage`** (native, ours): the stage locked into the mission when it became Active (the status routine
+   does that before the script hook), else the region's current stage. The region stage is the host's input
+   (`FireMissionSlice::setRegionGameStage`; the host keeps fixing it per player and playthrough and saving it).
+4. **`WillowPlayerController.ExpEarn`** (native, ours): `Exp x scale` added to a VM-side pool (`CurrentValue`, a float), clamped to
+   `[0, R(max level)]`, only when it raises the pool; it does not level up. The scales (`ExpCombatPointsScale`,
+   `ExpMissionPointsScale`, `ExpAllPointsScale`) are attributes whose base values the note did not decode: **taken as 1**. The call is
+   still recorded (`expEarned()`).
+5. **The pool update** (`ExperienceResourcePool.ApplyExpPointsToExpLevel(false)`, implemented as `MissionScript::updateExperiencePool`
+   and run from `FireMissionSlice::tick`, standing in for the pool's per-frame update): while the pool has reached
+   `ExpPointsNextLevelAt` (> 0) and the level is below `GetMaxExpLevel` (native, ours: 50), the installed script
+   `WillowPlayerController.ExpLevelUp(false)` runs on the VM controller. It raises `PlayerReplicationInfo.ExpLevel`, then
+   `OnExpLevelChange` (script) sets `ExpPointsNextLevelAt` through `GetExpPointsRequiredForLevel` (native, ours, the same curve).
+   Skill points, health and the HUD stay stubbed in the script (the globals' skill-point formula is not evaluated; swap 7 below evaluates it
+   and the new maximum health); `LevelUpCount` is not kept.
+6. **Where the state lives:** the VM holds the pool value and the level (the controller's `PlayerReplicationInfo`), the host keeps
+   Maya's `UOpenWillowSkills` (level and experience display, skill points, health, save). Simplest design that keeps the host's UI and
+   save untouched: before accept and turn-in the host copies its inputs in (`setRegionGameStage`, `setPlayerExperience(level,
+   experience)`), and the slice hands back two events, `Experience` (what ExpEarn added) and `Level` (the level the pool update
+   reached). The host applies `Experience` with its own `AddExperience` and compares the `Level` event with its own level
+   (`OWQUEST script level-up: VM level 9, host level 9 (same)`; a quest-suite check). `GrantExperience` and its use of the
+   manifest's `MissionXp` are gone from the grant path; `MissionXp` and the manifest's `candidate_amount_by_mission_level` remain only
+   as the suite's oracle.
+
+### `src/progression.*`: a subset of the attribute evaluator (NATIVE_PROGRESSION section 1)
+
+`AttributeEvaluator` evaluates an `AttributeInitializationData`: the constant, an attribute whose context chain is the no-context
+resolver and whose value chain is constant / simple-math (Add, Sub, Mul, Div) / global-slot resolvers, a definition's `ValueFormula`
+(offset added before the multiplier, power skipped at 1) or `ConditionalInitialization` (expressions on `PlayThroughCount`, all must
+hold: UNVERIFIED), the base-value modes (numbers 1..3 as the note lists them, which name is which not checked), scale, range
+restriction and rounding, in single precision. Random variance, other resolvers, other context resolvers and other condition
+attributes throw `unsupported ...`: a mission that needs them stops with a script error instead of a guessed value.
+
+### Other reward natives implemented from the bridge note
+
+- `GetCurrencyRewardType`: `Reward.CurrencyRewardType` (or the alternative's).
+- `GetCurrencyReward`: other currencies from `OtherCurrencyReward`; credits only when the multiplier is exactly 0 (the Fire mission;
+  the note's `MissionCreditRewardFormula` attribute values were not decoded, so any other multiplier logs a "not implemented" entry in the
+  stub list and returns 0). Optional-objective currency is likewise a "not implemented" entry.
+- `ShouldGrantAlternateReward`: the last objective set of the `NextSet` chain, its objectives' indices in `ObjectiveDefs`, the passed
+  progress; **exercised only with the empty progress that the stubbed `MissionTracker.GetObjectivesProgress` returns**, so it answers false;
+  for a bit-mask objective the required progress is its full mask (UNVERIFIED).
+- `GetItemRewardsForPlayer`: the empty case (the Fire mission). Non-empty `RewardItems` or `RewardItemPools` log a "not implemented"
+  entry: item generation and pool rolls belong to the loot lane (`NATIVE_LOOT.md`).
+- `MissionDefinition.GetGameStage` as above.
+
+### VM fix: static-array fields of structs
+
+A struct's default tags set a static array (`ArrayDim > 1`) one element per tag, selected by the tag's array index. The VM overwrote the
+whole array with the last element, so `PendingMissionRewardData.WeaponRewards/ItemRewards` read "out of bounds" and, more
+visibly, `ProviderDefinitionPathName.PathComponentNames` was a scalar holding the last component. Both now are two-element / name arrays.
+`providerPathLeaf` (`src/behavior.*`) takes the provider's own name from that array for the two callers that used the scalar. The
+dummy provider's sequence changes still route (22 host events identical to before). Synthetic check: `vm_test.py` `MakePair`.
+
+### Stubs still hit on the Fire turn-in (real data, 14 up to the turn-in, 18 with a level-up)
+
+`Actor.SetTimer`, `MissionTracker.GetActivePrimaryObjectiveSet` / `GetAllMissions` / `GetObjectivesProgress`,
+`PlayerController.IsPrimaryPlayer`, `WillowGlobals.GetWillowGlobals`, `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`,
+`WillowPlayerController.GetCurrentPlaythrough` / `GetHUDMovie` / `PlayUIAkEvent` / `RefreshBalanceDataFromMissionCompletion` /
+`UnlockAchievementIfConditionsMet` / `UpdateLcdMissionStatus`, `WorldInfo.IsMenuLevel`; the level-up adds
+`AttributeInitializationDefinition.EvaluateInitializationData` (the skill-point formula), `WillowLeviathanService.RecordPlayerCharacterGainedLevelEventForPlayer`,
+`RecordPointsEarnedEventForPlayer` and `WillowPlayerController.RecalculateAttributeInitializedState`. Removed from the list by this swap:
+`MissionDefinition.GetGameStage`, `GetCurrencyReward`, `GetCurrencyRewardType`, `ShouldGrantAlternateReward`, `GetItemRewardsForPlayer`.
+
+### Not modelled / uncertain
+
+Playthrough 2 and later and level 50+ (the playthrough multiplier m), optional objectives' own XP, the experience scales (1),
+DLC level caps, `LevelUpCount`, HUD updates and telemetry in `ExpEarn`, the order in which the real pool updates relative to other
+per-frame work (here: once per `tick`, after the mission tick), and everything the note calls open. The region stage is still the
+host's table (`values.xp.region_stage`), not evaluated from `RegionBalanceData` in `src/`.
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+
+- **Real-data CLI** (`--slice-run ... stage:8 player:8:20208 accept ... turnin tick:1`): one `Experience` event of **395**, `exp_earned`
+  `(395, 4, -1)`, pool 20,603, no level change; with `player:8:27900` the pool reaches 28,295, the script `ExpLevelUp` runs and the
+  `Level` event says 9. At `stage:7` the amount is 316 (the table in NATIVE_PROGRESSION).
+- Synthetic `mission_script_test.py` (invented curve `2 x (n^2 + 1)`, percentage `0.5 x (conditional 3)`): reward `trunc(18 x 1.5) = 27`
+  at stage 4, the later `stage:9` does not change it (locked at accept), pool 16 + 27 = 43 gives level 3 -> 4 by the script `ExpLevelUp`
+  and stops, the pool clamps at R(50) = 4998 and the level at 50, no region stage gives 0.
+- `ctest` **11/11**, `tools/verify_packages.py` 9/9, UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=81 errors=0 (80 before), resume PASS checks=11 errors=0.** New check
+  `script_pool_update_levels_up_to_host_level`; all existing XP, level, skill-point and health checks unchanged and green.
+
+## Script swap 3: the dummy's enable conditions and the controller helpers (2026-10-05)
+
+AI-assisted (Claude), lane I1. Rules from [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) (sections A-C) and
+[NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md), **all UNVERIFIED in the running game**.
+
+### 1. The dummy's sequence enable conditions (`src/slice.*`, `src/mission.*`, `src/behavior.*`)
+
+Replaced the old rule (a re-sync of every condition after each host call) with the note's:
+
+- **When:** `MissionSystem` raises the tracker's observer notifications after it changed its own state: the status changed (after the
+  script hook, before the `Default` event), the active set switched, an objective's progress written, an objective completed
+  (before the set evaluation). `FireMissionSlice` applies **every** condition on **each** one (the notification's arguments are
+  ignored); `setSequenceEnabled` changes nothing, and fires no event, for a sequence already in that state, so events come only from real
+  transitions. `ObjectiveCleared` is not modelled; a loaded mission (`loadState`) is announced once (the LevelLoad kind).
+- **The verdict:** not objective-specific: the mission status bit of `MissionStatesToLinkTo`. Objective-specific: no `LinkedObjective`
+  gives false, else the objective is classified by `MissionSystem::objectiveState` (Complete when the mission is Active, ReadyToTurnIn
+  or Complete and the progress equals the count; else Active when the mission is Active, the objective is in the active set and its
+  progress is below the count; else NotStarted) and the verdict is that bit of `ObjectiveStatesToLinkTo` (the mission-state bits are
+  not consulted). A non-empty `ObjectiveSetRestrictions` keeps a true verdict only while one listed set is the active set. Another
+  mission counts as Complete when in the completed set, else NotStarted; its objectives NotStarted.
+- **Registration** (`spawnDummy`): the provider is a consumer only from the spawn. `BehaviorProvider::registerConsumer` is pass 1 (every
+  sequence disabled, then each `bEnabledOnSpawn` sequence enabled in order, its `OnBehaviorSequenceEnabled` firing); the conditions
+  are then applied (pass 2, the immediate LevelLoad verdict) and only then `OnSpawned` fires. Before the spawn no condition observes
+  anything (the old rule changed the unspawned provider's sequences from the accept on).
+- **Kernel enable/disable:** `bSequenceEnabledMutex` (enabling a mutex sequence first disables one other enabled mutex sequence of the
+  provider) and the event order (enabled event after the bit is set, disabled event before it is cleared). The dummy's data has the
+  flag false on all nine sequences (read with `--object-dump`), so the mutex is exercised only by the synthetic test.
+- **Synthetic test** (`tests/mission_script_test.py`, scenario D, `--slice-run` on invented `Startup` and `Sanctuary_Dynamic` packages
+  with the stock provider path): no sequence event before the spawn; registration order `Idle`, then the conditions in sequence order;
+  the progress notification already turns the objective's sequences off; set restrictions (one listed set active, one not);
+  ReadyToTurnIn enables the second mutex sequence after disabling the first; Complete turns the mission-level condition on.
+- **Real data** (`--slice-run ... accept tick:5 range spawn tick:6 damage:Shock damage:Incendiary tick:5 turnin`): the 22 host events are
+  **identical** to the previous rule's, in the same order, and the enabled sequences at the end are the same (`Default`, `Idle`,
+  `Targetable`). Differences, all from the note: (1) pass 1 now fires `Idle`'s `OnBehaviorSequenceEnabled`, which reaches
+  `GearboxFramework.Behavior_SpecialMove` (an animation request; no animation system, so it is listed at the boundary and logged by the host
+  as "not run by host"; it was never reached before and without the boundary entry it would have been an unsupported-class error);
+  (2) the verdicts are applied at the notification points instead of after the whole host call (no host-visible effect here);
+  (3) an objective-specific condition no longer also requires its mission-state bit (class default {Active}; equal for the Fire
+  conditions); (4) the objective classification gates Complete on the mission status.
+- Not modelled: per-instance objectives (`bRememberItemsWithinObjective` consumers), `bInstanced`, the waypoint hooks, the multi-condition class,
+  the Kismet twin, `RequiredObjectivesComplete` and `Failed` statuses (MissionSystem has neither).
+
+### 2. Controller helper natives (`src/mission_script.cpp`)
+
+Implemented only those the slice's script reaches, per NATIVE_CONTROLLER_HELPERS.md:
+
+| Native | VM behaviour |
+|---|---|
+| `MissionTracker.IsDataValid` / `ValidateData` | the tracker's `bDataValidated` flag; `ValidateData` is its only writer. **Trigger (a choice, UNVERIFIED):** the game sets it when the reply to a mission data request reaches `ClientValidateMissionData`; how a standalone run triggers that request was not read, so the installed script `ClientValidateMissionData` runs once on the controller when the VM graph is built (its effect is the game's: `ValidateData`, then a per-controller loop over an engine iterator, which the VM does not run (listed as a stub), and the script's two refresh calls) |
+| `WillowPlayerController.GetCurrentPlaythrough` | `CurrentPlaythrough` of the VM replication info (0), also used by `NativeGetMissionIndex` (now range-checked against `MissionPlaythroughs`, first match) |
+| `PlayerController.IsPrimaryPlayer` | true for the sole local controller |
+| `WillowPlayerController.GetHUDMovie` | None (no HUD in the graph; the script then skips its HUD branches) |
+| `WorldInfo.IsMenuLevel` | the VM world's `bIsMenuLevel`, false |
+| `WillowGlobals.GetWillowGlobals`, `GearboxGlobals.GetGearboxGlobals` / `GetBehaviorKernel` | one VM `WillowGlobals` instance (the kernel field: None) |
+| `WillowGlobals.GetGlobalsDefinition` | the installed `GD_Globals.General.Globals` object (named in the note's prose; no section of its own) |
+| `UpdateLcdMissionStatus`, `PlayUIAkEvent` | documented no-ops (presentation only) |
+
+**Turn-in stub count (real data, `accept` to turn-in): 14 before, 12 after.** Removed: `GetCurrentPlaythrough`, `IsPrimaryPlayer`,
+`GetHUDMovie`, `PlayUIAkEvent`, `UpdateLcdMissionStatus`, `GetWillowGlobals`, `IsMenuLevel` (7). Newly reached because the script now gets real
+answers (a real globals definition, a menu-level answer, the validation run): `Object.Localize` x3, `MissionTracker.AllExpansionSideMissionsComplete`,
+`PlayerController.IsLocalPlayerController`, `function ?.SpawnPlayerMovie` (a call on a data-object stand-in without a class) and the engine
+iterator (x2). Remaining from before: `Actor.SetTimer`, `MissionTracker.GetActivePrimaryObjectiveSet` / `GetAllMissions` / `GetObjectivesProgress`,
+`WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`, `RefreshBalanceDataFromMissionCompletion`, `UnlockAchievementIfConditionsMet`.
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+
+- `ctest` 11/11 (`mission-script-synthetic` gained the helper probes and scenario D), `tools/verify_packages.py` 9/9.
+- **`tools/test_quest.ps1`: first run PASS checks=81 errors=0, resume PASS checks=11 errors=0** (unchanged counts).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0** (rerun because `src/behavior.*` changed).
+
+## Script swap 4: Marcus's dialog (2026-10-05)
+
+AI-assisted (Claude), lane I1. Rules from [NATIVE_DIALOG.md](NATIVE_DIALOG.md) and
+[NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) (section G2, latent waits), **all UNVERIFIED in the running game**.
+The stand-in in `MissionSystem` (every `Behavior_TriggerDialogEvent` selected Out and Finished at once and emitted a "dialog" effect
+for the behavior's own tag) is gone. New `src/dialog.hpp/.cpp` (`DialogSystem`, owned by `MissionSystem`).
+
+### The behavior and the kernel wait (`src/behavior.*`)
+- A handler may now make its behavior **latent**: `BehaviorProvider::run().wait` (minimum 1/60 s) parks the thread with per-thread
+  `state`; the behavior runs again later with `initialRun` false. The links selected in the latent call start new threads while this one waits.
+  A waiting thread whose sequence was disabled ends without running (the note's per-behavior check inside a running thread is not applied).
+- `tick()` now **advances time to each due thread** instead of jumping to the end of the call, so a long frame (the CLI's `tick:5`) passes
+  through every wake and poll; `onTime` keeps the dialog components in step with it. (the behavior suite is unchanged; the host
+  ticks at frame rate.)
+- `Behavior_TriggerDialogEvent` (`DialogSystem::behavior`): first run: **Out (id 0) selected at once**, latent for 0.001 s (so one
+  kernel wake, 1/60 s); the next run triggers the dialog; while the event's talk act is live it polls every **0.1 s**; **Finished (id 1)**
+  on the first poll where it is no longer live (the same run when nothing started, or the pooled event data was reused);
+  `bForcePlayImmediate` triggers in the first run and selects Finished, then Out; no `EventTag` selects Finished at once.
+
+### The dialog (`DialogSystem`)
+- **Event:** the group's **last enabled** `DialogEvents` entry for the tag. **Act:** its inline `OutputAction`, else the target of the group's
+  link table for (the entry's 1-based id, link 0): a `TalkActs` template (ids after the events) or a node by `NodeID`. The Fire group's
+  seven link-table events resolve to `TalkActs[0..6]` as the note's structural check says. Unsupported (throws "dialog: not implemented"):
+  talker variables, chance/compare/switch/trigger/random-branch nodes, sound-effect events, output links on a talk act, talker-owned events (no group).
+- **Talker:** an act with no audio in any TalkData passes through (nothing is chosen); `bInstigatorTalker` -> the instigator is the mission,
+  never an actor, so **no talker** (reported as "no talker"); otherwise a random TalkData entry (seeded, deterministic) resolved by its **exact**
+  name tag to a registered pawn (`registerTalker`), else, for an echo event, an **echo caller** (created when absent).
+- **Audio device:** Talk does nothing without one. The host's line player is `DialogSystem::setLinePlayer` (told when a line starts,
+  `lineEnded(id)` when it ends); `setTestLineLength(s)` is a test player (every line lasts `s`). **Default: no player = no device = no line
+  starts**, so Finished follows on the wake that triggered the dialog (the note's "within one poll" is the same run here).
+- **Priority arbitration** before a line starts: the tag's index in the globals' `Priorities` (`GD_Globals.Dialog.DialogGlobals`; lower = more
+  important), floored for the tracked mission's `MissionDialogGroup` (`ActiveSideMissionMinPriority`, plot: `ActivePlotMissionMinPriority`,
+  unless the base is already at least `ActiveMissionMinPriorityStart`); blocked when the group's current event (keyed by the root group) or the
+  talker's own live line has an index `<=` the new one (`<` for an echo event without `bDoesNotOverrideSamePriority`). A started echo/group
+  event silences the group (stops its live lines) and interrupts the talker's own line.
+- **Line end** (the component update): audio end + `OutputDelay`, no audio -> the next update; the event data is then inactive.
+- **What the host sees:** a `Dialog` effect/event per chosen line: a = event tag, b = group, c = the talker's name tag, detail =
+  `act=...;ak=<AkEvent>;talker=echo|pawn;outcome=started|no audio device|blocked by priority|no audio event|no talker;line=<id>`.
+  The host logs it, resolves the event in its audio manifest, **compares the VM's AkEvent with the manifest's** (new quest check
+  `dialog_lines_name_the_manifest_ak_events`) and registers Marcus as a pawn talker (the most common talker name tag of the manifest: a host
+  choice). CLI steps: `lines:<s>`, `talker:<name tag path>`; events print `detail`.
+
+### Timeline on real data
+- Host, no line player: the tracker tick plays the kickoff the frame after the accept, `Default` id 12 reaches `_1185` (Out), and one kernel wake
+  (1/60 s) later the dialog is triggered ("no audio device") and **Finished** starts `GoToRange_ObjSet` and `RocksPaper_MoveMarcusToRange`:
+  in the quest run 17 ms (3 frames) after `mission status -> Active`. Before this swap the set started inside the accept call.
+- With a test line player (`lines:2.0`) the first objective set starts only **after the kickoff line ends** (the second `tick:1` step), as the
+  note predicts; with the real 17.7 s kickoff audio that would be about 17.7 s plus up to 0.1 s.
+- `--slice-run` (the same steps as before): the 16 non-dialog host events are identical and in the same order. Dialog lines: the six the stand-in
+  listed (01, 02, 03b, 03a, 04, 05) are reported again: four "no audio device", and **03b and 03a as "no talker"** (their acts name the
+  instigator as talker, and the mission context is no actor; the real game's context object for mission behaviors was not read, so whether those
+  two lines play there is open).
+- **Quest suite timing change, per the note:** `installed_kismet_starts_marcus_walk` and `marcus_walk_clip_playing` used to be checked in the frame
+  after the use key; Marcus's walk now starts a few frames later (kickoff tick + kernel wake), so step 4 first records `use_key_accepts_mission`
+  (unchanged, immediate) and then waits up to 2 s for the walk to start before the two checks, whose conditions are unchanged.
+
+### Checks (2026-10-05, CMake Release and UE module rebuilt first)
+- `ctest` 11/11 (`mission-script-synthetic` scenario E: Out first, dialog on the next wake, Finished at once without a player; with a 0.55 s test
+  player Finished on the first poll after the end; blocked chatter; the last enabled entry; a template act through the link table; a pawn
+  against the echo caller; `bForcePlayImmediate`), `tools/verify_packages.py` 9/9.
+- **`tools/test_quest.ps1`: first run PASS checks=82 errors=0, resume PASS checks=11 errors=0** (81 before; the new check is the AkEvent comparison).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0** (behavior and kernel code changed).
+
+## Script swap 5: GoToRange through the stock waypoint script (2026-10-06)
+
+AI-assisted (Claude), lane I1 then the orchestrator (both worked from [NATIVE_OBJECTIVE_TRIGGERS.md](NATIVE_OBJECTIVE_TRIGGERS.md) only; neither
+opened analysis output). **All rules UNVERIFIED in the running game.** Replaces the stand-in where the host called `enterRange()` (a direct
+`UpdateObjective(RockPaper_GoToRange)`) when the player capsule overlapped the cylinder while the objective was active.
+
+- **What runs as script now:** the placed `WillowWaypoint_9` of `Sanctuary_Dynamic` is instantiated on the VM with authority and the world's
+  replication info. Its own `PostBeginPlay` registers it with the tracker as a mission observer; its own `Touch` filters with `IsPlayerOwned`,
+  asks `IsMissionObjectiveActive` and calls `UpdateObjective(LinkedObjective)`; its own "objective set changed" reaction re-checks every actor in
+  its `Touching` list, so a player already standing in the range completes the objective when `GoToRange_ObjSet` becomes active.
+- **New natives (src/mission_script.cpp):** `Actor.IsPlayerOwned` (owner chain to its root, the root's controller; true only for the player's
+  controller), `MissionTracker.IsMissionObjectiveActive` / `IsMissionObjectiveComplete` / `IsObjectiveSetActive` (MissionSystem's own
+  classification, the same predicate as its update gate), `UpdateObjective` (queued into MissionSystem), `RegisterMissionObserver` (VM
+  observers get the `MissionReaction*` events; LevelLoad at registration). After each applied update the VM controller hears
+  `UpdateMissionObjective(objective, bit)` and the tracker runs `TriggerMissionObjectivesChangedDelegates`, after the observers and before the
+  objective's own events, as the note orders them.
+- **VM:** interface casts (`EX_InterfaceCast`, `EX_DynamicCast` to an interface class) now succeed when the object's class defines every
+  function the interface declares (`Runtime::implements`). The packages' implemented-interface tables are not decoded; this is a structural
+  stand-in, UNVERIFIED, and an open item.
+- **Host:** the host still owns the shape test (actor cylinder vs the waypoint cylinder, now for any actor via its simple collision cylinder) and
+  reports begin/end of overlap for the player pawn and for Marcus (`touchWaypoint`); it no longer looks at the objective state. Marcus's touch
+  reaches the script and is ignored there. `enterRange()` stays as a thin wrapper (a player touch).
+- **Fire (second commit of the swap):** the dummy's `Behavior_UpdateMissionObjective` now runs its own `ApplyBehaviorToContext` on the VM
+  (world role authority, `GetWorldInfo`, the cast of the context object to `IMissionObjective`, the world's tracker, `UpdateObjective`). New
+  binding `BehaviorBase.GetWorldInfo` (the bridge's world, NATIVE_ENGINE_CORE.md); the VM world now has `Role` = authority. The dummy pawn has
+  no VM object, so the context object is None: it casts to no interface exactly as a pawn does, and the bit is 0 (the note's reading). This
+  path is covered by the quest suite and a real-data `--slice-run`; the toy package has no script behavior for it (open).
+  `RequiredObjectivesComplete` is still not modelled (the note's gate also accepts it). New stubs reached at level start, all
+  harmless for the slice: `Actor.AttachComponent`, `MissionTracker.RegisterWaypoint`, `Trigger.TriggerDetachSprites`.
+- **CLI:** each `--slice-run` step record now carries the mission status after it; new steps `touch:` / `untouch:` `player` / `marcus`.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11 (`mission-script-synthetic` scenario F on a toy waypoint: Marcus ignored, one update for the player, a touch while not updatable
+  does nothing, a player inside at set activation completes it without re-entry, the `range` wrapper; scenario A now also records the
+  controller's `UpdateMissionObjective`), `tools/verify_packages.py` 9/9.
+- **`tools/test_quest.ps1`: first run PASS checks=83 errors=0, resume PASS checks=11 errors=0** (82 before; new check
+  `objective_completed_through_waypoint_script_once`). The log shows Marcus's touch delivered and ignored, then the player's touch.
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+- After the Fire commit: CTest 11/11, packages 9/9, UE build Succeeded, quest PASS 83/83 and resume PASS 11/11, door PASS 16/16; a real-data
+  `--slice-run` (accept, range, spawn, hit:other, hit:fire, turnin) reaches ReadyToTurnIn on the incendiary hit and Complete on turn-in with no errors.
+
+## Script swap 6a: choosing the usable by the camera ray (2026-10-06)
+
+Source: `NATIVE_USE_INTERACTION.md` ("Per-frame usable evaluation"). Every rule below is UNVERIFIED (read from native code, not confirmed in the
+running game). Only step 6a is done; 6b and 6c (the use itself and the accept screen's logic as script) were sized and stopped, see below.
+
+- **Rule implemented (host function):** the 250 cm sphere around the player is gone. `UOpenWillowQuest::InTalkReach()` now casts one ray from the
+  player camera's position along the control rotation, `PlayerInteractionDistance` long, and Marcus is usable when the ray enters his hit volume and
+  nothing else blocks the visibility channel in front of it. No cone and no radius, as the note says. The distance is not a host constant: the VM
+  reads `GD_Globals.General.Globals.PlayerInteractionDistance` from the installed data (`MissionScript::playerInteractionDistance`, through
+  `FireMissionSlice`; 350 uu on the real data, shown by `--slice-run` / `--mission-run` as `script.interaction_distance`). The globals loader the
+  `WillowGlobals.GetGlobalsDefinition` native used is now one function (`MissionScript::globalsDefinition`).
+- **Hit volume (host-chosen, UNVERIFIED):** Marcus's mesh has no collision, so `AOpenWillowNpc` gets a query-only capsule from the imported mesh's bounds
+  (the combat targets' pattern), blocking only the visibility channel (it cannot block movement). The stock pawn's collision cylinder is not read.
+- **View point:** the camera component's location and the pawn's current control rotation (the camera manager's cached view lags one frame after a
+  teleport, which the automated run does).
+- **Not modelled:** the 1/30 s evaluation throttle, the cinematic lock and other blocking flags, the trade proxy, icons and prompts, the Use key's own
+  press path (`Walker->TryUse` still calls `TryUse`, which then accepts or turns in directly; that is 6b/6c).
+- **Tests:** `mission-script-synthetic` scenario A reads an invented `PlayerInteractionDistance` (420) from a toy `GD_Globals.General.Globals`.
+  Quest suite: three new checks, `use_ray_reaches_marcus_in_view`, `use_ray_misses_marcus_looking_away`, `use_ray_stops_at_interaction_distance`
+  (at the data's distance plus 100); `use_key_out_of_reach_ignored`, `use_key_accepts_mission`, `use_key_turns_in_mission` and the resume
+  "must not re-accept" check keep their names and pass.
+
+### Why 6b and 6c were not started
+The use itself as script needs, beyond the bridge's present objects, a VM Marcus `WillowAIPawn` with a mind, class and AI definition, the native
+`AIClassDefinition.OnUsed` / `AIDefinition.OnUsed` (event with link filter on two providers) and Marcus's AI-definition provider running through the
+kernel, `BehaviorBase.RunBehaviors`, the G4 cost natives, and the behaviors of his chain. One of those has no note: **`Behavior_IsSequenceEnabled`
+(native, 227 instances, nine in Marcus's chain) has no description of what it checks or which output link means enabled**; the data shows only link
+ids 0 and 1. Implementing it now would be guessing. The other pieces have notes. The orchestrator should decide whether to commission that note first.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=86 errors=0, resume PASS checks=11 errors=0** (83 before, three new use-ray checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6c: the mission screen's logic as script (2026-10-06)
+
+Sources: `NATIVE_USE_INTERACTION.md` ("Marcus's chain (data) and the lists (script)", the button section) and `NATIVE_MISSION_SCRIPT_BRIDGE.md`
+("Availability queries", "IMissionDirector implementers"). Every rule is UNVERIFIED (read from native code, not confirmed in the running game).
+The screen's movie is not hosted; 6b (the use itself, `OnUsed` through the kernel) waits for the `Behavior_IsSequenceEnabled` note.
+
+- **A VM Marcus:** `MissionScript::placeMarcus` instantiates the stock archetype `GD_Marcus.Character.Pawn_Marcus` (a `WillowAIPawn`, so his
+  `MissionDirectivesDefinition_1` table, seven entries, is the data's), with authority role and the VM world. The VM does not load references, so
+  the table's reference is loaded in `placeMarcus`; the entries' missions stay references (imports into the mission's package). The same pawn is the
+  waypoint's Marcus toucher (it replaces the bare `WillowAIPawn` of swap 5; identity only).
+- **Bound natives (tracker):** `CanStartMission` (the `MissionSystem` predicate `canStart`, the one `accept()` now uses: NotStarted and dependencies
+  met), `CanEndMission` (`canEnd`: ReadyToTurnIn), `GetCompletedBranch` (`completedBranch`, per the note: follow `NextSet` from the initial set to
+  the last, 1 when all of its objectives are complete, 2 when not, 0 unless ReadyToTurnIn/Complete). A mission argument is matched by export path, so
+  a directive entry (a reference) and the loaded definition are the same mission. Not modelled: Failed, repeatable Complete, the blocked-mission
+  test, RequiredObjectivesComplete (`MissionSystem` has no such state). The tracker holds one mission record, so every other mission of Marcus's table
+  (the other six entries) answers "no record": not startable, not endable, branch 0, status NotStarted (stand-in).
+- **The lists are the stock script:** `WillowAIPawn.GetEligibleMissions`, `GetInProgressMissions`, `GetRedeemableMissions` run unchanged on the VM
+  Marcus (`MissionScript::missionLists`; `FireMissionSlice::screen`; `--slice-run ... screen`, `--mission-run ... script:screen`). Real data:
+  NotStarted -> eligible [Fire]; Active -> in progress [Fire]; the Complete / ReadyToTurnIn rows are covered by the toy scenario and by the
+  quest suite (the real Fire mission cannot reach ReadyToTurnIn from the CLI without Kismet).
+- **The confirm:** the host's use key asks the lists (`UOpenWillowQuest::MissionScreen`) and confirms the one offered entry (redeemable first, as
+  `DetermineQuestEntries` lists them), a host stand-in for the button press: `slice.accept()` / `turnIn()` now check the lists, then run the stock
+  `AcceptMission(Mission, Director = Marcus)` / `ServerCompleteMission(Mission, Marcus)` scripts. They stay as thin wrappers for the CLI and tests.
+  A mission the lists do not offer is refused before the script (the button does not exist); the hint line and the key's "consumed" result use the
+  same lists. With no Marcus in the data (the toy packages) the old direct path remains.
+- **Director callbacks (script now):** `AcceptMission` calls `OnPlayerAcceptedMission(controller, mission)` and `ServerCompleteMission` calls
+  `OnPlayerTurnedInMission` after `CompleteMission`, as stock script. Both are the stock `WillowAIPawn` functions; with nobody registered in
+  `PawnsUsingMe` (the accept screen's `BeginUse` is part of opening the screen, 6b) they return at their first test, so they reach **no** further
+  native here. When the screen is opened by the VM they will reach `MissionsAcceptedByPrimaryUser` / `PlayMissionTurnedInDialog` (not exercised).
+- **Stubs:** no new ones: after accept 9 and after turn-in 15 in the quest log, the same lists as before the swap (CLI `--slice-run` the same).
+- **Tests:** `mission-script-synthetic` scenario G (toy director with five invented entries: begins, begins+ends, other-mission end only, branch 1 and
+  branch 2 endings; toy list functions in the stock structure over the bridge's natives): eligible only when NotStarted; in progress when Active
+  (no dedup); redeemable by the completed branch when ready (branch-2 entry and the other mission not offered); nothing when Complete; an accept
+  while Active is refused and the screen no longer offers it; the callbacks run (markers 120 / 121), the turn-in one before the reward. Quest suite:
+  `mission_screen_offers_fire_from_marcus_directives` and `mission_screen_offers_turn_in_when_ready` added; all `use_key_*` names unchanged.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=88 errors=0, resume PASS checks=11 errors=0** (86 before, two new screen checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6b: the use key runs Marcus's OnUsed chain (2026-10-06)
+
+Source: `NATIVE_MARCUS_USE_CHAIN.md` (and `NATIVE_USE_INTERACTION.md`, `NATIVE_MISSION_DISPATCH.md` A2, `NATIVE_CONTROLLER_HELPERS.md`). Every rule is UNVERIFIED
+(read from native code, not confirmed in the running game). The key path is now: key -> the host's use ray (6a) -> `FireMissionSlice::useMarcus` -> his
+`OnUsed` chain on the VM -> the controller's `ClientGFxPlayMovie` (reported as a host event) -> the host confirms the offered entry (6c lists) -> the stock
+`AcceptMission` / `ServerCompleteMission`. The host no longer decides on its own to open the screen.
+
+- **The raise:** `MissionScript::useMarcus` raises `OnUsed` with link filter 2 (Generic) on Marcus's AI-definition provider
+  (`GD_Marcus.Character.AIDef_Marcus.AIBehaviorProviderDefinition_0`, the existing `BehaviorProvider`, registered on his consumer at `placeMarcus`: PID 1 in his
+  `ConsumerHandle`). The payload is the instigator (the player's VM pawn) and the used component (None). `BehaviorProvider::fireEvent` got an optional payload:
+  an output-type variable link takes the element at its connection index into its object variable (a live VM object, new `Variable::live`), so the instigator
+  lands in Brain's `PlayerWhoUsedMe`. The two later raises of `UseObject` (filters 0 and 1) reach no link and are not made. The VM Marcus `UseObject` script is not
+  run (the bridge makes the raise itself).
+- **The behaviors are script:** one handler runs each chain class's own `ApplyBehaviorToContext` on the VM (`Behavior_IsSequenceEnabled`,
+  `Behavior_RemoteCustomEvent`, `Behavior_PlayAIMissionContextDialog`, `Behavior_HasMissions`, `Behavior_ShowMissionInterface`), once per context object
+  (`BehaviorProvider::contexts`: a Context-type variable link resolves a named-variable reference to the first same-named non-reference variable, else the
+  consumer's own pawn). `SelfObject` is Marcus. Behaviors now set `outer` to the provider definition (the resolver's Outer fallback), and a nested call into the
+  provider (a remote event fired from script) keeps the calling behavior's `RunInfo`.
+- **Natives (bound in `MissionScript::bindUse`, only when Marcus's provider exists):** `BehaviorKernel.IsBehaviorSequenceEnabled` (true only for the registered
+  consumer + provider + an existing enabled sequence; None provider, unknown name, wrong handle give false), `BehaviorHelpers.ResolveBehaviorProviderDefinitionReference`
+  (a non-empty path wins, joined with dots; only the bridge's own provider is found; then the reference, returned as is; then the source behavior's Outer; else None),
+  `BehaviorKernel.ActivateBehaviorEventFromScript` (None provider fires nothing; an omitted filter is -1).
+- **Needed beyond the three (each has a note except the last):** `BehaviorKernel.ActivateBehaviorOutputLink` (NATIVE_MISSION_DISPATCH A2: appends the id to the
+  running behavior's list), `Object.QueryInterface` (NATIVE_CONTROLLER_HELPERS; a Core native, structural `Runtime::implements` stand-in; it worked for
+  `IBehaviorConsumer` and `IMissionDirector` on Marcus), and `WillowPawn.GetBehaviorConsumerHandle` (a plain read of the pawn's own `ConsumerHandle` field, scoped to the VM Marcus; NATIVE_BEHAVIOR_CONTEXT.md later
+  described it: the field must start at -1 and be assigned once at consumer registration, which swap 6d does). Also a small VM change: `Runtime::overrideScript` lets a host binding replace a script function; used only for
+  the controller's `ClientGFxPlayMovie`, which is presentation and is reported as `interfaceOpened` (movie definition, director) instead of run.
+- **Real data (`--slice-run ... use`):** the nine checks answer "not enabled" (outputs 1: three names have no sequence, six belong to other missions), the context
+  dialog runs, `Behavior_HasMissions` selects 0 while the Fire mission is eligible, in progress or redeemable and 1 when the tracker has no such mission for
+  Marcus (the Complete state: no link, nothing happens, the key is not consumed), `Behavior_ShowMissionInterface` opens the interface
+  (`UI_Mission.MissionInterface_Definition`, director `GD_Marcus.Character.Pawn_Marcus`). In the quest suite the first press accepts, the last turns in.
+- **Registration of his provider:** every sequence starts disabled and the `bEnabledOnSpawn` ones (`AI`, `Brain`) are enabled; the enable conditions of the other
+  missions' sequences are not applied (those missions are not in the tracker, every verdict would be "not enabled"). The `OnBehaviorSequenceEnabled` events of his
+  spawn reach four world operations that nothing here runs, listed at the boundary and in the script notes: `Behavior_AIHold`, `Behavior_SetPawnThrottleData`,
+  `Behavior_ChangeUsability`, `Behavior_SetUsableIcon`.
+- **Stubs newly reached:** one, `BehaviorBase.GetBehaviorContext(behaviorcontextdata,object,object,object,behaviorparameters)`, from
+  `Behavior_PlayAIMissionContextDialog` (one call per press). It is the pure resolver described in NATIVE_BEHAVIOR_CONTEXT.md (not a kernel context lookup); as a stub it returned None, so the dialog behavior's script ended
+  without calling `WillowAIPawn.PlayOnUseDialog` (the dialog on use was silent). The stub also needed the runner's struct fill (swap 6d).
+- **Tests:** `mission-script-synthetic` scenario H (packages `UseChainOn` / `UseChainOff`): toy Marcus with a provider at the stock path; checks for a sequence
+  that does not exist, one that is disabled, one that is enabled (fires its remote event; the cascade stops, the interface is not reached), a check whose
+  path names no provider (selects nothing), the path winning over a `SequenceProvider` reference, and the payload variable reaching the Context-linked
+  behavior (the interface opens when no check is enabled; the script RPC is replaced). Quest suite: `use_chain_reaches_mission_interface` and
+  `use_chain_all_nine_checks_not_enabled` added; every earlier check name unchanged. CLI: `--slice-run ... use`, `--mission-run ... script:use` print the cascade.
+- **Not covered:** the reference and Outer branches of the resolver on the real data (all nine instances use a path); the remote events of the six other
+  missions (not enabled here); the Kismet named variables (`MarcusVendingProxy`, `MarcusStoreUser`) are not resolved.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=90 errors=0, resume PASS checks=11 errors=0** (88 before, two new use-chain checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6d: Marcus's on-use dialog runs as script (2026-10-06)
+
+Source: `NATIVE_BEHAVIOR_CONTEXT.md` (lane G21). Every rule is UNVERIFIED (read from native code, not confirmed in the running game). The stub that
+left the on-use dialog silent (`BehaviorBase.GetBehaviorContext`) is gone; `Behavior_PlayAIMissionContextDialog` and `WillowAIPawn.PlayOnUseDialog` now run
+their own script on the VM and pick the tag from Marcus's own lists. Playing the line is an open item (below).
+
+- **`GetBehaviorContext` (pure resolver, `MissionScript::bindUse`):** the struct's `BehaviorContext` selector picks the base object: 0 `SelfObject`, 1 the
+  instigator, 2 the other participant, 4 the struct's own `ContextObject`; 3 (EventData) and anything else give None. A non-empty `InstancedDataContextName`
+  would ask the object's instance data; that path is not on Marcus's route and is listed as not implemented. The static and interface siblings are not bound
+  (not on the route).
+- **The thread runner's struct fill (`BehaviorProvider::bindContextInputs`):** before a behavior runs, an Input link onto a struct property of type
+  `BehaviorContextData` stores the first resolved object in `ContextObject` (None when nothing resolves) and sets the selector to 4; after the run
+  `ContextObject` is None again (the selector stays 4). Kernel-run behaviors get `SelfObject` = the consumer's pawn and no instigator, participant or event
+  data. A Context link that resolves to nothing skips the behavior for that pass (no run, no output); the provider then follows the default link only when the
+  behavior supports one. (A behavior with no Context link runs once on the consumer's own pawn, as before.)
+- **The consumer handle:** the VM Marcus's `ConsumerHandle.PID` starts at -1 (invalid) and is assigned once when his provider registers (the emulation of
+  `InitializeBehaviorProviders`, in `placeMarcus`): 0, the first slot (UNVERIFIED: the allocator's base). `GetBehaviorConsumerHandle` stays a plain field read;
+  the kernel natives treat -1 (and any other value) that is not his registered handle as "unregistered".
+- **What the guard needs, from his stock data (nothing invented):** `MyWillowMind` is a bare `WillowMind` VM object whose `AIClass` is the archetype's AI class
+  (`GD_Marcus.Character.CharClass_Marcus`, loaded, which names his `AIDef`); his `DialogComponent` is the archetype's component (loaded). The mind carries no
+  native mind state (nothing else reads it on this route). `PawnsUsingMe` is empty, the controller is the VM player controller. Building the mind was small.
+- **The tag:** `PlayOnUseDialog` counts the director lists (redeemable, then eligible, then in progress, then none: `DET_OnUse_MissionComplete`,
+  `..._MissionsAvailable`, `..._AllMissionsInProgress`, `..._NoMissions`, fetched through `WillowDialogGlobalsDefinition.Get`, bound to return
+  `GD_Globals.Dialog.DialogGlobals`) and calls the pawn's `GearboxDialogComponent.TriggerEvent(tag, player)`. That call is bound on Marcus's component and reported
+  (tag path, speaker = the component's owner, other object = the player pawn's class): `MarcusUse::onUseTag / onUseSpeaker / onUseTarget`, a host event
+  `OnUseDialog` (`on_use_dialog` in the CLI), printed by `--slice-run ... use`.
+  Real data: NotStarted gives `VO_NPC_OnUse_MissionsAvailable`, Active `VO_NPC_OnUse_AllMissionsInProgress`; in the quest suite the turn-in press gives
+  `VO_NPC_OnUse_MissionComplete` and the press after completion `VO_NPC_OnUse_NoMissions`.
+- **Playback: OPEN ITEM.** How the host plays dialog today: `DialogSystem` (src/dialog.*) plays a line for `Behavior_TriggerDialogEvent` with a group, a tag, Talk
+  acts and a registered talker (NATIVE_DIALOG.md), and the host's line player (SLICE_AUDIO_CHAIN.md) plays the chosen audio event. The on-use tags are
+  different: they sit in the generic group `GD_Dialog_NPC.Groups.DialogGroup_NPC`, whose Talk acts have no Marcus entry, so the **no-match output** runs a Trigger act
+  that fires the implementation tag (`DET_NPC_OnUse_*`) in Marcus's own group `DialogGroup_NPC_Marcus`. `DialogSystem` has no component-level `TriggerEvent` group search,
+  no no-match output and no Trigger acts, so this two-step dispatch is **not implemented** and the tag is reported, not played (the host logs it with "not played").
+  The `MissionComplete` tag may be silent even then (note: its generic event has no output action).
+- **Stubs:** none newly reached; `BehaviorBase.GetBehaviorContext` is gone. Quest log: 9 after accept, 15 after turn-in (the pre-6b counts).
+  Newly bound natives needed by the route: `WillowDialogGlobalsDefinition.Get` (listed in NATIVE_DIALOG.md only as "see package", the globals object is what the note
+  names) and `GearboxDialogComponent.TriggerEvent` (reported, scoped).
+- **Tests:** `mission-script-synthetic` scenario H gained a `Probes` sequence in the toy provider: probe behaviors for selectors 0, 1, 2, 3, 4 (with and without
+  an object), an unknown selector, an Input link that overwrites both the selector and the object in the data (the player: not Self), an Input link that resolves to
+  nothing (None, the data's object is gone), and a behavior whose Context link is empty (skipped, its default link reaches the next probe). Quest suite:
+  `use_chain_picks_on_use_dialog_tag` (the tag of the first press: missions available) and `use_chain_on_use_tag_follows_mission_state` (the turn-in press: mission
+  complete) added; every earlier name unchanged. (The first name says "plays" as the coordinator named it; what the host does is log the tag, not play it.)
+- **Not covered:** the runner's `ContextObject` reset after the run (no observer: it is rewritten before the next run); more than one object resolving into a
+  `BehaviorContextData` input (only the first is stored, as the note says); `StaticGetBehaviorContext`, `StaticGetAllBehaviorContexts`, `GetBehaviorContextInterface`.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (with class bodies exact), UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=92 errors=0, resume PASS checks=11 errors=0** (90 before, two new on-use checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 6e: the on-use line plays through the stock dialog data (2026-10-06)
+
+Source: `NATIVE_DIALOG.md` ("Component TriggerEvent / GetMatchingEvent", the Trigger act, the Talk act and its no-match output, the line rules),
+`NATIVE_BEHAVIOR_CONTEXT.md` (the data finding), `SLICE_AUDIO_CHAIN.md` (how a chosen line reaches the host). Every rule is UNVERIFIED (read from native
+code, not confirmed in the running game). `GearboxDialogComponent.TriggerEvent` is no longer "reported, not played": it runs in the existing `DialogSystem`
+(`src/dialog.*`), and the line it chooses reaches the host through the mission's own dialog hook.
+
+- **What `DialogSystem` gained (`triggerOnComponent`, no second engine):**
+  - the **group search** of `GetMatchingEvent`: the speaker's groups in order, the first with an enabled entry for the tag wins, a group without one appends its
+    `ParentGroup` to the search;
+  - the event's **instigator** is the speaker (a registered talker with its own groups), so a Talk act with `bInstigatorTalker` takes the instigator when it has an
+    entry for its own name tag (exact tag; the `ParentTag` ancestors are not modelled);
+  - the **no-match output**: no valid talker and `bEnableNoMatch` takes output 1, which here leads to a **Trigger act**; output links other than a no-match
+    link to a Trigger act still throw "not implemented";
+  - the **Trigger act**: its Instigator variable gives the talkers, those with a group holding an enabled entry for its `DialogEvent` can talk it, and the event
+    is triggered on that talker's own groups with the **same event data**. The act's own output 0 (after the line) has no link in the stock data and is not
+    followed. Any other dialog variable class throws "not implemented".
+- **How Marcus reaches it (bridge):** the component's speaker is read from his body class (`GD_Marcus.Character.BodyClass_Marcus`) by `DialogSystem::pawnDialog`: the
+  name tag is its `DialogName`, and the group list follows the rule of `NATIVE_DIALOG_GROUPS.md` (UNVERIFIED, read from native code; replaces the earlier labelled
+  stand-in "body class `DialogGroups` + globals `NPCDialogGroups`"): the body class's `DialogGroups`; then, **only if its `bNPCDialog` is set**, the name tag's
+  `DlcExpansion.NPCDialogGroups` (if any) and the dialog globals' `NPCDialogGroups`; then **always** the globals' `DefaultTemplateGroup`; no de-duplication; an empty
+  list with no body class. For Marcus that is **127 entries**: his own group `DialogGroup_NPC_Marcus`, the 125 generic NPC groups (first `GD_Dialog_NPC.Groups.DialogGroup_NPC`;
+  `GD_VOSQ_ThisJustIn` appears twice, as in the data), then `GD_Dialog_Templates.Groups.DialogGroup_TemplateDefault` (checked on the real data: `--slice-run ... use`
+  prints `on_use_groups` count 127 with that first and last entry, and entries 105 and 119 are `ThisJustIn`). Without the generic group the tag `VO_NPC_OnUse_*` is in no group of his and the
+  line would stay silent. Marcus is registered as the talker when the component is triggered (so the mission's own lines, which the host registers him for, are unaffected).
+- **What changed against the 6e code of the same day (following `NATIVE_DIALOG_GROUPS.md`):** (1) the list now ends with the default template group (and takes the
+  name tag's expansion groups before the globals' ones); (2) `matchingGroup` appends a parent group **once, unique by identity** (it was appended unconditionally, with a
+  32-entry cap on the search that a 127-group list would have hit); (3) template groups are skipped unless the caller allows them: `triggerOnComponent` (a fresh
+  trigger, no event data reused) allows them, the Trigger act that fires on the same event data does not; a skipped template group adds no parent; (4) an import that
+  no installed package file resolves (the body class's name tag, `GD_Dialog_NPC...`) is looked up by path among the dialog package's exports. No on-use line changes.
+- **The four states (stock data, read with `ow-package --object-dump`):** `VO_NPC_OnUse_MissionsAvailable`, `..._AllMissionsInProgress` and `..._NoMissions` sit in the
+  generic group `GD_Dialog_NPC.Groups.DialogGroup_NPC` with Talk acts (`Talk_24`, `Talk_33`, `Talk_4`) that have **no Marcus entry** and `bEnableNoMatch`; output 1 goes to
+  Trigger acts (`Trigger_8`, `_7`, `_9`) whose `DialogEvent` is Marcus's `DET_NPC_OnUse_*` tag, whose talker variable is the event's Instigator; his group answers with
+  Talk acts `115`, `113`, `116` and his own AkEvents `Ak_Play_VOCT_Marcus_Quest_New`, `..._Quest_During`, `..._Quest_No_New`. So NotStarted plays Quest_New, Active plays
+  Quest_During, and the press after completion plays Quest_No_New (the `NoMissions` act is symmetric: confirmed, closing that open item of the note).
+  **`VO_NPC_OnUse_MissionComplete` is silent** (finding, open question 4 closed): the generic event has no inline act; the link table points to the group's template talk
+  act, whose only entry is Marcus's name tag with **no AkEvent**, so the act passes through (output 0, no link) and no line is chosen. Nothing was invented for it.
+- **Reaching the host:** a chosen line is a dialog effect of the mission's `DialogSystem`, as for the mission's other lines: a host dialog event whose tag is the
+  `DET_NPC_OnUse_*` tag, group `DialogGroup_NPC_Marcus`, talker `DialogName_Marcus` (a pawn). The host's hook (`K::Dialog`) looks the tag up in the audio manifest
+  (`dialog:` entries, and now `marcus_group:` entries for Marcus's own group) and checks the AkEvent against the manifest's. **No audio is played: the host has no audio
+  device** (its `played=0` check stays); "plays" means the line was chosen by the stock data and found in the manifest, exactly as for the mission's lines.
+- **Real data (`--slice-run`):** NotStarted gives the Quest_New line (`outcome=started` with `lines:2`, `no audio device` without), Active gives the Quest_During line
+  (blocked by priority if Marcus's previous line is still live: the stock arbitration, tick past it). In the quest suite: the turn-in press (MissionComplete) chooses no line;
+  the press after completion chooses Quest_No_New.
+- **Stubs:** none newly reached (quest log 9 after accept, 15 after turn-in).
+- **Not modelled / open:** the `ParentTag` ancestor test of the talker validity; the manager `bEnabled` gate (assumed enabled); the priority gate is the existing
+  one (the DET tags are `DialogPriority_20`); `WillowPawn.SetDialogNameTag` (the name tag override; the tag is `BodyClass.DialogName`); the manager's registered group list and `bEnabled` (the pawn's list is stored on the talker); sound-effect tags; Act_Chance / MissionSwitch / ObjectParameterSwitch in the
+  generic group (not on the four on-use routes); a no-match output into anything but a Trigger act. A failed `no talker` line still consumes a line id.
+- **Tests:** `mission-script-synthetic` scenario E2 (`--mission-run ... component:<speaker name tag>|<tag>|<groups>`; toy generic group, no-match output, Trigger act and a
+  speaker group with a `ParentGroup`): the no-match chain plays the speaker's line (tag S, his AkEvent, a pawn talker); his own tag plays directly; a talker that cannot
+  talk the event stays silent; an act without audio is silent; a tag in no group does nothing. Quest suite: `use_chain_plays_on_use_line`, `use_chain_plays_in_progress_line`,
+  `use_chain_mission_complete_is_silent`, `use_chain_plays_no_missions_line` added; every earlier name unchanged.
+  Scenario E3 (a pawn's dialog groups; `--mission-run ... pawn:<body class>|<event tag>`, invented body classes, groups, name tags and a template group): an NPC body gets
+  [own, NPC group, template]; a non-NPC body [own, template] and no generic event; an NPC body whose name tag has an expansion [own, expansion group, NPC group, template]
+  and the expansion group answers first, a non-NPC body with that name tag gets no expansion group; the template group is searched by a fresh trigger and skipped by the
+  Trigger act on reused event data; a parent is searched after the template group and once although two groups name it.
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=96 errors=0, resume PASS checks=11 errors=0** (92 before, four new on-use line checks).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+### Checks for the dialog-group rule (2026-10-06, CMake Release and UE module rebuilt first)
+Rule: `NATIVE_DIALOG_GROUPS.md` (UNVERIFIED, not confirmed in the running game). Real data: Marcus's list is 127 entries (first `DialogGroup_NPC_Marcus`, last
+`DialogGroup_TemplateDefault`); the on-use lines are unchanged (NotStarted Quest_New, Active Quest_During, after completion Quest_No_New, ReadyToTurnIn silent).
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE build Succeeded.
+- **`tools/test_quest.ps1`: first run PASS checks=96 errors=0, resume PASS checks=11 errors=0** (unchanged); stubs unchanged (9 after accept, 15 after turn-in).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Script swap 7: the level-up's skill points and maximum health from the data (2026-10-06)
+
+AI-assisted (Claude), lane I4. Rules from [NATIVE_PROGRESSION.md](NATIVE_PROGRESSION.md) (sections 1, 3 and 4), [NATIVE_SKILLS.md](NATIVE_SKILLS.md) (section 1) and
+[NATIVE_ATTRIBUTES.md](NATIVE_ATTRIBUTES.md) (sections 1, 5, 6, 8 and 11); the save rule of [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) is only the host's oracle
+(`max(0, L - 4)` minus points spent). **Every rule stays UNVERIFIED in the running game** except what the notes say was confirmed on 2026-10-02: the points
+`max(0, L - 4)` and the health pool's base maximum `80 x 1.13^L`.
+
+### The traced path of one level-up (what is script, what is native, what is a stub)
+
+`FireMissionSlice::tick` runs the pool update, which runs the installed script `WillowPlayerController.ExpLevelUp(false)` on the VM controller while the pool has
+reached `ExpPointsNextLevelAt`. Traced with `research/script_disasm.py` and the VM's stub list (`--slice-run ... stage:8 player:8:27900 ... turnin tick:1`):
+
+| Step of `ExpLevelUp` / `OnExpLevelChange` | Kind | Before swap 7 | Now |
+|---|---|---|---|
+| `GetWillowGlobals`, `GetGlobalsDefinition`, `GetMaxExpLevel` | native | implemented (swaps 2 and 3) | unchanged |
+| `ExpLevel` + 1 | script | runs | unchanged |
+| skill points: `GeneralSkillPoints += int(EvaluateInitializationData(GlobalsDefinition.GeneralSkillPointsPerLevelUp, Self))` | script + native | **stub** (returned 0: no points) | **implemented**: the `src/progression.*` evaluator on the installed `INI_SkillPointsPerLevelUp` (a conditional: 1 when `PlayerExperienceLevel >= 5`, default 0) |
+| `SpecialistSkillPoints += int(EvaluateInitializationData(SpecialistSkillPointsPerLevelUp, Self))` | script + native | stub (0) | the same native; the data has no such definition, so an empty initialization (0) |
+| `FireSkillPointsChangedDelegates` | script | runs (no delegates registered in the VM graph) | unchanged |
+| first-skill-point stats, `BroadcastLocalizedMessage`, `RecordPointsEarnedEventForPlayer` | script / telemetry native | stat object absent; telemetry stub | unchanged: telemetry stays a stub (no rule to implement) |
+| `OnExpLevelChange`: `ExpPointsNextLevelAt` from `GetExpPointsRequiredForLevel` | script + native | implemented (swap 2) | unchanged |
+| `OnExpLevelChange`: `RecalculateAttributeInitializedState` | native thunk | **stub** | **host-boundary stand-in** (below); **replaced by the real rule in swap 7b** |
+| `OnExpLevelChange`: the pawn branch (`SetGameStage`, intrinsic armour, the class's `OnLevelUp` behaviors) | script | skipped: the VM controller has no pawn | unchanged in swap 7 (so the health top-up of `PlayerBehavior_LevelUp` was not run); **swap 7b runs the branch** |
+| `ClientOnExpLevelChange` (HUD queue, achievements, LCD, `RecordPlayerCharacterGainedLevelEventForPlayer`) | script | HUD absent; stubs | unchanged |
+
+The health pool's maximum is **not** written anywhere by the level-up script. The notes do not say which native recomputes it: `RecalculateAttributeInitializedState`
+is "a thin native thunk to a virtual method whose body was not reached" (NATIVE_ATTRIBUTES section 8) and `ResourcePoolManager.RecalculateBaseValues` is low
+confidence. So that step is the one that needed a stand-in; it did not need the whole attribute and resource-pool system.
+*Correction 2026-10-07 (NATIVE_LEVEL_UP_ATTRIBUTES.md, lane G23): the notes do say which native recomputes it: `RecalculateAttributeInitializedState`, through the pool rebase
+(`ResourcePoolManager.RecalculateBaseValues` -> the script `ResourcePool.CalculateBaseValues(true)`), so the stand-in below stood in for a known rule; swap 7b implements it.*
+
+### What was implemented
+
+- **`AttributeInitializationDefinition.EvaluateInitializationData`** (`src/mission_script.cpp`, static native, three arguments): evaluates the data with the existing
+  `AttributeEvaluator`. The context source is the VM player controller, which resolves to its `PlayerReplicationInfo` (the player resolvers, NATIVE_ATTRIBUTES section 5).
+  No source gives no player (a condition on the player's level is then false); any other source object, and a non-None override source, are listed as "not implemented"
+  entries in the stub list.
+- **`src/progression.*`** gained, inside the evaluator and for the two shapes the data needs: the context resolver `PlayerReplicationInfoAttributeContextResolver` (resolves
+  when the context has a replication info, otherwise the attribute does not resolve), the value resolver `ObjectPropertyAttributeValueResolver` (get: the named property of the
+  resolved context, `ExpLevel` for `PlayerExperienceLevel`), and the condition attribute `PlayerExperienceLevel` next to `PlayThroughCount`. A comparison whose operand does not
+  resolve is false (NATIVE_ATTRIBUTES section 11). Any other resolver or condition attribute still throws "unsupported ..." rather than guess.
+- **`WillowPlayerController.RecalculateAttributeInitializedState`: HOST-BOUNDARY STAND-IN (superseded by swap 7b, below).** It evaluates the health pool's base maximum for the new level
+  (`GD_Siren.Character.CharClass_Siren.HealthPoolDefinition` -> `BaseMaxValue` -> `Init_PlayerHealth`, found by its stock path: Maya is the host's player class, the VM
+  controller's own `PlayerClass` stays unset) and keeps it for the pool update. **What the real native recomputes, and that it is the one that does this, is not established;
+  only the data and the formula (NATIVE_PROGRESSION section 4) are from the notes.** Missing class data is a "not implemented" stub entry, not an error.
+- **The slice reports the result** (`MissionScript::updateExperiencePool`, after the loop): when the level changed, the events `Level` (as before), then `SkillPoints`
+  (`GeneralSkillPoints` after minus before: the points the level-up awarded, sent even when 0) and `MaxHealth` (the pool's base maximum for the new level). Several levels in one
+  update give one event each, with the summed points and the last level's health. `--slice-run` prints them as `skill_points` and `max_health` (`a` is the value).
+
+### Host side (`OpenWillowQuest.cpp`)
+
+The host's `UOpenWillowSkills` derives the unspent points from the level (`EarnedPointsAt`) and holds no counter, and its maximum health is `HealthForLevel` at the new
+level, so there is nothing to apply for the two new events: they are **compared** with the host's own numbers, as the `Level` event is. Log lines:
+`OWQUEST script level-up skill points: VM awarded 1, host 1 (same)` and `OWQUEST script level-up max health: VM 240.323 at level 9, host 240.323 (same)`. Two new suite
+checks, `script_level_up_awards_skill_points` (one event, equal to the host's change of available points, a point at level 9) and `script_level_up_sets_max_health` (the VM's
+number equals the walker's maximum health and `Data.HealthForLevel`); no existing check was renamed. The host's formulas (`EarnedPointsAt`, `HealthForLevel`) stay as the
+oracle. The host's UI and save are untouched; the VM's numbers do not replace the host's displayed ones yet (open below).
+
+### Real data and what it shows
+
+`--slice-run ... stage:8 player:<level>:<experience> accept ... turnin tick:1` on the installed packages:
+
+| Level-up | `skill_points` | `max_health` | Check |
+|---|---|---|---|
+| 8 -> 9 (pool 27,900 + 395) | 1 | 240.3233 | `80 x 1.13^9` |
+| 4 -> 5 (pool 5,300 + 395) | 1 | 147.3948 | `80 x 1.13^5` (the note's 147.4) |
+| 3 -> 4 -> 5 (pool 5,300; 4 happens in the first tick) | 0, then 1 | 130.4379, then 147.3948 | level 4 is below 5 |
+
+Stubs removed from the real run: `AttributeInitializationDefinition.EvaluateInitializationData` (x2) and `WillowPlayerController.RecalculateAttributeInitializedState`. Still hit on
+the level-up path, all with no rule to implement: `WillowLeviathanService.RecordPointsEarnedEventForPlayer`, `RecordPlayerCharacterGainedLevelEventForPlayer` (telemetry),
+and the HUD side of `ClientOnExpLevelChange` (no HUD). No stub is newly reached.
+
+### Not modelled / open
+
+- The host still displays its own points and health; adopting the VM's numbers needs a points counter in the host (the save recomputes points from the level, NATIVE_SAVE_LOAD:
+  `max(0, L - 4)` minus points spent, and must keep doing so) and a health setter, and is a UI/save change.
+- Which native writes the health pool's base maximum in the game; whether a level-up refills current health (the host does; the class's `OnLevelUp` behavior is a pawn branch the VM skips).
+  *Implemented in swap 7b (below).* *Answered 2026-10-07 (lane L1, in game):* `RecalculateAttributeInitializedState` writes the maximum, and a level-up refills current health to the new maximum ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+- The VM's `GeneralSkillPoints` starts at 0 each run (the host owns the unspent count), so the script's "first skill point" stat branch (old 0, new above 0) is reached with no stats object
+  and does nothing; the spent-points and respec paths are not run.
+- Evaluation is single precision with `std::pow`; the game's `pow` may differ in the last bit (see NATIVE_PROGRESSION section 3 for the same question on the curve).
+- Playthroughs above 1 and the skill-point definitions of DLC are not modelled (the evaluator throws on shapes it does not know).
+
+### Checks (2026-10-06, CMake Release and UE module rebuilt first)
+
+- Synthetic `tests/mission_script_test.py` scenario S7 (`--slice-run` on invented packages: a conditional `PlayerExperienceLevel >= 5` gives 1 point else 0, a health formula
+  `10 x 1.5^level`; the toy `ExpLevelUp` mirrors the installed one's two extra steps): 4 -> 5 awards 1 point and 75.9375 health, 5 -> 6 awards 1 and 113.90625, 3 -> 4 awards 0 and
+  50.625, 4 -> 6 in one update awards 2 once with the last level's health, a reward that does not cross a level sends neither event; no stubs and no notes. (The existing toy's
+  `Expressions` array element lacked its `None` terminator, so its conditional list decoded as empty; fixed, the playthrough branch it models is still the default one.)
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=98 errors=0 (96 before, two new: `script_level_up_awards_skill_points`, `script_level_up_sets_max_health`), resume PASS checks=11 errors=0.**
+  The log lines: `OWQUEST script level-up skill points: VM awarded 1, host 1 (same)`, `OWQUEST script level-up max health: VM 240.323 at level 9, host 240.323 (same)`. Stubs unchanged
+  at the points the suite logs them: 9 after accept, 15 after turn-in (the level-up runs in the next frame, after that line).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0.**
+
+## Turn-in loot stand-in removed (2026-10-07)
+
+Maintainer decision, AI-assisted (Claude), lane I4: "that's not how missions are gonna look". The stock data gives the Fire mission no item reward (`RewardData` has only
+`ExperienceRewardPercentage` and `CreditRewardMultiplier` 0; NATIVE_LOOT.md, `GetItemRewardPools` / `GetItemRewardsForPlayer`), so the turn-in is XP only.
+
+- **Removed:** `tools/weapon_slice_gear.py --reward-only` and `--reward-seed-limit` (`build_reward`, the `slice_reward_roll` recipe, mesh and the manifest's `reward_roll` key; the
+  rest of the tool, including the manifest's `loot` table and `build_mesh` used by `weapon_refresh_fragments.py`, is unchanged); in `OpenWillowQuest`: the `reward_roll` recipe lookup
+  at start, `RewardItem` / `bHasReward` / `RewardPickup` / `DropReward`, the pickup spawned by the `Reward` effect; in `OpenWillowInventory`: the `reward_roll` provenance skip in
+  `LoadRecipes` (only mission weapons are skipped now). The suite checks `turn_in_drops_loot_stand_in_pickup` and `use_key_collects_loot_pickup_into_backpack` are removed with it.
+- **Kept:** `AOpenWillowInventoryPickup`, the walker's pickup path and the backpack code (the lent mission pistol, the inventory suite). The press of E at the end of turn-in now reaches
+  Marcus (the "no missions" line, check `use_chain_plays_no_missions_line` unchanged).
+- **New check `turn_in_gives_no_item_reward`:** after the turn-in the reward counter is 1, the script's stub list has no `GetItemRewardsForPlayer` entry (that native lists a "not
+  implemented" entry for a non-empty item reward, so the script path found none), no `AOpenWillowInventoryPickup` exists in the world and the backpack count is unchanged.
+- **Local files:** `local/items/slice/slice_reward_roll.*` and the manifest key were deleted on this machine (ignored, regenerable otherwise); a copy elsewhere is harmless but
+  `host/ue5/import_slice_items.py` would still import a stale `slice_reward_roll.json` as an asset, so delete it there too.
+
+## Script swap 7b: the health pool rebase and the level-up refill (2026-10-07)
+
+AI-assisted (Claude), lane I4. Replaces swap 7's health stand-in with the rule of [NATIVE_LEVEL_UP_ATTRIBUTES.md](NATIVE_LEVEL_UP_ATTRIBUTES.md) (lane G23). **Every rule stays
+UNVERIFIED in the running game except the one outcome observed on 2026-10-07 by lane L1 in two live captures** (refill from half and from a quarter health to the new maximum,
+[REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)). The numbers differ from those captures only by the profile's Badass Rank modifier, which the slice does not have.
+
+### What runs now
+
+1. **The VM owns a health pool.** `MissionScript::ensureHealthPool` builds a `ResourcePoolManager` on the VM controller and one `ResourcePool` in it, of the class the health
+   resource names (`D_Resources.Health.DefaultResourcePoolClass`, `Engine.HealthResourcePool`), over Maya's `HealthPoolDefinition` (found by its stock path, as in swap 7), the
+   controller as `AssociatedProvider`, authoritative. The host seeds it: `setPlayerExperience` builds it at the player's level, full; `setPlayerHealth(current)` (the quest calls it
+   with Maya's current health before accept and turn-in) sets the current value and records it. Seeding is the pool's creation, not the level-up path: base maximum from
+   `BaseMaxValue` through the evaluator, empty modifier stack, minimum from the definition, then `UpdateLastValues`.
+2. **`RecalculateAttributeInitializedState` (controller-class part, section 1 of the note).** The native rebases every pool of the controller's manager through
+   `ResourcePoolManager.RecalculateBaseValues`, which runs the **installed script** `ResourcePool.CalculateBaseValues(true)` on each pool, in slot order. That script runs on the VM
+   unchanged: the let-attribute opcode (5F) stores the evaluated `BaseMaxValue` into `MaxValueBaseValue` and recomputes `MaxValue` from the stack with no notification; then
+   `UpdateCurrentValueOnExtremaChange` applies the follow rule (the definition flag `bUpdateCurrentValueOnExtremaChange` holds for health): **current becomes the new maximum
+   only if it was at or above the maximum recorded at the last `UpdateLastValues`**, and the script ends by recording the new values. Natives implemented for it, scoped to this one
+   pool, from section 4 of the note (UNVERIFIED): `ResourcePool.GetMaxValue` (base or effective), `SetCurrentValue` (authoritative gate, integer-resource truncation, clamp with the
+   minimum winning, idle-timer stamp), `UpdateLastValues` (clears "created and not modified" past 0.0001, records current, minimum, maximum), `PoolIsNowFull` (has-been-full flag when
+   minimum < maximum). The pool's other reads (`GetUpgradeLevel`, `ApplyUpgrades`) are installed script and run as is (health has no upgrade data).
+3. **The refill: `OnExpLevelChange`'s pawn branch runs in the VM, so the 1 s guard is the script's own.** During the level-up the controller is given the player's pawn (the VM
+   player pawn) and `PlayerClass` (Maya's class), and the world's `TimeSeconds` advances with the slice's ticks (`FireMissionSlice::tick` -> `advanceTime`). The installed script then
+   tests `bFeedback` and `TimeSeconds - LastLevelUpTime > 1.0` (strictly greater, before both behavior sets; `LastLevelUpTime` starts at 0, so a level-up in the first second of game time gets none),
+   sets `LastLevelUpTime` and calls `BehaviorBase.RunBehaviors(PlayerClass.OnLevelUp, ...)`, and again for `OnLevelUpNaturally`. Natives on that branch with no note of their own, bound
+   as UNVERIFIED stand-ins: `WillowPawn.GetAWillowPawn` (answers the pawn itself, its name), `WillowPawn.SetGameStage` (recorded only).
+4. **`BehaviorBase.RunBehaviors` is a labelled STAND-IN for the skill activation** (the note describes the data and the observed effect, not this native or the skill machinery behind
+   `Behavior_AttributeEffect`: `SkillEffectManager.ActivateSkill`, the timed skill, `AddSkillEffect`, `AdjustModifiers`). It walks the collection by its data
+   (`Behavior_RunBehaviorCollection.CollectionDefinition.Behaviors`) and for each `Behavior_AttributeEffect` applies the skill's effects at the starting grade (at least 1): the
+   attribute is resolved through its resource-pool context resolver and object-property value resolver to a pool of the VM (no such pool: the context does not resolve and the effect is not
+   added, which is the game's rule), the value is `BaseModifierValue` (evaluated for the controller: for the heal, `HealthMaxValue`, the **new** effective maximum, since the rebase came
+   first) + `PerGradeUpgrade x ((grade - start) div step)`, and a plain attribute (no modifier stack: `CurrentValue`) takes it in place: PostAdd adds, Scale multiplies by the raw value;
+   then the pool's notification clamps current (below the minimum to the minimum, at or above the maximum to the maximum). So the first skill's first effect adds the maximum to current
+   and the clamp ends at the maximum. Presentation behaviors (the particle and the dialog event) are listed in `script.notes`, not run. The evaluator gained the resource-pool context
+   resolver (`AttributeContext::resourcePool`) for this.
+5. **Events.** After a level change the slice sends `Level`, `SkillPoints`, `MaxHealth` (now the pool's effective maximum) and the new `Health` event (current in `a`, maximum in `b`).
+   `--slice-run` prints it as `health`; a new step `health:<current>` sets the player's current health (after `player:`).
+
+### Host (`OpenWillowQuest`, `OpenWillowWalker`)
+
+The host now **adopts** the VM's result for a level-up from the mission's experience. When the script's experience raises the level, the walker's own refresh is held
+(`HoldHealthForScript`) instead of setting the host formula at once; the `Health` event's numbers become Maya's maximum and current health (`ApplyScriptHealth`), which ends the hold; if
+no `Health` event comes in the next tick the host formula applies as before (logged). The host formula (`Data.HealthForLevel`) is the oracle: the log lines compare the VM's maximum
+with it. A level change the script did not handle (the suite's `SetLevel` fixtures) still goes through `RefreshHealthForLevel`. A load does not run any of this (the note, section 8).
+
+Existing checks whose meaning changed (names kept): `level_up_sets_formula_max_health` and `level_up_refills_current_health` now hold because the VM computed the maximum and
+refilled the half-empty pool (before, the host's own formula did both at once; the oracle comparison `Data.HealthForLevel` is unchanged); `script_level_up_sets_max_health` now compares the
+VM's maximum with the adopted walker maximum (still the same numbers). New: `script_level_up_refills_health` (Maya at half health when the reward came, one `Health` event full at the new
+level's maximum, the walker holds exactly those numbers). The old MaxHealth log line compares with the host formula, not with the walker.
+
+### Not modelled / reported
+
+- **Class-level attributes of the native** (section 1 parts 1 and 3): `EncumbranceResistance`, the twelve pawn damage modifiers and the ten status-effect resistances. For Maya's class
+  they are the constants 0 and 1, so nothing visible changes; the VM pawn has none of those attributes set up. **Not implemented.**
+- **The action-skill cooldown reset** (second effect of the first skill: `ActiveSkillCooldownCurrentValue` scaled by the pool's minimum, 0): the VM has no cooldown pool, so the effect finds no context and
+  is not added (the game's rule for a missing pool). It would need the Phaselock cooldown pool as a VM `ResourcePool` (definition `ActiveSkillCooldownPool_Siren`, current value, minimum) and
+  the host's cooldown state read from and written back to it; the host keeps its own cooldown. **Not implemented.**
+- **The shield recharge boost** (second `OnLevelUp` skill: `ShieldActiveRegenerationRate` PostAdd half the shield maximum, 4 s, a stack attribute removed at expiry) needs a shield pool, a
+  timed skill with expiry and the stack-attribute path of the modifier machinery. The slice has no shield (base maximum 0). **Not implemented.** Likewise the natural-level-up weapon-damage
+  scale (`OnLevelUpNaturally`), a 30 s stack effect on the weapon: **not implemented** (the behavior list is walked, the effect targets a stack attribute and is listed as not implemented).
+- The real skill activation (timed skill, grade, expiry), the pool's subclass "current value changed" hooks, the per-frame pool update (regeneration, which also records the last values),
+  `OnHealthPoolMaxValueModified`, the load-time fills (`ServerItemSaveGameDataCompleted`), and the pawn's `SetGameStage` (recorded only).
+- The VM pool has no modifier stack entries (the host applies no skills or Badass Rank to health), so the rebase's "keep the stack" is exercised by the formula only, not by data. The
+  profile Badass Rank modifier of the live captures (effective/base 2.01747) is not modelled by the host.
+- `SetCurrentValue`, `GetMaxValue`, `UpdateLastValues` and `PoolIsNowFull` are bound only for the one pool the bridge builds; `RunBehaviors` outside a level-up logs a stub.
+
+### Checks (2026-10-07, CMake Release and UE module rebuilt first)
+
+- Synthetic `tests/mission_script_test.py` scenario S7b (`--slice-run`; toy `ResourcePool` with the pool-side script in miniature, a manager, an `OnLevelUp` collection, the toy `ExpLevelUp`
+  with the installed guard; health `10 x 1.5^level`): a full pool follows the new maximum (75.9375/75.9375) with the behaviors inside the guard; a half pool (20) keeps its current value through
+  the rebase inside the guard (20 of 75.9375); the same level-up after the guard refills it (75.9375 of 75.9375); with level-ups at 2.1 s, 2.2 s and 3.7 s the first refills, the second
+  (0.1 s later) leaves current at 20 of 113.90625, the third refills (170.859375 of 170.859375); the cooldown effect of the toy skill (a pool the VM lacks) is not added and no stub appears.
+  The earlier S7 scenario is unchanged and passes.
+- Real data (`--slice-run`, installed packages): `player:8:28200 health:106.3 tick:3` gives skill_points 1, max_health 240.3233, health 240.3233 of 240.3233; the same with `tick:0.5` (inside the guard)
+  leaves 106.3 of 240.3233; a full pool at level 8 ends 240.3233 of 240.3233 (`player:8:28200 tick:3`).
+- `ctest` 11/11, `tools/verify_packages.py` 9/9 (class bodies exact), UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=98 errors=0 (97 before, one new: `script_level_up_refills_health`), resume PASS checks=11 errors=0.** The log shows
+  `OWQUEST script level-up health: VM 240.323/240.323 adopted; host formula maximum 240.323 (same)`. Stubs at the suite's log points are unchanged: 9 after accept, 15 after turn-in.
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0** (the last known run, local/p2/inv_swap2.log, was the same).
+- **One newly reached stub entry, after the level-up only** (`--slice-run` real data; not in the suite's two log lines): `level-up skill effect: attribute resolvers other than a resource pool's property (not
+  implemented) x1`, the natural-level-up weapon-damage effect (its attribute resolves through the weapon, not a pool). The shield and cooldown effects are skipped silently (no such pool in the VM).
+
+## Script swap 8: the lent weapon, the dummy's spawn and the turn-in dialog follow the real game's order (2026-10-07)
+
+AI-assisted (Claude), lane I6. Evidence: the live Fire-mission trace of lane L2 ([FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md), observed in the running
+game) and the installed data and script. Native rules come from [NATIVE_MISSION_SCRIPT_BRIDGE.md](NATIVE_MISSION_SCRIPT_BRIDGE.md),
+[NATIVE_INVENTORY_EQUIP.md](NATIVE_INVENTORY_EQUIP.md), [NATIVE_DIALOG.md](NATIVE_DIALOG.md) and [NATIVE_BEHAVIOR_POPULATION.md](NATIVE_BEHAVIOR_POPULATION.md) (all
+UNVERIFIED unless the trace shows them; what the trace shows is named below). The comparison was rerun first with the current binary: the host-event stream was
+the one L2 compared (38 matched, 4 out of order, 5 missing, 4 extra). After this swap: **43 / 2 / 2 / 4**, and the 18 order rules in `tools/verify_fire_event_order.py`
+hold on the real data (9 of 18 before).
+
+### 1. The lent weapon: granted inside Active, removed inside Complete
+
+- **Observed (L2):** the grant is `AddInventory` (bReady false), then `AddInventoryToBackpack`, then the controller's `ShowMissionWeaponTraining`, inside `ActivateMission`,
+  after `UpdateMissionStatus(Active)` and the status delegates and before `SetActiveMission`; the item was in the backpack, not equipped. The removal is
+  `RemoveMissionWeapons` inside `CompleteMission`, after the status hook (the rewards) and before the observers. At ReadyToTurnIn nothing is removed: the pistol stayed
+  usable until the turn-in.
+- **VM (`src/mission.cpp`):** `MissionSystem::setStatus` emits `MissionWeaponGranted` right after the status event when the new status is Active, and `MissionWeaponRemoved`
+  right after it when Complete (before the observers and the `Default` event). The old rule (grant when the set holding the weapon's objective activates, remove when that
+  objective completes) is gone. The bridge note's owner condition is applied (`MissionSystem::lendsWeapon`: the weapon's own mission objective is one of the mission's
+  objectives); its region-stage condition (the mission has a `GameStageRegion`) is not read here. Events: `status`, `mission_weapon_granted`, then the initial set at accept;
+  `experience`, `status`, `mission_weapon_removed`, `reward` at turn-in. `ShowMissionWeaponTraining` (a contextual HUD prompt) is not run.
+- **Host:** `OpenWillowWalker::LendWeapon` now only adds the item to the backpack (not equipped, not drawn; the pickup stats, the roll and the level are the host's recipe);
+  `ReturnLentWeapon` removes it from the slots and the backpack alike and draws another weapon only if the lent one was held (first equipped slot: host rule, UNVERIFIED;
+  the game switches to the best remaining weapon). So **Maya must equip the pistol herself** before she can shoot with it, as in the live run (where the driver moved it
+  from the backpack into a slot with `ReadyBackpackInventory`): in the inventory page, or in the quest suite by a fixture that calls the same `EquipItem` the page calls.
+  A saved Active mission re-grants it into the backpack on load (the existing `weapon_lent` flag), which matches the note's `GiveTo(pawn, False)`.
+  Open: the host's `EquipItem` still checks the item's level against Maya's; the native rule gives a mission weapon level requirement 0. Not exercised (the lent pistol's level
+  is the gear level).
+- **Quest suite names (98 checks before):** kept: `mission_weapon_not_carried_before_lend`, `mission_weapon_lent` (after the range: still lent), `lent_pistol_drawn_with_recipe_identity_and_stats`,
+  `lent_pistol_shows_imported_mesh_with_arms`, `lent_pistol_shot_carries_its_damage_type_to_dummy`. **Meaning changed:** `mission_weapon_removed_after_objective` is replaced by
+  `mission_weapon_kept_after_objective` (the pistol is still lent and held after the objective completes). **Added:** `mission_weapon_granted_on_accept` (lent, in the backpack, in no
+  slot, not held), `lent_pistol_readied_from_backpack_by_player` (the fixture's equip: the player action that the grant no longer does), `mission_weapon_removed_on_turn_in` (gone from slots and
+  backpack, the held weapon is another), `turn_in_raises_mission_turned_in_dialog_tag`. The drawn-pistol checks hold after the player's equip, as they did after the old automatic draw.
+
+### 2. The dummy's `RegisterTargetable`: already the data's 1 s; now visible
+
+- **Cause (from the data; `--behavior-dump` now prints each sequence's links with ids and delays):** the mission provider's `Behavior_AdvanceObjectiveSet_96` (which runs 0.5 s
+  after the `RockPaper_GoToRange` completion, behind dialog 03b's first run) has one link, the **default output (id -1) with `ActivateDelay` 1.0, to `Behavior_ChangeRemoteBehaviorSequenceState_171`**,
+  which enables the dummy's `Targetable` sequence; that sequence's `OnBehaviorSequenceEnabled` runs `Behavior_RegisterTargetable_36`. The live trace shows exactly this
+  (`AdvanceObjectiveSet_96` at 89.953, `_171` and `RegisterTargetable_36` at 90.960).
+- **The VM already ran it** (the 1 s is a link delay of the kernel, from the first swaps); lane L2 read "at spawn" because the CLI printed no sequence changes and the dummy
+  trace has no times. Checked with `--slice-run` (`range tick:0.6 spawn tick:A`): `RegisterTargetable_36` is absent from the dummy's trace for A = 0.8 and present for A = 1.0
+  (the set came 0.5 s after the range, `_171` is due 1.0 s after the set). So nothing was changed in the rule. Added: the host event **`sequence_change`** (provider, sequence, action)
+  for every `Behavior_ChangeRemoteBehaviorSequenceState` (the mission's `_171`, the dummy's own `_84` and `_64`), so the order is comparable.
+- **Open (UNVERIFIED, not tested live):** whether a shot in the first second, before `Targetable`, counts. And if the dummy's registration came after `_171` ran (a host that spawns
+  it a second late), the registration would reset the enabled sequences and `Targetable` would stay off; the host spawns it with the set.
+
+### 3. `AIHold_57` on the dummy's spawn: `Behavior_SpecialMove` selects output 0
+
+The dummy's `Idle` sequence: `OnBehaviorSequenceEnabled -> Behavior_SpecialMove_58 --(output id 0)--> Behavior_AIHold_57`. The VM reported `SpecialMove` at the host boundary and,
+as for every boundary class, selected no output, so only default links were followed. The installed script of `Behavior_SpecialMove.ApplyBehaviorToContext` (`--disasm`)
+asks the context's special-move component to play the move on its first run and selects output 0 at once; output 1 follows when the move has ended. `BehaviorProvider::reportAtBoundary`
+gained an `outputs` argument (the ids the class's script selects before it needs the host's answer) and the dummy's `SpecialMove` is registered with `{0}`. `AIHold_57` now runs
+between `SpecialMove_58` and `Transform_12`, as live. Output 1 (the move ended) is not modelled (no animation system); no link of the dummy uses it. UNVERIFIED that the dummy's context
+has the special-move interface (the live `AIHold_57` is the evidence).
+
+### 4. `PlayMissionTurnedInDialog` at the turn-in
+
+- **Why the VM did not run it:** `OnPlayerTurnedInMission` (installed script, run since swap 6c) calls `PlayMissionTurnedInDialog` only when `PawnsUsingMe` is not empty and its first
+  entry's controller is the accepting player. `PawnsUsingMe` is filled by `BeginUse`, which the real game calls when Marcus's mission screen opens (the live order: `Behavior_ShowMissionInterface`,
+  `OnPlayerOpenedMissionUI`, `BeginUse`). The screen's movie (`QuestAcceptGFxMovie.Start`, script) is not hosted.
+- **What runs now (`MissionScript::useMarcus`):** when the chain opens the interface, the open of the movie is emulated at its observed position: `OnPlayerOpenedMissionUI(controller)` and
+  `BeginUse(player pawn)` on Marcus, both installed script. A movie opens once, so a second press while the screen is "open" does not run `Start` again. **The close is not emulated** (host UI): in the
+  real game the accept closes the screen (`EndUse`, `PlayDismissalDialog`, `OnPlayerClosedMissionUI`, observed); here the player stays Marcus's user for the rest of the run. An emulated close was tried and
+  dropped: the dismissal tag `VO_NPC_GenericDismissal` leads to a template talk act whose only entry names another NPC (Dannenberg), so the VM would report a "no talker" line that the host's audio manifest has
+  no entry for.
+- **The turn-in:** `ServerCompleteMission -> OnPlayerTurnedInMission -> PlayMissionTurnedInDialog` raises the global `VO_NPC_MissionTurnedIn` tag on Marcus's dialog component (the same tag as live, observed), which the
+  bound `GearboxDialogComponent.TriggerEvent` reports as the new host event **`turn_in_dialog`** (tag, speaker, other object's class) after `reward`, and runs through the stock dialog data.
+- **`Act_ObjectParameterSwitch` (`src/dialog.cpp`):** that tag's event action is a switch over the event's ObjectParameter (None here) with one `Outputs` entry (a mission); the note's rule is
+  implemented: an output for every entry equal to the parameter, else the last output. Nothing matches, the last output has no link, the chain ends: **the turned-in event is silent for the Fire mission**
+  (UNVERIFIED in the game: lines are native, not seen). A chosen output that has a link is "not implemented" (an error), as unsupported nodes were before.
+- **VM fix found on the way (`src/interp.cpp`):** `BeginUse` stores `PawnsUsingMe[PawnsUsingMe.Length] = User`. The assignment evaluated its target a second time to produce its value, and the second
+  evaluation of the index grew the array again, so **every `arr[arr.Length] = x` in script stored two elements**. That made `PawnsUsingMe` hold two users, and the stock `PlayOnUseDialog` (which stays
+  silent when more than one user is registered) went silent at the turn-in press. The assignment now returns the target it already holds. This is a general VM correction, not limited to the mission
+  code; the full gate below ran after it. Test: `tests/vm_test.py` `Foo.Append` (fails without the fix).
+
+### 5. The dialog event "one wake late" (03b and 05): not a defect
+
+The installed `Behavior_TriggerDialogEvent` script: first run (not forced): `NextExecutionDelayTime` = 0.001 and Out (id 0); the resumed run triggers the dialog. So in the real game too the line starts one
+kernel wake after the behavior's first application; the hook saw only that first application (before `AdvanceObjectiveSet_96` in the same frame) because the line is native. The VM's `dialog` event marks the line
+start, hence after the set. No code change; the event-order rules say so. [FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md) has what the live trace adds (no `_1184`/`_1183`: the Finished
+output of dialog 03b was never selected live).
+
+### CLI and tests
+
+- `--slice-run` events: `sequence_change`, `turn_in_dialog` (new); `--mission-run` effects: `turn_in_dialog`. `--behavior-dump` prints `graph` per sequence (event and behavior links with id and delay).
+- `tools/verify_fire_event_order.py`: the event-order rules of the Fire mission (names and order only), run on the real data; `--from-json` checks a saved `--slice-run`; `--self-test` checks the checker on an
+  invented stream (a weapon removed at the hit and a missing `AIHold_57` are caught). Needs the installed game, so it is not in CTest.
+- `tests/mission_script_test.py` (synthetic): scenario W (weapon granted inside Active, not at the second set; not removed at ReadyToTurnIn; removed inside Complete before the reward), H2 (the screen opens once, with
+  one user: the toy `BeginUse` appends through the length, which also covers the VM fix), E2 additions (a switch with no matching output ends silent; a matching one with a link is an error), and the dummy toy's Idle
+  sequence now runs a `Behavior_SpecialMove` whose output 0 leads to its remote event (scenario D). `tests/vm_test.py`: `Foo.Append`.
+- Host: the two new host-event kinds are logged; the quest-suite changes are listed in section 1.
+
+### Not modelled / open after this swap
+
+- The screen's close (accept and after the reward) and `MissionRewardsReceived` on the player's confirmation: host UI.
+- `ShowMissionWeaponTraining` (HUD prompt), `ActiveMissionWeapons` and `IsValidMissionWeapon` (the gate that refuses readying a mission weapon after its mission ended: nothing can ready it, it is removed with the mission),
+  the weapon's roll (the host uses its recipe), the grant's region-stage condition, `GrantMissionWeaponsToClientPlayer` (the host re-lends on load by its own flag).
+- `Behavior_SpecialMove`'s output 1 and the move itself; the dummy's idle animation.
+- Lines 03a and 04 (the VM plays them; the live trace never selected the Finished output that leads to them), the `DET_NPC_OnUse_MissionsAvailable` second step, `AttemptStatusEffect_9` (the VM's hit model): unchanged.
+
+### Checks (2026-10-07, CMake Release and UE module rebuilt first)
+
+- `ctest` **11/11** (`mission-script-synthetic` and `vm-synthetic` gained the cases above), `tools/verify_packages.py` **9/9** (class bodies exact), UE module `Result: Succeeded`.
+- Real-data `--slice-run` (the L2 step list): no errors; `python tools/verify_fire_event_order.py` **18 of 18** rules (9 of 18 on the stream before this swap); `--self-test` passes.
+- **`tools/test_quest.ps1`: first run PASS checks=102 errors=0 (98 before), resume PASS checks=11 errors=0.** The log shows `lent weapon ... added to the backpack, not equipped`, the three
+  `dummy sequence change` lines, `turn-in dialog tag raised on Marcus: ...VO_NPC_MissionTurnedIn`, `dialog lookups=9 misses=0 played=0`. Stub entries at the suite's log points: **12 after accept, 18 after
+  turn-in** (9 and 15 before): three newly reached, all from `BeginUse -> OnNewPrimaryUser -> StartLingerTimer` and the `Used` event: `AIComponent.ActivateEvent`, `Actor.ClearTimer`, and
+  `EvaluateInitializationData` with a context source other than the player controller (`Actor.SetTimer` is now called twice).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.**
+
+## Level-up weapon damage scale (2026-10-07)
+
+AI-assisted (Claude), lane I7. Rules: [NATIVE_LEVEL_UP_ATTRIBUTES.md](NATIVE_LEVEL_UP_ATTRIBUTES.md) section 6 and 7, [NATIVE_ATTRIBUTES.md](NATIVE_ATTRIBUTES.md) sections 3 and 5,
+[NATIVE_SKILLS.md](NATIVE_SKILLS.md) section 4. **Observed in the running game (lane L1, [REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)):** after a natural level-up the equipped weapon's
+damage went from 41.40 to 61.92 for 30 s (the weapon's damage scale sum from 2.017 to 3.017, +1.0 added to the existing sum), gone at 30.3 s. Everything else here is UNVERIFIED.
+
+### What runs as script, what is data, what is a stand-in
+
+- **Script (unchanged installed code):** `ExpLevelUp(bCheated)` calls `OnExpLevelChange(true, not bCheated)`; inside the 1 s guard that function runs `PlayerClass.OnLevelUp` and then, **only
+  if `bNaturalLevelup`**, `PlayerClass.OnLevelUpNaturally`. So "natural" is decided by the script. The slice's pool update always calls `ExpLevelUp(false)` (earned experience), so its
+  level-ups are natural; the not-natural path is `ExpLevelUp(true)` (a cheat) and the load path (`bFeedback` false, no behaviors).
+- **Data (read, not hard-coded):** `OnLevelUpNaturally` of Maya's class names `PlayerBehavior_LevelUpNaturally`, one `Behavior_AttributeEffect` whose skill is `DurationType` Timed (position 1 of
+  `SkillDefinition.EEffectDurationType`: Infinite, Timed, MAX), `InitialDuration` 30, one effect on `D_Attributes.Weapon.WeaponDamage` (context resolver
+  `WeaponAttributeContextResolver`, value resolver `ObjectPropertyAttributeValueResolver` on `InstantHitDamage`), `ModifierType` Scale (0), `BaseModifierValue` 1, start grade 0. The skill also has
+  `bAutoUpdateContexts` and `SkillEffectUpdateIterval` 0.5 (seen with `--object-dump`).
+- **STAND-IN (VM, `MissionScript::weaponEffect`):** `BehaviorBase.RunBehaviors` stays the labelled stand-in for the skill activation. For an effect whose context is the weapon, the VM has no weapon,
+  so it does not apply the effect: it evaluates the value at the starting grade (the same `effectAmount` as the pool effects) and reads the skill's duration, and reports one host event
+  `weapon_damage_scale` (`a` = value, `b` = seconds), after `level`, `skill_points`, `max_health`, `health`. Only the weapon damage property, a Scale modifier, a timed skill and an empty bonus list are
+  handed over; anything else is a "not implemented" stub entry. This replaces the stub `level-up skill effect: attribute resolvers other than a resource pool's property` that swap 7b reported.
+  Each activation is its own modifier (two natural level-ups outside the guard give two events). `--slice-run` has a new step `cheatlevel` (one `ExpLevelUp(true)`), used only by the test.
+- **Host (`AOpenWillowWalker::AddWeaponDamageScale` / `ShotDamage`):** the walker keeps (scale, end time) entries in game time; an entry runs while `Now < start + duration`
+  (dropped by Tick, logged). The shot's damage follows the stack rule, **(base + PreAdd) x (1 + up + s) / (1 + down) + PostAdd** (NATIVE_ATTRIBUTES.md section 3), so the running scale joins
+  the weapon's existing up-sum, which is the observed (S + s) / S (3.017 / 2.017 = 1.496), not a doubling. The terms come from the card: `tools/weapon_stats.py` now writes
+  `card.damage_stack` (`base`, `pre_add`, `post_add`, `scale_up`, `scale_down`: the WeaponDamage stack that `combine()` turns into `damage`, which is unchanged) and the host parses it into
+  `FOpenWillowWeaponItem` (`bHasDamageStack`, `DamageBase` ...). **Fallback (labelled host stand-in, UNVERIFIED):** a recipe without the stack (evaluated before the field) gets card damage
+  x (1 + s), S taken as 1, which overstates when other Scale modifiers are on the weapon. A non-positive scale is refused (the stack puts a negative one in the divisor; not modelled).
+  The modifier follows whichever weapon is held when the shot is made; the game re-gathers the context every 0.5 s (not modelled). The effect is not saved.
+- **Local slice cards:** a full `tools/weapon_slice_gear.py` rerun re-rolls different guns than the ones in `local/items/slice` (different names and damage), so it was not used. The five existing
+  recipes were re-evaluated with `tools/weapon_stats.py --recipe` (on copies under `local/p2/I7/restat/`) and only `card.damage_stack` was copied into each existing recipe; its
+  terms rebuild each card's `damage` to within 1e-6 relative. (The re-evaluation also differs from the old cards in `rarity_rating`/`rarity_color`, and for the shotgun in reload, magazine and display:
+  the old recipes predate those tool changes. They were left as they were.)
+
+### Not modelled / open
+
+- The shield recharge boost (second `OnLevelUp` skill: no shield pool in the VM or host), the action-skill cooldown reset (a live check by another lane is running), other timed skills, the real skill
+  activation (`SkillEffectManager.ActivateSkill`, the per-frame refresh), and the host's weapon scale sum (a per-weapon modifier stack that would make the factor exact).
+- The expiry time is the host's game time at the event plus the duration; the VM's `TimeSeconds` and the host's clock are separate (the level-up runs in the tick after the turn-in, so they differ by a frame).
+
+### Checks (2026-10-07)
+
+- Synthetic `tests/weapon_stats_test.py` (30, two new): the card's `damage_stack` has the five terms, `combine()` over them gives `damage`, and a further Scale of 0.5 gives the (S + s) / S ratio, not a doubling.
+- Synthetic `tests/mission_script_test.py` scenario S9 (invented data: Scale 0.75, 12.5 s, the toy `ExpLevelUp` with the installed `not bCheated` branch): a natural level-up past the guard gives one
+  `weapon_damage_scale` 0.75 / 12.5 after `level`, `skill_points`, `max_health`, `health`, with no stub or note; inside the 1 s guard none; `cheatlevel` (not natural) past the guard runs the level-up behavior
+  (a `health` event) and gives none; two natural level-ups at 2.1 s and 3.7 s give two events and the one at 2.2 s none.
+- Real data (`--slice-run`, installed packages; logs under local/p2/I7/): `stage:8 player:8:27900 health:106.3 accept tick:5 range spawn tick:6 damage:... tick:5 turnin tick:3` gives `weapon_damage_scale 1.000000 30.000000`
+  after `health 240.3233 of 240.3233`; `player:8:0 tick:3 cheatlevel` gives the level, points, maximum and health events and no weapon event; no `level-up skill effect` stub remains (the only stub left on the
+  level-up path is the telemetry `RecordPlayerCharacterGainedLevelEventForPlayer`).
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, `tools/verify_fire_event_order.py` 18 of 18 (and `--self-test`), UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=103 errors=0 (102 before, one new: `natural_level_up_scales_weapon_damage_for_duration`), resume PASS checks=11 errors=0.** Log lines:
+  `OWQUEST script level-up weapon damage scale: +1.000 for 30.0 s (the VM's, from the skill's data)` and, for the held slice pistol, `card 63.633, with the scale 110.421 (stack formula 110.421, factor 1.735), after 63.633`
+  (1.735 = (1.36 + 1) / 1.36 for that gun's up-sum of 0.36; the card damage again at the end time).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0** (card loader touched: same as baseline).
+
+## Script swap 10: the level-up resets the action-skill cooldown (2026-10-07)
+
+AI-assisted (Claude), lane I7. **Observed in the running game and VERIFIED by lane L3** ([COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md) section E, "Part B"): `ExpLevelUp(false)` took the action-skill
+cooldown to 0.0 in the same call, both at its 13.0 maximum during a real Phaselock hold (2.0 s after the cast) and at 7.99 during the drain, and it stayed 0 (no later refill, the hold was not
+ended); `ActionSkillCooldownComplete` ran within 1 ms after `ClientOnExpLevelChange`. The trace shows natural level-ups only. Everything about the VM and host path below is UNVERIFIED.
+
+### From the data: which collection, which modifier
+- The effect is the **second effect of the first skill of `PlayerBehavior_LevelUp`**, i.e. the class's **`OnLevelUp`** collection (not `OnLevelUpNaturally`): `D_Attributes.ActiveSkillCooldownResource.ActiveSkillCooldownCurrentValue`
+  (resource-pool context resolver on `D_Resources.ActiveSkillCooldown`, object-property resolver on `CurrentValue`, a plain attribute), `ModifierType` Scale (0), `BaseModifierValue` = the attribute
+  `ActiveSkillCooldownMinValue` (the pool's minimum), start grade 0. The pool is Maya's `SkillCooldownPoolDefinition` (`ActiveSkillCooldownPool_Siren`, `BaseMinValue` 0).
+- **Natural or not:** `OnExpLevelChange` runs `OnLevelUp` for every level-up with feedback and `OnLevelUpNaturally` only for a natural one, so the script (and this data) say the cooldown reset also follows a not-natural
+  level-up (`ExpLevelUp(true)`); the live trace does not show that case. **The natural / not-natural split of this effect is UNVERIFIED**, taken from the installed script and data.
+
+### What runs
+- **VM (`MissionScript::cooldownPool`, `cooldownEffect`):** `poolFor` now also knows a minimal cooldown pool: an `Engine.ResourcePool` over the class's `SkillCooldownPoolDefinition` with its minimum from the definition (not in the
+  manager: the rebase would evaluate its designer-attribute maximum; its current value is the host's). So the effect's value, the pool's own minimum, evaluates through the evaluator rather than being assumed to be 0. The
+  effect is not applied in the VM: the host gets one `action_skill_cooldown` event (`a` = Scale / PreAdd / PostAdd, `b` = the value), after `health` and before `weapon_damage_scale`, at every level-up past the 1 s guard.
+  A cooldown attribute other than `CurrentValue` or another modifier type is a "not implemented" stub entry. Real data: `Scale 0.000000` for natural and `cheatlevel` level-ups.
+- **Host (`AOpenWillowWalker::ModifyPhaselockCooldown`):** the Phaselock cooldown is a drain model (refilled at the cast, held rate until the release, then the base rate). The modifier is applied to the current value in place:
+  Scale multiplies it, PreAdd/PostAdd add, clamped to 0..maximum, and kept as an offset (`PhaselockCooldownAdjust`, cleared by the next cast) so the drain continues from the new value; Scale 0 therefore reads 0 through the hold and
+  after the release, as observed. Nothing of the cast is touched (a held or draining Phaselock is not ended). When it ends a running cooldown the host logs the game's `ActionSkillCooldownComplete`; **the host has no handler
+  for that call** (the HUD ring reads `PhaselockRemaining`), so nothing else runs.
+
+### Checks (2026-10-07)
+- Synthetic `tests/mission_script_test.py` scenario S10 (invented cooldown pool minimum 0.25, so the Scale value is the data's and not a built-in 0): a level-up past the guard gives one `action_skill_cooldown` Scale 0.25 after `health`
+  and before `weapon_damage_scale`, for a natural and a not-natural (`cheatlevel`) level-up; none inside the 1 s guard; the S9 event-order checks now include it; no stubs.
+- Real data (`--slice-run`): `action_skill_cooldown Scale 0.000000` for `player:8:28200 ... tick:3` and for `player:8:0 tick:3 cheatlevel`; no new stub.
+- `ctest` 11/11, `tools/verify_packages.py` 9/9, `tools/verify_fire_event_order.py` self-test and 18 of 18, UE module `Result: Succeeded`.
+- **`tools/test_quest.ps1`: first run PASS checks=105 errors=0 (103 before, two new: `level_up_resets_action_skill_cooldown`, `action_skill_cooldown_modifier_scales_then_resets_host_cooldown`), resume PASS checks=11 errors=0.**
+  Log: `OWQUEST script level-up action skill cooldown: Scale 0.000 (the VM's, from the skill's data): 0.00 -> 0.00`. At the turn-in no cooldown is running in the suite (the cast steps come later), so that check covers the event and
+  the host's application (reads 0); the modifier on a running cooldown is checked in the Phaselock steps after the blocked cast (Scale 0.5 halves what is left without completing, Scale 0 ends it and reports completion, a third
+  application changes nothing). The suite's later wait for that cooldown to drain is therefore shorter. **Not tested:** a reset while a cast is held (the host's offset keeps the cast untouched; the live observation is L3's).
+- **`tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.**
+
+## Script swap 11: Marcus's mission screen closes at the accept and the reward page waits for the player (2026-10-08)
+
+AI-assisted (Claude), implementer lane I10b. Record of the observed order and the comparison counts: [FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md) ("After swap 11"). Everything the VM
+does here follows the installed script; the host-only parts are stand-ins. **Beyond the order observed in the live game, all of it is UNVERIFIED.**
+
+### What runs
+- **VM (`MissionScript::bindScreen`, `openScreen`, `closeMovie`, `closeScreen`, `confirmReward`):** a stand-in object of the installed class `QuestAcceptGFxMovie` (director, NPC and focus subject filled as `Start` does) and a
+  `WillowGFxUIManager` on the controller. While the screen is open `WillowGFxUIManager.GetPlayingMovie` returns the stand-in, so the controller's own script finds a movie: `ClientUpdateUIMissionList` runs
+  the movie's `UpdateMissionList` -> `DetermineQuestEntries` -> `GotoCorrectPartOfMovie`, and an empty entry list ends in the native `GFxMoviePlayer.Close`. The host bindings are `GetPlayingMovie`, `Close` (raises the emulated `OnClose`: `ServerPlayerEndUseNPC`, then
+  `OnPlayerClosedMissionUI`), `GearboxGFxMovie.PlayUISound` (no-op) and two script overrides, `DisplayRewardsPage` (a flag that waits) and `DetermineQuestEntries` (rows built in C++; the VM keeps no element type for an array grown from empty by `DynArrayInsert`, so the script
+  version cannot fill struct rows; `src/interp.cpp` was not changed).
+- **Events (new):** `dismissal_dialog` (the generic dismissal tag raised on Marcus's component while the screen closes), `mission_interface_closed`, `reward_page` (the turn-in with the screen open) and `reward_received`
+  (`MissionRewardsReceived` on the player's confirmation). `--slice-run` has the steps `confirmreward` and `close`.
+- **Order:** accept = `dismissal_dialog`, `dialog`, `mission_interface_closed`, `status Active`, `mission_weapon_granted`. Turn-in with the screen open = `experience`, `reward_page`, `status Complete`, `mission_weapon_removed`, `reward`,
+  `turn_in_dialog`; `confirmreward` = `reward_received`. `tools/verify_fire_event_order.py` has 24 rules (the 18 of swap 8, two of them reworded for the new events, and six new ones).
+- **Host (`OpenWillowQuest`):** the four events are handled (counted and logged); while the reward page waits, the use key confirms it and then closes the screen (the stand-in for Enter and the Escape after it); the dismissal line (event
+  `dialog` right after the tag) is reported, not looked up: the audio manifest is built from the mission's own steps and has no entry for it. The suite's direct second `useMarcus` after the accept (the in-progress press) opens the screen
+  again, as the script does, so the fixture now closes it, as the player would.
+
+### Bug found on the way
+The first version of the `DetermineQuestEntries` override iterated `rows(...).elements()` of a temporary (freed memory), which left the entry list empty and the screen never closed at the accept. Fixed by naming the value.
+
+### Not modelled / open
+- One `EndUse` in the VM against two live (the first from the controller's focus object, not kept). The dismissal line's talker (the live run starts the act with another NPC; the VM reports `no talker`). The movie's own bookkeeping after
+  the confirmation (the live screen stayed open; the host closes it with the same key). All presentation of the screen. The audio manifest has no entry for the dismissal line (open: `tools/audio_slice_chain.py` only resolves the mission's own steps).
+
+### Checks (2026-10-08, CMake Release and UE module rebuilt first)
+- `ctest` 11/11; `tools/verify_packages.py` 9/9 packages, 3,339/3,339 class bodies; `tools/verify_fire_event_order.py` self-test and 24 of 24 rules on the real data.
+- **`tools/test_quest.ps1`: first run PASS checks=107 errors=0 (105 before, two new: `accept_closes_mission_screen_with_dismissal`, `reward_received_on_confirmation`), resume PASS checks=11 errors=0.**
+  `tools/test_mover.ps1`: PASS checks=16 errors=0. `tools/test_inventory_actions.ps1`: PASS=49 FAIL=0 NOT_RUN=0 KNOWN_DIVERGENCE=0.

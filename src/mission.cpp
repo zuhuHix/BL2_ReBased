@@ -34,7 +34,7 @@ int nativeStatus(MissionSystem::Status status) {
     return numbers[int(status)];
 }
 // Mission event link ids (NATIVE_MISSION_DISPATCH.md B7, UNVERIFIED).
-enum LinkId { ObjectiveCompleted = 2, ObjectiveProgress = 3, SetActivated = 4, SetCompleted = 5, StatusBase = 6, Kickoff = 12, KickoffDialogOnly = 13 };
+enum LinkId { ObjectiveCompleted = 2, ObjectiveProgress = 3, SetActivated = 4, SetCompleted = 5, StatusBase = 6, Kickoff = 12, KickoffDialogOnly = 13, TurnIn = 14 };
 }
 
 struct MissionSystem::Impl {
@@ -42,10 +42,16 @@ struct MissionSystem::Impl {
 };
 
 MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const std::string& missionPath)
-    : runtime_(runtime), package_(runtime.package(package)), missionPath_(missionPath), impl_(std::make_shared<Impl>()) {
+    : runtime_(runtime), package_(runtime.package(package)), missionPath_(missionPath), impl_(std::make_shared<Impl>()), dialog_(runtime, package_) {
+    dialog_.onLine = [this](const DialogSystem::Line& line, const std::string& outcome) {
+        emit(Effect::Kind::Dialog, line.eventTag, line.group, line.talker);
+        effects_.back().detail = "act=" + line.talkAct + ";ak=" + line.akEvent + ";talker=" + (line.echo ? "echo" : "pawn") + ";outcome=" + outcome +
+                                 ";line=" + std::to_string(line.id);
+    };
     const int32_t index = runtime_.findExport(*package_, missionPath);
     if (index <= 0) throw RuntimeError("mission not found: " + missionPath);
     auto mission = runtime_.instantiateExport(package_, index, 4);
+    definition_ = mission;
     if (mission->cls->path != "WillowGame.MissionDefinition") throw RuntimeError("not a MissionDefinition: " + missionPath);
     missionName_ = text(runtime_, *mission, "MissionName");
     description_ = text(runtime_, *mission, "MissionDescription");
@@ -105,6 +111,7 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     if (const Value* reference = runtime_.property(*mission, "BehaviorProvider"); reference && reference->o && reference->o->resourcePackage) {
         impl_->provider = std::make_unique<BehaviorProvider>(runtime_, reference->o->resourcePackage, reference->o->resourceIndex);
         auto& provider = *impl_->provider;
+        provider.onTime = [this](double time) { dialog_.advanceTo(time); };
         provider.handle("WillowGame.Behavior_AdvanceObjectiveSet", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
             requestAdvance(refPath(p.runtime().property(*b.object, "ObjectiveSetToAdvanceTo")));
             return std::vector<int>();
@@ -117,13 +124,10 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
             updateObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
             return std::vector<int>();
         });
-        // Outputs ETriggerDialogEventOutputLinks: Out 0, Finished 1. HOST STAND-IN: no dialog is played, so the dialog
-        // counts as finished at once and both outputs are selected (Out, then Finished).
+        // Outputs ETriggerDialogEventOutputLinks: Out 0, Finished 1. Out on the first run, the dialog one kernel wake later, Finished
+        // when the live line ends (at once when no line starts): src/dialog.* (NATIVE_DIALOG.md, UNVERIFIED).
         provider.handle("GearboxFramework.Behavior_TriggerDialogEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
-            Runtime& r = p.runtime();
-            emit(Effect::Kind::Dialog, refPath(r.property(*b.object, "EventTag")), refPath(r.property(*b.object, "Group")),
-                 refPath(r.property(*b.object, "NameTag")));
-            return std::vector<int>{0, 1};
+            return dialog_.behavior(p, b);
         });
         // Action is an ITargetable.EChangeStatus (CHANGE_Toggle, CHANGE_Enable, CHANGE_Disable; class default Enable).
         const auto actions = enumNames(runtime_, "Engine", "ITargetable.EChangeStatus");
@@ -132,12 +136,31 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
             const Value* components = path ? path->field("PathComponentNames") : nullptr;
             const Value* action = p.runtime().property(*b.object, "Action");
             const int64_t index = action ? action->integer() : -1;
-            emit(Effect::Kind::SetSequence, components ? components->s : "", text(p.runtime(), *b.object, "SequenceName"),
+            emit(Effect::Kind::SetSequence, providerPathLeaf(components), text(p.runtime(), *b.object, "SequenceName"),
                  index >= 0 && size_t(index) < actions.size() ? actions[size_t(index)] : "");
             return std::vector<int>();
         });
     }
 }
+
+bool MissionSystem::hasOptionalObjective() const {
+    return std::any_of(objectives_.begin(), objectives_.end(), [](const auto& entry) { return entry.second.optional; });
+}
+
+// The tracked mission (its tracker's ActiveMission) while Active or ReadyToTurnIn: its MissionDialogGroup gives dialog its priority floor.
+void MissionSystem::updateTrackedMission() {
+    const bool tracked = status_ == Status::Active || status_ == Status::ReadyToTurnIn;
+    const Value* group = runtime_.property(*definition_, "MissionDialogGroup");
+    const Value* plot = runtime_.property(*definition_, "bPlotCritical");
+    dialog_.setTrackedMission(tracked ? refPath(group) : "", plot && plot->truth());
+}
+
+// The grant condition of the bridge note: a MissionWeapon is set and the weapon's own mission objective is one of this mission's objectives.
+bool MissionSystem::lendsWeapon() const {
+    return !weapon_.empty() && std::any_of(objectives_.begin(), objectives_.end(), [&](const auto& entry) { return entry.second.path == weaponObjective_; });
+}
+
+int MissionSystem::statusNumber() const { return nativeStatus(status_); }
 
 bool MissionSystem::available(const std::set<std::string>& completed, const std::map<std::string, std::string>& objectiveStates) const {
     for (const auto& dependency : dependencies_)
@@ -160,7 +183,9 @@ std::vector<MissionSystem::Effect> MissionSystem::drain() {
 }
 
 // B4 (UNVERIFIED): ReadyToTurnIn only from Active, Complete only from ReadyToTurnIn; every accepted change fires
-// "Default" with id 6 + the EMissionStatus number.
+// "Default" with id 6 + the EMissionStatus number. Bridge note ("MissionTracker.SetMissionStatus"): the script hook
+// UpdateMissionStatus runs inside the status branch, before the observers and the "Default" event, and the Active branch
+// writes the pending kickoff (SetActiveMission) before that tail.
 bool MissionSystem::setStatus(Status status) {
     const bool allowed = (status == Status::Active && status_ == Status::NotStarted) ||
                          (status == Status::ReadyToTurnIn && status_ == Status::Active) ||
@@ -168,19 +193,46 @@ bool MissionSystem::setStatus(Status status) {
     if (!allowed) return false;
     status_ = status;
     if (status == Status::Complete) activeSet_.clear();
+    updateTrackedMission();
+    if (onStatusChanged) onStatusChanged(nativeStatus(status));
+    // SetActiveMission(mission, fromActivation): a record is written only when the kickoff was not heard and none is pending.
+    if (status == Status::Active && !heardKickoff_ && !kickoffPending_) { kickoffPending_ = true; kickoffFromActivation_ = true; }
     static const char* names[] = {"NotStarted", "Active", "ReadyToTurnIn", "Complete"};
     emit(Effect::Kind::StatusChanged, names[int(status)]);
+    // The lent weapon is part of the status branch itself: granted inside Active (after the script hook and the status delegates, before the
+    // initial set and the tracked-mission step) and removed inside Complete (after the hook, before the observers). Observed in the real game
+    // (FIRE_MISSION_GOLDEN_TRACE.md, lane L2): added to the backpack inside ActivateMission, removed inside CompleteMission, still there at
+    // ReadyToTurnIn. The bridge note's owner condition is applied (the weapon's mission objective belongs to this mission); its region-stage
+    // condition is not (UNVERIFIED).
+    if (lendsWeapon() && status == Status::Active) emit(Effect::Kind::MissionWeaponGranted, weapon_);
+    if (lendsWeapon() && status == Status::Complete) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
+    if (onNotification) onNotification(Notification::StatusChanged);
     fireEvent("Default", StatusBase + nativeStatus(status));
     return true;
+}
+
+void MissionSystem::bindKismetVariable(const std::string& name, ObjectPtr object) {
+    if (impl_->provider) impl_->provider->bindKismetVariable(name, std::move(object));
 }
 
 void MissionSystem::fireEvent(const std::string& name, int linkId) {
     if (impl_->provider) impl_->provider->fireEvent(name, {}, linkId);
 }
 
+// The tracker tick consumes the pending kickoff record (bridge note): the accepting controller's IsMissionMoviePlaying
+// runs (its result is not used), then PlayKickoff (id 12) when the record came from an activation, else
+// PlayKickoffDialogOnly (13); the mission's bHeardKickoff is set and the record cleared. UNVERIFIED. Not modelled: the
+// "Loader" level wait, the tracked-mission switch and the dialog request (the Fire mission lists no DialogEvent).
 void MissionSystem::tick(double seconds) {
     now_ += seconds;
-    if (impl_->provider) impl_->provider->tick(seconds);
+    if (kickoffPending_) {
+        if (onKickoffTick) onKickoffTick();
+        fireEvent("Default", kickoffFromActivation_ ? Kickoff : KickoffDialogOnly);
+        heardKickoff_ = true;
+        kickoffPending_ = false;
+    }
+    // The dialog components' per-frame update follows the kernel's time (each wake of a thread), or the frame's without a provider.
+    if (impl_->provider) impl_->provider->tick(seconds); else dialog_.tick(seconds);
     collectProviderErrors();
 }
 
@@ -215,12 +267,9 @@ bool MissionSystem::activateSet(const std::string& setPath) {
     }
     activeSet_ = setPath;
     emit(Effect::Kind::ObjectiveSetActive, set->name);
-    // UNVERIFIED: the mission weapon is lent while the objective it belongs to is active (the native reading grants it
-    // at status Active and removes it at Complete; not adopted yet, see DECISIONS.md 2026-10-02).
-    if (!weapon_.empty() && std::find(set->objectivePaths.begin(), set->objectivePaths.end(), weaponObjective_) != set->objectivePaths.end())
-        emit(Effect::Kind::MissionWeaponGranted, weapon_);
     const std::string name = set->name;
     const bool evaluate = set->canCompleteMission;
+    if (onNotification) onNotification(Notification::ObjectiveSetChanged);
     fireEvent(name, SetActivated);
     if (evaluate && activeSet_ == setPath) evaluateSet();
     return true;
@@ -249,7 +298,7 @@ void MissionSystem::evaluateSet() {
 }
 
 bool MissionSystem::accept(const std::set<std::string>& completed) {
-    if (status_ != Status::NotStarted || !available(completed)) return false;
+    if (!canStart(completed)) return false;
     // B4 (UNVERIFIED): which runs first, the status event or the initial set, was not settled; status first here.
     setStatus(Status::Active);
     if (activateInitialSet_ && activeSet_.empty() && !initialSet_.empty()) activateSet(initialSet_);
@@ -257,11 +306,35 @@ bool MissionSystem::accept(const std::set<std::string>& completed) {
     return true;
 }
 
+int MissionSystem::completedBranch() const {
+    if (status_ != Status::ReadyToTurnIn && status_ != Status::Complete) return 0;
+    const ObjectiveSet* last = nullptr;
+    std::set<std::string> seen;
+    for (std::string path = initialSet_; !path.empty() && seen.insert(path).second;) {
+        const auto found = std::find_if(sets_.begin(), sets_.end(), [&](const ObjectiveSet& set) { return set.path == path; });
+        if (found == sets_.end()) break;
+        last = &*found;
+        path = found->next;
+    }
+    if (!last || last->cls != "WillowGame.MissionObjectiveSetDefinition") return 0;
+    for (const auto& objective : last->objectives)
+        if (!completedObjectives_.count(objective)) return 2;
+    return 1;
+}
+
 bool MissionSystem::kickoff(bool dialogOnly) {
     if (status_ != Status::Active) return false;
     fireEvent("Default", dialogOnly ? KickoffDialogOnly : Kickoff);
+    heardKickoff_ = true;
+    kickoffPending_ = false;
     collectProviderErrors();
     return true;
+}
+
+// PlayTurnIn with a mission: the "Default" event, id 14, and nothing else (bridge note).
+void MissionSystem::playTurnIn() {
+    fireEvent("Default", TurnIn);
+    collectProviderErrors();
 }
 
 int MissionSystem::objectiveProgress(const std::string& objectiveName) const {
@@ -311,11 +384,13 @@ bool MissionSystem::applyUpdate(const std::string& objectiveName, int bit) {
     } else ++progress_[objectiveName];
     const int count = objectiveProgress(objectiveName);
     emit(Effect::Kind::ObjectiveUpdated, objectiveName, std::to_string(count));
+    if (onNotification) onNotification(Notification::ObjectiveUpdated);
+    if (onObjectiveUpdated) onObjectiveUpdated(objective.path, bit);
     fireEvent(objectiveName, ObjectiveProgress);
     if (count != objective.count) return true;
     completedObjectives_.insert(objectiveName);
     emit(Effect::Kind::ObjectiveComplete, objectiveName);
-    if (!weapon_.empty() && objective.path == weaponObjective_) emit(Effect::Kind::MissionWeaponRemoved, weapon_);
+    if (onNotification) onNotification(Notification::ObjectiveComplete);
     evaluateSet();
     fireEvent(objectiveName, ObjectiveCompleted);
     return true;
@@ -328,14 +403,27 @@ bool MissionSystem::updateObjectiveByPath(const std::string& objectivePath, int 
     return false;
 }
 
+// NATIVE_BEHAVIOR_POPULATION.md section B (UNVERIFIED), the tracker's own classification: Complete when the mission is Active, ReadyToTurnIn
+// or Complete and the progress equals the count exactly; else Active when the mission is Active, the objective is in the active
+// set and the progress is below the count; else NotStarted. "" when the path is not one of the mission's objectives.
 std::string MissionSystem::objectiveState(const std::string& objectivePath) const {
+    bool known = false, inActiveSet = false;
+    std::string name;
     for (const auto& set : sets_)
         for (size_t i = 0; i < set.objectivePaths.size(); ++i) {
             if (set.objectivePaths[i] != objectivePath) continue;
-            if (completedObjectives_.count(set.objectives[i])) return "Complete";
-            return status_ == Status::Active && set.path == activeSet_ ? "Active" : "NotStarted";
+            known = true;
+            name = set.objectives[i];
+            if (set.path == activeSet_) inActiveSet = true;
         }
-    return "";
+    if (!known) return "";
+    const auto objective = objectives_.find(name);
+    if (objective == objectives_.end()) return "";
+    const int progress = objectiveProgress(name);
+    if ((status_ == Status::Active || status_ == Status::ReadyToTurnIn || status_ == Status::Complete) && progress == objective->second.count)
+        return "Complete";
+    if (status_ == Status::Active && inActiveSet && progress < objective->second.count) return "Active";
+    return "NotStarted";
 }
 
 // RunMissionCustomEvent: id 0, unless the mission is Complete (B4, UNVERIFIED).
@@ -396,6 +484,10 @@ bool MissionSystem::loadState(const std::string& state) {
         progress[o] = found == objectives_.end() ? 1 : found->second.mask ? (1 << found->second.count) - 1 : found->second.count;
     }
     status_ = status; activeSet_ = active; completedObjectives_ = objectives; completedSets_ = setsDone; progress_ = progress;
+    // A restored mission has played its kickoff (bHeardKickoff is not saved; this is an assumption, UNVERIFIED).
+    kickoffPending_ = false;
+    heardKickoff_ = status != Status::NotStarted;
+    updateTrackedMission();
     return true;
 }
 

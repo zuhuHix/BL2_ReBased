@@ -1,6 +1,7 @@
 #include "vm.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <map>
 #include <sstream>
@@ -98,6 +99,102 @@ std::string sweepPackage(Runtime& runtime, const std::shared_ptr<const Package>&
     for (size_t i = 0; i < ranked.size() && i < options.top; ++i)
         out << (i ? "," : "") << "{\"functions_reaching\":" << ranked[i].first << ",\"native\":" << jsonString(ranked[i].second) << '}';
     out << "]}";
+    return out.str();
+}
+
+// Structural oracle for the Class export body (docs/verification/NATIVE_CLASS_SERIAL_LAYOUT.md). A Class export has class reference 0.
+std::string checkClassBodies(Runtime& runtime, const std::shared_ptr<const Package>& package, bool listFailures, size_t* failed) {
+    size_t classes = 0, exact = 0, defaultsOk = 0, interfaceClasses = 0, entries = 0, entriesToInterfaces = 0, classesWithEntries = 0;
+    size_t tableStruct = 0, tableNull = 0;
+    std::vector<std::string> failures;
+    const auto& table = runtime.indexOf(*package);
+    for (int32_t index = 1; size_t(index) <= package->exports.size(); ++index) {
+        const auto& exported = package->exports[size_t(index) - 1];
+        if (exported.cls != 0) continue;
+        ++classes;
+        const std::string path = package->path(index);
+        ClassBody body;
+        try { body = decodeClassBody(*package, index); }
+        catch (const std::exception& error) { failures.push_back(path + ": " + error.what()); continue; }
+        ++exact;
+        if (body.defaultObject > 0 && package->exports[size_t(body.defaultObject) - 1].name == "Default__" + exported.name &&
+            package->exports[size_t(body.defaultObject) - 1].cls == index) ++defaultsOk;
+        else failures.push_back(path + ": default object is not Default__" + exported.name + " of this class");
+        if (body.classFlags & CLASS_Interface) ++interfaceClasses;
+        if (!body.interfaces.empty()) ++classesWithEntries;
+        for (const auto& entry : body.interfaces) {
+            ++entries;
+            Class* target = nullptr;
+            try { target = runtime.classAt(package, entry.classRef); } catch (const std::exception&) {}
+            if (target && target->isInterface()) ++entriesToInterfaces;
+            else failures.push_back(path + ": interface entry " + package->object(entry.classRef).name + " is not an interface class");
+            if (!entry.tableProperty) { ++tableNull; continue; }
+            const auto& property = package->object(entry.tableProperty);
+            if (entry.tableProperty > 0 && table.classNames[size_t(entry.tableProperty) - 1] == "StructProperty" && property.outer == index &&
+                property.name.rfind("VfTable_", 0) == 0 && property.name.find(package->object(entry.classRef).name) != std::string::npos) ++tableStruct;
+            else failures.push_back(path + ": table pointer " + property.name + " is not a VfTable_ StructProperty child");
+        }
+    }
+    if (failed) *failed = failures.size();
+    std::ostringstream out;
+    out << "{\"package\":" << jsonString(package->packageName) << ",\"classes\":" << classes << ",\"exact\":" << exact
+        << ",\"default_objects\":" << defaultsOk << ",\"interface_classes\":" << interfaceClasses
+        << ",\"classes_with_interfaces\":" << classesWithEntries << ",\"interface_entries\":" << entries
+        << ",\"entries_to_interface_classes\":" << entriesToInterfaces << ",\"table_struct_properties\":" << tableStruct
+        << ",\"table_null\":" << tableNull << ",\"failed\":" << failures.size();
+    if (listFailures) {
+        out << ",\"failures\":[";
+        for (size_t i = 0; i < failures.size(); ++i) out << (i ? "," : "") << jsonString(failures[i]);
+        out << ']';
+    }
+    out << '}';
+    return out.str();
+}
+
+// Every (class, interface) pair of the nine code packages answered by the earlier structural rule and by the interface table.
+std::string compareInterfaces(Runtime& runtime) {
+    std::vector<Class*> interfaces, subjects;
+    for (const char* name : {"Core", "Engine", "GameFramework", "GearboxFramework", "WillowGame", "GFxUI", "IpDrv", "OnlineSubsystemSteamworks", "AkAudio"}) {
+        const auto package = runtime.package(name);
+        for (int32_t index = 1; size_t(index) <= package->exports.size(); ++index) {
+            if (package->exports[size_t(index) - 1].cls != 0) continue;
+            Class* cls = runtime.classAt(package, index);
+            if (!cls || !cls->bodyDecoded) continue;
+            (cls->isInterface() ? interfaces : subjects).push_back(cls);
+        }
+    }
+    // The structural rule as the note describes it (functions only), without the I<Upper> name condition the coded rule adds.
+    const auto functionsOnly = [&](Class* cls, const Class* iface) {
+        if (iface->functions.empty()) return false;
+        for (const auto& entry : iface->functions)
+            if (!runtime.findMethod(cls, entry.first)) return false;
+        return true;
+    };
+    size_t both = 0, newOnly = 0, oldOnly = 0, bothPlain = 0, newOnlyPlain = 0, oldOnlyPlain = 0;
+    std::map<std::string, std::array<size_t, 4>> slice = {{"IMission", {}}, {"IUsable", {}}, {"IMissionObjective", {}}, {"IMissionDirector", {}}};
+    for (Class* cls : subjects)
+        for (Class* iface : interfaces) {
+            const bool table = runtime.implements(cls, iface), coded = runtime.implementsStructurally(cls, iface), plain = functionsOnly(cls, iface);
+            if (table && coded) ++both; else if (table) ++newOnly; else if (coded) ++oldOnly;
+            if (table && plain) ++bothPlain; else if (table) ++newOnlyPlain; else if (plain) ++oldOnlyPlain;
+            const auto found = slice.find(iface->name);
+            if (found != slice.end()) {
+                ++found->second[table ? 0 : 1];
+                if (table != coded) ++found->second[2];
+                if (table != plain) ++found->second[3];
+            }
+        }
+    std::ostringstream out;
+    out << "{\"classes\":" << subjects.size() << ",\"interfaces\":" << interfaces.size() << ",\"both_yes\":" << both
+        << ",\"table_only_yes\":" << newOnly << ",\"coded_only_yes\":" << oldOnly << ",\"functions_only_rule\":{\"both_yes\":" << bothPlain
+        << ",\"table_only_yes\":" << newOnlyPlain << ",\"stand_in_only_yes\":" << oldOnlyPlain << "},\"slice\":{";
+    bool first = true;
+    for (const auto& [name, counts] : slice) {
+        out << (first ? "" : ",") << jsonString(name) << ":{\"table_yes\":" << counts[0] << ",\"table_no\":" << counts[1]
+            << ",\"disagree_coded\":" << counts[2] << ",\"disagree_functions_only\":" << counts[3] << '}';
+        first = false;
+    }
+    out << "}}";
     return out.str();
 }
 

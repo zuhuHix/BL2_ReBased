@@ -234,7 +234,7 @@ adds its own `PartList`; with this tool's rules its candidate set is identical t
 agent decodes the exact selection; the table lists what the balance allows.
 
 Gestalt mesh `Weap_Pistol.GestaltDef_Pistol_GestaltSkeletalMesh` (Startup export 45445, 1,100,886 bytes) holds every pistol part in one
-skeletal mesh; the fragment table comes from `GestaltDef_Pistol` (export 19832) decoded with `local/infinity/gestalt.schema`.
+skeletal mesh; the fragment table comes from `GestaltDef_Pistol` (export 19832) decoded with `tools/gestalt-arrays.schema` (it was the hand-made `local/infinity/gestalt.schema`).
 
 | Slot | Candidate part | Weight | Gestalt fragment |
 | --- | --- | --- | --- |
@@ -314,7 +314,7 @@ $env:OPENWILLOW_UMODEL = "<umodel.exe, build 1590>"
 tools\seed_slice_npc_assets.ps1 -Steps all -CaptureWaitSeconds 60   # extract, import, preview, capture, manifest
 ```
 
-Needs: a built `build/Release/ow-package.exe`, `tools/export_index.py` and `tools/mission_closure.py` already run (path index), `local/infinity/gestalt.schema`,
+Needs: a built `build/Release/ow-package.exe`, `tools/export_index.py` and `tools/mission_closure.py` already run (path index), (the gestalt schema is the tracked `tools/gestalt-arrays.schema`),
 the built UE editor module. Last complete run (`-Steps all`): no error elapsed=562s, identity through manifest.
 
 ## 10. Manifest

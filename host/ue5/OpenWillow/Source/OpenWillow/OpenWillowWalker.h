@@ -48,8 +48,8 @@ public:
     bool TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem);
     void ToggleInventory();
     void ToggleSkills();
-    // Mission weapon lend/return (UOpenWillowQuest): the item goes into a weapon slot and is drawn; on return it is
-    // removed and the slot held before the lend is drawn again. Placement rule: host choice, UNVERIFIED.
+    // Mission weapon lend/return (UOpenWillowQuest): the grant adds the item to the backpack (observed in the real game: not equipped; the player
+    // readies it with EquipItem); the return removes it wherever it is and draws another weapon only if it was the held one.
     bool LendWeapon(const FOpenWillowWeaponItem& Item);
     bool ReturnLentWeapon(const FString& Id);
     // Draws the equipped weapon with this stable id; false when it is not in a slot.
@@ -73,6 +73,11 @@ public:
     // Object path of the mesh shown in Maya's hand ("" when none).
     FString HeldWeaponMesh() const;
     float PhaselockRemaining() const;
+    // The level-up skill's modifier on the action-skill cooldown's current value (the VM's ActionSkillCooldown event, swap 10): a plain attribute, so it takes
+    // effect in place at once: Scale multiplies the current value by `Amount` (0 resets it), PreAdd and PostAdd add. A cast in progress is not ended and the
+    // release is not moved (observed in game, COMBAT_GOLDEN_TRACE.md section E: the cooldown read 0 during the hold and after the release). Returns true when
+    // the modifier ended a running cooldown (the game then runs ActionSkillCooldownComplete; the host has no such handler, it logs it, and the HUD ring reads PhaselockRemaining).
+    bool ModifyPhaselockCooldown(int32 ModifierType, float Amount);
     float PhaselockCooldown() const { return Phaselock.CooldownSeconds; }
     // Last cast: world time, whether it lifted a target, whether the target was blocked (CanLiftTargetIf failed), and
     // its timeline (zero for a miss or a blocked target).
@@ -112,6 +117,22 @@ public:
     // -owquest: sets maximum health from the recovered formula when Maya's level differs from the level it was last
     // set for (start, XP level-up, test fixtures); does nothing otherwise.
     void RefreshHealthForLevel();
+    // A level-up from the mission script's experience is handled by the VM (swap 7b): the host's own refresh waits (HoldHealthForScript) until the
+    // script's Health event arrives, and ApplyScriptHealth sets the maximum and current health from it (and ends the wait).
+    void HoldHealthForScript(bool bHold) { bHealthHeldForScript = bHold; }
+    bool IsHealthHeldForScript() const { return bHealthHeldForScript; }
+    void ApplyScriptHealth(float NewMax, float NewCurrent);
+    // A natural level-up's OnLevelUpNaturally skill (the VM's WeaponDamageScale event, swap 9): a Scale modifier of `Scale` on the held weapon's damage for
+    // `Seconds` of game time from now. Each call is its own modifier, so two stack. NATIVE_LEVEL_UP_ATTRIBUTES.md section 7; observed in game: +1.0 on the
+    // scale sum for 30 s (REALGAME_GROUND_TRUTH.md). Not saved (it is gone 30 s later).
+    void AddWeaponDamageScale(float Scale, float Seconds);
+    // The sum of the scale modifiers still running at game time `Now` (0 when none).
+    float WeaponDamageScaleAt(float Now) const;
+    // The damage of one shot of `Weapon` at game time `Now`. The stock rule is damage = (base + PreAdd) x (1 + up) / (1 + down) + PostAdd over the weapon's
+    // stack (NATIVE_ATTRIBUTES.md section 3; the card's "damage_stack" holds the terms), a running Scale s joins `up` (observed: sum 2.017 to 3.017, damage
+    // 41.40 to 61.92). A weapon without the stack (a recipe from before the field) falls back to card damage x (1 + s): HOST STAND-IN (UNVERIFIED), S taken
+    // as 1, an overstatement when other Scale modifiers are on the weapon. Which of the two applies is the weapon's, not a setting.
+    float ShotDamage(const FOpenWillowWeaponItem& Weapon, float Now) const;
 private:
     struct FViewModel;
     struct FWeaponSocketData;
@@ -160,7 +181,12 @@ private:
     void SendInventoryKey(const TCHAR* Key);
     void SpawnCombatTarget();
     void AimAt(const FVector& Point);
+    // Muzzle flash and tracer origin: the view model's Muzzle socket, else the recipe's decoded Muzzle socket, else a
+    // camera-space estimate (logged, counted).
     FVector MuzzleLocation() const;
+    // World position of a socket of the held gun (recipe "sockets"; WEAPON_VISUALS.md section 17); false when the gun has none.
+    // "EjectPort" is exposed this way for shell casings, which the host does not spawn yet.
+    bool GunSocketLocation(const TCHAR* Name, FVector& OutWorld) const;
     UPROPERTY() TObjectPtr<class UCameraComponent> Camera;
     // Maya's first-person arms (-owmaya). Their animations carry a root
     // correction that keeps the arms skeleton's Camera bone at this
@@ -177,6 +203,9 @@ private:
     float MaxHealth = 400.f;
     float Health = 400.f;
     int32 HealthLevel = 0;              // the level MaxHealth was last set for (0: not yet)
+    bool bHealthHeldForScript = false;  // a script level-up is pending: RefreshHealthForLevel does nothing
+    struct FDamageScale { float Scale = 0; float EndsAt = 0; };
+    TArray<FDamageScale> DamageScales;  // the running weapon damage Scale modifiers (AddWeaponDamageScale); ended ones are dropped by Tick
     FVector RespawnLocation = FVector::ZeroVector;
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;
@@ -312,6 +341,7 @@ private:
     float PhaselockCastAt = -100.f;
     float PhaselockHeldUntil = -100.f;
     float PhaselockResetAt = -100.f;
+    float PhaselockCooldownAdjust = 0.f;    // what ModifyPhaselockCooldown added to the pool's current value since the last cast (the cast refills it: 0)
     bool bPhaselockHit = false;
     bool bPhaselockBlocked = false;
     FOpenWillowPhaselockTimeline PhaselockTimeline;
@@ -326,9 +356,11 @@ private:
     FString BurstWeaponId;     // the weapon the burst state belongs to
     void StartReloadThrow(const struct FOpenWillowWeaponItem& Weapon);
     void TracePellet(const FVector& Start, const FVector& Direction, const FVector& Muzzle);
-    int32 PreLendSlot = INDEX_NONE;
     bool bWantsCombatTarget = false;
     bool bBarrelAxisLogged = false;
+    // Muzzle fallbacks used (shots), and the item/socket pairs whose socket check was already logged.
+    mutable int32 MuzzleFallbackShots = 0;
+    mutable TSet<FString> GunSocketLogged;
     // Look-input weapon sway, in degrees (yaw, pitch).
     FVector2D LookInput = FVector2D::ZeroVector;
     FVector2D Sway = FVector2D::ZeroVector;

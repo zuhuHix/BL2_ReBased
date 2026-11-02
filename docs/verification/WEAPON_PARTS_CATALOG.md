@@ -111,7 +111,10 @@ inventory's `FOpenWillowWeaponItem` the same way recipe-loaded items are filled.
 weapon-assembly lane: `Parts` (slot and part object path, slot order Body .. Material), `Material`, `GestaltMesh`.
 Loot: the slice quest's turn-in reward is rolled from the stand-in's source pool at the mission level (seed from
 `-owrewardseed`, default 1); when the manifest is missing or the roll drops no weapon the pre-rolled stand-in is used,
-as before. `ow.RollGun <balance or pool> [stage] [seed]` puts a rolled gun in the backpack. Pool rolls in the host cap the gun's stage at 50 (normal mode and
+as before. **Removed at the 2026-11-02 merge with `t3/ai-melee-and-bleedout`:** that branch had already removed the
+turn-in loot stand-in by maintainer decision (DECISIONS.md 2026-10-07: the stock data gives the Fire mission no item
+reward), so the quest no longer rolls or drops a reward and `-owrewardseed` is gone; `RewardSource` survives only for the
+`-owweapongentest` pool check, which needs a `reward_roll` recipe under `-owitems` (none is generated any more). `ow.RollGun <balance or pool>` [stage] [seed]` puts a rolled gun in the backpack. Pool rolls in the host cap the gun's stage at 50 (normal mode and
 TVHM; section 2, `UNVERIFIED` in game; UVHM is not modelled); the drops themselves use the raw stage.
 
 Checks (in engine, this machine): `-owweapongentest` rolls a fixed list and logs the converted items; against

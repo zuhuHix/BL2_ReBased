@@ -3,6 +3,11 @@
 This is the tool-neutral project brief. Read it before starting work, then read
 `CLAUDE.md` for repository-specific safety rules when that file is present.
 
+**Subagents and short tasks:** read [docs/LANE_BRIEF.md](docs/LANE_BRIEF.md) (the binding rules on one page) and
+[docs/verification/GATES.md](docs/verification/GATES.md) (gate commands and the current baseline) instead of reading every long
+document; open the long documents only for the part your task touches. Read recent decisions with
+`python tools/decisions_index.py --tail N` and look up natives with `python tools/native_index_find.py <name>`.
+
 ## Strategic direction
 
 BL2_ReBased is a Borderlands 2 engine reimplementation targeting Unreal Engine 5.
@@ -151,7 +156,7 @@ Read this first when picking work up; it is the short version of ROADMAP.md.
   damage type goes to the dummy's check, candidate XP into the skills component, Phaselock read from the manifest
   (lift rule, valid-target rule and cast gate from script and data), progression (level, XP, skill grades) in the quest
   save, health recomputed on level change, the dummy's Transform/RegisterTargetable behaviours and holder socket, and a
-  labelled turn-in loot stand-in (stock data drops no item for this mission). Recorded checks: quest suite 73/73 and
+  turn-in that gives XP only (the loot stand-in was removed on 2026-10-07: stock data drops no item for this mission). Recorded checks: quest suite 73/73 and
   resume 10/10, door suite 16/16, CTest 10/10, packages 9/9; inventory suite 47 PASS / 2 KNOWN_DIVERGENCE (sort order)
   on the fully seeded worktree, 45 PASS / 2 NOT_RUN / 2 KNOWN_DIVERGENCE on a regenerated one with a short backpack.
   This is host behaviour with many documented stand-ins and **no original-game parity capture yet** (needs exclusive

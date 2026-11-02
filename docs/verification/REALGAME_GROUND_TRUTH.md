@@ -175,3 +175,192 @@ regardless of lighting, the Jakobs frame is near-white with sparse rust in the g
 Maliwan, and the game shows element glow (red barrel slot and windows) the host lacks. The real first-person shots
 were taken under the HQ's cool fluorescent light, which itself gives metal a cyan cast. Report:
 `local/realgame/skins/critic_report.md`.
+
+## Level-up, Marcus's use chain and interface answers (lane L1, 2026-10-07)
+
+AI-assisted (Claude), lane L1. Second capture session, driven with the same tool (`tools/real_game/`, one game process under
+`local/ue_run.lock`, saves backed up first, the driver blocking every `WillowSaveGameManager` save call from the first frame,
+memory-only changes, objects looked up again in every command). The game was started with the installed startup mod's
+`-Character=Save0008.sav` argument and "Continue" was pressed, which loaded the level-8 Maya (Plan B) in Sanctuary. The driver gained
+`Install-Driver -BlockSavesAtStart` for this (a flag file makes the driver block saves at import, before any command can run).
+New command scripts: `scripts/levelup_probe.py` (hooks, attribute snapshots) and `scripts/marcus_use_probe.py` (hooks, state reads).
+Raw rows and screenshots stay under ignored `local/realgame/L1/`. Hooks were Python hooks on script-visible functions: a call that
+the game makes natively from C++ (not through script) is not seen by them, which limits what an order of events can show.
+
+### Level-up (NATIVE_PROGRESSION section 3 and 4, SANCTUARY_RPG_MISSION "Not modelled")
+
+Three level-ups in one session, 8 to 9, 9 to 10 and 10 to 11, each by `WillowPlayerController.ExpEarn(shortfall, plot-mission source)`
+with the health pool set to 50 %, 25 % and 30 % and the shield to 50 %, 10 % and 30 % beforehand. `ExpEarn` raised the experience
+pool by exactly the amount and did not level up inside the call; the level changed on the next frame (every level-up call below ran in
+that one frame, at one game time).
+
+- **Health: confirmed full refill.** Current health went from 214.5 of 429.1 to 484.8 of 484.8 (8 to 9), from 121.2 of 484.8 to
+  547.9 of 547.9 (9 to 10), from 164.4 of 547.9 to 619.1 of 619.1 (10 to 11). It is neither the same fraction nor the same absolute
+  value. The refill happens inside `OnExpLevelChange`, after `RecalculateAttributeInitializedState` returned and before
+  `ClientOnExpLevelChange` runs. It is the class's `OnLevelUp` behavior, whose stock skill definition adds `HealthMaxValue` to
+  `HealthCurrentValue` (read from the live object, post-add modifier): current health counts as a gain (the controller's
+  health-gained accumulator took the fractional part of the refill, 0.663 of 426.663) and the pool's impulse counter rose by one.
+  Whether the effect is "add the maximum, then cap" or "set to the maximum" cannot be told apart from the end state.
+- **Maximum: confirmed written by `RecalculateAttributeInitializedState`.** Before the call the pool maximum was still the old one,
+  after it the new one; the call leaves current health alone. The pool's base maximum was 212.6755, 240.3233, 271.5654 (levels 8,
+  9, 10), `80 x 1.13^L` to float precision; the effective maximum is that base times 2.0176 on this character (the profile's
+  Badass Rank modifier), as before. The note's stand-in (re-evaluate the base maximum for the new level) gives the right value;
+  that it is this native that recomputes it is now observed. What else the native does is not shown by this run.
+- **Shield: the level-up does not set current or maximum shield** (maximum 180.589 and base 0 unchanged, current unchanged through
+  the level-up frame). It does start the shield recharge at once: the recharge rate attribute is raised by half the maximum shield per
+  second (90.295 per second) for 4.0 s (observed 4.008 s), then back to 0. Without a level-up (control, also with a 10 XP
+  `ExpEarn`) the same shield waits 1.61 s and then recharges at 25.9 per second. The rate and the 4.0 s duration are in the stock
+  `PlayerBehavior_LevelUp` skill definition; the shield reached full in about 1.9 s.
+- **Skill points: confirmed +1 per level** at 8 to 9, 9 to 10 and 10 to 11 (unspent 0 to 1 to 2, `LevelUpCount` up by one each time).
+  The point is added at the start of `ExpLevelUp`, before `OnExpLevelChange`. The "0 below level 5" half was not observed.
+- **Other attributes: nothing else changed.** A before/after snapshot of every numeric attribute and its base value on the
+  controller, pawn, replication info, health, shield and experience pools (about 1,640 values, run on two level-ups) changed only in
+  these places: experience pool and `ExpPointsNextLevelAt` (28,126 to 37,798 to 49,377), health pool base and maximum, current health,
+  the pawn's game stage (8 to 9 to 10, set inside `OnExpLevelChange` after `RecalculateAttributeInitializedState`), level, skill
+  points, level-up counters and timestamps, the shield recharge rate above. Outside that list: a natural level-up also applies the
+  stock `PlayerBehavior_LevelUpNaturally` skill, a weapon-damage modifier of the scale kind that **raised the equipped weapon's
+  damage from 41.40 to 61.92 for 30 s** (the scale sum went from 2.017 to 3.017, i.e. +1.0 added to the existing sum) and was gone
+  at 30.3 s. The action-skill cooldown part of `PlayerBehavior_LevelUp` was **not shown to do anything**: a cooldown pool set to
+  its maximum drained at the same speed with and without a level-up (inconclusive, the set-up was artificial).
+- Incidental: `GetExperienceReward` for the Fire mission still answers 395 at level 11 (it was 395 at level 8), and Marcus's offer
+  screen printed "Level 8, 395 XP" for this level-11 character.
+
+### Marcus's use chain (NATIVE_MARCUS_USE_CHAIN, NATIVE_BEHAVIOR_CONTEXT, NATIVE_DIALOG_GROUPS)
+
+The player was put 110 units in front of Marcus (`Sanctuary_Dynamic` `WillowAIPawn_13`), made his current usable object, and the real
+use key was pressed once. The character's mission state: two active missions (the Sanctuary welcome mission at its fuel cell objective
+and "Handsome Jack Here") and five complete; none of the six missions whose sequences Marcus's chain tests, and not the Fire mission.
+
+- **The nine checks: confirmed in order and all answered "not enabled".** `BehaviorKernel.IsBehaviorSequenceEnabled` was called nine
+  times, in the note's order (Ep4_SpeakToMarcusAboutBank, Ep4_GetMarcusCrystal, Ep14_Rescued, M_TheBane, M_BearerBadNews,
+  M_ClaptrapBirthdayBash, M_OutOfBody, M_SafeAndSound_BringPictures, Ep17_TalkToMarcus), each with consumer handle 49 and Marcus's
+  own AI provider, each answering false. The three names that have no sequence in the provider answered false as well. After the
+  ninth the chain went to `Behavior_PlayAIMissionContextDialog`, `Behavior_HasMissions` and `Behavior_ShowMissionInterface`, in
+  that order; nothing else of the cascade ran. What the note predicts for this state (none of the six missions started) is exactly
+  this; a Fire-only save gives the same cascade.
+- **The native's result rule: confirmed by direct calls.** Of Marcus's 13 provider sequences exactly `AI`, `Brain` and `Patrol` read
+  as enabled; the other ten, an unknown name, a `None` provider and consumer handles -1 and 0 all read false.
+- **Use event: confirmed.** `AIClassDefinition.OnUsed` ran with link filter 2 (generic) first and filter 0 right after the interface
+  call; the second raise reached none of the checks.
+- **The on-use tag: `VO_NPC_OnUse_MissionsAvailable`.** `PlayOnUseDialog(player pawn)` triggered it on Marcus's dialog component
+  with the player as the other object. The mission counts for this player (`CountMyMissionsByState`) were 1 eligible, 0 in progress,
+  0 redeemable, so the note's rule (redeemable, else eligible, else in progress, else none) predicts it. The screen shown by
+  `Behavior_ShowMissionInterface` was the offer for the Fire mission ("Rock, Paper, Genocide: Fire Weapons!", level 8, 395 XP,
+  optional); it was declined, not accepted. After it closed the component was asked for `VO_NPC_PlayerLingeringInMenu` and, on the
+  decline, `VO_NPC_GenericDismissal`.
+- **Which group answers.** A read-only `GetMatchingEvent` call on Marcus's dialog component with the player's name tag answered
+  `DialogGroup_NPC` (the generic group, second in his list) for all four `VO_NPC_OnUse_*` tags and `DialogGroup_NPC_Marcus` for
+  `DET_NPC_OnUse_MissionsAvailable`, as the note says. The event object it returned was `GearboxDialogEvent_0` for all four `VO_` tags,
+  which looks like an artefact of the out parameter, so only the group is claimed. The second, native step (the Trigger act
+  re-firing the `DET_` tag) is not visible to script hooks and was **not observed**; the `TriggerEvent` post hook did not report.
+- **Dialog group list: confirmed size and order.** `GetDialogGroups` on Marcus returned 127 entries: his own group first,
+  `DialogGroup_NPC` second, the default template group last; his body class has 1 group, `bNPCDialog` is true, the globals have 125
+  NPC groups, his name tag has no DLC expansion; `DialogGroups_Side_ThisJustIn` appears twice (positions 105 and 119 of the 127, which
+  are 104 and 118 of the globals' list). His consumer handle is 49 (the player's is 2).
+
+### Interface answers (NATIVE_CLASS_SERIAL_LAYOUT) and `Skill.UpdateGrade` (NATIVE_BYTECODE_OPCODES)
+
+- **Interface table versus stand-in: confirmed on all disputed pairs.** Class-level interface answers read from the running game
+  through the SDK (the engine's own `ImplementsInterface` on the loaded class) agree with the real interface table on **all 66**
+  pairs where the stand-in said yes and the table no (59 IGFxMenuScreenTickable, 3 IInstanceData, one each IResourcePoolProvider,
+  IStorageDevice, ISkillTreeListener, OnlineAccountInterface; so WillowPlayerController is not an IInstanceData nor an
+  IGFxMenuScreenTickable) and on **all 203** pairs where the table said yes and the stand-in no because the interface declares no
+  function (for example IConstructObject, IAttributeEffectBehavior). The other 772 of the 975 "table yes" pairs have the interface
+  `Core.Interface`, for which the engine answers false for every class: consistent with the note's "excluding Core.Interface". 15 more
+  hand-picked pairs, including the slice's IUsable on WillowAIPawn and IMission on WillowWaypoint, agree with the table (two
+  more pairs, IConstructObject and IMissionDirector on WillowPlayerController, were my own guesses for "yes", not table entries; the
+  game says no, as the full sweep implies). Caveat: this is the class check, not a run of the script cast opcode on an object. (The note says 771 pairs are `Core.Interface`; the list holds
+  772.)
+- **Let-attribute rule, partly confirmed.** `Skill.UpdateGrade(N)` on a live skill set both `Grade` and `GradeBaseValue` to N (N = 2,
+  5, 3: base and value together, empty modifier stack) and set `bForceRefreshModifiersNextTick`. **Correction:** the stored grade is
+  `max(N, 1)` (0, -3 and 1 all give 1), not "N plus one"; the script's second operand is the constant 1 of a native two-argument
+  call, which reads as a maximum. Not shown: "no change notification" (a native virtual, invisible to script hooks) and the recompute
+  from a non-empty modifier stack.
+
+### Save safety (this session)
+
+`Backup-Saves` copied `SaveData` and `Config` first; 33 files were hashed before and after. With saves blocked from the first
+frame, **all 33 files are byte-identical after the session** (no restore was needed, profile.bin included), the startup mod's
+settings folder is unchanged, and the driver was removed. The game was closed through its window. The run lock changed hands
+before this lane released it (see the lane's handoff).
+
+## Fire mission golden trace (lane L2, 2026-10-07)
+
+AI-assisted (Claude), lane L2. Third capture session, same tool and safety rules as lane L1 (one game process under
+`local/ue_run.lock`, saves backed up and hashed first, `Install-Driver -BlockSavesAtStart`, startup-mod load of the level-8 Maya,
+memory-only changes, objects looked up again in every command). Goal: the real game's event order for the Fire mission, to compare
+with the VM's `--slice-run`. The full record, with the live sequence rule by rule and the comparison, is
+[FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md); raw rows and screenshots stay under ignored `local/realgame/L2/`. New
+command script: `scripts/fire_mission_probe.py` (394 hooks: 97 on mission, dialog, inventory, waypoint and Kismet functions and 297
+on every `Behavior_*` class; state snapshots between steps). Hooks see only calls that go through script.
+
+**What was played (recorded launch, about 190 s of game time):** the offer through the real use key on Marcus, accept (Enter),
+the range by a real waypoint touch (the player was placed there, then one W step), the Fire objective by a real shot with the lent
+Maliwan pistol (moved from the backpack to slot 3 by `ReadyBackpackInventory`), the turn-in by the use key and Enter, and the reward
+screen confirmed with Enter. One earlier launch served as a rehearsal (its accept was not recorded: a probe reload reset the
+recorder). The Dialog Skipper mod was active, so delays that depend on a spoken line are compressed; delays inside behavior links
+are not.
+
+**Confirmed in game (each by hook rows, with the game's clock):**
+
+- **Accept is one frame:** `AcceptMission` (script) -> `ActivateMission` -> `UpdateMissionStatus(Active)` -> changed-delegate ->
+  **the lent weapon goes to the backpack** (`AddInventory`, `AddInventoryToBackpack`, `ShowMissionWeaponTraining`) ->
+  active-mission delegate -> observers; then `OnPlayerAcceptedMission` on Marcus. The kickoff (`IsMissionMoviePlaying`, dialog 01)
+  follows on the next tick (+9 ms), the first objective set when the line ends. The same order the bridge note gives.
+- **The lent weapon is removed at Complete, not at ReadyToTurnIn:** `RemoveMissionWeapons`, `RemoveFromInventory`,
+  `ClientRemoveMissionWeapons` inside `CompleteMission`, after the changed-delegate and before the observers. Between the hit and
+  the turn-in the pistol is still in the inventory.
+- **Objective path:** waypoint `Touch` -> `ProcessPlayerTouch` -> `IsMissionObjectiveActive` -> `UpdateObjective` -> the waypoint's
+  updated reaction -> the controller's `UpdateMissionObjective` -> objectives-changed delegate -> the waypoint's complete reaction, in
+  one frame. The next set follows 0.505 s later (a behavior-link delay): dialog 03b behavior, `AdvanceObjectiveSet`, then the dummy
+  spawns 29 ms after that and its `Targetable` registration runs 0.98 s later, together with a mission behavior
+  (`ChangeRemoteBehaviorSequenceState_171`). The Fire hit runs the dummy's four behaviors, completes the objective, **then**
+  `UpdateMissionStatus(ReadyToTurnIn)`, then the `Default` link 9 behaviors (dialog 05, `RocksPaper_FireCompleted`). The dummy
+  sends its target back 2.002 s later and the mission raises `RocksPaper_TargetBack` twice at 3.002 s.
+- **Turn-in reward order:** `ServerCompleteMission` -> `CompleteMission` -> `UpdateMissionStatus(Complete)` ->
+  `ShouldGrantAlternateReward` (false) -> `ServerGrantMissionRewards` (currency type 0, currency 0, experience 395,
+  `ExpEarn(395, source 4, type 0)`, `GetItemRewardsForPlayer` empty, `ClientSpawnMissionRewardUI`) -> changed-delegate -> weapon
+  removal -> observers -> `OnPlayerTurnedInMission` on Marcus (`PlayMissionTurnedInDialog`, tag `VO_NPC_MissionTurnedIn`) ->
+  `PlayTurnIn`. Experience 26,218 -> 26,613, level 8 unchanged, no item. `MissionRewardsReceived` came later, from the reward
+  screen's confirmation (14.9 s here), and `AcceptOrSaveUnclaimedReward` never ran.
+- **Marcus's use chain at both uses:** the same nine checks (all false) and three behaviors as in lane L1; the on-use tag is
+  `VO_NPC_OnUse_MissionsAvailable` before the accept and `VO_NPC_OnUse_MissionComplete` at ReadyToTurnIn.
+- **Tracked mission:** accepting the side mission made it the tracked mission (a plot mission was tracked before); after the
+  turn-in the plot mission was tracked again.
+
+**Not observed (invisible to script hooks):** the dialog lines themselves (no call of `Talk`, `TalkReplicated`,
+`TriggerGroupEvent` or `PlayEchoDialog`), `SetMissionStatus`, `SetActiveMission`, `PlayKickoff`, the native second dialog lookup
+of the use chain, and the Kismet receivers of two of the six remote events.
+
+**Comparison with the VM (`--slice-run`, a copy of the binary from 01:47):** 38 items matched, 4 out of order (dialog 03b against
+the set, dialog 05 against `RocksPaper_FireCompleted`, the weapon grant, the weapon removal), 5 missing in the VM (`AIHold_57`
+on the dummy, the mission's `_171` and the 1 s before `Targetable`, `PlayMissionTurnedInDialog`, the screen close at accept, the
+reward confirmation), 4 extra in the VM (the `DET_` dialog event, lines 03a and 04, `AttemptStatusEffect_9`). Timings of behavior-link
+delays agree to within 10 ms (live 0.505 / 2.002 / 3.002 s; VM inside 0.01 s windows). Classification: two items are the already
+open "mission weapon at Active/Complete"; one is the already open "`PlayMissionTurnedInDialog` not exercised"; the dialog ordering
+pair, the screen close and the reward confirmation are host-side; the lines 03a / 04 and the `DET_` event are unobserved; **`AIHold_57`
+and the `Targetable` delay are the candidates for a VM fix**; the status-effect item is the VM's hit model.
+
+### Save safety (this session)
+
+`Backup-Saves` copied `SaveData` and `Config` first (`local/realgame/save-backup-20261007-014859`); 33 files hashed before and
+after each of the two launches. With saves blocked from the first frame (the driver's event log holds `save_blocked` marks), **all 33 files are byte-identical after the session** (profile.bin included), the startup mod's
+settings folder is unchanged, the driver was removed and the game was closed through its window (no kill). The run lock was taken at
+01:48:59 and released by this lane after the session; this lane spawned nothing (the lent pistol is the game's own) and the Fire offer, the XP and the weapon exist only in
+the closed process.
+
+## Combat golden trace (lane L3, 2026-10-07)
+
+AI-assisted (Claude), lane L3. A fourth capture session, with the same tool and safety rules as lanes L1 and L2. The level-8 Maya was taken to
+Three Horns Divide (`Ice_P`) by the game's own `WillowGameInfo.InitiateTravel` and fought bullymongs with real mouse shots and one real
+Phaselock cast. The full record is [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md), and the new command script is
+`scripts/combat_probe.py`. Observed:
+- the per-pellet hit chain and the AI death order;
+- kill experience awards and pool credits;
+- drop pools and pickups;
+- the shield taking hits first, then its recharge;
+- down, bleed-out, death and respawn, with the 7 percent fee charged 11.8 s after arrival;
+- second wind.
+Also observed: **a level-up resets the action-skill cooldown to 0 in the same call** (at the cooldown's maximum and during the drain). The 4 s
+shield boost and the 30 s weapon-damage scale were seen again. All 60 hashed files (saves, config, the SDK settings, Sanity Saver's private
+backups) match after the session. The one file the Sanity Saver mod rewrote at load was restored from the backup.

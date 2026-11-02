@@ -28,6 +28,18 @@ struct FOpenWillowAmmoPool
     int32 Max = 0;
 };
 
+// One socket of a gun's gestalt mesh, from the recipe's "sockets" (tools/gestalt_sockets.py via
+// tools/weapon_slice_gear.attach_sockets). Location is the cooked bone-local offset in cm; MeshLocation is the same point
+// in mesh space in the reference pose, computed by the tool from the UModel skeleton (an oracle for the host's bone maths).
+struct FOpenWillowGunSocket
+{
+    FString Fragment;
+    FString Bone;
+    FVector Location = FVector::ZeroVector;
+    FVector MeshLocation = FVector::ZeroVector;
+    bool bHasMeshLocation = false;
+};
+
 // One chosen part of a weapon: the slot it fills and the game object path of the part.
 USTRUCT()
 struct FOpenWillowWeaponPart
@@ -63,6 +75,11 @@ struct FOpenWillowWeaponItem
     FString RarityColor;
     int32 Level = 1;
     float Damage = 0;
+    // The WeaponDamage stack behind Damage (card "damage_stack", tools/weapon_stats.py damage_stack_of): Damage = (base + pre) x (1 + up) / (1 + down) + post.
+    // A later Scale modifier (the natural level-up's) joins the up-sum, so the shot is computed from these terms (AOpenWillowWalker::ShotDamage).
+    // Absent (false) for a recipe evaluated before the field existed.
+    bool bHasDamageStack = false;
+    float DamageBase = 0, DamagePreAdd = 0, DamagePostAdd = 0, DamageScaleUp = 0, DamageScaleDown = 0;
     float FireRate = 1;    // shots per second
     float ReloadTime = 0;
     float Magazine = 0;
@@ -89,6 +106,8 @@ struct FOpenWillowWeaponItem
     float StatusDps = 0;
     float StatusChance = 0; // percent
     TArray<FString> Fragments;
+    // Sockets of the fragments the gun draws, by original name ("Muzzle", "EjectPort", ...); empty when the recipe predates them.
+    TMap<FString, FOpenWillowGunSocket> Sockets;
     // Chosen parts in slot order (Body..Material), as the generator or the recipe's `parts` chose them. Empty slots are
     // left out. The parallel weapon-assembly work reads these; the part paths are game object paths, not UE assets.
     TArray<FOpenWillowWeaponPart> Parts;
@@ -174,8 +193,8 @@ public:
     // UNVERIFIED against a live BL2 run: expected base backpack and SDU cap.
     static constexpr int32 DefaultBackpackCapacity = 12;
     static constexpr int32 MaximumBackpackCapacity = 39;
-    // Loads every *.json recipe with stats under Directory; returns the count. Mission weapons and the turn-in loot
-    // stand-in are skipped: the quest lends or drops them (FindRecipe).
+    // Loads every *.json recipe with stats under Directory; returns the count. Mission weapons are skipped:
+    // the quest lends them (FindRecipe).
     int32 LoadRecipes(const FString& Directory);
     // -owitemids=a,b,c (test runs): when not empty, LoadRecipes loads only the recipe ids in this set.
     TSet<FString> RecipeFilter;

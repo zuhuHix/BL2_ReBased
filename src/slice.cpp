@@ -18,14 +18,36 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                    const std::string& dummyProviderPath)
     : runtime_(runtime) {
     mission_ = std::make_unique<MissionSystem>(runtime, "Startup", missionPath);
+    // The tracker's observers in registration order: the VM's own (the waypoint, registered at level start) first, then the dummy's conditions.
+    mission_->onNotification = [this](MissionSystem::Notification kind) { script_->notify(kind); applyConditions(); };
+    script_ = std::make_unique<MissionScript>(runtime, *mission_);
+    // NotifyTakeHit of a pawn hit (MissionScript::hitFromPlayer) raises the dummy's OnTakeDamage with the damage type definition and the source class as the
+    // event's DamageType and DamageSource outputs, after the pawn's health was lowered.
+    script_->combat().setTakeDamageHandler([this](const CombatSystem::TakeDamageEvent& event) {
+        if (event.pawn != dummyPawn_) return;
+        const auto& type = event.damageType;
+        const size_t before = dummy_->trace.size();
+        dummy_->fireEvent("OnTakeDamage", {{"DamageType", type && type->resourcePackage ? type->resourcePackage->path(type->resourceIndex) : ""},
+                                           {"DamageSource", event.source ? event.source->path : ""}});
+        script_->combat().note("OnTakeDamage raised on the dummy's provider (damage=" + std::to_string(event.damage) + ")");
+        for (size_t i = before; i < dummy_->trace.size(); ++i) script_->combat().note("behavior " + dummy_->trace[i]);
+    });
     auto package = runtime.package(dummyProviderPackage);
     const int32_t index = runtime.findExport(*package, dummyProviderPath);
     if (index <= 0) throw RuntimeError("dummy behavior provider not found: " + dummyProviderPath);
     dummy_ = std::make_unique<BehaviorProvider>(runtime, package, index);
+    dummyPackage_ = package;
+    // The stock GoToRange waypoint (placed in the same level package), if the package has it.
+    script_->placeWaypoint(package, "TheWorld.PersistentLevel.WillowWaypoint_9");
+    // Marcus, the mission director: the stock archetype with his own directive table (NATIVE_USE_INTERACTION.md); the placed pawn is an instance of it.
+    script_->placeMarcus(package, "GD_Marcus.Character.Pawn_Marcus");
     dummyName_ = dummyProviderPath.substr(dummyProviderPath.rfind('.') + 1);
     auto& d = *dummy_;
-    d.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
-        mission_->updateObjectiveByPath(refPath(p.runtime().property(*b.object, "MissionObjective")));
+    // Behavior_UpdateMissionObjective is script (NATIVE_OBJECTIVE_TRIGGERS.md): it runs on the VM and reaches the tracker's UpdateObjective.
+    // Its context object would be the dummy pawn, which has no VM object here; None casts to no IMissionObjective, as a pawn does, so the
+    // bit is 0 either way.
+    d.handle("WillowGame.Behavior_UpdateMissionObjective", [this](BehaviorProvider&, BehaviorProvider::Behavior& b, const std::string&) {
+        script_->applyBehavior(b.object, nullptr);
         return std::vector<int>();
     });
     // Behavior_CompareObject runs through the provider's built-in handler (inputs from the variable data).
@@ -71,7 +93,19 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
                                                   {"Context", context(p, b)},
                                                   {"Calls", "IBodyCompositionInstance.ChangeInstanceDataSwitch"}};
     });
-    d.handle("GearboxFramework.Behavior_AIHold", [](BehaviorProvider&, BehaviorProvider::Behavior&, const std::string&) {
+    // Reached since the provider registers like the stock one (the bEnabledOnSpawn sequences fire OnBehaviorSequenceEnabled, section C of
+    // NATIVE_BEHAVIOR_POPULATION.md): a special-move (animation) request on the pawn; no animation system here, listed at the boundary.
+    // The installed script of Behavior_SpecialMove (read with --disasm): on its first run it asks the context's special-move component to play the
+    // move and selects output 0 at once; output 1 follows when the move has ended (not modelled: no animation system, and no link of the dummy's
+    // provider uses it). So the Idle sequence's next behavior, Behavior_AIHold_57 (output 0), runs, as it did in the real game (lane L2 trace).
+    d.reportAtBoundary("GearboxFramework.Behavior_SpecialMove", nullptr, {0});
+    // The hold behavior is installed script (Behavior_AIHold.ApplyBehaviorToContext: its Type selects the AI component's Hold / HoldTarget / HoldMovement /
+    // HoldDemigod / HoldGod / HoldDialog, an Action other than 0 the Release of the same type). It runs on the VM once the dummy pawn has its mind and AI component
+    // (its first pawn hit), so the FireDamage sequence's AIHold_59 (Reason Safe, Type 3 = HoldDemigod) makes the pawn demigod, which the stock AdjustDamage and
+    // TakeDamage scripts answer with the floor of 1 health (lane L6). Before that the dummy has no AI component and the behavior stays a recorded no-op, as it was.
+    d.handle("GearboxFramework.Behavior_AIHold", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
+        if (dummyCombat_)
+            for (const ObjectPtr& context : p.contexts(b, dummyPawn_)) script_->applyBehavior(b.object, script_->combat().aiInterfaceFor(context));
         return std::vector<int>();
     });
     d.handle("Engine.Behavior_RemoteEvent", [this](BehaviorProvider& p, BehaviorProvider::Behavior& b, const std::string&) {
@@ -84,9 +118,9 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
         const Value* path = p.runtime().property(*b.object, "ProviderDefinitionPathName");
         const Value* components = path ? path->field("PathComponentNames") : nullptr;
         const Value* sequence = p.runtime().property(*b.object, "SequenceName");
-        if (components && components->s == dummyName_ && sequence)
+        if (components && providerPathLeaf(components) == dummyName_ && sequence)
             changeSequence(sequence->s, nameOf(actions, p.runtime().property(*b.object, "Action")));
-        else p.errors.push_back("sequence change targets another provider: " + (components ? components->s : std::string()));
+        else p.errors.push_back("sequence change targets another provider: " + providerPathLeaf(components));
         return std::vector<int>();
     });
 }
@@ -94,44 +128,60 @@ FireMissionSlice::FireMissionSlice(Runtime& runtime, const std::string& missionP
 // Behavior_ChangeRemoteBehaviorSequenceState.Action (ITargetable.EChangeStatus). Its script hands the action to the
 // native BehaviorKernel.ChangeBehaviorSequenceActivationStatus; that Toggle flips the current state is UNVERIFIED.
 void FireMissionSlice::changeSequence(const std::string& sequence, const std::string& action) {
+    events_.push_back({HostEvent::Kind::SequenceChange, dummyName_, sequence, action});
     if (action == "CHANGE_Enable") dummy_->setSequenceEnabled(sequence, true);
     else if (action == "CHANGE_Disable") dummy_->setSequenceEnabled(sequence, false);
     else if (action == "CHANGE_Toggle") dummy_->setSequenceEnabled(sequence, !dummy_->sequenceEnabled(sequence));
     else errors_.push_back("unknown sequence change action '" + action + "' for " + sequence);
 }
 
-// BehaviorSequenceEnableByMission. The data: LinkedMission, MissionStatesToLinkTo (bNotStarted, bActive,
-// bRequiredObjectivesComplete, bReadyToTurnIn, bComplete, bFailed; class default {bActive}), bIsObjectiveSpecific,
-// LinkedObjective, ObjectiveStatesToLinkTo (bNotStarted, bActive, bComplete; class default {bActive}),
-// ObjectiveSetRestrictions. Its evaluation is native; this rule is UNVERIFIED. A mission other than the slice's
-// is Complete when it is in the completed set, else NotStarted.
+// BehaviorSequenceEnableByMission (NATIVE_BEHAVIOR_POPULATION.md section B, read from native code: UNVERIFIED). Data: LinkedMission,
+// MissionStatesToLinkTo (bNotStarted, bActive, bRequiredObjectivesComplete, bReadyToTurnIn, bComplete, bFailed), bIsObjectiveSpecific,
+// LinkedObjective, ObjectiveStatesToLinkTo (bNotStarted, bActive, bComplete), ObjectiveSetRestrictions. The verdict: a mission that
+// is not objective-specific looks up its status bit; an objective-specific one has no linked objective -> false, else classifies the
+// objective (MissionSystem::objectiveState: Complete / Active / NotStarted, with the status gating) and looks up that bit; then a
+// non-empty ObjectiveSetRestrictions keeps a true verdict only while one listed set is the active set. A mission other than the
+// slice's counts as Complete when it is in the completed set, else NotStarted, and its objectives as NotStarted. RequiredObjectivesComplete
+// and Failed are not modelled by MissionSystem. Not modelled: per-instance objectives (bRememberItemsWithinObjective consumers).
 bool FireMissionSlice::conditionHolds(Object& condition) {
     Runtime& r = runtime_;
     const std::string mission = refPath(r.property(condition, "LinkedMission"));
     const bool own = mission == mission_->path();
     static const char* statusFields[] = {"bNotStarted", "bActive", "bReadyToTurnIn", "bComplete"};
-    const std::string missionState = own ? statusFields[int(mission_->status())]
-                                         : (completedMissions_.count(mission) ? "bComplete" : "bNotStarted");
-    const Value* missionStates = r.property(condition, "MissionStatesToLinkTo");
-    const Value* missionMatch = missionStates ? missionStates->field(missionState) : nullptr;
-    if (!missionMatch || !missionMatch->truth()) return false;
-    if (const Value* restrictions = r.property(condition, "ObjectiveSetRestrictions");
-        restrictions && restrictions->kind == Value::Kind::Array && !restrictions->elements().empty()) {
-        errors_.push_back("unsupported ObjectiveSetRestrictions on " + condition.name);
-        return false;
-    }
+    bool verdict;
     const Value* specific = r.property(condition, "bIsObjectiveSpecific");
-    if (!specific || !specific->truth()) return true;
-    const std::string objective = refPath(r.property(condition, "LinkedObjective"));
-    const std::string state = own ? mission_->objectiveState(objective) : "NotStarted";
-    if (state.empty()) { errors_.push_back("enable condition names an objective outside its mission: " + objective); return false; }
-    const Value* objectiveStates = r.property(condition, "ObjectiveStatesToLinkTo");
-    const Value* objectiveMatch = objectiveStates ? objectiveStates->field("b" + state) : nullptr;
-    return objectiveMatch && objectiveMatch->truth();
+    if (!specific || !specific->truth()) {
+        const std::string missionState = own ? statusFields[int(mission_->status())]
+                                             : (completedMissions_.count(mission) ? "bComplete" : "bNotStarted");
+        const Value* missionStates = r.property(condition, "MissionStatesToLinkTo");
+        const Value* match = missionStates ? missionStates->field(missionState) : nullptr;
+        verdict = match && match->truth();
+    } else {
+        const std::string objective = refPath(r.property(condition, "LinkedObjective"));
+        if (objective.empty()) return false;
+        const std::string state = own ? mission_->objectiveState(objective) : "NotStarted";
+        if (state.empty()) { errors_.push_back("enable condition names an objective outside its mission: " + objective); return false; }
+        const Value* objectiveStates = r.property(condition, "ObjectiveStatesToLinkTo");
+        const Value* match = objectiveStates ? objectiveStates->field("b" + state) : nullptr;
+        verdict = match && match->truth();
+    }
+    if (verdict)
+        if (const Value* restrictions = r.property(condition, "ObjectiveSetRestrictions");
+            restrictions && restrictions->kind == Value::Kind::Array && !restrictions->elements().empty()) {
+            verdict = false;
+            if (own)
+                for (const auto& set : restrictions->elements())
+                    if (mission_->setActive(refPath(&set))) { verdict = true; break; }
+        }
+    return verdict;
 }
 
-bool FireMissionSlice::syncSequences() {
-    bool changed = false;
+// What every mission notification does to the registered dummy: recompute each condition's verdict from the tracker's current state
+// and apply it to its sequence (the notification's own arguments are ignored). setSequenceEnabled changes nothing, and fires no
+// event, when the sequence already is in that state, so events come only from real transitions.
+void FireMissionSlice::applyConditions() {
+    if (!dummyRegistered_) return;
+    if (++notifyDepth_ > 16) { errors_.push_back("mission notifications did not settle"); --notifyDepth_; return; }
     for (const auto& name : dummy_->sequenceNames()) {
         auto condition = dummy_->enableCondition(name);
         if (!condition) continue;
@@ -140,12 +190,9 @@ bool FireMissionSlice::syncSequences() {
             if (std::find(errors_.begin(), errors_.end(), line) == errors_.end()) errors_.push_back(line);
             continue;
         }
-        const bool enabled = conditionHolds(*condition);
-        if (dummy_->sequenceEnabled(name) == enabled) continue;
-        dummy_->setSequenceEnabled(name, enabled);
-        changed = true;
+        dummy_->setSequenceEnabled(name, conditionHolds(*condition));
     }
-    return changed;
+    --notifyDepth_;
 }
 
 bool FireMissionSlice::drainMission() {
@@ -160,56 +207,166 @@ bool FireMissionSlice::drainMission() {
             else errors_.push_back("mission sequence change targets an unbound provider: " + effect.a);
             break;
         case K::RemoteEvent: events_.push_back({HostEvent::Kind::RemoteEvent, effect.a, mission_->path(), ""}); break;
-        case K::Dialog: events_.push_back({HostEvent::Kind::Dialog, effect.a, effect.b, effect.c}); break;
+        case K::Dialog: events_.push_back({HostEvent::Kind::Dialog, effect.a, effect.b, effect.c, effect.detail}); break;
         case K::MissionWeaponGranted: events_.push_back({HostEvent::Kind::MissionWeaponGranted, effect.a, "", ""}); break;
         case K::MissionWeaponRemoved: events_.push_back({HostEvent::Kind::MissionWeaponRemoved, effect.a, "", ""}); break;
         case K::Reward: events_.push_back({HostEvent::Kind::Reward, effect.a, "", ""}); break;
         case K::StatusChanged: events_.push_back({HostEvent::Kind::Status, effect.a, "", ""}); break;
         case K::ObjectiveSetActive: events_.push_back({HostEvent::Kind::ObjectiveSet, effect.a, "", ""}); break;
         case K::ObjectiveComplete: events_.push_back({HostEvent::Kind::ObjectiveComplete, effect.a, "", ""}); break;
+        case K::TurnInDialog: events_.push_back({HostEvent::Kind::TurnInDialog, effect.a, effect.b, effect.c}); break;
+        case K::DismissalDialog: events_.push_back({HostEvent::Kind::DismissalDialog, effect.a, effect.b, effect.c}); break;
+        case K::InterfaceClosed: events_.push_back({HostEvent::Kind::MissionInterfaceClosed, effect.a, "", ""}); break;
+        case K::RewardPage: events_.push_back({HostEvent::Kind::RewardPage, effect.a, "", ""}); break;
+        case K::RewardReceived: events_.push_back({HostEvent::Kind::RewardReceived, effect.a, "", ""}); break;
         case K::ObjectiveUpdated: break;   // progress only; completion is reported separately
         }
     }
     return any;
 }
 
-void FireMissionSlice::pump() {
-    // Mission state changes can toggle dummy sequences, whose behaviors can change mission state again: repeat
-    // until both are quiet (bounded).
-    for (int round = 0; round < 16; ++round) {
-        const bool drained = drainMission();
-        const bool changed = syncSequences();
-        if (!drained && !changed) return;
+// What the script's experience natives did since the last call, as host events: ExpEarn's pool gains, the levels the pool update reached and
+// what its level-up awarded (skill points) and set (maximum health).
+void FireMissionSlice::drainExperience() {
+    using Kind = MissionScript::Gain::Kind;
+    for (const auto& gain : script_->takeGains()) {
+        switch (gain.kind) {
+        case Kind::Experience: events_.push_back({HostEvent::Kind::Experience, std::to_string(gain.amount), "", "", ""}); break;
+        case Kind::Level: events_.push_back({HostEvent::Kind::Level, std::to_string(gain.amount), "", "", ""}); break;
+        case Kind::SkillPoints: events_.push_back({HostEvent::Kind::SkillPoints, std::to_string(gain.amount), "", "", ""}); break;
+        case Kind::MaxHealth: events_.push_back({HostEvent::Kind::MaxHealth, std::to_string(gain.health), "", "", ""}); break;
+        case Kind::Health: events_.push_back({HostEvent::Kind::Health, std::to_string(gain.health), std::to_string(gain.maximum), "", ""}); break;
+        case Kind::ActionSkillCooldown: events_.push_back({HostEvent::Kind::ActionSkillCooldown, gain.amount == 0 ? "Scale" : gain.amount == 1 ? "PreAdd" : "PostAdd", std::to_string(gain.scale), "", ""}); break;
+        case Kind::WeaponDamageScale: events_.push_back({HostEvent::Kind::WeaponDamageScale, std::to_string(gain.scale), std::to_string(gain.duration), "", ""}); break;
+        }
     }
+}
+
+void FireMissionSlice::pump() {
+    drainExperience();
+    // Dummy sequence changes (made by the mission's notifications) can fire behaviors that change mission state again: repeat
+    // until the effects are quiet (bounded).
+    for (int round = 0; round < 16; ++round)
+        if (!drainMission()) return;
     errors_.push_back("mission/dummy state did not settle");
 }
 
+MissionScript::MarcusUse FireMissionSlice::useMarcus(const std::set<std::string>& completed) {
+    completedMissions_ = completed;
+    const auto use = script_->useMarcus(completed);
+    if (!use.onUseTag.empty()) events_.push_back({HostEvent::Kind::OnUseDialog, use.onUseTag, use.onUseSpeaker, use.onUseTarget, ""});
+    if (use.interfaceOpened) events_.push_back({HostEvent::Kind::MissionInterface, use.movie, use.director, "", ""});
+    pump();
+    return use;
+}
+
+// What Marcus's mission screen offers, from his own list scripts (NATIVE_USE_INTERACTION.md); the screen itself is not hosted.
+MissionScript::MissionLists FireMissionSlice::screen(const std::set<std::string>& completed) {
+    completedMissions_ = completed;
+    return script_->missionLists(completed);
+}
+
+// The confirm button on an entry (bridge note, "Calls into the C1 natives"): a thin wrapper kept for the CLI and the tests. When Marcus is
+// placed, the entry must be one his screen offers (the button only exists for an offered entry); WillowPlayerController.AcceptMission then
+// runs as script with Marcus as the director, and its native ActivateMission drives MissionSystem. The kickoff is the pending record that the
+// next tick() plays (bridge note); the mission's first objective set follows from it.
 bool FireMissionSlice::accept(const std::set<std::string>& completed) {
     completedMissions_ = completed;
-    const bool ok = mission_->accept(completed);
-    // HOST STAND-IN: what plays the kickoff after acceptance was not identified (NATIVE_MISSION_DISPATCH.md B9); the
-    // slice plays it at once. Its dialog is not played, so its Finished output (which activates the first set) runs now.
-    if (ok) mission_->kickoff();
+    if (script_->hasMarcus()) {
+        const auto lists = script_->missionLists(completed);
+        if (std::find(lists.eligible.begin(), lists.eligible.end(), mission_->path()) == lists.eligible.end()) return false;
+    }
+    const bool ok = script_->accept(completed);
     pump();
     return ok;
 }
 
+// The player leaves Marcus's mission screen (Escape), or confirms the reward page it showed at the turn-in (Enter). Host stand-ins for the movie's buttons;
+// what they run is installed script (MissionScript).
+bool FireMissionSlice::closeScreen() {
+    const bool ok = script_->closeScreen();
+    pump();
+    return ok;
+}
+
+bool FireMissionSlice::confirmReward() {
+    const bool ok = script_->confirmReward();
+    pump();
+    return ok;
+}
+
+// The host reports the overlap of an actor with the waypoint's cylinder; the waypoint's own script decides what it means.
+void FireMissionSlice::touchWaypoint(bool player, bool begin) {
+    using W = MissionScript::Toucher;
+    if (begin) script_->touch(player ? W::Player : W::Marcus); else script_->untouch(player ? W::Player : W::Marcus);
+    pump();
+}
+
+// The old direct call, kept as a thin wrapper: the player enters the cylinder. Without the stock waypoint (data without it) the objective
+// is updated directly as before.
 bool FireMissionSlice::enterRange() {
-    const bool ok = mission_->updateObjective("RockPaper_GoToRange");
-    pump();
-    return ok;
+    const auto before = mission_->objectiveProgress("RockPaper_GoToRange");
+    if (script_->hasWaypoint()) touchWaypoint(true, true);
+    else { mission_->updateObjective("RockPaper_GoToRange"); pump(); }
+    return mission_->objectiveProgress("RockPaper_GoToRange") != before;
 }
 
-bool FireMissionSlice::damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath) {
-    dummy_->fireEvent("OnTakeDamage", {{"DamageType", damageTypePath}, {"DamageSource", damageSourcePath}});
+bool FireMissionSlice::damageDummy(const std::string& damageTypePath, const std::string& damageSourcePath, double damage) {
+    if (damage < 0 || !dummyPawn_) {
+        dummy_->fireEvent("OnTakeDamage", {{"DamageType", damageTypePath}, {"DamageSource", damageSourcePath}});
+        pump();
+        return true;
+    }
+    try {
+        if (!dummyCombat_) {
+            const int stage = script_->currentGameStage() > 0 ? script_->currentGameStage() : script_->playerLevel();
+            script_->combat().adopt(dummyPawn_, stage, stage);
+            dummyCombat_ = true;
+        }
+        lastHit_ = script_->hitFromPlayer(dummyPawn_, damage, damageTypePath, damageSourcePath);
+    } catch (const std::exception& error) {
+        errors_.push_back(std::string("pawn hit: ") + error.what());
+        return false;
+    }
     pump();
     return true;
 }
 
+double FireMissionSlice::dummyHealth() {
+    if (!dummyCombat_) return -1;
+    Function* getHealth = runtime_.findMethod(dummyPawn_->cls, "GetHealth");
+    return getHealth ? runtime_.call(*getHealth, dummyPawn_).number() : -1;
+}
+
+// The stock spawn registers the dummy's provider on its pawn before OnSpawned (IntializeBehaviorProviderForConsumer: the
+// bEnabledOnSpawn sequences are enabled, then each condition observes the mission and delivers its verdict at once), so
+// FireDamage is already enabled when OnSpawned arrives. The provider is not a consumer, and observes nothing, before that.
 bool FireMissionSlice::spawnDummy() {
+    if (!dummyRegistered_) {
+        dummy_->registerConsumer();
+        dummyRegistered_ = true;
+        notifyDepth_ = 0;
+        applyConditions();                    // the LevelLoad verdict
+    }
+    placeDummyPawn();
     dummy_->fireEvent("OnSpawned");
+    // The level's SeqEvent_PopulatedActor writes the pawn into the Kismet object variable TargetDummy after the pawn's own spawn behaviors (observed live:
+    // lane L4, the same frame as the first dialog behavior's resumed run, which comes before both).
+    mission_->bindKismetVariable("TargetDummy", dummyPawn_);
     pump();
     return true;
+}
+
+// The pawn object the VM holds for the dummy: the stock archetype, registered as a dialog talker under the dialog name of its body class (the live line 03a
+// is spoken by the dummy). Made once. The data without the archetype gives no pawn: nothing is bound then and nothing speaks.
+void FireMissionSlice::placeDummyPawn() {
+    if (dummyPawn_) return;
+    const int32_t index = runtime_.findExport(*dummyPackage_, "GD_TargetDummy.Character.Pawn_TargetDummy");
+    if (index <= 0) return;
+    dummyPawn_ = runtime_.instantiateExport(dummyPackage_, index, 4);
+    const Value* body = runtime_.property(*dummyPawn_, "BodyClass");
+    const auto dialog = mission_->dialog().pawnDialog(body ? *body : Value());
+    if (!dialog.nameTag.empty()) mission_->dialog().registerTalker(dialog.nameTag, dummyPawn_);
 }
 
 bool FireMissionSlice::hitDummy(bool fireDamage) {
@@ -218,18 +375,28 @@ bool FireMissionSlice::hitDummy(bool fireDamage) {
 
 bool FireMissionSlice::loadState(const std::string& state) {
     if (!mission_->loadState(state)) return false;
+    script_->syncRestored();
+    applyConditions();                        // a loaded mission is announced to its observers (LevelLoad)
     pump();
     return true;
 }
 
+// WillowPlayerController.ServerCompleteMission runs as script (CompleteMission, then PlayTurnIn) with Marcus as the director. The real turn-in
+// screen offers it only for a redeemable entry (CanEndMission holds), so a mission his lists do not offer is refused here, before the script.
 bool FireMissionSlice::turnIn() {
-    const bool ok = mission_->turnInMission();
+    if (script_->hasMarcus()) {
+        const auto lists = script_->missionLists(completedMissions_);
+        if (std::find(lists.redeemable.begin(), lists.redeemable.end(), mission_->path()) == lists.redeemable.end()) return false;
+    } else if (!mission_->canEnd()) return false;
+    const bool ok = script_->turnIn();
     pump();
     return ok;
 }
 
 void FireMissionSlice::tick(double seconds) {
     mission_->tick(seconds);
+    script_->advanceTime(seconds);         // game time, read by OnExpLevelChange's 1 s guard
+    script_->updateExperiencePool();       // the experience pool update, every frame (ApplyExpPointsToExpLevel)
     dummy_->tick(seconds);
     pump();
 }
@@ -243,6 +410,7 @@ std::vector<FireMissionSlice::HostEvent> FireMissionSlice::drain() {
 std::vector<std::string> FireMissionSlice::errors() const {
     std::vector<std::string> all = errors_;
     for (const auto& line : mission_->errors) all.push_back(line);
+    for (const auto& line : script_->errors) all.push_back(line);
     for (const auto& line : dummy_->errors) all.push_back(line);
     return all;
 }

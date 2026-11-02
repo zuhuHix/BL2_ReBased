@@ -38,13 +38,13 @@ public:
     // group actor's mesh moves, the actors attached to it in the data follow. Throws std::runtime_error.
     void BindTrack(const TSharedPtr<FJsonObject>& Binding);
     class UStaticMeshComponent* TrackCarrier() const { return TrackMesh; }
-    bool TrackRunning() const { return bTrackRunning; }
+    bool TrackRunning() const { return bTrackRunning || bTrackEndPending; }   // the action is active until its deactivation
     FVector TrackOffset() const;                  // carrier location minus its placed location
     int32 TrackForwardEnds = 0, TrackReverseEnds = 0;
     // Closed-position centre of the door and a standing point beside it (test/host positioning).
     bool Anchor(FVector& Out) const;
     bool StandPoint(FVector& Out) const;
-    bool DoorRunning() const { return Running; }
+    bool DoorRunning() const { return Running || bDoorEndPending; }
     FVector DoorPlacedLocation() const { return Initial.GetLocation(); }
     int32 LastEventMatched = 0;
     int32 LastEventBoundary = 0;
@@ -71,6 +71,7 @@ private:
     bool Failed = false;
     bool Testing = false;
     bool Running = false;
+    bool bDoorEndPending = false;    // reached the end last frame: deactivation (finish, Completed/Reversed) this frame
     bool Reverse = false;
     float Time = 0;
     float Duration = 0;
@@ -86,6 +87,7 @@ private:
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> TrackMesh;
     FTransform TrackInitial;
     bool bTrackRunning = false;
+    bool bTrackEndPending = false;
     bool bTrackReverse = false;
     float TrackTime = 0;
 };

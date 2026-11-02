@@ -34,6 +34,10 @@ struct IterState {
     Value* index = nullptr;
     size_t position = 0;
     size_t resume = 0;      // statement to run for each element
+    // An engine iterator (foreach over a native such as AllActors) walks a list the native returned: `array` points into `owned`, the item is
+    // the call's out parameter, destroyed objects are skipped, and the item reads None once the list is exhausted.
+    std::shared_ptr<Value> owned;
+    bool engine = false;
 };
 
 struct Frame {
@@ -54,6 +58,7 @@ struct Interp {
     std::vector<const Function*> stack;                       // active script functions, innermost last
     Value scratch;                                            // sink for writes through a null reference
     std::map<std::pair<const Package*, int32_t>, PropertyDecl> decls;
+    std::map<std::pair<const Package*, int32_t>, std::pair<PropertyDecl, PropertyDecl>> attributeLinks;   // value property -> (stack, base)
 
     explicit Interp(Runtime& runtime) : rt(runtime) {}
 
@@ -86,7 +91,7 @@ struct Interp {
             return &found->second.ref();
         }
         case script::EX_Op4C: case script::EX_Op4D: case script::EX_Op4E: case script::EX_Op4F: case script::EX_Op50:
-            return &f.typed[{e.op, e.ints.at(0)}].ref();
+            return &typedTemporary(e, f).ref();
         case script::EX_InstanceVariable: case script::EX_Op5E: case script::EX_StateVariable: {
             if (!ctx) return &(scratch = Value());
             const auto& property = decl(f, e.refs.at(0));
@@ -121,13 +126,35 @@ struct Interp {
         }
         case script::EX_Context: case script::EX_ClassContext: {
             ObjectPtr target = contextTarget(e, f, ctx);
-            if (!target) return &(scratch = zeroFor(f, e.refs.at(0)));
+            if (!target) { noteNoneContext(f); return &(scratch = zeroFor(f, e.refs.at(0))); }
             return lval(e.kids.at(1), f, target);
         }
         default:
             scratch = eval(e, f, ctx);          // not a storage location: operate on a temporary
             return &scratch;
         }
+    }
+
+    // Opcodes 4C-50 (NATIVE_BYTECODE_OPCODES.md, UNVERIFIED in the running game): a hidden typed temporary of the function's frame. The operand
+    // is an index into the function's local-variable array as the engine stores it in memory (count first, then the file's values), so it is
+    // odd and selects pair (operand - 1) / 2. A slot nothing has written yet reads as the typed zero (the frame zero-fill is assumed).
+    Slot& typedTemporary(const Expr& e, Frame& f) {
+        const int32_t operand = e.ints.at(0);
+        if (operand < 1 || !(operand & 1) || size_t(operand) >= f.function->info.hiddenLocals.size())
+            throw RuntimeError("typed temporary " + std::to_string(operand) + " is outside the local-variable array of " + f.function->path);
+        auto found = f.typed.find({e.op, operand});
+        if (found == f.typed.end()) {
+            Slot slot;
+            switch (e.op) {
+            case script::EX_Op4C: slot.v = Value::makeInt(0); break;
+            case script::EX_Op4D: slot.v = Value::makeFloat(0); break;
+            case script::EX_Op4E: slot.v = Value::makeByte(0); break;
+            case script::EX_Op4F: slot.v = Value::makeBool(false); break;
+            default: slot.v = Value::makeObject(nullptr); break;
+            }
+            found = f.typed.emplace(std::make_pair(int(e.op), operand), std::move(slot)).first;
+        }
+        return found->second;
     }
 
     // The object a Context expression's member runs against; null when the object expression is None.
@@ -139,6 +166,11 @@ struct Interp {
     }
 
     void log(const std::string& text) { rt.log.push_back(text); }
+
+    // Census only: a Context expression whose object was None silently yields a zero value; remember where.
+    void noteNoneContext(const Frame& f) {
+        if (rt.countCalls) ++rt.noneContexts[f.function->path];
+    }
 
     // ---------------------------------------------------------------------------------- expressions
     Value constant(const Expr& e) {
@@ -255,8 +287,10 @@ struct Interp {
             const auto resolved = rt.resolveRef(f.function->package, e.refs.at(0));
             if (resolved) {
                 const auto& exportObject = resolved.package->exports[size_t(resolved.index) - 1];
+                // A class export has class reference 0 (its own class is implicit), the same rule vm.cpp's
+                // classNameOf uses; an export that names "Class" explicitly is accepted too.
                 try {
-                    if (resolved.package->object(exportObject.cls).name == "Class")
+                    if (!exportObject.cls || resolved.package->object(exportObject.cls).name == "Class")
                         return Value::makeClass(rt.classAt(resolved.package, resolved.index));
                 } catch (const std::exception&) {}
             }
@@ -282,12 +316,13 @@ struct Interp {
         }
         case script::EX_Context: case script::EX_ClassContext: {
             ObjectPtr target = contextTarget(e, f, ctx);
-            if (!target) return zeroFor(f, e.refs.at(0));
+            if (!target) { noteNoneContext(f); return zeroFor(f, e.refs.at(0)); }
             return eval(e.kids.at(1), f, target);
         }
         case script::EX_InterfaceContext: return eval(e.kids.at(0), f, ctx);
         case script::EX_Skip: return eval(e.kids.at(0), f, ctx);
-        case script::EX_Let: case script::EX_LetBool: case script::EX_LetDelegate: case script::EX_Op5F: {
+        case script::EX_Op5F: letAttribute(e, f, ctx); return Value();     // a statement: no result
+        case script::EX_Let: case script::EX_LetBool: case script::EX_LetDelegate: {
             const Expr& lhs = e.kids.at(0);
             if (lhs.op == script::EX_DynArrayLength) {
                 // Assigning a dynamic array's length resizes it.
@@ -302,7 +337,9 @@ struct Interp {
             Value* target = lval(lhs, f, ctx);
             Value value = eval(e.kids.at(1), f, ctx);
             assign(*target, std::move(value));
-            return *lval(lhs, f, ctx);
+            // The value of the assignment is what the target now holds. Evaluating `lhs` again here would repeat its side effect: the index of
+            // `arr[arr.Length] = x` is the length, and a second evaluation grew the array a second time (one append stored two elements).
+            return *target;
         }
         case script::EX_Conditional: {
             return eval(e.kids.at(0), f, ctx).truth() ? eval(e.kids.at(1), f, ctx) : eval(e.kids.at(2), f, ctx);
@@ -319,7 +356,7 @@ struct Interp {
         case script::EX_DynamicCast: case script::EX_InterfaceCast: {
             Value v = eval(e.kids.at(0), f, ctx);
             Class* want = rt.classAt(f.function->package, e.refs.at(0));
-            if (v.kind == K::Object && v.o && v.o->cls && want && v.o->cls->isChildOf(want)) return v;
+            if (v.kind == K::Object && v.o && v.o->cls && want && (v.o->cls->isChildOf(want) || rt.implements(v.o->cls, want))) return v;
             return Value::makeObject(nullptr);
         }
         case script::EX_MetaCast: {
@@ -485,6 +522,78 @@ struct Interp {
         target = std::move(value);
     }
 
+    // The stack and base companions of an attribute value property, found from the property's own references in the package (not by name):
+    // float and int attribute properties list (stack, base), a byte attribute lists (enum, stack, base). Values carry flag bit 63, bases bit 62
+    // (NATIVE_ATTRIBUTES.md; 257 value and 257 base properties of the nine code packages, all companions checked against the names).
+    const std::pair<PropertyDecl, PropertyDecl>& companions(const Frame& f, const PropertyDecl& value) {
+        const auto key = std::make_pair(value.package.get(), value.index);
+        const auto cached = attributeLinks.find(key);
+        if (cached != attributeLinks.end()) return cached->second;
+        const bool isByte = value.type == "ByteAttributeProperty";
+        if ((!isByte && value.type != "FloatAttributeProperty" && value.type != "IntAttributeProperty") || !(value.flags >> 63 & 1))
+            throw RuntimeError("let attribute: " + value.name + " is not an attribute value property in " + f.function->path);
+        auto stackDecl = rt.declAt(value.package, isByte ? value.typeRef2 : value.typeRef);
+        auto baseDecl = rt.declAt(value.package, isByte ? value.typeRef3 : value.typeRef2);
+        if (stackDecl.type != "ArrayProperty" || !(baseDecl.flags >> 62 & 1))
+            throw RuntimeError("let attribute: " + value.name + " has no modifier stack and base value in " + f.function->path);
+        return attributeLinks.emplace(key, std::make_pair(std::move(stackDecl), std::move(baseDecl))).first->second;
+    }
+
+    // The value of a stack attribute from its base and modifier stack (NATIVE_ATTRIBUTES.md section 3, UNVERIFIED in the running game), in
+    // single precision. A modifier object has Type (0 scale, 1 pre-add, 2 post-add, anything else ignored) and Value. Integer and byte
+    // attributes truncate toward zero; a byte keeps the low 8 bits, an out-of-range float becomes INT_MIN as the hardware conversion does.
+    Value attributeValue(const PropertyDecl& value, const Value& base, const Value& modifiers) {
+        float preAdd = 0, postAdd = 0, scaleUp = 0, scaleDown = 0;
+        for (const Value& item : modifiers.elements()) {
+            if (item.kind != K::Object || !item.o) continue;
+            const Value* type = rt.property(*item.o, "Type");
+            const Value* amount = rt.property(*item.o, "Value");
+            if (!type || !amount) { log("attribute modifier without Type or Value"); continue; }
+            const float x = float(amount->number());
+            switch (type->integer()) {
+            case 0: if (x > 0) scaleUp += x; else scaleDown += x; break;
+            case 1: preAdd += x; break;
+            case 2: postAdd += x; break;
+            default: break;
+            }
+        }
+        const float result = (float(base.number()) + preAdd) * ((1.0f + scaleUp) / (1.0f - scaleDown)) + postAdd;
+        if (value.type == "FloatAttributeProperty") return Value::makeFloat(result);
+        const int32_t whole = (result >= 2147483648.0f || result < -2147483648.0f || result != result) ? INT32_MIN : int32_t(result);
+        return value.type == "ByteAttributeProperty" ? Value::makeByte(whole) : Value::makeInt(whole);
+    }
+
+    // Opcode 5F, "let attribute" (NATIVE_BYTECODE_OPCODES.md, UNVERIFIED in the running game): the left side names an attribute value property
+    // (a bare 5E or Context(...) wrapping one). The right side is stored into the property's BASE companion and the value property is then
+    // recomputed from the base and the modifier stack. It does not run the attribute-changed notification, and the engine's replication-dirty
+    // hook (an empty virtual in the classes read) is skipped. A None context logs the error and still evaluates the right side.
+    void letAttribute(const Expr& e, Frame& f, const ObjectPtr& ctx) {
+        const Expr* left = &e.kids.at(0);
+        if (left->op == script::EX_DynArrayLength) { log("Illegal call to execLetAttribute() for Array"); return; }
+        ObjectPtr container = ctx;
+        while (left->op == script::EX_Context || left->op == script::EX_ClassContext) {
+            container = contextTarget(*left, f, container);
+            if (!container) break;
+            left = &left->kids.at(1);
+        }
+        if (!container) {
+            noteNoneContext(f);
+            log("Attempt to assign attribute through None");
+            eval(e.kids.at(1), f, ctx);
+            return;
+        }
+        if (left->op != script::EX_Op5E) throw RuntimeError("let attribute: the left side is not an attribute reference in " + f.function->path);
+        const PropertyDecl& value = decl(f, left->refs.at(0));
+        const auto& [stackDecl, baseDecl] = companions(f, value);
+        Value rhs = eval(e.kids.at(1), f, ctx);
+        Value* base = rt.property(*container, baseDecl.name);
+        Value* stored = rt.property(*container, value.name);
+        Value* modifiers = rt.property(*container, stackDecl.name);
+        if (!base || !stored || !modifiers) throw RuntimeError("let attribute: " + value.name + " is missing on its object in " + f.function->path);
+        assign(*base, std::move(rhs));
+        *stored = attributeValue(value, *base, *modifiers);
+    }
+
     // --------------------------------------------------------------------------------------- calls
     // Parameter expressions are evaluated in the *caller's* context (the frame's own object) even when the
     // call target was chosen by a Context expression (UE3's Stack.Object versus Context; UNVERIFIED).
@@ -568,6 +677,13 @@ struct Interp {
     // Runs `function` with bound arguments; natives call their implementation, script functions get a frame.
     Value invoke(Function& function, const ObjectPtr& target, std::vector<NativeCall::Arg> args) {
         tick();
+        if (rt.callTrace) rt.callTrace->push_back(function.path);
+        if (rt.countCalls) {
+            rt.countedFunctions.emplace(function.path, &function);
+            if (!function.isNative()) ++rt.scriptCalls[function.path];
+            else if (function.native) ++rt.nativeCalls[function.path];
+            else ++rt.stubCalls[function.path];
+        }
         if (function.isNative()) {
             if (function.native) {
                 NativeCall call{rt, function, target, std::move(args)};
@@ -577,6 +693,11 @@ struct Interp {
             // Out parameters keep their values; the result is the return type's zero value.
             if (function.result) return rt.zeroValue(*function.result);
             return Value();
+        }
+        // A script function a host binding overrides (Runtime::overrideScript): the binding runs instead of the bytecode.
+        if (function.native) {
+            NativeCall call{rt, function, target, std::move(args)};
+            return function.native(call);
         }
         if (function.decodeFailed) throw RuntimeError("cannot run " + function.path + ": " + function.decodeError);
         if (!function.code) {
@@ -619,6 +740,52 @@ struct Interp {
         run(frame);
         // Copy-out for out parameters is by alias; the result is the returned value.
         return std::move(frame.result);
+    }
+
+    // Starts a foreach over an engine iterator (EX_Iterator). The call sits under any Context wrappers and must be a numbered native that has an
+    // iterator registered (Runtime::registerIterator); anything else returns false and nothing is evaluated, so the caller skips the loop as
+    // before. Otherwise the object chain is resolved (a None object skips the loop, like any call on None), the arguments are bound like an
+    // ordinary call, the iterator returns its list, and the state is pushed with the out parameter as the loop variable. The first element
+    // is already assigned when this returns true and the list is not empty; an empty list leaves the variable None.
+    bool startEngineIterator(const Expr& s, Frame& f, size_t pc) {
+        const Expr* call = &s.kids.at(0);
+        while ((call->op == script::EX_Context || call->op == script::EX_ClassContext) && call->kids.size() == 2) call = &call->kids[1];
+        if (!call->isNativeCall()) return false;
+        Function* function = rt.nativeByIndex(call->native);
+        const IteratorFn* iterator = function ? rt.iteratorFor(*function) : nullptr;
+        if (!iterator) return false;
+        ObjectPtr receiver = f.self;
+        for (const Expr* wrapper = &s.kids.at(0); wrapper != call; wrapper = &wrapper->kids[1]) {
+            receiver = contextTarget(*wrapper, f, receiver);
+            if (!receiver) break;
+        }
+        IterState it;
+        it.engine = true;
+        it.owned = std::make_shared<Value>(Value::makeArray());
+        it.array = it.owned.get();
+        it.resume = pc + 1;
+        if (receiver) {
+            tick();
+            if (rt.countCalls) { rt.countedFunctions.emplace(function->path, function); ++rt.nativeCalls[function->path]; }
+            Bound bound = bindArguments(*function, *call, f, 0);
+            NativeCall native{rt, *function, receiver, std::move(bound.args)};
+            IteratorResult result = (*iterator)(native);
+            if (result.outParam < native.args.size() && native.args[result.outParam].alias) {
+                it.item = native.args[result.outParam].alias;
+                it.owned->elements() = std::move(result.items);
+            }
+        } else {
+            noteNoneContext(f);
+        }
+        if (!it.item) {         // None object, or the iterator named no usable out parameter: the loop body does not run
+            it.item = &scratch;
+        } else if (it.owned->elements().empty()) {
+            *it.item = Value::makeObject(nullptr);
+        } else {
+            *it.item = it.owned->elements()[0];
+        }
+        f.iterators.push_back(std::move(it));
+        return true;
     }
 
     // ------------------------------------------------------------------------------------ statements
@@ -683,27 +850,52 @@ struct Interp {
                 it.item = lval(s.kids.at(1), f, f.self);
                 it.index = s.bytes.at(0) ? lval(s.kids.at(2), f, f.self) : nullptr;
                 it.resume = pc + 1;
-                if (it.array->kind != K::Array || it.array->elements().empty()) { pc = target(f, s.words.at(0)); continue; }
+                // The end offset of a loop is its IteratorPop (checked on the installed packages), which pops one iterator: the state is
+                // pushed even when the loop body never runs, so an empty inner loop does not pop the enclosing one.
+                const bool empty = it.array->kind != K::Array || it.array->elements().empty();
+                f.iterators.push_back(it);
+                if (empty) { pc = target(f, s.words.at(0)); continue; }
                 *it.item = it.array->elements()[0];
                 if (it.index) *it.index = Value::makeInt(0);
-                f.iterators.push_back(it);
                 ++pc;
                 continue;
             }
             case script::EX_Iterator: {
-                log("UNIMPLEMENTED native iterator (foreach over an engine iterator)");
-                pc = target(f, s.words.at(0));
+                // [call of an iterator native][u16 end]: the end offset is the loop's IteratorPop, the body ends at IteratorNext.
+                if (!startEngineIterator(s, f, pc)) {
+                    log("UNIMPLEMENTED native iterator (foreach over an engine iterator)");
+                    if (rt.callTrace) {         // the call trace names which iterator it was (the stub line does not)
+                        const Expr* call = &s.kids.at(0);
+                        while ((call->op == script::EX_Context || call->op == script::EX_ClassContext) && call->kids.size() == 2) call = &call->kids[1];
+                        const Function* iterator = call->isNativeCall() ? rt.nativeByIndex(call->native)
+                                                   : call->op == script::EX_FinalFunction && !call->refs.empty() ? rt.functionAt(f.function->package, call->refs.at(0)) : nullptr;
+                        rt.callTrace->push_back("iterator " + (iterator ? iterator->path : !call->names.empty() ? call->names.at(0) : std::string("?")));
+                    }
+                    pc = target(f, s.words.at(0));
+                } else if (f.iterators.back().array->elements().empty()) {
+                    pc = target(f, s.words.at(0));
+                } else {
+                    ++pc;
+                }
                 continue;
             }
             case script::EX_IteratorNext: {
                 if (f.iterators.empty()) { ++pc; continue; }
                 IterState& it = f.iterators.back();
                 ++it.position;
+                if (it.engine)       // an object destroyed since the list was made is not visited
+                    while (it.position < it.array->elements().size()) {
+                        const Value& next = it.array->elements()[it.position];
+                        if (next.kind == K::Object && next.o && next.o->destroyed) ++it.position; else break;
+                    }
                 if (it.array->kind == K::Array && it.position < it.array->elements().size()) {
                     *it.item = it.array->elements()[it.position];
                     if (it.index) *it.index = Value::makeInt(int64_t(it.position));
                     pc = it.resume;
-                } else ++pc;
+                } else {
+                    if (it.engine) *it.item = Value::makeObject(nullptr);
+                    ++pc;
+                }
                 continue;
             }
             case script::EX_IteratorPop:
@@ -734,9 +926,31 @@ Value Runtime::call(Function& function, ObjectPtr self, std::vector<Value> args,
         if (function.params[i].isOut()) arg.alias = &args[i];   // out parameters write back into `args`
         bound.push_back(std::move(arg));
     }
+    struct ActiveGuard {
+        Runtime& rt;
+        Interp* previous;
+        ActiveGuard(Runtime& runtime, Interp* now) : rt(runtime), previous(runtime.activeInterp_) { rt.activeInterp_ = now; }
+        ~ActiveGuard() { rt.activeInterp_ = previous; }
+    } active(*this, &interp);
     Value result = interp.invoke(function, self, std::move(bound));
     if (outs) *outs = std::move(args);
     return result;
+}
+
+Value Runtime::callFromNative(Function& function, ObjectPtr self, std::vector<Value> args) {
+    if (!activeInterp_) return call(function, std::move(self), std::move(args));
+    if (args.size() > function.params.size()) throw RuntimeError("too many arguments for " + function.path);
+    const size_t given = args.size();
+    args.resize(function.params.size());
+    std::vector<NativeCall::Arg> bound;
+    for (size_t i = 0; i < args.size(); ++i) {
+        NativeCall::Arg arg;
+        arg.supplied = i < given;
+        if (arg.supplied) arg.value = args[i];
+        if (function.params[i].isOut()) arg.alias = &args[i];
+        bound.push_back(std::move(arg));
+    }
+    return activeInterp_->invoke(function, self, std::move(bound));
 }
 
 Value Runtime::callByName(ObjectPtr self, const std::string& name, std::vector<Value> args) {

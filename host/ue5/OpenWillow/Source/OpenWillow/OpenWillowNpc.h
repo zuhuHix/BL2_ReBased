@@ -32,11 +32,14 @@ public:
     class UAnimSequence* Idle() const { return IdleAnim; }
     class UAnimSequence* WalkClip() const { return WalkAnim; }
     class USkeletalMeshComponent* GetMesh() const { return Mesh; }
+    // The query-only volume the use ray (UOpenWillowQuest::InTalkReach) tests against; null before Setup succeeds.
+    class UCapsuleComponent* GetHitVolume() const { return HitVolume; }
 private:
     void Play(class UAnimSequence* Anim);
     void TurnToward(const FVector& Direction, float DeltaSeconds);
     UPROPERTY() TObjectPtr<class USceneComponent> Root;
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> Mesh;
+    UPROPERTY() TObjectPtr<class UCapsuleComponent> HitVolume;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> WalkAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> Playing;

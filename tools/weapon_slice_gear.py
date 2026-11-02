@@ -89,11 +89,40 @@ def stat_ranges(package, recipe, level):
     return {'combinations': count, 'stats': {f: {'min': lo, 'max': hi} for f, (lo, hi) in sorted(ranges.items())}}
 
 
+def gestalt_kind(recipe):
+    """'Pistol' for a recipe whose gestalt is Weap_Pistol.GestaltDef_Pistol."""
+    gestalt = recipe['gestalt']
+    return (gestalt['path'] if isinstance(gestalt, dict) else str(gestalt)).split('.')[-1].removeprefix('GestaltDef_')
+
+
+def attach_sockets(recipe, gestalt_dir):
+    """recipe['sockets']: the sockets of the fragments the gun draws, keyed by original name (Muzzle, EjectPort, ...).
+
+    Reads <Kind>.sockets.json from tools/gestalt_sockets.py. Each entry is that fragment's socket (mangled name, bone,
+    bone-local location, rotation, scale, reference-pose mesh_location). When several drawn fragments define the same
+    original name (body variants share RearSight) the first fragment in name order is kept and the others are listed
+    under `also_from`. The host reads Muzzle and EjectPort (docs/verification/WEAPON_VISUALS.md section 17).
+    """
+    recipe.pop('sockets', None)
+    table = gestalt_dir / f'{gestalt_kind(recipe)}.sockets.json'
+    if not table.exists():
+        return f'skipped: {table.name} missing (run tools/gestalt_sockets.py)'
+    fragments = json.loads(table.read_text(encoding='utf-8'))['fragments']
+    sockets = {}
+    for fragment in sorted(recipe['gestalt_fragments']):
+        for original, socket in fragments.get(fragment, {}).get('sockets', {}).items():
+            if original in sockets:
+                sockets[original].setdefault('also_from', []).append(fragment)
+            else:
+                sockets[original] = {'fragment': fragment, **socket}
+    recipe['sockets'] = sockets
+    return 'ok'
+
+
 def build_mesh(recipe_path, recipe, gestalt_dir, gltf_dir):
     """<id>.gltf through tools/filter_gestalt_gltf.py, as tools/seed_inventory_demo.py does."""
     from filter_gestalt_gltf import gestalt_parts
-    gestalt = recipe['gestalt']
-    kind = (gestalt['path'] if isinstance(gestalt, dict) else str(gestalt)).split('.')[-1].removeprefix('GestaltDef_')
+    kind = gestalt_kind(recipe)
     table = gestalt_dir / f'{kind}.json'
     mesh = gltf_dir / f'GestaltDef_{kind}_GestaltSkeletalMesh.gltf'
     if not table.exists() or not mesh.exists():
@@ -122,43 +151,6 @@ def pick_from_pool(package, values, pool, level, seed):
     return (weapons[0], tree) if weapons else (None, tree)
 
 
-REWARD_ID = 'slice_reward_roll'
-REWARD_NOTE = ('HOST STAND-IN, not stock: the mission RewardData carries only ExperienceRewardPercentage and '
-               'CreditRewardMultiplier 0, and PawnBalance_TargetDummy has no item pools, so nothing in the data drops '
-               'an item for this mission. This rolls the slice fallback list (loot.source) so the pickup path can be '
-               'exercised at turn-in. The seed is the first one >= 1 whose roll drops a weapon (most single rolls drop '
-               'nothing or money); the roll and part rules are seeded stand-ins for native code (UNVERIFIED).')
-
-
-def build_reward(args, package, localize):
-    """The turn-in loot stand-in: roll the fallback list from seed 1 up until a weapon drops; write its recipe."""
-    manifest_path = args.output / 'slice_manifest.json'
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    loot = manifest['loot']
-    tried = []
-    for seed in range(1, args.reward_seed_limit + 1):
-        drops = loot_pools.roll(loot, seed)
-        tried.append({'seed': seed, 'drops': [d['item'] for d in drops]})
-        weapons = [d for d in drops if package.classes.get(d['item'], '').endswith('WeaponBalanceDefinition')]
-        if weapons:
-            break
-    else:
-        raise SystemExit(f'no weapon in {args.reward_seed_limit} seeded rolls of {loot["source"]}')
-    drop = weapons[0]
-    # Parts use the roll seed too, so the reward is not a part-for-part copy of a pool-rolled slice gun.
-    recipe = build_recipe(package, drop['item'], seed, manifest['level'], localize, {
-        'kind': 'reward_roll', 'source': loot['source'], 'pool_chain': drop['chain'], 'roll_seed': seed,
-        'part_seed': seed, 'level': manifest['level'], 'level_rule': manifest['level_rule'], 'note': REWARD_NOTE})
-    path = args.output / f'{REWARD_ID}.json'
-    mesh = build_mesh(path, recipe, args.gestalt, args.gltf) if args.gestalt and args.gltf else 'not built'
-    path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
-    manifest['reward_roll'] = {'id': REWARD_ID, 'recipe': path.name, 'balance': recipe['balance'], 'name': recipe['name'],
-                               'type': recipe['type'], 'roll_seed': seed, 'seeds_tried': tried, 'mesh': mesh,
-                               'note': REWARD_NOTE}
-    manifest_path.write_text(json.dumps(manifest, indent=1), encoding='utf-8')
-    print(f"{REWARD_ID}: seed {seed} of {len(tried)} -> {recipe['name']} ({recipe['balance']}) via {' > '.join(drop['chain'])}; mesh {mesh}")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
@@ -168,9 +160,6 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'local/items/slice')
     parser.add_argument('--gestalt', type=Path, help='folder of <Type>.json gestalt part tables (optional meshes)')
     parser.add_argument('--gltf', type=Path, help='folder of GestaltDef_<Type>_GestaltSkeletalMesh.gltf (optional)')
-    parser.add_argument('--reward-only', action='store_true',
-                        help='only (re)build the turn-in loot stand-in (slice_reward_roll) from an existing slice_manifest.json')
-    parser.add_argument('--reward-seed-limit', type=int, default=200)
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to((ROOT / 'local').resolve()):
         parser.error('--output must stay under local/')
@@ -190,9 +179,6 @@ def main():
             files[name] = skill_stats.localization_for(args.game, name)
         return files[name].get((skill_stats.localization_key(path, package.classes), 'NoConstraintText'), default)
 
-    if args.reward_only:
-        build_reward(args, package, localize)
-        return
     values = loot_pools.Values(package)
     items = []
     recipe = build_recipe(package, MISSION_WEAPON, args.seed, args.level, localize, {
@@ -214,9 +200,11 @@ def main():
             'note': 'pool and part selection are seeded stand-ins for native code (UNVERIFIED)'})
         items.append((recipe_id, recipe))
 
-    meshes = {}
+    meshes, sockets = {}, {}
     for recipe_id, recipe in items:
         path = args.output / f'{recipe_id}.json'
+        if args.gestalt:
+            sockets[recipe_id] = attach_sockets(recipe, args.gestalt)
         if args.gestalt and args.gltf:
             meshes[recipe_id] = build_mesh(path, recipe, args.gestalt, args.gltf)
         path.write_text(json.dumps(recipe, indent=1), encoding='utf-8')
@@ -225,7 +213,7 @@ def main():
     manifest = {
         'schemaVersion': 1, 'kind': 'openwillow.slice_gear', 'level': args.level, 'level_rule': LEVEL_RULE,
         'items': [{'id': i, 'recipe': f'{i}.json', 'balance': r['balance'], 'name': r['name'], 'type': r['type'],
-                   'provenance': r['provenance'], 'mesh': meshes.get(i, 'not built'), 'card': {k: r['stats']['card'].get(k) for k in (
+                   'provenance': r['provenance'], 'mesh': meshes.get(i, 'not built'), 'sockets': sockets.get(i, 'not attached'), 'card': {k: r['stats']['card'].get(k) for k in (
                        'damage', 'fire_rate', 'reload_time', 'magazine', 'shot_cost', 'projectiles', 'element',
                        'status_effect', 'status_chance', 'status_dps', 'status_duration', 'accuracy', 'display')}}
                   for i, r in items],

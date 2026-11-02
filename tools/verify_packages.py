@@ -37,4 +37,13 @@ with tempfile.TemporaryDirectory(prefix='openwillow-') as folder:
                                    size=original['size'], offset=original['off'])
             if any(record[key] != value for key, value in expected_record.items()):
                 raise RuntimeError(f'{package}: export {index} differs')
-        print(f'{package}: {len(data)} bytes, {len(exports)} exports; decoded bytes, counts and export fields match', flush=True)
+        # Class export bodies (docs/verification/NATIVE_CLASS_SERIAL_LAYOUT.md): every export with class reference 0 must decode and end
+        # exactly at its serial size, and the C++ count must equal the independent count from native_count.
+        classes = sum(1 for original in exports if original['class'] == 0)
+        checked = subprocess.run([str(args.reader.resolve()), str(args.cooked / (package + '.upk')), '--class-check', '--cooked', str(args.cooked),
+                                  '--failures'], capture_output=True, text=True, encoding='utf-8')
+        summary = json.loads(checked.stdout)
+        if checked.returncode or summary['failed'] or summary['classes'] != classes or summary['exact'] != classes:
+            raise RuntimeError(f'{package}: class bodies: {summary}')
+        print(f'{package}: {len(data)} bytes, {len(exports)} exports; decoded bytes, counts and export fields match; '
+              f'{summary["exact"]}/{classes} class bodies exact', flush=True)

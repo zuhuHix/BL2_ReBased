@@ -1,4 +1,6 @@
 #include "assets.hpp"
+#include "census.hpp"
+#include "combat.hpp"
 #include "natives.hpp"
 #include "script.hpp"
 #include "vm.hpp"
@@ -6,6 +8,7 @@
 #include "mover.hpp"
 #include "kismet.hpp"
 #include "mission.hpp"
+#include "mission_script.hpp"
 #include "slice.hpp"
 
 #include <fstream>
@@ -26,14 +29,16 @@ void usage() {
         "--property-offset <bytes> --output <obj> [--lod <index>] | --texture <index> "
         "--property-offset <bytes> --output <png> --tfc <directory> [--mip <index>] "
         "[--all-mips <directory>]] | --script-check [--failures] | --disasm <index|Class.Function> | "
+        "--class-check --cooked <directory> [--failures] | --interface-compare --cooked <directory> | "
         "--vm-sweep --cooked <directory> [--class <name>] [--limit <n>] [--steps <n>] [--top <n>] | "
         "--run-batch <file> --cooked <directory> | "
+        "--native-census <entry-file> --cooked <directory> [--steps <n>] [--no-static] | "
         "--inventory-move <delta> <start> <count> --cooked <directory> | "
         "--mover-probe <actor> <action> --cooked <directory> | "
         "--kismet-run <sequence-path> --cooked <directory> (--remote <name> | --mission <path> <name> | --op <name> | --originator <object-path>) [--tick <s>]... | "
         "--object-dump <export-index> <prefix> --cooked <directory> [--all] | "
         "--kismet-census --cooked <directory> | --mission-run <mission-path> --cooked <directory> <step>... | "
-        "--slice-run <mission-path> --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
+        "--slice-run <mission-path> --cooked <directory> <step>... | --combat-run --cooked <directory> <step>... | --behavior-dump <provider-path> --cooked <directory> | "
         "--behavior-run <provider-path> --cooked <directory> <step>... | "
         "--run <Package.Class.Function> --cooked <directory> [--self <Package.Class>] [--arg <type:value>]... | "
         "--native <name> [--native-args <args>] | --native-selftest");
@@ -78,6 +83,51 @@ void valueJson(std::ostream& out, const vm::Value& value, unsigned depth) {
         break;
     }
     }
+}
+
+// Marcus's mission screen lists as JSON (--slice-run `screen`, --mission-run `script:screen`).
+std::string missionListsJson(const vm::MissionScript::MissionLists& lists) {
+    std::string out = "{";
+    const auto one = [&out](const char* name, const std::vector<std::string>& paths, bool last) {
+        out += std::string("\"") + name + "\":[";
+        for (size_t i = 0; i < paths.size(); ++i) out += (i ? "," : "") + quote(paths[i]);
+        out += last ? "]" : "],";
+    };
+    one("eligible", lists.eligible, false);
+    one("in_progress", lists.inProgress, false);
+    one("redeemable", lists.redeemable, true);
+    return out + "}";
+}
+
+// The result of the use key on Marcus (--slice-run `use`, --mission-run `script:use`).
+std::string useJson(const vm::MissionScript::MarcusUse& use) {
+    std::string out = "{\"interface_opened\":" + std::string(use.interfaceOpened ? "true" : "false") + ",\"movie\":" + quote(use.movie) +
+                      ",\"director\":" + quote(use.director) + ",\"on_use_tag\":" + quote(use.onUseTag) + ",\"on_use_speaker\":" + quote(use.onUseSpeaker) +
+                      ",\"on_use_target\":" + quote(use.onUseTarget) + ",\"on_use_groups\":{\"count\":" + std::to_string(use.onUseGroupCount) +
+                      ",\"first\":" + quote(use.onUseFirstGroup) + ",\"last\":" + quote(use.onUseLastGroup) + "},\"cascade\":[";
+    for (size_t i = 0; i < use.cascade.size(); ++i) out += (i ? "," : "") + quote(use.cascade[i]);
+    return out + "]}";
+}
+
+// The mission script bridge's report, shared by --mission-run and --slice-run (src/mission_script.hpp): the controller's own
+// record of the mission, every ExpEarn call, the natives without an implementation that the script reached, VM notes.
+void printScriptReport(int playerStatus, bool needsRewards, int playerLevel, float pool, const std::vector<vm::MissionScript::ExpEarn>& earned,
+                       const std::vector<std::string>& stubs, const std::vector<std::string>& notes, float interactionDistance) {
+    std::cout << "{\"player_status\":" << playerStatus << ",\"needs_rewards\":" << (needsRewards ? "true" : "false")
+              << ",\"player_level\":" << playerLevel << ",\"experience_pool\":" << pool << ",\"interaction_distance\":" << interactionDistance
+              << ",\"exp_earned\":[";
+    bool first = true;
+    for (const auto& earn : earned) {
+        std::cout << (first ? "" : ",") << "{\"amount\":" << earn.amount << ",\"source\":" << earn.source << ",\"type\":" << earn.type << "}";
+        first = false;
+    }
+    std::cout << "],\"stubs\":[";
+    first = true;
+    for (const auto& line : stubs) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+    std::cout << "],\"notes\":[";
+    first = true;
+    for (const auto& line : notes) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+    std::cout << "]}";
 }
 
 int32_t signedNumber(const std::string& value) {
@@ -468,6 +518,30 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (mode == "--native-census") {
+            // Which natives do these script entry points reach? Runs the entry file on the VM (counting every call) and
+            // walks the bytecode they reach; format in src/census.hpp. Prints one JSON report.
+            if (argc < 6) usage();
+            vm::CensusOptions options;
+            std::filesystem::path cooked;
+            for (int i = 4; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--steps") options.stepLimit = unsignedNumber(nextValue(i, argc, argv, "--steps"));
+                else if (option == "--no-static") options.staticClosure = false;
+                else usage();
+            }
+            if (cooked.empty()) usage();
+            std::ifstream entries(argv[3], std::ios::binary);
+            if (!entries) throw std::runtime_error("cannot open entry file");
+            const std::string text{std::istreambuf_iterator<char>(entries), std::istreambuf_iterator<char>()};
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            std::cout << vm::nativeCensus(runtime, text, options) << '\n';
+            return 0;
+        }
+
         if (mode == "--inventory-move") {
             if (argc != 8 || std::string(argv[6]) != "--cooked") usage();
             vm::InventoryNavigation navigation(argv[7]);
@@ -475,6 +549,26 @@ int main(int argc, char** argv) {
             std::cout << "{\"index\":" << result.index << ",\"steps\":" << result.steps
                       << ",\"error\":" << (result.error.empty() ? "null" : quote(result.error)) << "}\n";
             return result.error.empty() ? 0 : 1;
+        }
+
+        if (mode == "--class-check" || mode == "--interface-compare") {
+            // Structural oracle over the Class exports of this package, or the table-versus-stand-in interface comparison over all code packages.
+            std::filesystem::path cooked;
+            bool listFailures = false;
+            for (int i = 3; i < argc; ++i) {
+                const std::string option = argv[i];
+                if (option == "--cooked") cooked = nextValue(i, argc, argv, "--cooked");
+                else if (option == "--failures" && mode == "--class-check") listFailures = true;
+                else usage();
+            }
+            if (cooked.empty()) usage();
+            PackageStore store(cooked);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            if (mode == "--interface-compare") { std::cout << vm::compareInterfaces(runtime) << '\n'; return 0; }
+            const auto summary = vm::checkClassBodies(runtime, store.loadPath(sourcePath), listFailures);
+            std::cout << summary << '\n';
+            return summary.find("\"failed\":0}") != std::string::npos || summary.find("\"failed\":0,") != std::string::npos ? 0 : 1;
         }
 
         if (mode == "--vm-sweep") {
@@ -533,21 +627,95 @@ int main(int argc, char** argv) {
         }
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
-            // turnin | tick:<seconds>
+            // turnin | tick:<seconds> | script:accept | script:turnin | script:screen | script:use | stage:<n> | player:<level>:<experience> | pool |
+            // lines:<seconds> (a test line player: every dialog line lasts that long) | talker:<name tag path> (a pawn that can talk) |
+            // kismet:<variable>|<name tag path> (a new talker pawn bound to the mission's named Kismet variable; no tag clears the variable)
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
             runtime.registerCoreNatives();
             vm::MissionSystem mission(runtime, package->packageName, argv[3]);
+            // script:accept | script:turnin | xp:<amount> run the installed controller script through the bridge
+            // (src/mission_script.hpp); the bridge is built only when one of them is asked for, and then every status change
+            // calls UpdateMissionStatus.
+            std::unique_ptr<vm::MissionScript> script;
+            for (int i = 6; i < argc; ++i)
+                if (std::string(argv[i]).rfind("script:", 0) == 0 || std::string(argv[i]).rfind("stage:", 0) == 0 || std::string(argv[i]).rfind("player:", 0) == 0) {
+                    script = std::make_unique<vm::MissionScript>(runtime, mission);
+                    script->placeMarcus(runtime.package(package->packageName), "GD_Marcus.Character.Pawn_Marcus");   // the director, when the package has him
+                    break;
+                }
             std::set<std::string> completed;
             for (const auto& dependency : mission.dependencies()) completed.insert(dependency);   // probe: dependencies satisfied
             std::cout << "{\"mission\":" << quote(mission.path()) << ",\"name\":" << quote(mission.name()) << ",\"steps\":[";
             bool first = true;
-            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated"};
+            static const char* kinds[] = {"remote_event", "dialog", "set_sequence", "objective_set_active", "objective_complete", "status", "reward", "mission_weapon_granted", "mission_weapon_removed", "objective_updated", "turn_in_dialog", "dismissal_dialog", "interface_closed", "reward_page", "reward_received"};
+            const auto object = [&](const std::string& path) {      // an object of the mission's package, by path
+                auto owner = runtime.package(package->packageName);
+                const int32_t found = runtime.findExport(*owner, path);
+                if (found <= 0) throw std::runtime_error("no such object: " + path);
+                return vm::Value::makeObject(runtime.instantiateExport(owner, found, 4));
+            };
             for (int i = 6; i < argc; ++i) {
                 const std::string step = argv[i];
                 bool ok = true;
+                std::string screenJson, screenKey = "screen";
                 if (step == "accept") ok = mission.accept(completed);
+                else if (step == "script:screen" && script) screenJson = missionListsJson(script->missionLists(completed));
+                else if (step == "script:use" && script) {     // the use key on Marcus (his OnUsed chain), as in --slice-run `use`
+                    const auto use = script->useMarcus(completed);
+                    screenKey = "use";
+                    ok = use.interfaceOpened;
+                    screenJson = useJson(use);
+                }
+                else if (step == "script:accept" && script) ok = script->accept(completed);
+                else if (step == "script:turnin" && script) ok = script->turnIn();
+                else if (step.rfind("stage:", 0) == 0 && script) script->setRegionGameStage(std::stoi(step.substr(6)));
+                else if (step.rfind("player:", 0) == 0 && script) {     // player:<level>:<experience>
+                    const auto colon = step.find(':', 7);
+                    if (colon == std::string::npos) usage();
+                    script->setPlayerExperience(std::stoi(step.substr(7, colon - 7)), std::stoll(step.substr(colon + 1)));
+                }
+                else if (step == "pool" && script) script->updateExperiencePool();
+                else if (step.rfind("lines:", 0) == 0) mission.dialog().setTestLineLength(std::stod(step.substr(6)));   // every dialog line lasts <s>
+                else if (step.rfind("talker:", 0) == 0) mission.dialog().registerTalker(step.substr(7));              // a pawn with this name tag
+                else if (step.rfind("kismet:", 0) == 0) {         // kismet:<variable>|<name tag>: a new pawn with that name tag (a talker) bound to the mission's named Kismet variable; no tag clears it
+                    const std::string rest = step.substr(7);
+                    const auto bar = rest.find('|');
+                    if (bar == std::string::npos) usage();
+                    vm::ObjectPtr actor;
+                    if (bar + 1 < rest.size()) {
+                        actor = object(rest.substr(bar + 1)).o;       // any object stands for the pawn; its identity is what matters
+                        mission.dialog().registerTalker(rest.substr(bar + 1), actor);
+                    }
+                    mission.bindKismetVariable(rest.substr(0, bar), actor);
+                }
+                else if (step.rfind("component:", 0) == 0) {      // component:<speaker name tag>|<event tag>|<group>[,<group>...]: a pawn's component TriggerEvent
+                    const std::string rest = step.substr(10);
+                    const auto bar1 = rest.find('|'), bar2 = rest.find('|', bar1 + 1);
+                    if (bar1 == std::string::npos || bar2 == std::string::npos) usage();
+                    std::vector<vm::Value> groups;
+                    for (size_t from = bar2 + 1; from <= rest.size();) {
+                        const auto comma = rest.find(',', from);
+                        groups.push_back(object(rest.substr(from, comma == std::string::npos ? std::string::npos : comma - from)));
+                        if (comma == std::string::npos) break;
+                        from = comma + 1;
+                    }
+                    ok = mission.dialog().triggerOnComponent(rest.substr(0, bar1), groups, object(rest.substr(bar1 + 1, bar2 - bar1 - 1)));
+                }
+                else if (step.rfind("pawn:", 0) == 0) {          // pawn:<body class>|<event tag>: the component TriggerEvent of a pawn with that body class (its dialog groups)
+                    const std::string rest = step.substr(5);
+                    const auto bar = rest.find('|');
+                    if (bar == std::string::npos) usage();
+                    const auto pawn = mission.dialog().pawnDialog(object(rest.substr(0, bar)));
+                    ok = !pawn.nameTag.empty() && mission.dialog().triggerOnComponent(pawn.nameTag, pawn.groups, object(rest.substr(bar + 1)));
+                    screenKey = "pawn";
+                    screenJson = "{\"name_tag\":" + quote(pawn.nameTag) + ",\"groups\":[";
+                    for (size_t g = 0; g < pawn.groups.size(); ++g) screenJson += (g ? "," : "") + quote(vm::DialogSystem::objectPath(pawn.groups[g]));
+                    screenJson += "],\"searched\":[";
+                    for (size_t g = 0; g < mission.dialog().lastSearch().size(); ++g) screenJson += (g ? "," : "") + quote(mission.dialog().lastSearch()[g]);
+                    screenJson += "]}";
+                }
                 else if (step == "turnin") ok = mission.turnInMission();
                 else if (step == "kickoff") ok = mission.kickoff();
                 else if (step.rfind("obj:", 0) == 0) {
@@ -559,12 +727,14 @@ int main(int argc, char** argv) {
                 else if (step.rfind("tick:", 0) == 0) mission.tick(std::stod(step.substr(5)));
                 else usage();
                 std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
-                          << ",\"set\":" << quote(mission.activeSet()) << ",\"status\":" << int(mission.status()) << ",\"effects\":[";
+                          << ",\"set\":" << quote(mission.activeSet()) << ",\"status\":" << int(mission.status())
+                          << (screenJson.empty() ? "" : ",\"" + screenKey + "\":" + screenJson)
+                          << ",\"kickoff_pending\":" << (mission.kickoffPending() ? "true" : "false") << ",\"effects\":[";
                 first = false;
                 bool firstEffect = true;
                 for (const auto& effect : mission.drain()) {
                     std::cout << (firstEffect ? "" : ",") << "{\"t\":" << effect.time << ",\"kind\":" << quote(kinds[int(effect.kind)])
-                              << ",\"a\":" << quote(effect.a) << ",\"b\":" << quote(effect.b) << ",\"c\":" << quote(effect.c) << "}";
+                              << ",\"a\":" << quote(effect.a) << ",\"b\":" << quote(effect.b) << ",\"c\":" << quote(effect.c) << ",\"detail\":" << quote(effect.detail) << "}";
                     firstEffect = false;
                 }
                 std::cout << "]}";
@@ -572,12 +742,25 @@ int main(int argc, char** argv) {
             std::cout << "],\"status\":" << int(mission.status()) << ",\"errors\":[";
             first = true;
             for (const auto& line : mission.errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
-            std::cout << "]}\n";
-            return mission.errors.empty() ? 0 : 1;
+            if (script) for (const auto& line : script->errors) { std::cout << (first ? "" : ",") << quote(line); first = false; }
+            std::cout << "]";
+            if (script) {
+                std::cout << ",\"script\":";
+                printScriptReport(script->controllerStatus(), script->controllerNeedsRewards(), script->playerLevel(), script->experiencePool(), script->expEarned(), script->stubs(), script->notes(), script->playerInteractionDistance());
+            }
+            std::cout << "}\n";
+            return mission.errors.empty() && (!script || script->errors.empty()) ? 0 : 1;
         }
         if (mode == "--slice-run") {
             // --slice-run <mission-path> --cooked <dir> <step>...: the stock Fire mission with the dummy's own provider.
-            // steps: accept | range | hit:fire | hit:other | turnin | tick:<s>. Package argument is Sanctuary_Dynamic.
+            // Each step's record carries the mission status after it.
+            // steps: accept | range | touch:player|marcus | untouch:player|marcus | hit:fire | hit:other | pawnhit:<damage>:<type>[:<source>] (the player's hit through the stock chain on the dummy pawn) | turnin | tick:<s> | stage:<n> (the region game stage the host
+            // owns) | player:<level>:<experience> (the player's state) | health:<current> (the player's current health, after player:) | cheatlevel (one not-natural level-up) | screen (Marcus's mission lists, printed with the step) | use (the use key
+            // on Marcus: his OnUsed chain; the behaviors it ran and the interface it opened are printed with the step) | confirmreward (Enter on the reward page the open screen showed at the turn-in) |
+            // close (Escape: the player leaves Marcus's mission screen; the accept closes it by itself). accept and turnin
+            // run the installed controller script with Marcus as the director (the entry must be one his lists offer); tick also runs the
+            // experience pool update.
+            // Package argument is Sanctuary_Dynamic.
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
             vm::Runtime runtime(store);
@@ -587,27 +770,67 @@ int main(int argc, char** argv) {
             std::set<std::string> completed;
             for (const auto& dependency : slice.mission().dependencies()) completed.insert(dependency);
             static const char* kinds[] = {"remote_event", "dialog", "status_effect", "mission_weapon_granted", "mission_weapon_removed",
-                                          "reward", "status", "objective_set", "objective_complete"};
+                                          "reward", "status", "objective_set", "objective_complete", "experience", "level", "mission_interface", "on_use_dialog",
+                                          "skill_points", "max_health", "health", "sequence_change", "turn_in_dialog", "action_skill_cooldown", "weapon_damage_scale",
+                                          "dismissal_dialog", "mission_interface_closed", "reward_page", "reward_received"};
             std::cout << "{\"steps\":[";
             bool first = true;
             for (int i = 6; i < argc; ++i) {
                 const std::string step = argv[i];
                 bool ok = true;
+                std::string screenJson, screenKey = "screen";
                 if (step == "accept") ok = slice.accept(completed);
+                else if (step == "screen") screenJson = missionListsJson(slice.screen(completed));
+                else if (step == "use") {     // the use key on Marcus: his OnUsed chain; the cascade of behaviors it ran is printed with the step
+                    const auto use = slice.useMarcus(completed);
+                    screenKey = "use";
+                    ok = use.interfaceOpened;
+                    screenJson = useJson(use);
+                }
                 else if (step == "range") ok = slice.enterRange();
+                else if (step == "touch:player" || step == "touch:marcus") slice.touchWaypoint(step == "touch:player", true);      // overlap begins
+                else if (step == "untouch:player" || step == "untouch:marcus") slice.touchWaypoint(step == "untouch:player", false);
                 else if (step == "spawn") ok = slice.spawnDummy();
                 else if (step == "hit:fire") ok = slice.hitDummy(true);
                 else if (step == "hit:other") ok = slice.hitDummy(false);
                 else if (step.rfind("damage:", 0) == 0) ok = slice.damageDummy(step.substr(7));   // damage:<stock damage type path>, "damage:" = None
+                else if (step.rfind("pawnhit:", 0) == 0) {     // pawnhit:<damage>:<damage type definition path>[:<WillowDmgSource_* class path>]: the player's hit through the stock chain
+                    const auto firstColon = step.find(':', 8);
+                    if (firstColon == std::string::npos) usage();
+                    const auto secondColon = step.find(':', firstColon + 1);
+                    const std::string source = secondColon == std::string::npos ? "" : step.substr(secondColon + 1);
+                    ok = slice.damageDummy(step.substr(firstColon + 1, secondColon == std::string::npos ? std::string::npos : secondColon - firstColon - 1), source, std::stod(step.substr(8, firstColon - 8)));
+                    const auto& hit = slice.lastHit();
+                    std::ostringstream report;
+                    report << "{\"health_before\":" << hit.healthBefore << ",\"health_after\":" << hit.healthAfter << ",\"arriving\":" << hit.arriving << ",\"applied\":" << hit.applied
+                           << ",\"demigod_before\":" << (hit.demigodBefore ? "true" : "false") << ",\"demigod_after\":" << (hit.demigodAfter ? "true" : "false") << ",\"events\":[";
+                    for (size_t e = 0; e < hit.events.size(); ++e) report << (e ? "," : "") << quote(hit.events[e]);
+                    report << "]}";
+                    screenKey = "hit";
+                    screenJson = report.str();
+                }
                 else if (step == "turnin") ok = slice.turnIn();
+                else if (step == "confirmreward") ok = slice.confirmReward();     // Enter on the reward page the open screen showed
+                else if (step == "close") ok = slice.closeScreen();               // Escape: the player leaves Marcus's mission screen
+                else if (step == "cheatlevel") slice.cheatLevelUp();       // one ExpLevelUp(true): the not-natural level-up
+                else if (step.rfind("lines:", 0) == 0) slice.mission().dialog().setTestLineLength(std::stod(step.substr(6)));
+                else if (step.rfind("talker:", 0) == 0) slice.mission().dialog().registerTalker(step.substr(7));
+                else if (step.rfind("stage:", 0) == 0) slice.setRegionGameStage(std::stoi(step.substr(6)));
+                else if (step.rfind("player:", 0) == 0) {     // player:<level>:<experience>
+                    const auto colon = step.find(':', 7);
+                    if (colon == std::string::npos) usage();
+                    slice.setPlayerExperience(std::stoi(step.substr(7, colon - 7)), std::stoll(step.substr(colon + 1)));
+                }
+                else if (step.rfind("health:", 0) == 0) slice.setPlayerHealth(std::stof(step.substr(7)));      // health:<current>, after player:
                 else if (step.rfind("tick:", 0) == 0) slice.tick(std::stod(step.substr(5)));
                 else usage();
-                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false") << ",\"events\":[";
+                std::cout << (first ? "" : ",") << "{\"step\":" << quote(step) << ",\"ok\":" << (ok ? "true" : "false")
+                          << ",\"status\":" << int(slice.mission().status()) << (screenJson.empty() ? "" : ",\"" + screenKey + "\":" + screenJson) << ",\"events\":[";   // the mission status after the step
                 first = false;
                 bool firstEvent = true;
                 for (const auto& event : slice.drain()) {
                     std::cout << (firstEvent ? "" : ",") << "{\"kind\":" << quote(kinds[int(event.kind)]) << ",\"a\":" << quote(event.a)
-                              << ",\"b\":" << quote(event.b) << ",\"c\":" << quote(event.c) << "}";
+                              << ",\"b\":" << quote(event.b) << ",\"c\":" << quote(event.c) << ",\"detail\":" << quote(event.detail) << "}";
                     firstEvent = false;
                 }
                 std::cout << "]}";
@@ -615,7 +838,9 @@ int main(int argc, char** argv) {
             std::cout << "],\"status\":" << int(slice.mission().status()) << ",\"errors\":[";
             first = true;
             for (const auto& line : slice.errors()) { std::cout << (first ? "" : ",") << quote(line); first = false; }
-            std::cout << "],\"dummy_boundary\":[";
+            std::cout << "],\"script\":";
+            printScriptReport(slice.scriptPlayerStatus(), slice.scriptPlayerNeedsRewards(), slice.scriptPlayerLevel(), slice.scriptExperiencePool(), slice.expEarned(), slice.scriptStubs(), slice.scriptNotes(), slice.playerInteractionDistance());
+            std::cout << ",\"dummy_boundary\":[";
             first = true;
             for (const auto& line : slice.dummy().boundary) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "],\"dummy_boundary_calls\":[";
@@ -637,6 +862,17 @@ int main(int argc, char** argv) {
             for (const auto& line : slice.dummy().trace) { std::cout << (first ? "" : ",") << quote(line); first = false; }
             std::cout << "]}\n";
             return slice.errors().empty() ? 0 : 1;
+        }
+        if (mode == "--combat-run") {
+            // --combat-run --cooked <dir> <step>...: AI pawns spawned from their stock archetypes with their health pools; the steps and the report are in
+            // src/combat.hpp (combatRun). The package argument is any installed package; the archetypes name their own.
+            if (argc < 5 || std::string(argv[3]) != "--cooked") usage();
+            PackageStore store(argv[4]);
+            vm::Runtime runtime(store);
+            runtime.registerCoreNatives();
+            bool failed = false;
+            std::cout << vm::combatRun(runtime, std::vector<std::string>(argv + 5, argv + argc), &failed) << '\n';
+            return failed ? 1 : 0;
         }
         if (mode == "--behavior-run") {
             // --behavior-run <provider-path> --cooked <dir> <step>...: one provider alone. Steps: enable:<seq> | disable:<seq> |
@@ -734,6 +970,9 @@ int main(int argc, char** argv) {
                         std::cout << "]}";
                         firstLink = false;
                     }
+                std::cout << "],\"graph\":[";
+                bool firstEdge = true;
+                for (const auto& line : provider.graph(name)) { std::cout << (firstEdge ? "" : ",") << quote(line); firstEdge = false; }
                 std::cout << "]}";
                 first = false;
             }
