@@ -53,10 +53,12 @@
     return {level, text: `${xp} / ${next}`, percent: Math.trunc((xp - start) * 100 / (next - start)) + 1};
   }
 
-  // The list header (extSetupMissionLogScreen): Caps(MissionLogMyMissions) @ '<font size="22">(' $ sort name $ ')</font>'.
-  // A single player is the primary host, so the header is the "My Missions" one; the sort is the default (All).
+  // The list header (extSetupMissionLogScreen): Caps(MissionLogMyMissions), a space, then the sort name inside the script's own
+  // markup constants (def.markup.headerSortOpen / headerSortClose, read from the installed bytecode by prepare_mission_log.py).
+  // A single player is the primary host, so the header is the player's own missions one; the sort is the default (all).
   function listHeader(def) {
-    return `${def.strings.myMissions.toUpperCase()} <font size="22">(${def.strings.sortAll})</font>`;
+    return `${escapeHtml(def.strings.myMissions.toUpperCase())} ${def.markup.headerSortOpen}${escapeHtml(def.strings.sortAll)}${
+      def.markup.headerSortClose}`;
   }
 
   const escapeHtml = text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -111,33 +113,36 @@
   // missions. In order:
   //  - the mission's summary and a blank line;
   //  - unless the mission is failed, complete or ready to turn in, one line per current objective: four spaces, its
-  //    ProgressMessage, then ": p/n" when ObjectiveCount > 1 (" / " with spaces for Japanese, Korean and Chinese), ": Complete"
-  //    when a single-count objective is done, else nothing; an optional objective's line is in #B0F5FF;
-  //  - when the mission has objective sets and is ready to turn in, "    TURN IN!";
-  //  - a blank line and the description in #8B8B8B;
-  //  - when complete or ready to turn in, a blank line and "Turn In: " with the turn-in location.
+  //    ProgressMessage, then the localized colon and "p/n" when ObjectiveCount > 1 (spaces around the slash for Japanese,
+  //    Korean and Chinese), the localized "complete" word when a single-count objective is done, else nothing; an optional
+  //    objective's line is inside the script's optional-objective font (def.markup.optionalObjectiveOpen);
+  //  - when the mission has objective sets and is ready to turn in, the localized turn-in divider and "!";
+  //  - a blank line and the description inside the script's description font (def.markup.descriptionOpen);
+  //  - when complete or ready to turn in, a blank line and the localized turn-in label with the turn-in location.
+  // Every piece of game or localized text is escaped (the page adds only the script's markup), so text containing '<' or '&'
+  // shows as written; whether the game would render markup inside these strings is not known.
   // Which text MissionTracker.GetMissionDescription (native) returns as summary and description is not read: the host sends
   // MissionSummary and MissionDescription, and TurnInDescription when ready to turn in (UNVERIFIED). Branch ("OR") objectives
   // are not modelled by the host. A not-started mission shows its teaser text instead (the host lists none).
   function descriptionHtml(mission, def, {wideCounts = false} = {}) {
-    const s = def.strings, status = mission.statusNumber, NL = '\n';
-    if (status === NOT_STARTED) return mission.teaser || '';
-    let text = (mission.summary || '') + NL + NL;
+    const s = def.strings, m = def.markup, status = mission.statusNumber, NL = '\n', e = escapeHtml;
+    if (status === NOT_STARTED) return e(mission.teaser || '');
+    let text = e(mission.summary || '') + NL + NL;
     if (![FAILED, COMPLETE, TURN_IN].includes(status)) {
       for (const objective of mission.objectives || []) {
-        if (objective.optional) text += "<font color='#B0F5FF'>";
-        text += '    ' + (objective.text || '');
+        if (objective.optional) text += m.optionalObjectiveOpen;
+        text += '    ' + e(objective.text || '');
         const count = objective.count || 1, progress = Math.min(objective.progress || 0, count);
-        if (count > 1) text += s.colonAndSpace + progress + (wideCounts ? ' / ' : '/') + count + NL;
-        else if (progress >= 1) text += s.colonAndSpace + s.objectiveComplete + NL;
+        if (count > 1) text += e(s.colonAndSpace) + progress + (wideCounts ? ' / ' : '/') + count + NL;
+        else if (progress >= 1) text += e(s.colonAndSpace + s.objectiveComplete) + NL;
         else text += ' ' + NL;
         if (objective.optional) text += '</font>';
       }
     }
-    if (mission.hasSets !== false && status === TURN_IN) text += '    ' + s.turnInHud + '!' + NL;
+    if (mission.hasSets !== false && status === TURN_IN) text += '    ' + e(s.turnInHud) + '!' + NL;
     const description = status === TURN_IN && mission.turnInDescription ? mission.turnInDescription : mission.description || '';
-    text += NL + '<font color="#8B8B8B">' + description + '</font>';
-    if (status === COMPLETE || status === TURN_IN) text += NL + NL + s.briefingTurnIn + ': ' + (mission.turnIn || '');
+    text += NL + m.descriptionOpen + e(description) + '</font>';
+    if (status === COMPLETE || status === TURN_IN) text += NL + NL + e(s.briefingTurnIn + ': ' + (mission.turnIn || ''));
     return text;
   }
 

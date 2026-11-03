@@ -10,7 +10,7 @@ param(
 )
 # In-engine check of the Missions log page (tools/hud_overlay/missions.html) with the -owquest slice mission:
 # -owmissionlogtest (AOpenWillowMayaHUD::TickMissionLogTest) opens the page, checks it lists nothing before the mission is
-# accepted and the mission under IN PROGRESS after Accept(), Down on the only mission, the header tabs to Inventory and
+# accepted and the mission under the in-progress category after Accept(), Down on the only mission, the header tabs to Inventory and
 # back, and Escape. Prints each OWMISSIONTEST row and the summary; screenshots are copied to local/menus/missionlog/.
 # Needs the slice manifests test_quest.ps1 uses and local/ui/run/missionlog.json (tools/prepare_mission_log.py).
 # Exit codes: 0 all PASS; 1 a FAIL; 2 no summary (launch/timeout). Owns one editor and the shared lock; never touches

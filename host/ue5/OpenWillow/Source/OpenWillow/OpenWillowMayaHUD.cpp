@@ -905,6 +905,10 @@ void AOpenWillowMayaHUD::EndPlay(const EEndPlayReason::Type Reason)
         GEngine->GameViewport->RemoveViewportWidgetContent(CachedSkillsRoot.ToSharedRef());
     CachedSkillsRoot.Reset();
     CachedSkillsBrowser.Reset();
+    if (CachedMissionsRoot && GEngine && GEngine->GameViewport)
+        GEngine->GameViewport->RemoveViewportWidgetContent(CachedMissionsRoot.ToSharedRef());
+    CachedMissionsRoot.Reset();
+    CachedMissionsBrowser.Reset();
     if (FlashHudRoot && GEngine && GEngine->GameViewport)
         GEngine->GameViewport->RemoveViewportWidgetContent(FlashHudRoot.ToSharedRef());
     FlashHudRoot.Reset();

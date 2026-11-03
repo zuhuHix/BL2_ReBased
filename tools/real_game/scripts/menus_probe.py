@@ -13,8 +13,10 @@ RG_OUT (the ignored local/realgame/menus/). Memory-only: nothing here saves sett
 - mp_inv_*: the bounded-recipe inventory set-up, the sorted backpack list as the panel holds it, and per-item tie-break fields.
 """
 import json
+import re
 import time
 from collections import Counter
+from pathlib import Path
 
 import unrealsdk
 from unrealsdk.hooks import Type, add_hook, remove_hook
@@ -45,16 +47,36 @@ def _p(value, depth=0):
     return repr(value)[:200]
 
 
+def _root():
+    """RG_OUT resolved, refused unless it lies inside a repository's ignored local/ (an ancestor named `local` whose parent
+    holds `.git`: a folder in the main checkout, a file in a worktree). What this probe writes is game data; realgame.ps1 builds
+    RG_OUT from its -OutFolder argument, so a folder like '../../docs' would otherwise send it into tracked files (the same
+    guard as scripts/minimap.py)."""
+    root = Path(RG_OUT).resolve()
+    if not any(a.name == "local" and (a.parent / ".git").exists() for a in root.parents):
+        raise ValueError(f"RG_OUT {root} is not inside a repository's local/ folder")
+    return root
+
+
 def _out(name):
-    return RG_OUT + "/" + name
+    """RG_OUT/<name>: each '/'-separated part of `name` a plain file name (no '..', no drive or absolute path, no backslash),
+    and the resolved path still under RG_OUT; otherwise ValueError. Creates the parent folder."""
+    parts = name.split("/") if isinstance(name, str) else []
+    if not parts or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", part) or ".." in part for part in parts):
+        raise ValueError(f"output name must be plain file names separated by '/', got {name!r}")
+    root = _root()
+    path = root.joinpath(*parts).resolve()
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError(f"{path} is not under {root}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def mp_write_json(name, data):
-    import os
-    os.makedirs(RG_OUT, exist_ok=True)
-    with open(_out(name), "w", encoding="utf-8") as handle:
+    path = _out(name)
+    with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=1, ensure_ascii=False)
-    return _out(name)
+    return str(path)
 
 
 # ---------------------------------------------------------------- mods
@@ -137,10 +159,9 @@ def _ui_functions():
 
 
 def mp_trace_start(name):
-    import os
+    path = _out("traces/" + name + ".jsonl") if isinstance(name, str) else _out(name)   # refuses a bad name before any hook
     mp_trace_stop()
-    os.makedirs(_out("traces"), exist_ok=True)
-    MP.update(file=open(_out("traces/" + name + ".jsonl"), "w", encoding="utf-8"), seq=0, t0=time.perf_counter(),
+    MP.update(file=open(path, "w", encoding="utf-8"), seq=0, t0=time.perf_counter(),
               calls=Counter(), last={})
     funcs = _ui_functions()
     for path in funcs:
