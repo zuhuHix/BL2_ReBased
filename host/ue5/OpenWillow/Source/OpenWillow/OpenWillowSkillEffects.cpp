@@ -208,7 +208,9 @@ bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutErro
 
 const FOpenWillowSkillEffects::FSkill* FOpenWillowSkillEffects::Find(const FString& IdOrName) const
 {
-    return Skills.FindByPredicate([&](const FSkill& S) { return S.Id == IdOrName || S.Name == IdOrName; });
+    // The full object path, the display name ("Sweet Release") or the path's last part ("SweetRelease").
+    return Skills.FindByPredicate([&](const FSkill& S)
+        { return S.Id == IdOrName || S.Name == IdOrName || S.Id.EndsWith(TEXT(".") + IdOrName, ESearchCase::CaseSensitive); });
 }
 
 float FOpenWillowSkillEffects::ModifierValue(const FEffect& Effect, int32 Grade, const FWorld& World)
