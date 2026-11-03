@@ -86,7 +86,7 @@ try {
     }
     Remove-Driver
     if ($bak) {
-        $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame/SaveData'
+        $src = Join-Path $script:WillowDir 'SaveData'
         $b = $bak + '\SaveData'
         Get-ChildItem $b -Recurse -File | ForEach-Object {
             $o = Join-Path $src $_.FullName.Substring($b.Length)

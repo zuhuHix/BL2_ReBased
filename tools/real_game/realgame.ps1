@@ -60,11 +60,19 @@ function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive) {
         if (!(Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods'))) { throw "bl-sdk is not installed: $(Join-Path $script:Game 'sdk_mods') is missing" }
         if (Test-Path -LiteralPath $target) { throw "$target already exists; not overwriting it (remove it by hand if it is a stale copy of this driver)" }
     }
-    New-Item -ItemType Directory -Force $target | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py') $target -Force
-    Set-Content -LiteralPath (Join-Path $target 'cmd_dir.txt') -Value $script:CmdDir -NoNewline
-    $flag = Join-Path $target 'autoblock.flag'
-    if ($BlockSavesAtStart) { Set-Content -LiteralPath $flag -Value '1' -NoNewline } else { Remove-Item $flag -ErrorAction SilentlyContinue }
+    # A folder this call creates is removed again if the install fails part-way (a partial driver would make the next
+    # -Exclusive run refuse); a folder that already existed is left as it is.
+    $created = !(Test-Path -LiteralPath $target)
+    try {
+        New-Item -ItemType Directory -Force $target | Out-Null
+        Copy-Item (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py') $target -Force
+        Set-Content -LiteralPath (Join-Path $target 'cmd_dir.txt') -Value $script:CmdDir -NoNewline
+        $flag = Join-Path $target 'autoblock.flag'
+        if ($BlockSavesAtStart) { Set-Content -LiteralPath $flag -Value '1' -NoNewline } else { Remove-Item $flag -ErrorAction SilentlyContinue }
+    } catch {
+        if ($created) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }
+        throw
+    }
 }
 function Remove-Driver { Remove-Item -Recurse -Force (Join-Path $script:Game 'sdk_mods/openwillow_realgame') -ErrorAction SilentlyContinue }
 

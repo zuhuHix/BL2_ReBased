@@ -100,7 +100,9 @@ try {
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     # The SDK's settings and Sanity Saver's private store are compared too (an earlier session saw Sanity Saver rewrite one).
     foreach ($d in $extraRoots.Keys) { if (Test-Path $extraRoots[$d]) { Copy-Item -Recurse $extraRoots[$d] (Join-Path $bak $d) } }
-    Install-Driver -BlockSavesAtStart -Exclusive; $driverOwned = $true
+    # The preflight saw no driver folder, so whatever is there from here on was made by this run (even a partial install).
+    $driverOwned = $true
+    Install-Driver -BlockSavesAtStart -Exclusive
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }
@@ -183,21 +185,39 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } finally {
-    # Each step is isolated so a failure in one (a log write, a stuck process) cannot skip the restore. Order: stop our game,
-    # remove our driver, restore and verify the saves and config, write the logs, and only then release the locks.
+    # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: stop our game, and only once it
+    # has exited remove our driver and restore and verify the saves and config; then write the logs and release the locks.
+    # If the game's exit is not confirmed, a live game could overwrite restored files: nothing is removed or restored, the
+    # backup is kept and manual-recovery steps are printed.
     $cleanup = [ordered]@{}
-    try {
-        if ($proc) {
+    $gameGone = $true
+    if ($proc) {
+        try {
             for ($i = 0; $i -lt 10 -and !$proc.HasExited; $i++) { Start-Sleep 1 }
-            $cleanup.game = Stop-OwnGame $proc $procStart $marker
-            if ($cleanup.game -eq 'stopped') { $proc.WaitForExit(15000) | Out-Null }
-        }
-    } catch { $cleanup.game = "error: $_" }
+            $cleanup.game = if ($proc.HasExited) { 'exited' } else { Stop-OwnGame $proc $procStart $marker }
+            if ($cleanup.game -eq 'stopped' -and !$proc.WaitForExit(15000)) { $cleanup.game = 'stopped, but still running after 15 s' }
+            $proc.Refresh(); $gameGone = $proc.HasExited
+        } catch { $cleanup.game = "error: $_"; $gameGone = $false }
+    }
+    if (!$gameGone) {
+        $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
+        $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
+        @"
+MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored.
+  1. Close Borderlands 2 yourself.
+  2. In PowerShell: . '$PSScriptRoot\realgame.ps1'
+     Remove-Item -Recurse -Force '$script:DriverDir'
+     foreach (`$sub in 'SaveData', 'Config', 'sdk_settings', 'SanitySaver') { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
+     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'; a 'MISMATCH after restore' row means it failed.
+  3. Then remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
+"@
+        $bak = $null; $driverOwned = $false; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
+    }
     try {
         if ($driverOwned) {
             Remove-Driver
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
-        } else { $cleanup.driver = 'not installed by this run; untouched' }
+        } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
     $rows = @()
     if ($bak) {

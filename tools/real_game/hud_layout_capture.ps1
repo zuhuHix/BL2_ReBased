@@ -70,7 +70,7 @@ try {
     if ($runLock) { Exit-RunLock }
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
     if ($bak) {
-        $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame'
+        $src = $script:WillowDir
         $rows = foreach ($sub in 'SaveData', 'Config') {
             $b = Join-Path $bak $sub; $s = Join-Path $src $sub
             Get-ChildItem $s -Recurse -File | ForEach-Object {
