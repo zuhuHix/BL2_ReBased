@@ -23,6 +23,12 @@
 OWHUDTRACKPAGE line whose Module1 shows the mission name, one module per objective line in the state the line has
 (`[x]` Complete, `[o]` Optional, `[ ]` NotComplete) with its text, or one TurnIn module when ready to turn in; a state without a mission has every
 module off. The run must show the mission go from its first objective to ready to turn in.
+-Feedback (`-owhudfxshots`): hits from the four sides of the view, then a level-up.
+- fx_sides: the host's OWHUDFX lines give hits 1-4 the sides u, r, d, l in that order (90 degree quadrants of the view).
+- fx_arrows: for each hit, a later OWHUDFXPAGE line with that hit count shows that side's arrow playing (past frame 1)
+  on its `Health` inner frame (2).
+- fx_levelup: a level-up in the host's lines, and a page line with it showing the banner on `go` (frame 2) with a text.
+- fx_shots: OWHudFx_{hit_u,hit_r,hit_d,hit_l,levelup}.png are complete 1280x720 PNGs.
 Both: the movie path and the page identity (check_hud_shots.check_identity). Prints `OWHUDDOWNTEST PASS|FAIL <name>
 <detail>` per check and a summary; exit code 0 only when every check passes.
 """
@@ -220,6 +226,47 @@ def check_down_shots(folder):
     return 'down_shots', not bad, '; '.join(bad) or f'{len(DOWN_SHOTS)} captures complete; bleed-bar pixels {summary}'
 
 
+FX_SHOTS = ('hit_u', 'hit_r', 'hit_d', 'hit_l', 'levelup')
+HEALTH_FRAME = 2   # the arrows' inner clip: label `Health` (read from the movie)
+HOST_FX = re.compile(r'OWHUDFX t=[0-9.]+ hits=(?P<hits>\d+) side=(?P<side>[-urdl]) levelUps=(?P<ups>\d+) level=(?P<level>\d+)\s*$')
+PAGE_FX = re.compile(r'OWHUDFXPAGE hits=(?P<hits>\d+) side=(?P<side>\S+) levelUps=(?P<ups>\d+) u=(?P<u>\S+) r=(?P<r>\S+) d=(?P<d>\S+) '
+                     r'l=(?P<l>\S+) levelup=(?P<levelup>\S+) levelText=(?P<text>.*)$')
+
+
+def check_feedback(lines):
+    host = [(n, m) for n, line in enumerate(lines) for m in [HOST_FX.search(line)] if m]
+    pages = page_lines(lines, PAGE_FX)
+    sides = {}
+    for _, m in host:
+        sides.setdefault(int(m['hits']), m['side'])
+    got = [sides.get(k, '?') for k in range(1, 5)]
+    results = [('fx_sides', got == ['u', 'r', 'd', 'l'], f'hits 1-4 sides {" ".join(got)}')]
+    problems = []
+    for k, side in enumerate(['u', 'r', 'd', 'l'], 1):
+        first = next((n for n, m in host if int(m['hits']) == k), None)
+        shown = [p for pn, p in pages if first is not None and pn > first and int(p['hits']) == k]
+        frames = [p[side].split('/') for p in shown]
+        if not any(len(f) == 2 and f[0].isdigit() and int(f[0]) > 1 and f[1] == str(HEALTH_FRAME) for f in frames):
+            problems.append(f'hit {k} ({side}): {[p[side] for p in shown][:3] or "no page line"}')
+    results.append(('fx_arrows', not problems, '; '.join(problems) or '4 arrows played on their Health frame'))
+    up = next((n for n, m in host if int(m['ups']) >= 1), None)
+    banner = [p for pn, p in pages if up is not None and pn > up and int(p['ups']) >= 1]
+    ok = any(p['levelup'].split('/')[0] == '2' and p['text'] not in ('', '-') for p in banner)
+    results.append(('fx_levelup', up is not None and ok,
+                    f'host level-up {"seen" if up is not None else "missing"}; banner {banner[0]["levelup"] if banner else "no page line"}'))
+    return results
+
+
+def check_fx_shots(folder):
+    bad = []
+    for name in FX_SHOTS:
+        try:
+            read_shot(Path(folder) / f'OWHudFx_{name}.png')
+        except ValueError as error:
+            bad.append(f'{name}: {error}')
+    return 'fx_shots', not bad, '; '.join(bad) or f'{len(FX_SHOTS)} captures complete'
+
+
 def expected_modules(rest):
     """[(label, text)] per shown module for a host OWHUDTRACK line's text, and whether it shows a mission."""
     if rest.strip() == 'none':
@@ -269,7 +316,7 @@ def check_tracker(lines):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('log')
-    parser.add_argument('--mode', choices=('down', 'tracker'), required=True)
+    parser.add_argument('--mode', choices=('down', 'tracker', 'feedback'), required=True)
     parser.add_argument('--shots', help='capture folder (down mode)')
     parser.add_argument('--strings', default=str(STRINGS_FILE), help='the hud_strings.json the page loaded (down mode)')
     args = parser.parse_args()
@@ -280,6 +327,10 @@ def main():
         results.append(check_down_weapon(lines))
         if args.shots:
             results.append(check_down_shots(args.shots))
+    elif args.mode == 'feedback':
+        results += check_feedback(lines)
+        if args.shots:
+            results.append(check_fx_shots(args.shots))
     else:
         results += check_tracker(lines)
     for name, ok, detail in results:

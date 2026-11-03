@@ -129,8 +129,33 @@
     return `OWHUDTRACKPAGE mission=${esc(t && t.mission)} turnIn=${t && t.turnIn ? 1 : 0} lines=${t ? (t.lines || []).length : 0} ${parts.join(' ')}`;
   }
 
+  // ---- Damage-direction arrows and the level-up banner (docs/verification/HUD_PARITY.md) ----
+  // Read from the movie's own frame scripts: p1.dmg_u / dmg_r / dmg_d / dmg_l stop on frame 1 with their inner clip hidden;
+  // from frame 2 they show it and animate by themselves (36 frames). The inner clip's labels name the absorber (`Health`, or
+  // a shield type: `Original`, `Generic`, `Nova`, ...); the host has no shield damage, so every hit is `Health` (UNVERIFIED
+  // which label the game picks). p1.levelup's `go` frame writes the banner text itself, starts the inner animation and
+  // flashes the XP bar. `levelDisp.text` is left as it is: whatever the native puts there was not observed.
+  // feedback: {hits, side: 'u'|'r'|'d'|'l', levelUps, level}; previous: the last one applied (or null).
+  function feedbackCalls(feedback, previous) {
+    const calls = [];
+    if (!feedback) return calls;
+    const before = previous || {hits: feedback.hits, levelUps: feedback.levelUps};   // the first state is the baseline
+    if (Number(feedback.hits) > Number(before.hits || 0) && /^[urdl]$/.test(feedback.side || '')) {
+      const arrow = `${P1}.dmg_${feedback.side}`;
+      calls.push([arrow + '.inner', 'gotoAndStop', 'Health'], [arrow, 'gotoAndPlay', 2]);
+    }
+    if (Number(feedback.levelUps) > Number(before.levelUps || 0)) calls.push([P1 + '.levelup', 'gotoAndPlay', 'go']);
+    return calls;
+  }
+  function feedbackLine(shown, get) {
+    const f = shown.feedback || {};
+    const arrows = ['u', 'r', 'd', 'l'].map(side => `${side}=${get(`${P1}.dmg_${side}`, '_currentframe')}/${get(`${P1}.dmg_${side}.inner`, '_currentframe')}`);
+    return `OWHUDFXPAGE hits=${f.hits || 0} side=${f.side || '-'} levelUps=${f.levelUps || 0} ${arrows.join(' ')}`
+      + ` levelup=${get(P1 + '.levelup', '_currentframe')}/${get(P1 + '.levelup.inner', '_currentframe')} levelText=${esc(get(P1 + '.levelup.inner.levelup1', 'text'))}`;
+  }
+
   const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine, barFrame, downCalls, secondWindCalls, trackerCalls,
-    downLine, trackerLine, TRACKER_MODULES};
+    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

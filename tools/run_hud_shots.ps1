@@ -13,6 +13,8 @@ param(
     # HUD and a capture after each tracker change (-owhudtrackshots), checked by check_hud_down.py --mode tracker.
     [switch]$Down,
     [switch]$Tracker,
+    # -Feedback: hits from the four sides of the view and a level-up (-owhudfxshots), checked by check_hud_down.py --mode feedback.
+    [switch]$Feedback,
     [int]$WaitForEditorSeconds = 1800,
     # Extra command-line switches, e.g. '-owcanvashud' for the fallback HUD.
     [string[]]$Extra = @()
@@ -38,7 +40,7 @@ if (!(Test-Path -LiteralPath (Join-Path $repo 'local/ui/run/UI_HUD/hud_strings.j
 }
 $level = if ($Level -gt 0) { $Level } else { [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level }
 if ($Shield) { $Extra += '-owhudshield' }
-if ($Down -and $Tracker) { throw 'Pick -Down or -Tracker, not both' }
+if (@($Down, $Tracker, $Feedback | Where-Object { $_ }).Count -gt 1) { throw 'Pick one of -Down, -Tracker, -Feedback' }
 $mode = if ($Down) { @('-owhuddownshots', '-owcombattest') } elseif ($Tracker) {
     $sliceFiles = @((Join-Path $repo 'local/doors/mover.json'), (Join-Path $repo 'local/slice/world.json'),
         (Join-Path $repo 'local/slice/npc_assets.json'), (Join-Path $repo 'local/slice/audio.json'))
@@ -47,8 +49,8 @@ $mode = if ($Down) { @('-owhuddownshots', '-owcombattest') } elseif ($Tracker) {
     if (Test-Path -LiteralPath $trackSave) { Remove-Item -LiteralPath $trackSave -Force }
     @("-owmover=`"$($sliceFiles[0])`"", "-owslice=`"$($sliceFiles[1])`"", "-ownpcs=`"$($sliceFiles[2])`"", "-owaudio=`"$($sliceFiles[3])`"",
       '-owquest', '-owquesttest', "-owquestsave=`"$trackSave`"", '-owhudtrackshots')
-} else { @('-owhudshots') }
-$shotFilter = if ($Down) { 'OWHudDown_*.png' } elseif ($Tracker) { 'OWHudTrack_*.png' } else { 'OWHud_*.png' }
+} elseif ($Feedback) { @('-owhudfxshots') } else { @('-owhudshots') }
+$shotFilter = if ($Down) { 'OWHudDown_*.png' } elseif ($Tracker) { 'OWHudTrack_*.png' } elseif ($Feedback) { 'OWHudFx_*.png' } else { 'OWHud_*.png' }
 if ($Tracker -and $TimeoutSeconds -lt 600) { $TimeoutSeconds = 600 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outDir = Join-Path $repo "local/hudshots/$stamp"
@@ -82,8 +84,9 @@ try {
     if ($finished) {
         $checkArgs = if ($Down) { @((Join-Path $PSScriptRoot 'check_hud_down.py'), $log, '--mode', 'down', '--shots', $outDir) }
             elseif ($Tracker) { @((Join-Path $PSScriptRoot 'check_hud_down.py'), $log, '--mode', 'tracker') }
+            elseif ($Feedback) { @((Join-Path $PSScriptRoot 'check_hud_down.py'), $log, '--mode', 'feedback', '--shots', $outDir) }
             else { @((Join-Path $PSScriptRoot 'check_hud_shots.py'), $log, '--shots', $outDir) }
-        if ($Shield -and -not ($Down -or $Tracker)) { $checkArgs += '--expect-shield' }
+        if ($Shield -and -not ($Down -or $Tracker -or $Feedback)) { $checkArgs += '--expect-shield' }
         & python @checkArgs
         $code = $LASTEXITCODE
     }

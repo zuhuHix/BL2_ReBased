@@ -106,4 +106,23 @@ assert.strictEqual(fields.downLine({down: {phase: 'injured', bleed: 0.25}, secon
 assert.strictEqual(fields.downLine({}, get), 'OWHUDDOWNPAGE phase=up bleed=1.00 secondWind=0 dying=2 bleedout=- title=- windFrame=1');
 assert.strictEqual(fields.trackerLine({tracker: null}, get), 'OWHUDTRACKPAGE mission= turnIn=0 lines=0 m1=1 m2=1 m3=1 m4=1 m5=1 m6=1');
 
+// ---- hit arrows and the level-up banner (invented counts) ----
+const P = '_level1.p1';
+// The first state seen is the baseline: nothing plays for hits or level-ups that happened before the page loaded.
+assert.deepStrictEqual(fields.feedbackCalls({hits: 3, side: 'r', levelUps: 1, level: 9}, null), []);
+// A new hit plays that side's arrow on its Health frame; the other sides are left alone.
+assert.deepStrictEqual(fields.feedbackCalls({hits: 4, side: 'l', levelUps: 1}, {hits: 3, levelUps: 1}),
+  [[P + '.dmg_l.inner', 'gotoAndStop', 'Health'], [P + '.dmg_l', 'gotoAndPlay', 2]]);
+// No new hit, or a hit with no side: no arrow.
+assert.deepStrictEqual(fields.feedbackCalls({hits: 4, side: 'u', levelUps: 1}, {hits: 4, levelUps: 1}), []);
+assert.deepStrictEqual(fields.feedbackCalls({hits: 5, side: '-', levelUps: 1}, {hits: 4, levelUps: 1}), []);
+// A level-up plays the banner from `go` (its text is the movie's own), together with a hit in the same state.
+assert.deepStrictEqual(fields.feedbackCalls({hits: 5, side: 'd', levelUps: 2}, {hits: 4, levelUps: 1}),
+  [[P + '.dmg_d.inner', 'gotoAndStop', 'Health'], [P + '.dmg_d', 'gotoAndPlay', 2], [P + '.levelup', 'gotoAndPlay', 'go']]);
+const fxFake = {[P + '.dmg_r']: {_currentframe: 5}, [P + '.dmg_r.inner']: {_currentframe: 2}, [P + '.levelup']: {_currentframe: 2},
+  [P + '.levelup.inner']: {_currentframe: 30}, [P + '.levelup.inner.levelup1']: {text: 'BANNER'}};
+const fxGet = (t, k) => (fxFake[t] || {})[k] ?? 1;
+assert.strictEqual(fields.feedbackLine({feedback: {hits: 1, side: 'r', levelUps: 1}}, fxGet),
+  'OWHUDFXPAGE hits=1 side=r levelUps=1 u=1/1 r=5/2 d=1/1 l=1/1 levelup=2/30 levelText=BANNER');
+
 console.log('hud_fields_test: all checks passed');

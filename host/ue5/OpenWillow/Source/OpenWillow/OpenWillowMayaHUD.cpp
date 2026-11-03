@@ -1112,6 +1112,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     const FString Minimap = PlayerOwner ? OpenWillowMinimap::StateField(Maya, *PlayerOwner) : FString();
     if (!Minimap.IsEmpty()) State = State.LeftChop(1) + TEXT(",\"minimap\":") + Minimap + TEXT("}");
     State = State.LeftChop(1) + TEXT(",") + DownHudFields(Maya) + TEXT(",\"tracker\":") + TrackerHudField(Maya) + TEXT("}");
+    State = State.LeftChop(1) + TEXT(",\"feedback\":") + FeedbackHudField(Maya) + TEXT("}");
     // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
     // (tools/check_action_skill_hud.py reads them).
     const FString SkillLine = FString::Printf(TEXT("active=%.2f cooldown=%.2f"), SkillActive, SkillCooldown);
@@ -1185,6 +1186,81 @@ FString AOpenWillowMayaHUD::TrackerHudField(const AOpenWillowWalker& Maya)
         TrackShotAt = -1.f;
     }
     return Field;
+}
+
+FString AOpenWillowMayaHUD::FeedbackHudField(const AOpenWillowWalker& Maya)
+{
+    // The damage-direction side: the source's direction against the view yaw, in 90 degree quadrants (u ahead, r, d behind,
+    // l). How the game splits the circle is native and was not read (UNVERIFIED). A level-up is any rise of Maya's level
+    // after the first one read; the banner's text is the movie's own.
+    const FVector From = Maya.GetLastHitFrom();
+    const float Yaw = PlayerOwner ? PlayerOwner->GetControlRotation().Yaw : Maya.GetActorRotation().Yaw;
+    const float Relative = FRotator::NormalizeAxis(From.Rotation().Yaw - Yaw);
+    const TCHAR* Side = FMath::Abs(Relative) <= 45.f ? TEXT("u") : FMath::Abs(Relative) >= 135.f ? TEXT("d") : Relative > 0.f ? TEXT("r") : TEXT("l");
+    const int32 Level = Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 0;
+    if (SeenLevel >= 0 && Level > SeenLevel) ++LevelUps;
+    SeenLevel = Level;
+    const FString Line = FString::Printf(TEXT("hits=%d side=%s levelUps=%d level=%d"), Maya.GetHitCount(), Maya.GetHitCount() ? Side : TEXT("-"), LevelUps, Level);
+    if (Line != LastFeedbackLine)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWHUDFX t=%.3f %s"), GetWorld()->GetTimeSeconds(), *Line);
+        LastFeedbackLine = Line;
+    }
+    return FString::Printf(TEXT("{\"hits\":%d,\"side\":\"%s\",\"levelUps\":%d,\"level\":%d}"), Maya.GetHitCount(), Side, LevelUps, Level);
+}
+
+void AOpenWillowMayaHUD::TickHudFxShots(AOpenWillowWalker& Maya)
+{
+    // Unattended: once the movie has settled, four 5-point hits whose sources sit ahead, right, behind and left of the view
+    // (point hits, so the shot direction gives the side), a capture 0.25 s after each, then a level-up and its capture.
+    if (FxShotStep < 0) return;
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (FxShotStep == 0) { FxShotAt = FMath::Max(Now + 4.f, 12.f); FxShotStep = 1; return; }
+    if (Now < FxShotAt) return;
+    static const TCHAR* Sides[] = {TEXT("u"), TEXT("r"), TEXT("d"), TEXT("l")};
+    const int32 Step = FxShotStep - 1;   // 0..3 hit, 4..7 capture after each, then the level-up
+    auto Shot = [this, Now](const FString& Name)
+    {
+        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWHudFx_%s.png"), *Name), true, false);
+        UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS shot %s t=%.3f"), *Name, Now);
+    };
+    if (Step < 8)
+    {
+        const int32 Hit = Step / 2;
+        if (Step % 2 == 0)
+        {
+            // The source's direction: the view's forward turned by 0, 90, 180, 270 degrees (right-handed yaw: +90 is right).
+            const FRotator View(0.f, (PlayerOwner ? PlayerOwner->GetControlRotation().Yaw : Maya.GetActorRotation().Yaw) + 90.f * Hit, 0.f);
+            const FVector Toward = View.Vector();
+            FPointDamageEvent Event(5.f, FHitResult(), -Toward, nullptr);
+            const float Applied = Maya.TakeDamage(5.f, Event, nullptr, nullptr);
+            UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS hit %s t=%.3f applied=%.0f"), Sides[Hit], Now, Applied);
+            FxShotAt = Now + 0.25f;
+        }
+        else
+        {
+            Shot(FString(TEXT("hit_")) + Sides[Hit]);
+            FxShotAt = Now + 1.5f;
+        }
+    }
+    else if (Step == 8)
+    {
+        if (UOpenWillowSkills* Skills = Maya.GetSkills())
+        {
+            Skills->SetLevel(Skills->GetLevel() + 1);
+            UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS levelup t=%.3f level=%d"), Now, Skills->GetLevel());
+        }
+        FxShotAt = Now + 0.6f;
+    }
+    else if (Step == 9) { Shot(TEXT("levelup")); FxShotAt = Now + 2.f; }
+    else
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS done"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        FxShotStep = -1;
+        return;
+    }
+    ++FxShotStep;
 }
 
 #if WITH_EDITOR   // a test sequence that injects fire and reload input (AOpenWillowWalker::TestFireInput): editor builds only
@@ -1561,6 +1637,8 @@ void AOpenWillowMayaHUD::DrawHUD()
         static const bool bHudDownShots = FParse::Param(FCommandLine::Get(), TEXT("owhuddownshots"));
         if (bHudDownShots && bFlashHudReady) TickHudDownShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
 #endif
+        static const bool bHudFxShots = FParse::Param(FCommandLine::Get(), TEXT("owhudfxshots"));
+        if (bHudFxShots && bFlashHudReady) TickHudFxShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
         if (bFlashHudReady)

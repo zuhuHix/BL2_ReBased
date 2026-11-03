@@ -140,6 +140,11 @@ public:
     float LastDownAt() const { return DownAt; }
     float LastSecondWindAt() const { return SecondWindAt; }
     float LastRespawnAt() const { return RespawnAt; }
+    // Hits that took health and came from a known place (the HUD's damage-direction arrows): how many so far, and the world
+    // direction from Maya toward the last one's source (a point hit's shot direction reversed, else the causer's or the
+    // instigator's position).
+    int32 GetHitCount() const { return HitsTaken; }
+    FVector GetLastHitFrom() const { return LastHitFrom; }
     // Maya killed an enemy (AOpenWillowCombatTarget calls it with her as the damage causer): while Injured, a second wind.
     void NotifyKilledEnemy();
     // -owquest: sets maximum health from the recovered formula when Maya's level differs from the level it was last
@@ -244,6 +249,8 @@ private:
     float DownAt = -1000.f, DownBleedSeconds = 12.f, DeadAt = -1000.f, SecondWindAt = -1000.f, RespawnAt = -1000.f;
     float LastInjuryAt = -1000.f;
     int32 SuccessiveInjuries = 0;
+    int32 HitsTaken = 0;
+    FVector LastHitFrom = FVector::ZeroVector;
     void GoDown();
     void TickDown(float Now);
     void EndDownOnRefill(const TCHAR* Why);

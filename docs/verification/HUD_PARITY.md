@@ -20,11 +20,11 @@ movie shows. Scores are the independent critic's, and only where a matched real-
 | Shield bar and text (`shield`) | yes | partly: the equipped shield's capacity; the bar stays full | `check_hud_shots.py` | as health; no damage or recharge model |
 | Shield break (`shielddown`) | yes, when the shield breaks | not driven: the host has no shield damage | none | missing |
 | Ammo bar, text, icon (`bullets`) | yes | driven: magazine, reserve and ammo type | `check_hud_shots.py` | 8/10 (with the clusters) |
-| Reload / empty prompt (`reload`: `reload`, `depleted`, `empty`) | yes | not driven | none | missing |
-| Grenade count (`grenades`) | yes | driven: count and max; the icon's type is not | `check_hud_shots.py` | type missing |
-| Crosshair (`crosshairs`) | yes | style and idle spread for pistol and shotgun; no widening while firing | `check_hud_shots.py` | 7.7-8/10; spread per gun open |
+| Reload / empty prompt (`reload`: `reload`, `depleted`, `empty`) | yes | not driven: the movie leaves its `desc` text and the choice of state to native code (`UpdateAmmo` is native), neither read | none | missing |
+| Grenade count (`grenades`) | yes | driven: count and max. The icon's type (`protean.payload`: `none`, `standard`, `transfusion`, `mirv`, `bouncing`, `area`, `singularity`) is not: the host's grenade mod carries no delivery type, and guessing it from the name was not done | `check_hud_shots.py` | type missing |
+| Crosshair (`crosshairs`) | yes | style and idle spread for pistol and shotgun; no widening while firing: the host's spread is the card value, with no bloom state to drive it | `check_hud_shots.py` | 7.7-8/10; spread per gun open |
 | XP bar, level, class-mod text (`xpbar`, `levelClassMod`) | yes | driven: XP and level; the class-mod title is not sent | `check_hud_shots.py` | with the clusters |
-| Level-up banner (`levelup`, label `go`) | yes, on the mission reward | not driven | none | missing |
+| Level-up banner (`levelup`, label `go`) | yes, on the mission reward | **driven** (HUD lane 2): any rise of Maya's level plays `go`; the movie writes its own text and flashes the XP bar | `check_hud_down.py` (feedback) | UNVERIFIED: no real frame |
 | Action skill (`character`, `activeAbility`) | yes | driven (ACTION_SKILL_HUD.md) | `test_action_skill_hud.ps1` | see ACTION_SKILL_HUD.md |
 | Minimap and compass (`minimapEcho`) | yes | driven (HUD_MINIMAP.md) | `test_hud_minimap.ps1` | see HUD_MINIMAP.md |
 | Fight For Your Life (`dying1`: `fight` label, 100-frame bleed-out bar, title and hint) | yes | **driven** (this lane): the Walker's down state | `check_hud_down.py` (down) | UNVERIFIED: no real frame on this PC |
@@ -35,7 +35,7 @@ movie shows. Scores are the independent critic's, and only where a matched real-
 | Interaction prompt (`tools`, `toolsSecondary`: `talk`, `use`, `guns`, ...; `desc` text) | yes (Marcus, the gun pickup) | not driven: the host shows a debug text line. The label and text come from the native `UpdateInteractionIcon` (the HUD's handler is native too), not read | none | missing |
 | Contextual prompt (`contextualPrompt`) | unknown | not driven | none | unknown whether the loop shows it |
 | Pickup item card (`outerequip`, `equipcard` with `stat1-7`, `manufacturer`) | yes (looking at a gun) | not driven | none | missing |
-| Damage direction (`dmg_u`, `dmg_d`, `dmg_l`, `dmg_r`) | yes, when Maya is hit | not driven: nothing in the UE host damages Maya (enemy attacks run in the C++ VM only, PR #59) | none | missing |
+| Damage direction (`dmg_u`, `dmg_d`, `dmg_l`, `dmg_r`) | yes, when Maya is hit | **driven** (HUD lane 2) from any hit with a known source; but nothing in the UE host attacks Maya yet (enemy attacks run in the C++ VM only, PR #59) | `check_hud_down.py` (feedback) | UNVERIFIED: no real frame; side split and inner label UNVERIFIED |
 | Area name (`WorldDiscovery`) | yes, entering Sanctuary | not driven | none | missing |
 | Damage numbers | yes | the host's canvas draws them over the movie; the movie has no clip for them | none | not compared |
 | Hit marker | no in stock BL2 (no clip in the movie; a mod adds one, UNVERIFIED) | none | none | n/a |
@@ -199,6 +199,33 @@ itself is therefore checked independently in `tests/mission_script_test.py` (sce
 refuses objective updates once a mission is ready to turn in, so an optional objective left open then stays open;
 whether the game still counts it is UNVERIFIED (a mission-model question, not a HUD one).
 
+## Hit arrows and the level-up banner (HUD lane 2, 2026-11-03)
+
+AI-assisted (Claude Opus 5.5). What the movie does by itself, read from its own frame scripts in the converted movie (the
+listing stays under ignored `local/analysis/hud/`):
+
+* **Damage arrows.** Each of `dmg_u`, `dmg_r`, `dmg_d` and `dmg_l` stops on frame 1 with its inner clip hidden. From frame 2
+  it shows the inner clip and animates by itself over 36 frames, with random offsets. The inner clip's labels name what
+  took the hit: `Health`, or a shield type (`Original`, `Generic`, `Nova`, `Absorb`, ...).
+* **Level-up banner.** `levelup`'s `go` frame writes the banner text itself, starts the inner animation and flashes the
+  XP bar.
+
+What the host sends:
+
+* **Hits.** `AOpenWillowWalker::TakeDamage` counts every hit that took health and has a known source: a point hit's shot
+  direction reversed, else the causer's or the instigator's position. The HUD turns the last source's direction into
+  a quadrant of the view yaw: within 45 degrees ahead is `u`, within 45 degrees of behind is `d`, otherwise `r` or `l`.
+  On each new hit the page plays that side's arrow from frame 2 on its `Health` frame. The host has no shield damage,
+  so every hit is `Health`. How the game splits the circle and picks the label is native (UNVERIFIED).
+* **Level-ups.** The HUD counts any rise of Maya's level after the first one it reads, and the page plays `levelup` from
+  `go`. `levelDisp.text` is left alone, because what the native puts there was not observed.
+
+Not done, because there is nothing real to drive them:
+
+* the reload prompt: its state and its `desc` text are native (`WillowHUDGFxMovie.UpdateAmmo`);
+* crosshair widening: the host has no bloom state;
+* the grenade icon type: the grenade mod item has no delivery type.
+
 ## Checks
 
 * `node tests/hud_warp_test.js`: the homography against the written-out formula (0.01 px, six turns, seven origins, a
@@ -294,6 +321,13 @@ whether the game still counts it is UNVERIFIED (a mission-model question, not a 
     tick never starts a burst, and the reload begun while down had refilled the magazine before the second injury.
     The sequence now holds the trigger until the first shot and fires once after the respawn.
   * `test_quest.ps1` 112/112 + resume 11/11; `test_weapon_firing.ps1` 14/14.
+
+* HUD lane 2 (after PR #63, on main 8b7b7f4): `tools/run_hud_shots.ps1 -Feedback` (`-owhudfxshots`): four 5-point hits whose sources sit
+  ahead, right, behind and left of the view, then a level-up, with captures. Checked by `check_hud_down.py --mode feedback`:
+  the sides u r d l in order, each arrow playing on its `Health` frame, the banner on `go` with a text, and 5 complete
+  captures. `tests/check_hud_down_test.py` now has 30 cases (4 for this mode), and `tests/hud_fields_test.js` covers
+  `feedbackCalls` / `feedbackLine`. In UE on pc-hummer: 6/6. In the captures each arrow is on its own screen edge, and
+  the banner shows over LV 09.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.
