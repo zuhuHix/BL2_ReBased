@@ -27,12 +27,23 @@ function PyJson([string]$Expr, [int]$Timeout = 30) {
     $r = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
     try { $r | ConvertFrom-Json } catch { $r }
 }
+# A string as a JSON string literal, which Python reads as the same str: arguments never become source code.
+function Q([string]$Text) { ConvertTo-Json -InputObject $Text -Compress }
+# Gun ids name local recipe files and output folders: letters, digits and underscores only.
+foreach ($id in $Guns) { if ($id -notmatch '^[A-Za-z0-9_]+$') { throw "gun id '$id' is not of the form [A-Za-z0-9_]+" } }
 function Right-Hold([int]$Ms) { [OWRG.Native]::mouse_event(0x8, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $Ms }
 function Right-Release { [OWRG.Native]::mouse_event(0x10, 0, 0, 0, [UIntPtr]::Zero) }
 function Level-View { Py 'pc = get_pc(); r = pc.Rotation; pc.Rotation = unrealsdk.make_struct("Rotator", Pitch=0, Yaw=(r.Yaw + 16384) & 0xFFFF, Roll=0); print("ok")' | Out-Null }
 
-$hub = $null; $bak = $null; $proc = $null; $target = $null; $runLock = $false
+$extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
+$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false
+# A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the image
+# path and the start time before stopping a PID). Unknown switches are ignored by the game.
+$marker = "-owrun=$Lane-$PID"
 try {
+    # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
+    if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2)" }
+    if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
     while (!$hub) {
         try { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
         catch { "hub lock held by '$(Get-Content $HubLock -Raw -ErrorAction SilentlyContinue)'; retry in 60 s"; Start-Sleep 60 }
@@ -43,9 +54,13 @@ try {
     Start-Sleep 20   # let the other lane's restore and driver removal finish
     Enter-RunLock 600; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
-    Install-Driver
+    foreach ($d in $extraRoots.Keys) { if (Test-Path $extraRoots[$d]) { Copy-Item -Recurse $extraRoots[$d] (Join-Path $bak $d) } }
+    # -Exclusive re-checks that the folder is absent and removes its own partial install on failure: the folder is this
+    # run's only once the call has returned.
+    Install-Driver -Exclusive
+    $driverOwned = $true
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-    $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character")
+    $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'wp2/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
@@ -96,7 +111,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     if (!$target) { throw "no bullymong: $pick" }
     $log.target = $target
     $log.protect = Py 'print(len(protect_player(True)))'
-    $log.target_setup = PyJson "fp3_target('$target', 500.0)" 60
+    $log.target_setup = PyJson "fp3_target($(Q $target), 500.0)" 60
     $log.hooks_fp3 = PyJson 'fp3_install_hooks()'
     $log.hooks_wp2 = PyJson 'wp2_install_hooks()'
     "target $target levels $($log.target_setup.levels | ConvertTo-Json -Compress)"
@@ -104,10 +119,10 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     foreach ($gun in $Guns) {
         $g = [ordered]@{}; $log.guns[$gun] = $g
         try {
-            $g.spawn = PyJson "fp_spawn('$gun')" 60
-            $g.ready = PyJson "fp_ready('$gun', 1)" 60
+            $g.spawn = PyJson "fp_spawn($(Q $gun))" 60
+            $g.ready = PyJson "fp_ready($(Q $gun), 1)" 60
             Start-Sleep 3
-            $g.particles = PyJson "wp2_particles('$gun')" 120
+            $g.particles = PyJson "wp2_particles($(Q $gun))" 120
             $g.held = PyJson 'fp3_damage()'
             if (!$SkipVisuals -and $gun -like 'slice_*') {
                 Py 'fp3_unlock_aim(); print("ok")' | Out-Null
@@ -122,7 +137,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             $off = if ($gun -like 'sg_*' -or $gun -eq 'slice_shotgun') { 1.1 } else { 0.35 }
             $n = if ($gun -match 'maliwan|fire') { $StatusPresses } else { 25 }
             PyJson 'wp2_infinite_ammo(True)' | Out-Null
-            $g.run = PyJson "fp3_run_begin('$gun', {'presses': $n})"
+            $g.run = PyJson "fp3_run_begin($(Q $gun), {'presses': $n})"
             PyJson "fp3_aim_target(0.0, True)" | Out-Null
             Start-Sleep 1
             PyJson "wp2_autofire($n, 0.08, $off)" | Out-Null
@@ -136,7 +151,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             try {
                 Py 'fp3_unlock_aim(); print("ok")' | Out-Null
                 $g.wall = PyJson 'fp_face_wall()' 60
-                PyJson "fp_run_begin('wall_$gun')" | Out-Null
+                PyJson "fp_run_begin($(Q "wall_$gun"))" | Out-Null
                 PyJson "wp2_autofire(6, 0.08, $off)" | Out-Null
                 Start-Sleep ([int](6 * ($off + 0.1) + 4))
                 PyJson 'wp2_stop_autofire()' | Out-Null
@@ -151,27 +166,54 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     Py 'wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
     for ($i = 0; $i -lt 20 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
 } finally {
-    $log.finished = (Get-Date).ToString('o')
-    $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
-    if ($proc) { Start-Sleep 2; $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force } }
-    try { Remove-Driver } catch { "Remove-Driver failed: $_" }
-    if ($runLock) { Exit-RunLock }
-    if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
-    if ($bak) {
-        $src = $script:WillowDir
-        $rows = foreach ($sub in 'SaveData', 'Config') {
-            $b = Join-Path $bak $sub; $s = Join-Path $src $sub
-            Get-ChildItem $s -Recurse -File | ForEach-Object {
-                $rel = $_.FullName.Substring($s.Length + 1); $old = Join-Path $b $rel
-                if (!(Test-Path $old)) { [pscustomobject]@{ file = "$sub\$rel"; status = 'added (left in place)' } }
-                elseif ((Get-FileHash $old).Hash -ne (Get-FileHash $_.FullName).Hash) {
-                    Copy-Item $old $_.FullName -Force; [pscustomobject]@{ file = "$sub\$rel"; status = 'changed, restored' }
-                }
-            }
-            Get-ChildItem $b -Recurse -File | Where-Object { !(Test-Path (Join-Path $s $_.FullName.Substring($b.Length + 1))) } |
-                ForEach-Object { [pscustomobject]@{ file = "$sub\$($_.FullName.Substring($b.Length + 1))"; status = 'missing' } }
-        }
-        @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json')
-        "save compare: $(@($rows).Count) differences"; $rows
+    # Order: stop our game; only once it has exited, remove our driver and restore and verify the saves, config and SDK stores
+    # while both locks are still held; then write the logs; release the locks last, each in its own step. If the game's
+    # exit is not confirmed nothing is removed or restored and the locks stay held (manual recovery printed).
+    $cleanup = [ordered]@{}
+    $gameGone = $true
+    if ($proc) {
+        try {
+            for ($i = 0; $i -lt 10 -and !$proc.HasExited; $i++) { Start-Sleep 1 }
+            $cleanup.game = if ($proc.HasExited) { 'exited' } else { Stop-OwnGame $proc $procStart $marker }
+            if ($cleanup.game -eq 'stopped' -and !$proc.WaitForExit(15000)) { $cleanup.game = 'stopped, but still running after 15 s' }
+            $proc.Refresh(); $gameGone = $proc.HasExited
+        } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
+    if (!$gameGone) {
+        "MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored;"
+        "  close it, remove '$script:DriverDir', run Restore-Tree from each folder of '$bak' (realgame.ps1), then remove '$HubLock' and '$script:Lock'."
+        $bak = $null; $driverOwned = $false; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
+    }
+    try {
+        if ($driverOwned) {
+            Remove-Driver
+            $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
+        } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
+    } catch { $cleanup.driver = "error: $_" }
+    $rows = @()
+    if ($bak) {
+        try {
+            $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
+            foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
+            foreach ($sub in $roots.Keys) {
+                $b = Join-Path $bak $sub; $live = $roots[$sub]
+                try {
+                    # Restore-Tree removes added files, restores missing and changed ones, then compares every hash again.
+                    if (Test-Path -LiteralPath $b) { $rows += @(Restore-Tree $b $live $sub) }
+                    elseif (Test-Path -LiteralPath $live) { $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' } }
+                } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
+            }
+            $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
+            $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)" }
+    }
+    try {
+        $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
+        $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
+        if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+    } catch { "log write failed: $_" }
+    try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
+    try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
+    $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
+    $rows
 }

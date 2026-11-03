@@ -476,10 +476,13 @@ def muzzle_flash_fx_for(package, collection, cache):
     if not collection:
         return None
     if collection not in cache:
-        cache[collection] = {
-            element: {'system': system, 'layers': weapon_muzzle_fx.particle_system_layers(package, system)}
-            for element, system in weapon_muzzle_fx.muzzle_collection(package, collection).items()
-        }
+        # An element whose system yields no layers is left out, so the host falls back to its procedural flash for it.
+        fx = {}
+        for element, system in weapon_muzzle_fx.muzzle_collection(package, collection).items():
+            layers = weapon_muzzle_fx.particle_system_layers(package, system)
+            if layers:
+                fx[element] = {'system': system, 'layers': layers}
+        cache[collection] = fx or None
     return cache[collection]
 
 

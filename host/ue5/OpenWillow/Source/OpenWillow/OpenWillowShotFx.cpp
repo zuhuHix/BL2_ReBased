@@ -13,6 +13,28 @@ const TCHAR* FxMaterialPath = TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_
 const TCHAR* FlameMaterialPath = TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_MuzzleFlame.M_OW_MuzzleFlame");
 }
 
+namespace
+{
+// Cosmetic budget: shot effects spawned per frame (flashes, sparks, tracers, flash quads, casings). A multi-pellet or fast
+// gun can ask for hundreds in one frame; past the cap the extra cosmetic actors are skipped. Damage never goes through here.
+// Host value, not a game rule.
+constexpr int32 MaxShotFxPerFrame = 96;
+uint64 BudgetFrame = 0;
+int32 BudgetUsed = 0;
+}
+
+AOpenWillowShotFx* AOpenWillowShotFx::SpawnBudgeted(UWorld* World, const FTransform& Pose)
+{
+    if (!World) return nullptr;
+    if (BudgetFrame != GFrameCounter) { BudgetFrame = GFrameCounter; BudgetUsed = 0; }
+    if (BudgetUsed >= MaxShotFxPerFrame) return nullptr;
+    AOpenWillowShotFx* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
+    if (!Fx) return nullptr;
+    ++BudgetUsed;
+    Fx->FinishSpawning(Pose);
+    return Fx;
+}
+
 AOpenWillowShotFx::AOpenWillowShotFx()
 {
     PrimaryActorTick.bCanEverTick = true;
@@ -79,8 +101,8 @@ void AOpenWillowShotFx::Tracer(UWorld* World, const FVector& Start, const FVecto
     // The engine cylinder is 100 cm tall along Z with a 50 cm radius.
     const FTransform Pose(FRotationMatrix::MakeFromZ(Span / Length).Rotator(),
         Start + Span * 0.5f, FVector(Radius / 50.f, Radius / 50.f, Length / 100.f));
-    auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
-    Fx->FinishSpawning(Pose);
+    AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+    if (!Fx) return;
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")),
         Color, 6.f, Life, 0.f);
 }
@@ -91,8 +113,8 @@ void AOpenWillowShotFx::Flash(UWorld* World, const FVector& Location, const FLin
     if (!World) return;
     const FTransform Pose(FRotator(FMath::FRandRange(0.f, 360.f), FMath::FRandRange(0.f, 360.f), 0.f),
         Location, FVector(Radius / 50.f));
-    auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
-    Fx->FinishSpawning(Pose);
+    AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+    if (!Fx) return;
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")),
         Color, Intensity, Life, LightIntensity);
 }
@@ -123,15 +145,15 @@ void AOpenWillowShotFx::MuzzleFlash(UWorld* World, const FVector& Location, floa
         const FQuat Twist(-ViewForward, FMath::DegreesToRadians(Roll));
         const FTransform Pose(Twist * Facing, Location,
             FVector(Width / 100.f, Height / 100.f, 1.f));
-        auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
-        Fx->FinishSpawning(Pose);
+        AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+        if (!Fx) continue;
         Fx->Setup(Plane, Color, 1.3f, PlumeLife, 0.f, true, 0.f);
         Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     }
     const float CoreSize = Extent * 0.44f;
     const FTransform CorePose(Facing, Location, FVector(CoreSize / 100.f, CoreSize / 100.f, 1.f));
-    auto* Core = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), CorePose);
-    Core->FinishSpawning(CorePose);
+    AOpenWillowShotFx* Core = SpawnBudgeted(World, CorePose);
+    if (!Core) return;
     Core->Setup(Plane, Color, 2.5f, PlumeLife, 90.f, true, 1.f);
     Core->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
 }
@@ -141,8 +163,8 @@ void AOpenWillowShotFx::Spark(UWorld* World, const FVector& Location, const FVec
 {
     if (!World) return;
     const FTransform Pose(FRotator::ZeroRotator, Location, FVector(FMath::Max(0.01f, Radius) / 50.f));
-    auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
-    Fx->FinishSpawning(Pose);
+    AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+    if (!Fx) return;
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")), Color, Intensity, Life, 0.f);
     Fx->bIsCasing = true;   // the casing motion: velocity with gravity
     Fx->CasingVelocity = Velocity;
@@ -193,8 +215,8 @@ void AOpenWillowShotFx::MuzzleFlashLayers(UWorld* World, const FVector& Location
         if (L.bModulate) Strength *= 0.06f;
         if (Strength < 0.02f) continue;
         const FLinearColor Tint = L.bSmoke ? FLinearColor(0.6f, 0.58f, 0.55f) : L.Color / FMath::Max(Peak, 1e-3f);
-        auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
-        Fx->FinishSpawning(Pose);
+        AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+        if (!Fx) continue;
         Fx->Setup(Plane, Tint, Strength, Life, 0.f, true, L.bSmoke ? 0.f : 0.3f);  // a softer white core (critic round 2: too pale)
         Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     }
@@ -208,8 +230,8 @@ void AOpenWillowShotFx::Casing(UWorld* World, const FVector& Location, const FVe
         FMath::Max(0.001f, 0.012f * Scale));
     // UNVERIFIED host stand-ins: short cylinder, orientation, subdued brass tint, intensity and lifetime.
     const FTransform Pose(FRotator(90.f, 0.f, 0.f), Location, SafeScale);
-    auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
-    Fx->FinishSpawning(Pose);
+    AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+    if (!Fx) return;
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")),
         FLinearColor(0.72f, 0.34f, 0.055f, 1.f), 0.55f, FMath::Max(0.05f, Life), 0.f);
     Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
