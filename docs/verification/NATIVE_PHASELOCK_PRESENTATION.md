@@ -156,6 +156,10 @@ press, attached at the arms socket with the offsets above; no parameter to set.
 
 ## 5. UNVERIFIED and how to confirm
 
+The probe that settles most rows in one session is `tools/real_game/phaselock_integrity_capture.ps1` (clip names and
+weights per frame, emitter instance parameters, hand-orb event time, collision flags, lock vs. down). It has not completed a
+run yet (2026-11-03: the first session was lost, and the second PC has no bl-sdk; PHASELOCK_STOCK_DATA.md round 21).
+
 | Statement | What would confirm it |
 |---|---|
 | Lift clip starts at the cast with 0.4 s blend-in; loop follows (partly observed 2026-10-21: the base idle's weight falls to 0 over about 0.4 s after the cast; the clip names were not readable) | Original game, SDK trace (`tools/real_game/`) of the target's current special move and clip name over time after a cast |

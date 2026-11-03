@@ -1237,3 +1237,25 @@ lower edge against the game's rounded shell that hides the target), the bullymon
 brown; no material graph or shader identity found), the rim (smooth against the game's irregular cyan edge) and the palm
 orb (pale and flat against saturated cobalt with strands). The eye motif low in the game's view is the HUD's action-skill
 indicator, not an effect.
+
+## Round 21 (2026-11-03): machine move, target regenerated, targeting-range test; live work blocked
+
+AI-assisted (Claude). Work resumed on the maintainer's second PC after the move. No presentation change was made.
+
+* **Target and capture pipeline on the new PC.** `tools/import_phaselock_target.ps1` regenerated the bullymong (identity,
+  4 UModel jobs with 0 failed, mesh, the six clips, zone material) after `local/census` was copied from the main checkout.
+  `tools/run_phaselock_shots.ps1` with the Round 20 switches wrote all 24 hit and 4 miss frames (ignored `local/phaselock/r21/`).
+  By eye they show the Round 20 state: held pose folded with the limbs high, icy white-lilac target, smooth violet rim.
+  No critic score: the matched real-game frames (`local/realgame/phaselock/matched_650/`) and the earlier host rounds
+  (`local/laneB/`) exist only on the first PC, and this PC has no private store configured.
+* **Live §5 confirmations blocked.** `tools/real_game/phaselock_integrity_capture.ps1` needs bl-sdk (pyunrealsdk), which is
+  not installed in this PC's game (`sdk_mods` and `Binaries/Win32/Plugins` are missing); the Maya save `Save0008` is
+  present. Its hub-lock default no longer names the first PC's user folder (it now uses the main checkout's `local/`).
+  NATIVE_PHASELOCK_PRESENTATION.md section 5 therefore stays as it was.
+* **Targeting range check.** The auto-aim arithmetic moved unchanged from `AOpenWillowWalker::ScorePhaselockTarget` to
+  `FOpenWillowPhaselockData::ScoreAim`, so the synthetic automation test `OpenWillow.Phaselock` (invented numbers) can
+  check it: in-range scoring and its order by depth, rejection beyond `MaxTargetDistance` and below `MinTargetDistance`, the
+  log2 magnetism radius and the target's own radius, plus the cast gate (reload allowed; holstered, down or in a vehicle
+  refused; down ends a held lock), the timeline, the PostAdd duration and the diminishing returns. It pins the host's
+  reading only: the rules stay **UNVERIFIED** in game. The other gameplay rules keep their quest-suite checks
+  (`phaselock_*` in `OpenWillowQuest.cpp`).

@@ -186,6 +186,21 @@ bool FOpenWillowPhaselockData::EvaluatorHolds(const FString& Class, const FOpenW
     return true;
 }
 
+FOpenWillowPhaselockAim FOpenWillowPhaselockData::ScoreAim(float Depth, float X, float Y, float AutoAimRadius, float TanHalfFov) const
+{
+    FOpenWillowPhaselockAim R;
+    R.ScreenOffset = FMath::Sqrt(X * X + Y * Y);
+    R.TargetRadius = AutoAimRadius * RadiusMultiplier / (Depth * TanHalfFov);
+    // Magnetism radius on a log2 scale of the depth past DistanceOffset; never narrower than the target itself.
+    const float LogMax = FMath::Log2(TargetMaxDistance);
+    const float Reach = 1.f + LogMax - FMath::Log2(FMath::Max(1.f, Depth - DistanceOffset));
+    R.MagnetRadius = FMath::Max(MaxSnapAngle * FMath::Max(0.f, Reach) / LogMax, R.TargetRadius);
+    if (R.MagnetRadius <= 0.f || R.ScreenOffset > R.MagnetRadius) { R.Rejected = TEXT("outside the magnetism radius"); return R; }
+    if (Depth < TargetMinDistance || Depth > TargetMaxDistance) { R.Rejected = TEXT("outside the distance range"); return R; }
+    R.Score = 0.5f * ((2.f - Depth / TargetMaxDistance) - R.ScreenOffset / R.MagnetRadius);
+    return R;
+}
+
 bool FOpenWillowPhaselockData::GateOpen(const FOpenWillowPhaselockGateState& State, bool bActivation, FString& OutFailed) const
 {
     for (const FConstraint& C : Constraints)

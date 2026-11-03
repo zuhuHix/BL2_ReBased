@@ -1566,15 +1566,11 @@ AOpenWillowWalker::FPhaselockAimScore AOpenWillowWalker::ScorePhaselockTarget(co
     const float TanHalfVertical = TanHalfFov * 0.75f;
     const float X = float(FVector::DotProduct(Delta, Axes.GetUnitAxis(EAxis::Y))) / R.Depth / TanHalfVertical;
     const float Y = float(FVector::DotProduct(Delta, Axes.GetUnitAxis(EAxis::Z))) / R.Depth / TanHalfVertical;
-    R.ScreenOffset = FMath::Sqrt(X * X + Y * Y);
-    R.TargetRadius = Target->AutoAimRadius() * Phaselock.RadiusMultiplier / (R.Depth * TanHalfFov);
-    // Magnetism radius on a log2 scale of the depth past DistanceOffset; never narrower than the target itself.
-    const float LogMax = FMath::Log2(Phaselock.TargetMaxDistance);
-    const float Reach = 1.f + LogMax - FMath::Log2(FMath::Max(1.f, R.Depth - Phaselock.DistanceOffset));
-    R.MagnetRadius = FMath::Max(Phaselock.MaxSnapAngle * FMath::Max(0.f, Reach) / LogMax, R.TargetRadius);
-    if (R.MagnetRadius <= 0.f || R.ScreenOffset > R.MagnetRadius) { R.Rejected = TEXT("outside the magnetism radius"); return R; }
-    const float Score = 0.5f * ((2.f - R.Depth / Phaselock.TargetMaxDistance) - R.ScreenOffset / R.MagnetRadius);
-    if (R.Depth < Phaselock.TargetMinDistance || R.Depth > Phaselock.TargetMaxDistance) { R.Rejected = TEXT("outside the distance range"); return R; }
+    const FOpenWillowPhaselockAim Aim = Phaselock.ScoreAim(R.Depth, X, Y, Target->AutoAimRadius(), TanHalfFov);
+    R.ScreenOffset = Aim.ScreenOffset;
+    R.TargetRadius = Aim.TargetRadius;
+    R.MagnetRadius = Aim.MagnetRadius;
+    if (!Aim.Rejected.IsEmpty()) { R.Rejected = Aim.Rejected; return R; }
     // Line of sight to the aim point: clear, the target itself, or something hard-attached to it.
     FHitResult Hit;
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPhaselockSight), true, this);
@@ -1588,7 +1584,7 @@ AOpenWillowWalker::FPhaselockAimScore AOpenWillowWalker::ScorePhaselockTarget(co
             return R;
         }
     }
-    R.Score = Score;
+    R.Score = Aim.Score;
     return R;
 }
 AOpenWillowCombatTarget* AOpenWillowWalker::PreferredPhaselockTarget(FString* OutLog) const
