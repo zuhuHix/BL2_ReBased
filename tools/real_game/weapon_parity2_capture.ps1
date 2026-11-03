@@ -6,7 +6,8 @@
 # local/realgame/wp2/. Locks: the shared hub lock and the run lock; saves are backed up, saving is blocked in game, and
 # afterwards the save folder is compared with the backup (changed files are restored from it). Stops only the game it started.
 param(
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    # Machine-wide hub lock: OPENWILLOW_HUB_LOCK, else local\hub-ue.lock in the main checkout (resolved below).
+    [string]$HubLock = $env:OPENWILLOW_HUB_LOCK,
     [string]$Lane = 'weapons-rg',
     [string]$Character = 'Save0008.sav',
     [string[]]$Guns = @('slice_pistol', 'slice_smg', 'slice_assault_rifle', 'slice_shotgun', 'slice_mission_pistol_fire',
@@ -16,6 +17,12 @@ param(
     [switch]$SkipVisuals
 )
 $ErrorActionPreference = 'Stop'
+if (!$HubLock) {
+    # The main checkout (the parent of git's common dir), so every worktree of this repository finds the same lock file.
+    $common = git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir 2>$null
+    $main = if ($LASTEXITCODE -eq 0 -and $common) { Split-Path -Parent $common.Trim() } else { Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
+    $HubLock = Join-Path $main 'local\hub-ue.lock'
+}
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $Out = Join-Path $script:RG 'wp2'
@@ -45,7 +52,7 @@ $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; 
 # stopping a PID; unknown switches are ignored by the game), the driver folder's owner file and the backup folder name.
 $runId = "$Lane-$PID-$((Get-Date).ToString('yyyyMMddHHmmssfff'))"
 $marker = "-owrun=$runId"
-# The driver folder is this run's only while its owner file holds $runId (created with CreateNew, so of two runs racing
+# The driver folder is this run's only while its owner file holds $runId (New-Item without -Force refuses an existing file, so of two runs racing
 # for the folder only one can own it); the cleanup removes no other folder.
 $ownerFile = Join-Path $script:DriverDir '.owrun'
 function Test-DriverOwned { try { (Test-Path -LiteralPath $ownerFile) -and ([IO.File]::ReadAllText($ownerFile) -eq $runId) } catch { $false } }
@@ -85,11 +92,10 @@ try {
     }
     $rootState | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $bak 'backup_complete.json')
     "backup $bak ($(@($rootState.Keys | Where-Object { $rootState[$_].verified }).Count) roots verified)"
-    # Claim the driver folder: it must not exist (New-Item without -Force fails then), and the owner file is created with
-    # CreateNew. Install-Driver then fills the folder this run owns (not -Exclusive: the folder exists by now).
+    # Claim the driver folder: it must not exist (New-Item without -Force fails then), nor may its owner file (same rule, as
+    # for the hub lock). Install-Driver then fills the folder this run owns (not -Exclusive: the folder exists by now).
     New-Item -ItemType Directory -Path $script:DriverDir -ErrorAction Stop | Out-Null
-    $stream = [IO.File]::Open($ownerFile, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-    try { $bytes = [Text.Encoding]::UTF8.GetBytes($runId); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    New-Item -ItemType File -Path $ownerFile -Value $runId -ErrorAction Stop | Out-Null
     Install-Driver
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
