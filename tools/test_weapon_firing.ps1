@@ -13,7 +13,7 @@ param(
 # is then reloaded with 5 rounds left (the throw and the refill are checked). The host logs
 # one OWFIRING result line per gun; tools/check_weapon_firing.py grades them (PASS/FAIL table, exit code).
 # Builds the module first (Build.bat, like tools/run_ue_level.ps1; -SkipBuild reuses the binary). Owns one editor at a time
-# and the shared lock local/ue_run.lock: it waits while another UnrealEditor or the lock exists and never touches them.
+# and the machine-wide UE run lock (tools/ue_lock.ps1): it waits while another UnrealEditor or the lock exists and never touches them.
 # Host behaviour only: the firing rules are UNVERIFIED in game. Log: local/firing/run-<stamp>.log.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -22,7 +22,7 @@ $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $checker = Join-Path $repo 'tools/check_weapon_firing.py'
 # The host's recipe folders in load order: -owitems first, then -owitemdir (the first recipe with a given id wins).
 $itemDirs = @((Join-Path $repo 'local/items'), (Join-Path $repo 'local/items/slice'), (Join-Path $repo 'local/items/firing/coverage'))
@@ -45,7 +45,7 @@ while (!$stream) {
         try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
     }
     if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
         Start-Sleep -Seconds 5
     }
 }

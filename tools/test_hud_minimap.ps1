@@ -1,7 +1,7 @@
 param(
     [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
     [string]$Game = $env:OPENWILLOW_BL2,
-    # Optional machine-wide lock shared by several checkouts (taken before local/ue_run.lock, released after).
+    # Optional machine-wide lock shared by several checkouts (taken before the UE run lock (tools/ue_lock.ps1), released after).
     [string]$SharedLock,
     [int]$Port = 8794,
     [int]$TimeoutSeconds = 240,
@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $manifest = Join-Path $repo 'local/slice/minimap.json'
 foreach ($file in @($manifest, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf'),

@@ -11,13 +11,13 @@ param(
     [int]$WaitForEditorSeconds = 1800
 )
 # AI-assisted. Imports Phaselock's effect textures and meshes and builds host materials with
-# host/ue5/import_phaselock_fx.py (recreates /Game/OpenWillow/Phaselock only). Holds local/ue_run.lock for the editor
+# host/ue5/import_phaselock_fx.py (recreates /Game/OpenWillow/Phaselock only). Holds the UE run lock (tools/ue_lock.ps1) for the editor
 # launch and stops if another Unreal editor runs (never touches it). Report: local/phaselock/fx_import.json.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logs = Join-Path $repo 'local/phaselock/logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
@@ -42,7 +42,7 @@ while (!$stream) {
         try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
     }
     if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
         Start-Sleep -Seconds 5
     }
 }

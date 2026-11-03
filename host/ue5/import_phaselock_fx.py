@@ -1,6 +1,6 @@
 """Import Phaselock's effect textures and meshes from local UModel output and build host materials (editor Python).
 
-AI-assisted (Claude). Run through tools/import_phaselock_fx.ps1 (it holds local/ue_run.lock). Inputs, all under the
+AI-assisted (Claude). Run through tools/import_phaselock_fx.ps1 (it holds the UE run lock (tools/ue_lock.ps1)). Inputs, all under the
 ignored local/ tree:
   OPENWILLOW_PHASELOCK_UMODEL   ';'-separated UModel export roots (PNG textures, .mat slot lists, glTF meshes)
   OPENWILLOW_PHASELOCK_EMITTERS research/particle_system.py output (one JSON per template: emitters, materials)

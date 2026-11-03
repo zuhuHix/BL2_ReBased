@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $script:Repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $script:RG = Join-Path $script:Repo 'local/realgame'
 $script:CmdDir = Join-Path $script:RG 'cmd'
-$script:Lock = Join-Path $script:Repo 'local/ue_run.lock'
+$script:Lock = & (Join-Path $PSScriptRoot '../ue_lock.ps1')
 $script:Game = $env:OPENWILLOW_BL2
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 
@@ -38,7 +38,7 @@ function Enter-RunLock([int]$WaitSeconds = 600) {
         if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
             try { $stream = [IO.File]::Open($script:Lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read) } catch { $stream = $null }
         }
-        if (!$stream) { if ((Get-Date) -gt $deadline) { throw 'UnrealEditor or local/ue_run.lock still present' }; Start-Sleep 5 }
+        if (!$stream) { if ((Get-Date) -gt $deadline) { throw 'UnrealEditor or the UE run lock (tools/ue_lock.ps1) still present' }; Start-Sleep 5 }
     }
     $bytes = [Text.Encoding]::UTF8.GetBytes("realgame $((Get-Date).ToString('o'))")
     $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()

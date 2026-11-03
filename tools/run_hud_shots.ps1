@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $gear = Join-Path $repo 'local/items/slice/slice_manifest.json'
 foreach ($file in @($gear, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf'))) {

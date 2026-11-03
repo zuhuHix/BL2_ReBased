@@ -26,7 +26,7 @@ param(
 #   capture   -game launches of the preview levels, one screenshot each (window capture)
 #   manifest  merge everything into local/slice/ambient/ambient_assets.json
 #
-# Only one editor runs at a time and the shared local/ue_run.lock is held for each editor launch. If an UnrealEditor
+# Only one editor runs at a time and the machine-wide UE run lock (tools/ue_lock.ps1) is held for each editor launch. If an UnrealEditor
 # process that is not ours is running this script stops instead of touching it. It only (re)creates content under
 # /Game/OpenWillow/Characters/Ambient (Marcus, the dummy, Maya and every weapon asset are untouched).
 $ErrorActionPreference = 'Stop'
@@ -36,7 +36,7 @@ if (!$UModel -or !(Test-Path -LiteralPath $UModel)) { throw 'Pass -UModel <umode
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $ambient = Join-Path $repo 'local/slice/ambient'
 $logs = Join-Path $repo 'local/slice/logs'
 $tool = Join-Path $PSScriptRoot 'ambient_npc_assets.py'
@@ -59,7 +59,7 @@ function Use-EditorLock([scriptblock]$Body) {
             try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
         }
         if (!$stream) {
-            if ((Get-Date) -gt $deadline) { throw 'Another editor/game or local/ue_run.lock is still present; leaving it untouched.' }
+            if ((Get-Date) -gt $deadline) { throw 'Another editor/game or the UE run lock (tools/ue_lock.ps1) is still present; leaving it untouched.' }
             Start-Sleep -Seconds 10
         }
     }

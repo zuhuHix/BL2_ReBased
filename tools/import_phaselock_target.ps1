@@ -15,13 +15,13 @@ param(
 # (tools/slice_npc_editor.py) with this tool's own job file. Game-derived data stays under local/ and the ignored
 # Content folder; nothing is added to Git. The host uses it with -owcombattest -owcombatpawn=Bullymong.
 #
-# The editor runs under the worktree's local/ue_run.lock (as tools/seed_slice_npc_assets.ps1 does). On a machine where
+# The editor runs under the machine-wide UE run lock (tools/ue_lock.ps1), as tools/seed_slice_npc_assets.ps1 does. On a machine where
 # several lanes share UE, take the machine-wide lock first; this script does not manage it.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $out = Join-Path $repo 'local/phaselock/target'
 $logs = Join-Path $out 'logs'
 $tool = Join-Path $PSScriptRoot 'prepare_phaselock_target.py'

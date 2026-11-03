@@ -11,7 +11,7 @@ param(
 # local/items/slice (tools/weapon_slice_gear.py): Maya carries the pool-rolled slice guns and Marcus lends the stock
 # mission pistol. Her level defaults to the slice gear level in slice_manifest.json (an UNVERIFIED slice choice, printed
 # at launch) so she can use that gear; -Level N overrides it. Owns the shared
-# local/ue_run.lock while the window is open so the automated suites wait; waits itself while another editor or
+# the UE run lock (tools/ue_lock.ps1) while the window is open so the automated suites wait; waits itself while another editor or
 # the lock exists. -Fresh deletes the hand-play save first; -Seconds N closes the window after N seconds (smoke check). Keys: see docs/verification/SANCTUARY_RPG_MISSION.md.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -28,7 +28,7 @@ $gearLevel = [int](Get-Content -LiteralPath $files.items -Raw | ConvertFrom-Json
 if ($Level -le 0) { $Level = $gearLevel; Write-Output "Maya level $Level = slice gear level (slice_manifest.json; UNVERIFIED slice choice, not a save)" }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $stream = $null
 while (!$stream) {
     if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {

@@ -14,7 +14,7 @@ param(
 # AI-assisted. Imports the weapon part library (each gestalt mesh once, every skin as an instance of one master paint
 # material) into the ignored /Game/OpenWillow/Weapons/Library. Game-derived inputs stay under local/; nothing is added to
 # Git. Waits for the machine-wide hub lock and for any running Unreal editor (never touches it), then holds the worktree's
-# local/ue_run.lock while the commandlet runs. Prints the importer's OW_LIBRARY lines; the full report is
+# the UE run lock (tools/ue_lock.ps1) while the commandlet runs. Prints the importer's OW_LIBRARY lines; the full report is
 # <Library>/import_report.json.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -22,7 +22,7 @@ if (-not $Library) { $Library = Join-Path $repo 'local/weapon_library' }
 $Library = (Resolve-Path $Library).Path
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logs = Join-Path $Library 'logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 

@@ -237,5 +237,5 @@ there; a newer default toolset made the UE module fail to link against `ow-core.
 - Keep guesses labelled `UNVERIFIED` in code and docs; never copy game data, item names or stats
   from a player's save into the repository.
 - Only one UE editor at a time per machine: `tools/test_inventory_actions.ps1` holds
-  `local/ue_run.lock`. The page loads `tools/hud_overlay/*.js` from disk at start, so do not edit
+  the machine-wide UE run lock (`tools/ue_lock.ps1`). The page loads `tools/hud_overlay/*.js` from disk at start, so do not edit
   them while a run is in progress.

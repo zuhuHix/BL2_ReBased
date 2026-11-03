@@ -16,7 +16,7 @@ param(
 # AI-assisted. One windowed host run in Sanctuary that equips each recipe and captures OWGun_<id>_idle.png (first person) and
 # OWGun_<id>_side.png (inventory preview capture), plus the assembly's per-gun log lines (OpenWillow weapon assembly ...), which
 # tools/weapon_assembly_oracle.py compares with the game's triangle counts. Frames and the log go to -Out (ignored local/).
-# Waits for the machine-wide hub lock and for any running Unreal editor (never touches it); holds local/ue_run.lock.
+# Waits for the machine-wide hub lock and for any running Unreal editor (never touches it); holds the UE run lock (tools/ue_lock.ps1).
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $Items = (Resolve-Path $Items).Path
@@ -28,7 +28,7 @@ if (-not $Ids.Count) {
 $outDir = Join-Path $repo $Out
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $log = Join-Path $outDir 'run.log'
 $hub = $null
 try {

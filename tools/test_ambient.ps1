@@ -11,7 +11,7 @@ param(
     [int]$WaitForEditorSeconds = 1800
 )
 # Sanctuary ambient NPCs in the host (docs/verification/SANCTUARY_AMBIENT_NPCS.md). One editor launch of the walking
-# map with -owambient=<manifest>; waits for the shared local/ue_run.lock like tools/test_quest.ps1 and never touches an
+# map with -owambient=<manifest>; waits for the machine-wide UE run lock (tools/ue_lock.ps1) like tools/test_quest.ps1 and never touches an
 # editor it did not start. Self-test: prints "OWAMBIENT SUMMARY ..." after -Seconds. Capture: screenshots are copied to
 # local/ambient/<Tag>/. Host behaviour only; original-game parity is UNVERIFIED.
 $ErrorActionPreference = 'Stop'
@@ -20,7 +20,7 @@ if (!$Ambient) { $Ambient = Join-Path $repo 'local/slice/ambient_world.json' }
 if (!(Test-Path -LiteralPath $Ambient)) { throw "Missing $Ambient (tools/prepare_ambient_world.py)" }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shotDir = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $out = Join-Path $repo "local/ambient/$Tag"
 New-Item -ItemType Directory -Force $out | Out-Null
@@ -31,7 +31,7 @@ while (!$stream) {
         try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
     }
     if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another editor/game or local/ue_run.lock is still present; leave it untouched.' }
+        if ((Get-Date) -gt $deadline) { throw 'Another editor/game or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
         Start-Sleep -Seconds 5
     }
 }

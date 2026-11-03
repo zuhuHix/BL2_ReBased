@@ -10,7 +10,7 @@ param(
 # Host frames for the real-game firing references (local/realgame/firing/r3/frames): one trigger pull per gun in Sanctuary_P
 # (-owfiringshots), a flat wall 465.9 uu ahead, pitch 0, yaw 90, FOV 77.55, frames 02-24 at ~46 ms (shot = frame 04).
 # Builds the module first (Build.bat, like tools/test_weapon_firing.ps1; -SkipBuild reuses the binary). Owns one editor at a time
-# and the shared lock local/ue_run.lock: it waits while another UnrealEditor or the lock exists and never touches them.
+# and the machine-wide UE run lock (tools/ue_lock.ps1): it waits while another UnrealEditor or the lock exists and never touches them.
 # Output: local/firing/frames/host/<gun>_NN.png (copied from the editor's Saved/Screenshots, only files this run wrote), the run
 # log local/firing/frames/run-<stamp>.log. Then run tools/firing_contact_sheet.py to build the sheets.
 $ErrorActionPreference = 'Stop'
@@ -20,7 +20,7 @@ $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $outDir = Join-Path $repo 'local/firing/frames/host'
 # The host's recipe folders in load order: -owitems first, then -owitemdir (the first recipe with a given id wins).
@@ -35,7 +35,7 @@ while (!$stream) {
         try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
     }
     if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
         Start-Sleep -Seconds 5
     }
 }
