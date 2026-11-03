@@ -502,7 +502,7 @@ ring *= lerp(float3(0.9, 0.35, 1.0), float3(0.55, 0.9, 1.4), ringBright);
 float ringLuma = dot(ring, float3(0.3, 0.55, 0.15));
 ring += float3(0.6, 0.8, 1.0) * ringLuma * ringLuma;
 float softFade = saturate((SD - PD) / 41.0);
-return float4(min(4.0, Col.a * ring) * softFade, 1.0);
+return float4(min(1.0, Col.a * ring) * softFade, 1.0);
 """, dyn=True)
 
 # Mat_EnemyOrbCoreColor (additive): the haze between the dark core and the rim. Colour: the core-colour texture times the
@@ -523,7 +523,7 @@ float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
 float weight = core.r * Col.a * mask * dot(centred, centred);
 float3 colour = Col.rgb * core.rgb;
 float softFade = saturate((SD - PD) / 41.0);
-return float4(min(4.0, colour) * weight * softFade, 1.0);
+return float4(min(1.0, colour) * weight * softFade, 1.0);
 """)
 
 # Mat_SirenOrbEnergySpikes (translucent): the blue streaks around the bubble. A horizontally scrolling smoke read (0.25 per
@@ -545,7 +545,7 @@ float2 shortUv = float2((uv.x - 0.5) * 1.15 + 0.5, (uv.y - 0.5) * 0.55 + 0.5);
 float inside = (shortUv.x >= 0.0 && shortUv.x <= 1.0) ? 1.0 : 0.0;
 float3 spikeShort = Texture2DSample(T1, T1Sampler, shortUv + smoke * 0.05).rgb;
 alpha = saturate(spikeShort.r * (1.0 - 3.0 * cut)) * Col.a * saturate((SD - PD) / 51.0) * inside * 1.0;
-return float4(min(4.0, Col.rgb * spikeShort), alpha);
+return float4(min(1.0, Col.rgb * spikeShort), alpha);
 """)
 
 # Mat_SirenOrbEnergySpikesMOD (modulate): darkens the scene by (fade x particle colour x spike) per channel, a dark streak
@@ -603,7 +603,7 @@ float3 twirl = saturate(Texture2DSample(T1, T1Sampler, uv + float2(bendX, bendY)
 // x0.5 and the shader's own colour (x1), which left black cracks; round 14 draws them at alpha x0.6 and colour x5, soft purple clouds. A
 // first round 14 try at the shader's own alpha (x1, colour x1) was hard black cracks too.
 float alpha = 0.6 * saturate(4.0 * twirl.r * twirl.r) * Col.a;
-return float4(min(4.0, 5.0 * (sqrt(twirl) - twirl) * Col.rgb * float3(0.6, 0.0, 0.8)), alpha);
+return float4(min(1.0, 5.0 * (sqrt(twirl) - twirl) * Col.rgb * float3(0.6, 0.0, 0.8)), alpha);
 """, subuv=True)
 
 # --- hand and release materials ---------------------------------------------------------------------------------------
@@ -615,7 +615,7 @@ exact('Mat_SirenEnergyRibbons', 'add', ['EnergyRibbon_Dif_Tex'], r"""
 float2 uv = UV;
 float b = Texture2DSample(T0, T0Sampler, float2(2.0 * uv.x - Dyn, uv.y)).b;
 float amount = saturate(uv.x - 0.05) * b * (b * Col.a);
-return float4(min(4.0, amount * Col.rgb), 1.0);
+return float4(min(1.0, amount * Col.rgb), 1.0);
 """, dyn=True)
 
 # Mat_SirenEnergySwirl (translucent): the vortex arcs. Colour = the texture's blue channel x particle colour; alpha = the
@@ -624,23 +624,23 @@ return float4(min(4.0, amount * Col.rgb), 1.0);
 # vortex where the game's is thin, translucent blue ribbons.
 exact('Mat_SirenEnergySwirl', 'trans', ['EnergySwirl_Dif_Tex'], r"""
 float4 t = Texture2DSample(T0, T0Sampler, UV);
-return float4(min(4.0, t.b * Col.rgb * float3(0.25, 0.75, 1.3)), 0.8 * max(0.0, t.a * Col.a));
+return float4(min(1.0, t.b * Col.rgb * float3(0.25, 0.75, 1.3)), 0.8 * max(0.0, t.a * Col.a));
 """)
 
 # Mat_SirenHandGlow (translucent): a soft glow. A mirrored soft mask read at twice the UV is both the colour weight and the
 # alpha weight; soft fade over 21 units.
 exact('Mat_SirenHandGlow', 'trans', ['EnergyOrbSoftMod_Dif_Mirror'], r"""
 float g = Texture2DSample(T0, T0Sampler, 2.0 * UV).r;
-return float4(min(4.0, g * Col.rgb), g * Col.a * saturate((SD - PD) / 21.0));
+return float4(min(1.0, g * Col.rgb), g * Col.a * saturate((SD - PD) / 21.0));
 """)
 
 # Mat_SirenHandGlowShattered (translucent): the star-burst. The star texture (RGBA) times the particle colour; alpha = the
 # texture's alpha x particle alpha x soft fade over 21 units.
-# Host calibration (UNVERIFIED): alpha x0.2 (0.4 in round 7), because in the host the long rays swamp the hand at 0.55-0.75 s while the game
-# keeps a visible palm orb with a few thin white lines.
+# Round 22: the alpha is the stock one again (rounds 7 to 21 scaled it to 0.4 and then 0.2, about 3 % of stock together with the
+# emitter gain, which removed the facets the game shows at 0.50 s); the C++ emitter gain holds the remaining fit (UNVERIFIED).
 exact('Mat_SirenHandGlowShattered', 'trans', ['EnergyShatter_Dif_Tex'], r"""
 float4 t = Texture2DSample(T0, T0Sampler, UV);
-return float4(min(4.0, Col.rgb * t.rgb), 0.2 * t.a * Col.a * saturate((SD - PD) / 21.0));
+return float4(min(1.0, Col.rgb * t.rgb), t.a * Col.a * saturate((SD - PD) / 21.0));
 """)
 
 # Mat_SirenHandInnerOrb (translucent): the blue palm orb. Four reads of a nebula texture in two rotating frames (0.18 rad/s
@@ -669,7 +669,7 @@ float k = base + mixWeight * (m1 - base);
 // layers may dominate it, but their contribution is unresolved. Retain the prior fit instead of stacking on another guess.
 float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;
 float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9 * float3(0.55, 0.70, 1.0);
-return float4(min(4.0, lerp(blue, orb, k)), saturate(k) * Col.a);
+return float4(min(1.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
 
 # Mat_SirenHandPowerDiffuse (translucent): the smoke after the orb leaves. Colour is just the particle colour. Alpha = 35 x
@@ -681,7 +681,7 @@ float nebula = Texture2DSample(T0, T0Sampler, uv + float2(0.0, frac(0.2 * t))).r
 float smoke = Texture2DSample(T1, T1Sampler, uv + float2(frac(0.15 * t), frac(0.2 * t))).r;
 float mask = Texture2DSample(T2, T2Sampler, uv).r;
 float blend = 1.0 - (1.0 - 0.1 * smoke) * (1.0 - mask);
-return float4(min(4.0, Col.rgb), nebula * blend * blend * Col.a * saturate((SD - PD) / 16.0));
+return float4(min(1.0, Col.rgb), nebula * blend * blend * Col.a * saturate((SD - PD) / 16.0));
 """)
 
 # Mati_Wispy_Smoke_Cloud_SubUV (translucent, sub-image sprites; parent Mat_Wispy_Smoke): the sub-image alpha is both the
@@ -689,7 +689,7 @@ return float4(min(4.0, Col.rgb), nebula * blend * blend * Col.a * saturate((SD -
 # sub-images by the particle's frame fraction; the host shows one.
 exact('Mati_Wispy_Smoke_Cloud_SubUV', 'trans', ['Tex_Wispy_Smoke_SubUV'], r"""
 float a = Texture2DSample(T0, T0Sampler, UV).a;
-return float4(min(4.0, a * Col.rgb), saturate(a * Col.a) * saturate((SD - PD) / 19.0));
+return float4(min(1.0, a * Col.rgb), saturate(a * Col.a) * saturate((SD - PD) / 19.0));
 """, subuv=True)
 
 # Mat_SirenGlowMOD (modulate, overbright): the scene is multiplied by 1 + min(3, soft fade over 16 x particle alpha x a

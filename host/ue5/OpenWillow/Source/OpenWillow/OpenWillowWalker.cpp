@@ -507,6 +507,17 @@ void AOpenWillowWalker::BeginPlay()
     bViewFovForced = FParse::Value(FCommandLine::Get(), TEXT("owfpfov="), ForegroundFov);
     ViewFovDefault = ForegroundFov;
     bViewModelActive = ForegroundFov > 1.f;
+    // -owtonecurve=<0..1>: the camera's tone-curve amount, for a capture A/B (Phaselock round 22: whether the remaining colour gap of
+    // the effects is UE5's film curve rather than per-material fits). Not set: the project's default.
+    float ToneCurve = 1.f;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owtonecurve="), ToneCurve))
+    {
+        Camera->PostProcessSettings.bOverride_ToneCurveAmount = true;
+        Camera->PostProcessSettings.ToneCurveAmount = FMath::Clamp(ToneCurve, 0.f, 1.f);
+        Camera->PostProcessSettings.bOverride_ExpandGamut = true;      // the engine: both at 0 turn the tone curve fully off
+        Camera->PostProcessSettings.ExpandGamut = FMath::Clamp(ToneCurve, 0.f, 1.f);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow tone curve amount %.2f (-owtonecurve)"), Camera->PostProcessSettings.ToneCurveAmount);
+    }
     if (ForegroundFov > 1.f)
     {
         Camera->SetEnableFirstPersonFieldOfView(true);

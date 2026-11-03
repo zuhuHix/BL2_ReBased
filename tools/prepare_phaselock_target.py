@@ -43,7 +43,11 @@ TOOL = 'tools/prepare_phaselock_target.py'
 TARGETS = {
     'Bullymong': {
         'package': 'Ice_Dynamic',   # Three Horns Divide, where the real-game captures were taken; has the pawn and its AnimSet
-        'pawn': 'GD_PrimalBeast.Character.Pawn_PrimalBeast',
+        # The "Adult Bullymong" of the real-game frames: its balance (PawnBalance_PrimalBeastAdult) names this archetype, whose
+        # component material is the tan/brown/rust Mati_BullymongAdult with no scale override (1.0, as the live read) and a
+        # 150 x 90 cylinder (as observed). The plain Pawn_PrimalBeast used before carries the near-white Mati_Bullymong
+        # (the host's icy white-lilac target) and the 100-unit cylinder and 0.7 scale that conflicted with the live reads.
+        'pawn': 'GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult',
         'dest': '/Game/OpenWillow/Characters/PhaselockTarget/Bullymong',
         'roles': [('Idle', 'Idle_var1'), ('Death', 'Death_Fire_var1'),
                   ('PhaseLock_Lift', 'PhaseLock_Lift'), ('PhaseLock_Loop', 'PhaseLock_Loop'),
