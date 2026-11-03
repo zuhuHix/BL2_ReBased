@@ -22,7 +22,7 @@ struct FLook
     FVector KeyDir = FVector(-0.45, 0.55, -0.70), FillDir = FVector(0.70, -0.20, -0.40);
 };
 FLook Current();
-// The look of the inventory preview capture (Inspect, thumbnails): Current() unless -owinspectlook=<D>,<A>,<K>,<F>,<E> sets its
+// The look of the inventory preview capture (Inspect, thumbnails): Current() with the fitted Inspect light (ambient 3.2, key 0.7, fill 0.3) unless -owinspectlook=<D>,<A>,<K>,<F>,<E> sets its
 // own values (calibration against the real Inspect frames; docs/verification/WEAPON_VISUALS.md section 19).
 FLook CurrentInspect();
 // Gives every material slot of Mesh a dynamic instance carrying the current look. Slots whose material has none of the
