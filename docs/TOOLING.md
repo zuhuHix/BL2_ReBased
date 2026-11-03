@@ -1346,6 +1346,15 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   recipes: each recipe's weapon-type `PlayerViewOffset` and `FirstPersonMeshFOV`. The walker places the arms and sets the
   foreground FOV from it when a gun is selected; rerun it when a recipe folder changes (a recipe without an entry gets
   no offset and 45).
+  Since 2026-11-03 it also writes `muzzle_flash_fx` (per element, the type's muzzle-flash particle emitters: axis lock,
+  size, offset, life, colour) and `shell_casing_fx` (the casing particle's life, start velocity and acceleration), read
+  from the cooked particle systems by `tools/weapon_muzzle_fx.py` (`--system <ParticleSystem>` / `--collection <path>`
+  print one as JSON; the lookup-table layout is fitted, see WEAPON_VISUALS.md section 18). `-owflashfill=<f>` sets the
+  host's flash-quad fill (default 0.5).
+- `pwsh tools/real_game/weapon_parity2_capture.ps1` (real game, hub lock, saves backed up and compared): the world FOV
+  through the HUD canvas, the flash/casing particle systems and impact-explosion hooks per gun, an equal-level status
+  series and hip/ADS/reload frames of the slice guns (`scripts/weapon_parity2_probe.py`). Written 2026-11-03; it has not
+  run to completion yet (the game stopped at a Steam message box).
 
 Weapon part library (2026-10-23, `docs/verification/WEAPON_PART_ASSETS.md`): every gestalt mesh once and every skin as a
 material instance, guns assembled from their parts at run time (`OpenWillowWeaponAssembly`).

@@ -100,6 +100,8 @@ public:
     FVector LastHitVelocityChange() const { return LastVelocityChange; }
     FVector Displacement() const { return GetActorLocation() - KnockOrigin; }  // since the last ResetKnock
     void ResetKnock() { Knock = FVector::ZeroVector; KnockOrigin = GetActorLocation(); }
+    // Test fixture: a living dummy back to full health (the firing test refills it per segment).
+    void RestoreHealth() { if (!bDead) Health = MaxHealth; }
     class USkeletalMeshComponent* GetStockMesh() const { return StockMesh; }
     TArray<FOpenWillowDamagePopup> Popups;
 private:

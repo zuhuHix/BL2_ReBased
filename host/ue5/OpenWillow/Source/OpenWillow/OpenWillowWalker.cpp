@@ -496,6 +496,8 @@ void AOpenWillowWalker::BeginPlay()
     // behaviour; the match against the frames is the evidence.
     // -owfpfov=<horizontal degrees> forces one value for every weapon, -owfpfov=0 restores the old world-FOV view.
     float ForegroundFov = 45.f;
+    // -owflashfill=<f>: the share of a cooked flash quad the game's sprite texture covers (host fit, default 0.5).
+    FParse::Value(FCommandLine::Get(), TEXT("owflashfill="), FlashTextureFill);
     bViewFovForced = FParse::Value(FCommandLine::Get(), TEXT("owfpfov="), ForegroundFov);
     ViewFovDefault = ForegroundFov;
     bViewModelActive = ForegroundFov > 1.f;
@@ -914,6 +916,83 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
                 Socket.Rotation = FRotator((*Rotation)[0]->AsNumber(), (*Rotation)[1]->AsNumber(), (*Rotation)[2]->AsNumber());
             Socket.bValid = !Socket.Name.IsEmpty() && !Socket.Bone.IsEmpty();
         };
+        // Cooked muzzle-flash emitters and casing motion (tools/weapon_muzzle_fx.py). A [min, max] pair or a number.
+        auto Range = [](const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, float& Min, float& Max)
+        {
+            const TArray<TSharedPtr<FJsonValue>>* Pair = nullptr;
+            double Value = 0.0;
+            if (Object->TryGetArrayField(Field, Pair) && Pair->Num() == 2)
+            {
+                Min = float(FMath::Min((*Pair)[0]->AsNumber(), (*Pair)[1]->AsNumber()));
+                Max = float(FMath::Max((*Pair)[0]->AsNumber(), (*Pair)[1]->AsNumber()));
+            }
+            else if (Object->TryGetNumberField(Field, Value)) Min = Max = float(Value);
+        };
+        const TSharedPtr<FJsonObject>* FlashFx = nullptr;
+        if ((*Entry)->TryGetObjectField(TEXT("muzzle_flash_fx"), FlashFx) && FlashFx && FlashFx->IsValid())
+            for (const auto& ElementPair : (*FlashFx)->Values)
+            {
+                const TSharedPtr<FJsonObject>* System = nullptr;
+                const TArray<TSharedPtr<FJsonValue>>* LayerList = nullptr;
+                if (!ElementPair.Value->TryGetObject(System) || !System || !(*System)->TryGetArrayField(TEXT("layers"), LayerList))
+                    continue;
+                TArray<FOpenWillowFlashLayer>& ElementLayers = Model.FlashLayers.FindOrAdd(FString(ElementPair.Key));
+                for (const TSharedPtr<FJsonValue>& Value : *LayerList)
+                {
+                    const TSharedPtr<FJsonObject>* Row = nullptr;
+                    if (!Value->TryGetObject(Row) || !Row) continue;
+                    FOpenWillowFlashLayer L;
+                    (*Row)->TryGetStringField(TEXT("name"), L.Name);
+                    (*Row)->TryGetStringField(TEXT("axis"), L.Axis);
+                    FString Material;
+                    (*Row)->TryGetStringField(TEXT("material"), Material);
+                    L.bAngleFade = Material.Contains(TEXT("Angle_Fade"));
+                    L.bModulate = Material.Contains(TEXT("Modulate"));
+                    (*Row)->TryGetBoolField(TEXT("smoke"), L.bSmoke);
+                    Range(*Row, TEXT("life"), L.LifeMin, L.LifeMax);
+                    Range(*Row, TEXT("size_x"), L.LengthMin, L.LengthMax);
+                    float WidthMin = 0.f, WidthMax = 0.f;
+                    Range(*Row, TEXT("size_y"), WidthMin, WidthMax);
+                    FString Alignment;
+                    (*Row)->TryGetStringField(TEXT("alignment"), Alignment);
+                    L.Width = Alignment == TEXT("PSA_Rectangle") ? WidthMax : 0.f;
+                    double LayerOffset = 0.0;
+                    if ((*Row)->TryGetNumberField(TEXT("offset_x"), LayerOffset)) L.OffsetX = float(LayerOffset);
+                    Range(*Row, TEXT("alpha"), L.AlphaMin, L.AlphaMax);
+                    const TArray<TSharedPtr<FJsonValue>>* Color = nullptr;
+                    if ((*Row)->TryGetArrayField(TEXT("color"), Color) && Color->Num() == 3)
+                        L.Color = FLinearColor(float((*Color)[0]->AsNumber()), float((*Color)[1]->AsNumber()),
+                            float((*Color)[2]->AsNumber()));
+                    ElementLayers.Add(L);
+                }
+            }
+        const TSharedPtr<FJsonObject>* CasingFx = nullptr;
+        if ((*Entry)->TryGetObjectField(TEXT("shell_casing_fx"), CasingFx) && CasingFx && CasingFx->IsValid())
+        {
+            Model.bCasingFx = true;
+            Range(*CasingFx, TEXT("life"), Model.CasingLifeMin, Model.CasingLifeMax);
+            // Speed: the length of the cooked start-velocity box's low and high corners (its direction in the socket's frame
+            // is not used: the socket rotation is not decoded). Gravity: the acceleration's Z range.
+            auto Corner = [](const TSharedPtr<FJsonObject>& Object, const TCHAR* Field) -> FVector
+            {
+                const TArray<TSharedPtr<FJsonValue>>* V = nullptr;
+                return Object->TryGetArrayField(Field, V) && V->Num() == 3
+                    ? FVector((*V)[0]->AsNumber(), (*V)[1]->AsNumber(), (*V)[2]->AsNumber()) : FVector::ZeroVector;
+            };
+            const TSharedPtr<FJsonObject>* Velocity = nullptr;
+            if ((*CasingFx)->TryGetObjectField(TEXT("start_velocity"), Velocity) && Velocity)
+            {
+                Model.CasingSpeedMin = float(Corner(*Velocity, TEXT("min")).Size());
+                Model.CasingSpeedMax = float(Corner(*Velocity, TEXT("max")).Size());
+            }
+            const TSharedPtr<FJsonObject>* Accel = nullptr;
+            if ((*CasingFx)->TryGetObjectField(TEXT("acceleration"), Accel) && Accel)
+            {
+                const float A = -float(Corner(*Accel, TEXT("min")).Z), B = -float(Corner(*Accel, TEXT("max")).Z);
+                Model.CasingGravityMin = FMath::Min(A, B);
+                Model.CasingGravityMax = FMath::Max(A, B);
+            }
+        }
         ReadSocket(*Entry, TEXT("zoom_socket_transform"), Model.ZoomSocket);
         ReadSocket(*Entry, TEXT("muzzle_socket_transform"), Model.MuzzleSocket);
         ReadSocket(*Entry, TEXT("shell_casing_socket_transform"), Model.ShellSocket);
@@ -1478,17 +1557,35 @@ void AOpenWillowWalker::FireWeapon()
             || FiredItem->DamageType.Contains(TEXT("Incendiary"), ESearchCase::IgnoreCase)))
         MuzzleTint = FLinearColor(1.f, 0.075f, 0.012f, 1.f);
     else if (OpenWillowFiring::IsElemental(Element)) MuzzleTint = OpenWillowFiring::ElementColor(Element);
-    AOpenWillowShotFx::MuzzleFlash(GetWorld(), Muzzle, Model ? Model->MuzzleFlashRadius : 3.5f,
-        Model ? Model->MuzzleFlashDuration : 0.33f, MuzzleTint);
+    // The type's cooked flash emitters for this element (else its Default system) when the manifest has them; the
+    // procedural plume otherwise. The barrel runs along the gun Root's -Y axis (section 17 of WEAPON_VISUALS.md).
+    const TArray<FOpenWillowFlashLayer>* FlashLayers = Model ? Model->FlashLayers.Find(Element.IsEmpty() ? TEXT("Default") : Element) : nullptr;
+    if (Model && !FlashLayers) FlashLayers = Model->FlashLayers.Find(TEXT("Default"));
+    if (FlashLayers && WeaponVisual && WeaponVisual->GetBoneIndex(TEXT("Root")) != INDEX_NONE)
+    {
+        const FTransform Root = WeaponVisual->GetBoneTransform(FName(TEXT("Root")));
+        AOpenWillowShotFx::MuzzleFlashLayers(GetWorld(), Muzzle, -Root.GetUnitAxis(EAxis::Y), Root.GetUnitAxis(EAxis::Z),
+            *FlashLayers, FlashTextureFill);
+    }
+    else
+        AOpenWillowShotFx::MuzzleFlash(GetWorld(), Muzzle, Model ? Model->MuzzleFlashRadius : 3.5f,
+            Model ? Model->MuzzleFlashDuration : 0.33f, MuzzleTint);
     if (Model && Model->bShellCasingEnabled && Model->ShellSocket.bValid
         && (WeaponVisual->DoesSocketExist(FName(*Model->ShellSocket.Name))
             || WeaponVisual->GetBoneIndex(FName(*Model->ShellSocket.Bone)) != INDEX_NONE))
     {
         const FVector Shell = WeaponSocketWorld(Model->ShellSocket).GetLocation();
-        // UNVERIFIED host stand-in velocity in cm/s; the socket and rightward direction are data/visual observations.
-        const FVector Velocity = Camera->GetRightVector() * 180.f + Camera->GetUpVector() * 100.f
-            + Camera->GetForwardVector() * 18.f;
-        AOpenWillowShotFx::Casing(GetWorld(), Shell, Velocity);
+        // Direction: UNVERIFIED host stand-in (right, up, a little forward; the socket rotation is not decoded). With a cooked
+        // casing system the speed, life and gravity are its particle values (tools/weapon_muzzle_fx.py); else host values.
+        FVector Velocity = Camera->GetRightVector() * 180.f + Camera->GetUpVector() * 100.f + Camera->GetForwardVector() * 18.f;
+        float CasingLife = 0.22f, CasingGravity = 980.f;
+        if (Model->bCasingFx)
+        {
+            Velocity = Velocity.GetSafeNormal() * FMath::FRandRange(Model->CasingSpeedMin, Model->CasingSpeedMax);
+            CasingLife = FMath::FRandRange(Model->CasingLifeMin, Model->CasingLifeMax);
+            CasingGravity = FMath::FRandRange(Model->CasingGravityMin, Model->CasingGravityMax);
+        }
+        AOpenWillowShotFx::Casing(GetWorld(), Shell, Velocity, 1.f, CasingLife, CasingGravity);
     }
     for (const FVector& Direction : Directions)
     {
@@ -1554,6 +1651,14 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     if (!bHit) return;
     ++OpenWillowFiring::Counts.Impacts;
     AOpenWillowProjectile::ImpactFx(GetWorld(), Impact, Hit.ImpactNormal, Held ? Held->Element : FString());
+    // A firing mode with its own Behavior_Explode explodes at every impact, after the bullet's own damage (the impact
+    // explosion of elemental Maliwan guns; native read 2026-11-03, UNVERIFIED in game beyond the one live match).
+    const auto ImpactExplosion = [&]()
+    {
+        if (!Held || !Held->Firing.bLoaded || !Held->Firing.Splash.bValid) return;
+        const float Scale = Held->Damage > 0.f ? ShotDamage(*Held, GetWorld()->GetTimeSeconds()) / Held->Damage : 1.f;
+        AOpenWillowProjectile::Explode(GetWorld(), this, Held->Firing, Impact, Hit.ImpactNormal, Held->Firing.Splash.Damage * Scale);
+    };
     AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
     if (!Target)
     {
@@ -1561,6 +1666,7 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
             TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
             UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 4.f, 4.f), Impact,
                 (-Hit.ImpactNormal).Rotation(), 12.f);
+        ImpactExplosion();
         return;
     }
     // Evaluated item-card damage per pellet (tools/weapon_stats.py) with any running level-up weapon damage scale
@@ -1573,6 +1679,7 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     const FOpenWillowFiringData& Firing = Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly;
     AOpenWillowProjectile::HitTarget(this, Firing, Target, Damage, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f,
         Firing.Momentum);
+    ImpactExplosion();
 }
 FOpenWillowFiringState& AOpenWillowWalker::FiringStateFor(const FOpenWillowWeaponItem& Weapon)
 {

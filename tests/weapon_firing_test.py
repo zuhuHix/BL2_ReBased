@@ -296,5 +296,54 @@ class MomentumAndExtentTests(unittest.TestCase):
         self.assertIsNone(firing.vector_of({'X': 0, 'Y': 0, 'Z': 0}))
 
 
+class ImpactExplosionTests(unittest.TestCase):
+    """A trace firing mode's own Behavior_Explode, with the element picked from ExplosionOverrideDefinition."""
+
+    def world_with_override(self):
+        source = source_of()
+        add = source.package.add
+        fm = 'Fake.FiringModes.Bullet_Default'
+        source.package.objects[fm]['ExplosionOverrideDefinition'] = 'Fake.Fx.Elemental'
+        add(fm + '.Behavior_Explode_3', 'WillowGame.Behavior_Explode', {
+            'DamageRadiusFormula': const(77), 'MomentumFormula': const(500), 'Definition': 'Fake.Explosions.Fallback',
+            'DamageFormula': const(0, 'D_Attributes.Weapon.WeaponDamage', 0.6), 'bDisableRadiusDamageFalloff': True})
+        add('Fake.Fx.Elemental', 'WillowGame.ExplosionCollectionDefinition', {'Explosions': [
+            {'Expression': 'Fake.Fx.Elemental.Cond_0', 'Explosion': 'Fake.Explosions.Acid'},
+            {'Expression': 'Fake.Fx.Elemental.Cond_1', 'Explosion': 'Fake.Explosions.Zap'}]})
+        add('Fake.Fx.Elemental.Cond_0', 'GearboxFramework.AttributeExpressionEvaluator',
+            {'Expression': {'AttributeOperand1': 'D_Attributes.WeaponDamageType.WeaponDamage_Is_Corrosive', 'ConstantOperand2': 1}})
+        add('Fake.Fx.Elemental.Cond_1', 'GearboxFramework.AttributeExpressionEvaluator',
+            {'Expression': {'AttributeOperand1': 'D_Attributes.WeaponDamageType.WeaponDamage_Is_Shock', 'ConstantOperand2': 1}})
+        add('Fake.Explosions.Zap', 'WillowGame.ExplosionDefinition', {'DamageTypeDef': 'Fake.DamageTypes.Zap'})
+        add('Fake.Explosions.Acid', 'WillowGame.ExplosionDefinition', {'DamageTypeDef': 'Fake.DamageTypes.Acid'})
+        add('Fake.DamageTypes.Zap', 'WillowGame.DamageTypeDefinition', {'MaxDamageRadius': 0.3})
+        return source
+
+    def test_element_picks_its_explosion_and_damage_type(self):
+        st = stats()
+        st['card']['element'] = 'Shock'
+        out = firing.build(self.world_with_override(), recipe(), st)['impact_explosion']
+        self.assertEqual(out['explosion'], 'Fake.Explosions.Zap')
+        self.assertEqual(out['damage_type'], 'Fake.DamageTypes.Zap')
+        self.assertEqual((out['radius'], out['momentum'], out['falloff'], out['damage_scale']), (77, 500, False, 0.6))
+        self.assertTrue(out['explosion_from_override'])
+
+    def test_no_matching_entry_keeps_the_behaviour_explosion(self):
+        st = stats()
+        st['card']['element'] = 'Fire'
+        out = firing.build(self.world_with_override(), recipe(), st)['impact_explosion']
+        self.assertEqual(out['explosion'], 'Fake.Explosions.Fallback')
+        self.assertFalse(out['explosion_from_override'])
+
+    def test_no_behaviour_means_no_impact_explosion(self):
+        self.assertIsNone(shot()['impact_explosion'])
+
+    def test_amp_condition_is_slag(self):
+        source = self.world_with_override()
+        source.package.objects['Fake.Fx.Elemental.Cond_1']['Expression']['AttributeOperand1'] = (
+            'D_Attributes.WeaponDamageType.WeaponDamage_Is_Amp')
+        self.assertEqual(firing.override_explosion(source, 'Fake.Fx.Elemental', 'Slag'), 'Fake.Explosions.Zap')
+
+
 if __name__ == '__main__':
     unittest.main()

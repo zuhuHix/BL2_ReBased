@@ -186,6 +186,7 @@ private:
     int64 ExperienceBeforeReward = 0;
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;
+    TArray<FString> DummyDamageTypes;   // every dummy hit's damage type, in order (DummyShots entries)
     int32 DummyShots = 0;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
     // test: bullets fly (OpenWillowProjectile), so a case fires, waits for the landing and checks; ShotPhase is the case's own sub-step, ShotsBefore the dummy's

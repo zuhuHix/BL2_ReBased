@@ -5,6 +5,7 @@
 #include "OpenWillowPhaselock.h"
 #include "OpenWillowPhaselockFx.h"
 #include "OpenWillowFiring.h"
+#include "OpenWillowShotFx.h"
 #include "OpenWillowWalker.generated.h"
 
 struct FOpenWillowTakenInventoryItem;
@@ -334,6 +335,14 @@ private:
         bool bShellCasingEnabled = false;
         float MuzzleFlashDuration = 0.33f;
         float MuzzleFlashRadius = 3.5f; // UNVERIFIED host stand-in; WeaponTypeDefinition has no scalar flash size.
+        // The type's muzzle-flash particle emitters per element ("Default", "Fire", "Shock", ...), from weapon_view.json
+        // "muzzle_flash_fx"; empty for older manifests (the procedural MuzzleFlash is used then).
+        TMap<FString, TArray<FOpenWillowFlashLayer>> FlashLayers;
+        // The type's shell-casing particle motion (weapon_view.json "shell_casing_fx"); speeds in cm/s.
+        bool bCasingFx = false;
+        float CasingLifeMin = 0.22f, CasingLifeMax = 0.22f;
+        float CasingSpeedMin = 200.f, CasingSpeedMax = 200.f;
+        float CasingGravityMin = 980.f, CasingGravityMax = 980.f;
         float TracerRadius = 0.8f;      // UNVERIFIED host stand-in; no type tracer template is present in the measured slice.
         float TracerLife = 0.09f;       // UNVERIFIED host stand-in; no type tracer template is present in the measured slice.
         FLinearColor TracerColor = FLinearColor(200.f / 255.f, 200.f / 255.f, 200.f / 255.f, 1.f);
@@ -347,6 +356,7 @@ private:
     bool bViewModelActive = false;      // foreground FOV on (the default; -owfpfov=0 turns it and the offsets off)
     bool bViewFovForced = false;        // -owfpfov=<n> given: that value for every weapon
     float ViewFovDefault = 45.f;        // horizontal degrees
+    float FlashTextureFill = 0.5f;      // UNVERIFIED host fit: share of a cooked flash quad the real sprite covers
     void LoadViewModels(const FString& ItemDir);
     void ApplyViewModel(const FString& ItemId);
     // Weapon glow after shots (native rule, UNVERIFIED: +0.25 per shot, cap 5, decay 3.5/s from 0.2 s after the shot; the

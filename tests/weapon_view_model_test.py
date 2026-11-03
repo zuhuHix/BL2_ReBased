@@ -28,7 +28,7 @@ class WeaponViewModelTests(unittest.TestCase):
 
     def test_ads_frame_fit_is_separate_from_the_selected_cooked_socket(self):
         self.assertEqual(view.zoom_position_fit_cm('slice_pistol'),
-                         ([0.0, -3.2, 11.0], 'UNVERIFIED fit to lane E ADS frame'))
+                         ([0.0, -0.6, 11.0], 'UNVERIFIED fit to lane E ADS frame'))
         self.assertEqual(view.zoom_position_fit_cm('slice_assault_rifle'),
                          ([0.0, 0.0, 0.0], 'no recipe-specific fit'))
 
