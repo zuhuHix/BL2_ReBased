@@ -95,6 +95,10 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestTrue(TEXT("a swapped shield starts empty"), S.Shield == 0.f && S.ShieldFraction() == 0.f);
         Run(S, 210.f, 212.f);
         TestTrue(TEXT("and recharges after its own delay"), S.Shield > 4.f && S.Shield < 6.f);
+        // A shield swapped while down: the second wind uses the new capacity.
+        S.ApplyDamage(1000.f, 215.f);
+        S.EquipShield(200.f, 1.f, 5.f, false, 216.f);
+        TestTrue(TEXT("second wind after a swap while down uses the new shield"), S.SecondWind(217.f) && S.Shield == 180.f);
         S.EquipShield(0.f, 1.f, 5.f, false, 220.f);
         TestTrue(TEXT("no shield: fraction 0, hits go to health"), S.ShieldFraction() == 0.f && S.ApplyDamage(10.f, 221.f).ToHealth == 10.f);
     }

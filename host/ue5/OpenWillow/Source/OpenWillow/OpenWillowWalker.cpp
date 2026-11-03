@@ -264,7 +264,9 @@ float AOpenWillowWalker::DownBleedLeft() const
 
 void AOpenWillowWalker::NotifyKilledEnemy()
 {
-    if (!MayaState.SecondWind(GetWorld()->GetTimeSeconds())) return;
+    const float Now = GetWorld()->GetTimeSeconds();
+    TickShield(Now);   // a shield swapped since the last tick sets the second wind's 90 % (and is not reset after it)
+    if (!MayaState.SecondWind(Now)) return;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya second wind t=%.3f health %.0f/%.0f shield %.0f/%.0f"), MayaState.SecondWindAt,
         GetHealth(), GetMaxHealth(), GetShield(), GetShieldCapacity());
 }
