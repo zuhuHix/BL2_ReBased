@@ -665,6 +665,9 @@ bool UOpenWillowInventory::ResolveAmmoType(const FOpenWillowWeaponItem& Item, EO
     {
         {TEXT("Pistol"), TEXT("GD_Weap_Pistol"), EOpenWillowAmmoType::Pistol},
         {TEXT("SMG"), TEXT("GD_Weap_SMG"), EOpenWillowAmmoType::SMG},
+        // The game's own SMG label, which tools/weapon_stats.py writes for every rolled SMG (the slice SMG included).
+        // Without it those guns had no ammo pool and could not reload (found 2026-11-03).
+        {TEXT("Sub-Machine Gun"), TEXT("GD_Weap_SMG"), EOpenWillowAmmoType::SMG},
         {TEXT("Assault Rifle"), TEXT("GD_Weap_AssaultRifle"), EOpenWillowAmmoType::AssaultRifle},
         {TEXT("Shotgun"), TEXT("GD_Weap_Shotgun"), EOpenWillowAmmoType::Shotgun},
         {TEXT("Sniper Rifle"), TEXT("GD_Weap_SniperRifle"), EOpenWillowAmmoType::Sniper},
@@ -910,6 +913,9 @@ bool UOpenWillowInventory::RunSelfTest()
     EOpenWillowAmmoType Ammo = EOpenWillowAmmoType::Pistol;
     Check(Gun && ResolveAmmoType(*Gun, Ammo) && Ammo == EOpenWillowAmmoType::Shotgun,
         TEXT("shotgun resolves to the shotgun pool"));
+    const FOpenWillowWeaponItem LabelledSmg = Make(TEXT("smg"), TEXT("Sub-Machine Gun"));
+    Check(ResolveAmmoType(LabelledSmg, Ammo) && Ammo == EOpenWillowAmmoType::SMG,
+        TEXT("the game's \"Sub-Machine Gun\" label resolves to the SMG pool"));
     if (Gun)
     {
         Check(Inv->ConsumeShot(*Gun) && Inv->ConsumeShot(*Gun) && Inv->ConsumeShot(*Gun) && !Inv->ConsumeShot(*Gun),

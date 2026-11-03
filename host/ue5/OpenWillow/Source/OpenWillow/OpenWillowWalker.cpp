@@ -949,6 +949,20 @@ const AOpenWillowWalker::FViewModel* AOpenWillowWalker::ActiveViewModel() const
     const FOpenWillowWeaponItem* Item = Inventory ? Inventory->ActiveWeapon() : nullptr;
     return Item ? ViewModels.Find(Item->Id) : nullptr;
 }
+namespace
+{
+// The ADS fit uses the eye socket's height and side offset on the gun, not its position along the barrel. The barrel runs
+// along the mesh's Y axis (the decoded muzzles are at -Y), so the socket is projected onto the plane through Root across
+// that axis. Without this, the pistol's eye socket 83 cm along the axis turned the hip pose's small yaw into about 9 cm of
+// sideways error. Host rule, UNVERIFIED against the game's zoom pose.
+FVector EyeOnGunPlane(const USkeletalMeshComponent* Gun, const FVector& EyeWorld)
+{
+    if (!Gun || Gun->GetBoneIndex(FName(TEXT("Root"))) == INDEX_NONE) return EyeWorld;
+    const FTransform RootWorld = Gun->GetBoneTransform(FName(TEXT("Root")));
+    const FVector Axis = RootWorld.GetUnitAxis(EAxis::Y);
+    return EyeWorld - Axis * FVector::DotProduct(EyeWorld - RootWorld.GetLocation(), Axis);
+}
+}
 FTransform AOpenWillowWalker::WeaponSocketWorld(const FWeaponSocketData& Socket) const
 {
     if (!WeaponVisual || !Socket.bValid) return FTransform::Identity;
@@ -975,11 +989,11 @@ FTransform AOpenWillowWalker::WeaponSocketWorld(const FWeaponSocketData& Socket)
         else
             ParentWorld = WeaponVisual->GetComponentTransform();
     }
-    // Cooked UE3 socket coordinates are mirrored across Y by the local MD5/glTF path. The positional and rotator
-    // conversion below follows that axis map; its equivalence to the live game's composite socket is UNVERIFIED.
-    const FVector LocalLocation(Socket.Location.X, -Socket.Location.Y, Socket.Location.Z);
-    const FRotator LocalRotation(Socket.Rotation.Pitch, -Socket.Rotation.Yaw, -Socket.Rotation.Roll);
-    return FTransform(LocalRotation, LocalLocation) * ParentWorld;
+    // The cooked socket offset is applied in the imported bone's frame unchanged, as GunSocketLocation does: the glTF import
+    // keeps the cooked axes. The Y mirror applied here before (2026-11-03) put the Root-parented SMG and shotgun muzzles
+    // 33 / 93 cm behind the gun and the eye sockets in front of it; the gunprobe showed the unmirrored point equals the
+    // decoded mesh-space socket. Equivalence to the live game's composite socket is still UNVERIFIED.
+    return FTransform(Socket.Rotation, Socket.Location) * ParentWorld;
 }
 void AOpenWillowWalker::BeginAimTransition(float Now)
 {
@@ -1019,7 +1033,7 @@ void AOpenWillowWalker::UpdateAim(float Now)
                 || WeaponVisual->GetBoneIndex(FName(*Model->ZoomSocket.Bone)) != INDEX_NONE))
         {
             const FVector SocketInCamera = Camera->GetComponentTransform().InverseTransformPosition(
-                WeaponSocketWorld(Model->ZoomSocket).GetLocation());
+                EyeOnGunPlane(WeaponVisual, WeaponSocketWorld(Model->ZoomSocket).GetLocation()));
             // Remove the arm translation applied on the previous frame to recover this socket's hip-pose position.
             // Re-evaluate after each per-type pose update instead of retaining a value measured during slot selection.
             const FVector AppliedZoom = Arms->GetRelativeLocation() - BaseOffset;
@@ -1039,7 +1053,13 @@ void AOpenWillowWalker::UpdateAim(float Now)
             const float Fov = Model->Fov > 1.f ? Model->Fov : ViewFovDefault;
             const float VerticalFov = 2.f * FMath::Atan(FMath::Tan(FMath::DegreesToRadians(Fov) * 0.5f) / Aspect);
             const float DropPixels = ViewportHeight * (18.f / 568.f); // live frame fit: ~18 px below reticle on a 568 px panel
-            const float DropCm = FMath::Max(0.f, BaseSocket.X) * FMath::Tan(VerticalFov * 0.5f)
+            // The pixels are converted to cm at the gun body's depth (its Root bone in the hip pose), where the drop is seen.
+            // The eye socket's own depth is near the eye (a few cm) and would give almost no drop.
+            float DropDepth = BaseSocket.X;
+            if (WeaponVisual->GetBoneIndex(TEXT("Root")) != INDEX_NONE)
+                DropDepth = (Camera->GetComponentTransform().InverseTransformPosition(WeaponVisual->GetBoneLocation(TEXT("Root")))
+                    - AppliedZoom).X;
+            const float DropCm = FMath::Max(0.f, DropDepth) * FMath::Tan(VerticalFov * 0.5f)
                 * (2.f * DropPixels / ViewportHeight);
             Model->ZoomOffset = FVector(0.f, -BaseSocket.Y, -BaseSocket.Z - DropCm) + Model->ZoomPositionFit;
         }
@@ -2233,7 +2253,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
         if (Model && Model->ZoomSocket.bValid)
         {
             const FVector SocketInCamera = Camera->GetComponentTransform().InverseTransformPosition(
-                WeaponSocketWorld(Model->ZoomSocket).GetLocation());
+                EyeOnGunPlane(WeaponVisual, WeaponSocketWorld(Model->ZoomSocket).GetLocation()));
             UE_LOG(LogTemp, Display, TEXT("OpenWillow aim socket %s camera %s fitted offset %s alpha %.3f"),
                 *Model->ZoomSocket.Name, *SocketInCamera.ToString(), *Model->ZoomOffset.ToString(), AimAlpha);
         }
