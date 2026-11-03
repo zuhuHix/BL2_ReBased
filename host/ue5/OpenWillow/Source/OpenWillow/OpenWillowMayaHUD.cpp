@@ -1058,8 +1058,12 @@ FString AOpenWillowMayaHUD::TrackerHudField(const AOpenWillowWalker& Maya)
 void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
 {
     // Unattended: once the movie has settled, Maya goes down through her own TakeDamage (no attacker: the host's enemies do
-    // not attack her yet), bleeds out, dies and respawns; 3 s after the respawn she goes down again and, 3 s later, the dummy
-    // is killed with her as the damage causer (the kill-while-down path: a second wind). Captures at fixed moments, then quit.
+    // not attack her yet), bleeds out, dies and respawns; then she goes down again and the dummy is killed with her as the
+    // damage causer (the kill-while-down path: a second wind). Captures at fixed moments, then quit.
+    // The weapon while down (AOpenWillowWalker::GoDown, UNVERIFIED rule) is exercised on the way, each step logged as an
+    // OWHUDDOWNWEAPON line for tools/check_hud_down.py: the first injury lands while a 3-shot burst still owes two shots
+    // (test fixture: the held weapon's burst count is set to 3 for that burst, then restored), fire and reload are pressed
+    // during the put-away, and fired and reloaded after it; the second injury lands mid-reload.
     const float Now = GetWorld()->GetTimeSeconds();
     if (DownShotStep < 0) return;
     auto Shot = [this, Now](const TCHAR* Name)
@@ -1072,18 +1076,86 @@ void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
         const float Applied = Maya.TakeDamage(Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
         UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS injure t=%.3f applied=%.0f down=%d"), Now, Applied, Maya.IsDown() ? 1 : 0);
     };
+    UOpenWillowInventory* Inventory = Maya.GetInventory();
+    FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
+    auto Magazine = [Weapon]() { return Weapon ? UOpenWillowInventory::MagazineLeft(*Weapon) : -1; };
+    auto Log = [&Maya, Now, &Magazine](const TCHAR* Label)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNWEAPON %s t=%.3f mag=%d reloading=%d ready=%d down=%d"), Label, Now, Magazine(),
+            Maya.IsReloading() ? 1 : 0, Maya.DownWeaponReady() ? 1 : 0, Maya.IsDown() ? 1 : 0);
+    };
     switch (DownShotStep)
     {
     case 0: DownShotAt = FMath::Max(Now + 4.f, 12.f); DownShotStep = 1; return;
-    case 1: if (Now < DownShotAt) return; Shot(TEXT("up")); Injure(); DownShotAt = Now + 1.f; break;
-    case 2: if (Now < DownShotAt) return; Shot(TEXT("down_start")); DownShotAt = Now + 6.f; break;
-    case 3: if (Now < DownShotAt) return; Shot(TEXT("down_mid")); break;
-    case 4: if (Maya.GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead) return; DownShotAt = Now + 1.f; break;
-    case 5: if (Now < DownShotAt) return; Shot(TEXT("dead")); break;
-    case 6: if (Maya.IsDown()) return; DownShotAt = Now + 1.f; break;
-    case 7: if (Now < DownShotAt) return; Shot(TEXT("respawned")); DownShotAt = Now + 2.f; break;
-    case 8: if (Now < DownShotAt) return; Injure(); DownShotAt = Now + 3.f; break;
-    case 9:
+    case 1:
+        if (Now < DownShotAt) return;
+        Shot(TEXT("up"));
+        if (Weapon) { SavedBurstCount = Weapon->Firing.BurstCount; Weapon->Firing.BurstCount = 3; }   // test fixture
+        Log(TEXT("burst_start"));
+        BurstStartMagazine = Magazine();
+        Maya.TestFireInput(true);    // held until the first shot: the Walker's tick starts the burst only on a held trigger
+        DownShotAt = Now + 0.5f;
+        break;
+    case 2:
+        // The burst's first shot is out: let go (a burst still fires its count after release) and injure in the same tick,
+        // with two shots still owed.
+        if (Magazine() >= BurstStartMagazine && Now < DownShotAt) return;
+        Maya.TestFireInput(false);
+        Log(TEXT("burst_first_shot"));
+        Injure();
+        Log(TEXT("down_mid_burst"));
+        DownShotAt = Now + 1.f;
+        break;
+    case 3:
+        if (Now < DownShotAt) return;
+        Shot(TEXT("down_start"));
+        Log(TEXT("putaway_after_burst"));
+        if (Weapon) Weapon->Firing.BurstCount = SavedBurstCount;
+        Maya.TestFireInput(true);
+        Maya.TestReloadInput();
+        DownShotAt = Now + 0.3f;
+        break;
+    case 4:
+        if (Now < DownShotAt) return;
+        Maya.TestFireInput(false);
+        Log(TEXT("putaway_presses"));
+        DownShotAt = Now + 2.f;   // past the 2.28 s put-away (1.3 s gone) and the 0.2 s equip
+        break;
+    case 5:
+        if (Now < DownShotAt) return;
+        Log(TEXT("ready_before_fire"));
+        Maya.TestFireInput(true);
+        DownShotAt = Now + 0.3f;
+        break;
+    case 6:
+        if (Now < DownShotAt) return;
+        Maya.TestFireInput(false);
+        Log(TEXT("ready_fired"));
+        Maya.TestReloadInput();
+        Log(TEXT("ready_reload"));
+        DownShotAt = Now + 2.7f;   // down_mid about 7 s after the injury, as before
+        break;
+    case 7: if (Now < DownShotAt) return; Shot(TEXT("down_mid")); break;
+    case 8: if (Maya.GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead) return; DownShotAt = Now + 1.f; break;
+    case 9: if (Now < DownShotAt) return; Shot(TEXT("dead")); break;
+    case 10: if (Maya.IsDown()) return; DownShotAt = Now + 1.f; break;
+    case 11: if (Now < DownShotAt) return; Shot(TEXT("respawned")); DownShotAt = Now + 2.f; break;
+    case 12:
+        // The reload started while down finished during the bleed-out: one shot so that the magazine is short again.
+        if (Now < DownShotAt) return;
+        Maya.TestFireInput(true);
+        DownShotAt = Now + 0.3f;
+        break;
+    case 13:
+        if (Now < DownShotAt) return;
+        Maya.TestFireInput(false);
+        Maya.TestReloadInput();
+        Log(TEXT("reload_started"));
+        Injure();
+        Log(TEXT("down_mid_reload"));
+        DownShotAt = Now + 3.f;
+        break;
+    case 14:
     {
         if (Now < DownShotAt) return;
         AOpenWillowCombatTarget* Target = nullptr;
@@ -1094,7 +1166,7 @@ void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
         DownShotAt = Now + 0.3f;
         break;
     }
-    case 10: if (Now < DownShotAt) return; Shot(TEXT("second_wind")); DownShotAt = Now + 2.f; break;
+    case 15: if (Now < DownShotAt) return; Shot(TEXT("second_wind")); DownShotAt = Now + 2.f; break;
     default:
         if (Now < DownShotAt) return;
         UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS done"));

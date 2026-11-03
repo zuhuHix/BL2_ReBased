@@ -13,6 +13,9 @@
 - down_page_texts: with the strings file loaded (`OpenWillow HUD strings <n>`), every injured title the page shows equals the
   `injured` value of that file (--strings, default local/ui/run/UI_HUD/hud_strings.json), escaped as the page writes it.
 - second_wind_banner: after secondWind=1 the page shows the banner clip past its first frame.
+- down_weapon: the weapon while down (host rule, UNVERIFIED): an injury in the tick of a 3-shot burst's first shot drops the
+  two owed shots; fire and reload presses during the 2.28 s put-away do nothing; after it a press fires and a reload
+  starts; an injury mid-reload cancels the reload (OWHUDDOWNWEAPON lines).
 - down_shots: OWHudDown_{up,down_start,down_mid,dead,respawned,second_wind}.png are complete 1280x720 PNGs, and the
   down panel is in them: the bleed-out bar's red fills a fixed box in down_start and down_mid (the bar shorter at
   down_mid) and is absent from the other four (box and colour measured on this lane's captures, HUD_PARITY.md).
@@ -53,6 +56,7 @@ PAGE_DOWN = re.compile(r'OWHUDDOWNPAGE phase=(?P<phase>\w+) bleed=(?P<bleed>[0-9
 HOST_TRACK = re.compile(r'OWHUDTRACK t=[0-9.]+ (?P<rest>.*)$')
 PAGE_TRACK = re.compile(r'OWHUDTRACKPAGE mission=(?P<mission>.*?) turnIn=(?P<turnIn>[01]) lines=(?P<lines>\d+) (?P<modules>m1=.*)$')
 STRINGS = re.compile(r'OpenWillow HUD strings (\S+)')
+WEAPON = re.compile(r'OWHUDDOWNWEAPON (?P<label>\w+) t=[0-9.]+ mag=(?P<mag>-?\d+) reloading=(?P<reloading>[01]) ready=(?P<ready>[01]) down=(?P<down>[01])')
 LOG_TIME = re.compile(r'^\[(?P<stamp>[^\]]+)\]')
 
 
@@ -170,6 +174,35 @@ def bleed_bar(shot):
     return count(shot, BLEED_BOX, is_health), right
 
 
+def check_down_weapon(lines):
+    steps = {}
+    for line in lines:
+        found = WEAPON.search(line)
+        if found:
+            steps.setdefault(found['label'], {k: int(found[k]) for k in ('mag', 'reloading', 'ready', 'down')})
+    labels = ('burst_start', 'burst_first_shot', 'down_mid_burst', 'putaway_after_burst', 'putaway_presses', 'ready_before_fire',
+              'ready_fired', 'ready_reload', 'reload_started', 'down_mid_reload')
+    missing = [label for label in labels if label not in steps]
+    if missing:
+        return 'down_weapon', False, f'missing steps {missing}'
+    s = steps
+    first = s['burst_start']['mag'] - 1   # the magazine after the burst's first shot
+    rules = [
+        ('the burst fired its first shot before the injury', s['burst_first_shot']['mag'] == first and not s['burst_first_shot']['down']),
+        ('down mid-burst: weapon not ready', s['down_mid_burst']['down'] == 1 and s['down_mid_burst']['ready'] == 0),
+        ('the two owed shots were dropped', s['putaway_after_burst']['mag'] == first),
+        ('fire and reload presses during the put-away do nothing', s['putaway_presses']['mag'] == first
+         and s['putaway_presses']['reloading'] == 0 and s['putaway_presses']['ready'] == 0),
+        ('weapon ready after the put-away', s['ready_before_fire']['ready'] == 1 and s['ready_before_fire']['down'] == 1),
+        ('a press after the put-away fires', s['ready_fired']['mag'] < first),
+        ('a reload after the put-away starts', s['ready_reload']['reloading'] == 1),
+        ('the second injury lands mid-reload', s['reload_started']['reloading'] == 1 and s['reload_started']['down'] == 0),
+        ('going down cancels the reload', s['down_mid_reload']['reloading'] == 0 and s['down_mid_reload']['down'] == 1),
+    ]
+    failed = [name for name, ok in rules if not ok]
+    return 'down_weapon', not failed, '; '.join(failed) or f'{len(rules)} weapon rules hold (magazine {s["burst_start"]["mag"]} -> {s["ready_fired"]["mag"]})'
+
+
 def check_down_shots(folder):
     bad, bars = [], {}
     for name in DOWN_SHOTS:
@@ -244,6 +277,7 @@ def main():
     results = [check_path(lines), check_identity(lines)]
     if args.mode == 'down':
         results += check_down(lines, args.strings)
+        results.append(check_down_weapon(lines))
         if args.shots:
             results.append(check_down_shots(args.shots))
     else:

@@ -104,6 +104,7 @@ private:
     // and kills the dummy (a second wind); then quit.
     void TickHudDownShots(class AOpenWillowWalker& Maya);
     int32 DownShotStep = 0;
+    int32 SavedBurstCount = 0, BurstStartMagazine = 0;   // -owhuddownshots: the held weapon's burst count while the test fixture sets 3
     float DownShotAt = 0.f;
     // The fields for the down state, the second wind and the mission tracker (PushFlashHudState): the second winds seen so
     // far (the page plays the banner once per increase) and the last OWHUDDOWN / OWHUDTRACK lines logged.

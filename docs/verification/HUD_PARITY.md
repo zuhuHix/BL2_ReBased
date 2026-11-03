@@ -162,8 +162,21 @@ the live numbers of [COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md):
 * Damage while down is ignored, and the Phaselock gate sees the injured state.
 * A health refill while Injured (a level-up) ends the down state, so "down" always means health 0. The game is widely
   reported to revive a player who levels up in Fight For Your Life; that is not observed here (UNVERIFIED).
-* Not modelled: crawling, the sidearm switch, the injured bonus damage, the shield half, Defense Boost, a partner revive
-  and the respawn fee (`moneyRemoval`).
+* **The weapon while down** (host rule, UNVERIFIED; to confirm live with bl-sdk). It follows the script read in
+  NATIVE_DAMAGE_DEATH.md 10.1 and COMBAT_DOWN_RESPAWN.md: the injured state's special move puts the weapon away
+  (`InjuredWeaponPutDownTime` 0.1 s), and its end, `SwitchToSidearm` (2.28 s live), brings one back
+  (`InjuredWeaponEquipTime` 0.2 s).
+  * Going down puts the weapon away: it releases the trigger, drops the shots a burst still owes, and cancels a running
+    reload. A cancel is the same as for a weapon change: a refill already past its point is kept.
+  * Until 2.28 s after the injury (`AOpenWillowWalker::DownWeaponReady`), fire and reload presses do nothing.
+  * After that, the held weapon fires and reloads as usual; Fight For Your Life is fought with the gun.
+  * While Dead nothing fires.
+  * Clearing the trigger on entry is part of the put-away, so it does not contradict firing later: a new press is
+    needed, as after any put-away.
+  * Not modelled: the switch to a sidearm (the held weapon comes back), and the 0.1 s / 0.2 s put-down and equip times
+    inside the 2.28 s.
+* Not modelled: crawling, the injured bonus damage, the shield half, Defense Boost, a partner revive and the respawn fee
+  (`moneyRemoval`).
 
 The host pushes `down` (`null`, or the phase and the bleed-out left, quantised to the bar's 100 frames) and `secondWind`
 (a count; the page plays `p1.secondwind` from `go` once per increase). The page puts `p1.dying1` on its `fight` label
@@ -227,6 +240,18 @@ whether the game still counts it is UNVERIFIED (a mission-model question, not a 
     PNGs cover: no panel, a panel in the `up` capture, a bar that does not drain, and a missing capture.
   * Tracker: a matching run with an optional objective passes; a wrong objective text, an optional objective shown as
     `NotComplete` and a run without the turn-in fail. All fixture texts are invented.
+* `down_weapon` (the same `-Down` run): the first injury lands in the tick of a 3-shot burst's first shot. That burst
+  comes from a test fixture that sets the held weapon's burst count to 3, then restores it; no slice gun has a burst
+  count above 1. The check requires:
+  * the two owed shots dropped;
+  * fire and reload presses during the put-away doing nothing;
+  * a press after the put-away firing, and a reload starting;
+  * the second injury, landing mid-reload, cancelling it.
+
+  `tests/check_hud_down_test.py` adds 6 synthetic cases for it (26 in all).
+* `python tests/prepare_hud_strings_test.py` (4 cases): `--output` must resolve inside this repository's `local/`. An
+  outside path, a repository path outside `local/`, and a path that climbs out with `..` are refused with exit 2 and
+  nothing written. A path under `local/` gets the invented strings.
 * `tests/mission_script_test.py` scenario T (ctest `mission-script-synthetic`): a toy mission whose first set
   auto-enables a second set (one objective with count 2, one optional), plus an unused set. `trackerLines()` gives:
   * nothing before acceptance, and only the active set's objectives in their order with their invented
@@ -261,6 +286,14 @@ whether the game still counts it is UNVERIFIED (a mission-model question, not a 
   * `test_weapon_firing.ps1` 14/14, after regenerating the local slice recipes' `firing` block with
     `tools/weapon_firing.py`. The first run with the older local recipes gave 11/14: the slice pistol, shotgun and SMG had
     no `firing` block, so the expected momentum fell back to the default (local data, not this change).
+* Review round 3 (the weapon while down; the strings output guard), main 542d0c6, pc-hummer:
+  * ctest 20/20; verify_packages 9/9; checker 26/26; `prepare_hud_strings_test` 4/4; UE module build OK.
+  * `run_hud_shots.ps1 -Down` 11/11. Exactly three shots in the run (the burst's first, the press after the put-away, the
+    shot after the respawn), and the magazine stays at 7 through the put-away.
+    The first try failed `down_weapon` because of the test sequence, not the rule: a press and release in the same
+    tick never starts a burst, and the reload begun while down had refilled the magazine before the second injury.
+    The sequence now holds the trigger until the first shot and fires once after the respawn.
+  * `test_quest.ps1` 112/112 + resume 11/11; `test_weapon_firing.ps1` 14/14.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.

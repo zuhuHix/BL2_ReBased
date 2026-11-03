@@ -14,6 +14,9 @@ import json
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+LOCAL = ROOT / 'local'
+
 # (json key, .int section, .int key)
 STRINGS = (
     ('injured', 'WillowHUDGFxMovie', 'PlayerInjuredString'),
@@ -50,14 +53,19 @@ def hud_strings(sections):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--game', required=True, help='Borderlands 2 install directory')
-    parser.add_argument('--output', default='local/ui/run')
+    parser.add_argument('--output', default=str(LOCAL / 'ui' / 'run'),
+                        help="the UI run folder; must resolve inside this repository's local/ (game text never leaves it)")
     args = parser.parse_args()
+    output = Path(args.output).resolve()
+    if not output.is_relative_to(LOCAL.resolve()):
+        print(f'refusing to write game text outside {LOCAL}: {output}', file=sys.stderr)
+        return 2
     source = Path(args.game) / 'WillowGame' / 'Localization' / 'INT' / 'WillowGame.int'
     strings, missing = hud_strings(read_sections(source))
     if missing:
         print('missing in ' + str(source) + ': ' + ', '.join(missing), file=sys.stderr)
         return 1
-    target = Path(args.output) / 'UI_HUD' / 'hud_strings.json'
+    target = output / 'UI_HUD' / 'hud_strings.json'
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(strings, ensure_ascii=False, indent=1), encoding='utf-8')
     print(f'wrote {target} ({len(strings)} strings)')
