@@ -177,9 +177,14 @@ capture sequence and the quest suite reach the down state.
 **Mission tracker.** `MissionSystem::trackerLines()` (`src/mission.*`) lists the active objective set, each objective
 with its `ProgressMessage` from the package; `--mission-run` output ends with a `"tracker"` array. The quest exposes it
 read-only (`UOpenWillowQuest::HudTracker`). The page fills `p1.MissionNotifications.Module1-6`: the mission name, one
-module per objective (`NotComplete` or `Complete`), or `TurnIn` when ready to turn in, and every module is off without
-a mission. In the Fire mission run it shows "Go to firing range", then "Burn vandal", then the turn-in, then nothing.
+module per objective (`Complete`, else `Optional` for an optional objective, else `NotComplete`), or `TurnIn` when ready
+to turn in, and every module is off without a mission. The host's `OWHUDTRACK` line marks each objective `[x]`, `[o]` or
+`[ ]` the same way, and the checker requires the matching inner frame. In the Fire mission run it shows the first objective, then the second, then the turn-in, then nothing.
 How long the game keeps a completed objective on screen was not observed, so the host replaces it at the next change.
+The page and the host's log share the tracker data, so they could agree on a wrong objective set. The set selection
+itself is therefore checked independently in `tests/mission_script_test.py` (scenario T, below). There the mission model
+refuses objective updates once a mission is ready to turn in, so an optional objective left open then stays open;
+whether the game still counts it is UNVERIFIED (a mission-model question, not a HUD one).
 
 ## Checks
 
@@ -209,11 +214,27 @@ How long the game keeps a completed objective on screen was not observed, so the
   the first equippable gear-manifest shield); `tools/test_action_skill_hud.ps1` 19/19 (three runs during the lane: one 18/19, see below, then 19/19 twice).
   The 18/19 run pushed the state before the scripted cast in the same frame, so the full pool appeared one frame late
   (0.152 s against 0.15 s); the cast now runs first.
-* `python tests/check_hud_down_test.py` (12 synthetic cases) for `tools/check_hud_down.py`, the checker of
-  `tools/run_hud_shots.ps1 -Down` and `-Tracker`. The down cases: a matching run passes; a late bleed-out, a late
-  respawn, a wrong second-wind health, a missing page echo, a wrong bar frame, no strings file, no second wind and the
-  canvas path each fail the check meant to catch them. The tracker cases: a matching run passes; a wrong objective text
-  and a run without the turn-in fail.
+* `python tests/check_hud_down_test.py` (20 synthetic cases) for `tools/check_hud_down.py`, the checker of
+  `tools/run_hud_shots.ps1 -Down` and `-Tracker`.
+  * Down: a matching run passes. A late bleed-out, a late respawn, a wrong second-wind health, a missing page echo, a
+    wrong bar frame, no strings file, an unreadable strings file, a title other than the strings file's, no second wind
+    and the canvas path each fail the check meant to catch them.
+  * `down_page_texts` compares every injured title the page shows with the `injured` value of the generated strings
+    file (`--strings`); it reports only match or mismatch, never the text.
+  * `down_shots` checks more than file validity: the bleed-out bar's red must fill a fixed box (400-900 x 380-580) in
+    down_start and down_mid, be absent from the other four captures, and end at least 40 px further left at down_mid.
+    The box and colour were measured on this lane's captures (about 3,500 and 2,300 pixels; 0 elsewhere). Synthetic
+    PNGs cover: no panel, a panel in the `up` capture, a bar that does not drain, and a missing capture.
+  * Tracker: a matching run with an optional objective passes; a wrong objective text, an optional objective shown as
+    `NotComplete` and a run without the turn-in fail. All fixture texts are invented.
+* `tests/mission_script_test.py` scenario T (ctest `mission-script-synthetic`): a toy mission whose first set
+  auto-enables a second set (one objective with count 2, one optional), plus an unused set. `trackerLines()` gives:
+  * nothing before acceptance, and only the active set's objectives in their order with their invented
+    `ProgressMessage`;
+  * the optional flag, and completion only when the count is reached;
+  * after the required objective, a ready-to-turn-in status with the optional objective still open (the current rule
+    above);
+  * nothing from the unused set.
 * In-engine, pc-hummer, 2026-11-03 (main 95e48fb plus this lane):
   * `run_hud_shots.ps1 -Down`: 10/10, twice. The first injury's total was 12.00 s; bled out 14.283 s after the injury
     (expected 14.28); respawn 5.760 s after that; the second wind left 100 of 400; 110 of 110 down states echoed by the page.

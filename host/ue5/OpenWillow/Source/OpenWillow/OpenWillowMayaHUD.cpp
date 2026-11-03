@@ -1030,7 +1030,8 @@ FString AOpenWillowMayaHUD::TrackerHudField(const AOpenWillowWalker& Maya)
         {
             Items.Add(FString::Printf(TEXT("{\"text\":%s,\"complete\":%s,\"optional\":%s}"), *Json(L.Text),
                 L.bComplete ? TEXT("true") : TEXT("false"), L.bOptional ? TEXT("true") : TEXT("false")));
-            Logged.Add(FString::Printf(TEXT("%s%s"), L.bComplete ? TEXT("[x]") : TEXT("[ ]"), *L.Text));
+            // [x] complete, [o] optional and not complete, [ ] not complete (tools/check_hud_down.py reads the same marks).
+            Logged.Add(FString::Printf(TEXT("%s%s"), L.bComplete ? TEXT("[x]") : L.bOptional ? TEXT("[o]") : TEXT("[ ]"), *L.Text));
         }
         Field = FString::Printf(TEXT("{\"mission\":%s,\"turnIn\":%s,\"lines\":[%s]}"), *Json(Mission), bTurnIn ? TEXT("true") : TEXT("false"),
             *FString::Join(Items, TEXT(",")));

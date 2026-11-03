@@ -38,6 +38,9 @@ enabled in the On package and disabled in the Off package, one whose path names 
 toys; their scripts mirror the installed ones in structure and call the natives the bridge binds (IsBehaviorSequenceEnabled, ResolveBehaviorProvider-
 DefinitionReference, ActivateBehaviorEventFromScript, ActivateBehaviorOutputLink, GetBehaviorConsumerHandle, ClientGFxPlayMovie).
 
+The tracker scenario (--mission-run on `TrackerMission`, scenario T) checks MissionSystem::trackerLines, the HUD tracker's lines: only the
+active set's objectives, in the set's order, with their ProgressMessage (invented), completion and optional flag, across a set advance.
+
 The dialog scenario (--mission-run, scenario E) uses a toy mission whose provider runs Behavior_TriggerDialogEvent behaviors over a toy
 dialog group (invented tags, priorities, acts, a talker name tag): Out on the first run, the dialog one kernel wake later, Finished when
 the live line ends, the priority arbitration with the tracked-mission floor, the last enabled entry for a tag, a template act through the
@@ -141,6 +144,9 @@ class Tags:
         return self.p.fname(name) + self.p.fname(kind) + w32(size, 0) + detail + body
 
     def int(self, name, v): return self.tag(name, 'IntProperty', 4, w32(v))
+    def str_(self, name, v):
+        body = w32(len(v) + 1) + v.encode('ascii') + b'\0'
+        return self.tag(name, 'StrProperty', len(body), body)
     def name_(self, name, v): return self.tag(name, 'NameProperty', 8, self.p.fname(v))
     def float(self, name, v): return self.tag(name, 'FloatProperty', 4, struct.pack('<f', v))
     def byte(self, name, v): return self.tag(name, 'ByteProperty', 1, bytes([v]), self.p.fname('None'))
@@ -549,7 +555,7 @@ def build_gearbox():
 
 
 def build_willowgame():
-    toy = Toy(('Int', 'Float', 'Bool', 'Byte', 'Object', 'Array', 'Struct', 'Name'))
+    toy = Toy(('Int', 'Float', 'Bool', 'Byte', 'Object', 'Array', 'Struct', 'Name', 'Str'))
     p, T = toy.p, toy
     engine = p.add_import_full('Package', 0, 'Engine')
     aid = p.add_import_full('ScriptStruct', engine, 'AttributeInitializationData')
@@ -642,6 +648,8 @@ def build_willowgame():
     objective = T.cls('MissionObjectiveDefinition')
     T.prop('Int', objective, 'ObjectiveCount')
     T.prop('Bool', objective, 'bRememberItemsWithinObjective')
+    T.prop('Bool', objective, 'bObjectiveIsOptional')
+    T.prop('Str', objective, 'ProgressMessage')
 
     engine_pawn = p.add_import_full('Class', engine, 'Pawn')
     T.cls('WillowPlayerPawn', super_ref=engine_pawn)
@@ -1546,6 +1554,42 @@ def build_dialog_mission():
     return p
 
 
+
+def build_tracker_mission():
+    """TrackerMission (scenario T, the HUD tracker's lines): SetA {StepOne} auto-enables SetB {StepTwo (count 2), SideStep (optional)},
+    which can complete the mission; SetC {Unused} is never activated. Every objective has an invented ProgressMessage except SideStep
+    whose message is "Toy side step" too; Unused's must never be listed."""
+    p = Package()
+    t = Tags(p)
+    chains = {}
+
+    def chain(*path):
+        if path in chains: return chains[path]
+        outer = chain(*path[:-1]) if len(path) > 1 else 0
+        chains[path] = p.add_import_full('Package' if len(path) == 1 else 'Class', outer, path[-1])
+        return chains[path]
+
+    none = t.none()
+    objective_class, set_class = chain('WillowGame', 'MissionObjectiveDefinition'), chain('WillowGame', 'MissionObjectiveSetDefinition')
+    mission = p.add_export(chain('WillowGame', 'MissionDefinition'), 'TrackerMission', b'')
+
+    def objective(name, message, count=1, optional=False):
+        body = w32(0) + t.int('ObjectiveCount', count) + t.str_('ProgressMessage', message)
+        return p.add_export(objective_class, name, body + (t.bool('bObjectiveIsOptional', True) if optional else b'') + none, outer=mission)
+    one = objective('StepOne', 'Toy step one')
+    two = objective('StepTwo', 'Toy step two', count=2)
+    side = objective('SideStep', 'Toy side step', optional=True)
+    unused = objective('Unused', 'Toy unused')
+    set_b = p.add_export(set_class, 'SetB', w32(0) + t.array('ObjectiveDefinitions', 2, w32(two, side)) + t.bool('bCanCompleteMission', True) + none, outer=mission)
+    set_a = p.add_export(set_class, 'SetA', w32(0) + t.array('ObjectiveDefinitions', 1, w32(one)) + t.obj('NextSet', set_b)
+                         + t.bool('bAutoEnableNextSet', True) + none, outer=mission)
+    set_c = p.add_export(set_class, 'SetC', w32(0) + t.array('ObjectiveDefinitions', 1, w32(unused)) + none, outer=mission)
+    cls_, sup, outer, name, _ = p.exports[mission - 1]
+    p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 3, w32(set_a, set_b, set_c))
+                              + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + none)
+    return p
+
+
 failures = []
 
 
@@ -2005,6 +2049,35 @@ with tempfile.TemporaryDirectory() as folder:
         check('E3 parent appended once at the end', info(rows[7])[1] == ['ChildA', 'ChildB', 'TemplateGroup', 'ParentOnly'] and played(rows[7], 'Ak_D'), rows[7])
     else:
         check('E3 rows', False, len(rows))
+
+    # Scenario T: the HUD tracker's lines (MissionSystem::trackerLines, the `tracker` array of --mission-run): only the active set's
+    # objectives, in the set's order, with their ProgressMessage, completion and optional flag. Expected values written by hand.
+    (root / 'TrackerMission.upk').write_bytes(build_tracker_mission().build())
+
+    def tracker_after(*steps):
+        proc = subprocess.run([reader, str(root / 'TrackerMission.upk'), '--mission-run', 'TrackerMission', '--cooked', str(root), *steps],
+                              capture_output=True, text=True, encoding='utf-8')
+        if not proc.stdout.strip(): return None, proc.stderr
+        got = json.loads(proc.stdout)
+        return [(l['objective'], l['message'], l['complete'], l['optional']) for l in got['tracker']], got['steps'][-1]['status'] if got['steps'] else None
+
+    one, two, side = ('StepOne', 'Toy step one'), ('StepTwo', 'Toy step two'), ('SideStep', 'Toy side step')
+    check('T not accepted: no lines', tracker_after()[0] == [], tracker_after())
+    check('T accepted: the initial set only', tracker_after('accept')[0] == [(*one, False, False)], tracker_after('accept'))
+    lines, status = tracker_after('accept', 'obj:StepOne')
+    check('T set done: the next set, in its order, the optional flagged, SetC never', lines == [(*two, False, False), (*side, False, True)], lines)
+    lines, status = tracker_after('accept', 'obj:StepOne', 'obj:StepTwo')
+    check('T one of two counts: not complete yet', lines == [(*two, False, False), (*side, False, True)] and status == 1, (lines, status))
+    lines, status = tracker_after('accept', 'obj:StepOne', 'obj:StepTwo', 'obj:StepTwo')
+    # the required objective done: ready to turn in (status 2) with the optional one still open
+    check('T required done: complete, optional open, ready to turn in', lines == [(*two, True, False), (*side, False, True)] and status == 2, (lines, status))
+    lines, status = tracker_after('accept', 'obj:StepOne', 'obj:StepTwo', 'obj:StepTwo', 'obj:SideStep')
+    # The current model refuses updates once the mission is ready to turn in (applyUpdate needs Active), so the optional one stays open.
+    # Whether the game still counts an optional objective then is UNVERIFIED; this pins today's rule, not the game's.
+    check('T after ready to turn in the optional stays open (current rule)', lines == [(*two, True, False), (*side, False, True)], lines)
+    lines, status = tracker_after('accept', 'obj:StepOne', 'obj:SideStep', 'obj:StepTwo', 'obj:StepTwo')
+    check('T optional done before the required one', lines == [(*two, True, False), (*side, True, True)] and status == 2, (lines, status))
+    check('T an objective outside the active set is refused', tracker_after('accept', 'obj:Unused')[0] == [(*one, False, False)], tracker_after('accept', 'obj:Unused'))
 
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')

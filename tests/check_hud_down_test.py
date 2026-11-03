@@ -1,16 +1,28 @@
 """Synthetic tests for tools/check_hud_down.py (no game or engine needed; the logs are generated here).
 
 Every value is invented: an injury at t=10.000, Maya's maximum health 400, a strings file with 5 strings, a title
-"TEST TITLE", a mission "Test Mission" with two objectives, and run ids made up for these tests. The expected times are
+"TEST TITLE" (also the strings file's), a mission "Test Mission" with the objectives "Toy step one", "Toy side step"
+(optional) and "Toy step two", captures drawn here (grey frames, with a red bar where the down panel would be), and run ids
+made up for these tests. The expected times are
 worked out by hand from the host's constants (2.28 s, a 12 s first bleed-out, 5.76 s), not computed by the checker:
 bled out at 10.000 + 2.28 + 12 = 24.280, respawn at 24.280 + 5.76 = 30.040.
 """
+import atexit
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_hud_down as chk  # noqa: E402
+from check_hud_shots_test import png  # noqa: E402  (the synthetic PNG writer)
+
+STRINGS = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8')
+json.dump({'injured': 'TEST TITLE'}, STRINGS)
+STRINGS.close()
+atexit.register(lambda: Path(STRINGS.name).unlink(missing_ok=True))
 
 PREFIX = 'LogTemp: Display: '
 CONSOLE = 'LogTemp: Display: OpenWillow Flash HUD console: '
@@ -55,10 +67,10 @@ def down_log(bled_at=24.280, respawn_at=30.040, wind_health=100, skip_page_at=No
     return '\n'.join(f'[2026.01.01-00.00.00:000][  1]{line}' for line in lines)
 
 
-def results(text, mode='down'):
+def results(text, mode='down', strings=STRINGS.name):
     lines = text.splitlines()
     found = [chk.check_path(lines), chk.check_identity(lines)]
-    found += chk.check_down(lines) if mode == 'down' else chk.check_tracker(lines)
+    found += chk.check_down(lines, strings) if mode == 'down' else chk.check_tracker(lines)
     return {name: (ok, detail) for name, ok, detail in found}
 
 
@@ -83,18 +95,31 @@ def modules(*shown):
     return ' '.join(parts)
 
 
-def tracker_log(second_text='Burn\\u0020vandal'):
+def tracker_log(second_text='Toy\\u0020step\\u0020two', side_frame=23):
+    """Objective one, then one done with an optional side step and objective two, then the turn-in. side_frame is the inner
+    frame the page reports for the optional line (23 `Optional`; 8 would be `NotComplete`)."""
     name = (29, 'Test\\u0020Mission')
+    one = 'Toy\\u0020step\\u0020one'
     lines = HEAD[:1] + HEAD[2:]
     lines += track_state('none', 'mission=- turnIn=0 lines=0 ' + OFF)
-    lines += track_state('mission=Test Mission turnIn=0 lines=[ ]Go to range',
-                         'mission=Test\\u0020Mission turnIn=0 lines=1 ' + modules(name, (8, 'Go\\u0020to\\u0020range')))
-    lines += track_state('mission=Test Mission turnIn=0 lines=[x]Go to range|[ ]Burn vandal',
-                         'mission=Test\\u0020Mission turnIn=0 lines=2 '
-                         + modules(name, (1, 'Go\\u0020to\\u0020range'), (8, second_text)))
+    lines += track_state('mission=Test Mission turnIn=0 lines=[ ]Toy step one',
+                         'mission=Test\\u0020Mission turnIn=0 lines=1 ' + modules(name, (8, one)))
+    lines += track_state('mission=Test Mission turnIn=0 lines=[x]Toy step one|[o]Toy side step|[ ]Toy step two',
+                         'mission=Test\\u0020Mission turnIn=0 lines=3 '
+                         + modules(name, (1, one), (side_frame, 'Toy\\u0020side\\u0020step'), (8, second_text)))
     lines += track_state('mission=Test Mission turnIn=1 lines=',
                          'mission=Test\\u0020Mission turnIn=1 lines=0 ' + modules(name, (51, 'Turn\\u0020in')))
-    return '\n'.join(PREFIX[:0] + line for line in lines)
+    return '\n'.join(lines)
+
+
+def down_shots(folder, mid_bar=(450, 710), up_bar=None):
+    """The six down captures: grey frames; down_start's bar spans x 450-840, down_mid's mid_bar (None: no panel);
+    up_bar draws a bar into the `up` capture too (a panel where none should be)."""
+    bars = {'down_start': (450, 840), 'down_mid': mid_bar, 'up': up_bar}
+    for name in chk.DOWN_SHOTS:
+        span = bars.get(name)
+        png(Path(folder) / f'OWHudDown_{name}.png',
+            boxes=[(span[0], 490, span[1], 550, (210, 30, 30))] if span else [], shade=False)
 
 
 class DownTest(unittest.TestCase):
@@ -131,9 +156,54 @@ class DownTest(unittest.TestCase):
         text = '\n'.join(l for l in down_log().splitlines() if 'second wind' not in l and 'secondWind=1' not in l)
         self.assertTrue({'down_sequence', 'second_wind_health', 'down_states', 'second_wind_banner'} <= failed(results(text)))
 
+    def test_title_not_the_strings_files_fails(self):
+        # The page shows another title than the strings file's `injured` value.
+        found = results(down_log().replace(TITLE, 'OTHER\\u0020TITLE'))
+        self.assertEqual(failed(found), {'down_page_texts'})
+        self.assertIn('NOT equal', found['down_page_texts'][1])
+
+    def test_unreadable_strings_file_fails_as_missing_data(self):
+        found = results(down_log(), strings=str(Path(STRINGS.name).with_suffix('.missing')))
+        self.assertEqual(failed(found), {'down_page_texts'})
+        self.assertIn('local data missing', found['down_page_texts'][1])
+
     def test_canvas_path_fails(self):
         text = down_log().replace('HUD path: movie (page reported ready)', 'HUD path: canvas (forced)')
         self.assertIn('movie_path', failed(results(text)))
+
+
+class DownShotsTest(unittest.TestCase):
+    def shots(self, **bars):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        down_shots(folder.name, **bars)
+        return chk.check_down_shots(folder.name)
+
+    def test_panel_where_expected_passes(self):
+        name, ok, detail = self.shots()
+        self.assertTrue(ok, detail)
+
+    def test_valid_png_without_the_panel_fails(self):
+        name, ok, detail = self.shots(mid_bar=None)
+        self.assertFalse(ok)
+        self.assertIn('down_mid', detail)
+
+    def test_panel_in_the_up_capture_fails(self):
+        name, ok, detail = self.shots(up_bar=(450, 840))
+        self.assertFalse(ok)
+        self.assertIn('up:', detail)
+
+    def test_bar_not_draining_fails(self):
+        name, ok, detail = self.shots(mid_bar=(450, 840))
+        self.assertFalse(ok)
+        self.assertIn('not shorter', detail)
+
+    def test_missing_capture_fails(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        down_shots(folder.name)
+        (Path(folder.name) / 'OWHudDown_dead.png').unlink()
+        self.assertFalse(chk.check_down_shots(folder.name)[1])
 
 
 class TrackerTest(unittest.TestCase):
@@ -141,8 +211,11 @@ class TrackerTest(unittest.TestCase):
         found = results(tracker_log(), 'tracker')
         self.assertEqual(failed(found), set(), found)
 
+    def test_optional_shown_as_not_complete_fails(self):
+        self.assertEqual(failed(results(tracker_log(side_frame=8), 'tracker')), {'tracker_page'})
+
     def test_wrong_objective_text_fails(self):
-        found = results(tracker_log(second_text='Burn\\u0020other'), 'tracker')
+        found = results(tracker_log(second_text='Toy\\u0020other'), 'tracker')
         self.assertEqual(failed(found), {'tracker_page'})
 
     def test_no_turn_in_fails_progress(self):
