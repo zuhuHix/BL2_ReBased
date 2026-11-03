@@ -31,10 +31,22 @@ import prepare_skill_tree  # noqa: E402
 import skill_stats  # noqa: E402
 
 FORMAT = 'openwillow.skill_effects/1'
+REPO = Path(__file__).resolve().parents[1]
 SCHEMA_LINES = prepare_skill_tree.SCHEMA_LINES + [
     'SkillConstraints=StructProperty:SkillConstraintData',
     'EvaluatorDefinitions=ObjectProperty',
 ]
+
+
+def local_output(path, repo=REPO):
+    """The output folder, resolved; refuses anything not below the repository's ignored local/ folder, because the
+    manifest holds game-derived names and values that must never land in a tracked file."""
+    resolved = Path(path).resolve()
+    local = (Path(repo) / 'local').resolve()
+    # Strictly below local/: the schema file is written to the output's parent folder.
+    if local not in resolved.parents:
+        raise SystemExit(f'refusing --output {path}: it must be inside {local} (ignored game-derived output)')
+    return resolved
 
 
 def strip(value, prefix):
@@ -143,7 +155,7 @@ def main():
     args = parser.parse_args()
 
     cooked = Path(args.game) / 'WillowGame' / 'CookedPCConsole'
-    output = Path(args.output)
+    output = local_output(args.output)
     schema = output.parent / 'skilleffects.schema'
     schema.parent.mkdir(parents=True, exist_ok=True)
     schema.write_text('\n'.join(SCHEMA_LINES) + '\n', encoding='utf-8')

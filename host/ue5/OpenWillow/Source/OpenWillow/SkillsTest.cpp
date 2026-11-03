@@ -197,6 +197,23 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
     TestTrue(TEXT("Stack formula"), FMath::IsNearlyEqual(Running.Apply(100.f), 147.5f, 1e-3f));
     Tree->ResetTree();
     TestTrue(TEXT("A respec removes every modifier"), Stack(TEXT("A.Damage")).IsEmpty());
+
+    // Malformed manifests are refused whole and leave no effects loaded (every hook then returns its base value).
+    const TCHAR* BadManifests[] = {
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[null]}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":\"five\",\"effects\":[]}]}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":1,\"effects\":[7]}]}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":1,\"effects\":[],\"conditions\":[null]}]}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":{\"id\":\"T.X\"}}"),
+        TEXT("{\"format\":2,\"skills\":[]}")};
+    for (const TCHAR* Bad : BadManifests)
+    {
+        TSharedPtr<FJsonObject> BadRoot;
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Bad), BadRoot);
+        FString BadError;
+        TestFalse(FString::Printf(TEXT("Malformed manifest refused: %s"), Bad), BadRoot && Fx.LoadJson(*BadRoot, BadError));
+        TestFalse(TEXT("No effects left loaded after a refused manifest"), Fx.IsLoaded());
+    }
     return true;
 }
 #endif

@@ -95,6 +95,17 @@ def test_conditions():
     assert second['onFailure'] == 'Deactivated'
 
 
+def test_output_must_be_inside_local():
+    repo = Path(__file__).resolve().parents[1]
+    assert p.local_output(repo / 'local' / 'ui' / 'run') == (repo / 'local' / 'ui' / 'run').resolve()
+    for bad in (repo / 'docs' / 'verification', repo, repo / 'local', repo / 'local' / '..' / 'docs', repo / 'localx'):
+        try:
+            p.local_output(bad)
+        except SystemExit:
+            continue
+        raise AssertionError(f'{bad} was accepted')
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for t in tests:

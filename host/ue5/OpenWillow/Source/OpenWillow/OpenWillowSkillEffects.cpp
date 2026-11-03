@@ -34,14 +34,15 @@ FOpenWillowSkillEffects::FTest ReadTest(const FJsonObject& Object)
 {
     using FTest = FOpenWillowSkillEffects::FTest;
     FTest Test;
-    const FString Kind = Object.GetStringField(TEXT("kind"));
+    FString Kind, Usage;
+    Object.TryGetStringField(TEXT("kind"), Kind);   // a missing kind reads as Unknown: the skill stays off
     if (Kind == TEXT("attribute"))
     {
         Test.Kind = FTest::EKind::Attribute;
         Object.TryGetStringField(TEXT("attribute"), Test.Attribute);
         Object.TryGetStringField(TEXT("attribute2"), Test.Attribute2);
         Object.TryGetStringField(TEXT("op"), Test.Op);
-        Test.bMultiply = Object.GetStringField(TEXT("usage")) == TEXT("Multiply");
+        Test.bMultiply = Object.TryGetStringField(TEXT("usage"), Usage) && Usage == TEXT("Multiply");
         double Constant = 0;
         Object.TryGetNumberField(TEXT("constant"), Constant);
         Test.Constant = float(Constant);
@@ -83,31 +84,45 @@ bool FOpenWillowSkillEffects::Load(const FString& File, FString& OutError)
 
 bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutError)
 {
-    if (Root.GetStringField(TEXT("format")) != TEXT("openwillow.skill_effects/1"))
-    {
-        OutError = TEXT("format is not openwillow.skill_effects/1 (regenerate with tools/prepare_skill_effects.py)");
-        return false;
-    }
+    // Every field is read with a checked accessor: a malformed manifest is refused whole, leaving no effects loaded,
+    // so every hook returns its base value.
+    Skills.Reset();
+    auto Fail = [&OutError](const FString& Why) { OutError = TEXT("malformed skill effects: ") + Why; return false; };
+    FString Format;
+    if (!Root.TryGetStringField(TEXT("format"), Format) || Format != TEXT("openwillow.skill_effects/1"))
+        return Fail(TEXT("format is not openwillow.skill_effects/1 (regenerate with tools/prepare_skill_effects.py)"));
+    const TArray<TSharedPtr<FJsonValue>>* SkillValues = nullptr;
+    if (!Root.TryGetArrayField(TEXT("skills"), SkillValues)) return Fail(TEXT("no skills array"));
     TArray<FSkill> Read;
-    for (const TSharedPtr<FJsonValue>& SkillValue : Root.GetArrayField(TEXT("skills")))
+    for (int32 SkillIndex = 0; SkillIndex < SkillValues->Num(); ++SkillIndex)
     {
-        const FJsonObject& Object = *SkillValue->AsObject();
+        const TSharedPtr<FJsonObject>* ObjectPtr = nullptr;
+        if (!(*SkillValues)[SkillIndex].IsValid() || !(*SkillValues)[SkillIndex]->TryGetObject(ObjectPtr) || !ObjectPtr->IsValid())
+            return Fail(FString::Printf(TEXT("skill %d is not an object"), SkillIndex));
+        const FJsonObject& Object = **ObjectPtr;
         FSkill& Skill = Read.AddDefaulted_GetRef();
-        Skill.Id = Object.GetStringField(TEXT("id"));
+        FString Type;
+        const TArray<TSharedPtr<FJsonValue>>* EffectValues = nullptr;
+        if (!Object.TryGetStringField(TEXT("id"), Skill.Id) || !Object.TryGetStringField(TEXT("type"), Type)
+            || !Object.TryGetNumberField(TEXT("maxGrade"), Skill.MaxGrade) || !Object.TryGetArrayField(TEXT("effects"), EffectValues))
+            return Fail(FString::Printf(TEXT("skill %d lacks id, type, maxGrade or effects"), SkillIndex));
         Object.TryGetStringField(TEXT("name"), Skill.Name);
-        const FString Type = Object.GetStringField(TEXT("type"));
         Skill.Type = Type == TEXT("Action") ? ESkillType::Action : Type == TEXT("ActionAugment") ? ESkillType::ActionAugment
             : Type == TEXT("Kill") ? ESkillType::Kill : Type == TEXT("Proficiency") ? ESkillType::Proficiency : ESkillType::Passive;
-        Object.TryGetNumberField(TEXT("maxGrade"), Skill.MaxGrade);
         Object.TryGetBoolField(TEXT("subjectToGradeRules"), Skill.bGradeRules);
-        for (const TSharedPtr<FJsonValue>& EffectValue : Object.GetArrayField(TEXT("effects")))
+        for (const TSharedPtr<FJsonValue>& EffectValue : *EffectValues)
         {
-            const FJsonObject& E = *EffectValue->AsObject();
+            const TSharedPtr<FJsonObject>* EPtr = nullptr;
+            FString Mod, Target;
+            if (!EffectValue.IsValid() || !EffectValue->TryGetObject(EPtr) || !EPtr->IsValid())
+                return Fail(Skill.Id + TEXT(": an effect is not an object"));
+            const FJsonObject& E = **EPtr;
+            if (!E.TryGetStringField(TEXT("modifierType"), Mod) || !E.TryGetStringField(TEXT("target"), Target))
+                return Fail(Skill.Id + TEXT(": an effect lacks modifierType or target"));
             FEffect& Effect = Skill.Effects.AddDefaulted_GetRef();
             E.TryGetStringField(TEXT("attribute"), Effect.Attribute);   // null stays empty
-            const FString Mod = E.GetStringField(TEXT("modifierType"));
             Effect.Type = Mod == TEXT("PreAdd") ? EModifier::PreAdd : Mod == TEXT("PostAdd") ? EModifier::PostAdd : EModifier::Scale;
-            Effect.bSelf = E.GetStringField(TEXT("target")) == TEXT("Self");
+            Effect.bSelf = Target == TEXT("Self");
             E.TryGetNumberField(TEXT("startGrade"), Effect.StartGrade);
             E.TryGetNumberField(TEXT("interval"), Effect.Interval);
             Effect.Base = ReadValue(ObjectField(E, TEXT("base")));
@@ -115,20 +130,31 @@ bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutErro
             const TArray<TSharedPtr<FJsonValue>>* Bonus = nullptr;
             if (E.TryGetArrayField(TEXT("bonus"), Bonus))
                 for (const TSharedPtr<FJsonValue>& B : *Bonus)
-                    Effect.Bonus.Add({int32(B->AsObject()->GetNumberField(TEXT("grade"))), float(B->AsObject()->GetNumberField(TEXT("value")))});
+                {
+                    const TSharedPtr<FJsonObject>* BPtr = nullptr;
+                    int32 Grade = 0;
+                    double Value = 0;
+                    if (!B.IsValid() || !B->TryGetObject(BPtr) || !BPtr->IsValid() || !(*BPtr)->TryGetNumberField(TEXT("grade"), Grade)
+                        || !(*BPtr)->TryGetNumberField(TEXT("value"), Value))
+                        return Fail(Skill.Id + TEXT(": a bonus entry lacks grade or value"));
+                    Effect.Bonus.Add({Grade, float(Value)});
+                }
         }
         const TArray<TSharedPtr<FJsonValue>>* Conditions = nullptr;
         if (Object.TryGetArrayField(TEXT("conditions"), Conditions))
             for (const TSharedPtr<FJsonValue>& Row : *Conditions)
             {
+                const TSharedPtr<FJsonObject>* RowPtr = nullptr;
+                if (!Row.IsValid() || !Row->TryGetObject(RowPtr) || !RowPtr->IsValid())
+                    return Fail(Skill.Id + TEXT(": a condition is not an object"));
                 // Only constraints applied while active decide whether the modifiers are on (Maya's all are).
                 bool bWhileActive = false;
-                Row->AsObject()->TryGetBoolField(TEXT("whileActive"), bWhileActive);
-                if (const FJsonObject* Test = ObjectField(*Row->AsObject(), TEXT("test")); Test && bWhileActive)
+                (*RowPtr)->TryGetBoolField(TEXT("whileActive"), bWhileActive);
+                if (const FJsonObject* Test = ObjectField(**RowPtr, TEXT("test")); Test && bWhileActive)
                     Skill.Conditions.Add(ReadTest(*Test));
             }
     }
-    if (Read.Num() == 0) { OutError = TEXT("no skills"); return false; }
+    if (Read.Num() == 0) return Fail(TEXT("no skills"));
     Skills = MoveTemp(Read);
     return true;
 }
