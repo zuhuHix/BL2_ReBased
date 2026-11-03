@@ -814,6 +814,7 @@ void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FSt
     if (!Impl || bFailed || !Target || Target != Dummy) return;
     // The shot's stock damage type path goes to the dummy's own OnTakeDamage (its CompareObject decides).
     LastDummyDamageType = DamageType;
+    DummyDamageTypes.Add(DamageType);
     ++DummyShots;
     UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy OnTakeDamage DamageType=%s"), DamageType.IsEmpty() ? TEXT("None") : *DamageType);
     Impl->Slice->damageDummy(TCHAR_TO_UTF8(*DamageType));
@@ -1471,7 +1472,12 @@ void UOpenWillowQuest::RunTest(float Delta)
         }
         if (Waiting(ProjectilesInFlight(GetWorld()) == 0 && DummyShots > ShotsBefore, 3.f)) return;
         ShotPhase = 0;
-        Check(DummyShots == ShotsBefore + 1 && LastDummyDamageType == MissionWeapon.DamageType, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
+        // The bullet's own hit comes first with the gun's damage type. The Maliwan firing mode then explodes at the impact
+        // (its Behavior_Explode; WEAPON_PROJECTILES.md section 8), a second hit with the element's impact damage type.
+        const FOpenWillowWeaponItem* LentHeld = Walker->GetInventory()->ActiveWeapon();
+        Check(DummyShots == ShotsBefore + 1 + (LentHeld && LentHeld->Firing.bLoaded && LentHeld->Firing.Splash.bValid ? 1 : 0)
+            && DummyDamageTypes.IsValidIndex(ShotsBefore) && DummyDamageTypes[ShotsBefore] == MissionWeapon.DamageType,
+            TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
         Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
         // The lent pistol is NOT taken back when the objective completes (observed in the real game: it stays in the inventory until the turn-in's
         // CompleteMission); it is removed at the turn-in (case 18). Meaning changed: this check was "mission_weapon_removed_after_objective".

@@ -28,6 +28,33 @@ float FOpenWillowStatus::ChancePercent(const FString& Surface) const
     return Generic ? *Generic : 0.f;
 }
 
+// A Behavior_Explode block (a projectile's "splash" or a firing mode's "impact_explosion") into Out.
+static void ParseSplash(const FJsonObject& Splash, float CardDamage, FOpenWillowSplash& Out)
+{
+    Out.bValid = true;
+    Out.Radius = float(weapon_firing::explosionRadius(NumberOr(Splash, TEXT("radius"), 0)));
+    // An evaluated damage when the tool resolved one; else the damage formula's attribute scaled by its constant. A
+    // rocket's ProjectileDamage follows the weapon's damage through the type's ProjectileBaseValues
+    // (NATIVE_WEAPON_FIRING 2.1): the live Bandit rocket's splash equalled its card damage (285.84, 2026-10-23).
+    double Damage = 0;
+    if (!Splash.TryGetNumberField(TEXT("damage"), Damage) || !FMath::IsFinite(Damage))
+        Damage = CardDamage * NumberOr(Splash, TEXT("damage_scale"), 1);
+    Out.Damage = float(Damage);
+    // "falloff" is !bDisableRadiusDamageFalloff of the Behavior_Explode; false means full damage everywhere in the
+    // radius (weapon rockets and gyrojets, confirmed live). The bands are the damage type's.
+    bool bFalloff = true;
+    Splash.TryGetBoolField(TEXT("falloff"), bFalloff);
+    Out.bFullDamage = !bFalloff;
+    if (const FJsonObject* Bands = ObjectOrNull(Splash, TEXT("falloff_bands")))
+    {
+        Out.Falloff.maxDamageRadius = NumberOr(*Bands, TEXT("MaxDamageRadius"), Out.Falloff.maxDamageRadius);
+        Out.Falloff.minDamageRadius = NumberOr(*Bands, TEXT("MinDamageRadius"), Out.Falloff.minDamageRadius);
+        Out.Falloff.minDamagePercent = NumberOr(*Bands, TEXT("MinDamagePercent"), Out.Falloff.minDamagePercent);
+    }
+    Splash.TryGetStringField(TEXT("damage_type"), Out.DamageType);
+    Out.Momentum = float(NumberOr(Splash, TEXT("momentum"), 0));
+}
+
 void FOpenWillowFiringData::ParseProjectile(const FJsonObject& Projectile, float CardDamage, FOpenWillowFiringData& Out)
 {
     // Own-motion bullets (gyrojets) keep their light-bullet speed; AirFriction and Acceleration change it in flight.
@@ -48,30 +75,7 @@ void FOpenWillowFiringData::ParseProjectile(const FJsonObject& Projectile, float
             && (*Elasticity)[0]->TryGetNumber(First))
             Out.Elasticity = float(First);
     }
-    const FJsonObject* Splash = ObjectOrNull(Projectile, TEXT("splash"));
-    if (!Splash) return;
-    Out.Splash.bValid = true;
-    Out.Splash.Radius = float(weapon_firing::explosionRadius(NumberOr(*Splash, TEXT("radius"), 0)));
-    // An evaluated damage when the tool resolved one; else the damage formula's attribute scaled by its constant. A
-    // rocket's ProjectileDamage follows the weapon's damage through the type's ProjectileBaseValues
-    // (NATIVE_WEAPON_FIRING 2.1): the live Bandit rocket's splash equalled its card damage (285.84, 2026-10-23).
-    double Damage = 0;
-    if (!Splash->TryGetNumberField(TEXT("damage"), Damage) || !FMath::IsFinite(Damage))
-        Damage = CardDamage * NumberOr(*Splash, TEXT("damage_scale"), 1);
-    Out.Splash.Damage = float(Damage);
-    // "falloff" is !bDisableRadiusDamageFalloff of the Behavior_Explode; false means full damage everywhere in the
-    // radius (weapon rockets and gyrojets, confirmed live). The bands are the damage type's.
-    bool bFalloff = true;
-    Splash->TryGetBoolField(TEXT("falloff"), bFalloff);
-    Out.Splash.bFullDamage = !bFalloff;
-    if (const FJsonObject* Bands = ObjectOrNull(*Splash, TEXT("falloff_bands")))
-    {
-        Out.Splash.Falloff.maxDamageRadius = NumberOr(*Bands, TEXT("MaxDamageRadius"), Out.Splash.Falloff.maxDamageRadius);
-        Out.Splash.Falloff.minDamageRadius = NumberOr(*Bands, TEXT("MinDamageRadius"), Out.Splash.Falloff.minDamageRadius);
-        Out.Splash.Falloff.minDamagePercent = NumberOr(*Bands, TEXT("MinDamagePercent"), Out.Splash.Falloff.minDamagePercent);
-    }
-    Splash->TryGetStringField(TEXT("damage_type"), Out.Splash.DamageType);
-    Out.Splash.Momentum = float(NumberOr(*Splash, TEXT("momentum"), 0));
+    if (const FJsonObject* Splash = ObjectOrNull(Projectile, TEXT("splash"))) ParseSplash(*Splash, CardDamage, Out.Splash);
 }
 
 bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, FOpenWillowFiringData& Out)
@@ -112,6 +116,10 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
             Out.Pattern.lines.push_back(Entry);
         }
     if (const FJsonObject* Projectile = ObjectOrNull(Firing, TEXT("projectile"))) ParseProjectile(*Projectile, CardDamage, Out);
+    // A trace or light-bullet firing mode's own Behavior_Explode (OnAnyImpact): it explodes on every impact, the bullet's
+    // own damage first (native read 2026-11-03, WEAPON_PROJECTILES.md section 3; the Maliwan pistol's 0.8 x matches live).
+    if (!Out.Splash.bValid)
+        if (const FJsonObject* Impact = ObjectOrNull(Firing, TEXT("impact_explosion"))) ParseSplash(*Impact, CardDamage, Out.Splash);
     Out.SpinDownDuration = float(NumberOr(Firing, TEXT("spin_down"), 0));
     Out.TraceRange = float(NumberOr(Firing, TEXT("trace_range"), 16384));
     Out.Momentum = float(weapon_firing::hitMomentum(NumberOr(Firing, TEXT("instant_hit_momentum"), 10)));

@@ -45,7 +45,10 @@ from weapon_stats import ATTR
 SCHEMA_LINES = weapon_stats.SCHEMA_LINES + [
     'FiringPatternLines=StructProperty:FiringPatternLine',
     'StatusEffectChanceScales=StructProperty:StatusEffectChanceScale',
+    'Explosions=StructProperty:ConditionalExplosionData',
 ]
+# ExplosionCollectionDefinition conditions name the weapon's damage-type attribute; the card's element by that name.
+OVERRIDE_ELEMENTS = {'Corrosive': 'Corrosive', 'Incendiary': 'Fire', 'Shock': 'Shock', 'Amp': 'Slag', 'Explosive': 'Explosive'}
 GLOBALS = 'GD_Globals.General.Globals'
 # Weapon-type fields that describe the kick and the accuracy impulse (raw values, not evaluated).
 RECOIL_FIELDS = {
@@ -195,6 +198,41 @@ def splash_of(source, path, definition, fm, fallback_type, known, unresolved):
         'status_effect_chance': formula(source, explosion.get('StatusEffectChance'), known, unresolved),
         'instigator_self_damage_scale': explosion.get('InstigatorSelfDamageScale'),
     }
+
+
+def override_explosion(source, collection, element):
+    """The entry of an ExplosionCollectionDefinition whose condition names the card's element (first match), or None.
+
+    Each entry is {Expression, Explosion}; the expression compares D_Attributes.WeaponDamageType.WeaponDamage_Is_<X> with 1.
+    First-match order and the comparison are read from native code (UNVERIFIED in game; WEAPON_PROJECTILES.md section 3).
+    """
+    if not collection or not element:
+        return None
+    for entry in source.fields(collection).get('Explosions') or []:
+        expression = (source.fields(entry.get('Expression')).get('Expression') or {}) if entry.get('Expression') else {}
+        attribute = str(expression.get('AttributeOperand1') or '')
+        name = attribute.rsplit('WeaponDamage_Is_', 1)[-1] if 'WeaponDamage_Is_' in attribute else None
+        if name and OVERRIDE_ELEMENTS.get(name) == element and entry.get('Explosion'):
+            return entry['Explosion']
+    return None
+
+
+def impact_explosion_of(source, fm_path, fm, element, fallback_type, known, unresolved):
+    """The impact explosion of a trace or light-bullet firing mode: its own Behavior_Explode (OnAnyImpact), with the
+    explosion and damage type taken from ExplosionOverrideDefinition when an entry matches the element (native read
+    2026-11-03, UNVERIFIED in game except the Maliwan shock pistol's 0.8 x hit, 36.24 of 45.30)."""
+    explosions = behaviours(source, fm_path).get('Behavior_Explode', [])
+    splash = splash_of(source, explosions[0] if explosions else None, None, fm, fallback_type, known, unresolved)
+    if not splash:
+        return None
+    picked = override_explosion(source, fm.get('ExplosionOverrideDefinition'), element)
+    if picked:
+        splash['explosion'] = picked
+        splash['damage_type'] = source.fields(picked).get('DamageTypeDef') or splash['damage_type']
+        splash['falloff_bands'] = falloff_bands(source, splash['damage_type'])
+    splash['explosion_from_override'] = bool(picked)
+    splash['explosion_count'] = len(explosions)
+    return splash
 
 
 def projectile_of(source, fm_path, fm, definition, bullet_speed, fallback_type, known, unresolved, speed_multiplier=1.0):
@@ -357,6 +395,11 @@ def build(source, recipe, stats):
             sources['projectile.gravity_scale'] = source.origin(definition, 'GravityScaling')
         if projectile['splash']:
             sources['splash'] = projectile['splash']['behaviour']
+    impact_explosion = None
+    if kind != 'projectile':
+        impact_explosion = impact_explosion_of(source, fm_path, fm, card.get('element'), damage_type, known, unresolved)
+        if impact_explosion:
+            sources['impact_explosion'] = impact_explosion['behaviour']
     status = status_of(source, card, known, unresolved)
     return {
         'schema': 1,
@@ -373,6 +416,7 @@ def build(source, recipe, stats):
         'on_any_impact': fm.get('OnAnyImpact'),
         'explosion_override': fm.get('ExplosionOverrideDefinition'),
         'projectile': projectile,
+        'impact_explosion': impact_explosion,
         'pellets': whole(attribute['WeaponProjectilesPerShot']),
         'spread': attribute['WeaponSpread'],
         'spread_unit': 'WeaponSpread as stored (UNVERIFIED: degrees)',

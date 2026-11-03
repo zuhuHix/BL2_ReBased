@@ -73,6 +73,7 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
 | Per-hit momentum = `InstantHitMomentum` x 100 along the shot; from the weapon type, the class default when it has none; splash momentum = the explode behaviour's `MomentumFormula` x the radius scale (2026-11-02, maintainer decision to restore it) | data + NATIVE_WEAPON_TRIGGER_AMMO 3 (x100 once at weapon setup) | the values **match live reads** (R6/R7: pistol 8, shotgun 7, Torgue 10, rocket splash 10,000); the x100 factor is read from native code and the hit's effect on a pawn is **not measured** (UNVERIFIED) |
 | A hit changes the target's velocity by momentum / `Mass` (`Default__Pawn.Mass` 100, Engine.upk); the target then slides, slowed by `GroundFriction` 8 (`Default__PhysicsVolume`) | stock UE3 pawn rule + data | UNVERIFIED: the host applies the friction as v x (1 - 8 dt) per frame, a stand-in for the game's walking physics |
 | Wide bullets: a firing mode's `TraceExtent` makes the shot a box sweep instead of a line (light bullets each tick and traces); rockets stay lines | native 2.2 + data | read only; none of the 28 local recipes has an extent, so the in-engine check uses a host-chosen 24 uu box |
+| A trace or light-bullet firing mode's own `Behavior_Explode` (in `OnAnyImpact`) runs at every impact that is not a pass-through actor, after the bullet's `TakeDamage`; radius, damage formula, momentum and falloff are the behaviour's; `ExplosionOverrideDefinition` (an `ExplosionCollectionDefinition`, first entry whose `WeaponDamage_Is_<element>` condition holds, chosen once at weapon setup) only picks the explosion definition and so the damage type | native read 2026-11-03 (section 8) + data | the Maliwan shock pistol's value **matches live**: 45.30 x 0.8 = 36.24, falloff off, on the same bullymong; every other part UNVERIFIED in game |
 | Status chance x the level-difference scale (`GD_Globals.General.Globals.StatusEffectChanceScales`): row = min(difference, 6); shooter higher -> `HigherLevelChanceScale` (x2.0 at 6+), lower -> `LowerLevelChanceScale` (x0 at 6+) | data | **consistent with live counts** (Maya 54 vs bullymong 7: about 2 x the card chance on Maliwan pistols, section 5); a live check against a same-level target is still to do (UNVERIFIED) |
 
 ## 4. The host (what it does and where it stands in for the game)
@@ -93,16 +94,10 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
   the radius-250 rocket lay between 380 and 432 uu from the pawn origin). The target's surface is taken as Generic.
 * Torgue impact explosions are modelled: they are the firing mode's own `Behavior_Explode` splash (Torgue shotgun 17.755 per
   hit = live 0.85 x 20.888; gyrojet 28.97, live 28.977), section 5.
-* Not modelled (open): the elemental impact explosion of elemental bullets (live: Maliwan pistol bullet 45.30 plus an impact
-  explosion of 36.24 = 0.80 x). What the data says (2026-11-03): the firing mode names
-  `ExplosionOverrideDefinition` = `GD_Weap_Shared_Effects.Default_Elemental_Explosions` with instance-data name
-  `ExplosionOverride`; that collection is an array of `ConditionalExplosionData` {`Explosion`, `Expression`} (one explosion
-  per condition, not yet decoded: the reader's schema lacks the struct); an `ExplosionDefinition` carries visuals, sound and a
-  damage type but **no damage, radius or momentum**, so whoever plays it supplies them. Neither the Maliwan weapon type's nor
-  the elemental name prefix's behaviour provider has any sequence. The shock impact damage type has its own falloff bands
-  (`MaxDamageRadius` 0.4, `MinDamageRadius` 1.0, `MinDamagePercent` 0.75), so the live 0.80 may be full bullet damage under
-  that falloff rather than a fixed factor (UNVERIFIED guess). The caller is native (the second branch of
-  `ProcessInstantHitBullet`, open in NATIVE_WEAPON_TRIGGER_AMMO.md); settling it needs a native read or a live hook; element-vs-surface factors (live on flesh: fire x1.5, corrosive x0.9, shock and slag
+* Elemental impact explosions are modelled (2026-11-03, section 8): a trace or light-bullet firing mode whose own behaviours
+  hold a `Behavior_Explode` (the Maliwan pistol firing mode; not the default pistol, SMG or shotgun modes) explodes at every
+  impact after the bullet's own damage. `tools/weapon_firing.py` writes it as `impact_explosion`; the host plays it as the
+  gun's splash. Still open (not modelled): element-vs-surface factors (live on flesh: fire x1.5, corrosive x0.9, shock and slag
   x1.0); child projectiles spawned by a projectile's behaviours (the Maliwan launcher's fire area; the firing block lists
   them under `unsupported` and the host logs them); beams (the tool gives them their own kind, `beam`, listed as
   unsupported; the host fires light bullets for them); runtime damage modifiers (skills, relics; the per-pellet split is
@@ -215,3 +210,47 @@ hook); the critic aligned on the first visible effect.
   next step; recipe guns are unaffected.
 * Live skills change weapon stats a lot (a legendary amp shield added a flat 46,940 per shot); real-game measurements
   need skills off.
+
+## 8. Impact explosions of trace and light-bullet guns (2026-11-03, weapons parity 2)
+
+AI-assisted (Claude). Settles the open item of section 4. A live hook was the plan; the game could not be started on
+this PC that day (a "Steam must be running" message box), so the rule comes from a clean-room native read (Ghidra,
+headless and read-only; the analyst's own-words note stays under ignored `local/p2/wp2-native/`; NATIVE_WEAPON_TRIGGER_AMMO.md
+has the outline) plus the cooked data, decoded with our reader. It is `UNVERIFIED` in game except for the one live
+number it reproduces.
+
+- **Data.** `GD_Weap_Shared_Effects.Default_Elemental_Explosions` decodes with the array schema line
+  `Explosions=StructProperty:ConditionalExplosionData` to four {`Expression`, `Explosion`} entries: the conditions
+  `WeaponDamage_Is_Corrosive`, `_Is_Incendiary`, `_Is_Shock`, `_Is_Amp` (each compared with 1) pick
+  `GD_Explosions.<element>.Explosion_<Element>Master`. Each `ExplosionDefinition` carries only `DamageTypeDef`
+  (`DmgType_<Element>_Impact`, slag `DmgType_Amp_Impact`), `ImpactTraceLength` 512 and an `ExplosionScale` array
+  (presentation only). No damage, radius or momentum.
+- **Rule (native read).** The bullet-impact native sends the bullet's own `TakeDamage`, then runs the firing mode's
+  `OnAnyImpact` behaviours and the surface response's behaviours. A `Behavior_Explode` there explodes at the impact
+  point with its own radius, damage formula, momentum and falloff switch, and hurts every damageable actor in range
+  (the actor the bullet hit included), with the shooter's controller as instigator. The override collection is
+  evaluated once at weapon setup (first matching entry, stored on the weapon as instance data) and only replaces the
+  explosion definition, so the damage type. Pass-through actors (non-blocking triggers) get the bullet only.
+- **Maliwan pistol** (`Bullet_Pistol_Maliwan`): radius 106, damage `WeaponDamage` x 0.8, momentum 1000, falloff off.
+  Live check: 45.30 x 0.8 = 36.24, exactly the earlier live hit. The shock damage type's falloff bands are not used
+  (falloff is off), so section 4's band guess was wrong.
+- **Torgue** gyrojet bullets use the same mechanism with their own `Behavior_Explode` (no override); the existing
+  model (section 3) is unchanged.
+- **Which guns.** Of the regenerated recipes only the Maliwan firing mode carries one: `pistol_maliwan_shock`,
+  `_corrosive`, `_slag` and `slice_mission_pistol_fire` (radius 106, 0.8 x, damage types shock / corrosive / amp /
+  incendiary). The Bandit, Jakobs, Tediore and Dahl pistols, the slice SMG and the fire AR have none (their firing
+  modes name the collection but hold no `Behavior_Explode`).
+- **Tool and host.** `tools/weapon_firing.py` writes `impact_explosion` (the splash fields plus `explosion_from_override`)
+  for trace and light-bullet modes; synthetic tests in `tests/weapon_firing_test.py` (33 OK). The host reads it into the
+  gun's splash when the projectile has none (`OpenWillowFiring.cpp`); light bullets already explode on impact when they
+  have a splash, and `TracePellet` now does the same after a trace's own damage. Shock, corrosive and slag explosions
+  draw a small element-coloured burst (`ExplosionFx`), not the rocket fireball. `tools/check_weapon_firing.py` takes the
+  impact explosion as the gun's splash (no wide-bullet check for exploding guns, as before for gyrojets); the firing test
+  refills the dummy at each segment start, because the extra damage killed it mid-segment.
+- **Firing suite** (this PC, `tools/test_weapon_firing.ps1`): 13 PASS / 1 FAIL. The three Maliwan guns pass with
+  24-25 splash hits of 33.94 each per run. `pistol_tediore` fails ("the thrown gun hit nothing"; the throw lands on a wall
+  mesh 0.5 s after launch). Nothing in this change touches the throw path, and the same failure appears in the run
+  before the dummy refill. It passed on the other PC on 2026-11-03; cause not found, open.
+- **Still open, to check live:** a wall shot next to a bullymong (the wall impact explodes too), a Bandit elemental
+  pistol (no second hit expected), a hit at the radius edge (no falloff expected), and the status chance of the
+  explosion hit (its status damage and chance attributes are named in the behaviour; how they reach the hit was not read).

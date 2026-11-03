@@ -364,6 +364,9 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         StepAt = Now;   // the camera follows the new aim a frame later: no pull before AimSettle
         Step = Part.bWide ? 8 : Part.bThrow ? 6 : Part.Lifecycle ? 7 : 3;
         if (Segment == 0) CombatTarget->ResetKnock();
+        // Each segment starts on a full dummy: the elemental guns' impact explosions roughly double their damage, and a
+        // dummy killed mid-segment would cut the segment short (test fixture only).
+        CombatTarget->RestoreHealth();
         break;
     }
     case 8:   // wide bullet: aim beside the dummy (centre line passes Offset from its centre), fire as a line, then as a box

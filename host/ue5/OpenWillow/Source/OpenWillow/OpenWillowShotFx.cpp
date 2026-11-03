@@ -61,7 +61,7 @@ void AOpenWillowShotFx::Tick(float DeltaSeconds)
     if (bIsCasing)
     {
         // UNVERIFIED host stand-in: gravity and spin keep the brass visible without a physics body per shot.
-        CasingVelocity.Z -= 980.f * DeltaSeconds;
+        CasingVelocity.Z -= CasingGravity * DeltaSeconds;
         AddActorWorldOffset(CasingVelocity * DeltaSeconds, false);
         AddActorLocalRotation(FRotator(540.f * DeltaSeconds, 1080.f * DeltaSeconds, 720.f * DeltaSeconds));
     }
@@ -148,7 +148,60 @@ void AOpenWillowShotFx::Spark(UWorld* World, const FVector& Location, const FVec
     Fx->CasingVelocity = Velocity;
 }
 
-void AOpenWillowShotFx::Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale)
+void AOpenWillowShotFx::MuzzleFlashLayers(UWorld* World, const FVector& Location, const FVector& Forward, const FVector& Up,
+    const TArray<FOpenWillowFlashLayer>& FlashLayers, float TextureFill)
+{
+    if (!World || FlashLayers.IsEmpty()) return;
+    UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+    if (!Plane) return;
+    const FVector X = Forward.GetSafeNormal();
+    const FVector Side = FVector::CrossProduct(Up, X).GetSafeNormal();  // the barrel's sideways axis
+    const FVector Top = FVector::CrossProduct(X, Side).GetSafeNormal();
+    FVector ViewDir = X;
+    if (APlayerController* PC = World->GetFirstPlayerController())
+        if (PC->PlayerCameraManager) ViewDir = (Location - PC->PlayerCameraManager->GetCameraLocation()).GetSafeNormal();
+    for (const FOpenWillowFlashLayer& L : FlashLayers)
+    {
+        const float Life = FMath::Max(0.01f, FMath::FRandRange(L.LifeMin, L.LifeMax));
+        // A rectangle's flame starts at the muzzle: its offset along the barrel shrinks with its length. Its visible
+        // streak is narrower than the quad (critic round 2: rectangles about 60 percent of the first fit's width).
+        const float Length = FMath::FRandRange(L.LengthMin, L.LengthMax) * TextureFill;
+        // Square additive sprites facing along the barrel (the assault rifle's front flash) draw a small star in the game;
+        // with the host's soft quad they read as a block, so they keep 30 percent of the fill (host fit, critic round 2).
+        const float SquareFill = !L.bSmoke && !L.bModulate ? 0.3f : 1.f;
+        const float Width = L.Width > 0.f ? L.Width * TextureFill * 0.6f
+            : FMath::FRandRange(L.LengthMin, L.LengthMax) * TextureFill * SquareFill;
+        // The engine plane is 100 x 100 cm in its local X/Y with the normal on Z.
+        FVector Normal = X, PlaneX = Side;
+        if (L.bSmoke) { Normal = -ViewDir; PlaneX = FVector::CrossProduct(Top, Normal).GetSafeNormal(); }
+        else if (L.Axis == TEXT("EPAL_Y")) { Normal = Side; PlaneX = X; }
+        else if (L.Axis == TEXT("EPAL_Z")) { Normal = Top; PlaneX = X; }
+        if (PlaneX.IsNearlyZero()) PlaneX = Side;
+        const FVector PlaneY = FVector::CrossProduct(Normal, PlaneX).GetSafeNormal();
+        // Square sprites spin about their normal (the game picks a random sub-image and rotation).
+        FQuat Basis = FMatrix(PlaneX, PlaneY, Normal, FVector::ZeroVector).ToQuat();
+        if (L.Width <= 0.f && !L.bSmoke) Basis = FQuat(Normal, FMath::FRandRange(0.f, 2.f * PI)) * Basis;
+        const bool bRect = L.Width > 0.f && !L.bSmoke;
+        const FTransform Pose(Basis, Location + X * L.OffsetX * TextureFill,
+            FVector((bRect ? Length : Width) / 100.f, Width / 100.f, 1.f));
+        // Brightness: the colour's peak channel times the start alpha; the glow material fades toward edge-on views.
+        const float Peak = FMath::Max3(L.Color.R, L.Color.G, L.Color.B);
+        float Strength = FMath::FRandRange(L.AlphaMin, L.AlphaMax) * Peak;
+        if (L.bAngleFade) Strength *= FMath::Abs(FVector::DotProduct(ViewDir, Normal));
+        if (L.bSmoke) Strength = FMath::Min(Strength, 1.f) * 0.12f;  // host stand-in: additive grey for a lit smoke puff
+        // The host has only an additive material: a modulate glow is drawn as a faint tint of its colour (host fit).
+        if (L.bModulate) Strength *= 0.06f;
+        if (Strength < 0.02f) continue;
+        const FLinearColor Tint = L.bSmoke ? FLinearColor(0.6f, 0.58f, 0.55f) : L.Color / FMath::Max(Peak, 1e-3f);
+        auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
+        Fx->FinishSpawning(Pose);
+        Fx->Setup(Plane, Tint, Strength, Life, 0.f, true, L.bSmoke ? 0.f : 0.3f);  // a softer white core (critic round 2: too pale)
+        Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+    }
+}
+
+void AOpenWillowShotFx::Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale, float Life,
+    float Gravity)
 {
     if (!World) return;
     const FVector SafeScale(FMath::Max(0.001f, 0.003f * Scale), FMath::Max(0.001f, 0.003f * Scale),
@@ -158,8 +211,9 @@ void AOpenWillowShotFx::Casing(UWorld* World, const FVector& Location, const FVe
     auto* Fx = World->SpawnActorDeferred<AOpenWillowShotFx>(StaticClass(), Pose);
     Fx->FinishSpawning(Pose);
     Fx->Setup(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")),
-        FLinearColor(0.72f, 0.34f, 0.055f, 1.f), 0.55f, 0.22f, 0.f);
+        FLinearColor(0.72f, 0.34f, 0.055f, 1.f), 0.55f, FMath::Max(0.05f, Life), 0.f);
     Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
     Fx->bIsCasing = true;
+    Fx->CasingGravity = Gravity;
     Fx->CasingVelocity = Velocity;
 }

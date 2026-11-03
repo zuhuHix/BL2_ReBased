@@ -186,6 +186,20 @@ void AOpenWillowProjectile::ExplosionFx(UWorld* World, const FVector& Origin, co
     // Elemental splash (the fire AR's rockets) is a compact ragged patch with embers; explosive splash a fire envelope
     // with sparks and a dark scorch where the real game draws smoke (critic round 2).
     const bool bFire = DamageType.Contains(TEXT("Incendiary")) || DamageType.Contains(TEXT("Fire"));
+    // Shock, corrosive and slag impact explosions (the elemental Maliwan guns' small radius): a soft element-coloured
+    // burst and a few sparks, no fireball (host stand-in for the Explosion_<Element>Master particle systems).
+    const TCHAR* Element = DamageType.Contains(TEXT("Shock")) ? TEXT("Shock") : DamageType.Contains(TEXT("Corrosive"))
+        ? TEXT("Corrosive") : DamageType.Contains(TEXT("Amp")) || DamageType.Contains(TEXT("Slag")) ? TEXT("Slag") : nullptr;
+    if (Element)
+    {
+        const FLinearColor Color = OpenWillowFiring::ElementColor(Element);
+        AOpenWillowShotFx::Flash(World, At, Color, Radius * 0.25f, 0.18f, 0.f, 0.7f);
+        AOpenWillowShotFx::Flash(World, At, FLinearColor(1.f, 1.f, 1.f), Radius * 0.06f, 0.06f, 0.f, 1.5f);
+        for (int32 I = 0; I < 6; ++I)
+            AOpenWillowShotFx::Spark(World, At, (FMath::VRand() + Normal).GetSafeNormal() * FMath::FRandRange(150.f, 350.f),
+                Color, 1.f, FMath::FRandRange(0.12f, 0.25f), 4.f);
+        return;
+    }
     if (bFire)
     {
         for (int32 I = 0; I < 5; ++I)

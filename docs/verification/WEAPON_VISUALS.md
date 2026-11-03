@@ -141,10 +141,8 @@ come from is still unexplained, so this chooses a data source for the host's car
   effects are first-person primitives as well, so they stay on the hand.
 - The world FOV: the game reads 77.55 where the host assumes 90 (106 degrees horizontal at 16:9); a rotation test to
   settle it (`local/orch/C/rg2.ps1`) was not run: a person was using the machine when it was due.
-- Muzzle flash: the game uses the type's `Muzzle` socket, an orange/yellow particle flash for 0.33 s and ejected shell casings. The
-  host's flash and tracer origin now come from the decoded `Muzzle` socket (section 17; it was a point estimated 27 cm past the `Barrel`
-  bone). The host still draws a sphere flash and no shell casings; the eject port is exposed only. The emissive glow after shots is
-  wired (Lane E's rule) but not captured.
+- Muzzle flash and casings: drawn from the cooked particle data since 2026-11-03 (section 18); the emitter textures are not
+  hosted, so the quads are host stand-ins. The world FOV rotation test is still not run (section 18, live items).
 - First-person lighting: the real frames were taken in the HQ under cool light and the host's in Sanctuary daylight; the gun
   look is scene-independent in the host by design (analytic lights in view space), so only the inspect pairs are lighting-matched.
 - The mission pistol's host mesh in the quest is Lane B's `MaliwanPistol/SK_Pistol_Maliwan_2_Fire_seed1`, a different rolled sample
@@ -402,7 +400,8 @@ Open, most visible first:
   170 cm, which doubled the drop to about 35-40 px). Fitted offsets (right, up; cm) before -> after: SMG -18.8, 1.6 -> -18.9, 1.7;
   shotgun -18.7, -0.7 -> -18.7, 0.2; AR -16.9, 3.7 -> -16.9, 4.7; pistol -10.4, -1.2 -> -15.9, 4.7. The pistol fit does not
   converge: at full zoom its projected eye point stays 3.2 cm to the side (the same 3.2 cm as before the change), and the sight
-  shows about 50 px left of and slightly above the reticle. Open; needs the matched real frame.
+  shows about 50 px left of and slightly above the reticle. Refit 2026-11-03 (section 18): the side term of the pistol's
+  frame fit -3.2 -> -0.6 cm; the critic then put the sight within about 10 px of the real frame's.
 - **SMG hip size:** about 370 px wide against 242 px in the real idle frame with scale 1.0 and the correct arms set; cause not found.
   Note (2026-11-03): that comparison used lane E's fixture SMG (a Maliwan barrel). This machine's `slice_smg` is a different roll
   (Dahl barrel, Hyperion body, Tediore scope, drawn from the pre-built `SK_slice_smg` because the Hyperion SMG type is not in the
@@ -491,3 +490,58 @@ Not done: the socket rotation (flash direction), the alternate muzzle sockets of
 rifle fragment in the slice recipe), the scope and sight sockets, the three live-versus-cooked eye-socket differences, shell casings and
 a muzzle-flash particle. First-person flash placement under the foreground FOV projection is unchanged (the flash is a world actor at the
 gun's world point).
+
+## 18. Weapons parity 2 (2026-11-03): the cooked muzzle flash and casing, critic rounds
+
+AI-assisted (Claude). Host frames on this PC (`tools/run_weapon_assembly_shots.ps1 -Items local/items/slice`, slice pistol, SMG
+and assault rifle; the mission pistol cannot be equipped outside the quest) against lane E's real frames (section 15), pairs
+by `local/wp2/make_pairs.py`, scored by an independent critic (Luna, a different model family) in `local/wp2/critic_r2.md`
+and `critic_r4.md`. Nothing here was compared with new real-game frames: the planned live session
+(`tools/real_game/weapon_parity2_capture.ps1`) stopped at a "Steam must be running" message box on this PC, so the live
+items below stay open.
+
+**Muzzle flash from the data.** The weapon type's `MuzzleFlashPSTemplates` is an `EffectCollectionDefinition` whose
+`ParticleEffects` entries ({`Expression`, `ParticleEffect`}) pick a particle system per element (`WeaponDamage_Is_<X>` == 1;
+the entry without an expression is the default; `Etec` systems are picked by `_Is_Amp`, slag). Pistols use the SMG
+systems. `tools/weapon_muzzle_fx.py` reads each system's emitters (first LOD: required module, lifetime, size, location,
+colour, alpha, axis lock, velocity) and `tools/weapon_view_model.py` writes them per element into `weapon_view.json`
+(`muzzle_flash_fx`). Read values (cm in the muzzle's frame, X along the barrel; s; HDR colour):
+- SMG/pistol default: side and top flame rectangles 35-48 x 18 centred 25 cm ahead, 0.034 s, colour (1.5, 0.5, 0.09);
+  front and side glows with a modulate material; a smoke puff 0.28-0.37 s.
+- Assault rifle default: side and top rectangles 85 x 45 centred 42 cm ahead, 0.055 s, colour (3, 1, 0.17); an additive
+  front sprite 48-68 cm square, 0.07 s.
+- Shock: blue (0.35, 0.45, 15); incendiary: red-orange (8, 0.15, 0.1) with a dark smoke. The flash is orange to yellow,
+  not the host's earlier red, and each sprite lives 34-75 ms (the 0.33 s `MuzzleFlashDuration` is the component's life).
+The lookup-table layout (two header floats, then chunks; a uniform distribution's chunk is a low and a high half) is fitted
+to the data and `UNVERIFIED`; the values agree with what the burst frames show (gone 0.12-0.13 s after the last shot).
+
+**Host drawing (UNVERIFIED stand-in).** `AOpenWillowShotFx::MuzzleFlashLayers` draws each emitter as one soft additive quad
+in the gun's frame (barrel = the `Root` bone's -Y): `EPAL_Y` / `EPAL_Z` rectangles on the barrel's side / top plane, square
+sprites facing along the barrel, smoke facing the camera. Host fits, from the critic rounds: quad size x 0.5
+(`-owflashfill`), the offset along the barrel scaled with it (the flame starts at the muzzle), rectangle width x 0.6,
+square additive sprites x 0.3, modulate glows as a faint tint (x 0.06), angle-fading glows by the view angle. Guns without
+the data keep the older procedural plume.
+
+**Casing.** Only the assault rifle type names a casing system (`FX_WEP_Assault.Particles.Assault_Shells`; the pistol, SMG
+and shotgun types have none, so no casing is spawned for them, as in the data). Read: life 0.35 s, start velocity
+x 125-225, y 100-140, z 120-175 cm/s in the socket's frame, acceleration z -650 to -400 in world space. The host uses the
+life, the speed range and the gravity range; the direction stays the host's (right, up, a little forward) because the
+socket rotation is not decoded.
+
+**Critic scores** (0-10; lane E round 4 was 6.5 with other code and other captures):
+
+| round | idle | ADS | firing | reload | overall |
+|---|---|---|---|---|---|
+| r2 (first data flash) | 7.0 | 6.5 | 6.1 | 5.6 | 6.3 |
+| r4 (fits above, pistol ADS refit) | 7.0 | 6.8 | 6.5 | 5.6 | 6.5 |
+
+Per gun at r4: pistol 7.1, assault rifle 6.2, SMG 6.1. AR flash 150x170 px -> 75x95 px (real about 95x80); SMG flash
+55x70 px (real 60x75); pistol ADS sight 30-40 px left of the real -> within 10 px. The 8/10 target is not reached.
+
+**Remaining, ranked by the critic (open):** AR reload framing (host gun and hand span about 480 px against 340 px);
+SMG reload pose (host gun near vertical with the hand at the optic, real canted with the hand at the receiver; timing
+sensitive); the pistol's firing forearm (real fills the lower right); AR ADS view 25-30 percent narrower and SMG ADS reticle
+about 15 percent smaller than the real frames (both point at the zoomed foreground FOV, which was not read live: the
+host keeps the hip foreground FOV during ADS); SMG hip size (roll-confounded, as before); the flash quads' noisy edges
+(no hosted textures). Live items not done (blocked by the Steam dialog): the world FOV through the HUD canvas, the
+particle reads in the running game, the status chance at an equal-level target, the reload mid-poses.

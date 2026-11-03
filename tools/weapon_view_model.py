@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
+import weapon_muzzle_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
 
 
@@ -56,13 +57,27 @@ SCHEMA_ADDITIONS = [
     'RelativeLocation=StructProperty:Vector',
     'RelativeRotation=StructProperty:Rotator',
     'RelativeScale=StructProperty:Vector',
+    # Particle systems for muzzle flashes and shell casings (see weapon_muzzle_fx.py).
+    'ParticleEffects=StructProperty:ParticleEffectData',
+    'Emitters=ObjectProperty',
+    'LODLevels=ObjectProperty',
+    'Modules=ObjectProperty',
+    'LookupTable=FloatProperty',
+    'BurstList=StructProperty:ParticleBurst',
 ]
+
+MUZZLE_FX_SOURCE = ('cooked EffectCollectionDefinition and particle systems; '
+                    'table layout fitted, host drawing UNVERIFIED')
+SHELL_CASING_FX_SOURCE = ('cooked ShellCasingPSCTemplate particle system; '
+                          'table layout fitted, host drawing UNVERIFIED')
 
 # Camera-local translation added after the selected cooked eye socket is
 # centered. The pistol's fallback body socket does not coincide with the
 # visible sight line, so this is a separate frame fit.
 ZOOM_POSITION_FITS_CM = {
-    'slice_pistol': (0.0, -3.2, 11.0),
+    # Side term refit 2026-11-03 (weapons parity 2, critic round 2: sight 30-40 px left of the reticle at 960 px, about
+    # 2.6 cm at the gun's 87 cm depth under the 45-degree first-person FOV): -3.2 -> -0.6.
+    'slice_pistol': (0.0, -0.6, 11.0),
 }
 
 
@@ -456,6 +471,18 @@ def _property_path(value):
     return value if isinstance(value, str) else None
 
 
+def muzzle_flash_fx_for(package, collection, cache):
+    """{element: {'system', 'layers'}} for one MuzzleFlashPSTemplates collection, cached per path."""
+    if not collection:
+        return None
+    if collection not in cache:
+        cache[collection] = {
+            element: {'system': system, 'layers': weapon_muzzle_fx.particle_system_layers(package, system)}
+            for element, system in weapon_muzzle_fx.muzzle_collection(package, collection).items()
+        }
+    return cache[collection]
+
+
 def build_recipe_entries(recipe_rows, package, class_defaults):
     """Build data entries and batch-load only sockets referenced by these recipes."""
     prepared = []
@@ -503,6 +530,7 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
         package.preload(sorted(socket_paths))
 
     result = {}
+    muzzle_cache = {}
     for recipe_id, entry, type_properties, skeletal_mesh, selected_fragments in prepared:
         sockets = [package.cache[path] for path in package.index
                    if skeletal_mesh and path.startswith(skeletal_mesh + '.SkeletalMeshSocket_')
@@ -523,6 +551,12 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
         entry['shell_casing_socket_transform_source'] = 'selected fragment SkeletalMeshSocket export' if casing else 'unresolved'
         entry['zoom_socket_transform'] = zoom_socket
         entry['zoom_socket_transform_source'] = 'selected fragment SkeletalMeshSocket export' if zoom_socket else 'unresolved'
+        collection = _property_path(type_properties.get('MuzzleFlashPSTemplates'))
+        entry['muzzle_flash_fx'] = muzzle_flash_fx_for(package, collection, muzzle_cache)
+        entry['muzzle_flash_fx_source'] = MUZZLE_FX_SOURCE
+        casing_system = _property_path(type_properties.get('ShellCasingPSCTemplate'))
+        entry['shell_casing_fx'] = weapon_muzzle_fx.casing_fx(package, casing_system) if casing_system else None
+        entry['shell_casing_fx_source'] = SHELL_CASING_FX_SOURCE
         result[recipe_id] = entry
     return result
 

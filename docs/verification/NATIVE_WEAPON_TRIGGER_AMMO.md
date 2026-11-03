@@ -204,9 +204,20 @@ is the damage causer. Some hit actors forward the hit to an owning object first 
 effects pick an entry of the definition's `ImpactResponses` by the surface type of the hit (a lookup of the surface byte
 in the response list; `-1` when none matches) and run the definition's `OnAnyImpact` behaviours plus the matched
 response's behaviours, and play the impact effects. Everything after `TakeDamage` (health, shields, crit regions,
-elemental damage types, status application, death) is lane G11's. Two details were not separated: how the two internal
-branches (actor kinds) differ, and where critical-hit and damage-over-distance scaling is applied (not seen on the shot
-side: the damage amount is passed through unchanged).
+elemental damage types, status application, death) is lane G11's. Where critical-hit and damage-over-distance scaling is
+applied was not separated (not seen on the shot side: the damage amount is passed through unchanged).
+
+*The two branches (read 2026-11-03, weapons parity 2; UNVERIFIED in game except one live number).* Pass-through actors (the
+same test `CalcWeaponFire` traces through, e.g. non-blocking triggers) receive only the bullet's `TakeDamage`. Every other hit
+actor, world geometry included, needs a firing-mode definition; then the surface response is looked up, a reusable
+stand-in object is placed at the impact as the source of what follows, the bullet's own damage is sent (unless the matched
+response disables regular bullet damage), and the impact behaviours run: all of the definition's `OnAnyImpact`, then the
+matched response's behaviours, with the shooter pawn as instigator and the hit actor as the other participant. A
+`Behavior_Explode` among them is the "impact explosion" of elemental Maliwan bullets and of Torgue gyrojets: radius,
+damage formula, momentum and falloff switch are its own fields; the weapon's `ExplosionOverride` instance data (filled
+once at weapon setup from the firing mode's `ExplosionOverrideDefinition`, first entry whose condition holds) only
+replaces its explosion definition, so its damage type. The Maliwan pistol's behaviour gives 0.8 x weapon damage over
+106 uu without falloff: 45.30 x 0.8 = 36.24, the live value (WEAPON_PROJECTILES.md section 8).
 
 **`GetMultiProjectileDamage` (native, virtual).** Walks the weapon's damage modifier stack with the same arithmetic as
 NATIVE_WEAPON_RULES section 1 (scale entries above 0 add to the "up" sum, scale entries at or below 0 to the "down" sum,
@@ -425,7 +436,7 @@ WEAPON_PROJECTILES.md section 3 (`weapon_firing::statusLevelScale`).
 
 ## Open
 - How a still-held trigger starts the next burst (the pending flag is cleared at the end of a burst; the re-arm path was not found).
-- `CalcWeaponFire`'s "pass through" actor class and whether bullets penetrate pawns; the two branches of `ProcessInstantHitBullet`;
+- `CalcWeaponFire`'s "pass through" actor class and whether bullets penetrate pawns (the two branches of `ProcessInstantHitBullet` are outlined above, 2026-11-03);
   whether `GetMultiProjectileDamage` or the plain damage is stored for the slice shotgun (the pawn-kind check in `AddProj`).
 - The per-frame light projectile update beyond the outline (gravity or acceleration, friction, ricochet, how a bullet that
   misses ends).

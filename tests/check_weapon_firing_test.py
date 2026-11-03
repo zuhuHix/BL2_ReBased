@@ -53,6 +53,13 @@ class Expectations(unittest.TestCase):
         firing = {'projectile': {'splash': {'damage': None, 'damage_scale': 0.5}}}
         self.assertAlmostEqual(check.expectations(recipe(40, firing=firing))['splash_damage'], 20.0)
 
+    def test_impact_explosion_is_the_bullet_splash(self):
+        firing = {'fire_type': None, 'impact_explosion': {'damage': 12.0, 'momentum': 300.0}}
+        out = check.expectations(recipe(15, firing=firing))
+        self.assertTrue(out['splash'] and out['explodes'])
+        self.assertEqual(out['splash_momentum'], 300.0)
+        self.assertFalse(out['wide'])
+
 
 class Gun(unittest.TestCase):
     def setUp(self):

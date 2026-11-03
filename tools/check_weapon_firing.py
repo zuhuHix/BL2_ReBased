@@ -130,7 +130,9 @@ def expectations(recipe):
         kind = 'Trace'
     else:
         kind = {'EWWFT_Rocket': 'Rocket', 'EWWFT_HitScan': 'Trace'}.get(fire_type, 'Bullet')
-    splash = (firing.get('projectile') or {}).get('splash')
+    # A projectile's own splash, else a trace or light-bullet firing mode's impact explosion (its Behavior_Explode on
+    # every impact; tools/weapon_firing.py impact_explosion). The host plays either as the gun's splash.
+    splash = (firing.get('projectile') or {}).get('splash') or firing.get('impact_explosion')
     splash_damage = None
     if splash:
         splash_damage = splash.get('damage')
