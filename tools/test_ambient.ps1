@@ -20,24 +20,12 @@ if (!$Ambient) { $Ambient = Join-Path $repo 'local/slice/ambient_world.json' }
 if (!(Test-Path -LiteralPath $Ambient)) { throw "Missing $Ambient (tools/prepare_ambient_world.py)" }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shotDir = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $out = Join-Path $repo "local/ambient/$Tag"
 New-Item -ItemType Directory -Force $out | Out-Null
-$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor, Borderlands2 -ErrorAction SilentlyContinue)) {
-        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another editor/game or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
-        Start-Sleep -Seconds 5
-    }
-}
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("B test_ambient $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
 $code = 2
+Enter-OwUeLock -Owner 'test_ambient' -TimeoutSeconds $WaitForEditorSeconds -AlsoWaitFor Borderlands2
 try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -75,6 +63,6 @@ try {
     if ($summary -match '^result=PASS ') { $code = 0 } elseif ($summary) { $code = 1 }
     Write-Output "OWAMBIENT SUMMARY $summary"
 } finally {
-    Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+    Exit-OwUeLock
 }
 exit $code

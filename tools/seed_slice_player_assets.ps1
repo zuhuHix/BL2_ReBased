@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logs = Join-Path $repo 'local/items/logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 $run = { param($name) $Steps -contains 'all' -or $Steps -contains $name }
@@ -30,9 +30,7 @@ function Invoke-EditorScript([string]$Name, [string]$Script, [hashtable]$Environ
     if (Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
         throw 'An Unreal editor process is already running; leaving it untouched.'
     }
-    $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes("seed_slice_player_assets $Name $((Get-Date).ToString('o'))")
-    $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+    Enter-OwUeLock -Owner "seed_slice_player_assets $Name" -TimeoutSeconds 0   # fails at once when held, as before
     try {
         foreach ($key in $Environment.Keys) { Set-Item -Path "env:$key" -Value $Environment[$key] }
         $log = Join-Path $logs "editor-$Name.log"
@@ -48,7 +46,7 @@ function Invoke-EditorScript([string]$Name, [string]$Script, [hashtable]$Environ
         }
         Select-String -LiteralPath $log -Pattern 'LogPython: (OW_|Error)|Traceback' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
         if ($code -ne 0 -or (Select-String -LiteralPath $log -Pattern 'Traceback|LogPython: Error' -Quiet)) { throw "editor step $Name failed (exit $code); see $log" }
-    } finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+    } finally { Exit-OwUeLock }
 }
 
 $full = { param($path) (Resolve-Path -LiteralPath (Join-Path $repo $path)).Path }

@@ -22,7 +22,7 @@ if (-not $Library) { $Library = Join-Path $repo 'local/weapon_library' }
 $Library = (Resolve-Path $Library).Path
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logs = Join-Path $Library 'logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
@@ -48,14 +48,12 @@ try {
     }
     $env:OPENWILLOW_WEAPON_RELOAD_TARGET = 'library'
     $env:OPENWILLOW_WEAPON_RELOAD_ANIMS = ($Reloads | ForEach-Object { $k, $v = $_ -split '=', 2; "$k=$((Resolve-Path $v).Path)" }) -join ';'
-    $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes("import_weapon_library $((Get-Date).ToString('o'))")
-    $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
     $env:OPENWILLOW_WEAPON_LIBRARY = $Library
     $env:OPENWILLOW_WEAPON_LIBRARY_ONLY = $Only
     $jobs = @()
     if ($Only -ne 'none') { $jobs += 'import_weapon_library.py' }
     if ($Reloads.Count) { $jobs += 'import_weapon_reload_anims.py' }
+    Enter-OwUeLock -Owner 'import_weapon_library' -TimeoutSeconds 0   # fails at once when held, as before
     try {
         foreach ($job in $jobs) {
             $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -69,7 +67,7 @@ try {
             if ($process.ExitCode -ne 0) { throw "$job failed (exit $($process.ExitCode)); see $log" }
         }
     } finally {
-        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+        Exit-OwUeLock
     }
 } finally {
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }

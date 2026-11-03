@@ -19,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $url = "http://127.0.0.1:$Port/"
 
 # Reuse an overlay server that is already running, else start one. Another
@@ -43,4 +44,9 @@ $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
 $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url", "-owflashskills=${url}skills.html") + $Extra
 if ($InventoryMovie -and !$NoInventoryMovie) { $arguments += "-owflashinventory=${url}inventory.html" }
 if ($GameWindow) { $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash') }
-Start-Process -FilePath $editor -ArgumentList $arguments
+# Holds the machine-wide UE run lock until the editor window is closed.
+Invoke-OwUeLocked -Owner 'run_ue_flash_hud' -Body {
+    $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
+    Write-Output "Editor pid $($process.Id); the UE run lock is held until it closes."
+    $process.WaitForExit()
+}

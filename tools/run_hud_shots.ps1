@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $gear = Join-Path $repo 'local/items/slice/slice_manifest.json'
 foreach ($file in @($gear, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf'))) {
@@ -28,16 +28,12 @@ foreach ($file in @($gear, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf')))
 }
 $level = if ($Level -gt 0) { $Level } else { [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level }
 if ($Shield) { $Extra += '-owhudshield' }
-$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
-while ($true) {
-    try { New-Item -ItemType File -Path $lock -Value "run_hud_shots $((Get-Date).ToString('o'))" -ErrorAction Stop | Out-Null; break }
-    catch { if ((Get-Date) -gt $deadline) { throw "$lock is still held" }; Start-Sleep -Seconds 30 }
-}
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outDir = Join-Path $repo "local/hudshots/$stamp"
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $log = Join-Path $outDir 'run.log'
 $server = $null; $process = $null; $code = 1
+Enter-OwUeLock -Owner 'run_hud_shots' -TimeoutSeconds $WaitForEditorSeconds -PollSeconds 30
 try {
     $server = Start-Process -PassThru -WindowStyle Hidden -FilePath python -ArgumentList @(
         "`"$(Join-Path $PSScriptRoot 'hud_overlay/serve.py')`"", '--port', $Port)
@@ -71,6 +67,6 @@ try {
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+    Exit-OwUeLock
 }
 exit $code

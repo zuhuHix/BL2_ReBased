@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $probeList = Get-Content $Probes -Raw | ConvertFrom-Json
-$hub = $null; $bak = $null
+$hub = $null; $bak = $null; $game = $null; $gameStart = $null
 if (-not $CallerHoldsHubLock) { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
 try {
     Enter-RunLock 600
@@ -24,7 +24,9 @@ try {
     Get-ChildItem (Join-Path $script:RG 'cmd') -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies')
     if ($Character) { $gameArgs += "-Character=$Character" }  # the quick_startup mod puts this slot on the menu's Continue
-    Start-Game $gameArgs | Out-Null
+    # Keep the process this run started: only it may be stopped below (never a game the user started).
+    $game = Start-Game $gameArgs
+    $gameStart = $game.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GamePy 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { throw 'driver did not answer' }
@@ -69,10 +71,19 @@ try {
     Start-Sleep -Milliseconds 300; Send-Key Space 80; Start-Sleep 3.5
     "jump: " + (Invoke-GamePy 'print(walk_status())' 10)
     Invoke-GamePy 'walk_stop(); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null
-    for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
+    for ($i = 0; $i -lt 20 -and -not $game.HasExited; $i++) { Start-Sleep 2 }
 } finally {
     Start-Sleep 3
-    if (Get-GameProcess) { Stop-Process -Id (Get-GameProcess).Id -Force }
+    if ($game -and -not $game.HasExited) {
+        # Stop only our own game: same process id, same executable, same start time, our command line.
+        $live = Get-Process -Id $game.Id -ErrorAction SilentlyContinue
+        $exe = Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'
+        $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($game.Id)" -ErrorAction SilentlyContinue).CommandLine
+        $same = $live -and $live.Path -and ([IO.Path]::GetFullPath($live.Path) -eq [IO.Path]::GetFullPath($exe)) -and
+            $live.StartTime -eq $gameStart -and $cmd -match 'Borderlands2\.exe' -and $cmd -match '-nostartupmovies' -and $cmd -match '-ResX=1280'
+        if ($same) { Stop-Process -Id $game.Id -Force; "stopped our game pid $($game.Id)" }
+        else { "game pid $($game.Id) no longer matches the process this run started; left running" }
+    }
     Remove-Driver
     if ($bak) {
         $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame/SaveData'

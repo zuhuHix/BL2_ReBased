@@ -20,28 +20,15 @@ $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $outDir = Join-Path $repo 'local/firing/frames/host'
 # The host's recipe folders in load order: -owitems first, then -owitemdir (the first recipe with a given id wins).
 $itemDirs = @((Join-Path $repo 'local/items'), (Join-Path $repo 'local/items/slice'), (Join-Path $repo 'local/items/firing/coverage'))
 foreach ($dir in $itemDirs) { if (!(Test-Path -LiteralPath $dir)) { throw "Missing recipe folder $dir (tools/weapon_stats.py, weapon_slice_gear.py, weapon_firing.py)" } }
 if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under $Engine" }
-# Take the lock as soon as no editor runs and nobody holds it (CreateNew is the atomic claim).
-$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
-        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
-        Start-Sleep -Seconds 5
-    }
-}
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("capture_firing_frames $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
 $code = 2
+Enter-OwUeLock -Owner 'capture_firing_frames' -TimeoutSeconds $WaitForEditorSeconds
 try {
     if (!$SkipBuild) {
         & $buildScript OpenWillowEditor Win64 Development "-Project=$project" -WaitMutex -NoHotReloadFromIDE
@@ -90,6 +77,6 @@ try {
     Write-Host "Log: $log"
     $code = if ($copied -gt 0) { 0 } else { 1 }
 } finally {
-    Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+    Exit-OwUeLock
 }
 exit $code

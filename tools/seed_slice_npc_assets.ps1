@@ -32,7 +32,7 @@ if (!$UModel -or !(Test-Path -LiteralPath $UModel)) { throw 'Pass -UModel <umode
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $slice = Join-Path $repo 'local/slice'
 $logs = Join-Path $slice 'logs'
 $tool = Join-Path $PSScriptRoot 'slice_npc_assets.py'
@@ -51,10 +51,8 @@ function Use-EditorLock([scriptblock]$Body) {
     if (Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
         throw 'An Unreal editor process is already running; leaving it untouched.'
     }
-    $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes("seed_slice_npc_assets $((Get-Date).ToString('o'))")
-    $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
-    try { & $Body } finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+    Enter-OwUeLock -Owner 'seed_slice_npc_assets' -TimeoutSeconds 0   # fails at once when held, as before
+    try { & $Body } finally { Exit-OwUeLock }
 }
 
 function Invoke-Editor([string]$Mode) {

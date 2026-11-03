@@ -28,18 +28,10 @@ $gearLevel = [int](Get-Content -LiteralPath $files.items -Raw | ConvertFrom-Json
 if ($Level -le 0) { $Level = $gearLevel; Write-Output "Maya level $Level = slice gear level (slice_manifest.json; UNVERIFIED slice choice, not a save)" }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
-        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) { Write-Output 'Waiting for another editor / lock holder to finish...'; Start-Sleep -Seconds 5 }
-}
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 New-Item -ItemType Directory -Force (Split-Path $Save) | Out-Null
 if ($Fresh -and (Test-Path -LiteralPath $Save)) { Remove-Item -LiteralPath $Save -Force }
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("run_quest $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+Enter-OwUeLock -Owner 'run_quest' -TimeoutSeconds 86400   # waits as long as another run holds it
 try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $log = Join-Path $repo ('local/quest/manual-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
@@ -55,5 +47,5 @@ try {
     Select-String -LiteralPath $log -Pattern 'OWQUEST|OWMOVER TRACK|not found|Maya level|lent weapon|returned lent|Phaselock|equipped slot' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '' }
 } finally {
-    Remove-Item -LiteralPath $lock -Force
+    Exit-OwUeLock
 }

@@ -15,6 +15,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under $Engine" }
 if (!(Test-Path -LiteralPath (Join-Path $Game 'Binaries/Win32/Borderlands2.exe'))) { throw 'BL2 installation not found' }
 if (!$Scene) { $Scene = Join-Path $repo 'local/ash' }
@@ -58,34 +59,38 @@ if ($LowEnd) {
     ) -join ','
     $lowEndArgs = @('-dx11', "-ExecCmds=$lowEndCmds")
 }
-if ($ViewOnly) {
-    $walkArgs = @()
-    if ($Walk) { $walkArgs += '-owwalk' }
-    & $editor $project $savedMap -game @viewArgs @lowEndArgs -log @walkArgs
-} elseif ($ImportOnly) {
-    $commandlet = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-    $importLog = Join-Path $env:OPENWILLOW_SCENE 'ue-import.log'
-    & $commandlet $project -run=pythonscript "-script=$script" -unattended -nullrhi -nosplash "-abslog=$importLog"
-    if ($LASTEXITCODE -ne 0) { throw "Scene import failed: $LASTEXITCODE" }
-    # A material whose shader fails to compile silently renders as the default
-    # checkerboard; the saved-scene verifier only inspects the graph, so gate here.
-    $compileFailures = @(Select-String -LiteralPath $importLog -Pattern 'Failed to compile Material' -SimpleMatch)
-    if ($compileFailures.Count -gt 0) {
-        $compileFailures | ForEach-Object { Write-Host $_.Line }
-        throw "$($compileFailures.Count) material(s) failed to compile during import; see $importLog"
+# Every launch below runs under the machine-wide UE run lock; the editor launches wait for the window to close.
+Enter-OwUeLock -Owner 'run_ue_level'
+try {
+    if ($ViewOnly) {
+        $walkArgs = @()
+        if ($Walk) { $walkArgs += '-owwalk' }
+        Invoke-OwUeEditor $editor (@($project, $savedMap, '-game') + $viewArgs + $lowEndArgs + @('-log') + $walkArgs) -AllowFailure
+    } elseif ($ImportOnly) {
+        $commandlet = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
+        $importLog = Join-Path $env:OPENWILLOW_SCENE 'ue-import.log'
+        & $commandlet $project -run=pythonscript "-script=$script" -unattended -nullrhi -nosplash "-abslog=$importLog"
+        if ($LASTEXITCODE -ne 0) { throw "Scene import failed: $LASTEXITCODE" }
+        # A material whose shader fails to compile silently renders as the default
+        # checkerboard; the saved-scene verifier only inspects the graph, so gate here.
+        $compileFailures = @(Select-String -LiteralPath $importLog -Pattern 'Failed to compile Material' -SimpleMatch)
+        if ($compileFailures.Count -gt 0) {
+            $compileFailures | ForEach-Object { Write-Host $_.Line }
+            throw "$($compileFailures.Count) material(s) failed to compile during import; see $importLog"
+        }
+        $verify = Join-Path $repo 'host/ue5/verify_level.py'
+        & $commandlet $project -run=pythonscript "-script=$verify" -unattended -nullrhi -nosplash
+        if ($LASTEXITCODE -ne 0) { throw "Saved scene verification failed: $LASTEXITCODE" }
+        $manifest = Get-Content -LiteralPath (Join-Path $Scene 'scene.json') -Raw | ConvertFrom-Json
+        if ($manifest.collision_policy -eq 'observed_convex_and_box_v1') {
+            $verifyCollision = Join-Path $repo 'host/ue5/verify_collision.py'
+            & $commandlet $project -run=pythonscript "-script=$verifyCollision" -unattended -nullrhi -nosplash
+            if ($LASTEXITCODE -ne 0) { throw "Saved collision verification failed: $LASTEXITCODE" }
+        }
+        $verifyUv = Join-Path $repo 'host/ue5/verify_uv.py'
+        & $commandlet $project -run=pythonscript "-script=$verifyUv" -unattended -nullrhi -nosplash
+        if ($LASTEXITCODE -ne 0) { throw "Saved UV verification failed: $LASTEXITCODE" }
+    } else {
+        Invoke-OwUeEditor $editor (@($project, "-ExecutePythonScript=$script") + $lowEndArgs + @('-log')) -AllowFailure
     }
-    $verify = Join-Path $repo 'host/ue5/verify_level.py'
-    & $commandlet $project -run=pythonscript "-script=$verify" -unattended -nullrhi -nosplash
-    if ($LASTEXITCODE -ne 0) { throw "Saved scene verification failed: $LASTEXITCODE" }
-    $manifest = Get-Content -LiteralPath (Join-Path $Scene 'scene.json') -Raw | ConvertFrom-Json
-    if ($manifest.collision_policy -eq 'observed_convex_and_box_v1') {
-        $verifyCollision = Join-Path $repo 'host/ue5/verify_collision.py'
-        & $commandlet $project -run=pythonscript "-script=$verifyCollision" -unattended -nullrhi -nosplash
-        if ($LASTEXITCODE -ne 0) { throw "Saved collision verification failed: $LASTEXITCODE" }
-    }
-    $verifyUv = Join-Path $repo 'host/ue5/verify_uv.py'
-    & $commandlet $project -run=pythonscript "-script=$verifyUv" -unattended -nullrhi -nosplash
-    if ($LASTEXITCODE -ne 0) { throw "Saved UV verification failed: $LASTEXITCODE" }
-} else {
-    & $editor $project "-ExecutePythonScript=$script" @lowEndArgs -log
-}
+} finally { Exit-OwUeLock }

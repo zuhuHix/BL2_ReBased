@@ -16,6 +16,7 @@ if (@($Walk, $Terrain, $Bsp, $Selector, $Profile, $Inspect, $Route | Where-Objec
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 if (!(Test-Path -LiteralPath $editor)) { throw 'UnrealEditor.exe not found' }
 if (!(Test-Path -LiteralPath (Join-Path $Game 'Binaries/Win32/Borderlands2.exe'))) { throw 'BL2 installation not found' }
 $root = (Resolve-Path -LiteralPath $Scene).Path
@@ -55,9 +56,11 @@ $argsList = @("`"$project`"", "/Game/OpenWillow/$($manifest.map)/$($manifest.map
     '-TestExit="Automation Test Queue Empty"', "-abslog=`"$log`"") + $lowEndArgs
 # Only this temporary game process belongs to the harness; never close an editor.
 if ($Walk -or $Terrain -or $Bsp -or $Route) { $argsList += '-owwalk' }
-$process = Start-Process -FilePath $editor -ArgumentList $argsList -WindowStyle Hidden -PassThru
-$deadline = (Get-Date).AddMinutes($(if ($Route) { 20 } else { 8 }))
+$process = $null
+Enter-OwUeLock -Owner 'test_ue_viewer'
 try {
+    $process = Start-Process -FilePath $editor -ArgumentList $argsList -WindowStyle Hidden -PassThru
+    $deadline = (Get-Date).AddMinutes($(if ($Route) { 20 } else { 8 }))
     while (!$process.WaitForExit(1000)) {
         if ((Get-Date) -gt $deadline) { throw "Viewer test timed out; see $log" }
     }
@@ -68,5 +71,6 @@ try {
     Select-String -LiteralPath $log -Pattern 'Pawn displacement:|Viewer diagnostic:|Requested screenshot:|Inspection (view|captured)|Map selector|Profile (start|turned) view|BSP (stand|walk|runtime summary):|Terrain (probes|runtime summary)|Terrain_[0-9]+ (stand(\[[0-9]+\])?|hole|seam):|covered by other geometry|Route |Host walker:|blocks a pawn sweep|OpenWillow volumes:|Test Completed.' | ForEach-Object { $_.Line }
     Write-Output "Log: $log"
 } finally {
-    if (!$process.HasExited) { Stop-Process -Id $process.Id }
+    if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id; $process.WaitForExit(30000) | Out-Null }
+    Exit-OwUeLock
 }

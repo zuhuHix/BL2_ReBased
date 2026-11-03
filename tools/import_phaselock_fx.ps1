@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logs = Join-Path $repo 'local/phaselock/logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
@@ -35,19 +35,7 @@ $env:OPENWILLOW_PHASELOCK_REPORT = Join-Path $repo 'local/phaselock/fx_import.js
 
 # Waits for the shared run lock (another lane's editor, a capture or a suite) and for no Unreal editor process, then claims
 # the lock atomically; it never touches another editor.
-$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) -and !(Test-Path -LiteralPath $lock)) {
-        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
-        Start-Sleep -Seconds 5
-    }
-}
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("import_phaselock_fx $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+Enter-OwUeLock -Owner 'import_phaselock_fx' -TimeoutSeconds $WaitForEditorSeconds
 try {
     $log = Join-Path $logs 'import.log'
     $process = Start-Process -FilePath $cmd -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logs 'import.stdout.txt') -ArgumentList @(
@@ -62,4 +50,4 @@ try {
     }
     Select-String -LiteralPath $log -Pattern 'LogPython: (OW_|Error)|Traceback' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
     if ($code -ne 0 -or (Select-String -LiteralPath $log -Pattern 'Traceback|LogPython: Error' -Quiet)) { throw "import failed (exit $code); see $log" }
-} finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+} finally { Exit-OwUeLock }

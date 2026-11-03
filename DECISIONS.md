@@ -3146,3 +3146,23 @@ Branches older than this change still use the per-checkout file until rebased. V
 `local/ue_run.lock` describe past runs and are left as written. Checks: CTest `ue-lock-machine-wide` (no script builds its
 own lock path; the helper's default and override); live: with the lock held, `test_quest.ps1 -WaitForEditorSeconds 10`
 gave up without touching it; a full `test_quest.ps1` passed 111/111 and 11/11 and left no lock behind.
+
+Review round 1 (GPT-6-Luna) changed the rule set; `tools/ue_lock.ps1` is now a dot-sourced helper used by every caller:
+- **Owner and staleness.** The lock file records the owner's PowerShell process id, its start time and the script name.
+  A lock is stale only when that exact process is gone. The former rule in `test_inventory_actions.ps1` (older than 15
+  minutes with no `UnrealEditor` or game process) could remove the lock of a long commandlet, since it ignored
+  `UnrealEditor-Cmd`; it is gone. `Exit-OwUeLock` removes only the caller's own lock. Old-format locks are never removed
+  automatically.
+- **Every launch holds it.** Seven launchers started the editor or a commandlet without the lock (`run_ue_level`,
+  `run_ue_character`, `run_ue_flash_hud`, `run_ue_probe`, `import_maya_combat_anims`, `seed_inventory_assets`,
+  `test_ue_viewer`); each launch now runs under it until the process exits. Interactive launchers now wait for the editor
+  window to close (behaviour change: the PowerShell call returns only then).
+- **Lock then `try` at once.** `test_quest.ps1` and `run_quest.ps1` ran setup between taking the lock and entering
+  `try/finally`, so a throw there stranded the lock; every caller now enters `try` on the next line.
+- **Absolute override only.** A relative `OPENWILLOW_UE_LOCK` is rejected.
+- **Own game only.** `tools/real_game/walking_capture.ps1` stopped the first `Borderlands2` process it found, which could
+  be one the user started. It now keeps the process it launched and stops only that one, after checking its id, executable
+  path, start time and command line (inline; the shared helper for this belongs to another open PR).
+- Fail-fast scripts (`import_weapon_library`, `import_phaselock_target`, `seed_slice_*`, `run_weapon_assembly_shots`) keep
+  failing at once when the lock is held (`-TimeoutSeconds 0`). `test_ambient` and `seed_ambient_npc_assets` still also wait
+  for `Borderlands2` (`-AlsoWaitFor`).
