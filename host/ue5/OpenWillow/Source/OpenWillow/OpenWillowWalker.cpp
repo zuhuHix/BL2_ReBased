@@ -1639,6 +1639,7 @@ void AOpenWillowWalker::FireWeapon()
         // Own-motion bullets (gyrojets): a yellow-olive trail, as in the real frames.
         if (Firing.AirFriction < 0.f) { Launch.bDrawStreak = true; Launch.Color = FLinearColor(0.84f, 0.76f, 0.3f); }
         Launch.Element = Element;
+        Launch.WeaponId = FiredItem ? FiredItem->Id : FString();
         if (Firing.Kind == EOpenWillowShotKind::Rocket)
         {
             // ProjectileDefinitionFire: a player's rocket leaves the muzzle toward the screen-centre hit point, when
@@ -1681,9 +1682,11 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     {
         if (!Held || !Held->Firing.bLoaded || !Held->Firing.Splash.bValid) return;
         const float Scale = Held->Damage > 0.f ? ShotDamage(*Held, GetWorld()->GetTimeSeconds()) / Held->Damage : 1.f;
-        AOpenWillowProjectile::Explode(GetWorld(), this, Held->Firing, Impact, Hit.ImpactNormal, Held->Firing.Splash.Damage * Scale);
+        AOpenWillowProjectile::Explode(GetWorld(), this, Held->Firing, Impact, Hit.ImpactNormal, Held->Firing.Splash.Damage * Scale,
+            Held->Id);
     };
-    AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
+    // Anything that takes Maya's hits (IOpenWillowHitTarget: the host dummy, range's enemies).
+    AActor* Target = OpenWillowHit::AsTarget(Hit.GetActor()) ? Hit.GetActor() : nullptr;
     if (!Target)
     {
         if (AOpenWillowShotFx::TakeDecalBudget())
@@ -1702,8 +1705,14 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     ++OpenWillowFiring::Counts.TargetHits;
     OpenWillowFiring::Counts.Direct += Damage;
     const FOpenWillowFiringData& Firing = Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly;
-    AOpenWillowProjectile::HitTarget(this, Firing, Target, Damage, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f,
-        Firing.Momentum);
+    FOpenWillowHitEvent Event;
+    Event.Kind = EOpenWillowHitKind::Direct;
+    Event.Damage = Damage;
+    Event.DamageType = Weapon ? Weapon->DamageType : FString();
+    Event.Direction = Direction;
+    Event.Momentum = Direction.GetSafeNormal() * Firing.Momentum;
+    Event.Origin = Start;
+    AOpenWillowProjectile::HitTarget(this, Firing, Target, Event, Hit, 1.f);
     ImpactExplosion();
 }
 FOpenWillowFiringState& AOpenWillowWalker::FiringStateFor(const FOpenWillowWeaponItem& Weapon)
@@ -1731,26 +1740,57 @@ void AOpenWillowWalker::StartReloadThrow(const FOpenWillowWeaponItem& Weapon)
     Launch.SplashDamage = Launch.Damage * (Throw.Splash.Damage / FMath::Max(1e-3f, Weapon.Damage));
     Launch.DamageType = Weapon.DamageType;
     Launch.Color = FLinearColor(0.35f, 0.75f, 1.f);
+    Launch.WeaponId = Weapon.Id;
     UE_LOG(LogTemp, Display, TEXT("OWFIRING reload throw %s: %d rounds, damage %.1f"), *Weapon.Id, Left, Launch.Damage);
     AOpenWillowProjectile::Launch(GetWorld(), Launch);
     if (FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable(); Held && Held->InstanceId == Weapon.InstanceId)
         Held->MagazineLeft = 0;
 }
-void AOpenWillowWalker::ApplyShotDamage(AActor* Target, float Amount, const FString& DamageType, const FVector& Direction,
-    const FHitResult& Hit, const FVector& Momentum)
+float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEvent& In, const FHitResult& Hit)
 {
-    if (!Target) return;
-    // The shot carries the item's stock damage type path (card damage_type); the target reads it while the
-    // damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded.
+    if (!Target) return 0.f;
+    const float Amount = In.Damage;
+    const FString& DamageType = In.DamageType;
+    const FVector& Momentum = In.Momentum;
+    const FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeapon() : nullptr;
+    // The hit event (OpenWillowHitEvent.h): who, where, how much, which element, momentum. Damage source (the stock
+    // DamageSource output) is not passed: its value is not decoded.
+    FOpenWillowDamageEvent Event;
+    FOpenWillowHitEvent& E = Event.Hit;
+    E = In;
+    E.Instigator = this;
+    E.Target = Target;
+    if (E.WeaponId.IsEmpty() && Held) E.WeaponId = Held->Id;
+    E.Location = Hit.ImpactPoint;
+    E.Bone = Hit.BoneName;
+    E.Element = OpenWillowHit::ElementOf(DamageType, Held ? Held->Element : FString());
+    // BL2: status-effect damage never crits; splash crits are not measured (taken as none, UNVERIFIED).
+    E.bCanCrit = In.Kind == EOpenWillowHitKind::Direct || In.Kind == EOpenWillowHitKind::Throw;
+    E.CritBonus = 2.f;   // CurrentInstantHitCriticalHitBonus base value (live); skills and the weapon's crit bonus not applied yet
+    E.Time = GetWorld()->GetTimeSeconds();
+    E.bCritical = false;
+    E.Applied = -1;
+    Event.Damage = Amount;
+    Event.HitInfo = Hit;
+    Event.ShotDirection = E.Direction;
+    Event.DamageTypeClass = UDamageType::StaticClass();
+    // Older readers (the dummy's quest path, its momentum) read the damage type and momentum through the walker.
     const FString Outer = ShotDamageTypeInFlight;   // restored after, should damage ever nest
     const FVector OuterMomentum = ShotMomentumInFlight;
     ShotDamageTypeInFlight = DamageType;
     ShotMomentumInFlight = Momentum;
     if (Cast<AOpenWillowCombatTarget>(Target)) OpenWillowFiring::Counts.Damage += Amount;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s for %.2f (damage type %s)"),
-        Inventory && Inventory->ActiveWeapon() ? *Inventory->ActiveWeapon()->Id : TEXT("-"), *Target->GetName(), Amount,
-        DamageType.IsEmpty() ? TEXT("None") : *DamageType);
-    UGameplayStatics::ApplyPointDamage(Target, Amount, Direction, Hit, GetController(), this, UDamageType::StaticClass());
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s for %.2f (damage type %s)"), E.WeaponId.IsEmpty() ? TEXT("-") : *E.WeaponId,
+        *Target->GetName(), Amount, DamageType.IsEmpty() ? TEXT("None") : *DamageType);
+    // UGameplayStatics::ApplyPointDamage without the event: the same TakeDamage call, skipped for zero damage.
+    const float Applied = Amount != 0.f ? Target->TakeDamage(Amount, Event, GetController(), this) : 0.f;
+    E.Applied = Applied;
+    ++OpenWillowFiring::Counts.HitEvents;
+    ++OpenWillowFiring::Counts.HitKinds[uint8(E.Kind) & 3];
+    UE_LOG(LogTemp, Display, TEXT("OWFIRING hitevent %s %s on %s damage %.3f applied %.3f element %s crit %d momentum %.1f"),
+        OpenWillowHit::KindName(E.Kind), E.WeaponId.IsEmpty() ? TEXT("-") : *E.WeaponId, *Target->GetName(), E.Damage, Applied,
+        OpenWillowHit::ElementName(E.Element), E.bCritical ? 1 : 0, float(E.Momentum.Size()));
+    OpenWillowHit::OnHit().Broadcast(E);
     if (const AOpenWillowCombatTarget* Dummy = Cast<AOpenWillowCombatTarget>(Target); Dummy && !Momentum.IsNearlyZero())
     {
         ++OpenWillowFiring::Counts.MomentumHits;
@@ -1761,6 +1801,7 @@ void AOpenWillowWalker::ApplyShotDamage(AActor* Target, float Amount, const FStr
     ShotDamageTypeInFlight = Outer;
     ShotMomentumInFlight = OuterMomentum;
     TargetHitAt = GetWorld()->GetTimeSeconds();
+    return Applied;
 }
 bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
 {

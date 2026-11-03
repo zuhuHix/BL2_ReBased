@@ -94,7 +94,12 @@ void UOpenWillowStatusEffects::TickComponent(float DeltaTime, ELevelTick TickTyp
             ++OpenWillowFiring::Counts.Ticks;
             FHitResult Hit;
             Hit.ImpactPoint = Hit.Location = Target->GetActorLocation() + FVector(0, 0, 60);
-            Effect.Shooter->ApplyShotDamage(Target, float(Amount), Effect.DamageType, FVector::ZeroVector, Hit);
+            FOpenWillowHitEvent Event;
+            Event.Kind = EOpenWillowHitKind::StatusTick;
+            Event.Damage = float(Amount);
+            Event.DamageType = Effect.DamageType;
+            Event.Origin = Hit.ImpactPoint;
+            Effect.Shooter->ApplyShotDamage(Target, Event, Hit);
             AOpenWillowShotFx::Flash(GetWorld(), Hit.ImpactPoint, StatusColor(Effect.Type), 14.f, 0.25f, 600.f);
         }
         if (bEnded)

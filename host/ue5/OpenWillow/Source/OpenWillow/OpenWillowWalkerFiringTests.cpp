@@ -563,9 +563,10 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
         const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
         UE_LOG(LogTemp, Display, TEXT("OWFIRING dummy id=%s health=%.3f"), *Id, CombatTarget->HealthFraction());
-        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d"),
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d hit_events=%d hit_direct=%d hit_splash=%d hit_tick=%d hit_throw=%d"),
             *Id, *Kind, C.Pellets, C.Shots, C.Launches, C.Impacts, C.TargetHits, C.Damage, C.Direct, C.Splash, C.SplashHits,
-            C.StatusRolls, C.Procs, C.Ticks, C.TimedImpacts, C.OnTimeImpacts);
+            C.StatusRolls, C.Procs, C.Ticks, C.TimedImpacts, C.OnTimeImpacts, C.HitEvents, C.HitKinds[0], C.HitKinds[1],
+            C.HitKinds[2], C.HitKinds[3]);
         if (!Item || Item->Id != Id) UE_LOG(LogTemp, Warning, TEXT("OWFIRING id=%s reported after the weapon changed"), *Id);
         ++Gun;
         Step = 0;

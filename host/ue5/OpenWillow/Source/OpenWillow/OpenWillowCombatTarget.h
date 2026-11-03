@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "OpenWillowPhaselock.h"
 #include "OpenWillowPhaselockFx.h"
+#include "OpenWillowHitEvent.h"
 #include "OpenWillowCombatTarget.generated.h"
 
 struct FOpenWillowDamagePopup
@@ -16,10 +17,19 @@ struct FOpenWillowDamagePopup
 // Local Sanctuary combat stand-in until enemy pawn/AI data is hosted. It is a
 // host-made training dummy (engine shapes), not a BL2 enemy mesh or behavior.
 UCLASS()
-class OPENWILLOW_API AOpenWillowCombatTarget : public AActor
+class OPENWILLOW_API AOpenWillowCombatTarget : public AActor, public IOpenWillowHitTarget
 {
     GENERATED_BODY()
 public:
+    // IOpenWillowHitTarget (OpenWillowHitEvent.h): splash distance to the collision centre, the auto-aim radius for the
+    // status chance falloff, and the level below.
+    virtual void GetHitCentre(FVector& OutCentre, float& OutRadius) const override
+    {
+        float HalfHeight = 0;
+        CollisionCentre(OutCentre, HalfHeight);
+        OutRadius = AutoAimRadius();
+    }
+    virtual int32 GetHitLevel() const override { return Level; }
     AOpenWillowCombatTarget();
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;

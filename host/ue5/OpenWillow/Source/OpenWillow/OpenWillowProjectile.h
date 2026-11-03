@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "OpenWillowFiring.h"
+#include "OpenWillowHitEvent.h"
 #include "OpenWillowProjectile.generated.h"
 
 // One fired pellet that travels: a light bullet (EWWFT_Bullet; damage when it arrives) or a rocket (EWWFT_Rocket;
@@ -29,23 +30,24 @@ public:
         FString DamageType;                          // stock damage type path the target reads
         bool bDrawStreak = true;
         FString Element;                             // the card element (impact colour)
+        FString WeaponId;                            // the fired item's id, carried to the hit event
         FLinearColor Color = FLinearColor(1.f, 0.78f, 0.45f);
     };
     static AOpenWillowProjectile* Launch(UWorld* World, const FLaunch& Launch);
 
     // Splash from an explosion at Origin (also used by trace shots of guns whose firing mode explodes on impact).
     static void Explode(UWorld* World, class AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data,
-        const FVector& Origin, const FVector& Normal, float SplashDamage);
+        const FVector& Origin, const FVector& Normal, float SplashDamage, const FString& WeaponId = FString());
     // Host impact and explosion looks (stand-ins for the particle systems).
     static void ImpactFx(UWorld* World, const FVector& Point, const FVector& Normal, const FString& Element);
     static void ExplosionFx(UWorld* World, const FVector& Origin, const FVector& Normal, float Radius,
         const FString& DamageType);
-    // A damaging hit on a target: damage, then the status effect roll (NATIVE_WEAPON_FIRING 4.1-4.2).
-    // Momentum is the hit's momentum length along Direction (InstantHitMomentum x 100 for a bullet or trace; radius
-    // scale x MomentumFormula for splash).
+    // A damaging hit on a target: damage (the hit event, OpenWillowHitEvent.h), then the status effect roll
+    // (NATIVE_WEAPON_FIRING 4.1-4.2). The caller fills the event's Kind, Damage, DamageType, Direction, Momentum (the
+    // vector: InstantHitMomentum x 100 along the ray for a bullet or trace; radius scale x MomentumFormula for splash),
+    // Origin, RadiusScale and WeaponId; the shooter fills the rest.
     static void HitTarget(class AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data, AActor* Target,
-        float Damage, const FString& DamageType, const FVector& Direction, const FHitResult& Hit, float StatusScale,
-        float Momentum);
+        const FOpenWillowHitEvent& Event, const FHitResult& Hit, float StatusScale);
 
 private:
     void Impact(const FHitResult& Hit);
@@ -64,6 +66,7 @@ private:
     bool bRocket = false;
     bool bDrawStreak = true;
     FString Element;
+    FString WeaponId;
     FVector VisualOffset = FVector::ZeroVector; // muzzle minus start, faded out over the first metres
     FVector StartPoint = FVector::ZeroVector;
     float LastDelta = 0;                        // the last tick's seconds (the arrival check allows one frame)
