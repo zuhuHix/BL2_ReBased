@@ -140,7 +140,7 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
  {"id":"T.Gated","name":"Gated","type":"Passive","maxGrade":5,"subjectToGradeRules":true,"effects":[
   {"attribute":"A.Damage","modifierType":"PostAdd","target":"Self","startGrade":1,"interval":1,"base":{"attribute":"A.Max","scale":0.5},"perGrade":{"constant":0},"bonus":[]}],
   "conditions":[{"whileActive":true,"test":{"kind":"and","left":{"kind":"attribute","attribute":"A.Locked","op":"EqualTo","constant":1},"right":{"kind":"onFoot"}}}]},
- {"id":"T.Aug","name":"Aug","type":"ActionAugment","maxGrade":5,"subjectToGradeRules":true,"conditions":[],"effects":[
+ {"id":"T.Aug","name":"Aug Skill","type":"ActionAugment","maxGrade":5,"subjectToGradeRules":true,"conditions":[],"effects":[
   {"attribute":"A.Damage","modifierType":"PreAdd","target":"Self","startGrade":1,"interval":1,"base":{"constant":2},"perGrade":{"constant":0},"bonus":[]}]},
  {"id":"T.Kill","name":"Kill","type":"Kill","maxGrade":5,"subjectToGradeRules":true,"conditions":[],"effects":[
   {"attribute":"A.Damage","modifierType":"PreAdd","target":"Self","startGrade":1,"interval":1,"base":{"constant":100},"perGrade":{"constant":0},"bonus":[]}]}]})");
@@ -155,6 +155,9 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
     FString Error;
     FOpenWillowSkillEffects& Fx = Tree->GetEffectsMutable();
     TestTrue(TEXT("Manifest loads"), Root && Fx.LoadJson(*Root, Error));
+    TestTrue(TEXT("Find by id, display name and the id's last part"),
+        Fx.Find(TEXT("Aug Skill")) && Fx.Find(TEXT("Aug")) == Fx.Find(TEXT("T.Aug")) && Fx.Find(TEXT("Aug")) == Fx.Find(TEXT("Aug Skill"))
+        && !Fx.Find(TEXT("ug")));
 
     bool bLocked = false, bRunning = false;
     FOpenWillowSkillEffects::FWorld World;
