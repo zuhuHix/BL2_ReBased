@@ -91,9 +91,18 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
   (`-owtargetlevel=N` sets the host dummy's; without it the dummy counts as Maya's level, factor 1).
 * The splash distance is to the target's collision centre (the game measures to a hit-region bone; the live cutoff of
   the radius-250 rocket lay between 380 and 432 uu from the pawn origin). The target's surface is taken as Generic.
-* Not modelled (open): the elemental impact explosions of elemental and Torgue bullets (live: Maliwan pistol bullet
-  45.30 plus an impact explosion of 0.80 x; Torgue shotgun 0.85 x; from the firing mode's `ExplosionOverrideDefinition`
-  collection, not yet decoded); element-vs-surface factors (live on flesh: fire x1.5, corrosive x0.9, shock and slag
+* Torgue impact explosions are modelled: they are the firing mode's own `Behavior_Explode` splash (Torgue shotgun 17.755 per
+  hit = live 0.85 x 20.888; gyrojet 28.97, live 28.977), section 5.
+* Not modelled (open): the elemental impact explosion of elemental bullets (live: Maliwan pistol bullet 45.30 plus an impact
+  explosion of 36.24 = 0.80 x). What the data says (2026-11-03): the firing mode names
+  `ExplosionOverrideDefinition` = `GD_Weap_Shared_Effects.Default_Elemental_Explosions` with instance-data name
+  `ExplosionOverride`; that collection is an array of `ConditionalExplosionData` {`Explosion`, `Expression`} (one explosion
+  per condition, not yet decoded: the reader's schema lacks the struct); an `ExplosionDefinition` carries visuals, sound and a
+  damage type but **no damage, radius or momentum**, so whoever plays it supplies them. Neither the Maliwan weapon type's nor
+  the elemental name prefix's behaviour provider has any sequence. The shock impact damage type has its own falloff bands
+  (`MaxDamageRadius` 0.4, `MinDamageRadius` 1.0, `MinDamagePercent` 0.75), so the live 0.80 may be full bullet damage under
+  that falloff rather than a fixed factor (UNVERIFIED guess). The caller is native (the second branch of
+  `ProcessInstantHitBullet`, open in NATIVE_WEAPON_TRIGGER_AMMO.md); settling it needs a native read or a live hook; element-vs-surface factors (live on flesh: fire x1.5, corrosive x0.9, shock and slag
   x1.0); child projectiles spawned by a projectile's behaviours (the Maliwan launcher's fire area; the firing block lists
   them under `unsupported` and the host logs them); beams (the tool gives them their own kind, `beam`, listed as
   unsupported; the host fires light bullets for them); runtime damage modifiers (skills, relics; the per-pellet split is

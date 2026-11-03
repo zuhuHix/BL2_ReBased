@@ -10,7 +10,8 @@ param(
     [string[]]$Extra = @(),
     [int]$TimeoutSeconds = 3600,
     [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    # Optional machine-wide hub lock file (OPENWILLOW_HUB_LOCK); empty: only the editor check and local/ue_run.lock.
+    [string]$HubLock = $env:OPENWILLOW_HUB_LOCK,
     [string]$Lane = 'weaponparts'
 )
 # AI-assisted. One windowed host run in Sanctuary that equips each recipe and captures OWGun_<id>_idle.png (first person) and
@@ -32,7 +33,8 @@ $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $log = Join-Path $outDir 'run.log'
 $hub = $null
 try {
-    while (!$hub) {
+    if ($HubLock -and !(Test-Path -LiteralPath (Split-Path -Parent $HubLock))) { throw "hub lock folder missing: $HubLock" }
+    while ($HubLock -and !$hub) {
         try { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
         catch { "hub lock held by '$(Get-Content $HubLock -Raw -ErrorAction SilentlyContinue)'; retry in 60 s"; Start-Sleep 60 }
     }

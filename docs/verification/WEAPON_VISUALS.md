@@ -386,12 +386,42 @@ in four rounds. Final pairs: `local/laneE/pairs_r4/` and the hub gallery; report
 
 Open, most visible first:
 
-- **SMG flash at the rear of the gun.** The SMG's (and the shotguns') cooked muzzle socket hangs off `Root` with a -Y offset
-  (`SMG_Barrel_Maliwan_Muzzle` at about (0, -27, 12)), while the pistol and AR sockets hang off `Barrel` with the offset on X. The host draws the
-  SMG flash about 27 cm behind the receiver, which fits a Y mirror between the cooked bone frame and the imported mesh's `Root`. Suspected,
-  not tested; the eye sockets are on `Root` too, so a fix must recheck the ADS fit (lateral alignment does not depend on that sign, depth does).
+- **SMG flash at the rear of the gun: fixed 2026-11-03 (host check; frames not yet compared with the game).** Cause confirmed:
+  `WeaponSocketWorld` mirrored the cooked socket offset across Y, while the decoded-socket path (`GunSocketLocation`) and the
+  mesh-space reference do not. Every decoded muzzle is at -Y in mesh space (pistol -22, AR -69, SMG -33, shotgun -93 cm) and every
+  eye socket at +Y, so the barrel runs along -Y. On the `Barrel`-parented pistol and AR muzzles the mirrored component is about
+  0.1 cm and did nothing; on the `Root`-parented SMG and shotgun muzzles it put the whole offset behind the gun. Gunprobe on
+  pc-hummer (camera X forward, cm): SMG flash 51.0 before -> 116.9 after (decoded socket 116.9, gun root 84.3); shotgun -24.4 ->
+  162.2 (decoded 162.2); pistol and AR unchanged within 0.3 cm. The mirror is removed. Firing suite after the change 14 PASS /
+  0 FAIL (rockets and tracers start at the same point).
+- **ADS fit after the mirror fix.** The eye sockets went through the same mirror. Two host rules changed with it, both UNVERIFIED
+  against the game's zoom pose: (1) the fit projects the eye socket onto the plane through the gun's `Root` across the barrel
+  axis, so only the sight's height and side offset count (the pistol's eye socket sits 83 cm along the axis, which turned the hip
+  pose's yaw into about 9 cm of side error with the mirror or without it); (2) the "about 18 px below the reticle" drop is
+  converted to cm at the gun body's depth (`Root`), where it is seen, not at the eye socket's (the mirror had put the pistol's at
+  170 cm, which doubled the drop to about 35-40 px). Fitted offsets (right, up; cm) before -> after: SMG -18.8, 1.6 -> -18.9, 1.7;
+  shotgun -18.7, -0.7 -> -18.7, 0.2; AR -16.9, 3.7 -> -16.9, 4.7; pistol -10.4, -1.2 -> -15.9, 4.7. The pistol fit does not
+  converge: at full zoom its projected eye point stays 3.2 cm to the side (the same 3.2 cm as before the change), and the sight
+  shows about 50 px left of and slightly above the reticle. Open; needs the matched real frame.
 - **SMG hip size:** about 370 px wide against 242 px in the real idle frame with scale 1.0 and the correct arms set; cause not found.
+  Note (2026-11-03): that comparison used lane E's fixture SMG (a Maliwan barrel). This machine's `slice_smg` is a different roll
+  (Dahl barrel, Hyperion body, Tediore scope, drawn from the pre-built `SK_slice_smg` because the Hyperion SMG type is not in the
+  part library), so hip size needs the matched gun and frame before it can be judged.
 - **Reload mid-poses** of the AR (fills too much of the view) and SMG (hand placement, cant) still differ although both clips start together.
+  The slice SMG could not reload at all in the host until 2026-11-03: `UOpenWillowInventory::ResolveAmmoType` matched only the type
+  `SMG`, while the recipes carry the game's long SMG type label (lane E's fixture had renamed it), so the gun had no ammo pool.
+  The label now resolves to the SMG pool (inventory self-test check added).
+  Reload clips on a fresh machine (pc-hummer, 2026-11-03; all output ignored): UModel 1590 `-game=border -export -md5` of the
+  `Startup` weapon AnimSets (Pistol, AssaultRifle, SMG) and gestalt meshes into `local/laneE/umodel-*-r1`, of
+  `GD_Siren_Streaming_SF` `1st_Person_<Pistol|AssaultRifle|SMG>` AnimSets (118 clips, as in section 13) and `Hands_Siren`; then
+  `import_weapon_items.py` with `OPENWILLOW_WEAPON_REFERENCES=local/laneE/weapon-refs` (it rebuilds `Weapons/Items`, so the
+  slice recipes are imported with the demo recipes), `tools/weapon_reload_anims.py`, and the UE imports
+  `import_weapon_reload_anims.py` (per recipe and library) and `import_character_anims.py` (arms). Host check after it: the
+  pistol (`Reload_Jakobs`), AR (`Reload_Jakobs`) and SMG (`Reload_Hyperion`) reloads play with their arms clips (rates 0.866 /
+  0.718 / 1.852) and reach the midpoint frame; the slice shotgun has no reload clip (`tools/weapon_reload_anims.py` has no shotgun
+  family) and the mission pistol is not captured (it cannot be equipped into a slot outside the quest). The pistol, AR and SMG
+  now load `Items/SK_slice_*` instead of `SliceItems/SK_slice_*`; their muzzle points agree within 0.4 cm. The mid-poses still
+  need the matched real frames.
 - **ADS widths:** pistol about 20 percent too broad, AR about 20 percent too narrow.
 - **Look:** Jakobs metal reads warmer and greyer than the real frames (different scene light; not changed without an Inspect-safe cause); the
   Maliwan accents read pinker; Maya's forearm reads narrower and paler than the real blue-white sleeve.
