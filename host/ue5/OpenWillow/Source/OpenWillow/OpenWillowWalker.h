@@ -118,6 +118,9 @@ public:
     class UOpenWillowQuest* GetQuest() const { return Quest; }
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
         class AController* EventInstigator, AActor* DamageCauser) override;
+    // A teleport (respawn, fast travel, test drivers, the range lane): resets the fall tracking so the landing after it is not charged
+    // for a fall that began elsewhere. A generic check in TickMovement backs this up for callers that do not call it.
+    void NotifyTeleported();
     // Damage from the world (OpenWillowApplyDamageToPlayer, and TakeDamage for UE's ApplyDamage): shield first, then health,
     // then the down state. SourceLocation is where the hit came from (ZeroVector: unknown). Returns what the pools took.
     float ApplyDamageToPlayer(float Amount, AActor* Causer, const FVector& SourceLocation);
@@ -191,8 +194,8 @@ private:
     // Maya's movement feel each tick (NATIVE_PLAYER_MOVEMENT.md, OpenWillowMayaMovement.h): speeds from the stats, the sprint
     // state machine, the eye height and bob on the camera, the sprint FOV (read by UpdateAim). Maya mode only.
     void TickMovement(float Now, float DeltaSeconds);
-    void BeginSprint(float Now);
-    void EndSprint(float Now, const TCHAR* Why);
+    OpenWillowMovement::FSprintInput SprintInputNow() const;
+    void LogSprint(bool bOn, const TCHAR* Why) const;
     virtual void Landed(const FHitResult& Hit) override;
     void ApplyMayaMovementDefaults();
     void JumpPressed();
@@ -284,8 +287,7 @@ private:
     UPROPERTY() TObjectPtr<class UOpenWillowArmsAnimInstance> ArmsAnim;
     TWeakObjectPtr<class AOpenWillowCombatTarget> CombatTarget;
     bool bSprintHeld = false;           // sprint key down
-    bool bSprintPending = false;        // pressed, waiting for forward input (bTryToSprint)
-    bool bSprinting = false;
+    OpenWillowMovement::FSprint Sprint;  // the script's sprint state machine (press, wait for the cone, want, active)
     bool bCrouchHeld = false;
     bool bMayaCrouched = false;         // the host's crouch (SetMayaCrouched): cylinder 21 x 50
     OpenWillowMovement::FFallTimer FallTimer;

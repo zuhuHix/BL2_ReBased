@@ -85,6 +85,7 @@ void AOpenWillowGameMode::RestartPlayer(AController* NewPlayer)
             && FMath::IsFinite(X) && FMath::IsFinite(Y) && FMath::IsFinite(Z))
         {
             Pawn->SetActorLocation(FVector(X, Y, Z), false, nullptr, ETeleportType::TeleportPhysics);
+            if (auto* Maya = Cast<AOpenWillowWalker>(Pawn)) Maya->NotifyTeleported();
         }
         Player->SetViewTarget(Pawn);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow walking pawn activated at %s"), *Pawn->GetActorLocation().ToString());

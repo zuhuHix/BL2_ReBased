@@ -1062,6 +1062,7 @@ void UOpenWillowQuest::PlacePlayer(const FVector& Location, const FVector& Look)
     auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     Walker->SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
     Walker->GetCharacterMovement()->StopMovementImmediately();
+    Walker->NotifyTeleported();
     if (Walker->GetController()) Walker->GetController()->SetControlRotation((Look - (Location + FVector(0, 0, 70))).Rotation());
 }
 

@@ -60,6 +60,65 @@ float EaseFov(float Current, float Target, float DeltaSeconds)
     return (Target - Current) * (Target - Next) <= 0.f ? Target : Next;
 }
 
+bool FSprint::Act(const FSprintInput& In)
+{
+    if (!In.bCanSprint) return false;
+    if (In.bGroundOrShortFall)
+    {
+        bActive = true;
+        bWants = false;
+        return true;
+    }
+    bWants = true;
+    return false;
+}
+
+bool FSprint::Press(const FSprintInput& In, bool& bOutBegan)
+{
+    bOutBegan = false;
+    if (!In.bInCone)
+    {
+        bTry = true;
+        return false;
+    }
+    bTry = false;
+    bOutBegan = Act(In);
+    return true;
+}
+
+FSprint::EEvent FSprint::Tick(const FSprintInput& In, bool& bOutCancelCrouch)
+{
+    bOutCancelCrouch = false;
+    if (bActive)
+    {
+        if (In.bCanContinue && In.bInCone) return EEvent::None;
+        bActive = false;
+        return EEvent::Ended;
+    }
+    if (bTry && In.bInCone)
+    {
+        bTry = false;
+        bOutCancelCrouch = true;
+        if (Act(In)) return EEvent::Began;
+    }
+    if (bWants)
+    {
+        if (!In.bInCone) bWants = false;
+        else if (In.bGroundOrShortFall && In.bCanSprint)
+        {
+            bWants = false;
+            bActive = true;
+            return EEvent::Began;
+        }
+    }
+    return EEvent::None;
+}
+
+FVector FallingVelocityAfterFriction(const FVector& Velocity, float DeltaSeconds)
+{
+    return Velocity * FMath::Max(0.f, 1.f - FluidFriction * DeltaSeconds);
+}
+
 bool LooksLikeTeleport(const FVector& Previous, const FVector& Current, const FVector& Velocity, float DeltaSeconds)
 {
     return FVector::Dist(Previous, Current) > Velocity.Size() * DeltaSeconds + 100.f;

@@ -841,6 +841,7 @@ void AOpenWillowAmbientDirector::RunShots(float DeltaSeconds)
             bSkipView = false;
             Walker->SetActorLocation(Camera, false, nullptr, ETeleportType::TeleportPhysics);
             Walker->GetCharacterMovement()->StopMovementImmediately();
+            Walker->NotifyTeleported();
             const FVector P = Npc->GetActorLocation();
             UE_LOG(LogTemp, Display, TEXT("OWAMBIENT view %d %s kind=%s phase=%s pawn %.0f %.0f %.0f yaw %.0f camera %.0f %.0f %.0f (%s)"), View, *Npc->Label(),
                 *Npc->KindName(), *Npc->Phase(), P.X, P.Y, P.Z, Npc->GetActorRotation().Yaw, Camera.X, Camera.Y, Camera.Z, *Note);
