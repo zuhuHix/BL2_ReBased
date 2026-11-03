@@ -18,7 +18,8 @@ test_inventory_actions 49 pass / 0 fail; verify_combat_pawn `--vm` 25 pass / 0 f
 verify_packages 9 packages, all class bodies exact. `test_quest` now has 112 checks; the new `player_death_goes_down_first` and the respawn
 after the 20 s bleed-out pass. `run_hud_shots.ps1 -Down` 10/10, `-Tracker` 4/4, default 16/16; `test_action_skill_hud` 19/19;
 `test_hud_minimap` 15/15. Rebased on main 490661e (PR #61) with a regenerated audio manifest: ctest 21/21, `test_quest` first run
-112/112 and resume 11/11.
+112/112 and resume 11/11. On main 542d0c6 (PR #62): ctest 20/20, `test_quest` 112/112 + resume 11/11, `-Down` 10/10, `-Tracker` 4/4,
+`test_weapon_firing` 14/14 (with the local slice recipes' `firing` block regenerated).
 
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):

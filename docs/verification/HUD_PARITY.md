@@ -253,6 +253,14 @@ whether the game still counts it is UNVERIFIED (a mission-model question, not a 
   * `run_hud_shots.ps1 -Down` 10/10 with the new title and pixel checks (bleed-bar pixels: up 0, down_start 3,540,
     down_mid 2,281, the other three 0).
   * `-Tracker` 4/4.
+* Rebased on main 542d0c6 (PR #62, momentum and sweep), pc-hummer:
+  * ctest 20/20 (PR #62 retired one test); verify_packages 9/9 exact; UE module build OK.
+  * Every shot, projectile, splash and status tick still reaches the dummy through `AOpenWillowWalker::ApplyShotDamage`
+    with Maya as the causer, so `NotifyKilledEnemy` (second wind) sees all of them. Checked by reading, not by a run.
+  * `test_quest.ps1` 112/112 and resume 11/11; `run_hud_shots.ps1 -Down` 10/10; `-Tracker` 4/4.
+  * `test_weapon_firing.ps1` 14/14, after regenerating the local slice recipes' `firing` block with
+    `tools/weapon_firing.py`. The first run with the older local recipes gave 11/14: the slice pistol, shotgun and SMG had
+    no `firing` block, so the expected momentum fell back to the default (local data, not this change).
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.
