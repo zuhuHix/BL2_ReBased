@@ -99,6 +99,79 @@ void TeleportMaya(UWorld* World, const FVector& Spot, float Yaw)
 }
 }
 
+namespace
+{
+// The floor of one formation slot (host choice, UNVERIFIED): a down trace near the spot's height that meets a walkable floor
+// (normal Z >= 0.85) within 150 uu of the spot. False when there is none.
+bool SlotFloor(UWorld* World, const FVector& Spot, const FVector& Centre, FVector& OutFloor)
+{
+    FHitResult Hit;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSlot), true);
+    if (!World->LineTraceSingleByChannel(Hit, FVector(Centre.X, Centre.Y, Spot.Z + 300.f), FVector(Centre.X, Centre.Y, Spot.Z - 600.f),
+            ECC_Visibility, Query) || Hit.bStartPenetrating)
+        return false;
+    if (Hit.ImpactNormal.Z < 0.85f || FMath::Abs(Hit.Location.Z - Spot.Z) > 150.f) return false;
+    OutFloor = Hit.Location;
+    return true;
+}
+}
+
+bool UOpenWillowRangeSubsystem::FormationSlots(const FVector& Spot, float Yaw, TArray<FVector>& OutDummies, TArray<FVector>& OutEnemies,
+    FString& OutWhy) const
+{
+    // Every slot of the formation must stand on floor: the dummy row DummyAhead ahead and the enemy arc EnemyRing ahead, one
+    // slot per enemy the manifest spawns. The scout uses this too, so a scouted spot always holds the whole range.
+    UWorld* World = GetWorld();
+    OutDummies.Reset();
+    OutEnemies.Reset();
+    if (!World) { OutWhy = TEXT("no world"); return false; }
+    const FVector Forward = FRotator(0.f, Yaw, 0.f).Vector();
+    const FVector Side = FRotator(0.f, Yaw + 90.f, 0.f).Vector();
+    for (int32 Index = 0; Index < ExpectedDummies; ++Index)
+    {
+        const FVector Centre = Spot + Forward * DummyAhead + Side * (float(Index) - 1.f) * DummySpacing;
+        FVector Floor;
+        if (!SlotFloor(World, Spot, Centre, Floor)) { OutWhy = FString::Printf(TEXT("dummy slot %d at %s has no walkable floor"), Index, *Centre.ToString()); return false; }
+        OutDummies.Add(Floor);
+    }
+    const int32 Total = ExpectedEnemies();
+    for (int32 Index = 0; Index < Total; ++Index)
+    {
+        const float Angle = Total > 1 ? FMath::Lerp(-EnemyArcDegrees, EnemyArcDegrees, float(Index) / float(Total - 1)) : 0.f;
+        const FVector Centre = Spot + FRotator(0.f, Yaw + Angle, 0.f).Vector() * EnemyRing;
+        FVector Floor;
+        if (!SlotFloor(World, Spot, Centre, Floor)) { OutWhy = FString::Printf(TEXT("enemy slot %d at %s has no walkable floor"), Index, *Centre.ToString()); return false; }
+        OutEnemies.Add(Floor);
+    }
+    return true;
+}
+
+int32 UOpenWillowRangeSubsystem::ExpectedEnemies() const
+{
+    int32 Total = 0;
+    for (const FOpenWillowRangeSpawn& Spawn : Manifest.Spawns)
+        if (Manifest.Kinds.Contains(Spawn.Kind)) Total += FMath::Max(0, Spawn.Count);
+    return Total;
+}
+
+void UOpenWillowRangeSubsystem::EnsureManifest()
+{
+    if (bManifestLoaded) return;
+    bManifestLoaded = true;
+    const FString Path = RangeFile(TEXT("owrange="), TEXT("../../../local/range/range_manifest.json"));
+    FString Why;
+    Manifest = FOpenWillowRangeManifest::Load(Path, Why);
+    if (Manifest.bFromFile)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE manifest %s: %d kinds, %d spawn entries, respawn %.0f s"), *Path, Manifest.Kinds.Num(),
+            Manifest.Spawns.Num(), Manifest.RespawnSeconds);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE manifest %s: %s; stand-in kind (engine shapes, health 400)"), *Path, *Why);
+    }
+}
+
 FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FString& OutLog)
 {
     FOpenWillowRangeManifest Out;
@@ -247,42 +320,26 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
     UWorld* World = GetWorld();
     if (!World) return false;
     ClearRange();
-    if (!bManifestLoaded)
+    EnsureManifest();
+    // The whole formation must stand on walkable floor before anything is spawned (an incomplete range is a failed build).
+    TArray<FVector> DummySlots, EnemySlots;
+    FString Why;
+    if (!FormationSlots(Spot, Yaw, DummySlots, EnemySlots, Why))
     {
-        bManifestLoaded = true;
-        const FString Path = RangeFile(TEXT("owrange="), TEXT("../../../local/range/range_manifest.json"));
-        FString Why;
-        Manifest = FOpenWillowRangeManifest::Load(Path, Why);
-        if (Manifest.bFromFile)
-        {
-            UE_LOG(LogTemp, Display, TEXT("OWRANGE manifest %s: %d kinds, %d spawn entries, respawn %.0f s"), *Path, Manifest.Kinds.Num(),
-                Manifest.Spawns.Num(), Manifest.RespawnSeconds);
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("OWRANGE manifest %s: %s; stand-in kind (engine shapes, health 400)"), *Path, *Why);
-        }
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE build failed at %s yaw %.0f: %s"), *Spot.ToString(), Yaw, *Why);
+        return false;
     }
     SpotNow = Spot;
     SpotYawNow = Yaw;
-    const FVector Forward = FRotator(0.f, Yaw, 0.f).Vector();
-    const FVector Side = FRotator(0.f, Yaw + 90.f, 0.f).Vector();
-
     // Three static dummies in a row, facing the spot. The Fire mission's stock dummy when its data loads, else engine shapes.
     const bool bStockDummy = LoadSliceData();
-    for (int32 Index = 0; Index < 3; ++Index)
+    for (int32 Index = 0; Index < DummySlots.Num(); ++Index)
     {
-        const FVector Centre = Spot + Forward * DummyAhead + Side * (float(Index) - 1.f) * DummySpacing;
-        FVector At;
-        if (!AOpenWillowEnemy::TraceFloor(World, FVector2D(Centre.X, Centre.Y), Spot.Z + 300.f, Spot.Z - 600.f, nullptr, At))
-        {
-            UE_LOG(LogTemp, Warning, TEXT("OWRANGE dummy %d: no floor at %s, skipped"), Index, *Centre.ToString());
-            continue;
-        }
+        const FVector& At = DummySlots[Index];
         FActorSpawnParameters Params;
         Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
         AOpenWillowCombatTarget* Dummy = World->SpawnActor<AOpenWillowCombatTarget>(At, FRotator(0.f, Yaw + 180.f, 0.f), Params);
-        if (!Dummy) continue;
+        if (!Dummy) break;
         const bool bStock = bStockDummy
             && Dummy->UseStockPawn(SliceData.Dummy.Mesh, SliceData.Dummy.Idle, SliceData.Dummy.Death, SliceData.Dummy.MeshOffset);
         Dummy->SetRespawn(true, Manifest.RespawnSeconds);
@@ -292,10 +349,8 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             bStock ? TEXT("yes") : TEXT("no (engine shapes)"), Manifest.RespawnSeconds);
     }
 
-    // Moving enemies: the manifest's spawns on an arc ahead, each on the floor and facing the spot.
+    // Moving enemies: the manifest's spawns on the arc slots, in manifest order, each facing the spot.
     const int32 Level = EnemyLevel();
-    int32 Total = 0;
-    for (const FOpenWillowRangeSpawn& Spawn : Manifest.Spawns) Total += FMath::Max(0, Spawn.Count);
     int32 Index = 0;
     for (const FOpenWillowRangeSpawn& Spawn : Manifest.Spawns)
     {
@@ -305,16 +360,9 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             UE_LOG(LogTemp, Warning, TEXT("OWRANGE spawn kind %s is not in the manifest, skipped"), *Spawn.Kind);
             continue;
         }
-        for (int32 Copy = 0; Copy < Spawn.Count; ++Copy, ++Index)
+        for (int32 Copy = 0; Copy < Spawn.Count && EnemySlots.IsValidIndex(Index); ++Copy, ++Index)
         {
-            const float Angle = Total > 1 ? FMath::Lerp(-EnemyArcDegrees, EnemyArcDegrees, float(Index) / float(Total - 1)) : 0.f;
-            const FVector Centre = Spot + FRotator(0.f, Yaw + Angle, 0.f).Vector() * EnemyRing;
-            FVector At;
-            if (!AOpenWillowEnemy::TraceFloor(World, FVector2D(Centre.X, Centre.Y), Spot.Z + 300.f, Spot.Z - 600.f, nullptr, At))
-            {
-                UE_LOG(LogTemp, Warning, TEXT("OWRANGE enemy %d (%s): no floor at %s, skipped"), Index, *Kind->Name, *Centre.ToString());
-                continue;
-            }
+            const FVector& At = EnemySlots[Index];
             FActorSpawnParameters Params;
             Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
             AOpenWillowEnemy* Enemy = World->SpawnActor<AOpenWillowEnemy>(At, FRotator(0.f, (Spot - At).Rotation().Yaw, 0.f), Params);
@@ -325,6 +373,14 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             Enemy->OnEnemyDied.AddUObject(this, &UOpenWillowRangeSubsystem::HandleEnemyDied);
             Enemies.Add(Enemy);
         }
+    }
+    // Every slot must hold its actor; an incomplete range is a failed build (nothing is left standing).
+    if (Dummies.Num() != DummySlots.Num() || Enemies.Num() != EnemySlots.Num())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE build failed: spawned %d of %d dummies and %d of %d enemies"), Dummies.Num(),
+            DummySlots.Num(), Enemies.Num(), EnemySlots.Num());
+        ClearRange();
+        return false;
     }
     bBuilt = true;
     UE_LOG(LogTemp, Display, TEXT("OWRANGE built spot=%s yaw=%.0f dummies=%d enemies=%d level=%d invulnerable=%d passive=%d"),
@@ -421,6 +477,7 @@ bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FSt
 
 bool UOpenWillowRangeSubsystem::ScoutSpot(FVector& OutSpot, float& OutYaw, FString& OutLog)
 {
+    EnsureManifest();   // the formation check needs the number of enemies
     UWorld* World = GetWorld();
     FHitResult Plaza;
     if (!World || !TraceVisibility(World, FVector(ScoutCentre.X, ScoutCentre.Y, 10000.f),
@@ -443,6 +500,10 @@ bool UOpenWillowRangeSubsystem::ScoutSpot(FVector& OutSpot, float& OutYaw, FStri
             const FVector2D XY = ScoutCentre + FVector2D(FMath::Cos(Rad), FMath::Sin(Rad)) * Radius;
             FVector Floor;
             if (!ScoutAccepts(World, XY, PlazaZ, Floor)) continue;
+            // The whole formation (dummy row and enemy arc, facing away from the town) must have floor too.
+            TArray<FVector> DummySlots, EnemySlots;
+            FString Why;
+            if (!FormationSlots(Floor, (Floor - Centre).Rotation().Yaw, DummySlots, EnemySlots, Why)) continue;
             ++Accepted;
             if (!bWon)
             {
@@ -582,7 +643,10 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
             if (AOpenWillowCombatTarget* Dummy = Weak.Get()) Probe(Dummy);
         for (const auto& Weak : Enemies)
             if (AOpenWillowEnemy* Enemy = Weak.Get()) Probe(Enemy);
-        TestCheck(TEXT("placement"), Checked > 0 && Off == 0, FString::Printf(TEXT("%d actor(s) checked, %d off the floor"), Checked, Off));
+        // The build is complete: as many dummies and enemies as the formation and the manifest ask for, all on the floor.
+        const bool bCounts = Dummies.Num() == ExpectedDummies && Enemies.Num() == ExpectedEnemies() && ExpectedEnemies() > 0;
+        TestCheck(TEXT("placement"), bCounts && Off == 0, FString::Printf(TEXT("dummies %d/%d, enemies %d/%d, %d actor(s) checked, %d off the floor"),
+            Dummies.Num(), ExpectedDummies, Enemies.Num(), ExpectedEnemies(), Checked, Off));
         TestStep = 3;
         return;
     }

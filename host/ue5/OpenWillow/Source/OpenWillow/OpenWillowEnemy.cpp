@@ -210,14 +210,27 @@ bool AOpenWillowEnemy::TraceFloor(UWorld* World, const FVector2D& XY, float From
 float AOpenWillowEnemy::AdjustIncomingDamage(float Amount, const FDamageEvent& DamageEvent, bool& bOutCritical)
 {
     const float Now = GetWorld()->GetTimeSeconds();
-    // Only point damage carries a hit component; a hit on the critical region is critical.
+    // Critical hits are the victim's call (OpenWillowHitEvent.h): the hit event says whether this hit may be critical
+    // (never a status tick; splash per the shooter) and the instigator's bonus. Damage without a hit event (test hits,
+    // other sources) falls back to the point hit and the class default bonus.
     bOutCritical = false;
-    if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
+    float Bonus = CritMultiplier;
+    bool bCanCrit = true;
+    FName Bone = NAME_None;
+    if (DamageEvent.IsOfType(FOpenWillowDamageEvent::ClassID))
+    {
+        const FOpenWillowHitEvent& HitEvent = static_cast<const FOpenWillowDamageEvent&>(DamageEvent).Hit;
+        bCanCrit = HitEvent.bCanCrit && HitEvent.Kind != EOpenWillowHitKind::StatusTick;
+        Bonus = HitEvent.CritBonus;
+        Bone = HitEvent.Bone;
+    }
+    if (bCanCrit && DamageEvent.IsOfType(FPointDamageEvent::ClassID))
     {
         const auto& Point = static_cast<const FPointDamageEvent&>(DamageEvent);
-        bOutCritical = IsCritRegion(Point.HitInfo.Component.Get(), Point.HitInfo.BoneName, Point.HitInfo.ImpactPoint, Point.ShotDirection);
+        if (Bone.IsNone()) Bone = Point.HitInfo.BoneName;
+        bOutCritical = IsCritRegion(Point.HitInfo.Component.Get(), Bone, Point.HitInfo.ImpactPoint, Point.ShotDirection);
     }
-    const float Total = Amount * (bOutCritical ? CritMultiplier : 1.f);
+    const float Total = Amount * (bOutCritical ? Bonus : 1.f);
 
     // Shield first, then health (COMBAT_GOLDEN_TRACE item 9 order, recorded for the player; for enemies UNVERIFIED).
     // Invulnerable: the shield is kept and health is not lowered by the base.
