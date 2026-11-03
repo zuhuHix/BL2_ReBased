@@ -1267,9 +1267,10 @@ nothing was launched). Supporting files are under ignored `local/phaselock-r22/`
 capture run and a critic score.
 
 * **Target colour: the wrong archetype.** The real frames show an "Adult Bullymong". Its balance (`PawnBalance_PrimalBeastAdult`, playthrough 1)
-  names `GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult`, whose component material `Mati_BullymongAdult` has tan, brown and rust zone colours
-  (midtones A (1, .71, .42), B (.48, .32, .21), C (.38, .07, .03)). `tools/prepare_phaselock_target.py` imported `GD_PrimalBeast.Character.Pawn_PrimalBeast`,
-  whose `Mati_Bullymong` has a near-white B zone (.95, 1, .98): the icy white-lilac target of rounds 16 to 21. The zone pipeline itself applied all
+  names `GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult`, whose component material `Mati_BullymongAdult` has warm zone colours (a light tan,
+  a mid brown and a dark rust red). `tools/prepare_phaselock_target.py` imported `GD_PrimalBeast.Character.Pawn_PrimalBeast`, whose `Mati_Bullymong`
+  has a near-white second zone: the icy white-lilac target of rounds 16 to 21. The decoded zone vectors of both materials are in ignored
+  `local/phaselock/r22/mic_compare.json` (not copied here). The zone pipeline itself applied all
   nine vectors; they were the other variant's. The Adult archetype also carries the 150 x 90 cylinder and has no scale override (1.0), which settles
   the two contradictions recorded above (archetype 100 and 0.7 against the live 150 and 1.0). **Change:** the tool now names the Adult archetype.
   It needs `tools/import_phaselock_target.ps1 -Steps all` (the editor: hub tier).
@@ -1281,7 +1282,9 @@ capture run and a critic score.
   host had cut it to about 3 % of stock (emitter gain 0.15 times material alpha 0.2). **Change:** material alpha back to stock, emitter gain 0.5. The
   hand-written stand-ins capped their colour at 4.0 while the importer's own LDR rule caps each channel at 1 (UE5's film curve turns HDR blue white;
   the game clips): **change:** the ten `exact` stand-ins now cap at 1.0. Both need `tools/import_phaselock_fx.ps1` (editor, hub tier).
+* **`-owtonecurve=<0..1>`** is a capture and diagnostic switch only: it sets the camera's tone-curve amount for the whole run and nothing
+  else (expand gamut stays at the project default), so an A/B isolates the tone curve.
 * **Open, not changed this round:** the 0.80 s shell (the `Suction` emitter's `Mat_SirenSuction` screen-distortion material is still skipped; a refraction
-  stand-in is the next step), the rim's dark spikes layer, the head look-at control of the stock AnimTree, and the tone mapping. A capture switch
-  `-owtonecurve=<0..1>` (the camera's post-process tone curve amount) is added for an A/B: if the shell, rim and orb all move toward the game with
-  0, the remaining gap is tone mapping rather than per-material fits.
+  stand-in is the next step), the rim's dark spikes layer, the head look-at control of the stock AnimTree, and the tone mapping. The capture switch
+  `-owtonecurve=<0..1>` (above) is for that A/B: if the shell, rim and orb all move toward the game with 0, the remaining gap is tone mapping
+  rather than per-material fits.
