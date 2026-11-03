@@ -27,7 +27,6 @@ namespace
 {
 const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
-constexpr float RespawnSeconds = 3.f;
 // Host calibration (UNVERIFIED): factor between the data's light brightness and UE5's unitless intensity (see UpdatePresentation).
 constexpr float LockLightGain = 6.5f;
 
@@ -694,7 +693,15 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         SetActorEnableCollision(false);
         if (StockMesh && StockDeath) PlayStock(StockDeath, false);
         AOpenWillowShotFx::Flash(GetWorld(), AimPoint(), FLinearColor(1.f, 0.55f, 0.2f), 70.f, 0.25f, 4000.f);
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnSeconds);
+        // Engine-shape targets always respawn after RespawnDelay; a stock pawn only when respawn is enabled (the range).
+        if (!StockMesh || bRespawnStock)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnDelay);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; no respawn"));
+        }
         // A kill by Maya: while she is down it is her second wind.
         if (auto* Killer = Cast<AOpenWillowWalker>(DamageCauser)) Killer->NotifyKilledEnemy();
         OnDied(DamageCauser);
