@@ -84,6 +84,12 @@ class StaticTest(unittest.TestCase):
     def test_helper_has_no_test_switch(self):
         self.assertNotIn('TEST_PROCESS', text(HELPER))
 
+    def test_gate_is_global_only(self):
+        # A session-local fallback would be a second gate that does not serialize against the global one.
+        helper = code(HELPER)
+        self.assertIn(r"'Global\OpenWillowUeLockGate'", helper)
+        self.assertNotIn(r'Local\OpenWillowUeLockGate', helper)
+
     def test_helper_is_loaded_at_script_level_not_invoked(self):
         # `& ue_lock.ps1` would run it in a child scope: the functions would not exist afterwards.
         for path in scripts():

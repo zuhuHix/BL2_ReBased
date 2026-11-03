@@ -3180,3 +3180,9 @@ Review round 2 (GPT-6-Luna):
   continues.
 - **Real game and Unreal never overlap.** `Enter-RunLock` (real-game helpers) and `run_phaselock_shots.ps1` also wait for
   `Borderlands2`; the CTest checks that every real-game script that starts the game takes the lock.
+
+Review round 3 (GPT-6-Luna; resolved by the hub without a further round):
+- **The gate fails closed.** The `Local\` fallback for the mutex is gone: a second, session-local gate would not
+  serialize against the global one. If `Global\OpenWillowUeLockGate` cannot be opened or created, the script stops with an
+  error that says how to fix it. No opt-out.
+- **Known limitation, accepted.** The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.

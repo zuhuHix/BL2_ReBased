@@ -55,12 +55,18 @@ function Get-OwUeBusyProcess([string[]]$AlsoWaitFor = @()) {
 function Invoke-OwUeLockGate([scriptblock]$Body, [int]$WaitMilliseconds = 30000) {
     # Runs $Body while holding a machine-wide named mutex, so that "is the lock stale? delete it; create it" (and the
     # owner check before a release) happen as one step: without it two waiters could both judge the same dead owner
-    # stale, and the second would delete the lock the first had just created. Global\ is visible to every session;
-    # Local\ is the fallback when the Global namespace is refused. Returns $Body's output, or throws when the gate is
-    # not free within $WaitMilliseconds. A gate left by a killed process is abandoned, and the OS hands it on.
+    # stale, and the second would delete the lock the first had just created. The mutex lives in the Global\ namespace
+    # so every session sees the same one; there is no fallback (a Local\ copy would be a second, separate gate), so a
+    # refused Global name fails closed. Returns $Body's output, or throws when the gate is not free within
+    # $WaitMilliseconds. A gate left by a killed process is abandoned, and the OS hands it on.
     $gate = $null
     try { $gate = New-Object System.Threading.Mutex($false, 'Global\OpenWillowUeLockGate') }
-    catch [System.UnauthorizedAccessException] { $gate = New-Object System.Threading.Mutex($false, 'Local\OpenWillowUeLockGate') }
+    catch {
+        throw ("Cannot open or create the mutex Global\OpenWillowUeLockGate ($($_.Exception.Message)). The UE run lock " +
+            'refuses to run without it. Usually another account or an elevated process created it with permissions this ' +
+            'session cannot use: close the elevated PowerShell or editor that holds it (or sign out that account), or run ' +
+            'this script with the same rights as the other lock users.')
+    }
     try {
         $held = $false
         try { $held = $gate.WaitOne($WaitMilliseconds) } catch [System.Threading.AbandonedMutexException] { $held = $true }
