@@ -61,6 +61,10 @@ public:
     const std::string& turnIn() const { return turnIn_; }
     const std::string& weaponDefinition() const { return weapon_; }
     std::string description() const { return description_; }
+    // MissionSummary and TurnInDescription text, as stored in the package ("" when absent); the mission log shows them
+    // (WillowPlayerController.GetMissionDescriptionForUI, docs/verification/MENUS_PARITY.md).
+    const std::string& summary() const { return summary_; }
+    const std::string& turnInDescription() const { return turnInDescription_; }
     std::vector<std::string> dependencies() const { return dependencies_; }
     bool objectiveComplete(const std::string& objectiveName) const { return completedObjectives_.count(objectiveName) != 0; }
     int objectiveProgress(const std::string& objectiveName) const;   // the count (distinct bits for a bit-mask objective)
@@ -145,7 +149,7 @@ public:
 private:
     Runtime& runtime_;
     std::shared_ptr<const Package> package_;
-    std::string missionPath_, missionName_, giver_, turnIn_, weapon_, description_, xpAttribute_;
+    std::string missionPath_, missionName_, giver_, turnIn_, weapon_, description_, xpAttribute_, summary_, turnInDescription_;
     std::vector<std::string> dependencies_;
     struct ObjectiveSet {
         std::string path, name, next, cls;

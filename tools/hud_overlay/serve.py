@@ -22,7 +22,7 @@ HERE = Path(__file__).parent
 PAGES = {'/': 'index.html', '/index.html': 'index.html', '/action_skill.js': 'action_skill.js', '/hud3d.js': 'hud3d.js', '/hud_fields.js': 'hud_fields.js', '/hud_warp.js': 'hud_warp.js', '/minimap.js': 'minimap.js', '/skills.html': 'skills.html', '/skills.js': 'skills.js',
          '/skill_info.js': 'skill_info.js', '/skill_nav.js': 'skill_nav.js', '/inventory.html': 'inventory.html',
          '/inventory.js': 'inventory.js', '/menu3d.js': 'menu3d.js', '/glass_sheet.js': 'glass_sheet.js',
-         '/missions.html': 'missions.html', '/missions.js': 'missions.js'}
+         '/missions.html': 'missions.html', '/missions.js': 'missions.js', '/mission_log.js': 'mission_log.js'}
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8'}
 PACKAGE_PREFIX = '/ package/'
 

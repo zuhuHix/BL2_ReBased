@@ -55,6 +55,8 @@ MissionSystem::MissionSystem(Runtime& runtime, const std::string& package, const
     if (mission->cls->path != "WillowGame.MissionDefinition") throw RuntimeError("not a MissionDefinition: " + missionPath);
     missionName_ = text(runtime_, *mission, "MissionName");
     description_ = text(runtime_, *mission, "MissionDescription");
+    summary_ = text(runtime_, *mission, "MissionSummary");
+    turnInDescription_ = text(runtime_, *mission, "TurnInDescription");
     giver_ = text(runtime_, *mission, "MissionGiver");
     turnIn_ = text(runtime_, *mission, "MissionTurnInLocation");
     weapon_ = refPath(runtime_.property(*mission, "MissionWeapon"));
