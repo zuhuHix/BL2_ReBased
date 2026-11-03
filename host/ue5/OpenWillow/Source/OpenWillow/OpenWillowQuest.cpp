@@ -247,15 +247,16 @@ FString UOpenWillowQuest::MissionLogJson() const
         // reward presentations (UNVERIFIED); the page hides those panels while the values are unknown.
         Entry->SetBoolField(TEXT("tracked"), Current == S::Active || Current == S::ReadyToTurnIn);
         TArray<TSharedPtr<FJsonValue>> Objectives;
-        for (const auto& Objective : Mission.activeObjectives())
+        // The same objective view as the HUD's tracker (MissionSystem::trackerLines), plus each objective's progress count.
+        for (const auto& Line : Mission.trackerLines())
         {
             TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-            Row->SetStringField(TEXT("name"), UTF8_TO_TCHAR(Objective.name.c_str()));
-            Row->SetStringField(TEXT("text"), UTF8_TO_TCHAR(Objective.message.c_str()));
-            Row->SetNumberField(TEXT("progress"), Mission.objectiveProgress(Objective.name));
-            Row->SetNumberField(TEXT("count"), Objective.count);
-            Row->SetBoolField(TEXT("done"), Mission.objectiveComplete(Objective.name));
-            Row->SetBoolField(TEXT("optional"), Objective.optional);
+            Row->SetStringField(TEXT("name"), UTF8_TO_TCHAR(Line.name.c_str()));
+            Row->SetStringField(TEXT("text"), UTF8_TO_TCHAR(Line.message.c_str()));
+            Row->SetNumberField(TEXT("progress"), Mission.objectiveProgress(Line.name));
+            Row->SetNumberField(TEXT("count"), Line.count);
+            Row->SetBoolField(TEXT("done"), Line.complete);
+            Row->SetBoolField(TEXT("optional"), Line.optional);
             Objectives.Add(MakeShared<FJsonValueObject>(Row));
         }
         Entry->SetArrayField(TEXT("objectives"), Objectives);

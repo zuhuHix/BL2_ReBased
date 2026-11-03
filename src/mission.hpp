@@ -76,7 +76,8 @@ public:
     // The active objective set's objectives as the HUD's mission tracker lists them: the objective name, its ProgressMessage
     // (MissionObjectiveDefinition, read from the package; "" when the property is absent) and whether it is complete. Empty when
     // no set is active. That the game's tracker shows exactly these lines is UNVERIFIED (HUD_PARITY.md, "Mission tracker").
-    struct TrackerLine { std::string name, message; bool complete = false, optional = false; };
+    // `count` is the objective's ObjectiveCount (the mission log prints progress against it; the tracker does not use it).
+    struct TrackerLine { std::string name, message; bool complete = false, optional = false; int count = 1; };
     std::vector<TrackerLine> trackerLines() const;
     bool plotCritical() const;              // MissionDefinition.bPlotCritical (story vs optional mission)
 

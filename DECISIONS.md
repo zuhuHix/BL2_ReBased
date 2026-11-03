@@ -3246,5 +3246,9 @@ log's rules). Script and AS2 listings and the presentation data stay under ignor
   Round 2: `prepare_mission_log.py` refuses an output outside the repository's `local/`; the host sends no credit or item
   reward (neither is evaluated; the page hides both panels, UNVERIFIED) instead of a hard-coded 0; the page uses the named
   `status` field instead of numeric status IDs, and the no-host sample and fixtures use invented values.
+- **One objective view.** After the HUD lane's tracker landed (PR #63), the mission log reads the active objectives from the
+  same `MissionSystem::trackerLines()` as the HUD tracker; the separate `activeObjectives()` is gone. `TrackerLine` gained the
+  objective's `count` (ObjectiveCount), which the log prints progress against; the tracker does not use it. The launcher
+  `tools/test_mission_log.ps1` takes the machine-wide UE run lock (`tools/ue_lock.ps1`, PR #66).
 - **Inventory round-21 list.** VALUE thumbnails do not reproduce on round-21 code (they were a round-22 regression); the
   BRANDS order is the engine's unstable sort, not a missing tie-break. Details in `INVENTORY_MOVIE_PROTOTYPE.md`.
