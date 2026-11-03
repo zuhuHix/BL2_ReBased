@@ -24,6 +24,7 @@
 #include "OpenWillowShotFx.h"
 #include "OpenWillowProjectile.h"
 #include "OpenWillowStatusEffect.h"
+#include "OpenWillowSkillEffects.h"
 #include "OpenWillowGunLook.h"
 #include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowInventoryPreviewActor.h"
@@ -394,10 +395,14 @@ float AOpenWillowWalker::WeaponDamageScaleAt(float Now) const
 float AOpenWillowWalker::ShotDamage(const FOpenWillowWeaponItem& Weapon, float Now) const
 {
     const float Scale = WeaponDamageScaleAt(Now);
-    if (Scale == 0.f) return Weapon.Damage;
+    // Skills lane hook: the trained skills' WeaponDamage modifiers join the weapon's own stack (OpenWillowSkillEffects.h).
+    const FOpenWillowModifierStack Skill = OpenWillowSkillEffects::Stack(this, OpenWillowSkillEffects::Attr::WeaponDamage);
+    if (Scale == 0.f && Skill.IsEmpty()) return Weapon.Damage;
     // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: the sum 2.017 to 3.017 took 41.40 to 61.92): the Scale joins the up-sum.
     if (Weapon.bHasDamageStack)
-        return (Weapon.DamageBase + Weapon.DamagePreAdd) * (1.f + Weapon.DamageScaleUp + Scale) / (1.f + Weapon.DamageScaleDown) + Weapon.DamagePostAdd;
+        return (Weapon.DamageBase + Weapon.DamagePreAdd + Skill.PreAdd) * (1.f + Weapon.DamageScaleUp + Scale + Skill.ScaleUp)
+            / (1.f + Weapon.DamageScaleDown - Skill.ScaleDown) + Weapon.DamagePostAdd + Skill.PostAdd;
+    if (!Skill.IsEmpty()) return Skill.Apply(Weapon.Damage * (1.f + Scale));   // no stack: skill modifiers over the card value (UNVERIFIED)
     return Weapon.Damage * (1.f + Scale);      // fallback without the stack: S taken as 1 (UNVERIFIED, see the header)
 }
 
@@ -836,7 +841,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
             // Evaluated item-card fire interval, spun up when the barrel spins (GetFireInterval).
             const float Base = 1.f / Weapon->FireRate;
             const float Interval = OpenWillowFiring::FireInterval(Weapon->Firing, Base, FiringStateFor(*Weapon));
-            NextShotAt = Now + Interval;
+            NextShotAt = Now + OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::WeaponFireInterval, Interval);   // skills lane hook
             // AutomaticBurstCount (weapon_firing::Burst): count 1 (the slice pistol and rifle) is one shot per press, as
             // observed live; after a longer burst the next one waits GetBurstInterval.
             if (Burst.shot(Weapon->Firing.BurstCount))
@@ -1479,7 +1484,7 @@ bool AOpenWillowWalker::StartReload(float Now)
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     // Every reload path (the key, an empty magazine, test drivers) waits for the weapon while down (GoDown, DownWeaponReady).
     if (bReloading || !Weapon || !DownWeaponReady() || !Inventory->CanReload(*Weapon)) return false;
-    const float ReloadTime = FMath::Max(0.1f, Weapon->ReloadTime);
+    const float ReloadTime = FMath::Max(0.1f, OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::WeaponReloadSpeed, Weapon->ReloadTime));   // skills lane hook
     const FViewModel* Model = ViewModels.Find(Weapon->Id);
     bReloading = true;
     Burst.interrupt();   // a reload ends the burst in progress; firing again needs a new press
@@ -2011,7 +2016,7 @@ void AOpenWillowWalker::UsePhaselock()
     // PhaselockTimeScale (lower while its diminishing returns run).
     const int32 Grade = Skills->GradeOf(Phaselock.DurationSkill);
     if (Target)
-        PhaselockTimeline = Phaselock.Timeline(Phaselock.LockDuration(Grade), Target->PhaselockTimeScale(Now, Phaselock));
+        PhaselockTimeline = Phaselock.Timeline(OpenWillowSkillEffects::IsLoaded(this) ? OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::PhaselockDuration, Phaselock.LockDurationBase) : Phaselock.LockDuration(Grade), Target->PhaselockTimeScale(Now, Phaselock));   // skills lane hook
     if (!Target || !Target->BeginPhaselock(Now, Phaselock, PhaselockTimeline, &PhaselockFx))
     {
         // FizzleOut: no lift; after ReleaseBufferTime Fizzled resets the cooldown and ends the skill. The fail clip's
@@ -2227,7 +2232,7 @@ float AOpenWillowWalker::PhaselockRemaining() const
     if (Now >= PhaselockResetAt) return 0.f;
     const float Held = FMath::Clamp(Now, PhaselockCastAt, PhaselockHeldUntil) - PhaselockCastAt;
     const float Free = FMath::Max(0.f, Now - FMath::Max(PhaselockCastAt, PhaselockHeldUntil));
-    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * Phaselock.CooldownRate + PhaselockCooldownAdjust);
+    return FMath::Max(0.f, Phaselock.CooldownSeconds - Held * Phaselock.CooldownHeldRate - Free * OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::CooldownRate, Phaselock.CooldownRate) + PhaselockCooldownAdjust);   // skills lane hook
 }
 bool AOpenWillowWalker::ModifyPhaselockCooldown(int32 ModifierType, float Amount)
 {

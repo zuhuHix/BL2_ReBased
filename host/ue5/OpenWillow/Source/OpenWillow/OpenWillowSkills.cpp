@@ -1,6 +1,7 @@
 #include "OpenWillowSkills.h"
 #include "Dom/JsonObject.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -14,11 +15,16 @@ bool UOpenWillowSkills::LoadTree(const FString& File)
     Branches.Reset();
     const TSharedPtr<FJsonObject>* Action = nullptr;
     int32 ActionMax = 1;
-    if (Root->TryGetObjectField(TEXT("actionSkill"), Action)) (*Action)->TryGetNumberField(TEXT("maxGrade"), ActionMax);
+    FString ActionId;
+    if (Root->TryGetObjectField(TEXT("actionSkill"), Action))
+    {
+        (*Action)->TryGetNumberField(TEXT("maxGrade"), ActionMax);
+        (*Action)->TryGetStringField(TEXT("id"), ActionId);
+    }
     // The root branch's first-tier PointsToUnlockNextTier (tools/prepare_skill_tree.py).
     int32 UnlockTrees = 1;
     Root->TryGetNumberField(TEXT("actionSkillPoints"), UnlockTrees);
-    SetActionSkill(ActionMax, UnlockTrees);
+    SetActionSkill(ActionMax, UnlockTrees, ActionId);
     for (const TSharedPtr<FJsonValue>& BranchValue : Root->GetArrayField(TEXT("branches")))
     {
         TArray<FTier> Tiers;
@@ -38,11 +44,23 @@ bool UOpenWillowSkills::LoadTree(const FString& File)
         }
         AddBranch(Tiers);
     }
+    // skilltree_<class>.json -> skilleffects_<class>.json in the same folder.
+    const FString EffectsFile = FPaths::Combine(FPaths::GetPath(File), FPaths::GetCleanFilename(File).Replace(TEXT("skilltree_"), TEXT("skilleffects_")));
+    FString Error;
+    if (Effects.Load(EffectsFile, Error))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow skill effects: %d skills from %s"), Effects.GetSkills().Num(), *EffectsFile);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow skill effects not loaded, skills change no stat: %s"), *Error);
+    }
     return Branches.Num() > 0;
 }
 
-void UOpenWillowSkills::SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees)
+void UOpenWillowSkills::SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees, const FString& Id)
 {
+    ActionSkillId = Id;
     ActionMaxGrade = FMath::Max(1, MaxGrade);
     ActionPointsToUnlockTrees = FMath::Max(0, PointsToUnlockTrees);
 }

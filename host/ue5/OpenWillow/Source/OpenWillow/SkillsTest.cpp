@@ -120,3 +120,83 @@ bool FOpenWillowSkillsTest::RunTest(const FString&)
     return true;
 }
 #endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "OpenWillowSkillEffects.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+
+// Skill effects on an invented manifest (no game data): grade formula, stack combination, skill types and conditions.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowSkillEffectsTest, "OpenWillow.SkillEffects",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
+{
+    const TCHAR* Json = TEXT(R"({"format":"openwillow.skill_effects/1","skills":[
+ {"id":"T.Act","name":"Act","type":"Action","maxGrade":1,"subjectToGradeRules":true,"effects":[],"conditions":[]},
+ {"id":"T.Dmg","name":"Dmg","type":"Passive","maxGrade":5,"subjectToGradeRules":true,"conditions":[],"effects":[
+  {"attribute":"A.Damage","modifierType":"Scale","target":"Self","startGrade":1,"interval":1,"base":{"constant":0.05},"perGrade":{"constant":0.05},"bonus":[]},
+  {"attribute":"A.Interval","modifierType":"Scale","target":"Self","startGrade":1,"interval":1,"base":{"constant":-0.1},"perGrade":{"constant":-0.1},"bonus":[]},
+  {"attribute":null,"modifierType":"PostAdd","target":"None","startGrade":1,"interval":2,"base":{"constant":1},"perGrade":{"constant":1},"bonus":[{"grade":3,"value":10},{"grade":5,"value":20}]}]},
+ {"id":"T.Gated","name":"Gated","type":"Passive","maxGrade":5,"subjectToGradeRules":true,"effects":[
+  {"attribute":"A.Damage","modifierType":"PostAdd","target":"Self","startGrade":1,"interval":1,"base":{"attribute":"A.Max","scale":0.5},"perGrade":{"constant":0},"bonus":[]}],
+  "conditions":[{"whileActive":true,"test":{"kind":"and","left":{"kind":"attribute","attribute":"A.Locked","op":"EqualTo","constant":1},"right":{"kind":"onFoot"}}}]},
+ {"id":"T.Aug","name":"Aug","type":"ActionAugment","maxGrade":5,"subjectToGradeRules":true,"conditions":[],"effects":[
+  {"attribute":"A.Damage","modifierType":"PreAdd","target":"Self","startGrade":1,"interval":1,"base":{"constant":2},"perGrade":{"constant":0},"bonus":[]}]},
+ {"id":"T.Kill","name":"Kill","type":"Kill","maxGrade":5,"subjectToGradeRules":true,"conditions":[],"effects":[
+  {"attribute":"A.Damage","modifierType":"PreAdd","target":"Self","startGrade":1,"interval":1,"base":{"constant":100},"perGrade":{"constant":0},"bonus":[]}]}]})");
+    TSharedPtr<FJsonObject> Root;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root);
+    UOpenWillowSkills* Tree = NewObject<UOpenWillowSkills>();
+    using FTier = UOpenWillowSkills::FTier;
+    Tree->AddBranch({FTier{0, {{TEXT("T.Dmg"), 0, 5}, {TEXT("T.Gated"), 1, 5}, {TEXT("T.Aug"), 2, 5}}}});
+    Tree->AddBranch({FTier{0, {{TEXT("T.Kill"), 0, 5}}}});
+    Tree->SetActionSkill(1, 1, TEXT("T.Act"));
+    Tree->SetLevel(50);
+    FString Error;
+    FOpenWillowSkillEffects& Fx = Tree->GetEffectsMutable();
+    TestTrue(TEXT("Manifest loads"), Root && Fx.LoadJson(*Root, Error));
+
+    bool bLocked = false, bRunning = false;
+    FOpenWillowSkillEffects::FWorld World;
+    World.Value = [&](const FString& A, float& Out)
+    {
+        if (A == TEXT("A.Locked")) { Out = bLocked ? 1.f : 0.f; return true; }
+        if (A == TEXT("A.Max")) { Out = 40.f; return true; }
+        return false;
+    };
+    auto Stack = [&](const TCHAR* A) { World.bActionSkillRunning = bRunning; return Fx.Stack(*Tree, A, World); };
+    TestTrue(TEXT("Nothing trained, nothing applies"), Stack(TEXT("A.Damage")).IsEmpty());
+
+    FString Why;
+    Tree->TrySpend(-1, -1, -1, Why);
+    for (int32 I = 0; I < 3; ++I) Tree->TrySpend(0, 0, 0, Why);
+    const FOpenWillowModifierStack D = Stack(TEXT("A.Damage"));
+    TestTrue(TEXT("Grade 3 scale = 0.05 + 0.05 x 2"), FMath::IsNearlyEqual(D.ScaleUp, 0.15f) && D.Count == 1);
+    TestTrue(TEXT("Damage 100 -> 115"), FMath::IsNearlyEqual(D.Apply(100.f), 115.f, 1e-3f));
+    // A negative Scale divides: interval 1 x 1 / (1 + 0.3).
+    TestTrue(TEXT("Interval scale -0.3 divides"), FMath::IsNearlyEqual(Stack(TEXT("A.Interval")).Apply(1.f), 1.f / 1.3f, 1e-5f));
+    // Interval 2 and the bonus list: grade 3 -> 1 + 1 x (2 div 2) + bonus(3) = 12; grade 4 -> 1 + 1 + 10 = 12; grade 5 -> 1 + 2 + 20.
+    TestTrue(TEXT("Effect value with interval and bonus at grade 3"), FMath::IsNearlyEqual(Fx.EffectValue(*Tree, TEXT("Dmg"), 2, World), 12.f));
+    Tree->TrySpend(0, 0, 0, Why);
+    Tree->TrySpend(0, 0, 0, Why);
+    TestTrue(TEXT("Best bonus only, at grade 5"), FMath::IsNearlyEqual(Fx.EffectValue(*Tree, TEXT("Dmg"), 2, World), 23.f));
+    TestEqual(TEXT("Below the start grade the value is 0"), FOpenWillowSkillEffects::ModifierValue(Fx.GetSkills()[1].Effects[0], 0, World), 0.f);
+
+    // Conditions, augments and kill skills.
+    Tree->TrySpend(0, 0, 1, Why);
+    Tree->TrySpend(0, 0, 2, Why);
+    Tree->TrySpend(1, 0, 0, Why);
+    TestEqual(TEXT("Gated, augment and kill skills off at first"), Stack(TEXT("A.Damage")).Count, 1);
+    bLocked = true;
+    const FOpenWillowModifierStack Gated = Stack(TEXT("A.Damage"));
+    TestTrue(TEXT("Condition met: attribute-valued PostAdd 40 x 0.5"), Gated.Count == 2 && FMath::IsNearlyEqual(Gated.PostAdd, 20.f));
+    bRunning = true;
+    const FOpenWillowModifierStack Running = Stack(TEXT("A.Damage"));
+    TestTrue(TEXT("Augment applies while the action skill runs"), Running.Count == 3 && FMath::IsNearlyEqual(Running.PreAdd, 2.f));
+    // (100 + 2) x 1.25 + 20
+    TestTrue(TEXT("Stack formula"), FMath::IsNearlyEqual(Running.Apply(100.f), 147.5f, 1e-3f));
+    Tree->ResetTree();
+    TestTrue(TEXT("A respec removes every modifier"), Stack(TEXT("A.Damage")).IsEmpty());
+    return true;
+}
+#endif
