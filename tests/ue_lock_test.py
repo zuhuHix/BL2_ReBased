@@ -127,9 +127,10 @@ class RuntimeTest(unittest.TestCase):
 
     def test_paths(self):
         rc, out, _ = self.ps('Get-OwUeLockPath', override='')
-        self.assertEqual((rc, Path(out)), (0, Path(self.tmp.name) / 'OpenWillow' / 'ue_run.lock'))
+        # resolve() on both: CI temp dirs come back as 8.3 short names (RUNNER~1) on one side only.
+        self.assertEqual((rc, Path(out).resolve()), (0, (Path(self.tmp.name) / 'OpenWillow' / 'ue_run.lock').resolve()))
         rc, out, _ = self.ps('Get-OwUeLockPath')
-        self.assertEqual((rc, Path(out)), (0, self.lock))
+        self.assertEqual((rc, Path(out).resolve()), (0, self.lock.resolve()))
         self.assertTrue(self.lock.parent.is_dir())
         self.assertFalse(self.lock.exists())            # naming the lock never takes it
         for relative in ('rel\\a.lock', '.\\a.lock', '\\a.lock', 'C:a.lock'):
