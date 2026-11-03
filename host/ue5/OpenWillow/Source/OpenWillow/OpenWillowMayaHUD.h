@@ -133,9 +133,12 @@ private:
     FString LastFeedbackLine;
     // -owhudfxshots (with -owitems): hits from the front, right, back and left, then a level-up, with captures
     // (OWHudFx_*.png) for tools/check_hud_down.py --mode feedback; then quit.
+#if WITH_EDITOR
     void TickHudFxShots(class AOpenWillowWalker& Maya);
+#endif
     int32 FxShotStep = 0;
     float FxShotAt = 0.f;
+    FRotator FxBaseView = FRotator::ZeroRotator;   // -owhudfxshots: the view the sequence starts from (restored at the end)
     // -owhudtrackshots: a capture (OWHudTrack_<n>.png) 1.5 s after each tracker change, for the critic.
     float TrackShotAt = -1.f;
     int32 TrackShots = 0;

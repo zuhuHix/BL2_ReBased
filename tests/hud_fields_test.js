@@ -118,11 +118,17 @@ assert.deepStrictEqual(fields.feedbackCalls({hits: 4, side: 'u', levelUps: 1}, {
 assert.deepStrictEqual(fields.feedbackCalls({hits: 5, side: '-', levelUps: 1}, {hits: 4, levelUps: 1}), []);
 // A level-up plays the banner from `go` (its text is the movie's own), together with a hit in the same state.
 assert.deepStrictEqual(fields.feedbackCalls({hits: 5, side: 'd', levelUps: 2}, {hits: 4, levelUps: 1}),
-  [[P + '.dmg_d.inner', 'gotoAndStop', 'Health'], [P + '.dmg_d', 'gotoAndPlay', 2], [P + '.levelup', 'gotoAndPlay', 'go']]);
+  [[P + '.dmg_d.inner', 'gotoAndStop', 'Health'], [P + '.dmg_d', 'gotoAndPlay', 2],
+   [P + '.levelup', 'gotoAndStop', 'stop'], [P + '.levelup', 'gotoAndPlay', 'go']]);
+// One banner per increase of the host's count: the host counts a multi-level jump as one level-up, so 8 -> 10 in one
+// update arrives as levelUps 1 -> 2 and plays one banner (the rule, UNVERIFIED); nothing replays without an increase.
+const jump = fields.feedbackCalls({hits: 0, side: 'u', levelUps: 2, level: 10}, {hits: 0, levelUps: 1, level: 8});
+assert.strictEqual(jump.filter(c => c[2] === 'go').length, 1);
+assert.deepStrictEqual(fields.feedbackCalls({hits: 0, side: 'u', levelUps: 2, level: 10}, {hits: 0, levelUps: 2, level: 10}), []);
 const fxFake = {[P + '.dmg_r']: {_currentframe: 5}, [P + '.dmg_r.inner']: {_currentframe: 2}, [P + '.levelup']: {_currentframe: 2},
   [P + '.levelup.inner']: {_currentframe: 30}, [P + '.levelup.inner.levelup1']: {text: 'BANNER'}};
 const fxGet = (t, k) => (fxFake[t] || {})[k] ?? 1;
-assert.strictEqual(fields.feedbackLine({feedback: {hits: 1, side: 'r', levelUps: 1}}, fxGet),
-  'OWHUDFXPAGE hits=1 side=r levelUps=1 u=1/1 r=5/2 d=1/1 l=1/1 levelup=2/30 levelText=BANNER');
+assert.strictEqual(fields.feedbackLine({feedback: {hits: 1, side: 'r', levelUps: 1}}, fxGet, 1),
+  'OWHUDFXPAGE hits=1 side=r levelUps=1 banners=1 u=1/1 r=5/2 d=1/1 l=1/1 levelup=2/30 levelText=BANNER');
 
 console.log('hud_fields_test: all checks passed');

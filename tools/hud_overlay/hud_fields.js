@@ -144,13 +144,17 @@
       const arrow = `${P1}.dmg_${feedback.side}`;
       calls.push([arrow + '.inner', 'gotoAndStop', 'Health'], [arrow, 'gotoAndPlay', 2]);
     }
-    if (Number(feedback.levelUps) > Number(before.levelUps || 0)) calls.push([P1 + '.levelup', 'gotoAndPlay', 'go']);
+    // One banner per level-up count increase (the host counts one per level change, a multi-level jump included). The
+    // banner is wound back to `stop` first: a `go` while it already sits on `go` would not run that frame's script again.
+    if (Number(feedback.levelUps) > Number(before.levelUps || 0))
+      calls.push([P1 + '.levelup', 'gotoAndStop', 'stop'], [P1 + '.levelup', 'gotoAndPlay', 'go']);
     return calls;
   }
-  function feedbackLine(shown, get) {
+  // banners: how many banners the page has played (index.html counts the `go` calls), compared with the host's level-ups.
+  function feedbackLine(shown, get, banners) {
     const f = shown.feedback || {};
     const arrows = ['u', 'r', 'd', 'l'].map(side => `${side}=${get(`${P1}.dmg_${side}`, '_currentframe')}/${get(`${P1}.dmg_${side}.inner`, '_currentframe')}`);
-    return `OWHUDFXPAGE hits=${f.hits || 0} side=${f.side || '-'} levelUps=${f.levelUps || 0} ${arrows.join(' ')}`
+    return `OWHUDFXPAGE hits=${f.hits || 0} side=${f.side || '-'} levelUps=${f.levelUps || 0} banners=${banners || 0} ${arrows.join(' ')}`
       + ` levelup=${get(P1 + '.levelup', '_currentframe')}/${get(P1 + '.levelup.inner', '_currentframe')} levelText=${esc(get(P1 + '.levelup.inner.levelup1', 'text'))}`;
   }
 

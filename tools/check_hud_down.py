@@ -23,11 +23,17 @@
 OWHUDTRACKPAGE line whose Module1 shows the mission name, one module per objective line in the state the line has
 (`[x]` Complete, `[o]` Optional, `[ ]` NotComplete) with its text, or one TurnIn module when ready to turn in; a state without a mission has every
 module off. The run must show the mission go from its first objective to ready to turn in.
--Feedback (`-owhudfxshots`): hits from the four sides of the view, then a level-up.
-- fx_sides: the host's OWHUDFX lines give hits 1-4 the sides u, r, d, l in that order (90 degree quadrants of the view).
+-Feedback (`-owhudfxshots`): eight hits (four around a level view, one overhead, three with the view pitched 60 degrees
+down), then one level-up and a jump of two levels.
+- fx_sides: the host's OWHUDFX lines give hits 1-8 the sides u r d l u u d d (view-space quadrants; a vertical source shows
+  u above, d below: HitSide in OpenWillowMayaHUD.cpp, UNVERIFIED).
 - fx_arrows: for each hit, a later OWHUDFXPAGE line with that hit count shows that side's arrow playing (past frame 1)
   on its `Health` inner frame (2).
-- fx_levelup: a level-up in the host's lines, and a page line with it showing the banner on `go` (frame 2) with a text.
+- fx_arrows_clear: after playing, each hit's arrow is back on its hidden frame 1 before the next hit (or the end of the
+  run), so no arrow sticks.
+- fx_levelup: the banner rule (UNVERIFIED): one level-up per rise of the level, a multi-level jump counting once. The host's
+  level-up count equals its number of level rises, the run has a one-level rise and a rise of two or more, the page has
+  played exactly that many banners (OWHUDFXPAGE banners=), and each count shows the banner on `go` (frame 2) with a text.
 - fx_shots: OWHudFx_{hit_u,hit_r,hit_d,hit_l,levelup}.png are complete 1280x720 PNGs.
 Both: the movie path and the page identity (check_hud_shots.check_identity). Prints `OWHUDDOWNTEST PASS|FAIL <name>
 <detail>` per check and a summary; exit code 0 only when every check passes.
@@ -228,32 +234,45 @@ def check_down_shots(folder):
 
 FX_SHOTS = ('hit_u', 'hit_r', 'hit_d', 'hit_l', 'levelup')
 HEALTH_FRAME = 2   # the arrows' inner clip: label `Health` (read from the movie)
+EXPECTED_SIDES = ['u', 'r', 'd', 'l', 'u', 'u', 'd', 'd']
 HOST_FX = re.compile(r'OWHUDFX t=[0-9.]+ hits=(?P<hits>\d+) side=(?P<side>[-urdl]) levelUps=(?P<ups>\d+) level=(?P<level>\d+)\s*$')
-PAGE_FX = re.compile(r'OWHUDFXPAGE hits=(?P<hits>\d+) side=(?P<side>\S+) levelUps=(?P<ups>\d+) u=(?P<u>\S+) r=(?P<r>\S+) d=(?P<d>\S+) '
+PAGE_FX = re.compile(r'OWHUDFXPAGE hits=(?P<hits>\d+) side=(?P<side>\S+) levelUps=(?P<ups>\d+) banners=(?P<banners>\d+) u=(?P<u>\S+) r=(?P<r>\S+) d=(?P<d>\S+) '
                      r'l=(?P<l>\S+) levelup=(?P<levelup>\S+) levelText=(?P<text>.*)$')
 
 
 def check_feedback(lines):
     host = [(n, m) for n, line in enumerate(lines) for m in [HOST_FX.search(line)] if m]
     pages = page_lines(lines, PAGE_FX)
-    sides = {}
-    for _, m in host:
+    sides, hit_at = {}, {}
+    for n, m in host:
         sides.setdefault(int(m['hits']), m['side'])
-    got = [sides.get(k, '?') for k in range(1, 5)]
-    results = [('fx_sides', got == ['u', 'r', 'd', 'l'], f'hits 1-4 sides {" ".join(got)}')]
-    problems = []
-    for k, side in enumerate(['u', 'r', 'd', 'l'], 1):
-        first = next((n for n, m in host if int(m['hits']) == k), None)
-        shown = [p for pn, p in pages if first is not None and pn > first and int(p['hits']) == k]
-        frames = [p[side].split('/') for p in shown]
-        if not any(len(f) == 2 and f[0].isdigit() and int(f[0]) > 1 and f[1] == str(HEALTH_FRAME) for f in frames):
-            problems.append(f'hit {k} ({side}): {[p[side] for p in shown][:3] or "no page line"}')
-    results.append(('fx_arrows', not problems, '; '.join(problems) or '4 arrows played on their Health frame'))
-    up = next((n for n, m in host if int(m['ups']) >= 1), None)
-    banner = [p for pn, p in pages if up is not None and pn > up and int(p['ups']) >= 1]
-    ok = any(p['levelup'].split('/')[0] == '2' and p['text'] not in ('', '-') for p in banner)
-    results.append(('fx_levelup', up is not None and ok,
-                    f'host level-up {"seen" if up is not None else "missing"}; banner {banner[0]["levelup"] if banner else "no page line"}'))
+        hit_at.setdefault(int(m['hits']), n)
+    count = len(EXPECTED_SIDES)
+    got = [sides.get(k, '?') for k in range(1, count + 1)]
+    results = [('fx_sides', got == EXPECTED_SIDES, f'hits 1-{count} sides {" ".join(got)} (expected {" ".join(EXPECTED_SIDES)})')]
+    played, cleared = [], []
+    for k, side in enumerate(EXPECTED_SIDES, 1):
+        start = hit_at.get(k)
+        end = hit_at.get(k + 1, len(lines))
+        window = [(pn, p) for pn, p in pages if start is not None and start < pn < end]
+        frames = [(pn, p[side].split('/')) for pn, p in window]
+        first = next((pn for pn, f in frames if len(f) == 2 and f[0].isdigit() and int(f[0]) > 1 and f[1] == str(HEALTH_FRAME)), None)
+        if first is None:
+            played.append(f'hit {k} ({side}): {[p[side] for _, p in window][:3] or "no page line"}')
+        elif not any(pn > first and f[0] == '1' for pn, f in frames):
+            cleared.append(f'hit {k} ({side}): last {window[-1][1][side] if window else "-"}')
+    results.append(('fx_arrows', not played, '; '.join(played) or f'{count} arrows played on their Health frame'))
+    results.append(('fx_arrows_clear', not played and not cleared,
+                    '; '.join(cleared) or ('arrows did not play' if played else f'{count} arrows back on frame 1 before the next hit')))
+    levels = [int(m['level']) for _, m in host]
+    rises = [b - a for a, b in zip(levels, levels[1:]) if b > a]
+    ups = int(host[-1][1]['ups']) if host else 0
+    banners = int(pages[-1][1]['banners']) if pages else 0
+    shown = all(any(int(p['ups']) == n and p['levelup'].split('/')[0] == '2' and p['text'] not in ('', '-') for _, p in pages)
+                for n in range(1, ups + 1))
+    ok = bool(rises) and ups == len(rises) and 1 in rises and any(r >= 2 for r in rises) and banners == ups and shown
+    results.append(('fx_levelup', ok, f'level rises {rises}; host level-ups {ups}; page banners {banners}; '
+                    f'each banner on go with a text: {shown}'))
     return results
 
 
