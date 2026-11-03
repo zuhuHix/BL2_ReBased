@@ -16,8 +16,9 @@ test_inventory_actions 49 pass / 0 fail; verify_combat_pawn `--vm` 25 pass / 0 f
 
 **After the HUD lane (2026-11-03, pc-hummer, main 95e48fb + feature/hud-integrity, Fight For Your Life in the UE host):** ctest 19/19;
 verify_packages 9 packages, all class bodies exact. `test_quest` now has 112 checks; the new `player_death_goes_down_first` and the respawn
-after the 20 s bleed-out pass. First run 111/112 (the known missing dialog audio line); resume run not run. `run_hud_shots.ps1 -Down` 10/10,
-`-Tracker` 4/4, default 16/16; `test_action_skill_hud` 19/19; `test_hud_minimap` 15/15.
+after the 20 s bleed-out pass. `run_hud_shots.ps1 -Down` 10/10, `-Tracker` 4/4, default 16/16; `test_action_skill_hud` 19/19;
+`test_hud_minimap` 15/15. Rebased on main 490661e (PR #61) with a regenerated audio manifest: ctest 21/21, `test_quest` first run
+112/112 and resume 11/11.
 
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):

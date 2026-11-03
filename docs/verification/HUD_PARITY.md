@@ -246,6 +246,13 @@ whether the game still counts it is UNVERIFIED (a mission-model question, not a 
   * `test_quest.ps1` first run 111/112. The new `player_death_goes_down_first` and the respawn checks after the bleed-out
     pass. The failure is `dialog_hook_finds_every_line_and_plays_nothing` (a missing dialog audio line, the Fixes lane's;
     #105 before this lane added a check). The resume run did not run, because the suite stops after a failed first run.
+* After review round 1, rebased on main 490661e (PR #61), pc-hummer:
+  * ctest 21/21; verify_packages 9/9 exact.
+  * `test_quest.ps1` first run **112/112** and resume **11/11**, after regenerating the local audio manifest with PR #61's
+    `tools/audio_slice_chain.py` (47 entries). With the old manifest the same build gave 111/112 (3 dialog misses).
+  * `run_hud_shots.ps1 -Down` 10/10 with the new title and pixel checks (bleed-bar pixels: up 0, down_start 3,540,
+    down_mid 2,281, the other three 0).
+  * `-Tracker` 4/4.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.

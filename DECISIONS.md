@@ -3201,9 +3201,11 @@ respawn"); the down-state rules and their live numbers come from `docs/verificat
   `p1.secondwind` and `p1.MissionNotifications.Module1-6`. `MissionSystem::trackerLines()` gives the active objectives with their
   package `ProgressMessage`, and `--mission-run` output now ends with a `"tracker"` array.
 - **Why.** Die and respawn is a Phase 4 gate piece, and BL2's loop goes through Fight For Your Life, not an instant respawn.
-- **Checks.** `run_hud_shots.ps1 -Down` 10/10 (twice) and `-Tracker` 4/4 in UE, with `tests/check_hud_down_test.py` (12 synthetic
-  cases) for their checker. `test_quest.ps1` waits out the bleed-out before its respawn checks and adds `player_death_goes_down_first`;
-  first run 111/112, the one failure being the known missing dialog audio line.
+- **Checks.** `run_hud_shots.ps1 -Down` 10/10 and `-Tracker` 4/4 in UE, with `tests/check_hud_down_test.py` (20 synthetic cases)
+  for their checker. The down check compares the title with the generated strings file and checks the bleed-out bar's pixels. The
+  tracker check covers optional objectives, and `tests/mission_script_test.py` scenario T covers `trackerLines()` on a toy mission.
+  `test_quest.ps1` waits out the bleed-out before its respawn checks and adds `player_death_goes_down_first`. On main 490661e it gives
+  112/112 plus resume 11/11.
 - **Not verified.** No real-game frame of these elements exists on this PC: bl-sdk and a Maya save are missing, so no critic score.
   Which `dying1` and `secondwind` fields the native fills is UNVERIFIED. Nothing in the UE host attacks Maya yet: the enemy attacks
   of PR #59 run in the C++ VM only.
