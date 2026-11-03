@@ -151,6 +151,19 @@ def test_plain_font_import_copies_library_from_run_root():
         assert conv2.copied_libraries == [] and len(conv2.inlined_fonts) == 2
 
 
+def test_font_library_name_matches_case_insensitively():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        (run / 'gfxfontlib.swf').write_bytes(font_library_swf())
+        movie = run / 'UI_Movie'
+        movie.mkdir()
+        conv = g.Converter(run, font_base=movie)
+        conv.convert([(g.IMPORT_ASSETS2, font_import('GFXFONTLIB.SWF'))])
+        assert conv.copied_libraries and (movie / 'GFXFONTLIB.SWF').is_file()
+        assert len(conv.inlined_fonts) == 1
+
+
 def test_traversal_or_other_library_url_is_not_copied():
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
