@@ -12,7 +12,7 @@ FOpenWillowDamageResult FOpenWillowMayaState::ApplyDamage(float Amount, float No
         Result.bIgnored = true;
         return Result;
     }
-    if (Amount <= 0.f) return Result;
+    if (!FMath::IsFinite(Amount) || Amount <= 0.f) return Result;   // NaN or infinity never reaches the pools
     // Live (COMBAT_GOLDEN_TRACE.md step 9): each hit came off the shield; the hit that emptied it sent the remainder to
     // health in the same hit. Every hit restarts the recharge delay (step 10), a health-only hit included.
     LastDamageAt = Now;

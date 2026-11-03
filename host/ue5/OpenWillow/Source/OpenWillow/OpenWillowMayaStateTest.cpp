@@ -56,6 +56,10 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         Run(S, 6.5f, 20.f);
         TestEqual(TEXT("recharge stops at the capacity"), S.Shield, 50.f);
         TestEqual(TEXT("health does not regenerate at rate 0"), S.Health, 90.f);
+        const float NaN = FMath::Sqrt(-1.f);
+        TestTrue(TEXT("NaN damage is ignored"), S.ApplyDamage(NaN, 21.f).ToHealth == 0.f && S.Health == 90.f && S.Shield == 50.f);
+        TestTrue(TEXT("infinite damage is ignored"), S.ApplyDamage(TNumericLimits<float>::Infinity(), 22.f).ToShield == 0.f && S.Health == 90.f
+            && S.Shield == 50.f && !S.IsDown());
     }
     {
         FOpenWillowMayaState S = Synthetic();
