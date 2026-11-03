@@ -18,7 +18,9 @@ Objects are looked up again in every command (see openwillow_realgame/__init__.p
 """
 import json
 import math
+import re
 import time
+from pathlib import Path
 
 try:
     import unrealsdk
@@ -34,6 +36,17 @@ wp2_state = globals().setdefault("wp2_state", {"fov": None, "fov_hooks": [], "ho
 # View directions (yaw, pitch in degrees, camera frame) projected through the HUD canvas.
 FOV_DIRS = [(a, 0.0) for a in (-40, -30, -20, -10, 0, 10, 20, 30, 40)] + [(0.0, b) for b in (-25, -15, -5, 5, 15, 25)]
 TYPE_TERMS = ("muzzle", "shell", "casing", "tracer", "impact", "flash", "eject")
+
+
+def _out_file(folder, tag):
+    """<RG_OUT>/<folder>/<tag>.json for a tag of letters, digits and underscores, checked to resolve under RG_OUT."""
+    if not re.fullmatch(r"[A-Za-z0-9_]+", str(tag)):
+        raise ValueError("tag must match [A-Za-z0-9_]+: %r" % (tag,))
+    path = (_out(folder) / (tag + ".json")).resolve()
+    root = Path(RG_OUT).resolve()
+    if root not in path.parents:
+        raise ValueError("output path %s is outside RG_OUT %s" % (path, root))
+    return path
 
 
 # ---------------------------------------------------------------- world FOV
@@ -227,7 +240,7 @@ def wp2_particles(tag):
                     _collect_ps(v, found)
     result = {"weapon": _path(weapon), "type": _path(wtype), "name": _safe_call(weapon, "GetShortHumanReadableName"),
               "fields": fields, "systems": {p: _particle_system(ps) for p, ps in found.items()}}
-    _write_json(_out("particles") / (tag + ".json"), result)
+    _write_json(_out_file("particles", tag), result)
     return {"type": result["type"], "fields": len(fields), "systems": sorted(found)}
 
 

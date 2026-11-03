@@ -174,5 +174,22 @@ class WeaponViewModelTests(unittest.TestCase):
         self.assertEqual(parsed['fast_reload_threshold'], 4.0)
 
 
+class MuzzleFlashFxTests(unittest.TestCase):
+    """An element whose particle system has no layers is left out (the host then draws its procedural flash)."""
+
+    def test_empty_layer_lists_are_dropped(self):
+        fx = view.weapon_muzzle_fx
+        saved = fx.muzzle_collection, fx.particle_system_layers
+        try:
+            fx.muzzle_collection = lambda package, path: {'Default': 'Fake.Sys_A', 'Shock': 'Fake.Sys_B'}
+            fx.particle_system_layers = lambda package, path: [{'name': 'A'}] if path == 'Fake.Sys_A' else []
+            self.assertEqual(view.muzzle_flash_fx_for(None, 'Fake.Coll', {}),
+                             {'Default': {'system': 'Fake.Sys_A', 'layers': [{'name': 'A'}]}})
+            fx.particle_system_layers = lambda package, path: []
+            self.assertIsNone(view.muzzle_flash_fx_for(None, 'Fake.Coll', {}))
+        finally:
+            fx.muzzle_collection, fx.particle_system_layers = saved
+
+
 if __name__ == '__main__':
     unittest.main()

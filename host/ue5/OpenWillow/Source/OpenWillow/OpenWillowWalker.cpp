@@ -1560,8 +1560,8 @@ void AOpenWillowWalker::FireWeapon()
     // The type's cooked flash emitters for this element (else its Default system) when the manifest has them; the
     // procedural plume otherwise. The barrel runs along the gun Root's -Y axis (section 17 of WEAPON_VISUALS.md).
     const TArray<FOpenWillowFlashLayer>* FlashLayers = Model ? Model->FlashLayers.Find(Element.IsEmpty() ? TEXT("Default") : Element) : nullptr;
-    if (Model && !FlashLayers) FlashLayers = Model->FlashLayers.Find(TEXT("Default"));
-    if (FlashLayers && WeaponVisual && WeaponVisual->GetBoneIndex(TEXT("Root")) != INDEX_NONE)
+    if (Model && (!FlashLayers || FlashLayers->IsEmpty())) FlashLayers = Model->FlashLayers.Find(TEXT("Default"));
+    if (FlashLayers && !FlashLayers->IsEmpty() && WeaponVisual && WeaponVisual->GetBoneIndex(TEXT("Root")) != INDEX_NONE)
     {
         const FTransform Root = WeaponVisual->GetBoneTransform(FName(TEXT("Root")));
         AOpenWillowShotFx::MuzzleFlashLayers(GetWorld(), Muzzle, -Root.GetUnitAxis(EAxis::Y), Root.GetUnitAxis(EAxis::Z),
