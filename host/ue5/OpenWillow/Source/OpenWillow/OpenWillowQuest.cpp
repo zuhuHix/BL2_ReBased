@@ -1558,9 +1558,18 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     case 20: {
         if (TestWait < 0.5f) return;
-        const int32 Before = Respawns;
-        FHitResult Hit;
-        UGameplayStatics::ApplyPointDamage(Walker, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+        // Health 0 puts Maya down first (Fight For Your Life); with no kill she bleeds out and the respawn follows
+        // 2.28 + 12 + 5.76 s later (OpenWillowWalker's down state), so the step waits for it.
+        if (RespawnsBeforeDeath < 0)
+        {
+            RespawnsBeforeDeath = Respawns;
+            FHitResult Hit;
+            UGameplayStatics::ApplyPointDamage(Walker, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+            Check(Walker->IsDown() && Walker->GetHealth() == 0.f && Respawns == RespawnsBeforeDeath, TEXT("player_death_goes_down_first"));
+            return;
+        }
+        if (Waiting(Respawns > RespawnsBeforeDeath, 0.5f + 25.f)) return;
+        const int32 Before = RespawnsBeforeDeath;
         Check(Respawns == Before + 1, TEXT("player_death_triggers_respawn"));
         Check(Walker->GetActorLocation().Equals(Data.OracleRespawnLocation, 1.f), TEXT("respawn_at_decoded_station_exit_point"));
         Check(Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("respawn_restores_formula_health"));

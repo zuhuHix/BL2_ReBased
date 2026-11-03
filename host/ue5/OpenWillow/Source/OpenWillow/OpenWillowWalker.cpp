@@ -304,6 +304,7 @@ void AOpenWillowWalker::RefreshHealthForLevel()
     MaxHealth = Health = FormulaHealth;
     HealthLevel = Skills->GetLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f for level %d (was level %d)"), Health, MaxHealth, HealthLevel, FromLevel);
+    EndDownOnRefill(TEXT("level change"));
 }
 
 void AOpenWillowWalker::ApplyScriptHealth(float NewMax, float NewCurrent)
@@ -315,6 +316,18 @@ void AOpenWillowWalker::ApplyScriptHealth(float NewMax, float NewCurrent)
     if (Skills) HealthLevel = Skills->GetLevel();
     bHealthHeldForScript = false;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f from the script's level-up (was %.1f/%.1f)"), Health, MaxHealth, FromHealth, FromMax);
+    EndDownOnRefill(TEXT("script level-up"));
+}
+
+void AOpenWillowWalker::EndDownOnRefill(const TCHAR* Why)
+{
+    // Down means health 0. A refill while Injured (a level-up) ends the down state like a second wind: the game is widely
+    // reported to revive a player who levels up during Fight For Your Life (UNVERIFIED, not observed here). While Dead the
+    // respawn still follows.
+    if (DownPhase != EDownPhase::Injured || Health <= 0.f) return;
+    DownPhase = EDownPhase::Up;
+    SecondWindAt = GetWorld()->GetTimeSeconds();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya revived by %s t=%.3f health %.0f/%.0f"), Why, SecondWindAt, Health, MaxHealth);
 }
 
 void AOpenWillowWalker::AddWeaponDamageScale(float Scale, float Seconds)
