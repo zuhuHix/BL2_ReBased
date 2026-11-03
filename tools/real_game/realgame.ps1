@@ -33,8 +33,8 @@ Add-Type -Namespace OWRG -Name Native -MemberDefinition @'
 function Get-QpcSeconds { [double][Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency }
 
 function Enter-RunLock([int]$WaitSeconds = 600) {
-    # The machine-wide claim every editor script uses (tools/ue_lock.ps1): no Unreal editor, lock free or stale, CreateNew.
-    Enter-OwUeLock -Owner 'realgame' -TimeoutSeconds $WaitSeconds
+    # The machine-wide claim every editor script uses (tools/ue_lock.ps1): no Unreal editor or Borderlands 2, lock free or stale, CreateNew.
+    Enter-OwUeLock -Owner 'realgame' -TimeoutSeconds $WaitSeconds -AlsoWaitFor Borderlands2   # no game or editor already running
 }
 function Exit-RunLock { Exit-OwUeLock }   # removes the lock only when this process owns it
 

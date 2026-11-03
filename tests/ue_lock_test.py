@@ -7,11 +7,15 @@ Static (always run):
 1. Every script that names UnrealEditor.exe or UnrealEditor-Cmd.exe dot-sources tools/ue_lock.ps1 and takes the lock
    (Enter-OwUeLock / Invoke-OwUeLocked), and every script that takes it releases it (Exit-OwUeLock).
 2. No script builds a per-checkout lock path or opens a lock with CreateNew itself.
-Runtime (PowerShell needed; OPENWILLOW_UE_LOCK_TEST_PROCESS_NAMES points the editor wait at a name that is not
-running, or at python itself to check the wait, so a real editor elsewhere on the machine does not matter):
+Runtime (PowerShell needed). Each test's PowerShell process redefines Get-OwUeBusyProcess after loading the helper
+(no process running, or python itself to check the wait), so a real editor elsewhere on the machine does not matter and
+the production helper has no test switch:
 3. The default path and the absolute override; a relative override is rejected.
 4. Enter writes the owner (pid, process start time, script); Exit removes only the caller's own lock.
 5. A lock is stale only when its owner process is gone or its start time differs; an old-format lock never is.
+6. Stale recovery is atomic: several processes recovering the same stale lock at once end with exactly one owner.
+7. A lock taken while an editor starts in the meantime is given back.
+8. The real-game helpers take the lock and also wait for Borderlands2; every real-game script that starts the game takes it.
 """
 import json
 import os
@@ -21,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +72,18 @@ class StaticTest(unittest.TestCase):
                 self.assertNotRegex(body, r"Join-Path[^\n]*'(local/)?ue_run\.lock'")
                 self.assertNotRegex(body, r'CreateNew')
 
+    def test_real_game_sessions_hold_the_lock_and_wait_for_the_game(self):
+        helper = code(ROOT / 'tools' / 'real_game' / 'realgame.ps1')
+        self.assertRegex(helper, r"Enter-OwUeLock[^\n]*-AlsoWaitFor\s+'?Borderlands2")
+        for path in sorted((ROOT / 'tools' / 'real_game').glob('*.ps1')):
+            body = code(path)
+            if path.name != 'realgame.ps1' and re.search(r'\bStart-Game\b', body):
+                with self.subTest(script=path.name):
+                    self.assertRegex(body, r'\b(Enter-RunLock|Enter-OwUeLock)\b')
+
+    def test_helper_has_no_test_switch(self):
+        self.assertNotIn('TEST_PROCESS', text(HELPER))
+
     def test_helper_is_loaded_at_script_level_not_invoked(self):
         # `& ue_lock.ps1` would run it in a child scope: the functions would not exist afterwards.
         for path in scripts():
@@ -83,15 +100,23 @@ class RuntimeTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def ps(self, script, override=None, busy='ow-no-such-process'):
+    def command(self, script, busy=None, prelude=''):
+        # busy=None: no Unreal process is running; busy='python': this test's own interpreter counts as one.
+        mock = ('function Get-OwUeBusyProcess { param([string[]]$AlsoWaitFor) }' if busy is None else
+                f"function Get-OwUeBusyProcess {{ param([string[]]$AlsoWaitFor) Get-Process -Name '{busy}' -ErrorAction SilentlyContinue }}")
+        return [POWERSHELL, '-NoProfile', '-NonInteractive', '-Command',
+                f". '{HELPER}'; {mock}; {prelude}; $ErrorActionPreference = 'Stop'; try {{ {script} }} "
+                "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"]
+
+    def env(self, override=None):
         env = dict(os.environ)
-        env['OPENWILLOW_UE_LOCK_TEST_PROCESS_NAMES'] = busy
         env['OPENWILLOW_UE_LOCK'] = str(self.lock) if override is None else override
         env['LOCALAPPDATA'] = self.tmp.name
-        done = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-Command',
-                               f". '{HELPER}'; $ErrorActionPreference = 'Stop'; try {{ {script} }} "
-                               "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"],
-                              capture_output=True, text=True, env=env, timeout=120)
+        return env
+
+    def ps(self, script, override=None, busy=None, prelude=''):
+        done = subprocess.run(self.command(script, busy, prelude), capture_output=True, text=True,
+                              env=self.env(override), timeout=120)
         return done.returncode, done.stdout.strip(), done.stderr.strip()
 
     def test_paths(self):
@@ -172,6 +197,36 @@ class RuntimeTest(unittest.TestCase):
         rc, out, err = self.ps("Enter-OwUeLock -Owner 'unit' -TimeoutSeconds 0; (Get-OwUeLockOwner).owner; Exit-OwUeLock")
         self.assertEqual(rc, 0, err)
         self.assertTrue(out.endswith('unit'))
+        self.assertFalse(self.lock.exists())
+
+    def test_concurrent_stale_recovery_has_one_owner(self):
+        # Every competitor judges the dead owner stale and then pauses before acting on it, the widest window for the
+        # race. Without the gate, a later competitor would delete the lock an earlier one had just created.
+        gone = subprocess.Popen([sys.executable, '-c', 'pass'])
+        gone.wait()
+        self.write_lock({'owner': 'dead', 'pid': gone.pid, 'process_start_utc_filetime': 1})
+        go = time.time() + 8
+        slow = ("$orig = ${function:Test-OwUeLockStale}; "
+                "function Test-OwUeLockStale([string]$Path) { $r = & $orig $Path; Start-Sleep -Milliseconds 1500; $r }; "
+                f"while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt {int(go * 1000)}) {{ Start-Sleep -Milliseconds 20 }}")
+        body = ("Enter-OwUeLock -Owner \"racer$PID\" -TimeoutSeconds 0; "
+                "'OWNED ' + (Get-OwUeLockOwner).owner; Start-Sleep -Seconds 8; Exit-OwUeLock")
+        racers = [subprocess.Popen(self.command(body, prelude=slow), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, env=self.env()) for _ in range(3)]
+        outputs = [r.communicate(timeout=180) for r in racers]
+        owners = [out for out, _ in outputs if 'OWNED racer' in out]
+        refused = [err for _, err in outputs if 'still present' in err]
+        self.assertEqual(len(owners), 1, outputs)
+        self.assertEqual(len(refused), 2, outputs)
+        self.assertFalse(self.lock.exists())
+
+    def test_lock_is_given_back_when_an_editor_appeared(self):
+        # The editor shows up only on the second look (after the lock was created): the lock must not be kept.
+        prelude = ("$script:looks = 0; function Get-OwUeBusyProcess { param([string[]]$AlsoWaitFor) "
+                   "$script:looks++; if ($script:looks -ge 2) { Get-Process -Id $PID } }")
+        rc, _, err = self.ps("Enter-OwUeLock -Owner 'unit' -TimeoutSeconds 0", prelude=prelude)
+        self.assertNotEqual(rc, 0)
+        self.assertIn('still present', err)
         self.assertFalse(self.lock.exists())
 
     def test_invoke_locked_releases_when_the_body_throws(self):
