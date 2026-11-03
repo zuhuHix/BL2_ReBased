@@ -31,6 +31,15 @@ def result(gun, **values):
             'damage': '80.00', 'direct': '80.00', 'splash': '0.00', 'splash_hits': '0', 'status_rolls': '0',
             'procs': '0', 'ticks': '0'}
     base.update({key: str(value) for key, value in values.items()})
+    if not values.pop('legacy', False) and 'hit_events' not in values:
+        # Hit-event fields consistent with the counts (a direct event per non-rocket target hit, splash and tick events).
+        direct = 0 if base['kind'] == 'Rocket' else int(base['target_hits'])
+        hits = {'hit_direct': direct, 'hit_splash': int(base['splash_hits']), 'hit_tick': int(base['ticks']), 'hit_throw': 0}
+        base.update({k: str(v) for k, v in hits.items()})
+        base['hit_events'] = str(sum(hits.values()))
+    if 'legacy' not in base:
+        base.setdefault('tick_weapons', f"{gun}:{base['ticks']}" if int(base['ticks']) else '-')
+    base.pop('legacy', None)
     return f"LogTemp: Display: OWFIRING result id={gun} " + ' '.join(f'{k}={v}' for k, v in base.items() if k != 'id')
 
 
@@ -79,14 +88,16 @@ class Gun(unittest.TestCase):
     def tearDown(self):
         self.folder.cleanup()
 
-    def run_check(self, text, guns):
-        results, segments, skipped, no_wall, _, throws, lifecycles = check.read_log(text)
+    def run_check(self, text, guns, hit_events=True):
+        extra = {}
+        results, segments, skipped, no_wall, _, throws, lifecycles = check.read_log(text, extra)
         out = []
         for gun in guns:
             rec, _ = check.find_recipe(self.dirs, gun)
             expected = check.expectations(rec)
             out.append(check.check_gun(gun, results.get(gun), segments.get(gun), expected, skipped.get(gun), no_wall,
-                                       throws.get(gun), lifecycles.get(gun)))
+                                       throws.get(gun), lifecycles.get(gun), hit_events=hit_events,
+                                       swap=extra['swap'].get(gun)))
         return out
 
     def test_trace_gun_passes(self):
@@ -109,6 +120,29 @@ class Gun(unittest.TestCase):
         fails, notes, _ = self.run_check(text, ['made_rocket'])[0]
         self.assertEqual(fails, [], fails)
         self.assertTrue(any('rocket missed' in note for note in notes), notes)
+
+    def test_missing_hit_fields_fail_unless_legacy(self):
+        stale = result('made_trace', legacy=True)
+        fails, _, _ = self.run_check(log(segment('made_trace', 0, 0, 5), stale), ['made_trace'])[0]
+        self.assertTrue(any('pass --legacy' in reason for reason in fails), fails)
+        fails, _, _ = self.run_check(log(segment('made_trace', 0, 0, 5), stale), ['made_trace'], hit_events=False)[0]
+        self.assertEqual(fails, [], fails)
+
+    def test_ticks_after_a_weapon_swap_must_name_the_proc_gun(self):
+        swap = 'LogTemp: Display: OWFIRING swap id=made_rocket to=made_trace ticks_before=1'
+        common = dict(kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0, damage='60.00',
+                      direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=3)
+        good = result('made_rocket', **common)
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, good), ['made_rocket'])[0]
+        self.assertEqual(fails, [], fails)
+        wrong = result('made_rocket', **common, hit_events=7, hit_direct=0, hit_splash=2, hit_tick=3, hit_throw=0,
+                       tick_weapons='made_rocket:1,made_trace:2')
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, wrong), ['made_rocket'])[0]
+        self.assertTrue(any('credited to another weapon (after the swap to made_trace)' in r for r in fails), fails)
+        late = result('made_rocket', **dict(common, ticks=1), hit_events=5, hit_direct=0, hit_splash=2, hit_tick=1,
+                      hit_throw=0, tick_weapons='made_rocket:1')
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, late), ['made_rocket'])[0]
+        self.assertTrue(any('no tick landed after it' in r for r in fails), fails)
 
     def test_hit_events_match_the_counts(self):
         good = result('made_trace', hit_events=8, hit_direct=8, hit_splash=0, hit_tick=0, hit_throw=0)
@@ -168,7 +202,8 @@ class Gun(unittest.TestCase):
 
     def test_tediore_throw_needs_a_full_refill(self):
         # A single straight bullet gun: 5 + 3 pulls plus the two wide-bullet pulls.
-        bullets = dict(kind='Bullet', shots=10, pellets=10, launches=10, impacts=10, target_hits=9, direct='85.00', damage='85.00')
+        bullets = dict(kind='Bullet', shots=10, pellets=10, launches=10, impacts=10, target_hits=9, direct='85.00', damage='85.00',
+                       hit_events=9, hit_direct=8, hit_splash=0, hit_tick=0, hit_throw=1)
         missing = log(segment('made_throw', 0, 0, 5), result('made_throw', **bullets))
         fails, _, _ = self.run_check(missing, ['made_throw'])[0]
         self.assertTrue(any('no OWFIRING throw' in reason for reason in fails), fails)

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "OpenWillowFiring.h"
+#include "OpenWillowHitEvent.h"
 #include "OpenWillowStatusEffect.generated.h"
 
 // Elemental status effects on a target (burning, shock, corrosive, slag), added to the target when an effect first
@@ -16,8 +17,10 @@ class OPENWILLOW_API UOpenWillowStatusEffects : public UActorComponent
 public:
     UOpenWillowStatusEffects();
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+    // WeaponId and Element name the gun whose hit caused the proc; every tick's hit event carries them (a weapon swap
+    // before the tick must not credit it to the gun now in hand).
     static void Apply(AActor* Target, class AOpenWillowWalker* Shooter, const FOpenWillowStatus& Status,
-        const FString& DamageType);
+        const FString& DamageType, const FString& WeaponId, EOpenWillowElement Element);
     bool IsActive(const FString& Type) const;
     // True while any status effect is on Target (the -owfiringtest wait), and the reset that ends them all.
     static bool AnyActive(const AActor* Target);
@@ -27,6 +30,8 @@ private:
     {
         FString Type;
         FString DamageType;
+        FString WeaponId;
+        EOpenWillowElement Element = EOpenWillowElement::None;
         float Dps = 0;
         float EndsAt = 0;
         double Clock = 0;        // time built up toward the next tick

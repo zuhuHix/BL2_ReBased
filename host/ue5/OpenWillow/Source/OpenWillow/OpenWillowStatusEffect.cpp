@@ -22,7 +22,7 @@ UOpenWillowStatusEffects::UOpenWillowStatusEffects()
 }
 
 void UOpenWillowStatusEffects::Apply(AActor* Target, AOpenWillowWalker* Shooter, const FOpenWillowStatus& Status,
-    const FString& DamageType)
+    const FString& DamageType, const FString& WeaponId, EOpenWillowElement Element)
 {
     if (!Target || !Status.bValid || Status.Duration <= 0.f) return;
     UOpenWillowStatusEffects* Effects = Target->FindComponentByClass<UOpenWillowStatusEffects>();
@@ -45,6 +45,8 @@ void UOpenWillowStatusEffects::Apply(AActor* Target, AOpenWillowWalker* Shooter,
     }
     // A refreshed shock keeps its tick clock and restarts its duration (live).
     Entry->DamageType = DamageType;
+    Entry->WeaponId = WeaponId;
+    Entry->Element = Element;
     Entry->Dps = Status.Dps;
     Entry->EndsAt = Now + Status.Duration;
     Entry->Shooter = Shooter;
@@ -98,6 +100,8 @@ void UOpenWillowStatusEffects::TickComponent(float DeltaTime, ELevelTick TickTyp
             Event.Kind = EOpenWillowHitKind::StatusTick;
             Event.Damage = float(Amount);
             Event.DamageType = Effect.DamageType;
+            Event.WeaponId = Effect.WeaponId;
+            Event.Element = Effect.Element;
             Event.Origin = Hit.ImpactPoint;
             Effect.Shooter->ApplyShotDamage(Target, Event, Hit);
             AOpenWillowShotFx::Flash(GetWorld(), Hit.ImpactPoint, StatusColor(Effect.Type), 14.f, 0.25f, 600.f);

@@ -270,6 +270,7 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
             Event.Momentum = Event.Direction * Data.Momentum;
             Event.Origin = StartPoint;
             Event.WeaponId = WeaponId;
+            Event.Element = OpenWillowHit::ElementOf(DamageType, Element);
             HitTarget(Shooter.Get(), Data, Other, Event, Hit, 1.f);
         }
         else
@@ -294,6 +295,7 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
         Event.Direction = Velocity.GetSafeNormal();
         Event.Origin = StartPoint;
         Event.WeaponId = WeaponId;
+        Event.Element = OpenWillowHit::ElementOf(DamageType, Element);
         HitTarget(Shooter.Get(), Data, Other, Event, Hit, 1.f);
     }
     // Bullets whose firing mode carries a Behavior_Explode (gyrojets) explode where they hit; a rocket explodes when its
@@ -367,5 +369,12 @@ void AOpenWillowProjectile::HitTarget(AOpenWillowWalker* Shooter, const FOpenWil
     if (bProc) ++OpenWillowFiring::Counts.Procs;
     UE_LOG(LogTemp, Display, TEXT("OWFIRING status roll %s chance %.3f (level scale %.2f, levels %d / %d) roll %.3f %s"),
         *Data.Status.Type, Chance, LevelScale, ShooterLevel, TargetLevel, Roll, bProc ? TEXT("proc") : TEXT("miss"));
-    if (bProc) UOpenWillowStatusEffects::Apply(Target, Shooter, Data.Status, DamageType);
+    if (bProc)
+    {
+        // The proc's source: the hit event's weapon (every caller names it) and its element, fixed now for all its ticks.
+        const EOpenWillowElement Element = Event.Element != EOpenWillowElement::None ? Event.Element
+            : OpenWillowHit::ElementOf(DamageType);
+        const FString& WeaponId = Event.WeaponId;
+        UOpenWillowStatusEffects::Apply(Target, Shooter, Data.Status, DamageType, WeaponId, Element);
+    }
 }

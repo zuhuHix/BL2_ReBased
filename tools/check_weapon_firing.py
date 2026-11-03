@@ -52,6 +52,7 @@ THROW = re.compile(r'OWFIRING throw (.*)$')
 LIFECYCLE = re.compile(r'OWFIRING lifecycle (.*)$')
 PUSH = re.compile(r'OWFIRING push (.*)$')
 WIDE = re.compile(r'OWFIRING wide (.*)$')
+SWAP = re.compile(r'OWFIRING swap (.*)$')
 SPLASH = re.compile(r'OWFIRING splash \S+ distance (\S+) scale (\S+) momentum (\S+) source (\w+)')
 SKIPPED = re.compile(r'OWFIRING skipped id=(\S+) reason=(.*)$')
 NO_WALL = re.compile(r'OWFIRING no wall in reach for id=(\S+)')
@@ -73,6 +74,7 @@ def read_log(text, extra=None):
     extra.setdefault('push', {})
     extra.setdefault('wide', {})
     extra.setdefault('splash', {})
+    extra.setdefault('swap', {})
     pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
         if match := SPLASH.search(line):
@@ -86,6 +88,10 @@ def read_log(text, extra=None):
         if match := WIDE.search(line):
             body = fields(match.group(1))
             extra['wide'][body['id']] = body
+            continue
+        if match := SWAP.search(line):
+            body = fields(match.group(1))
+            extra['swap'][body['id']] = body
             continue
         if match := THROW.search(line):
             body = fields(match.group(1))
@@ -240,12 +246,14 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
     return fails
 
 
-def check_hit_events(log, expected, throw=None):
+def check_hit_events(log, expected, throw=None, required=True, gun=None, swap=None):
     """Hit events (OpenWillowHitEvent.h: one per damage application, by kind) against the counts of the same run: a
     direct event per bullet or trace hit (none for a rocket body), a splash event per splash hit, a tick event per status
-    tick, a throw event per direct hit of a thrown gun. Logs from before the hit-event API have no hit_* fields."""
+    tick, a throw event per direct hit of a thrown gun. Every status tick must carry the weapon id of the gun that caused
+    the proc (`tick_weapons`), also after the test's weapon swap (`swap`). The fields are required; only a log from
+    before the hit-event API (graded with --legacy, `required` False) may lack them."""
     if 'hit_events' not in log:
-        return []
+        return ['no hit_events fields in the result line (a log from before the hit-event API: pass --legacy)'] if required else []
     fails = []
     kinds = {k: int(log[f'hit_{k}']) for k in ('direct', 'splash', 'tick', 'throw')}
     throw_hits = int(throw['target_hits']) if throw is not None else 0
@@ -260,11 +268,25 @@ def check_hit_events(log, expected, throw=None):
             fails.append(f'{count} {kind} hit events, expected {want[kind]}')
     if int(log['hit_events']) != sum(kinds.values()):
         fails.append(f"hit_events {log['hit_events']} != the sum of the kinds {sum(kinds.values())}")
+    if 'tick_weapons' not in log:
+        if required:
+            fails.append('no tick_weapons field in the result line')
+        return fails
+    ticks = {}
+    for entry in ([] if log['tick_weapons'] == '-' else log['tick_weapons'].split(',')):
+        weapon, _, count = entry.rpartition(':')
+        ticks[weapon] = ticks.get(weapon, 0) + int(count)
+    wrong = {weapon: count for weapon, count in ticks.items() if gun is not None and weapon != gun}
+    if wrong:
+        after = '' if swap is None else f" (after the swap to {swap.get('to')})"
+        fails.append(f'status ticks credited to another weapon{after}: {wrong}')
+    if swap is not None and int(log['ticks']) <= int(swap.get('ticks_before') or 0):
+        fails.append('weapon swap during the status ticks, but no tick landed after it (the swap check did not run)')
     return fails
 
 
 def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None, lifecycle=None, push=None, wide=None,
-              momentum=False, splash_lines=None):
+              momentum=False, splash_lines=None, hit_events=True, swap=None):
     """(list of failure reasons, notes, values for the table) for one gun. With `momentum`, the push and wide lines are
     checked too (check_momentum)."""
     fails, notes = [], []
@@ -367,7 +389,7 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
                 fails.append(f'ticks {ticks} > {most} possible for {procs} procs of {expected["duration"]:g} s')
         if rolls and not procs:
             notes.append(f'no proc in {rolls} status rolls')
-    fails += check_hit_events(log, expected, throw)
+    fails += check_hit_events(log, expected, throw, hit_events, gun, swap)
     if momentum:
         fails += check_momentum(push, wide, expected, phase_a_hits, splash_lines, int(log['splash_hits']), throw)
     if 'timed' in log and log['timed'] != log.get('on_time'):
@@ -397,8 +419,8 @@ def main(argv=None):
                              'local/items/firing/coverage)')
     parser.add_argument('--guns', default=None, help='comma-separated recipe ids (default: the run\'s own list)')
     parser.add_argument('--legacy', action='store_true',
-                        help='grade a log from before the momentum checks: momentum and wide are skipped when it has no '
-                             'push lines')
+                        help='grade a log from before the momentum or hit-event checks: momentum and wide are skipped '
+                             'when it has no push lines, the hit events when its result lines have no hit_events')
     args = parser.parse_args(argv)
     item_dirs = [Path(p) for p in args.items] if args.items else DEFAULT_ITEM_DIRS
     text = Path(args.log).read_text(encoding='utf-8', errors='replace')
@@ -408,6 +430,10 @@ def main(argv=None):
     momentum = not (args.legacy and not extra['push'])
     if not momentum:
         print('note: no OWFIRING push lines in this log (a run from before the momentum checks): momentum not checked')
+    # The hit-event fields are required; only --legacy grades result lines from before the hit-event API without them.
+    hit_events = not (args.legacy and not any('hit_events' in body for body in results.values()))
+    if not hit_events:
+        print('note: no hit_events fields in this log (a run from before the hit-event API): hit events not checked')
     guns = args.guns.split(',') if args.guns else run_guns
     if not guns:
         print('no gun list: the log has no "firing test parsed" line and --guns is missing', file=sys.stderr)
@@ -426,7 +452,8 @@ def main(argv=None):
         expected = expectations(recipe)
         fails, notes, values = check_gun(gun, results.get(gun), segments.get(gun), expected, skipped.get(gun), no_wall,
                                          throws.get(gun), lifecycles.get(gun), extra['push'].get(gun),
-                                         extra['wide'].get(gun), momentum, extra['splash'].get(gun))
+                                         extra['wide'].get(gun), momentum, extra['splash'].get(gun), hit_events,
+                                         extra['swap'].get(gun))
         verdict = 'FAIL' if fails else 'PASS'
         failed += bool(fails)
         if values:

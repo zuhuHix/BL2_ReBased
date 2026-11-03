@@ -123,6 +123,7 @@ struct FOpenWillowFiringStats
     int32 OnTimeImpacts = 0; // ... after distance / speed seconds (to within one frame)
     int32 HitEvents = 0;     // hit events sent (ApplyShotDamage; any target)
     int32 HitKinds[4] = {0, 0, 0, 0}; // ... by EOpenWillowHitKind: direct, splash, status tick, throw
+    TMap<FString, int32> TickWeapons;  // status tick events by the weapon id they carry
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 

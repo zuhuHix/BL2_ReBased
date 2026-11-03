@@ -1712,6 +1712,8 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     Event.Direction = Direction;
     Event.Momentum = Direction.GetSafeNormal() * Firing.Momentum;
     Event.Origin = Start;
+    Event.WeaponId = Weapon ? Weapon->Id : FString();
+    Event.Element = OpenWillowHit::ElementOf(Event.DamageType, Weapon ? Weapon->Element : FString());
     AOpenWillowProjectile::HitTarget(this, Firing, Target, Event, Hit, 1.f);
     ImpactExplosion();
 }
@@ -1763,7 +1765,10 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
     if (E.WeaponId.IsEmpty() && Held) E.WeaponId = Held->Id;
     E.Location = Hit.ImpactPoint;
     E.Bone = Hit.BoneName;
-    E.Element = OpenWillowHit::ElementOf(DamageType, Held ? Held->Element : FString());
+    // The caller's element (a status tick's proc-time element) wins; otherwise from the damage type, and only for a hit
+    // without a weapon id from the gun in hand.
+    if (E.Element == EOpenWillowElement::None)
+        E.Element = OpenWillowHit::ElementOf(DamageType, In.WeaponId.IsEmpty() && Held ? Held->Element : FString());
     // BL2: status-effect damage never crits; splash crits are not measured (taken as none, UNVERIFIED).
     E.bCanCrit = In.Kind == EOpenWillowHitKind::Direct || In.Kind == EOpenWillowHitKind::Throw;
     E.CritBonus = 2.f;   // CurrentInstantHitCriticalHitBonus base value (live); skills and the weapon's crit bonus not applied yet
@@ -1787,6 +1792,7 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
     E.Applied = Applied;
     ++OpenWillowFiring::Counts.HitEvents;
     ++OpenWillowFiring::Counts.HitKinds[uint8(E.Kind) & 3];
+    if (E.Kind == EOpenWillowHitKind::StatusTick) ++OpenWillowFiring::Counts.TickWeapons.FindOrAdd(E.WeaponId);
     UE_LOG(LogTemp, Display, TEXT("OWFIRING hitevent %s %s on %s damage %.3f applied %.3f element %s crit %d momentum %.1f"),
         OpenWillowHit::KindName(E.Kind), E.WeaponId.IsEmpty() ? TEXT("-") : *E.WeaponId, *Target->GetName(), E.Damage, Applied,
         OpenWillowHit::ElementName(E.Element), E.bCritical ? 1 : 0, float(E.Momentum.Size()));

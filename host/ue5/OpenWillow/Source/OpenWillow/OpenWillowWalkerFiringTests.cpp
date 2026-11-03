@@ -545,6 +545,20 @@ void AOpenWillowWalker::RunFiringTest(float Now)
     {
         if (Now < FinishAt + 0.5f) break;
         const bool bStatus = UOpenWillowStatusEffects::AnyActive(CombatTarget.Get());
+        // Weapon swap during the status ticks: the ticks still to come must name the gun that caused the proc, not the one
+        // now in hand (the hit event stores the source weapon at the proc). Once per gun, to any other backpack gun.
+        static int32 SwappedGun = -1;
+        if (bStatus && SwappedGun != Gun)
+        {
+            SwappedGun = Gun;
+            for (int32 I = 0; I < Inventory->Items().Num(); ++I)
+                if (Inventory->Items()[I].Id != Id && EquipItem(I, 0) && Inventory->ActiveWeapon() && Inventory->ActiveWeapon()->Id != Id)
+                {
+                    UE_LOG(LogTemp, Display, TEXT("OWFIRING swap id=%s to=%s ticks_before=%d"), *Id, *Inventory->ActiveWeapon()->Id,
+                        OpenWillowFiring::Counts.Ticks);
+                    break;
+                }
+        }
         if (ProjectilesInFlight() > 0 && Now < FinishAt + 6.f) break;
         if (bStatus && Now < FinishAt + 10.f) break;
         int32 Leftover = 0;
@@ -562,12 +576,17 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         }
         const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
         const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
+        FString TickWeapons;
+        for (const TPair<FString, int32>& Pair : C.TickWeapons)
+            TickWeapons += FString::Printf(TEXT("%s%s:%d"), TickWeapons.IsEmpty() ? TEXT("") : TEXT(","),
+                Pair.Key.IsEmpty() ? TEXT("-") : *Pair.Key, Pair.Value);
         UE_LOG(LogTemp, Display, TEXT("OWFIRING dummy id=%s health=%.3f"), *Id, CombatTarget->HealthFraction());
-        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d hit_events=%d hit_direct=%d hit_splash=%d hit_tick=%d hit_throw=%d"),
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d hit_events=%d hit_direct=%d hit_splash=%d hit_tick=%d hit_throw=%d tick_weapons=%s"),
             *Id, *Kind, C.Pellets, C.Shots, C.Launches, C.Impacts, C.TargetHits, C.Damage, C.Direct, C.Splash, C.SplashHits,
             C.StatusRolls, C.Procs, C.Ticks, C.TimedImpacts, C.OnTimeImpacts, C.HitEvents, C.HitKinds[0], C.HitKinds[1],
-            C.HitKinds[2], C.HitKinds[3]);
-        if (!Item || Item->Id != Id) UE_LOG(LogTemp, Warning, TEXT("OWFIRING id=%s reported after the weapon changed"), *Id);
+            C.HitKinds[2], C.HitKinds[3], TickWeapons.IsEmpty() ? TEXT("-") : *TickWeapons);
+        if ((!Item || Item->Id != Id) && SwappedGun != Gun)
+            UE_LOG(LogTemp, Warning, TEXT("OWFIRING id=%s reported after the weapon changed"), *Id);
         ++Gun;
         Step = 0;
         break;
