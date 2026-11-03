@@ -452,7 +452,7 @@ lift start, which is the host's cast time.
 | No dark core during the hold; pink-white sphere | UE5 applies modulate materials apart from the additive layer, even in the before-DOF pass, so `Mat_SirenOrbBlackMOD` never darkened the additive core sprites drawn before it | host stand-in: the darkening modulates are drawn as translucent black with opacity equal to the modulate weight (exact for a black target), in emitter order. The black orb has no texture parameter, so its mask is a host disc (full to two thirds of the radius). The hold now shows a near-black core with the violet rim of `PhaseLockBubble_Dif_Tex` |
 | Black wedge at the collapse | The end template's smoke ran its sub-images the wrong way (the host ignored the SubUV module's `SubImageIndex`, which runs 15 -> 0) | fixed: `SubImageIndex` drives linear sub-image layouts; spawn-time distributions are read at the emitter's time (the smoke's `StartSize` curve) |
 | Violet pool on the floor | `PhaselockLight` data (radius 500, brightness 4, falloff 0.5, `LAC_DYNAMIC_AND_STATIC_AFFECTING`) drawn as a UE5 unitless light | host stand-in: the light reaches only the lifted target (lighting channel 1). The data says it should light the floor too; the capture shows no pool. The UE3 -> UE5 brightness mapping stays open |
-| White full-screen wash at 1.2-2.0 s | The screen material drew its mask texture's brightest channel x colour (4, 6, 30) | host stand-in: a modulate of the view by the colour's hue, weighted by alpha and the mask's green streaks. It reads as the game's strong blue tint |
+| White full-screen wash at 1.2-2.0 s | The screen material drew its mask texture's brightest channel x its HDR blue particle colour | host stand-in: a modulate of the view by the colour's hue, weighted by alpha and the mask's green streaks. It reads as the game's strong blue tint |
 
 **Cast animation data (no host change).** `Phase_Lock_Lift` has no `RateScale`, and `Anim_Phaselock`
 (`SpecialMove_FirstPerson`) names only the clip and a behavior provider. `Default__GearboxAnimDefinition` has
@@ -469,7 +469,7 @@ UNVERIFIED either way.
 **Still different from the game (UNVERIFIED stand-ins or open):** the real dark blob around the raised hand at about
 0.27 s (none of the decoded hand emitters explains it under the host's modulate reading); the solid blue palm orb at
 0.45-0.6 s (the host shows white-blue flashes and swirls there); the intro's 0.8 s burst, which the host draws as a
-white band (the `Mat_SirenHandGlow` rectangle, colour (0.5, 0.8, 20), tone-maps to white in UE5); the screen tint
+white band (the `Mat_SirenHandGlow` rectangle, an HDR colour with a very strong blue channel, tone-maps to white in UE5); the screen tint
 starting at 1.05 s instead of about 0.82 s; what `SphereCollapse` does in the stripped graph (the host draws nothing
 from it). The modulate readings in `MODULATE_READINGS` and `DARKEN_AS_TRANSLUCENT`, the black orb's disc and the light
 channel are host choices.
@@ -483,7 +483,7 @@ and `..._r3_extra_...` (0.35, 0.8, 1.2, 4.5 and 5.0 s).
 
 **One common cause: the tone curve, not exposure.** Auto-exposure is already off project-wide, so exposure was not
 adapting. What differs is the tone curve. UE3 shows each channel of the final colour clipped at 1, so an HDR particle
-colour such as (0.5, 0.8, 20) at opacity 0.25 reads as saturated cobalt (0.125, 0.2, 1). UE5's filmic curve maps the
+colour such as that rectangle's (blue far above 1, red and green below 1) at opacity 0.25 reads as saturated cobalt. UE5's filmic curve maps the
 same value to near white. Host stand-in (UNVERIFIED; BL2's PC tone pipeline was not checked): the additive parent caps
 each channel of a layer's contribution at 1, which is exact for one additive layer over the scene. The translucent
 parent caps it at 1 / opacity. The global tone mapper is unchanged.
@@ -491,7 +491,7 @@ parent caps it at 1 / opacity. The global tone mapper is unchanged.
 | Critic item | Cause found | Change (host stand-ins unless said) |
 |---|---|---|
 | Screen grade grey-brown at 1.5 and 3 s | Round 2's modulate divided the particle colour by its largest channel, which darkens the scene | Divide by its luminance (Rec. 709) instead: the tint keeps the scene's brightness and pushes it to blue. Burst `Time` is now read as seconds of emitter time (UNVERIFIED); only the screen burst moves (1.05 s -> 0.70 s), which fits the game's tint onset of about 0.82 s after the lift starts |
-| Cast flashes white | The `Mat_SirenGlowMOD` flashes multiply the view by (3, 6, 12). Even UE3's clip would give near white there, while the game shows cobalt at 0.8 s (f018-f020) | `Mat_SirenGlowMOD` reads its colour as a brightness-keeping tint (colour / luminance, `HueOnly`). The 0.8 s frame is now a cobalt flash with radial streaks |
+| Cast flashes white | The `Mat_SirenGlowMOD` flashes multiply the view by an HDR blue-cyan colour (every channel above 1). Even UE3's clip would give near white there, while the game shows cobalt at 0.8 s (f018-f020) | `Mat_SirenGlowMOD` reads its colour as a brightness-keeping tint (colour / luminance, `HueOnly`). The 0.8 s frame is now a cobalt flash with radial streaks |
 | No dark burst at +0.27 s | Under the colour-only reading the hand orb's `ModulateBlack` (colour 1) did nothing | One reading of `Mat_SirenOrbBlackMOD` fits all three of its emitters: darkness = mask x (1 - alpha), towards black, colour unused. The bubble emitters have alpha scaled to 0 (dark core, as before). The hand emitter has alpha 0 at spawn (0.25 s) and 1 by 0.2 of its life: a large dark blob around the raised hand at 0.25-0.35 s, gone by 0.5 s, as in game f007-f009 |
 | Faint palm orb | The 0.5 s flash washed out the orb sprite (`Mat_SirenHandInnerOrb`, blue on `EnergyOrbCenter2_Dif_Tex`, 15 x size-over-life about 2 x hand scale 0.35, about 11 uu) | No size change. With the flash and clip changes a blue orb shows in the palm at 0.5 s. It looks smaller than the game's because the whole hand is about 2.5x smaller on screen in the host (arms placement or FOV, not the effect). Relative to the palm, the host orb is close to the game's |
 | Hard blue rim | Round 2's black disc (full to two thirds of the radius) also darkened the core sprite's magenta edge | Black disc full to half the radius (`RadialSharpness` 2): the hold shows a near-black core with a soft violet-magenta rim |
@@ -503,7 +503,7 @@ distance (about 650 uu), or the bullymong's bounds radius read from the game.
 
 **Still different:**
 - The release ring is blue-violet. The game's ring is cyan-white at 4.9-5.0 s. The same `HueOnly` reading that fixes
-  the cast flashes reduces the end template's `Brighten` (0.4, 16, 30) to about x2 blue. Round 2's plain multiply
+  the cast flashes reduces the end template's `Brighten` (a dim red with very strong green and blue) to about x2 blue. Round 2's plain multiply
   gave cyan-white there, but white cast flashes. One material reading does not fit both emitters, so neither was
   tuned per emitter.
 - The 0.6 s white starburst (`Mat_SirenHandGlowShattered`, colour 1).
@@ -537,7 +537,7 @@ default belongs to the host camera, not this lane, and was not changed.
 | Thick bright ring, lit interior | The black disc was fully dark only to half its radius. Measured at the same draw scale, the core sprite's bright magenta band falls at 0.46-0.70 of the black quad's radius and the bubble texture's thin rim at about 0.70 | Black disc fully dark to 0.6 of its radius: the band is hidden and the rim stays as a thin, dim edge |
 | Target fully lit inside the bubble | The darkening quad sat at the target's centre, so the target's front half was in front of it | A material's negative `DepthBias` / `Bias` default (read from the template JSON, following parents) moves the sprite that many uu toward the camera and shrinks it by the same ratio: same outline, different depth test (UNVERIFIED reading of the parameter) |
 | How dark | The game keeps the target at about a third of its brightness and the interior deep violet (mean about (50, 52, 98)). UE3 blended into an 8-bit target that clamps after each blend; UE5's float target lets the additive bubble layers sum to about 2.5 before the black | Black darkness capped at 0.9 where opaque geometry lies within 40 uu behind the quad (the target: a third of the 8-bit brightness, since (1/3)^2.2 is about 0.09). Capped at 0.96 where the scene is more than 80 uu behind (the interior: 1 - 0.1 / 2.5). Calibrated against the one capture |
-| Release ring blue-violet | One reading of `Mat_SirenGlowMOD` cannot give both the game's cobalt cast flashes (needs the brightness-keeping tint) and its cyan-white ring (needs a plain multiply clipped per channel: violet rim x (0.4, 16, 30)). The colours and alpha curves do not separate the two | A labelled per-emitter override in `OpenWillowPhaselockFx.cpp` (`EmitterOverrides`): the end template's `Brighten` uses the plain multiply. The release is now a bright cyan-blue ring |
+| Release ring blue-violet | One reading of `Mat_SirenGlowMOD` cannot give both the game's cobalt cast flashes (needs the brightness-keeping tint) and its cyan-white ring (needs a plain multiply clipped per channel: violet rim x the end template's `Brighten` colour). The colours and alpha curves do not separate the two | A labelled per-emitter override in `OpenWillowPhaselockFx.cpp` (`EmitterOverrides`): the end template's `Brighten` uses the plain multiply. The release is now a bright cyan-blue ring |
 
 **Bubble size: not changed, not confirmed.** The script reads `Pawn.Mesh.Bounds.SphereRadius` / `BubbleFXScale`
 (local script reading). With full-width sprites that puts this bullymong's rim (0.8 of the `Sphere` quad's half-width)
@@ -660,9 +660,9 @@ alpha/colour; `fade(D)` as above.
 | `Mat_SirenEnemyOrb` (additive), the bubble sphere | Texture 0 is a smoke map, texture 1 a flat signed normal map (values within +/-0.2 of zero), texture 2 `PhaseLockBubble_Dif_Tex`. Two rotating, panning reads of the smoke map, `R(0.58t, 2uv - 0.5) + (P(0.2t), P(0.1t)) + 0.5` (its red) and `R(-0.75t, 2uv) + (P(-0.4t), P(0.1t))` (its blue), make a displacement `(a, b)`. With `d2 = abs(uv - 0.5)^2` the displacement is scaled by `ring x (1 - 2 d2)`, `ring = 25 d2 - 1.5` for `d2 <= 0.1` and 1 beyond, and is zero where `ring < 0` (inside radius 0.245) or `1 - 2 d2 < 0`. Two reads of the normal map at `R(3t, uv - 0.5) + 0.5` and `R(1.5t, uv - 0.5) + 0.5` (n1, n2) give a direction `(n2.y + n1.x, sqrt(1 - n2.x^2 - n2.y^2) + n1.x)`. The bubble texture is read at `uv + displacement x direction`; result `alpha x texel x fade(41)`. The particle colour is unused. |
 | `Mat_EnemyOrbCoreColor` (additive), the violet haze | Colour `col x core`, `core` = `EnergyOrbCoreColor_Dif_Tex` read at `uv + (noise - 0.1) x (tangent-space view direction)` (a small parallax; noise is a scrolling smoke read at `uv + (P(0.4t), P(0.5t))`). Weight `core.r x alpha x mask x d2 x fade(41)`, `mask` = `EnergyOrbCenter_Dif_Mirror` read at `2uv`. The haze is zero in the middle and brightest toward the quad's edge. |
 | `Mat_SirenOrbEnergySpikes` (translucent), the blue streaks | Smoke red at `uv + (P(0.25t), 0)` shifts the spike texture's UV by `0.05 x smoke` in both axes; colour `col x spike`; alpha `saturate(spike.r x (1 - 3 m)) x alpha x fade(51)` with `m` the soft mirror mask read at `(2u, 0.5v + 0.76)`, which cuts the middle of the sprite out. |
-| `Mat_SirenOrbEnergySpikesMOD` (modulate) | Scene multiplied by `1 - fade(51) x col x spike` per channel (the particle colour is (5, 5, 5)): dark streaks under the blue ones. |
+| `Mat_SirenOrbEnergySpikesMOD` (modulate) | Scene multiplied by `1 - fade(51) x col x spike` per channel (the particle colour is a uniform grey well above 1): dark streaks under the blue ones. |
 | `Mat_SirenOrbBlackMOD` (modulate), the dark core | Scene multiplied by `1 - darkness`, `darkness = (1 - alpha) x (1 - A^2) x fade(21)`, `A = 1 - saturate(1.5 (1 - saturate(8 d2))^2)` (0 out to 0.15 of the quad, 1 from 0.354). The bubble loop scales the particle alpha to 0, so the core is a hole that is full black in the middle and clear at 0.354 of the quad. `_NoBias` (hand fizzle) has no depth fade. Because of the fade it darkens scenery behind the sprite plane, **not the lifted target's near surface**. |
-| `Mat_PowerUpTwirls` (translucent, sub-image) | The twirl atlas is read at a UV bent by two slowly rotating scroll-map reads (0.02 x); colour `(sqrt(t) - t) x col x (0.6, 0, 0.8)`, alpha `saturate(4 t.r^2) x alpha`. The loop template gives it a particle colour of about (0, 0.02, 0.04), so these are dark wisps. |
+| `Mat_PowerUpTwirls` (translucent, sub-image) | The twirl atlas is read at a UV bent by two slowly rotating scroll-map reads (0.02 x); colour `(sqrt(t) - t) x col x (0.6, 0, 0.8)`, alpha `saturate(4 t.r^2) x alpha`. The loop template gives it a near-black blue particle colour, so these are dark wisps. |
 | `Mat_SirenEnergyRibbons` (additive, mesh) | Ribbon texture read at `(2u - dynamic parameter 0, v)`; colour `saturate(u - 0.05) x b^2 x alpha x col`, `b` its blue channel. |
 | `Mat_SirenEnergySwirl` (translucent) | Colour `blue x col`, alpha `texture alpha x alpha`. |
 | `Mat_SirenHandGlow` (translucent) | `g` = the soft mirror mask at `2uv`; colour `g x col`, alpha `g x alpha x fade(21)`. |
@@ -1080,8 +1080,8 @@ presented as a measurement of this new import.
 
 The target component loaded `/Game/OpenWillow/Characters/PhaselockTarget/Bullymong/Materials/MI_Mati_Bullymong_Zone`; the
 editor report says all nine `p_A/B/CColor{Hilight,Midtone,Shadow}` vectors were applied. The prepared property manifest
-records, for example, `p_AColorMidtone=(0.780899,0.534723,0.424757,1)` and
-`p_CColorMidtone=(0.449438,0.368965,0.316917,1)`. These package values are data evidence, not a visual-parity result: the
+records warm values for them (a light tan first zone and a greyish brown third zone; the decoded vectors are kept in ignored
+`local/phaselock/r22/round14_zone_vectors.txt`, not here, as are the particle colours that rounds 2 to 6 quoted). These package values are data evidence, not a visual-parity result: the
 capture still reads cool grey/blue under the host lighting. The ambient citizen zone shader is reused by analogy, and its
 mixing rule remains **UNVERIFIED** for the bullymong. No colour vectors were guessed or edited this round.
 
