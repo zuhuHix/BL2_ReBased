@@ -374,7 +374,7 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 10. Scorn: melee-skill pool drain rate, damage-area sphere radius and projectile level.
 11. Thoughtlock: `Charm` owner and allegiance change.
 
-## 7. Host implementation status (2026-11-03, skills lane PR 3)
+## 7. Host implementation status (2026-11-03, skills lane PR 3 and PR 4)
 
 `OpenWillowSkillBehaviours.cpp` (part of `UOpenWillowSkills`, ticking on Maya's pawn) implements from this note:
 
@@ -386,6 +386,10 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 | Converge (1.1) | +1.25 s blast, radius 2000, 1 x PlayerSkillDamage | the pull, the melee definitions; blocked chain |
 | Ruin (1.2) | slag, shock, corrosive blasts 1, 2, 3 s after the lock, radius 650, 7.2 x PlayerSkillStatusEffectDamage | the status effects; blocked chain |
 | Sweet Release (2.1) | when the held target dies, g orbs each heal 15 % of Maya's missing health after flight time at 800 uu/s | the orb actor and homing; other players |
+| Life Tap (3.4) | while the kill-skill timer runs, Maya heals `PlayerConvertDamageToHealingPercent` (0.012 x g) of each gun hit's applied damage | the native conversion rule (guess: applied damage x fraction) |
+| Cloud Kill (4.2) | a gun hit on an enemy, outside a 5.5 s cooldown, leaves a cloud at the enemy: 20 corrosive blasts every 0.25 s, radius 220, 0.25 x PlayerSkillDamage | the cloud actor; only bullet/rocket damage sources (host: any gun hit) |
+| Immolate (4.4) | while Maya is down, each gun hit adds an incendiary hit of 0.1 x g x its applied damage | the status damage |
+| Blight Phoenix (3.5) | while the kill-skill timer runs, every 0.5 s a corrosive and an incendiary blast around Maya, radius 512, 0.02 x g x PlayerMeleeDamage each | the status damage; the body effect |
 | Sustenance (4.8), Elated (4.6) | health regeneration per second from `HealthPassiveRegenerationRate` (the effects file now carries balance formulas) | the 0.5 s refresh cadence; allies |
 
 Phaselock events are read from the Walker's public state (cast time, hit, target, timeline), so the Phaselock code has
@@ -393,5 +397,9 @@ no new hook. The blast is the host's: every actor that takes Maya's hits (`IOpen
 a splash `FOpenWillowHitEvent` through `AOpenWillowWalker::ApplyShotDamage` (weapon id `skill:<name>`, the skill's own
 damage type and element, no falloff, no crit), so kills count for her and hit listeners see the skill, with the host's
 explosion look. Not implemented yet: Thoughtlock's charm, Res, Sub-Sequence, Chain Reaction,
-Kinetic Reflection, Life Tap, Blight Phoenix, Scorn, Cloud Kill, Backdraft, Immolate, Recompense, Reaper, Mind's Eye
+Kinetic Reflection, Scorn, Backdraft, Recompense, Reaper, Mind's Eye
 (no crits in the host), the blocked-target damage. All of it is UNVERIFIED in game; the live questions are in section 6.
+
+The hit-driven skills (PR 4) listen to `OpenWillowHit::OnHit()`; they ignore status ticks and the skills' own hits
+(weapon id `skill:<name>`), and queue their extra damage for the next tick instead of applying it inside the broadcast.
+PlayerMeleeDamage is taken as 2.5 x PlayerSkillDamage (no melee buff in the host).

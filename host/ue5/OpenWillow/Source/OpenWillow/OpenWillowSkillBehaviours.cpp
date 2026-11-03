@@ -26,6 +26,60 @@ int32 UOpenWillowSkills::GradeOfNamed(const TCHAR* Name) const
     return Skill ? GradeOfAny(Skill->Id) : 0;
 }
 
+void UOpenWillowSkills::BeginPlay()
+{
+    Super::BeginPlay();
+    HitHandle = OpenWillowHit::OnHit().AddUObject(this, &UOpenWillowSkills::HandleHit);
+}
+
+void UOpenWillowSkills::EndPlay(const EEndPlayReason::Type Reason)
+{
+    OpenWillowHit::OnHit().Remove(HitHandle);
+    Super::EndPlay(Reason);
+}
+
+// Hits of Maya's guns (not her skills' own hits, not status ticks). The skills' extra damage is queued for the next tick
+// instead of being applied inside the dispatcher that is still broadcasting this hit.
+void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
+{
+    AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner());
+    if (!Maya || !GetWorld() || !Effects.IsLoaded() || Event.Instigator.Get() != Maya || !Event.Target.IsValid()) return;
+    if (Event.WeaponId.StartsWith(TEXT("skill:")) || Event.Kind == EOpenWillowHitKind::StatusTick) return;
+    const float Now = GetWorld()->GetTimeSeconds();
+    const float Applied = FMath::Max(0.f, Event.Applied);
+
+    // Life Tap (kill skill): Maya heals PlayerConvertDamageToHealingPercent (0.012 x grade while the kill-skill timer runs)
+    // of the damage she deals. The conversion is native in the game (UNVERIFIED rule: applied damage x the fraction).
+    const float Convert = OpenWillowSkillEffects::Apply(Maya,
+        TEXT("D_Attributes.DamageEnhancementModifiers.PlayerConvertDamageToHealingPercent"), 0.f);
+    if (Convert > 0.f && Applied > 0.f) Maya->Heal(Applied * Convert);
+
+    // Cloud Kill: a bullet or rocket hit on an enemy, when CloudKill_Feedback (5.5 s) is not running, leaves a corrosive
+    // cloud at the enemy for 5 s: every 0.25 s radius 220, 0.25 x PlayerSkillDamage, no falloff.
+    if (GradeOfNamed(TEXT("CloudKill")) > 0 && Now >= CloudKillReadyAt)
+    {
+        CloudKillReadyAt = Now + 5.5f;
+        const FVector Where = Event.Target->GetActorLocation();
+        for (int32 Tick = 1; Tick <= 20; ++Tick)
+        {
+            FAction& A = Actions.AddDefaulted_GetRef();
+            A.At = Now + 0.25f * Tick; A.Kind = FAction::EKind::Blast; A.Where = Where; A.Radius = 220.f;
+            A.Damage = 0.25f * SkillDamageAt(GetLevel()); A.DamageType = TEXT("GD_Corrosive.DamageType.DmgType_Corrosive_Impact_NoDoT");
+            A.Skill = TEXT("CloudKill"); A.Why = TEXT("Cloud Kill");
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLFX Cloud Kill cloud at %s for 5 s"), *Where.ToCompactString());
+    }
+
+    // Immolate: in Fight For Your Life (health below 1), each gun hit adds incendiary damage of 0.1 x grade x the hit's
+    // damage to that enemy.
+    if (const int32 G = GradeOfNamed(TEXT("Immolate")); G > 0 && Maya->IsDown() && Applied > 0.f)
+    {
+        FAction& A = Actions.AddDefaulted_GetRef();
+        A.At = Now; A.Kind = FAction::EKind::Direct; A.Target = Event.Target; A.Damage = 0.1f * G * Applied;
+        A.DamageType = TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"); A.Skill = TEXT("Immolate"); A.Why = TEXT("Immolate");
+    }
+}
+
 void UOpenWillowSkills::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -100,6 +154,23 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
             UE_LOG(LogTemp, Display, TEXT("OWSKILLFX Sweet Release: %d orbs, arrive in %.2f s"), Orbs, Flight);
     }
 
+    // Blight Phoenix (kill skill, Att_BlightPhoenix_IsActive = grade while the kill-skill timer runs): every 0.5 s a
+    // corrosive and an incendiary blast around Maya, radius 512, each 0.02 x grade x PlayerMeleeDamage.
+    if (const int32 G = GradeOfNamed(TEXT("BlightPhoenix")); G > 0 && KillSkillsActiveAt(Now))
+    {
+        if (Now >= NextBlightAt)
+        {
+            NextBlightAt = Now + 0.5f;
+            for (const TCHAR* Type : {TEXT("GD_Corrosive.DamageType.DmgType_Corrosive_Impact"), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact")})
+            {
+                FAction& A = Actions.AddDefaulted_GetRef();
+                A.At = Now; A.Kind = FAction::EKind::Blast; A.Target = Maya; A.Where = Maya->GetActorLocation(); A.Radius = 512.f;
+                A.Damage = 0.02f * G * MeleeDamageAt(GetLevel()); A.DamageType = Type; A.Skill = TEXT("BlightPhoenix"); A.Why = TEXT("Blight Phoenix");
+            }
+        }
+    }
+    else NextBlightAt = Now + 0.5f;   // the first pulse comes 0.5 s after the skill turns on (OnActivated delay)
+
     for (int32 I = 0; I < Actions.Num();)
     {
         if (Actions[I].At > Now) { ++I; continue; }
@@ -119,6 +190,30 @@ void UOpenWillowSkills::RunAction(const FAction& Action)
         Maya->Heal(0.15f * (Maya->GetMaxHealth() - Maya->GetHealth()));
         UE_LOG(LogTemp, Display, TEXT("OWSKILLFX %s orb heals %.1f (health %.1f/%.1f)"), *Action.Why, Maya->GetHealth() - Before,
             Maya->GetHealth(), Maya->GetMaxHealth());
+        return;
+    }
+    if (Action.Kind == FAction::EKind::Direct)
+    {
+        AActor* Victim = Action.Target.Get();
+        IOpenWillowHitTarget* Target = OpenWillowHit::AsTarget(Victim);
+        if (!Victim || !Target || !Target->CanTakeHits()) return;
+        FVector TargetCentre;
+        float TargetRadius = 0.f;
+        Target->GetHitCentre(TargetCentre, TargetRadius);
+        FOpenWillowHitEvent Event;
+        Event.Kind = EOpenWillowHitKind::Direct;
+        Event.WeaponId = TEXT("skill:") + Action.Skill;
+        Event.Damage = Action.Damage;
+        Event.DamageType = Action.DamageType;
+        Event.Element = OpenWillowHit::ElementOf(Action.DamageType);
+        Event.Origin = Maya->GetActorLocation();
+        Event.Direction = (TargetCentre - Event.Origin).GetSafeNormal();
+        Event.bCanCrit = false;
+        FHitResult Hit;
+        Hit.ImpactPoint = TargetCentre;
+        Hit.Location = TargetCentre;
+        Maya->ApplyShotDamage(Victim, Event, Hit);
+        UE_LOG(LogTemp, Display, TEXT("OWSKILLFX %s: direct %.1f on %s"), *Action.Why, Action.Damage, *Victim->GetName());
         return;
     }
     const FVector Centre = Action.Target.IsValid() ? Action.Target->GetActorLocation() : Action.Where;

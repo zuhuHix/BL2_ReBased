@@ -7,6 +7,7 @@
 #include "OpenWillowSkills.generated.h"
 
 class FJsonObject;
+struct FOpenWillowHitEvent;
 
 // Maya's level, experience and skill grades. The host owns this state; the
 // Skills page (tools/hud_overlay/skills.js) only reports clicks and shows
@@ -21,6 +22,9 @@ public:
     // Behaviour skills (OpenWillowSkillBehaviours.cpp): kill-skill timer, health regeneration and the Phaselock
     // variants, run on Maya's pawn.
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+    // Listens to OpenWillowHit::OnHit() for the hit-driven skills (Cloud Kill, Life Tap, Immolate).
+    virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     // Kill skills (WillowPlayerController.UpdateKillSkills, timer native): a kill (re)starts the timer at
     // KillSkillSeconds; they count while it runs. Refresh rather than add is an UNVERIFIED guess.
     // GD_Globals.General.Globals.KillSkillDurationsPerPlayers for one player, times KillSkillDurationMultiplier (1).
@@ -32,6 +36,9 @@ public:
     // Init_PlayerSkillStatusEffectDamage with Att_UniversalBalanceScaler 1.13; read from data, UNVERIFIED in game).
     static float SkillDamageAt(int32 AtLevel) { return 8.f * FMath::Pow(1.13f, float(AtLevel)); }
     static float SkillStatusDamageAt(int32 AtLevel) { return FMath::Pow(1.13f, float(AtLevel)); }
+    // PlayerMeleeDamage = 2.5 x (8 x 1.13 ^ level + InstigatedMeleeDamageAddedBuff), the buff taken as 0 (no melee buffs
+    // in the host). Init_PlayerMeleeDamage, read from data, UNVERIFIED in game.
+    static float MeleeDamageAt(int32 AtLevel) { return 2.5f * SkillDamageAt(AtLevel); }
     // Grade of the tree skill with this effects name (e.g. TEXT("Helios")); 0 when untrained or unknown.
     int32 GradeOfNamed(const TCHAR* Name) const;
 
@@ -123,7 +130,7 @@ private:
     struct FAction
     {
         float At = 0.f;
-        enum class EKind : uint8 { Blast, HealOrb } Kind = EKind::Blast;
+        enum class EKind : uint8 { Blast, HealOrb, Direct } Kind = EKind::Blast;   // Direct: one hit on Target
         TWeakObjectPtr<AActor> Target;   // centre of a blast while it exists
         FVector Where = FVector::ZeroVector;
         float Radius = 0.f, Damage = 0.f;
@@ -135,6 +142,10 @@ private:
     TWeakObjectPtr<AActor> HeldTarget;
     float HeldUntil = -1.f;
     bool bHeldKillSeen = false;
+    FDelegateHandle HitHandle;
+    float CloudKillReadyAt = -1.f;   // CloudKill_Feedback runs 5.5 s and blocks the next proc
+    float NextBlightAt = -1.f;
+    void HandleHit(const FOpenWillowHitEvent& Event);
     void TickBehaviours(float Now, float DeltaTime);
     void RunAction(const FAction& Action);
     FString ActionSkillId;
