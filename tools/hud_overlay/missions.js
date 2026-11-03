@@ -20,6 +20,15 @@ const query = new URLSearchParams(location.search);
 let def = null, ready = false, snapshot = null;
 let rows = [], selected = -1, listTop = 0, selectedId = null;
 let canScroll = false;
+// The hint line's font colour and size are the movie's own: the tooltips field's initial format, read once the movie is ready
+// (readHintFormat), so no game value is copied into this file. Neutral values stand in only if the field cannot be read.
+let hintColor = '#ffffff', hintSize = 12;
+function readHintFormat() {
+  const html = String(get(`${ROOT}.tooltips.tooltips`, 'htmlText') || '');
+  const color = /COLOR="(#[0-9A-Fa-f]{6})"/.exec(html), size = /SIZE="(\d+)"/.exec(html);
+  if (color) hintColor = color[1];
+  if (size) hintSize = Number(size[1]);
+}
 let renderedKey = '';
 window.owMissionsReady = false;
 
@@ -116,7 +125,7 @@ function renderGeneral() {
 function renderTooltips() {
   const mission = rows[selected] && snapshot.missions.find(m => m.id === rows[selected].id);
   const canTrack = !!mission && !mission.tracked && [log.ACTIVE, log.REQUIRED_DONE, log.TURN_IN].includes(mission.status);
-  setText(`${ROOT}.tooltips.tooltips`, `<p align="center"><font face="$WillowBody" size="15" color="#a4e8f3">${
+  setText(`${ROOT}.tooltips.tooltips`, `<p align="center"><font face="$WillowBody" size="${hintSize}" color="${hintColor}">${
     log.escapeHtml(log.tooltipBar(def, {canTrack, canScroll}))}</font></p>`);
 }
 
@@ -132,7 +141,7 @@ function render() {
     call(ROOT, 'gotoNoMissions');
     rows = []; selected = -1; selectedId = null;
     renderGeneral();
-    setText(`${ROOT}.tooltips.tooltips`, `<p align="center"><font face="$WillowBody" size="15" color="#a4e8f3">${
+    setText(`${ROOT}.tooltips.tooltips`, `<p align="center"><font face="$WillowBody" size="${hintSize}" color="${hintColor}">${
       log.escapeHtml(def.strings.tooltipCancel)}</font></p>`);
     report();
     return;
@@ -259,6 +268,7 @@ async function boot() {
       // The movie's ring is the curved glass sheet in game; over the transparent host viewport it is an opaque rectangle
       // (see skills.js), so glass_sheet.js draws the stand-in and the ring is hidden.
       set(`${ROOT}.ring`, '_visible', false);
+      readHintFormat();
       window.owMenu3d.apply(document.body, Number(get(MISSIONS, '_yrotation')) || 0, Number(get(MISSIONS, '_x')), Number(get(MISSIONS, '_y')));
       addHeaderHits();
       ready = true;
