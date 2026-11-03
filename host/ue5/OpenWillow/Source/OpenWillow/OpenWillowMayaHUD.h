@@ -126,6 +126,16 @@ private:
     int32 SecondWinds = 0;
     float SeenSecondWindAt = -1000.f;
     FString LastDownLine, LastTrackLine;
+    // The hit and level-up feedback (PushFlashHudState): Maya's hits with a known source, the last one's side relative to the
+    // view (u, r, d, l), and the level-ups seen since the HUD started (the first level read is the start, not a level-up).
+    FString FeedbackHudField(const class AOpenWillowWalker& Maya);
+    int32 SeenLevel = -1, LevelUps = 0;
+    FString LastFeedbackLine;
+    // -owhudfxshots (with -owitems): hits from the front, right, back and left, then a level-up, with captures
+    // (OWHudFx_*.png) for tools/check_hud_down.py --mode feedback; then quit.
+    void TickHudFxShots(class AOpenWillowWalker& Maya);
+    int32 FxShotStep = 0;
+    float FxShotAt = 0.f;
     // -owhudtrackshots: a capture (OWHudTrack_<n>.png) 1.5 s after each tracker change, for the critic.
     float TrackShotAt = -1.f;
     int32 TrackShots = 0;

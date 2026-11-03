@@ -70,7 +70,8 @@ def down_log(bled_at=24.280, respawn_at=30.040, wind_health=100, skip_page_at=No
 def results(text, mode='down', strings=STRINGS.name):
     lines = text.splitlines()
     found = [chk.check_path(lines), chk.check_identity(lines)]
-    found += chk.check_down(lines, strings) if mode == 'down' else chk.check_tracker(lines)
+    found += (chk.check_down(lines, strings) if mode == 'down'
+              else {'tracker': chk.check_tracker, 'feedback': chk.check_feedback}[mode](lines))
     return {name: (ok, detail) for name, ok, detail in found}
 
 
@@ -262,6 +263,46 @@ class TrackerTest(unittest.TestCase):
         text = '\n'.join(tracker_log().splitlines()[:-2])
         self.assertIn('tracker_progress', failed(results(text, 'tracker')))
 
+
+
+def fx_log(sides=('u', 'r', 'd', 'l'), inner=2, banner='2/40', text='BANNER', level_up=True):
+    """Four hits then a level-up: the host's OWHUDFX line and the page's read-back after each (invented times)."""
+    lines = HEAD[:1] + HEAD[2:]
+    state = {'u': '1/1', 'r': '1/1', 'd': '1/1', 'l': '1/1'}
+
+    def page(hits, side, ups, levelup='1/1', shown=''):
+        arrows = ' '.join(f'{k}={state[k]}' for k in 'urdl')
+        return CONSOLE + f'OWHUDFXPAGE hits={hits} side={side} levelUps={ups} {arrows} levelup={levelup} levelText={shown}' + ENDING
+
+    lines += [PREFIX + 'OWHUDFX t=1.000 hits=0 side=- levelUps=0 level=8', page(0, 'u', 0)]
+    for k, side in enumerate(sides, 1):
+        lines.append(PREFIX + f'OWHUDFX t={k + 1:.3f} hits={k} side={side} levelUps=0 level=8')
+        state = {key: '1/1' for key in 'urdl'}
+        state[side] = f'3/{inner}'
+        lines.append(page(k, side, 0))
+    if level_up:
+        lines.append(PREFIX + 'OWHUDFX t=9.000 hits=4 side=l levelUps=1 level=9')
+        lines.append(page(4, 'l', 1, banner, text))
+    return '\n'.join(lines)
+
+
+class FeedbackTest(unittest.TestCase):
+    def test_matching_run_passes(self):
+        found = results(fx_log(), 'feedback')
+        self.assertEqual(failed(found), set(), found)
+
+    def test_wrong_side_order_fails(self):
+        # The arrows are expected on u, r, d, l too, so the swapped sides' arrows also count as missing.
+        self.assertEqual(failed(results(fx_log(sides=('u', 'l', 'd', 'r')), 'feedback')), {'fx_sides', 'fx_arrows'})
+
+    def test_arrow_not_on_health_frame_fails(self):
+        # Inner frame 3 is the shield label `Generic`, not `Health` (2).
+        self.assertEqual(failed(results(fx_log(inner=3), 'feedback')), {'fx_arrows'})
+
+    def test_banner_not_playing_or_without_text_fails(self):
+        self.assertEqual(failed(results(fx_log(banner='1/1'), 'feedback')), {'fx_levelup'})
+        self.assertEqual(failed(results(fx_log(text=''), 'feedback')), {'fx_levelup'})
+        self.assertEqual(failed(results(fx_log(level_up=False), 'feedback')), {'fx_levelup'})
 
 if __name__ == '__main__':
     unittest.main()
