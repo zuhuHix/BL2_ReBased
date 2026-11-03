@@ -291,7 +291,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         // Four synthetic filler weapons (copies of a seeded one under a TEST FILLER name) so a short seeded backpack
         // still has the nine rows the wheel steps need. Nothing here is game data.
         int32 Added = 0;
-        for (int32 N = 1; N <= 4 && Inv->Items().Num() && Inv->CanAddToBackpack(); ++N)
+        for (int32 N = 1; N <= 4 && Inv->Items().Num() && Inv->GetBackpackCapacity() - Inv->BackpackCount() > MinFreeBackpackRows; ++N)
         {
             FOpenWillowWeaponItem Copy = Inv->Items()[0];
             Copy.InstanceId.Reset();
@@ -300,6 +300,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             if (Inv->AddToBackpack(Copy)) ++Added;
         }
         UE_LOG(LogTemp, Display, TEXT("OWINVTEST fixture synthetic filler weapons added=%d backpack=%d"), Added, Inv->BackpackCount());
+        FreeBackpackRowsAtStart = Inv->GetBackpackCapacity() - Inv->BackpackCount();
     }
 
     // Tab is the primary key (the controller forwards it to Maya); I is exercised at the reopen step.
@@ -1529,6 +1530,16 @@ void UOpenWillowInventoryActionTest::TickComponent(float DeltaTime, ELevelTick T
         UE_LOG(LogTemp, Display, TEXT("OWINVTEST start steps=%d keys=%s slots=%d level=%d capacity=%d"), Steps.Num(),
             bUseJsKeys ? TEXT("js") : TEXT("slate"), Walker->GetInventory()->GetWeaponSlotsUnlocked(),
             Walker->GetSkills()->GetLevel(), Walker->GetInventory()->GetBackpackCapacity());
+        // The unequip and drag-back steps need free backpack rows: the host refuses an unequip into a full backpack, which
+        // a large local item set causes (28 recipes plus an 11-item gear manifest filled 39/39 on 2026-11-03, and the run
+        // failed 3 and skipped 22 steps for a reason that was not the page's). Refuse such a set before the first step.
+        if (FreeBackpackRowsAtStart < MinFreeBackpackRows)
+        {
+            SetupProblem = FString::Printf(TEXT("item set too large: %d free backpack row(s) after the fixture, the suite needs %d "
+                "(use -Items local/inventory-actions/bounded-recipes or a smaller gear manifest)"), FreeBackpackRowsAtStart, MinFreeBackpackRows);
+            Summarize(*SetupProblem);
+            return;
+        }
         BeginStep(Now);
         return;
     }

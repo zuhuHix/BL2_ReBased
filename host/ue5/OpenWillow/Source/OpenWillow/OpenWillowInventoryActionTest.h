@@ -114,6 +114,10 @@ private:
     int32 VmCallsBefore = 0;
     FString VmExpectedId;
     TArray<FString> FillerIds;
+    // Free backpack rows after the fixture; the unequip steps need room (host choice: two rows).
+    static constexpr int32 MinFreeBackpackRows = 2;
+    int32 FreeBackpackRowsAtStart = 0;
+    FString SetupProblem;              // why the run was refused before its first step (kept alive for Summarize)
     TArray<FString> VisibleBeforeScroll;
     bool bMeasurePreviewLoop = false;
     int32 PreviewLoopSamples = 0;
