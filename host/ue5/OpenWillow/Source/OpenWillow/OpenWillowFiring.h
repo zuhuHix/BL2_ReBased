@@ -121,6 +121,8 @@ struct FOpenWillowFiringStats
     float LastMomentum = 0;  // length of the last momentum passed to a combat target
     int32 TimedImpacts = 0;  // constant-speed light bullets that reached a surface or target
     int32 OnTimeImpacts = 0; // ... after distance / speed seconds (to within one frame)
+    int32 HitEvents = 0;     // hit events sent (ApplyShotDamage; any target)
+    int32 HitKinds[4] = {0, 0, 0, 0}; // ... by EOpenWillowHitKind: direct, splash, status tick, throw
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 

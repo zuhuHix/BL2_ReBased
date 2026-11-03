@@ -5,6 +5,7 @@
 #include "OpenWillowPhaselock.h"
 #include "OpenWillowPhaselockFx.h"
 #include "OpenWillowFiring.h"
+#include "OpenWillowHitEvent.h"
 #include "OpenWillowShotFx.h"
 #include "OpenWillowMayaState.h"
 #include "OpenWillowMayaMovement.h"
@@ -63,11 +64,12 @@ public:
     const FString& ShotDamageType() const { return ShotDamageTypeInFlight; }
     // True while a burst still owes shots (the -owfiringtest harness waits for it before the next pull).
     bool IsBurstFiring() const { return Burst.active(); }
-    // Damage from one of Maya's shots, its projectile, splash or status tick: the target reads DamageType (the stock
-    // damage type path) while the damage is applied.
-    // Momentum is the hit's momentum vector (UE3 TakeDamage's Momentum); the target reads it with ShotMomentum().
-    void ApplyShotDamage(AActor* Target, float Amount, const FString& DamageType, const FVector& Direction,
-        const FHitResult& Hit, const FVector& Momentum = FVector::ZeroVector);
+    // Damage from one of Maya's shots, its projectile, splash or status tick: the one entry for every hit. The caller fills
+    // Event's Kind, Damage, DamageType, Direction, Momentum, Origin, RadiusScale (and WeaponId when the shot was fired
+    // earlier); this fills Instigator, Target, Location, Bone, Element, CritBonus, Time, sends it as the target's
+    // FOpenWillowDamageEvent and then to OpenWillowHit::OnHit(). Returns the damage the target applied.
+    // While it runs, ShotDamageType() and ShotMomentum() return the event's damage type and momentum (older readers).
+    float ApplyShotDamage(AActor* Target, const FOpenWillowHitEvent& Event, const FHitResult& Hit);
     // Momentum of the shot being applied right now; zero otherwise.
     const FVector& ShotMomentum() const { return ShotMomentumInFlight; }
     // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).

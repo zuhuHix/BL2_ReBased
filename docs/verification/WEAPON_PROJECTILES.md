@@ -257,3 +257,34 @@ number it reproduces.
 - **Still open, to check live:** a wall shot next to a bullymong (the wall impact explodes too), a Bandit elemental
   pistol (no second hit expected), a hit at the radius edge (no falloff expected), and the status chance of the
   explosion hit (its status damage and chance attributes are named in the behaviour; how they reach the hit was not read).
+
+## 9. The hit-event API (2026-11-03, slice projectiles lane)
+
+AI-assisted (Claude). One shape for every hit of one of Maya's shots, so that other actors (the range lane's enemies, HUD
+numbers, AI reactions) read the same data the host dummy does. Host code only; no new game rule. Files:
+`OpenWillowHitEvent.{h,cpp}`.
+
+- **`FOpenWillowHitEvent`**: who (`Instigator` pawn, `Target`, `WeaponId` of the fired item), what kind (`Direct`, `Splash`,
+  `StatusTick`, `Throw`), where (`Location`, explosion `Origin`, unit `Direction`, `Bone`), how much (`Damage` before the target's
+  own scaling, the stock `DamageType` path, `Element` from that path or the item, the `Momentum` vector, the splash
+  `RadiusScale` already in damage and momentum), crit inputs (`bCanCrit`, `CritBonus`) and `Time`. Result fields the target
+  writes inside `TakeDamage`: `bCritical`; the shooter stores `Applied` (TakeDamage's return).
+- **Delivery.** `AOpenWillowWalker::ApplyShotDamage(Target, Event, Hit)` is the only damage entry. It calls the target's own
+  `TakeDamage` with an `FOpenWillowDamageEvent` (an `FPointDamageEvent` subclass: point-damage readers keep working; new readers
+  test `IsOfType(FOpenWillowDamageEvent::ClassID)`), then broadcasts the event on `OpenWillowHit::OnHit()`. The old
+  `ShotDamageType()` / `ShotMomentum()` readers still work while the call runs.
+- **Who gets splash and status.** Explosions used to look only for the host dummy class. They now visit every actor that
+  implements `IOpenWillowHitTarget` (`GetHitCentre`: the point the splash distance is measured to and the radius the status
+  falloff subtracts, default the simple collision cylinder; `GetHitLevel`: the level for the status level scale, 0 = the
+  shooter's; `CanTakeHits`), never the shooter. Bullets, traces and thrown guns count a hit on any such actor; other actors
+  are world surfaces (decals, no damage). The host dummy implements it with its existing collision centre, auto-aim radius
+  and `-owtargetlevel` level, so its numbers do not change.
+- **Crits.** In BL2 the victim decides: a hit region with `bCriticalHit` (from the bone), never for status damage, times the
+  instigator's `CurrentInstantHitCriticalHitBonus` (base 2.0, confirmed live, COMBAT_GOLDEN_TRACE.md). The event therefore
+  carries the bonus and `bCanCrit` (direct and throw hits; splash taken as non-critical, UNVERIFIED), and the target sets
+  `bCritical`. Skills and the weapon's own crit bonus are not applied to `CritBonus` yet. The host dummy has no hit regions and
+  never crits.
+- **Test.** The firing test's result line gains `hit_events` and one count per kind; `tools/check_weapon_firing.py` requires a
+  direct event per bullet or trace hit (none for a rocket body), a splash event per splash hit, a tick event per status tick and
+  a throw event per thrown-gun hit (`tests/check_weapon_firing_test.py`). Each event is also logged
+  (`OWFIRING hitevent <kind> <weapon> on <target> damage .. applied .. element .. crit .. momentum ..`).

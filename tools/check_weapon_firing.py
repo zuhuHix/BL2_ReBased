@@ -240,6 +240,29 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
     return fails
 
 
+def check_hit_events(log, expected, throw=None):
+    """Hit events (OpenWillowHitEvent.h: one per damage application, by kind) against the counts of the same run: a
+    direct event per bullet or trace hit (none for a rocket body), a splash event per splash hit, a tick event per status
+    tick, a throw event per direct hit of a thrown gun. Logs from before the hit-event API have no hit_* fields."""
+    if 'hit_events' not in log:
+        return []
+    fails = []
+    kinds = {k: int(log[f'hit_{k}']) for k in ('direct', 'splash', 'tick', 'throw')}
+    throw_hits = int(throw['target_hits']) if throw is not None else 0
+    want = {
+        'direct': 0 if expected['kind'] == 'Rocket' else int(log['target_hits']) - throw_hits,
+        'splash': int(log['splash_hits']),
+        'tick': int(log['ticks']),
+        'throw': throw_hits,
+    }
+    for kind, count in kinds.items():
+        if count != want[kind]:
+            fails.append(f'{count} {kind} hit events, expected {want[kind]}')
+    if int(log['hit_events']) != sum(kinds.values()):
+        fails.append(f"hit_events {log['hit_events']} != the sum of the kinds {sum(kinds.values())}")
+    return fails
+
+
 def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None, lifecycle=None, push=None, wide=None,
               momentum=False, splash_lines=None):
     """(list of failure reasons, notes, values for the table) for one gun. With `momentum`, the push and wide lines are
@@ -344,6 +367,7 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
                 fails.append(f'ticks {ticks} > {most} possible for {procs} procs of {expected["duration"]:g} s')
         if rolls and not procs:
             notes.append(f'no proc in {rolls} status rolls')
+    fails += check_hit_events(log, expected, throw)
     if momentum:
         fails += check_momentum(push, wide, expected, phase_a_hits, splash_lines, int(log['splash_hits']), throw)
     if 'timed' in log and log['timed'] != log.get('on_time'):
