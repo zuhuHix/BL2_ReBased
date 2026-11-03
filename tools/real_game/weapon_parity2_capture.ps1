@@ -35,7 +35,11 @@ function Right-Hold([int]$Ms) { [OWRG.Native]::mouse_event(0x8, 0, 0, 0, [UIntPt
 function Right-Release { [OWRG.Native]::mouse_event(0x10, 0, 0, 0, [UIntPtr]::Zero) }
 function Level-View { Py 'pc = get_pc(); r = pc.Rotation; pc.Rotation = unrealsdk.make_struct("Rotator", Pitch=0, Yaw=(r.Yaw + 16384) & 0xFFFF, Roll=0); print("ok")' | Out-Null }
 
-$extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
+# Everything the game or the SDK could rewrite: the saves, the config and two SDK stores (an earlier session saw Sanity Saver
+# rewrite one). $rootState records, per root, whether it existed at the start and whether its backup was verified.
+$roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config')
+    sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
+$rootState = [ordered]@{}
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false
 # A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the image
 # path and the start time before stopping a PID). Unknown switches are ignored by the game.
@@ -53,11 +57,28 @@ try {
     if (Get-GameProcess) { throw 'Borderlands2 still running after 90 min; not touching it' }
     Start-Sleep 20   # let the other lane's restore and driver removal finish
     Enter-RunLock 600; $runLock = $true
-    $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
-    foreach ($d in $extraRoots.Keys) { if (Test-Path $extraRoots[$d]) { Copy-Item -Recurse $extraRoots[$d] (Join-Path $bak $d) } }
-    # -Exclusive re-checks that the folder is absent and removes its own partial install on failure: the folder is this
-    # run's only once the call has returned.
-    Install-Driver -Exclusive
+    # Backup: every root is copied to a staging folder, compared file by file (SHA-256) with the live tree, and only then
+    # promoted and marked restorable. The cleanup restores only verified roots (Restore-Tree deletes live files that are
+    # missing from the backup, so a partial backup must never reach it).
+    $bak = Join-Path $script:RG ('save-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss')); $log.backup = $bak
+    New-Item -ItemType Directory -Force $bak | Out-Null
+    foreach ($sub in $roots.Keys) {
+        $live = $roots[$sub]; $st = [ordered]@{ present = (Test-Path -LiteralPath $live); verified = $false }; $rootState[$sub] = $st
+        if (!$st.present) { continue }
+        $staging = Join-Path $bak "$sub.staging"
+        Copy-Item -Recurse -LiteralPath $live $staging
+        $diff = @(Compare-TreeHashes $live $staging)
+        if ($diff.Count) { throw "backup of $sub differs from the live tree in $($diff.Count) files ($($diff[0]), ...); not starting" }
+        Rename-Item -LiteralPath $staging $sub
+        $st.verified = $true; $st.files = @(Get-ChildItem -LiteralPath (Join-Path $bak $sub) -Recurse -File -Force).Count
+    }
+    $rootState | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $bak 'backup_complete.json')
+    "backup $bak ($(@($rootState.Keys | Where-Object { $rootState[$_].verified }).Count) roots verified)"
+    # -Exclusive re-checks that the folder is absent and removes its own partial install on failure. If that removal fails
+    # too, a folder that was absent just before the call is this run's: claim it so the cleanup removes it or reports it.
+    $driverWasThere = Test-Path -LiteralPath $script:DriverDir
+    try { Install-Driver -Exclusive }
+    catch { if (!$driverWasThere -and (Test-Path -LiteralPath $script:DriverDir)) { $driverOwned = $true }; throw }
     $driverOwned = $true
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
@@ -192,20 +213,28 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     } catch { $cleanup.driver = "error: $_" }
     $rows = @()
     if ($bak) {
-        try {
-            $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
-            foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-            foreach ($sub in $roots.Keys) {
-                $b = Join-Path $bak $sub; $live = $roots[$sub]
-                try {
+        foreach ($sub in $rootState.Keys) {
+            $st = $rootState[$sub]; $b = Join-Path $bak $sub; $live = $roots[$sub]
+            try {
+                if (!$st.present) {
+                    # Absent at the start (an SDK store this run's game created): removed again; still there is a problem.
+                    if (Test-Path -LiteralPath $live) {
+                        Remove-Item -LiteralPath $live -Recurse -Force -ErrorAction SilentlyContinue
+                        $rows += [pscustomobject]@{ file = $sub; status = $(if (Test-Path -LiteralPath $live) { 'CREATED DURING THE RUN, STILL PRESENT' } else { 'created during the run, removed' }) }
+                    }
+                } elseif ($st.verified) {
                     # Restore-Tree removes added files, restores missing and changed ones, then compares every hash again.
-                    if (Test-Path -LiteralPath $b) { $rows += @(Restore-Tree $b $live $sub) }
-                    elseif (Test-Path -LiteralPath $live) { $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' } }
-                } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
-            }
-            $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
-            $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
-        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)" }
+                    $rows += @(Restore-Tree $b $live $sub)
+                } else {
+                    $rows += [pscustomobject]@{ file = $sub; status = 'NO VERIFIED BACKUP: not restored' }
+                }
+            } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
+        }
+        # A root the backup never reached (the run stopped before it) has no state: report it, never call it identical.
+        foreach ($sub in $roots.Keys) { if (!$rootState.Contains($sub)) { $rows += [pscustomobject]@{ file = $sub; status = 'NO VERIFIED BACKUP: backup did not reach it' } } }
+        $problem = 'MISMATCH*', 'RESTORE FAILED*', 'NO VERIFIED BACKUP*', 'CREATED DURING THE RUN, STILL PRESENT'
+        $bad = @($rows | Where-Object { $status = $_.status; @($problem | Where-Object { $status -clike $_ }).Count })
+        $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
     }
     try {
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup

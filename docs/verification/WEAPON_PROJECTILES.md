@@ -252,8 +252,8 @@ number it reproduces.
   dummy that never dies never respawns at home, so it drifted with the earlier guns' pushes and the thrown gun's arc missed
   it (the same suite on main's host code passed 14/14). The test now also returns the dummy home, at rest, before each gun.
 - **Cosmetic budget.** Every shot effect (flashes, sparks, tracers, flash quads, casings) is spawned through one function
-  with a cap of 96 per frame and a null check; past the cap the cosmetic actor is skipped. Damage, explosions and their
-  hits are not budgeted (host value).
+  with a cap of 96 per frame and a null check; past the cap the cosmetic actor is skipped. Impact decals (bullet holes,
+  scorch marks) have their own cap of 16 per frame. Damage, explosions and their hits are not budgeted (host values).
 - **Still open, to check live:** a wall shot next to a bullymong (the wall impact explodes too), a Bandit elemental
   pistol (no second hit expected), a hit at the radius edge (no falloff expected), and the status chance of the
   explosion hit (its status damage and chance attributes are named in the behaviour; how they reach the hit was not read).
