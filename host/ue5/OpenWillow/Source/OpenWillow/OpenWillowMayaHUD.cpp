@@ -1456,9 +1456,10 @@ void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
             const FVector Screen = Project(Popup.Location + FVector(0, 0, 70.f * Age), false);
             if (Screen.Z <= 0.f) continue;
             const float Alpha = FMath::Clamp(1.f - Age / 1.2f, 0.f, 1.f);
-            const float Scale = 1.9f + 0.8f * FMath::Max(0.f, 1.f - Age / 0.15f);
-            Outlined(*this, FString::Printf(TEXT("%.0f"), Popup.Amount),
-                FLinearColor(1.f, 0.95f, 0.8f, Alpha), Screen.X, Screen.Y, Font, Scale);
+            // Critical hits (range enemies, PR1): orange at 1.25x (host stand-in, UNVERIFIED in game).
+            const float Scale = (Popup.bCritical ? 1.25f : 1.f) * (1.9f + 0.8f * FMath::Max(0.f, 1.f - Age / 0.15f));
+            const FLinearColor Colour = Popup.bCritical ? FLinearColor(1.f, 0.45f, 0.1f, Alpha) : FLinearColor(1.f, 0.95f, 0.8f, Alpha);
+            Outlined(*this, FString::Printf(TEXT("%.0f"), Popup.Amount), Colour, Screen.X, Screen.Y, Font, Scale);
         }
     }
 }

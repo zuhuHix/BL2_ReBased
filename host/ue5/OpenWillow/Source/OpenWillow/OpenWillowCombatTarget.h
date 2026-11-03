@@ -12,6 +12,7 @@ struct FOpenWillowDamagePopup
     FVector Location;
     float Amount = 0;
     float Born = 0;
+    bool bCritical = false;   // hit on the critical region (range enemies only; see AdjustIncomingDamage)
 };
 
 // Local Sanctuary combat stand-in until enemy pawn/AI data is hosted. It is a
@@ -124,9 +125,24 @@ public:
         LastVelocityChange = FVector::ZeroVector;
         KnockOrigin = HomeLocation;
     }
+    // PR1 range additions (host stand-ins, UNVERIFIED in game). The defaults keep the Fire dummy, the firing tests and the
+    // Phaselock tests as they were: a stock pawn does not respawn, nothing is invulnerable, no hit is critical.
+    void SetMaxHealth(float NewMax) { if (NewMax > 0.f) { MaxHealth = NewMax; Health = NewMax; } }
+    float GetHealth() const { return Health; }
+    float GetMaxHealth() const { return MaxHealth; }
+    bool IsDead() const { return bDead; }
+    // Invulnerable: a hit is still recorded (popup, flash, wobble, log, quest hook, momentum) but does not lower health.
+    void SetInvulnerable(bool bOn) { bInvulnerable = bOn; }
+    bool IsInvulnerable() const { return bInvulnerable; }
+    // A stock pawn respawns only when enabled here. Engine-shape targets always respawn; the delay is 3 s unless set here.
+    void SetRespawn(bool bEnabled, float DelaySeconds);
+    float GetRespawnDelay() const { return RespawnDelay; }
+    // Sets the home spot (the respawn spot) and the knock origin.
+    void SetHome(const FVector& NewHome) { HomeLocation = NewHome; KnockOrigin = NewHome; }
+    FVector GetHome() const { return HomeLocation; }
     class USkeletalMeshComponent* GetStockMesh() const { return StockMesh; }
     TArray<FOpenWillowDamagePopup> Popups;
-private:
+protected:   // was private: the range enemy (OpenWillowEnemy.cpp) builds on these; no name changed
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> StockMesh;
     UPROPERTY() TObjectPtr<class UAnimSequence> StockDeath;
     UPROPERTY() TObjectPtr<class UCapsuleComponent> HitVolume;
@@ -206,4 +222,18 @@ private:
     float Health = 20000.f;
     bool bPhaselocked = false;
     bool bDead = false;
+    // PR1 range state (off by default).
+    bool bInvulnerable = false;         // SetInvulnerable
+    bool bRespawnStock = false;         // SetRespawn: a stock pawn respawns (engine shapes always do)
+    bool bRagdoll = false;              // the stock mesh is limp after its death (TickStockRespawn)
+    float RespawnDelay = 3.f;           // death to respawn, seconds (3 s is the engine-shape value the Fire dummy keeps)
+    // Death to ragdoll, seconds: the value src/combat_run.cpp uses for the player's ragdoll. For targets UNVERIFIED.
+    static constexpr float RagdollDelay = 0.84f;
+    void TickStockRespawn(float Now);
+    // Hooks for subclasses. Defaults: the damage passes through, no critical hit, nothing on death or respawn.
+    // AdjustIncomingDamage runs after the death and quest checks and before health is lowered; its result is the damage
+    // taken from health (the popup and the return value use it). OnDied runs at the end of the death branch.
+    virtual float AdjustIncomingDamage(float Amount, const FDamageEvent& DamageEvent, bool& bOutCritical);
+    virtual void OnDied(AActor* DamageCauser) {}
+    virtual void OnRespawned() {}
 };

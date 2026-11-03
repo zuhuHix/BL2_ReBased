@@ -496,10 +496,15 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     Popups.RemoveAll([Now](const FOpenWillowDamagePopup& Popup) { return Now - Popup.Born > 1.2f; });
     if (bDead)
     {
-        if (StockMesh) return; // the stock dummy keeps its death pose until the sequence destroys it
+        // The stock dummy keeps its death pose until the sequence destroys it; with respawn enabled it ragdolls and respawns.
+        if (StockMesh)
+        {
+            if (bRespawnStock) TickStockRespawn(Now);
+            return;
+        }
         const float Since = Now - DiedAt;
         Pivot->SetRelativeScale3D(FVector(FMath::Max(0.01f, 1.f - Since / 0.25f)));
-        if (Since < RespawnSeconds) return;
+        if (Since < RespawnDelay) return;
         bDead = false;
         Health = MaxHealth;
         // A respawned target starts at rest: no knock and no last-hit momentum carried over from the previous life.
@@ -512,6 +517,7 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         Pivot->SetRelativeLocation(FVector::ZeroVector);
         SetActorHiddenInGame(false);
         SetActorEnableCollision(true);
+        OnRespawned();
         return;
     }
     // Momentum from hits: slide by the knock velocity on the ground plane, slowed by the friction stand-in.
@@ -637,8 +643,11 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         if (UOpenWillowQuest* Quest = Shooter->GetQuest(); Quest && Quest->Enabled())
             Quest->OnDummyDamaged(this, Shooter->ShotDamageType());
     const float Now = GetWorld()->GetTimeSeconds();
-    const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
-    Health -= Applied;
+    bool bCritical = false;
+    const float Dealt = AdjustIncomingDamage(DamageAmount, DamageEvent, bCritical);
+    // Invulnerable (range toggle): the hit is recorded, popup included, but health is not lowered.
+    const float Applied = bInvulnerable ? FMath::Max(0.f, Dealt) : FMath::Clamp(Dealt, 0.f, Health);
+    if (!bInvulnerable) Health -= Applied;
     LastHitAt = Now;
     FVector Where = AimPoint();
     FVector Direction = FVector::ZeroVector;
@@ -658,7 +667,7 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     }
     const FVector Local = GetActorTransform().InverseTransformVectorNoScale(Direction);
     WobbleVelocity += FVector2D(Local.Y, -Local.X) * 220.f;
-    Popups.Add({Where + FVector(FMath::FRandRange(-12.f, 12.f), FMath::FRandRange(-12.f, 12.f), 10.f), Applied, Now});
+    Popups.Add({Where + FVector(FMath::FRandRange(-12.f, 12.f), FMath::FRandRange(-12.f, 12.f), 10.f), Applied, Now, bCritical});
     UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target hit for %.0f, health %.0f/%.0f"),
         Applied, Health, MaxHealth);
     if (Health <= 0.f)
@@ -676,8 +685,67 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnSeconds);
         // A kill by Maya: while she is down it is her second wind.
         if (auto* Killer = Cast<AOpenWillowWalker>(DamageCauser)) Killer->NotifyKilledEnemy();
+        OnDied(DamageCauser);
     }
     return Applied;
+}
+
+float AOpenWillowCombatTarget::AdjustIncomingDamage(float Amount, const FDamageEvent& DamageEvent, bool& bOutCritical)
+{
+    // Base target: no critical hits, the damage passes through unchanged.
+    bOutCritical = false;
+    return Amount;
+}
+
+void AOpenWillowCombatTarget::SetRespawn(bool bEnabled, float DelaySeconds)
+{
+    bRespawnStock = bEnabled;
+    if (DelaySeconds > 0.f) RespawnDelay = DelaySeconds;
+}
+
+void AOpenWillowCombatTarget::TickStockRespawn(float Now)
+{
+    // Host stand-in (UNVERIFIED): the death clip plays; after RagdollDelay the mesh goes limp (physics only when the imported
+    // mesh has a physics asset; the log says which); after RespawnDelay the mesh is put back on its pose and the target stands again.
+    const float Since = Now - DiedAt;
+    if (!bRagdoll && Since >= RagdollDelay)
+    {
+        bRagdoll = true;
+        // The death turned the actor's collision off; the ragdoll needs it back to land on the floor, while the hit volume
+        // stays off (a corpse takes no shots: TakeDamage returns at once while dead).
+        SetActorEnableCollision(true);
+        if (HitVolume) HitVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        StockMesh->SetCollisionProfileName(TEXT("Ragdoll"));
+        const bool bPhysics = StockMesh->GetPhysicsAsset() != nullptr;
+        if (bPhysics) StockMesh->SetSimulatePhysics(true);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s ragdoll at %.2f s: physics asset %s"), *GetName(), Since,
+            bPhysics ? TEXT("yes, simulating") : TEXT("none, not simulated"));
+    }
+    if (Since < RespawnDelay) return;
+    if (bRagdoll) StockMesh->SetSimulatePhysics(false);
+    // The mesh goes back under the pivot at its rest offset; the host never sets its rotation, so zero is its rest rotation.
+    StockMesh->AttachToComponent(Pivot, FAttachmentTransformRules::KeepRelativeTransform);
+    StockMesh->SetRelativeLocation(StockMeshBaseOffset);
+    StockMesh->SetRelativeRotation(FRotator::ZeroRotator);
+    MeshExtraZ = 0.f;
+    Pivot->SetRelativeLocation(FVector::ZeroVector);
+    bRagdoll = false;
+    bDead = false;
+    Health = MaxHealth;
+    // A respawned target starts at rest: no knock and no last-hit momentum carried over from the previous life.
+    Knock = FVector::ZeroVector;
+    LastMomentum = FVector::ZeroVector;
+    LastVelocityChange = FVector::ZeroVector;
+    SetActorLocation(HomeLocation);
+    KnockOrigin = HomeLocation;
+    SetActorHiddenInGame(false);
+    SetActorEnableCollision(true);
+    StockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);   // the hit volume is the target's collision, as before the death
+    if (HitVolume) HitVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    AnimStage = 0;
+    PlayStock(StockIdle, true);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s respawned after %.2f s at %s"), *GetName(), Since, *HomeLocation.ToString());
+    OnRespawned();
 }
 
 FVector AOpenWillowCombatTarget::MomentumVelocity(const FVector& Momentum, float Mass)

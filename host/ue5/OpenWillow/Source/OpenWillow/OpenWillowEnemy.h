@@ -1,0 +1,84 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "OpenWillowCombatTarget.h"
+#include "OpenWillowRangeKind.h"
+#include "OpenWillowEnemy.generated.h"
+
+class AOpenWillowEnemy;
+class UPrimitiveComponent;
+class UWorld;
+
+// Broadcast when a range enemy dies (PR3 loot hangs on this). Killer is the damage causer, possibly null.
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnRangeEnemyDied, AOpenWillowEnemy*, AActor*);
+
+// A range enemy: the combat target with a kind from the range manifest. PR1 = patrol only; no AI (PR2), no loot (PR3).
+// Host stand-in throughout (UNVERIFIED in game): the health bar, the walk speed, the shield, the critical region and its
+// multiplier. The critical multiplier 2.0 is the CurrentInstantHitCriticalHitBonus default (NATIVE_COMBAT_GROUNDWORK 3.4).
+UCLASS()
+class OPENWILLOW_API AOpenWillowEnemy : public AOpenWillowCombatTarget
+{
+    GENERATED_BODY()
+public:
+    AOpenWillowEnemy();
+    virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
+
+    // Sets the kind up: the stock pawn when its assets load (else the engine shapes, logged as fallback=shapes), the level,
+    // the max health of that level (stand-in 400 when the table has none), the shield, respawn after RespawnSeconds.
+    // Returns true when the stock pawn is in use.
+    bool SetupKind(const FOpenWillowRangeKind& InKind, int32 InLevel, float RespawnSeconds);
+    void SetPassive(bool bOn) { bPassive = bOn; }
+    bool IsPassive() const { return bPassive; }
+    // Test-only: sets the shield (max and current) to Amount.
+    void SetShieldForTest(float Amount) { ShieldMax = Amount; ShieldCurrent = Amount; }
+    float ShieldNow() const { return ShieldCurrent; }
+    float ShieldMaxNow() const { return ShieldMax; }
+    // The colliding body volume (stock: the hit capsule; engine shapes: the torso) and the critical region (stock: a sphere on
+    // the head bone; engine shapes: the head). Null when the stock mesh has no head bone.
+    UPrimitiveComponent* BodyComponent() const;
+    UPrimitiveComponent* CritComponent() const;
+    // The one critical-hit decision: true when the hit component is the critical region, the hit bone's name contains "head"
+    // (case-insensitive), or the shot entered the body volume on a line that passes through the head sphere (the body capsule
+    // encloses the head, so a shot at the head meets the capsule first; host stand-in, UNVERIFIED). AdjustIncomingDamage calls
+    // it with the point hit's component, bone, impact point and shot direction (zero direction: no line test).
+    bool IsCritRegion(const UPrimitiveComponent* HitComponent, FName Bone, const FVector& Impact, const FVector& ShotDirection) const;
+    FString StateReport() const;
+    // The floor under XY: the first Visibility hit of a trace from FromZ down to ToZ, ignoring Ignore. False when there is none.
+    static bool TraceFloor(UWorld* World, const FVector2D& XY, float FromZ, float ToZ, const AActor* Ignore, FVector& OutFloor);
+
+    FOnRangeEnemyDied OnEnemyDied;
+
+protected:
+    virtual float AdjustIncomingDamage(float Amount, const FDamageEvent& DamageEvent, bool& bOutCritical) override;
+    virtual void OnDied(AActor* DamageCauser) override;
+    virtual void OnRespawned() override;
+
+private:
+    void MakeCritVolume();
+    void UpdatePatrol(float Now, float DeltaSeconds);
+    void SetMoveAnim(bool bMoving);
+    void UpdateHealthBars();
+
+    FOpenWillowRangeKind Kind;
+    UPROPERTY() TObjectPtr<class USphereComponent> CritVolume;
+    UPROPERTY() TObjectPtr<class UAnimSequence> WalkClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> HitClip;
+    UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarBack;
+    UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarFill;
+    UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarShield;
+
+    FRandomStream Rand;
+    bool bPassive = false;
+    bool bHasTarget = false;
+    FVector PatrolTarget = FVector::ZeroVector;
+    float PauseUntil = 0.f;
+    UAnimSequence* MoveClipNow = nullptr;   // the clip the move state last started (avoids restarts)
+    bool bHitPlaying = false;
+    float HitEndsAt = 0.f;
+    float LastHitReactAt = -10.f;
+    float ShieldMax = 0.f;
+    float ShieldCurrent = 0.f;
+    float ShieldRate = 0.f;             // per second, after ShieldDelay without a hit
+    float ShieldDelay = 0.f;
+};
