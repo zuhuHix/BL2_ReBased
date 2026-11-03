@@ -7,8 +7,11 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.owMissionLog = api;
 })(globalThis, function () {
-  // EMissionStatus (IMission): 0 NotStarted, 1 Active, 2 RequiredObjectivesComplete, 3 ReadyToTurnIn, 4 Complete, 5 Failed.
-  const NOT_STARTED = 0, ACTIVE = 1, REQUIRED_DONE = 2, TURN_IN = 3, COMPLETE = 4, FAILED = 5;
+  // Mission statuses by the names the host sends in each mission's "status" field (UOpenWillowQuest::MissionLogJson):
+  // 'requireddone' (required objectives done, optional ones left) and 'failed' are listed for completeness; the host's slice
+  // mission does not produce them.
+  const NOT_STARTED = 'notstarted', ACTIVE = 'active', REQUIRED_DONE = 'requireddone', TURN_IN = 'turnin',
+    COMPLETE = 'complete', FAILED = 'failed';
 
   // The list row's presentation (StatusMenuExGFxMovie.UpdateListOfMissionTitles): 1 and 2 share the active presentation,
   // the plot-critical one when MissionDefinition.bPlotCritical is set.
@@ -77,12 +80,12 @@
   function listRows(missions, def) {
     const rows = [];
     for (const category of CATEGORIES) {
-      const members = missions.filter(mission => category.statuses.includes(mission.statusNumber));
+      const members = missions.filter(mission => category.statuses.includes(mission.status));
       if (!members.length) continue;
       rows.push({kind: 'category', key: category.key,
         text: def.list.categoryPrefix + escapeHtml(def.strings[category.label]) + def.list.categoryPostfix, type: def.list.categoryIcon});
       for (const mission of members) {
-        const presentation = def.presentation[presentationKey(mission.statusNumber, mission.plot)];
+        const presentation = def.presentation[presentationKey(mission.status, mission.plot)];
         rows.push({kind: 'mission', id: mission.id, name: mission.name, color: presentation.color, type: presentation.frame});
       }
     }
@@ -125,7 +128,7 @@
   // MissionSummary and MissionDescription, and TurnInDescription when ready to turn in (UNVERIFIED). Branch ("OR") objectives
   // are not modelled by the host. A not-started mission shows its teaser text instead (the host lists none).
   function descriptionHtml(mission, def, {wideCounts = false} = {}) {
-    const s = def.strings, m = def.markup, status = mission.statusNumber, NL = '\n', e = escapeHtml;
+    const s = def.strings, m = def.markup, status = mission.status, NL = '\n', e = escapeHtml;
     if (status === NOT_STARTED) return e(mission.teaser || '');
     let text = e(mission.summary || '') + NL + NL;
     if (![FAILED, COMPLETE, TURN_IN].includes(status)) {
