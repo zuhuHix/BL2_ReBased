@@ -204,8 +204,9 @@ float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& Dama
 
 float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const FVector& SourceLocation)
 {
-    if (!bMayaActive && !bRespawnPointCaptured) return 0.f;
+    if ((!bMayaActive && !bRespawnPointCaptured) || !GetWorld()) return 0.f;
     const float Now = GetWorld()->GetTimeSeconds();
+    TickShield(Now);   // a shield equipped or removed since the last tick applies to this hit
     // Live: damage still reaches the injured state's TakeDamage, but health does not move (COMBAT_GOLDEN_TRACE.md step 12).
     const FOpenWillowDamageResult Hit = MayaState.ApplyDamage(Amount, Now);
     if (Hit.bIgnored) return 0.f;
@@ -257,6 +258,7 @@ bool AOpenWillowWalker::DownWeaponReady() const
 
 float AOpenWillowWalker::DownBleedLeft() const
 {
+    if (!IsDown()) return 1.f;
     return GetWorld() ? MayaState.BleedLeft(GetWorld()->GetTimeSeconds()) : 0.f;
 }
 
