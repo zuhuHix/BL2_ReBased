@@ -13,7 +13,10 @@ param(
     [string]$Lane = 'phaselock-integrity',
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya (Phaselock) in Sanctuary
     [switch]$ProbeOnly,                     # stop after pi_discover / pi_flags
-    [switch]$SkipDown
+    [switch]$SkipDown,
+    # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
+    # maintainer, never by this script.
+    [int]$HubWaitMinutes = 120
 )
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
@@ -74,23 +77,34 @@ function Wait-Ready([double]$Timeout = 40) {
 }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
-$hub = $null; $bak = $null; $proc = $null; $target = $null; $runLock = $false
+$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false
+# A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the
+# image path and the start time before stopping a PID). Unknown switches are ignored by the game.
+$marker = "-owrun=$Lane-$PID"
 $hostShots = @{ 'hit-0.25' = 0.25; 'hit-0.50' = 0.5; 'hit-0.80' = 0.8; 'hit-1.50' = 1.5; 'hit-3.00' = 3.0; 'hit-4.50' = 4.5; 'hit-5.30' = 5.3; 'hit-6.20' = 6.2 }
 try {
+    # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
+    if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2); not installing it" }
+    if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
+    $hubDeadline = (Get-Date).AddMinutes($HubWaitMinutes)
     while (!$hub) {
         try { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
-        catch { "hub lock held by '$(Get-Content $HubLock -Raw -ErrorAction SilentlyContinue)'; retry in 60 s"; Start-Sleep 60 }
+        catch {
+            $held = Get-Content $HubLock -Raw -ErrorAction SilentlyContinue
+            if ((Get-Date) -gt $hubDeadline) { throw "hub lock $HubLock still held after $HubWaitMinutes min by '$held'; if it is stale, its owner or the maintainer removes it" }
+            "hub lock held by '$held'; retry in 60 s"; Start-Sleep 60
+        }
     }
     if (Get-GameProcess) { throw 'Borderlands2 is running although the hub lock was free; not touching it' }
     Enter-RunLock 1800; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     # The SDK's settings and Sanity Saver's private store are compared too (an earlier session saw Sanity Saver rewrite one).
     foreach ($d in $extraRoots.Keys) { if (Test-Path $extraRoots[$d]) { Copy-Item -Recurse $extraRoots[$d] (Join-Path $bak $d) } }
-    Install-Driver -BlockSavesAtStart
+    Install-Driver -BlockSavesAtStart -Exclusive; $driverOwned = $true
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-    $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies')
+    $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }
-    $proc = Start-Game $gameArgs
+    $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'phaselock_integrity/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
@@ -169,29 +183,48 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } finally {
-    $log.finished = (Get-Date).ToString('o')
-    $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-    if ($proc) { Start-Sleep 2; $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force } }
-    try { Remove-Driver } catch { "Remove-Driver failed: $_" }
-    if ($runLock) { Exit-RunLock }
-    if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
-    if ($bak) {
-        $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame'
-        $roots = [ordered]@{ SaveData = (Join-Path $src 'SaveData'); Config = (Join-Path $src 'Config') }
-        foreach ($d in $extraRoots.Keys) { if (Test-Path (Join-Path $bak $d)) { $roots[$d] = $extraRoots[$d] } }
-        $rows = foreach ($sub in $roots.Keys) {
-            $b = Join-Path $bak $sub; $s = $roots[$sub]
-            Get-ChildItem $s -Recurse -File | ForEach-Object {
-                $rel = $_.FullName.Substring($s.Length + 1); $old = Join-Path $b $rel
-                if (!(Test-Path $old)) { [pscustomobject]@{ file = "$sub\$rel"; status = 'added (left in place)' } }
-                elseif ((Get-FileHash $old).Hash -ne (Get-FileHash $_.FullName).Hash) {
-                    Copy-Item $old $_.FullName -Force; [pscustomobject]@{ file = "$sub\$rel"; status = 'changed, restored' }
-                }
-            }
-            Get-ChildItem $b -Recurse -File | Where-Object { !(Test-Path (Join-Path $s $_.FullName.Substring($b.Length + 1))) } |
-                ForEach-Object { [pscustomobject]@{ file = "$sub\$($_.FullName.Substring($b.Length + 1))"; status = 'missing' } }
+    # Each step is isolated so a failure in one (a log write, a stuck process) cannot skip the restore. Order: stop our game,
+    # remove our driver, restore and verify the saves and config, write the logs, and only then release the locks.
+    $cleanup = [ordered]@{}
+    try {
+        if ($proc) {
+            for ($i = 0; $i -lt 10 -and !$proc.HasExited; $i++) { Start-Sleep 1 }
+            $cleanup.game = Stop-OwnGame $proc $procStart $marker
+            if ($cleanup.game -eq 'stopped') { $proc.WaitForExit(15000) | Out-Null }
         }
-        @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json')
-        "save compare: $(@($rows).Count) differences"; $rows
+    } catch { $cleanup.game = "error: $_" }
+    try {
+        if ($driverOwned) {
+            Remove-Driver
+            $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
+        } else { $cleanup.driver = 'not installed by this run; untouched' }
+    } catch { $cleanup.driver = "error: $_" }
+    $rows = @()
+    if ($bak) {
+        try {
+            $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
+            foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
+            foreach ($sub in $roots.Keys) {
+                $b = Join-Path $bak $sub; $live = $roots[$sub]
+                try {
+                    if (Test-Path -LiteralPath $b) { $rows += @(Restore-Tree $b $live $sub) }
+                    elseif (Test-Path -LiteralPath $live) {
+                        # Absent at the backup and created during the run (an SDK mod's own store): reported, not deleted.
+                        $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' }
+                    }
+                } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
+            }
+            $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
+            $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)" }
     }
+    try {
+        $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
+        $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+        if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+    } catch { "log write failed: $_" }
+    try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
+    try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
+    $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
+    $rows
 }

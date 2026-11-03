@@ -9,6 +9,9 @@ $script:CmdDir = Join-Path $script:RG 'cmd'
 . (Join-Path $PSScriptRoot '../ue_lock.ps1')
 $script:Lock = Get-OwUeLockPath
 $script:Game = $env:OPENWILLOW_BL2
+# The game's WillowGame folder under the shell's Documents folder (which may be redirected away from %USERPROFILE%).
+$script:WillowDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'My Games/Borderlands 2/WillowGame'
+$script:DriverDir = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 
 Add-Type -AssemblyName System.Drawing
@@ -39,7 +42,7 @@ function Enter-RunLock([int]$WaitSeconds = 600) {
 function Exit-RunLock { Exit-OwUeLock }   # removes the lock only when this process owns it
 
 function Backup-Saves {
-    $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame'
+    $src = $script:WillowDir
     $dst = Join-Path $script:RG ('save-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Force $dst | Out-Null
     Copy-Item -Recurse (Join-Path $src 'SaveData') $dst
@@ -47,10 +50,16 @@ function Backup-Saves {
     $dst
 }
 
-function Install-Driver([switch]$BlockSavesAtStart) {
+function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive) {
     # Copy the command-channel mod into the game's sdk_mods (removed again by Remove-Driver).
     # -BlockSavesAtStart: the driver blocks the save functions as soon as it loads (see the driver's autoblock.flag).
-    $target = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
+    # -Exclusive: refuse when bl-sdk is absent or the mod folder already exists (then this run did not create it and must
+    # neither overwrite nor remove it); otherwise the old behaviour (create or overwrite).
+    $target = $script:DriverDir
+    if ($Exclusive) {
+        if (!(Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods'))) { throw "bl-sdk is not installed: $(Join-Path $script:Game 'sdk_mods') is missing" }
+        if (Test-Path -LiteralPath $target) { throw "$target already exists; not overwriting it (remove it by hand if it is a stale copy of this driver)" }
+    }
     New-Item -ItemType Directory -Force $target | Out-Null
     Copy-Item (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py') $target -Force
     Set-Content -LiteralPath (Join-Path $target 'cmd_dir.txt') -Value $script:CmdDir -NoNewline
@@ -58,6 +67,52 @@ function Install-Driver([switch]$BlockSavesAtStart) {
     if ($BlockSavesAtStart) { Set-Content -LiteralPath $flag -Value '1' -NoNewline } else { Remove-Item $flag -ErrorAction SilentlyContinue }
 }
 function Remove-Driver { Remove-Item -Recurse -Force (Join-Path $script:Game 'sdk_mods/openwillow_realgame') -ErrorAction SilentlyContinue }
+
+# Make the live tree $Live identical to the backup tree $Backup: files added during the run are removed, missing and changed
+# files are copied back, directories created during the run are removed when empty. Then every file is compared again by
+# SHA-256. Returns one row per difference found; a row with status 'MISMATCH after restore' means the restore failed.
+function Restore-Tree([string]$Backup, [string]$Live, [string]$Label) {
+    $Backup = [IO.Path]::GetFullPath($Backup).TrimEnd('\'); $Live = [IO.Path]::GetFullPath($Live).TrimEnd('\')
+    $rel = { param($Root, $Path) $Path.Substring($Root.Length + 1) }
+    $row = { param($File, $Status) [pscustomobject]@{ file = "$Label\$File"; status = $Status } }
+    if (!(Test-Path -LiteralPath $Live)) { New-Item -ItemType Directory -Force $Live | Out-Null }
+    foreach ($f in @(Get-ChildItem -LiteralPath $Live -Recurse -File -Force)) {
+        $r = & $rel $Live $f.FullName
+        if (!(Test-Path -LiteralPath (Join-Path $Backup $r) -PathType Leaf)) { Remove-Item -LiteralPath $f.FullName -Force; & $row $r 'added, removed' }
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $Backup -Recurse -File -Force)) {
+        $r = & $rel $Backup $f.FullName; $dst = Join-Path $Live $r
+        if (!(Test-Path -LiteralPath $dst -PathType Leaf)) {
+            New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null; Copy-Item -LiteralPath $f.FullName $dst -Force; & $row $r 'missing, restored'
+        } elseif ((Get-FileHash -LiteralPath $f.FullName).Hash -ne (Get-FileHash -LiteralPath $dst).Hash) {
+            Copy-Item -LiteralPath $f.FullName $dst -Force; & $row $r 'changed, restored'
+        }
+    }
+    Get-ChildItem -LiteralPath $Live -Recurse -Directory -Force | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object {
+        $r = & $rel $Live $_.FullName
+        if (!(Test-Path -LiteralPath (Join-Path $Backup $r)) -and !(Get-ChildItem -LiteralPath $_.FullName -Force)) { Remove-Item -LiteralPath $_.FullName -Force }
+    }
+    foreach ($r in (Compare-TreeHashes $Backup $Live)) { & $row $r 'MISMATCH after restore' }
+}
+# Relative paths whose presence or SHA-256 differs between two trees (empty when they are identical).
+function Compare-TreeHashes([string]$A, [string]$B) {
+    $A = [IO.Path]::GetFullPath($A).TrimEnd('\'); $B = [IO.Path]::GetFullPath($B).TrimEnd('\')
+    $hashes = { param($Root) $h = @{}; Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $h[$_.FullName.Substring($Root.Length + 1)] = (Get-FileHash -LiteralPath $_.FullName).Hash }; $h }
+    $ha = & $hashes $A; $hb = & $hashes $B
+    @($ha.Keys) + @($hb.Keys) | Sort-Object -Unique | Where-Object { $ha[$_] -ne $hb[$_] }
+}
+
+# Stop the game process this run started, only if the PID still names that process: same image path, same start time and
+# a command line containing $Marker. Returns what it did ('stopped', 'exited', or why it refused).
+function Stop-OwnGame([Diagnostics.Process]$Started, [datetime]$StartTime, [string]$Marker) {
+    $exe = [IO.Path]::GetFullPath((Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'))
+    $c = Get-CimInstance Win32_Process -Filter "ProcessId=$($Started.Id)" -ErrorAction SilentlyContinue
+    if (!$c) { return 'exited' }
+    if (!$c.ExecutablePath -or [IO.Path]::GetFullPath($c.ExecutablePath) -ne $exe) { return "refused: pid $($Started.Id) is $($c.ExecutablePath)" }
+    if ([math]::Abs(($c.CreationDate - $StartTime).TotalSeconds) -gt 2) { return "refused: pid $($Started.Id) started $($c.CreationDate), ours $StartTime" }
+    if ($c.CommandLine -notlike "*$Marker*") { return "refused: pid $($Started.Id) command line lacks '$Marker'" }
+    Stop-Process -Id $Started.Id -Force; 'stopped'
+}
 
 function Start-Game([string[]]$Arguments = @()) {
     $exe = Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'
