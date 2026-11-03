@@ -6,6 +6,41 @@ critic Codex GPT-6-Luna). The host drives BL2's own HUD movie (`UI_HUD.HUD`, con
 transparent page over UE5); nothing below is redrawn natively. Converted movies, real-game frames, live reads and host
 captures stay under ignored `local/`.
 
+## Element inventory (the slice loop)
+
+HUD lane, 2026-11-03. The rows are the HUD movie's own named clips under `p1` (read from the converted `UI_HUD.HUD`
+with a local SWF tag listing; the listing stays under ignored `local/analysis/hud/`), plus the two effects the movie
+has no clip for. "Slice" says whether BL2 shows the element in the Phase 4 loop (spawn, fight, loot, equip, Phaselock,
+one mission, die, respawn). "Driven" means the host pushes real state to that clip and a check reads back what the
+movie shows. Scores are the independent critic's, and only where a matched real-game frame existed.
+
+| Element (clip) | Slice | Host driver today | Check | Parity |
+|---|---|---|---|---|
+| Health bar and text (`health`) | yes | driven: `AOpenWillowWalker` health | `check_hud_shots.py` | 8/10 (2026-10-22, with the clusters) |
+| Shield bar and text (`shield`) | yes | partly: the equipped shield's capacity; the bar stays full | `check_hud_shots.py` | as health; no damage or recharge model |
+| Shield break (`shielddown`) | yes, when the shield breaks | not driven: the host has no shield damage | none | missing |
+| Ammo bar, text, icon (`bullets`) | yes | driven: magazine, reserve and ammo type | `check_hud_shots.py` | 8/10 (with the clusters) |
+| Reload / empty prompt (`reload`: `reload`, `depleted`, `empty`) | yes | not driven | none | missing |
+| Grenade count (`grenades`) | yes | driven: count and max; the icon's type is not | `check_hud_shots.py` | type missing |
+| Crosshair (`crosshairs`) | yes | style and idle spread for pistol and shotgun; no widening while firing | `check_hud_shots.py` | 7.7-8/10; spread per gun open |
+| XP bar, level, class-mod text (`xpbar`, `levelClassMod`) | yes | driven: XP and level; the class-mod title is not sent | `check_hud_shots.py` | with the clusters |
+| Level-up banner (`levelup`, label `go`) | yes, on the mission reward | not driven | none | missing |
+| Action skill (`character`, `activeAbility`) | yes | driven (ACTION_SKILL_HUD.md) | `test_action_skill_hud.ps1` | see ACTION_SKILL_HUD.md |
+| Minimap and compass (`minimapEcho`) | yes | driven (HUD_MINIMAP.md) | `test_hud_minimap.ps1` | see HUD_MINIMAP.md |
+| Fight For Your Life (`dying1`: `fight` label, 100-frame bleed-out bar, title and hint) | yes | **driven** (this lane): the Walker's down state | `check_hud_down.py` (down) | UNVERIFIED: no real frame on this PC |
+| Second wind banner (`secondwind`, from `go`) | yes | **driven** (this lane) | `check_hud_down.py` (down) | UNVERIFIED: no real frame |
+| Respawn fee (`moneyRemoval`, labels `in`, `out`, `ganked`) | yes, after the respawn | not driven: the host has no currency or fee | none | missing |
+| Mission tracker (`MissionNotifications.Module1-6`) | yes | **driven** (this lane): mission name, objectives with their progress text, turn-in | `check_hud_down.py` (tracker) | UNVERIFIED: no real frame on this PC |
+| Mission banners (`MissionFeedbackController`) | yes (accepted, complete) | not driven | none | missing |
+| Interaction prompt (`tools`, `toolsSecondary`: `talk`, `use`, `guns`, ...; `desc` text) | yes (Marcus, the gun pickup) | not driven: the host shows a debug text line. The label and text come from the native `UpdateInteractionIcon` (the HUD's handler is native too), not read | none | missing |
+| Contextual prompt (`contextualPrompt`) | unknown | not driven | none | unknown whether the loop shows it |
+| Pickup item card (`outerequip`, `equipcard` with `stat1-7`, `manufacturer`) | yes (looking at a gun) | not driven | none | missing |
+| Damage direction (`dmg_u`, `dmg_d`, `dmg_l`, `dmg_r`) | yes, when Maya is hit | not driven: nothing in the UE host damages Maya (enemy attacks run in the C++ VM only, PR #59) | none | missing |
+| Area name (`WorldDiscovery`) | yes, entering Sanctuary | not driven | none | missing |
+| Damage numbers | yes | the host's canvas draws them over the movie; the movie has no clip for them | none | not compared |
+| Hit marker | no in stock BL2 (no clip in the movie; a mod adds one, UNVERIFIED) | none | none | n/a |
+| Not in the slice loop | | `AssassinView`, `badassToken`, `bossModule`, `boundry`, `challenges`, `coop1-3`, `crosshairsDualWield`, `crouch`, `eridiumCounter`, `flaskBuff`, `instinct`, `instinctbar`, `radial`, `ring`, `ShieldAbsorb`, `slotmachine`, `tradingTips`, `training`, `triggeredSkills` | | |
+
 ## What changed
 
 * **The movie is the default gameplay HUD.** `AOpenWillowMayaHUD` opens the overlay page at `http://127.0.0.1:8767/`
@@ -114,6 +149,38 @@ Non-ASCII text reaches the movie through `htmlText` as numeric entities: Ruffle'
 strings to the movie as their UTF-8 bytes, which drew the no-break space as an A-circumflex and a space; `htmlText`
 keeps the field's own format (seen in the bench).
 
+## Fight For Your Life, second wind and respawn (HUD lane, 2026-11-03)
+
+AI-assisted (Claude Opus 5.5). Health 0 no longer respawns Maya at once. `AOpenWillowWalker` now has a down state, with
+the live numbers of [COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md):
+
+* Health 0 puts her down (Injured). The bleed-out timer starts 2.28 s later and runs 12 s. Successive injuries cut it by
+  12 / 3 each, to a 1 s minimum; an injury less than 30 s after the previous one counts as successive.
+* The end of the bleed-out is death (Dead), and the respawn follows 5.76 s later. The respawn resets the successive count.
+* A kill while Injured is a second wind: health goes back to 25 % of the maximum. `AOpenWillowCombatTarget` reports the
+  kill when Maya is the damage causer.
+* Damage while down is ignored, and the Phaselock gate sees the injured state.
+* A health refill while Injured (a level-up) ends the down state, so "down" always means health 0. The game is widely
+  reported to revive a player who levels up in Fight For Your Life; that is not observed here (UNVERIFIED).
+* Not modelled: crawling, the sidearm switch, the injured bonus damage, the shield half, Defense Boost, a partner revive
+  and the respawn fee (`moneyRemoval`).
+
+The host pushes `down` (`null`, or the phase and the bleed-out left, quantised to the bar's 100 frames) and `secondWind`
+(a count; the page plays `p1.secondwind` from `go` once per increase). The page puts `p1.dying1` on its `fight` label
+while injured, with the bleed-out bar on frame `1 + round((1 - left) * 99)`, and off otherwise. The title and hint come
+from `hud_strings.json` (`tools/prepare_hud_strings.py`: the install's own localization, written under ignored
+`local/`). Which of those fields the native fills, and with which string, was not observed (UNVERIFIED).
+
+**Nothing in the UE host damages Maya yet.** The enemy attacks of PR #59 run in the C++ VM only, so in the host only the
+capture sequence and the quest suite reach the down state.
+
+**Mission tracker.** `MissionSystem::trackerLines()` (`src/mission.*`) lists the active objective set, each objective
+with its `ProgressMessage` from the package; `--mission-run` output ends with a `"tracker"` array. The quest exposes it
+read-only (`UOpenWillowQuest::HudTracker`). The page fills `p1.MissionNotifications.Module1-6`: the mission name, one
+module per objective (`NotComplete` or `Complete`), or `TurnIn` when ready to turn in, and every module is off without
+a mission. In the Fire mission run it shows "Go to firing range", then "Burn vandal", then the turn-in, then nothing.
+How long the game keeps a completed objective on screen was not observed, so the host replaces it at the next change.
+
 ## Checks
 
 * `node tests/hud_warp_test.js`: the homography against the written-out formula (0.01 px, six turns, seven origins, a
@@ -142,6 +209,22 @@ keeps the field's own format (seen in the bench).
   the first equippable gear-manifest shield); `tools/test_action_skill_hud.ps1` 19/19 (three runs during the lane: one 18/19, see below, then 19/19 twice).
   The 18/19 run pushed the state before the scripted cast in the same frame, so the full pool appeared one frame late
   (0.152 s against 0.15 s); the cast now runs first.
+* `python tests/check_hud_down_test.py` (12 synthetic cases) for `tools/check_hud_down.py`, the checker of
+  `tools/run_hud_shots.ps1 -Down` and `-Tracker`. The down cases: a matching run passes; a late bleed-out, a late
+  respawn, a wrong second-wind health, a missing page echo, a wrong bar frame, no strings file, no second wind and the
+  canvas path each fail the check meant to catch them. The tracker cases: a matching run passes; a wrong objective text
+  and a run without the turn-in fail.
+* In-engine, pc-hummer, 2026-11-03 (main 95e48fb plus this lane):
+  * `run_hud_shots.ps1 -Down`: 10/10, twice. The first injury's total was 12.00 s; bled out 14.283 s after the injury
+    (expected 14.28); respawn 5.760 s after that; the second wind left 100 of 400; 110 of 110 down states echoed by the page.
+  * `-Tracker`: 4/4 (7 of 7 tracker states read back, 5 with a mission, the turn-in shown).
+  * `run_hud_shots.ps1` (default): 16/16.
+  * `-Level 36 -Shield`: 16/17. `shield_shown` fails only because this PC's local items have no shield Maya can equip at
+    level 36 (local data).
+  * `test_action_skill_hud.ps1` 19/19; `test_hud_minimap.ps1` 15/15.
+  * `test_quest.ps1` first run 111/112. The new `player_death_goes_down_first` and the respawn checks after the bleed-out
+    pass. The failure is `dialog_hook_finds_every_line_and_plays_nothing` (a missing dialog audio line, the Fixes lane's;
+    #105 before this lane added a check). The resume run did not run, because the suite stops after a failed first run.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.

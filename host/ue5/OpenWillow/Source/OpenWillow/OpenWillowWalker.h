@@ -236,6 +236,7 @@ private:
     int32 SuccessiveInjuries = 0;
     void GoDown();
     void TickDown(float Now);
+    void EndDownOnRefill(const TCHAR* Why);
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;

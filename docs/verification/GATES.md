@@ -14,6 +14,11 @@ test_inventory_actions 49 pass / 0 fail; verify_combat_pawn `--vm` 25 pass / 0 f
 `weapon_refresh_firing` retired); verify_packages 9 packages, all class bodies exact; `tools/test_weapon_firing.ps1` 14 PASS /
 0 FAIL with the new push, wide and flight-timing checks (WEAPON_PROJECTILES.md section 5).
 
+**After the HUD lane (2026-11-03, pc-hummer, main 95e48fb + feature/hud-integrity, Fight For Your Life in the UE host):** ctest 19/19;
+verify_packages 9 packages, all class bodies exact. `test_quest` now has 112 checks; the new `player_death_goes_down_first` and the respawn
+after the 20 s bleed-out pass. First run 111/112 (the known missing dialog audio line); resume run not run. `run_hud_shots.ps1 -Down` 10/10,
+`-Tracker` 4/4, default 16/16; `test_action_skill_hud` 19/19; `test_hud_minimap` 15/15.
+
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):
   `export PATH="/c/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH"`,

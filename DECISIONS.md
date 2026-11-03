@@ -3186,3 +3186,24 @@ Review round 3 (GPT-6-Luna; resolved by the hub without a further round):
   serialize against the global one. If `Global\OpenWillowUeLockGate` cannot be opened or created, the script stops with an
   error that says how to fix it. No opt-out.
 - **Known limitation, accepted.** The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.
+
+## 2026-11-03: Health 0 puts Maya down in the UE host; the HUD movie shows Fight For Your Life, the second wind and the mission tracker (HUD lane)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/HUD_PARITY.md` (element inventory; "Fight For Your Life, second wind and
+respawn"); the down-state rules and their live numbers come from `docs/verification/COMBAT_DOWN_RESPAWN.md`.
+
+- **What.** `AOpenWillowWalker` no longer respawns at health 0. It goes down (Injured): the bleed-out starts 2.28 s later and runs
+  12 s, cut by 4 s per successive injury (30 s window, 1 s floor). Bleeding out is death, and the respawn follows 5.76 s later. A kill
+  while down is a second wind (25 % of the maximum health). Damage while down is ignored. A health refill while Injured (a level-up)
+  ends the down state, so down always means health 0. The game is reported to revive a player who levels up in Fight For Your Life,
+  but that is not observed here (UNVERIFIED).
+- **HUD.** `AOpenWillowMayaHUD` pushes `down`, `secondWind` and `tracker` to the HUD page, which drives the movie's `p1.dying1`,
+  `p1.secondwind` and `p1.MissionNotifications.Module1-6`. `MissionSystem::trackerLines()` gives the active objectives with their
+  package `ProgressMessage`, and `--mission-run` output now ends with a `"tracker"` array.
+- **Why.** Die and respawn is a Phase 4 gate piece, and BL2's loop goes through Fight For Your Life, not an instant respawn.
+- **Checks.** `run_hud_shots.ps1 -Down` 10/10 (twice) and `-Tracker` 4/4 in UE, with `tests/check_hud_down_test.py` (12 synthetic
+  cases) for their checker. `test_quest.ps1` waits out the bleed-out before its respawn checks and adds `player_death_goes_down_first`;
+  first run 111/112, the one failure being the known missing dialog audio line.
+- **Not verified.** No real-game frame of these elements exists on this PC: bl-sdk and a Maya save are missing, so no critic score.
+  Which `dying1` and `secondwind` fields the native fills is UNVERIFIED. Nothing in the UE host attacks Maya yet: the enemy attacks
+  of PR #59 run in the C++ VM only.

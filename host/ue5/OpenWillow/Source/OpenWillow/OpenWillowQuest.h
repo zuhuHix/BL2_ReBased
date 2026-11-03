@@ -110,6 +110,7 @@ private:
     int32 ClosesBeforeConfirm = 0, DismissalsBeforeConfirm = 0;   // test: the counts when the page was waiting
     bool bRewardWaited = false;         // test: after the turn-in the page was shown, the reward not yet received, and the controller still owed the rewards
     int32 Respawns = 0;
+    int32 RespawnsBeforeDeath = -1;     // test: the respawn count when step 20 put Maya down (-1 before that)
     int32 Checks = 0;
     int32 Errors = 0;
     int32 TestStep = 0;
