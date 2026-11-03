@@ -237,11 +237,15 @@ FString UOpenWillowQuest::MissionLogJson() const
         Entry->SetNumberField(TEXT("statusNumber"), Mission.statusNumber());
         Entry->SetBoolField(TEXT("plot"), Mission.plotCritical());
         Entry->SetStringField(TEXT("description"), UTF8_TO_TCHAR(Mission.description().c_str()));
+        Entry->SetStringField(TEXT("summary"), UTF8_TO_TCHAR(Mission.summary().c_str()));
+        Entry->SetStringField(TEXT("turnInDescription"), UTF8_TO_TCHAR(Mission.turnInDescription().c_str()));
         Entry->SetStringField(TEXT("giver"), UTF8_TO_TCHAR(Mission.giver().c_str()));
         Entry->SetStringField(TEXT("turnIn"), UTF8_TO_TCHAR(Mission.turnIn().c_str()));
         // The mission level is the region stage once it is fixed (FixRegionStage); its XP reward the slice data's formula (MissionXp).
         Entry->SetNumberField(TEXT("level"), RegionStage);
         Entry->SetNumberField(TEXT("xp"), RegionStage > 0 ? Impl->Data.MissionXp(RegionStage) : 0);
+        // GetCurrencyReward for this mission: its CreditRewardMultiplier is 0 (src/mission_script.cpp), so no credits.
+        Entry->SetNumberField(TEXT("credits"), 0);
         Entry->SetBoolField(TEXT("tracked"), Current == S::Active || Current == S::ReadyToTurnIn);
         TArray<TSharedPtr<FJsonValue>> Objectives;
         for (const auto& Objective : Mission.activeObjectives())

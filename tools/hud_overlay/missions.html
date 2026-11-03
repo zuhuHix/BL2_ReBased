@@ -3,7 +3,7 @@
   OpenWillow mission log: BL2's StatusMenu movie in Ruffle, on its Missions frame, filled by missions.js the way the
   game's StatusMenuExGFxMovie fills it (docs/verification/MENUS_MISSION_LOG.md). Our own code; the movie, Ruffle and the
   localized strings are served from ignored local/ by serve.py. Inside UE the host calls owMissions(state); without a host
-  the page shows ?demo=<state> (none / new / goto / fire / turnin / complete) from built-in host-made sample data.
+  the page shows ?demo=<state> (none / active / turnin / complete) from built-in host-made sample data.
 -->
 <html><head><meta charset="utf-8"><title>OpenWillow missions</title>
 <style>
@@ -36,5 +36,6 @@ ruffle-player,#hit-layer{transform-origin:var(--ow-origin,50% 50%);transform:rot
 <div id="loading" role="status" aria-live="polite">MISSIONS<small>Loading the mission log...</small></div>
 <script src="glass_sheet.js"></script>
 <script src="menu3d.js"></script>
+<script src="mission_log.js"></script>
 <script src="missions.js"></script>
 </body></html>

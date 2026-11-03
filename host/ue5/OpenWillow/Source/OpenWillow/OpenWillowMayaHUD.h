@@ -11,6 +11,9 @@ class AOpenWillowInventoryMayaDisplay;
 class AOpenWillowInventoryPreviewActor;
 class FOpenWillowInventoryVm;
 
+// The StatusMenu pages the host shows (each its own page over the same movie): Skills, Inventory, and the Missions log.
+enum class EOpenWillowStatusPage : uint8 { Skills, Inventory, Missions };
+
 UCLASS()
 class OPENWILLOW_API AOpenWillowMayaHUD : public AHUD
 {
@@ -21,6 +24,9 @@ public:
     virtual void DrawHUD() override;
     void ToggleSkills();
     bool ToggleInventory();
+    // The Missions log page (tools/hud_overlay/missions.html); false without a page URL.
+    bool ToggleMissions();
+    bool IsMissionsOpen() const { return SkillsBrowser.IsValid() && bMissionsOpen; }
     void CloseSkills();
     void RequestSkillsCloseFromPage();
     bool IsSkillsOpen() const { return SkillsBrowser.IsValid(); }
@@ -57,11 +63,16 @@ public:
     void SendPageBackpackWheel(int32 PixelDelta);
 
 private:
-    void OpenStatusMenu(bool bInventory);
+    void OpenStatusMenu(EOpenWillowStatusPage Page);
     TSharedPtr<SWebBrowser> CreateStatusBrowser(const FString& MenuUrl);
     void CreateInventoryVm();
     FString InventoryUrl;
     bool bInventoryOpen = false;
+    // -owflashmissions=<url>, else the skills URL with missions.html in place of skills.html.
+    FString MissionsUrl;
+    bool bMissionsOpen = false;
+    TSharedPtr<SWebBrowser> CachedMissionsBrowser;
+    TSharedPtr<SBox> CachedMissionsRoot;
     UPROPERTY() TObjectPtr<AOpenWillowInventoryMayaDisplay> InventoryMayaDisplay;
     UPROPERTY() TObjectPtr<AOpenWillowInventoryPreviewActor> InspectActor;
     FString PendingInspectRequest;
@@ -136,7 +147,7 @@ private:
     TSharedPtr<SWebBrowser> CachedSkillsBrowser;
     TSharedPtr<SBox> CachedSkillsRoot;
     bool bCloseSkillsRequested = false;
-    // Header-tab clicks on either status page: 1 = inventory, 2 = skills (0 = none).
+    // Header-tab clicks on a status page: 1 = inventory, 2 = skills, 3 = missions (0 = none).
     int32 PendingTabSwitch = 0;
     float NextSkillsPush = 0.f;
     // Spends the page reported (branch, tier, cell), applied in DrawHUD.
@@ -165,6 +176,15 @@ private:
     // OWCombat_D*.png. It is independent of -owcombatshots, whose key script predates the stock navigation.
     void TickInvShots();
     bool bInvShots = false;
+    // -owmissionlogtest: opens the Missions page, checks what it lists before and after accepting the -owquest mission,
+    // the header tabs to and from Inventory and the close key, from the page's OWMISSIONPAGE reports; logs
+    // "OWMISSIONTEST <step> PASS|FAIL <detail>" and "OWMISSIONTEST SUMMARY passed=<n> failed=<n>", screenshots
+    // OWMission_*.png, then quits. tools/test_mission_log.ps1 runs it.
+    void TickMissionLogTest();
+    bool bMissionLogTest = false, bMissionsPageReady = false;
+    int32 MissionTestStep = 0, MissionTestPassed = 0, MissionTestFailed = 0;
+    double MissionTestAt = 0;
+    FString LastMissionPageReport;
     bool bInventoryPageReady = false, bSkillsPagePopulated = false; // set from the pages' OWINVTIME lines
     int32 InvShotStep = 0;
     double InvShotAt = 0;

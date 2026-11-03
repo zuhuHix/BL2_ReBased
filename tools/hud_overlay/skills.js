@@ -433,8 +433,9 @@ function layoutHits() {
   }
   // This route is intercepted by the UE browser before it navigates.
   addHit(`${ROOT}.header.pcCloseButton`, null, closeSkills, 'Close skills', layer);
-  // Header tabs (nav1..nav5 = Missions, Map, Inventory, Skills, Challenges). Only Inventory is another
-  // page this host has; the UE browser intercepts the route. The others have no host data yet.
+  // Header tabs (nav1..nav5 = Missions, Map, Inventory, Skills, Challenges). Missions and Inventory are the other
+  // pages this host has; the UE browser intercepts the route. Map and Challenges have no host data yet.
+  addHit(`${ROOT}.header.nav1`, null, () => { location.href = '/__ow_tab_missions'; }, 'Missions tab', layer);
   addHit(`${ROOT}.header.nav3`, null, () => { location.href = '/__ow_tab_inventory'; }, 'Inventory tab', layer);
 }
 

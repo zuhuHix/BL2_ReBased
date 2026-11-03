@@ -10,6 +10,7 @@
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowInventoryMayaDisplay.h"
 #include "OpenWillowInventoryPreviewActor.h"
+#include "OpenWillowQuest.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowQuest.h"
@@ -132,9 +133,12 @@ void AOpenWillowMayaHUD::BeginPlay()
     Super::BeginPlay();
     FParse::Value(FCommandLine::Get(), TEXT("owflashskills="), SkillsUrl);
     FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryUrl);
+    if (!FParse::Value(FCommandLine::Get(), TEXT("owflashmissions="), MissionsUrl) && SkillsUrl.Contains(TEXT("skills.html")))
+        MissionsUrl = SkillsUrl.Replace(TEXT("skills.html"), TEXT("missions.html"));
     FParse::Value(FCommandLine::Get(), TEXT("owinvopenbench="), OpenBenchRuns);
     FParse::Value(FCommandLine::Get(), TEXT("owinvopenbenchdelay="), OpenBenchDelay);
     bInvShots = FParse::Param(FCommandLine::Get(), TEXT("owinvshots"));
+    bMissionLogTest = FParse::Param(FCommandLine::Get(), TEXT("owmissionlogtest"));
     // -owinvnopreload: measurement A/B only; skips the menu preloads below.
     const bool bPreload = !FParse::Param(FCommandLine::Get(), TEXT("owinvnopreload"));
     bWeaponMeshesPreloaded = !bPreload;
@@ -169,6 +173,15 @@ void AOpenWillowMayaHUD::BeginPlay()
         GEngine->GameViewport->AddViewportWidgetContent(CachedSkillsRoot.ToSharedRef(), 20);
         TimeLog(TEXT("skills_preload_browser_created"));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills movie preloading: %s"), *SkillsUrl);
+    }
+    // The Missions log the same way (a header tab away from the other two pages).
+    if (bPreload && !MissionsUrl.IsEmpty() && GEngine && GEngine->GameViewport
+        && IWebBrowserModule::Get().IsWebModuleAvailable())
+    {
+        CachedMissionsBrowser = CreateStatusBrowser(MissionsUrl);
+        CachedMissionsRoot = SNew(SBox).Visibility(EVisibility::Hidden)[CachedMissionsBrowser.ToSharedRef()];
+        GEngine->GameViewport->AddViewportWidgetContent(CachedMissionsRoot.ToSharedRef(), 20);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Missions movie preloading: %s"), *MissionsUrl);
     }
     FString Url;
     const bool bExplicitUrl = FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url);
@@ -249,9 +262,18 @@ void AOpenWillowMayaHUD::BeginPlay()
 
 void AOpenWillowMayaHUD::ToggleSkills()
 {
-    if (SkillsBrowser && !bInventoryOpen) { CloseSkills(); return; }
+    if (SkillsBrowser && !bInventoryOpen && !bMissionsOpen) { CloseSkills(); return; }
     CloseSkills();
-    OpenStatusMenu(false);
+    OpenStatusMenu(EOpenWillowStatusPage::Skills);
+}
+
+bool AOpenWillowMayaHUD::ToggleMissions()
+{
+    if (MissionsUrl.IsEmpty()) return false;
+    if (SkillsBrowser && bMissionsOpen) { CloseSkills(); return true; }
+    CloseSkills();
+    OpenStatusMenu(EOpenWillowStatusPage::Missions);
+    return SkillsBrowser.IsValid();
 }
 
 bool AOpenWillowMayaHUD::ToggleInventory()
@@ -259,7 +281,7 @@ bool AOpenWillowMayaHUD::ToggleInventory()
     if (InventoryUrl.IsEmpty()) return false;
     if (SkillsBrowser && bInventoryOpen) { CloseSkills(); return true; }
     CloseSkills();
-    OpenStatusMenu(true);
+    OpenStatusMenu(EOpenWillowStatusPage::Inventory);
     return SkillsBrowser.IsValid();
 }
 
@@ -314,6 +336,82 @@ void AOpenWillowMayaHUD::TickOpenBench()
         }
         break;
     }
+}
+
+void AOpenWillowMayaHUD::TickMissionLogTest()
+{
+    if (!bMissionLogTest || !PlayerOwner || !bMissionsPageReady || !bInventoryPageReady) return;
+    AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
+    UOpenWillowQuest* Quest = Maya ? Maya->GetQuest() : nullptr;
+    if (!Maya) return;
+    const double Now = FPlatformTime::Seconds();
+    if (MissionTestAt == 0) { MissionTestAt = Now + 3.; return; }
+    if (Now < MissionTestAt) return;
+    // The last page report's fields.
+    TSharedPtr<FJsonObject> Report;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(LastMissionPageReport), Report);
+    auto Field = [&Report](const TCHAR* Name) { FString Value; if (Report) Report->TryGetStringField(Name, Value); return Value; };
+    auto Rows = [&Report]()
+    {
+        TArray<FString> Out;
+        const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+        if (Report && Report->TryGetArrayField(TEXT("rows"), List)) for (const auto& Row : *List) Out.Add(Row->AsString());
+        return FString::Join(Out, TEXT(","));
+    };
+    auto Check = [this](const TCHAR* Step, bool bOk, const FString& Detail)
+    {
+        ++(bOk ? MissionTestPassed : MissionTestFailed);
+        UE_LOG(LogTemp, Display, TEXT("OWMISSIONTEST %s %s %s"), Step, bOk ? TEXT("PASS") : TEXT("FAIL"), *Detail);
+    };
+    auto Shot = [](const TCHAR* Name) { FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWMission_%s.png"), Name), true, false); };
+    auto AskReport = [this]() { if (SkillsBrowser) SkillsBrowser->ExecuteJavascript(TEXT("window.owMissionsReport && window.owMissionsReport()")); };
+    const FString MissionId = TEXT("GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire");
+    double Wait = 2.;
+    switch (MissionTestStep)
+    {
+    case 0: Check(TEXT("open"), ToggleMissions() && IsMissionsOpen(), TEXT("ToggleMissions")); break;
+    case 1: AskReport(); Wait = .5; break;
+    case 2:
+        Shot(TEXT("1_NotStarted"));
+        // Before the mission is accepted the player has no mission: the no-missions frame (2), no rows.
+        Check(TEXT("not_started"), Quest && Rows().IsEmpty() && Report && Report->GetNumberField(TEXT("frame")) == 2,
+            FString::Printf(TEXT("quest=%d rows=[%s] report=%s"), Quest != nullptr, *Rows(), *LastMissionPageReport));
+        if (Quest) Quest->Accept();
+        Wait = 2.5; // the next state push is at most a second away
+        break;
+    case 3: AskReport(); Wait = .5; break;
+    case 4:
+        Shot(TEXT("2_Active"));
+        Check(TEXT("accepted"), Rows() == TEXT("#inprogress,") + MissionId && Field(TEXT("selected")) == MissionId
+            && Field(TEXT("header")) == TEXT("inprogress") && Report->GetNumberField(TEXT("frame")) == 1, FString::Printf(TEXT("status=%d report=%s"), Quest ? Quest->Status() : -1, *LastMissionPageReport));
+        SendPageKey(TEXT("ArrowDown"));
+        Wait = 1.;
+        break;
+    case 5: AskReport(); Wait = .5; break;
+    case 6:
+        Check(TEXT("down_stays"), Field(TEXT("selected")) == MissionId, LastMissionPageReport);
+        if (SkillsBrowser) SkillsBrowser->ExecuteJavascript(TEXT("location.href='/__ow_tab_inventory'"));
+        Wait = 2.;
+        break;
+    case 7:
+        Check(TEXT("tab_inventory"), IsInventoryOpen(), TEXT("Missions header tab -> Inventory"));
+        if (SkillsBrowser) SkillsBrowser->ExecuteJavascript(TEXT("location.href='/__ow_tab_missions'"));
+        Wait = 2.;
+        break;
+    case 8:
+        Check(TEXT("tab_missions"), IsMissionsOpen(), TEXT("Inventory header tab -> Missions"));
+        SendSlateKey(TEXT("Escape"));
+        Wait = 1.5;
+        break;
+    case 9:
+        Check(TEXT("close"), !IsSkillsOpen(), TEXT("Escape closes the page"));
+        UE_LOG(LogTemp, Display, TEXT("OWMISSIONTEST SUMMARY passed=%d failed=%d"), MissionTestPassed, MissionTestFailed);
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        bMissionLogTest = false;
+        return;
+    }
+    ++MissionTestStep;
+    MissionTestAt = Now + Wait;
 }
 
 void AOpenWillowMayaHUD::TickInvShots()
@@ -393,9 +491,10 @@ void AOpenWillowMayaHUD::TickInvShots()
     InvShotAt = Now + Wait;
 }
 
-void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
+void AOpenWillowMayaHUD::OpenStatusMenu(EOpenWillowStatusPage Page)
 {
-    const FString& MenuUrl = bInventory ? InventoryUrl : SkillsUrl;
+    const bool bInventory = Page == EOpenWillowStatusPage::Inventory, bMissions = Page == EOpenWillowStatusPage::Missions;
+    const FString& MenuUrl = bInventory ? InventoryUrl : bMissions ? MissionsUrl : SkillsUrl;
     if (MenuUrl.IsEmpty() || !GEngine || !GEngine->GameViewport || !PlayerOwner) return;
     if (!IWebBrowserModule::Get().IsWebModuleAvailable())
     {
@@ -403,6 +502,7 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         return;
     }
     bInventoryOpen = bInventory;
+    bMissionsOpen = bMissions;
     OpenStartedAt = FPlatformTime::Seconds();
     OpenFrame = GFrameCounter;
     if (bInventory)
@@ -433,7 +533,13 @@ void AOpenWillowMayaHUD::OpenStatusMenu(bool bInventory)
         SkillsRoot = CachedInventoryRoot;
         CachedInventoryRoot->SetVisibility(EVisibility::Visible);
     }
-    else if (!bInventory && CachedSkillsBrowser && CachedSkillsRoot)
+    else if (bMissions && CachedMissionsBrowser && CachedMissionsRoot)
+    {
+        SkillsBrowser = CachedMissionsBrowser;
+        SkillsRoot = CachedMissionsRoot;
+        CachedMissionsRoot->SetVisibility(EVisibility::Visible);
+    }
+    else if (!bInventory && !bMissions && CachedSkillsBrowser && CachedSkillsRoot)
     {
         SkillsBrowser = CachedSkillsBrowser;
         SkillsRoot = CachedSkillsRoot;
@@ -498,12 +604,14 @@ TSharedPtr<SWebBrowser> AOpenWillowMayaHUD::CreateStatusBrowser(const FString& M
         .OnBeforeNavigation_Lambda([this](const FString& NextUrl, const FWebNavigationRequest&)
             {
                 // Header tab routes: consumed like the close routes, applied in DrawHUD.
-                if (NextUrl.EndsWith(TEXT("/__ow_tab_inventory")) || NextUrl.EndsWith(TEXT("/__ow_tab_skills")))
+                if (NextUrl.EndsWith(TEXT("/__ow_tab_inventory")) || NextUrl.EndsWith(TEXT("/__ow_tab_skills"))
+                    || NextUrl.EndsWith(TEXT("/__ow_tab_missions")))
                 {
-                    PendingTabSwitch = NextUrl.EndsWith(TEXT("/__ow_tab_inventory")) ? 1 : 2;
+                    PendingTabSwitch = NextUrl.EndsWith(TEXT("/__ow_tab_inventory")) ? 1 : NextUrl.EndsWith(TEXT("/__ow_tab_skills")) ? 2 : 3;
                     return true;
                 }
-                if (!NextUrl.EndsWith(TEXT("/__ow_close_skills")) && !NextUrl.EndsWith(TEXT("/__ow_close_inventory"))) return false;
+                if (!NextUrl.EndsWith(TEXT("/__ow_close_skills")) && !NextUrl.EndsWith(TEXT("/__ow_close_inventory"))
+                    && !NextUrl.EndsWith(TEXT("/__ow_close_missions"))) return false;
                 bCloseSkillsRequested = true;
                 UE_LOG(LogTemp, Display, TEXT("OpenWillow Skills close requested by page"));
                 return true; // Consume the page's close route without navigating away.
@@ -539,6 +647,8 @@ void AOpenWillowMayaHUD::CloseSkills()
     }
     if (bInventoryOpen && CachedInventoryRoot)
         CachedInventoryRoot->SetVisibility(EVisibility::Hidden);
+    else if (SkillsRoot && SkillsRoot == CachedMissionsRoot)
+        CachedMissionsRoot->SetVisibility(EVisibility::Hidden);
     else if (SkillsRoot && SkillsRoot == CachedSkillsRoot)
         CachedSkillsRoot->SetVisibility(EVisibility::Hidden);
     else if (SkillsRoot && GEngine && GEngine->GameViewport)
@@ -551,6 +661,7 @@ void AOpenWillowMayaHUD::CloseSkills()
     PendingInventoryActions.Reset();
     PendingInventoryVmMoves.Reset();
     bInventoryOpen = false;
+    bMissionsOpen = false;
     if (FlashHudRoot) FlashHudRoot->SetVisibility(bFlashHudReady ? EVisibility::HitTestInvisible : EVisibility::Hidden);
     if (PlayerOwner)
     {
@@ -570,6 +681,7 @@ void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
         if (Message.StartsWith(TEXT("OWINVTIME js_open "), ESearchCase::CaseSensitive)) bOpenTimingAcked = true;
         if (Message.StartsWith(TEXT("OWINVTIME js_movie_ready "), ESearchCase::CaseSensitive)) bInventoryPageReady = true;
         if (Message.StartsWith(TEXT("OWINVTIME js_skills_populated "), ESearchCase::CaseSensitive)) bSkillsPagePopulated = true;
+        if (Message.StartsWith(TEXT("OWINVTIME js_missions_ready "), ESearchCase::CaseSensitive)) bMissionsPageReady = true;
         return;
     }
     if (bInventoryOpen)
@@ -607,6 +719,14 @@ void AOpenWillowMayaHUD::OnSkillsConsole(const FString& Message)
             if (Message.Len() <= 4096 && PendingInventoryActions.Num() < 64)
                 PendingInventoryActions.Add(Message);
         }
+        return;
+    }
+    if (bMissionsOpen)
+    {
+        // The Missions page's state line (missions.js report()); its track request (OWMISSION) has nothing to change while
+        // the host has one mission, which the tracker already follows.
+        if (Message.StartsWith(TEXT("OWMISSIONPAGE "), ESearchCase::CaseSensitive) && Message.Len() <= 4096)
+            LastMissionPageReport = Message.Mid(14);
         return;
     }
     // The page reports a skill click as console.log('OWSKILL {"branch":B,
@@ -648,6 +768,14 @@ void AOpenWillowMayaHUD::PushSkillsState()
             bOpenPushLogged = true;
             TimeLog(TEXT("first_state_push"), FString::Printf(TEXT("dur=%.1fms"), (FPlatformTime::Seconds() - Started) * 1000.));
         }
+        return;
+    }
+    if (bMissionsOpen)
+    {
+        // The mission log's snapshot; without -owquest it lists no missions (and still shows the level panel).
+        const UOpenWillowQuest* Quest = Maya->GetQuest();
+        SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owMissions && window.owMissions(%s)"),
+            Quest ? *Quest->MissionLogJson() : TEXT("{\"enabled\":false,\"missions\":[]}")));
         return;
     }
     SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owSkills && window.owSkills(%s)"), *Skills->StateJson()));
@@ -1203,6 +1331,7 @@ void AOpenWillowMayaHUD::DrawHUD()
     Super::DrawHUD();
     TickOpenBench();
     TickInvShots();
+    TickMissionLogTest();
     if (!bWeaponMeshesPreloaded && PlayerOwner)
         if (const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()))
             if (const UOpenWillowInventory* Held = Walker->GetInventory())
@@ -1285,12 +1414,15 @@ void AOpenWillowMayaHUD::DrawHUD()
     if (PendingTabSwitch)
     {
         // Only a page that is open can ask; a stale request after a close is dropped.
-        const bool bToInventory = PendingTabSwitch == 1;
+        const EOpenWillowStatusPage To = PendingTabSwitch == 1 ? EOpenWillowStatusPage::Inventory
+            : PendingTabSwitch == 3 ? EOpenWillowStatusPage::Missions : EOpenWillowStatusPage::Skills;
+        const EOpenWillowStatusPage Current = bInventoryOpen ? EOpenWillowStatusPage::Inventory
+            : bMissionsOpen ? EOpenWillowStatusPage::Missions : EOpenWillowStatusPage::Skills;
         PendingTabSwitch = 0;
-        if (SkillsBrowser && bInventoryOpen != bToInventory)
+        if (SkillsBrowser && To != Current && (To != EOpenWillowStatusPage::Missions || !MissionsUrl.IsEmpty()))
         {
             CloseSkills();
-            OpenStatusMenu(bToInventory);
+            OpenStatusMenu(To);
         }
     }
     if (SkillsBrowser && bInventoryOpen && InventoryVm && PendingInventoryVmMoves.Num())
