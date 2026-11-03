@@ -3166,3 +3166,17 @@ Review round 1 (GPT-6-Luna) changed the rule set; `tools/ue_lock.ps1` is now a d
 - Fail-fast scripts (`import_weapon_library`, `import_phaselock_target`, `seed_slice_*`, `run_weapon_assembly_shots`) keep
   failing at once when the lock is held (`-TimeoutSeconds 0`). `test_ambient` and `seed_ambient_npc_assets` still also wait
   for `Borderlands2` (`-AlsoWaitFor`).
+
+Review round 2 (GPT-6-Luna):
+- **Atomic stale recovery.** Two waiters could both judge the same dead owner stale; the second then deleted the lock the
+  first had just created, and both ran Unreal. The staleness check, the removal and `CreateNew` (and the owner check in
+  `Exit-OwUeLock`) now run under a machine-wide named mutex, and the owner is re-read inside it. Test: three PowerShell
+  processes recover one stale lock at once, each pausing 1.5 s between its verdict and acting on it; exactly one owns
+  it and two are refused (3 of 3 runs). With the mutex replaced by a pass-through the same test fails (all three remove
+  the lock).
+- **No test switch in the helper.** The process-name override variable is gone; the tests redefine
+  `Get-OwUeBusyProcess` in their own PowerShell process.
+- **Re-check after taking the lock.** If an Unreal process appeared in the meantime, the lock is given back and the wait
+  continues.
+- **Real game and Unreal never overlap.** `Enter-RunLock` (real-game helpers) and `run_phaselock_shots.ps1` also wait for
+  `Borderlands2`; the CTest checks that every real-game script that starts the game takes the lock.

@@ -49,9 +49,24 @@ function Test-OwUeLockStale([string]$Path = (Get-OwUeLockPath)) {
 }
 
 function Get-OwUeBusyProcess([string[]]$AlsoWaitFor = @()) {
-    # OPENWILLOW_UE_LOCK_TEST_PROCESS_NAMES (comma-separated) replaces the two Unreal names; tests/ue_lock_test.py only.
-    $names = if ($env:OPENWILLOW_UE_LOCK_TEST_PROCESS_NAMES) { $env:OPENWILLOW_UE_LOCK_TEST_PROCESS_NAMES -split ',' } else { @('UnrealEditor', 'UnrealEditor-Cmd') }
-    Get-Process -Name (@($names) + $AlsoWaitFor) -ErrorAction SilentlyContinue
+    Get-Process -Name (@('UnrealEditor', 'UnrealEditor-Cmd') + $AlsoWaitFor) -ErrorAction SilentlyContinue
+}
+
+function Invoke-OwUeLockGate([scriptblock]$Body, [int]$WaitMilliseconds = 30000) {
+    # Runs $Body while holding a machine-wide named mutex, so that "is the lock stale? delete it; create it" (and the
+    # owner check before a release) happen as one step: without it two waiters could both judge the same dead owner
+    # stale, and the second would delete the lock the first had just created. Global\ is visible to every session;
+    # Local\ is the fallback when the Global namespace is refused. Returns $Body's output, or throws when the gate is
+    # not free within $WaitMilliseconds. A gate left by a killed process is abandoned, and the OS hands it on.
+    $gate = $null
+    try { $gate = New-Object System.Threading.Mutex($false, 'Global\OpenWillowUeLockGate') }
+    catch [System.UnauthorizedAccessException] { $gate = New-Object System.Threading.Mutex($false, 'Local\OpenWillowUeLockGate') }
+    try {
+        $held = $false
+        try { $held = $gate.WaitOne($WaitMilliseconds) } catch [System.Threading.AbandonedMutexException] { $held = $true }
+        if (!$held) { throw 'The UE run lock gate is busy (another script is taking or releasing the lock).' }
+        try { & $Body } finally { $gate.ReleaseMutex() }
+    } finally { $gate.Dispose() }
 }
 
 function Enter-OwUeLock {
@@ -73,15 +88,25 @@ function Enter-OwUeLock {
     $said = $false
     while ($true) {
         if (!(Get-OwUeBusyProcess $AlsoWaitFor)) {
-            if ((Test-Path -LiteralPath $path) -and (Test-OwUeLockStale $path)) {
-                Write-Host "Removing stale UE run lock (its owner process is gone): $([IO.File]::ReadAllText($path))"
-                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            # Inside the gate: the owner is read again here, so a verdict made before another waiter replaced the lock
+            # is never acted on, and the new file is complete before anyone else can read it.
+            $taken = Invoke-OwUeLockGate {
+                if ((Test-Path -LiteralPath $path) -and (Test-OwUeLockStale $path)) {
+                    Write-Host "Removing stale UE run lock (its owner process is gone): $([IO.File]::ReadAllText($path))"
+                    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+                }
+                $stream = $null
+                try { $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read) } catch { $stream = $null }
+                if ($stream) {
+                    try { $bytes = [Text.Encoding]::UTF8.GetBytes($record); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+                }
+                [bool]$stream
             }
-            $stream = $null
-            try { $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read) } catch { $stream = $null }
-            if ($stream) {
-                try { $bytes = [Text.Encoding]::UTF8.GetBytes($record); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
-                return
+            if ($taken) {
+                # Re-check after taking it: a process started in the meantime by a script that bypasses the lock (a
+                # branch older than this helper) means the lock is given back and the wait goes on.
+                if (!(Get-OwUeBusyProcess $AlsoWaitFor)) { return }
+                Exit-OwUeLock
             }
         }
         if ((Get-Date) -gt $deadline) {
@@ -96,9 +121,11 @@ function Enter-OwUeLock {
 function Exit-OwUeLock {
     # Removes the lock only when this PowerShell process owns it.
     $path = Get-OwUeLockPath
-    $owner = Get-OwUeLockOwner $path
-    if ($owner -and [int]$owner.pid -eq $PID -and [long]$owner.process_start_utc_filetime -eq (Get-Process -Id $PID).StartTime.ToFileTimeUtc()) {
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    Invoke-OwUeLockGate {
+        $owner = Get-OwUeLockOwner $path
+        if ($owner -and [int]$owner.pid -eq $PID -and [long]$owner.process_start_utc_filetime -eq (Get-Process -Id $PID).StartTime.ToFileTimeUtc()) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

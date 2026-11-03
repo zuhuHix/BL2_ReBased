@@ -161,9 +161,15 @@ exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.p
   script name. `Exit-OwUeLock` deletes it only when the caller owns it. `Invoke-OwUeLocked -Owner <script> -Body { ... }`
   does both around a block; `Invoke-OwUeEditor` starts the editor and waits for it (`& $editor` does not wait for a GUI program).
 - A lock is stale only when its owner process is gone (no process with that id, or one with another start time); `Enter`
-  then removes it and takes its place. Age alone never makes a lock stale, and a lock without owner fields (written by
+  then removes it and takes its place. The check, the removal and the atomic create happen together behind a machine-wide
+  named mutex (`Global\OpenWillowUeLockGate`, `Local\` if Global is refused), so two waiters cannot both replace the
+  same stale lock. After creating the lock, `Enter` looks for running editors once more and gives the lock back if one
+  appeared (started by a script that bypasses the lock). Age alone never makes a lock stale, and a lock without owner fields (written by
   a branch older than 2026-11-03) is never removed automatically: check that no editor or game it guarded runs, then
   delete it by hand.
+- The real-game helpers (`Enter-RunLock` in `tools/real_game/realgame.ps1`) and `run_phaselock_shots.ps1`,
+  `test_ambient.ps1` and `seed_ambient_npc_assets.ps1` also wait while `Borderlands2` runs, so real-game probes and
+  Unreal runs never overlap.
 - `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
   worktree and is rejected).
 

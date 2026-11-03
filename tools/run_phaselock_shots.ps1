@@ -22,7 +22,7 @@ $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
-Enter-OwUeLock -Owner 'run_phaselock_shots' -TimeoutSeconds $WaitForEditorSeconds
+Enter-OwUeLock -Owner 'run_phaselock_shots' -TimeoutSeconds $WaitForEditorSeconds -AlsoWaitFor Borderlands2
 try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $outDir "run-$stamp.log"
