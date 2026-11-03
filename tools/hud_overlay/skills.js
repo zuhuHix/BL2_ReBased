@@ -146,8 +146,7 @@ function skillState(target) {
 }
 
 function canSpend(target) {
-  const state = skillState(target);
-  return points > 0 && !state.locked && state.grade < target.skill.maxGrade;
+  return owSkillRules.refusal(data, pageState(), target.branch, target.tier, target.skill) === '';
 }
 
 // Info box text (tools/hud_overlay/skill_info.js reproduces the traced
@@ -239,28 +238,13 @@ function drawBranch(index, branch) {
   });
 }
 
-function rank(skill) {
-  const value = Number(grades[skill.id]) || 0;
-  return Math.min(skill.maxGrade, Math.max(0, Math.floor(value)));
-}
-
-function invested(branchIndex) {
-  return data.branches[branchIndex].tiers.reduce((sum, tier) =>
-    sum + tier.skills.reduce((tierSum, skill) => tierSum + rank(skill), 0), 0);
-}
-
-// The host's rule: trees open once the action skill has its unlock points
-// (the traced info text is grey for tree skills before that), and a tier
-// opens once its branch holds every lower tier's points.
-function treesOpen() {
-  return actionGrade >= (data.actionSkillPoints ?? 1);
-}
-
-function tierOpen(branchIndex, tierIndex) {
-  const tiers = data.branches[branchIndex].tiers;
-  const required = tiers.slice(0, tierIndex).reduce((sum, tier) => sum + (tier.pointsToUnlockNext || 0), 0);
-  return treesOpen() && invested(branchIndex) >= required;
-}
+// The spend rules live in skill_rules.js (shared with tests/skill_rules_test.js); these wrap them with the page's
+// current state.
+const pageState = () => ({ points, actionGrade, grades });
+function rank(skill) { return owSkillRules.rank(pageState(), skill); }
+function invested(branchIndex) { return owSkillRules.invested(data, pageState(), branchIndex); }
+function treesOpen() { return owSkillRules.treesOpen(data, pageState()); }
+function tierOpen(branchIndex, tierIndex) { return owSkillRules.tierOpen(data, pageState(), branchIndex, tierIndex); }
 
 // ProgressBackground frame at the bottom of each tier row, measured in
 // Ruffle (the lit band grows about 0.43 px per frame). The maintainer's

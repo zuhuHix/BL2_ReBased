@@ -208,6 +208,17 @@ telemetry, removes the credits and marks the replication info dirty; otherwise `
 listener) deactivates every tree skill for the player, zeroes the kill-skill timer, runs `UpdateKillSkills(false)`, re-checks
 activation of every skill (so grade-0 skills with no grade rule come back) and runs `HandleBadassSkillActivation`.
 
+**Host (2026-11-03, skills lane).** `UOpenWillowSkills::ResetTree` sets every grade, the action skill's included, to 0
+and returns the refund; level and experience stay. That every Maya skill's `DefaultStartingGrade` is 0 is assumed, not read;
+the local real-game respec trace (a level 45 Maya with 41 free points and no grades afterwards, DECISIONS.md 2026-09-27)
+agrees at one level. `ResetCost(level)` evaluates `GD_Globals.Skills.CostToResetSkillPoints` as read from the install: the
+balance formula `Multiplier x (Level ^ Power + Offset)` with Multiplier 100, Level =
+`GD_Economy.Universal.Att_UniversalPriceIncreasePerLevelScaler` (constant 1.12) and Power = the player's experience level,
+so 100 x 1.12^L credits, truncated (310 at level 10, 28,900 at level 50). The cost is read from data and UNVERIFIED in game.
+`PurchaseReset` refuses below the cost and otherwise takes it and resets, with no "nothing spent" check (the script has
+none; whether the Quick Change dialog has one is not read). Nothing in the host calls `PurchaseReset` yet: the Quick Change
+station that offers it is not built.
+
 ### 3.2 Save and load
 - Save: `SaveSkillSaveGameData(SaveGame)` writes one (SkillDefinition, grade) entry per skill in the tree, including grade 0.
 - Native `ApplySkillSaveGameData` sets each entry's grade (clamped) and runs the unlock rule; **but script does not use it

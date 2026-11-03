@@ -9,7 +9,7 @@ class FJsonObject;
 // Maya's level, experience and skill grades. The host owns this state; the
 // Skills page (tools/hud_overlay/skills.js) only reports clicks and shows
 // what the host sends back. Rules and what they rest on are in DECISIONS.md
-// (2026-09-27, host-owned skill points). Skill effects are not applied.
+// (2026-09-27, host-owned skill points).
 UCLASS()
 class OPENWILLOW_API UOpenWillowSkills : public UActorComponent
 {
@@ -62,6 +62,20 @@ public:
     // cell), with -1, -1, -1 for the action skill. Returns false and a reason
     // when the spend is refused; state changes only on success.
     bool TrySpend(int32 Branch, int32 Tier, int32 Cell, FString& OutReason);
+
+    // Respec, as WillowPlayerController.ResetSkillTree (NATIVE_SKILLS.md section 3.1): every grade, the action skill's
+    // included, goes back to 0 and the refund (points spent before) is returned; level and experience stay. The
+    // local real-game respec trace (DECISIONS.md 2026-09-27) shows a level 45 Maya with 41 free points and no grades
+    // afterwards, which is this rule at one level.
+    int32 ResetTree();
+    // Credits a respec costs at a level: GD_Globals.Skills.CostToResetSkillPoints is the balance formula
+    // 100 x (1.12 ^ level), 1.12 being GD_Economy.Universal.Att_UniversalPriceIncreasePerLevelScaler (read from data,
+    // UNVERIFIED in game), evaluated in single precision and truncated.
+    static int32 ResetCost(int32 AtLevel);
+    // ServerPurchaseSkillTreeReset: refuses when InOutMoney is below ResetCost(Level); otherwise takes the cost from
+    // InOutMoney and resets the tree. As in the script, a tree with nothing spent can still be bought back (the
+    // Quick Change dialog that may stop that is not read). Returns false with a reason and changes nothing on refusal.
+    bool PurchaseReset(int32& InOutMoney, FString& OutReason);
 
     // {"points":N,"actionGrade":N,"grades":{"<skill path>":N,...}} for owSkills().
     FString StateJson() const;

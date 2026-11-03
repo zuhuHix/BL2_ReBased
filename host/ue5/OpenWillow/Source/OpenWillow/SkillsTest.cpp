@@ -45,6 +45,27 @@ bool FOpenWillowSkillsTest::RunTest(const FString&)
     TestEqual(TEXT("State for the page"), Skills->StateJson(),
         FString(TEXT("{\"points\":0,\"actionGrade\":1,\"grades\":{\"Test.A\":3,\"Test.C\":1}}")));
 
+    // Respec: everything back, the action skill included; level stays; the refund is what was spent.
+    TestEqual(TEXT("Respec refund"), Skills->ResetTree(), 5);
+    TestEqual(TEXT("Respec frees every point"), Skills->AvailablePoints(), 5);
+    TestEqual(TEXT("Respec clears grades and the action skill"), Skills->StateJson(),
+        FString(TEXT("{\"points\":5,\"actionGrade\":0,\"grades\":{}}")));
+    TestEqual(TEXT("Respec keeps the level"), Skills->GetLevel(), 9);
+    TestFalse(TEXT("Trees closed again after a respec"), Spend(0, 0, 0));
+    TestTrue(TEXT("Points can be spent again"), Spend(-1, -1, -1) && Spend(0, 0, 0) && Spend(0, 0, 0) && Spend(0, 0, 2));
+    // Cost 100 x 1.12 ^ level, truncated: 310 at level 10 (310.58), 28,900 at level 50 (28,900.2).
+    TestEqual(TEXT("Respec cost at level 10"), UOpenWillowSkills::ResetCost(10), 310);
+    TestEqual(TEXT("Respec cost at level 50"), UOpenWillowSkills::ResetCost(50), 28900);
+    int32 Purse = UOpenWillowSkills::ResetCost(9) - 1;
+    TestFalse(TEXT("Respec refused one credit short"), Skills->PurchaseReset(Purse, Reason));
+    TestEqual(TEXT("Refused respec keeps the grades"), Skills->GradeOf(TEXT("Test.A")), 2);
+    Purse += 11;
+    TestTrue(TEXT("Respec bought"), Skills->PurchaseReset(Purse, Reason));
+    TestEqual(TEXT("Respec cost taken"), Purse, 10);
+    TestEqual(TEXT("Bought respec clears the tree"), Skills->SpentPoints(), 0);
+    // Spend back to the state the checks below expect.
+    TestTrue(TEXT("Respend"), Spend(-1, -1, -1) && Spend(0, 0, 0) && Spend(0, 0, 0) && Spend(0, 0, 0) && Spend(0, 1, 1));
+
     // Level curve (NATIVE_PROGRESSION.md section 3): level 46 is the one threshold seen in the real game; the others
     // are the note's values, where the old floor(60 L^2.8 - 60) curve was one point lower.
     TestEqual(TEXT("Level 1 needs nothing"), UOpenWillowSkills::ExperienceForLevel(1), int64(0));
