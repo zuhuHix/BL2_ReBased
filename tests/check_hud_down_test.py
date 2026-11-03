@@ -172,6 +172,46 @@ class DownTest(unittest.TestCase):
         self.assertIn('movie_path', failed(results(text)))
 
 
+def weapon_log(**changes):
+    """The OWHUDDOWNWEAPON steps of a run that follows the rule (an invented magazine of 12): (mag, reloading, ready, down)
+    per label; changes override single steps."""
+    steps = {'burst_start': (12, 0, 1, 0), 'burst_first_shot': (11, 0, 1, 0), 'down_mid_burst': (11, 0, 0, 1),
+             'putaway_after_burst': (11, 0, 0, 1), 'putaway_presses': (11, 0, 0, 1), 'ready_before_fire': (11, 0, 1, 1),
+             'ready_fired': (10, 0, 1, 1), 'ready_reload': (10, 1, 1, 1), 'reload_started': (10, 1, 1, 0), 'down_mid_reload': (10, 0, 0, 1)}
+    steps.update(changes)
+    return [PREFIX + f'OWHUDDOWNWEAPON {label} t=1.000 mag={m} reloading={r} ready={y} down={d}' for label, (m, r, y, d) in steps.items()]
+
+
+class DownWeaponTest(unittest.TestCase):
+    def test_rule_followed_passes(self):
+        name, ok, detail = chk.check_down_weapon(weapon_log())
+        self.assertTrue(ok, detail)
+
+    def test_owed_burst_shots_fired_while_down_fails(self):
+        # Two more rounds gone during the put-away: the burst kept firing.
+        name, ok, detail = chk.check_down_weapon(weapon_log(putaway_after_burst=(9, 0, 0, 1)))
+        self.assertFalse(ok)
+        self.assertIn('owed shots', detail)
+
+    def test_press_during_put_away_firing_fails(self):
+        name, ok, detail = chk.check_down_weapon(weapon_log(putaway_presses=(10, 0, 0, 1)))
+        self.assertFalse(ok)
+        self.assertIn('put-away', detail)
+
+    def test_reload_kept_running_when_going_down_fails(self):
+        name, ok, detail = chk.check_down_weapon(weapon_log(down_mid_reload=(10, 1, 0, 1)))
+        self.assertFalse(ok)
+        self.assertIn('cancels the reload', detail)
+
+    def test_no_fire_after_the_put_away_fails(self):
+        name, ok, detail = chk.check_down_weapon(weapon_log(ready_fired=(11, 0, 1, 1)))
+        self.assertFalse(ok)
+        self.assertIn('fires', detail)
+
+    def test_missing_steps_fail(self):
+        self.assertFalse(chk.check_down_weapon(weapon_log()[:5])[1])
+
+
 class DownShotsTest(unittest.TestCase):
     def shots(self, **bars):
         folder = tempfile.TemporaryDirectory()

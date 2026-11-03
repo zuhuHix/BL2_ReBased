@@ -3200,6 +3200,9 @@ respawn"); the down-state rules and their live numbers come from `docs/verificat
 - **HUD.** `AOpenWillowMayaHUD` pushes `down`, `secondWind` and `tracker` to the HUD page, which drives the movie's `p1.dying1`,
   `p1.secondwind` and `p1.MissionNotifications.Module1-6`. `MissionSystem::trackerLines()` gives the active objectives with their
   package `ProgressMessage`, and `--mission-run` output now ends with a `"tracker"` array.
+- **Weapon while down (UNVERIFIED, to confirm live with bl-sdk).** Going down puts the weapon away, as the injured special move does:
+  it releases the trigger, drops owed burst shots and cancels a running reload. Fire and reload presses do nothing for the 2.28 s
+  until `SwitchToSidearm`; after that the held weapon fires and reloads as usual (no sidearm switch). Checked in `-Down` (`down_weapon`).
 - **Why.** Die and respawn is a Phase 4 gate piece, and BL2's loop goes through Fight For Your Life, not an instant respawn.
 - **Checks.** `run_hud_shots.ps1 -Down` 10/10 and `-Tracker` 4/4 in UE, with `tests/check_hud_down_test.py` (20 synthetic cases)
   for their checker. The down check compares the title with the generated strings file and checks the bleed-out bar's pixels. The

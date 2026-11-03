@@ -126,6 +126,13 @@ public:
     bool IsDown() const { return DownPhase != EDownPhase::Up; }
     // The bleed-out left as a fraction of its total: 1 until its timer starts, falling to 0 at death; 0 while Dead, 1 when up.
     float DownBleedLeft() const;
+    // Whether the weapon is in hand for firing and reloading: always when up; while Injured only after the put-away special
+    // move ends (2.28 s after the injury); never while Dead (see GoDown, UNVERIFIED).
+    bool DownWeaponReady() const;
+    bool IsReloading() const { return bReloading; }
+    // Test drivers (-owhuddownshots): the same handlers the fire and reload input bindings call.
+    void TestFireInput(bool bPressed) { if (bPressed) FirePressed(); else FireReleased(); }
+    void TestReloadInput() { ReloadPressed(); }
     float DownBleedTotal() const { return DownBleedSeconds; }
     float LastDownAt() const { return DownAt; }
     float LastSecondWindAt() const { return SecondWindAt; }

@@ -222,13 +222,27 @@ void AOpenWillowWalker::GoDown()
 {
     const float Now = GetWorld()->GetTimeSeconds();
     Health = 0.f;
+    // The weapon while down (host rule, UNVERIFIED; to confirm live with bl-sdk): the injured state's special move puts the
+    // weapon away (InjuredWeaponPutDownTime 0.1 s) and only its end, SwitchToSidearm (2.28 s live), brings one back
+    // (InjuredWeaponEquipTime 0.2 s) - NATIVE_DAMAGE_DEATH.md 10.1, COMBAT_DOWN_RESPAWN.md. So going down releases the
+    // trigger, drops the shots a burst still owes and cancels a running reload like any weapon put-away (CancelReload keeps
+    // a refill already past its point); until DownWeaponReady() fire and reload presses do nothing; after it the held weapon
+    // fires and reloads as usual (the switch to a sidearm is not modelled: the held weapon comes back). Dead: no weapon.
     bFireHeld = false;
+    Burst.interrupt();
+    CancelReload();
     DownPhase = EDownPhase::Injured;
     DownAt = Now;
     DownBleedSeconds = FMath::Max(DownBaseBleed - DownBaseBleed / DownMaxSuccessive * SuccessiveInjuries, 1.f);
     SuccessiveInjuries = Now - LastInjuryAt < DownSuccessiveWindow ? SuccessiveInjuries + 1 : 0;
     LastInjuryAt = Now;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya down t=%.3f bleedout=%.2fs successive=%d"), Now, DownBleedSeconds, SuccessiveInjuries);
+}
+
+bool AOpenWillowWalker::DownWeaponReady() const
+{
+    if (DownPhase == EDownPhase::Up) return true;
+    return DownPhase == EDownPhase::Injured && GetWorld() && GetWorld()->GetTimeSeconds() >= DownAt + DownTargetedDelay;
 }
 
 float AOpenWillowWalker::DownBleedLeft() const
@@ -761,7 +775,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         Spin.SpinPercent = float(weapon_firing::tickSpin(Spin.SpinPercent, DeltaSeconds, bTrigger && !bReloading,
             Weapon->Firing.SpinUpDuration, Weapon->Firing.SpinDownDuration));
     }
-    if (bMayaActive && bWeaponOut && Weapon && bTrigger && !bReloading && Now >= NextShotAt)
+    if (bMayaActive && bWeaponOut && Weapon && bTrigger && !bReloading && DownWeaponReady() && Now >= NextShotAt)
     {
         if (Inventory->ConsumeShot(*Weapon))
         {
@@ -1274,7 +1288,7 @@ void AOpenWillowWalker::UpdateArmsVisibility()
 void AOpenWillowWalker::FirePressed()
 {
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
-    if (!bMayaActive || !bWeaponOut || !Weapon) return;
+    if (!bMayaActive || !bWeaponOut || !Weapon || !DownWeaponReady()) return;   // weapon put away while going down
     bFireHeld = true;
     Burst.press();
     // Only BSM_SpinUpToFullFireRate changes firing: GetFireInterval ramps the interval from
@@ -1297,7 +1311,7 @@ void AOpenWillowWalker::AimReleased()
 }
 void AOpenWillowWalker::ReloadPressed()
 {
-    if (bMayaActive && bWeaponOut && !bInventoryPresentation) StartReload(GetWorld()->GetTimeSeconds());
+    if (bMayaActive && bWeaponOut && !bInventoryPresentation && DownWeaponReady()) StartReload(GetWorld()->GetTimeSeconds());
 }
 bool AOpenWillowWalker::StartReload(float Now)
 {
