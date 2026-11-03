@@ -56,6 +56,18 @@ RECOIL_FIELDS = {
     'kick_left': 'WeaponKickLeft', 'per_shot_accuracy_impulse': 'PerShotAccuracyImpulse',
     'alternative_kick_enabled': 'bAlternativeKickEnabled', 'alternative_kick': 'AlternativeWeaponKick',
     'remove_base_accuracy_from_recoil_scale': 'bRemoveBaseAccuracyFromRecoilScale',
+    'kick_up': 'WeaponKickUp', 'kick_down': 'WeaponKickDown', 'kick_right': 'WeaponKickRight',
+    'min_vertical': 'MinimumVerticalPercentage', 'min_horizontal': 'MinimumHorizontalPercentage',
+    'kick_zoom_multiplier': 'WeaponKickZoomMultiplier', 'burst_accuracy_impulse_scale': 'BurstShotAccuracyImpulseScale',
+    'zoom_time': 'ZoomTime',
+}
+# The player's accuracy pool (NATIVE_WEAPON_TRIGGER_AMMO section 4A) and the owner attributes the weapon's external slots
+# and effects modify while it is held (ApplyAllExternalAttributeEffects).
+ACCURACY_POOL = 'D_Resourcepools.PlayerPools.AccuracyPool'
+ACCURACY_ATTRIBUTES = {
+    'D_Attributes.AccuracyResourcePool.AccuracyMinValue': 'min',
+    'D_Attributes.AccuracyResourcePool.AccuracyMaxValue': 'max',
+    'D_Attributes.AccuracyResourcePool.AccuracyOnIdleRegenerationRate': 'idle_rate',
 }
 DAMAGE_TYPE_EXPLOSIVE = 'DAMAGE_TYPE_Explosive'
 ALWAYS_UNVERIFIED = [
@@ -353,6 +365,63 @@ def unsupported_of(kind, projectile):
     return gaps
 
 
+def accuracy_pool_of(source, recipe, weapon_type, known, unresolved):
+    """The player's accuracy pool while this weapon is held: the pool definition's base min, max, idle rate and delay,
+    each scaled by the weapon's external modifiers (the type's activated external attribute slots, graded as for internal
+    slots, and the type's and parts' ExternalAttributeEffects), combined as weapon attributes are. None without the pool.
+    UNVERIFIED: the external slot grading reuses the internal rule; checked against the live pool minimum per gun."""
+    package = source.package
+    if ACCURACY_POOL not in package.index:
+        return None
+    pool = package.props(ACCURACY_POOL)
+
+    def number(init):
+        if isinstance(init, (int, float)):
+            return float(init)
+        return formula(source, init, known, unresolved)
+
+    base = {'min': number(pool.get('BaseMinValue')), 'max': number(pool.get('BaseMaxValue')),
+            'idle_rate': number(pool.get('BaseOnIdleRegenerationRate'))}
+    mods, sources = {}, []
+
+    def add(attribute, kind, amount, origin):
+        key = ACCURACY_ATTRIBUTES.get(attribute)
+        if key is None or amount is None:
+            return
+        bucket = mods.setdefault(key, {'MT_PreAdd': 0.0, 'MT_Scale': 0.0, 'MT_PostAdd': 0.0, 'scale_up': 0.0, 'scale_down': 0.0})
+        amount = weapon_stats.f32(amount)
+        bucket[kind] = weapon_stats.f32(bucket.get(kind, 0.0) + amount)
+        if kind == 'MT_Scale':
+            side = 'scale_up' if amount > 0 else 'scale_down'
+            bucket[side] = weapon_stats.f32(bucket[side] + abs(amount))
+        if amount:
+            sources.append({'attribute': key, 'type': kind, 'value': amount, 'source': origin})
+
+    parts = weapon_stats.ordered_parts(recipe)
+    grades, activated = {}, set()
+    for path in [recipe['weapon_type']] + parts:
+        props = weapon_type if path == recipe['weapon_type'] else (package.props(path) if path in package.index else {})
+        for effect in props.get('ExternalAttributeEffects') or []:
+            add(effect.get('AttributeToModify'), effect.get('ModifierType'), number(effect.get('BaseModifierValue')), path)
+        for upgrade in props.get('AttributeSlotUpgrades') or []:
+            grades[upgrade['SlotName']] = grades.get(upgrade['SlotName'], 0) + (upgrade.get('GradeIncrease') or 0)
+            if upgrade.get('bActivateSlot'):
+                activated.add(upgrade['SlotName'])
+    base_grade = number(weapon_type.get('AttributeSlotBaseGrade') or {'BaseValueConstant': 1.0})
+    for effect in weapon_type.get('AttributeSlotEffects') or []:
+        name = effect.get('SlotName')
+        if name not in activated or not effect.get('bExternalSlot'):
+            continue
+        grade = weapon_stats.slot_grade(base_grade, grades.get(name, 0), effect)
+        amount = weapon_stats.slot_value(grade, number(effect.get('BaseModifierValue')) or 0.0,
+                                         number(effect.get('PerGradeUpgrade')) or 0.0)
+        add(effect.get('AttributeToModify'), effect.get('ModifierType'), amount, f'slot {name} grade {grade}')
+    values = {key: (weapon_stats.combine(start, mods.get(key, {})) if start is not None else None) for key, start in base.items()}
+    values.update({'idle_delay': number(pool.get('BaseOnIdleRegenerationDelay')),
+                   'start_with_max': bool(pool.get('StartWithMaxValue')), 'base': base, 'modifiers': sources})
+    return values
+
+
 def build(source, recipe, stats):
     """The recipe's firing section (see the module docstring)."""
     card, attributes = stats['card'], stats['attributes']
@@ -434,6 +503,7 @@ def build(source, recipe, stats):
         # FiringModeDefinition.TraceExtent: half extents of the box the bullet's segment is swept with (zero = a line).
         'trace_extent': vector_of(fm.get('TraceExtent')),
         'recoil': {name: weapon_type.get(field) for name, field in RECOIL_FIELDS.items()},
+        'accuracy_pool': accuracy_pool_of(source, recipe, weapon_type, known, unresolved),
         'additional_ricochets': attribute['WeaponAdditionalRicochets'],
         'shot_cost': attribute['WeaponShotCost'],
         'damage': card.get('damage'),

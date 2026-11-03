@@ -93,6 +93,30 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
     Out.Pellets = FMath::Max(1, int32(NumberOr(Firing, TEXT("pellets"), 1)));
     Out.Spread = float(NumberOr(Firing, TEXT("spread"), 0));
     Out.BulletSpeed = float(NumberOr(Firing, TEXT("bullet_speed"), 0));
+    // Accuracy pool while the weapon is held, and the type's kick (NATIVE_WEAPON_TRIGGER_AMMO sections 4-5, UNVERIFIED).
+    if (const FJsonObject* Pool = ObjectOrNull(Firing, TEXT("accuracy_pool")))
+    {
+        Out.bHasAccuracyPool = true;
+        Out.Pool.minValue = NumberOr(*Pool, TEXT("min"), Out.Pool.minValue);
+        Out.Pool.maxValue = NumberOr(*Pool, TEXT("max"), Out.Pool.maxValue);
+        Out.Pool.idleRate = NumberOr(*Pool, TEXT("idle_rate"), Out.Pool.idleRate);
+        Out.Pool.idleDelay = NumberOr(*Pool, TEXT("idle_delay"), Out.Pool.idleDelay);
+        Pool->TryGetBoolField(TEXT("start_with_max"), Out.bPoolStartsAtMax);
+    }
+    if (const FJsonObject* Recoil = ObjectOrNull(Firing, TEXT("recoil")))
+    {
+        Out.AccuracyImpulse = float(NumberOr(*Recoil, TEXT("per_shot_accuracy_impulse"), 0));
+        Out.BurstImpulseScale = float(NumberOr(*Recoil, TEXT("burst_accuracy_impulse_scale"), 1));
+        Out.KickData.up = NumberOr(*Recoil, TEXT("kick_up"), Out.KickData.up);
+        Out.KickData.down = NumberOr(*Recoil, TEXT("kick_down"), Out.KickData.down);
+        Out.KickData.left = NumberOr(*Recoil, TEXT("kick_left"), Out.KickData.left);
+        Out.KickData.right = NumberOr(*Recoil, TEXT("kick_right"), Out.KickData.right);
+        Out.KickData.minVertical = NumberOr(*Recoil, TEXT("min_vertical"), Out.KickData.minVertical);
+        Out.KickData.minHorizontal = NumberOr(*Recoil, TEXT("min_horizontal"), Out.KickData.minHorizontal);
+        Out.KickData.speed = NumberOr(*Recoil, TEXT("kick_speed"), Out.KickData.speed);
+        Out.KickData.recoveryTime = NumberOr(*Recoil, TEXT("kick_recovery_time"), Out.KickData.recoveryTime);
+        Out.KickData.zoomMultiplier = NumberOr(*Recoil, TEXT("kick_zoom_multiplier"), Out.KickData.zoomMultiplier);
+    }
     Out.BurstCount = FMath::Max(0, int32(NumberOr(Firing, TEXT("burst_count"), 0)));
     Out.BurstInterval = float(NumberOr(Firing, TEXT("burst_interval"), 0));
     Out.SpinUpDuration = float(NumberOr(Firing, TEXT("spin_up"), 0));
@@ -226,4 +250,47 @@ bool OpenWillowFiring::SweepShot(const UWorld* World, FHitResult& Hit, const FVe
     if (!World) return false;
     if (Extent.IsNearlyZero()) return World->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, Query);
     return World->SweepSingleByChannel(Hit, From, To, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeBox(Extent), Query);
+}
+
+FRotator OpenWillowFiring::TickAim(FOpenWillowAimState& State, const FOpenWillowFiringData* Held, const FString& HeldInstance,
+    float Dt)
+{
+    if (Held && Held->bHasAccuracyPool && State.Weapon != HeldInstance)
+    {
+        const double Value = State.Pool.value;
+        State.Pool.minValue = Held->Pool.minValue;
+        State.Pool.maxValue = Held->Pool.maxValue;
+        State.Pool.idleRate = Held->Pool.idleRate;
+        State.Pool.idleDelay = Held->Pool.idleDelay;
+        if (!State.bStarted) State.Pool.reset(Held->bPoolStartsAtMax);
+        else State.Pool.value = FMath::Clamp(Value, State.Pool.minValue, State.Pool.maxValue);
+        State.bStarted = true;
+        State.Weapon = HeldInstance;
+    }
+    State.Pool.tick(Dt);
+    State.Kick.tick(Dt, Held ? Held->KickData : weapon_firing::KickData());
+    const double Pitch = State.Kick.currentPitch - State.AppliedPitch;
+    const double Yaw = State.Kick.currentYaw - State.AppliedYaw;
+    State.AppliedPitch = State.Kick.currentPitch;
+    State.AppliedYaw = State.Kick.currentYaw;
+    return FRotator(float(Pitch / weapon_firing::RotatorUnitsPerDegree), float(Yaw / weapon_firing::RotatorUnitsPerDegree), 0.f);
+}
+
+FRotator OpenWillowFiring::ShotAim(const FOpenWillowAimState& State, const FRotator& View, float ZoomEffect, FRandomStream& Rng)
+{
+    if (!State.bStarted) return View;
+    const weapon_firing::Offset O = weapon_firing::accuracyOffset(State.Pool.value, ZoomEffect, Rng.FRand(), Rng.FRand());
+    // In the aim's local frame, as the pellets' pattern and spread offsets.
+    const FQuat Local = FRotator(float(O.pitch / weapon_firing::RotatorUnitsPerDegree), float(O.yaw / weapon_firing::RotatorUnitsPerDegree), 0.f).Quaternion();
+    return (View.Quaternion() * Local).Rotator();
+}
+
+void OpenWillowFiring::OnShot(FOpenWillowAimState& State, const FOpenWillowFiringData& Data, float ZoomEffect, float FovRatio,
+    bool bBurstShot, FRandomStream& Rng)
+{
+    if (!Data.bHasAccuracyPool) return;
+    const double Impulse = Data.AccuracyImpulse * (bBurstShot ? Data.BurstImpulseScale : 1.f);
+    State.Pool.impulse(Impulse);
+    const double Amount = weapon_firing::Kick::amount(Impulse, ZoomEffect, Data.KickData.zoomMultiplier);
+    State.Kick.add(Amount, Data.KickData, FovRatio, Rng.FRand(), Rng.FRand());
 }

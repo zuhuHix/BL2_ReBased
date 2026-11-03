@@ -439,6 +439,11 @@ private:
     FVector ShotMomentumInFlight = FVector::ZeroVector;
     // Pattern index, barrel spin and the host random stream between shots, per weapon (OpenWillowFiring).
     TMap<FString, FOpenWillowFiringState> FiringStates;
+    // The accuracy pool and the view kick (OpenWillowFiring::TickAim / ShotAim / OnShot). Off under -owfiringtest unless
+    // -owaimmodel is given, so the suite's dummy pulls keep their aim.
+    FOpenWillowAimState AimState;
+    FRandomStream AimRng{0x41AC};
+    bool bAimModel = true;
     FOpenWillowFiringState& FiringStateFor(const struct FOpenWillowWeaponItem& Weapon);
     // AutomaticBurstCount (ShouldRefire): a burst finishes its shots even if the trigger is let go, then waits for a
     // new press; 0 fires while the trigger is held.

@@ -706,6 +706,17 @@ void AOpenWillowWalker::BeginPlay()
 void AOpenWillowWalker::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    static const bool bAimModelOff = FParse::Param(FCommandLine::Get(), TEXT("owfiringtest"))
+        && !FParse::Param(FCommandLine::Get(), TEXT("owaimmodel"));
+    bAimModel = !bAimModelOff;
+    if (bAimModel)
+    {
+        // Accuracy pool fall and view kick (live 2026-11-03): the kick is a view offset, added here as this frame's change.
+        const FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeapon() : nullptr;
+        const FRotator Kick = OpenWillowFiring::TickAim(AimState, Held && Held->Firing.bLoaded ? &Held->Firing : nullptr,
+            Held ? Held->InstanceId : FString(), DeltaSeconds);
+        if (Controller && !Kick.IsNearlyZero(1e-5f)) Controller->SetControlRotation(Controller->GetControlRotation() + Kick);
+    }
     if (!bSpawnProbeLogged && FParse::Param(FCommandLine::Get(), TEXT("owspawnprobe"))
         && GetWorld()->GetTimeSeconds() > 5)
     {
@@ -1569,8 +1580,22 @@ void AOpenWillowWalker::FireWeapon()
     static const FOpenWillowFiringData TraceOnly;
     const FOpenWillowFiringData& Firing = FiredItem && FiredItem->Firing.bLoaded ? FiredItem->Firing : TraceOnly;
     TArray<FVector> Directions;
+    // One aim per shot: the view plus the accuracy pool's cone (x 1 - zoom); then pattern and spread per pellet.
+    const FRotator ShotView = bAimModel ? OpenWillowFiring::ShotAim(AimState, Camera->GetComponentRotation(), AimAlpha, AimRng)
+                                        : Camera->GetComponentRotation();
     OpenWillowFiring::PelletDirections(Firing, FiredItem ? FiredItem->Spread : 0.f, FiredItem ? FiredItem->Projectiles : 1,
-        Camera->GetComponentRotation(), FiredItem ? FiringStateFor(*FiredItem) : FiringStates.FindOrAdd(FString()), Directions);
+        ShotView, FiredItem ? FiringStateFor(*FiredItem) : FiringStates.FindOrAdd(FString()), Directions);
+    if (bAimModel && Firing.bLoaded)
+    {
+        // The pool impulse and the kick after the shot; inside an automatic burst (not its last shot) the impulse is scaled.
+        const int32 Count = Firing.BurstCount;
+        const bool bBurstShot = Count > 1 && (Burst.left > 0 ? Burst.left - 1 : Count - 1) > 0;
+        const float FovRatio = FMath::Tan(FMath::DegreesToRadians(Camera->FieldOfView * 0.5f))
+            / FMath::Tan(FMath::DegreesToRadians(WorldFovDefault * 0.5f));
+        OpenWillowFiring::OnShot(AimState, Firing, AimAlpha, FovRatio, bBurstShot, AimRng);
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING aim pool %.3f (min %.3f max %.3f) kick target %.1f %.1f"), float(AimState.Pool.value),
+            float(AimState.Pool.minValue), float(AimState.Pool.maxValue), float(AimState.Kick.targetPitch), float(AimState.Kick.targetYaw));
+    }
     const FVector Start = Camera->GetComponentLocation();
     const FVector Muzzle = MuzzleLocation();
     // Lane E's flame tint for plain and fire guns; elemental guns take their element's colour (the real Maliwan shock

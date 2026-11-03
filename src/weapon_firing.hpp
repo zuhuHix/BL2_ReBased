@@ -109,4 +109,47 @@ double dotAdvance(double& accumulated, double dt, double damagePerSecond, double
 // The final partial tick when the duration runs out; resets the clock.
 double dotFinish(double& accumulated, double damagePerSecond);
 
+// NATIVE_WEAPON_TRIGGER_AMMO section 4A: the player's accuracy pool (a resource pool; its value is the full cone angle in
+// degrees, shared by every pellet of a shot). Data: D_Resourcepools.PlayerPools.AccuracyPool (min 2, max 12, start at max,
+// idle rate -8 per second after a 0.2 s delay), scaled by the held weapon's external accuracy slots. Each shot adds the
+// type's PerShotAccuracyImpulse (x BurstShotAccuracyImpulseScale inside an automatic burst); the sum is clamped to
+// [min, max] and restarts the idle delay. UNVERIFIED in game beyond the bound of the cone (PROJECTILE_FIRING_PATTERNS_LIVE R2).
+struct AccuracyPool {
+    double minValue = 2, maxValue = 12;
+    double idleRate = -8;        // per second, once the delay has passed (negative: the cone shrinks)
+    double idleDelay = 0.2;      // s
+    double value = 12;
+    double idleFor = 0;          // s since the last change by an impulse
+    void reset(bool startWithMax) { value = startWithMax ? maxValue : minValue; idleFor = idleDelay; }
+    void impulse(double amount);
+    void tick(double dt);
+};
+// The aim offset of one shot: the same ellipse draw as spreadOffset with the pool value as diameter, times
+// 1 - zoomEffect (fully zoomed: no pool cone).
+Offset accuracyOffset(double poolDegrees, double zoomEffect, double r1, double r2);
+
+// NATIVE_WEAPON_FIRING 1.6 / NATIVE_WEAPON_TRIGGER_AMMO section 5: the view kick. A shot's kick (rotator units) is
+// impulse x 182.0444 x lerp(1, WeaponKickZoomMultiplier, zoom) (or the Hyperion AlternativeWeaponKick), rescaled by the FOV
+// ratio and split into vertical and horizontal parts by two draws; the targets decay linearly to 0 over
+// WeaponKickRecoveryTime from the last kick and the current amounts chase them at WeaponKickSpeed. Whether the current
+// amounts are a view offset or a per-frame view change is open (to be read live): the host uses them as an offset.
+struct KickData {
+    double up = 1, down = 0, left = 0, right = 0;          // WeaponKickUp/Down/Left/Right
+    double minVertical = 0, minHorizontal = 0;             // MinimumVertical/HorizontalPercentage
+    double speed = 4;                                      // WeaponKickSpeed (class default)
+    double recoveryTime = 0.5;                             // WeaponKickRecoveryTime (class default)
+    double zoomMultiplier = 1;                             // WeaponKickZoomMultiplier
+};
+struct Kick {
+    double targetPitch = 0, targetYaw = 0;    // rotator units
+    double currentPitch = 0, currentYaw = 0;
+    double recoverLeft = 0;                   // s until the targets reach 0
+    // Kick amount (rotator units) of one shot before the split.
+    static double amount(double impulseDegrees, double zoomEffect, double zoomMultiplier);
+    // AddWeaponKick: r1, r2 in [0, 1) pick the vertical and horizontal draws; fovRatio = tan(FOV/2) / tan(DefaultFOV/2).
+    void add(double kick, const KickData& data, double fovRatio, double r1, double r2);
+    // ApplyWanderingAndKick for one frame (first-order chase: the routine's exact form was not read, UNVERIFIED).
+    void tick(double dt, const KickData& data);
+};
+
 }  // namespace weapon_firing
