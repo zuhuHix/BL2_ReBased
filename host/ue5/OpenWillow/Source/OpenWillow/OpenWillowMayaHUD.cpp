@@ -1188,15 +1188,30 @@ FString AOpenWillowMayaHUD::TrackerHudField(const AOpenWillowWalker& Maya)
     return Field;
 }
 
+namespace
+{
+// The damage-direction arrow for a hit whose source lies in world direction From (unit), seen from a view rotation (pitch
+// included): the direction in view space (X ahead, Y right, Z up), then its quadrant around the view axis: within 45 degrees
+// of ahead u, of behind d, else r or l. A source within about 11.5 degrees of the view's up or down axis (its part across
+// the view plane under 0.2) has no side of its own: above shows u, below d. How the game splits the circle and treats a
+// vertical hit is native and was not read (UNVERIFIED).
+const TCHAR* HitSide(const FVector& From, const FRotator& View)
+{
+    const FVector Local = View.UnrotateVector(From);
+    if (FVector2D(Local.X, Local.Y).Size() < 0.2f) return Local.Z >= 0.f ? TEXT("u") : TEXT("d");
+    const float Angle = FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X));
+    return FMath::Abs(Angle) <= 45.f ? TEXT("u") : FMath::Abs(Angle) >= 135.f ? TEXT("d") : Angle > 0.f ? TEXT("r") : TEXT("l");
+}
+}
+
 FString AOpenWillowMayaHUD::FeedbackHudField(const AOpenWillowWalker& Maya)
 {
-    // The damage-direction side: the source's direction against the view yaw, in 90 degree quadrants (u ahead, r, d behind,
-    // l). How the game splits the circle is native and was not read (UNVERIFIED). A level-up is any rise of Maya's level
-    // after the first one read; the banner's text is the movie's own.
-    const FVector From = Maya.GetLastHitFrom();
-    const float Yaw = PlayerOwner ? PlayerOwner->GetControlRotation().Yaw : Maya.GetActorRotation().Yaw;
-    const float Relative = FRotator::NormalizeAxis(From.Rotation().Yaw - Yaw);
-    const TCHAR* Side = FMath::Abs(Relative) <= 45.f ? TEXT("u") : FMath::Abs(Relative) >= 135.f ? TEXT("d") : Relative > 0.f ? TEXT("r") : TEXT("l");
+    // The arrow side of the last hit (HitSide) and the level-ups. A level-up is one rise of Maya's level between two reads,
+    // whatever its size: a jump of several levels at once plays one banner. Basis: the HUD script's QueueDisplayLevelUp keeps
+    // a single QueuedLevelUpLevel, which a later level overwrites before the native shows it; what the game shows for a
+    // multi-level jump was not observed (UNVERIFIED, to confirm live with bl-sdk). The banner's text is the movie's own.
+    const FRotator View = PlayerOwner ? PlayerOwner->GetControlRotation() : Maya.GetActorRotation();
+    const TCHAR* Side = HitSide(Maya.GetLastHitFrom(), View);
     const int32 Level = Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 0;
     if (SeenLevel >= 0 && Level > SeenLevel) ++LevelUps;
     SeenLevel = Level;
@@ -1209,50 +1224,64 @@ FString AOpenWillowMayaHUD::FeedbackHudField(const AOpenWillowWalker& Maya)
     return FString::Printf(TEXT("{\"hits\":%d,\"side\":\"%s\",\"levelUps\":%d,\"level\":%d}"), Maya.GetHitCount(), Side, LevelUps, Level);
 }
 
+#if WITH_EDITOR   // a test sequence (it moves the view, hurts Maya and raises her level): editor builds only
 void AOpenWillowMayaHUD::TickHudFxShots(AOpenWillowWalker& Maya)
 {
-    // Unattended: once the movie has settled, four 5-point hits whose sources sit ahead, right, behind and left of the view
-    // (point hits, so the shot direction gives the side), a capture 0.25 s after each, then a level-up and its capture.
-    if (FxShotStep < 0) return;
+    // Unattended, once the movie has settled. Eight 5-point hits (point hits: the shot direction gives the source), each
+    // followed by a 2.5 s wait so its arrow can finish (36 frames) before the next: sources ahead, right, behind and left of
+    // a level view (a capture 0.25 s after each), straight overhead with a level view, then with the view pitched 60 degrees
+    // down: a source ahead and level, one behind and level, and one straight overhead. Then the view is levelled, Maya gains
+    // one level (a capture) and then two at once; then quit. Expected sides: u r d l u u d d (check_hud_down.py).
+    if (FxShotStep < 0 || !PlayerOwner) return;
     const float Now = GetWorld()->GetTimeSeconds();
-    if (FxShotStep == 0) { FxShotAt = FMath::Max(Now + 4.f, 12.f); FxShotStep = 1; return; }
+    if (FxShotStep == 0) { FxShotAt = FMath::Max(Now + 4.f, 12.f); FxShotStep = 1; FxBaseView = PlayerOwner->GetControlRotation(); return; }
     if (Now < FxShotAt) return;
-    static const TCHAR* Sides[] = {TEXT("u"), TEXT("r"), TEXT("d"), TEXT("l")};
-    const int32 Step = FxShotStep - 1;   // 0..3 hit, 4..7 capture after each, then the level-up
     auto Shot = [this, Now](const FString& Name)
     {
         FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWHudFx_%s.png"), *Name), true, false);
         UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS shot %s t=%.3f"), *Name, Now);
     };
-    if (Step < 8)
+    // Each hit: the view pitch, the source's yaw from the view (0 ahead, +90 right) and pitch (90 straight up), its name.
+    struct FHit { float ViewPitch, Yaw, Pitch; const TCHAR* Name; bool bShot; };
+    static const FHit Hits[] = {{0, 0, 0, TEXT("hit_u"), true}, {0, 90, 0, TEXT("hit_r"), true}, {0, 180, 0, TEXT("hit_d"), true},
+        {0, 270, 0, TEXT("hit_l"), true}, {0, 0, 90, TEXT("overhead_level_view"), false}, {-60, 0, 0, TEXT("ahead_pitched_view"), false},
+        {-60, 180, 0, TEXT("behind_pitched_view"), false}, {-60, 0, 90, TEXT("overhead_pitched_view"), false}};
+    constexpr int32 HitCount = UE_ARRAY_COUNT(Hits);
+    const int32 Step = FxShotStep - 1;   // 0 .. 2 * HitCount - 1: a hit, then its capture or wait; then the level-ups
+    if (Step < 2 * HitCount)
     {
-        const int32 Hit = Step / 2;
+        const FHit& H = Hits[Step / 2];
         if (Step % 2 == 0)
         {
-            // The source's direction: the view's forward turned by 0, 90, 180, 270 degrees (right-handed yaw: +90 is right).
-            const FRotator View(0.f, (PlayerOwner ? PlayerOwner->GetControlRotation().Yaw : Maya.GetActorRotation().Yaw) + 90.f * Hit, 0.f);
-            const FVector Toward = View.Vector();
+            PlayerOwner->SetControlRotation(FRotator(H.ViewPitch, FxBaseView.Yaw, 0.f));
+            const FVector Toward = FRotator(H.Pitch, FxBaseView.Yaw + H.Yaw, 0.f).Vector();
             FPointDamageEvent Event(5.f, FHitResult(), -Toward, nullptr);
             const float Applied = Maya.TakeDamage(5.f, Event, nullptr, nullptr);
-            UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS hit %s t=%.3f applied=%.0f"), Sides[Hit], Now, Applied);
+            UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS hit %s t=%.3f applied=%.0f view_pitch=%.0f"), H.Name, Now, Applied, H.ViewPitch);
             FxShotAt = Now + 0.25f;
         }
         else
         {
-            Shot(FString(TEXT("hit_")) + Sides[Hit]);
-            FxShotAt = Now + 1.5f;
+            if (H.bShot) Shot(H.Name);
+            // 2.5 s per hit: the arrow's 36 frames end well before the next hit, and the host's once-a-second push makes
+            // the page log the arrow back on its hidden frame (check_hud_down.py fx_arrows_clear).
+            FxShotAt = Now + 2.25f;
         }
     }
-    else if (Step == 8)
+    else if (Step == 2 * HitCount)
     {
-        if (UOpenWillowSkills* Skills = Maya.GetSkills())
-        {
-            Skills->SetLevel(Skills->GetLevel() + 1);
-            UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS levelup t=%.3f level=%d"), Now, Skills->GetLevel());
-        }
+        PlayerOwner->SetControlRotation(FRotator(0.f, FxBaseView.Yaw, 0.f));
+        if (UOpenWillowSkills* Skills = Maya.GetSkills()) Skills->SetLevel(Skills->GetLevel() + 1);
+        UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS levelup t=%.3f level=%d"), Now, Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : -1);
         FxShotAt = Now + 0.6f;
     }
-    else if (Step == 9) { Shot(TEXT("levelup")); FxShotAt = Now + 2.f; }
+    else if (Step == 2 * HitCount + 1) { Shot(TEXT("levelup")); FxShotAt = Now + 2.5f; }
+    else if (Step == 2 * HitCount + 2)
+    {
+        if (UOpenWillowSkills* Skills = Maya.GetSkills()) Skills->SetLevel(Skills->GetLevel() + 2);   // two levels in one update
+        UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS levelup_jump t=%.3f level=%d"), Now, Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : -1);
+        FxShotAt = Now + 2.5f;
+    }
     else
     {
         UE_LOG(LogTemp, Display, TEXT("OWHUDFXSHOTS done"));
@@ -1262,6 +1291,7 @@ void AOpenWillowMayaHUD::TickHudFxShots(AOpenWillowWalker& Maya)
     }
     ++FxShotStep;
 }
+#endif
 
 #if WITH_EDITOR   // a test sequence that injects fire and reload input (AOpenWillowWalker::TestFireInput): editor builds only
 void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
@@ -1637,8 +1667,10 @@ void AOpenWillowMayaHUD::DrawHUD()
         static const bool bHudDownShots = FParse::Param(FCommandLine::Get(), TEXT("owhuddownshots"));
         if (bHudDownShots && bFlashHudReady) TickHudDownShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
 #endif
+#if WITH_EDITOR
         static const bool bHudFxShots = FParse::Param(FCommandLine::Get(), TEXT("owhudfxshots"));
         if (bHudFxShots && bFlashHudReady) TickHudFxShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+#endif
         if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
         if (bFlashHudReady)

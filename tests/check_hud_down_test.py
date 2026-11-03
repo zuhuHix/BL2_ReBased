@@ -265,24 +265,33 @@ class TrackerTest(unittest.TestCase):
 
 
 
-def fx_log(sides=('u', 'r', 'd', 'l'), inner=2, banner='2/40', text='BANNER', level_up=True):
-    """Four hits then a level-up: the host's OWHUDFX line and the page's read-back after each (invented times)."""
+EIGHT = ('u', 'r', 'd', 'l', 'u', 'u', 'd', 'd')
+
+
+def fx_log(sides=EIGHT, inner=2, banner='2/40', text='BANNER', stuck=None, levels=(9, 11), up_counts=None, banners=None):
+    """Eight hits, then level rises (8 -> 9 -> 11 by default): the host's OWHUDFX lines and the page's read-backs. Each arrow
+    plays (frame 3) and then clears (frame 1) before the next hit, except the hit numbered `stuck`. up_counts and banners
+    override the host's level-up counts and the page's banner counts per rise (the rule gives 1, 2)."""
     lines = HEAD[:1] + HEAD[2:]
-    state = {'u': '1/1', 'r': '1/1', 'd': '1/1', 'l': '1/1'}
+    hidden = {key: '1/1' for key in 'urdl'}
 
-    def page(hits, side, ups, levelup='1/1', shown=''):
-        arrows = ' '.join(f'{k}={state[k]}' for k in 'urdl')
-        return CONSOLE + f'OWHUDFXPAGE hits={hits} side={side} levelUps={ups} {arrows} levelup={levelup} levelText={shown}' + ENDING
+    def page(hits, side, ups, arrows, played=0, levelup='1/1', shown=''):
+        text_ = ' '.join(f'{k}={arrows[k]}' for k in 'urdl')
+        return CONSOLE + f'OWHUDFXPAGE hits={hits} side={side} levelUps={ups} banners={played} {text_} levelup={levelup} levelText={shown}' + ENDING
 
-    lines += [PREFIX + 'OWHUDFX t=1.000 hits=0 side=- levelUps=0 level=8', page(0, 'u', 0)]
+    lines += [PREFIX + 'OWHUDFX t=1.000 hits=0 side=- levelUps=0 level=8', page(0, 'u', 0, hidden)]
     for k, side in enumerate(sides, 1):
         lines.append(PREFIX + f'OWHUDFX t={k + 1:.3f} hits={k} side={side} levelUps=0 level=8')
-        state = {key: '1/1' for key in 'urdl'}
-        state[side] = f'3/{inner}'
-        lines.append(page(k, side, 0))
-    if level_up:
-        lines.append(PREFIX + 'OWHUDFX t=9.000 hits=4 side=l levelUps=1 level=9')
-        lines.append(page(4, 'l', 1, banner, text))
+        playing = dict(hidden, **{side: f'3/{inner}'})
+        lines.append(page(k, side, 0, playing))
+        lines.append(page(k, side, 0, dict(hidden, **{side: f'20/{inner}'}) if stuck == k else hidden))
+    level, last = 8, sides[-1]
+    for n, new in enumerate(levels, 1):
+        ups = (up_counts or list(range(1, len(levels) + 1)))[n - 1]
+        played = (banners or list(range(1, len(levels) + 1)))[n - 1]
+        lines.append(PREFIX + f'OWHUDFX t={20 + n:.3f} hits={len(sides)} side={last} levelUps={ups} level={new}')
+        lines.append(page(len(sides), last, ups, hidden, played, banner, text))
+        level = new
     return '\n'.join(lines)
 
 
@@ -291,18 +300,40 @@ class FeedbackTest(unittest.TestCase):
         found = results(fx_log(), 'feedback')
         self.assertEqual(failed(found), set(), found)
 
-    def test_wrong_side_order_fails(self):
-        # The arrows are expected on u, r, d, l too, so the swapped sides' arrows also count as missing.
-        self.assertEqual(failed(results(fx_log(sides=('u', 'l', 'd', 'r')), 'feedback')), {'fx_sides', 'fx_arrows'})
+    def test_wrong_sides_fail(self):
+        # A world-yaw-only rule would give the overhead hit with the pitched view a side of its own (u here, not d).
+        sides = ('u', 'r', 'd', 'l', 'u', 'u', 'd', 'u')
+        self.assertEqual(failed(results(fx_log(sides=sides), 'feedback')), {'fx_sides', 'fx_arrows', 'fx_arrows_clear'})
 
     def test_arrow_not_on_health_frame_fails(self):
         # Inner frame 3 is the shield label `Generic`, not `Health` (2).
-        self.assertEqual(failed(results(fx_log(inner=3), 'feedback')), {'fx_arrows'})
+        self.assertEqual(failed(results(fx_log(inner=3), 'feedback')), {'fx_arrows', 'fx_arrows_clear'})
+
+    def test_stuck_arrow_fails(self):
+        # Hit 6's arrow is still on frame 20 when hit 7 lands: it never went back to its hidden frame.
+        found = results(fx_log(stuck=6), 'feedback')
+        self.assertEqual(failed(found), {'fx_arrows_clear'})
+        self.assertIn('hit 6', found['fx_arrows_clear'][1])
 
     def test_banner_not_playing_or_without_text_fails(self):
         self.assertEqual(failed(results(fx_log(banner='1/1'), 'feedback')), {'fx_levelup'})
         self.assertEqual(failed(results(fx_log(text=''), 'feedback')), {'fx_levelup'})
-        self.assertEqual(failed(results(fx_log(level_up=False), 'feedback')), {'fx_levelup'})
+        self.assertEqual(failed(results(fx_log(levels=()), 'feedback')), {'fx_levelup'})
+
+    def test_multi_level_jump_counted_twice_fails(self):
+        # 9 -> 11 counted as two level-ups (one banner per level gained) breaks the rule: host 3 level-ups for 2 rises.
+        found = results(fx_log(up_counts=[1, 3], banners=[1, 3]), 'feedback')
+        self.assertEqual(failed(found), {'fx_levelup'})
+
+    def test_page_playing_another_number_of_banners_fails(self):
+        found = results(fx_log(banners=[1, 3]), 'feedback')
+        self.assertEqual(failed(found), {'fx_levelup'})
+        self.assertIn('page banners 3', found['fx_levelup'][1])
+
+    def test_run_without_a_multi_level_jump_fails(self):
+        # The run must exercise the rule: two one-level rises only do not.
+        self.assertEqual(failed(results(fx_log(levels=(9, 10)), 'feedback')), {'fx_levelup'})
+
 
 if __name__ == '__main__':
     unittest.main()

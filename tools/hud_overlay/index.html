@@ -56,6 +56,7 @@
   const shown = {};   // every field applied so far: the warp re-reads its regions when this changes
   let skill = {}, lastSkillPage = '';   // the action-skill fields last applied (action_skill.js plans from the change)
   let lastHudPage = '';   // the last OWHUDPAGE line (hud_fields.js pageLine)
+  let bannersPlayed = 0;   // level-up banners played (OWHUDFXPAGE banners=)
   let lastFxPage = '', lastDownPage = '', lastTrackPage = '', lastSecondWind = 0, trackerStale = false;   // hud_fields.js downLine / trackerLine; the banners played
   let hudStrings = {};   // UI_HUD/hud_strings.json (the game's own texts, under local/); {} without it
   fetch('UI_HUD/hud_strings.json', {cache: 'no-store'}).then(r => (r.ok ? r.json() : {}), () => ({}))
@@ -105,7 +106,11 @@
       lastSecondWind = Math.max(lastSecondWind, Number(s.secondWind) || 0);
     }
     // Hit arrows and the level-up banner play once per increase of their counts (hud_fields.js feedbackCalls).
-    if ('feedback' in s) for (const c of F.feedbackCalls(s.feedback, shown.feedback)) call(c[0], c[1], c[2], c[3]);
+    if ('feedback' in s)
+      for (const c of F.feedbackCalls(s.feedback, shown.feedback)) {
+        call(c[0], c[1], c[2], c[3]);
+        if (c[1] === 'gotoAndPlay' && c[2] === 'go' && c[0].endsWith('.levelup')) ++bannersPlayed;
+      }
     // The tracker is redrawn when it changes, and once more when the strings arrive (its turn-in label is one of them).
     if ('tracker' in s && (trackerStale || JSON.stringify(s.tracker) !== JSON.stringify(shown.tracker))) {
       for (const c of F.trackerCalls(s.tracker, hudStrings)) call(c[0], c[1], c[2], c[3]);
@@ -141,7 +146,7 @@
     const downPage = window.owHudFields.downLine(shown, get), trackPage = window.owHudFields.trackerLine(shown, get);
     if (downPage !== lastDownPage) { console.log(downPage); lastDownPage = downPage; }
     if (trackPage !== lastTrackPage) { console.log(trackPage); lastTrackPage = trackPage; }
-    const fxPage = window.owHudFields.feedbackLine(shown, get);
+    const fxPage = window.owHudFields.feedbackLine(shown, get, bannersPlayed);
     if (fxPage !== lastFxPage) { console.log(fxPage); lastFxPage = fxPage; }
     const key = JSON.stringify(shown), now = performance.now();
     if (warp && warp.path === 'warp' && (key !== warpKey && now - warpReadAt > 250 || now - warpReadAt > 5000)) {

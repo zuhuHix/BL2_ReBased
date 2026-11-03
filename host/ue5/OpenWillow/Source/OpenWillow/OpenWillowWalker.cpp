@@ -195,13 +195,15 @@ float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& Dama
     const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
     Health -= Applied;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.0f damage, health %.0f/%.0f"), Applied, Health, MaxHealth);
-    // Where the hit came from, for the HUD's damage-direction arrows; a hit with no known source shows none.
+    // Where the hit came from, for the HUD's damage-direction arrows: the first of a point hit's shot direction reversed,
+    // the causer's position and the instigator's pawn's position that gives a usable direction (a zero shot direction
+    // falls through to the next); a hit with no known source shows none.
     FVector From = FVector::ZeroVector;
     if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
         From = -static_cast<const FPointDamageEvent&>(DamageEvent).ShotDirection;
-    else if (DamageCauser && DamageCauser != this)
+    if (!From.Normalize() && DamageCauser && DamageCauser != this)
         From = DamageCauser->GetActorLocation() - GetActorLocation();
-    else if (EventInstigator && EventInstigator->GetPawn() && EventInstigator->GetPawn() != this)
+    if (!From.Normalize() && EventInstigator && EventInstigator->GetPawn() && EventInstigator->GetPawn() != this)
         From = EventInstigator->GetPawn()->GetActorLocation() - GetActorLocation();
     if (Applied > 0.f && From.Normalize())
     {
