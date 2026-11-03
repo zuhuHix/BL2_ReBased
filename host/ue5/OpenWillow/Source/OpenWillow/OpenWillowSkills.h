@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "GameFramework/Actor.h"
 #include "OpenWillowSkillEffects.h"
 #include "OpenWillowSkills.generated.h"
 
@@ -16,6 +17,24 @@ class OPENWILLOW_API UOpenWillowSkills : public UActorComponent
 {
     GENERATED_BODY()
 public:
+    UOpenWillowSkills();
+    // Behaviour skills (OpenWillowSkillBehaviours.cpp): kill-skill timer, health regeneration and the Phaselock
+    // variants, run on Maya's pawn.
+    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+    // Kill skills (WillowPlayerController.UpdateKillSkills, timer native): a kill (re)starts the timer at
+    // KillSkillSeconds; they count while it runs. Refresh rather than add is an UNVERIFIED guess.
+    // GD_Globals.General.Globals.KillSkillDurationsPerPlayers for one player, times KillSkillDurationMultiplier (1).
+    static constexpr float KillSkillSeconds = 7.f;
+    void OnEnemyKilled(float Now) { KillSkillsEndAt = Now + KillSkillSeconds; }
+    bool KillSkillsActiveAt(float Now) const { return Now < KillSkillsEndAt; }
+    bool KillSkillsActive() const;
+    // PlayerSkillDamage = 8 x 1.13 ^ level and PlayerSkillStatusEffectDamage = 1.13 ^ level (Init_PlayerSkillDamage,
+    // Init_PlayerSkillStatusEffectDamage with Att_UniversalBalanceScaler 1.13; read from data, UNVERIFIED in game).
+    static float SkillDamageAt(int32 AtLevel) { return 8.f * FMath::Pow(1.13f, float(AtLevel)); }
+    static float SkillStatusDamageAt(int32 AtLevel) { return FMath::Pow(1.13f, float(AtLevel)); }
+    // Grade of the tree skill with this effects name (e.g. TEXT("Helios")); 0 when untrained or unknown.
+    int32 GradeOfNamed(const TCHAR* Name) const;
+
     struct FSkill { FString Id; int32 Cell = 0; int32 MaxGrade = 1; int32 Grade = 0; };
     struct FTier { int32 PointsToUnlockNext = 0; TArray<FSkill> Skills; };
 
@@ -100,6 +119,24 @@ private:
 
     TArray<TArray<FTier>> Branches;
     FOpenWillowSkillEffects Effects;
+    // Behaviour state (OpenWillowSkillBehaviours.cpp).
+    struct FAction
+    {
+        float At = 0.f;
+        enum class EKind : uint8 { Blast, HealOrb } Kind = EKind::Blast;
+        TWeakObjectPtr<AActor> Target;   // centre of a blast while it exists
+        FVector Where = FVector::ZeroVector;
+        float Radius = 0.f, Damage = 0.f;
+        FString DamageType, Why;
+    };
+    TArray<FAction> Actions;
+    float KillSkillsEndAt = -1.f;
+    float SeenCastAt = -1.f;
+    TWeakObjectPtr<AActor> HeldTarget;
+    float HeldUntil = -1.f;
+    bool bHeldKillSeen = false;
+    void TickBehaviours(float Now, float DeltaTime);
+    void RunAction(const FAction& Action);
     FString ActionSkillId;
     int32 ActionMaxGrade = 1;
     int32 ActionPointsToUnlockTrees = 1;

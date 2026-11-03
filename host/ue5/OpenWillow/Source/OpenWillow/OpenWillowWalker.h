@@ -133,6 +133,8 @@ public:
     float GetMaxHealth() const { return MayaState.Effective().MaxHealth; }
     float GetShield() const { return MayaState.Shield; }
     float GetShieldCapacity() const { return MayaState.Effective().ShieldCapacity; }
+    // Skill healing (Sweet Release, regeneration): up to the effective maximum, not while down. Skills lane hook.
+    void Heal(float Amount) { if (!IsDown() && Amount > 0.f) MayaState.Health = FMath::Min(GetMaxHealth(), MayaState.Health + Amount); }
     // ---- Fight For Your Life: the host's down state (rules and their live numbers: docs/verification/COMBAT_DOWN_RESPAWN.md) ----
     // Health reaching 0 puts Maya down (Injured) instead of respawning her at once. 2.28 s later the bleed-out timer starts
     // (12 s, cut for successive injuries); a kill while Injured is a second wind (health back to 25 % of the maximum); the end

@@ -195,6 +195,35 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
     TestTrue(TEXT("Augment applies while the action skill runs"), Running.Count == 3 && FMath::IsNearlyEqual(Running.PreAdd, 2.f));
     // (100 + 2) x 1.25 + 20
     TestTrue(TEXT("Stack formula"), FMath::IsNearlyEqual(Running.Apply(100.f), 147.5f, 1e-3f));
+    // Kill skills count only while the kill-skill timer runs; a kill restarts it at 7 s (refresh is UNVERIFIED).
+    World.bKillSkillsActive = true;
+    TestEqual(TEXT("Kill skill applies while the timer runs"), Stack(TEXT("A.Damage")).Count, 4);
+    World.bKillSkillsActive = false;
+    Tree->OnEnemyKilled(10.f);
+    TestTrue(TEXT("Kill timer runs after a kill"), Tree->KillSkillsActiveAt(16.9f));
+    TestFalse(TEXT("Kill timer ends after 7 s"), Tree->KillSkillsActiveAt(17.f));
+    Tree->OnEnemyKilled(15.f);
+    TestTrue(TEXT("A second kill restarts the timer"), Tree->KillSkillsActiveAt(21.9f));
+
+    // A balance-formula value: 0.5 x (A.Max ^ 1 + (-1 x A.Cur)) = half the missing amount; mode 1 adds the base 3.
+    FOpenWillowSkillEffects::FEffect Missing;
+    FOpenWillowSkillEffects::FValue Constant, Max, Cur, Power;
+    Constant.Constant = 0.5f; Max.Attribute = TEXT("A.Max"); Cur.Attribute = TEXT("A.Cur"); Cur.Scale = -1.f; Power.Constant = 1.f;
+    FOpenWillowSkillEffects::FValue Base; Base.Constant = 3.f;
+    Missing.Base.Formula = {Constant, Max, Power, Cur, Base};
+    Missing.Base.Mode = 1;
+    World.Value = [](const FString& A, float& Out)
+    {
+        if (A == TEXT("A.Max")) { Out = 40.f; return true; }
+        if (A == TEXT("A.Cur")) { Out = 10.f; return true; }
+        return false;
+    };
+    TestTrue(TEXT("Formula value with base mode add"), FMath::IsNearlyEqual(FOpenWillowSkillEffects::ModifierValue(Missing, 1, World), 18.f));
+
+    // Skill damage formulas: 8 x 1.13 ^ level and 1.13 ^ level.
+    TestTrue(TEXT("PlayerSkillDamage at level 1"), FMath::IsNearlyEqual(UOpenWillowSkills::SkillDamageAt(1), 9.04f, 1e-3f));
+    TestTrue(TEXT("PlayerSkillStatusEffectDamage at level 2"), FMath::IsNearlyEqual(UOpenWillowSkills::SkillStatusDamageAt(2), 1.2769f, 1e-3f));
+
     Tree->ResetTree();
     TestTrue(TEXT("A respec removes every modifier"), Stack(TEXT("A.Damage")).IsEmpty());
 

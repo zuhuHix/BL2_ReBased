@@ -31,7 +31,25 @@ FOpenWillowSkillEffects::FValue ReadValue(const FJsonObject* Object)
     FOpenWillowSkillEffects::FValue Value;
     if (!Object) return Value;
     double Number = 0;
-    if (NumberField(*Object, TEXT("constant"), Number)) Value.Constant = float(Number);
+    const FJsonObject* Formula = nullptr;
+    {
+        const TSharedPtr<FJsonObject>* Field = nullptr;
+        if (Object->TryGetObjectField(TEXT("formula"), Field)) Formula = Field->Get();
+    }
+    if (Formula)
+    {
+        for (const TCHAR* Term : {TEXT("multiplier"), TEXT("level"), TEXT("power"), TEXT("offset")})
+        {
+            const TSharedPtr<FJsonObject>* Field = nullptr;
+            Value.Formula.Add(Formula->TryGetObjectField(Term, Field) ? ReadValue(Field->Get()) : FOpenWillowSkillEffects::FValue());
+        }
+        const TSharedPtr<FJsonObject>* BaseField = nullptr;
+        Value.Formula.Add(Object->TryGetObjectField(TEXT("base"), BaseField) ? ReadValue(BaseField->Get()) : FOpenWillowSkillEffects::FValue());
+        NumberField(*Object, TEXT("mode"), Value.Mode);
+        if (NumberField(*Object, TEXT("scale"), Number)) Value.Scale = float(Number);
+        for (const FOpenWillowSkillEffects::FValue& Term : Value.Formula) Value.bResolved &= Term.bResolved;
+    }
+    else if (NumberField(*Object, TEXT("constant"), Number)) Value.Constant = float(Number);
     else if (Object->TryGetStringField(TEXT("attribute"), Value.Attribute))
     {
         if (NumberField(*Object, TEXT("scale"), Number)) Value.Scale = float(Number);
@@ -83,6 +101,15 @@ FOpenWillowSkillEffects::FTest ReadTest(const FJsonObject& Object)
 float WorldNumber(const FOpenWillowSkillEffects::FValue& Value, const FOpenWillowSkillEffects::FWorld& World)
 {
     if (!Value.bResolved) return 0.f;
+    if (Value.Formula.Num() == 5)
+    {
+        const float Multiplier = WorldNumber(Value.Formula[0], World), Level = WorldNumber(Value.Formula[1], World);
+        const float Power = WorldNumber(Value.Formula[2], World), Offset = WorldNumber(Value.Formula[3], World);
+        const float Base = WorldNumber(Value.Formula[4], World);
+        const float F = Multiplier * ((Power == 1.f ? Level : FMath::Pow(Level, Power)) + Offset);
+        const float Combined = Value.Mode == 1 ? Base + F : Value.Mode == 2 ? Base * F : Value.Mode == 3 ? F - Base : F;
+        return Combined * Value.Scale;
+    }
     if (Value.Attribute.IsEmpty()) return Value.Constant;
     float Number = 0.f;
     return World.Value && World.Value(Value.Attribute, Number) ? Number * Value.Scale : 0.f;
@@ -138,7 +165,9 @@ bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutErro
             FEffect& Effect = Skill.Effects.AddDefaulted_GetRef();
             E.TryGetStringField(TEXT("attribute"), Effect.Attribute);   // null stays empty
             Effect.Type = Mod == TEXT("PreAdd") ? EModifier::PreAdd : Mod == TEXT("PostAdd") ? EModifier::PostAdd : EModifier::Scale;
-            Effect.bSelf = Target == TEXT("Self");
+            bool bIncludeSelf = false;
+            E.TryGetBoolField(TEXT("includeSelf"), bIncludeSelf);
+            Effect.bSelf = Target == TEXT("Self") || ((Target == TEXT("Allies") || Target == TEXT("All")) && bIncludeSelf);
             bool bWrongType = false;
             NumberField(E, TEXT("startGrade"), Effect.StartGrade, &bWrongType);
             NumberField(E, TEXT("interval"), Effect.Interval, &bWrongType);
@@ -237,7 +266,7 @@ bool FOpenWillowSkillEffects::IsActive(const FSkill& Skill, int32 Grade, const F
     if (Skill.bGradeRules && Grade <= 0) return false;   // SkillDefinition.DoesSkillPassMinGradeTest
     switch (Skill.Type)
     {
-    case ESkillType::Kill: return false;   // no kill timer in the host yet
+    case ESkillType::Kill: if (!World.bKillSkillsActive) return false; break;
     case ESkillType::Action:
     case ESkillType::ActionAugment: if (!World.bActionSkillRunning) return false; break;
     default: break;
@@ -300,11 +329,14 @@ FOpenWillowSkillEffects::FWorld WorldOf(const AOpenWillowWalker& Maya)
 {
     FOpenWillowSkillEffects::FWorld World;
     World.bActionSkillRunning = Maya.IsPhaselockActive();
+    World.bKillSkillsActive = Maya.GetSkills() && Maya.GetSkills()->KillSkillsActive();
     World.Value = [&Maya](const FString& Attribute, float& Out)
     {
         if (Attribute == TEXT("GD_Siren_Skills.Misc.Att_EnemyIsPhaseLocked")) { Out = Maya.IsPhaselockActive() && Maya.LastPhaselockHit() ? 1.f : 0.f; return true; }
         if (Attribute == TEXT("OpenWillow.Down")) { Out = Maya.IsDown() ? 1.f : 0.f; return true; }
-        if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue_Player")) { Out = Maya.GetMaxHealth(); return true; }
+        if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue_Player")
+            || Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue")) { Out = Maya.GetMaxHealth(); return true; }
+        if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthCurrentValue")) { Out = Maya.GetHealth(); return true; }
         const bool bNormal = Attribute == TEXT("D_Attributes.WeaponDamageType.WeaponDamage_Is_Normal");
         const bool bExplosive = Attribute == TEXT("D_Attributes.WeaponDamageType.WeaponDamage_Is_Explosive");
         if (bNormal || bExplosive)

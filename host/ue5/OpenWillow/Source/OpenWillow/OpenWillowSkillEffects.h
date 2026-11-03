@@ -13,9 +13,10 @@ class UOpenWillowSkills;
 //   grade, else base + per-grade x ((g - start) div max(interval, 1)) + the best bonus entry at or below g;
 // - g is the skill's grade, at least 1 once active (Skill.UpdateGrade), with no class-mod bonus (none in the slice);
 // - which skills contribute (4.1): Passive skills with a point in them (bSubjectToGradeRules); ActionAugment and the
-//   Action skill while Phaselock runs; Kill skills never yet (no kill timer in the host); a skill whose constraint fails
+//   Action skill while Phaselock runs; Kill skills while the kill-skill timer runs; a skill whose constraint fails
 //   contributes nothing (paused and deactivated are not told apart);
-// - only TARGET_Self rows with an attribute make a modifier; the others carry numbers for behaviours (EffectValue);
+// - only rows with an attribute that target Maya (TARGET_Self, or Allies with bIncludeSelfAsTarget) make a modifier;
+//   the others carry numbers for behaviours (EffectValue);
 // - modifiers on one attribute combine as (base + PreAdd) x (1 + positive Scales) / (1 - non-positive Scales) + PostAdd
 //   (NATIVE_WEAPON_RULES.md section 1).
 // Condition attributes the host can answer are listed in OpenWillowSkillEffects.cpp (WorldValue); any other attribute
@@ -38,8 +39,18 @@ class OPENWILLOW_API FOpenWillowSkillEffects
 public:
     enum class EModifier : uint8 { Scale, PreAdd, PostAdd };
     enum class ESkillType : uint8 { Passive, Action, ActionAugment, Kill, Proficiency };
-    // A base or per-grade number: a constant, or another attribute's value times Scale; unresolved ones count as 0.
-    struct FValue { float Constant = 0.f; FString Attribute; float Scale = 1.f; bool bResolved = true; };
+    // A base or per-grade number: a constant, another attribute's value times Scale, or a balance formula
+    // Multiplier x (Level ^ Power + Offset) combined with Base by Mode (0 replaces, 1 adds, 2 multiplies, 3 is f - base;
+    // NATIVE_PROGRESSION.md section 1) times Scale. Unresolved ones count as 0.
+    struct FValue
+    {
+        float Constant = 0.f;
+        FString Attribute;
+        float Scale = 1.f;
+        bool bResolved = true;
+        TArray<FValue> Formula;   // empty, or Multiplier, Level, Power, Offset, Base
+        int32 Mode = 0;
+    };
     struct FEffect
     {
         FString Attribute;
@@ -72,6 +83,7 @@ public:
     struct FWorld
     {
         bool bActionSkillRunning = false;
+        bool bKillSkillsActive = false;   // the kill-skill timer runs (UOpenWillowSkills)
         TFunction<bool(const FString& Attribute, float& OutValue)> Value;   // false: the attribute does not resolve
     };
 
@@ -117,5 +129,6 @@ namespace OpenWillowSkillEffects
         inline const TCHAR* CooldownRate = TEXT("D_Attributes.ActiveSkillCooldownResource.ActiveSkillCooldownConsumptionRate");
         inline const TCHAR* HealthMax = TEXT("D_Attributes.HealthResourcePool.HealthMaxValue");
         inline const TCHAR* FootSpeed = TEXT("D_Attributes.GameplayAttributes.FootSpeed");
+        inline const TCHAR* HealthRegen = TEXT("D_Attributes.HealthResourcePool.HealthPassiveRegenerationRate");
     }
 }

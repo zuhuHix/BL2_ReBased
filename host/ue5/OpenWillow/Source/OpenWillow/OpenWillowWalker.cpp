@@ -272,6 +272,7 @@ float AOpenWillowWalker::DownBleedLeft() const
 
 void AOpenWillowWalker::NotifyKilledEnemy()
 {
+    if (Skills) Skills->OnEnemyKilled(GetWorld()->GetTimeSeconds());   // skills lane hook: kill-skill timer
     const float Now = GetWorld()->GetTimeSeconds();
     TickShield(Now);   // a shield swapped since the last tick sets the second wind's 90 % (and is not reset after it)
     if (!MayaState.SecondWind(Now)) return;

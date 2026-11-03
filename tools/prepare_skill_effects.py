@@ -61,14 +61,36 @@ def owner(packages, path):
 
 
 def init_value(packages, resolver, init):
-    """AttributeInitializationData -> {"constant"} | {"attribute", "scale"} | {"unresolved"}."""
+    """AttributeInitializationData -> {"constant"} | {"attribute", "scale"} | {"formula", "scale"} | {"unresolved"}.
+
+    A definition whose only rule is an enabled ValueFormula (no condition, variance, range or rounding) becomes
+    {"formula": {"multiplier", "level", "power", "offset"}, "base", "mode", "scale"} with each term itself a value, for
+    the host to evaluate as Multiplier x (Level ^ Power + Offset) combined with the base by BaseValueMode (0 replaces,
+    1 adds, 2 multiplies, 3 subtracts the base; NATIVE_PROGRESSION.md section 1)."""
     init = init or {}
     definition = init.get('InitializationDefinition')
     attribute = init.get('BaseValueAttribute')
     scale = init.get('BaseValueScaleConstant', 1.0)
     if definition:
         value = resolver.value(owner(packages, definition), init)
-        return {'constant': round(value, 6)} if value is not None else {'unresolved': definition}
+        if value is not None:
+            return {'constant': round(value, 6)}
+        props = owner(packages, definition).props(definition)
+        formula = props.get('ValueFormula') or {}
+        others = [k for k in ('ConditionalInitialization', 'RandomVariance') if (props.get(k) or {}).get('bEnabled')]
+        others += [k for k in ('RangeRestriction', 'RoundingMode') if props.get(k)]
+        if not formula.get('bEnabled') or others:
+            return {'unresolved': definition}
+        terms = {key.lower(): init_value(packages, resolver, formula.get(key) or {'BaseValueConstant': default})
+                 for key, default in (('Multiplier', 1.0), ('Level', 0.0), ('Power', 1.0), ('Offset', 0.0))}
+        if any('unresolved' in t for t in terms.values()):
+            return {'unresolved': definition}
+        base = init_value(packages, resolver, {k: v for k, v in init.items() if k != 'InitializationDefinition'}
+                          | {'BaseValueScaleConstant': 1.0})
+        mode = props.get('BaseValueMode') or 0
+        if isinstance(mode, str):
+            mode = {'BASEVALUE_InitializationDefSetsBaseValue': 0}.get(mode, mode)
+        return {'formula': terms, 'base': base, 'mode': mode, 'scale': round(scale, 6)}
     if attribute:
         constant = resolver.attribute(attribute)
         if constant is not None:
@@ -123,6 +145,7 @@ def skill_entry(packages, resolver, path):
             'attribute': effect.get('AttributeToModify'),
             'modifierType': strip(effect.get('ModifierType') or 'MT_Scale', 'MT_'),
             'target': strip(effect.get('EffectTarget') or 'TARGET_None', 'TARGET_'),
+            'includeSelf': effect.get('bIncludeSelfAsTarget', False),
             # The struct default for an untagged start grade is 0 (NATIVE_SKILLS.md 4.3).
             'startGrade': effect.get('GradeToStartApplyingEffect', 0),
             'interval': effect.get('PerGradeUpgradeInterval', 0),
