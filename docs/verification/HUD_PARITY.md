@@ -212,13 +212,27 @@ listing stays under ignored `local/analysis/hud/`):
 
 What the host sends:
 
-* **Hits.** `AOpenWillowWalker::TakeDamage` counts every hit that took health and has a known source: a point hit's shot
-  direction reversed, else the causer's or the instigator's position. The HUD turns the last source's direction into
-  a quadrant of the view yaw: within 45 degrees ahead is `u`, within 45 degrees of behind is `d`, otherwise `r` or `l`.
-  On each new hit the page plays that side's arrow from frame 2 on its `Health` frame. The host has no shield damage,
-  so every hit is `Health`. How the game splits the circle and picks the label is native (UNVERIFIED).
-* **Level-ups.** The HUD counts any rise of Maya's level after the first one it reads, and the page plays `levelup` from
-  `go`. `levelDisp.text` is left alone, because what the native puts there was not observed.
+* **Hits.** `AOpenWillowWalker::TakeDamage` counts every hit that took health and has a known source. The source is
+  the first of these that gives a usable direction: a point hit's shot direction reversed (a zero shot direction falls
+  through), the causer's position, then the instigator's pawn's position.
+* **Arrow side.** The HUD turns the last source's direction into an arrow side in view space, pitch included
+  (`HitSide`):
+  * Within 45 degrees of ahead is `u`, within 45 degrees of behind is `d`, otherwise `r` or `l`.
+  * A source within about 11.5 degrees of the view's up or down axis has no side of its own: above shows `u`, below
+    `d`. So straight overhead is `u` with a level view, and `d` with the view pitched 60 degrees down (overhead is then
+    behind the view).
+  * On each new hit the page plays that side's arrow from frame 2 on its `Health` frame. The host has no shield damage,
+    so every hit is `Health`.
+  * How the game splits the circle, treats a vertical hit and picks the label is native (UNVERIFIED).
+* **Level-ups, one banner per level change.** The HUD counts one level-up per rise of Maya's level between two reads,
+  whatever its size, so a jump of several levels at once plays one banner.
+  * Basis: the HUD script's `QueueDisplayLevelUp` keeps a single `QueuedLevelUpLevel`, which a later level overwrites
+    before the native shows it. What the game shows for a multi-level jump was not observed (UNVERIFIED, to confirm
+    live with bl-sdk).
+  * Before each `go` the page winds the banner back to `stop`: a `go` while the clip already sits on `go` would not run
+    that frame's script again.
+  * The page counts the banners it plays (`OWHUDFXPAGE banners=`).
+  * `levelDisp.text` is left alone, because what the native puts there was not observed.
 
 Not done, because there is nothing real to drive them:
 
@@ -322,17 +336,27 @@ Not done, because there is nothing real to drive them:
     The sequence now holds the trigger until the first shot and fires once after the respawn.
   * `test_quest.ps1` 112/112 + resume 11/11; `test_weapon_firing.ps1` 14/14.
 
-* HUD lane 2 (after PR #63, on main 8b7b7f4): `tools/run_hud_shots.ps1 -Feedback` (`-owhudfxshots`): four 5-point hits whose sources sit
-  ahead, right, behind and left of the view, then a level-up, with captures. Checked by `check_hud_down.py --mode feedback`:
-  the sides u r d l in order, each arrow playing on its `Health` frame, the banner on `go` with a text, and 5 complete
-  captures. `tests/check_hud_down_test.py` now has 30 cases (4 for this mode), and `tests/hud_fields_test.js` covers
-  `feedbackCalls` / `feedbackLine`. In UE on pc-hummer: 6/6. In the captures each arrow is on its own screen edge, and
-  the banner shows over LV 09.
-  On main 8b7b7f4, after the rebase over PR #63 (the down sequence stays editor-only; the feedback sequence and
-  `FeedbackHudField` stay outside the `WITH_EDITOR` block, since they inject no input):
-  * ctest 21/21; verify_packages 9/9; checker 30/30; Node test green; UE build OK;
-  * `-Feedback` 6/6, with the same captures (each arrow on its own edge, the banner over LV 09);
-  * `-Down` 11/11, because `TakeDamage` now also counts hits.
+* HUD lane 2: `tools/run_hud_shots.ps1 -Feedback` (`-owhudfxshots`, editor builds only).
+  * The sequence: eight 5-point hits, 2.5 s apart, with sources ahead, right, behind and left of a level view
+    (captured), straight overhead with a level view, then with the view pitched 60 degrees down: ahead and level, behind
+    and level, and straight overhead. Then the view is levelled, Maya gains one level (captured) and then two at once.
+  * `check_hud_down.py --mode feedback` checks:
+    * the sides u r d l u u d d;
+    * each arrow playing on its `Health` frame, and back on its hidden frame 1 before the next hit (`fx_arrows_clear`);
+    * the banner rule (`fx_levelup`): host level-ups equal to the level rises, a one-level rise and a two-level jump
+      present, the page's banner count equal to the host's, and each banner on `go` with a text;
+    * 5 complete captures.
+  * `tests/check_hud_down_test.py`: 34 cases, including a stuck arrow, a jump counted as two level-ups, a different
+    banner count, a run without a jump, and the overhead hit given a world-yaw side.
+  * `tests/hud_fields_test.js` covers `feedbackCalls` / `feedbackLine`, including one banner for a multi-level jump.
+  * On main 4445a3a after review round 1:
+    * ctest 21/21; verify_packages 9/9; checker 34/34; Node test green; UE build OK.
+    * `-Feedback` 7/7: sides as expected, 8 arrows played and cleared, level rises [1, 2] with 2 level-ups and 2
+      banners.
+    * `-Down` 11/11.
+  * The first try of the 2.5 s spacing: with 1.75 s between hits, `fx_arrows_clear` failed because of sampling, not a
+    stuck arrow. The page logs only on the host's pushes (on a change, or once a second), and the last sample before
+    each next hit caught the arrow on frame 26 of 36.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.
