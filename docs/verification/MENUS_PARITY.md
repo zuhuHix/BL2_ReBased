@@ -87,7 +87,19 @@ Rules read from script (implemented in `tools/hud_overlay/mission_log.js`, own w
   description, hints, routes).
 - `tools/test_mission_log.ps1` (in engine, `-owquest`): open the page, nothing listed before Accept, the mission under IN
   PROGRESS with the `inprogress` header after Accept, Down stays on the only mission, header tabs to Inventory and back, Escape
-  closes. Results are in the round notes below.
+  closes. 2026-11-03 on pc-hummer: **7 PASS / 0 FAIL** (host behaviour only). The first run with the reset fix missing showed
+  the no-missions frame after Accept (see "Movie quirks" in DECISIONS 2026-11-03); the check now also requires frame 1.
+
+### Captures (host only, `local/menus/missionlog/`)
+
+`OWMission_1_NotStarted.png` (the movie's "No Current Missions" panel) and `OWMission_2_Active.png` (the slice mission under
+IN PROGRESS: name, summary "Test Marcus's fire weaponry.", objective "Go to firing range", the grey description, LEVEL: 8,
+DIFFICULTY NORMAL, OPTIONAL MISSION, 395 XP, the level bar). The list row's embedded font subset dropped `, : !` from the
+mission name in the first capture; rows now use the movie's `$WillowBody` face like the other fields. No real-game frame
+exists to score against, so no critic round was run for this page.
+
+Known artefact: in a headless replay, a column of list scroll ticks shows after a no-missions -> missions transition (not
+seen in the engine capture).
 
 ## Open
 

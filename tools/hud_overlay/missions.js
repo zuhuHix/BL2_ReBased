@@ -67,7 +67,8 @@ function renderList() {
   listTop = log.windowTop(rows.length, Math.max(0, selected), listTop, entries);
   for (let slot = 0; slot < entries && listTop + slot < rows.length; ++slot) {
     const row = rows[listTop + slot];
-    call(ROOT, 'SetTextEntry', container, slot + 1, log.rowText(row, listTop + slot === selected, def), row.type);
+    // The row button's embedded font subset lacks ',' ':' '!' (the slice mission's name lost them in the engine capture): $WillowBody face.
+    call(ROOT, 'SetTextEntry', container, slot + 1, FACE(log.rowText(row, listTop + slot === selected, def)), row.type);
   }
   if (selected >= 0) call(ROOT, 'MoveHighlightBar', container, selected - listTop + 1);
   call(ROOT, 'SetMoreBars', `${container}.${def.list.moreUp}`, listTop > 0, `${container}.${def.list.moreDown}`, listTop + entries < rows.length);
