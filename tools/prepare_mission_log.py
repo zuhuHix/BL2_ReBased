@@ -13,8 +13,8 @@ install's localization (tools/gfx_to_swf.load_localization):
 - the markup constants the mission-log script functions use (fonts around optional objectives, the description and the
   header's sort name), from the installed bytecode through research/script_disasm.py.
 
-Writes `<output>/missionlog.json` (default local/ui/run). It is game data and
-stays local (docs/LEGAL.md). Which values the script uses and how is recorded in
+Writes `<output>/missionlog.json` (default local/ui/run; refused unless it resolves inside the repository's
+local/). It is game data and stays local (docs/LEGAL.md). Which values the script uses and how is recorded in
 docs/verification/MENUS_PARITY.md.
 """
 import argparse
@@ -136,6 +136,16 @@ def build(reader, cooked, localization, game):
     }
 
 
+def output_file(output, repo=REPO):
+    """<output>/missionlog.json, resolved (symlinks and junctions followed), refused unless it lies inside the repository's
+    ignored local/ folder: the file holds extracted game data and must never land in a tracked folder."""
+    local = (Path(repo) / 'local').resolve()
+    target = (Path(output) / 'missionlog.json').resolve()
+    if not target.is_relative_to(local):
+        raise SystemExit(f'refusing to write {target}: the output must be inside {local}')
+    return target
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reader', default=str(REPO / 'build/Release/ow-package.exe'))
@@ -144,12 +154,12 @@ def main():
     args = parser.parse_args()
     if not args.game:
         raise SystemExit('pass --game <Borderlands 2 folder> or set OPENWILLOW_BL2')
+    target = output_file(args.output)   # checked before any game data is read
     game = Path(args.game)
     data = build(args.reader, game / 'WillowGame/CookedPCConsole', game / 'WillowGame/Localization/INT', game)
-    output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
-    (output / 'missionlog.json').write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding='utf-8')
-    print(f'wrote {output / "missionlog.json"}: {len(data["presentation"])} presentations, {len(data["strings"])} strings')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding='utf-8')
+    print(f'wrote {target}: {len(data["presentation"])} presentations, {len(data["strings"])} strings')
 
 
 if __name__ == '__main__':

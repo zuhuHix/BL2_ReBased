@@ -234,7 +234,6 @@ FString UOpenWillowQuest::MissionLogJson() const
         Entry->SetStringField(TEXT("id"), UTF8_TO_TCHAR(Mission.path().c_str()));
         Entry->SetStringField(TEXT("name"), UTF8_TO_TCHAR(Mission.name().c_str()));
         Entry->SetStringField(TEXT("status"), Names[int32(Current)]);
-        Entry->SetNumberField(TEXT("statusNumber"), Mission.statusNumber());
         Entry->SetBoolField(TEXT("plot"), Mission.plotCritical());
         Entry->SetStringField(TEXT("description"), UTF8_TO_TCHAR(Mission.description().c_str()));
         Entry->SetStringField(TEXT("summary"), UTF8_TO_TCHAR(Mission.summary().c_str()));
@@ -244,8 +243,8 @@ FString UOpenWillowQuest::MissionLogJson() const
         // The mission level is the region stage once it is fixed (FixRegionStage); its XP reward the slice data's formula (MissionXp).
         Entry->SetNumberField(TEXT("level"), RegionStage);
         Entry->SetNumberField(TEXT("xp"), RegionStage > 0 ? Impl->Data.MissionXp(RegionStage) : 0);
-        // GetCurrencyReward for this mission: its CreditRewardMultiplier is 0 (src/mission_script.cpp), so no credits.
-        Entry->SetNumberField(TEXT("credits"), 0);
+        // No "credits" and no reward items: the host does not evaluate MissionDefinition.GetCurrencyReward's formula or the
+        // reward presentations (UNVERIFIED); the page hides those panels while the values are unknown.
         Entry->SetBoolField(TEXT("tracked"), Current == S::Active || Current == S::ReadyToTurnIn);
         TArray<TSharedPtr<FJsonValue>> Objectives;
         for (const auto& Objective : Mission.activeObjectives())

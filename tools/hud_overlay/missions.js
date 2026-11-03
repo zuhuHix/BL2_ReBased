@@ -29,13 +29,13 @@ function sample(state) {
   const objectives = [{name: 'go', text: 'Walk to the marked place', progress: state === 'active' ? 0 : 1, count: 1,
     done: state !== 'active', optional: false}, {name: 'shoot', text: 'Hit the target', progress: state === 'active' ? 2 : 5,
     count: 5, done: state !== 'active', optional: false}];
-  const status = {active: 1, turnin: 3, complete: 4}[state];
-  const missions = status === undefined ? [] : [{id: 'sample.mission', name: 'Sample Mission', statusNumber: status, plot: false,
+  const status = ['active', 'turnin', 'complete'].includes(state) ? state : undefined;
+  const missions = status === undefined ? [] : [{id: 'sample.mission', name: 'Sample Mission', status, plot: false,
     summary: 'Check the page without the game.', description: 'A host-made sample mission.', turnIn: 'The sample giver',
-    level: 8, xp: 120, credits: 0,
-    tracked: status === 1 || status === 3, objectives}];
+    level: 8, xp: 120,
+    tracked: status === 'active' || status === 'turnin', objectives}];
   const required = [8, 9].map(SAMPLE_CURVE);
-  return {enabled: true, missions, player: {level: 8, xp: Math.round((required[0] + required[1]) / 2), maxLevel: 50, required}};
+  return {enabled: true, missions, player: {level: 8, xp: Math.round((required[0] + required[1]) / 2), maxLevel: 30, required}};   // an invented cap for the no-host sample
 }
 
 // The XP needed for `level`, from the two the host sends (start of this level, next level); other levels are not needed
@@ -45,7 +45,7 @@ function requiredFrom(player) {
 }
 
 function listedMissions() {
-  return (snapshot?.missions || []).filter(mission => mission.statusNumber !== log.NOT_STARTED);
+  return (snapshot?.missions || []).filter(mission => mission.status !== log.NOT_STARTED);
 }
 
 function setText(path, html) {
@@ -80,18 +80,19 @@ function renderList() {
 function renderDetails() {
   const mission = rows[selected] && snapshot.missions.find(m => m.id === rows[selected].id);
   if (!mission) return;
-  player.ow(`${MISSIONS}.missionSummary.header`, 'gotoAndStop', log.headerFrame(mission.statusNumber, mission.plot));
+  player.ow(`${MISSIONS}.missionSummary.header`, 'gotoAndStop', log.headerFrame(mission.status, mission.plot));
   set(`${MISSIONS}.missionSummary.header.description`, 'text', mission.name);
   player.ow(`${MISSIONS}.rewardPanel.OptionalRequired`, 'gotoAndStop', mission.plot ? 'required' : 'optional');
   setText(`${MISSIONS}.rewardPanel.OptionalRequired.textField`, log.escapeHtml(mission.plot ? def.strings.storyMission : def.strings.optionalMission));
-  // GetCurrencyRewardType is credits for every mission the host has; 0 hides the credits panel (SetRewardsTotalCredits).
-  call(ROOT, 'SetRewardsTotalCredits', mission.credits || 0);
+  // SetRewardsTotalCredits shows the credits panel only for an amount above 0. The host sends "credits" only when it knows the
+  // reward (it does not evaluate GetCurrencyReward yet), so an unknown reward hides the panel: UNVERIFIED for any mission.
+  call(ROOT, 'SetRewardsTotalCredits', Number.isFinite(mission.credits) ? mission.credits : 0);
   call(ROOT, 'SetRewardsXP', def.strings.xpRewards.replace('%d', String(mission.xp || 0)));
   const playerLevel = snapshot.player?.level || 1;
   call(ROOT, 'SetLevelAndDifficulty', def.strings.missionLevel.replace('%d', String(mission.level || 0)),
     log.difficultyFrame(mission.level || 0, playerLevel, def.difficulty));
   refaceText(`${MISSIONS}.missionSummary.difficultybar.level`);
-  // SetRewardCard: no reward item presentations for the missions the host has, so the item reward clip is hidden.
+  // SetRewardCard: the host sends no reward item presentations (not evaluated), so the item reward clip stays hidden (UNVERIFIED).
   set(`${MISSIONS}.rewardPanel.reward_weap`, '_visible', false);
   setText(`${MISSIONS}.missionSummary.description`, FACE(log.descriptionHtml(mission, def)));
   set(`${MISSIONS}.missionSummary.description`, 'scroll', 1);
@@ -114,7 +115,7 @@ function renderGeneral() {
 
 function renderTooltips() {
   const mission = rows[selected] && snapshot.missions.find(m => m.id === rows[selected].id);
-  const canTrack = !!mission && !mission.tracked && [log.ACTIVE, log.REQUIRED_DONE, log.TURN_IN].includes(mission.statusNumber);
+  const canTrack = !!mission && !mission.tracked && [log.ACTIVE, log.REQUIRED_DONE, log.TURN_IN].includes(mission.status);
   setText(`${ROOT}.tooltips.tooltips`, `<p align="center"><font face="$WillowBody" size="15" color="#a4e8f3">${
     log.escapeHtml(log.tooltipBar(def, {canTrack, canScroll}))}</font></p>`);
 }
@@ -227,7 +228,7 @@ function addHeaderHits() {
 function report() {
   console.log('OWMISSIONPAGE ' + JSON.stringify({ready, rows: rows.map(row => row.kind === 'mission' ? row.id : `#${row.key}`),
     selected: selectedId, top: listTop, frame: get(MISSIONS, '_currentframe'),
-    header: rows[selected] ? log.headerFrame(snapshot.missions.find(m => m.id === rows[selected].id).statusNumber,
+    header: rows[selected] ? log.headerFrame(snapshot.missions.find(m => m.id === rows[selected].id).status,
       snapshot.missions.find(m => m.id === rows[selected].id).plot) : null}));
 }
 window.owMissionsReport = report;

@@ -51,18 +51,20 @@ Rules read from script (implemented in `tools/hud_overlay/mission_log.js`, own w
   writes `missions.title_questname.text`, a field this movie does not contain, so the frame's own static text stays (the host
   does the same). Otherwise the list header is the upper-cased "my missions" string, a space, and the sort name inside the
   script's markup constants, for a single player (primary host, default sort).
-- **List rows** (`UpdateListOfMissionTitles`): statuses 1 and 2 use the active presentation, the plot one when
+- **List rows** (`UpdateListOfMissionTitles`): the active and required-objectives-done statuses use the active presentation, the plot one when
   `bPlotCritical`; the row is added to the native `GFxTextListContainer`, which calls the movie's
   `SetTextEntry(container, index, text, type)`. The container (row order, category rows, row markup, scrolling) and
   `UpdateMissionTextList` are native and were not read: the host groups turn-in, in-progress, completed and failed missions
   under the localized divider strings, wraps the name in the status colour (the highlight colour when selected) and skips
   category rows when moving. **UNVERIFIED.**
-- **Summary** (`UpdateMissionDetails`): header frame `new` (status 0), `inprogress` / `inprogressMission` (1, 2), `turnin`
-  (3), `complete` (4), `none` (5); mission name in `header.description`; `OptionalRequired` frame and label from
-  `bPlotCritical`; credits through `SetRewardsTotalCredits` (0 hides the panel; the Fire mission's credit multiplier is 0); XP
+- **Summary** (`UpdateMissionDetails`): header frame `new` (not started), `inprogress` / `inprogressMission` (active or
+  required objectives done), `turnin` (ready to turn in), `complete`, `none` (failed); mission name in `header.description`; `OptionalRequired` frame and label from
+  `bPlotCritical`; credits through `SetRewardsTotalCredits` (an amount of 0 hides the panel); XP
   through `SetRewardsXP` with the localized XP pattern; the localized level pattern and the difficulty frame from mission level
   minus player level against the thresholds (`>=`, in order impossible, hard, tough, normal, else `trivial`); the item reward
-  clip hidden when there are no reward presentations (the Fire mission has none).
+  clip hidden when there are no reward presentations. The host evaluates neither the credit reward
+  (`MissionDefinition.GetCurrencyReward`) nor the reward presentations, so it sends no credit or item reward and the page
+  hides both panels while they are unknown (**UNVERIFIED** for any mission).
 - **Description** (`WillowPlayerController.GetMissionDescriptionForUI`, UnrealScript): the summary and a blank line; unless
   failed, complete or ready to turn in, one line per current objective (an indent, its ProgressMessage, then the localized colon
   and "p/n" when the count is above 1 - spaces around the slash for Japanese, Korean and Chinese - or the localized "complete"
