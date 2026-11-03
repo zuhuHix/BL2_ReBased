@@ -230,17 +230,25 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 Read(TEXT("head_radius"), Kind.HeadRadius);
                 Read(TEXT("walk_speed"), Kind.WalkSpeed);
                 Read(TEXT("patrol_radius"), Kind.PatrolRadius);
+                Read(TEXT("run_speed"), Kind.RunSpeed);
                 Read(TEXT("shield"), Kind.Shield);
                 Read(TEXT("shield_delay"), Kind.ShieldDelay);
                 Read(TEXT("shield_rate"), Kind.ShieldRate);
-                const TSharedPtr<FJsonObject>* HealthObject = nullptr;
-                if (Obj->TryGetObjectField(TEXT("health_by_level"), HealthObject))
-                    for (const auto& Entry : (*HealthObject)->Values)
-                    {
-                        double Health = 0.0;
-                        if (Entry.Value.IsValid() && Entry.Value->TryGetNumber(Health))
-                            Kind.HealthByLevel.Add(FCString::Atoi(*Entry.Key), float(Health));
-                    }
+                // A table of level -> number, keyed by the level as a string in the manifest.
+                auto ReadLevels = [&Obj](const TCHAR* Field, TMap<int32, float>& Table)
+                {
+                    const TSharedPtr<FJsonObject>* Object = nullptr;
+                    if (Obj->TryGetObjectField(Field, Object))
+                        for (const auto& Entry : (*Object)->Values)
+                        {
+                            double Value = 0.0;
+                            if (Entry.Value.IsValid() && Entry.Value->TryGetNumber(Value))
+                                Table.Add(FCString::Atoi(*Entry.Key), float(Value));
+                        }
+                };
+                ReadLevels(TEXT("health_by_level"), Kind.HealthByLevel);
+                ReadLevels(TEXT("melee_arrival_by_level"), Kind.MeleeArrivalByLevel);
+                ReadLevels(TEXT("melee_ratio_by_level"), Kind.MeleeRatioByLevel);
                 Out.Kinds.Add(Kind.Name, Kind);
             }
         OutLog = TEXT("ok");
@@ -280,7 +288,9 @@ TStatId UOpenWillowRangeSubsystem::GetStatId() const
 
 void UOpenWillowRangeSubsystem::Tick(float DeltaTime)
 {
-    if (bTestMode && !bTestDone) TickTest(GetWorld()->GetTimeSeconds());
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (bBuilt) UpdateThreatDen(Den, Now);   // PR2: the den's fall-back check (every second)
+    if (bTestMode && !bTestDone) TickTest(Now);
 }
 
 bool UOpenWillowRangeSubsystem::LoadSliceData()
@@ -331,6 +341,9 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
     }
     SpotNow = Spot;
     SpotYawNow = Yaw;
+    // PR2: the range is one den, centred on the spot; its record starts fresh.
+    Den.Centre = FVector2D(Spot.X, Spot.Y);
+    Den.ResetRecord();
     // Three static dummies in a row, facing the spot. The Fire mission's stock dummy when its data loads, else engine shapes.
     const bool bStockDummy = LoadSliceData();
     for (int32 Index = 0; Index < DummySlots.Num(); ++Index)
@@ -370,6 +383,7 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             Enemy->SetupKind(*Kind, Level, Manifest.RespawnSeconds);
             Enemy->SetInvulnerable(bModeInvulnerable);
             Enemy->SetPassive(bModePassive);
+            Enemy->SetDen(&Den);
             Enemy->OnEnemyDied.AddUObject(this, &UOpenWillowRangeSubsystem::HandleEnemyDied);
             Enemies.Add(Enemy);
         }
@@ -558,7 +572,8 @@ void UOpenWillowRangeSubsystem::TestSkip(const TCHAR* Step, const TCHAR* Reason)
     UE_LOG(LogTemp, Display, TEXT("OWRANGETEST step=%s result=SKIP reason=%s"), Step, Reason);
 }
 
-void UOpenWillowRangeSubsystem::TestHit(AOpenWillowCombatTarget* Target, float Amount, UPrimitiveComponent* Where)
+void UOpenWillowRangeSubsystem::TestHit(AOpenWillowCombatTarget* Target, float Amount, UPrimitiveComponent* Where,
+    AController* Instigator, AActor* Causer)
 {
     if (!Target) return;
     // A hit as a shot would make it: a point hit on the given component, shot horizontally toward its centre (null: the
@@ -571,8 +586,8 @@ void UOpenWillowRangeSubsystem::TestHit(AOpenWillowCombatTarget* Target, float A
     Hit.Component = Where;
     Hit.Location = At;
     Hit.ImpactPoint = At - Direction * 5.f;
-    UGameplayStatics::ApplyPointDamage(Target, Amount, Direction.IsNearlyZero() ? FVector(1.f, 0.f, 0.f) : Direction, Hit, nullptr,
-        nullptr, UDamageType::StaticClass());
+    UGameplayStatics::ApplyPointDamage(Target, Amount, Direction.IsNearlyZero() ? FVector(1.f, 0.f, 0.f) : Direction, Hit, Instigator,
+        Causer, UDamageType::StaticClass());
 }
 
 void UOpenWillowRangeSubsystem::TestShot(int32 Number)
@@ -586,7 +601,8 @@ void UOpenWillowRangeSubsystem::TestShot(int32 Number)
 void UOpenWillowRangeSubsystem::TickTest(float Now)
 {
     // Steps: 0 wait for Maya, build and move her; 1 teleport; 2 placement; 3 body hit; 4 crit hit; 5 crit trace; 6 shield order;
-    // 7 invulnerable; 8 passive; 9 passive held; 10 patrol; 11 death; 12 ragdoll; 13 respawn; 14-15 dummy respawn; 99 summary.
+    // 7 invulnerable; 8 passive; 9 passive held; 10 patrol; 11 death; 12 ragdoll; 13 respawn; 14-15 dummy respawn;
+    // 16-36 enemy AI (TickAITest); 99 summary.
     UWorld* World = GetWorld();
     APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
     APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
@@ -594,6 +610,11 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     AOpenWillowEnemy* Enemy1 = Enemies.Num() > 1 ? Enemies[1].Get() : nullptr;
     AOpenWillowCombatTarget* Dummy0 = Dummies.Num() > 0 ? Dummies[0].Get() : nullptr;
 
+    if (TestStep >= 16 && TestStep < 99)
+    {
+        TickAITest(Now);
+        return;
+    }
     switch (TestStep)
     {
     case 0:
@@ -856,14 +877,14 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
         if (!Dummy0)
         {
             TestSkip(TEXT("dummy_respawn"), TEXT("no dummy"));
-            TestStep = 99;
+            TestStep = 16;
             return;
         }
         TestHit(Dummy0, 1.e6f, nullptr);
         if (!Dummy0->IsDead())
         {
             TestCheck(TEXT("dummy_respawn"), false, TEXT("the dummy did not die"));
-            TestStep = 99;
+            TestStep = 16;
             return;
         }
         DeathAt = Now;
@@ -876,7 +897,7 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
         const bool bOk = Dummy0 && !Dummy0->IsDead() && FMath::IsNearlyEqual(Dummy0->GetHealth(), Dummy0->GetMaxHealth(), 0.01f);
         TestCheck(TEXT("dummy_respawn"), bOk, FString::Printf(TEXT("alive=%d health %.0f/%.0f"), (Dummy0 && !Dummy0->IsDead()) ? 1 : 0,
             Dummy0 ? Dummy0->GetHealth() : 0.f, Dummy0 ? Dummy0->GetMaxHealth() : 0.f));
-        TestStep = 99;
+        TestStep = 16;
         return;
     }
     case 99:
@@ -888,6 +909,406 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
         if (PC) PC->ConsoleCommand(TEXT("quit"));
         return;
     }
+    }
+}
+
+void UOpenWillowRangeSubsystem::TickAITest(float Now)
+{
+    // Steps 16-36 (PR2, enemy AI). Each step sets its scene and checks it after its wait. The threat record is reset between
+    // steps (test only), and the other enemies are passive where a step needs one enemy alone. Maya is not healed: a step
+    // that finds her down logs it and fails. The host stand-ins are UNVERIFIED in game; the timings are the spec's tolerances.
+    UWorld* World = GetWorld();
+    APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
+    APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
+    const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(Pawn);
+    AOpenWillowEnemy* E0 = Enemies.Num() > 0 ? Enemies[0].Get() : nullptr;
+    if (!Walker || !PC)
+    {
+        TestSkip(TEXT("ai"), TEXT("no walker pawn"));
+        TestStep = 99;
+        return;
+    }
+    if (!E0)
+    {
+        const TCHAR* Names[] = {TEXT("notice_proximity"), TEXT("notice_sight"), TEXT("no_notice_far"), TEXT("provoked"),
+            TEXT("approach"), TEXT("melee_hit"), TEXT("melee_interval"), TEXT("melee_miss"), TEXT("forget"), TEXT("passive_no_melee")};
+        for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no enemy"));
+        TestStep = 99;
+        return;
+    }
+    const FOpenWillowEnemyBrain& Brain = E0->GetBrain();
+    const int32 Seen = OpenWillowThreat::SeenInThreatRadius;
+
+    // Maya on the floor under XY (her origin at the floor plus her half height), facing Yaw. False when there is no floor there.
+    auto PlaceMaya = [this, World, Pawn](const FVector2D& XY, float Yaw) -> bool
+    {
+        FVector Floor;
+        if (!AOpenWillowEnemy::TraceFloor(World, XY, SpotNow.Z + 300.f, SpotNow.Z - 900.f, Pawn, Floor)) return false;
+        TeleportMaya(World, Floor, Yaw);
+        return true;
+    };
+    // The enemy's facing, horizontal.
+    auto Forward = [](const AOpenWillowEnemy* Enemy) { return FRotator(0.f, Enemy->GetActorRotation().Yaw, 0.f).Vector(); };
+    auto YawToward = [](const FVector& From, const FVector& To) { return (To - From).Rotation().Yaw; };
+    auto Reset = [this](const TCHAR* Why)
+    {
+        Den.ResetRecord();
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE threat reset (test, %s) level=1"), Why);
+    };
+    // Only Keep is active; every other enemy is passive (no notice, no melee).
+    auto OnlyActive = [this](const AOpenWillowEnemy* Keep)
+    {
+        for (const auto& Weak : Enemies)
+            if (AOpenWillowEnemy* Enemy = Weak.Get()) Enemy->SetPassive(Enemy != Keep);
+    };
+    // Maya 400 uu ahead of an enemy, inside its melee volume (the origin is 100 uu behind it, 500 uu to Maya).
+    auto PlaceInVolume = [&](AOpenWillowEnemy* Enemy) -> bool
+    {
+        const FVector At = Enemy->GetActorLocation() + Forward(Enemy) * 400.f;
+        return PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, Enemy->GetActorLocation()));
+    };
+
+    switch (TestStep)
+    {
+    case 16: // notice_proximity: Maya 500 uu behind E0 (away from her facing). Proximity raises the level at once.
+    {
+        Reset(TEXT("proximity"));
+        OnlyActive(E0);
+        const FVector At = E0->GetActorLocation() - Forward(E0) * 500.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("notice_proximity"), TEXT("no floor 500 uu behind the enemy"));
+            TestStep = 18;
+            return;
+        }
+        StepStart = Now;
+        TestStep = 17;
+        return;
+    }
+    case 17:
+    {
+        if (Now - StepStart < 0.5f) return;
+        TestCheck(TEXT("notice_proximity"), Den.Level >= Seen, FString::Printf(TEXT("level %d, %.2f s after the teleport (500 uu behind)"),
+            Den.Level, Now - StepStart));
+        TestStep = 18;
+        return;
+    }
+    case 18: // notice_sight: Maya 2000 uu in front of E0, in its line of sight.
+    {
+        Reset(TEXT("sight"));
+        OnlyActive(E0);
+        const FVector At = E0->GetActorLocation() + Forward(E0) * 2000.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("notice_sight"), TEXT("no floor 2000 uu in front of the enemy"));
+            TestStep = 20;
+            return;
+        }
+        StepStart = Now;
+        TestStep = 19;
+        return;
+    }
+    case 19:
+    {
+        if (Now - StepStart < 0.5f) return;
+        TestCheck(TEXT("notice_sight"), Den.Level >= Seen, FString::Printf(TEXT("level %d, %.2f s after the teleport (2000 uu in front)"),
+            Den.Level, Now - StepStart));
+        TestStep = 20;
+        return;
+    }
+    case 20: // no_notice_far: Maya 6000 uu from the spot, on the far side of the enemies. No rule holds for 3 s.
+    {
+        Reset(TEXT("far"));
+        OnlyActive(E0);
+        const FVector At = SpotNow + FRotator(0.f, SpotYawNow, 0.f).Vector() * 6000.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("no_notice_far"), TEXT("no floor 6000 uu from the spot"));
+            TestStep = 22;
+            return;
+        }
+        TestMaxLevel = Den.Level;
+        StepStart = Now;
+        TestStep = 21;
+        return;
+    }
+    case 21:
+    {
+        TestMaxLevel = FMath::Max(TestMaxLevel, Den.Level);
+        if (Now - StepStart < 3.f) return;
+        TestCheck(TEXT("no_notice_far"), TestMaxLevel == OpenWillowThreat::InThreatRadius,
+            FString::Printf(TEXT("highest level %d in 3 s, Maya %.0f uu from the spot"), TestMaxLevel,
+                FVector::Dist2D(Walker->GetActorLocation(), SpotNow)));
+        TestStep = 22;
+        return;
+    }
+    case 22: // provoked: a hit on E0 by Maya (her pawn as the instigator, from 6000 uu away).
+    {
+        Reset(TEXT("provoked"));
+        OnlyActive(E0);
+        TestHit(E0, 1.f, E0->BodyComponent(), PC, Pawn);
+        StepStart = Now;
+        TestStep = 23;
+        return;
+    }
+    case 23:
+    {
+        if (Now - StepStart < 0.5f) return;
+        const float Span = Den.ForgetTime - Den.AggroTime;
+        TestCheck(TEXT("provoked"), Den.Level == OpenWillowThreat::ProvokedLevel && Den.AggroTime >= StepStart
+            && FMath::IsNearlyEqual(Span, OpenWillowThreat::MinProvokedTime, 0.01f),
+            FString::Printf(TEXT("level %d, forget %.2f s after the stamp, E0 health %.1f"), Den.Level, Span, E0->GetHealth()));
+        TestStep = 24;
+        return;
+    }
+    case 24: // approach: Maya 2000 uu in front of E0 again; once aware, E0 closes the distance.
+    {
+        Reset(TEXT("approach"));
+        OnlyActive(E0);
+        const FVector At = E0->GetActorLocation() + Forward(E0) * 2000.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("approach"), TEXT("no floor 2000 uu in front of the enemy"));
+            TestStep = 26;
+            return;
+        }
+        TestDistance = FVector::Dist2D(E0->GetActorLocation(), Walker->GetActorLocation());
+        StepStart = Now;
+        TestStep = 25;
+        return;
+    }
+    case 25:
+    {
+        if (Now - StepStart < 2.f) return;
+        const float Gap = FVector::Dist2D(E0->GetActorLocation(), Walker->GetActorLocation());
+        TestCheck(TEXT("approach"), TestDistance - Gap >= 300.f && Den.Level >= Seen,
+            FString::Printf(TEXT("closed %.0f uu in 2 s (%.0f to %.0f), level %d"), TestDistance - Gap, TestDistance, Gap, Den.Level));
+        TestStep = 26;
+        return;
+    }
+    case 26: // melee_hit: Maya in E0's volume; one hit 0.41 s after the swing start, of the table's amount.
+    {
+        Reset(TEXT("melee"));
+        OnlyActive(E0);
+        if (!PlaceInVolume(E0))
+        {
+            TestSkip(TEXT("melee_hit"), TEXT("no floor in front of the enemy"));
+            TestStep = 28;
+            return;
+        }
+        TestSwingBase = Brain.SwingCount;
+        TestResolvedBase = Brain.MeleeResolved;
+        TestHealthBefore = Walker->GetHealth();
+        StepStart = Now;
+        TestStep = 27;
+        return;
+    }
+    case 27:
+    {
+        if (Walker->IsDown())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OWRANGE maya down during melee_hit (not restored)"));
+            TestCheck(TEXT("melee_hit"), false, TEXT("Maya is down (not restored)"));
+            TestStep = 28;
+            return;
+        }
+        if (Brain.MeleeResolved <= TestResolvedBase)
+        {
+            if (Now - StepStart > 3.f)
+            {
+                TestCheck(TEXT("melee_hit"), false, TEXT("no swing resolved in 3 s"));
+                TestStep = 28;
+            }
+            return;
+        }
+        const float Delta = TestHealthBefore - Walker->GetHealth();
+        const float Expected = Brain.LastArrival * Brain.LastRatio * Brain.LastScale;
+        const float Timing = Brain.LastAt - Brain.LastSwingStart;
+        const bool bOk = Brain.MeleeResolved == TestResolvedBase + 1 && Brain.LastHit && Brain.LastApplied > 0.f
+            && FMath::IsNearlyEqual(Brain.LastApplied, Expected, 0.01f) && FMath::Abs(Timing - OpenWillowThreat::SwingDamageDelay) <= 0.1f
+            && FMath::IsNearlyEqual(Delta, Brain.LastApplied, 0.01f);
+        TestCheck(TEXT("melee_hit"), bOk, FString::Printf(TEXT("hit %d at +%.3f s, applied %.2f (arrival %.2f x ratio %.4f x scale %.2f), "
+            "maya health %.1f -> %.1f"), Brain.LastHit ? 1 : 0, Timing, Brain.LastApplied, Brain.LastArrival, Brain.LastRatio,
+            Brain.LastScale, TestHealthBefore, Walker->GetHealth()));
+        TestStep = 28;
+        return;
+    }
+    case 28: // melee_interval setup: Maya stays in the volume.
+    {
+        Reset(TEXT("melee"));
+        OnlyActive(E0);
+        if (!PlaceInVolume(E0))
+        {
+            TestSkip(TEXT("melee_interval"), TEXT("no floor in front of the enemy"));
+            TestStep = 30;
+            return;
+        }
+        TestSwingBase = Brain.SwingCount;
+        StepStart = Now;
+        TestStep = 29;
+        return;
+    }
+    case 29:
+    {
+        if (Walker->IsDown())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OWRANGE maya down during melee_interval (not restored)"));
+            TestCheck(TEXT("melee_interval"), false, TEXT("Maya is down (not restored)"));
+            TestStep = 30;
+            return;
+        }
+        if (Brain.SwingCount < TestSwingBase + 2)
+        {
+            if (Now - StepStart > 6.f)
+            {
+                TestCheck(TEXT("melee_interval"), false, TEXT("fewer than two swing starts in 6 s"));
+                TestStep = 30;
+            }
+            return;
+        }
+        const float Gap = Brain.LastSwingStart - Brain.PrevSwingStart;
+        TestCheck(TEXT("melee_interval"), FMath::Abs(Gap - OpenWillowThreat::SwingInterval) <= 0.1f,
+            FString::Printf(TEXT("%.3f s between the last two swing starts"), Gap));
+        TestStep = 30;
+        return;
+    }
+    case 30: // melee_miss setup: Maya in the volume; she steps out after the swing starts.
+    {
+        Reset(TEXT("melee"));
+        OnlyActive(E0);
+        if (!PlaceInVolume(E0))
+        {
+            TestSkip(TEXT("melee_miss"), TEXT("no floor in front of the enemy"));
+            TestStep = 32;
+            return;
+        }
+        TestSwingBase = Brain.SwingCount;
+        TestResolvedBase = Brain.MeleeResolved;
+        TestHealthBefore = Walker->GetHealth();
+        TestMovedAt = -1.f;
+        StepStart = Now;
+        TestStep = 31;
+        return;
+    }
+    case 31:
+    {
+        if (Walker->IsDown())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OWRANGE maya down during melee_miss (not restored)"));
+            TestCheck(TEXT("melee_miss"), false, TEXT("Maya is down (not restored)"));
+            TestStep = 32;
+            return;
+        }
+        if (TestMovedAt < 0.f)
+        {
+            if (Brain.SwingCount <= TestSwingBase)
+            {
+                if (Now - StepStart > 3.f)
+                {
+                    TestCheck(TEXT("melee_miss"), false, TEXT("no swing start in 3 s"));
+                    TestStep = 32;
+                }
+                return;
+            }
+            // Maya steps away at once: 3000 uu behind E0, out of its volume and out of its notice rules.
+            const FVector At = E0->GetActorLocation() - Forward(E0) * 3000.f;
+            PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation()));
+            TestMovedAt = Now;
+            return;
+        }
+        if (Brain.MeleeResolved <= TestResolvedBase)
+        {
+            if (Now - TestMovedAt > 2.f)
+            {
+                TestCheck(TEXT("melee_miss"), false, TEXT("no swing resolved in 2 s"));
+                TestStep = 32;
+            }
+            return;
+        }
+        const bool bOk = !Brain.LastHit && FMath::IsNearlyZero(Brain.LastApplied)
+            && FMath::IsNearlyEqual(Walker->GetHealth(), TestHealthBefore, 0.01f)
+            && TestMovedAt < Brain.LastSwingStart + OpenWillowThreat::SwingDamageDelay;
+        TestCheck(TEXT("melee_miss"), bOk, FString::Printf(TEXT("hit %d, applied %.2f, moved %.3f s after the swing start, maya health %.1f -> %.1f"),
+            Brain.LastHit ? 1 : 0, Brain.LastApplied, TestMovedAt - Brain.LastSwingStart, TestHealthBefore, Walker->GetHealth()));
+        TestStep = 32;
+        return;
+    }
+    case 32: // forget setup: Maya 500 uu behind E0 raises the level by proximity, with no swing (she is outside the volume).
+    {
+        Reset(TEXT("forget"));
+        OnlyActive(E0);
+        const FVector At = E0->GetActorLocation() - Forward(E0) * 500.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("forget"), TEXT("no floor 500 uu behind the enemy"));
+            TestStep = 35;
+            return;
+        }
+        StepStart = Now;
+        TestStep = 33;
+        return;
+    }
+    case 33:
+    {
+        if (Now - StepStart < 0.5f) return;
+        if (Den.Level < Seen)
+        {
+            TestCheck(TEXT("forget"), false, TEXT("not raised by the proximity rule"));
+            TestStep = 35;
+            return;
+        }
+        // Out of every rule now: far from the enemies. The record is left to run out.
+        const FVector At = SpotNow + FRotator(0.f, SpotYawNow, 0.f).Vector() * 6000.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("forget"), TEXT("no floor 6000 uu from the spot"));
+            TestStep = 35;
+            return;
+        }
+        TestStep = 34;
+        return;
+    }
+    case 34:
+    {
+        // The den checks once a second, so the fall can come up to a second after ForgetTime; 0.2 s more for the enemy's update.
+        if (Now < Den.ForgetTime + 1.2f) return;
+        TestCheck(TEXT("forget"), Den.Level == OpenWillowThreat::InThreatRadius && !Brain.IsTargeting(),
+            FString::Printf(TEXT("level %d, targeting %d, %.2f s after ForgetTime"), Den.Level, Brain.IsTargeting() ? 1 : 0,
+                Now - Den.ForgetTime));
+        TestStep = 35;
+        return;
+    }
+    case 35: // passive_no_melee: every enemy passive, Maya in E0's volume. Nothing notices and nothing swings.
+    {
+        Reset(TEXT("passive"));
+        SetMode(false, true);
+        if (!PlaceInVolume(E0))
+        {
+            TestSkip(TEXT("passive_no_melee"), TEXT("no floor in front of the enemy"));
+            SetMode(false, false);
+            TestStep = 99;
+            return;
+        }
+        TestSwingBase = Brain.SwingCount;
+        TestHealthBefore = Walker->GetHealth();
+        StepStart = Now;
+        TestStep = 36;
+        return;
+    }
+    case 36:
+    {
+        if (Now - StepStart < 2.f) return;
+        const bool bOk = Brain.SwingCount == TestSwingBase && FMath::IsNearlyEqual(Walker->GetHealth(), TestHealthBefore, 0.01f)
+            && Den.Level == OpenWillowThreat::InThreatRadius;
+        TestCheck(TEXT("passive_no_melee"), bOk, FString::Printf(TEXT("swing starts %d, maya health %.1f -> %.1f, level %d"),
+            Brain.SwingCount - TestSwingBase, TestHealthBefore, Walker->GetHealth(), Den.Level));
+        SetMode(false, false);
+        TestStep = 99;
+        return;
+    }
+    default:
+        TestStep = 99;
+        return;
     }
 }
 

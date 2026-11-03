@@ -7,6 +7,9 @@
 #    runs the pawn's installed spawn script and health pool (COMBAT_HIT_CHAIN.md, COMBAT_DEATH.md); the rows
 #    max_health.<class>.L<level> are its answer. That the VM's spawn health equals the game's is UNVERIFIED (no live row of
 #    a fresh pawn's maximum was recorded).
+#    The same run swings each kind's melee (or the slinger's rock) at a Maya of the same level: the rows
+#    arrival.<class>.L<level> (the evaluated damage) and ratio.<class>.L<level> (what the damage pipeline passed on) reproduce
+#    the live melee rows (COMBAT_MELEE.md); the host multiplies them for an enemy at Maya's level.
 # 2. The imported enemy assets: local/phaselock/target/host_target.json (tools/import_phaselock_target.ps1, the bullymong).
 #    Extra clips (walk, run, hit, melee) are picked by name from the imported AnimSequence files next to the idle clip; the
 #    choice is a name match (UNVERIFIED that it is the clip the game plays) and the manifest says which file was taken.
@@ -28,6 +31,8 @@ KINDS = {
     "bullymong_baby": ("baby", "PrimalBeastBaby"),
     "bullymong_slinger": ("ranged", "PrimalBeast_Ranged"),
 }
+# The swing kind of each (combat-run swing:<pawn>:<kind>): the melee blow, the slinger's rock.
+SWINGS = {"regular": "melee", "adult": "melee", "baby": "melee", "ranged": "slinger"}
 # The range's default population (host choice).
 SPAWNS = [{"kind": "bullymong", "count": 3}, {"kind": "bullymong_adult", "count": 1}]
 # Clip roles -> name patterns tried in order against the imported AnimSequence file names (host choice, UNVERIFIED).
@@ -48,10 +53,10 @@ def parse_levels(text):
     return list(range(first, last + 1))
 
 
-def health_table(run_json, row_class):
-    """{level: max health} from the combat-run rows max_health.<row_class>.L<level>."""
+def health_table(run_json, row_class, row="max_health"):
+    """{level: value} from the combat-run rows <row>.<row_class>.L<level> (max_health, arrival, ratio)."""
     table = {}
-    prefix = "max_health." + row_class + ".L"
+    prefix = row + "." + row_class + ".L"
     for key, value in run_json.get("rows", {}).items():
         if key.startswith(prefix) and key[len(prefix):].isdigit():
             table[int(key[len(prefix):])] = float(value)
@@ -89,12 +94,15 @@ def find_clips(idle_path, listing=None):
     return {role: (base + "/" + n + "." + n if n else "") for role, n in ((r, pick_clip(names, r)) for r in CLIP_PATTERNS)}
 
 
-def kind_entry(label, target, health, source, listing=None):
+def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=None):
     entry = {"label": label, "mesh": "", "idle": "", "death": "", "walk": "", "run": "", "hit": "", "melee": "",
              "mesh_offset_z": 0.0, "mesh_scale": 1.0, "collision_radius": 0.0, "collision_height": 0.0,
              "head_bone": "", "head_radius": 18.0, "walk_speed": 150.0, "patrol_radius": 500.0,
              "shield": 0.0, "shield_delay": 0.0, "shield_rate": 0.0,
-             "health_by_level": {str(k): v for k, v in health.items()}, "source": source}
+             "run_speed": 400.0,
+             "health_by_level": {str(k): v for k, v in health.items()},
+             "melee_arrival_by_level": {str(k): v for k, v in (arrival or {}).items()},
+             "melee_ratio_by_level": {str(k): v for k, v in (ratio or {}).items()}, "source": source}
     if target:
         for key in ("mesh", "idle", "death"):
             entry[key] = target.get(key, "")
@@ -110,7 +118,11 @@ def run_vm(reader, levels):
     cooked = os.path.join(os.environ.get("OPENWILLOW_BL2", ""), "WillowGame", "CookedPCConsole")
     if not os.path.isdir(cooked):
         raise SystemExit("set OPENWILLOW_BL2 to the installed Borderlands 2 folder")
-    steps = ["spawn:%s:%d" % (vm_kind, level) for vm_kind, _ in KINDS.values() for level in levels]
+    # Per kind and level: a Maya of that level (refilled), the pawn, its swing at her. Pawn indices count up from 0.
+    steps = []
+    for vm_kind, _ in KINDS.values():
+        for level in levels:
+            steps += ["maya:%d" % level, "spawn:%s:%d" % (vm_kind, level), "swing:%d:%s" % (len(steps) // 3, SWINGS[vm_kind])]
     command = [reader, os.path.join(cooked, "Sanctuary_Dynamic.upk"), "--combat-run", "--cooked", cooked] + steps
     out = subprocess.run(command, capture_output=True, text=True, check=True)
     return json.loads(out.stdout)
@@ -136,7 +148,8 @@ def main(argv=None):
     for name, (vm_kind, row_class) in KINDS.items():
         health = health_table(run, row_class)
         source = "combat-run spawn:%s (VM spawn health, UNVERIFIED)" % vm_kind if health else "no VM run"
-        kinds[name] = kind_entry(name.replace("_", " ").title(), target, health, source)
+        kinds[name] = kind_entry(name.replace("_", " ").title(), target, health, source,
+                                 arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"))
     manifest = {"schema": "ow-range-v1", "respawn_seconds": 8, "spawns": SPAWNS, "kinds": kinds,
                 "assets": "imported" if target else "missing (run tools/import_phaselock_target.ps1)"}
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -144,7 +157,7 @@ def main(argv=None):
         json.dump(manifest, f, indent=1)
     for name, kind in kinds.items():
         levels = kind["health_by_level"]
-        print("%s: %d levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), "yes" if kind["mesh"] else "no",
+        print("%s: %d health levels, %d melee levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), len(kind["melee_arrival_by_level"]), "yes" if kind["mesh"] else "no",
               kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-"))
     print("wrote " + args.out)
     return 0

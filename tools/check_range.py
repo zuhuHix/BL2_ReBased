@@ -12,9 +12,11 @@ import argparse
 import re
 import sys
 
-# The steps of PR1's driver, in order (OpenWillowRange.cpp). Later PRs append their steps here.
+# The steps of the driver, in order (OpenWillowRange.cpp): PR1's, then PR2's enemy AI (TickAITest, steps 16-36).
 EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "crit_trace", "shield_order", "invulnerable", "passive",
-            "patrol", "death", "ragdoll", "respawn", "popup_crit", "dummy_respawn"]
+            "patrol", "death", "ragdoll", "respawn", "popup_crit", "dummy_respawn",
+            "notice_proximity", "notice_sight", "no_notice_far", "provoked", "approach", "melee_hit", "melee_interval",
+            "melee_miss", "forget", "passive_no_melee"]
 # Steps that may be SKIP when their data is absent (no imported stock mesh / physics asset).
 MAY_SKIP = {"ragdoll"}
 

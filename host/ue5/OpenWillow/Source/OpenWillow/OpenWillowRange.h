@@ -1,11 +1,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "OpenWillowEnemyAI.h"
 #include "OpenWillowRangeKind.h"
 #include "OpenWillowSliceData.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "OpenWillowRange.generated.h"
 
+class AController;
 class AOpenWillowCombatTarget;
 class AOpenWillowEnemy;
 class UPrimitiveComponent;
@@ -43,6 +45,8 @@ public:
     // Enemy level for the next build: the override (ow.RangeLevel) or the walker's level.
     void SetLevelOverride(int32 Level) { LevelOverride = Level; }
     void Report() const;
+    // The range's threat record (PR2): one den for all of its enemies.
+    const FOpenWillowThreatDen& GetDen() const { return Den; }
 
 private:
     void EnsureManifest();
@@ -50,10 +54,14 @@ private:
     int32 EnemyLevel() const;
     bool LoadSliceData();
     void TickTest(float Now);
+    void TickAITest(float Now);
     void TestCheck(const TCHAR* Step, bool bPass, const FString& Detail);
     void TestSkip(const TCHAR* Step, const TCHAR* Reason);
-    void TestHit(AOpenWillowCombatTarget* Target, float Amount, UPrimitiveComponent* Where);
+    void TestHit(AOpenWillowCombatTarget* Target, float Amount, UPrimitiveComponent* Where, AController* Instigator = nullptr,
+        AActor* Causer = nullptr);
     void TestShot(int32 Number);
+
+    FOpenWillowThreatDen Den;           // PR2: the threat record of the range den (centre = the spot)
 
     TArray<TWeakObjectPtr<AOpenWillowCombatTarget>> Dummies;
     TArray<TWeakObjectPtr<AOpenWillowEnemy>> Enemies;
@@ -82,4 +90,12 @@ private:
     TArray<FVector> Recorded;           // enemy locations at the start of a movement check
     int32 DeathsBefore = 0;
     int32 PopupsBefore = 0;
+    // PR2 driver state (TickAITest): the highest threat level seen in a window, the swing and health baselines, the distance
+    // at the start of a chase, and when Maya was moved away from a swing.
+    int32 TestMaxLevel = 0;
+    int32 TestSwingBase = 0;
+    int32 TestResolvedBase = 0;
+    float TestHealthBefore = 0.f;
+    float TestDistance = 0.f;
+    float TestMovedAt = -1.f;
 };
