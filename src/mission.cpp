@@ -420,7 +420,8 @@ std::vector<MissionSystem::TrackerLine> MissionSystem::trackerLines() const {
     for (const auto& name : active->objectives) {
         const auto objective = objectives_.find(name);
         lines.push_back({name, objective != objectives_.end() ? objective->second.message : "", objectiveComplete(name),
-                         objective != objectives_.end() && objective->second.optional});
+                         objective != objectives_.end() && objective->second.optional,
+                         objective != objectives_.end() ? objective->second.count : 1});
     }
     return lines;
 }

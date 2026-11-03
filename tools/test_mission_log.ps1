@@ -4,7 +4,7 @@ param(
     [string]$Game = $env:OPENWILLOW_BL2,
     [int]$Port = 8785,
     [int]$TimeoutSeconds = 360,
-    # How long to wait for another run's local/ue_run.lock (or a running editor) before giving up.
+    # How long to wait for the UE run lock (tools/ue_lock.ps1) or a running editor before giving up.
     [int]$LockWaitSeconds = 900,
     [string[]]$Extra = @('-ddc=InstalledNoZenLocalFallback', '-d3d11')
 )
@@ -13,8 +13,8 @@ param(
 # accepted and the mission under the in-progress category after Accept(), Down on the only mission, the header tabs to Inventory and
 # back, and Escape. Prints each OWMISSIONTEST row and the summary; screenshots are copied to local/menus/missionlog/.
 # Needs the slice manifests test_quest.ps1 uses and local/ui/run/missionlog.json (tools/prepare_mission_log.py).
-# Exit codes: 0 all PASS; 1 a FAIL; 2 no summary (launch/timeout). Owns one editor and the shared lock; never touches
-# another editor; stops only the editor and server it started.
+# Exit codes: 0 all PASS; 1 a FAIL; 2 no summary (launch/timeout). Owns one editor and the machine-wide UE run lock
+# (tools/ue_lock.ps1); never touches another editor; stops only the editor and server it started.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
@@ -36,22 +36,9 @@ $log = Join-Path $outDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log'
 $save = Join-Path $outDir 'save.json'
 if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
-$lockPath = Join-Path $repo 'local/ue_run.lock'
-
-# --- lock: wait until no editor runs and nobody holds it (CreateNew is the atomic claim) ---
-$deadline = (Get-Date).AddSeconds($LockWaitSeconds)
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
-        try { $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
-        Start-Sleep -Seconds 5
-    }
-}
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("test_mission_log $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+# --- lock: the machine-wide UE run lock (tools/ue_lock.ps1; waits while any editor runs), released in finally ---
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
+Enter-OwUeLock -Owner 'test_mission_log' -TimeoutSeconds $LockWaitSeconds -PollSeconds 5
 
 $exitCode = 2
 $process = $null
@@ -108,6 +95,6 @@ try {
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    Exit-OwUeLock
 }
 exit $exitCode

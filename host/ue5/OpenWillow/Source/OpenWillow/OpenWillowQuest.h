@@ -79,7 +79,7 @@ public:
     // "status" (notstarted / active / turnin / complete), "plot", "description", "summary",
     // "turnInDescription", "giver", "turnIn", "level", "xp", "tracked" (no credit or item reward: not evaluated), "objectives": [{"name", "text", "progress", "count", "done", "optional"}]}], "player": {"level", "xp",
     // "xpLevelStart", "xpNext", "credits" (only when known)}}. Without -owquest only "enabled": false and the player block. The objectives
-    // are the active set's (MissionSystem::activeObjectives); "tracked" is true while the mission is Active or ReadyToTurnIn (the one
+    // are the active set's (MissionSystem::trackerLines, the HUD tracker's view); "tracked" is true while the mission is Active or ReadyToTurnIn (the one
     // mission is the tracker's active mission then). Docs: docs/verification/MENUS_PARITY.md.
     FString MissionLogJson() const;
 
