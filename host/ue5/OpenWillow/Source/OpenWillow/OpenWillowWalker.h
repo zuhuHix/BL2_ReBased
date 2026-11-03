@@ -130,9 +130,12 @@ public:
     // move ends (2.28 s after the injury); never while Dead (see GoDown, UNVERIFIED).
     bool DownWeaponReady() const;
     bool IsReloading() const { return bReloading; }
-    // Test drivers (-owhuddownshots): the same handlers the fire and reload input bindings call.
+#if WITH_EDITOR
+    // Test drivers (-owhuddownshots, which runs as UnrealEditor -game): the same handlers the fire and reload input bindings
+    // call. Editor builds only, so Shipping has no way to inject input.
     void TestFireInput(bool bPressed) { if (bPressed) FirePressed(); else FireReleased(); }
     void TestReloadInput() { ReloadPressed(); }
+#endif
     float DownBleedTotal() const { return DownBleedSeconds; }
     float LastDownAt() const { return DownAt; }
     float LastSecondWindAt() const { return SecondWindAt; }

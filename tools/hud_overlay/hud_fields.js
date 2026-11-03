@@ -94,7 +94,8 @@
     const rows = [];
     if (tracker && tracker.mission) {
       rows.push(['MissionName', tracker.mission]);
-      if (tracker.turnIn) rows.push(['TurnIn', (strings && strings.turnIn) || '']);
+      // The turn-in label is the strings file's; without it (no file, or no value) the movie keeps its own text: null = no call.
+      if (tracker.turnIn) rows.push(['TurnIn', strings && typeof strings.turnIn === 'string' ? strings.turnIn : null]);
       else for (const line of tracker.lines || [])
         rows.push([line.complete ? 'Complete' : line.optional ? 'Optional' : 'NotComplete', line.text || '']);
     }
@@ -103,7 +104,8 @@
       const module = `${TRACKER}.Module${k}`;
       const row = rows[k - 1];
       if (!row) { calls.push([module, 'gotoAndStop', 'Off']); continue; }
-      calls.push([module, 'gotoAndStop', 'NoMovement'], [module + '.inner', 'gotoAndStop', row[0]], textCall(module + '.inner.text', row[1]));
+      calls.push([module, 'gotoAndStop', 'NoMovement'], [module + '.inner', 'gotoAndStop', row[0]]);
+      if (row[1] !== null) calls.push(textCall(module + '.inner.text', row[1]));
     }
     return calls;
   }

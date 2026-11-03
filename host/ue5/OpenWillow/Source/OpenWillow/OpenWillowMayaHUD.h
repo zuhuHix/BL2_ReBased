@@ -102,7 +102,9 @@ private:
     // -owhuddownshots (with -owcombattest): the down-state HUD for the checks (tools/check_hud_down.py) and the critic
     // (OWHudDown_*.png): Maya goes down through her own TakeDamage and bleeds out, dies and respawns; then goes down again
     // and kills the dummy (a second wind); then quit.
+#if WITH_EDITOR
     void TickHudDownShots(class AOpenWillowWalker& Maya);
+#endif
     int32 DownShotStep = 0;
     int32 SavedBurstCount = 0, BurstStartMagazine = 0;   // -owhuddownshots: the held weapon's burst count while the test fixture sets 3
     float DownShotAt = 0.f;
