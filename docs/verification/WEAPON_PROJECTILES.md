@@ -288,3 +288,10 @@ numbers, AI reactions) read the same data the host dummy does. Host code only; n
   direct event per bullet or trace hit (none for a rocket body), a splash event per splash hit, a tick event per status tick and
   a throw event per thrown-gun hit (`tests/check_weapon_firing_test.py`). Each event is also logged
   (`OWFIRING hitevent <kind> <weapon> on <target> damage .. applied .. element .. crit .. momentum ..`).
+- **Source weapon of a status tick (review fix).** A proc stores the weapon id and the element of the hit that caused it
+  on the active status effect, and every tick's event carries those, so a weapon swap before the next tick does not credit it to
+  the gun now in hand. Every hit path names its weapon explicitly (bullets and rockets from the launch, traces from the fired
+  item, splash from the exploding shot); the walker falls back to the gun in hand only for a hit that names none. The firing
+  test checks it: for a status gun whose effect is still running in the final wait, it equips another gun (`OWFIRING swap`) and
+  the result line's `tick_weapons` must name only the proc gun, with at least one tick after the swap. The checker requires
+  the hit-event fields; `--legacy` grades a log from before the hit-event API without them.
