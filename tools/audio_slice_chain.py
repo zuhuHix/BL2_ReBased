@@ -60,34 +60,60 @@ class Ue3:
                 'max_duration': p.get('MaxDuration'), 'required_bank': p.get('RequiredBank')}
 
 
-def dialog_chain(ue3):
-    """The mission's dialog effects -> group -> Talk act(s) -> AkEvent (decoded by ow-package --object-dump)."""
+def mission_run_dialog(ue3):
+    """Dialog effects of one scripted run of the mission (MISSION_STEPS) through ow-package --mission-run."""
     run = subprocess.run([ue3.reader, os.path.join(ue3.cooked, 'Startup.upk'), '--mission-run', MISSION, '--cooked', ue3.cooked, *MISSION_STEPS],
                          capture_output=True, encoding='utf-8')
-    effects = [e for s in json.loads(run.stdout)['steps'] for e in s.get('effects', []) if e['kind'] == 'dialog']
-    groups, rows = {}, []
-    for e in effects:
-        tag, group, name = e['a'], e['b'], e['c']
-        if group not in groups:
-            groups[group] = ue3.dump('Startup', group)
-        g = groups[group]
-        event = next((d for d in g['dialogevents'] if d['Tag'] == tag), None)
-        talk = None
-        if event and event['OutputAction']:
-            talk = ue3.dump('Startup', event['OutputAction'])['talkdata']
-            how = 'DialogEvents[Tag].OutputAction -> WillowDialogAct_Talk.TalkData'
-        elif event:
-            # events without an OutputAction pair, in order, with the group's inline TalkActs (UNVERIFIED pairing rule;
-            # oracle: the talk event name matches the tag name for 7 of 7 in this group)
-            empties = [d['Tag'] for d in g['dialogevents'] if not d['OutputAction']]
-            talk = g['talkacts'][empties.index(tag)]['TalkData']
-            how = 'k-th null-OutputAction event <-> k-th inline TalkActs entry (UNVERIFIED pairing)'
-        row = {'trigger': {'event_tag': tag, 'group': group, 'name_tag': name}, 'how': how if event else 'event tag not in group',
-               'talk': talk, 'ak_events': []}
-        for t in talk or []:
-            pkg_path = t['TalkAkEvent']
-            row['ak_events'].append({'name_tag': t['NameTag'], **ue3.ak_event('Startup', pkg_path)})
-        rows.append(row)
+    if run.returncode:
+        raise RuntimeError('--mission-run: ' + run.stderr.strip())
+    return [e for s in json.loads(run.stdout)['steps'] for e in s.get('effects', []) if e['kind'] == 'dialog']
+
+
+def group_talk(ue3, group_dump, tag):
+    """(talk data, how) for one DialogEvents tag of a dumped dialog group; (None, reason) when the tag is not there."""
+    event = next((d for d in group_dump['dialogevents'] if d['Tag'] == tag), None)
+    if not event:
+        return None, 'event tag not in group'
+    if event['OutputAction']:
+        return ue3.dump('Startup', event['OutputAction'])['talkdata'], 'DialogEvents[Tag].OutputAction -> WillowDialogAct_Talk.TalkData'
+    # events without an OutputAction pair, in order, with the group's inline TalkActs (UNVERIFIED pairing rule;
+    # oracle: the talk event name matches the tag name for 7 of 7 in this group)
+    empties = [d['Tag'] for d in group_dump['dialogevents'] if not d['OutputAction']]
+    k = empties.index(tag)
+    if k >= len(group_dump.get('talkacts') or []):
+        return None, 'null OutputAction and no k-th inline TalkActs entry'
+    return group_dump['talkacts'][k]['TalkData'], 'k-th null-OutputAction event <-> k-th inline TalkActs entry (UNVERIFIED pairing)'
+
+
+def dialog_chain(ue3, run_effects=None):
+    """Every line the mission's dialog groups can play -> Talk act(s) -> AkEvent (decoded by ow-package --object-dump).
+
+    The groups are the mission's MissionDialogGroup plus any group a scripted run's dialog effects name. Every
+    DialogEvents entry of those groups is resolved, not only the ones one fixed run reaches: which lines the slice
+    host plays depends on timing and choices (seen: 03a, 04, 05 on some runs only), so a step list cannot be complete.
+    `reached_in_scripted_run` marks the tags the fixed MISSION_STEPS run reached.
+    """
+    effects = mission_run_dialog(ue3) if run_effects is None else run_effects
+    reached = {e['a'] for e in effects}
+    groups = []
+    own = ue3.dump('Startup', MISSION).get('missiondialoggroup')
+    for group in [own] + [e['b'] for e in effects]:
+        if group and group not in groups:
+            groups.append(group)
+    rows = []
+    for group in groups:
+        g = ue3.dump('Startup', group)
+        tags = [d['Tag'] for d in g['dialogevents']]
+        # A scripted-run tag missing from its group is kept, so the gap shows instead of vanishing.
+        tags += [e['a'] for e in effects if e['b'] == group and e['a'] not in tags]
+        for tag in dict.fromkeys(tags):
+            name = next((e['c'] for e in effects if e['a'] == tag and e['b'] == group), None)
+            talk, how = group_talk(ue3, g, tag)
+            row = {'trigger': {'event_tag': tag, 'group': group, 'name_tag': name}, 'how': how, 'talk': talk,
+                   'reached_in_scripted_run': tag in reached, 'ak_events': []}
+            for t in talk or []:
+                row['ak_events'].append({'name_tag': t['NameTag'], **ue3.ak_event('Startup', t['TalkAkEvent'])})
+            rows.append(row)
     return rows
 
 
@@ -182,7 +208,8 @@ def build_manifest(chain, decoded_dir):
 
     for row in chain['dialog']:
         for ak in row['ak_events']:
-            add('dialog:' + row['trigger']['event_tag'], 'dialog', row['trigger'], ak, how_resolved=row['how'], talker_name_tag=ak['name_tag'])
+            add('dialog:' + row['trigger']['event_tag'], 'dialog', row['trigger'], ak, how_resolved=row['how'], talker_name_tag=ak['name_tag'],
+                reached_in_scripted_run=row.get('reached_in_scripted_run'))
     for row in chain['marcus_group']:
         for ak in row['ak_events']:
             add('marcus_group:' + row['trigger']['event_tag'], 'dialog_group_bark', row['trigger'], ak, talker_name_tag=ak['name_tag'])
@@ -204,7 +231,8 @@ def main():
     args = ap.parse_args()
     if not args.game:
         sys.exit('set OPENWILLOW_BL2 or pass --game')
-    ue3 = Ue3(args.reader, os.path.join(args.game, 'WillowGame', 'CookedPCConsole'))
+    # Windows CreateProcess does not find a relative path written with forward slashes (build/Release/...).
+    ue3 = Ue3(os.path.abspath(args.reader), os.path.join(args.game, 'WillowGame', 'CookedPCConsole'))
     inst = ac.Install(args.game)
     chain = {'dialog': dialog_chain(ue3), 'marcus_group': marcus_group_chain(ue3), 'door': door_chain(ue3), 'weapon': weapon_chain(ue3)}
     wem = os.path.join(root, 'local', 'audio', 'wem')

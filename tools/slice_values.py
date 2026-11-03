@@ -48,12 +48,13 @@ MISSION = 'GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire'
 PLAYER_CLASS = 'GD_Siren.Character.CharClass_Siren'
 XP_REQUIRED = 'GD_Balance_Experience.Formulas.Init_ExperienceRequiredForLevel'
 GLOBALS = 'GD_Globals.General.Globals'
-SCHEMA_LINES = [
+# weapon_recipe owns the attribute-resolver lines (ValueResolverChain and friends); the reader
+# rejects a schema that names one key twice, so only the slice-specific lines are added here.
+SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     'RegionBalanceData=StructProperty:PlayThroughData',
     'BalanceDefinitions=ObjectProperty',
     'BalanceByRegion=StructProperty:RegionBalanceData',
     'MissionOverrides=StructProperty:MissionStateBalanceAdjustment',
-    'ValueResolverChain=ObjectProperty',
     'ContextResolverChain=ObjectProperty',
     'ConditionalExpressionList=StructProperty:ConditionalAttributeInitializationData',
     'Dependencies=ObjectProperty',
@@ -202,7 +203,7 @@ def build(reader, game, levels=range(1, 16)):
     startup = Path(game) / 'WillowGame' / 'CookedPCConsole' / 'Startup.upk'
     with tempfile.TemporaryDirectory() as tmp:
         schema = Path(tmp) / 'values.schema'
-        schema.write_text('\n'.join(SCHEMA_LINES + weapon_recipe.SCHEMA_LINES) + '\n')
+        schema.write_text('\n'.join(SCHEMA_LINES) + '\n')
         package = weapon_recipe.Package(str(reader), startup, str(schema))
         package.classes = {e['path']: e['class'] for e in json.loads(package.run('--exports'))}
         mission = package.props(MISSION)

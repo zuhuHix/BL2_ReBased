@@ -32,6 +32,8 @@ handled from layouts observed in the files (see DECISIONS.md 2026-09-26):
 - With --inline-font-imports, a font-only ImportAssets(2) whose URL resolves
   (next to --output) to an already converted SWF is replaced by the fonts
   themselves; see Converter.inline_fonts for the Ruffle limitation this avoids.
+  A library missing next to --output is first copied there from the run root
+  (the folder above it), see Converter.place_library.
 - Other Scaleform tags (>= 1000) are dropped and counted.
 """
 import argparse
@@ -310,6 +312,7 @@ class Converter:
         self.text = Counter()
         self.font_base = font_base      # directory import URLs resolve against, or None
         self.inlined_fonts = []
+        self.copied_libraries = []
         self.atlases = {}
         self.dropped = Counter()
         self.images = []
@@ -327,6 +330,7 @@ class Converter:
         """
         url, items = parse_assets(body, code)
         source = self.font_base / url
+        self.place_library(source)
         fonts = exported_fonts(source) if source.is_file() else {}
         if not items or any(name not in fonts for _, name in items):
             return write_tag(code, body)
@@ -339,6 +343,23 @@ class Converter:
         # which an import registers; keep that name as an export.
         exports = b''.join(struct.pack('<H', i) + n.encode('latin-1') + b'\0' for i, n in items)
         return bytes(out) + write_tag(EXPORT_ASSETS, struct.pack('<H', len(items)) + exports)
+
+    def place_library(self, source):
+        """Copy a library the import names from the run root (one level up) when it is not where the URL points.
+
+        Movies import the font library both as `../gfxfontlib.swf` and as plain `gfxfontlib.swf`
+        (UI_HUD has both). Scaleform resolves the plain form itself; here it resolves next to
+        --output, and the web player resolves it next to the movie, so a movie folder without its own
+        copy keeps the import (no fonts inlined) and later shows fallback fonts. The library is
+        converted once into the run root (local/ui/run/gfxfontlib.swf); copying it beside the movie
+        removes the manual step. Only a missing file is filled; an existing one is left alone.
+        """
+        fallback = self.font_base.parent / source.name
+        if source.is_file() or not fallback.is_file() or fallback.resolve() == source.resolve():
+            return
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(fallback.read_bytes())
+        self.copied_libraries.append({'from': str(fallback), 'to': str(source)})
 
     def load(self, file, width, height):
         path = self.textures / (Path(file).stem + '.png')
@@ -423,6 +444,7 @@ def main():
     report = {'output': str(output), 'version': version, 'bytes': 8 + len(swf_body),
               'external_images': converter.images, 'sub_images': converter.sub_images,
               'fonts': converter.fonts, 'inlined_font_imports': converter.inlined_fonts,
+              'copied_font_libraries': converter.copied_libraries,
               'localized_tokens': dict(converter.text),
               'dropped_scaleform_tags': dict(converter.dropped)}
     output.with_suffix('.json').write_text(json.dumps(report, indent=1), encoding='utf-8')

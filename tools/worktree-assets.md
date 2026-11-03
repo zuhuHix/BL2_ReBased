@@ -35,6 +35,14 @@ captures, Phaselock data, analysis notes). Existing files are kept:
 tools/provision_worktree_assets.ps1 -SourceWorktree <previous-worktree-path>
 ```
 
+What the seed leaves out, and a new worktree therefore lacks until it is copied or regenerated: `local/slice/`
+(world, audio, NPC and minimap manifests), `local/doors/`, `local/sanctuary/`, `local/gestalt/`, `local/weapon_library/`,
+`local/audio/`, the Phaselock data, and `local/external/` (the UModel exports; the full export is over 10 GB, so copy only
+the subfolders a task needs). The suites name the manifest they miss. To fill a worktree from the main checkout without
+overwriting anything, either use `-SourceWorktree <main checkout>` above or copy single folders with
+`robocopy <main>\local\slice <worktree>\local\slice /E /XO`; otherwise regenerate them in the order given in
+[docs/TOOLING.md](../docs/TOOLING.md) "Regenerating local data on a fresh machine".
+
 `build/` is not copied; configure and build it in the new worktree (`cmake -S . -B build -T version=14.50`
 on a machine whose UE needs that toolset). Then run the checks in AGENTS.md before regenerating anything:
 regenerate only what is missing or older than the code that produces it.

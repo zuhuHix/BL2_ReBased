@@ -49,6 +49,8 @@ add_test(NAME combat-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}
 add_test(NAME weapon-refresh-firing-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_refresh_firing_test.py)
 add_test(NAME decisions-index-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/decisions_index_test.py)
 add_test(NAME native-index-find-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/native_index_find_test.py)
+add_test(NAME tool-schema-lines COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/schema_lines_test.py)
+add_test(NAME audio-slice-chain-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/audio_slice_chain_test.py)
 add_executable(ow-weapon-firing-test tests/weapon_firing_math_test.cpp)
 target_link_libraries(ow-weapon-firing-test PRIVATE ow-core)
 target_compile_features(ow-weapon-firing-test PRIVATE cxx_std_20)
