@@ -7,6 +7,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowMayaState.h"
+#include <limits>
 
 namespace
 {
@@ -58,7 +59,7 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestEqual(TEXT("health does not regenerate at rate 0"), S.Health, 90.f);
         const float NaN = FMath::Sqrt(-1.f);
         TestTrue(TEXT("NaN damage is ignored"), S.ApplyDamage(NaN, 21.f).ToHealth == 0.f && S.Health == 90.f && S.Shield == 50.f);
-        TestTrue(TEXT("infinite damage is ignored"), S.ApplyDamage(TNumericLimits<float>::Infinity(), 22.f).ToShield == 0.f && S.Health == 90.f
+        TestTrue(TEXT("infinite damage is ignored"), S.ApplyDamage(std::numeric_limits<float>::infinity(), 22.f).ToShield == 0.f && S.Health == 90.f
             && S.Shield == 50.f && !S.IsDown());
     }
     {
