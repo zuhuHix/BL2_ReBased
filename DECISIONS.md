@@ -3255,6 +3255,8 @@ log's rules). Script and AS2 listings and the presentation data stay under ignor
 
 ## 2026-11-03: HUD damage-direction arrows and level-up banner driven from host state (HUD lane 2, stacked on PR #63)
 
+## 2026-11-03: HUD damage-direction arrows and level-up banner driven from host state (HUD lane 2, after PR #63)
+
 AI-assisted (Claude Opus 5.5). Record: `docs/verification/HUD_PARITY.md` ("Hit arrows and the level-up banner").
 
 - **What.** `AOpenWillowWalker::TakeDamage` counts hits that took health and have a known source (a point hit's shot direction,

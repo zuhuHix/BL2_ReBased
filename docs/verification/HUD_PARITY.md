@@ -328,6 +328,11 @@ Not done, because there is nothing real to drive them:
   captures. `tests/check_hud_down_test.py` now has 30 cases (4 for this mode), and `tests/hud_fields_test.js` covers
   `feedbackCalls` / `feedbackLine`. In UE on pc-hummer: 6/6. In the captures each arrow is on its own screen edge, and
   the banner shows over LV 09.
+  On main 8b7b7f4, after the rebase over PR #63 (the down sequence stays editor-only; the feedback sequence and
+  `FeedbackHudField` stay outside the `WITH_EDITOR` block, since they inject no input):
+  * ctest 21/21; verify_packages 9/9; checker 30/30; Node test green; UE build OK;
+  * `-Feedback` 6/6, with the same captures (each arrow on its own edge, the banner over LV 09);
+  * `-Down` 11/11, because `TakeDamage` now also counts hits.
 * `tools/test_inventory_actions.ps1 -Items <bounded recipe set>` (the set the 2026-10-22 post-merge verification used):
   49/49. Run with the full local demo library instead it gave 24 pass, 3 fail, 22 not run: that library fills the 39-slot
   backpack, so unequipping into it is refused (`CanAddToBackpack`); local data, not this change.
