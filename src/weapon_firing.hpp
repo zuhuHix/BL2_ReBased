@@ -62,12 +62,14 @@ struct Falloff { double maxDamageRadius = 0.2, minDamageRadius = 0.8, minDamageP
 double radiusDamageScale(double distance, double radius, const Falloff& falloff, bool fullDamage = false);
 double explosionRadius(double formulaRadius);  // section 3.2: 0 becomes 256
 
-// Section 4.2: the product of the percent factors, times 0.01, clamped to [0, 1]. Factors the host does not model
-// (level difference, friendly fire, skills and relics) are 1 at the call site.
+// Section 4.2: the product of the percent factors, times 0.01, clamped to [0, 1]. The host's hit path passes the radius
+// scale times statusLevelScale (below) as extraScale; friendly fire, skills and relics are not modelled and count as 1.
 double statusChance(double baseChancePercent, double targetModifier, double weaponBaseModifier,
                     double weaponChanceModifier, double fireIntervalFactor, double extraScale);
 // Section 4.2 LevelScale: GlobalsDefinition.StatusEffectChanceScales. With n = min(|instigator - target|, rows), row n - 1;
 // an instigator above the target takes HigherLevelChanceScale, below LowerLevelChanceScale; equal levels (or no rows) 1.
+// UNVERIFIED: the higher/lower mapping and the row choice come from the data and fit the live Maliwan proc counts (shooter
+// 54 against a level-7 target); the native roll was not read and the same-level case was not measured.
 struct LevelChanceScale { int levelDifference = 0; double higher = 1, lower = 1; };
 double statusLevelScale(int instigatorLevel, int targetLevel, const std::vector<LevelChanceScale>& rows);
 // Section 4.2 fire-interval factor: r = current interval / type base interval.

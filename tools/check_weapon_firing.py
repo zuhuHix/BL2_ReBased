@@ -22,7 +22,11 @@ docs/verification/NATIVE_WEAPON_FIRING.md and WEAPON_PROJECTILES.md when it exis
   or trace gun without splash passed exactly its momentum; the dummy moved along the shots when it was hit.
 - flight timing (result timed / on_time, when logged): every constant-speed light bullet arrives after distance / speed
   seconds, within the frame that reaches it.
-- wide bullet (OWFIRING wide; single straight pellets: no pattern, no own motion, no splash, no burst): a pull beside the
+- splash momentum (OWFIRING splash, each splash hit, given to the next result line's gun): momentum = the recipe's splash
+  momentum (MomentumFormula; the reload throw's own for source=throw) x the hit's radius scale, and not zero when the
+  recipe's is not.
+- wide bullet (OWFIRING wide; single straight pellets: no pattern, no own motion (air friction or acceleration), no splash,
+  no burst): a pull beside the
   dummy as a line misses it, the same pull with a TraceExtent box hits it. Its two pulls count in the shots.
 """
 import argparse
@@ -47,6 +51,7 @@ THROW = re.compile(r'OWFIRING throw (.*)$')
 LIFECYCLE = re.compile(r'OWFIRING lifecycle (.*)$')
 PUSH = re.compile(r'OWFIRING push (.*)$')
 WIDE = re.compile(r'OWFIRING wide (.*)$')
+SPLASH = re.compile(r'OWFIRING splash \S+ distance (\S+) scale (\S+) momentum (\S+) source (\w+)')
 SKIPPED = re.compile(r'OWFIRING skipped id=(\S+) reason=(.*)$')
 NO_WALL = re.compile(r'OWFIRING no wall in reach for id=(\S+)')
 PARSED = re.compile(r'firing test parsed \d+ recipe IDs: (\S+)')
@@ -66,7 +71,13 @@ def read_log(text, extra=None):
     extra = {} if extra is None else extra
     extra.setdefault('push', {})
     extra.setdefault('wide', {})
+    extra.setdefault('splash', {})
+    pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
+        if match := SPLASH.search(line):
+            pending_splash.append({'scale': float(match.group(2)), 'momentum': float(match.group(3)),
+                                   'source': match.group(4)})
+            continue
         if match := PUSH.search(line):
             body = fields(match.group(1))
             extra['push'][body['id']] = body
@@ -86,6 +97,8 @@ def read_log(text, extra=None):
         if match := RESULT.search(line):
             body = fields(match.group(1))
             results[body['id']] = body
+            extra['splash'][body['id']] = pending_splash
+            pending_splash = []
         elif match := SEGMENT.search(line):
             body = fields(match.group(1))
             if body.get('index') == '0' and body.get('wall') == '0':
@@ -125,12 +138,17 @@ def expectations(recipe):
     status = firing.get('status') or None
     projectile = firing.get('projectile') or {}
     momentum = firing.get('instant_hit_momentum')
+    acceleration = projectile.get('acceleration') or {}
+    accelerates = isinstance(acceleration, dict) and any(float(value or 0) != 0 for value in acceleration.values())
+    throw_splash = (((firing.get('reload_throw') or {}).get('projectile') or {}).get('splash')) or {}
     projectiles = int(card.get('projectiles') or 1)
     burst = max(1, int(firing.get('burst_count') or 0))
     return {
         'momentum': 100.0 * float(10 if momentum is None else momentum),
         'wide': bool(firing) and kind != 'Rocket' and projectiles <= 1 and not firing.get('pattern_lines')
-                and not projectile.get('air_friction') and splash is None and burst == 1,
+                and not projectile.get('air_friction') and not accelerates and splash is None and burst == 1,
+        'splash_momentum': float((splash or {}).get('momentum') or 0),
+        'throw_splash_momentum': float(throw_splash.get('momentum') or 0),
         'kind': kind,
         'burst': burst,
         # Bullets with an explode behaviour always explode; rockets when the definition detonates on impact.
@@ -150,9 +168,19 @@ def num(value):
     return float(value) if value is not None else None
 
 
-def check_momentum(push, wide, expected, phase_a_hits):
-    """Failure reasons for the momentum (push) and wide-bullet (wide) lines of one gun."""
+def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None):
+    """Failure reasons for the momentum (push, splash) and wide-bullet (wide) lines of one gun."""
     fails = []
+    shot_lines = 0
+    for line in splash_lines or []:
+        recipe = expected['throw_splash_momentum'] if line['source'] == 'throw' else expected['splash_momentum']
+        want = recipe * line['scale']
+        shot_lines += line['source'] != 'throw'
+        if abs(line['momentum'] - want) > 0.1 + 1e-3 * want:
+            fails.append(f"splash momentum {line['momentum']:g} != recipe {recipe:g} x scale {line['scale']:g} = {want:.1f}")
+            break
+    if expected['explodes'] and expected['splash_momentum'] > 0 and not shot_lines:
+        fails.append('the shots explode with splash momentum but no OWFIRING splash line was logged')
     if push is None:
         fails.append('no OWFIRING push line (momentum after the dummy pulls)')
     else:
@@ -180,7 +208,7 @@ def check_momentum(push, wide, expected, phase_a_hits):
 
 
 def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None, lifecycle=None, push=None, wide=None,
-              momentum=False):
+              momentum=False, splash_lines=None):
     """(list of failure reasons, notes, values for the table) for one gun. With `momentum`, the push and wide lines are
     checked too (check_momentum)."""
     fails, notes = [], []
@@ -284,7 +312,7 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
         if rolls and not procs:
             notes.append(f'no proc in {rolls} status rolls')
     if momentum:
-        fails += check_momentum(push, wide, expected, phase_a_hits)
+        fails += check_momentum(push, wide, expected, phase_a_hits, splash_lines)
     if 'timed' in log and log['timed'] != log.get('on_time'):
         fails.append(f"{int(log['timed']) - int(log.get('on_time') or 0)} of {log['timed']} bullets did not arrive after "
                      'distance / speed')
@@ -311,13 +339,16 @@ def main(argv=None):
                         help='recipe folder, in the host load order (repeat; default: local/items, local/items/slice, '
                              'local/items/firing/coverage)')
     parser.add_argument('--guns', default=None, help='comma-separated recipe ids (default: the run\'s own list)')
+    parser.add_argument('--legacy', action='store_true',
+                        help='grade a log from before the momentum checks: momentum and wide are skipped when it has no '
+                             'push lines')
     args = parser.parse_args(argv)
     item_dirs = [Path(p) for p in args.items] if args.items else DEFAULT_ITEM_DIRS
     text = Path(args.log).read_text(encoding='utf-8', errors='replace')
     extra = {}
     results, segments, skipped, no_wall, run_guns, throws, lifecycles = read_log(text, extra)
-    # Runs from before the momentum checks have no push lines; those are graded without them.
-    momentum = bool(extra['push'])
+    # The push, splash and wide lines are required; only --legacy grades a run from before the momentum checks without them.
+    momentum = not (args.legacy and not extra['push'])
     if not momentum:
         print('note: no OWFIRING push lines in this log (a run from before the momentum checks): momentum not checked')
     guns = args.guns.split(',') if args.guns else run_guns
@@ -338,7 +369,7 @@ def main(argv=None):
         expected = expectations(recipe)
         fails, notes, values = check_gun(gun, results.get(gun), segments.get(gun), expected, skipped.get(gun), no_wall,
                                          throws.get(gun), lifecycles.get(gun), extra['push'].get(gun),
-                                         extra['wide'].get(gun), momentum)
+                                         extra['wide'].get(gun), momentum, extra['splash'].get(gun))
         verdict = 'FAIL' if fails else 'PASS'
         failed += bool(fails)
         if values:

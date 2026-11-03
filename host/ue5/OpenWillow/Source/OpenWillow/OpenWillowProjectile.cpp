@@ -290,7 +290,9 @@ void AOpenWillowProjectile::Explode(UWorld* World, AOpenWillowWalker* Shooter, c
         Hit.ImpactPoint = Centre;
         Hit.Location = Centre;
         const float StatusScale = float(weapon_firing::radiusStatusScale(Distance, It->AutoAimRadius(), Radius));
-        UE_LOG(LogTemp, Display, TEXT("OWFIRING splash %s distance %.0f scale %.3f"), *It->GetName(), Distance, Scale);
+        // The momentum passed with this splash hit (tools/check_weapon_firing.py checks it against the recipe x scale).
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING splash %s distance %.0f scale %.3f momentum %.1f source %s"), *It->GetName(),
+            Distance, Scale, Data.Splash.Momentum * Scale, Data.FiringMode == TEXT("reload_throw") ? TEXT("throw") : TEXT("shot"));
         ++OpenWillowFiring::Counts.SplashHits;
         OpenWillowFiring::Counts.Splash += SplashDamage * Scale;
         HitTarget(Shooter, Data, *It, SplashDamage * Scale,

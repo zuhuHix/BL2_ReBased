@@ -116,6 +116,12 @@ meshes here and are drawn as the stand-in (firing uses the card and the block). 
 * Status rolls ran at level scale 1 (no `-owtargetlevel`: the dummy counts as Maya's level): procs shock 4/26, corrosive
   1/26, slag 8/26, fire AR 3/25. A run with `-owtargetlevel` below Maya's to see the x2 rows was not made.
 
+**Review fixes (PR #62 round 1).** The checker now also checks every splash hit's momentum against the recipe (the explode
+behaviour's `MomentumFormula`, or the reload throw's, x the hit's radius scale; the host's `OWFIRING splash` line carries both)
+and fails a gun whose shots explode with splash momentum but log no splash line. The push, splash and wide lines are required:
+a log without them fails unless `--legacy` is passed (runs from before the momentum checks). The wide check also skips
+bullets with an acceleration. A target's knock is cleared when it dies, and the knock and last-hit momentum when it respawns.
+
 The first run of the day (`run-20261103-013858.log`) failed 8 of 14 on shot counts only: the wide check's two pulls were
 not counted by the checker, and on the burst fixture the burst's later shots landed during the check. The checker now
 counts the two pulls and the wide check skips burst guns; nothing else changed between the runs.

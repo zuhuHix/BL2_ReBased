@@ -3127,7 +3127,8 @@ AI-assisted (Claude). Record and numbers: `docs/verification/WEAPON_PROJECTILES.
 - **Firing test.** New `OWFIRING push` (momentum rule, every hit's velocity change, the dummy moved), `OWFIRING wide` (a pull
   beside the dummy misses as a line and hits with a host-chosen 24 uu box; single straight non-burst bullets only, its two
   pulls counted in the shots) and the restored flight-timing check (`timed` / `on_time`). `tools/check_weapon_firing.py`
-  grades them.
+  grades them, including each splash hit's momentum against the recipe x radius scale; the new lines are required unless
+  `--legacy` is passed. A dead target stops sliding; a respawned one starts at rest.
 - **Verified / UNVERIFIED.** The momentum values match live reads (pistol 8, shotgun 7, Torgue 10, rocket splash 10,000).
   The x100 factor is read from native code, the effect on a pawn and the friction are not measured: UNVERIFIED. No local
   recipe has a `TraceExtent`, so the sweep is checked with a host box only. The level scale is consistent with the live
