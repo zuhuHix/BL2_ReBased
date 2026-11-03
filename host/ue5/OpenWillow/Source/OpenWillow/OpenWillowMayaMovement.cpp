@@ -60,9 +60,14 @@ float EaseFov(float Current, float Target, float DeltaSeconds)
     return (Target - Current) * (Target - Next) <= 0.f ? Target : Next;
 }
 
-float FallingDamage(float LandingVz, float MaxHealth)
+bool LooksLikeTeleport(const FVector& Previous, const FVector& Current, const FVector& Velocity, float DeltaSeconds)
 {
-    if (LandingVz >= -MaxFallSpeed) return 0.f;
+    return FVector::Dist(Previous, Current) > Velocity.Size() * DeltaSeconds + 100.f;
+}
+
+float FallingDamage(float LandingVz, float MaxHealth, bool bTrackedFall)
+{
+    if (!bTrackedFall || LandingVz >= -MaxFallSpeed) return 0.f;
     return -((LandingVz + MaxFallSpeed) / MaxFallSpeed) * MaxHealth * FallingDamageFraction;
 }
 }

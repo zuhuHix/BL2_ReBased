@@ -18,6 +18,7 @@ constexpr float WalkableFloorZ = 0.7f;         // Default__Pawn
 constexpr float MaxStepHeight = 35.f;
 constexpr float CollisionRadius = 42.f, CollisionHalfHeight = 80.f;   // Pawn_Siren's cylinder
 constexpr float CrouchHalfHeight = 50.f;       // CrouchHeight
+constexpr float CrouchRadius = 21.f;           // CrouchRadius
 constexpr float BaseEyeHeight = 70.f;          // Pawn_Siren
 constexpr float CrouchedEyeHeight = 40.f;      // min(0.8 x CrouchHeight, CrouchHeight - 10) (section 12)
 constexpr float EyeHeightSpeed = 10.f;         // the eye height eases toward its target at min(1, dt x 10) (section 15)
@@ -30,6 +31,24 @@ constexpr float FovModifierSpeed = 10.f;       // InitialFOVModifierSpeed
 constexpr float GlobalDefaultFov = 70.f;       // GD_Globals DefaultFOV (horizontal, at the 16:9 reference)
 constexpr float FallingDamageFraction = 0.1f;  // GlobalFallingDamageScale = max health x 0.1
 constexpr float SprintInputCos = 0.7071f;      // sprint only within 45 degrees of straight ahead (section 10)
+constexpr float ShortFallSeconds = 0.3f;       // IsOnGroundOrShortFall: a fall shorter than this still counts as on the ground
+constexpr float JumpFallSeconds = 0.5f;        // DoJump sets PlayerFallDuration to this, so a jump never counts as a short fall
+
+// The walker's numbers without -owmaya (the host's earlier estimates, kept so non-Maya runs behave as before).
+constexpr float LegacyWalkSpeed = 450.f, LegacySprintSpeed = 650.f, LegacyJumpZ = 420.f, LegacyFloorAngle = 45.f;
+
+// Section 10: IsOnGroundOrShortFall. FallSeconds counts up while falling, is 0 on the ground, and a jump sets it to 0.5.
+struct FFallTimer
+{
+    float Seconds = 0.f;
+    void Tick(float DeltaSeconds, bool bFalling) { Seconds = bFalling ? Seconds + DeltaSeconds : 0.f; }
+    void Jumped() { Seconds = JumpFallSeconds; }
+    bool OnGroundOrShortFall(bool bWalking) const { return bWalking || Seconds < ShortFallSeconds; }
+};
+
+// A move of the actor that its velocity cannot explain (a teleport: respawn, test drivers, the minimap's fast travel): more than
+// the frame's travel plus 100 uu. Fall tracking is reset on it so a landing after a teleport is not charged for the old fall.
+bool LooksLikeTeleport(const FVector& Previous, const FVector& Current, const FVector& Velocity, float DeltaSeconds);
 
 // Section 10: the move input (forward, strafe) allows a sprint when its direction is within 45 degrees of straight ahead.
 bool SprintInputAllowed(float Forward, float Right);
@@ -62,6 +81,7 @@ float SprintFov(float BaseFovDegrees);
 // Section 19: AdjustFOV's easing: lerp by dt x speed, snapping once it would overshoot.
 float EaseFov(float Current, float Target, float DeltaSeconds);
 
-// Section 14: the damage of a landing with vertical speed LandingVz (negative, uu/s); 0 above -MaxFallSpeed.
-float FallingDamage(float LandingVz, float MaxHealth);
+// Section 14: the damage of a landing with vertical speed LandingVz (negative, uu/s); 0 above -MaxFallSpeed, and 0 unless the
+// fall was tracked from its start (bTrackedFall: no teleport since it began).
+float FallingDamage(float LandingVz, float MaxHealth, bool bTrackedFall = true);
 }
