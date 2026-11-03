@@ -80,6 +80,11 @@ struct FOpenWillowPhaselockData
     // CanLiftTargetIf's flag (Flag_Skills_CanPhaseLock): the host target's "can be phaselocked" property stands for it.
     FString CanLiftFlag;
 
+    // The constraint evaluator classes GateOpen maps to host state (defined in OpenWillowPhaselock.cpp).
+    static const TCHAR* const WeaponActionEvaluator;
+    static const TCHAR* const HealthStateEvaluator;
+    static const TCHAR* const VehiclePassengerEvaluator;
+
     bool Load(const FString& File, FString& OutError);
     // The constraints that apply now, in data order: at activation (bActivation) those flagged for activation, else
     // those flagged while active. The first failing one (all fail to SKILL_Deactivated in this data) ends the check:

@@ -2,6 +2,7 @@
 // magnetism, the cast gate, the timeline, the lock duration and the diminishing returns. Every number below is invented
 // for the test; nothing is read from the game or the manifest. The rules themselves are host readings of native code and
 // script (NATIVE_PHASELOCK_TARGETING.md) and stay UNVERIFIED in game; this test only pins the host's arithmetic.
+// The evaluator classes come from FOpenWillowPhaselockData's own constants, not quoted here.
 // Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.Phaselock; Quit"
 #include "Misc/AutomationTest.h"
 
@@ -27,9 +28,9 @@ FOpenWillowPhaselockData SyntheticData()
     D.RadiusMultiplier = 1.f;
     D.DistanceOffset = 0.f;
     D.Constraints = {
-        {TEXT("WillowGame.WeaponActionAvailableExpressionEvaluator"), true, false},
-        {TEXT("WillowGame.HealthStateExpressionEvaluator"), true, true},
-        {TEXT("WillowGame.VehiclePassengerExpressionEvaluator"), true, true},
+        {FOpenWillowPhaselockData::WeaponActionEvaluator, true, false},
+        {FOpenWillowPhaselockData::HealthStateEvaluator, true, true},
+        {FOpenWillowPhaselockData::VehiclePassengerEvaluator, true, true},
     };
     return D;
 }
@@ -68,15 +69,15 @@ bool FOpenWillowPhaselockTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("reloading does not refuse the cast"), D.GateOpen(S, true, Failed));
     FOpenWillowPhaselockGateState Holstered = S;
     Holstered.bWeaponInactive = true;
-    TestTrue(TEXT("holstered weapon refuses the cast"), !D.GateOpen(Holstered, true, Failed) && Failed.Contains(TEXT("WeaponAction")));
+    TestTrue(TEXT("holstered weapon refuses the cast"), !D.GateOpen(Holstered, true, Failed) && Failed == FOpenWillowPhaselockData::WeaponActionEvaluator);
     TestTrue(TEXT("holstering while held does not end the lock"), D.GateOpen(Holstered, false, Failed));
     FOpenWillowPhaselockGateState Down = S;
     Down.bInjured = true;
-    TestTrue(TEXT("going down refuses the cast"), !D.GateOpen(Down, true, Failed) && Failed.Contains(TEXT("HealthState")));
-    TestTrue(TEXT("going down ends a running lock"), !D.GateOpen(Down, false, Failed) && Failed.Contains(TEXT("HealthState")));
+    TestTrue(TEXT("going down refuses the cast"), !D.GateOpen(Down, true, Failed) && Failed == FOpenWillowPhaselockData::HealthStateEvaluator);
+    TestTrue(TEXT("going down ends a running lock"), !D.GateOpen(Down, false, Failed) && Failed == FOpenWillowPhaselockData::HealthStateEvaluator);
     FOpenWillowPhaselockGateState Vehicle = S;
     Vehicle.bInVehicle = true;
-    TestTrue(TEXT("a vehicle refuses the cast"), !D.GateOpen(Vehicle, true, Failed) && Failed.Contains(TEXT("VehiclePassenger")));
+    TestTrue(TEXT("a vehicle refuses the cast"), !D.GateOpen(Vehicle, true, Failed) && Failed == FOpenWillowPhaselockData::VehiclePassengerEvaluator);
 
     // Duration and timeline: lift + lock x time scale; outro LockFadeOutTime before the release; end after the buffer.
     TestTrue(TEXT("lock duration adds the grade's PostAdd"), FMath::IsNearlyEqual(D.LockDuration(2), 5.f) && FMath::IsNearlyEqual(D.LockDuration(7), 4.f));

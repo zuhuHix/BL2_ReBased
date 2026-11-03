@@ -8,10 +8,6 @@ namespace
 {
 const TCHAR* const DiminishingSkill = TEXT("GD_Siren_Skills.Phaselock.Skill_Phaselock_DiminishingReturns");
 const TCHAR* const CooldownManagerSkill = TEXT("GD_Siren_Skills.Phaselock.Skill_Phaselock_CooldownManager");
-// Constraint evaluator classes the host maps to its own state (GateOpen). Their Evaluate() is native.
-const TCHAR* const WeaponActionEvaluator = TEXT("WillowGame.WeaponActionAvailableExpressionEvaluator");
-const TCHAR* const HealthStateEvaluator = TEXT("WillowGame.HealthStateExpressionEvaluator");
-const TCHAR* const VehiclePassengerEvaluator = TEXT("WillowGame.VehiclePassengerExpressionEvaluator");
 
 // The single value of a helper skill's effect on Attribute with ModifierType (helpers carry one value per grade, all
 // equal in this data; anything else is reported, not guessed).
@@ -36,6 +32,11 @@ bool HelperValue(const TSharedPtr<FJsonObject>& Skill, const FString& Attribute,
     return false;
 }
 }
+
+// Constraint evaluator classes the host maps to its own state (GateOpen). Their Evaluate() is native.
+const TCHAR* const FOpenWillowPhaselockData::WeaponActionEvaluator = TEXT("WillowGame.WeaponActionAvailableExpressionEvaluator");
+const TCHAR* const FOpenWillowPhaselockData::HealthStateEvaluator = TEXT("WillowGame.HealthStateExpressionEvaluator");
+const TCHAR* const FOpenWillowPhaselockData::VehiclePassengerEvaluator = TEXT("WillowGame.VehiclePassengerExpressionEvaluator");
 
 bool FOpenWillowPhaselockData::Load(const FString& File, FString& OutError)
 {
