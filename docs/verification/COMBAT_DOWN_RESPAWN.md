@@ -132,3 +132,28 @@ Steps added to `--combat-run` (`src/combat_run.cpp`; documented in the comment o
 
 and the early run (`run_early.sh`: no `tick:100`, three babies, `bleed:4` before the third kill) for 12 / 8 / 4 / 1. Without a game install: `ctest` runs `combat-synthetic`, which checks the down natives on a toy pawn
 (invented values) and that `bleed` and `cash` refuse a run without the mission bridge; `python tools/verify_combat_pawn.py --self-test` checks the new rows' PASS / FAIL / MISSING logic on invented inputs.
+
+## The host's state: shield, health and the down state in the UE host (2026-11-03, maya lane)
+
+AI-assisted (Claude). `host/ue5/OpenWillow/Source/OpenWillow/OpenWillowMayaState.{h,cpp}` holds Maya's survival state as plain C++ (no world):
+the walker passes game time in and does the presentation (weapon put-away, Phaselock end, teleport, logs). The down rules that were in
+`OpenWillowWalker.cpp` moved there unchanged; what is new is the shield and one damage entry point.
+
+- **Stats in one struct.** `FOpenWillowMayaStats` holds every number the rules read (maximum health, health regeneration, shield capacity,
+  recharge delay and rate, the bleed-out multiplier, the second-wind and respawn fractions). `FOpenWillowMayaState::Effective()` is the one
+  place the rules read them from; the skills lane adds its modifiers there.
+- **Shield first, then health.** A hit takes the shield first; the hit that empties it sends the rest to health in the same hit (live:
+  COMBAT_GOLDEN_TRACE.md step 9, 31.616 = 23.387 + 8.229). The amount is the damage as it arrives at the pools: the stock pipeline's factors
+  (the 0.715 to 0.741 seen live) are not applied here and are the caller's.
+- **Recharge.** Every hit restarts the delay; after it the shield rises at the rate, up to the capacity (live: the shield rose 1.613-1.618 s
+  after the last hit, the delay read 1.611 s plus one frame, at about 25.9 per second; step 10). Health does not regenerate (live rates 0).
+  The numbers come from the equipped shield's card (`Capacity`, `Recharge Rate`, `Recharge Delay`; the last two labels are BL2's card labels
+  and have not been seen in the local card data: UNVERIFIED); a card without them keeps the live read for the one shield measured
+  (1.611 s, 25.88 per second) as a HOST STAND-IN.
+- **Host rules, UNVERIFIED:** no recharge while down; the session's first shield starts full; a swapped shield starts empty and waits its
+  delay; the second wind raises the shield to 90 % of its capacity (live: section D) and the respawn fills it.
+- **`OpenWillowApplyDamageToPlayer(WorldContext, Amount, Causer, SourceLocation)`** (in `OpenWillowMayaState.h`) is the entry point for
+  enemies and hazards; UE's `ApplyDamage` reaches the same path through the walker's `TakeDamage`.
+- **Checks.** `OpenWillow.MayaState` (UE automation, `OpenWillowMayaStateTest.cpp`, invented numbers only) pins the arithmetic: shield then
+  health, the delay and rate, the bleed-out cut for successive injuries, the second wind, the dead state, the respawn after the death camera,
+  a revive on a refill, a swapped shield. The in-engine `-owhuddownshots` run and `tools/check_hud_down.py` keep checking the down timeline.

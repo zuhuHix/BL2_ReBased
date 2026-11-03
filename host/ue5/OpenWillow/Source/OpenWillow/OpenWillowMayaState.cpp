@@ -1,0 +1,137 @@
+// AI-assisted (Claude). See OpenWillowMayaState.h and docs/verification/COMBAT_DOWN_RESPAWN.md ("The host's state").
+#include "OpenWillowMayaState.h"
+#include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
+#include "OpenWillowWalker.h"
+
+FOpenWillowDamageResult FOpenWillowMayaState::ApplyDamage(float Amount, float Now)
+{
+    FOpenWillowDamageResult Result;
+    if (IsDown())
+    {
+        Result.bIgnored = true;
+        return Result;
+    }
+    if (Amount <= 0.f) return Result;
+    // Live (COMBAT_GOLDEN_TRACE.md step 9): each hit came off the shield; the hit that emptied it sent the remainder to
+    // health in the same hit. Every hit restarts the recharge delay (step 10), a health-only hit included.
+    LastDamageAt = Now;
+    Result.ToShield = FMath::Min(Amount, Shield);
+    Shield -= Result.ToShield;
+    Result.ToHealth = FMath::Min(Amount - Result.ToShield, Health);
+    Health -= Result.ToHealth;
+    if (Health <= 0.f)
+    {
+        GoDown(Now);
+        Result.bWentDown = true;
+    }
+    return Result;
+}
+
+void FOpenWillowMayaState::GoDown(float Now)
+{
+    // BeginState of the injured state (COMBAT_DOWN_RESPAWN.md "Bleed-out"): the cut uses the counter as it was before
+    // this injury, at least 1 s is left; only then is the counter raised (an injury within 30 s of the previous one) or reset.
+    const FOpenWillowMayaStats S = Effective();
+    const float Total = BaseBleedout * S.BleedoutMultiplier;
+    Health = 0.f;
+    Phase = EOpenWillowDownPhase::Injured;
+    DownAt = Now;
+    BleedSeconds = FMath::Max(Total - Total / MaxSuccessive * SuccessiveInjuries, 1.f);
+    SuccessiveInjuries = Now - LastInjuryAt < SuccessiveWindow ? SuccessiveInjuries + 1 : 0;
+    LastInjuryAt = Now;
+}
+
+FOpenWillowMayaState::ETickEvent FOpenWillowMayaState::Tick(float Now, float DeltaSeconds)
+{
+    const FOpenWillowMayaStats S = Effective();
+    if (Phase == EOpenWillowDownPhase::Up)
+    {
+        // The shield waits the delay after the last hit, then rises at the rate (live: 1.613-1.618 s, one frame past the
+        // read delay, then about 25.9 per second; step 10). Not while down (host rule, UNVERIFIED).
+        if (Now - LastDamageAt >= S.ShieldRechargeDelay && Shield < S.ShieldCapacity)
+            Shield = FMath::Min(S.ShieldCapacity, Shield + S.ShieldRechargeRate * DeltaSeconds);
+        if (S.HealthRegenRate > 0.f && Health > 0.f)
+            Health = FMath::Min(S.MaxHealth, Health + S.HealthRegenRate * DeltaSeconds);
+        return ETickEvent::None;
+    }
+    if (Phase == EOpenWillowDownPhase::Injured && Now - (DownAt + TargetedDelay) > BleedSeconds)
+    {
+        Phase = EOpenWillowDownPhase::Dead;
+        DeadAt = Now;
+        return ETickEvent::BledOut;
+    }
+    if (Phase == EOpenWillowDownPhase::Dead && Now - DeadAt >= DeathCamera) return ETickEvent::RespawnDue;
+    return ETickEvent::None;
+}
+
+bool FOpenWillowMayaState::SecondWind(float Now)
+{
+    if (Phase != EOpenWillowDownPhase::Injured) return false;
+    const FOpenWillowMayaStats S = Effective();
+    Health = FMath::Max(Health, S.MaxHealth * S.SecondWindHealthPct * S.RevivalHealthMultiplier);
+    Shield = FMath::Max(Shield, S.ShieldCapacity * S.SecondWindShieldPct);
+    Phase = EOpenWillowDownPhase::Up;
+    SecondWindAt = Now;
+    return true;
+}
+
+void FOpenWillowMayaState::Respawn(float Now)
+{
+    const FOpenWillowMayaStats S = Effective();
+    Health = S.MaxHealth * S.RespawnHealthPct;
+    Shield = S.ShieldCapacity;
+    Phase = EOpenWillowDownPhase::Up;
+    SuccessiveInjuries = 0;
+    RespawnAt = Now;
+}
+
+bool FOpenWillowMayaState::SetHealth(float NewMax, float NewCurrent, float Now)
+{
+    Base.MaxHealth = NewMax;
+    Health = NewCurrent;
+    if (Phase != EOpenWillowDownPhase::Injured || Health <= 0.f) return false;
+    Phase = EOpenWillowDownPhase::Up;
+    SecondWindAt = Now;
+    return true;
+}
+
+void FOpenWillowMayaState::EquipShield(float Capacity, float RechargeDelay, float RechargeRate, bool bStartFull, float Now)
+{
+    Base.ShieldCapacity = FMath::Max(0.f, Capacity);
+    Base.ShieldRechargeDelay = FMath::Max(0.f, RechargeDelay);
+    Base.ShieldRechargeRate = FMath::Max(0.f, RechargeRate);
+    Shield = bStartFull ? Base.ShieldCapacity : 0.f;
+    LastDamageAt = Now;
+}
+
+bool FOpenWillowMayaState::WeaponReady(float Now) const
+{
+    if (Phase == EOpenWillowDownPhase::Up) return true;
+    return Phase == EOpenWillowDownPhase::Injured && Now >= DownAt + TargetedDelay;
+}
+
+float FOpenWillowMayaState::BleedLeft(float Now) const
+{
+    if (Phase == EOpenWillowDownPhase::Up) return 1.f;
+    if (Phase == EOpenWillowDownPhase::Dead) return 0.f;
+    const float Bled = Now - (DownAt + TargetedDelay);
+    return FMath::Clamp(1.f - FMath::Max(0.f, Bled) / BleedSeconds, 0.f, 1.f);
+}
+
+float FOpenWillowMayaState::HealthFraction() const
+{
+    return FMath::Clamp(Health / FMath::Max(1.f, Effective().MaxHealth), 0.f, 1.f);
+}
+
+float FOpenWillowMayaState::ShieldFraction() const
+{
+    const float Capacity = Effective().ShieldCapacity;
+    return Capacity > 0.f ? FMath::Clamp(Shield / Capacity, 0.f, 1.f) : 0.f;
+}
+
+float OpenWillowApplyDamageToPlayer(const UObject* WorldContext, float Amount, AActor* Causer, const FVector& SourceLocation)
+{
+    auto* Maya = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(WorldContext, 0));
+    return Maya ? Maya->ApplyDamageToPlayer(Amount, Causer, SourceLocation) : 0.f;
+}
