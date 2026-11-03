@@ -159,6 +159,36 @@ bool UOpenWillowSkills::TrySpend(int32 Branch, int32 Tier, int32 Cell, FString& 
     return true;
 }
 
+int32 UOpenWillowSkills::ResetTree()
+{
+    const int32 Refund = SpentPoints();
+    ActionGrade = 0;
+    for (TArray<FTier>& Branch : Branches)
+        for (FTier& Tier : Branch)
+            for (FSkill& Skill : Tier.Skills) Skill.Grade = 0;
+    return Refund;
+}
+
+int32 UOpenWillowSkills::ResetCost(int32 AtLevel)
+{
+    // Multiplier x (Level ^ Power + Offset) with Multiplier 100, Level 1.12, Power = the player level, no offset.
+    const float Value = 100.f * FMath::Pow(1.12f, float(AtLevel));
+    return int32(FMath::Min(double(Value), double(MAX_int32)));
+}
+
+bool UOpenWillowSkills::PurchaseReset(int32& InOutMoney, FString& OutReason)
+{
+    const int32 Cost = ResetCost(Level);
+    if (InOutMoney < Cost)
+    {
+        OutReason = FString::Printf(TEXT("respec costs %d credits, %d held"), Cost, InOutMoney);
+        return false;
+    }
+    InOutMoney -= Cost;
+    ResetTree();
+    return true;
+}
+
 FString UOpenWillowSkills::StateJson() const
 {
     // Skill ids are installed object paths (letters, digits, '.', '_'), so

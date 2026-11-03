@@ -80,3 +80,12 @@ scored the three Skills pairs 6.7-8.4, its D6/D7 remarks mixing the two pairs up
 `tests/skill_navigation_test.js` uses synthetic tiers and checks the observed
 four-step destination shape, column matching, tie handling and limits. It also
 checks that `serve.py` routes every script the Skills page loads.
+
+## Spend rule on the page (2026-11-03)
+
+The page's copy of the host's spend rule (which tiers look open, whether the footer offers "Spend Point") moved from
+`skills.js` into `tools/hud_overlay/skill_rules.js`, a pure module like `skill_nav.js`. `tests/skill_rules_test.js`
+(`node tests/skill_rules_test.js`, synthetic tree) checks the action-skill gate, the 5-points-per-tier gate summed over
+lower tiers, max grade, no points, clamping of host grades and the state after a respec (trees closed again). The host
+still decides every spend (`UOpenWillowSkills::TrySpend`); the page rule only mirrors it, and the refusal reasons use
+the host's words so the two can be compared line by line.
