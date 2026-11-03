@@ -41,7 +41,11 @@ FLook CurrentInspect()
 {
     static const FLook Look = []
     {
+        // Fitted 2026-11-04 (UNVERIFIED stand-in light, like the world look): the slice Jakobs pistol's side capture against the
+        // real Inspect frame of the same gun, registered by its bounds; a sweep of four sets (WEAPON_VISUALS.md section 19) put
+        // the 25th-75th luma percentiles within 6 of the real frame (1.6 / 1.2 / 0.5 left them 21-28 darker).
         FLook Result = Current();
+        Result.Ambient = 3.2f; Result.Key = 0.7f; Result.Fill = 0.3f;
         TArray<float> V;
         if (ParseList(TEXT("owinspectlook="), V) && V.Num() == 5)
         {
