@@ -37,6 +37,21 @@ FLook Current()
     return Look;
 }
 
+FLook CurrentInspect()
+{
+    static const FLook Look = []
+    {
+        FLook Result = Current();
+        TArray<float> V;
+        if (ParseList(TEXT("owinspectlook="), V) && V.Num() == 5)
+        {
+            Result.Diffuse = V[0]; Result.Ambient = V[1]; Result.Key = V[2]; Result.Fill = V[3]; Result.Emissive = V[4];
+        }
+        return Result;
+    }();
+    return Look;
+}
+
 void Apply(USkeletalMeshComponent* Mesh, bool bSceneCapture)
 {
     if (!Mesh) return;
@@ -61,7 +76,7 @@ void Apply(USkeletalMeshComponent* Mesh, bool bSceneCapture)
 void Configure(UMaterialInstanceDynamic* Instance, bool bSceneCapture)
 {
     if (!Instance || FParse::Param(FCommandLine::Get(), TEXT("owgunnolook"))) return;
-    const FLook Look = Current();
+    const FLook Look = bSceneCapture ? CurrentInspect() : Current();
     Instance->SetScalarParameterValue(TEXT("OW_Diffuse"), Look.Diffuse);
     Instance->SetScalarParameterValue(TEXT("OW_Ambient"), Look.Ambient);
     Instance->SetScalarParameterValue(TEXT("OW_Key"), Look.Key);

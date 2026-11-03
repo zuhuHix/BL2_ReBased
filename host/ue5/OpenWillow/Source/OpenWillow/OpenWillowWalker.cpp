@@ -2475,6 +2475,15 @@ void AOpenWillowWalker::RunGunShots(float Now)
             FParse::Value(FCommandLine::Get(), TEXT("owgunradius="), Radius);
             const bool bSaved = GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_side.png"), *Id), 0.f, 0.f, Radius, 1280, 720);
             UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s side view %s"), *Id, bSaved ? TEXT("saved") : TEXT("FAILED"));
+            // Optional Inspect turntable for the gun-look critic: -owgunturn=<yaw>,<yaw>,... (degrees about the gun, pitch 15).
+            FString Turn;
+            if (FParse::Value(FCommandLine::Get(), TEXT("owgunturn="), Turn, false))
+            {
+                TArray<FString> Yaws;
+                Turn.ParseIntoArray(Yaws, TEXT(","));
+                for (const FString& Yaw : Yaws)
+                    GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_turn%s.png"), *Id, *Yaw), FCString::Atof(*Yaw), 15.f, Radius, 1280, 720);
+            }
         }
         ++GunShotStep;
         break;
