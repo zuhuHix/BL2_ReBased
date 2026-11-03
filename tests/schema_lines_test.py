@@ -60,8 +60,16 @@ class SchemaLinesTest(unittest.TestCase):
 
     def test_no_tool_schema_repeats_a_key(self):
         checked = 0
+        skipped = []
         for name, attribute in schema_modules():
-            value = getattr(importlib.import_module(name), attribute, None)
+            try:
+                module = importlib.import_module(name)
+            except ModuleNotFoundError as missing:
+                # A tool that needs an optional third-party package (Pillow, numpy) the CI runner
+                # lacks; the composed schemas this test exists for import without them (checked below).
+                skipped.append((name, missing.name))
+                continue
+            value = getattr(module, attribute, None)
             if not isinstance(value, (str, list, tuple)):
                 continue
             with self.subTest(module=name, attribute=attribute):
@@ -69,6 +77,8 @@ class SchemaLinesTest(unittest.TestCase):
                 self.assertEqual(repeated, [], f'{name}.{attribute} repeats {repeated}')
                 checked += 1
         self.assertGreater(checked, 5)
+        composed = {'weapon_recipe', 'slice_values', 'loot_pools', 'prepare_slice_world'}
+        self.assertEqual([n for n, _ in skipped if n in composed], [], f'skipped {skipped}')
 
     def test_slice_values_writes_a_valid_schema(self):
         """slice_values.build composes its schema at run time; capture what it hands the reader."""
