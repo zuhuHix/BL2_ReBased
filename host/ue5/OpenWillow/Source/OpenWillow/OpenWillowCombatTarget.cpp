@@ -502,7 +502,12 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         if (Since < RespawnSeconds) return;
         bDead = false;
         Health = MaxHealth;
+        // A respawned target starts at rest: no knock and no last-hit momentum carried over from the previous life.
+        Knock = FVector::ZeroVector;
+        LastMomentum = FVector::ZeroVector;
+        LastVelocityChange = FVector::ZeroVector;
         SetActorLocation(HomeLocation);
+        KnockOrigin = HomeLocation;
         Pivot->SetRelativeScale3D(FVector(1.f));
         Pivot->SetRelativeLocation(FVector::ZeroVector);
         SetActorHiddenInGame(false);
@@ -660,6 +665,9 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     {
         bDead = true;
         bPhaselocked = false;
+        // A dead target does not slide. The last-hit record (LastMomentum, LastVelocityChange) stays until respawn: the
+        // shooter reads it right after this hit to count the push.
+        Knock = FVector::ZeroVector;
         DiedAt = Now;
         ClearPresentation();
         SetActorEnableCollision(false);

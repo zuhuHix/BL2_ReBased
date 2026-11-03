@@ -182,7 +182,7 @@ class Cli(unittest.TestCase):
 
     def test_exit_codes(self):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
-                                  segment('made_trace', 0, 0, 5), result('made_trace')))
+                                  segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace')))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
         code, out = self.main(log(result('made_trace', direct='1.00')), '--guns', 'made_trace')
@@ -249,6 +249,80 @@ class Momentum(unittest.TestCase):
         extra = {}
         check.read_log(log(segment('x', 0, 0, 5), result('x')), extra)
         self.assertEqual(extra['push'], {})
+
+    def test_wide_excludes_accelerating_bullets(self):
+        accelerating = {'fire_type': None, 'projectile': {'acceleration': {'X': 500.0, 'Y': 0, 'Z': 0}}}
+        self.assertFalse(check.expectations(recipe(10, firing=accelerating))['wide'])
+        still = {'fire_type': None, 'projectile': {'acceleration': {'X': 0, 'Y': 0, 'Z': 0}}}
+        self.assertTrue(check.expectations(recipe(10, firing=still))['wide'])
+
+
+def splash_line(scale, momentum, source='shot'):
+    return (f'LogTemp: Display: OWFIRING splash Dummy distance 120 scale {scale} momentum {momentum} source {source}')
+
+
+class SplashMomentum(unittest.TestCase):
+    def expected(self, momentum=10000.0, throw=0.0):
+        firing = {'fire_type': 'EWWFT_Rocket', 'instant_hit_momentum': 10,
+                  'projectile': {'explode_on_impact': True, 'splash': {'damage': 100, 'momentum': momentum}}}
+        if throw:
+            firing['reload_throw'] = {'projectile': {'splash': {'momentum': throw}}}
+        return check.expectations(recipe(10, firing=firing))
+
+    def lines(self, *body):
+        extra = {}
+        check.read_log(log(*body, result('g', kind='Rocket')), extra)
+        return extra['splash']['g']
+
+    def test_recipe_times_scale_passes(self):
+        lines = self.lines(splash_line(1.0, 10000.0), splash_line(0.604, 6040.0))
+        self.assertEqual(check.check_momentum(fields(push('g')), None, self.expected(), 0, lines), [])
+
+    def test_zero_or_wrong_splash_momentum_fails(self):
+        for bad in (splash_line(1.0, 0.0), splash_line(0.5, 10000.0)):
+            fails = check.check_momentum(fields(push('g')), None, self.expected(), 0, self.lines(bad))
+            self.assertTrue(any('splash momentum' in reason for reason in fails), fails)
+
+    def test_exploding_shots_without_splash_lines_fail(self):
+        fails = check.check_momentum(fields(push('g')), None, self.expected(), 0, self.lines())
+        self.assertTrue(any('no OWFIRING splash line' in reason for reason in fails), fails)
+
+    def test_throw_lines_use_the_throw_momentum(self):
+        lines = self.lines(splash_line(1.0, 10000.0), splash_line(0.5, 250.0, 'throw'))
+        self.assertEqual(check.check_momentum(fields(push('g')), None, self.expected(throw=500.0), 0, lines), [])
+
+    def test_splash_lines_belong_to_the_next_result(self):
+        extra = {}
+        check.read_log(log(splash_line(1.0, 1.0), result('a'), splash_line(1.0, 2.0), splash_line(1.0, 3.0), result('b')),
+                       extra)
+        self.assertEqual([line['momentum'] for line in extra['splash']['a']], [1.0])
+        self.assertEqual([line['momentum'] for line in extra['splash']['b']], [2.0, 3.0])
+
+
+class RequiredMarkers(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        write_recipes(self.folder.name, {'made_trace': recipe(10.0)})
+        self.log = Path(self.folder.name) / 'run.log'
+        self.log.write_text(log(segment('made_trace', 0, 0, 5), result('made_trace')), encoding='utf-8')
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def run_main(self, *extra):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = check.main([str(self.log), '--items', self.folder.name, '--guns', 'made_trace', *extra])
+        return code, out.getvalue()
+
+    def test_missing_push_lines_fail_in_normal_mode(self):
+        code, out = self.run_main()
+        self.assertEqual(code, 1, out)
+        self.assertIn('no OWFIRING push line', out)
+
+    def test_legacy_flag_grades_an_old_log_without_them(self):
+        code, out = self.run_main('--legacy')
+        self.assertEqual(code, 0, out)
 
 
 def fields(line):
