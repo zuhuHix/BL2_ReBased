@@ -3338,8 +3338,10 @@ AI-assisted (Claude). Records: `docs/verification/WEAPON_PROJECTILES.md` section
   segment; quest check `lent_pistol_shot_carries_its_damage_type_to_dummy` now expects the bullet hit first and, for an
   exploding gun, the explosion hit after it. New `tools/real_game/weapon_parity2_capture.ps1` and its probe (not yet run to
   completion).
-- **Results.** Critic 6.3 -> 6.5 / 10 (firing 6.1 -> 6.5); target 8 not reached. Firing suite 13 PASS / 1 FAIL
-  (`pistol_tediore` throw hits a wall; cause not found, not touched by this change). `test_quest` 111/112: the failing check
+- **Results.** Critic 6.3 -> 6.5 / 10 (firing 6.1 -> 6.5); target 8 not reached. Firing suite 14 PASS / 0 FAIL after review
+  round 1 (the round-0 Tediore failure came from the test's per-segment dummy refill: a dummy that never died never respawned
+  home and drifted; the test now returns it home before each gun). Shot effects have a per-frame cosmetic budget (96 actors;
+  damage unaffected). `test_quest` 111/112: the failing check
   (`natural_level_up_scales_weapon_damage_for_duration`) needs the recipes' `damage_stack`, which this PC's local slice
   recipes lack (local data).
 - **Open, for a live session:** world FOV 77.55 vs 90 (HUD-canvas projection), the equal-level status chance, the zoomed

@@ -102,6 +102,18 @@ public:
     void ResetKnock() { Knock = FVector::ZeroVector; KnockOrigin = GetActorLocation(); }
     // Test fixture: a living dummy back to full health (the firing test refills it per segment).
     void RestoreHealth() { if (!bDead) Health = MaxHealth; }
+    // Test fixture: a living dummy back at its home spot, at rest and at full health, as a respawn would leave it (the firing
+    // test calls it before each gun, so a dummy that never dies does not drift with the pushes of the earlier guns).
+    void ResetForTest()
+    {
+        if (bDead) return;
+        Health = MaxHealth;
+        SetActorLocation(HomeLocation);
+        Knock = FVector::ZeroVector;
+        LastMomentum = FVector::ZeroVector;
+        LastVelocityChange = FVector::ZeroVector;
+        KnockOrigin = HomeLocation;
+    }
     class USkeletalMeshComponent* GetStockMesh() const { return StockMesh; }
     TArray<FOpenWillowDamagePopup> Popups;
 private:
