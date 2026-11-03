@@ -38,11 +38,10 @@ if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 # --- lock: the machine-wide UE run lock (tools/ue_lock.ps1; waits while any editor runs), released in finally ---
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
-Enter-OwUeLock -Owner 'test_mission_log' -TimeoutSeconds $LockWaitSeconds -PollSeconds 5
-
 $exitCode = 2
 $process = $null
 $server = $null
+Enter-OwUeLock -Owner 'test_mission_log' -TimeoutSeconds $LockWaitSeconds -PollSeconds 5
 try {
     $url = "http://127.0.0.1:$Port/"
     $pages = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'hud_overlay')).Path
