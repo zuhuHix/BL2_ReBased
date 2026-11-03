@@ -1,8 +1,9 @@
 // Own-made glass-sheet stand-in for the StatusMenu pages. UNVERIFIED: the
 // original ring brightens the scene, while this page can only composite alpha.
 // Measured on local/realgame/d20 D1, D2g and D7 (1280x720): scanline pitch is
-// about 6 px; the curved bright edges sit around y=25..70 and y=653..690, with
-// the side edges slanting inward toward the bottom.
+// about 6 px; the top edge sits around y=64..70 (flatter than a plain arc) and
+// the lower edge around y=653..690 (10 px higher cut across the hint row in
+// round 23), with the side edges slanting inward toward the bottom.
 (() => {
   const WIDTH = 1280, HEIGHT = 720, SCANLINE_PITCH = 6;
   const presentation = document.getElementById('presentation');
@@ -46,8 +47,8 @@
 
     // A very light sheet body keeps the colour more cyan near its curved edges.
     context.beginPath();
-    context.moveTo(-12, 68);
-    context.bezierCurveTo(290, 25, 950, 20, 1290, 56);
+    context.moveTo(-12, 73);
+    context.bezierCurveTo(290, 31, 950, 31, 1290, 69);
     context.lineTo(1238, 658);
     context.bezierCurveTo(930, 689, 320, 682, 30, 655);
     context.closePath();
@@ -55,9 +56,9 @@
     context.fill();
 
     // The local captures show fine horizontal lines about six pixels apart.
-    context.fillStyle = 'rgba(3, 22, 54, 0.075)';
+    context.fillStyle = 'rgba(3, 22, 54, 0.09)';
     for (let y = 0; y < HEIGHT; y += SCANLINE_PITCH) context.fillRect(0, y, WIDTH, 1);
-    context.fillStyle = 'rgba(125, 220, 244, 0.025)';
+    context.fillStyle = 'rgba(125, 220, 244, 0.03)';
     for (let y = 2; y < HEIGHT; y += SCANLINE_PITCH) context.fillRect(0, y, WIDTH, 1);
 
     // Shallow curved top/bottom and slanted side edges; subtle at the measured
@@ -69,13 +70,13 @@
     context.shadowColor = 'rgba(70, 213, 242, 0.32)';
     context.shadowBlur = 5;
     context.beginPath();
-    context.moveTo(-12, 68);
-    context.bezierCurveTo(290, 25, 950, 20, 1290, 56);
+    context.moveTo(-12, 73);
+    context.bezierCurveTo(290, 31, 950, 31, 1290, 69);
     context.moveTo(-12, 653);
     context.bezierCurveTo(320, 682, 930, 689, 1290, 656);
-    context.moveTo(-12, 68);
+    context.moveTo(-12, 73);
     context.bezierCurveTo(5, 238, 18, 476, 30, 655);
-    context.moveTo(1290, 56);
+    context.moveTo(1290, 69);
     context.bezierCurveTo(1274, 238, 1256, 487, 1238, 658);
     context.stroke();
     context.restore();

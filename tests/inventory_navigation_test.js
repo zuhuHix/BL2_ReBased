@@ -424,8 +424,18 @@ check('D5 Inspect fit, zoom and hint text track the measured targets (UNVERIFIED
   assert.equal(run('INSPECT_CARD_LEFT'), 56); // measured target inputs for the visible frame inset
   assert.equal(run('INSPECT_CARD_TOP'), 50);
   assert.equal(run('INSPECT_ZOOM'), 1.54);
-  assert.equal(run('INSPECT_HINT_FONT_SIZE'), 12);
+  assert.equal(run('INSPECT_HINT_FONT_SIZE'), 14);
   assert.equal(run('CARD_FIT.inspect.width * FRAME_INSET'), 293);
-  assert.equal(run('CARD_FIT.inspect.aspect'), 306/241);
+  assert.equal(run('CARD_FIT.inspect.aspect'), 306/224);
+  assert.equal(run('CARD_FIT.inspect.y'), 47);
+  assert.ok(run('INSPECT_HINT_EXTRA_WIDTH') > 0); // the 14-px hint must fit one line (round 23 capture wrapped it without this)
+});
+check('Round-23 card and plate fits keep the measured D20 targets (UNVERIFIED)', () => {
+  assert.equal(run('CARD_FIT.single.y'), 86);
+  assert.equal(run('CARD_FIT.single.heightScale'), 1.06);
+  assert.equal(run('CARD_FIT.right.y'), 105);
+  assert.equal(run('CARD_FIT.right.heightScale'), 1.06);
+  assert.deepEqual(JSON.parse(run('JSON.stringify(FOCUS_CHROME_TARGETS.map(([, target]) => target))')),
+    [{left:770, top:538, width:176, height:81}, {left:210, top:493, width:296, height:146}]);
 });
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);

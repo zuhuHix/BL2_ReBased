@@ -1340,3 +1340,60 @@ Host captures: `-owinvshots` with `inventory.html?logsnapshot` (frames and the l
    real-game observation (note that the "Better UI Controls" mod was active in the 2026-10-22 session).
 5. **Runtime-added items:** the host has no kill loot yet (PR #59's loot exists only in the VM); items added at runtime are
    Maya's own drops picked up again, which the action suite's drop/pickup steps check against the page snapshot.
+
+## Round 23 (2026-11-03, inventory parity lane, second PC with bl-sdk)
+
+AI-assisted (Claude orchestrating; Haiku for the real-game session, Luna (Codex) as the independent critic). Host frames, critic
+reports, the A/B key and the session logs stay under ignored `local/inv23/` and `local/realgame/nk/`. Host runs: `-owinvshots` with
+the round-21 bounded recipe set, `-owlevel=36`, an empty gear manifest, `-owslots=2 -owmoney=0 -owerid=0` (as in rounds 20-22),
+compared with the matched D20 real frames.
+
+**Found and fixed.**
+- **VALUE thumbnails blank (round-21 item 1): cause found.** The movie's inventory turn (`_yrotation`) sways from about 11 to 5
+  degrees for a couple of seconds after some sorts. Every step re-ran `render()`, which rebuilt each cell button with a new `<img>`;
+  the new images were still decoding when the D2e shot was taken (a page log of every render showed the four VALUE cells placed,
+  visible, not covered and with their image `complete` flag flipping between renders). A decoded thumbnail is now moved into the
+  rebuilt button instead of being loaded again. The 2026-11-03 pc-hummer note ("not reproduced") was a timing difference between machines.
+- **Thumbnails over the card.** Round 22's change that stopped the single card hiding backpack cells also stopped it hiding the
+  equipped column, so equipped thumbnails drew over the card text. In the single-card view the card now hides equipped and gear
+  cells only; compare cards hide both, as before.
+- **Inspect turn and hint (round-21 item 4).** The real D5 card's top edge drops about 7 px over 200 px and the hint rises to the
+  right, so the page now keeps the menu's turn in Inspect (the movie itself sets 5 degrees there); the 3D picture moved out of the
+  turned layer. The hint font went from 12 to 14 and its text field is widened about its centre, so the line spans about x 217-1018
+  (real 213-1029). The ring emblem stand-in is a little stronger. All UNVERIFIED fits.
+- **Card frame, focus panel, plates, glass sheet (round-21 item 3).** Round 22's geometry fits are back without its sort tie-break
+  change (that change is what moved the ALL selection). Then, from the round-23 critic measurements: single card 8 px up, the right
+  compare card 13 px up with the single card's 6% height stretch, focus panel bottom about 7 px higher, the count and ammo plates
+  fitted to their drawn size (the clips' bounds are wider than the plates, so the round-22 targets drew them about 34 and 42 px too
+  narrow), glass-sheet top edge flatter. Measured afterwards on D2: card x212-528/y92-414 (real 211-527/91-414), ammo plate
+  x235-487/y499-637 (real the same), count plate x801-918/y543-619 (real x800-919/y542-620). Fits to D20 only, UNVERIFIED elsewhere.
+
+**Critic scores (14 pairs).** Round 1 (first fit) **7.67**; round 2 **7.39** (a different critic: the skills pages, unchanged, fell from
+8.8/9.0 to 7.2/7.5, so the two means are not comparable); round 3 scored the final frames and the round-21 frames blind as sets A
+and B with one critic: **final 7.99, round 21 7.84**. Per pair the two sets scored the same except D2e (8.2 against 6.8) and D5
+(5.8 against 5.1), so the geometry fits did not move that critic's scores. Target 8 not reached.
+
+**Still open, in the last critic's order** (critic remarks checked against the frames where they conflict):
+1. Inspect weapon is white (the preview actor's paint, outside this lane's files); its frame is also about 18 px right and 13 px tall.
+2. Inspect emblem: the rings are a stand-in for the faint Vault emblem.
+3. Glass-sheet edges straighter than the real bowed edge.
+4. Thumbnail renders differ from the real ones (the static previews).
+5. D3: right card border yellow, not green, and about 14 px short. The critic's "extra Sort hint" in D3/D4 is wrong: checked on
+   the frames, D3 shows no Sort entry and D4 a dimmed one, as in the real frames.
+6. Zoom lines 0.1 high on D1, D2, D2c (3.3x for 3.2x, 2.5x for 2.4x). The value comes from `src/weapon_gen.cpp` (round half up of
+   80 / zoomed FOV), outside this lane; whether the game truncates or uses another FOV is not settled. The D1 flavour line still wraps
+   one phrase earlier (Ruffle text metrics).
+7. D1 ammo plate about 7 px right; the money strip about 17 px wider.
+8. Skills overview tree group about 12 px narrower than real.
+
+**Number keys (round-21 item 6): not observed.** A real-game session (bl-sdk driver, saves blocked, Better UI Controls disabled for
+the session) was started twice and both times the game stopped at "Steam must be running in order to launch Borderlands 2"
+although `steam.exe` was running (probably a Steam login without the game; the Weapons lane hit the same box). Saves, config and
+SDK settings were restored and checked by hash (52 of 52 files identical), the driver removed. The host keeps 1-4 as its slot
+picker for a backpack transfer (UNVERIFIED host control).
+
+**BRANDS within-brand order (round-21 item 2): left as is** (the native quick sort; UNVERIFIED), as the 2026-11-03 note explains.
+
+**Checks.** Inventory suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE on the final page code (round-21 recipe set);
+`inventory_navigation_test.js` 41/41 (one new check); `skill_navigation_test.js` 6/6; the other page tests pass; CTest 21/21; verify_packages 9/9
+packages with exact class bodies.
