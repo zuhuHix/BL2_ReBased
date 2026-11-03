@@ -15,12 +15,12 @@ the game unless a row says otherwise.
 
 | Screen | In the slice? | Host page | Driven from | State | Checks |
 |---|---|---|---|---|---|
-| StatusMenu: Inventory | yes (loot, equip) | `inventory.html` | host inventory, VM navigation | round 21 of the earlier parity loop (critic 7.85, 14 matched pairs, 2026-10-22); open items below | `test_inventory_actions.ps1`, `inventory_navigation_test.js` |
+| StatusMenu: Inventory | yes (loot, equip) | `inventory.html` | host inventory, VM navigation | round 23 (2026-11-03): critic 7.99 against 7.84 for round 21 in one blind A/B round (14 matched pairs); open items below | `test_inventory_actions.ps1`, `inventory_navigation_test.js` |
 | StatusMenu: Skills | yes (Phaselock, points) | `skills.html` | host skills | round 21; tree navigation read from script | `SkillsTest`, `skill_navigation_test.js` |
 | StatusMenu: Missions (mission log) | yes (one mission) | `missions.html` (new) | `UOpenWillowQuest::MissionLogJson` (VM mission state) | new this round: list, summary, rewards, level panel, hints, header tabs | `mission_log_test.js` (synthetic), `test_mission_log.ps1` (in engine) |
 | StatusMenu: Map | marginal (no fast travel in the slice) | none | - | not started: `StatusMenuMap` loads a per-level map movie through `extStatusMenuMapPostMapMovieLoad`; the path given to `setMapMovie` was not observed | - |
 | StatusMenu: Badass Rank / Challenges | no | none (tab disabled) | - | not started | - |
-| Inspect (inventory) | yes | inside `inventory.html` | host preview actor | stand-in backdrop; no 3D turn on the card/hint, no emblem | action suite (inspect steps) |
+| Inspect (inventory) | yes | inside `inventory.html` | host preview actor | stand-in backdrop with a ring emblem; menu turn on the card and hint (round 23); weapon paint white | action suite (inspect steps) |
 | Pause menu | yes (any session) | none | - | not started; the host has no pause screen | - |
 | Mission accept / turn-in screens (QuestAccept movie) | yes | none | - | not started: the host accepts and turns in with the use key near the giver (`UOpenWillowQuest::TryUse`), no briefing screen | quest suite (host flow only) |
 | Respawn (death) screen | yes | gameplay HUD's | HUD worker | outside this lane | - |
@@ -113,5 +113,6 @@ seen in the engine capture).
 1. Real-game frames and live strings: the htmlText of the description per state, the list order and category rows, the
    PC keys of the mission log, the Map movie path. Needs bl-sdk on this machine (a maintainer decision) or the other PC.
 2. Map tab; accept / turn-in briefing screens; pause menu.
-3. Inventory round-21 open list (see `INVENTORY_MOVIE_PROTOTYPE.md`): VALUE thumbnails, BRANDS order, card frame, Inspect turn
-   and emblem, zoom lines and flavour wrap, number keys.
+3. Inventory round-23 open list (see `INVENTORY_MOVIE_PROTOTYPE.md`, "Round 23"): Inspect weapon paint and emblem, glass-sheet
+   curve, thumbnail renders, D3 card border, zoom lines (`weapon_gen.cpp`) and one flavour wrap, BRANDS order (native, UNVERIFIED),
+   number keys (needs a real-game session; Steam blocked the 2026-11-03 attempt).
