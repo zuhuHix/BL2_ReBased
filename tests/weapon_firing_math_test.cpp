@@ -140,6 +140,43 @@ int main() {
     check(near(statusLevelScale(54, 7, rows), 3.0) && near(statusLevelScale(7, 54, rows), 0.1), "level scale: clamps to the last row");
     check(near(statusLevelScale(54, 7, {}), 1), "level scale: no table");
 
+    // Accuracy pool (invented numbers): impulse clamps and restarts the delay; decay only after the delay.
+    AccuracyPool pool;
+    pool.minValue = 1; pool.maxValue = 10; pool.idleRate = -4; pool.idleDelay = 0.5;
+    pool.reset(false);
+    check(near(pool.value, 1), "pool: starts at min without StartWithMaxValue");
+    pool.impulse(3);
+    check(near(pool.value, 4) && near(pool.idleFor, 0), "pool: impulse adds and restarts the delay");
+    pool.tick(0.4);
+    check(near(pool.value, 4), "pool: holds during the delay");
+    pool.tick(0.35);   // 0.25 s past the delay
+    check(near(pool.value, 3), "pool: decays only for the time past the delay");
+    pool.impulse(100);
+    check(near(pool.value, 10), "pool: clamps to max");
+    pool.tick(10);
+    check(near(pool.value, 1), "pool: decays to min, no further");
+    pool.impulse(-5);
+    check(near(pool.value, 1), "pool: a negative impulse clamps to min");
+    check(near(accuracyOffset(4.0, 1.0, 0.0, 0.0).yaw, 0), "pool cone: fully zoomed removes it");
+    check(near(accuracyOffset(4.0, 0.5, 0.0, 0.0).yaw, 0.25 * std::trunc(4.0 * RotatorUnitsPerDegree)), "pool cone: half zoom halves it");
+
+    // Kick (invented numbers).
+    check(near(Kick::amount(2.0, 0.0, 1.5), 2.0 * 182.0444) && near(Kick::amount(2.0, 1.0, 1.5), 3.0 * 182.0444),
+          "kick: impulse x 182.0444 x zoom lerp");
+    KickData kd;
+    kd.up = 1; kd.down = 0; kd.left = 0; kd.right = 0; kd.minVertical = 0.4; kd.minHorizontal = 0; kd.recoveryTime = 1; kd.speed = 10;
+    Kick kick;
+    kick.add(100, kd, 1.0, 0.5, 0.0);   // v = 0.5 up, h = 0: all vertical
+    check(near(kick.targetPitch, 100) && near(kick.targetYaw, 0), "kick: no horizontal draw puts it all on pitch");
+    kd.left = 1; kd.right = 1;
+    Kick side;
+    side.add(100, kd, 0.5, 0.5, 1.0);   // m = 50, v = 0.5, h = +1: vertical 0.4 + 0.6 x 0.5 / 1.5 = 0.6
+    check(near(side.targetPitch, 30) && near(side.targetYaw, 20), "kick: shares and FOV ratio");
+    side.tick(0.5, kd);
+    check(near(side.targetPitch, 15) && near(side.currentPitch, 15), "kick: target decays linearly, current chases");
+    side.tick(0.6, kd);
+    check(near(side.targetPitch, 0) && near(side.currentPitch, 0), "kick: targets reach 0 at the recovery time");
+
     if (failures) return 1;
     std::printf("weapon_firing_math: all checks passed\n");
     return 0;

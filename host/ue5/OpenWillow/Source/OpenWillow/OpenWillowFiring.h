@@ -80,6 +80,13 @@ struct FOpenWillowFiringData
     float SpinDownDuration = 0;
     float SpinStartMultiplier = 1;
     bool bSpinsToFullRate = false;
+    // The player's accuracy pool while this weapon is held (accuracy_pool) and the shot's impulse and kick (recoil).
+    bool bHasAccuracyPool = false;
+    bool bPoolStartsAtMax = true;
+    weapon_firing::AccuracyPool Pool;
+    float AccuracyImpulse = 0;      // PerShotAccuracyImpulse (degrees; negative on reverse-recoil types)
+    float BurstImpulseScale = 1;    // BurstShotAccuracyImpulseScale inside an automatic burst
+    weapon_firing::KickData KickData;
     FOpenWillowSplash Splash;
     FOpenWillowStatus Status;
     FString TracerTemplate;
@@ -98,6 +105,20 @@ struct FOpenWillowFiringState
     int32 PatternIndex = 0;      // NextFiringPatternIndex
     float SpinPercent = 0;       // BarrelSpinUpPercent
     FRandomStream Rng{0x0B12};   // host stream; the game's random sequence is not reproduced
+};
+
+// The player's accuracy pool and view kick between shots (one per shooter). Live, 2026-11-03 (WEAPON_PROJECTILES.md
+// section 10): the pool holds 0.2 s after a shot and then falls at its idle rate; the kick is impulse x 182.0444 units, its
+// targets fall linearly to 0 over WeaponKickRecoveryTime and the current amounts chase them at WeaponKickSpeed per second;
+// the controller rotation itself never moves, so the kick is a view offset that returns.
+struct FOpenWillowAimState
+{
+    weapon_firing::AccuracyPool Pool;
+    weapon_firing::Kick Kick;
+    FString Weapon;              // instance id whose pool limits are in Pool
+    bool bStarted = false;       // StartWithMaxValue applies once, at the first weapon
+    double AppliedPitch = 0;     // kick already added to the view (rotator units)
+    double AppliedYaw = 0;
 };
 
 // What the shots did, for the -owfiringtest report (OWFIRING result). Filled by the walker, the projectiles and the status
@@ -143,6 +164,14 @@ FLinearColor ElementColor(const FString& Element);
 bool SweepShot(const UWorld* World, FHitResult& Hit, const FVector& From, const FVector& To, const FVector& Extent,
     const FCollisionQueryParams& Query);
 bool IsElemental(const FString& Element);
+// Once per frame: the held weapon's pool limits (a new weapon clamps the value into them), the pool's idle fall and the
+// kick's decay and chase. Returns the view change to add this frame (degrees, pitch and yaw).
+FRotator TickAim(FOpenWillowAimState& State, const FOpenWillowFiringData* Held, const FString& HeldInstance, float Dt);
+// The shot's aim: the view plus one draw in the pool's cone (x 1 - zoom), shared by every pellet of the shot.
+FRotator ShotAim(const FOpenWillowAimState& State, const FRotator& View, float ZoomEffect, FRandomStream& Rng);
+// After a shot: the pool impulse (x the burst scale inside an automatic burst) and the view kick.
+void OnShot(FOpenWillowAimState& State, const FOpenWillowFiringData& Data, float ZoomEffect, float FovRatio, bool bBurstShot,
+    FRandomStream& Rng);
 // World gravity for falling projectiles (uu/s^2): the Tediore pistol throw fell at 850 = 0.85 (its GravityScaling)
 // x 1000 in Ice_P (live, 2026-10-23); whether every map uses 1000 is UNVERIFIED.
 constexpr float WorldGravityZ = -1000.f;

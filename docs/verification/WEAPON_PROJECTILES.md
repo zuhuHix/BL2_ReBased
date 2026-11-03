@@ -58,7 +58,7 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
 | Rocket `MaxSpeed` = `SpeedFormula` x the weapon's projectile speed multiplier | native 2.1 | **confirmed live**: 3,000 x 2.6 = 7,800 (Bandit, Maliwan), 3,300 x 2.6 = 8,580 (Tediore) |
 | Weapon rockets do not fall (GravityScaling 0.1 or 1.0 has no effect under their physics); thrown guns fall at GravityScaling x 1,000 | observed | live: rockets' speed constant over 1-5 s; Tediore pistol throw vz slope -850 = 0.85 x 1,000 |
 | Pellets: one aim per shot, `ProjectilesPerShot` pellets, each pattern offset then spread | native 1.2-1.4 | read; pellet count confirmed live (Jakobs 7 per shot); the spread distribution was not measured (no impact points: no hook fires at a bullet's wall hit) |
-| Spread: yaw uniform across a disc of diameter `Spread` degrees, pitch uniform on the chord | native 1.4 | read only |
+| Spread: yaw uniform across a disc of diameter `Spread` degrees, pitch uniform on the chord | native 1.4 | **confirmed live** 2026-11-03 (420 `AddSpread` draws, section 10) |
 | Pattern: one random point on the current `FiringPatternLines` line, scaled by spread when flagged, index per pellet | native 1.3 | read; the cooked lines equal the live dump (shotgun Yaw +-455) |
 | Per-pellet damage = card damage (`InstantHitDamage`); flat additions split over pellets (the split, `weapon_firing::multiProjectileDamage`, is **not used by the host**: it has no runtime modifier stack and fires the evaluated card damage) | native 1.7 | **confirmed live** on 4 of 5 guns (pistol 26.261, Jakobs 20.888, SMG 19.353, sniper 60.191 = card); a skill's flat +46,940 split over 7 Jakobs pellets confirmed the split. Dahl AR: live 21.463 vs card 19.603 (generation lane's card, section 6) |
 | Splash: full damage inside the radius when the explode behaviour sets `bDisableRadiusDamageFalloff` | data + native 3.1 | **confirmed live**: Bandit rocket 285.84 at all 21 distances 86-380 uu, gyrojet 28.98 at 86-211 uu |
@@ -74,7 +74,7 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
 | A hit changes the target's velocity by momentum / `Mass` (`Default__Pawn.Mass` 100, Engine.upk); the target then slides, slowed by `GroundFriction` 8 (`Default__PhysicsVolume`) | stock UE3 pawn rule + data | UNVERIFIED: the host applies the friction as v x (1 - 8 dt) per frame, a stand-in for the game's walking physics |
 | Wide bullets: a firing mode's `TraceExtent` makes the shot a box sweep instead of a line (light bullets each tick and traces); rockets stay lines | native 2.2 + data | read only; none of the 28 local recipes has an extent, so the in-engine check uses a host-chosen 24 uu box |
 | A trace or light-bullet firing mode's own `Behavior_Explode` (in `OnAnyImpact`) runs at every impact that is not a pass-through actor, after the bullet's `TakeDamage`; radius, damage formula, momentum and falloff are the behaviour's; `ExplosionOverrideDefinition` (an `ExplosionCollectionDefinition`, first entry whose `WeaponDamage_Is_<element>` condition holds, chosen once at weapon setup) only picks the explosion definition and so the damage type | native read 2026-11-03 (section 8) + data | the Maliwan shock pistol's value **matches live**: 45.30 x 0.8 = 36.24, falloff off, on the same bullymong; every other part UNVERIFIED in game |
-| Status chance x the level-difference scale (`GD_Globals.General.Globals.StatusEffectChanceScales`): row = min(difference, 6); shooter higher -> `HigherLevelChanceScale` (x2.0 at 6+), lower -> `LowerLevelChanceScale` (x0 at 6+) | data | **consistent with live counts** (Maya 54 vs bullymong 7: about 2 x the card chance on Maliwan pistols, section 5); a live check against a same-level target is still to do (UNVERIFIED) |
+| Status chance x the level-difference scale (`GD_Globals.General.Globals.StatusEffectChanceScales`): row = min(difference, 6); shooter higher -> `HigherLevelChanceScale` (x2.0 at 6+), lower -> `LowerLevelChanceScale` (x0 at 6+) | data | UNVERIFIED. **Equal levels did not give x1** (2026-11-03: 18 of 43 bullet procs against a 23.4 % card chance, section 10). The profile's Badass Rank, or a skill, is the likely extra factor, so the x2 against level-7 targets is not evidence for the level scale either; a skills-off rerun is queued |
 
 ## 4. The host (what it does and where it stands in for the game)
 
@@ -310,3 +310,59 @@ numbers, AI reactions) read the same data the host dummy does. Host code only; n
   given one. `tools/test_weapon_firing.ps1` now runs `tools/weapon_firing_coverage.py --only-firing` when a listed recipe
   has no firing block, and stops if one is still missing. The checker's momentum failure names that cause. `-Extra`
   passes extra game arguments (for example `-Extra '-owaimmodel'`).
+
+## 10. Accuracy pool, view kick and the spread draw, live (2026-11-03, slice projectiles lane)
+
+AI-assisted (Claude). One real-game session (`tools/real_game/projectiles_capture.ps1` with `scripts/projectiles_probe.py`;
+Save0008 Maya, Sanctuary_P then Ice_P; saving blocked, saves and config restored and hash-compared afterwards). The probe
+sampled every frame the controller's `AccuracyPool` value, its four kick fields and its rotation, and logged every
+`AddWeaponKick`, `AddSpread` and `FireAmmunition` call with the game clock. Numbers only; the dumps stay under ignored
+`local/realgame/pj/`; `tools/analyze_projectiles_live.py` prints the fits. To repeat the status part, run `projectiles_capture.ps1 -StatusOnly`. It needs `local/items/slice/status_maliwan_fire.json`: a copy of `slice_mission_pistol_fire.json` with `balance` set to `GD_Weap_Pistol.A_Weapons_Elemental.Pistol_Maliwan_2_Fire`, made by hand.
+
+**Limits of this session.** The probe's equip step left the save's own Jakobs shotgun (`WT_Jakobs_Shotgun`) in hand for every
+run, so all the numbers below come from that one gun. Maya's skills were active: a skill modifier on the weapon's
+`PerShotAccuracyImpulse` turned the type's 11 into 5.4524. The rules below are ratios and orders of events, which these
+facts do not change; per-gun values come from the data (`accuracy_pool` in the firing block) and are `UNVERIFIED` live.
+
+| Rule | Status |
+|---|---|
+| The pool rises by the shot's impulse at the shot (5.4524, every one of 8 single shots and the 60 spread shots) | **confirmed live** |
+| After a shot the pool holds, then falls linearly: hold 0.176-0.200 s (the data's 0.2 s delay to within a frame), fall -8.9 to -9.1 per second, down to its floor (1.2434 with this gun and Maya's skills) | **confirmed live** (rate and floor include the skill and weapon scales, not separated) |
+| The kick passed to `AddWeaponKick` = impulse x 182.0444, x `WeaponKickZoomMultiplier` when fully zoomed (992.58 hip, 1985.2 = x 2.0 zoomed) | **confirmed live** |
+| `TargetVertical/HorizontalKickAmt` fall linearly to 0 at `WeaponKickRecoveryTime` (0.35 s) after the kick | **confirmed live** |
+| `CurrentVertical/HorizontalKickAmt` chase the targets at exactly `WeaponKickSpeed` per second (first-order: d current = (target - current) x speed x dt; fitted 8.00 on every frame pair, the type's 8) | **confirmed live** |
+| The controller rotation never moves (pitch 0 throughout): the kick is a view offset that returns to the aim, not a permanent view change | **confirmed live** |
+| The shot's base aim includes the current kick (aim minus view averages the kick amount on shots fired during a kick) | consistent with live (not fitted) |
+| `AddSpread`: yaw uniform across the disc, pitch uniform on the chord (420 pellet draws: yaw SD 0.575 and pitch/chord SD 0.567 of the half width, uniform 0.577; none outside the disc) | **confirmed live** |
+| Fully zoomed, the pool cone vanishes (`1 - ZoomEffect`) | partly: pitch offsets near 0, but yaw offsets up to 332 units with a pool half-width of 80 (3 shots); the zoomed view wander is the suspect, UNVERIFIED |
+| The vertical / horizontal split of a kick and its signs | not fitted (this gun kicks up 3, down 0, left 0.5, right 0.5) |
+
+**Host.** `src/weapon_firing` gains `AccuracyPool` (impulse, hold, idle fall, clamp) and `Kick` (the split, the linear target
+decay, the first-order chase), checked by CTest `weapon-firing-math`. `tools/weapon_firing.py` writes the pool the held weapon
+gives the player (`accuracy_pool`: the pool definition's base values scaled by the type's activated external slots and the
+type's and parts' `ExternalAttributeEffects`) and the type's full kick fields (`recoil`). The walker draws one pool-cone offset
+per shot (x 1 - zoom) before pattern and spread, adds the impulse and the kick after the shot, and adds the change of the
+current kick to the view each frame (so the view returns when the kick has recovered). The firing suite runs without it unless
+`-owaimmodel` is given (its dummy pulls keep their aim); each shot logs `OWFIRING aim`. Not modelled: the zoomed view wander,
+the Hyperion `AlternativeWeaponKick`, skill modifiers on the pool and the impulse.
+
+**Equal-level status chance (Ice_P, third run).** The Maliwan fire pistol (the slice mission pistol's parts on the elemental
+balance `Pistol_Maliwan_2_Fire`, since a mission balance cannot be readied outside its mission), 81 shots at a bullymong whose
+level was set in memory to Maya's (6 -> 8, `SetExpLevel`). `RollChanceForStatusEffect` ran 86 times: 43 for bullet hits and 43
+for the firing mode's impact explosion. `ApplyStatusEffect` followed 18 bullet rolls (42 %) and 23 explosion rolls (53 %). The
+card's flesh chance is 23.4 %. At equal levels the level-difference scale is 1, so if it were the only missing factor (section
+3) about 10 bullet procs would be expected; 18 is 2.8 standard deviations above that. **The x1 prediction is not supported.**
+The proc rate is again about twice the card chance, as it was against a level-7 target. Maya's skills were active in this save,
+so a skill's instigated status-chance modifier can't be ruled out. The cause of the x2 stays UNVERIFIED. The host keeps the
+data's level-difference scale and the card chance; a skills-off rerun would settle it.
+
+*Likely explanation (UNVERIFIED).* The skill allocation of this save could not be read: the repository has no save reader,
+and the probe did not list the skill tree. The run did record the weapon's damage stack. It holds a single modifier,
+`GD_Challenges.BadassSkill.BadassSkill`, scale +1.0175, so 45.30 x 2.0175 = 91.39 (the live `InstantHitDamage`). The profile
+carries a large Badass Rank, and Badass Rank has an elemental effect chance stat that reaches the roll as an instigated
+chance modifier. A level-8 Maya has at most 4 skill points (NATIVE_PROGRESSION.md), so a Cataclysm skill can add at most a few
+ranks. Without either, the measured factor is 42 / 23.4 = 1.79; at 18 of 43 its 95 % interval is about 1.2 to 2.5. With a
+modifier of that size, the equal-level x1 level scale would fit. The same profile was presumably used for the 2026-10-23 counts
+(Maya 54 against level 7), so the "x2 = level scale" reading of section 3 is suspect too. The rerun, with skills and Badass
+Rank zeroed in memory, should also read the controller's `InstigatedStatusEffectStatusChanceModifier` and
+`InstigatedIncendiaryStatusChanceModifier` before firing.

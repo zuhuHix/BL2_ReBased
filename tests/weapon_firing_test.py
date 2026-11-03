@@ -345,5 +345,46 @@ class ImpactExplosionTests(unittest.TestCase):
         self.assertEqual(firing.override_explosion(source, 'Fake.Fx.Elemental', 'Slag'), 'Fake.Explosions.Zap')
 
 
+class AccuracyPoolTests(unittest.TestCase):
+    POOL = 'D_Resourcepools.PlayerPools.AccuracyPool'
+
+    def source_with_pool(self):
+        source = source_of()
+        source.package.add(self.POOL, 'WillowGame.ResourcePoolDefinition', {
+            'BaseMinValue': 3, 'BaseMaxValue': const(10), 'StartWithMaxValue': True,
+            'BaseOnIdleRegenerationRate': -5, 'BaseOnIdleRegenerationDelay': 0.25})
+        return source
+
+    def test_no_pool_definition_is_null(self):
+        self.assertIsNone(shot()['accuracy_pool'])
+
+    def test_base_values_without_modifiers(self):
+        pool = firing.build(self.source_with_pool(), recipe(), stats())['accuracy_pool']
+        self.assertEqual((pool['min'], pool['max'], pool['idle_rate']), (3, 10, -5))
+        self.assertAlmostEqual(pool['idle_delay'], 0.25)
+        self.assertTrue(pool['start_with_max'])
+
+    def test_external_slots_and_effects_scale_the_pool(self):
+        source = self.source_with_pool()
+        wt = source.package.objects['Fake.Types.WT_Fake']
+        wt['AttributeSlotEffects'] = [
+            {'SlotName': 'AccMax', 'bExternalSlot': True, 'ModifierType': 'MT_Scale',
+             'AttributeToModify': 'D_Attributes.AccuracyResourcePool.AccuracyMaxValue',
+             'BaseModifierValue': const(0), 'PerGradeUpgrade': const(-0.25)},
+            {'SlotName': 'Inactive', 'bExternalSlot': True, 'ModifierType': 'MT_Scale',
+             'AttributeToModify': 'D_Attributes.AccuracyResourcePool.AccuracyMinValue',
+             'BaseModifierValue': const(5), 'PerGradeUpgrade': const(0)}]
+        source.package.objects['Fake.Barrel.Barrel_A'].update({
+            'AttributeSlotUpgrades': [{'SlotName': 'AccMax', 'GradeIncrease': 1, 'bActivateSlot': True}],
+            'ExternalAttributeEffects': [{'AttributeToModify': 'D_Attributes.AccuracyResourcePool.AccuracyOnIdleRegenerationRate',
+                                          'ModifierType': 'MT_Scale', 'BaseModifierValue': const(0.5)}]})
+        pool = firing.build(source, recipe(), stats())['accuracy_pool']
+        # Grade 2 (base 1 + 1): -0.25 scale, a divide: 10 / 1.25; the inactive slot does nothing; +0.5 on the rate.
+        self.assertAlmostEqual(pool['max'], 8.0, places=5)
+        self.assertEqual(pool['min'], 3)
+        self.assertAlmostEqual(pool['idle_rate'], -7.5, places=5)
+        self.assertEqual(len(pool['modifiers']), 2)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -148,4 +148,57 @@ double statusLevelScale(int instigatorLevel, int targetLevel, const std::vector<
     return instigatorLevel > targetLevel ? row.higher : row.lower;
 }
 
+void AccuracyPool::impulse(double amount) {
+    value = std::clamp(value + amount, minValue, maxValue);
+    idleFor = 0;
+}
+
+void AccuracyPool::tick(double dt) {
+    if (dt <= 0) return;
+    // Only the part of the frame after the idle delay regenerates.
+    idleFor += dt;
+    const double active = std::min(dt, std::max(0.0, idleFor - idleDelay));
+    value = std::clamp(value + idleRate * active, minValue, maxValue);
+}
+
+Offset accuracyOffset(double poolDegrees, double zoomEffect, double r1, double r2) {
+    const Offset o = spreadOffset(poolDegrees, r1, r2);
+    const double keep = 1.0 - std::clamp(zoomEffect, 0.0, 1.0);
+    return {o.pitch * keep, o.yaw * keep};
+}
+
+double Kick::amount(double impulseDegrees, double zoomEffect, double zoomMultiplier) {
+    const double z = std::clamp(zoomEffect, 0.0, 1.0);
+    return impulseDegrees * 182.0444 * (1.0 + (zoomMultiplier - 1.0) * z);
+}
+
+void Kick::add(double kick, const KickData& d, double fovRatio, double r1, double r2) {
+    const double m = std::fabs(fovRatio * kick);
+    const double v = std::fabs(d.up + d.down) * r1 - d.down;
+    const double h = std::fabs(d.right + d.left) * r2 - d.left;
+    const double av = std::fabs(v), ah = std::fabs(h);
+    double vertical = d.minVertical;
+    if (av > 0) vertical += (1.0 - d.minVertical - d.minHorizontal) * av / (av + ah);
+    const double horizontal = ah > 0 ? 1.0 - vertical : d.minHorizontal;
+    targetPitch += (v < 0 ? -1.0 : 1.0) * vertical * m * (av > 0 ? 1.0 : 0.0);
+    targetYaw += (h < 0 ? -1.0 : 1.0) * horizontal * m * (ah > 0 ? 1.0 : 0.0);
+    recoverLeft = d.recoveryTime;
+}
+
+void Kick::tick(double dt, const KickData& d) {
+    if (dt <= 0) return;
+    if (recoverLeft > dt) {
+        const double keep = 1.0 - dt / recoverLeft;
+        targetPitch *= keep;
+        targetYaw *= keep;
+        recoverLeft -= dt;
+    } else {
+        targetPitch = targetYaw = 0;
+        recoverLeft = 0;
+    }
+    const double follow = std::min(1.0, d.speed * dt);
+    currentPitch += (targetPitch - currentPitch) * follow;
+    currentYaw += (targetYaw - currentYaw) * follow;
+}
+
 }  // namespace weapon_firing
