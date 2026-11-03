@@ -6,8 +6,9 @@
 
 namespace
 {
-constexpr float WalkSpeed = 450.f;
-constexpr float SprintSpeed = 650.f;
+// Maya's run and sprint speeds (NATIVE_PLAYER_MOVEMENT.md sections 1 and 11: 440, and 440 x 1.35).
+constexpr float WalkSpeed = 440.f;
+constexpr float SprintSpeed = 594.f;
 constexpr float BlendSeconds = 0.12f;
 
 void Advance(const UAnimSequence* Clip, float& Time, float DeltaSeconds, bool bLoop)

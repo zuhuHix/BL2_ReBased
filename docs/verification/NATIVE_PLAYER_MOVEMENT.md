@@ -347,3 +347,28 @@ All angles are degrees. The game's "VFOV/HFOV" pair assumes a fixed 16:9 referen
   and class-mod objects. UNVERIFIED in game; firing is blocked while sprinting, so the effect shows mainly in the first shots after sprint ends.
 - The host Walker uses estimates (450 / 420 / 650 / 45 degrees); the data here gives 440 / 630 / 594 / 0.7 floor Z.
 - Native operator numbers 244 to 247 in the script listing are Min, Max, Clamp and Lerp (float), not add; read this way throughout.
+
+## Host implementation (2026-11-03, maya lane)
+
+AI-assisted (Claude). The UE host now uses the numbers and rules above, from this note only. Code:
+`host/ue5/OpenWillow/Source/OpenWillow/OpenWillowMayaMovement.{h,cpp}` (plain C++ rules), `OpenWillowWalker.cpp` (`TickMovement`,
+the sprint and crouch handlers, `Landed`), the tunable numbers in `FOpenWillowMayaStats` (`OpenWillowMayaState.h`, so the skills lane can
+modify `GroundSpeed`, `JumpZ`, `AirControl`). Everything stays UNVERIFIED in the running game; nothing here was measured live.
+
+| Rule | Host | Section |
+|---|---|---|
+| Speeds | run 440, sprint 440 x 1.35 = 594, crouch 220; written to the movement component every frame from the stats | 1, 2, 11 |
+| Steering and braking | UE's walking step: acceleration 2048, ground friction 8, braking friction factor 2, no constant braking deceleration (UE also sub-steps at about 0.03 s and stops below 10 uu/s) | 4 |
+| Jump and air | `JumpZ` 630, gravity 500 (the existing scale), air control 0.11 (225 uu/s squared), UE's air-control boost off, terminal velocity 4000 (UE's volume default). The game's start kick below 10 uu/s is not reproduced | 7, 8, 13 |
+| Floor and step | walkable floor Z 0.7, step 35, capsule radius 42 and half height 80; crouched half height 50 (the crouched radius 21 is not applied: the UE capsule keeps 42) | 1, 12, 20 |
+| Sprint | the script's rule: a press sprints when the input is within 45 degrees of straight ahead, else waits; a release only drops a waiting press; crouch, firing, zoom, going down or leaving the cone ends it; a press cancels crouch | 10 |
+| Crouch | hold-to-crouch on Left Ctrl and C (host bindings; the game also has a toggle mode); refused while down; the eye height keeps its world height at the change and eases to 40 | 12 |
+| Eye height | eases at min(1, dt x 10) to 70 (40 crouched); the sprint modifier eases to -0.02 (eye / 1.02) | 15 |
+| Bob | `BobTime` and `WalkBob` as in section 15, b = 0.005 (sprint 0.005 x 0.01), applied to the camera as a side and an up offset; below 10 uu/s the bob settles like in the air (host choice) | 15, 17 |
+| Sprint FOV | tan(fov / 2) scaled by tan(1.35 x V / 2) / tan(V / 2), V the 16:9 vertical of the 70-degree default (the flexible-modifier maths reduces to that for any base angle); eased by lerp(dt x 10). The zoom blends from it | 18, 19 |
+| Falling damage | below -1500 uu/s, (abs(v) - 1500) / 1500 x 10 % of maximum health through `ApplyDamageToPlayer` (shield first: whether `DmgType_Fell` skips the shield is unknown) | 14 |
+
+Not done: the stair eye-height shift (`OldLocationZ`), the sprint skid lurch, the landing camera dip, `IsOnGroundOrShortFall`'s 0.3 s, the walk key,
+ladders, weapon bob (section 16) on the arms. **Jump arc check:** the host logs `OpenWillow Maya landed t=... vz=... rise=... air=...` on every
+landing. A standing jump on flat ground should show rise about 396.9 and air about 2.52 s. The matching real-game number still needs a live
+measurement (bl-sdk: the pawn's location Z per tick through one jump).

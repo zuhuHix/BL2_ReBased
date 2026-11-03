@@ -7,6 +7,7 @@
 #include "OpenWillowFiring.h"
 #include "OpenWillowShotFx.h"
 #include "OpenWillowMayaState.h"
+#include "OpenWillowMayaMovement.h"
 #include "OpenWillowWalker.generated.h"
 
 struct FOpenWillowTakenInventoryItem;
@@ -185,6 +186,16 @@ private:
     void Look(float Value);
     void SprintPressed();
     void SprintReleased();
+    void CrouchPressed();
+    void CrouchReleased();
+    // Maya's movement feel each tick (NATIVE_PLAYER_MOVEMENT.md, OpenWillowMayaMovement.h): speeds from the stats, the sprint
+    // state machine, the eye height and bob on the camera, the sprint FOV (read by UpdateAim). Maya mode only.
+    void TickMovement(float Now, float DeltaSeconds);
+    void BeginSprint(float Now);
+    void EndSprint(float Now, const TCHAR* Why);
+    virtual void Landed(const FHitResult& Hit) override;
+    virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
+    virtual void OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
     void SelectSlot(int32 Slot);
     void Holster();
     void SelectSlot1() { SelectSlot(0); }
@@ -271,7 +282,16 @@ private:
     UPROPERTY() TObjectPtr<class UAnimSequence> PhaselockFailAnim;
     UPROPERTY() TObjectPtr<class UOpenWillowArmsAnimInstance> ArmsAnim;
     TWeakObjectPtr<class AOpenWillowCombatTarget> CombatTarget;
-    bool bSprintHeld = false;
+    bool bSprintHeld = false;           // sprint key down
+    bool bSprintPending = false;        // pressed, waiting for forward input (bTryToSprint)
+    bool bSprinting = false;
+    bool bCrouchHeld = false;
+    float MoveForwardInput = 0.f, MoveRightInput = 0.f;   // this frame's move axes
+    OpenWillowMovement::FBob WalkBob;
+    OpenWillowMovement::FEyeHeight EyeState;
+    float BaseFovNow = 0.f;             // the world FOV before zoom: WorldFovDefault, eased toward the sprint FOV while sprinting
+    float LastFallVz = 0.f, JumpStartZ = 0.f, JumpApexZ = 0.f, FallStartedAt = 0.f;   // the jump arc logged at landing
+    bool bArcActive = false;
     bool bWasFalling = false;
     bool bSpawnProbeLogged = false;
     bool bMayaActive = false;
