@@ -43,8 +43,9 @@ const FOwFxEmitterScalar EmitterScalars[] = {
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_01"), TEXT("Gain"), 0.4f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_02"), TEXT("Gain"), 0.4f},
     {TEXT("Part_SirenASEnemyOrbEnd"), TEXT("twirl_03"), TEXT("Gain"), 0.4f},
-    // The star-burst at the fist (0.5-0.95 s): the game has no rays there; most of it is removed.
-    {TEXT("Part_SirenASHandOrb"), TEXT("EndBrightness"), TEXT("Gain"), 0.15f},
+    // The star-burst at the fist (0.5-0.95 s): the facets the game shows at 0.50 s. Round 22: gain 0.5 with the material's stock
+    // alpha (rounds 7 to 21: 0.15 with alpha x0.2, about 3 % of stock, which removed the facets). UNVERIFIED until the critic round.
+    {TEXT("Part_SirenASHandOrb"), TEXT("EndBrightness"), TEXT("Gain"), 0.5f},
     // Host fit (UNVERIFIED): these three large flash particles washed the 0.80 s capture nearly white at 1.0. Restore
     // Mat_SirenGlowMOD's 0.4 default, which is used by the hand glow and retains the game's streak detail better.
     {TEXT("Part_SirenASEnemyOrbBegin"), TEXT("InitialFlash"), TEXT("Overbright"), 0.4f},

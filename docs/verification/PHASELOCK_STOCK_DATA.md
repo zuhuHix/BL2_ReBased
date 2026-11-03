@@ -1259,3 +1259,29 @@ AI-assisted (Claude). Work resumed on the maintainer's second PC after the move.
   refused; down ends a held lock), the timeline, the PostAdd duration and the diminishing returns. It pins the host's
   reading only: the rules stay **UNVERIFIED** in game. The other gameplay rules keep their quest-suite checks
   (`phaselock_*` in `OpenWillowQuest.cpp`).
+
+## Round 22 (2026-11-03, maya lane): root causes for the target colour, the pose and the palm orb
+
+AI-assisted (Claude; an investigation sub-agent read the pipeline and the package data with our reader, `ow-package --object-dump`;
+nothing was launched). Supporting files are under ignored `local/phaselock-r22/`. Every visual statement stays UNVERIFIED until the hub's
+capture run and a critic score.
+
+* **Target colour: the wrong archetype.** The real frames show an "Adult Bullymong". Its balance (`PawnBalance_PrimalBeastAdult`, playthrough 1)
+  names `GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult`, whose component material `Mati_BullymongAdult` has tan, brown and rust zone colours
+  (midtones A (1, .71, .42), B (.48, .32, .21), C (.38, .07, .03)). `tools/prepare_phaselock_target.py` imported `GD_PrimalBeast.Character.Pawn_PrimalBeast`,
+  whose `Mati_Bullymong` has a near-white B zone (.95, 1, .98): the icy white-lilac target of rounds 16 to 21. The zone pipeline itself applied all
+  nine vectors; they were the other variant's. The Adult archetype also carries the 150 x 90 cylinder and has no scale override (1.0), which settles
+  the two contradictions recorded above (archetype 100 and 0.7 against the live 150 and 1.0). **Change:** the tool now names the Adult archetype.
+  It needs `tools/import_phaselock_target.ps1 -Steps all` (the editor: hub tier).
+* **Held pose: probably the target's back.** The converted clips reproduce UModel's MD5 joints (forward kinematics, error 4e-7), and the lift's last
+  frame equals the loop's first, so the loop clip plays as stored. The head sits at the mesh's +X in every pose, and Phaselock captures spawn the
+  target with Maya's own yaw (offset 0), so it faces away from her; rendered from the front the loop pose is a compact ball with the face low, like
+  the game. That contradicts the round-16 by-eye reading behind the 0 offset. **To settle in one capture run:** `-owcombatpawyawoffset=0` and `=180`.
+* **Palm orb.** The star-burst layer (`EndBrightness`, `Mat_SirenHandGlowShattered`) starts at 0.50 s, exactly when the game shows facets, but the
+  host had cut it to about 3 % of stock (emitter gain 0.15 times material alpha 0.2). **Change:** material alpha back to stock, emitter gain 0.5. The
+  hand-written stand-ins capped their colour at 4.0 while the importer's own LDR rule caps each channel at 1 (UE5's film curve turns HDR blue white;
+  the game clips): **change:** the ten `exact` stand-ins now cap at 1.0. Both need `tools/import_phaselock_fx.ps1` (editor, hub tier).
+* **Open, not changed this round:** the 0.80 s shell (the `Suction` emitter's `Mat_SirenSuction` screen-distortion material is still skipped; a refraction
+  stand-in is the next step), the rim's dark spikes layer, the head look-at control of the stock AnimTree, and the tone mapping. A capture switch
+  `-owtonecurve=<0..1>` (the camera's post-process tone curve amount) is added for an A/B: if the shell, rim and orb all move toward the game with
+  0, the remaining gap is tone mapping rather than per-material fits.
