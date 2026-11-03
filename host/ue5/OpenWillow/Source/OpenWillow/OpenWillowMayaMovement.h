@@ -14,6 +14,7 @@ constexpr float BrakingFrictionFactor = 2.f;   // braking decays V by 2 x fricti
 constexpr float Gravity = 500.f;               // WorldInfo.DefaultGravityZ (and the installed ini)
 constexpr float MaxFallSpeed = 1500.f;         // CharClass_Siren, the falling-damage threshold (section 14)
 constexpr float TerminalVelocity = 4000.f;     // Default__PhysicsVolume
+constexpr float FluidFriction = 0.3f;          // Default__PhysicsVolume: the falling step scales velocity by (1 - this x dt) (section 7)
 constexpr float WalkableFloorZ = 0.7f;         // Default__Pawn
 constexpr float MaxStepHeight = 35.f;
 constexpr float CollisionRadius = 42.f, CollisionHalfHeight = 80.f;   // Pawn_Siren's cylinder
@@ -45,6 +46,36 @@ struct FFallTimer
     void Jumped() { Seconds = JumpFallSeconds; }
     bool OnGroundOrShortFall(bool bWalking) const { return bWalking || Seconds < ShortFallSeconds; }
 };
+
+// Section 10: the sprint state machine of the script. Press: with the input inside the cone the press acts at once, else it waits
+// (bTry, dropped on release) until the input enters the cone. Acting on a press cancels crouch, then begins the sprint when CanSprint
+// holds and Maya is on the ground or in a short fall, or keeps it wanted (bWants) for later when CanSprint holds but she is in the
+// air; a press CanSprint rejects is not kept. A wanted sprint is dropped when the input leaves the cone. A running sprint ends when
+// CanContinueSprinting fails or the input leaves the cone.
+struct FSprintInput
+{
+    bool bInCone = false;           // the move input is within 45 degrees of straight ahead
+    bool bCanSprint = false;        // not sprinting already, not firing, not zoomed (no melee in the host), not down
+    bool bGroundOrShortFall = false;
+    bool bCanContinue = false;      // not crouch-held, not down, not firing, not zoomed
+};
+struct FSprint
+{
+    bool bTry = false, bWants = false, bActive = false;
+    enum class EEvent : uint8 { None, Began, Ended };
+    // Returns true when the press must cancel crouch now. bOutBegan: the sprint began on this press.
+    bool Press(const FSprintInput& In, bool& bOutBegan);
+    void Release() { bTry = false; }
+    // bOutCancelCrouch: a waiting press acted this tick and cancels crouch.
+    EEvent Tick(const FSprintInput& In, bool& bOutCancelCrouch);
+private:
+    bool Act(const FSprintInput& In);   // a press acting; true when the sprint began
+};
+
+// Section 7, falling: the velocity decays by the volume's fluid friction (lateral and vertical), and there is no horizontal speed
+// cap at the player's air control (the cap applies only at 0.05 or less). Returns the velocity after one step of DeltaSeconds.
+FVector FallingVelocityAfterFriction(const FVector& Velocity, float DeltaSeconds);
+constexpr float NoAirSpeedCap = TerminalVelocity;   // what the host writes to the walk-speed limit while falling
 
 // A move of the actor that its velocity cannot explain (a teleport: respawn, test drivers, the minimap's fast travel): more than
 // the frame's travel plus 100 uu. Fall tracking is reset on it so a landing after a teleport is not charged for the old fall.

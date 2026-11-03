@@ -66,6 +66,36 @@ bool FOpenWillowMayaMovementTest::RunTest(const FString&)
     Fall.Tick(0.1f, false);
     Fall.Jumped();
     TestFalse(TEXT("a jump never counts as a short fall"), Fall.OnGroundOrShortFall(false));
+    // Sprint state machine (section 10).
+    {
+        FSprintInput Ready; Ready.bInCone = Ready.bCanSprint = Ready.bGroundOrShortFall = Ready.bCanContinue = true;
+        bool bBegan = false, bCancel = false;
+        FSprint S1;
+        TestTrue(TEXT("a press in the cone acts and cancels crouch"), S1.Press(Ready, bBegan) && bBegan && S1.bActive);
+        FSprintInput Firing = Ready; Firing.bCanSprint = false; Firing.bCanContinue = false;
+        FSprint S2;
+        TestTrue(TEXT("a press CanSprint rejects is not kept"), S2.Press(Firing, bBegan) && !bBegan && !S2.bActive && !S2.bWants && !S2.bTry);
+        TestTrue(TEXT("and does not start when firing stops"), S2.Tick(Ready, bCancel) == FSprint::EEvent::None && !S2.bActive);
+        FSprintInput Strafe = Ready; Strafe.bInCone = false;
+        FSprint S3;
+        TestFalse(TEXT("a press while strafing waits and keeps crouch"), S3.Press(Strafe, bBegan));
+        TestTrue(TEXT("still waiting, crouch kept"), S3.Tick(Strafe, bCancel) == FSprint::EEvent::None && !bCancel && S3.bTry);
+        TestTrue(TEXT("entering the cone acts: crouch cancelled, sprint on"), S3.Tick(Ready, bCancel) == FSprint::EEvent::Began && bCancel);
+        TestTrue(TEXT("leaving the cone ends it"), S3.Tick(Strafe, bCancel) == FSprint::EEvent::Ended);
+        FSprint S4;
+        S4.Press(Strafe, bBegan);
+        S4.Release();
+        TestTrue(TEXT("a release drops a waiting press"), S4.Tick(Ready, bCancel) == FSprint::EEvent::None && !S4.bActive);
+        FSprintInput Air = Ready; Air.bGroundOrShortFall = false;
+        FSprint S5;
+        S5.Press(Air, bBegan);
+        TestTrue(TEXT("a press in the air is wanted"), !bBegan && S5.bWants);
+        TestTrue(TEXT("and begins on landing"), S5.Tick(Ready, bCancel) == FSprint::EEvent::Began);
+    }
+    // Falling (section 7): fluid friction 0.3 decays the whole velocity; no horizontal cap.
+    const FVector V = FallingVelocityAfterFriction(FVector(1000.f, 0.f, -500.f), 0.1f);
+    TestTrue(TEXT("falling friction decays lateral and vertical speed"), V.Equals(FVector(970.f, 0.f, -485.f), 0.01f));
+    TestTrue(TEXT("no horizontal cap in the air"), NoAirSpeedCap >= TerminalVelocity);
     // Teleports end a tracked fall.
     TestTrue(TEXT("a 2000 uu jump between frames is a teleport"), LooksLikeTeleport(FVector::ZeroVector, FVector(2000, 0, 0), FVector(0, 0, -500), 1.f / 60.f));
     TestFalse(TEXT("a fast fall is not"), LooksLikeTeleport(FVector::ZeroVector, FVector(0, 0, -60), FVector(0, 0, -3600), 1.f / 60.f));

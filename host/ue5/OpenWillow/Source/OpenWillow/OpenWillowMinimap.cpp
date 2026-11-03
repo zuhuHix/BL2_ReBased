@@ -134,6 +134,7 @@ void OpenWillowMinimap::TickShots(AOpenWillowWalker& Maya, APlayerController& Pl
     if (ShotStep % 2 == 0)
     {
         Maya.SetActorLocation(FVector(Spot.X, Spot.Y, Spot.Z), false, nullptr, ETeleportType::TeleportPhysics);
+        Maya.NotifyTeleported();
         Player.SetControlRotation(FRotator(0, Spot.Yaw, 0));
         ShotAt = Now;
         ++ShotStep;

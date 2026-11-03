@@ -330,6 +330,7 @@ void AOpenWillowWalker::Respawn()
     SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
     if (Controller) Controller->SetControlRotation(Rotation);
     GetCharacterMovement()->StopMovementImmediately();
+    NotifyTeleported();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *Location.ToString());
     if (Quest) Quest->NotifyRespawn();
 }
@@ -2708,7 +2709,8 @@ FVector AOpenWillowWalker::MuzzleLocation() const
 // UE's walking step steers and brakes like UE3's (section 4): acceleration 2048, ground friction 8, braking at 2 x friction
 // with no constant deceleration, sub-steps of about 0.03 s and a stop below 10 uu/s. Air control 0.11 gives the read
 // 225 uu/s squared in the air; UE's low-speed air-control boost is off (the game's start kick is not matched: UNVERIFIED).
-// The jump arc at gravity 500 is predicted at a 396.9 uu apex, 1.26 s up (section 8), and is logged on landing to measure.
+// The jump arc at gravity 500 with the falling fluid friction 0.3 is predicted at a 318 uu apex and 2.27 s in the air (396.9 and
+// 2.52 s without the friction, section 8); it is logged on landing to measure.
 void AOpenWillowWalker::ApplyMayaMovementDefaults()
 {
     const FOpenWillowMayaStats Stock;
@@ -2740,8 +2742,9 @@ void AOpenWillowWalker::SprintPressed()
         UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint on, max speed %.0f cm/s"), OpenWillowMovement::LegacySprintSpeed);
         return;
     }
-    bSprintPending = true;
-    bCrouchHeld = false;   // a sprint press stands up first (TickMovement)
+    bool bBegan = false;
+    if (Sprint.Press(SprintInputNow(), bBegan)) bCrouchHeld = false;   // a press that acts stands up first
+    if (bBegan) LogSprint(true, TEXT("press"));
 }
 void AOpenWillowWalker::SprintReleased()
 {
@@ -2752,7 +2755,7 @@ void AOpenWillowWalker::SprintReleased()
         UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint off, max speed %.0f cm/s"), OpenWillowMovement::LegacyWalkSpeed);
         return;
     }
-    bSprintPending = false;
+    Sprint.Release();
 }
 // Crouch (section 12): hold to crouch (the host's choice of the game's two modes), refused while down; it ends a sprint. The host's
 // own crouch, not UE's: the cylinder becomes radius 21, half height 50 with the feet kept in place, and standing up needs room for
@@ -2807,45 +2810,67 @@ void AOpenWillowWalker::SetMayaCrouched(bool bCrouch)
     bMayaCrouched = bCrouch;
     PreviousLocation = GetActorLocation();   // this move is not a teleport
 }
-void AOpenWillowWalker::BeginSprint(float Now)
+OpenWillowMovement::FSprintInput AOpenWillowWalker::SprintInputNow() const
 {
-    bSprinting = true;
-    bSprintPending = false;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint on t=%.3f, max speed %.0f"), Now,
-        MayaState.Effective().GroundSpeed * (1.f + MayaState.Effective().SprintSpeedScale));
+    const bool bZoomed = bAimHeld || AimAlpha > 0.f;
+    OpenWillowMovement::FSprintInput In;
+    In.bInCone = OpenWillowMovement::SprintInputAllowed(MoveForwardInput, MoveRightInput);
+    In.bCanSprint = !Sprint.bActive && !bFireHeld && !bZoomed && !IsDown();
+    In.bGroundOrShortFall = FallTimer.OnGroundOrShortFall(GetCharacterMovement()->IsMovingOnGround());
+    In.bCanContinue = !bCrouchHeld && !IsDown() && !bFireHeld && !bZoomed;
+    return In;
 }
-void AOpenWillowWalker::EndSprint(float Now, const TCHAR* Why)
+void AOpenWillowWalker::LogSprint(bool bOn, const TCHAR* Why) const
 {
-    if (!bSprinting) return;
-    bSprinting = false;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint off t=%.3f (%s)"), Now, Why);
+    const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+    if (bOn)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint on t=%.3f (%s), max speed %.0f"), Now, Why,
+            MayaState.Effective().GroundSpeed * (1.f + MayaState.Effective().SprintSpeedScale));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint off t=%.3f (%s)"), Now, Why);
+    }
+}
+void AOpenWillowWalker::NotifyTeleported()
+{
+    // A known teleport (respawn, a test driver, fast travel): the fall tracked so far is not this one.
+    bArcActive = false;
+    bTeleportedInFall = GetCharacterMovement()->IsFalling();
+    LastFallVz = 0.f;
+    FallTimer.Seconds = 0.f;
+    PreviousLocation = GetActorLocation();
 }
 void AOpenWillowWalker::TickMovement(float Now, float DeltaSeconds)
 {
     UCharacterMovementComponent* Move = GetCharacterMovement();
     const FOpenWillowMayaStats S = MayaState.Effective();
     const bool bOnGround = Move->IsMovingOnGround();
-    const bool bZoomed = bAimHeld || AimAlpha > 0.f;
-    const bool bInputAllows = OpenWillowMovement::SprintInputAllowed(MoveForwardInput, MoveRightInput);
-    // Sprint state machine (section 10). CanContinueSprinting: not crouched, not down, not firing, not zoomed; the input still
-    // allows it. Begin: pending, the input allows it, on the ground (a short fall is not tracked), not zoomed, not firing.
-    if (bSprinting)
+    // Sprint state machine (section 10; OpenWillowMovement::FSprint): a waiting press acts when the input enters the cone.
     {
-        if (IsDown()) EndSprint(Now, TEXT("down"));
-        else if (bMayaCrouched || bCrouchHeld) EndSprint(Now, TEXT("crouch"));
-        else if (bFireHeld) EndSprint(Now, TEXT("fire"));
-        else if (bZoomed) EndSprint(Now, TEXT("zoom"));
-        else if (!bInputAllows) EndSprint(Now, TEXT("input"));
+        const OpenWillowMovement::FSprintInput In = SprintInputNow();
+        bool bCancelCrouch = false;
+        const auto Event = Sprint.Tick(In, bCancelCrouch);
+        if (bCancelCrouch) bCrouchHeld = false;
+        if (Event == OpenWillowMovement::FSprint::EEvent::Began) LogSprint(true, TEXT("input"));
+        else if (Event == OpenWillowMovement::FSprint::EEvent::Ended)
+            LogSprint(false, IsDown() ? TEXT("down") : bCrouchHeld ? TEXT("crouch") : bFireHeld ? TEXT("fire") : !In.bInCone ? TEXT("input") : TEXT("zoom"));
     }
-    else if (bSprintPending && bInputAllows && FallTimer.OnGroundOrShortFall(bOnGround) && !bZoomed && !bFireHeld && !IsDown()
-        && !bMayaCrouched)
-        BeginSprint(Now);
+    const bool bSprinting = Sprint.bActive;
     // Crouch follows the held key (on the ground only; refused while down); standing up waits for room.
     if (IsDown()) bCrouchHeld = false;
     if (bCrouchHeld && bOnGround && !bMayaCrouched) SetMayaCrouched(true);
     else if (!bCrouchHeld && bMayaCrouched) SetMayaCrouched(false);
     // Speeds from the stats every frame (a skill's modifier lands at once): run 440, sprint 440 x 1.35 = 594, crouch 220.
-    Move->MaxWalkSpeed = S.GroundSpeed * (bMayaCrouched ? S.CrouchedPct : bSprinting ? 1.f + S.SprintSpeedScale : 1.f);
+    // In the air the stock falling step has no horizontal cap at air control 0.11 (UE's falling would cap input at MaxWalkSpeed), and
+    // the velocity decays by the volume's fluid friction 0.3 per second, lateral and vertical (section 7).
+    if (Move->IsFalling())
+    {
+        Move->MaxWalkSpeed = OpenWillowMovement::NoAirSpeedCap;
+        Move->Velocity = OpenWillowMovement::FallingVelocityAfterFriction(Move->Velocity, DeltaSeconds);
+    }
+    else Move->MaxWalkSpeed = S.GroundSpeed * (bMayaCrouched ? S.CrouchedPct : bSprinting ? 1.f + S.SprintSpeedScale : 1.f);
     Move->JumpZVelocity = S.JumpZ;
     Move->AirControl = S.AirControl;
     // Eye height and walk bob on the camera (sections 15 and 17): the bob's side term along the view's right vector.
