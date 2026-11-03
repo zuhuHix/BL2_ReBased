@@ -3,6 +3,7 @@
 #include "OpenWillowVendor.h"
 #include "OpenWillowVendorPage.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowQuest.h"
 #include "OpenWillowWeaponGen.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -34,6 +35,22 @@ bool IsWeaponLeaf(const FOpenWillowVendorLeaf& Leaf)
     return Leaf.Class == TEXT("WeaponBalanceDefinition");
 }
 
+// A manifest number as an int32 in [Low, High]; false when it is not finite, not whole or out of range (the cast to
+// int32 would otherwise be undefined or wrap).
+bool ManifestInt(double Number, int32 Low, int32 High, int32& Out)
+{
+    if (!FMath::IsFinite(Number) || Number != FMath::FloorToDouble(Number) || Number < double(Low) || Number > double(High))
+        return false;
+    Out = int32(Number);
+    return true;
+}
+
+// Money never wraps: sums are clamped to [0, MAX_int32].
+int32 SaturatingAdd(int32 A, int32 B)
+{
+    return int32(FMath::Clamp(int64(A) + int64(B), int64(0), int64(MAX_int32)));
+}
+
 // Pools in the manifest: each pool has a probability and a list of leaf balances with weights.
 void ReadPools(const TArray<TSharedPtr<FJsonValue>>& Pools, TArray<FOpenWillowVendorLeaf>& Out)
 {
@@ -56,7 +73,7 @@ void ReadPools(const TArray<TSharedPtr<FJsonValue>>& Pools, TArray<FOpenWillowVe
             double Weight = 0;
             (*Item)->TryGetNumberField(TEXT("weight"), Weight);
             Leaf.Weight = float(Probability * Weight);
-            if (!Leaf.Balance.IsEmpty() && Leaf.Weight > 0) Out.Add(Leaf);
+            if (!Leaf.Balance.IsEmpty() && FMath::IsFinite(Leaf.Weight) && Leaf.Weight > 0) Out.Add(Leaf);
         }
     }
 }
@@ -161,8 +178,17 @@ bool FOpenWillowVendorStock::Load(const TSharedPtr<FJsonObject>& Machine, int32 
     Stage = InStage;
     MinutesBetweenResets = InMinutesBetweenResets > 0 ? InMinutesBetweenResets : DefaultMinutesBetweenResets;
     double Number = 0;
-    if (Machine->TryGetNumberField(TEXT("fixed_item_cost"), Number)) FixedItemCost = FMath::Max(0, int32(Number));
-    if (Machine->TryGetNumberField(TEXT("fixed_featured_cost"), Number)) FixedFeaturedCost = FMath::Max(0, int32(Number));
+    FixedItemCost = FixedFeaturedCost = 0;
+    if (Machine->TryGetNumberField(TEXT("fixed_item_cost"), Number) && !ManifestInt(Number, 0, MAX_int32, FixedItemCost))
+    {
+        OutError = TEXT("fixed_item_cost out of range");
+        return false;
+    }
+    if (Machine->TryGetNumberField(TEXT("fixed_featured_cost"), Number) && !ManifestInt(Number, 0, MAX_int32, FixedFeaturedCost))
+    {
+        OutError = TEXT("fixed_featured_cost out of range");
+        return false;
+    }
     const TArray<TSharedPtr<FJsonValue>>* Pools = nullptr;
     if (Machine->TryGetArrayField(TEXT("inventory"), Pools)) ReadPools(*Pools, Leaves);
     else Leaves.Reset();
@@ -199,7 +225,10 @@ int32 FOpenWillowVendorStock::BuyPrice(int32 Value, int32 Level)
     // 2026-11-03: 79 of 79 stock and featured prices of Sanctuary's eight machines at player level 8
     // (docs/verification/VENDORS.md section 3).
     const float Markup = float(Level) * SellExponentializer + BaseMarkupIncrease;
-    return FMath::FloorToInt(float(Value) * Markup);
+    const float Price = float(Value) * Markup;
+    // A price that is not a finite, non-negative int32 (absurd value or level) is unaffordable rather than wrapped.
+    if (!FMath::IsFinite(Price) || Price < 0.f || Price >= 2147483520.f) return MAX_int32; // largest float below 2^31
+    return FMath::FloorToInt(Price);
 }
 
 bool FOpenWillowVendorStock::NeedsRestock(double Now) const
@@ -324,11 +353,18 @@ bool FOpenWillowVendorStock::Buy(const FString& Id, UOpenWillowInventory* Invent
     return true;
 }
 
-bool FOpenWillowVendorStock::Sell(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError)
+bool FOpenWillowVendorStock::Sell(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError,
+    const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected)
 {
-    if (!Inventory || !Inventory->FindItemById(Id))
+    const FOpenWillowWeaponItem* Owned = Inventory ? Inventory->FindItemById(Id) : nullptr;
+    if (!Owned)
     {
         OutError = TEXT("Unknown item");
+        return false;
+    }
+    if (IsProtected && IsProtected(*Owned))
+    {
+        OutError = TEXT("Mission items cannot be sold");
         return false;
     }
     for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
@@ -351,7 +387,7 @@ bool FOpenWillowVendorStock::Sell(const FString& Id, UOpenWillowInventory* Inven
     while (Buyback.Num() > BuybackCapacity) Buyback.RemoveAt(0);
     int32 Money = 0;
     Inventory->GetMoney(Money);
-    Inventory->SetMoney(Money + SellPriceOf(Sold));
+    Inventory->SetMoney(SaturatingAdd(Money, SellPriceOf(Sold)));
     return true;
 }
 
@@ -444,6 +480,13 @@ void UOpenWillowVendorSubsystem::OnWorldBeginPlay(UWorld& InWorld)
     double StageNumber = 1, MinutesNumber = FOpenWillowVendorStock::DefaultMinutesBetweenResets;
     Root->TryGetNumberField(TEXT("stage"), StageNumber);
     Root->TryGetNumberField(TEXT("minutes_between_resets"), MinutesNumber);
+    int32 Stage = 1, Minutes = FOpenWillowVendorStock::DefaultMinutesBetweenResets;
+    if (!ManifestInt(StageNumber, 1, 100, Stage) || !ManifestInt(MinutesNumber, 1, 24 * 60, Minutes))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow vendors: stage %g or minutes_between_resets %g out of range in %s; no machines"),
+            StageNumber, MinutesNumber, *Path);
+        return;
+    }
     const TArray<TSharedPtr<FJsonValue>>* MachinesJson = nullptr;
     if (!Root->TryGetArrayField(TEXT("machines"), MachinesJson))
     {
@@ -481,7 +524,7 @@ void UOpenWillowVendorSubsystem::OnWorldBeginPlay(UWorld& InWorld)
         if (!Machine) continue;
         Machine->Configure(Id, Title, Kind);
         FString Error;
-        if (!Machine->Stock.Load(Json, int32(StageNumber), int32(MinutesNumber), Error))
+        if (!Machine->Stock.Load(Json, Stage, Minutes, Error))
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow vendors: %s stock not loaded: %s"), *Id, *Error);
         }
@@ -512,9 +555,34 @@ bool UOpenWillowVendorSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
     return Subsystem && Subsystem->UseNearest(Walker);
 }
 
+bool UOpenWillowVendorSubsystem::NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared)
+{
+    const UWorld* World = Walker.GetWorld();
+    const UOpenWillowVendorSubsystem* Subsystem = World ? World->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr;
+    if (!Subsystem) return false;
+    if (Subsystem->Page.IsValid() && Subsystem->Page->IsShown())
+    {
+        OutDistanceSquared = 0;
+        return true;
+    }
+    bool bFound = false;
+    OutDistanceSquared = FMath::Square(double(InteractionReach));
+    for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Subsystem->Machines)
+    {
+        const AOpenWillowVendingMachine* Machine = Candidate.Get();
+        if (!Machine) continue;
+        const double DistanceSquared = FVector::DistSquared(Walker.GetActorLocation(), Machine->GetActorLocation());
+        if (DistanceSquared >= OutDistanceSquared) continue;
+        OutDistanceSquared = DistanceSquared;
+        bFound = true;
+    }
+    return bFound;
+}
+
 bool UOpenWillowVendorSubsystem::UseNearest(AOpenWillowWalker& Walker)
 {
-    if (Page.IsValid() && Page->IsShown()) return true; // the page has the input; nothing else should react
+    // A second press while the shop is shown closes it (a backstop: until the page reports ready the game keeps input).
+    if (Page.IsValid() && Page->IsShown()) { CloseShop(); return true; }
     const FVector WalkerLocation = Walker.GetActorLocation();
     AOpenWillowVendingMachine* Nearest = nullptr;
     double BestDistanceSquared = FMath::Square(double(InteractionReach));
@@ -538,10 +606,10 @@ bool UOpenWillowVendorSubsystem::OpenAt(AOpenWillowWalker& Walker, AOpenWillowVe
     if (!Page.IsValid())
     {
         // The page reports through this callback; the weak pointer keeps a destroyed subsystem out of it.
-        Page = MakeShared<FOpenWillowVendorPage>([WeakThis = TWeakObjectPtr<UOpenWillowVendorSubsystem>(this)](const FString& Line)
-            {
-                if (UOpenWillowVendorSubsystem* Subsystem = WeakThis.Get()) Subsystem->HandlePageMessage(Line);
-            });
+        const TWeakObjectPtr<UOpenWillowVendorSubsystem> WeakThis(this);
+        Page = MakeShared<FOpenWillowVendorPage>(
+            [WeakThis](const FString& Line) { if (UOpenWillowVendorSubsystem* Subsystem = WeakThis.Get()) Subsystem->HandlePageMessage(Line); },
+            [WeakThis]() { if (UOpenWillowVendorSubsystem* Subsystem = WeakThis.Get()) Subsystem->CloseShop(); });
     }
     ActiveMachine = &Machine;
     ActiveInventory = Inventory;
@@ -550,6 +618,9 @@ bool UOpenWillowVendorSubsystem::OpenAt(AOpenWillowWalker& Walker, AOpenWillowVe
     const bool bRestocked = Machine.Stock.EnsureStocked(GetWorld()->GetTimeSeconds());
     Page->Show(PC);
     PushState();
+    // While open, push the state every second: the page's countdown is the host's world time, and a restock that falls
+    // due while the shop is open shows at once.
+    GetWorld()->GetTimerManager().SetTimer(OpenTimer, FTimerDelegate::CreateUObject(this, &UOpenWillowVendorSubsystem::PushState), 1.f, true);
     UE_LOG(LogTemp, Display, TEXT("OWVENDOR open id=%s kind=%s restocked=%d"), *Machine.Id, *Machine.Kind, bRestocked ? 1 : 0);
     return true;
 }
@@ -557,6 +628,7 @@ bool UOpenWillowVendorSubsystem::OpenAt(AOpenWillowWalker& Walker, AOpenWillowVe
 void UOpenWillowVendorSubsystem::CloseShop()
 {
     if (Page.IsValid()) Page->Hide(ActiveController.Get());
+    if (UWorld* World = GetWorld()) World->GetTimerManager().ClearTimer(OpenTimer);
     ActiveMachine.Reset();
     ActiveInventory.Reset();
     ActiveController.Reset();
@@ -600,8 +672,13 @@ bool UOpenWillowVendorSubsystem::Command(const FString& Action, const FString& I
     bool bOk = false;
     if (!Machine || !Inventory) OutError = TEXT("No shop is open");
     else if (Id.IsEmpty() && Action != TEXT("close")) OutError = TEXT("No item given");
+    // A restock that fell due is applied before the action, never after it. A buy aimed at the old shelf is refused:
+    // its id may now name a different gun.
+    else if (Machine->Stock.EnsureStocked(GetWorld()->GetTimeSeconds()) && Action == TEXT("buy"))
+        OutError = TEXT("The stock changed");
     else if (Action == TEXT("buy")) bOk = Machine->Stock.Buy(Id, Inventory, OutError);
-    else if (Action == TEXT("sell")) bOk = Machine->Stock.Sell(Id, Inventory, OutError);
+    else if (Action == TEXT("sell"))
+        bOk = Machine->Stock.Sell(Id, Inventory, OutError, [this](const FOpenWillowWeaponItem& Item) { return IsQuestOwned(Item); });
     else if (Action == TEXT("buyback")) bOk = Machine->Stock.BuyBack(Id, Inventory, OutError);
     else OutError = TEXT("Unknown action");
     int32 Money = 0;
@@ -658,6 +735,15 @@ void UOpenWillowVendorSubsystem::RestockOpen()
     LastMessage.Reset();
     UE_LOG(LogTemp, Display, TEXT("OWVENDOR restock id=%s ok=1"), *Machine->Id);
     PushState();
+}
+
+bool UOpenWillowVendorSubsystem::IsQuestOwned(const FOpenWillowWeaponItem& Item) const
+{
+    // The quest says which weapon it lent (and still owns); no item id is named here.
+    const APlayerController* PC = ActiveController.Get();
+    const AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr;
+    const UOpenWillowQuest* Quest = Walker ? Walker->GetQuest() : nullptr;
+    return Quest && Quest->OwnsItem(Item);
 }
 
 bool UOpenWillowVendorSubsystem::SellLast(FString& OutError)
@@ -768,7 +854,9 @@ FString UOpenWillowVendorSubsystem::StateJson() const
             const FOpenWillowWeaponItem* Held = Inventory->SlotItem(Slot);
             if (Held && UOpenWillowInventory::StableId(*Held) == UOpenWillowInventory::StableId(Gun)) bEquipped = true;
         }
-        BackpackJsonList.Add(MakeShared<FJsonValueObject>(BackpackJson(Gun, bEquipped)));
+        TSharedRef<FJsonObject> Row = BackpackJson(Gun, bEquipped);
+        Row->SetBoolField(TEXT("sellable"), !bEquipped && !IsQuestOwned(Gun));
+        BackpackJsonList.Add(MakeShared<FJsonValueObject>(Row));
     }
     State->SetArrayField(TEXT("backpack"), BackpackJsonList);
 

@@ -39,6 +39,8 @@ public:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function) override;
 
     bool Enabled() const { return bEnabled; }
+    // True while Item is the weapon the mission lends Maya (the quest takes it back at the turn-in): shops refuse it.
+    bool OwnsItem(const FOpenWillowWeaponItem& Item) const { return bWeaponLent && !MissionWeapon.Id.IsEmpty() && Item.Id == MissionWeapon.Id; }
     // The use key near Marcus: accept when not started, turn in when ready; true when it was consumed.
     bool TryUse();
     // Direct mission calls (the use key goes through these; kept callable for tests).

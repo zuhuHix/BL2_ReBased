@@ -98,7 +98,9 @@ struct FOpenWillowVendorStock
 
     // The actions. Each returns false with OutError set and changes nothing on refusal.
     bool Buy(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError);
-    bool Sell(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError);
+    // IsProtected: items the caller will not let go (a weapon the quest lends); refused with "Mission items cannot be sold".
+    bool Sell(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError,
+        const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected = nullptr);
     bool BuyBack(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError);
 
     const FOpenWillowVendorItem* FindShopItem(const FString& Id) const;
@@ -141,6 +143,9 @@ public:
     // Called from AOpenWillowWalker::PickupNearby. True when the press was used (a machine opened, or the shop is
     // already open); false lets the pickup go on.
     static bool TryUseNearest(AOpenWillowWalker& Walker);
+    // The reach test of TryUseNearest on its own: the squared distance to the nearest machine in reach (0 while the shop
+    // is shown, so a press closes it). The walker compares it with its other use targets.
+    static bool NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared);
 
     // Page bridge: one console line "OWVEND {json}" from the page.
     void HandlePageMessage(const FString& Line);
@@ -170,6 +175,9 @@ private:
     // -owvendortest: a scripted open / buy / sell / restock sequence with reports and a screenshot, then quit
     // (tools/test_vendors.ps1). Driven by a world timer so it starts only once the walker exists.
     void TickVendorTest();
+    // True while the quest lends this weapon (it must not be sold or lost to buy-back).
+    bool IsQuestOwned(const FOpenWillowWeaponItem& Item) const;
+    FTimerHandle OpenTimer;           // pushes the state every second while the shop is open
     FTimerHandle TestTimer;
     int32 TestStep = 0;
     int32 TestWaits = 0;

@@ -91,7 +91,7 @@
   function row(item, source, featured) {
     return {source, id: item.id, name: item.name, kind: item.kind, rarity: item.rarity, level: item.level || 0,
       price: item[source === 'backpack' ? 'sell' : 'price'], affordable: item.affordable === true,
-      equipped: item.equipped === true, featured, card: item.card || null};
+      equipped: item.equipped === true, sellable: item.sellable !== false, featured, card: item.card || null};
   }
 
   // The three lists the page shows. Shop: the item of the day first, then the stock in the host's order (an item
@@ -139,13 +139,15 @@
   }
 
   // What Enter or E does with the selected row. Returns {ok:true, action, id} to send, or {ok:false, message}
-  // for the page to show. Unaffordable buys and equipped sales are never sent.
+  // for the page to show. Unaffordable buys, equipped sales and unsellable (mission) items are never sent.
   function actionFor(sel, lists, state) {
     const list = lists[sel.column] || [];
     const item = list[sel.index];
     if (!item) return {ok: false, message: 'Nothing selected'};
     if (sel.column === 'backpack') {
       if (item.equipped) return {ok: false, message: 'Equipped items cannot be sold'};
+      // The host marks items it will not buy (a weapon the mission lends); the page does not ask.
+      if (!item.sellable) return {ok: false, message: 'Mission items cannot be sold'};
       return {ok: true, action: 'sell', id: item.id};
     }
     if (state.used >= state.capacity) return {ok: false, message: 'Backpack full'};

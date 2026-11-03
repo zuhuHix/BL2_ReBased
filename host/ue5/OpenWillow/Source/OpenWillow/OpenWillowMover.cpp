@@ -216,6 +216,11 @@ void UOpenWillowMover::Fail(const FString& Error) {
         FPlatformMisc::RequestExit(false);
     }
 }
+bool UOpenWillowMover::InReach(const FVector& From, double& OutDistanceSquared) const {
+    if (!Impl || Failed || !Mesh) return false;
+    OutDistanceSquared = FVector::DistSquared(From, Mesh->Bounds.Origin);
+    return OutDistanceSquared <= FMath::Square(220.);
+}
 bool UOpenWillowMover::TryInteract() {
     if (!Impl || Failed || !Mesh) return false;
     if (FVector::DistSquared(GetOwner()->GetActorLocation(), Mesh->Bounds.Origin) > FMath::Square(220.)) return false;
