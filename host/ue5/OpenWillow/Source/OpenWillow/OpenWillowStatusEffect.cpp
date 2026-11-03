@@ -77,6 +77,16 @@ void UOpenWillowStatusEffects::TickComponent(float DeltaTime, ELevelTick TickTyp
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     const float Now = GetWorld()->GetTimeSeconds();
     AActor* Target = GetOwner();
+    // Ticks are collected while the list is walked and sent after it: a hit listener may add or clear effects on this
+    // target, which would move or free the entries the loop holds.
+    struct FPendingTick
+    {
+        TWeakObjectPtr<AOpenWillowWalker> Shooter;
+        FOpenWillowHitEvent Event;
+        FHitResult Hit;
+        FLinearColor Color;
+    };
+    TArray<FPendingTick> Pending;
     for (int32 I = Active.Num() - 1; I >= 0; --I)
     {
         FActive& Effect = Active[I];
@@ -103,13 +113,18 @@ void UOpenWillowStatusEffects::TickComponent(float DeltaTime, ELevelTick TickTyp
             Event.WeaponId = Effect.WeaponId;
             Event.Element = Effect.Element;
             Event.Origin = Hit.ImpactPoint;
-            Effect.Shooter->ApplyShotDamage(Target, Event, Hit);
-            AOpenWillowShotFx::Flash(GetWorld(), Hit.ImpactPoint, StatusColor(Effect.Type), 14.f, 0.25f, 600.f);
+            Pending.Add({Effect.Shooter, Event, Hit, StatusColor(Effect.Type)});
         }
         if (bEnded)
         {
             UE_LOG(LogTemp, Display, TEXT("OWFIRING status %s ended on %s"), *Effect.Type, *Target->GetName());
             Active.RemoveAt(I);
         }
+    }
+    for (FPendingTick& Tick : Pending)
+    {
+        if (!IsValid(Target)) break;
+        if (AOpenWillowWalker* Shooter = Tick.Shooter.Get()) Shooter->ApplyShotDamage(Target, Tick.Event, Tick.Hit);
+        AOpenWillowShotFx::Flash(GetWorld(), Tick.Hit.ImpactPoint, Tick.Color, 14.f, 0.25f, 600.f);
     }
 }

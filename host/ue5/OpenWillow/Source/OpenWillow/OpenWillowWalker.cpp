@@ -1678,12 +1678,20 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     AOpenWillowProjectile::ImpactFx(GetWorld(), Impact, Hit.ImpactNormal, Held ? Held->Element : FString());
     // A firing mode with its own Behavior_Explode explodes at every impact, after the bullet's own damage (the impact
     // explosion of elemental Maliwan guns; native read 2026-11-03, UNVERIFIED in game beyond the one live match).
+    // Its inputs are copied now: the bullet's own hit runs listeners that may change or remove the inventory item.
+    TOptional<FOpenWillowFiringData> ExplodeData;
+    float ExplodeDamage = 0.f;
+    FString ExplodeId;
+    if (Held && Held->Firing.bLoaded && Held->Firing.Splash.bValid)
+    {
+        ExplodeData = Held->Firing;
+        const float Scale = Held->Damage > 0.f ? ShotDamage(*Held, GetWorld()->GetTimeSeconds()) / Held->Damage : 1.f;
+        ExplodeDamage = Held->Firing.Splash.Damage * Scale;
+        ExplodeId = Held->Id;
+    }
     const auto ImpactExplosion = [&]()
     {
-        if (!Held || !Held->Firing.bLoaded || !Held->Firing.Splash.bValid) return;
-        const float Scale = Held->Damage > 0.f ? ShotDamage(*Held, GetWorld()->GetTimeSeconds()) / Held->Damage : 1.f;
-        AOpenWillowProjectile::Explode(GetWorld(), this, Held->Firing, Impact, Hit.ImpactNormal, Held->Firing.Splash.Damage * Scale,
-            Held->Id);
+        if (ExplodeData) AOpenWillowProjectile::Explode(GetWorld(), this, *ExplodeData, Impact, Hit.ImpactNormal, ExplodeDamage, ExplodeId);
     };
     // Anything that takes Maya's hits (IOpenWillowHitTarget: the host dummy, range's enemies).
     AActor* Target = OpenWillowHit::AsTarget(Hit.GetActor()) ? Hit.GetActor() : nullptr;
@@ -1704,7 +1712,7 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     const float Damage = Weapon ? ShotDamage(*Weapon, GetWorld()->GetTimeSeconds()) : 0.f;
     ++OpenWillowFiring::Counts.TargetHits;
     OpenWillowFiring::Counts.Direct += Damage;
-    const FOpenWillowFiringData& Firing = Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly;
+    const FOpenWillowFiringData Firing = Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly;
     FOpenWillowHitEvent Event;
     Event.Kind = EOpenWillowHitKind::Direct;
     Event.Damage = Damage;
@@ -1762,6 +1770,9 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
     E = In;
     E.Instigator = this;
     E.Target = Target;
+    // The gun in hand fills in only for a hit that names no source. Any named source is kept as given, including ids
+    // that are not inventory guns (skill blasts send "skill:<name>"): its element then comes from its own damage type
+    // only, and the damage type is always the caller's.
     if (E.WeaponId.IsEmpty() && Held) E.WeaponId = Held->Id;
     E.Location = Hit.ImpactPoint;
     E.Bone = Hit.BoneName;

@@ -546,18 +546,41 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         if (Now < FinishAt + 0.5f) break;
         const bool bStatus = UOpenWillowStatusEffects::AnyActive(CombatTarget.Get());
         // Weapon swap during the status ticks: the ticks still to come must name the gun that caused the proc, not the one
-        // now in hand (the hit event stores the source weapon at the proc). Once per gun, to any other backpack gun.
-        static int32 SwappedGun = -1;
-        if (bStatus && SwappedGun != Gun)
+        // now in hand (the hit event stores the source weapon at the proc). Every status gun swaps once; with no effect
+        // running it first pulls once more at the dummy (up to 40 extra pulls, logged) until one runs. Each outcome is
+        // logged: the checker requires a swap and ticks after it.
+        static int32 SwappedGun = -1, ExtraPulls = 0, ExtraFor = -1;
+        if (ExtraFor != Gun) { ExtraFor = Gun; ExtraPulls = 0; }
+        const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        if (SwappedGun != Gun && Held && Held->Id == Id && Held->Firing.bLoaded && Held->Firing.Status.bValid)
         {
+            if (!bStatus && ExtraPulls < 40)
+            {
+                ++ExtraPulls;
+                Segments.Add(FSegment{false, 1});
+                Step = 2;
+                break;
+            }
             SwappedGun = Gun;
-            for (int32 I = 0; I < Inventory->Items().Num(); ++I)
-                if (Inventory->Items()[I].Id != Id && EquipItem(I, 0) && Inventory->ActiveWeapon() && Inventory->ActiveWeapon()->Id != Id)
-                {
-                    UE_LOG(LogTemp, Display, TEXT("OWFIRING swap id=%s to=%s ticks_before=%d"), *Id, *Inventory->ActiveWeapon()->Id,
-                        OpenWillowFiring::Counts.Ticks);
-                    break;
-                }
+            FString To;
+            if (bStatus)
+                for (int32 I = 0; I < Inventory->Items().Num(); ++I)
+                    if (Inventory->Items()[I].Id != Id && EquipItem(I, 0) && Inventory->ActiveWeapon() && Inventory->ActiveWeapon()->Id != Id)
+                    {
+                        To = Inventory->ActiveWeapon()->Id;
+                        break;
+                    }
+            if (!To.IsEmpty())
+            {
+                UE_LOG(LogTemp, Display, TEXT("OWFIRING swap id=%s to=%s ticks_before=%d extra_pulls=%d"), *Id, *To,
+                    OpenWillowFiring::Counts.Ticks, ExtraPulls);
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("OWFIRING swap id=%s failed=%s ticks_before=%d extra_pulls=%d"), *Id,
+                    bStatus ? TEXT("no_other_gun_equipped") : TEXT("no_effect_running"), OpenWillowFiring::Counts.Ticks, ExtraPulls);
+            }
+            break;   // the next pass waits for the remaining ticks
         }
         if (ProjectilesInFlight() > 0 && Now < FinishAt + 6.f) break;
         if (bStatus && Now < FinishAt + 10.f) break;

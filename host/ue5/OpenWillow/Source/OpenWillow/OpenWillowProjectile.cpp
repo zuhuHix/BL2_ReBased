@@ -351,30 +351,33 @@ void AOpenWillowProjectile::HitTarget(AOpenWillowWalker* Shooter, const FOpenWil
     const FOpenWillowHitEvent& Event, const FHitResult& Hit, float StatusScale)
 {
     if (!Shooter || !Target) return;
-    const FString& DamageType = Event.DamageType;
-    Shooter->ApplyShotDamage(Target, Event, Hit);
-    if (!Data.Status.bValid) return;
+    // Copies: Data may be an inventory item's firing data, and the hit's listeners run inside ApplyShotDamage.
+    const FOpenWillowStatus Status = Data.Status;
+    const FOpenWillowHitEvent Sent = Event;
+    const FString& DamageType = Sent.DamageType;
+    Shooter->ApplyShotDamage(Target, Sent, Hit);
+    // No roll on a target the hit killed or removed (range lane request, PR #76).
+    const IOpenWillowHitTarget* Receiver = IsValid(Target) ? OpenWillowHit::AsTarget(Target) : nullptr;
+    if (!Status.bValid || !Receiver || !Receiver->CanTakeHits()) return;
     // The roll: surface chance (already times the weapon's chance modifiers) x the radius scale x the level-difference
     // scale, one draw. The host target's damage surface is taken as Generic (UNVERIFIED); friendly and skill factors are 1.
     // Level scale: Maya's level against the target's (a host target without its own level counts as Maya's: factor 1).
     const int32 ShooterLevel = Shooter->GetSkills() ? Shooter->GetSkills()->GetLevel() : 1;
-    const IOpenWillowHitTarget* Receiver = OpenWillowHit::AsTarget(Target);
     const int32 TargetLevel = Receiver && Receiver->GetHitLevel() > 0 ? Receiver->GetHitLevel() : ShooterLevel;
-    const double LevelScale = weapon_firing::statusLevelScale(ShooterLevel, TargetLevel, Data.Status.LevelScales);
-    const double Chance = weapon_firing::statusChance(Data.Status.ChancePercent(TEXT("generic")), 1, 1, 1, 1,
+    const double LevelScale = weapon_firing::statusLevelScale(ShooterLevel, TargetLevel, Status.LevelScales);
+    const double Chance = weapon_firing::statusChance(Status.ChancePercent(TEXT("generic")), 1, 1, 1, 1,
         StatusScale * LevelScale);
     const float Roll = FMath::FRand();
     const bool bProc = Chance > 0.0001 && Roll <= Chance;
     ++OpenWillowFiring::Counts.StatusRolls;
     if (bProc) ++OpenWillowFiring::Counts.Procs;
     UE_LOG(LogTemp, Display, TEXT("OWFIRING status roll %s chance %.3f (level scale %.2f, levels %d / %d) roll %.3f %s"),
-        *Data.Status.Type, Chance, LevelScale, ShooterLevel, TargetLevel, Roll, bProc ? TEXT("proc") : TEXT("miss"));
+        *Status.Type, Chance, LevelScale, ShooterLevel, TargetLevel, Roll, bProc ? TEXT("proc") : TEXT("miss"));
     if (bProc)
     {
         // The proc's source: the hit event's weapon (every caller names it) and its element, fixed now for all its ticks.
-        const EOpenWillowElement Element = Event.Element != EOpenWillowElement::None ? Event.Element
+        const EOpenWillowElement Element = Sent.Element != EOpenWillowElement::None ? Sent.Element
             : OpenWillowHit::ElementOf(DamageType);
-        const FString& WeaponId = Event.WeaponId;
-        UOpenWillowStatusEffects::Apply(Target, Shooter, Data.Status, DamageType, WeaponId, Element);
+        UOpenWillowStatusEffects::Apply(Target, Shooter, Status, DamageType, Sent.WeaponId, Element);
     }
 }
