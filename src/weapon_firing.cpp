@@ -134,4 +134,18 @@ double dotFinish(double& accumulated, double damagePerSecond) {
     return damage;
 }
 
+double hitMomentum(double instantHitMomentum) { return instantHitMomentum * 100.0; }
+
+Vec momentumVelocity(const Vec& momentum, double mass) {
+    const double scale = mass > 0.01 ? 1.0 / mass : 100.0;
+    return {momentum.x * scale, momentum.y * scale, momentum.z * scale};
+}
+
+double statusLevelScale(int instigatorLevel, int targetLevel, const std::vector<LevelChanceScale>& rows) {
+    const int difference = instigatorLevel > targetLevel ? instigatorLevel - targetLevel : targetLevel - instigatorLevel;
+    if (difference == 0 || rows.empty()) return 1;
+    const LevelChanceScale& row = rows[static_cast<size_t>(std::min<int>(difference, static_cast<int>(rows.size())) - 1)];
+    return instigatorLevel > targetLevel ? row.higher : row.lower;
+}
+
 }  // namespace weapon_firing

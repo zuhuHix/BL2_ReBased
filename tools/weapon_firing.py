@@ -44,7 +44,9 @@ from weapon_stats import ATTR
 
 SCHEMA_LINES = weapon_stats.SCHEMA_LINES + [
     'FiringPatternLines=StructProperty:FiringPatternLine',
+    'StatusEffectChanceScales=StructProperty:StatusEffectChanceScale',
 ]
+GLOBALS = 'GD_Globals.General.Globals'
 # Weapon-type fields that describe the kick and the accuracy impulse (raw values, not evaluated).
 RECOIL_FIELDS = {
     'kick_speed': 'WeaponKickSpeed', 'kick_recovery_time': 'WeaponKickRecoveryTime',
@@ -122,6 +124,14 @@ def formula(source, init, known, unresolved):
     if not init:
         return None
     return weapon_stats.price_init(source.package, init, known, unresolved)
+
+
+def vector_of(value):
+    """A Vector struct as [X, Y, Z], or None when absent or all zero (a line trace)."""
+    if not isinstance(value, dict):
+        return None
+    xyz = [float(value.get(axis) or 0.0) for axis in 'XYZ']
+    return xyz if any(xyz) else None
 
 
 def whole(value):
@@ -265,7 +275,19 @@ def status_of(source, card, known, unresolved):
         },
         'on_application': effect.get('OnApplication'),
         'on_duration_end': effect.get('OnDurationEnd'),
+        # GlobalsDefinition.StatusEffectChanceScales: the chance factor by level difference between instigator and target
+        # (NATIVE_WEAPON_FIRING 4.2 LevelScale). Null when the package has no globals object.
+        'level_chance_scales': level_chance_scales(source),
     }
+
+
+def level_chance_scales(source):
+    """[{LevelDifference, HigherLevelChanceScale, LowerLevelChanceScale}] from the game globals, or None."""
+    if GLOBALS not in source.package.index:
+        return None
+    rows = source.package.props(GLOBALS).get('StatusEffectChanceScales') or []
+    keys = ('LevelDifference', 'HigherLevelChanceScale', 'LowerLevelChanceScale')
+    return [{key: row.get(key) for key in keys} for row in rows if isinstance(row, dict)] or None
 
 
 def reload_throw(source, weapon_type, fallback_type, known, unresolved):
@@ -361,6 +383,12 @@ def build(source, recipe, stats):
         # The barrel's SpinDownDuration constant (an attribute initialization; only the constant is read).
         'spin_down': spin_down,
         'trace_range': weapon_type.get('Range'),
+        # WeaponTypeDefinition.InstantHitMomentum (an attribute initialization; class default where the type has none).
+        # The game multiplies it by 100 once at weapon setup and passes ray direction x that as the hit's momentum
+        # (confirmed live: 800 for the pistol type's 8, PROJECTILE_FIRING_PATTERNS_LIVE R6). The host does the x100.
+        'instant_hit_momentum': formula(source, weapon_type.get('InstantHitMomentum'), known, unresolved),
+        # FiringModeDefinition.TraceExtent: half extents of the box the bullet's segment is swept with (zero = a line).
+        'trace_extent': vector_of(fm.get('TraceExtent')),
         'recoil': {name: weapon_type.get(field) for name, field in RECOIL_FIELDS.items()},
         'additional_ricochets': attribute['WeaponAdditionalRicochets'],
         'shot_cost': attribute['WeaponShotCost'],

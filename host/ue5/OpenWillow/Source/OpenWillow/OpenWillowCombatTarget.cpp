@@ -2,6 +2,7 @@
 #include "OpenWillowShotFx.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowWalker.h"
+#include "weapon_firing.hpp"
 #include "OpenWillowTargetAnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "Components/CapsuleComponent.h"
@@ -89,6 +90,8 @@ void AOpenWillowCombatTarget::BeginPlay()
 {
     Super::BeginPlay();
     HomeLocation = GetActorLocation();
+    KnockOrigin = HomeLocation;
+    FParse::Value(FCommandLine::Get(), TEXT("owtargetlevel="), Level);
     BodyMaterial = Tint(this, Torso, BodyColor);
     Tint(this, Post, FLinearColor(0.05f, 0.05f, 0.05f));
     HeadMaterial = Tint(this, Head, HeadColor);
@@ -506,6 +509,13 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         SetActorEnableCollision(true);
         return;
     }
+    // Momentum from hits: slide by the knock velocity on the ground plane, slowed by the friction stand-in.
+    if (!Knock.IsNearlyZero(0.01f))
+    {
+        if (!bPhaselocked) AddActorWorldOffset(FVector(Knock.X, Knock.Y, 0.f) * DeltaSeconds, true);
+        Knock *= FMath::Max(0.f, 1.f - KnockFriction * DeltaSeconds);
+    }
+    else Knock = FVector::ZeroVector;
     // Damped spring: hits kick the dummy, which settles back upright.
     WobbleVelocity += (-60.f * Wobble - 7.f * WobbleVelocity) * DeltaSeconds;
     Wobble += WobbleVelocity * DeltaSeconds;
@@ -633,6 +643,14 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         Where = Point.HitInfo.ImpactPoint;
         Direction = Point.ShotDirection;
     }
+    if (const auto* Shooter = Cast<AOpenWillowWalker>(DamageCauser); Shooter && !Shooter->ShotMomentum().IsNearlyZero())
+    {
+        LastMomentum = Shooter->ShotMomentum();
+        LastVelocityChange = bPhaselocked ? FVector::ZeroVector : MomentumVelocity(LastMomentum, Mass);
+        Knock += LastVelocityChange;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target momentum %.1f -> velocity change %.3f uu/s (mass %.1f)"),
+            LastMomentum.Size(), LastVelocityChange.Size(), Mass);
+    }
     const FVector Local = GetActorTransform().InverseTransformVectorNoScale(Direction);
     WobbleVelocity += FVector2D(Local.Y, -Local.X) * 220.f;
     Popups.Add({Where + FVector(FMath::FRandRange(-12.f, 12.f), FMath::FRandRange(-12.f, 12.f), 10.f), Applied, Now});
@@ -650,4 +668,10 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat target destroyed; respawns in %.0fs"), RespawnSeconds);
     }
     return Applied;
+}
+
+FVector AOpenWillowCombatTarget::MomentumVelocity(const FVector& Momentum, float Mass)
+{
+    const weapon_firing::Vec V = weapon_firing::momentumVelocity({Momentum.X, Momentum.Y, Momentum.Z}, Mass);
+    return FVector(V.x, V.y, V.z);
 }

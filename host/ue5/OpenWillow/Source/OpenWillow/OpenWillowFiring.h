@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Math/RandomStream.h"
+#include "CollisionQueryParams.h"
 #include "weapon_firing.hpp"
 
 class FJsonObject;
@@ -25,6 +26,7 @@ struct FOpenWillowSplash
     bool bFullDamage = false;    // bDisableRadiusDamageFalloff (weapon rockets and gyrojets; confirmed live 2026-10-23)
     weapon_firing::Falloff Falloff; // the damage type's MaxDamageRadius / MinDamageRadius / MinDamagePercent
     float DirectScale = 0;       // part of the damage dealt to what the projectile hits (Tediore throw: 0.5, observed)
+    float Momentum = 0;          // MomentumFormula; each target gets radius scale x this along explosion -> target (3.1)
     FString DamageType;
 };
 
@@ -36,6 +38,8 @@ struct FOpenWillowStatus
     TMap<FString, float> ChanceBySurface; // percent: surface BaseChance x the weapon's chance modifiers
     float Duration = 0;          // s
     float Dps = 0;               // the weapon's StatusEffectDamage (damage-over-time effects only)
+    // GlobalsDefinition.StatusEffectChanceScales (status.level_chance_scales): the chance factor by level difference.
+    std::vector<weapon_firing::LevelChanceScale> LevelScales;
     float ChancePercent(const FString& Surface) const;
 };
 
@@ -49,6 +53,13 @@ struct FOpenWillowFiringData
     bool bSuppressSpread = false; // bSuppressWeaponSpread: only the pattern moves the pellets
     weapon_firing::Pattern Pattern;
     float TraceRange = 16384;    // WeaponTypeDefinition.Range (trace length)
+    // Momentum of a bullet or trace hit: WeaponTypeDefinition.InstantHitMomentum x 100, along the ray (confirmed live:
+    // 800 / 700 / 1,000 for types with 8 / 7 / 10, PROJECTILE_FIRING_PATTERNS_LIVE R6). Without a value in the block:
+    // the class default 10 (x 100), UNVERIFIED for that case.
+    float Momentum = 1000;
+    // FiringModeDefinition.TraceExtent: half extents of the axis-aligned box each bullet segment is swept with; zero
+    // sweeps a line. The light-projectile manager sweeps with it (NATIVE_WEAPON_TRIGGER_AMMO); box shape and axes UNVERIFIED.
+    FVector TraceExtent = FVector::ZeroVector;
     // Light bullets.
     float BulletSpeed = 0;       // uu/s
     float AirFriction = 0;
@@ -105,6 +116,11 @@ struct FOpenWillowFiringStats
     float Damage = 0;        // all damage passed to combat targets (direct, splash and ticks)
     float Direct = 0;        // direct hit damage
     float Splash = 0;        // explosion damage (per target: damage x the radius scale)
+    int32 MomentumHits = 0;  // damage applications to combat targets that carried momentum
+    int32 Pushes = 0;        // ... whose target velocity change equalled momentum / mass
+    float LastMomentum = 0;  // length of the last momentum passed to a combat target
+    int32 TimedImpacts = 0;  // constant-speed light bullets that reached a surface or target
+    int32 OnTimeImpacts = 0; // ... after distance / speed seconds (to within one frame)
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 
@@ -119,6 +135,10 @@ float FireInterval(const FOpenWillowFiringData& Data, float BaseInterval, const 
 // Host colour of an element's muzzle flash, bullet streak and impact (a stand-in for the per-element particle
 // templates; picked by eye against the 2026-10-23 real frames). White-ish orange for no element.
 FLinearColor ElementColor(const FString& Element);
+// One bullet or trace segment: a line trace, or a sweep of the firing mode's TraceExtent box (axis-aligned) when it has
+// one, so a wide bullet hits what passes beside its centre line.
+bool SweepShot(const UWorld* World, FHitResult& Hit, const FVector& From, const FVector& To, const FVector& Extent,
+    const FCollisionQueryParams& Query);
 bool IsElemental(const FString& Element);
 // World gravity for falling projectiles (uu/s^2): the Tediore pistol throw fell at 850 = 0.85 (its GravityScaling)
 // x 1000 in Ice_P (live, 2026-10-23); whether every map uses 1000 is UNVERIFIED.

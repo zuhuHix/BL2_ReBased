@@ -126,6 +126,20 @@ int main() {
     for (int i = 0; i < 120; ++i) total += dotAdvance(steady, 1.0 / 60.0, 10);
     check(total > 10 * 2.0 * 1.0 && total < 10 * 2.0 * 1.2, "dot: frame overshoot adds a little over dps x time");
 
+    // Momentum (invented numbers): x100 at setup, then momentum / mass on the victim; tiny masses take x100.
+    check(near(hitMomentum(8), 800), "momentum: type value x 100");
+    const Vec push = momentumVelocity({600, -800, 0}, 50);
+    check(near(push.x, 12) && near(push.y, -16) && near(push.z, 0), "momentum: velocity change = momentum / mass");
+    check(near(momentumVelocity({3, 0, 0}, 0.005).x, 300), "momentum: mass <= 0.01 scales by 100");
+
+    // Level scale (invented table): row min(|diff|, rows) - 1, higher or lower column, equal levels 1.
+    const std::vector<LevelChanceScale> rows = {{1, 1.0, 0.9}, {2, 1.25, 0.5}, {3, 3.0, 0.1}};
+    check(near(statusLevelScale(10, 10, rows), 1), "level scale: equal levels");
+    check(near(statusLevelScale(11, 10, rows), 1.0) && near(statusLevelScale(10, 11, rows), 0.9), "level scale: one apart");
+    check(near(statusLevelScale(12, 10, rows), 1.25), "level scale: two above");
+    check(near(statusLevelScale(54, 7, rows), 3.0) && near(statusLevelScale(7, 54, rows), 0.1), "level scale: clamps to the last row");
+    check(near(statusLevelScale(54, 7, {}), 1), "level scale: no table");
+
     if (failures) return 1;
     std::printf("weapon_firing_math: all checks passed\n");
     return 0;

@@ -66,6 +66,10 @@ double explosionRadius(double formulaRadius);  // section 3.2: 0 becomes 256
 // (level difference, friendly fire, skills and relics) are 1 at the call site.
 double statusChance(double baseChancePercent, double targetModifier, double weaponBaseModifier,
                     double weaponChanceModifier, double fireIntervalFactor, double extraScale);
+// Section 4.2 LevelScale: GlobalsDefinition.StatusEffectChanceScales. With n = min(|instigator - target|, rows), row n - 1;
+// an instigator above the target takes HigherLevelChanceScale, below LowerLevelChanceScale; equal levels (or no rows) 1.
+struct LevelChanceScale { int levelDifference = 0; double higher = 1, lower = 1; };
+double statusLevelScale(int instigatorLevel, int targetLevel, const std::vector<LevelChanceScale>& rows);
 // Section 4.2 fire-interval factor: r = current interval / type base interval.
 double fireIntervalChanceFactor(double currentInterval, double typeBaseInterval, double shortPower, double longPower);
 // Section 4.2 ExtraScale for radius damage: 1 - clamp(distance - cylinder radius, 0, R) / R.
@@ -84,6 +88,13 @@ struct Motion {
     double maxSpeed = 0;        // 0 = no cap
 };
 void step(Flight& flight, const Motion& motion, double dt);
+
+// Momentum of a bullet or trace hit (section 1.2 / NATIVE_WEAPON_TRIGGER_AMMO ProcessInstantHitBullet): the weapon type's
+// InstantHitMomentum is multiplied by 100 once at weapon setup; the hit passes ray direction x that (confirmed live:
+// 800 for a type value of 8). The victim's velocity changes by momentum / Mass, or momentum x 100 when Mass <= 0.01
+// (engine Pawn.TakeDamage, NATIVE_DAMAGE_DEATH 0.1; the upward part some damage types add is not included).
+double hitMomentum(double instantHitMomentum);
+Vec momentumVelocity(const Vec& momentum, double mass);
 
 // Damage-over-time clock of one status effect application, as measured in the running game (2026-10-23, 94 ticks;
 // docs/verification/WEAPON_PROJECTILES.md): the elapsed time builds up each frame; once it reaches the period (0.33 s)

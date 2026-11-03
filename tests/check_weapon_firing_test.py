@@ -144,7 +144,8 @@ class Gun(unittest.TestCase):
         self.assertTrue(any('splashed nothing' in reason for reason in fails), fails)
 
     def test_tediore_throw_needs_a_full_refill(self):
-        bullets = dict(kind='Bullet', launches=8, target_hits=9, direct='85.00', damage='85.00')
+        # A single straight bullet gun: 5 + 3 pulls plus the two wide-bullet pulls.
+        bullets = dict(kind='Bullet', shots=10, pellets=10, launches=10, impacts=10, target_hits=9, direct='85.00', damage='85.00')
         missing = log(segment('made_throw', 0, 0, 5), result('made_throw', **bullets))
         fails, _, _ = self.run_check(missing, ['made_throw'])[0]
         self.assertTrue(any('no OWFIRING throw' in reason for reason in fails), fails)
@@ -188,6 +189,70 @@ class Cli(unittest.TestCase):
         self.assertEqual(code, 1, out)
         code, _ = self.main('no firing lines here\n', '--guns', 'made_trace')
         self.assertEqual(code, 2)
+
+
+def push(gun, rule=1000, last=1000, hits=5, pushes=5, moved=0.4):
+    return (f'LogTemp: Display: OWFIRING push id={gun} momentum_rule={rule} momentum_last={last} momentum_hits={hits} '
+            f'pushes={pushes} mass=100.0 moved={moved}')
+
+
+def wide(gun, line_hits=0, box_hits=1):
+    return f'LogTemp: Display: OWFIRING wide id={gun} offset=40.0 half=24.0 line_hits={line_hits} box_hits={box_hits}'
+
+
+class Momentum(unittest.TestCase):
+    def test_rule_is_100_times_the_type_value_or_the_class_default(self):
+        self.assertEqual(check.expectations(recipe(10, firing={'instant_hit_momentum': 8}))['momentum'], 800)
+        self.assertEqual(check.expectations(recipe(10, firing={'instant_hit_momentum': None}))['momentum'], 1000)
+
+    def test_wide_only_for_single_straight_pellets(self):
+        self.assertTrue(check.expectations(recipe(10, firing={'fire_type': None}))['wide'])
+        self.assertFalse(check.expectations(recipe(10, projectiles=7, firing={'fire_type': None}))['wide'])
+        self.assertFalse(check.expectations(recipe(10, firing={'fire_type': None, 'pattern_lines': [{}]}))['wide'])
+        self.assertFalse(check.expectations(recipe(10, firing={'fire_type': None,
+                                                              'projectile': {'air_friction': -6}}))['wide'])
+        self.assertFalse(check.expectations(recipe(10, firing={'fire_type': 'EWWFT_Rocket'}))['wide'])
+        self.assertFalse(check.expectations(recipe(10))['wide'])
+        self.assertFalse(check.expectations(recipe(10, firing={'fire_type': None, 'burst_count': 3}))['wide'])
+
+    def expected(self, **firing):
+        return check.expectations(recipe(10, firing=dict({'fire_type': None, 'instant_hit_momentum': 8}, **firing)))
+
+    def test_good_lines_pass(self):
+        e = self.expected()
+        self.assertEqual(check.check_momentum(fields(push('g', 800, 800)), fields(wide('g')), e, 5), [])
+
+    def test_wrong_rule_wrong_velocity_and_no_move_fail(self):
+        e = self.expected()
+        self.assertTrue(check.check_momentum(fields(push('g', 1000, 1000)), fields(wide('g')), e, 5))
+        self.assertTrue(check.check_momentum(fields(push('g', 800, 800, pushes=4)), fields(wide('g')), e, 5))
+        self.assertTrue(check.check_momentum(fields(push('g', 800, 800, moved=0.0)), fields(wide('g')), e, 5))
+        self.assertTrue(check.check_momentum(fields(push('g', 800, 800, hits=3, pushes=3)), fields(wide('g')), e, 5))
+
+    def test_wide_line_must_miss_and_box_must_hit(self):
+        e = self.expected()
+        good = fields(push('g', 800, 800))
+        self.assertTrue(check.check_momentum(good, None, e, 5))
+        self.assertTrue(any('inconclusive' in r for r in check.check_momentum(good, fields(wide('g', 1, 1)), e, 5)))
+        self.assertTrue(any('missed' in r for r in check.check_momentum(good, fields(wide('g', 0, 0)), e, 5)))
+
+    def test_late_bullets_fail(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        write_recipes(folder.name, {'made_trace': recipe(10.0)})
+        results, segments, *_ = check.read_log(log(segment('made_trace', 0, 0, 5), result('made_trace', timed=8, on_time=7)))
+        fails, _, _ = check.check_gun('made_trace', results['made_trace'], segments['made_trace'],
+                                      check.expectations(recipe(10.0)), None, set())
+        self.assertTrue(any('distance / speed' in reason for reason in fails), fails)
+
+    def test_old_logs_without_push_lines_are_graded_without_momentum(self):
+        extra = {}
+        check.read_log(log(segment('x', 0, 0, 5), result('x')), extra)
+        self.assertEqual(extra['push'], {})
+
+
+def fields(line):
+    return check.fields(line.split('OWFIRING ', 1)[1].split(' ', 1)[1])
 
 
 if __name__ == '__main__':

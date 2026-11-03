@@ -1234,7 +1234,9 @@ python tools/weapon_card_audit.py --reader $reader --package "$cooked\Startup.up
 
 # What a shot does (docs/verification/WEAPON_PROJECTILES.md): add the "firing" block to a recipe that has stats
 python tools/weapon_firing.py --reader $reader --package "$cooked\Startup.upk" --recipe <recipe .json> [--print]
-pwsh -File tools/test_weapon_firing.ps1 [-Guns a,b,c] [-SkipBuild]      # in-engine -owfiringtest + check_weapon_firing.py
+python tools/weapon_firing_coverage.py --game $game [--only-firing]     # the firing test's coverage recipes + firing blocks (local/items)
+pwsh -File tools/test_weapon_firing.ps1 [-Guns a,b,c] [-SkipBuild] [-Engine <UE>]  # in-engine -owfiringtest + check_weapon_firing.py
+# (tools/weapon_refresh_firing.py, the L7 live-dump firing block, was retired on 2026-11-02: the cooked firing block replaces it)
 powershell -File tools/capture_firing_frames.ps1                       # host frames at the real frames' pose (-owfiringshots)
 python tools/firing_contact_sheet.py --offsets=-2:10                   # real / host sheets under local/firing/frames/sheets
 

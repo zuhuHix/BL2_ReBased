@@ -46,7 +46,6 @@ add_test(NAME weapon-gen-parity-logic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOUR
 add_test(NAME behavior-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/behavior_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME mission-script-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/mission_script_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME combat-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/combat_test.py $<TARGET_FILE:ow-package>)
-add_test(NAME weapon-refresh-firing-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_refresh_firing_test.py)
 add_test(NAME decisions-index-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/decisions_index_test.py)
 add_test(NAME native-index-find-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/native_index_find_test.py)
 add_test(NAME tool-schema-lines COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/schema_lines_test.py)

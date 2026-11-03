@@ -12,6 +12,7 @@
 #include "OpenWillowShotFx.h"
 #include "OpenWillowStatusEffect.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowSkills.h"
 
 namespace
 {
@@ -52,6 +53,7 @@ AOpenWillowProjectile* AOpenWillowProjectile::Launch(UWorld* World, const FLaunc
     P->bDrawStreak = In.bDrawStreak || P->bRocket;
     P->Element = In.Element;
     P->Flight.position = ToVec(In.Start);
+    P->StartPoint = In.Start;
     if (P->bRocket)
     {
         // NATIVE_WEAPON_FIRING 2.1: Velocity = MaxSpeed x direction; life MaxLifespan. Weapon rockets flew straight in
@@ -100,12 +102,14 @@ void AOpenWillowProjectile::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     const FVector From = ToVector(Flight.position);
+    LastDelta = DeltaSeconds;
     weapon_firing::step(Flight, Motion, DeltaSeconds);
     const FVector To = ToVector(Flight.position);
     FHitResult Hit;
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowProjectile), true, this);
     if (Shooter.IsValid()) Query.AddIgnoredActor(Shooter.Get());
-    if (GetWorld()->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, Query))
+    // Light bullets sweep their firing mode's TraceExtent box (zero: a line); rockets are traced as a line.
+    if (OpenWillowFiring::SweepShot(GetWorld(), Hit, From, To, bRocket ? FVector::ZeroVector : Data.TraceExtent, Query))
     {
         Impact(Hit);
         return;
@@ -214,6 +218,15 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
     const FVector Velocity = ToVector(Flight.velocity);
     ++OpenWillowFiring::Counts.Impacts;
     if (Cast<AOpenWillowCombatTarget>(Other)) ++OpenWillowFiring::Counts.TargetHits;
+    // Flight timing (the light-projectile manager: damage after distance / speed): a constant-speed bullet must arrive
+    // no earlier than that and within the frame that reaches it. A sweep box may meet a surface up to its half size early.
+    if (!bRocket && Motion.airFriction == 0.0 && ToVector(Motion.acceleration).IsNearlyZero() && Velocity.Size() > 1.f)
+    {
+        const float Expected = float(FVector::Dist(StartPoint, Hit.Location)) / float(Velocity.Size());
+        ++OpenWillowFiring::Counts.TimedImpacts;
+        if (Flight.age >= Expected - 1e-3f && Flight.age <= Expected + LastDelta + 1e-3f) ++OpenWillowFiring::Counts.OnTimeImpacts;
+        else UE_LOG(LogTemp, Warning, TEXT("OWFIRING bullet arrived after %.4f s, distance / speed %.4f s"), float(Flight.age), Expected);
+    }
     UE_LOG(LogTemp, Display, TEXT("OWFIRING impact %s on %s at (%.0f %.0f %.0f) after %.3f s, speed %.0f"),
         bRocket ? TEXT("rocket") : TEXT("bullet"), Other ? *Other->GetName() : TEXT("world"),
         Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z, float(Flight.age), float(Velocity.Size()));
@@ -231,7 +244,7 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
         if (Cast<AOpenWillowCombatTarget>(Other))
         {
             OpenWillowFiring::Counts.Direct += Damage;
-            HitTarget(Shooter.Get(), Data, Other, Damage, DamageType, Velocity.GetSafeNormal(), Hit, 1.f);
+            HitTarget(Shooter.Get(), Data, Other, Damage, DamageType, Velocity.GetSafeNormal(), Hit, 1.f, Data.Momentum);
         }
         else
         {
@@ -246,7 +259,8 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
     {
         // A thrown Tediore gun: half its damage to what it strikes, the other half as the splash (live, 2026-10-23).
         OpenWillowFiring::Counts.Direct += Damage * Data.Splash.DirectScale;
-        HitTarget(Shooter.Get(), Data, Other, Damage * Data.Splash.DirectScale, DamageType, Velocity.GetSafeNormal(), Hit, 1.f);
+        // Its momentum on that hit is not measured; none is passed (UNVERIFIED).
+        HitTarget(Shooter.Get(), Data, Other, Damage * Data.Splash.DirectScale, DamageType, Velocity.GetSafeNormal(), Hit, 1.f, 0.f);
     }
     // Bullets whose firing mode carries a Behavior_Explode (gyrojets) explode where they hit; a rocket explodes when its
     // projectile definition has a Detonate behaviour (explode_on_impact).
@@ -281,24 +295,31 @@ void AOpenWillowProjectile::Explode(UWorld* World, AOpenWillowWalker* Shooter, c
         OpenWillowFiring::Counts.Splash += SplashDamage * Scale;
         HitTarget(Shooter, Data, *It, SplashDamage * Scale,
             Data.Splash.DamageType.IsEmpty() ? FString() : Data.Splash.DamageType, (Centre - Origin).GetSafeNormal(), Hit,
-            StatusScale);
+            StatusScale, Data.Splash.Momentum * Scale);
     }
 }
 
 void AOpenWillowProjectile::HitTarget(AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data, AActor* Target,
-    float Damage, const FString& DamageType, const FVector& Direction, const FHitResult& Hit, float StatusScale)
+    float Damage, const FString& DamageType, const FVector& Direction, const FHitResult& Hit, float StatusScale,
+    float Momentum)
 {
     if (!Shooter || !Target) return;
-    Shooter->ApplyShotDamage(Target, Damage, DamageType, Direction, Hit);
+    Shooter->ApplyShotDamage(Target, Damage, DamageType, Direction, Hit, Direction.GetSafeNormal() * Momentum);
     if (!Data.Status.bValid) return;
-    // The roll: surface chance (already times the weapon's chance modifiers) x the radius scale, one draw.
-    // The host target's damage surface is taken as Generic (UNVERIFIED); level, friendly and skill factors are 1.
-    const double Chance = weapon_firing::statusChance(Data.Status.ChancePercent(TEXT("generic")), 1, 1, 1, 1, StatusScale);
+    // The roll: surface chance (already times the weapon's chance modifiers) x the radius scale x the level-difference
+    // scale, one draw. The host target's damage surface is taken as Generic (UNVERIFIED); friendly and skill factors are 1.
+    // Level scale: Maya's level against the target's (a host target without its own level counts as Maya's: factor 1).
+    const int32 ShooterLevel = Shooter->GetSkills() ? Shooter->GetSkills()->GetLevel() : 1;
+    const AOpenWillowCombatTarget* Dummy = Cast<AOpenWillowCombatTarget>(Target);
+    const int32 TargetLevel = Dummy && Dummy->GetLevel() > 0 ? Dummy->GetLevel() : ShooterLevel;
+    const double LevelScale = weapon_firing::statusLevelScale(ShooterLevel, TargetLevel, Data.Status.LevelScales);
+    const double Chance = weapon_firing::statusChance(Data.Status.ChancePercent(TEXT("generic")), 1, 1, 1, 1,
+        StatusScale * LevelScale);
     const float Roll = FMath::FRand();
     const bool bProc = Chance > 0.0001 && Roll <= Chance;
     ++OpenWillowFiring::Counts.StatusRolls;
     if (bProc) ++OpenWillowFiring::Counts.Procs;
-    UE_LOG(LogTemp, Display, TEXT("OWFIRING status roll %s chance %.3f roll %.3f %s"), *Data.Status.Type, Chance, Roll,
-        bProc ? TEXT("proc") : TEXT("miss"));
+    UE_LOG(LogTemp, Display, TEXT("OWFIRING status roll %s chance %.3f (level scale %.2f, levels %d / %d) roll %.3f %s"),
+        *Data.Status.Type, Chance, LevelScale, ShooterLevel, TargetLevel, Roll, bProc ? TEXT("proc") : TEXT("miss"));
     if (bProc) UOpenWillowStatusEffects::Apply(Target, Shooter, Data.Status, DamageType);
 }
