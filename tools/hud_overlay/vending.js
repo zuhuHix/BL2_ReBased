@@ -1,0 +1,139 @@
+// DOM and Ruffle glue for the vending page. The rules (validation, lists, selection, requests) are in vending_model.js.
+// The host calls window.owVending(state) (shape in local/p2/vendors/spec.md, section B) and reads the page's
+// `OWVEND {...}` console lines. The page never changes money itself; it waits for the next state.
+const model = window.OwVendingModel;
+const $ = id => document.getElementById(id);
+const COLUMN_LISTS = {shop: 'list-shop', backpack: 'list-backpack', buyback: 'list-buyback'};
+const KIND_LABEL = {weapon: 'Weapon', item: 'Item', ammo: 'Ammo', health: 'Health'};
+
+let state = null, lists = {shop: [], backpack: [], buyback: []};
+let sel = {column: 'shop', index: 0};
+let lastSerial = -1, receivedAt = 0, localMessage = '', lastRequest = '', movieState = 'loading';
+
+// Stock movie as frame art. Any failure leaves the plain HTML panel, which works on its own.
+try {
+  const player = window.RufflePlayer.newest().createPlayer();
+  $('stage').appendChild(player);
+  window.owPlayer = player;
+  player.ruffle().load({url: 'UI_VendingMachine/VendingMachineInterface.swf', base: 'UI_VendingMachine/'})
+    .then(() => { movieState = 'loaded'; }, () => { movieState = 'failed'; });
+} catch (error) {
+  movieState = 'failed';
+}
+
+function send(action, id) {
+  const line = model.buildRequest(state ? state.serial : 0, action, id);
+  lastRequest = line;
+  console.log(line);
+}
+
+function act() {
+  if (!state) return;
+  const result = model.actionFor(sel, lists, state);
+  localMessage = result.ok ? '' : result.message;
+  if (result.ok) send(result.action, result.id);
+  render();
+}
+
+function close() {
+  send('close', null);
+}
+
+// Text for one row; the host's name and numbers go in through textContent only.
+function rowElement(item, column, index) {
+  const el = document.createElement('div');
+  el.className = `row r${item.rarity}`;
+  if (sel.column === column && sel.index === index) el.classList.add('selected');
+  if (column === 'shop' && !item.affordable) el.classList.add('dim');
+  el.setAttribute('role', 'option');
+  const name = document.createElement('span');
+  name.textContent = `${item.name}${item.level ? ` (L${item.level})` : ''}${item.equipped ? ' [equipped]' : ''}`;
+  const price = document.createElement('span');
+  price.className = 'price';
+  price.textContent = model.formatPrice(item.price);
+  el.append(name, price);
+  el.addEventListener('click', () => { sel = {column, index}; render(); });
+  el.addEventListener('dblclick', () => { sel = {column, index}; act(); });
+  return el;
+}
+
+function renderList(column, rows, emptyText) {
+  const box = $(COLUMN_LISTS[column]);
+  box.replaceChildren();
+  if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = emptyText;
+    box.appendChild(empty);
+    return;
+  }
+  rows.forEach((item, index) => box.appendChild(rowElement(item, column, index)));
+}
+
+function renderFeatured() {
+  const box = $('featured-row');
+  $('featured').hidden = !(state && state.featured);
+  box.replaceChildren();
+  if (!state || !state.featured) return;
+  box.appendChild(rowElement(lists.shop[0], 'shop', 0));
+}
+
+function render() {
+  if (!state) return;
+  $('panel').hidden = !state.open;
+  $('title').textContent = state.machine.title || 'Vending machine';
+  $('money').textContent = model.formatPrice(state.money);
+  $('eridium').textContent = String(state.eridium);
+  $('used').textContent = `${state.used}/${state.capacity}`;
+  sel = {column: sel.column, index: model.clampIndex(sel.index, model.lengths(lists)[sel.column])};
+  renderFeatured();
+  renderList('shop', lists.shop, state.machine.kind === 'weapons' || state.machine.kind === 'items' ? 'Nothing in stock' : 'Not stocked yet');
+  renderList('backpack', lists.backpack, 'Backpack is empty');
+  renderList('buyback', lists.buyback, 'Nothing to buy back');
+  const picked = lists[sel.column][sel.index];
+  $('detail').textContent = picked ? `${picked.name}: ${KIND_LABEL[picked.kind] || picked.kind}, rarity ${picked.rarity}` : '';
+  $('message').textContent = localMessage || state.message;
+  tickCountdown();
+}
+
+// The host sends the seconds to restock when it sends the state; the page counts down from there.
+function tickCountdown() {
+  if (!state) return;
+  const left = state.resetSeconds - (Date.now() - receivedAt) / 1000;
+  $('countdown').textContent = model.formatCountdown(left);
+}
+setInterval(tickCountdown, 1000);
+
+window.owVending = raw => {
+  const result = model.validateState(raw);
+  if (!result.ok) {
+    console.log('OWVENDERR ' + JSON.stringify({error: result.error}));
+    localMessage = 'Bad state from host: ' + result.error;
+    if (state) render();
+    return;
+  }
+  if (result.state.serial < lastSerial) return; // an older state arrived late
+  state = result.state;
+  lastSerial = state.serial;
+  lists = model.buildLists(state);
+  receivedAt = Date.now();
+  localMessage = '';
+  render();
+};
+
+window.owVendingReport = () => {
+  console.log('OWVENDPAGE ' + JSON.stringify({serial: state ? state.serial : null, movie: movieState,
+    selection: sel, lengths: model.lengths(lists), lastRequest}));
+};
+
+document.addEventListener('keydown', event => {
+  const command = model.keyCommand(event.key);
+  if (!command) return;
+  event.preventDefault();
+  if (command === 'act') act();
+  else if (command === 'close') close();
+  else {
+    sel = model.moveSelection(sel, command, model.lengths(lists));
+    render();
+  }
+});

@@ -24,7 +24,8 @@ PAGES = {'/': 'index.html', '/index.html': 'index.html', '/action_skill.js': 'ac
          '/inventory.js': 'inventory.js', '/menu3d.js': 'menu3d.js', '/glass_sheet.js': 'glass_sheet.js',
          '/missions.html': 'missions.html', '/missions.js': 'missions.js', '/mission_log.js': 'mission_log.js',
          '/item_card.js': 'item_card.js', '/pickup_card.js': 'pickup_card.js', '/pickup_card.html': 'pickup_card.html',
-         '/map.html': 'map.html', '/map.js': 'map.js'}
+         '/map.html': 'map.html', '/map.js': 'map.js',
+         '/vending.html': 'vending.html', '/vending.js': 'vending.js', '/vending_model.js': 'vending_model.js'}
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8'}
 PACKAGE_PREFIX = '/ package/'
 
