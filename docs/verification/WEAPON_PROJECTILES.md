@@ -247,10 +247,13 @@ number it reproduces.
   draw a small element-coloured burst (`ExplosionFx`), not the rocket fireball. `tools/check_weapon_firing.py` takes the
   impact explosion as the gun's splash (no wide-bullet check for exploding guns, as before for gyrojets); the firing test
   refills the dummy at each segment start, because the extra damage killed it mid-segment.
-- **Firing suite** (this PC, `tools/test_weapon_firing.ps1`): 13 PASS / 1 FAIL. The three Maliwan guns pass with
-  24-25 splash hits of 33.94 each per run. `pistol_tediore` fails ("the thrown gun hit nothing"; the throw lands on a wall
-  mesh 0.5 s after launch). Nothing in this change touches the throw path, and the same failure appears in the run
-  before the dummy refill. It passed on the other PC on 2026-11-03; cause not found, open.
+- **Firing suite** (this PC, `tools/test_weapon_firing.ps1`): 14 PASS / 0 FAIL after review round 1. The three Maliwan guns
+  pass with 24-25 splash hits of 33.94 each per run. The first refill version (health only) made `pistol_tediore` fail: a
+  dummy that never dies never respawns at home, so it drifted with the earlier guns' pushes and the thrown gun's arc missed
+  it (the same suite on main's host code passed 14/14). The test now also returns the dummy home, at rest, before each gun.
+- **Cosmetic budget.** Every shot effect (flashes, sparks, tracers, flash quads, casings) is spawned through one function
+  with a cap of 96 per frame and a null check; past the cap the cosmetic actor is skipped. Damage, explosions and their
+  hits are not budgeted (host value).
 - **Still open, to check live:** a wall shot next to a bullymong (the wall impact explodes too), a Bandit elemental
   pistol (no second hit expected), a hit at the radius edge (no falloff expected), and the status chance of the
   explosion hit (its status damage and chance attributes are named in the behaviour; how they reach the hit was not read).
