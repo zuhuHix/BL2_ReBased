@@ -158,7 +158,7 @@ finally {
     if ($hub) { Remove-Item $HubLock -Force -ErrorAction SilentlyContinue }
     if ($bak) {
         # Compare the save folder with the backup by relative path and hash; differences are listed, not restored.
-        $live = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame/SaveData'
+        $live = Join-Path $script:WillowDir 'SaveData'
         $hashes = { param($root) Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ rel = $_.FullName.Substring($root.Length); hash = (Get-FileHash $_.FullName).Hash } } }
         $diff = Compare-Object (& $hashes (Join-Path $bak 'SaveData')) (& $hashes $live) -Property rel, hash
         $log.save_compare = @($diff | ForEach-Object { "$($_.SideIndicator) $($_.rel)" })

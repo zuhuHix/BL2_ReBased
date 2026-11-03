@@ -188,7 +188,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
     if ($bak) {
         # Compare with the backup; put changed files back and list everything (character selection writes a .bak).
-        $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame'
+        $src = $script:WillowDir
         $rows = foreach ($sub in 'SaveData', 'Config') {
             $b = Join-Path $bak $sub; $s = Join-Path $src $sub
             Get-ChildItem $s -Recurse -File | ForEach-Object {
