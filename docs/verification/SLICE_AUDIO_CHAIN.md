@@ -79,6 +79,16 @@ trigger's name tag for that line (`GD_Dialog_Enemy_Hyperion.VOBD_HYP_Engineer.Di
 `DialogName_HypEngineer`: unexplained, left as observed. Priority objects (`GD_Globals.Dialog.DialogPriority_*`), `bIsEchoEvent`
 and `Emote` exist on tags/acts and are not modelled.
 
+**2026-11-03: every line of the group, not one run's lines.** The table above is one `--mission-run` of the fixed step list.
+At main 95e48fb the same steps emit only three dialog effects (01, 02, 03b), while the slice host reaches further lines (03a, 04 and
+05; a regeneration run reported them varying between runs, two runs on 2026-11-03 both reached all three), so a manifest built from the run missed lines the host looked up (quest
+check `dialog_hook_finds_every_line_and_plays_nothing`, 110/111 on a freshly regenerated machine).
+`tools/audio_slice_chain.py` now resolves every `DialogEvents` entry of the mission's `MissionDialogGroup` (plus any group a
+run's effect names): 35 events in this group, all with an AkEvent (28 through `OutputAction`, 7 through the inline-`TalkActs`
+pairing above, whose 7 of 7 name agreement still holds), 47 manifest entries in all. Each dialog entry carries
+`reached_in_scripted_run` so the scripted run's three lines stay distinguishable. The group is shared by the whole Rock, Paper,
+Genocide series, so the manifest now also holds lines the Fire mission never plays; that is a superset by design.
+
 ### Marcus's own group (`GD_Dialog_NPCImplementation.Groups.DialogGroup_NPC_Marcus`, Sanctuary_Dynamic) - not triggered by the Fire steps
 
 Mission-giver barks: `DET_NPC_OnUse_AllMissionsInProgress` -> `Ak_Play_VOCT_Marcus_Quest_During`; `..._MissionsAvailable` -> `..._Quest_New`;

@@ -65,7 +65,7 @@ SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     'CustomItemPoolIncludedLists=ObjectProperty',
     'PlayThroughs=StructProperty:PlayThroughData',
     'ConditionalExpressionList=StructProperty:ConditionalExpression',
-    'ValueResolverChain=ObjectProperty',
+    # ValueResolverChain comes from weapon_recipe.SCHEMA_LINES; repeating it is rejected by the reader.
 ]
 NUMBER_OF_PLAYERS = 'D_Attributes.GameProperties.NumberOfPlayers'
 COMPARE = {

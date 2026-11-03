@@ -1,4 +1,4 @@
-"""Synthetic tests for tools/gfx_to_swf.py script localization.
+"""Synthetic tests for tools/gfx_to_swf.py: script localization and font-library imports.
 
 Builds small AVM1 action streams by hand (SWF spec action layouts; no game
 data) and checks that translating a $File.Section.Key string re-measures
@@ -115,6 +115,51 @@ def test_import_url_backslashes():
     body = b'..\\Shared\\Lib.swf\0' + struct.pack('<HH', 1, 0) + struct.pack('<H', 5) + b'name\0'
     assert g.normalize_import_url(body).startswith(b'../Shared/Lib.swf\0')
     assert g.normalize_import_url(body)[len(b'../Shared/Lib.swf\0'):] == body[len(b'..\\Shared\\Lib.swf\0'):]
+
+
+def font_library_swf():
+    """A minimal FWS movie: one stand-in DefineFont3 (id 7) exported as $Body (no game data)."""
+    rect = bytes([0x00])                      # nbits 0: an empty frame rect in one byte
+    header = rect + struct.pack('<HH', 0x1800, 1)
+    tags = g.write_tag(g.DEFINE_FONT3, struct.pack('<H', 7) + b'FONTBODY')
+    tags += g.write_tag(g.EXPORT_ASSETS, struct.pack('<HH', 1, 7) + b'$Body\0') + g.write_tag(0, b'')
+    body = header + tags
+    return b'FWS' + bytes([9]) + struct.pack('<I', 8 + len(body)) + body
+
+
+def font_import(url):
+    # ImportAssets2: url, two reserved bytes, count, (id, name)
+    return url.encode() + b'\0' + struct.pack('<BBHH', 1, 0, 1, 23) + b'$Body\0'
+
+
+def test_plain_font_import_copies_library_from_run_root():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        (run / 'gfxfontlib.swf').write_bytes(font_library_swf())
+        movie = run / 'UI_Movie'
+        movie.mkdir()
+        conv = g.Converter(run, font_base=movie)
+        out = conv.convert([(g.IMPORT_ASSETS2, font_import('gfxfontlib.swf'))])
+        assert (movie / 'gfxfontlib.swf').read_bytes() == (run / 'gfxfontlib.swf').read_bytes()
+        assert conv.copied_libraries and conv.inlined_fonts == [{'id': 23, 'name': '$Body', 'from': 'gfxfontlib.swf'}]
+        assert list(g.read_tags(out, 0, len(out)))[0][0] == g.DEFINE_FONT3
+        # the ../ form already resolves; nothing more is copied, and an existing copy is not overwritten
+        (movie / 'gfxfontlib.swf').write_bytes(font_library_swf() + b'')
+        conv2 = g.Converter(run, font_base=movie)
+        conv2.convert([(g.IMPORT_ASSETS2, font_import('../gfxfontlib.swf')), (g.IMPORT_ASSETS2, font_import('gfxfontlib.swf'))])
+        assert conv2.copied_libraries == [] and len(conv2.inlined_fonts) == 2
+
+
+def test_missing_library_keeps_the_import():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        movie = Path(tmp) / 'UI_Movie'
+        movie.mkdir()
+        conv = g.Converter(tmp, font_base=movie)
+        out = conv.convert([(g.IMPORT_ASSETS2, font_import('gfxfontlib.swf'))])
+        assert conv.copied_libraries == [] and conv.inlined_fonts == []
+        assert list(g.read_tags(out, 0, len(out)))[0][0] == g.IMPORT_ASSETS2
 
 
 if __name__ == '__main__':

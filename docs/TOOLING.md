@@ -562,6 +562,41 @@ name must be unique. Ambiguous cache names fail explicitly. The manifest records
 `package_scope`, which material refresh reuses. Base-only preparation retains
 the existing base-game search root. DLC discovery alone is not DLC compatibility.
 
+## Regenerating local data on a fresh machine
+
+Everything under `local/` and `host/ue5/OpenWillow/Content/` is generated from the installed game and is not in Git. A
+from-scratch regeneration on a second PC (2026-11-02/03, main 683a083) went through the order below; each tool's own
+section in this file has its options. Run the non-UE steps in any order their inputs allow; run UE steps one at a time
+(they wait for `local/ue_run.lock` and for no running editor), and only after the UE module has been built
+(`host/ue5/OpenWillow/Binaries/Win64/UnrealEditor-OpenWillow.dll`).
+
+1. Build the core (`cmake -S . -B build -T version=14.50`, then `cmake --build build --config Release`) and run
+   `tools/verify_packages.py`. Pass the reader to the Python tools as an absolute path: on Windows a relative
+   `build/Release/...` path with forward slashes is not found when a tool starts it as a subprocess.
+2. Sanctuary scene: `tools/viewer.py --action prepare --sanctuary-geometry --outer-shell`, then
+   `tools/refresh_collision.py`; the door mover (`tools/prepare_mover.py`).
+3. Slice data: `tools/prepare_slice_world.py` (21 oracles; it also runs `slice_values.py`), `tools/prepare_action_skill.py`,
+   `tools/audio_census.py census` then `tools/audio_slice_chain.py`, the gestalt tables and UModel gestalt glTF,
+   `tools/seed_inventory_demo.py`, `tools/weapon_slice_gear.py`, the export index and `tools/slice_npc_assets.py all`,
+   `tools/weapon_view_model.py`.
+4. UModel exports for Maya (glTF body, head and hands, PNG textures; MD5 hands and first-person AnimSets).
+5. UI: the font library first, then the movies, the harnesses, `tools/prepare_inventory_movie.py` on
+   `SharedWillowInventory`, the skill tree, HUD icons, minimap and the Ruffle web build (section "BL2's HUD movie over UE5").
+6. Weapon part library inputs (part census, `export_weapon_skins.py`, library meshes, skins, index) and the firing
+   coverage recipes.
+7. UE imports, one editor at a time: Sanctuary (`run_ue_level.ps1 -ImportOnly`), Maya and her arm and combat clips, then
+   `seed_slice_player_assets.ps1 -Steps fx` **before** `seed_inventory_assets.ps1` (the weapon items need the Infinity
+   material that step creates), the slice NPCs, the Phaselock effects (`research/particle_system.py`, the UModel FX
+   exports, `import_phaselock_fx.ps1`, `tools/prepare_phaselock_fx.py`, then the import again), the slice paint and the
+   weapon library import.
+8. Weapon previews (`tools/render_weapon_previews.py`), then the worktree seed (`tools/install_worktree_assets_hook.ps1`).
+9. Suites: quest, weapon firing, inventory actions, action-skill HUD, minimap.
+
+Machine notes: scripts that default to `C:\Program Files\Epic Games\UE_5.8` take `-Engine <path>` for an engine
+installed elsewhere. In Git Bash, MSYS rewrites arguments that start with `/` into Windows paths, which breaks UE content
+paths such as `/Game/OpenWillow/...`: set `MSYS2_ARG_CONV_EXCL=/Game` for tools that take them (PowerShell is not
+affected). New worktrees get only part of this data from the seed; see [tools/worktree-assets.md](../tools/worktree-assets.md).
+
 ## Where things are
 
 | Path | What |
@@ -702,7 +737,14 @@ Convert the UI movies into `local/ui/run` first (DECISIONS.md 2026-09-26:
 `tools/extract_swfmovie.py`, then `tools/gfx_to_swf.py --localization
 <install>/WillowGame/Localization/INT --inline-font-imports`, font library
 first, and `tools/hud_harness_swf.py`), with a Ruffle web build in
-`local/ui/run/ruffle`. Then:
+`local/ui/run/ruffle`. Convert the font library into `local/ui/run/gfxfontlib.swf` before any movie: movies import it
+both as `../gfxfontlib.swf` and as a plain `gfxfontlib.swf`, which resolves next to the movie. Since 2026-11-03
+`gfx_to_swf.py --inline-font-imports` copies the library into the movie's folder itself when it is missing there (listed
+under `copied_font_libraries` in the movie's `.json` report). A movie converted before the library existed keeps the
+import and shows fallback fonts: convert it again. After converting `SharedWillowInventory`, run
+`python tools/prepare_inventory_movie.py --input <converted SharedWillowInventory.swf> --output local/ui/run/SharedWillowInventory/SharedWillowInventory.swf`
+(the Ruffle nested-import workaround, [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md)); without
+it the inventory suite fails. Then:
 
 ```powershell
 ./tools/run_ue_flash_hud.ps1 -Engine $engine -Game $game            # editor; press Play
@@ -1198,7 +1240,7 @@ python tools/firing_contact_sheet.py --offsets=-2:10                   # real / 
 
 # Audio identity chain (no decoding): UE3 AkEvent -> Wwise event -> bank -> .wem
 python tools/audio_census.py census
-python tools/audio_slice_chain.py --reader $reader                     # local/slice/audio.json
+python tools/audio_slice_chain.py --reader $reader                     # local/slice/audio.json (every line of the mission's dialog group)
 
 # Marcus, the target dummy and the stock Maliwan pistol: UModel export + UE import job
 python tools/slice_npc_assets.py all                                   # local/slice/npc_assets.json
