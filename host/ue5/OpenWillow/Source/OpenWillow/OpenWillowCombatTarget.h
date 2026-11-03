@@ -85,6 +85,21 @@ public:
     // Returns false (engine shapes kept) when the switch is absent or the data or an asset is missing.
     bool UseCommandLinePawn();
     bool IsStockPawn() const { return StockMesh != nullptr; }
+    // Momentum of a hit (Pawn.TakeDamage, engine script, NATIVE_DAMAGE_DEATH 0.1): the velocity change is momentum / Mass
+    // (100 x momentum when Mass <= 0.01), added to the pawn's velocity (HandleMomentum). The extra upward part some damage
+    // types ask for is not applied (which types do is not decoded). The host target then slides by that velocity, slowed
+    // by a ground friction stand-in (KnockFriction, UNVERIFIED), and not while phaselocked or dead.
+    static FVector MomentumVelocity(const FVector& Momentum, float Mass);
+    float GetMass() const { return Mass; }
+    // Experience level for the status-chance level scale; 0 = none of its own (taken as the shooter's: factor 1).
+    // The stock dummy's and the stock pawns' levels are not read (UNVERIFIED); -owtargetlevel=N sets it for checks.
+    int32 GetLevel() const { return Level; }
+    void SetLevel(int32 NewLevel) { Level = FMath::Max(0, NewLevel); }
+    const FVector& KnockVelocity() const { return Knock; }
+    FVector LastHitMomentum() const { return LastMomentum; }
+    FVector LastHitVelocityChange() const { return LastVelocityChange; }
+    FVector Displacement() const { return GetActorLocation() - KnockOrigin; }  // since the last ResetKnock
+    void ResetKnock() { Knock = FVector::ZeroVector; KnockOrigin = GetActorLocation(); }
     class USkeletalMeshComponent* GetStockMesh() const { return StockMesh; }
     TArray<FOpenWillowDamagePopup> Popups;
 private:
@@ -153,6 +168,16 @@ private:
     float LastHitAt = -10;
     float DiedAt = -10;
     float FallVelocity = 0;
+    // Pawn Mass: Default__Pawn.Mass in Engine.upk is 100 (read from the package); a pawn archetype's own Mass is not read.
+    float Mass = 100.f;
+    int32 Level = 0;
+    // 1/s: Default__PhysicsVolume.GroundFriction (8, read from Engine.upk). How the walking physics applies it to a pushed
+    // pawn was not read: velocity x (1 - friction dt) per frame is a host stand-in (UNVERIFIED).
+    static constexpr float KnockFriction = 8.f;
+    FVector Knock = FVector::ZeroVector;
+    FVector KnockOrigin = FVector::ZeroVector;
+    FVector LastMomentum = FVector::ZeroVector;
+    FVector LastVelocityChange = FVector::ZeroVector;
     float MaxHealth = 20000.f; // host dummy; sized for level-30 item damage
     float Health = 20000.f;
     bool bPhaselocked = false;

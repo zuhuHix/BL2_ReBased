@@ -29,6 +29,22 @@ shotgun, sniper, launcher), every element (fire, shock, corrosive, slag, explosi
 Infinity rolls 1-6. 28 guns in all; firing kinds: 4 rocket firing modes, 2 own-motion light bullets (gyrojets), 22
 plain light bullets; no hit-scan firing mode among them.
 
+**Regenerating them (2026-11-02).** The 2026-10-23 set was not recorded by id, so `tools/weapon_firing_coverage.py` now fixes
+the list (16 coverage ids, each with its balance) and rebuilds everything the firing test reads, in a fresh worktree:
+
+```
+cmake --build build --config Release                     # ow-package.exe
+python tools/weapon_slice_gear.py --game "<BL2 folder>"   # local/items/slice (or copy it from another worktree's local/)
+python tools/weapon_firing_coverage.py --game "<BL2 folder>"
+```
+
+The last command rolls each coverage gun with `tools/weapon_recipe.py --stage 8 --seed 1` from Startup.upk, evaluates its
+card with `tools/weapon_stats.py --level 8`, writes `local/items/firing/coverage/<id>.json`, then adds the `firing` block
+(`tools/weapon_firing.py`) to every coverage, slice and Infinity recipe (`--only-firing` skips the rolls). About a minute
+per gun on the second machine. The reconstructed list keeps the ids the test and the frame captures name and adds
+`ar_vladof`, `smg_hyperion`, `sr_vladof`, `rl_maliwan` and `rl_tediore` so that every manufacturer and type is present;
+its rolls are not guaranteed to equal the 2026-10-23 ones (that run's generator setting was not recorded).
+
 ## 3. Rules and their evidence
 
 "Live" = measured in the running game with bl-sdk hooks (three sessions, 2026-10-22/23, Sanctuary_P, Glacial_P and
@@ -47,13 +63,17 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
 | Per-pellet damage = card damage (`InstantHitDamage`); flat additions split over pellets (the split, `weapon_firing::multiProjectileDamage`, is **not used by the host**: it has no runtime modifier stack and fires the evaluated card damage) | native 1.7 | **confirmed live** on 4 of 5 guns (pistol 26.261, Jakobs 20.888, SMG 19.353, sniper 60.191 = card); a skill's flat +46,940 split over 7 Jakobs pellets confirmed the split. Dahl AR: live 21.463 vs card 19.603 (generation lane's card, section 6) |
 | Splash: full damage inside the radius when the explode behaviour sets `bDisableRadiusDamageFalloff` | data + native 3.1 | **confirmed live**: Bandit rocket 285.84 at all 21 distances 86-380 uu, gyrojet 28.98 at 86-211 uu |
 | Falloff otherwise: the damage type's `MaxDamageRadius` / `MinDamageRadius` / `MinDamagePercent` bands | native 3.1 | **confirmed live** with the explosive type's 0.3 / 0.9 / 0.6: `CalcRadiusDamageScale(107.284, 120)` returned 0.603975, the formula gives 0.603976 |
-| Status chance = surface `BaseChance` x weapon modifiers x further factors | native 4.2 | **not matched**: Maliwan shock 21/96, corrosive 11/50, slag 18/50 procs against a card (flesh) chance of 11.7 / 11.7 / 23.4 %; fire AR 4/36 against 9 %. A factor the host does not apply (level difference: player 54 vs target 7, or the roll's `ChanceModifier` argument) is the suspect (UNVERIFIED) |
+| Status chance = surface `BaseChance` x weapon modifiers x further factors | native 4.2 | live: Maliwan shock 21/96, corrosive 11/50, slag 18/50 procs against a card (flesh) chance of 11.7 / 11.7 / 23.4 %; fire AR 4/36 against 9 %. The missing factor is taken to be the level-difference scale (row below; player 54 vs target 7 gives x2.0), UNVERIFIED |
 | DOT: build up frame time; at 0.33 s deal DPS x built-up time and subtract 0.33; a final partial tick at the end | not read | **confirmed live** on 94 ticks (ratio 1.00000); DPS = the weapon's `StatusEffectDamage`, duration = the definition's |
 | Re-procs: shock refreshes its one entry (duration restarts, clock kept); fire and corrosive run parallel entries | not read | observed (a few cases; rule UNVERIFIED) |
 | Spin-up: only `BSM_SpinUpToFullFireRate` ramps the interval; `BSM_SpinBarrelWithEachShot` does not gate firing | native 1.5 | read only |
 | `AutomaticBurstCount` N: a press fires N shots even if released, then waits for a new press; 1 = one shot per press (`weapon_firing::Burst`, reset when the weapon in hand changes) | native 1.5 + data | **consistent with live**: the slice pistol and rifle (count 1) fired once per hold; the SMG, shotgun (count 0) and Infinity fired repeatedly |
 | Tediore reload throw: damage = card damage x rounds left; half to what it strikes, half as a radius-120 splash with falloff | data + observed | **confirmed live** (25.891 x 10 = 258.91; direct 129.455; splash 78.19 at 0.604) |
 | The thrown rounds leave with the gun: the reload then takes a full magazine from the reserve | Tediore design | host rule; **not measured** (the live session logged the damage, not the ammo counts) |
+| Per-hit momentum = `InstantHitMomentum` x 100 along the shot; from the weapon type, the class default when it has none; splash momentum = the explode behaviour's `MomentumFormula` x the radius scale (2026-11-02, maintainer decision to restore it) | data + NATIVE_WEAPON_TRIGGER_AMMO 3 (x100 once at weapon setup) | the values **match live reads** (R6/R7: pistol 8, shotgun 7, Torgue 10, rocket splash 10,000); the x100 factor is read from native code and the hit's effect on a pawn is **not measured** (UNVERIFIED) |
+| A hit changes the target's velocity by momentum / `Mass` (`Default__Pawn.Mass` 100, Engine.upk); the target then slides, slowed by `GroundFriction` 8 (`Default__PhysicsVolume`) | stock UE3 pawn rule + data | UNVERIFIED: the host applies the friction as v x (1 - 8 dt) per frame, a stand-in for the game's walking physics |
+| Wide bullets: a firing mode's `TraceExtent` makes the shot a box sweep instead of a line (light bullets each tick and traces); rockets stay lines | native 2.2 + data | read only; none of the 28 local recipes has an extent, so the in-engine check uses a host-chosen 24 uu box |
+| Status chance x the level-difference scale (`GD_Globals.General.Globals.StatusEffectChanceScales`): row = min(difference, 6); shooter higher -> `HigherLevelChanceScale` (x2.0 at 6+), lower -> `LowerLevelChanceScale` (x0 at 6+) | data | **consistent with live counts** (Maya 54 vs bullymong 7: about 2 x the card chance on Maliwan pistols, section 5); a live check against a same-level target is still to do (UNVERIFIED) |
 
 ## 4. The host (what it does and where it stands in for the game)
 
@@ -64,6 +84,11 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
   data enables a tracer, the lane E rule).
 * Rockets launch from the muzzle toward the screen-centre hit (native 2.1) and explode when their definition has a
   Detonate behaviour; bullets whose firing mode carries a `Behavior_Explode` (gyrojets) explode where they hit.
+* Momentum: each direct hit, trace or splash passes `momentum` along the shot to the target, which changes its velocity by
+  momentum / mass and slides it on the ground plane (none while phaselocked; a Tediore throw's direct half passes none, not
+  measured). Wide bullets sweep their `TraceExtent` box (`OpenWillowFiring::SweepShot`).
+* Status rolls multiply the card chance by the level-difference scale: Maya's level against the target's
+  (`-owtargetlevel=N` sets the host dummy's; without it the dummy counts as Maya's level, factor 1).
 * The splash distance is to the target's collision centre (the game measures to a hit-region bone; the live cutoff of
   the radius-250 rocket lay between 380 and 432 uu from the pawn origin). The target's surface is taken as Generic.
 * Not modelled (open): the elemental impact explosions of elemental and Torgue bullets (live: Maliwan pistol bullet
@@ -72,10 +97,28 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
   x1.0); child projectiles spawned by a projectile's behaviours (the Maliwan launcher's fire area; the firing block lists
   them under `unsupported` and the host logs them); beams (the tool gives them their own kind, `beam`, listed as
   unsupported; the host fires light bullets for them); runtime damage modifiers (skills, relics; the per-pellet split is
-  written but unused); slag's damage bonus and its duration (the recipe's slag duration is unresolved; live 8 s); the status chance
-  factor above; the accuracy pool and kick (the recoil data is in the block, the host keeps lane E's kick); bullet ricochets; homing; the launcher reload throw's own motion (live speed steps not fitted).
+  written but unused); slag's damage bonus and its duration (the recipe's slag duration is unresolved; live 8 s); the accuracy pool and kick (the recoil data is in the block, the host keeps lane E's kick); bullet ricochets; homing; the launcher reload throw's own motion (live speed steps not fitted).
 
 ## 5. Host versus game
+
+**2026-11-03 run (pc-hummer, branch `feature/weapons-integrity` on main 95e48fb):** `local/firing/run-20261103-014500.log`,
+**14 PASS / 0 FAIL**. The recipes were regenerated on this machine (section 2), so cards and kinds differ from the 2026-10-23
+table below (for example this machine's `ar_bandit_fire` roll fires bullets, not rockets); the coverage guns have no imported
+meshes here and are drawn as the stand-in (firing uses the card and the block). New checks in this run:
+
+* Momentum (`OWFIRING push`): every momentum-carrying hit on all 14 guns changed the dummy's velocity by exactly momentum /
+  100 (`pushes` = `momentum_hits`, 4-15 per gun); momentum 500-1,100 per bullet (x100 of the block), 10,000 per rocket splash;
+  the dummy slid 1.9-12.7 uu over the five dummy pulls, 84.9 uu for the Bandit launcher.
+* Wide bullet (`OWFIRING wide`, the 7 single-straight-bullet guns): the line 45.6 uu beside the dummy's centre missed (0 hits),
+  the same pull with a 24 uu half-size box hit (1 hit) on all 7.
+* Flight timing (`timed` / `on_time`): 288 of 288 constant-speed bullets arrived within the frame that reaches
+  distance / speed (the own-motion and rocket guns are not timed).
+* Status rolls ran at level scale 1 (no `-owtargetlevel`: the dummy counts as Maya's level): procs shock 4/26, corrosive
+  1/26, slag 8/26, fire AR 3/25. A run with `-owtargetlevel` below Maya's to see the x2 rows was not made.
+
+The first run of the day (`run-20261103-013858.log`) failed 8 of 14 on shot counts only: the wide check's two pulls were
+not counted by the checker, and on the burst fixture the burst's later shots landed during the check. The checker now
+counts the two pulls and the wide check skips burst guns; nothing else changed between the runs.
 
 In-engine firing test (`tools/test_weapon_firing.ps1`; Sanctuary_P, the host dummy) after the round-3 fixes:
 
@@ -120,7 +163,7 @@ Same quantities, host versus live:
 | Bandit rocket splash | 285.84 flat in the radius | card damage flat in the radius |
 | Tediore throw | 258.91 at 10 rounds; 129.455 direct + 0.604 x 129.455 splash | same rule |
 | DOT tick | 0.33 s clock, DPS x built-up time, final partial | same clock |
-| Status proc rate | 2-3 x the card chance (Maliwan) | the card chance (open) |
+| Status proc rate | 2-3 x the card chance (Maliwan; Maya 54 vs a level-7 target) | the card chance x the level-difference row (x2.0 at 6+ levels above; x1 at equal levels), UNVERIFIED |
 
 ## 6. Matched-frame review
 

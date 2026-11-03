@@ -226,6 +226,7 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         int32 Pulls;
         bool bThrow = false;   // Tediore: reload with 5 rounds left at the dummy, then log the refill
         int32 Lifecycle = 0;   // burst guns: 1 = reload mid-burst, 2 = respawn mid-burst; no shot may follow either
+        bool bWide = false;    // one pull beside the dummy as a line, then one with a TraceExtent box (wide bullet)
     };
     static const float Settle = [] { float Seconds = 2.f; FParse::Value(FCommandLine::Get(), TEXT("owfiringsettle="), Seconds); return Seconds; }();
     static TArray<FString> Ids;
@@ -315,6 +316,12 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         Segments.Add(FSegment{true, 3});
         if (Item->Firing.bLoaded && Item->Firing.Status.bValid) Segments.Add(FSegment{false, 20});
         if (Item->Firing.ReloadThrow) Segments.Add(FSegment{false, 0, true});
+        // Wide bullet: single straight pellets only (no pattern, no own motion, no splash), so the line's miss is certain;
+        // not on burst guns, whose later burst shots would land while the check counts.
+        if (Item->Firing.bLoaded && Item->Firing.Kind != EOpenWillowShotKind::Rocket && Item->Projectiles <= 1
+            && Item->Firing.Pattern.lines.empty() && Item->Firing.AirFriction == 0.f && !Item->Firing.Splash.bValid
+            && Item->Firing.BurstCount <= 1)
+            Segments.Add(FSegment{false, 0, false, 0, true});
         if (Item->Firing.BurstCount > 1)
         {
             Segments.Add(FSegment{false, 0, false, 1});
@@ -354,7 +361,62 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         PullsLeft = Part.Pulls;
         bPulling = false;
         StepAt = Now;   // the camera follows the new aim a frame later: no pull before AimSettle
-        Step = Part.bThrow ? 6 : Part.Lifecycle ? 7 : 3;
+        Step = Part.bWide ? 8 : Part.bThrow ? 6 : Part.Lifecycle ? 7 : 3;
+        if (Segment == 0) CombatTarget->ResetKnock();
+        break;
+    }
+    case 8:   // wide bullet: aim beside the dummy (centre line passes Offset from its centre), fire as a line, then as a box
+    {
+        // The firing mode's TraceExtent is a data value on 7 of 150 modes; here a host-chosen box (half size Half) is put
+        // on the held gun for one pull and removed after: this checks the host's sweep, not a game value.
+        static int32 Phase = 0, HitsBefore = 0, LineHits = 0;
+        static FVector SavedExtent = FVector::ZeroVector;
+        static float SavedSpread = 0.f;
+        FOpenWillowWeaponItem* Item = Inventory->ActiveWeaponMutable();
+        if (!Item) { Finish(); break; }
+        const float Offset = CombatTarget->AutoAimRadius() + 12.f, Half = 24.f;
+        auto Pull = [&](const FVector& Extent)
+        {
+            Item->Firing.TraceExtent = Extent;
+            Item->MagazineLeft = -1;
+            HitsBefore = OpenWillowFiring::Counts.TargetHits;
+            ShotsBefore = OpenWillowFiring::Counts.Shots;
+            PullAt = Now;
+            FirePressed();
+        };
+        auto Landed = [&]() { return OpenWillowFiring::Counts.Shots > ShotsBefore && ProjectilesInFlight() == 0; };
+        if (Phase == 0)
+        {
+            const FVector Eye = Camera->GetComponentLocation();
+            const FVector Toward = (CombatTarget->AimPoint() - Eye).GetSafeNormal2D();
+            AimAt(CombatTarget->AimPoint() + FVector::CrossProduct(Toward, FVector::UpVector) * Offset);
+            SavedExtent = Item->Firing.TraceExtent;
+            SavedSpread = Item->Spread;
+            Item->Spread = 0.f;   // the pellet goes exactly where the aim is
+            StepAt = Now;
+            Phase = 1;
+            break;
+        }
+        if (Phase == 1) { if (Now < StepAt + 0.3f) break; Pull(FVector::ZeroVector); Phase = 2; break; }
+        if (Phase == 2)
+        {
+            if (!Landed() && Now < PullAt + 3.f) break;
+            FireReleased();
+            LineHits = OpenWillowFiring::Counts.TargetHits - HitsBefore;
+            StepAt = Now;
+            Phase = 3;
+            break;
+        }
+        if (Phase == 3) { if (Now < StepAt + 1.f / FMath::Max(0.1f, Item->FireRate) + 0.3f) break; Pull(FVector(Half)); Phase = 4; break; }
+        if (!Landed() && Now < PullAt + 3.f) break;
+        FireReleased();
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING wide id=%s offset=%.1f half=%.1f line_hits=%d box_hits=%d"), *Id, Offset, Half,
+            LineHits, OpenWillowFiring::Counts.TargetHits - HitsBefore);
+        Item->Firing.TraceExtent = SavedExtent;
+        Item->Spread = SavedSpread;
+        Phase = 0;
+        ++Segment;
+        Step = 2;
         break;
     }
     case 7:   // burst lifecycle: press, after the burst's first shot release and reload (or respawn); count later shots
@@ -459,6 +521,16 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         if (ProjectilesInFlight() > 0 && Now < FinishAt + 6.f) break;
         UE_LOG(LogTemp, Display, TEXT("OWFIRING segment id=%s index=%d wall=%d shots=%d target_hits=%d"), *Id, Segment,
             Segments[Segment].bWall ? 1 : 0, OpenWillowFiring::Counts.Shots, OpenWillowFiring::Counts.TargetHits);
+        if (Segment == 0)
+        {
+            // How far the dummy slid along the shots since the segment began (momentum / mass, then the friction stand-in).
+            const FVector Along = (CombatTarget->AimPoint() - Camera->GetComponentLocation()).GetSafeNormal2D();
+            const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING push id=%s momentum_rule=%.1f momentum_last=%.1f momentum_hits=%d pushes=%d mass=%.1f moved=%.3f"),
+                *Id, Held && Held->Firing.bLoaded ? Held->Firing.Momentum : 0.f, OpenWillowFiring::Counts.LastMomentum,
+                OpenWillowFiring::Counts.MomentumHits, OpenWillowFiring::Counts.Pushes, CombatTarget->GetMass(),
+                float(FVector::DotProduct(CombatTarget->Displacement(), Along)));
+        }
         ++Segment;
         Step = 2;
         break;
@@ -485,9 +557,9 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
         const FOpenWillowWeaponItem* Item = Inventory->ActiveWeapon();
         UE_LOG(LogTemp, Display, TEXT("OWFIRING dummy id=%s health=%.3f"), *Id, CombatTarget->HealthFraction());
-        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d"),
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d"),
             *Id, *Kind, C.Pellets, C.Shots, C.Launches, C.Impacts, C.TargetHits, C.Damage, C.Direct, C.Splash, C.SplashHits,
-            C.StatusRolls, C.Procs, C.Ticks);
+            C.StatusRolls, C.Procs, C.Ticks, C.TimedImpacts, C.OnTimeImpacts);
         if (!Item || Item->Id != Id) UE_LOG(LogTemp, Warning, TEXT("OWFIRING id=%s reported after the weapon changed"), *Id);
         ++Gun;
         Step = 0;

@@ -41,8 +41,11 @@ public:
     static void ExplosionFx(UWorld* World, const FVector& Origin, const FVector& Normal, float Radius,
         const FString& DamageType);
     // A damaging hit on a target: damage, then the status effect roll (NATIVE_WEAPON_FIRING 4.1-4.2).
+    // Momentum is the hit's momentum length along Direction (InstantHitMomentum x 100 for a bullet or trace; radius
+    // scale x MomentumFormula for splash).
     static void HitTarget(class AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data, AActor* Target,
-        float Damage, const FString& DamageType, const FVector& Direction, const FHitResult& Hit, float StatusScale);
+        float Damage, const FString& DamageType, const FVector& Direction, const FHitResult& Hit, float StatusScale,
+        float Momentum);
 
 private:
     void Impact(const FHitResult& Hit);
@@ -62,5 +65,7 @@ private:
     bool bDrawStreak = true;
     FString Element;
     FVector VisualOffset = FVector::ZeroVector; // muzzle minus start, faded out over the first metres
+    FVector StartPoint = FVector::ZeroVector;
+    float LastDelta = 0;                        // the last tick's seconds (the arrival check allows one frame)
     float Travelled = 0;
 };

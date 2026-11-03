@@ -1413,7 +1413,9 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     const FVector End = Start + Direction * (Held && Held->Firing.bLoaded ? Held->Firing.TraceRange : 10000.f);
     FHitResult Hit;
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowInfinity), true, this);
-    const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query);
+    // A trace sweeps the firing mode's TraceExtent box when it has one (the same rule as the light bullets).
+    const bool bHit = OpenWillowFiring::SweepShot(GetWorld(), Hit, Start, End,
+        Held && Held->Firing.bLoaded ? Held->Firing.TraceExtent : FVector::ZeroVector, Query);
     const FVector Impact = bHit ? Hit.ImpactPoint : End;
     // Live WeaponTypeDefinition data names no tracer template for this four-gun slice; suppress the generic line for them.
     // Keep the previous fallback for other items until their weapon type is present in weapon_view.json.
@@ -1441,8 +1443,9 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     const float Damage = Weapon ? ShotDamage(*Weapon, GetWorld()->GetTimeSeconds()) : 0.f;
     ++OpenWillowFiring::Counts.TargetHits;
     OpenWillowFiring::Counts.Direct += Damage;
-    AOpenWillowProjectile::HitTarget(this, Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly, Target,
-        Damage, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f);
+    const FOpenWillowFiringData& Firing = Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly;
+    AOpenWillowProjectile::HitTarget(this, Firing, Target, Damage, Weapon ? Weapon->DamageType : FString(), Direction, Hit, 1.f,
+        Firing.Momentum);
 }
 FOpenWillowFiringState& AOpenWillowWalker::FiringStateFor(const FOpenWillowWeaponItem& Weapon)
 {
@@ -1475,19 +1478,29 @@ void AOpenWillowWalker::StartReloadThrow(const FOpenWillowWeaponItem& Weapon)
         Held->MagazineLeft = 0;
 }
 void AOpenWillowWalker::ApplyShotDamage(AActor* Target, float Amount, const FString& DamageType, const FVector& Direction,
-    const FHitResult& Hit)
+    const FHitResult& Hit, const FVector& Momentum)
 {
     if (!Target) return;
     // The shot carries the item's stock damage type path (card damage_type); the target reads it while the
     // damage is applied. Damage source (DamageSource output) is not passed: its stock value is not decoded.
     const FString Outer = ShotDamageTypeInFlight;   // restored after, should damage ever nest
+    const FVector OuterMomentum = ShotMomentumInFlight;
     ShotDamageTypeInFlight = DamageType;
+    ShotMomentumInFlight = Momentum;
     if (Cast<AOpenWillowCombatTarget>(Target)) OpenWillowFiring::Counts.Damage += Amount;
     UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s for %.2f (damage type %s)"),
         Inventory && Inventory->ActiveWeapon() ? *Inventory->ActiveWeapon()->Id : TEXT("-"), *Target->GetName(), Amount,
         DamageType.IsEmpty() ? TEXT("None") : *DamageType);
     UGameplayStatics::ApplyPointDamage(Target, Amount, Direction, Hit, GetController(), this, UDamageType::StaticClass());
+    if (const AOpenWillowCombatTarget* Dummy = Cast<AOpenWillowCombatTarget>(Target); Dummy && !Momentum.IsNearlyZero())
+    {
+        ++OpenWillowFiring::Counts.MomentumHits;
+        OpenWillowFiring::Counts.LastMomentum = float(Momentum.Size());
+        const FVector Expected = AOpenWillowCombatTarget::MomentumVelocity(Momentum, Dummy->GetMass());
+        if (Dummy->IsPhaselocked() || Dummy->LastHitVelocityChange().Equals(Expected, 1e-3f)) ++OpenWillowFiring::Counts.Pushes;
+    }
     ShotDamageTypeInFlight = Outer;
+    ShotMomentumInFlight = OuterMomentum;
     TargetHitAt = GetWorld()->GetTimeSeconds();
 }
 bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
@@ -2091,6 +2104,12 @@ void AOpenWillowWalker::RunGunShots(float Now)
             const bool bEject = GunSocketLocation(TEXT("EjectPort"), EjectWorld);
             UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s Muzzle socket %s EjectPort socket %s"), *Id,
                 bMuzzle ? *Rel(MuzzleWorld) : TEXT("none"), bEject ? *Rel(EjectWorld) : TEXT("none"));
+            // The view-model muzzle socket (weapon_view.json, WeaponSocketWorld) and where the flash is drawn (MuzzleLocation).
+            const FViewModel* Probe = ActiveViewModel();
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow gunprobe %s view-model muzzle %s (bone %s, local %s) flash at %s Root %s"), *Id,
+                Probe && Probe->MuzzleSocket.bValid ? *Rel(WeaponSocketWorld(Probe->MuzzleSocket).GetLocation()) : TEXT("none"),
+                Probe ? *Probe->MuzzleSocket.Bone : TEXT("-"), Probe ? *Probe->MuzzleSocket.Location.ToString() : TEXT("-"),
+                *Rel(MuzzleLocation()), *Rel(WeaponVisual->GetBoneLocation(TEXT("Root"))));
         }
         // -owgunquick (weapon part assets sweep): first-person idle and the side view only.
         if (FParse::Param(FCommandLine::Get(), TEXT("owgunquick"))) { GunShotStep = Gun * 8 + 7; GunShotPhaseAt = Now; break; }

@@ -258,5 +258,43 @@ class NullHandlingTests(unittest.TestCase):
         self.assertIsNone(source.origin('Fake.FiringModes.Bullet_Default', 'AirFriction'))
 
 
+class LevelChanceScaleTests(unittest.TestCase):
+    def test_globals_table_is_copied_into_the_status_block(self):
+        source = source_of()
+        source.package.add(firing.GLOBALS, 'WillowGame.GlobalsDefinition', {'StatusEffectChanceScales': [
+            {'LevelDifference': 1, 'HigherLevelChanceScale': 1.5, 'LowerLevelChanceScale': 0.5}]})
+        status = firing.build(source, recipe(), stats())['status']
+        self.assertEqual(status['level_chance_scales'],
+                         [{'LevelDifference': 1, 'HigherLevelChanceScale': 1.5, 'LowerLevelChanceScale': 0.5}])
+
+    def test_no_globals_is_null(self):
+        self.assertIsNone(shot()['status']['level_chance_scales'])
+
+
+class MomentumAndExtentTests(unittest.TestCase):
+    def test_momentum_is_the_type_value_before_the_x100(self):
+        source = source_of()
+        source.package.objects['Fake.Types.WT_Fake']['InstantHitMomentum'] = const(7)
+        self.assertEqual(firing.build(source, recipe(), stats())['instant_hit_momentum'], 7)
+
+    def test_momentum_falls_back_to_the_class_default(self):
+        source = source_of()
+        source.defaults.add('Default__WeaponTypeDefinition', 'WillowGame.WeaponTypeDefinition',
+                            {'InstantHitMomentum': const(12)})
+        self.assertEqual(firing.build(source, recipe(), stats())['instant_hit_momentum'], 12)
+
+    def test_no_momentum_anywhere_is_null(self):
+        self.assertIsNone(shot()['instant_hit_momentum'])
+
+    def test_trace_extent_from_the_firing_mode(self):
+        source = source_of()
+        source.package.objects['Fake.FiringModes.Bullet_Default']['TraceExtent'] = {'X': 6, 'Y': 6, 'Z': 3}
+        self.assertEqual(firing.build(source, recipe(), stats())['trace_extent'], [6.0, 6.0, 3.0])
+
+    def test_zero_or_absent_extent_is_a_line(self):
+        self.assertIsNone(shot()['trace_extent'])
+        self.assertIsNone(firing.vector_of({'X': 0, 'Y': 0, 'Z': 0}))
+
+
 if __name__ == '__main__':
     unittest.main()

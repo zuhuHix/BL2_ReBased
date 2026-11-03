@@ -1,6 +1,7 @@
 #include "OpenWillowFiring.h"
 
 #include "Dom/JsonObject.h"
+#include "Engine/World.h"
 
 namespace
 {
@@ -70,6 +71,7 @@ void FOpenWillowFiringData::ParseProjectile(const FJsonObject& Projectile, float
         Out.Splash.Falloff.minDamagePercent = NumberOr(*Bands, TEXT("MinDamagePercent"), Out.Splash.Falloff.minDamagePercent);
     }
     Splash->TryGetStringField(TEXT("damage_type"), Out.Splash.DamageType);
+    Out.Splash.Momentum = float(NumberOr(*Splash, TEXT("momentum"), 0));
 }
 
 bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, FOpenWillowFiringData& Out)
@@ -112,6 +114,15 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
     if (const FJsonObject* Projectile = ObjectOrNull(Firing, TEXT("projectile"))) ParseProjectile(*Projectile, CardDamage, Out);
     Out.SpinDownDuration = float(NumberOr(Firing, TEXT("spin_down"), 0));
     Out.TraceRange = float(NumberOr(Firing, TEXT("trace_range"), 16384));
+    Out.Momentum = float(weapon_firing::hitMomentum(NumberOr(Firing, TEXT("instant_hit_momentum"), 10)));
+    const TArray<TSharedPtr<FJsonValue>>* Extent = nullptr;
+    if (Firing.TryGetArrayField(TEXT("trace_extent"), Extent) && Extent->Num() == 3)
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            double Value = 0;
+            if ((*Extent)[Axis].IsValid() && (*Extent)[Axis]->TryGetNumber(Value) && FMath::IsFinite(Value))
+                Out.TraceExtent[Axis] = FMath::Max(0.f, float(Value));
+        }
     Firing.TryGetBoolField(TEXT("suppress_spread"), Out.bSuppressSpread);
     Firing.TryGetBoolField(TEXT("pattern_scale_by_spread"), Out.Pattern.scaleBySpread);
     Out.Pattern.basePatternSpread = NumberOr(Firing, TEXT("pattern_base_spread"), 1);
@@ -141,6 +152,18 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
                 double Chance = 0;
                 if (Pair.Value.IsValid() && Pair.Value->TryGetNumber(Chance) && FMath::IsFinite(Chance))
                     Out.Status.ChanceBySurface.Add(FString(Pair.Key), float(Chance));
+            }
+        const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+        if (Status->TryGetArrayField(TEXT("level_chance_scales"), Rows))
+            for (const TSharedPtr<FJsonValue>& Value : *Rows)
+            {
+                const TSharedPtr<FJsonObject>* Row = nullptr;
+                if (!Value.IsValid() || !Value->TryGetObject(Row)) continue;
+                weapon_firing::LevelChanceScale Scale;
+                Scale.levelDifference = int32(NumberOr(**Row, TEXT("LevelDifference"), 0));
+                Scale.higher = NumberOr(**Row, TEXT("HigherLevelChanceScale"), 1);
+                Scale.lower = NumberOr(**Row, TEXT("LowerLevelChanceScale"), 1);
+                Out.Status.LevelScales.push_back(Scale);
             }
     }
     Out.bLoaded = true;
@@ -187,4 +210,12 @@ FLinearColor OpenWillowFiring::ElementColor(const FString& Element)
     if (Element == TEXT("Slag")) return FLinearColor(0.65f, 0.2f, 1.f);
     if (Element == TEXT("Explosive")) return FLinearColor(1.f, 0.62f, 0.12f);
     return FLinearColor(1.f, 0.75f, 0.35f);
+}
+
+bool OpenWillowFiring::SweepShot(const UWorld* World, FHitResult& Hit, const FVector& From, const FVector& To,
+    const FVector& Extent, const FCollisionQueryParams& Query)
+{
+    if (!World) return false;
+    if (Extent.IsNearlyZero()) return World->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, Query);
+    return World->SweepSingleByChannel(Hit, From, To, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeBox(Extent), Query);
 }

@@ -62,8 +62,11 @@ public:
     bool IsBurstFiring() const { return Burst.active(); }
     // Damage from one of Maya's shots, its projectile, splash or status tick: the target reads DamageType (the stock
     // damage type path) while the damage is applied.
+    // Momentum is the hit's momentum vector (UE3 TakeDamage's Momentum); the target reads it with ShotMomentum().
     void ApplyShotDamage(AActor* Target, float Amount, const FString& DamageType, const FVector& Direction,
-        const FHitResult& Hit);
+        const FHitResult& Hit, const FVector& Momentum = FVector::ZeroVector);
+    // Momentum of the shot being applied right now; zero otherwise.
+    const FVector& ShotMomentum() const { return ShotMomentumInFlight; }
     // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).
     void UsePhaselock();
     // Whether a cast would start now; otherwise why not (not bought, cooldown, or the failing skill constraint).
@@ -347,6 +350,7 @@ private:
     FOpenWillowPhaselockTimeline PhaselockTimeline;
     TWeakObjectPtr<class AOpenWillowCombatTarget> PhaselockTarget;
     FString ShotDamageTypeInFlight;
+    FVector ShotMomentumInFlight = FVector::ZeroVector;
     // Pattern index, barrel spin and the host random stream between shots, per weapon (OpenWillowFiring).
     TMap<FString, FOpenWillowFiringState> FiringStates;
     FOpenWillowFiringState& FiringStateFor(const struct FOpenWillowWeaponItem& Weapon);

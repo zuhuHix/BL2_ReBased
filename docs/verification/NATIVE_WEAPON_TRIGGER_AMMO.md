@@ -386,6 +386,13 @@ controller's instigated modifiers (general and per element) and target modifiers
 to a named field; treat it as an outline and take the authoritative reading from G11's note. Only `Behavior_AttemptStatusEffect`,
 projectiles' `Behavior_CauseDamage` and the weapon itself call the four getters.
 
+**Note (2026-11-02, Weapons worker).** One factor of that product is now tied to data: the level difference between shooter
+and target scales the chance by a row of `GD_Globals.General.Globals.StatusEffectChanceScales` (`LevelDifference` 1-6;
+`HigherLevelChanceScale` when the shooter is higher, up to x2.0 at 6 or more; `LowerLevelChanceScale` when lower, down to x0).
+This accounts for the live Maliwan proc counts being about twice the card chance (Maya 54 against a level-7 bullymong). The
+mapping to the native roll was not read and the same-level case was not measured: UNVERIFIED. Host use and record:
+WEAPON_PROJECTILES.md section 3 (`weapon_firing::statusLevelScale`).
+
 ## Class defaults and slice data quoted
 - Maliwan pistol type (`GD_Weap_Pistol.A_Weapons.WeaponType_Maliwan_Pistol`): `BarrelSpinMode` `BSM_SpinUpToFullFireRate`,
   `ClipSize` 6, `Spread` 1.5, `PerShotAccuracyImpulse` 2.5, `InstantHitMomentum` 8, `BurstInterval` 0.4,

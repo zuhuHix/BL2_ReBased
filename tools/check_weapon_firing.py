@@ -17,6 +17,13 @@ docs/verification/NATIVE_WEAPON_FIRING.md and WEAPON_PROJECTILES.md when it exis
 - direct hit damage = card damage per direct hit (Trace and Bullet); a rocket does no direct damage.
 - splash damage per explosion hit <= the firing block's splash damage (its card-damage fallback when null).
 - status: procs only with a status block; ticks only after a proc; each proc with a duration and dps ticks at least once.
+- momentum (OWFIRING push, after the five dummy pulls): the gun's momentum is 100 x the block's instant_hit_momentum
+  (class default 10 when null); every momentum-carrying hit changed the dummy's velocity by momentum / mass; a bullet
+  or trace gun without splash passed exactly its momentum; the dummy moved along the shots when it was hit.
+- flight timing (result timed / on_time, when logged): every constant-speed light bullet arrives after distance / speed
+  seconds, within the frame that reaches it.
+- wide bullet (OWFIRING wide; single straight pellets: no pattern, no own motion, no splash, no burst): a pull beside the
+  dummy as a line misses it, the same pull with a TraceExtent box hits it. Its two pulls count in the shots.
 """
 import argparse
 import json
@@ -32,11 +39,14 @@ TICK_INTERVAL = 0.33  # DOT period measured live (weapon_firing::DotPeriod); a f
 PHASE_A_PULLS = 5
 WALL_PULLS = 3
 STATUS_PULLS = 20
+WIDE_PULLS = 2
 
 RESULT = re.compile(r'OWFIRING result (.*)$')
 SEGMENT = re.compile(r'OWFIRING segment (.*)$')
 THROW = re.compile(r'OWFIRING throw (.*)$')
 LIFECYCLE = re.compile(r'OWFIRING lifecycle (.*)$')
+PUSH = re.compile(r'OWFIRING push (.*)$')
+WIDE = re.compile(r'OWFIRING wide (.*)$')
 SKIPPED = re.compile(r'OWFIRING skipped id=(\S+) reason=(.*)$')
 NO_WALL = re.compile(r'OWFIRING no wall in reach for id=(\S+)')
 PARSED = re.compile(r'firing test parsed \d+ recipe IDs: (\S+)')
@@ -47,12 +57,24 @@ def fields(body):
     return {key: value for key, value in KV.findall(body)}
 
 
-def read_log(text):
+def read_log(text, extra=None):
     """(results by id, phase-a segments by id, skipped {id: reason}, no-wall ids, gun list from the run's own parse,
-    Tediore throw lines by id, burst lifecycle lines {id: {case: fields}})."""
+    Tediore throw lines by id, burst lifecycle lines {id: {case: fields}}). With `extra` (a dict), the push and wide
+    lines by id go into extra['push'] and extra['wide']."""
     results, segments, skipped, no_wall, guns = {}, {}, {}, set(), None
     throws, lifecycles = {}, {}
+    extra = {} if extra is None else extra
+    extra.setdefault('push', {})
+    extra.setdefault('wide', {})
     for line in text.splitlines():
+        if match := PUSH.search(line):
+            body = fields(match.group(1))
+            extra['push'][body['id']] = body
+            continue
+        if match := WIDE.search(line):
+            body = fields(match.group(1))
+            extra['wide'][body['id']] = body
+            continue
         if match := THROW.search(line):
             body = fields(match.group(1))
             throws[body['id']] = body
@@ -102,9 +124,15 @@ def expectations(recipe):
             splash_damage = float(card['damage']) * float(splash.get('damage_scale') or 1)
     status = firing.get('status') or None
     projectile = firing.get('projectile') or {}
+    momentum = firing.get('instant_hit_momentum')
+    projectiles = int(card.get('projectiles') or 1)
+    burst = max(1, int(firing.get('burst_count') or 0))
     return {
+        'momentum': 100.0 * float(10 if momentum is None else momentum),
+        'wide': bool(firing) and kind != 'Rocket' and projectiles <= 1 and not firing.get('pattern_lines')
+                and not projectile.get('air_friction') and splash is None and burst == 1,
         'kind': kind,
-        'burst': max(1, int(firing.get('burst_count') or 0)),
+        'burst': burst,
         # Bullets with an explode behaviour always explode; rockets when the definition detonates on impact.
         'explodes': splash is not None and (kind != 'Rocket' or bool(projectile.get('explode_on_impact'))),
         'throw': bool(firing.get('reload_throw')),
@@ -122,8 +150,39 @@ def num(value):
     return float(value) if value is not None else None
 
 
-def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None, lifecycle=None):
-    """(list of failure reasons, notes, values for the table) for one gun."""
+def check_momentum(push, wide, expected, phase_a_hits):
+    """Failure reasons for the momentum (push) and wide-bullet (wide) lines of one gun."""
+    fails = []
+    if push is None:
+        fails.append('no OWFIRING push line (momentum after the dummy pulls)')
+    else:
+        rule, last = float(push['momentum_rule']), float(push['momentum_last'])
+        hits, pushes, moved = int(push['momentum_hits']), int(push['pushes']), float(push['moved'])
+        if abs(rule - expected['momentum']) > 0.05:
+            fails.append(f"momentum {rule:g} != 100 x instant_hit_momentum = {expected['momentum']:g}")
+        if pushes != hits:
+            fails.append(f'{hits - pushes} of {hits} momentum hits did not change the dummy velocity by momentum / mass')
+        if expected['kind'] != 'Rocket' and phase_a_hits:
+            if hits < phase_a_hits:
+                fails.append(f'{phase_a_hits} direct hits but {hits} carried momentum')
+            if not expected['splash'] and abs(last - expected['momentum']) > 0.05:
+                fails.append(f"hit momentum {last:g} != the gun's {expected['momentum']:g}")
+        if hits and moved <= 0:
+            fails.append(f'the dummy did not move along the shots ({moved:.3f} uu)')
+    if expected['wide']:
+        if wide is None:
+            fails.append('no OWFIRING wide line (wide-bullet check)')
+        elif wide['line_hits'] != '0':
+            fails.append(f"wide check inconclusive: the line beside the dummy hit it ({wide['line_hits']})")
+        elif int(wide['box_hits']) < 1:
+            fails.append('a TraceExtent box beside the dummy missed it')
+    return fails
+
+
+def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None, lifecycle=None, push=None, wide=None,
+              momentum=False):
+    """(list of failure reasons, notes, values for the table) for one gun. With `momentum`, the push and wide lines are
+    checked too (check_momentum)."""
     fails, notes = [], []
     if skipped_reason is not None:
         return [f'skipped by the host: {skipped_reason}'], notes, {}
@@ -160,7 +219,8 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
     procs, rolls, ticks = int(log['procs']), int(log['status_rolls']), int(log['ticks'])
     if log['kind'] != expected['kind']:
         fails.append(f"kind {log['kind']} != expected {expected['kind']}")
-    pulls = PHASE_A_PULLS + (0 if gun in wall_skipped else WALL_PULLS) + (STATUS_PULLS if expected['status'] else 0)
+    pulls = PHASE_A_PULLS + (0 if gun in wall_skipped else WALL_PULLS) + (STATUS_PULLS if expected['status'] else 0) \
+        + (WIDE_PULLS if expected['wide'] else 0)
     # A burst gun also fires one shot in each of its two lifecycle cases (reload, respawn) before the interruption.
     want = pulls * expected['burst'] + (2 if expected['burst'] > 1 else 0)
     if shots != want:
@@ -223,6 +283,11 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
                 fails.append(f'ticks {ticks} > {most} possible for {procs} procs of {expected["duration"]:g} s')
         if rolls and not procs:
             notes.append(f'no proc in {rolls} status rolls')
+    if momentum:
+        fails += check_momentum(push, wide, expected, phase_a_hits)
+    if 'timed' in log and log['timed'] != log.get('on_time'):
+        fails.append(f"{int(log['timed']) - int(log.get('on_time') or 0)} of {log['timed']} bullets did not arrive after "
+                     'distance / speed')
     values = {'kind': log['kind'], 'shots': shots, 'pellets': pellets, 'launches': launches, 'hits_a': phase_a_hits,
               'target_hits': target_hits, 'damage': damage, 'splash': splash, 'procs': procs, 'ticks': ticks}
     return fails, notes, values
@@ -249,7 +314,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     item_dirs = [Path(p) for p in args.items] if args.items else DEFAULT_ITEM_DIRS
     text = Path(args.log).read_text(encoding='utf-8', errors='replace')
-    results, segments, skipped, no_wall, run_guns, throws, lifecycles = read_log(text)
+    extra = {}
+    results, segments, skipped, no_wall, run_guns, throws, lifecycles = read_log(text, extra)
+    # Runs from before the momentum checks have no push lines; those are graded without them.
+    momentum = bool(extra['push'])
+    if not momentum:
+        print('note: no OWFIRING push lines in this log (a run from before the momentum checks): momentum not checked')
     guns = args.guns.split(',') if args.guns else run_guns
     if not guns:
         print('no gun list: the log has no "firing test parsed" line and --guns is missing', file=sys.stderr)
@@ -267,7 +337,8 @@ def main(argv=None):
             continue
         expected = expectations(recipe)
         fails, notes, values = check_gun(gun, results.get(gun), segments.get(gun), expected, skipped.get(gun), no_wall,
-                                         throws.get(gun), lifecycles.get(gun))
+                                         throws.get(gun), lifecycles.get(gun), extra['push'].get(gun),
+                                         extra['wide'].get(gun), momentum)
         verdict = 'FAIL' if fails else 'PASS'
         failed += bool(fails)
         if values:
