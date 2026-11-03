@@ -276,12 +276,21 @@ def check_hit_events(log, expected, throw=None, required=True, gun=None, swap=No
     for entry in ([] if log['tick_weapons'] == '-' else log['tick_weapons'].split(',')):
         weapon, _, count = entry.rpartition(':')
         ticks[weapon] = ticks.get(weapon, 0) + int(count)
+    if sum(ticks.values()) != int(log['ticks']) or sum(ticks.values()) != kinds['tick']:
+        fails.append(f"tick_weapons total {sum(ticks.values())} != ticks {log['ticks']} / hit_tick {kinds['tick']}")
     wrong = {weapon: count for weapon, count in ticks.items() if gun is not None and weapon != gun}
     if wrong:
         after = '' if swap is None else f" (after the swap to {swap.get('to')})"
         fails.append(f'status ticks credited to another weapon{after}: {wrong}')
-    if swap is not None and int(log['ticks']) <= int(swap.get('ticks_before') or 0):
-        fails.append('weapon swap during the status ticks, but no tick landed after it (the swap check did not run)')
+    # Every status gun swaps to another gun while an effect runs (the test pulls extra shots until one does), and at least
+    # one tick must land after the swap; a missing or failed swap fails (no silent skip).
+    if expected['status'] and required:
+        if swap is None:
+            fails.append('status gun without an OWFIRING swap line (the source-weapon check did not run)')
+        elif 'failed' in swap or not swap.get('to'):
+            fails.append(f"weapon swap failed: {swap.get('failed', 'no target gun')}")
+        elif int(log['ticks']) <= int(swap.get('ticks_before') or 0):
+            fails.append('weapon swap during the status ticks, but no tick landed after it')
     return fails
 
 
@@ -326,7 +335,7 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
     if log['kind'] != expected['kind']:
         fails.append(f"kind {log['kind']} != expected {expected['kind']}")
     pulls = PHASE_A_PULLS + (0 if gun in wall_skipped else WALL_PULLS) + (STATUS_PULLS if expected['status'] else 0) \
-        + (WIDE_PULLS if expected['wide'] else 0)
+        + (WIDE_PULLS if expected['wide'] else 0) + int((swap or {}).get('extra_pulls') or 0)
     # A burst gun also fires one shot in each of its two lifecycle cases (reload, respawn) before the interruption.
     want = pulls * expected['burst'] + (2 if expected['burst'] > 1 else 0)
     if shots != want:

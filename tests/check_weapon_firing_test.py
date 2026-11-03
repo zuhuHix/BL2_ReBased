@@ -114,6 +114,7 @@ class Gun(unittest.TestCase):
     def test_rocket_with_status_passes_and_direct_damage_is_zero(self):
         text = log(
             segment('made_rocket', 0, 0, 0),
+            'LogTemp: Display: OWFIRING swap id=made_rocket to=made_trace ticks_before=1 extra_pulls=0',
             result('made_rocket', kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0,
                    damage='60.00', direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=3),
         )
@@ -129,7 +130,7 @@ class Gun(unittest.TestCase):
         self.assertEqual(fails, [], fails)
 
     def test_ticks_after_a_weapon_swap_must_name_the_proc_gun(self):
-        swap = 'LogTemp: Display: OWFIRING swap id=made_rocket to=made_trace ticks_before=1'
+        swap = 'LogTemp: Display: OWFIRING swap id=made_rocket to=made_trace ticks_before=1 extra_pulls=0'
         common = dict(kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0, damage='60.00',
                       direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=3)
         good = result('made_rocket', **common)
@@ -143,6 +144,29 @@ class Gun(unittest.TestCase):
                       hit_throw=0, tick_weapons='made_rocket:1')
         fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, late), ['made_rocket'])[0]
         self.assertTrue(any('no tick landed after it' in r for r in fails), fails)
+
+    def test_status_gun_without_a_successful_swap_fails(self):
+        common = dict(kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0, damage='60.00',
+                      direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=3)
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), result('made_rocket', **common)), ['made_rocket'])[0]
+        self.assertTrue(any('without an OWFIRING swap line' in r for r in fails), fails)
+        failed = 'LogTemp: Warning: OWFIRING swap id=made_rocket failed=no_effect_running ticks_before=3 extra_pulls=40'
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), failed,
+                                         result('made_rocket', **dict(common, shots=68, pellets=68, launches=68))),
+                                     ['made_rocket'])[0]
+        self.assertTrue(any('weapon swap failed: no_effect_running' in r for r in fails), fails)
+
+    def test_extra_pulls_count_and_tick_totals_must_match(self):
+        common = dict(kind='Rocket', shots=30, pellets=30, launches=30, impacts=30, target_hits=0, damage='60.00',
+                      direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=3)
+        swap = 'LogTemp: Display: OWFIRING swap id=made_rocket to=made_trace ticks_before=1 extra_pulls=2'
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, result('made_rocket', **common)),
+                                     ['made_rocket'])[0]
+        self.assertEqual(fails, [], fails)
+        empty = result('made_rocket', **common, hit_events=5, hit_direct=0, hit_splash=2, hit_tick=3, hit_throw=0,
+                       tick_weapons='-')
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, empty), ['made_rocket'])[0]
+        self.assertTrue(any('tick_weapons total 0 != ticks 3' in r for r in fails), fails)
 
     def test_hit_events_match_the_counts(self):
         good = result('made_trace', hit_events=8, hit_direct=8, hit_splash=0, hit_tick=0, hit_throw=0)

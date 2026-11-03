@@ -295,3 +295,10 @@ numbers, AI reactions) read the same data the host dummy does. Host code only; n
   test checks it: for a status gun whose effect is still running in the final wait, it equips another gun (`OWFIRING swap`) and
   the result line's `tick_weapons` must name only the proc gun, with at least one tick after the swap. The checker requires
   the hit-event fields; `--legacy` grades a log from before the hit-event API without them.
+- **Listener safety and a certain swap (review round 2).** Hit listeners run inside `ApplyShotDamage`, so nothing read
+  after that call may point into state a listener can change. Status ticks are collected while the effect list is walked
+  and sent after the walk. The status roll reads a copy of the gun's status data. A trace's impact explosion uses inputs
+  copied before the bullet's hit. Every status gun must now swap during its ticks: with no effect running it pulls once
+  more at the dummy (up to 40 extra pulls, `extra_pulls` on the swap line, counted in the expected shots) until one runs.
+  The checker fails a status gun with no swap line, a failed swap, no tick after the swap, or `tick_weapons` totals that
+  differ from `ticks` / `hit_tick`.
