@@ -1,4 +1,6 @@
 #include "OpenWillowEnemy.h"
+#include "OpenWillowSkills.h"
+#include "OpenWillowWalker.h"
 #include "Animation/AnimSequence.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
@@ -7,6 +9,7 @@
 #include "Engine/DamageEvents.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Controller.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -95,6 +98,8 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
         }
         MakeCritVolume();
         WalkClip = Kind.Walk.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Walk);
+        RunClip = Kind.Run.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Run);
+        MeleeClip = Kind.Melee.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Melee);
         HitClip = Kind.Hit.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Hit);
     }
     else
@@ -259,10 +264,25 @@ float AOpenWillowEnemy::AdjustIncomingDamage(float Amount, const FDamageEvent& D
     return HealthDamage;
 }
 
+float AOpenWillowEnemy::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator,
+    AActor* DamageCauser)
+{
+    // Provoked (PR2): a hit by Maya, from her pawn, its controller, or an actor she instigated. The brain reads the flag at
+    // its next state update (AI_AWARENESS_LIVE 3).
+    const APawn* Maya = UGameplayStatics::GetPlayerPawn(this, 0);
+    if (Maya && ((EventInstigator && EventInstigator->GetPawn() == Maya)
+        || (DamageCauser && (DamageCauser == Maya || DamageCauser->GetInstigator() == Maya))))
+        bDamagedByMaya = true;
+    return Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+}
+
 void AOpenWillowEnemy::OnDied(AActor* DamageCauser)
 {
     bHasTarget = false;
     bHitPlaying = false;
+    bMeleePlaying = false;
+    bDamagedByMaya = false;
+    Brain.Stop();
     UE_LOG(LogTemp, Display, TEXT("OWRANGE death enemy=%s kind=%s respawn_in=%.1f"), *GetName(), *Kind.Name, GetRespawnDelay());
     OnEnemyDied.Broadcast(this, DamageCauser);
 }
@@ -271,6 +291,9 @@ void AOpenWillowEnemy::OnRespawned()
 {
     bHasTarget = false;
     bHitPlaying = false;
+    bMeleePlaying = false;
+    bDamagedByMaya = false;
+    Brain.Stop();
     MoveClipNow = nullptr;
     PauseUntil = GetWorld()->GetTimeSeconds() + Rand.FRandRange(1.f, 3.f);
     ShieldCurrent = ShieldMax;
@@ -290,8 +313,109 @@ void AOpenWillowEnemy::Tick(float DeltaSeconds)
         bHitPlaying = false;
         MoveClipNow = nullptr;   // the walk or idle clip starts again
     }
-    if (!IsDead()) UpdatePatrol(Now, DeltaSeconds);
+    if (bMeleePlaying && Now >= MeleeEndsAt)
+    {
+        bMeleePlaying = false;
+        MoveClipNow = nullptr;   // the swing interval is over: the move clips start again
+    }
+    if (!IsDead()) UpdateBrain(Now, DeltaSeconds);
     UpdateHealthBars();
+}
+
+void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
+{
+    // Without the range's den the enemy only patrols (not the case in the range).
+    if (!Den)
+    {
+        UpdatePatrol(Now, DeltaSeconds);
+        return;
+    }
+
+    // The brain's inputs. Maya's level is her skills' level; the enemy's own level is the range's level.
+    FOpenWillowBrainInput In;
+    In.Self = this;
+    In.Location = GetActorLocation();
+    In.YawDegrees = GetActorRotation().Yaw;
+    In.CollisionRadius = Kind.CollisionRadius > 0.f ? Kind.CollisionRadius : OpenWillowThreat::DefaultCollisionRadius;   // host stand-in
+    In.bPassive = bPassive;
+    In.bPaused = IsPhaselocked();
+    In.EnemyLevel = GetLevel();
+    const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(this, 0));
+    In.bHasMaya = Walker && !Walker->IsDown();
+    if (In.bHasMaya)
+    {
+        In.MayaLocation = Walker->GetActorLocation();
+        In.MayaLevel = Walker->GetSkills() ? Walker->GetSkills()->GetLevel() : GetLevel();
+        // Exposure stand-in (UNVERIFIED): a Visibility line from the enemy's centre to Maya's centre, both ignored.
+        FVector Centre;
+        float HalfHeight = 0.f;
+        CollisionCentre(Centre, HalfHeight);
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSight), true);
+        Query.AddIgnoredActor(this);
+        Query.AddIgnoredActor(Walker);
+        FHitResult Hit;
+        In.bLineOfSight = !GetWorld()->LineTraceSingleByChannel(Hit, Centre, In.MayaLocation, ECC_Visibility, Query);
+    }
+    // The melee numbers of this kind at the enemy's level (no entry: no melee for it).
+    float Arrival = 0.f, Ratio = 0.f;
+    if (OpenWillowValueAtLevel(Kind.MeleeArrivalByLevel, GetLevel(), Arrival)) In.ArrivalDamage = Arrival;
+    if (OpenWillowValueAtLevel(Kind.MeleeRatioByLevel, GetLevel(), Ratio)) In.Ratio = Ratio;
+
+    const FOpenWillowBrainOrders Orders = Brain.Tick(Now, In, *Den, bDamagedByMaya);
+    if (Orders.bSwingStarted) PlayMelee(Now);
+    if (Orders.bChase) UpdateChase(In.MayaLocation, Orders.bRun, DeltaSeconds);
+    else UpdatePatrol(Now, DeltaSeconds);
+}
+
+void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float DeltaSeconds)
+{
+    // Host stand-in (UNVERIFIED): turn toward Maya at 360 deg/s, run at the kind's RunSpeed (the walk clip when there is no run
+    // clip) until the brain stops it inside the melee volume. Floor snapping as the patrol.
+    const FVector Here = GetActorLocation();
+    FVector ToTarget = Target - Here;
+    ToTarget.Z = 0.f;
+    const float Left = ToTarget.Size();
+    if (Left < 1.f)
+    {
+        SetMoveAnim(false);
+        return;
+    }
+    const FVector Dir = ToTarget / Left;
+    TurnToward(Dir, DeltaSeconds);
+    if (!bRun)
+    {
+        SetMoveAnim(false);
+        return;
+    }
+
+    const FVector Next = Here + Dir * FMath::Min(Kind.RunSpeed * DeltaSeconds, Left);
+    FVector Floor;
+    if (!TraceFloor(GetWorld(), FVector2D(Next.X, Next.Y), Here.Z + 100.f, Here.Z - 300.f, this, Floor))
+    {
+        SetMoveAnim(false);
+        return;
+    }
+    AddActorWorldOffset(Floor - Here, true);
+    SetMoveAnim(true, true);
+}
+
+void AOpenWillowEnemy::PlayMelee(float Now)
+{
+    // Host stand-in (UNVERIFIED in game): the melee clip plays at the swing start, and the move clips wait out the swing
+    // interval (AI_MELEE_TARGETING_LIVE 4: the action restarts every 1.25 s).
+    bMeleePlaying = true;
+    MeleeEndsAt = Now + OpenWillowThreat::SwingInterval;
+    MoveClipNow = nullptr;
+    if (StockMesh && MeleeClip) PlayStock(MeleeClip, false);
+}
+
+void AOpenWillowEnemy::TurnToward(const FVector& Dir, float DeltaSeconds)
+{
+    // Turns toward the direction at 360 deg/s (the walk does not wait for the turn).
+    FRotator Rotation = GetActorRotation();
+    const float MaxTurn = TurnDegreesPerSecond * DeltaSeconds;
+    Rotation.Yaw += FMath::Clamp(FRotator::NormalizeAxis(Dir.Rotation().Yaw - Rotation.Yaw), -MaxTurn, MaxTurn);
+    SetActorRotation(Rotation);
 }
 
 void AOpenWillowEnemy::UpdatePatrol(float Now, float DeltaSeconds)
@@ -334,12 +458,7 @@ void AOpenWillowEnemy::UpdatePatrol(float Now, float DeltaSeconds)
         return;
     }
     const FVector Dir = ToTarget / Left;
-
-    // Turn toward the move direction at 360 deg/s (the walk does not wait for the turn).
-    FRotator Rotation = GetActorRotation();
-    const float MaxTurn = TurnDegreesPerSecond * DeltaSeconds;
-    Rotation.Yaw += FMath::Clamp(FRotator::NormalizeAxis(Dir.Rotation().Yaw - Rotation.Yaw), -MaxTurn, MaxTurn);
-    SetActorRotation(Rotation);
+    TurnToward(Dir, DeltaSeconds);
 
     // Step at WalkSpeed, then snap to the floor under the new spot. No floor there: stop and pick another target.
     const float Step = FMath::Min(Kind.WalkSpeed * DeltaSeconds, Left);
@@ -356,16 +475,19 @@ void AOpenWillowEnemy::UpdatePatrol(float Now, float DeltaSeconds)
     SetMoveAnim(true);
 }
 
-void AOpenWillowEnemy::SetMoveAnim(bool bMoving)
+void AOpenWillowEnemy::SetMoveAnim(bool bMoving, bool bRun)
 {
-    // The base owns the clips while the target is lifted or dropping (AnimStage), and a hit reaction plays out first.
-    if (!StockMesh || IsDead() || IsPhaselocked() || AnimStage != 0 || bHitPlaying)
+    // The base owns the clips while the target is lifted or dropping (AnimStage), and a hit reaction or a swing plays out first.
+    if (!StockMesh || IsDead() || IsPhaselocked() || AnimStage != 0 || bHitPlaying || bMeleePlaying)
     {
         MoveClipNow = nullptr;   // when the base hands the clips back, the move state starts its clip again
         return;
     }
+    // Chasing runs with the run clip (host stand-in: the walk clip when the kind has none).
     UAnimSequence* Walk = WalkClip.Get();
-    UAnimSequence* Want = (bMoving && Walk) ? Walk : StockIdle.Get();
+    UAnimSequence* Want = StockIdle.Get();
+    if (bMoving && bRun && RunClip) Want = RunClip.Get();
+    else if (bMoving && Walk) Want = Walk;
     if (!Want || Want == MoveClipNow) return;
     MoveClipNow = Want;
     PlayStock(Want, true, 1.f, MoveBlendIn);

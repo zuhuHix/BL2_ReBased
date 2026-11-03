@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowEnemyAI.h"
 #include "OpenWillowRangeKind.h"
 #include "OpenWillowEnemy.generated.h"
 
@@ -12,7 +13,8 @@ class UWorld;
 // Broadcast when a range enemy dies (PR3 loot hangs on this). Killer is the damage causer, possibly null.
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnRangeEnemyDied, AOpenWillowEnemy*, AActor*);
 
-// A range enemy: the combat target with a kind from the range manifest. PR1 = patrol only; no AI (PR2), no loot (PR3).
+// A range enemy: the combat target with a kind from the range manifest. PR1 = patrol; PR2 = notice, chase and melee (the
+// brain in OpenWillowEnemyAI.h); no loot (PR3).
 // Host stand-in throughout (UNVERIFIED in game): the health bar, the walk speed, the shield, the critical region and its
 // multiplier. The critical multiplier 2.0 is the CurrentInstantHitCriticalHitBonus default (NATIVE_COMBAT_GROUNDWORK 3.4).
 UCLASS()
@@ -30,6 +32,12 @@ public:
     bool SetupKind(const FOpenWillowRangeKind& InKind, int32 InLevel, float RespawnSeconds);
     void SetPassive(bool bOn) { bPassive = bOn; }
     bool IsPassive() const { return bPassive; }
+    // The range's threat record (shared by the range's enemies). Null: the enemy patrols only.
+    void SetDen(FOpenWillowThreatDen* InDen) { Den = InDen; }
+    const FOpenWillowEnemyBrain& GetBrain() const { return Brain; }
+    // Hits from Maya (her pawn, its controller, or an actor she instigated) set the "hit by Maya" flag; the brain reads it.
+    virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator,
+        AActor* DamageCauser) override;
     // Test-only: sets the shield (max and current) to Amount.
     void SetShieldForTest(float Amount) { ShieldMax = Amount; ShieldCurrent = Amount; }
     float ShieldNow() const { return ShieldCurrent; }
@@ -57,12 +65,18 @@ protected:
 private:
     void MakeCritVolume();
     void UpdatePatrol(float Now, float DeltaSeconds);
-    void SetMoveAnim(bool bMoving);
+    void TurnToward(const FVector& Dir, float DeltaSeconds);
+    void UpdateBrain(float Now, float DeltaSeconds);
+    void UpdateChase(const FVector& Target, bool bRun, float DeltaSeconds);
+    void PlayMelee(float Now);
+    void SetMoveAnim(bool bMoving, bool bRun = false);
     void UpdateHealthBars();
 
     FOpenWillowRangeKind Kind;
     UPROPERTY() TObjectPtr<class USphereComponent> CritVolume;
     UPROPERTY() TObjectPtr<class UAnimSequence> WalkClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> RunClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> MeleeClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> HitClip;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarBack;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarFill;
@@ -71,6 +85,12 @@ private:
     FRandomStream Rand;
     bool bPassive = false;
     bool bHasTarget = false;
+    // PR2 (range AI): the brain, the den's record, the hit-by-Maya flag and the melee clip's hold.
+    FOpenWillowEnemyBrain Brain;
+    FOpenWillowThreatDen* Den = nullptr;
+    bool bDamagedByMaya = false;
+    bool bMeleePlaying = false;
+    float MeleeEndsAt = 0.f;
     FVector PatrolTarget = FVector::ZeroVector;
     float PauseUntil = 0.f;
     UAnimSequence* MoveClipNow = nullptr;   // the clip the move state last started (avoids restarts)

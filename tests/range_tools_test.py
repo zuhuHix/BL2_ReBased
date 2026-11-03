@@ -23,6 +23,14 @@ class PrepareRangeTest(unittest.TestCase):
                         'max_health.BeastBig.L2': 7.0, 'max_health.Beast.Lx': 3.0}}
         self.assertEqual(prepare_range.health_table(run, 'Beast'), {2: 20.5, 10: 99.0})
 
+    def test_melee_rows(self):
+        run = {'rows': {'arrival.Beast.L3': 9.5, 'ratio.Beast.L3': 0.7, 'max_health.Beast.L3': 50.0}}
+        self.assertEqual(prepare_range.health_table(run, 'Beast', 'arrival'), {3: 9.5})
+        self.assertEqual(prepare_range.health_table(run, 'Beast', 'ratio'), {3: 0.7})
+        entry = prepare_range.kind_entry('B', None, {3: 50.0}, 't', arrival={3: 9.5}, ratio={3: 0.7})
+        self.assertEqual(entry['melee_arrival_by_level'], {'3': 9.5})
+        self.assertEqual(entry['melee_ratio_by_level'], {'3': 0.7})
+
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
         clips = prepare_range.find_clips('/Game/X/Anims/Idle_Made.Idle_Made', names)
