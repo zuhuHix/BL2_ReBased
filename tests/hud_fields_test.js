@@ -87,6 +87,13 @@ const t2 = fields.trackerCalls({mission: 'Mission X', turnIn: true, lines: [{tex
 assert.deepStrictEqual(rows(t2).slice(0, 3), [[M(1) + '.inner', 'MissionName'], [M(2) + '.inner', 'TurnIn'], [M(3), 'Off']]);
 assert.deepStrictEqual(t2.filter(c => c[1] === 'set').map(c => c[3]), ['Mission X', 'HAND IN']);
 assert.deepStrictEqual(fields.trackerCalls(null, S), [1, 2, 3, 4, 5, 6].map(k => [M(k), 'gotoAndStop', 'Off']));
+// No strings file, or one without the turn-in value: the TurnIn module is shown but its text is left as the movie has it
+// (no text call at all, never an empty string); the host's own texts (mission name) are still written.
+for (const missing of [{}, null, {injured: 'DOWN TITLE'}]) {
+  const t3 = fields.trackerCalls({mission: 'Mission X', turnIn: true, lines: []}, missing);
+  assert.deepStrictEqual(rows(t3).slice(0, 2), [[M(1) + '.inner', 'MissionName'], [M(2) + '.inner', 'TurnIn']]);
+  assert.deepStrictEqual(t3.filter(c => c[1] === 'set').map(c => [c[0], c[3]]), [[M(1) + '.inner.text', 'Mission X']]);
+}
 // More objective lines than modules: the extra lines are dropped, never written past Module6.
 const many = fields.trackerCalls({mission: 'M', lines: Array.from({length: 9}, (_, i) => ({text: `L${i}`}))}, S);
 assert.ok(many.every(c => !c[0].includes('Module7')));

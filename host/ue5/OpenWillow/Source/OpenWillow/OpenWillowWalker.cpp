@@ -1156,7 +1156,8 @@ bool AOpenWillowWalker::DrawItemById(const FString& Id)
 bool AOpenWillowWalker::FireOnce()
 {
     FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
-    if (!bMayaActive || !bWeaponOut || !Weapon || bReloading || !Inventory->ConsumeShot(*Weapon)) return false;
+    // DownWeaponReady: the weapon is put away for the first 2.28 s of the down state and gone while Dead (GoDown).
+    if (!bMayaActive || !bWeaponOut || !Weapon || bReloading || !DownWeaponReady() || !Inventory->ConsumeShot(*Weapon)) return false;
     FireWeapon();
     return true;
 }
@@ -1316,7 +1317,8 @@ void AOpenWillowWalker::ReloadPressed()
 bool AOpenWillowWalker::StartReload(float Now)
 {
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
-    if (bReloading || !Weapon || !Inventory->CanReload(*Weapon)) return false;
+    // Every reload path (the key, an empty magazine, test drivers) waits for the weapon while down (GoDown, DownWeaponReady).
+    if (bReloading || !Weapon || !DownWeaponReady() || !Inventory->CanReload(*Weapon)) return false;
     const float ReloadTime = FMath::Max(0.1f, Weapon->ReloadTime);
     const FViewModel* Model = ViewModels.Find(Weapon->Id);
     bReloading = true;

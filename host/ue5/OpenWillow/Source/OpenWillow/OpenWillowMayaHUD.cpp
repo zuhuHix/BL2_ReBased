@@ -1055,6 +1055,7 @@ FString AOpenWillowMayaHUD::TrackerHudField(const AOpenWillowWalker& Maya)
     return Field;
 }
 
+#if WITH_EDITOR   // a test sequence that injects fire and reload input (AOpenWillowWalker::TestFireInput): editor builds only
 void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
 {
     // Unattended: once the movie has settled, Maya goes down through her own TakeDamage (no attacker: the host's enemies do
@@ -1176,6 +1177,7 @@ void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
     }
     ++DownShotStep;
 }
+#endif
 
 void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
 {
@@ -1419,8 +1421,10 @@ void AOpenWillowMayaHUD::DrawHUD()
         if (bSkillHudShots && bFlashHudReady) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         static const bool bHudShots = FParse::Param(FCommandLine::Get(), TEXT("owhudshots"));
         if (bHudShots && bFlashHudReady) TickHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+#if WITH_EDITOR
         static const bool bHudDownShots = FParse::Param(FCommandLine::Get(), TEXT("owhuddownshots"));
         if (bHudDownShots && bFlashHudReady) TickHudDownShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+#endif
         if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
         if (bFlashHudReady)

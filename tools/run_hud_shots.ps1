@@ -31,6 +31,11 @@ $gear = Join-Path $repo 'local/items/slice/slice_manifest.json'
 foreach ($file in @($gear, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf'))) {
     if (!(Test-Path -LiteralPath $file)) { throw "Missing $file (tools/weapon_slice_gear.py, gfx_to_swf.py/hud_harness_swf.py)" }
 }
+# The localized HUD texts (down title and hint, second wind, turn-in) are optional: without them the movie keeps its own
+# texts, and the -Down check's title comparison reports local data missing.
+if (!(Test-Path -LiteralPath (Join-Path $repo 'local/ui/run/UI_HUD/hud_strings.json'))) {
+    Write-Warning 'local/ui/run/UI_HUD/hud_strings.json is missing (python tools/prepare_hud_strings.py --game <BL2>): the movie keeps its own texts'
+}
 $level = if ($Level -gt 0) { $Level } else { [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level }
 if ($Shield) { $Extra += '-owhudshield' }
 if ($Down -and $Tracker) { throw 'Pick -Down or -Tracker, not both' }
