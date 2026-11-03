@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "OpenWillowSkillEffects.h"
 #include "OpenWillowSkills.generated.h"
 
 class FJsonObject;
@@ -18,11 +19,15 @@ public:
     struct FSkill { FString Id; int32 Cell = 0; int32 MaxGrade = 1; int32 Grade = 0; };
     struct FTier { int32 PointsToUnlockNext = 0; TArray<FSkill> Skills; };
 
-    // Reads a skilltree_<class>.json written by tools/prepare_skill_tree.py.
+    // Reads a skilltree_<class>.json written by tools/prepare_skill_tree.py, and the skilleffects_<class>.json beside it
+    // (tools/prepare_skill_effects.py) when present; without it no skill changes a stat (logged).
     bool LoadTree(const FString& File);
+    // The skill effects read beside the tree (OpenWillowSkillEffects.h); tests load their own with GetEffectsMutable.
+    const FOpenWillowSkillEffects& GetEffects() const { return Effects; }
+    FOpenWillowSkillEffects& GetEffectsMutable() { return Effects; }
     // LoadTree uses these; tests build synthetic trees with them.
     void AddBranch(const TArray<FTier>& Tiers) { Branches.Add(Tiers); }
-    void SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees);
+    void SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees, const FString& Id = FString());
 
     // WillowPlayerController.GetMaxExpLevel without DLC: 50 (docs/verification/NATIVE_PROGRESSION.md section 3,
     // UNVERIFIED in game). TODO: each licensed level-cap DLC adds its increment (clamped to 50 + all increments);
@@ -50,6 +55,8 @@ public:
     int32 GetActionGrade() const { return ActionGrade; }
     // Grade of the tree skill with this id (installed object path); 0 when absent or not trained.
     int32 GradeOf(const FString& Id) const;
+    // GradeOf, or the action skill's grade for its id.
+    int32 GradeOfAny(const FString& Id) const { return !ActionSkillId.IsEmpty() && Id == ActionSkillId ? ActionGrade : GradeOf(Id); }
     // Where the skill sits, in TrySpend's terms; false when the tree has no such skill.
     bool FindSkill(const FString& Id, int32& OutBranch, int32& OutTier, int32& OutCell) const;
     // The tier's PointsToUnlockNextTier (0 when absent).
@@ -92,6 +99,8 @@ private:
     int32 Invested(const TArray<FTier>& Branch) const;
 
     TArray<TArray<FTier>> Branches;
+    FOpenWillowSkillEffects Effects;
+    FString ActionSkillId;
     int32 ActionMaxGrade = 1;
     int32 ActionPointsToUnlockTrees = 1;
     int32 ActionGrade = 0;

@@ -359,6 +359,41 @@ self / non-player flags. Not needed for the slice's self effects.
 4. Do not apply an effect (value 0) while the grade is below `GradeToStartApplyingEffect`.
 5. Pause/resume (constraint changes) remove/re-add the modifiers; the modifier objects survive pausing.
 
+### 4.8 Host implementation (2026-11-03, skills lane)
+
+`tools/prepare_skill_effects.py` reads every skill of Maya's tree into ignored `local/ui/run/skilleffects_siren.json`:
+type, max grade, each `SkillEffectData` (attribute, modifier type, target, start grade, interval, base and per-grade
+value as a constant, an attribute times a scale, or unresolved, bonus list) and the `SkillConstraints` as an expression
+tree. On the 2026-11-03 install it reports 31 skills, 50 effect rows of which 32 name an attribute on `TARGET_Self`, and
+34 constraints. Sustenance's regeneration row is unresolved (a nested level formula).
+
+`FOpenWillowSkillEffects` (host, `OpenWillowSkillEffects.*`) implements 4.1 and 4.3 from this note and the stack formula
+of NATIVE_WEAPON_RULES.md section 1, and the call sites ask `OpenWillowSkillEffects::Stack / Apply / EffectValue` with
+Maya's pawn. Every rule is read from native code or data, none is confirmed in the running game. Host simplifications:
+paused and deactivated skills are treated alike (no modifiers); constraints are re-evaluated on every query instead of
+on the manager's tick; kill skills never contribute (no kill timer yet); only `TARGET_Self` rows make modifiers. The
+condition attributes the host answers: `Att_EnemyIsPhaseLocked` (1 while Phaselock holds a target), the held gun's
+`WeaponDamage_Is_Normal` / `_Is_Explosive` (from its damage-type name), `HealthMaxValue_Player`, and "healthy" (not in
+Fight For Your Life). The shield attributes do not resolve (the host has no shield), so Fleet stays off.
+
+Hooked stats (one line each in `OpenWillowWalker.cpp`, owned by other lanes):
+
+| Stat | Attribute | Skills that reach it | Note |
+|---|---|---|---|
+| Shot damage | `WeaponDamage` | Accelerate; Wreck while a target is locked | joins the card's own damage stack |
+| Fire interval | `WeaponFireInterval` | Wreck while a target is locked | applied to the evaluated interval, not inside the weapon's stack (UNVERIFIED) |
+| Reload time | `WeaponReloadSpeed` | Foresight (Inertia once kill skills run) | applied to the card reload time (UNVERIFIED) |
+| Phaselock lock time | `Att_Phaselock_Duration` | Suspension, Thoughtlock | replaces the single-skill PostAdd sum when the effects file is loaded |
+| Cooldown drain rate | `ActiveSkillCooldownConsumptionRate` | Quicken | the free-running rate only; the held rate is unchanged |
+
+Not hooked yet, because the host has no such stat: shields (Ward, Fleet's condition), crits and melee (Mind's Eye),
+status-effect chance (Flicker), projectile speed (Accelerate's second row), health-healing modifiers (Restoration),
+target-health damage (Reaper). Not hooked because another lane owns the code: clip size (Foresight, inventory), max
+health (Restoration; needs a refresh when a grade changes), the Phaselock pool's maximum (Thoughtlock's +3 s).
+Behaviour skills (Sweet Release, Converge, Helios, Ruin, Res, Sub-Sequence, Chain Reaction, Scorn, Cloud Kill,
+Backdraft, Immolate, Recompense, Elated, Sustenance, Life Tap, Kinetic Reflection, Blight Phoenix) carry their numbers in
+`TARGET_None` rows and need their own code; `EffectValue` returns those numbers.
+
 ## 5. Action skill (Phaselock): duration and cooldown, beyond NATIVE_PHASELOCK_TARGETING
 
 ### 5.1 WillowPlayerController.GetActionSkillDuration()
