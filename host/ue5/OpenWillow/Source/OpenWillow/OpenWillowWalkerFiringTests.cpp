@@ -319,7 +319,7 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         // Wide bullet: single straight pellets only (no pattern, no own motion: neither air friction nor acceleration, no
         // splash), so the line's miss is certain; not on burst guns, whose later burst shots would land while the check counts.
         if (Item->Firing.bLoaded && Item->Firing.Kind != EOpenWillowShotKind::Rocket && Item->Projectiles <= 1
-            && Item->Firing.Pattern.lines.empty() && Item->Firing.AirFriction == 0.f && Item->Firing.Acceleration.IsNearlyZero()
+            && Item->Firing.Pattern.lines.empty() && Item->Firing.AirFriction == 0.f && Item->Firing.Acceleration.IsZero()
             && !Item->Firing.Splash.bValid
             && Item->Firing.BurstCount <= 1)
             Segments.Add(FSegment{false, 0, false, 0, true});
