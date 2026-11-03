@@ -1032,8 +1032,8 @@ void AOpenWillowMayaHUD::TickHudShots(AOpenWillowWalker& Maya)
 }
 void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
 {
-    // Only state the host really has. Health is Maya's own; the shield is the equipped shield's Capacity stat, if it
-    // has one (the host has no shield damage or recharge model, so that bar stays full); ammo and grenades come from
+    // Only state the host really has. Health and the shield are Maya's own (FOpenWillowMayaState: the shield drains on hits and
+    // recharges); ammo and grenades come from
     // UOpenWillowInventory; XP and the level from UOpenWillowSkills. Field meanings are in tools/hud_overlay/index.html.
     const UOpenWillowInventory* Inventory = Maya.GetInventory();
     const UOpenWillowSkills* Skills = Maya.GetSkills();
@@ -1054,19 +1054,12 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
         if (Weapon->ShotCost > 0.f && bAmmoType)
             AmmoText += FString::Printf(TEXT("\\u00a0/\\u00a0%d"), Inventory->AmmoPool(HeldAmmo).Current);
     }
-    // Shield: the card's "Capacity" stat (label as the local card data writes it, tools/hud_overlay/inventory.js; not
-    // seen on a real card yet, UNVERIFIED). With no shield, or none with that stat, the movie's "none" frame is sent.
-    bool bShield = false;
-    int32 ShieldCapacity = 0;
-    if (const FOpenWillowGearItem* Shield = Inventory ? Inventory->GearSlotItem(TEXT("shield")) : nullptr)
-        for (const FOpenWillowGearStat& Stat : Shield->Stats)
-            if (Stat.Label.Equals(TEXT("Capacity"), ESearchCase::IgnoreCase))
-            {
-                bShield = true;
-                ShieldCapacity = FMath::RoundToInt(FCString::Atof(*Stat.Value.Replace(TEXT(","), TEXT(""))));
-                break;
-            }
-    const FString ShieldText = bShield ? FString::Printf(TEXT("%d"), ShieldCapacity) : FString();
+    // Shield: the live pool of FOpenWillowMayaState, whose capacity is the equipped card's "Capacity" stat (label as the local
+    // card data writes it, UNVERIFIED). The text is the current value rounded, as the game's (the real frames show the pool, not
+    // the capacity, while it drains). With no shield, the movie's "none" frame is sent.
+    const bool bShield = Maya.GetShieldCapacity() > 0.f;
+    const float ShieldFill = bShield ? Maya.GetMayaState().ShieldFraction() : 0.f;
+    const FString ShieldText = bShield ? FString::Printf(TEXT("%d"), FMath::RoundToInt(FMath::Max(0.f, Maya.GetShield()))) : FString();
     // Grenades: the grenade pool's Current / Max, shown only when its capacity is known (count / max, as the game shows it).
     const FOpenWillowAmmoPool GrenadePool = Inventory ? Inventory->AmmoPool(EOpenWillowAmmoType::Grenade) : FOpenWillowAmmoPool();
     const bool bGrenades = Inventory && GrenadePool.Max > 0;
@@ -1084,7 +1077,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
              "\"xp\":%.3f,\"levelText\":\"%02d\",\"grenades\":%s,\"grenadeText\":\"%s\",\"weaponOut\":%s,\"weaponType\":\"%s\",\"ammo\":%.3f,\"ammoText\":\"%s\","
              "\"skillActive\":%s,\"skillCooldown\":%.2f}"),
         HealthFill,
-        bShield ? TEXT("1") : TEXT("null"),
+        bShield ? *FString::Printf(TEXT("%.3f"), ShieldFill) : TEXT("null"),
         HealthNow,
         *ShieldText,
         Skills ? Skills->LevelProgress() : 0.f,
@@ -1101,7 +1094,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     // echoes the state it applied (tools/hud_overlay/hud_fields.js, pageLine).
     const FString HudLine = FString::Printf(TEXT("health=%.3f shield=%s ammo=%.3f grenades=%s weaponOut=%d weaponType=%s ")
         TEXT("healthText=%d shieldText=%s ammoText=%s grenadeText=%s level=%02d"),
-        HealthFill, bShield ? TEXT("1.000") : TEXT("null"), MagazineFill,
+        HealthFill, bShield ? *FString::Printf(TEXT("%.3f"), ShieldFill) : TEXT("null"), MagazineFill,
         bGrenades ? *FString::Printf(TEXT("%.3f"), GrenadeFill) : TEXT("null"), bArmed ? 1 : 0,
         bAmmoType ? UOpenWillowInventory::AmmoTypeKey(HeldAmmo) : TEXT("-"), HealthNow, *ShieldText, *AmmoText, *GrenadeText, Level);
     if (HudLine != LastHudStateLine)
@@ -1312,7 +1305,7 @@ void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
     };
     auto Injure = [&Maya, Now]()
     {
-        const float Applied = Maya.TakeDamage(Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
+        const float Applied = Maya.TakeDamage(Maya.GetShield() + Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);   // the shield takes hits first
         UE_LOG(LogTemp, Display, TEXT("OWHUDDOWNSHOTS injure t=%.3f applied=%.0f down=%d"), Now, Applied, Maya.IsDown() ? 1 : 0);
     };
     UOpenWillowInventory* Inventory = Maya.GetInventory();
@@ -1706,9 +1699,9 @@ void AOpenWillowMayaHUD::DrawHUD()
 
     DrawDamagePopups(Large);
 
-    // Shield over health, bottom left. No shield is modelled (full bar); health is Maya's own.
+    // Shield over health, bottom left, both Maya's own (FOpenWillowMayaState); an empty shield bar without a shield.
     const float BarW = W * 0.19f;
-    SlantBar(*Canvas, 46.f, H - 86.f, BarW, 12.f, 8.f, 1.f, ShieldBlue);
+    SlantBar(*Canvas, 46.f, H - 86.f, BarW, 12.f, 8.f, Maya->GetMayaState().ShieldFraction(), ShieldBlue);
     SlantBar(*Canvas, 40.f, H - 62.f, BarW, 20.f, 10.f, FMath::Clamp(Maya->GetHealth() / FMath::Max(1.f, Maya->GetMaxHealth()), 0.f, 1.f), HealthRed);
 
     // Experience bar with Maya's level and progress, bottom centre (UOpenWillowSkills).

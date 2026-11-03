@@ -17,7 +17,7 @@ movie shows. Scores are the independent critic's, and only where a matched real-
 | Element (clip) | Slice | Host driver today | Check | Parity |
 |---|---|---|---|---|
 | Health bar and text (`health`) | yes | driven: `AOpenWillowWalker` health | `check_hud_shots.py` | 8/10 (2026-10-22, with the clusters) |
-| Shield bar and text (`shield`) | yes | partly: the equipped shield's capacity; the bar stays full | `check_hud_shots.py` | as health; no damage or recharge model |
+| Shield bar and text (`shield`) | yes | yes: Maya's live shield pool (`FOpenWillowMayaState`: drains on hits, recharges after the delay), capacity from the equipped card | `check_hud_shots.py` | as health; the recharge numbers are a stand-in when the card has none (COMBAT_DOWN_RESPAWN.md "The host's state") |
 | Shield break (`shielddown`) | yes, when the shield breaks | not driven: the host has no shield damage | none | missing |
 | Ammo bar, text, icon (`bullets`) | yes | driven: magazine, reserve and ammo type | `check_hud_shots.py` | 8/10 (with the clusters) |
 | Reload / empty prompt (`reload`: `reload`, `depleted`, `empty`) | yes | not driven: the movie leaves its `desc` text and the choice of state to native code (`UpdateAmmo` is native), neither read | none | missing |
@@ -139,7 +139,7 @@ own 3D matrices were not exposed through `GetDisplayMatrix`) would settle it.
 | Field | Source | Faked or missing |
 |---|---|---|
 | health bar, `healthText` | `AOpenWillowWalker::GetHealth()/GetMaxHealth()`, text rounded | none |
-| shield bar, `shieldText` | the equipped shield's `Capacity` card stat; with no shield, the movie's `none` frame | the bar stays full: the host has no shield damage or recharge model |
+| shield bar, `shieldText` | Maya's shield pool over the equipped card's `Capacity`, the text its current value rounded; with no shield, the movie's `none` frame | the drain and recharge are the host's model (shield first, delay, rate; UNVERIFIED against a live HUD read) |
 | ammo bar, `ammoText` | magazine left / size; `magazine / reserve` from the weapon's ammo pool, no-break spaces | a no-cost weapon (Infinity) shows the magazine only; the game's display for it is not observed (UNVERIFIED) |
 | grenade bar, `grenadeText` | the grenade ammo pool `current / max`, hidden when its max is 0 | the grenade icon's type (`grenades.protean.payload`) is not driven |
 | `levelText`, XP bar | `UOpenWillowSkills`, level zero-padded | the class-mod title (`comm`) is not sent |
