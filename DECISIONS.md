@@ -3095,6 +3095,11 @@ host code and no reader parsing changed.
   is missing beside the movie (never overwriting) and lists it in the report. Checked on the installed HUD movie: 5 of 5 font
   imports inlined, 2 of them only with the copy. `prepare_inventory_movie.py` stays a separate, documented step (it is a Ruffle
   workaround for one library, not part of conversion).
+- **Review round 1 (GPT-6-Luna).** The library copy now happens only for an import named `gfxfontlib.swf` and only to a
+  destination inside the movie's output folder; a `..` URL that leaves it is skipped with a warning (listed under
+  `skipped_font_library_copies`). Manifest keys stay `dialog:<event tag>` (the host lookup is unchanged), so the tool now
+  refuses to write a manifest when one tag occurs in two included groups, and `reached_in_scripted_run` is matched per
+  (group, tag). The installed data has no shared tag (35 tags, one group). Both have synthetic tests.
 - **Docs.** `docs/TOOLING.md` "Regenerating local data on a fresh machine" (order, UE-step ordering, the `MSYS2_ARG_CONV_EXCL=/Game`
   note), the UI conversion steps, and `tools/worktree-assets.md` (what the seed leaves out and how to fill it).
 - **Checks.** CTest 21/21, `verify_packages` 9/9, UE module build; `tools/test_quest.ps1` run twice: first run 111/111 and

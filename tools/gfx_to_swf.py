@@ -40,6 +40,7 @@ import argparse
 import json
 import re
 import struct
+import sys
 import zlib
 from collections import Counter
 from pathlib import Path
@@ -58,6 +59,7 @@ EDIT_TEXT = 37
 DO_ACTION = 12
 DO_INIT_ACTION = 59
 SUB_IMAGE = 1008
+FONT_LIBRARY = 'gfxfontlib.swf'   # the only import place_library copies
 DEFINE_SPRITE = 39
 BITS_LOSSLESS2 = 36
 ATLAS_MARKER = bytes((9, 0))  # bytes 2-3 of a packed-atlas DefineExternalImage2
@@ -313,6 +315,7 @@ class Converter:
         self.font_base = font_base      # directory import URLs resolve against, or None
         self.inlined_fonts = []
         self.copied_libraries = []
+        self.skipped_libraries = []
         self.atlases = {}
         self.dropped = Counter()
         self.images = []
@@ -353,9 +356,23 @@ class Converter:
         copy keeps the import (no fonts inlined) and later shows fallback fonts. The library is
         converted once into the run root (local/ui/run/gfxfontlib.swf); copying it beside the movie
         removes the manual step. Only a missing file is filled; an existing one is left alone.
+
+        The URL comes from the movie, so only the font library's own name is copied, and only to a
+        destination inside the movie's output folder: a URL with other `..` components is skipped
+        with a warning instead of writing outside the ignored output tree.
         """
-        fallback = self.font_base.parent / source.name
-        if source.is_file() or not fallback.is_file() or fallback.resolve() == source.resolve():
+        if source.name != FONT_LIBRARY or source.is_file():
+            return
+        fallback = self.font_base.parent / FONT_LIBRARY
+        if not fallback.is_file():
+            return
+        root = self.font_base.resolve()
+        target = source.resolve()
+        if target == fallback.resolve():
+            return
+        if not target.is_relative_to(root):
+            self.skipped_libraries.append({'url_target': str(source), 'reason': 'outside the output folder'})
+            print(f'warning: not copying {FONT_LIBRARY} to {source}: outside {root}', file=sys.stderr)
             return
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(fallback.read_bytes())
@@ -445,6 +462,7 @@ def main():
               'external_images': converter.images, 'sub_images': converter.sub_images,
               'fonts': converter.fonts, 'inlined_font_imports': converter.inlined_fonts,
               'copied_font_libraries': converter.copied_libraries,
+              'skipped_font_library_copies': converter.skipped_libraries,
               'localized_tokens': dict(converter.text),
               'dropped_scaleform_tags': dict(converter.dropped)}
     output.with_suffix('.json').write_text(json.dumps(report, indent=1), encoding='utf-8')

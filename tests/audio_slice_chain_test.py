@@ -76,6 +76,18 @@ class DialogCoverageTest(unittest.TestCase):
         rows = self.rows([{'a': 'Ev.Gone', 'b': GROUP, 'c': None}])
         self.assertEqual(rows[(GROUP, 'Ev.Gone')]['how'], 'event tag not in group')
 
+    def test_same_tag_in_two_groups_fails_loudly(self):
+        ue3 = FakeUe3()
+        ue3.objects[OTHER]['dialogevents'].append({'Tag': 'Ev.Line03', 'OutputAction': OTHER + '.Talk_9'})
+        # Ev.Line03 is now in both groups: refused, because manifest keys carry no group
+        with self.assertRaisesRegex(ValueError, 'Ev.Line03 in Pkg.Groups.MissionGroup, Pkg.Groups.OtherGroup'):
+            chain.dialog_chain(ue3, [{'a': 'Ev.Line03', 'b': OTHER, 'c': None}])
+
+    def test_reached_flag_follows_the_group_of_the_effect(self):
+        rows = self.rows([{'a': 'Ev.Other', 'b': OTHER, 'c': None}])
+        self.assertTrue(rows[(OTHER, 'Ev.Other')]['reached_in_scripted_run'])
+        self.assertFalse(rows[(GROUP, 'Ev.Line01')]['reached_in_scripted_run'])
+
     def test_manifest_has_a_dialog_entry_per_resolved_line(self):
         rows = chain.dialog_chain(FakeUe3(), [])
         manifest = chain.build_manifest({'dialog': rows, 'marcus_group': [], 'door': [], 'weapon': []}, 'no-such-dir')
