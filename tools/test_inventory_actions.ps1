@@ -44,38 +44,12 @@ if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under
 if (!$Game -or !(Test-Path -LiteralPath $Game)) { throw 'Pass -Game <Borderlands 2 folder> or set OPENWILLOW_BL2' }
 $localDir = Join-Path $repo 'local'
 New-Item -ItemType Directory -Force -Path $localDir | Out-Null
-$lockPath = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logDir = Join-Path $localDir 'inventory-actions'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
 
-# --- lock: created atomically, stale after 15 minutes with no editor or game running, removed in finally ---
-function Get-Lock {
-    $deadline = (Get-Date).AddSeconds($LockWaitSeconds)
-    while ($true) {
-        try {
-            $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew,
-                [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes("test_inventory_actions $((Get-Date).ToString('o'))")
-            $stream.Write($bytes, 0, $bytes.Length)
-            $stream.Dispose()
-            return
-        } catch [System.IO.IOException] {
-            if (!(Test-Path -LiteralPath $lockPath)) { continue }
-            $age = (Get-Date) - (Get-Item -LiteralPath $lockPath).LastWriteTime
-            # Old is not enough: a real-game session can hold the lock for longer, so only a lock with no editor or game running is stale.
-            $holderAlive = [bool](Get-Process -Name UnrealEditor, Borderlands2 -ErrorAction SilentlyContinue)
-            if ($age.TotalMinutes -gt 15 -and !$holderAlive) {
-                Write-Output "Removing stale lock ($([int]$age.TotalMinutes) min old): $(Get-Content -LiteralPath $lockPath -Raw)"
-                Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
-                continue
-            }
-            if ((Get-Date) -gt $deadline) { throw "Timed out waiting for $lockPath held by: $(Get-Content -LiteralPath $lockPath -Raw)" }
-            Write-Output "Waiting for $lockPath (held by: $(Get-Content -LiteralPath $lockPath -Raw))"
-            Start-Sleep -Seconds 10
-        }
-    }
-}
+# --- lock: tools/ue_lock.ps1 (atomic; a lock is stale only when the process that wrote it is gone), released in finally ---
 
 function Read-LogText {
     if (!(Test-Path -LiteralPath $log)) { return '' }
@@ -90,7 +64,7 @@ $exitCode = 1
 $process = $null
 $server = $null
 if (Get-Process UnrealEditor -ErrorAction SilentlyContinue) { throw 'An Unreal editor is already running; leave it untouched.' }
-Get-Lock
+Enter-OwUeLock -Owner 'test_inventory_actions' -TimeoutSeconds $LockWaitSeconds -PollSeconds 10
 try {
     # --- overlay server (the pages the game window loads) ---
     $url = "http://127.0.0.1:$Port/"
@@ -187,6 +161,6 @@ try {
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    Exit-OwUeLock
 }
 exit $exitCode

@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $out = Join-Path $repo 'local/phaselock/target'
 $logs = Join-Path $out 'logs'
 $tool = Join-Path $PSScriptRoot 'prepare_phaselock_target.py'
@@ -41,14 +41,12 @@ function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
     if (Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
         throw 'An Unreal editor process is already running; leaving it untouched.'
     }
-    $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes("import_phaselock_target $((Get-Date).ToString('o'))")
-    $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
     $env:OPENWILLOW_SLICE_JOB = Join-Path $out 'editor_job.json'
     $env:OPENWILLOW_SLICE_MODE = $Mode
     $log = Join-Path $logs "editor-$Mode.log"
     $report = Join-Path $out "editor_report_$Mode.json"
     if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report -Force }
+    Enter-OwUeLock -Owner 'import_phaselock_target' -TimeoutSeconds 0   # fails at once when held, as before
     try {
         $process = Start-Process -FilePath $cmd -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logs "editor-$Mode.stdout.txt") -ArgumentList @(
             "`"$project`"", '-run=pythonscript', "`"-script=$Script`"", '-unattended', '-nullrhi', '-nosplash',
@@ -57,7 +55,7 @@ function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
         if (!$process.WaitForExit(1500000)) { Stop-Process -Id $process.Id -Force; throw "editor mode $Mode timed out" }
         $code = $process.ExitCode
     } finally {
-        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+        Exit-OwUeLock
     }
     if ($code -ne 0 -or !(Test-Path -LiteralPath $report)) { throw "editor mode $Mode failed (exit $code); see $log" }
     Select-String -LiteralPath $log -Pattern 'LogPython: OW_' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }

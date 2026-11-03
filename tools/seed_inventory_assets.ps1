@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 if (!(Test-Path -LiteralPath $cmd)) { throw "UnrealEditor-Cmd.exe not found under $Engine" }
 if (!$Game -or !(Test-Path -LiteralPath $Game)) { throw 'Pass -Game <Borderlands 2 folder> or set OPENWILLOW_BL2' }
 if (!$Umodel -or !(Test-Path -LiteralPath $Umodel)) { throw 'Pass -Umodel <umodel.exe> or set OPENWILLOW_UMODEL' }
@@ -27,7 +28,7 @@ $logs = Join-Path $repo 'local/seed-logs'
 New-Item -ItemType Directory -Force -Path $out, $logs | Out-Null
 
 function Invoke-Editor([string]$Script, [string]$Name) {
-    & $cmd $project -run=pythonscript "-script=$(Join-Path $repo $Script)" -unattended -nullrhi -nosplash "-abslog=$(Join-Path $logs "$Name.log")"
+    Invoke-OwUeLocked -Owner "seed_inventory_assets $Name" -Body { & $cmd $project -run=pythonscript "-script=$(Join-Path $repo $Script)" -unattended -nullrhi -nosplash "-abslog=$(Join-Path $logs "$Name.log")" }
     if ($LASTEXITCODE -ne 0) { throw "$Name failed: $LASTEXITCODE" }
 }
 function Export-Umodel([string[]]$Arguments) {

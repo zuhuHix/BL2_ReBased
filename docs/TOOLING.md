@@ -149,14 +149,28 @@ LZO decoder is the vendored MIT-licensed lzokay; see
 
 ### One Unreal run per machine
 
-Every script that launches the Unreal Editor or the real game (the suites, the seed and import scripts, the shot
-runners, `tools/real_game/realgame.ps1`) takes one lock file per machine, `%LOCALAPPDATA%\OpenWillow\ue_run.lock`,
-with an atomic create, and deletes it when done; they also still wait while any `UnrealEditor` process runs. The path
-comes from `tools/ue_lock.ps1`; set `OPENWILLOW_UE_LOCK` to use another file. Until 2026-11-03 the lock was
-`local/ue_run.lock` inside each checkout, so editors started from different worktrees ran side by side; a branch older
-than that change still uses the per-checkout file, so rebase it before running suites next to newer worktrees. A lock
-left behind by a crashed run blocks every worktree: check that no editor or game started by that run is alive, then
-delete the file by hand. CTest `ue-lock-machine-wide` checks that no script builds its own lock path.
+Every script that launches `UnrealEditor.exe` or `UnrealEditor-Cmd.exe` (the suites, the seed and import scripts,
+the shot runners, the `run_ue_*` launchers, `test_ue_viewer.ps1`) and the real-game helpers (`tools/real_game/realgame.ps1`)
+hold one lock file per machine, `%LOCALAPPDATA%\OpenWillow\ue_run.lock`, from before the launch until the process has
+exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.ps1`, `run_ue_character.ps1 -Play`,
+`run_quest.ps1`) therefore keep their PowerShell window busy until the editor is closed. All of it lives in
+`tools/ue_lock.ps1`, which the scripts dot-source:
+
+- `Enter-OwUeLock -Owner <script>` waits while any `UnrealEditor`/`UnrealEditor-Cmd` process runs and the lock is held,
+  then creates the file atomically and writes its owner: the PowerShell process id, that process's start time and the
+  script name. `Exit-OwUeLock` deletes it only when the caller owns it. `Invoke-OwUeLocked -Owner <script> -Body { ... }`
+  does both around a block; `Invoke-OwUeEditor` starts the editor and waits for it (`& $editor` does not wait for a GUI program).
+- A lock is stale only when its owner process is gone (no process with that id, or one with another start time); `Enter`
+  then removes it and takes its place. Age alone never makes a lock stale, and a lock without owner fields (written by
+  a branch older than 2026-11-03) is never removed automatically: check that no editor or game it guarded runs, then
+  delete it by hand.
+- `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
+  worktree and is rejected).
+
+Until 2026-11-03 the lock was `local/ue_run.lock` inside each checkout, so editors started from different worktrees ran
+side by side; a branch older than that still uses the per-checkout file, so rebase it before running suites next to newer
+worktrees. CTest `ue-lock-machine-wide` fails when a script that names `UnrealEditor*.exe` does not use the helper, and
+checks the owner and staleness rules against temporary lock files.
 
 ## `ow-package`: the package reader
 

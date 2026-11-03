@@ -28,7 +28,7 @@ if (-not $Ids.Count) {
 $outDir = Join-Path $repo $Out
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $log = Join-Path $outDir 'run.log'
 $hub = $null
 try {
@@ -40,8 +40,7 @@ try {
         if ($i % 30 -eq 0) { 'an Unreal editor is running (not ours); waiting' }; Start-Sleep 10
     }
     if (Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) { throw 'an Unreal editor is still running; leaving it untouched' }
-    $stream = [IO.File]::Open($lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
-    $bytes = [Text.Encoding]::UTF8.GetBytes("run_weapon_assembly_shots $((Get-Date).ToString('o'))"); $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+    Enter-OwUeLock -Owner 'run_weapon_assembly_shots' -TimeoutSeconds 0   # fails at once when held, as before
     try {
         Get-ChildItem $shots -Filter 'OWGun_*.png' -ErrorAction SilentlyContinue | Remove-Item
         if ($env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $env:OPENWILLOW_BL2).Path }
@@ -53,7 +52,7 @@ try {
         $p = Start-Process -PassThru -FilePath (Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe') -ArgumentList $argsList
         if (!$p.WaitForExit($TimeoutSeconds * 1000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT: stopped our pid $($p.Id)" }
     } finally {
-        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+        Exit-OwUeLock
     }
     Get-ChildItem $shots -Filter 'OWGun_*.png' -ErrorAction SilentlyContinue | Copy-Item -Destination $outDir -Force
     "frames: $((Get-ChildItem $outDir -Filter '*.png').Count) in $outDir"

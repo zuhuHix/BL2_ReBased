@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $manifest = Join-Path $repo 'local/slice/minimap.json'
 foreach ($file in @($manifest, (Join-Path $repo 'local/ui/run/UI_HUD/harness.swf'),
@@ -48,7 +48,7 @@ $server = $null; $process = $null; $haveShared = $false; $haveLocal = $false
 $code = 2
 try {
     if ($SharedLock) { Wait-Lock $SharedLock 'minimap'; $haveShared = $true }
-    Wait-Lock $lock 'test_hud_minimap'; $haveLocal = $true
+    Enter-OwUeLock -Owner 'test_hud_minimap' -TimeoutSeconds $WaitForEditorSeconds -PollSeconds 60; $haveLocal = $true
     $server = Start-Process -PassThru -WindowStyle Hidden -FilePath python -ArgumentList @(
         "`"$(Join-Path $PSScriptRoot 'hud_overlay/serve.py')`"", '--port', $Port)
     Start-Sleep 2
@@ -88,7 +88,7 @@ try {
     # Only the processes this script started are stopped.
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    if ($haveLocal) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+    if ($haveLocal) { Exit-OwUeLock }
     if ($haveShared) { Remove-Item -LiteralPath $SharedLock -Force -ErrorAction SilentlyContinue }
 }
 exit $code

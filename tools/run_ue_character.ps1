@@ -24,13 +24,14 @@ $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $commandlet = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $out = Join-Path $repo 'local/character'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 if (!$CaptureOnly) {
     $env:OPENWILLOW_CHARACTER = (Resolve-Path -LiteralPath $Exports).Path
     $env:OPENWILLOW_CHARACTER_VIEW = $View
     $log = Join-Path $out 'import.log'
-    & $commandlet $project -run=pythonscript "-script=$(Join-Path $repo 'host/ue5/import_character.py')" -unattended -nullrhi -nosplash "-abslog=$log" | Out-Null
+    Invoke-OwUeLocked -Owner 'run_ue_character import' -Body { & $commandlet $project -run=pythonscript "-script=$(Join-Path $repo 'host/ue5/import_character.py')" -unattended -nullrhi -nosplash "-abslog=$log" | Out-Null }
     if ($LASTEXITCODE -ne 0) { throw "Character import failed: $LASTEXITCODE; see $log" }
     Select-String -LiteralPath $log -Pattern 'LogPython: OW_CHARACTER' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
     if ($Md5) {
@@ -41,7 +42,7 @@ if (!$CaptureOnly) {
         $animScript = Join-Path $repo 'host/ue5/import_character_anims.py'
         $env:OPENWILLOW_CHARACTER_REFERENCE = Join-Path $animDir 'ref_pose.json'
         $env:OPENWILLOW_CHARACTER_ANIMS = ''
-        & $commandlet $project -run=pythonscript "-script=$animScript" -unattended -nullrhi -nosplash "-abslog=$(Join-Path $animDir 'reference.log')" | Out-Null
+        Invoke-OwUeLocked -Owner 'run_ue_character reference' -Body { & $commandlet $project -run=pythonscript "-script=$animScript" -unattended -nullrhi -nosplash "-abslog=$(Join-Path $animDir 'reference.log')" | Out-Null }
         if ($LASTEXITCODE -ne 0) { throw "Reference pose dump failed: $LASTEXITCODE" }
         $tracks = Join-Path $animDir 'unarmed.json'
         & python (Join-Path $PSScriptRoot 'prepare_character_anims.py') --mesh (Join-Path $md5Root 'SkeletalMesh3/Hands_Siren.md5mesh') `
@@ -56,7 +57,7 @@ if (!$CaptureOnly) {
         $env:OPENWILLOW_CHARACTER_REFERENCE = ''
         $env:OPENWILLOW_CHARACTER_ANIMS = "Unarmed=$tracks;Pistol=$pistolTracks"
         $animLog = Join-Path $animDir 'anims.log'
-        & $commandlet $project -run=pythonscript "-script=$animScript" -unattended -nullrhi -nosplash "-abslog=$animLog" | Out-Null
+        Invoke-OwUeLocked -Owner 'run_ue_character anims' -Body { & $commandlet $project -run=pythonscript "-script=$animScript" -unattended -nullrhi -nosplash "-abslog=$animLog" | Out-Null }
         if ($LASTEXITCODE -ne 0) { throw "Animation import failed: $LASTEXITCODE; see $animLog" }
         Select-String -LiteralPath $animLog -Pattern 'LogPython: OW_ANIM' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
     }
@@ -87,11 +88,14 @@ if ($Sanctuary) {
 }
 $gameArgs = @('-game', '-windowed', '-WinX=0', '-WinY=0', '-ResX=1280', '-ResY=720', '-nosplash')
 if ($Play) {
-    Start-Process -FilePath $editor -ArgumentList (@("`"$project`"") + $level + $gameArgs)
+    # The UE run lock is held until the play window is closed.
+    Invoke-OwUeLocked -Owner 'run_ue_character play' -Body { (Start-Process -FilePath $editor -PassThru -ArgumentList (@("`"$project`"") + $level + $gameArgs)).WaitForExit() }
     return
 }
-$game = Start-Process -FilePath $editor -PassThru -ArgumentList (@("`"$project`"") + $level + $gameArgs)
+$game = $null
+Enter-OwUeLock -Owner 'run_ue_character capture'
 try {
+    $game = Start-Process -FilePath $editor -PassThru -ArgumentList (@("`"$project`"") + $level + $gameArgs)
     Start-Sleep -Seconds $Wait
     $game.Refresh()
     [OwWin]::SetForegroundWindow($game.MainWindowHandle) | Out-Null
@@ -107,5 +111,6 @@ try {
     $bitmap.Save($shot)
     Write-Output "Screenshot: $shot"
 } finally {
-    if (!$game.HasExited) { Stop-Process -Id $game.Id }
+    if ($game -and !$game.HasExited) { Stop-Process -Id $game.Id; $game.WaitForExit(30000) | Out-Null }
+    Exit-OwUeLock
 }

@@ -36,7 +36,7 @@ if (!$UModel -or !(Test-Path -LiteralPath $UModel)) { throw 'Pass -UModel <umode
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $ambient = Join-Path $repo 'local/slice/ambient'
 $logs = Join-Path $repo 'local/slice/logs'
 $tool = Join-Path $PSScriptRoot 'ambient_npc_assets.py'
@@ -53,19 +53,8 @@ function Invoke-Tool([string]$Step) {
 
 # Wait for the lock (another lane may hold it), claim it atomically, run the body, release it.
 function Use-EditorLock([scriptblock]$Body) {
-    $deadline = (Get-Date).AddMinutes(60); $stream = $null
-    while (!$stream) {
-        if (!(Get-Process UnrealEditor, UnrealEditor-Cmd, Borderlands2 -ErrorAction SilentlyContinue)) {
-            try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-        }
-        if (!$stream) {
-            if ((Get-Date) -gt $deadline) { throw 'Another editor/game or the UE run lock (tools/ue_lock.ps1) is still present; leaving it untouched.' }
-            Start-Sleep -Seconds 10
-        }
-    }
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes("B seed_ambient_npc_assets $((Get-Date).ToString('o'))")
-    $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
-    try { & $Body } finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+    Enter-OwUeLock -Owner 'seed_ambient_npc_assets' -TimeoutSeconds 3600 -PollSeconds 10 -AlsoWaitFor Borderlands2
+    try { & $Body } finally { Exit-OwUeLock }
 }
 
 function Invoke-Editor([string]$Mode) {

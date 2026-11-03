@@ -38,6 +38,7 @@ $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $script = Join-Path $repo 'host/ue5/import_character_anims.py'
 $commandlet = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 $log = Join-Path $out 'combat-import.log'
-& $commandlet $project -run=pythonscript "-script=$script" -unattended -nullrhi -nosplash "-abslog=$log" | Out-Null
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
+Invoke-OwUeLocked -Owner 'import_maya_combat_anims' -Body { & $commandlet $project -run=pythonscript "-script=$script" -unattended -nullrhi -nosplash "-abslog=$log" | Out-Null }
 if ($LASTEXITCODE -ne 0) { throw "Combat animation import failed: $LASTEXITCODE; see $log" }
 Select-String -LiteralPath $log -Pattern 'LogPython: OW_ANIM' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }

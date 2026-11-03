@@ -14,24 +14,11 @@ if (!$Manifest) { $Manifest = Join-Path $repo 'local/doors/mover.json' }
 if (!(Test-Path -LiteralPath $Manifest)) { throw 'Prepare a mover manifest first with tools/prepare_mover.py' }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
-# Take the lock as soon as no editor runs and nobody holds it (CreateNew is the atomic claim).
-$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
-        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
-        Start-Sleep -Seconds 5
-    }
-}
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("test_mover $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $process = $null
 $log = Join-Path $repo ('local/doors/run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
 $code = 2
+Enter-OwUeLock -Owner 'test_mover' -TimeoutSeconds $WaitForEditorSeconds
 try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud',
@@ -57,6 +44,6 @@ try {
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-    Remove-Item -LiteralPath $lock -Force
+    Exit-OwUeLock
 }
 exit $code

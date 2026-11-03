@@ -6,7 +6,8 @@ $ErrorActionPreference = 'Stop'
 $script:Repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $script:RG = Join-Path $script:Repo 'local/realgame'
 $script:CmdDir = Join-Path $script:RG 'cmd'
-$script:Lock = & (Join-Path $PSScriptRoot '../ue_lock.ps1')
+. (Join-Path $PSScriptRoot '../ue_lock.ps1')
+$script:Lock = Get-OwUeLockPath
 $script:Game = $env:OPENWILLOW_BL2
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 
@@ -32,20 +33,10 @@ Add-Type -Namespace OWRG -Name Native -MemberDefinition @'
 function Get-QpcSeconds { [double][Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency }
 
 function Enter-RunLock([int]$WaitSeconds = 600) {
-    # Same claim as tools/test_quest.ps1: no UnrealEditor and no lock file, then CreateNew.
-    $deadline = (Get-Date).AddSeconds($WaitSeconds); $stream = $null
-    while (!$stream) {
-        if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
-            try { $stream = [IO.File]::Open($script:Lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read) } catch { $stream = $null }
-        }
-        if (!$stream) { if ((Get-Date) -gt $deadline) { throw 'UnrealEditor or the UE run lock (tools/ue_lock.ps1) still present' }; Start-Sleep 5 }
-    }
-    $bytes = [Text.Encoding]::UTF8.GetBytes("realgame $((Get-Date).ToString('o'))")
-    $stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
+    # The machine-wide claim every editor script uses (tools/ue_lock.ps1): no Unreal editor, lock free or stale, CreateNew.
+    Enter-OwUeLock -Owner 'realgame' -TimeoutSeconds $WaitSeconds
 }
-function Exit-RunLock {
-    if ((Test-Path $script:Lock) -and ((Get-Content $script:Lock -Raw) -like 'realgame *')) { Remove-Item $script:Lock -Force }
-}
+function Exit-RunLock { Exit-OwUeLock }   # removes the lock only when this process owns it
 
 function Backup-Saves {
     $src = Join-Path $env:USERPROFILE 'Documents/My Games/Borderlands 2/WillowGame'

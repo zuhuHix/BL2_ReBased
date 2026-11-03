@@ -8,6 +8,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under $Engine" }
 if (!(Test-Path -LiteralPath (Join-Path $Game 'Binaries/Win32/Borderlands2.exe'))) { throw 'BL2 installation not found' }
 if (!$Probe) { $Probe = Join-Path $repo 'local/probe' }
@@ -17,5 +18,5 @@ $env:OPENWILLOW_PROBE = (Resolve-Path -LiteralPath $Probe).Path
 & $buildScript OpenWillowEditor Win64 Development "-Project=$project" -WaitMutex
 if ($LASTEXITCODE -ne 0) { throw "UE5 build failed: $LASTEXITCODE" }
 $script = Join-Path $repo 'host/ue5/import_probe.py'
-# The editor is an interactive tool for the user to inspect the Phase 0 result.
-& $editor $project "-ExecutePythonScript=$script" -log
+# The editor is an interactive tool for the user to inspect the Phase 0 result; the UE run lock is held until it closes.
+Invoke-OwUeLocked -Owner 'run_ue_probe' -Body { Invoke-OwUeEditor $editor @($project, "-ExecutePythonScript=$script", '-log') -AllowFailure }

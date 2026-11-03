@@ -30,23 +30,9 @@ $itemDir = Split-Path -Parent $gear
 $gearLevel = [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $save = Join-Path $repo 'local/quest/save.json'
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
-# Take the lock as soon as no editor runs and nobody holds it (CreateNew is the atomic claim).
-$deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
-$stream = $null
-while (!$stream) {
-    if (!(Get-Process UnrealEditor -ErrorAction SilentlyContinue)) {
-        try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
-    }
-    if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
-        Start-Sleep -Seconds 5
-    }
-}
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("test_quest $((Get-Date).ToString('o'))")
-$stream.Write($bytes, 0, $bytes.Length); $stream.Dispose()
 New-Item -ItemType Directory -Force (Split-Path $save) | Out-Null
 if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 $code = 2
@@ -91,6 +77,8 @@ function Invoke-Run([string]$Mode, [string[]]$Extra) {
     Write-Host "Log: $log"
     return $summary
 }
+# The machine-wide lock is taken as soon as no editor runs and nobody holds it, and released in the finally right after.
+Enter-OwUeLock -Owner 'test_quest' -TimeoutSeconds $WaitForEditorSeconds
 try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $first = Invoke-Run 'first' @()
@@ -103,6 +91,6 @@ try {
         else { $code = 1; Write-Output "FIRST RUN: $first"; Write-Output "RESUME RUN: $second" }
     }
 } finally {
-    Remove-Item -LiteralPath $lock -Force
+    Exit-OwUeLock
 }
 exit $code
