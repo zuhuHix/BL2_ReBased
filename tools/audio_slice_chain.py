@@ -94,7 +94,7 @@ def dialog_chain(ue3, run_effects=None):
     `reached_in_scripted_run` marks the tags the fixed MISSION_STEPS run reached.
     """
     effects = mission_run_dialog(ue3) if run_effects is None else run_effects
-    reached = {e['a'] for e in effects}
+    reached = {(e['b'], e['a']) for e in effects}
     groups = []
     own = ue3.dump('Startup', MISSION).get('missiondialoggroup')
     for group in [own] + [e['b'] for e in effects]:
@@ -110,10 +110,19 @@ def dialog_chain(ue3, run_effects=None):
             name = next((e['c'] for e in effects if e['a'] == tag and e['b'] == group), None)
             talk, how = group_talk(ue3, g, tag)
             row = {'trigger': {'event_tag': tag, 'group': group, 'name_tag': name}, 'how': how, 'talk': talk,
-                   'reached_in_scripted_run': tag in reached, 'ak_events': []}
+                   'reached_in_scripted_run': (group, tag) in reached, 'ak_events': []}
             for t in talk or []:
                 row['ak_events'].append({'name_tag': t['NameTag'], **ue3.ak_event('Startup', t['TalkAkEvent'])})
             rows.append(row)
+    # Manifest keys and the host's lookup are `dialog:<event tag>` with no group, so one tag in two groups would
+    # collide (the host keeps the last entry). Refuse until the key and the lookup carry the group.
+    owners = {}
+    for row in rows:
+        owners.setdefault(row['trigger']['event_tag'], []).append(row['trigger']['group'])
+    shared = {tag: groups for tag, groups in owners.items() if len(groups) > 1}
+    if shared:
+        raise ValueError('dialog event tag(s) in more than one included group; manifest keys need the group first: %s'
+                         % '; '.join('%s in %s' % (tag, ', '.join(groups)) for tag, groups in sorted(shared.items())))
     return rows
 
 

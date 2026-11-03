@@ -151,6 +151,25 @@ def test_plain_font_import_copies_library_from_run_root():
         assert conv2.copied_libraries == [] and len(conv2.inlined_fonts) == 2
 
 
+def test_traversal_or_other_library_url_is_not_copied():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        run = base / 'run'
+        movie = run / 'UI_Movie'
+        movie.mkdir(parents=True)
+        (run / 'gfxfontlib.swf').write_bytes(font_library_swf())
+        (run / 'escape.swf').write_bytes(font_library_swf())
+        conv = g.Converter(run, font_base=movie)
+        conv.convert([(g.IMPORT_ASSETS2, font_import('../../escape.swf')),
+                      (g.IMPORT_ASSETS2, font_import('../../gfxfontlib.swf')),
+                      (g.IMPORT_ASSETS2, font_import('sub/../../../gfxfontlib.swf')),
+                      (g.IMPORT_ASSETS2, font_import('escape.swf'))])
+        assert not (base / 'escape.swf').exists() and not (base / 'gfxfontlib.swf').exists()
+        assert not (movie / 'escape.swf').exists()
+        assert conv.copied_libraries == [] and len(conv.skipped_libraries) == 2
+
+
 def test_missing_library_keeps_the_import():
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
