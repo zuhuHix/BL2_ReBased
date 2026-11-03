@@ -23,6 +23,12 @@ struct OPENWILLOW_API FOpenWillowMayaStats
     float RevivalHealthMultiplier = 1.f;  // the attribute, 1 at its default
     float SecondWindShieldPct = 0.9f;     // live: the shield went to 90 % at a second wind (COMBAT_GOLDEN_TRACE.md section D)
     float RespawnHealthPct = 1.f;         // ResurrectedHealthPctOfMax (data 1.0)
+    // Movement (NATIVE_PLAYER_MOVEMENT.md section 1, cooked values; the rules are in OpenWillowMayaMovement.h).
+    float GroundSpeed = 440.f;            // CharacterClassDefinition default (FootSpeed resolves to it)
+    float SprintSpeedScale = 0.35f;       // SprintDefinition_Default: FootSpeed MT_Scale +0.35 (594 while sprinting)
+    float CrouchedPct = 0.5f;             // CrouchedPct (220 crouched)
+    float JumpZ = 630.f;                  // CharClass_Siren
+    float AirControl = 0.11f;             // GD_Globals PlayerAirControl
 };
 
 enum class EOpenWillowDownPhase : uint8 { Up, Injured, Dead };

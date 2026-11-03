@@ -3358,3 +3358,15 @@ AI-assisted (Claude). Record: `docs/verification/COMBAT_DOWN_RESPAWN.md` "The ho
   No recharge while down, a swapped shield starts empty, the second wind sets the shield to 90 % (the last is live; the rest UNVERIFIED).
 - **`OpenWillowApplyDamageToPlayer`** is the one damage entry point for enemies (range lane) and hazards.
 - **Checks.** New automation test `OpenWillow.MayaState` (synthetic). In-engine results come from the hub's integration run.
+
+## 2026-11-03: Maya's movement from the stock data in the host (maya lane, item 1)
+
+AI-assisted (Claude). Record: `docs/verification/NATIVE_PLAYER_MOVEMENT.md` "Host implementation". Host behaviour change; no live reads.
+
+- **Speeds and physics** move from estimates (450 run, 650 sprint, jump 420, 45-degree floors) to the cooked values: run 440, sprint 594,
+  crouch 220, jump Z 630, air control 0.11, friction 8 with braking factor 2, floor Z 0.7. The predicted jump: a 396.9 uu apex and
+  2.52 s in the air (logged at every landing; not yet compared with a live jump).
+- **Sprint** follows the script's rule (a 45-degree input cone, press-to-start, ended by crouch, firing, zoom or going down), with the
+  sprint FOV (the flexible-FOV maths, eased at 10) and the sprint eye height. **Crouch** is new (hold, Left Ctrl or C).
+- **Camera bob and eye height** follow the read eye-height and bob update; **falling damage** follows `TakeFallingDamage`.
+- All UNVERIFIED in game. Synthetic automation test `OpenWillow.MayaMovement`.
