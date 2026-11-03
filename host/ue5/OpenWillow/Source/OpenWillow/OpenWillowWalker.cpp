@@ -2,6 +2,7 @@
 #include "OpenWillowMayaMovement.h"
 #include "OpenWillowMover.h"
 #include "OpenWillowQuest.h"
+#include "OpenWillowVendor.h"
 #include "Engine/DamageEvents.h"
 #include "GameFramework/WorldSettings.h"
 #include "OpenWillowArmsAnimInstance.h"
@@ -1329,6 +1330,7 @@ void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
     if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
+    if (UOpenWillowVendorSubsystem::TryUseNearest(*this)) return;   // a vending machine in reach (-owvendors=)
     if (Mover && Mover->TryInteract()) return;
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);

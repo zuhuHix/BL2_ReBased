@@ -1,0 +1,78 @@
+<!doctype html>
+<!-- Vending machine page (PR 1). The stock movie is frame art when it loads; the lists, prices and hit targets are HTML.
+     Layout is UNVERIFIED against the game. Movie and Ruffle come from ignored local/ui/run (tools/prepare_vending_movie.py). -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenWillow vending</title>
+<style>
+html,body{margin:0;height:100%;background:#071018;color:#e8f3f8;font:14px Arial,sans-serif}
+#stage{position:fixed;inset:0;z-index:0;overflow:hidden}
+#stage ruffle-player{width:100%;height:100%;display:block}
+main{position:relative;z-index:1;box-sizing:border-box;max-width:1180px;margin:0 auto;padding:16px;min-height:100%;
+ background:rgba(8,24,39,.86)}
+header{display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;border-bottom:1px solid #59dced;padding-bottom:8px}
+h1{margin:0;font-size:22px;letter-spacing:.5px;flex:1 1 auto}
+.stat{color:#c9eafa}
+.stat b{color:#fff}
+#featured{margin:12px 0;border:1px solid #59dced;padding:8px 12px;background:rgba(25,186,211,.12)}
+#featured h2{margin:0 0 4px;font-size:13px;color:#a4e8f3;text-transform:uppercase;letter-spacing:1px}
+.columns{display:grid;grid-template-columns:1.1fr 1fr .8fr;gap:12px}
+.column h2{margin:0 0 6px;font-size:13px;color:#a4e8f3;text-transform:uppercase;letter-spacing:1px}
+.list{min-height:320px;display:flex;flex-direction:column;gap:4px}
+.row{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid #1f4a5e;border-left:4px solid #fff;
+ background:rgba(255,255,255,.03);cursor:pointer;user-select:none}
+.row.selected{background:rgba(25,186,211,.35);border-color:#59dced}
+.row.dim{opacity:.5}
+.row .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:#ffe7a3}
+.row.r1{border-left-color:#ffffff}.row.r2{border-left-color:#39ff14}.row.r3{border-left-color:#3c8dff}
+.row.r4{border-left-color:#b43cff}.row.r5{border-left-color:#ffb400}
+.empty{color:#7fa3b4;padding:8px}
+#detail{min-height:18px;margin:10px 0 4px;color:#c9eafa}
+#message{min-height:20px;margin:4px 0;color:#ffe7a3;font-weight:bold}
+.hint{margin:8px 0 0;color:#7fa3b4;font-size:12px}
+[hidden]{display:none!important}
+@media (max-width:760px){
+ .columns{grid-template-columns:1fr}
+ .list{min-height:0}
+ h1{font-size:18px}
+}
+</style>
+</head><body>
+<div id="stage" aria-hidden="true"></div>
+<main id="panel" aria-label="Vending machine">
+ <header>
+  <h1 id="title">Vending machine</h1>
+  <span class="stat">Money <b id="money">$0</b></span>
+  <span class="stat">Eridium <b id="eridium">0</b></span>
+  <span class="stat">Backpack <b id="used">0/0</b></span>
+  <span class="stat">Restock <b id="countdown">--:--</b></span>
+ </header>
+ <section id="featured" hidden>
+  <h2>Item of the day</h2>
+  <div id="featured-row"></div>
+ </section>
+ <div class="columns">
+  <section class="column" aria-label="Stock">
+   <h2>Stock</h2>
+   <div class="list" id="list-shop" role="listbox"></div>
+  </section>
+  <section class="column" aria-label="Backpack">
+   <h2>Backpack</h2>
+   <div class="list" id="list-backpack" role="listbox"></div>
+  </section>
+  <section class="column" aria-label="Buy back">
+   <h2>Buy back</h2>
+   <div class="list" id="list-buyback" role="listbox"></div>
+  </section>
+ </div>
+ <p id="detail"></p>
+ <p id="message" role="status" aria-live="polite"></p>
+ <p class="hint">Arrows or W S move. Tab or Left and Right switch lists. Enter or E buys or sells. Escape closes.</p>
+</main>
+<script>
+window.RufflePlayer = {config: {autoplay: 'on', unmuteOverlay: 'hidden', splashScreen: false, wmode: 'transparent',
+ backgroundColor: null, letterbox: 'off', logLevel: 'error', contextMenu: 'off', allowScriptAccess: true}};
+</script>
+<script src="ruffle/ruffle.js"></script>
+<script src="vending_model.js"></script>
+<script src="vending.js"></script>
+</body></html>
