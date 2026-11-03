@@ -4,6 +4,7 @@
 #include "OpenWillowWalker.h"
 #include "weapon_firing.hpp"
 #include "OpenWillowTargetAnimInstance.h"
+#include "OpenWillowStatusEffect.h"
 #include "Animation/AnimSequence.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -497,6 +498,9 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     if (bDead)
     {
         // The stock dummy keeps its death pose until the sequence destroys it; with respawn enabled it ragdolls and respawns.
+        // A status effect can be applied after the lethal hit (the shooter rolls it once TakeDamage returns); a range target
+        // (respawn enabled) clears it while dead so it does not tick on into the next life.
+        if (bRespawnStock && UOpenWillowStatusEffects::AnyActive(this)) UOpenWillowStatusEffects::ClearAll(this);
         if (StockMesh)
         {
             if (bRespawnStock) TickStockRespawn(Now);
@@ -648,6 +652,14 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     // Invulnerable (range toggle): the hit is recorded, popup included, but health is not lowered.
     const float Applied = bInvulnerable ? FMath::Max(0.f, Dealt) : FMath::Clamp(Dealt, 0.f, Health);
     if (!bInvulnerable) Health -= Applied;
+    // The hit event's result fields (OpenWillowHitEvent.h): the target reports what it applied and whether it was critical,
+    // so OnHit listeners see the same result as the damage number.
+    if (DamageEvent.IsOfType(FOpenWillowDamageEvent::ClassID))
+    {
+        const FOpenWillowHitEvent& HitEvent = static_cast<const FOpenWillowDamageEvent&>(DamageEvent).Hit;
+        HitEvent.bCritical = bCritical;
+        HitEvent.Applied = Applied;
+    }
     LastHitAt = Now;
     FVector Where = AimPoint();
     FVector Direction = FVector::ZeroVector;

@@ -31,6 +31,8 @@ public:
         OutRadius = AutoAimRadius();
     }
     virtual int32 GetHitLevel() const override { return Level; }
+    // A dead target (dying, ragdolled or waiting to respawn) takes no hits: explosions and status rolls skip it.
+    virtual bool CanTakeHits() const override { return !bDead; }
     AOpenWillowCombatTarget();
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;

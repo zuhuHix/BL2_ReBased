@@ -25,7 +25,7 @@ so each is `UNVERIFIED` unless a line says which record it reproduces.
 | Item | Value | Source | Status |
 |---|---|---|---|
 | Enemy max health per level | `max_health.<class>.L<level>` of `ow-package --combat-run spawn:<kind>:<level>` (regular, adult, baby, ranged; levels 1 to 50) | the VM runs the pawn's installed spawn script and health pool (COMBAT_HIT_CHAIN.md, COMBAT_DEATH.md) | UNVERIFIED: no live row of a fresh pawn's maximum. The L3 adult at level 5 started the recorded fight at 360.876, the VM's adult L5 maximum is 614.084; the live pawn may not have been at full health (open item) |
-| Critical multiplier | 2.0 | `CurrentInstantHitCriticalHitBonus` class default (NATIVE_COMBAT_GROUNDWORK 3.4; the projectiles lane reports it confirmed live) | skill modifiers not applied |
+| Critical multiplier | the hit event's `CritBonus` (2.0 base) | `CurrentInstantHitCriticalHitBonus` (NATIVE_COMBAT_GROUNDWORK 3.4; base confirmed live, COMBAT_GOLDEN_TRACE) | the shooter fills the bonus; 2.0 for damage without an event |
 | Critical region | a sphere (radius 18 uu, manifest `head_radius`) on the first bone whose name has "head"; the engine-shape enemy's head sphere | host stand-in | the stock body class's hit regions are not read |
 | Shield | shield first, the rest to health | the order recorded for the player (COMBAT_GOLDEN_TRACE item 9) | bullymongs have no shield (L3: "no shield"); the order on an enemy shield is UNVERIFIED and only exercised by a test fixture |
 | Ragdoll | 0.84 s after death | the delay `src/combat_run.cpp` uses for the player | UNVERIFIED for enemies |
@@ -33,9 +33,19 @@ so each is `UNVERIFIED` unless a line says which record it reproduces.
 | Health bar | a red bar (blue shield bar above when there is a shield) over the enemy, facing the camera | host stand-in for BL2's HUD target bar | UNVERIFIED look |
 | Critical damage number | orange, 1.25x | host stand-in | UNVERIFIED look |
 
-The body capsule (from the pawn's collision cylinder) encloses the head, so a shot at the head meets the capsule first. The enemy then follows the
-shot line from the impact through the body and counts the hit as critical when the line crosses the head sphere (host stand-in). When the hit-event
-API of the projectiles lane lands, the bone and `bCanCrit` / `CritBonus` of that event replace this, in `AOpenWillowEnemy::IsCritRegion`.
+**Critical hits use the hit event** (`FOpenWillowHitEvent`, the projectiles lane's API, `OpenWillowHitEvent.h`): the enemy crits only when the event allows it
+(`bCanCrit`, never a `StatusTick`), multiplies by the event's `CritBonus` (2.0 without an event: test hits and other sources), and writes `bCritical`
+and `Applied` back into the event, so `OpenWillowHit::OnHit()` listeners see the same result as the damage number. The region test: the event's bone
+(else the point hit's) containing "head", the critical sphere as the hit component, or, because the body capsule (from the pawn's collision cylinder)
+encloses the head, a shot whose line from the impact through the body crosses the head sphere (host stand-in).
+
+**Dead targets take no hits:** `CanTakeHits()` is false while dead (dying, ragdolled, waiting to respawn), so explosions skip corpses. A status effect
+the shooter rolls after the lethal hit is cleared from a dead range target (`UOpenWillowStatusEffects::ClearAll`) so it does not tick into the next life;
+gating the roll itself on `CanTakeHits()` is in the projectiles lane's `HitTarget` (asked for, not this lane's file).
+
+**The formation is validated as a whole:** every slot (3 dummies 900 uu ahead, one arc slot per manifest enemy 1,600 uu ahead) needs walkable floor
+(normal Z >= 0.85, within 150 uu of the spot's height) before anything spawns, for the scout's candidates and for `ow.Range` at a given spot; an
+incomplete range is a failed build and nothing is left standing. The test's placement step checks the dummy and enemy counts against the manifest.
 
 ## Data (all ignored, under `local/`)
 

@@ -34,11 +34,18 @@ public:
     bool ResolveSpot(FVector& OutSpot, float& OutYaw, FString& OutSource);
     // Scout (PR1 host choice, UNVERIFIED): the first open, flat spot around the town centre that passes the rules in the .cpp.
     bool ScoutSpot(FVector& OutSpot, float& OutYaw, FString& OutLog);
+    // The floor of every formation slot at Spot facing Yaw (3 dummies, one slot per manifest enemy). False, with the first
+    // slot that has no walkable floor in OutWhy, when the range does not fit there.
+    bool FormationSlots(const FVector& Spot, float Yaw, TArray<FVector>& OutDummies, TArray<FVector>& OutEnemies, FString& OutWhy) const;
+    // Enemies the manifest asks for (spawn entries of known kinds) and the dummy count: what a complete build holds.
+    int32 ExpectedEnemies() const;
+    static constexpr int32 ExpectedDummies = 3;
     // Enemy level for the next build: the override (ow.RangeLevel) or the walker's level.
     void SetLevelOverride(int32 Level) { LevelOverride = Level; }
     void Report() const;
 
 private:
+    void EnsureManifest();
     void HandleEnemyDied(AOpenWillowEnemy* Enemy, AActor* Killer);
     int32 EnemyLevel() const;
     bool LoadSliceData();
