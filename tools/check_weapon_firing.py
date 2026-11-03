@@ -24,7 +24,8 @@ docs/verification/NATIVE_WEAPON_FIRING.md and WEAPON_PROJECTILES.md when it exis
   seconds, within the frame that reaches it.
 - splash momentum (OWFIRING splash, each splash hit, given to the next result line's gun): momentum = the recipe's splash
   momentum (MomentumFormula; the reload throw's own for source=throw) x the hit's radius scale, and not zero when the
-  recipe's is not.
+  recipe's is not. There is one splash line per splash hit of the result (shots and throw), the throw's lines match its
+  summary, and every logged or expected number must be finite.
 - wide bullet (OWFIRING wide; single straight pellets: no pattern, no own motion (air friction or acceleration), no splash,
   no burst): a pull beside the
   dummy as a line misses it, the same pull with a TraceExtent box hits it. Its two pulls count in the shots.
@@ -168,11 +169,41 @@ def num(value):
     return float(value) if value is not None else None
 
 
-def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None):
-    """Failure reasons for the momentum (push, splash) and wide-bullet (wide) lines of one gun."""
+def not_finite(**values):
+    """Names of the values that are not finite numbers (NaN or infinite would slip through every tolerance test)."""
+    bad = []
+    for name, value in values.items():
+        try:
+            if not math.isfinite(float(value)):
+                bad.append(name)
+        except (TypeError, ValueError):
+            bad.append(name)
+    return bad
+
+
+def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash_hits=None, throw=None):
+    """Failure reasons for the momentum (push, splash) and wide-bullet (wide) lines of one gun. `splash_hits` is the result
+    line's total (shots and throw); `throw` the Tediore throw summary line, when there is one."""
     fails = []
+    splash_lines = splash_lines or []
+    bad = not_finite(momentum=expected['momentum'], splash_momentum=expected['splash_momentum'],
+                     throw_splash_momentum=expected['throw_splash_momentum'])
+    for line in splash_lines:
+        bad += [f'splash {name}' for name in not_finite(scale=line['scale'], momentum=line['momentum'])]
+    if push is not None:
+        bad += [f'push {name}' for name in not_finite(**{key: push.get(key) for key in
+                                                         ('momentum_rule', 'momentum_last', 'mass', 'moved')})]
+    if wide is not None:
+        bad += [f'wide {name}' for name in not_finite(offset=wide.get('offset'), half=wide.get('half'))]
+    if bad:
+        return fails + [f"not a finite number: {', '.join(sorted(set(bad)))}"]
+    if splash_hits is not None and len(splash_lines) != splash_hits:
+        fails.append(f'{splash_hits} splash hits but {len(splash_lines)} OWFIRING splash lines')
+    throw_lines = sum(line['source'] == 'throw' for line in splash_lines)
+    if throw is not None and throw_lines != int(throw['splash_hits']):
+        fails.append(f"the throw logged {throw['splash_hits']} splash hits but {throw_lines} throw splash lines")
     shot_lines = 0
-    for line in splash_lines or []:
+    for line in splash_lines:
         recipe = expected['throw_splash_momentum'] if line['source'] == 'throw' else expected['splash_momentum']
         want = recipe * line['scale']
         shot_lines += line['source'] != 'throw'
@@ -312,7 +343,7 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
         if rolls and not procs:
             notes.append(f'no proc in {rolls} status rolls')
     if momentum:
-        fails += check_momentum(push, wide, expected, phase_a_hits, splash_lines)
+        fails += check_momentum(push, wide, expected, phase_a_hits, splash_lines, int(log['splash_hits']), throw)
     if 'timed' in log and log['timed'] != log.get('on_time'):
         fails.append(f"{int(log['timed']) - int(log.get('on_time') or 0)} of {log['timed']} bullets did not arrive after "
                      'distance / speed')

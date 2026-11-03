@@ -299,6 +299,52 @@ class SplashMomentum(unittest.TestCase):
         self.assertEqual([line['momentum'] for line in extra['splash']['b']], [2.0, 3.0])
 
 
+class SplashCountsAndFinite(unittest.TestCase):
+    def tediore(self):
+        firing = {'fire_type': None, 'instant_hit_momentum': 5,
+                  'reload_throw': {'projectile': {'splash': {'momentum': 0}}}}
+        return check.expectations(recipe(10, firing=firing))
+
+    def lines(self, *body):
+        extra = {}
+        check.read_log(log(*body, result('g')), extra)
+        return extra['splash']['g']
+
+    def throw(self, splash_hits):
+        return {'splash_hits': str(splash_hits)}
+
+    def test_throw_splash_hit_without_a_line_fails_even_at_zero_momentum(self):
+        e = self.tediore()
+        fails = check.check_momentum(fields(push('g', 500, 500)), None, e, 5, self.lines(), 1, self.throw(1))
+        self.assertTrue(any('splash lines' in reason for reason in fails), fails)
+        good = self.lines(splash_line(0.6, 0.0, 'throw'))
+        self.assertEqual(check.check_momentum(fields(push('g', 500, 500)), fields(wide('g')), e, 5, good, 1, self.throw(1)), [])
+
+    def test_splash_line_count_must_equal_the_result_splash_hits(self):
+        e = SplashMomentum().expected()
+        lines = self.lines(splash_line(1.0, 10000.0))
+        fails = check.check_momentum(fields(push('g')), None, e, 0, lines, 2)
+        self.assertTrue(any('2 splash hits but 1' in reason for reason in fails), fails)
+
+    def test_nan_values_fail(self):
+        e = SplashMomentum().expected()
+        cases = [
+            (fields(push('g', rule='nan')), self.lines(splash_line(1.0, 10000.0))),
+            (fields(push('g', last='nan')), self.lines(splash_line(1.0, 10000.0))),
+            (fields(push('g', moved='nan')), self.lines(splash_line(1.0, 10000.0))),
+            (fields(push('g')), self.lines(splash_line(1.0, 'nan'))),
+            (fields(push('g')), self.lines(splash_line('nan', 10000.0))),
+        ]
+        for push_line, lines in cases:
+            fails = check.check_momentum(push_line, None, e, 0, lines, len(lines))
+            self.assertTrue(any('not a finite number' in reason for reason in fails), fails)
+
+    def test_nan_expected_value_fails(self):
+        e = dict(SplashMomentum().expected(), splash_momentum=float('nan'))
+        fails = check.check_momentum(fields(push('g')), None, e, 0, self.lines(splash_line(1.0, 10000.0)), 1)
+        self.assertTrue(any('not a finite number' in reason for reason in fails), fails)
+
+
 class RequiredMarkers(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
