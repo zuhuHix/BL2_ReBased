@@ -40,10 +40,15 @@ function Level-View { Py 'pc = get_pc(); r = pc.Rotation; pc.Rotation = unrealsd
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config')
     sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $rootState = [ordered]@{}
-$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false
-# A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the image
-# path and the start time before stopping a PID). Unknown switches are ignored by the game.
-$marker = "-owrun=$Lane-$PID"
+$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false
+# One id per run: the game's command-line marker (Stop-OwnGame checks it with the image path and the start time before
+# stopping a PID; unknown switches are ignored by the game), the driver folder's owner file and the backup folder name.
+$runId = "$Lane-$PID-$((Get-Date).ToString('yyyyMMddHHmmssfff'))"
+$marker = "-owrun=$runId"
+# The driver folder is this run's only while its owner file holds $runId (created with CreateNew, so of two runs racing
+# for the folder only one can own it); the cleanup removes no other folder.
+$ownerFile = Join-Path $script:DriverDir '.owrun'
+function Test-DriverOwned { try { (Test-Path -LiteralPath $ownerFile) -and ([IO.File]::ReadAllText($ownerFile) -eq $runId) } catch { $false } }
 try {
     # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2)" }
@@ -60,26 +65,32 @@ try {
     # Backup: every root is copied to a staging folder, compared file by file (SHA-256) with the live tree, and only then
     # promoted and marked restorable. The cleanup restores only verified roots (Restore-Tree deletes live files that are
     # missing from the backup, so a partial backup must never reach it).
-    $bak = Join-Path $script:RG ('save-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss')); $log.backup = $bak
+    $bak = Join-Path $script:RG "save-backup-$runId"; $log.backup = $bak
     New-Item -ItemType Directory -Force $bak | Out-Null
     foreach ($sub in $roots.Keys) {
         $live = $roots[$sub]; $st = [ordered]@{ present = (Test-Path -LiteralPath $live); verified = $false }; $rootState[$sub] = $st
         if (!$st.present) { continue }
         $staging = Join-Path $bak "$sub.staging"
-        Copy-Item -Recurse -LiteralPath $live $staging
-        $diff = @(Compare-TreeHashes $live $staging)
-        if ($diff.Count) { throw "backup of $sub differs from the live tree in $($diff.Count) files ($($diff[0]), ...); not starting" }
-        Rename-Item -LiteralPath $staging $sub
+        try {
+            Copy-Item -Recurse -LiteralPath $live $staging
+            $diff = @(Compare-TreeHashes $live $staging)
+            if ($diff.Count) { throw "backup of $sub differs from the live tree in $($diff.Count) files ($($diff[0]), ...); not starting" }
+            Rename-Item -LiteralPath $staging $sub
+        } catch {
+            # A failed copy, compare or promotion leaves no staging output behind (this run's folder only).
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+            throw
+        }
         $st.verified = $true; $st.files = @(Get-ChildItem -LiteralPath (Join-Path $bak $sub) -Recurse -File -Force).Count
     }
     $rootState | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $bak 'backup_complete.json')
     "backup $bak ($(@($rootState.Keys | Where-Object { $rootState[$_].verified }).Count) roots verified)"
-    # -Exclusive re-checks that the folder is absent and removes its own partial install on failure. If that removal fails
-    # too, a folder that was absent just before the call is this run's: claim it so the cleanup removes it or reports it.
-    $driverWasThere = Test-Path -LiteralPath $script:DriverDir
-    try { Install-Driver -Exclusive }
-    catch { if (!$driverWasThere -and (Test-Path -LiteralPath $script:DriverDir)) { $driverOwned = $true }; throw }
-    $driverOwned = $true
+    # Claim the driver folder: it must not exist (New-Item without -Force fails then), and the owner file is created with
+    # CreateNew. Install-Driver then fills the folder this run owns (not -Exclusive: the folder exists by now).
+    New-Item -ItemType Directory -Path $script:DriverDir -ErrorAction Stop | Out-Null
+    $stream = [IO.File]::Open($ownerFile, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $bytes = [Text.Encoding]::UTF8.GetBytes($runId); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    Install-Driver
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
@@ -200,13 +211,19 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             $proc.Refresh(); $gameGone = $proc.HasExited
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
-    if (!$gameGone) {
-        "MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored;"
-        "  close it, remove '$script:DriverDir', run Restore-Tree from each folder of '$bak' (realgame.ps1), then remove '$HubLock' and '$script:Lock'."
-        $bak = $null; $driverOwned = $false; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
+    # Our PID having exited proves nothing about another game (a lane without the hub lock): any running Borderlands2 stops
+    # every destructive step below (restore, removal of created roots, driver removal) and the locks stay held.
+    $otherGame = $null
+    try { $otherGame = Get-GameProcess } catch { $otherGame = 'unknown (Get-GameProcess failed)' }
+    if (!$gameGone -or $otherGame) {
+        $why = if (!$gameGone) { "Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game))" } else { "ANOTHER GAME RUNNING (pid $($otherGame.Id))" }
+        $cleanup.saves = "$why`: manual recovery needed, backup at $bak"
+        "MANUAL RECOVERY: $why. Nothing was removed or restored;"
+        "  close it, remove '$script:DriverDir' if its .owrun file reads '$runId', run Restore-Tree from each verified folder of '$bak' (realgame.ps1), then remove '$HubLock' and '$script:Lock'."
+        $bak = $null; $ownerFile = $null; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
     }
     try {
-        if ($driverOwned) {
+        if ($ownerFile -and (Test-DriverOwned)) {
             Remove-Driver
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
