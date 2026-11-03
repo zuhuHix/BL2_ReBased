@@ -44,6 +44,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.path = '/' + urllib.parse.quote(f'{package}/{movie}.swf')
         super().do_GET()
 
+    def translate_path(self, path):
+        # The stock handler drops '..' but follows symlinks; resolve the file and refuse anything outside the movies root
+        # (a name that does not exist there, so the handler answers 404).
+        root = Path(self.directory).resolve()
+        target = Path(super().translate_path(path)).resolve()
+        return str(target) if target == root or target.is_relative_to(root) else str(root / '__ow_outside_the_movies_root__')
+
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
         # Launchers reuse a running server; this tells them whose pages it serves.

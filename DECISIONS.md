@@ -3232,13 +3232,13 @@ log's rules). Script and AS2 listings and the presentation data stay under ignor
   stay host choices and UNVERIFIED: row order and category rows (`GFxTextListContainer`, `UpdateMissionTextList`), the row
   markup, which strings `MissionTracker.GetMissionDescription` returns, `CanTrackHighlightedMission`.
 - **Movie quirks kept or worked around.** The script's no-missions text goes to `missions.title_questname`, which this movie
-  does not have, so the frame's own "No Current Missions" shows (kept). `gotoRegularMissions` targets a label the missions clip
+  does not have, so the frame's own static text shows (kept). `gotoRegularMissions` targets a label the missions clip
   does not have, so after the no-missions frame the page returns the clip to frame 1 itself (found by the in-engine capture;
   the game rebuilds the screen on each open). In a headless replay a column of list scroll ticks still shows after that
   transition (open; not seen in the engine capture). Several of the movie's text fields embed font subsets without `/ : - , !`;
   the page re-sets them in the movie's own `$WillowBody` face, as `skills.js` does.
 - **Checks.** `node tests/mission_log_test.js` 9/9 (synthetic); `tools/test_mission_log.ps1` (new, in engine with
-  `-owquest`) 7/7: open, nothing listed before Accept, the mission under IN PROGRESS with the `inprogress` header on frame 1
+  `-owquest`) 7/7: open, nothing listed before Accept, the mission under the in-progress category with the `inprogress` header on frame 1
   after Accept, Down, tabs to Inventory and back, Escape. Inventory suite 49/0/0, navigation 40/40, `OpenWillow.Skills`
   passes. Other numbers are in the PR.
 - **Inventory round-21 list.** VALUE thumbnails do not reproduce on round-21 code (they were a round-22 regression); the

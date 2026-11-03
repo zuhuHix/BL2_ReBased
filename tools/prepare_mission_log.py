@@ -9,7 +9,9 @@ install's localization (tools/gfx_to_swf.load_localization):
 - `GD_Globals.General.Globals`: the LevelDifference_* thresholds that pick the
   difficulty bar frame;
 - the strings StatusMenuExGFxMovie and the missions panel use (WillowGame.int
-  [StatusMenuExGFxMovie], WillowMenu.int [missions]).
+  [StatusMenuExGFxMovie], WillowMenu.int [missions]);
+- the markup constants the mission-log script functions use (fonts around optional objectives, the description and the
+  header's sort name), from the installed bytecode through research/script_disasm.py.
 
 Writes `<output>/missionlog.json` (default local/ui/run). It is game data and
 stays local (docs/LEGAL.md). Which values the script uses and how is recorded in
@@ -18,6 +20,7 @@ docs/verification/MENUS_PARITY.md.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,6 +69,31 @@ STRINGS = {
 }
 
 
+# Markup string constants the mission-log script functions build their text from, read from the installed bytecode
+# (research/script_disasm.py) so no game value is written into tracked files. Each pattern must match exactly once.
+SCRIPT_MARKUP = {
+    # GetMissionDescriptionForUI: the font that opens an optional objective's line, and the one around the description.
+    'optionalObjectiveOpen': ('WillowPlayerController.GetMissionDescriptionForUI', r'"(<font color=\'#[0-9A-Fa-f]{6}\'>)"'),
+    'descriptionOpen': ('WillowPlayerController.GetMissionDescriptionForUI', r"'(<font color=\"#[0-9A-Fa-f]{6}\">)'"),
+    # extSetupMissionLogScreen: the markup around the sort name after the list header.
+    'headerSortOpen': ('StatusMenuExGFxMovie.extSetupMissionLogScreen', r"'(<font size=\"\d+\">\()'"),
+    'headerSortClose': ('StatusMenuExGFxMovie.extSetupMissionLogScreen', r"'(\)</font>)'"),
+}
+
+
+def script_markup(cooked):
+    listings, out = {}, {}
+    for key, (function, pattern) in SCRIPT_MARKUP.items():
+        if function not in listings:
+            listings[function] = subprocess.run([sys.executable, str(REPO / 'research/script_disasm.py'), '--game', str(cooked),
+                                                 'WillowGame.upk', function], check=True, capture_output=True, text=True).stdout
+        found = sorted(set(re.findall(pattern, listings[function])))
+        if len(found) != 1:
+            raise SystemExit(f'{function}: expected one {key} constant, found {len(found)}')
+        out[key] = found[0]
+    return out
+
+
 def hex_color(color):
     return '#%02X%02X%02X' % (color['R'], color['G'], color['B'])
 
@@ -101,6 +129,7 @@ def build(reader, cooked, localization, game):
         },
         # Level difference (mission level minus player level) at or above which each frame applies; below 'normal' it is 'trivial'.
         'difficulty': {name: globals_[f'leveldifference_{name}'] for name in DIFFICULTY},
+        'markup': script_markup(cooked),
         # <StringAliasMap:X> key tokens resolved to the PC text (DefaultGame.ini MenuInputMapArray), as the hint bar shows them.
         'strings': {key: ALIAS.sub(lambda m: aliases.get(m.group(1), m.group(0)), strings[name]).replace('\\n', '\n')
                     for key, name in STRINGS.items()},

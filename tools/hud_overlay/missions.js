@@ -32,7 +32,7 @@ function sample(state) {
   const status = {active: 1, turnin: 3, complete: 4}[state];
   const missions = status === undefined ? [] : [{id: 'sample.mission', name: 'Sample Mission', statusNumber: status, plot: false,
     summary: 'Check the page without the game.', description: 'A host-made sample mission.', turnIn: 'The sample giver',
-    level: 8, xp: 395, credits: 0,
+    level: 8, xp: 120, credits: 0,
     tracked: status === 1 || status === 3, objectives}];
   const required = [8, 9].map(SAMPLE_CURVE);
   return {enabled: true, missions, player: {level: 8, xp: Math.round((required[0] + required[1]) / 2), maxLevel: 50, required}};
@@ -83,7 +83,7 @@ function renderDetails() {
   player.ow(`${MISSIONS}.missionSummary.header`, 'gotoAndStop', log.headerFrame(mission.statusNumber, mission.plot));
   set(`${MISSIONS}.missionSummary.header.description`, 'text', mission.name);
   player.ow(`${MISSIONS}.rewardPanel.OptionalRequired`, 'gotoAndStop', mission.plot ? 'required' : 'optional');
-  setText(`${MISSIONS}.rewardPanel.OptionalRequired.textField`, mission.plot ? def.strings.storyMission : def.strings.optionalMission);
+  setText(`${MISSIONS}.rewardPanel.OptionalRequired.textField`, log.escapeHtml(mission.plot ? def.strings.storyMission : def.strings.optionalMission));
   // GetCurrencyRewardType is credits for every mission the host has; 0 hides the credits panel (SetRewardsTotalCredits).
   call(ROOT, 'SetRewardsTotalCredits', mission.credits || 0);
   call(ROOT, 'SetRewardsXP', def.strings.xpRewards.replace('%d', String(mission.xp || 0)));
@@ -127,7 +127,7 @@ function render() {
   const missions = listedMissions();
   if (!missions.length) {
     // extSetupMissionLogScreen with no missions: GotoNoMissions. extSetupNoMissionsPage then writes
-    // missions.title_questname.text, a field this movie does not have, so the frame's own "No Current Missions" stays.
+    // missions.title_questname.text, a field this movie does not have, so the frame's own static text stays.
     call(ROOT, 'gotoNoMissions');
     rows = []; selected = -1; selectedId = null;
     renderGeneral();

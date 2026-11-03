@@ -7,7 +7,8 @@ const def = {
     activeplot: {frame: 'ap', color: '#333333'}, turnin: {frame: 't', color: '#444444'}, complete: {frame: 'c', color: '#555555'},
     failed: {frame: 'f', color: '#666666'}, ineligible: {frame: 'i', color: '#777777'}},
   list: {entries: 3, highlightColor: '#FFFFFF', categoryPrefix: '<b>', categoryPostfix: '</b>', categoryIcon: 'div'},
-  difficulty: {impossible: 5, hard: 3, tough: 1, normal: -3},
+  difficulty: {impossible: 7, hard: 4, tough: 2, normal: -2},
+  markup: {optionalObjectiveOpen: '<i>', descriptionOpen: '<u>', headerSortOpen: '<s>[', headerSortClose: ']</s>'},
   strings: {myMissions: 'Mine', sortAll: 'Every', dividerTurnIn: 'TI', dividerInProgress: 'IP', dividerCompleted: 'DONE',
     dividerFailed: 'FAIL', tooltipCancel: 'X', tooltipSort: 'S', tooltipTrack: 'T', tooltipScroll: 'R'},
 };
@@ -29,7 +30,7 @@ check('summary header frames per status', () => {
 
 check('difficulty: thresholds compared with >= in order, trivial below normal', () => {
   const at = diff => log.difficultyFrame(10 + diff, 10, def.difficulty);
-  assert.deepEqual([6, 5, 4, 3, 2, 1, 0, -3, -4].map(at),
+  assert.deepEqual([8, 7, 6, 4, 3, 2, 0, -2, -3].map(at),
     ['impossible', 'impossible', 'hard', 'hard', 'tough', 'tough', 'normal', 'normal', 'trivial']);
 });
 
@@ -43,7 +44,8 @@ check('XP bar: text and integer percent plus one', () => {
 });
 
 check('list header and rows: categories in order, not-started missions not listed by the caller', () => {
-  assert.equal(log.listHeader(def), 'MINE <font size="22">(Every)</font>');
+  assert.equal(log.listHeader(def), 'MINE <s>[Every]</s>');
+  assert.equal(log.listHeader({...def, strings: {...def.strings, myMissions: 'a<b', sortAll: 'x&y'}}), 'A&lt;B <s>[x&amp;y]</s>');
   const rows = log.listRows([{id: 'b', name: 'B', statusNumber: 4}, {id: 'a', name: 'A & <x>', statusNumber: 1},
     {id: 'c', name: 'C', statusNumber: 3, plot: true}], def);
   assert.deepEqual(rows.map(r => r.kind === 'mission' ? r.id : `#${r.key}`), ['#turnin', 'c', '#inprogress', 'a', '#completed', 'b']);
@@ -71,12 +73,26 @@ check('description: summary, objective lines by count, optional colour, grey des
   const mission = {statusNumber: 1, summary: 'S', description: 'D', turnInDescription: 'TD', turnIn: 'Bob', objectives: [
     {text: 'One', progress: 1, count: 1}, {text: 'Two', progress: 7, count: 5, optional: true}, {text: 'Three', progress: 0, count: 1}]};
   assert.equal(log.descriptionHtml(mission, d),
-    "S\n\n    One: Done\n<font color='#B0F5FF'>    Two: 5/5\n</font>    Three \n\n<font color=\"#8B8B8B\">D</font>");
+    'S\n\n    One: Done\n<i>    Two: 5/5\n</font>    Three \n\n<u>D</font>');
   assert.equal(log.descriptionHtml({...mission, objectives: [{text: 'Two', progress: 2, count: 5}]}, d, {wideCounts: true}),
-    'S\n\n    Two: 2 / 5\n\n<font color="#8B8B8B">D</font>');
-  assert.equal(log.descriptionHtml({...mission, statusNumber: 3}, d), 'S\n\n    TI!\n\n<font color="#8B8B8B">TD</font>\n\nGive: Bob');
-  assert.equal(log.descriptionHtml({...mission, statusNumber: 4}, d), 'S\n\n\n<font color="#8B8B8B">D</font>\n\nGive: Bob');
+    'S\n\n    Two: 2 / 5\n\n<u>D</font>');
+  assert.equal(log.descriptionHtml({...mission, statusNumber: 3}, d), 'S\n\n    TI!\n\n<u>TD</font>\n\nGive: Bob');
+  assert.equal(log.descriptionHtml({...mission, statusNumber: 4}, d), 'S\n\n\n<u>D</font>\n\nGive: Bob');
   assert.equal(log.descriptionHtml({...mission, statusNumber: 0, teaser: 'T'}, d), 'T');
+});
+
+check('description: game and localized text is escaped, only the script markup is added', () => {
+  const d = {...def, strings: {...def.strings, colonAndSpace: ' <&> ', objectiveComplete: '<b>ok</b>', turnInHud: 'T&I',
+    briefingTurnIn: '<font color="#123456">Give</font>'}};
+  const mission = {statusNumber: 1, summary: 'a < b & c', description: '<font color="#ABCDEF">D</font>', turnIn: 'Bo<b>',
+    objectives: [{text: '<font size="40">Big</font>', progress: 1, count: 1, optional: true}, {text: 'x&y', progress: 1, count: 3}]};
+  assert.equal(log.descriptionHtml(mission, d),
+    'a &lt; b &amp; c\n\n<i>    &lt;font size="40"&gt;Big&lt;/font&gt; &lt;&amp;&gt; &lt;b&gt;ok&lt;/b&gt;\n</font>' +
+    '    x&amp;y &lt;&amp;&gt; 1/3\n\n<u>&lt;font color="#ABCDEF"&gt;D&lt;/font&gt;</font>');
+  assert.equal(log.descriptionHtml({...mission, statusNumber: 3}, d),
+    'a &lt; b &amp; c\n\n    T&amp;I!\n\n<u>&lt;font color="#ABCDEF"&gt;D&lt;/font&gt;</font>\n\n' +
+    '&lt;font color="#123456"&gt;Give&lt;/font&gt;: Bo&lt;b&gt;');
+  assert.equal(log.descriptionHtml({statusNumber: 0, teaser: '<b>t</b>'}, d), '&lt;b&gt;t&lt;/b&gt;');
 });
 
 check('hint bar', () => {
