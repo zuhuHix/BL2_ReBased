@@ -1510,7 +1510,9 @@ void UOpenWillowQuest::RunTest(float Delta)
         }
         // Test fixture: half of Maya's health off, so that what the level-up does to current health is visible.
         FHitResult Hit;
-        UGameplayStatics::ApplyPointDamage(Walker, Walker->GetMaxHealth() * 0.5f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+        // (plus the shield, which takes hits first, when one is equipped)
+        UGameplayStatics::ApplyPointDamage(Walker, Walker->GetShield() + Walker->GetMaxHealth() * 0.5f, FVector::ForwardVector, Hit, nullptr, nullptr,
+            UDamageType::StaticClass());
         HealthBeforeReward = Walker->GetHealth();
         MaxHealthBeforeReward = Walker->GetMaxHealth();
         PressUse();

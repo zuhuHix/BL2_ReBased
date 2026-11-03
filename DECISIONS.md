@@ -3383,3 +3383,13 @@ AI-assisted (Claude). Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "Round
   The hand-written effect stand-ins cap colour at 1 per channel, as the importer's own LDR rule does (was 4.0).
 - **Capture switch** `-owtonecurve=<0..1>` for a tone-mapping A/B. The target's facing (0 or 180) is to be settled by an A/B capture.
 - All UNVERIFIED until the hub's re-import, capture and critic round.
+
+## 2026-11-03: the HUD shield bar follows Maya's shield pool (maya lane, item 4)
+
+AI-assisted (Claude). Record: `docs/verification/HUD_PARITY.md`. Host behaviour change.
+
+- The Flash HUD's `shield` fill and `shieldText`, and the canvas HUD's shield bar, now read `FOpenWillowMayaState` (drains on hits,
+  recharges after the delay) instead of a full bar at the card's capacity. The text is the current pool rounded. The action-skill
+  cooldown ring already read the Phaselock cooldown (`ActionSkillHudState`); unchanged.
+- Test fixtures that meant "health to 0" or "half health" (`-owhuddownshots`, the quest's level-up fixture) add the shield, which now
+  takes hits first.
