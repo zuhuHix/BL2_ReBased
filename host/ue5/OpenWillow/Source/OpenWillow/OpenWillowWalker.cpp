@@ -182,32 +182,12 @@ AOpenWillowWalker::AOpenWillowWalker()
     Skills = CreateDefaultSubobject<UOpenWillowSkills>(TEXT("Skills"));
     Mover = CreateDefaultSubobject<UOpenWillowMover>(TEXT("InstalledMover"));
     Quest = CreateDefaultSubobject<UOpenWillowQuest>(TEXT("SliceQuest"));
-    // Maya's cooked movement numbers (NATIVE_PLAYER_MOVEMENT.md section 1; replace the old 450 / 420 / 45-degree estimates).
-    // UE's walking step steers and brakes like UE3's (section 4): acceleration 2048, ground friction 8, braking at 2 x friction
-    // with no constant deceleration, sub-steps of about 0.03 s and a stop below 10 uu/s. Air control 0.11 gives the read
-    // 225 uu/s squared in the air; UE's low-speed air-control boost is off (the game's start kick is not matched: UNVERIFIED).
-    // The jump arc at gravity 500 is predicted at a 396.9 uu apex, 1.26 s up (section 8), and is logged on landing to measure.
-    {
-        const FOpenWillowMayaStats Stock;
-        UCharacterMovementComponent* Move = GetCharacterMovement();
-        Move->MaxWalkSpeed = Stock.GroundSpeed;
-        Move->MaxWalkSpeedCrouched = Stock.GroundSpeed * Stock.CrouchedPct;
-        Move->MaxAcceleration = OpenWillowMovement::AccelRate;
-        Move->GroundFriction = OpenWillowMovement::GroundFriction;
-        Move->BrakingFrictionFactor = OpenWillowMovement::BrakingFrictionFactor;
-        Move->bUseSeparateBrakingFriction = false;
-        Move->BrakingDecelerationWalking = 0.f;
-        Move->JumpZVelocity = Stock.JumpZ;
-        Move->AirControl = Stock.AirControl;
-        Move->AirControlBoostMultiplier = 0.f;
-        Move->FallingLateralFriction = 0.f;
-        Move->MaxStepHeight = OpenWillowMovement::MaxStepHeight;
-        Move->SetWalkableFloorZ(OpenWillowMovement::WalkableFloorZ);
-        Move->SetCrouchedHalfHeight(OpenWillowMovement::CrouchHalfHeight);
-        Move->NavAgentProps.bCanCrouch = true;
-        Move->bCanWalkOffLedgesWhenCrouching = true;
-        CrouchedEyeHeight = OpenWillowMovement::CrouchedEyeHeight;
-    }
+    // Defaults without -owmaya: the host's earlier estimates, unchanged. Maya's cooked numbers replace them in BeginPlay
+    // (ApplyMayaMovementDefaults) only when -owmaya is set.
+    GetCharacterMovement()->MaxWalkSpeed = OpenWillowMovement::LegacyWalkSpeed;
+    GetCharacterMovement()->JumpZVelocity = OpenWillowMovement::LegacyJumpZ;
+    GetCharacterMovement()->MaxStepHeight = OpenWillowMovement::MaxStepHeight;
+    GetCharacterMovement()->SetWalkableFloorAngle(OpenWillowMovement::LegacyFloorAngle);
 }
 
 float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
@@ -432,6 +412,7 @@ void AOpenWillowWalker::BeginPlay()
     }
     bMayaActive = FParse::Param(FCommandLine::Get(), TEXT("owmaya"));
     if (!bMayaActive) return;
+    ApplyMayaMovementDefaults();
     if (APlayerController* PC = Cast<APlayerController>(Controller))
     {
         ScopeOverlayWidget = CreateWidget<UOpenWillowScopeOverlay>(PC);
@@ -860,7 +841,7 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAxis(TEXT("OWRight"), this, &AOpenWillowWalker::Right);
     Input->BindAxis(TEXT("OWTurn"), this, &AOpenWillowWalker::Turn);
     Input->BindAxis(TEXT("OWLook"), this, &AOpenWillowWalker::Look);
-    Input->BindAction(TEXT("OWJump"), IE_Pressed, this, &ACharacter::Jump);
+    Input->BindAction(TEXT("OWJump"), IE_Pressed, this, &AOpenWillowWalker::JumpPressed);
     Input->BindAction(TEXT("OWJump"), IE_Released, this, &ACharacter::StopJumping);
     Input->BindAction(TEXT("OWSprint"), IE_Pressed, this, &AOpenWillowWalker::SprintPressed);
     Input->BindAction(TEXT("OWSprint"), IE_Released, this, &AOpenWillowWalker::SprintReleased);
@@ -2723,43 +2704,108 @@ FVector AOpenWillowWalker::MuzzleLocation() const
         + Camera->GetRightVector() * 12.f - Camera->GetUpVector() * 10.f;
 }
 // ---- Maya's movement (NATIVE_PLAYER_MOVEMENT.md sections 10 to 19; every rule UNVERIFIED in the running game) ----
+// Maya's cooked movement numbers (section 1), applied in BeginPlay with -owmaya only (other runs keep the constructor's estimates).
+// UE's walking step steers and brakes like UE3's (section 4): acceleration 2048, ground friction 8, braking at 2 x friction
+// with no constant deceleration, sub-steps of about 0.03 s and a stop below 10 uu/s. Air control 0.11 gives the read
+// 225 uu/s squared in the air; UE's low-speed air-control boost is off (the game's start kick is not matched: UNVERIFIED).
+// The jump arc at gravity 500 is predicted at a 396.9 uu apex, 1.26 s up (section 8), and is logged on landing to measure.
+void AOpenWillowWalker::ApplyMayaMovementDefaults()
+{
+    const FOpenWillowMayaStats Stock;
+    UCharacterMovementComponent* Move = GetCharacterMovement();
+    Move->MaxWalkSpeed = Stock.GroundSpeed;
+    Move->MaxAcceleration = OpenWillowMovement::AccelRate;
+    Move->GroundFriction = OpenWillowMovement::GroundFriction;
+    Move->BrakingFrictionFactor = OpenWillowMovement::BrakingFrictionFactor;
+    Move->bUseSeparateBrakingFriction = false;
+    Move->BrakingDecelerationWalking = 0.f;
+    Move->JumpZVelocity = Stock.JumpZ;
+    Move->AirControl = Stock.AirControl;
+    Move->AirControlBoostMultiplier = 0.f;
+    Move->FallingLateralFriction = 0.f;
+    Move->MaxStepHeight = OpenWillowMovement::MaxStepHeight;
+    Move->SetWalkableFloorZ(OpenWillowMovement::WalkableFloorZ);
+    PreviousLocation = GetActorLocation();
+}
 // Sprint (section 10, the script's input rule): a press sprints at once when the move input is within 45 degrees of straight
 // ahead, otherwise it waits (pending) until it is; a release only drops a pending press, so a running sprint goes on until
 // the input leaves that cone or firing, zoom, crouch or going down ends it. Sprint presses cancel crouch.
 void AOpenWillowWalker::SprintPressed()
 {
     bSprintHeld = true;
+    if (!bMayaActive)
+    {
+        // Without -owmaya: the host's earlier hold-to-sprint estimate, unchanged.
+        GetCharacterMovement()->MaxWalkSpeed = OpenWillowMovement::LegacySprintSpeed;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint on, max speed %.0f cm/s"), OpenWillowMovement::LegacySprintSpeed);
+        return;
+    }
     bSprintPending = true;
-    bCrouchHeld = false;
-    UnCrouch();
+    bCrouchHeld = false;   // a sprint press stands up first (TickMovement)
 }
 void AOpenWillowWalker::SprintReleased()
 {
     bSprintHeld = false;
+    if (!bMayaActive)
+    {
+        GetCharacterMovement()->MaxWalkSpeed = OpenWillowMovement::LegacyWalkSpeed;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow sprint off, max speed %.0f cm/s"), OpenWillowMovement::LegacyWalkSpeed);
+        return;
+    }
     bSprintPending = false;
 }
-// Crouch (section 12): hold to crouch (the host's choice of the game's two modes), refused while down; it ends a sprint.
+// Crouch (section 12): hold to crouch (the host's choice of the game's two modes), refused while down; it ends a sprint. The host's
+// own crouch, not UE's: the cylinder becomes radius 21, half height 50 with the feet kept in place, and standing up needs room for
+// the full 42 x 80 cylinder (a crouch under a low ceiling stays until there is room). TickMovement applies both.
 void AOpenWillowWalker::CrouchPressed()
 {
     if (!bMayaActive || IsDown()) return;
     bCrouchHeld = true;
-    Crouch();
 }
 void AOpenWillowWalker::CrouchReleased()
 {
     bCrouchHeld = false;
-    UnCrouch();
 }
-void AOpenWillowWalker::OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+void AOpenWillowWalker::JumpPressed()
 {
-    Super::OnStartCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
-    // StartCrouch raises the eye height by the height change so the view does not pop, then it eases to the crouched 40.
-    EyeState.EyeHeight += ScaledHalfHeightAdjust;
+    // Crouched, the press only stands up (section 13); a jump sets the fall timer to 0.5 s so it never counts as a short fall.
+    if (bMayaActive && bMayaCrouched)
+    {
+        bCrouchHeld = false;
+        return;
+    }
+    if (bMayaActive && CanJump()) FallTimer.Jumped();
+    Jump();
 }
-void AOpenWillowWalker::OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+void AOpenWillowWalker::SetMayaCrouched(bool bCrouch)
 {
-    Super::OnEndCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
-    EyeState.EyeHeight -= ScaledHalfHeightAdjust;
+    if (bCrouch == bMayaCrouched) return;
+    UCapsuleComponent* Capsule = GetCapsuleComponent();
+    const float Drop = OpenWillowMovement::CollisionHalfHeight - OpenWillowMovement::CrouchHalfHeight;   // 30: the feet stay put
+    if (!bCrouch)
+    {
+        // Room to stand: the full cylinder, raised by the drop, slightly shrunk so the floor contact does not count.
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(OpenWillowStandUp), false, this);
+        FCollisionResponseParams Response;
+        GetCharacterMovement()->InitCollisionParams(Params, Response);
+        const FCollisionShape Standing = FCollisionShape::MakeCapsule(OpenWillowMovement::CollisionRadius - 1.f,
+            OpenWillowMovement::CollisionHalfHeight - 1.f);
+        if (GetWorld()->OverlapBlockingTestByChannel(GetActorLocation() + FVector(0, 0, Drop), FQuat::Identity,
+                Capsule->GetCollisionObjectType(), Standing, Params, Response))
+            return;
+        Capsule->SetCapsuleSize(OpenWillowMovement::CollisionRadius, OpenWillowMovement::CollisionHalfHeight);
+        SetActorLocation(GetActorLocation() + FVector(0, 0, Drop), false, nullptr, ETeleportType::TeleportPhysics);
+        EyeState.EyeHeight -= Drop;
+    }
+    else
+    {
+        Capsule->SetCapsuleSize(OpenWillowMovement::CrouchRadius, OpenWillowMovement::CrouchHalfHeight);
+        SetActorLocation(GetActorLocation() - FVector(0, 0, Drop), false, nullptr, ETeleportType::TeleportPhysics);
+        // StartCrouch raises the eye height by the height change so the view does not pop; it then eases to the crouched 40.
+        EyeState.EyeHeight += Drop;
+    }
+    bMayaCrouched = bCrouch;
+    PreviousLocation = GetActorLocation();   // this move is not a teleport
 }
 void AOpenWillowWalker::BeginSprint(float Now)
 {
@@ -2786,28 +2832,40 @@ void AOpenWillowWalker::TickMovement(float Now, float DeltaSeconds)
     if (bSprinting)
     {
         if (IsDown()) EndSprint(Now, TEXT("down"));
-        else if (bIsCrouched || bCrouchHeld) EndSprint(Now, TEXT("crouch"));
+        else if (bMayaCrouched || bCrouchHeld) EndSprint(Now, TEXT("crouch"));
         else if (bFireHeld) EndSprint(Now, TEXT("fire"));
         else if (bZoomed) EndSprint(Now, TEXT("zoom"));
         else if (!bInputAllows) EndSprint(Now, TEXT("input"));
     }
-    else if (bSprintPending && bInputAllows && bOnGround && !bZoomed && !bFireHeld && !IsDown() && !bIsCrouched)
+    else if (bSprintPending && bInputAllows && FallTimer.OnGroundOrShortFall(bOnGround) && !bZoomed && !bFireHeld && !IsDown()
+        && !bMayaCrouched)
         BeginSprint(Now);
-    if (IsDown() && bIsCrouched) { bCrouchHeld = false; UnCrouch(); }
+    // Crouch follows the held key (on the ground only; refused while down); standing up waits for room.
+    if (IsDown()) bCrouchHeld = false;
+    if (bCrouchHeld && bOnGround && !bMayaCrouched) SetMayaCrouched(true);
+    else if (!bCrouchHeld && bMayaCrouched) SetMayaCrouched(false);
     // Speeds from the stats every frame (a skill's modifier lands at once): run 440, sprint 440 x 1.35 = 594, crouch 220.
-    Move->MaxWalkSpeed = S.GroundSpeed * (bSprinting ? 1.f + S.SprintSpeedScale : 1.f);
-    Move->MaxWalkSpeedCrouched = S.GroundSpeed * S.CrouchedPct;
+    Move->MaxWalkSpeed = S.GroundSpeed * (bMayaCrouched ? S.CrouchedPct : bSprinting ? 1.f + S.SprintSpeedScale : 1.f);
     Move->JumpZVelocity = S.JumpZ;
     Move->AirControl = S.AirControl;
     // Eye height and walk bob on the camera (sections 15 and 17): the bob's side term along the view's right vector.
-    const float EyeZ = EyeState.Tick(DeltaSeconds, bIsCrouched, bSprinting);
+    const float EyeZ = EyeState.Tick(DeltaSeconds, bMayaCrouched, bSprinting);
     WalkBob.Tick(DeltaSeconds, GetVelocity().Size2D(), bOnGround, bSprinting, S.GroundSpeed);
     if (Camera) Camera->SetRelativeLocation(FVector(0.f, WalkBob.Side, EyeZ + WalkBob.Up));
     // Sprint FOV (section 19): eased toward the sprint target while sprinting and back afterwards; zoom blends from it (UpdateAim).
     const float FovTarget = bSprinting ? OpenWillowMovement::SprintFov(WorldFovDefault) : WorldFovDefault;
     BaseFovNow = OpenWillowMovement::EaseFov(BaseFovNow > 1.f ? BaseFovNow : WorldFovDefault, FovTarget, DeltaSeconds);
-    // The jump arc for the log at landing.
-    if (Move->IsFalling())
+    // Fall tracking (the jump arc logged at landing, falling damage, the short-fall rule): a teleport ends the tracked fall.
+    if (OpenWillowMovement::LooksLikeTeleport(PreviousLocation, GetActorLocation(), Move->Velocity, DeltaSeconds))
+    {
+        bArcActive = false;
+        bTeleportedInFall = Move->IsFalling();
+        LastFallVz = 0.f;
+        FallTimer.Seconds = 0.f;
+    }
+    PreviousLocation = GetActorLocation();
+    FallTimer.Tick(DeltaSeconds, Move->IsFalling());
+    if (Move->IsFalling() && !bTeleportedInFall)
     {
         if (!bArcActive) { bArcActive = true; JumpStartZ = JumpApexZ = GetActorLocation().Z; FallStartedAt = Now; }
         JumpApexZ = FMath::Max(JumpApexZ, GetActorLocation().Z);
@@ -2817,7 +2875,9 @@ void AOpenWillowWalker::TickMovement(float Now, float DeltaSeconds)
 void AOpenWillowWalker::Landed(const FHitResult& Hit)
 {
     Super::Landed(Hit);
-    const float Vz = FMath::Min(GetCharacterMovement()->Velocity.Z, LastFallVz);
+    // Only a fall tracked from its start counts (none after a teleport into the air: a respawn or a test driver).
+    const bool bTracked = bArcActive && !bTeleportedInFall;
+    const float Vz = bTracked ? FMath::Min(GetCharacterMovement()->Velocity.Z, LastFallVz) : 0.f;
     if (bMayaActive && GetWorld())
     {
         const float Now = GetWorld()->GetTimeSeconds();
@@ -2825,11 +2885,12 @@ void AOpenWillowWalker::Landed(const FHitResult& Hit)
             JumpApexZ - JumpStartZ, Now - FallStartedAt);
         // Falling damage (section 14): below -1500 uu/s, (|v| - 1500) / 1500 x 10 % of the maximum health, through the damage path
         // (whether the game's DmgType_Fell skips the shield is not known: here it does not, UNVERIFIED).
-        const float Damage = OpenWillowMovement::FallingDamage(Vz, MayaState.Effective().MaxHealth);
+        const float Damage = OpenWillowMovement::FallingDamage(Vz, MayaState.Effective().MaxHealth, bTracked);
         if (Damage > 0.f) ApplyDamageToPlayer(Damage, nullptr, FVector::ZeroVector);
     }
     LastFallVz = 0.f;
     bArcActive = false;
+    bTeleportedInFall = false;
 }
 void AOpenWillowWalker::Forward(float Value)
 {

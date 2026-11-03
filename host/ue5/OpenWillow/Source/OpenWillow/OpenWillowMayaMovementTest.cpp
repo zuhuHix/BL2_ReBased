@@ -6,6 +6,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowMayaMovement.h"
+#include "OpenWillowWalker.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowMayaMovementTest, "OpenWillow.MayaMovement",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -54,6 +56,25 @@ bool FOpenWillowMayaMovementTest::RunTest(const FString&)
     TestTrue(TEXT("FOV eases most of the way in a second"), Fov > 99.f && Fov <= 100.f);
     TestEqual(TEXT("FOV snaps on a full step"), EaseFov(90.f, 100.f, 0.2f), 100.f);
 
+    // Short fall (section 10): walking, or a fall under 0.3 s; a jump sets 0.5 s, so it never counts.
+    FFallTimer Fall;
+    TestTrue(TEXT("on the ground counts"), Fall.OnGroundOrShortFall(true));
+    Fall.Tick(0.2f, true);
+    TestTrue(TEXT("a 0.2 s fall off a ledge still counts"), Fall.OnGroundOrShortFall(false));
+    Fall.Tick(0.2f, true);
+    TestFalse(TEXT("a 0.4 s fall does not"), Fall.OnGroundOrShortFall(false));
+    Fall.Tick(0.1f, false);
+    Fall.Jumped();
+    TestFalse(TEXT("a jump never counts as a short fall"), Fall.OnGroundOrShortFall(false));
+    // Teleports end a tracked fall.
+    TestTrue(TEXT("a 2000 uu jump between frames is a teleport"), LooksLikeTeleport(FVector::ZeroVector, FVector(2000, 0, 0), FVector(0, 0, -500), 1.f / 60.f));
+    TestFalse(TEXT("a fast fall is not"), LooksLikeTeleport(FVector::ZeroVector, FVector(0, 0, -60), FVector(0, 0, -3600), 1.f / 60.f));
+    TestEqual(TEXT("no falling damage without a tracked fall"), FallingDamage(-3000.f, 500.f, false), 0.f);
+    // Without -owmaya the walker keeps the earlier estimates (the class defaults; Maya's numbers are applied in BeginPlay only).
+    const UCharacterMovementComponent* Defaults = GetDefault<AOpenWillowWalker>()->GetCharacterMovement();
+    TestTrue(TEXT("non-Maya defaults unchanged"), Defaults && Defaults->MaxWalkSpeed == LegacyWalkSpeed && Defaults->JumpZVelocity == LegacyJumpZ
+        && FMath::IsNearlyEqual(Defaults->GetWalkableFloorAngle(), LegacyFloorAngle, 0.01f) && Defaults->MaxStepHeight == MaxStepHeight);
+    TestTrue(TEXT("non-Maya sprint estimates"), LegacySprintSpeed == 650.f && LegacyWalkSpeed == 450.f);
     TestEqual(TEXT("no falling damage above the threshold"), FallingDamage(-1400.f, 500.f), 0.f);
     TestTrue(TEXT("falling damage at twice the threshold is 10 % of the maximum"), FMath::IsNearlyEqual(FallingDamage(-3000.f, 500.f), 50.f, 0.01f));
     return true;

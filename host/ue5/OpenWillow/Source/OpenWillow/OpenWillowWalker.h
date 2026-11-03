@@ -194,8 +194,9 @@ private:
     void BeginSprint(float Now);
     void EndSprint(float Now, const TCHAR* Why);
     virtual void Landed(const FHitResult& Hit) override;
-    virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
-    virtual void OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
+    void ApplyMayaMovementDefaults();
+    void JumpPressed();
+    void SetMayaCrouched(bool bCrouch);
     void SelectSlot(int32 Slot);
     void Holster();
     void SelectSlot1() { SelectSlot(0); }
@@ -286,6 +287,10 @@ private:
     bool bSprintPending = false;        // pressed, waiting for forward input (bTryToSprint)
     bool bSprinting = false;
     bool bCrouchHeld = false;
+    bool bMayaCrouched = false;         // the host's crouch (SetMayaCrouched): cylinder 21 x 50
+    OpenWillowMovement::FFallTimer FallTimer;
+    FVector PreviousLocation = FVector::ZeroVector;   // last tick's location, for the teleport check
+    bool bTeleportedInFall = false;
     float MoveForwardInput = 0.f, MoveRightInput = 0.f;   // this frame's move axes
     OpenWillowMovement::FBob WalkBob;
     OpenWillowMovement::FEyeHeight EyeState;
