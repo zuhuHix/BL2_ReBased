@@ -70,6 +70,18 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
   as frame art (converted by `tools/prepare_vending_movie.py`) with HTML lists over it. The host pushes state with
   `window.owVending(state)`, and the page answers with `OWVEND {serial, action, id}` console lines.
 - The machine visual is a placeholder box and the page layout is not fitted to the game: both `UNVERIFIED`.
+- Host rules, all host choices and `UNVERIFIED` against the game:
+  - A restock that has fallen due is applied before the next action, never after it. A buy aimed at the shelf from
+    before the restock is refused with "The stock changed".
+  - The host pushes the state every second while the shop is open, so the countdown follows host world time.
+  - The weapon the mission lends is refused for sale while the quest owns it (the quest's own flag, not an item id).
+  - Money is added with saturation, and manifest numbers are range-checked before use.
+  - The page gets UI-only input only after it reports ready (`OWVENDREADY`). A load error closes the shop, and Escape or
+    a second use press closes it from the host side.
+  - The use key goes to the nearest of vending machine (350 uu), door (220 uu) and pickup (220 uu), each within its own
+    reach.
+- **Not persisted yet:** stock, the reset timer and the buy-back list live in memory and are lost on save/load or map
+  reload. Planned for PR 2 with the currency save. Whether the game keeps them across a save is `UNVERIFIED`.
 - PR 1 stocks guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory
   does not have yet (PR 2).
 

@@ -8,7 +8,7 @@ const KIND_LABEL = {weapon: 'Weapon', item: 'Item', ammo: 'Ammo', health: 'Healt
 
 let state = null, lists = {shop: [], backpack: [], buyback: []};
 let sel = {column: 'shop', index: 0};
-let lastSerial = -1, receivedAt = 0, localMessage = '', lastRequest = '', movieState = 'loading';
+let lastSerial = -1, localMessage = '', lastRequest = '', movieState = 'loading';
 
 // Stock movie as frame art. Any failure leaves the plain HTML panel, which works on its own.
 try {
@@ -96,13 +96,12 @@ function render() {
   tickCountdown();
 }
 
-// The host sends the seconds to restock when it sends the state; the page counts down from there.
+// The seconds to restock come from the host's world time: the host pushes the state every second while the shop is
+// open, so the page shows that number as it is (no local clock, which would drift from a paused or slowed world).
 function tickCountdown() {
   if (!state) return;
-  const left = state.resetSeconds - (Date.now() - receivedAt) / 1000;
-  $('countdown').textContent = model.formatCountdown(left);
+  $('countdown').textContent = model.formatCountdown(state.resetSeconds);
 }
-setInterval(tickCountdown, 1000);
 
 window.owVending = raw => {
   const result = model.validateState(raw);
@@ -116,7 +115,6 @@ window.owVending = raw => {
   state = result.state;
   lastSerial = state.serial;
   lists = model.buildLists(state);
-  receivedAt = Date.now();
   localMessage = '';
   render();
 };
@@ -137,3 +135,6 @@ document.addEventListener('keydown', event => {
     render();
   }
 });
+
+// Tells the host the page can take input (it keeps game input until this line arrives; OpenWillowVendorPage.cpp).
+console.log('OWVENDREADY');

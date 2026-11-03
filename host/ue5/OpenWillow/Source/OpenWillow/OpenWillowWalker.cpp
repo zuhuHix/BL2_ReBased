@@ -1330,8 +1330,6 @@ void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
     if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
-    if (UOpenWillowVendorSubsystem::TryUseNearest(*this)) return;   // a vending machine in reach (-owvendors=)
-    if (Mover && Mover->TryInteract()) return;
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);
     for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
@@ -1341,6 +1339,14 @@ void AOpenWillowWalker::PickupNearby()
         BestDistanceSquared = DistanceSquared;
         Nearest = *It;
     }
+    // One rule for the rest: the nearest use target in its own reach wins (vending machine, door, pickup).
+    double VendorDistance = 0, MoverDistance = 0;
+    const double PickupDistance = Nearest ? double(BestDistanceSquared) : DBL_MAX;
+    const bool bVendor = UOpenWillowVendorSubsystem::NearestInReach(*this, VendorDistance);
+    const bool bMover = Mover && Mover->InReach(GetActorLocation(), MoverDistance);
+    if (bVendor && (!bMover || VendorDistance <= MoverDistance) && VendorDistance <= PickupDistance
+        && UOpenWillowVendorSubsystem::TryUseNearest(*this)) return;
+    if (bMover && MoverDistance <= PickupDistance && Mover->TryInteract()) return;
     if (!Nearest) return;
     const FString Name = Nearest->DisplayName();
     const bool bPickedUp = Nearest->TryPickup(Inventory);

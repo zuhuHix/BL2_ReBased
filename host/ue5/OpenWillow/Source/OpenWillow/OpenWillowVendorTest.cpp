@@ -43,6 +43,7 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("price is floor(value x markup)"), Stock.PriceOf(Stock.Items[0]), 484);
     TestEqual(TEXT("second gun's price"), Stock.PriceOf(Stock.Items[1]), 196);
     TestEqual(TEXT("formula on its own, level 10: floor(51 x 5.5)"), FOpenWillowVendorStock::BuyPrice(51, 10), 280);
+    TestEqual(TEXT("an absurd value is unaffordable, not wrapped"), FOpenWillowVendorStock::BuyPrice(MAX_int32, 100), MAX_int32);
     TestEqual(TEXT("sell price is the card value"), FOpenWillowVendorStock::SellPriceOf(Stock.Items[0]), 101);
 
     // Too little money: refused, nothing taken, the gun stays on the shelf.
@@ -72,6 +73,11 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("equip A"), Inventory->Equip(0, 0));
     TestFalse(TEXT("equipped gun is not sold"), Stock.Sell(TEXT("synthetic_a"), Inventory, Error));
     TestEqual(TEXT("equipped refusal text"), Error, FString(TEXT("Equipped items cannot be sold")));
+    // A protected item (the quest's lent weapon in the game) is refused and stays in the backpack.
+    TestFalse(TEXT("protected gun is not sold"), Stock.Sell(TEXT("synthetic_b"), Inventory, Error,
+        [](const FOpenWillowWeaponItem& Item) { return Item.Id == TEXT("synthetic_b"); }));
+    TestEqual(TEXT("protected refusal text"), Error, FString(TEXT("Mission items cannot be sold")));
+    TestEqual(TEXT("protected gun still owned"), Inventory->Items().Num(), 2);
     TestTrue(TEXT("sell B"), Stock.Sell(TEXT("synthetic_b"), Inventory, Error));
     Inventory->GetMoney(Money);
     TestEqual(TEXT("money after selling B (card value 41)"), Money, 361);

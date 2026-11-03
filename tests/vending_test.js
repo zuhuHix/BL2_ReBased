@@ -110,6 +110,22 @@ check('An equipped item is never sold', () => {
   assert.deepEqual(model.actionFor({column: 'backpack', index: 0}, lists, state()), {ok: true, action: 'sell', id: 'b1'});
 });
 
+check('An item the host marks unsellable (a lent mission weapon) is never sold', () => {
+  const current = state({backpack: [bagItem('m1', {sellable: false}), bagItem('b1')]});
+  const lists = model.buildLists(current);
+  const index = lists.backpack.findIndex(row => row.id === 'm1');
+  assert.deepEqual(model.actionFor({column: 'backpack', index}, lists, current),
+    {ok: false, message: 'Mission items cannot be sold'});
+  const other = lists.backpack.findIndex(row => row.id === 'b1');
+  assert.deepEqual(model.actionFor({column: 'backpack', index: other}, lists, current), {ok: true, action: 'sell', id: 'b1'});
+});
+
+check('The page tells the host when it can take input and keeps no local clock', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'hud_overlay', 'vending.js'), 'utf8');
+  assert.ok(source.includes("console.log('OWVENDREADY')"));
+  assert.ok(!source.includes('Date.now'));
+});
+
 check('Buy-back needs enough money', () => {
   const current = state({buyback: [item('r1', {affordable: false})]});
   const lists = model.buildLists(current);
