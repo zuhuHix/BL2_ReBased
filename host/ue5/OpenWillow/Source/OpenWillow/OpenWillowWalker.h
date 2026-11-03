@@ -6,6 +6,7 @@
 #include "OpenWillowPhaselockFx.h"
 #include "OpenWillowFiring.h"
 #include "OpenWillowShotFx.h"
+#include "OpenWillowMayaState.h"
 #include "OpenWillowWalker.generated.h"
 
 struct FOpenWillowTakenInventoryItem;
@@ -116,15 +117,23 @@ public:
     class UOpenWillowQuest* GetQuest() const { return Quest; }
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent,
         class AController* EventInstigator, AActor* DamageCauser) override;
-    float GetHealth() const { return Health; }
-    float GetMaxHealth() const { return MaxHealth; }
+    // Damage from the world (OpenWillowApplyDamageToPlayer, and TakeDamage for UE's ApplyDamage): shield first, then health,
+    // then the down state. SourceLocation is where the hit came from (ZeroVector: unknown). Returns what the pools took.
+    float ApplyDamageToPlayer(float Amount, AActor* Causer, const FVector& SourceLocation);
+    // Health, shield and Fight For Your Life live in FOpenWillowMayaState (OpenWillowMayaState.h); the walker forwards.
+    const FOpenWillowMayaState& GetMayaState() const { return MayaState; }
+    FOpenWillowMayaState& GetMayaState() { return MayaState; }
+    float GetHealth() const { return MayaState.Health; }
+    float GetMaxHealth() const { return MayaState.Effective().MaxHealth; }
+    float GetShield() const { return MayaState.Shield; }
+    float GetShieldCapacity() const { return MayaState.Effective().ShieldCapacity; }
     // ---- Fight For Your Life: the host's down state (rules and their live numbers: docs/verification/COMBAT_DOWN_RESPAWN.md) ----
     // Health reaching 0 puts Maya down (Injured) instead of respawning her at once. 2.28 s later the bleed-out timer starts
     // (12 s, cut for successive injuries); a kill while Injured is a second wind (health back to 25 % of the maximum); the end
     // of the bleed-out is death (Dead), and the respawn follows 5.76 s later. Read by the HUD (AOpenWillowMayaHUD) and the checks.
-    enum class EDownPhase : uint8 { Up, Injured, Dead };
-    EDownPhase GetDownPhase() const { return DownPhase; }
-    bool IsDown() const { return DownPhase != EDownPhase::Up; }
+    using EDownPhase = EOpenWillowDownPhase;
+    EDownPhase GetDownPhase() const { return MayaState.Phase; }
+    bool IsDown() const { return MayaState.IsDown(); }
     // The bleed-out left as a fraction of its total: 1 until its timer starts, falling to 0 at death; 0 while Dead, 1 when up.
     float DownBleedLeft() const;
     // Whether the weapon is in hand for firing and reloading: always when up; while Injured only after the put-away special
@@ -137,10 +146,10 @@ public:
     void TestFireInput(bool bPressed) { if (bPressed) FirePressed(); else FireReleased(); }
     void TestReloadInput() { ReloadPressed(); }
 #endif
-    float DownBleedTotal() const { return DownBleedSeconds; }
-    float LastDownAt() const { return DownAt; }
-    float LastSecondWindAt() const { return SecondWindAt; }
-    float LastRespawnAt() const { return RespawnAt; }
+    float DownBleedTotal() const { return MayaState.BleedSeconds; }
+    float LastDownAt() const { return MayaState.DownAt; }
+    float LastSecondWindAt() const { return MayaState.SecondWindAt; }
+    float LastRespawnAt() const { return MayaState.RespawnAt; }
     // Hits that took health and came from a known place (the HUD's damage-direction arrows): how many so far, and the world
     // direction from Maya toward the last one's source (a point hit's shot direction reversed, else the causer's or the
     // instigator's position).
@@ -232,10 +241,12 @@ private:
     UPROPERTY() TObjectPtr<class UOpenWillowMover> Mover;
     UPROPERTY() TObjectPtr<class UOpenWillowQuest> Quest;
     UPROPERTY() TObjectPtr<UOpenWillowScopeOverlay> ScopeOverlayWidget;
-    // Host stand-ins (UNVERIFIED) unless -owquest supplies the slice data: then health follows the recovered
-    // formula and respawn the decoded station selection (UOpenWillowQuest).
-    float MaxHealth = 400.f;
-    float Health = 400.f;
+    // Health, shield and the down state. Host stand-ins (UNVERIFIED) unless -owquest supplies the slice data: then health
+    // follows the recovered formula and respawn the decoded station selection (UOpenWillowQuest).
+    FOpenWillowMayaState MayaState;
+    FString EquippedShieldId;           // the shield MayaState was last given (TickShield)
+    bool bShieldEverEquipped = false;
+    void TickShield(float Now);
     int32 HealthLevel = 0;              // the level MaxHealth was last set for (0: not yet)
     bool bHealthHeldForScript = false;  // a script level-up is pending: RefreshHealthForLevel does nothing
     struct FDamageScale { float Scale = 0; float EndsAt = 0; };
@@ -244,17 +255,10 @@ private:
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;
     void Respawn();
-    // The down state (see EDownPhase above). LastInjuryAt starts far in the past: the game's default for its counterpart is not
-    // known (COMBAT_DOWN_RESPAWN.md, UNVERIFIED), and this keeps a first injury early in a session uncut.
-    EDownPhase DownPhase = EDownPhase::Up;
-    float DownAt = -1000.f, DownBleedSeconds = 12.f, DeadAt = -1000.f, SecondWindAt = -1000.f, RespawnAt = -1000.f;
-    float LastInjuryAt = -1000.f;
-    int32 SuccessiveInjuries = 0;
     int32 HitsTaken = 0;
     FVector LastHitFrom = FVector::ZeroVector;
-    void GoDown();
-    void TickDown(float Now);
-    void EndDownOnRefill(const TCHAR* Why);
+    void OnWentDown();
+    void TickDown(float Now, float DeltaSeconds);
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
     UPROPERTY() TObjectPtr<class UAnimSequence> IdleAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunAnim;

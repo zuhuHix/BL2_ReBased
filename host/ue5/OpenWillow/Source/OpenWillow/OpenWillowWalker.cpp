@@ -189,54 +189,54 @@ AOpenWillowWalker::AOpenWillowWalker()
 
 float AOpenWillowWalker::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
-    if (!bMayaActive && !bRespawnPointCaptured) return 0.f;
-    // Live: damage still reaches the injured state's TakeDamage, but health does not move (COMBAT_GOLDEN_TRACE.md step 12).
-    if (IsDown()) return 0.f;
-    const float Applied = FMath::Clamp(DamageAmount, 0.f, Health);
-    Health -= Applied;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.0f damage, health %.0f/%.0f"), Applied, Health, MaxHealth);
-    // Where the hit came from, for the HUD's damage-direction arrows: the first of a point hit's shot direction reversed,
-    // the causer's position and the instigator's pawn's position that gives a usable direction (a zero shot direction
-    // falls through to the next); a hit with no known source shows none.
-    FVector From = FVector::ZeroVector;
+    // UE's ApplyDamage path: the same as ApplyDamageToPlayer. The source is a point hit's shot direction reversed, else the
+    // causer, else the instigator's pawn.
+    FVector Source = FVector::ZeroVector;
     if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
-        From = -static_cast<const FPointDamageEvent&>(DamageEvent).ShotDirection;
-    if (!From.Normalize() && DamageCauser && DamageCauser != this)
-        From = DamageCauser->GetActorLocation() - GetActorLocation();
-    if (!From.Normalize() && EventInstigator && EventInstigator->GetPawn() && EventInstigator->GetPawn() != this)
-        From = EventInstigator->GetPawn()->GetActorLocation() - GetActorLocation();
+    {
+        const FVector Dir = static_cast<const FPointDamageEvent&>(DamageEvent).ShotDirection;
+        if (!Dir.IsNearlyZero()) Source = GetActorLocation() - Dir.GetSafeNormal() * 100.f;
+    }
+    AActor* Causer = DamageCauser;
+    if ((!Causer || Causer == this) && EventInstigator && EventInstigator->GetPawn() != this) Causer = EventInstigator->GetPawn();
+    return ApplyDamageToPlayer(DamageAmount, Causer, Source);
+}
+
+float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const FVector& SourceLocation)
+{
+    if (!bMayaActive && !bRespawnPointCaptured) return 0.f;
+    const float Now = GetWorld()->GetTimeSeconds();
+    // Live: damage still reaches the injured state's TakeDamage, but health does not move (COMBAT_GOLDEN_TRACE.md step 12).
+    const FOpenWillowDamageResult Hit = MayaState.ApplyDamage(Amount, Now);
+    if (Hit.bIgnored) return 0.f;
+    const float Applied = Hit.ToShield + Hit.ToHealth;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.1f damage (shield %.1f, health %.1f), shield %.1f/%.1f health %.1f/%.1f"),
+        Applied, Hit.ToShield, Hit.ToHealth, GetShield(), GetShieldCapacity(), GetHealth(), GetMaxHealth());
+    // Where the hit came from, for the HUD's damage-direction arrows: the source location, else the causer's position;
+    // a hit with no known source shows none.
+    FVector From = FVector::ZeroVector;
+    if (!SourceLocation.IsZero()) From = SourceLocation - GetActorLocation();
+    if (!From.Normalize() && Causer && Causer != this) From = Causer->GetActorLocation() - GetActorLocation();
     if (Applied > 0.f && From.Normalize())
     {
         LastHitFrom = From;
         ++HitsTaken;
     }
-    // Going down while a target is held: Skill_Phaselock's while-active HealthState constraint fails and deactivates the
-    // skill, which ends the lock (native reading, UNVERIFIED). Health 0 puts Maya down (GoDown).
-    FString Failed;
-    if (Health <= 0.f && IsPhaselockActive() && !Phaselock.GateOpen(PhaselockGateState(), false, Failed))
-        EndPhaselockEarly(TEXT("skill constraint ") + Failed);
-    if (Health <= 0.f) GoDown();
+    if (Hit.bWentDown) OnWentDown();
     return Applied;
 }
 
 // ---- Fight For Your Life (host down state) ----
-// The numbers are the live ones of COMBAT_GOLDEN_TRACE.md section D and COMBAT_DOWN_RESPAWN.md, which the VM's run of the
-// installed script reproduces: the weapon put-away special move ends 2.28 s after the injury and starts the bleed-out timer;
-// the total is 12 s cut by 12 / 3 per successive injury (the counter as it was before this one; at least 1 s), and an injury
-// less than 30 s after the previous one counts as successive; the death camera ends 5.76 s after the dead state began and
-// the respawn follows in the same frame; a second wind raises health to 25 % of the maximum. Not modelled: crawling speed,
-// the sidearm switch, the injured bonus damage, the shield half, the Defense Boost, a partner revive, the respawn fee.
-namespace
+// The rules and numbers are in FOpenWillowMayaState (the live ones of COMBAT_GOLDEN_TRACE.md section D and
+// COMBAT_DOWN_RESPAWN.md). The walker adds what the down state does to the weapon, the Phaselock and the position.
+// Not modelled: crawling speed, the sidearm switch, the injured bonus damage, the Defense Boost, a partner revive, the fee.
+void AOpenWillowWalker::OnWentDown()
 {
-constexpr float DownTargetedDelay = 2.28f, DownBaseBleed = 12.f, DownSuccessiveWindow = 30.f, DownDeathCamera = 5.76f;
-constexpr float DownSecondWindHealth = 0.25f;
-constexpr int32 DownMaxSuccessive = 3;
-}
-
-void AOpenWillowWalker::GoDown()
-{
-    const float Now = GetWorld()->GetTimeSeconds();
-    Health = 0.f;
+    // Going down while a target is held: Skill_Phaselock's while-active HealthState constraint fails and deactivates the
+    // skill, which ends the lock (native reading, UNVERIFIED).
+    FString Failed;
+    if (IsPhaselockActive() && !Phaselock.GateOpen(PhaselockGateState(), false, Failed))
+        EndPhaselockEarly(TEXT("skill constraint ") + Failed);
     // The weapon while down (host rule, UNVERIFIED; to confirm live with bl-sdk): the injured state's special move puts the
     // weapon away (InjuredWeaponPutDownTime 0.1 s) and only its end, SwitchToSidearm (2.28 s live), brings one back
     // (InjuredWeaponEquipTime 0.2 s) - NATIVE_DAMAGE_DEATH.md 10.1, COMBAT_DOWN_RESPAWN.md. So going down releases the
@@ -246,58 +246,68 @@ void AOpenWillowWalker::GoDown()
     bFireHeld = false;
     Burst.interrupt();
     CancelReload();
-    DownPhase = EDownPhase::Injured;
-    DownAt = Now;
-    DownBleedSeconds = FMath::Max(DownBaseBleed - DownBaseBleed / DownMaxSuccessive * SuccessiveInjuries, 1.f);
-    SuccessiveInjuries = Now - LastInjuryAt < DownSuccessiveWindow ? SuccessiveInjuries + 1 : 0;
-    LastInjuryAt = Now;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya down t=%.3f bleedout=%.2fs successive=%d"), Now, DownBleedSeconds, SuccessiveInjuries);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya down t=%.3f bleedout=%.2fs successive=%d"), MayaState.DownAt, MayaState.BleedSeconds,
+        MayaState.SuccessiveInjuries);
 }
 
 bool AOpenWillowWalker::DownWeaponReady() const
 {
-    if (DownPhase == EDownPhase::Up) return true;
-    return DownPhase == EDownPhase::Injured && GetWorld() && GetWorld()->GetTimeSeconds() >= DownAt + DownTargetedDelay;
+    return GetWorld() ? MayaState.WeaponReady(GetWorld()->GetTimeSeconds()) : !IsDown();
 }
 
 float AOpenWillowWalker::DownBleedLeft() const
 {
-    if (DownPhase == EDownPhase::Up) return 1.f;
-    if (DownPhase == EDownPhase::Dead || !GetWorld()) return 0.f;
-    const float Bled = GetWorld()->GetTimeSeconds() - (DownAt + DownTargetedDelay);
-    return FMath::Clamp(1.f - FMath::Max(0.f, Bled) / DownBleedSeconds, 0.f, 1.f);
+    return GetWorld() ? MayaState.BleedLeft(GetWorld()->GetTimeSeconds()) : 0.f;
 }
 
 void AOpenWillowWalker::NotifyKilledEnemy()
 {
-    if (DownPhase != EDownPhase::Injured) return;
-    const float Now = GetWorld()->GetTimeSeconds();
-    Health = FMath::Max(Health, MaxHealth * DownSecondWindHealth);
-    DownPhase = EDownPhase::Up;
-    SecondWindAt = Now;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya second wind t=%.3f health %.0f/%.0f"), Now, Health, MaxHealth);
+    if (!MayaState.SecondWind(GetWorld()->GetTimeSeconds())) return;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya second wind t=%.3f health %.0f/%.0f shield %.0f/%.0f"), MayaState.SecondWindAt,
+        GetHealth(), GetMaxHealth(), GetShield(), GetShieldCapacity());
 }
 
-void AOpenWillowWalker::TickDown(float Now)
+void AOpenWillowWalker::TickDown(float Now, float DeltaSeconds)
 {
-    if (DownPhase == EDownPhase::Injured && Now - (DownAt + DownTargetedDelay) > DownBleedSeconds)
+    TickShield(Now);
+    switch (MayaState.Tick(Now, DeltaSeconds))
     {
-        DownPhase = EDownPhase::Dead;
-        DeadAt = Now;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya bled out t=%.3f"), Now);
+    case FOpenWillowMayaState::ETickEvent::BledOut: UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya bled out t=%.3f"), Now); break;
+    case FOpenWillowMayaState::ETickEvent::RespawnDue: Respawn(); break;
+    default: break;
     }
-    if (DownPhase == EDownPhase::Dead && Now - DeadAt >= DownDeathCamera) Respawn();
+}
+
+void AOpenWillowWalker::TickShield(float Now)
+{
+    // The equipped shield's card stats: "Capacity" (as the HUD reads it), "Recharge Rate" and "Recharge Delay" (labels as BL2's
+    // shield card shows them; the local card data was not seen with the last two, UNVERIFIED). A card without them keeps the
+    // live-read stand-ins of FOpenWillowMayaStats. A new shield is applied once, when the equipped id changes.
+    const FOpenWillowGearItem* Item = Inventory ? Inventory->GearSlotItem(TEXT("shield")) : nullptr;
+    const FString Id = Item ? Item->Id : FString();
+    if (Id == EquippedShieldId) return;
+    EquippedShieldId = Id;
+    const FOpenWillowMayaStats Defaults;
+    float Capacity = 0.f, Delay = Defaults.ShieldRechargeDelay, Rate = Defaults.ShieldRechargeRate;
+    if (Item)
+        for (const FOpenWillowGearStat& Stat : Item->Stats)
+        {
+            const float Value = FCString::Atof(*Stat.Value.Replace(TEXT(","), TEXT("")));
+            if (Stat.Label.Equals(TEXT("Capacity"), ESearchCase::IgnoreCase)) Capacity = Value;
+            else if (Stat.Label.Equals(TEXT("Recharge Rate"), ESearchCase::IgnoreCase) && Value > 0.f) Rate = Value;
+            else if (Stat.Label.Equals(TEXT("Recharge Delay"), ESearchCase::IgnoreCase) && Value > 0.f) Delay = Value;
+        }
+    MayaState.EquipShield(Capacity, Delay, Rate, !bShieldEverEquipped, Now);
+    bShieldEverEquipped |= Capacity > 0.f;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya shield %s: capacity %.1f, recharge %.2f/s after %.3f s"),
+        Item ? *Item->Name : TEXT("none"), Capacity, Rate, Delay);
 }
 
 void AOpenWillowWalker::Respawn()
 {
     // With -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host
-    // stand-in: back to where this session started. Full health either way; mission state is not touched.
-    Health = MaxHealth;
-    // The game's ResurrectPlayer resets the successive-injury counter (COMBAT_DOWN_RESPAWN.md).
-    DownPhase = EDownPhase::Up;
-    SuccessiveInjuries = 0;
-    RespawnAt = GetWorld()->GetTimeSeconds();
+    // stand-in: back to where this session started. Full health and shield either way; mission state is not touched.
+    MayaState.Respawn(GetWorld()->GetTimeSeconds());
     bFireHeld = false;
     Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
@@ -328,35 +338,23 @@ void AOpenWillowWalker::RefreshHealthForLevel()
     // Current health becomes the new maximum, at start and on any level change the script did not handle (test fixtures,
     // a level that goes down). A level-up from the mission's experience is handled by the VM instead (ApplyScriptHealth):
     // OnExpLevelChange (script) rebases the health pool and, past its 1 s guard, runs the OnLevelUp behaviors that refill it
-    // (NATIVE_LEVEL_UP_ATTRIBUTES.md; the refill was observed in game).
+    // (NATIVE_LEVEL_UP_ATTRIBUTES.md; the refill was observed in game). A refill while Injured ends the down state.
     const int32 FromLevel = HealthLevel;
-    MaxHealth = Health = FormulaHealth;
+    const bool bRevived = MayaState.SetHealth(FormulaHealth, FormulaHealth, GetWorld()->GetTimeSeconds());
     HealthLevel = Skills->GetLevel();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f for level %d (was level %d)"), Health, MaxHealth, HealthLevel, FromLevel);
-    EndDownOnRefill(TEXT("level change"));
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f for level %d (was level %d)%s"), GetHealth(), GetMaxHealth(), HealthLevel,
+        FromLevel, bRevived ? TEXT(", revived by the level change") : TEXT(""));
 }
 
 void AOpenWillowWalker::ApplyScriptHealth(float NewMax, float NewCurrent)
 {
     // The VM's health pool after a level-up: its effective maximum and its current value (the refill included).
-    const float FromMax = MaxHealth, FromHealth = Health;
-    MaxHealth = NewMax;
-    Health = NewCurrent;
+    const float FromMax = GetMaxHealth(), FromHealth = GetHealth();
+    const bool bRevived = MayaState.SetHealth(NewMax, NewCurrent, GetWorld()->GetTimeSeconds());
     if (Skills) HealthLevel = Skills->GetLevel();
     bHealthHeldForScript = false;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f from the script's level-up (was %.1f/%.1f)"), Health, MaxHealth, FromHealth, FromMax);
-    EndDownOnRefill(TEXT("script level-up"));
-}
-
-void AOpenWillowWalker::EndDownOnRefill(const TCHAR* Why)
-{
-    // Down means health 0. A refill while Injured (a level-up) ends the down state like a second wind: the game is widely
-    // reported to revive a player who levels up during Fight For Your Life (UNVERIFIED, not observed here). While Dead the
-    // respawn still follows.
-    if (DownPhase != EDownPhase::Injured || Health <= 0.f) return;
-    DownPhase = EDownPhase::Up;
-    SecondWindAt = GetWorld()->GetTimeSeconds();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya revived by %s t=%.3f health %.0f/%.0f"), Why, SecondWindAt, Health, MaxHealth);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya health %.1f/%.1f from the script's level-up (was %.1f/%.1f)%s"), GetHealth(), GetMaxHealth(),
+        FromHealth, FromMax, bRevived ? TEXT(", revived by the script level-up") : TEXT(""));
 }
 
 void AOpenWillowWalker::AddWeaponDamageScale(float Scale, float Seconds)
@@ -675,7 +673,7 @@ void AOpenWillowWalker::BeginPlay()
     }
     RefreshHealthForLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d, health %.1f"),
-        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade(), MaxHealth);
+        Skills->GetLevel(), Skills->AvailablePoints(), Skills->GetActionGrade(), GetMaxHealth());
     if (bInventoryActionsRun)
     {
         UOpenWillowInventoryActionTest* Test = NewObject<UOpenWillowInventoryActionTest>(this, TEXT("InventoryActionTest"));
@@ -704,7 +702,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         AddMovementInput(FRotator(0, GetControlRotation().Yaw, 0).Vector(), 1);
     }
     const float Now = GetWorld()->GetTimeSeconds();
-    TickDown(Now);
+    TickDown(Now, DeltaSeconds);
     for (int32 I = DamageScales.Num() - 1; I >= 0; --I)
         if (Now >= DamageScales[I].EndsAt)
         {
@@ -1762,7 +1760,7 @@ FOpenWillowPhaselockGateState AOpenWillowWalker::PhaselockGateState() const
         State.bHoldsWeapon |= Inventory->SlotItem(Slot) != nullptr;
     State.bWeaponInactive = State.bHoldsWeapon && !bWeaponOut;
     State.bReloading = bReloading;
-    State.bAlive = Health > 0.f;
+    State.bAlive = GetHealth() > 0.f;
     State.bInjured = IsDown();
     return State;
 }
