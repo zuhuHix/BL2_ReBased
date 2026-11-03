@@ -393,6 +393,9 @@ health (Restoration; needs a refresh when a grade changes), the Phaselock pool's
 Behaviour skills (Sweet Release, Converge, Helios, Ruin, Res, Sub-Sequence, Chain Reaction, Scorn, Cloud Kill,
 Backdraft, Immolate, Recompense, Elated, Sustenance, Life Tap, Kinetic Reflection, Blight Phoenix) carry their numbers in
 `TARGET_None` rows and need their own code; `EffectValue` returns those numbers.
+The behaviour rules, and which of them the host runs, are in [NATIVE_SKILL_BEHAVIOURS.md](NATIVE_SKILL_BEHAVIOURS.md).
+Since PR 3 kill skills count while the kill-skill timer runs, balance-formula values (Sustenance) are evaluated, and
+rows on Allies that include self (Elated) apply to Maya.
 
 ## 5. Action skill (Phaselock): duration and cooldown, beyond NATIVE_PHASELOCK_TARGETING
 

@@ -50,6 +50,9 @@ OBJECTS = {
     'Pkg.Constant': {},
     'Pkg.Constant.ConstantAttributeValueResolver_0': {'ConstantValue': 3.0},
     'Pkg.Formula': {'ConditionalInitialization': {'bEnabled': True}},
+    'Pkg.Curve': {'ValueFormula': {'bEnabled': True, 'Multiplier': {'BaseValueConstant': 2},
+                                   'Level': {'BaseValueAttribute': 'Pkg.Runtime'}, 'Power': {'BaseValueConstant': 1},
+                                   'Offset': {'BaseValueAttribute': 'Pkg.Other', 'BaseValueScaleConstant': -1}}},
 }
 CLASSES = {
     'Pkg.Skill': 'WillowGame.SkillDefinition',
@@ -61,6 +64,7 @@ CLASSES = {
     'Pkg.Constant': 'Engine.AttributeDefinition',
     'Pkg.Constant.ConstantAttributeValueResolver_0': 'GearboxFramework.ConstantAttributeValueResolver',
     'Pkg.Formula': 'Engine.AttributeInitializationDefinition',
+    'Pkg.Curve': 'Engine.AttributeInitializationDefinition',
 }
 
 
@@ -104,6 +108,16 @@ def test_output_must_be_inside_local():
         except SystemExit:
             continue
         raise AssertionError(f'{bad} was accepted')
+
+
+def test_formula_value():
+    package = FakePackage(OBJECTS, CLASSES)
+    value = p.init_value([package], skill_stats.Resolver([package]), constant(0, definition='Pkg.Curve', scale=0.5))
+    assert value['scale'] == 0.5 and value['mode'] == 0 and value['base'] == {'constant': 0.0}
+    f = value['formula']
+    assert f['multiplier'] == {'constant': 2.0} and f['power'] == {'constant': 1.0}
+    assert f['level'] == {'attribute': 'Pkg.Runtime', 'scale': 1.0}
+    assert f['offset'] == {'attribute': 'Pkg.Other', 'scale': -1}
 
 
 if __name__ == '__main__':
