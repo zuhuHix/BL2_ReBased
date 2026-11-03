@@ -361,7 +361,8 @@ class Converter:
         destination inside the movie's output folder: a URL with other `..` components is skipped
         with a warning instead of writing outside the ignored output tree.
         """
-        if source.name != FONT_LIBRARY or source.is_file():
+        # Basename compare ignores case: Windows paths and the movies' own URLs vary in case.
+        if source.name.lower() != FONT_LIBRARY or source.is_file():
             return
         fallback = self.font_base.parent / FONT_LIBRARY
         if not fallback.is_file():
