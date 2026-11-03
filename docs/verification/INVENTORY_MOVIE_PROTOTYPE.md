@@ -1395,5 +1395,5 @@ picker for a backpack transfer (UNVERIFIED host control).
 **BRANDS within-brand order (round-21 item 2): left as is** (the native quick sort; UNVERIFIED), as the 2026-11-03 note explains.
 
 **Checks.** Inventory suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE on the final page code (round-21 recipe set);
-`inventory_navigation_test.js` 41/41 (one new check); `skill_navigation_test.js` 6/6; the other page tests pass; CTest 21/21; verify_packages 9/9
+`inventory_navigation_test.js` 41/41 (one new check); `inventory_preview_cache_test.js` 4/4 (review fix: listeners removed after load, cache pruned to the snapshot); `skill_navigation_test.js` 6/6; the other page tests pass; CTest 21/21; verify_packages 9/9
 packages with exact class bodies.

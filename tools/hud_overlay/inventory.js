@@ -709,22 +709,7 @@ function hit(path, label, click, hover, tint, item = null, kind = 'item', areaPa
     button.classList.add(`weapon-${kind}`);
     if (gearSlotForItem(item)) button.classList.add('gear-item');
     button.setAttribute('aria-pressed', String(item.id === selectedId));
-    // A decoded thumbnail is moved into the rebuilt button instead of loading a new <img>: the movie's turn sways for a
-    // couple of seconds after some sorts and every step re-renders, so new images were still decoding (blank) on the
-    // D20 VALUE capture.
-    const cacheKey = `${kind}|${item.id}|${previewUrls(item).join(',')}`;
-    const cached = loadedPreviews.get(cacheKey);
-    if (cached && cached.complete && cached.naturalWidth > 0) button.appendChild(cached);
-    else {
-      const preview = document.createElement('img');
-      preview.alt = '';
-      preview.draggable = false;
-      preview.decoding = 'async';
-      preview.addEventListener('load', () => loadedPreviews.set(cacheKey, preview), {once:true});
-      // No rendered preview (gear, or a weapon without an exported mesh): show the placeholder.
-      button.appendChild(preview);
-      loadPreview(preview, item, () => { preview.remove(); button.appendChild(gearPlaceholder(item)); });
-    }
+    attachPreview(button, kind, item);
   }
   // The SWF stage is 1280 × 720; Ruffle stretches it to the player box.
   Object.assign(button.style, {
@@ -763,19 +748,50 @@ function itemAriaLabel(item) {
   return [item.name, `level ${item.level}`, ...flags].join(', ');
 }
 
-const loadedPreviews = new Map(); // `${kind}|${item id}|${preview urls}` -> a decoded <img>, reused across renders
+// A decoded thumbnail is moved into the rebuilt button instead of loading a new <img>: the movie's turn sways for a couple of
+// seconds after some sorts and every step re-renders, so new images were still decoding (blank) on the D20 VALUE capture.
+// Keyed by the cell kind, the item id and its preview URLs; prunePreviewCache drops items that left the snapshot.
+const loadedPreviews = new Map();
+const previewCacheKey = (kind, item) => `${kind}|${item.id}|${previewUrls(item).join(',')}`;
+function attachPreview(button, kind, item) {
+  const key = previewCacheKey(kind, item);
+  const cached = loadedPreviews.get(key);
+  if (cached && cached.complete && cached.naturalWidth > 0) { button.appendChild(cached); return cached; }
+  const preview = document.createElement('img');
+  preview.alt = '';
+  preview.draggable = false;
+  preview.decoding = 'async';
+  preview.addEventListener('load', () => loadedPreviews.set(key, preview), {once:true});
+  // No rendered preview (gear, or a weapon without an exported mesh): show the placeholder.
+  button.appendChild(preview);
+  loadPreview(preview, item, () => { preview.remove(); button.appendChild(gearPlaceholder(item)); });
+  return preview;
+}
+// Called on every render: an entry whose item is gone, or whose preview URLs changed, is dropped.
+function prunePreviewCache() {
+  for (const key of [...loadedPreviews.keys()]) {
+    const [kind, id] = key.split('|');
+    const item = itemById(id);
+    if (!item || key !== previewCacheKey(kind, item)) loadedPreviews.delete(key);
+  }
+}
+// Tries each preview URL in turn. Its listeners come off once the image has loaded or every URL failed, so a cached image
+// keeps no reference to the button it was first made for (through onFailure).
 function loadPreview(image, item, onFailure) {
   const urls = previewUrls(item).filter(url => previewStatus.get(url) !== 'missing');
   let next = 0;
+  const cleanup = () => { image.removeEventListener('load', onLoad); image.removeEventListener('error', onError); };
   const tryNext = () => {
     if (next < urls.length) image.src = urls[next++];
-    else onFailure();
+    else { cleanup(); onFailure(); }
   };
-  image.addEventListener('load', () => previewStatus.set(urls[next - 1], 'ok'));
-  image.addEventListener('error', () => {
+  function onLoad() { previewStatus.set(urls[next - 1], 'ok'); cleanup(); }
+  function onError() {
     if (next > 0) previewStatus.set(urls[next - 1], 'missing');
     tryNext();
-  });
+  }
+  image.addEventListener('load', onLoad);
+  image.addEventListener('error', onError);
   if (urls.length) tryNext(); else queueMicrotask(onFailure);
 }
 
@@ -1938,6 +1954,7 @@ function placeListHeaders(headers, rowWidth) {
 function render() {
   update3d();
   if (!ready || !state) return;
+  prunePreviewCache();
   // The host's right-edge fade of the movie would cut the Backpack panel when it moves right for the compare view.
   document.body.classList.toggle('compare-wide', Boolean(transferSourceId));
   const layer = document.getElementById('controls');
