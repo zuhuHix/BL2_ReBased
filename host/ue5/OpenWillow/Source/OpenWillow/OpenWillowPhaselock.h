@@ -32,6 +32,13 @@ struct FOpenWillowPhaselockGateState
     bool bInVehicle = false;
 };
 
+// One candidate's auto-aim reading before the line-of-sight test (FOpenWillowPhaselockData::ScoreAim).
+struct FOpenWillowPhaselockAim
+{
+    float Score = 0, ScreenOffset = 0, TargetRadius = 0, MagnetRadius = 0;
+    FString Rejected;           // why the score is 0 ("" when it scored)
+};
+
 // Phaselock numbers read at run time from the ignored manifest local/character/action_skill_siren.json
 // (tools/prepare_action_skill.py; record docs/verification/PHASELOCK_STOCK_DATA.md). Nothing is compiled in: without
 // the manifest Phaselock is unavailable rather than falling back to invented values.
@@ -80,6 +87,11 @@ struct FOpenWillowPhaselockData
     bool GateOpen(const FOpenWillowPhaselockGateState& State, bool bActivation, FString& OutFailed) const;
     // One evaluator's reading (true = holds).
     static bool EvaluatorHolds(const FString& Class, const FOpenWillowPhaselockGateState& State);
+    // Host reading of WillowAutoAimStrategy's score for one candidate (NATIVE_PHASELOCK_TARGETING.md section 3,
+    // UNVERIFIED): Depth is the view-space distance along the view direction, X and Y the screen offsets as fractions of
+    // the half-screen height, AutoAimRadius the target's own radius, TanHalfFov the tangent of the half field of view.
+    // Rejects targets outside the magnetism radius, then outside [TargetMinDistance, TargetMaxDistance].
+    FOpenWillowPhaselockAim ScoreAim(float Depth, float X, float Y, float AutoAimRadius, float TanHalfFov) const;
     // Lock duration attribute at that grade of DurationSkill. The modifier stack read from native code
     // (docs/verification/NATIVE_WEAPON_RULES.md: (base + PreAdd) x (1 + up) / (1 - down) + PostAdd, no clamp) is
     // UNVERIFIED in game and for skills; only a PostAdd exists on this path, so it reduces to base + PostAdd.

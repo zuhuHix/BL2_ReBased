@@ -1,5 +1,5 @@
 param(
-    [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
+    [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [string]$Out = 'local/phaselock/b2',
     [int]$TimeoutSeconds = 240,
     [int]$WaitForEditorSeconds = 900,
