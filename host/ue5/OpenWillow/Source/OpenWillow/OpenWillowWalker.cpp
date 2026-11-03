@@ -1662,10 +1662,11 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     AOpenWillowCombatTarget* Target = Cast<AOpenWillowCombatTarget>(Hit.GetActor());
     if (!Target)
     {
-        if (UMaterialInterface* Hole = LoadObject<UMaterialInterface>(nullptr,
-            TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
-            UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 4.f, 4.f), Impact,
-                (-Hit.ImpactNormal).Rotation(), 12.f);
+        if (AOpenWillowShotFx::TakeDecalBudget())
+            if (UMaterialInterface* Hole = LoadObject<UMaterialInterface>(nullptr,
+                TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
+                UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 4.f, 4.f), Impact,
+                    (-Hit.ImpactNormal).Rotation(), 12.f);
         ImpactExplosion();
         return;
     }

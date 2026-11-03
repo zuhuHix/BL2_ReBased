@@ -219,6 +219,7 @@ void AOpenWillowProjectile::ExplosionFx(UWorld* World, const FVector& Origin, co
     for (int32 I = 0; I < 10; ++I)
         AOpenWillowShotFx::Spark(World, At, (FMath::VRand() + Normal).GetSafeNormal() * FMath::FRandRange(500.f, 900.f),
             FLinearColor(1.f, 0.6f, 0.2f), 1.5f, FMath::FRandRange(0.3f, 0.45f), 4.f);
+    if (!AOpenWillowShotFx::TakeDecalBudget()) return;
     if (UMaterialInterface* Scorch = LoadObject<UMaterialInterface>(nullptr,
         TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
         if (UDecalComponent* Decal = UGameplayStatics::SpawnDecalAtLocation(World, Scorch,
@@ -263,10 +264,11 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
         else
         {
             ImpactFx(GetWorld(), Hit.ImpactPoint, Hit.ImpactNormal, Element);
-            if (UMaterialInterface* Hole = LoadObject<UMaterialInterface>(nullptr,
-                TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
-                UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 4.f, 4.f), Hit.ImpactPoint,
-                    (-Hit.ImpactNormal).Rotation(), 12.f);
+            if (AOpenWillowShotFx::TakeDecalBudget())
+                if (UMaterialInterface* Hole = LoadObject<UMaterialInterface>(nullptr,
+                    TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_BulletHole.M_OW_BulletHole")))
+                    UGameplayStatics::SpawnDecalAtLocation(GetWorld(), Hole, FVector(6.f, 4.f, 4.f), Hit.ImpactPoint,
+                        (-Hit.ImpactNormal).Rotation(), 12.f);
         }
     }
     else if (Data.Splash.DirectScale > 0.f && Cast<AOpenWillowCombatTarget>(Other))

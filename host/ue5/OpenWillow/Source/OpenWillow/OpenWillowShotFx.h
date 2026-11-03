@@ -56,6 +56,8 @@ public:
     // the particle acceleration for the assault rifle casing).
     static void Casing(UWorld* World, const FVector& Location, const FVector& Velocity, float Scale = 1.f,
         float Life = 0.22f, float Gravity = 980.f);
+    // Impact decals (bullet holes, scorch marks) have their own per-frame budget (16; host value); false: skip the decal.
+    static bool TakeDecalBudget();
 private:
     // Spawns one effect actor unless this frame's cosmetic budget is spent or the spawn fails (nullptr then).
     static AOpenWillowShotFx* SpawnBudgeted(UWorld* World, const FTransform& Pose);

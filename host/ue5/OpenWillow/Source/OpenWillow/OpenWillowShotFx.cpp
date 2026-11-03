@@ -21,6 +21,18 @@ namespace
 constexpr int32 MaxShotFxPerFrame = 96;
 uint64 BudgetFrame = 0;
 int32 BudgetUsed = 0;
+// Decals are components, not effect actors: a separate, smaller cap per frame.
+constexpr int32 MaxDecalsPerFrame = 16;
+uint64 DecalFrame = 0;
+int32 DecalsUsed = 0;
+}
+
+bool AOpenWillowShotFx::TakeDecalBudget()
+{
+    if (DecalFrame != GFrameCounter) { DecalFrame = GFrameCounter; DecalsUsed = 0; }
+    if (DecalsUsed >= MaxDecalsPerFrame) return false;
+    ++DecalsUsed;
+    return true;
 }
 
 AOpenWillowShotFx* AOpenWillowShotFx::SpawnBudgeted(UWorld* World, const FTransform& Pose)

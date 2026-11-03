@@ -347,6 +347,12 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             break;
         }
         const FSegment Part = Segments[Segment];
+        // Each segment starts on a full dummy: the elemental guns' impact explosions roughly double their damage, and a
+        // dummy killed mid-segment would cut the segment short. Each gun starts with the dummy at home and at rest (before
+        // the refill, a dying dummy respawned there; without it the dummy drifted and the Tediore throw missed it). Done
+        // before the aim is read, so the aim point is the reset position.
+        if (Segment == 0) CombatTarget->ResetForTest();
+        CombatTarget->RestoreHealth();
         FVector Point = FVector::ZeroVector;
         if (Part.bWall)
         {
@@ -363,11 +369,6 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         bPulling = false;
         StepAt = Now;   // the camera follows the new aim a frame later: no pull before AimSettle
         Step = Part.bWide ? 8 : Part.bThrow ? 6 : Part.Lifecycle ? 7 : 3;
-        // Each segment starts on a full dummy: the elemental guns' impact explosions roughly double their damage, and a
-        // dummy killed mid-segment would cut the segment short. Each gun starts with the dummy at home and at rest (before
-        // the refill, a dying dummy respawned there; without it the dummy drifted and the Tediore throw missed it).
-        if (Segment == 0) CombatTarget->ResetForTest();
-        CombatTarget->RestoreHealth();
         break;
     }
     case 8:   // wide bullet: aim beside the dummy (centre line passes Offset from its centre), fire as a line, then as a box
