@@ -1317,3 +1317,26 @@ and clipped the Inspect hint. The page files are back at round 21.
 
 Checks on the final state: inventory suite **49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (bounded item set; the first run
 failed step 20 and skipped seven, fixed by item 6 above), navigation 40/40 (after the PR review fix), skill navigation 6/6, CTest 10/10, packages 9/9.
+
+## Round-21 open list revisited (2026-11-03, menus lane, pc-hummer)
+
+AI-assisted (Claude). No real-game session was possible on this machine (bl-sdk is not installed in its Borderlands 2) and
+the matched D20 references are on the other PC, so no critic round was run; the pages stay at round 21 (critic 7.85).
+Host captures: `-owinvshots` with `inventory.html?logsnapshot` (frames and the logged snapshot under ignored
+`local/menus/invshots/`), and headless Edge replays of that snapshot.
+
+1. **VALUE thumbnails blank: not reproduced.** On round-21 code the D2e (VALUE) capture shows a thumbnail in all eight
+   visible rows, and the headless replay reports every VALUE cell with a loaded image and not covered by the card. The
+   blank thumbnails belonged to round 22 and the uncommitted fourth attempt, which were reverted. (A first run on this machine
+   showed no inventory at all: the worktree had the pre-"defer" `SharedWillowInventory.swf`; copying the regenerated movie
+   from the main checkout fixed it. Other worktrees provisioned the same way have the same stale file.)
+2. **BRANDS within-brand order: explained, not fitted.** `IST_Manufacturer` compares manufacturer name, grade and rarity;
+   items equal on those go through the engine's unstable quick sort (NATIVE_INVENTORY_SORT.md section 1), so their order
+   depends on the sort's partitioning and the input order, not on any field. No comparator tie-break can match both the ALL
+   and the BRANDS frames; matching would mean reproducing that quick sort from the executable. Left as is (UNVERIFIED).
+3. **Card frame, focus panel, plates; Inspect 3D turn, hint line and emblem; zoom lines and flavour wrap:** not changed.
+   These are fits against the matched real frames, which are not on this machine.
+4. **Number keys:** still a host control (1-4 pick the weapon slot for a backpack transfer); the game's behaviour needs a
+   real-game observation (note that the "Better UI Controls" mod was active in the 2026-10-22 session).
+5. **Runtime-added items:** the host has no kill loot yet (PR #59's loot exists only in the VM); items added at runtime are
+   Maya's own drops picked up again, which the action suite's drop/pickup steps check against the page snapshot.
