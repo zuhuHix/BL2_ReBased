@@ -389,7 +389,9 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 | Sustenance (4.8), Elated (4.6) | health regeneration per second from `HealthPassiveRegenerationRate` (the effects file now carries balance formulas) | the 0.5 s refresh cadence; allies |
 
 Phaselock events are read from the Walker's public state (cast time, hit, target, timeline), so the Phaselock code has
-no new hook. The blast is the host's: every combat target within the radius takes the damage from Maya (kills count
-for her), with the host's explosion look. Not implemented yet: Thoughtlock's charm, Res, Sub-Sequence, Chain Reaction,
+no new hook. The blast is the host's: every actor that takes Maya's hits (`IOpenWillowHitTarget`) within the radius gets
+a splash `FOpenWillowHitEvent` through `AOpenWillowWalker::ApplyShotDamage` (weapon id `skill:<name>`, the skill's own
+damage type and element, no falloff, no crit), so kills count for her and hit listeners see the skill, with the host's
+explosion look. Not implemented yet: Thoughtlock's charm, Res, Sub-Sequence, Chain Reaction,
 Kinetic Reflection, Life Tap, Blight Phoenix, Scorn, Cloud Kill, Backdraft, Immolate, Recompense, Reaper, Mind's Eye
 (no crits in the host), the blocked-target damage. All of it is UNVERIFIED in game; the live questions are in section 6.

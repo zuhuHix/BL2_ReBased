@@ -127,7 +127,7 @@ private:
         TWeakObjectPtr<AActor> Target;   // centre of a blast while it exists
         FVector Where = FVector::ZeroVector;
         float Radius = 0.f, Damage = 0.f;
-        FString DamageType, Why;
+        FString DamageType, Skill, Why;   // Skill: the effects name, for the hit event's "skill:<name>" weapon id
     };
     TArray<FAction> Actions;
     float KillSkillsEndAt = -1.f;

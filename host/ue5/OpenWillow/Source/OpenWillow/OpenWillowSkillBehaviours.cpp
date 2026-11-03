@@ -5,9 +5,9 @@
 // so the Phaselock code needs no hook; a kill comes from AOpenWillowWalker::NotifyKilledEnemy.
 #include "OpenWillowSkills.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowHitEvent.h"
 #include "OpenWillowProjectile.h"
 #include "OpenWillowWalker.h"
-#include "Engine/DamageEvents.h"
 #include "EngineUtils.h"
 
 UOpenWillowSkills::UOpenWillowSkills()
@@ -56,28 +56,28 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
         if (Target)
         {
             const int32 MayaLevel = GetLevel();
-            auto Blast = [&](float At, float Radius, float Damage, const TCHAR* DamageType, const TCHAR* Why)
+            auto Blast = [&](float At, float Radius, float Damage, const TCHAR* DamageType, const TCHAR* Skill, const TCHAR* Why)
             {
                 FAction& A = Actions.AddDefaulted_GetRef();
                 A.At = At; A.Kind = FAction::EKind::Blast; A.Target = Target; A.Where = Target->GetActorLocation();
-                A.Radius = Radius; A.Damage = Damage; A.DamageType = DamageType; A.Why = Why;
+                A.Radius = Radius; A.Damage = Damage; A.DamageType = DamageType; A.Skill = Skill; A.Why = Why;
             };
             // Helios: at +0.75 s an incendiary blast on the target, radius 650, damage 0.2 x grade x PlayerSkillDamage.
             if (const int32 G = GradeOfNamed(TEXT("Helios")))
-                Blast(CastAt + 0.75f, 650.f, 0.2f * G * SkillDamageAt(MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"));
+                Blast(CastAt + 0.75f, 650.f, 0.2f * G * SkillDamageAt(MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"), TEXT("Helios"));
             // Converge: at +1.25 s a blast on the target, radius 2000, 1 x PlayerSkillDamage. The pull (momentum -110000
             // toward the target) is not applied by the host.
             if (GradeOfNamed(TEXT("Converge")) > 0)
-                Blast(CastAt + 1.25f, 2000.f, SkillDamageAt(MayaLevel), TEXT(""), TEXT("Converge"));
+                Blast(CastAt + 1.25f, 2000.f, SkillDamageAt(MayaLevel), TEXT(""), TEXT("Converge"), TEXT("Converge"));
             // Ruin: 1, 2 and 3 s after the lock, slag, shock and corrosive pulses on the target, radius 650, damage
             // 7.2 x PlayerSkillStatusEffectDamage each. Their status effects (always applied in the data) are not.
             if (GradeOfNamed(TEXT("Ruin")) > 0)
             {
                 const float LockedAt = CastAt + Maya->LastPhaselockTimeline().LockedAt;
                 const float Pulse = 7.2f * SkillStatusDamageAt(MayaLevel);
-                Blast(LockedAt + 1.f, 650.f, Pulse, TEXT("GD_Amp.DamageType.DmgType_Amp_Impact"), TEXT("Ruin slag"));
-                Blast(LockedAt + 2.f, 650.f, Pulse, TEXT("GD_Shock.DamageType.DmgType_Shock_Impact"), TEXT("Ruin shock"));
-                Blast(LockedAt + 3.f, 650.f, Pulse, TEXT("GD_Corrosive.DamageType.DmgType_Corrosive_Impact"), TEXT("Ruin corrosive"));
+                Blast(LockedAt + 1.f, 650.f, Pulse, TEXT("GD_Amp.DamageType.DmgType_Amp_Impact"), TEXT("Ruin"), TEXT("Ruin slag"));
+                Blast(LockedAt + 2.f, 650.f, Pulse, TEXT("GD_Shock.DamageType.DmgType_Shock_Impact"), TEXT("Ruin"), TEXT("Ruin shock"));
+                Blast(LockedAt + 3.f, 650.f, Pulse, TEXT("GD_Corrosive.DamageType.DmgType_Corrosive_Impact"), TEXT("Ruin"), TEXT("Ruin corrosive"));
             }
         }
     }
@@ -123,10 +123,30 @@ void UOpenWillowSkills::RunAction(const FAction& Action)
     }
     const FVector Centre = Action.Target.IsValid() ? Action.Target->GetActorLocation() : Action.Where;
     int32 Hits = 0;
-    for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It)
+    // Every actor that takes Maya's hits, as for a gun's splash (OpenWillowProjectile.cpp Explode), through the shared
+    // dispatcher so the target, OpenWillowHit::OnHit() and ShotDamageType() readers see the skill's own damage type. The
+    // blasts have no falloff (bDisableRadiusDamageFalloff in the behaviour data) and never crit (UNVERIFIED).
+    for (TActorIterator<AActor> It(GetWorld()); It; ++It)
     {
-        if (It->HealthFraction() <= 0.f || FVector::Dist(It->GetActorLocation(), Centre) > Action.Radius) continue;
-        It->TakeDamage(Action.Damage, FDamageEvent(), Maya->GetController(), Maya);
+        IOpenWillowHitTarget* Target = OpenWillowHit::AsTarget(*It);
+        if (!Target || *It == Maya || !Target->CanTakeHits()) continue;
+        FVector TargetCentre;
+        float TargetRadius = 0.f;
+        Target->GetHitCentre(TargetCentre, TargetRadius);
+        if (FVector::Dist(TargetCentre, Centre) > Action.Radius) continue;
+        FOpenWillowHitEvent Event;
+        Event.Kind = EOpenWillowHitKind::Splash;
+        Event.WeaponId = TEXT("skill:") + Action.Skill;
+        Event.Damage = Action.Damage;
+        Event.DamageType = Action.DamageType;
+        Event.Element = OpenWillowHit::ElementOf(Action.DamageType);
+        Event.Origin = Centre;
+        Event.Direction = (TargetCentre - Centre).GetSafeNormal();
+        Event.bCanCrit = false;
+        FHitResult Hit;
+        Hit.ImpactPoint = TargetCentre;
+        Hit.Location = TargetCentre;
+        Maya->ApplyShotDamage(*It, Event, Hit);
         ++Hits;
     }
     AOpenWillowProjectile::ExplosionFx(GetWorld(), Centre, FVector::UpVector, Action.Radius, Action.DamageType);
