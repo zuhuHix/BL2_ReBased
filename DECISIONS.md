@@ -3134,3 +3134,15 @@ AI-assisted (Claude). Record and numbers: `docs/verification/WEAPON_PROJECTILES.
   recipe has a `TraceExtent`, so the sweep is checked with a host box only. The level scale is consistent with the live
   Maliwan counts (about 2 x the card chance at Maya 54 against a level-7 bullymong); a same-level live check is still to do:
   UNVERIFIED. All of it is host behaviour checked in the host, not parity with the running game.
+
+## 2026-11-03: One Unreal run lock per machine
+
+AI-assisted (Claude Opus 5.5). The run lock was `local/ue_run.lock` inside each checkout, so suites started from different
+worktrees on one PC launched editors at the same time. `tools/ue_lock.ps1` now names one file per machine,
+`%LOCALAPPDATA%\OpenWillow\ue_run.lock` (`OPENWILLOW_UE_LOCK` overrides it), and all 20 scripts that took the old lock
+(suites, seed/import scripts, shot runners, `tools/real_game/realgame.ps1`) get the path from it. The take/release logic
+and the wait while any `UnrealEditor` runs are unchanged; the optional `-SharedLock`/`-HubLock` parameters still work.
+Branches older than this change still use the per-checkout file until rebased. Verification records that cite
+`local/ue_run.lock` describe past runs and are left as written. Checks: CTest `ue-lock-machine-wide` (no script builds its
+own lock path; the helper's default and override); live: with the lock held, `test_quest.ps1 -WaitForEditorSeconds 10`
+gave up without touching it; a full `test_quest.ps1` passed 111/111 and 11/11 and left no lock behind.

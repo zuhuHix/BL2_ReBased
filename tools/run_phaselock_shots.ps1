@@ -9,7 +9,7 @@ param(
 # AI-assisted. Captures the host Phaselock presentation on Sanctuary: Maya (-owmaya) with a slice gun, the host
 # training dummy 650 uu ahead (-owcombattest), a cast at it and timed screenshots (-owphaselockshots: hit at 0.12 ...
 # 6.2 s, then a miss for the fizzle hand effect). Screenshots and the log go to $Out (ignored local/). Holds
-# local/ue_run.lock for the one editor launch and never touches another editor. Host presentation only: nothing here is
+# the UE run lock (tools/ue_lock.ps1) for the one editor launch and never touches another editor. Host presentation only: nothing here is
 # an original-game capture.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -20,7 +20,7 @@ $itemDir = Split-Path -Parent $gear
 $gearLevel = if (Test-Path -LiteralPath $gear) { [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level } else { 30 }
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 $deadline = (Get-Date).AddSeconds($WaitForEditorSeconds)
 $stream = $null
@@ -29,7 +29,7 @@ while (!$stream) {
         try { $stream = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) } catch { $stream = $null }
     }
     if (!$stream) {
-        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or local/ue_run.lock is still present; leave it untouched.' }
+        if ((Get-Date) -gt $deadline) { throw 'Another Unreal editor or the UE run lock (tools/ue_lock.ps1) is still present; leave it untouched.' }
         Start-Sleep -Seconds 5
     }
 }

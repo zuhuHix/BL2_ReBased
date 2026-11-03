@@ -6,7 +6,7 @@ param(
     [int]$Port = 8784,
     # Whole run, from launch to the summary line.
     [int]$TimeoutSeconds = 420,
-    # How long to wait for another run's ue_run.lock before giving up.
+    # How long to wait for another run's UE run lock (tools/ue_lock.ps1) before giving up.
     [int]$LockWaitSeconds = 900,
     # Unlocked weapon slots for the run (the locked-slot steps need 2).
     [ValidateRange(2, 4)][int]$Slots = 2,
@@ -34,7 +34,7 @@ param(
 # host behaviour documented as different from the original game, never counted as a pass)
 # and a tally. Exit codes: 0 all PASS; 1 FAIL or NOT_RUN present; 2 no summary (launch/timeout);
 # 3 PASS_WITH_KNOWN_DIVERGENCE. Refuses to start when an Unreal editor is already running, and
-# always stops the editor it started and releases local/ue_run.lock.
+# always stops the editor it started and releases the UE run lock (tools/ue_lock.ps1).
 # Build the editor target first (docs/TOOLING.md).
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -44,7 +44,7 @@ if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under
 if (!$Game -or !(Test-Path -LiteralPath $Game)) { throw 'Pass -Game <Borderlands 2 folder> or set OPENWILLOW_BL2' }
 $localDir = Join-Path $repo 'local'
 New-Item -ItemType Directory -Force -Path $localDir | Out-Null
-$lockPath = Join-Path $localDir 'ue_run.lock'
+$lockPath = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logDir = Join-Path $localDir 'inventory-actions'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')

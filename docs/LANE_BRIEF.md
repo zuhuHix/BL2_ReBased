@@ -41,7 +41,7 @@ your task touches. If this page and a long document disagree, the long document 
   final message with what changed, why, and what is verified.
 - Real-game runs: only when your brief says so. Back up the saves first; afterwards the saves, config and SDK
   settings must be byte-identical (restore from the backup what the game rewrote, and say so).
-- One UE editor or game process per machine: `local/ue_run.lock`. The suite scripts take it themselves; for a UE build
+- One UE editor or game process per machine: `%LOCALAPPDATA%\OpenWillow\ue_run.lock` (`tools/ue_lock.ps1`; `OPENWILLOW_UE_LOCK` overrides it). The suite scripts take it themselves; for a UE build
   use `local/p2/locked.ps1 -Owner <lane> -Command build` when that helper exists in the worktree.
 
 ## Gates

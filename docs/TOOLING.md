@@ -147,6 +147,17 @@ decompressed packages and skips the container, asset and compressed tests. The
 LZO decoder is the vendored MIT-licensed lzokay; see
 [THIRD_PARTY.md](../THIRD_PARTY.md).
 
+### One Unreal run per machine
+
+Every script that launches the Unreal Editor or the real game (the suites, the seed and import scripts, the shot
+runners, `tools/real_game/realgame.ps1`) takes one lock file per machine, `%LOCALAPPDATA%\OpenWillow\ue_run.lock`,
+with an atomic create, and deletes it when done; they also still wait while any `UnrealEditor` process runs. The path
+comes from `tools/ue_lock.ps1`; set `OPENWILLOW_UE_LOCK` to use another file. Until 2026-11-03 the lock was
+`local/ue_run.lock` inside each checkout, so editors started from different worktrees ran side by side; a branch older
+than that change still uses the per-checkout file, so rebase it before running suites next to newer worktrees. A lock
+left behind by a crashed run blocks every worktree: check that no editor or game started by that run is alive, then
+delete the file by hand. CTest `ue-lock-machine-wide` checks that no script builds its own lock path.
+
 ## `ow-package`: the package reader
 
 A standalone x64 C++20 tool that reads version 832/46 packages:
@@ -567,7 +578,7 @@ the existing base-game search root. DLC discovery alone is not DLC compatibility
 Everything under `local/` and `host/ue5/OpenWillow/Content/` is generated from the installed game and is not in Git. A
 from-scratch regeneration on a second PC (2026-11-02/03, main 683a083) went through the order below; each tool's own
 section in this file has its options. Run the non-UE steps in any order their inputs allow; run UE steps one at a time
-(they wait for `local/ue_run.lock` and for no running editor), and only after the UE module has been built
+(they wait for the machine-wide run lock, `tools/ue_lock.ps1`, and for no running editor), and only after the UE module has been built
 (`host/ue5/OpenWillow/Binaries/Win64/UnrealEditor-OpenWillow.dll`).
 
 1. Build the core (`cmake -S . -B build -T version=14.50`, then `cmake --build build --config Release`) and run
@@ -1293,7 +1304,7 @@ python tools/render_weapon_previews.py slice_pistol --items local/items/slice `
   (pass 2) and the shading inputs (pass 3, behind a flag) are all `UNVERIFIED` against the running game; see the three
   weapon-paint entries dated 2026-10-02 in [DECISIONS.md](../DECISIONS.md).
 
-`tools/seed_slice_player_assets.ps1` holds `local/ue_run.lock` for each editor launch and never deletes
+`tools/seed_slice_player_assets.ps1` holds the machine-wide UE run lock (`tools/ue_lock.ps1`) for each editor launch and never deletes
 `Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when
 `Weapons/InfinityProxy` is absent (it supplies `M_OW_FxAdditive` and `M_OW_BulletHole`). `items` runs the additive
 `host/ue5/import_slice_items.py` (pool-rolled slice guns into `Weapons/SliceItems`, grey stand-in material; existing
@@ -1351,7 +1362,7 @@ pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList 
 - `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
   yet; picking one is a maintainer decision (license and provenance entry first).
 - `tools/slice_npc_editor.py` imports `unreal` and only runs inside the editor.
-- `tools/import_phaselock_fx.ps1` waits for `local/ue_run.lock` like the suite scripts. `host/ue5/import_phaselock_fx.py`
+- `tools/import_phaselock_fx.ps1` waits for the machine-wide UE run lock (`tools/ue_lock.ps1`) like the suite scripts. `host/ue5/import_phaselock_fx.py`
   and the `tools/run_phaselock_shots.ps1 -Extra` switches `-owbubbleradius` and `-owfxscalar` are described in
   [PHASELOCK_STOCK_DATA.md](verification/PHASELOCK_STOCK_DATA.md). Write the values as literals, since a PowerShell
   variable inside `-Extra` from a `-File` call is not expanded.

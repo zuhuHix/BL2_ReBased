@@ -16,12 +16,12 @@ param(
 #          that one folder). Provides M_OW_FxAdditive (tracers, flashes, Phaselock shell) and M_OW_BulletHole.
 #   items  host/ue5/import_slice_items.py: local/items/slice pool-rolled guns -> Weapons/SliceItems/SK_<id>.
 #   paint  host/ue5/import_weapon_paint.py with the prepared paint JSON (repaints the named mesh only).
-# Holds local/ue_run.lock for each editor launch and stops if another Unreal editor runs (never touches it).
+# Holds the UE run lock (tools/ue_lock.ps1) for each editor launch and stops if another Unreal editor runs (never touches it).
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $logs = Join-Path $repo 'local/items/logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 $run = { param($name) $Steps -contains 'all' -or $Steps -contains $name }

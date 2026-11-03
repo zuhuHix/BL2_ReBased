@@ -21,7 +21,7 @@ param(
 #   capture   -game launches of the preview levels, one screenshot each (window capture)
 #   manifest  merge everything into local/slice/npc_assets.json
 #
-# Only one editor runs at a time and the shared local/ue_run.lock is held for each editor launch. If an
+# Only one editor runs at a time and the machine-wide UE run lock (tools/ue_lock.ps1) is held for each editor launch. If an
 # UnrealEditor process that is not ours is running, this script stops instead of touching it.
 # It never edits Maya's assets or the existing weapon items; it only (re)creates content under
 # /Game/OpenWillow/Characters/{Marcus,TargetDummy,Shared} and /Game/OpenWillow/Weapons/MaliwanPistol.
@@ -32,7 +32,7 @@ if (!$UModel -or !(Test-Path -LiteralPath $UModel)) { throw 'Pass -UModel <umode
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
-$lock = Join-Path $repo 'local/ue_run.lock'
+$lock = & (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $slice = Join-Path $repo 'local/slice'
 $logs = Join-Path $slice 'logs'
 $tool = Join-Path $PSScriptRoot 'slice_npc_assets.py'
