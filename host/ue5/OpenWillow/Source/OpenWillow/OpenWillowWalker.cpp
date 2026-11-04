@@ -1826,7 +1826,7 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
         E.Element = OpenWillowHit::ElementOf(DamageType, In.WeaponId.IsEmpty() && Held ? Held->Element : FString());
     // BL2: status-effect damage never crits; splash crits are not measured (taken as none, UNVERIFIED).
     E.bCanCrit = In.Kind == EOpenWillowHitKind::Direct || In.Kind == EOpenWillowHitKind::Throw;
-    E.CritBonus = In.CritBonus != 2.f ? In.CritBonus : OpenWillowSkillEffects::Apply(this, TEXT("D_Attributes.GameplayAttributes.PlayerCriticalHitBonus"), 2.f);   // skills lane hook (Mind's Eye): base 2.0 (live) with skill Scale; a caller's own bonus wins
+    if (E.bCanCrit && Skills && !E.WeaponId.StartsWith(TEXT("skill:"))) E.CritBonus *= Skills->CritBonusScale();   // skills lane hook (Mind's Eye): gun hits, the event's bonus (base 2.0) x the skill's scale
     E.Time = GetWorld()->GetTimeSeconds();
     E.bCritical = false;
     E.Applied = -1;

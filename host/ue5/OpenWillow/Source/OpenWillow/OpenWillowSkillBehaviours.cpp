@@ -10,10 +10,24 @@
 #include "OpenWillowWalker.h"
 #include "EngineUtils.h"
 #include "GameFramework/Controller.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 UOpenWillowSkills::UOpenWillowSkills()
 {
     PrimaryComponentTick.bCanEverTick = true;
+    int32 Seed = 0;
+    Random.Initialize(FParse::Value(FCommandLine::Get(), TEXT("owskillseed="), Seed) ? Seed : int32(FPlatformTime::Cycles()));
+}
+
+float UOpenWillowSkills::CritBonusScale() const
+{
+    if (CritScaleVersion != GradeVersion)
+    {
+        CritScaleVersion = GradeVersion;
+        CritScale = OpenWillowSkillEffects::Apply(GetOwner(), TEXT("D_Attributes.GameplayAttributes.PlayerCriticalHitBonus"), 2.f) / 2.f;
+    }
+    return CritScale;
 }
 
 bool UOpenWillowSkills::KillSkillsActive() const
@@ -102,7 +116,7 @@ void UOpenWillowSkills::OnMayaDamaged(AActor* Causer, AController* Instigator, f
         if (A != Maya && OpenWillowHit::AsTarget(A)) Attacker = A;
     if (!Attacker && Instigator && Instigator->GetPawn() != Maya && OpenWillowHit::AsTarget(Instigator->GetPawn()))
         Attacker = Instigator->GetPawn();
-    if (!Attacker || FMath::FRand() >= 0.1f * G) return;
+    if (!Attacker || !RollRecompense(G)) return;
     FAction& A = Actions.AddDefaulted_GetRef();
     A.At = GetWorld()->GetTimeSeconds(); A.Kind = FAction::EKind::SingleHit; A.Target = Attacker; A.Damage = Damage;
     A.DamageType = TEXT("GD_Impact.DamageType.DmgType_Normal"); A.Skill = TEXT("Recompense"); A.Why = TEXT("Recompense");

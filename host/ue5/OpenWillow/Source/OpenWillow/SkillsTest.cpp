@@ -227,6 +227,22 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
     TestTrue(TEXT("PlayerSkillDamage at level 1"), FMath::IsNearlyEqual(UOpenWillowSkills::SkillDamageAt(1), 9.04f, 1e-3f));
     TestTrue(TEXT("PlayerSkillStatusEffectDamage at level 2"), FMath::IsNearlyEqual(UOpenWillowSkills::SkillStatusDamageAt(2), 1.2769f, 1e-3f));
 
+    // Recompense roll: chance 0.1 x grade from the component's seeded stream, so a seed replays the same procs.
+    TestFalse(TEXT("Recompense never procs untrained"), Tree->RollRecompense(0));
+    Tree->SetRandomSeed(1234);
+    FRandomStream Expected(1234);
+    int32 Procs = 0, Misses = 0;
+    bool bSame = true;
+    for (int32 I = 0; I < 20; ++I)
+    {
+        const bool bProc = Tree->RollRecompense(5);
+        bSame &= bProc == (Expected.FRand() < 0.5f);
+        (bProc ? Procs : Misses)++;
+    }
+    TestTrue(TEXT("Recompense rolls replay from the seed"), bSame);
+    TestTrue(TEXT("Seed 1234 gives both a proc and a no-proc in 20 rolls at grade 5"), Procs > 0 && Misses > 0);
+    TestEqual(TEXT("Crit bonus scale without an owner is 1"), Tree->CritBonusScale(), 1.f);
+
     Tree->ResetTree();
     TestTrue(TEXT("A respec removes every modifier"), Stack(TEXT("A.Damage")).IsEmpty());
 
