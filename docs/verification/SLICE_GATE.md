@@ -69,8 +69,8 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 
 ## Current link table
 
-Origin/main 6a2f35f plus this branch (review round 1), pc-hummer, 2026-11-04.
-**9 PASS, 0 FAIL, 4 NOT_AVAILABLE of 13**, in 183 s of game time.
+Origin/main 8bb74a0 plus this branch, pc-hummer, 2026-11-04.
+**10 PASS, 0 FAIL, 3 NOT_AVAILABLE of 13**, in 183 s of game time.
 
 | # | Link | Result | Detail (abridged) |
 |---|---|---|---|
@@ -79,7 +79,7 @@ Origin/main 6a2f35f plus this branch (review round 1), pc-hummer, 2026-11-04.
 | 3 | kill_enemy | PASS (fixture: ammo reserve refilled) | stand-in killed with 466 `FireOnce` shots in 136 s (two reserve refills) |
 | 4 | enemy_attacks_maya | NOT_AVAILABLE | the stand-in has no attack |
 | 5 | loot_drop_on_kill | NOT_AVAILABLE | no pickup within 1,500 uu of the corpse in 4 s |
-| 6 | pick_up_gun | NOT_AVAILABLE | nothing to pick up; fallback `ow.RollGun GD_Itempools.WeaponPools.Pool_Weapons_All_01_Common 8 1` added a level-8 Torgue pistol to the backpack |
+| 6 | pick_up_gun | PASS (fixture: teleport; gun rolled and dropped by the test) | no enemy drop yet, so the test rolls a gun (`ow.RollGun GD_Itempools.WeaponPools.Pool_Weapons_All_01_Common 8 1`) and drops it 150 uu ahead of Maya (as `-owpickupcardshots` does). Aimed at it, the pickup card (PR #95) selects that drop (`OpenWillowPickupCard::FindAimedPickup`) and its state names the item before E; E then picks it up (`PickupNearby`). Card state only: this run uses the canvas HUD, so the movie's drawing of the card is not checked |
 | 7 | equip_gun | PASS | the rolled gun equipped into the free 4th slot and drawn (it is the held weapon) |
 | 8 | phaselock_enemy | PASS (fixture: phaselock point granted) | the respawned stand-in lifted (`LastPhaselockHit`, target `IsPhaselocked`), 13 s lock |
 | 9 | mission_accept | PASS (fixture: teleport) | the use key at Marcus accepted the Fire mission; the lent pistol is in the backpack |
@@ -94,7 +94,8 @@ Origin/main 6a2f35f plus this branch (review round 1), pc-hummer, 2026-11-04.
 |---|---|---|---|
 | No gun range or real enemies on main | 2, 3 | range | PR #76 (`ow.Range`). The suite runs `ow.Range` when the command exists and fights the nearest moving enemy (class name containing `Enemy`) instead of the stand-in |
 | No enemy attacks | 4 (and 12's fixture) | range | PR #83 (enemy AI: notice, approach, melee). Once an enemy hits Maya during the fight, link 4 passes. The down link could then use an enemy's damage instead of the fixture; that change belongs to this lane |
-| No loot drop when an enemy dies | 5, 6 | range | Loot PR3: spawn an `AOpenWillowInventoryPickup` near the corpse. The VM already rolls the pools on death (COMBAT_LOOT.md); the host does not spawn them yet. The suite then walks to the drop and presses the use key (`PickupNearby`) |
+| No loot drop when an enemy dies | 5 (and 6's test drop) | range | Loot PR3: spawn an `AOpenWillowInventoryPickup` near the corpse. The VM already rolls the pools on death (COMBAT_LOOT.md); the host does not spawn them yet. With a real drop, link 6 uses it and drops the "gun rolled and dropped by the test" fixture |
+| The use key takes the nearest pickup, not the aimed one | 6 | inventory | PICKUP_CARD.md's known gap: E uses `PickupNearby` (nearest within 220 uu); the card uses `FindAimedPickup`. With one drop in reach both agree, so link 6 does not catch the difference |
 | Generated guns have no firing block | 7 (not graded) | projectiles | `ow.RollGun` guns fire the host's fallback trace (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"). The equip link does not grade the gun's firing |
 | The stand-in is a 20,000-health dummy | 3 | range | Real enemy health per level comes with PR #76 (`range_manifest.json`) |
 
@@ -110,6 +111,9 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-04 | main be94f4a | 9 / 0 / 4 | first green run, after four runs that found bugs in this lane's own driver (see below) |
 | 2026-11-04 | main f3947ed (after PR #80) | 9 / 0 / 4 | same links; ctest 21/21, verify_packages exact |
 | 2026-11-04 | main 6a2f35f, review round 1 | 9 / 0 / 4 | stricter grading (causer, full turn-in, run structure, fixtures); same links; ctest 21/21, verify_packages exact, checker tests 18/18 |
+| 2026-11-04 | main b945b49 (after #91, #92, #95) | 10 / 0 / 3 | link 6 now drops the rolled gun and checks the pickup card names it before E: NOT_AVAILABLE -> PASS (fixture); ctest 21/21, verify_packages exact |
+| 2026-11-04 | main 998780c (after #96, #86) | 10 / 0 / 3 | same links; ctest 21/21, verify_packages exact |
+| 2026-11-04 | main 8bb74a0 (after #94, #88) | 10 / 0 / 3 | same links; ctest 22/22, verify_packages exact, checker tests 18/18 |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
