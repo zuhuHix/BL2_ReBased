@@ -75,14 +75,16 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Rule | Host | Record |
 |---|---|---|
 | One threat record per den, shared by its members | the range is one den, centred on the spot | AI_AWARENESS_LIVE 0 |
-| State update cadence | every 0.2 s per enemy; den fall-back check every 1.0 s | AI_MELEE_TARGETING_LIVE 4; AI_AWARENESS_LIVE 2 |
+| State update cadence | every 0.2 s per enemy (the line-of-sight trace is taken on these updates only); den fall-back check every 1.0 s | AI_MELEE_TARGETING_LIVE 4; AI_AWARENESS_LIVE 2 |
 | Notice by sight | the previous update's line of sight (a Visibility trace, stand-in for the exposure iterator), Maya in the front half-plane, Maya within the den's ThreatRadius (4,665.625, the one den read) of the den centre | AI_AWARENESS_LIVE 0 |
 | Notice by proximity | 3D distance minus the enemy's collision radius below 768 (AICloseThreatRadius), Maya within the den's PatrolRadius (3,667.19) | AI_AWARENESS_LIVE 0 |
 | Notice stamps | level 2, AggroTime = now, ForgetTime = now + 10 (MinEngagementTime), refreshed while a rule holds | AI_AWARENESS_LIVE 2 |
 | Damage by Maya | level 3, ForgetTime = now + 25 (MinProvokedTime) | AI_AWARENESS_LIVE 3 |
 | Fall-back | at the first den update after ForgetTime the level drops to 1 (record removal beyond the list radius not modelled) | AI_AWARENESS_LIVE 2 |
 | Awareness | attack decisions only after AggroTime + 0.1 s | AI_AWARENESS_LIVE 2 |
+| Own target, apart from the threat record | each enemy keeps its own target: valid while the den level is 2 or more and Maya is within the den's ThreatRadius of its centre; it goes for where it last saw her (line of sight) or heard her (proximity), and after losing the target it walks to that spot once, then patrols | AI_AWARENESS_LIVE 2 (targets drop at the member's next update once its rules fail); the validity rule is a host stand-in |
 | Approach | turn at 360 deg/s, run at `run_speed` (400 uu/s, stand-in) with the run clip (walk as fallback) | host stand-in |
+| Blocked chase | under 10 uu of progress in 1 s counts as blocked: side-steps (70 degrees, alternating sides); blocked for 3 s, the enemy drops the target for 5 s | host choice |
 | Melee volume | horizontal 640 from a point 100 uu behind the enemy, 64 degree half angle, Maya's centre -143 to +339 uu from the enemy's location | AI_MELEE_TARGETING_LIVE 5 (fitted) |
 | Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing 1.25 s after the previous start | AI_MELEE_TARGETING_LIVE 4 |
 | Melee damage | the VM's swing rows per kind and level (`arrival` x `ratio`, both from `ow-package --combat-run maya:L spawn:<kind>:L swing:<n>:melee`), x the level scale (1.0 at or below Maya, 1.1 / 1.2 one / two levels up; a straight line to 3.0 at sixteen beyond that, stand-in) | COMBAT_MELEE (the VM rows reproduce adult L5/6/7 73.6974 / 83.2781 / 94.1042, regular L6 24.9834, baby L6 12.4917, ratios 0.715 / 0.728 / 0.741) |

@@ -32,13 +32,19 @@ public:
     void RebuildLast();
     // Toggles for every range actor: invulnerable (dummies and enemies), passive (enemies only).
     void SetMode(bool bInvulnerableNow, bool bPassiveNow);
-    // The spot for ow.Range without arguments: -owrangeat=X,Y,Z[,Yaw], else local/range/range.json "spot", else the scout.
+    // The spot for ow.Range without arguments: -owrangeat=X,Y,Z[,Yaw], else local/range/range.json "spot", else the manifest's
+    // candidates (PR2 follow-up), else the scout.
     bool ResolveSpot(FVector& OutSpot, float& OutYaw, FString& OutSource);
-    // Scout (PR1 host choice, UNVERIFIED): the first open, flat spot around the town centre that passes the rules in the .cpp.
+    // Scout (PR1 host choice, UNVERIFIED): the first open, flat, textured spot around the town centre that passes the rules in the .cpp.
     bool ScoutSpot(FVector& OutSpot, float& OutYaw, FString& OutLog);
     // The floor of every formation slot at Spot facing Yaw (3 dummies, one slot per manifest enemy). False, with the first
-    // slot that has no walkable floor in OutWhy, when the range does not fit there.
-    bool FormationSlots(const FVector& Spot, float Yaw, TArray<FVector>& OutDummies, TArray<FVector>& OutEnemies, FString& OutWhy) const;
+    // slot that has no walkable floor in OutWhy, when the range does not fit there. bRequireTexturedFloor: every slot must
+    // also stand on a textured material (the candidates and the scout set it).
+    bool FormationSlots(const FVector& Spot, float Yaw, TArray<FVector>& OutDummies, TArray<FVector>& OutEnemies, FString& OutWhy,
+        bool bRequireTexturedFloor = false) const;
+    // One manifest candidate (index into Manifest.Candidates): the first accepted point of the candidate and its rings. False,
+    // with the reason the candidate point failed in OutWhy, when no point is accepted.
+    bool ResolveCandidate(int32 Index, FVector& OutSpot, float& OutYaw, FString& OutMaterial, FString& OutWhy);
     // Enemies the manifest asks for (spawn entries of known kinds) and the dummy count: what a complete build holds.
     int32 ExpectedEnemies() const;
     static constexpr int32 ExpectedDummies = 3;
@@ -60,8 +66,10 @@ private:
     void TestHit(AOpenWillowCombatTarget* Target, float Amount, UPrimitiveComponent* Where, AController* Instigator = nullptr,
         AActor* Causer = nullptr);
     void TestShot(int32 Number);
+    // -owrangesurvey driver (PR2 follow-up; see TickSurvey in the .cpp).
+    void TickSurvey(float Now);
 
-    FOpenWillowThreatDen Den;           // PR2: the threat record of the range den (centre = the spot)
+    FOpenWillowThreatDen Den;          // PR2: the threat record of the range den (centre = the spot)
 
     TArray<TWeakObjectPtr<AOpenWillowCombatTarget>> Dummies;
     TArray<TWeakObjectPtr<AOpenWillowEnemy>> Enemies;
@@ -98,4 +106,13 @@ private:
     float TestHealthBefore = 0.f;
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;
+
+    // -owrangesurvey driver state: one candidate per step (teleport, then a shot 2.5 s later, then a second's settle).
+    bool bSurveyMode = false;
+    bool bSurveyDone = false;
+    int32 SurveyCount = 8;              // -owrangesurveycount=N
+    int32 SurveyIndex = 0;
+    float SurveyArmedAt = -1.f;
+    float SurveyStepAt = -1.f;          // the teleport of this step (-1: the next step has not started)
+    bool bSurveyShot = false;
 };

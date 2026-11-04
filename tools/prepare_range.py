@@ -13,6 +13,10 @@
 # 2. The imported enemy assets: local/phaselock/target/host_target.json (tools/import_phaselock_target.ps1, the bullymong).
 #    Extra clips (walk, run, hit, melee) are picked by name from the imported AnimSequence files next to the idle clip; the
 #    choice is a name match (UNVERIFIED that it is the clip the game plays) and the manifest says which file was taken.
+# 3. Spot candidates for the range: the standable terrain points of local/sanctuary/terrain-runtime.json (the terrain probes the
+#    level import wrote), with Sanctuary_P Terrain_2 first: the terrain the gate's floor lies in (SANCTUARY_ARTIFACT_PASS.md,
+#    "the void inside the gate lies within Sanctuary_P Terrain_2"), then the other terrains by distance from the plaza. The host
+#    tries them in order (a textured floor where the whole formation fits) before its ring scout.
 #
 # Usage: python tools/prepare_range.py [--reader build/Release/ow-package.exe] [--levels 1-50] [--no-vm]
 import argparse
@@ -114,6 +118,27 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
     return entry
 
 
+PLAZA = (0.0, 0.0)             # the scout centre; from ignored local data later in this stack
+GATE_TERRAIN = "Sanctuary_P:TheWorld.PersistentLevel.Terrain_2"
+
+
+def spot_candidates(terrain_json):
+    """Standable terrain points as range spot candidates: the gate's terrain first, then the rest by distance from the plaza."""
+    out = []
+    for probe in terrain_json.get("probes", []):
+        source = probe.get("source", "")
+        for stand in probe.get("stands", []):
+            point = stand.get("point")
+            if not point or len(point) != 3:
+                continue
+            gate = source == GATE_TERRAIN
+            distance = ((point[0] - PLAZA[0]) ** 2 + (point[1] - PLAZA[1]) ** 2) ** 0.5
+            out.append({"x": point[0], "y": point[1], "z": point[2], "source": source, "gate_terrain": gate,
+                        "plaza_distance": round(distance, 1)})
+    out.sort(key=lambda c: (not c["gate_terrain"], c["plaza_distance"]))
+    return out
+
+
 def run_vm(reader, levels):
     cooked = os.path.join(os.environ.get("OPENWILLOW_BL2", ""), "WillowGame", "CookedPCConsole")
     if not os.path.isdir(cooked):
@@ -134,6 +159,8 @@ def main(argv=None):
     parser.add_argument("--levels", default="1-50")
     parser.add_argument("--target", default=os.path.join(REPO, "local", "phaselock", "target", "host_target.json"))
     parser.add_argument("--out", default=os.path.join(REPO, "local", "range", "range_manifest.json"))
+    parser.add_argument("--terrain", default=os.path.join(REPO, "local", "sanctuary", "terrain-runtime.json"),
+                        help="terrain probes of the level import (spot candidates); missing: the host scouts rings only")
     parser.add_argument("--no-vm", action="store_true", help="skip the VM run (empty health tables: the host uses its stand-in)")
     args = parser.parse_args(argv)
     run = {} if args.no_vm else run_vm(args.reader, parse_levels(args.levels))
@@ -150,7 +177,11 @@ def main(argv=None):
         source = "combat-run spawn:%s (VM spawn health, UNVERIFIED)" % vm_kind if health else "no VM run"
         kinds[name] = kind_entry(name.replace("_", " ").title(), target, health, source,
                                  arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"))
-    manifest = {"schema": "ow-range-v1", "respawn_seconds": 8, "spawns": SPAWNS, "kinds": kinds,
+    candidates = []
+    if os.path.isfile(args.terrain):
+        with open(args.terrain, encoding="utf-8") as f:
+            candidates = spot_candidates(json.load(f))
+    manifest = {"schema": "ow-range-v1", "respawn_seconds": 8, "spawns": SPAWNS, "kinds": kinds, "spot_candidates": candidates,
                 "assets": "imported" if target else "missing (run tools/import_phaselock_target.ps1)"}
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
@@ -159,6 +190,7 @@ def main(argv=None):
         levels = kind["health_by_level"]
         print("%s: %d health levels, %d melee levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), len(kind["melee_arrival_by_level"]), "yes" if kind["mesh"] else "no",
               kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-"))
+    print("spot candidates: %d (%d on the gate terrain)" % (len(candidates), sum(c["gate_terrain"] for c in candidates)))
     print("wrote " + args.out)
     return 0
 

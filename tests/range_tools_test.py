@@ -31,6 +31,16 @@ class PrepareRangeTest(unittest.TestCase):
         self.assertEqual(entry['melee_arrival_by_level'], {'3': 9.5})
         self.assertEqual(entry['melee_ratio_by_level'], {'3': 0.7})
 
+    def test_spot_candidates_gate_first(self):
+        terrain = {'probes': [
+            {'source': 'Made:Level.Terrain_9', 'stands': [{'point': [0.0, 1000.0, 10.0]}, {'point': [1.0]}]},
+            {'source': prepare_range.GATE_TERRAIN, 'stands': [{'point': [-5000.0, 640.0, 20.0]}, {'point': [-1000.0, 640.0, 30.0]}]}]}
+        out = prepare_range.spot_candidates(terrain)
+        self.assertEqual([c['x'] for c in out], [-1000.0, -5000.0, 0.0])   # gate terrain first, each group nearest first
+        self.assertTrue(out[0]['gate_terrain'])
+        self.assertFalse(out[2]['gate_terrain'])
+        self.assertEqual(out[2]['plaza_distance'], 1000.0)
+
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
         clips = prepare_range.find_clips('/Game/X/Anims/Idle_Made.Idle_Made', names)

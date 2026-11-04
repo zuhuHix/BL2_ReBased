@@ -51,12 +51,22 @@ struct FOpenWillowRangeSpawn
     int32 Count = 0;
 };
 
+// A spot candidate from the manifest's "spot_candidates" (written by tools/prepare_range.py, gate terrain first). The
+// location is a point on a terrain near the town gate; the host tries it, and points around it, in ResolveSpot.
+struct FOpenWillowRangeCandidate
+{
+    FVector Location = FVector::ZeroVector;
+    FString Source;                      // the terrain the point was probed on
+    bool bGateTerrain = false;
+};
+
 // The whole manifest. Load() is in OpenWillowRange.cpp; a missing or invalid file gives one engine-shape stand-in kind.
 struct FOpenWillowRangeManifest
 {
     float RespawnSeconds = 8.f;
     TArray<FOpenWillowRangeSpawn> Spawns;
     TMap<FString, FOpenWillowRangeKind> Kinds;
+    TArray<FOpenWillowRangeCandidate> Candidates;   // empty for the stand-in manifest
     bool bFromFile = false;
 
     static FOpenWillowRangeManifest Load(const FString& Path, FString& OutLog);
