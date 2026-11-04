@@ -11,8 +11,8 @@ class AOpenWillowInventoryMayaDisplay;
 class AOpenWillowInventoryPreviewActor;
 class FOpenWillowInventoryVm;
 
-// The StatusMenu pages the host shows (each its own page over the same movie): Skills, Inventory, and the Missions log.
-enum class EOpenWillowStatusPage : uint8 { Skills, Inventory, Missions };
+// The StatusMenu pages the host shows (each its own page over the same movie): Skills, Inventory, the Missions log and the Map.
+enum class EOpenWillowStatusPage : uint8 { Skills, Inventory, Missions, Map };
 
 UCLASS()
 class OPENWILLOW_API AOpenWillowMayaHUD : public AHUD
@@ -27,6 +27,9 @@ public:
     // The Missions log page (tools/hud_overlay/missions.html); false without a page URL.
     bool ToggleMissions();
     bool IsMissionsOpen() const { return SkillsBrowser.IsValid() && bMissionsOpen; }
+    // The Map page (tools/hud_overlay/map.html, OpenWillowMapScreen); false without a page URL.
+    bool ToggleMap();
+    bool IsMapOpen() const { return SkillsBrowser.IsValid() && bMapOpen; }
     void CloseSkills();
     void RequestSkillsCloseFromPage();
     bool IsSkillsOpen() const { return SkillsBrowser.IsValid(); }
@@ -71,6 +74,9 @@ private:
     // -owflashmissions=<url>, else the skills URL with missions.html in place of skills.html.
     FString MissionsUrl;
     bool bMissionsOpen = false;
+    // -owflashmap=<url>, else the skills URL with map.html in place of skills.html.
+    FString MapUrl;
+    bool bMapOpen = false;
     TSharedPtr<SWebBrowser> CachedMissionsBrowser;
     TSharedPtr<SBox> CachedMissionsRoot;
     UPROPERTY() TObjectPtr<AOpenWillowInventoryMayaDisplay> InventoryMayaDisplay;

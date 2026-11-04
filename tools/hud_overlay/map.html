@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  OpenWillow Map screen: BL2's StatusMenu movie in Ruffle, on its Map frame, with the level's tactical map movie loaded into
+  it and filled by map.js the way StatusMenuMapGFxObject does (docs/verification/MAP_SCREEN.md). Our own code; the movies and
+  Ruffle are served from ignored local/ by serve.py. Inside UE the host calls owMap(state).
+-->
+<html><head><meta charset="utf-8"><title>OpenWillow map</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
+body{perspective:var(--ow-focal,1229px);perspective-origin:var(--ow-origin,50% 50%)}
+ruffle-player{width:100%;height:100%;display:block}
+/* The movie's own Y turn of the map clip (menu3d.js), for the picture and its hit boxes alike. */
+ruffle-player,#hit-layer{transform-origin:var(--ow-origin,50% 50%);transform:rotateY(var(--ow-rotation,0deg))}
+#loading{position:absolute;inset:0;z-index:2;display:grid;place-items:center;
+  background:linear-gradient(135deg,rgba(8,31,58,.96),rgba(22,85,118,.88));
+  color:#fff0b8;font:700 24px/1.3 Arial,sans-serif;text-shadow:2px 2px #11283d;
+  letter-spacing:.04em;text-align:center;transition:opacity .3s ease}
+#loading.finished{opacity:0;pointer-events:none}
+#loading[hidden]{display:none}
+#loading small{display:block;margin-top:12px;color:#c9eafa;font-size:14px;letter-spacing:0}
+#hit-layer{position:absolute;inset:0;z-index:1;pointer-events:none}
+.movie-hit{position:absolute;border:0;padding:0;background:transparent;pointer-events:auto;cursor:pointer}
+.movie-hit:disabled{cursor:not-allowed}
+.movie-hit:focus-visible{outline:2px solid #ffe25b;outline-offset:-2px}
+</style>
+<script>
+  window.RufflePlayer = window.RufflePlayer || {};
+  window.RufflePlayer.config = { autoplay: 'on', unmuteOverlay: 'hidden', splashScreen: false,
+    wmode: 'transparent', backgroundColor: null, letterbox: 'off', logLevel: 'error',
+    contextMenu: 'off', allowScriptAccess: true };
+</script>
+<script src="ruffle/ruffle.js"></script>
+</head><body>
+<div id="hit-layer" aria-label="Map controls"></div>
+<div id="loading" role="status" aria-live="polite">MAP<small>Loading the map...</small></div>
+<script src="glass_sheet.js"></script>
+<script src="menu3d.js"></script>
+<script src="map.js"></script>
+</body></html>

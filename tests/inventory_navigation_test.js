@@ -83,18 +83,19 @@ check('Left in the backpack returns to the equipped analogue, even after another
 });
 check('Number keys switch status-menu tabs (TrySwitchToScreen), not weapon slots', () => {
   run('reset(2)'); press('ArrowRight', '2'); assert.equal(run('lastTabRequest'), 'Map');
-  press('3'); assert.equal(run('lastTabRequest'), 'Inventory');
+  assert.equal(run('location.href'), '/__ow_tab_map');
+  run('reset(2)'); press('ArrowRight', '3'); assert.equal(run('lastTabRequest'), 'Inventory');
   press('5'); assert.equal(run('lastTabRequest'), 'Challenges');
-  assert.equal(run('location.href'), undefined); // Map and Challenges have no host page; Inventory is this page
+  assert.equal(run('location.href'), undefined); // Challenges has no host page; Inventory is this page
   assert.equal(run('targetSlot'), 0); assert.equal(selected(), 'b0');
   press('Enter', '1');
   assert.equal(run('location.href'), '/__ow_tab_missions');
   assert.equal(run('targetSlot'), 0); assert.equal(run('compareId'), 'w0'); // the transfer kept the analogue slot
   run('reset()'); press('4'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
-check('Comma and Period are the previous and next tab (GotoPrevTab / GotoNextTab): Map (no host page), Skills', () => {
+check('Comma and Period are the previous and next tab (GotoPrevTab / GotoNextTab): Map, Skills', () => {
   run('reset()'); press(',');
-  assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), undefined); // Map has no host page
+  assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), '/__ow_tab_map');
   press('.');
   assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
@@ -103,7 +104,7 @@ check('Comma and Period switch tabs during a transfer and during a compare too',
   press(','); assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('transferSourceId'), 'b0');
   press('.'); assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
   run('reset()'); press('ArrowRight', 'c'); assert.ok(run('compareId'));
-  press(','); assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), undefined);
+  press(','); assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), '/__ow_tab_map');
   press('.'); assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
 check('Backpack keeps its row when re-entered and stops at the top', () => {
