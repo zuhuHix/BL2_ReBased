@@ -2,7 +2,7 @@
 
 The host logs `OWSLICEGATE start ...`, then `OWSLICEGATE link=<name> result=<PASS|FAIL|NOT_AVAILABLE> fixtures=[<a; b>]
 detail=<text>` for each link it reaches, in run order, and `OWSLICEGATE SUMMARY pass=<n> fail=<n> na=<n>` when the run
-finishes. `fixtures=[...]` names the test fixtures the link relied on (empty or absent: none). This checker lists the 13
+finishes. `fixtures=[...]` names the test fixtures the link relied on (empty or absent: none). This checker lists the
 links in order, marks every link the host never logged as FAIL ("not reached"), and checks the run's structure: one
 start line, then each link at most once and in the expected order, then one SUMMARY line that agrees with the link lines.
 
@@ -24,6 +24,7 @@ LINKS = [
     ('enemy_attacks_maya', 'range'),
     ('loot_drop_on_kill', 'range'),
     ('pick_up_gun', 'range'),
+    ('pick_up_aimed_not_nearest', 'inventory'),
     ('equip_gun', 'maya'),
     ('phaselock_enemy', 'maya'),
     ('mission_accept', 'slice-gate'),
@@ -101,6 +102,29 @@ def parse_log(lines):
     return starts, logged, summary, errors
 
 
+# The pickup links name the card's item at the use-key press and the item E picked up (`card_id=... picked_id=...`). A
+# PASS needs both, and they must be the same item: the checker reads them itself rather than trusting the host's verdict.
+CARD_LINKS = ('pick_up_gun', 'pick_up_aimed_not_nearest')
+CARD_IDS = re.compile(r'\bcard_id=(?P<card>\S+) .*?\bpicked_id=(?P<picked>[^\s:,]+)')
+
+
+def cross_check(rows, errors):
+    """A PASS on a card link whose card id and picked-up id are missing or differ becomes a FAIL."""
+    for row in rows:
+        if row['name'] not in CARD_LINKS or row['result'] != 'PASS':
+            continue
+        match = CARD_IDS.search(row['detail'])
+        if not match:
+            why = 'no card_id/picked_id in the detail'
+        elif match['card'] != match['picked'] or match['card'] == 'none':
+            why = f'card_id {match["card"]} is not picked_id {match["picked"]}'
+        else:
+            continue
+        errors.append(f'link {row["name"]}: PASS overruled, {why}')
+        row['result'] = 'FAIL'
+        row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
+
+
 def build_rows(logged):
     """One row per expected link, in order. A link that was never logged is a FAIL (not reached)."""
     rows = []
@@ -155,6 +179,7 @@ def main(argv=None):
         return 2
 
     rows = build_rows(logged)
+    cross_check(rows, errors)
     totals = {result: sum(1 for row in rows if row['result'] == result) for result in RESULTS}
     logged_counts = Counter(result for result, _, _ in logged.values())
     if summary is None:
