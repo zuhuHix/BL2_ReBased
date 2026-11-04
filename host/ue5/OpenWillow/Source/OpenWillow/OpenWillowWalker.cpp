@@ -2670,9 +2670,9 @@ void AOpenWillowWalker::SpawnCombatTarget()
         ECC_Visibility, Query)) Location = Floor.ImpactPoint;
     FActorSpawnParameters Params;
     Params.Owner = this;
-    // The target faces Maya (+180). Phaselock round 22 settled it for the captures too: with +180 the held bullymong is the game's
-    // compact ball with its back up; with 0 (rounds 16 to 21) it showed its rear. The converted clips put the head at the mesh's +X
-    // (an FK check of the conversion). -owcombatpawyawoffset=<degrees> overrides it.
+    // The target's facing is UNVERIFIED; +180 (facing Maya) is the current capture choice. Phaselock round 22: the pre-lift frame
+    // and an FK check of the converted clips (head at the mesh's +X) favour +180, a critic preferred 0 (PHASELOCK_STOCK_DATA.md).
+    // -owcombatpawyawoffset=<degrees> overrides it.
     float FacingYawOffset = 180.f;
     FParse::Value(FCommandLine::Get(), TEXT("owcombatpawyawoffset="), FacingYawOffset);
     const FRotator Facing(0, GetControlRotation().Yaw + FacingYawOffset, 0);
