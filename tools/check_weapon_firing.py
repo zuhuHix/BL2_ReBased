@@ -270,6 +270,9 @@ def check_hit_events(log, expected, throw=None, required=True, gun=None, swap=No
     for kind, count in kinds.items():
         if count != want[kind]:
             fails.append(f'{count} {kind} hit events, expected {want[kind]}')
+    # Every firing path names its damage source (EOpenWillowHitSource); the field is absent before the source was added.
+    if int(log.get('unknown_sources') or 0):
+        fails.append(f"{log['unknown_sources']} hit events with an Unknown source")
     if int(log['hit_events']) != sum(kinds.values()):
         fails.append(f"hit_events {log['hit_events']} != the sum of the kinds {sum(kinds.values())}")
     if 'tick_weapons' not in log:

@@ -46,6 +46,15 @@ public:
     // mapping are UNVERIFIED host fits; sizes, offsets, lifetimes, colours and axis locks are the cooked values.
     static void MuzzleFlashLayers(UWorld* World, const FVector& Location, const FVector& Forward, const FVector& Up,
         const TArray<FOpenWillowFlashLayer>& FlashLayers, float TextureFill = 0.5f);
+    // A cooked particle system's layers (tools/weapon_projectile_fx.py: explosions, rocket trails) drawn in the world as
+    // camera-facing soft quads: each layer once (its burst count is not modelled), size x Scale (the explosion band's or
+    // the trail's particle scale) x TextureFill. Same UNVERIFIED stand-in as the muzzle layers: no particle renderer, no
+    // textures, no velocity or size-over-life modules.
+    static void WorldLayers(UWorld* World, const FVector& Location, const TArray<FOpenWillowFlashLayer>& Layers, float Scale,
+        float TextureFill = 0.5f);
+    // Reads tools/weapon_muzzle_fx.py layer rows (name, material, alignment, axis, life, size_x, size_y, offset_x,
+    // colour, alpha, smoke) into Out.
+    static void ParseLayers(const TArray<TSharedPtr<class FJsonValue>>& Rows, TArray<FOpenWillowFlashLayer>& Out);
     // Low-cost brass cylinder stand-in, launched from the selected type/body socket toward the right. Its size, life and
     // ballistic constants are UNVERIFIED host values; the type data only identifies the casing template/socket.
     // A small glowing sphere thrown from an impact or explosion (falls like a casing; no spin of note). Host stand-in for

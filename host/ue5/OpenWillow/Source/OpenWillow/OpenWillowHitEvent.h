@@ -24,6 +24,21 @@ enum class EOpenWillowHitKind : uint8
     Throw,       // the direct half of a thrown Tediore gun
 };
 
+// What dealt the damage, independent of Kind (a rocket's explosion is Source Rocket with Kind Splash). In the running
+// game the light bullet's own hit arrives as a weapon-type damage source (WillowDmgSource_Pistol, _Shotgun ...), a rocket
+// as WillowDmgSource_Rocket, and a bullet's impact explosion (Maliwan, Torgue gyrojet) as WillowDmgSource_Grenade
+// (PROJECTILE_FIRING_PATTERNS_LIVE R6, R7; WEAPON_PROJECTILES.md section 10): those map to Bullet, Rocket and Explosion.
+enum class EOpenWillowHitSource : uint8
+{
+    Unknown,     // the default: a caller that does not say
+    Bullet,      // a light bullet or trace pellet hitting what it struck
+    Rocket,      // a rocket projectile, its direct hit and its explosion
+    Explosion,   // an explosion that is not a rocket's: a bullet's impact explosion (Maliwan, gyrojet)
+    Throw,       // a thrown Tediore gun, its strike and its explosion
+    Status,      // a status effect's damage over time
+    Skill,       // a skill's own damage (set by the skills lane)
+};
+
 enum class EOpenWillowElement : uint8
 {
     None,
@@ -41,6 +56,7 @@ struct FOpenWillowHitEvent
     TWeakObjectPtr<AActor> Target;
     FString WeaponId;                    // the fired item's id (recipe stem); "" when unknown
     EOpenWillowHitKind Kind = EOpenWillowHitKind::Direct;
+    EOpenWillowHitSource Source = EOpenWillowHitSource::Unknown;
     // Where.
     FVector Location = FVector::ZeroVector;   // impact point (for splash: the target's centre, see Origin)
     FVector Origin = FVector::ZeroVector;     // the explosion centre for splash, else the shot start
@@ -101,6 +117,7 @@ OPENWILLOW_API FOnOpenWillowHit& OnHit();
 OPENWILLOW_API EOpenWillowElement ElementOf(const FString& DamageType, const FString& Fallback = FString());
 OPENWILLOW_API const TCHAR* ElementName(EOpenWillowElement Element);
 OPENWILLOW_API const TCHAR* KindName(EOpenWillowHitKind Kind);
+OPENWILLOW_API const TCHAR* SourceName(EOpenWillowHitSource Source);
 // The actor as a splash/status target, or null.
 OPENWILLOW_API IOpenWillowHitTarget* AsTarget(AActor* Actor);
 }

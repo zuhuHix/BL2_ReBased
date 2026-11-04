@@ -4,6 +4,7 @@
 #include "Math/RandomStream.h"
 #include "CollisionQueryParams.h"
 #include "weapon_firing.hpp"
+#include "OpenWillowShotFx.h"
 
 class FJsonObject;
 
@@ -28,6 +29,16 @@ struct FOpenWillowSplash
     float DirectScale = 0;       // part of the damage dealt to what the projectile hits (Tediore throw: 0.5, observed)
     float Momentum = 0;          // MomentumFormula; each target gets radius scale x this along explosion -> target (3.1)
     FString DamageType;
+};
+
+// One ExplosionDefinition.ExplosionScale band (tools/weapon_projectile_fx.py): the band whose radius range holds the
+// explosion's radius plays its particle system, at a particle scale lerped across the band (UNVERIFIED: read from the
+// field names, not from the native).
+struct FOpenWillowExplosionBand
+{
+    float MinRadius = 0, MaxRadius = 0;
+    float MinScale = 1, MaxScale = 1;
+    TArray<FOpenWillowFlashLayer> Layers;
 };
 
 struct FOpenWillowStatus
@@ -91,6 +102,12 @@ struct FOpenWillowFiringData
     FOpenWillowSplash Splash;
     FOpenWillowStatus Status;
     FString TracerTemplate;
+    // Cooked particle layers (the recipe's fx block): the rocket's in-flight trail and the explosion's bands.
+    TArray<FOpenWillowFlashLayer> TrailLayers;
+    float TrailScale = 1;
+    TArray<FOpenWillowExplosionBand> ExplosionBands;
+    // The band for an explosion of this radius (the one whose range holds it, else the nearest), and its particle scale.
+    const FOpenWillowExplosionBand* BandFor(float Radius, float& OutScale) const;
     TArray<FString> Unsupported;  // the tool's "unsupported": data the host does not act on (beams, child projectiles)
     // Tediore: the thrown gun on reload (reload_throw). Its damage is the card damage x the rounds left in the
     // magazine (observed live); half hits what it strikes and half is the splash (DirectScale / splash scale).
@@ -146,6 +163,7 @@ struct FOpenWillowFiringStats
     int32 HitEvents = 0;     // hit events sent (ApplyShotDamage; any target)
     int32 HitKinds[4] = {0, 0, 0, 0}; // ... by EOpenWillowHitKind: direct, splash, status tick, throw
     TMap<FString, int32> TickWeapons;  // status tick events by the weapon id they carry
+    int32 UnknownSources = 0;          // hit events whose Source was left Unknown (every firing path sets one)
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 

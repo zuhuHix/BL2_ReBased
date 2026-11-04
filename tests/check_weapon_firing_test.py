@@ -204,6 +204,9 @@ class Gun(unittest.TestCase):
                         hit_events=7, hit_direct=2, hit_splash=2, hit_tick=3, hit_throw=0)
         fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), rocket), ['made_rocket'])[0]
         self.assertTrue(any('2 direct hit events, expected 0' in reason for reason in fails), fails)
+        unknown = result('made_trace', unknown_sources=2)
+        fails, _, _ = self.run_check(log(segment('made_trace', 0, 0, 5), unknown), ['made_trace'])[0]
+        self.assertTrue(any('2 hit events with an Unknown source' in reason for reason in fails), fails)
         bad_sum = result('made_trace', hit_events=9, hit_direct=8, hit_splash=0, hit_tick=0, hit_throw=0)
         fails, _, _ = self.run_check(log(segment('made_trace', 0, 0, 5), bad_sum), ['made_trace'])[0]
         self.assertTrue(any('sum of the kinds' in reason for reason in fails), fails)

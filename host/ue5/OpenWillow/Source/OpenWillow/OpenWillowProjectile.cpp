@@ -133,6 +133,15 @@ void AOpenWillowProjectile::Tick(float DeltaSeconds)
         // Like the streaks: not drawn within 150 uu of the launch, where it would fill the view.
         Visual->SetHiddenInGame(Travelled < 150.f);
         Light->SetVisibility(Travelled >= 150.f);
+        // The projectile definition's InFlightEffects (the cooked trail), drawn as puffs left behind every TrailEvery s at
+        // its InFlightEffectsScale; the game's emitter spawn rate is not read (host rate, UNVERIFIED).
+        constexpr float TrailEvery = 0.05f;
+        TrailClock += DeltaSeconds;
+        if (!Data.TrailLayers.IsEmpty() && Travelled >= 150.f && TrailClock >= TrailEvery)
+        {
+            TrailClock = 0.f;
+            AOpenWillowShotFx::WorldLayers(GetWorld(), Drawn, Data.TrailLayers, Data.TrailScale);
+        }
     }
     else
     {
@@ -264,6 +273,7 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
             OpenWillowFiring::Counts.Direct += Damage;
             FOpenWillowHitEvent Event;
             Event.Kind = EOpenWillowHitKind::Direct;
+            Event.Source = EOpenWillowHitSource::Bullet;
             Event.Damage = Damage;
             Event.DamageType = DamageType;
             Event.Direction = Velocity.GetSafeNormal();
@@ -290,6 +300,7 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
         // Its momentum on that hit is not measured; none is passed (UNVERIFIED).
         FOpenWillowHitEvent Event;
         Event.Kind = EOpenWillowHitKind::Throw;
+        Event.Source = EOpenWillowHitSource::Throw;
         Event.Damage = Damage * Data.Splash.DirectScale;
         Event.DamageType = DamageType;
         Event.Direction = Velocity.GetSafeNormal();
@@ -301,18 +312,29 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
     // Bullets whose firing mode carries a Behavior_Explode (gyrojets) explode where they hit; a rocket explodes when its
     // projectile definition has a Detonate behaviour (explode_on_impact).
     if (Data.Splash.bValid && (!bRocket || Data.bExplodeOnImpact))
-        Explode(GetWorld(), Shooter.Get(), Data, Hit.ImpactPoint, Hit.ImpactNormal, SplashDamage, WeaponId);
+        Explode(GetWorld(), Shooter.Get(), Data, Hit.ImpactPoint, Hit.ImpactNormal, SplashDamage, WeaponId,
+            Data.FiringMode == TEXT("reload_throw") ? EOpenWillowHitSource::Throw
+            : bRocket ? EOpenWillowHitSource::Rocket : EOpenWillowHitSource::Explosion);
     Destroy();
 }
 
 void AOpenWillowProjectile::Explode(UWorld* World, AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data,
-    const FVector& Origin, const FVector& Normal, float SplashDamage, const FString& WeaponId)
+    const FVector& Origin, const FVector& Normal, float SplashDamage, const FString& WeaponId, EOpenWillowHitSource Source)
 {
     if (!World || !Data.Splash.bValid) return;
     const float Radius = Data.Splash.Radius;
     UE_LOG(LogTemp, Display, TEXT("OWFIRING explosion at (%.0f %.0f %.0f) radius %.0f damage %.1f %s"),
         Origin.X, Origin.Y, Origin.Z, Radius, SplashDamage, Data.Splash.bFullDamage ? TEXT("no falloff") : TEXT("falloff"));
-    ExplosionFx(World, Origin, Normal, Radius, Data.Splash.DamageType);
+    // The explosion definition's band for this radius (its cooked particle system at the band's scale) when the recipe
+    // has one; the older host look otherwise.
+    float BandScale = 1.f;
+    if (const FOpenWillowExplosionBand* Band = Data.BandFor(Radius, BandScale))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING explosion fx band %.0f-%.0f scale %.2f layers %d"), Band->MinRadius, Band->MaxRadius,
+            BandScale, Band->Layers.Num());
+        AOpenWillowShotFx::WorldLayers(World, Origin + Normal * 8.f, Band->Layers, BandScale);
+    }
+    else ExplosionFx(World, Origin, Normal, Radius, Data.Splash.DamageType);
     // Every actor that takes Maya's hits (IOpenWillowHitTarget: the host dummy, range's enemies), not the shooter.
     for (TActorIterator<AActor> It(World); It; ++It)
     {
@@ -336,6 +358,7 @@ void AOpenWillowProjectile::Explode(UWorld* World, AOpenWillowWalker* Shooter, c
         OpenWillowFiring::Counts.Splash += SplashDamage * Scale;
         FOpenWillowHitEvent Event;
         Event.Kind = EOpenWillowHitKind::Splash;
+        Event.Source = Source;
         Event.Damage = SplashDamage * Scale;
         Event.DamageType = Data.Splash.DamageType;
         Event.Direction = (Centre - Origin).GetSafeNormal();

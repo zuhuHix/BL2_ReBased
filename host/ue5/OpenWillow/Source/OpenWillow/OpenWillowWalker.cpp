@@ -1738,6 +1738,7 @@ void AOpenWillowWalker::TracePellet(const FVector& Start, const FVector& Directi
     const FOpenWillowFiringData Firing = Weapon && Weapon->Firing.bLoaded ? Weapon->Firing : TraceOnly;
     FOpenWillowHitEvent Event;
     Event.Kind = EOpenWillowHitKind::Direct;
+    Event.Source = EOpenWillowHitSource::Bullet;
     Event.Damage = Damage;
     Event.DamageType = Weapon ? Weapon->DamageType : FString();
     Event.Direction = Direction;
@@ -1827,9 +1828,10 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
     ++OpenWillowFiring::Counts.HitEvents;
     ++OpenWillowFiring::Counts.HitKinds[uint8(E.Kind) & 3];
     if (E.Kind == EOpenWillowHitKind::StatusTick) ++OpenWillowFiring::Counts.TickWeapons.FindOrAdd(E.WeaponId);
-    UE_LOG(LogTemp, Display, TEXT("OWFIRING hitevent %s %s on %s damage %.3f applied %.3f element %s crit %d momentum %.1f"),
+    if (E.Source == EOpenWillowHitSource::Unknown) ++OpenWillowFiring::Counts.UnknownSources;
+    UE_LOG(LogTemp, Display, TEXT("OWFIRING hitevent %s %s on %s damage %.3f applied %.3f element %s crit %d momentum %.1f source %s"),
         OpenWillowHit::KindName(E.Kind), E.WeaponId.IsEmpty() ? TEXT("-") : *E.WeaponId, *Target->GetName(), E.Damage, Applied,
-        OpenWillowHit::ElementName(E.Element), E.bCritical ? 1 : 0, float(E.Momentum.Size()));
+        OpenWillowHit::ElementName(E.Element), E.bCritical ? 1 : 0, float(E.Momentum.Size()), OpenWillowHit::SourceName(E.Source));
     OpenWillowHit::OnHit().Broadcast(E);
     if (const AOpenWillowCombatTarget* Dummy = Cast<AOpenWillowCombatTarget>(Target); Dummy && !Momentum.IsNearlyZero())
     {

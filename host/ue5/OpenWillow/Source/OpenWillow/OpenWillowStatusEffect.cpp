@@ -108,6 +108,7 @@ void UOpenWillowStatusEffects::TickComponent(float DeltaTime, ELevelTick TickTyp
             Hit.ImpactPoint = Hit.Location = Target->GetActorLocation() + FVector(0, 0, 60);
             FOpenWillowHitEvent Event;
             Event.Kind = EOpenWillowHitKind::StatusTick;
+            Event.Source = EOpenWillowHitSource::Status;
             Event.Damage = float(Amount);
             Event.DamageType = Effect.DamageType;
             Event.WeaponId = Effect.WeaponId;

@@ -80,6 +80,54 @@ void FOpenWillowFiringData::ParseProjectile(const FJsonObject& Projectile, float
     if (const FJsonObject* Splash = ObjectOrNull(Projectile, TEXT("splash"))) ParseSplash(*Splash, CardDamage, Out.Splash);
 }
 
+namespace
+{
+// The block's "fx" (tools/weapon_projectile_fx.py): the trail's layers and scale, the explosion's bands.
+void ParseFx(const FJsonObject& Block, FOpenWillowFiringData& Out)
+{
+    const FJsonObject* Fx = ObjectOrNull(Block, TEXT("fx"));
+    if (!Fx) return;
+    const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+    if (const FJsonObject* Trail = ObjectOrNull(*Fx, TEXT("trail")))
+    {
+        if (Trail->TryGetArrayField(TEXT("layers"), Rows)) AOpenWillowShotFx::ParseLayers(*Rows, Out.TrailLayers);
+        Out.TrailScale = float(NumberOr(*Trail, TEXT("scale"), 1));
+    }
+    const FJsonObject* Explosion = ObjectOrNull(*Fx, TEXT("explosion"));
+    const TArray<TSharedPtr<FJsonValue>>* Bands = nullptr;
+    if (Explosion && Explosion->TryGetArrayField(TEXT("bands"), Bands))
+        for (const TSharedPtr<FJsonValue>& Value : *Bands)
+        {
+            const TSharedPtr<FJsonObject>* Band = nullptr;
+            if (!Value.IsValid() || !Value->TryGetObject(Band) || !Band || !Band->IsValid()) continue;
+            FOpenWillowExplosionBand Entry;
+            Entry.MinRadius = float(NumberOr(**Band, TEXT("min_radius"), 0));
+            Entry.MaxRadius = float(NumberOr(**Band, TEXT("max_radius"), 0));
+            Entry.MinScale = float(NumberOr(**Band, TEXT("min_scale"), 1));
+            Entry.MaxScale = float(NumberOr(**Band, TEXT("max_scale"), 1));
+            if ((*Band)->TryGetArrayField(TEXT("layers"), Rows)) AOpenWillowShotFx::ParseLayers(*Rows, Entry.Layers);
+            if (!Entry.Layers.IsEmpty()) Out.ExplosionBands.Add(MoveTemp(Entry));
+        }
+}
+}
+
+const FOpenWillowExplosionBand* FOpenWillowFiringData::BandFor(float Radius, float& OutScale) const
+{
+    OutScale = 1.f;
+    const FOpenWillowExplosionBand* Best = nullptr;
+    float BestGap = TNumericLimits<float>::Max();
+    for (const FOpenWillowExplosionBand& Band : ExplosionBands)
+    {
+        const float Gap = Radius < Band.MinRadius ? Band.MinRadius - Radius : Radius > Band.MaxRadius ? Radius - Band.MaxRadius : 0.f;
+        if (Gap < BestGap) { BestGap = Gap; Best = &Band; }
+    }
+    if (!Best) return nullptr;
+    const float Span = Best->MaxRadius - Best->MinRadius;
+    const float T = Span > 0.f ? FMath::Clamp((Radius - Best->MinRadius) / Span, 0.f, 1.f) : 1.f;
+    OutScale = FMath::Lerp(Best->MinScale, Best->MaxScale, T);
+    return Best;
+}
+
 bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, FOpenWillowFiringData& Out)
 {
     Out = FOpenWillowFiringData();
@@ -143,6 +191,7 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
             Out.Pattern.lines.push_back(Entry);
         }
     if (const FJsonObject* Projectile = ObjectOrNull(Firing, TEXT("projectile"))) ParseProjectile(*Projectile, CardDamage, Out);
+    ParseFx(Firing, Out);
     // A trace or light-bullet firing mode's own Behavior_Explode (OnAnyImpact): it explodes on every impact, the bullet's
     // own damage first (native read 2026-11-03, WEAPON_PROJECTILES.md section 3; the Maliwan pistol's 0.8 x matches live).
     if (!Out.Splash.bValid)
@@ -172,6 +221,7 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
             ParseProjectile(*Thrown, CardDamage, *Out.ReloadThrow);
             Out.ReloadThrow->bFalls = true;
             Out.ReloadThrow->Splash.DirectScale = 0.5f;
+            ParseFx(*Throw, *Out.ReloadThrow);
             Out.ReloadThrow->bLoaded = true;
         }
     if (const FJsonObject* Status = ObjectOrNull(Firing, TEXT("status")))

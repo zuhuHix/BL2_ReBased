@@ -55,6 +55,20 @@ const TCHAR* OpenWillowHit::KindName(EOpenWillowHitKind Kind)
     }
 }
 
+const TCHAR* OpenWillowHit::SourceName(EOpenWillowHitSource Source)
+{
+    switch (Source)
+    {
+    case EOpenWillowHitSource::Bullet: return TEXT("bullet");
+    case EOpenWillowHitSource::Rocket: return TEXT("rocket");
+    case EOpenWillowHitSource::Explosion: return TEXT("explosion");
+    case EOpenWillowHitSource::Throw: return TEXT("throw");
+    case EOpenWillowHitSource::Status: return TEXT("status");
+    case EOpenWillowHitSource::Skill: return TEXT("skill");
+    default: return TEXT("unknown");
+    }
+}
+
 IOpenWillowHitTarget* OpenWillowHit::AsTarget(AActor* Actor)
 {
     return Actor ? Cast<IOpenWillowHitTarget>(Actor) : nullptr;

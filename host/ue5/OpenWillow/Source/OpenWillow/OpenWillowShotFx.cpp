@@ -6,6 +6,8 @@
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 
 namespace
 {
@@ -231,6 +233,83 @@ void AOpenWillowShotFx::MuzzleFlashLayers(UWorld* World, const FVector& Location
         if (!Fx) continue;
         Fx->Setup(Plane, Tint, Strength, Life, 0.f, true, L.bSmoke ? 0.f : 0.3f);  // a softer white core (critic round 2: too pale)
         Fx->Visual->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::FirstPerson);
+    }
+}
+
+void AOpenWillowShotFx::WorldLayers(UWorld* World, const FVector& Location, const TArray<FOpenWillowFlashLayer>& Layers,
+    float Scale, float TextureFill)
+{
+    if (!World || Layers.IsEmpty() || !(Scale > 0.f)) return;
+    UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+    if (!Plane) return;
+    FVector ViewDir = FVector::ForwardVector;
+    if (APlayerController* PC = World->GetFirstPlayerController())
+        if (PC->PlayerCameraManager) ViewDir = (Location - PC->PlayerCameraManager->GetCameraLocation()).GetSafeNormal();
+    const FVector Normal = -ViewDir;
+    const FVector Side = FVector::CrossProduct(FVector::UpVector, Normal).GetSafeNormal();
+    const FVector PlaneX = Side.IsNearlyZero() ? FVector::RightVector : Side;
+    const FVector PlaneY = FVector::CrossProduct(Normal, PlaneX).GetSafeNormal();
+    for (const FOpenWillowFlashLayer& L : Layers)
+    {
+        const float Life = FMath::Max(0.01f, FMath::FRandRange(L.LifeMin, L.LifeMax));
+        const float Size = FMath::FRandRange(L.LengthMin, L.LengthMax) * Scale * TextureFill;
+        const float Height = L.Width > 0.f ? L.Width * Scale * TextureFill : Size;
+        if (Size < 0.5f) continue;
+        // Sprites spin about the view axis (the game picks a random rotation per particle).
+        const FQuat Basis = FQuat(Normal, FMath::FRandRange(0.f, 2.f * PI)) * FMatrix(PlaneX, PlaneY, Normal, FVector::ZeroVector).ToQuat();
+        const FTransform Pose(Basis, Location, FVector(Size / 100.f, Height / 100.f, 1.f));
+        const float Peak = FMath::Max3(L.Color.R, L.Color.G, L.Color.B);
+        float Strength = FMath::FRandRange(L.AlphaMin, L.AlphaMax) * Peak;
+        if (L.bSmoke) Strength = FMath::Min(Strength, 1.f) * 0.12f;   // the same additive-grey smoke stand-in as the muzzle
+        if (L.bModulate) Strength *= 0.06f;
+        if (Strength < 0.02f) continue;
+        const FLinearColor Tint = L.bSmoke ? FLinearColor(0.6f, 0.58f, 0.55f) : L.Color / FMath::Max(Peak, 1e-3f);
+        AOpenWillowShotFx* Fx = SpawnBudgeted(World, Pose);
+        if (!Fx) continue;
+        Fx->Setup(Plane, Tint, Strength, Life, 0.f, true, L.bSmoke ? 0.f : 0.3f);
+    }
+}
+
+void AOpenWillowShotFx::ParseLayers(const TArray<TSharedPtr<FJsonValue>>& Rows, TArray<FOpenWillowFlashLayer>& Out)
+{
+    const auto Range = [](const FJsonObject& Object, const TCHAR* Field, float& Min, float& Max)
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Pair = nullptr;
+        double Value = 0.0;
+        if (Object.TryGetArrayField(Field, Pair) && Pair->Num() == 2)
+        {
+            Min = float(FMath::Min((*Pair)[0]->AsNumber(), (*Pair)[1]->AsNumber()));
+            Max = float(FMath::Max((*Pair)[0]->AsNumber(), (*Pair)[1]->AsNumber()));
+        }
+        else if (Object.TryGetNumberField(Field, Value)) Min = Max = float(Value);
+    };
+    for (const TSharedPtr<FJsonValue>& Value : Rows)
+    {
+        const TSharedPtr<FJsonObject>* Row = nullptr;
+        if (!Value.IsValid() || !Value->TryGetObject(Row) || !Row || !Row->IsValid()) continue;
+        const FJsonObject& R = **Row;
+        FOpenWillowFlashLayer L;
+        R.TryGetStringField(TEXT("name"), L.Name);
+        R.TryGetStringField(TEXT("axis"), L.Axis);
+        FString Material;
+        R.TryGetStringField(TEXT("material"), Material);
+        L.bAngleFade = Material.Contains(TEXT("Angle_Fade"));
+        L.bModulate = Material.Contains(TEXT("Modulate"));
+        R.TryGetBoolField(TEXT("smoke"), L.bSmoke);
+        Range(R, TEXT("life"), L.LifeMin, L.LifeMax);
+        Range(R, TEXT("size_x"), L.LengthMin, L.LengthMax);
+        float WidthMin = 0.f, WidthMax = 0.f;
+        Range(R, TEXT("size_y"), WidthMin, WidthMax);
+        FString Alignment;
+        R.TryGetStringField(TEXT("alignment"), Alignment);
+        L.Width = Alignment == TEXT("PSA_Rectangle") ? WidthMax : 0.f;
+        double Offset = 0.0;
+        if (R.TryGetNumberField(TEXT("offset_x"), Offset)) L.OffsetX = float(Offset);
+        Range(R, TEXT("alpha"), L.AlphaMin, L.AlphaMax);
+        const TArray<TSharedPtr<FJsonValue>>* Color = nullptr;
+        if (R.TryGetArrayField(TEXT("color"), Color) && Color->Num() == 3)
+            L.Color = FLinearColor(float((*Color)[0]->AsNumber()), float((*Color)[1]->AsNumber()), float((*Color)[2]->AsNumber()));
+        Out.Add(L);
     }
 }
 
