@@ -23,7 +23,7 @@ public:
 private:
     enum class EStep : uint8
     {
-        Start, Spawn, Arena, Fight, Loot, Pickup, Equip, Phaselock,
+        Start, Spawn, Arena, Fight, Recover, Loot, Pickup, PickupDecoy, Equip, Phaselock,
         Accept, WaitWalk, Trigger, ShootDummy, TurnIn, Confirm, Down, Bleed, Done
     };
     EStep Step = EStep::Start;
@@ -32,7 +32,7 @@ private:
     int32 Pass = 0, Failed = 0, NotAvailable = 0;
     bool bUseHeld = false;          // the simulated E key is down (released after 0.1 s)
     float UseHeldFor = 0.f;
-    bool bPlacedAtMarcus = false, bPlacedAtDrop = false, bPlacedForTurnIn = false, bRolled = false;   // one-shot actions of their steps
+    bool bPlacedAtMarcus = false, bPlacedForTurnIn = false, bRolled = false;   // one-shot actions of their steps
     bool bRangeMode = false;        // ow.Range existed and built the range
     bool bAcceptStarted = false;    // the accept step waited for the Phaselock to end
     float ShotClock = 0.f;
@@ -59,8 +59,20 @@ private:
     void Fixture(const FString& What) { Fixtures.AddUnique(What); }
     TArray<FString> Fixtures;
     bool bPhaselockPointGranted = false;
-    bool bTestDrop = false, bCardSeen = false;   // the pickup link: the test dropped the gun; the card named the drop
-    FString DropId;
+    bool bTestDrop = false;         // the pickup link: the test dropped the gun
+    bool bLootForced = false;       // ow.RangeLoot always ran before the fight
+    bool bRecoverStarted = false;
+    bool bLethalApplied = false;
+    bool SkipWhileDown();
+    FString RollSource;             // ow.RollGun source for the test drops
+    FString DropId, CardId, PickedId, NearId;   // the aimed drop, the card's id at the press, what E picked up, the decoy
+    int32 PickupPhase = 0;
+    float PickupWait = 0.f;
+    UPROPERTY() TObjectPtr<class AOpenWillowInventoryPickup> DecoyAimed;
+    UPROPERTY() TObjectPtr<class AOpenWillowInventoryPickup> DecoyNear;
+    static FString PickupId(const class AOpenWillowInventoryPickup* Pickup);
+    class AOpenWillowInventoryPickup* DropRolledGun(uint32 Seed, const FVector& Near, FString& OutWhy);
+    bool RunAimedPickup(class AOpenWillowInventoryPickup* Target);
     int32 LastHitCount = 0, EnemyHits = 0, OtherHits = 0, UnattributedHits = 0;   // Maya's hits during the fight, by causer
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }

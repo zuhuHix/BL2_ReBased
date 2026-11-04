@@ -30,7 +30,8 @@ def build(results=None, stop_after=None, summary='auto', start=True, extra=(), f
     for index, name in enumerate(order or chk.NAMES, 1):
         if stop_after is not None and index > stop_after:
             break
-        result, detail = results.get(name, ('PASS', 'synthetic detail'))
+        default = 'card_id=item_x picked_id=item_x synthetic detail' if name in chk.CARD_LINKS else 'synthetic detail'
+        result, detail = results.get(name, ('PASS', default))
         effective[name] = result
         lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} fixtures=[{fixtures.get(name, "")}] detail={detail}')
     lines.append(PREFIX + 'OWSLICEGATE note synthetic note, ignored')
@@ -74,7 +75,7 @@ class SliceGateTest(unittest.TestCase):
     def test_all_pass_exits_zero(self):
         code, out = self.run_checker(self.write_log(build()))
         self.assertEqual(code, 0)
-        self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
+        self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
         header = out.splitlines()[0]
         self.assertEqual(header.split(), ['#', 'link', 'result', 'owner', 'detail'])
         self.assertNotIn('error', out)
@@ -83,7 +84,7 @@ class SliceGateTest(unittest.TestCase):
         results = {'enemy_attacks_maya': ('NOT_AVAILABLE', 'synthetic gap')}
         code, out = self.run_checker(self.write_log(build(results)))
         self.assertEqual(code, 0)
-        self.assertIn('slice gate: 12 PASS, 0 FAIL, 1 NOT_AVAILABLE of 13', out)
+        self.assertIn('slice gate: 13 PASS, 0 FAIL, 1 NOT_AVAILABLE of 14', out)
         row = self.row(out, 4)
         self.assertIn('NOT_AVAILABLE', row)
         self.assertIn('range', row)
@@ -94,21 +95,21 @@ class SliceGateTest(unittest.TestCase):
         results = {'kill_enemy': ('FAIL', 'synthetic miss')}
         code, out = self.run_checker(self.write_log(build(results)))
         self.assertEqual(code, 1)
-        self.assertIn('slice gate: 12 PASS, 1 FAIL, 0 NOT_AVAILABLE of 13', out)
+        self.assertIn('slice gate: 13 PASS, 1 FAIL, 0 NOT_AVAILABLE of 14', out)
         self.assertIn('range', self.row(out, 3))
 
     def test_run_stopped_after_link_5_fails_the_rest(self):
         path = self.write_log(build(stop_after=5, summary=None))
         code, out = self.run_checker(path, '--json', str(self.dir / 'run.json'))
         self.assertEqual(code, 1)
-        self.assertIn('slice gate: 5 PASS, 8 FAIL, 0 NOT_AVAILABLE of 13', out)
+        self.assertIn('slice gate: 5 PASS, 9 FAIL, 0 NOT_AVAILABLE of 14', out)
         self.assertIn('not reached: the run stopped before this link', self.row(out, 6))
         report = json.loads((self.dir / 'run.json').read_text(encoding='utf-8'))
         self.assertFalse(report['summary_seen'])
         self.assertIn('no SUMMARY line: the run did not finish (crash or timeout)', report['errors'])
         self.assertEqual(report['links'][5]['result'], 'FAIL')
         self.assertEqual(report['links'][5]['owner'], 'range')   # pick_up_gun, the sixth link
-        self.assertEqual(report['links'][12]['owner'], 'maya')   # bleed_out_respawn, the last link
+        self.assertEqual(report['links'][13]['owner'], 'maya')   # bleed_out_respawn, the last link
 
     def test_no_start_line_exits_two(self):
         code, out = self.run_checker(self.write_log(build(start=False)))
@@ -133,11 +134,11 @@ class SliceGateTest(unittest.TestCase):
         order[2], order[7] = order[7], order[2]
         code, out = self.run_checker(self.write_log(build(order=order)))
         self.assertEqual(code, 1)
-        self.assertIn('link phaselock_enemy out of order (expected kill_enemy next)', out)
-        self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
+        self.assertIn('link equip_gun out of order (expected kill_enemy next)', out)
+        self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
 
     def test_link_after_summary_fails(self):
-        lines = build(stop_after=12, summary='pass=12 fail=0 na=0')
+        lines = build(stop_after=13, summary='pass=13 fail=0 na=0')
         lines.append(PREFIX + 'OWSLICEGATE link=bleed_out_respawn result=PASS detail=late')
         code, out = self.run_checker(self.write_log(lines))
         self.assertEqual(code, 1)
@@ -160,13 +161,35 @@ class SliceGateTest(unittest.TestCase):
         json_path, md_path = self.dir / 'f.json', self.dir / 'f.md'
         code, out = self.run_checker(self.write_log(build(fixtures=fixtures)), '--json', str(json_path), '--markdown', str(md_path))
         self.assertEqual(code, 0)
-        self.assertIn('PASS (fixture: phaselock point granted)', self.row(out, 8))
-        self.assertIn('PASS (fixture: lethal damage; teleport)', self.row(out, 12))
+        self.assertIn('PASS (fixture: phaselock point granted)', self.row(out, 9))
+        self.assertIn('PASS (fixture: lethal damage; teleport)', self.row(out, 13))
         self.assertEqual(self.row(out, 1).split()[2], 'PASS')
         report = json.loads(json_path.read_text(encoding='utf-8'))
-        self.assertEqual(report['links'][11]['fixtures'], ['lethal damage', 'teleport'])
+        self.assertEqual(report['links'][12]['fixtures'], ['lethal damage', 'teleport'])
         self.assertEqual(report['links'][0]['fixtures'], [])
-        self.assertIn('| 8 | phaselock_enemy | PASS (fixture: phaselock point granted) | - |', md_path.read_text(encoding='utf-8'))
+        self.assertIn('| 9 | phaselock_enemy | PASS (fixture: phaselock point granted) | - |', md_path.read_text(encoding='utf-8'))
+
+    def test_card_link_pass_with_different_ids_is_overruled(self):
+        results = {'pick_up_gun': ('PASS', 'aimed_drop=item_a card_id=item_a picked_id=item_b: synthetic')}
+        code, out = self.run_checker(self.write_log(build(results)))
+        self.assertEqual(code, 1)
+        self.assertIn('FAIL', self.row(out, 6))
+        self.assertIn('checker: card_id item_a is not picked_id item_b', self.row(out, 6))
+        self.assertIn('error: link pick_up_gun: PASS overruled', out)
+
+    def test_card_link_pass_without_ids_is_overruled(self):
+        results = {'pick_up_aimed_not_nearest': ('PASS', 'synthetic, no ids')}
+        code, out = self.run_checker(self.write_log(build(results)))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: no card_id/picked_id in the detail', self.row(out, 7))
+
+    def test_card_link_not_available_with_decoy_ids_is_kept(self):
+        detail = 'aimed_drop=item_a nearer_decoy=item_b card_id=item_a picked_id=item_b: E took the nearer decoy'
+        results = {'pick_up_aimed_not_nearest': ('NOT_AVAILABLE', detail)}
+        code, out = self.run_checker(self.write_log(build(results)))
+        self.assertEqual(code, 0)
+        self.assertIn('NOT_AVAILABLE', self.row(out, 7))
+        self.assertIn('inventory', self.row(out, 7))
 
     def test_link_line_without_fixtures_field_is_read(self):
         lines = build()
@@ -178,7 +201,7 @@ class SliceGateTest(unittest.TestCase):
     def test_summary_mismatch_exits_one(self):
         code, out = self.run_checker(self.write_log(build(summary='pass=12 fail=1 na=0')))
         self.assertEqual(code, 1)
-        self.assertIn('error: SUMMARY says pass=12 fail=1 na=0, but the link lines say pass=13 fail=0 na=0', out)
+        self.assertIn('error: SUMMARY says pass=12 fail=1 na=0, but the link lines say pass=14 fail=0 na=0', out)
 
     def test_json_output(self):
         results = {'pick_up_gun': ('FAIL', 'synthetic | pipe')}
@@ -193,7 +216,7 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(report['links'][0], {'index': 1, 'name': 'spawn_maya', 'result': 'PASS', 'fixtures': [],
                                               'owner': 'maya', 'detail': 'synthetic detail'})
         self.assertEqual(report['links'][5]['detail'], 'synthetic | pipe')
-        self.assertEqual((report['pass'], report['fail'], report['not_available']), (12, 1, 0))
+        self.assertEqual((report['pass'], report['fail'], report['not_available']), (13, 1, 0))
         self.assertTrue(report['summary_seen'])
         self.assertEqual(report['errors'], [])
 
@@ -212,7 +235,7 @@ class SliceGateTest(unittest.TestCase):
     def test_utf8_bom_at_start_of_file(self):
         code, out = self.run_checker(self.write_log(build(), bom=True))
         self.assertEqual(code, 0)
-        self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
+        self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
 
     def test_command_line_exit_code(self):
         script = Path(chk.__file__)

@@ -198,6 +198,128 @@ bool UOpenWillowSliceGate::EquipAndDraw(const FString& Id, FString& OutWhy)
     return true;
 }
 
+FString UOpenWillowSliceGate::PickupId(const AOpenWillowInventoryPickup* Pickup)
+{
+    if (!Pickup) return TEXT("none");
+    const FOpenWillowTakenInventoryItem& Item = Pickup->GetItem();
+    return Item.bIsGear ? Item.Gear.Id : UOpenWillowInventory::StableId(Item.Weapon);
+}
+
+// Rolls a gun (ow.RollGun RollSource, the player's level, Seed) and drops it on the floor under Near. Null, with the
+// reason, when no floor is found within 450 uu below Near (the drop is never left in the air) or the roll adds nothing.
+AOpenWillowInventoryPickup* UOpenWillowSliceGate::DropRolledGun(uint32 Seed, const FVector& Near, FString& OutWhy)
+{
+    AOpenWillowWalker* W = Walker();
+    FHitResult Ground;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWSliceGateDrop), false, W);
+    if (!GetWorld()->LineTraceSingleByChannel(Ground, Near + FVector(0, 0, 100), Near - FVector(0, 0, 450), ECC_WorldStatic, Query))
+    {
+        OutWhy = FString::Printf(TEXT("no floor under the test drop point %s"), *Near.ToCompactString());
+        return nullptr;
+    }
+    SnapshotBackpack();
+    const int32 Stage = FMath::Clamp(W->GetSkills()->GetLevel(), 1, 80);
+    GEngine->Exec(GetWorld(), *FString::Printf(TEXT("ow.RollGun %s %d %u"), *RollSource, Stage, Seed));
+    const FString Rolled = NewBackpackItem();
+    FOpenWillowTakenInventoryItem Taken;
+    if (Rolled.IsEmpty() || !W->TakeInventoryItemById(Rolled, Taken))
+    {
+        OutWhy = FString::Printf(TEXT("ow.RollGun %s %d %u added nothing to drop (see its log line)"), *RollSource, Stage, Seed);
+        return nullptr;
+    }
+    FActorSpawnParameters Spawn;
+    Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    const FVector At = Ground.ImpactPoint + FVector(0, 0, 12);
+    AOpenWillowInventoryPickup* Pickup = GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(), FTransform(At), Spawn);
+    if (!Pickup) { OutWhy = FString::Printf(TEXT("the test drop of %s did not spawn"), *Rolled); return nullptr; }
+    Pickup->Initialize(MoveTemp(Taken));
+    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test drop: %s at %s"), *Rolled, *At.ToCompactString());
+    return Pickup;
+}
+
+// Stands Maya 80 uu from Target, aims at it until she is on the ground, then in one tick reads the card (the id in the
+// card state, OpenWillowPickupCard::StateField) and presses E. Sets DropId, CardId and PickedId ("none" when absent).
+// True once the press has been answered (or timed out).
+bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
+{
+    AOpenWillowWalker* W = Walker();
+    const APlayerController* PC = Cast<APlayerController>(W->GetController());
+    switch (PickupPhase)
+    {
+    case 0: {
+        DropId = PickupId(Target);
+        CardId = PickedId = TEXT("none");
+        SnapshotBackpack();
+        PickupAttemptsBefore = W->PickupAttemptCount();
+        const FVector Away = (W->GetActorLocation() - Target->GetActorLocation()).GetSafeNormal2D();
+        Place(Target->GetActorLocation() + Away * 80.f + FVector(0, 0, 100.f), Target->GetActorLocation());
+        PickupPhase = 1;
+        PickupWait = 0.f;
+        return false;
+    }
+    case 1: {
+        PickupWait += GetWorld()->GetDeltaSeconds();
+        AimAt(Target->GetActorLocation());
+        if (!PC || ((!W->GetCharacterMovement()->IsMovingOnGround() || PickupWait < 0.5f) && PickupWait < 3.f)) return false;
+        // The card the player would see at the moment of the press.
+        const FString State = OpenWillowPickupCard::StateField(*W, *PC);
+        const int32 At = State.Find(TEXT("\"id\":\""));
+        if (At != INDEX_NONE)
+        {
+            const int32 Start = At + 6;
+            const int32 End = State.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, Start);
+            if (End > Start) CardId = State.Mid(Start, End - Start);
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note card at the press: aimed pickup %s, card id %s, grounded %d"),
+            *PickupId(OpenWillowPickupCard::FindAimedPickup(*W, *PC)), *CardId, W->GetCharacterMovement()->IsMovingOnGround());
+        PressUse();
+        PickupPhase = 2;
+        PickupWait = 0.f;
+        return false;
+    }
+    default: {
+        PickupWait += GetWorld()->GetDeltaSeconds();
+        if (W->PickupAttemptCount() == PickupAttemptsBefore && PickupWait < 2.f) return false;
+        const FString New = NewBackpackItem();
+        if (!New.IsEmpty()) PickedId = New;
+        PickupPhase = 0;
+        return true;
+    }
+    }
+}
+
+// The links each step starts, for the guard below (a step that continues a link, such as Trigger, has none of its own).
+static TArray<const TCHAR*> LinksFrom(uint8 StepValue, uint8 PickupStep, uint8 PickupDecoyStep, uint8 EquipStep,
+    uint8 PhaselockStep, uint8 AcceptStep, uint8 WaitWalkStep, uint8 TurnInStep)
+{
+    if (StepValue == PickupStep) return {TEXT("pick_up_gun"), TEXT("pick_up_aimed_not_nearest")};
+    if (StepValue == PickupDecoyStep) return {TEXT("pick_up_aimed_not_nearest")};
+    if (StepValue == EquipStep) return {TEXT("equip_gun")};
+    if (StepValue == PhaselockStep) return {TEXT("phaselock_enemy")};
+    if (StepValue == AcceptStep) return {TEXT("mission_accept"), TEXT("mission_objective"), TEXT("mission_turn_in")};
+    if (StepValue == WaitWalkStep) return {TEXT("mission_objective"), TEXT("mission_turn_in")};
+    if (StepValue == TurnInStep) return {TEXT("mission_turn_in")};
+    return {};
+}
+
+// A link group that would start with Maya down (from an earlier link) is logged NOT_AVAILABLE and skipped. Only at the
+// start of a step (StepTime is still the first tick) and never for the down links themselves.
+bool UOpenWillowSliceGate::SkipWhileDown()
+{
+    AOpenWillowWalker* W = Walker();
+    if (!W->IsDown() || StepTime > GetWorld()->GetDeltaSeconds() + KINDA_SMALL_NUMBER) return false;
+    const TArray<const TCHAR*> Links = LinksFrom(uint8(Step), uint8(EStep::Pickup), uint8(EStep::PickupDecoy), uint8(EStep::Equip),
+        uint8(EStep::Phaselock), uint8(EStep::Accept), uint8(EStep::WaitWalk), uint8(EStep::TurnIn));
+    if (Links.IsEmpty()) return false;
+    const FString Why = FString::Printf(TEXT("Maya down from a previous link (%s, health %.0f/%.0f) when this link was due to start"),
+        W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead ? TEXT("dead") : TEXT("injured"), W->GetHealth(), W->GetMaxHealth());
+    for (const TCHAR* Name : Links) MissingLink(Name, Why);
+    const EStep After = Step == EStep::Pickup || Step == EStep::PickupDecoy ? EStep::Equip
+        : Step == EStep::Equip ? EStep::Phaselock : Step == EStep::Phaselock ? EStep::Accept : EStep::Down;
+    Next(After);
+    return true;
+}
+
 void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function)
 {
     Super::TickComponent(Delta, Type, Function);
@@ -214,6 +336,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
     UOpenWillowQuest* Quest = W->GetQuest();
     UOpenWillowInventory* Inventory = W->GetInventory();
+    if (SkipWhileDown()) return;
     switch (Step)
     {
     case EStep::Start:
@@ -251,6 +374,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (!bRangeMode)
             {
                 bRangeMode = true;
+                // A range kill rolls the stock gun chance (0.085), so most kills drop no gun; the range's switch forces a gun
+                // (it retries up to 8 seeds). Named as a fixture on the loot link.
+                if (IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeLoot")))
+                {
+                    GEngine->Exec(GetWorld(), TEXT("ow.RangeLoot always"));
+                    bLootForced = true;
+                }
                 GEngine->Exec(GetWorld(), TEXT("ow.Range"));
                 return;
             }
@@ -310,6 +440,32 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         else if (OtherHits + UnattributedHits > 0) MissingLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("Maya was hit, but not by the selected enemy (%s)"), *Others));
         else MissingLink(TEXT("enemy_attacks_maya"), bRangeMode ? TEXT("no enemy hit Maya during the fight (enemy AI: range lane, PR #83)")
             : TEXT("the stand-in target has no attack; enemy AI is the range lane's PR #83"));
+        Next(EStep::Recover);
+        break;
+    }
+
+    case EStep::Recover: {
+        // Maya has no shield, so a pack of range enemies can put her down during the fight; the later links need her Up.
+        // Test fixtures, named on the next link: the range's enemies go passive (they stay targets for Phaselock), and
+        // Maya is set Up with full health. A bled-out Maya is left to the walker's own respawn (no fixture needed).
+        if (!bRecoverStarted)
+        {
+            bRecoverStarted = true;
+            if (bRangeMode && IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeMode")))
+            {
+                GEngine->Exec(GetWorld(), TEXT("ow.RangeMode passive"));
+                Fixture(TEXT("range set passive after the fight"));
+            }
+        }
+        if (W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead && StepTime < BleedTimeout) return;   // respawn due
+        FOpenWillowMayaState& State = W->GetMayaState();
+        if (W->IsDown() || W->GetHealth() < W->GetMaxHealth())
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: Maya restored from %s, health %.0f/%.0f"),
+                W->IsDown() ? TEXT("down") : TEXT("up"), W->GetHealth(), W->GetMaxHealth());
+            Fixture(W->IsDown() ? TEXT("Maya revived to full health after the fight") : TEXT("Maya healed to full after the fight"));
+            State.SetHealth(State.Base.MaxHealth, State.Base.MaxHealth, GetWorld()->GetTimeSeconds());
+        }
         Next(EStep::Loot);
         break;
     }
@@ -319,6 +475,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
                 if (!PickupsBeforeKill.Contains(*It) && FVector::Dist(It->GetActorLocation(), KillLocation) < LootRadius) { Drop = *It; break; }
         if (!Drop && StepTime < LootWait) return;
+        if (bLootForced) Fixture(TEXT("guaranteed loot roll"));
         if (Drop) PassLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("pickup \"%s\" %.0f uu from the corpse"), *Drop->DisplayName(),
             FVector::Dist(Drop->GetActorLocation(), KillLocation)));
         else MissingLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no pickup appeared within %.0f uu of the kill in %.0fs: no loot drop on kill yet (range lane, loot PR3)"),
@@ -328,95 +485,79 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Pickup: {
-        if (Drop)
-        {
-            if (!bPlacedAtDrop)
-            {
-                bPlacedAtDrop = true;
-                SnapshotBackpack();
-                PickupAttemptsBefore = W->PickupAttemptCount();
-                const FVector Away = (W->GetActorLocation() - Drop->GetActorLocation()).GetSafeNormal2D();
-                Place(Drop->GetActorLocation() + Away * 80.f + FVector(0, 0, 100.f), Drop->GetActorLocation());
-                return;
-            }
-            // Before E: the pickup card (PR #95) selects this drop and its state field names it. The card's state is
-            // read here; whether the HUD movie draws it is not checked (this run uses the canvas HUD).
-            if (StepTime < 0.5f)
-            {
-                const APlayerController* PC = Cast<APlayerController>(W->GetController());
-                if (Drop && PC && !bCardSeen && OpenWillowPickupCard::FindAimedPickup(*W, *PC) == Drop)
-                {
-                    const FOpenWillowTakenInventoryItem& Item = Drop->GetItem();
-                    DropId = Item.bIsGear ? Item.Gear.Id : UOpenWillowInventory::StableId(Item.Weapon);
-                    bCardSeen = OpenWillowPickupCard::StateField(*W, *PC).Contains(FString::Printf(TEXT("\"id\":\"%s\""), *DropId));
-                }
-                return;
-            }
-            if (W->PickupAttemptCount() == PickupAttemptsBefore && StepTime < 0.6f) { if (!bUseHeld) PressUse(); return; }
-            if (W->PickupAttemptCount() == PickupAttemptsBefore && StepTime < 2.f) return;
-            GunId = NewBackpackItem();
-            if (bTestDrop) Fixture(TEXT("gun rolled and dropped by the test"));
-            const FString Card = bCardSeen ? FString::Printf(TEXT("pickup card aimed at it named %s before E (card state only; HUD drawing not checked)"), *DropId)
-                : TEXT("no pickup card for it before E (FindAimedPickup or the card state did not name the drop)");
-            if (bCardSeen && W->PickupAttemptCount() > PickupAttemptsBefore && W->LastPickupAccepted() && !GunId.IsEmpty())
-                PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s; use key picked up %s"), *Card, *GunId));
-            else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s; use key: attempts %d -> %d, accepted %d, new backpack item '%s'"),
-                *Card, PickupAttemptsBefore, W->PickupAttemptCount(), W->LastPickupAccepted(), *GunId));
-            Next(EStep::Equip);
-            return;
-        }
-        // Fallback until drops exist: ow.RollGun rolls a gun from the generator into the backpack (once).
-        if (!bRolled)
+        // Until enemies drop loot: roll a gun and drop it 150 uu ahead of Maya (as -owpickupcardshots does), named as a
+        // fixture on the link, so the pickup path (card, use key) still runs. A real drop is used as it is.
+        if (!Drop && !bRolled)
         {
             bRolled = true;
-            SnapshotBackpack();
-            FString Source;
-            if (!FParse::Value(FCommandLine::Get(), TEXT("owslicegategun="), Source))
+            if (!FParse::Value(FCommandLine::Get(), TEXT("owslicegategun="), RollSource))
             {
                 FString ItemDir;
-                if (FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir)) Source = FOpenWillowWeaponGen::RewardSource(ItemDir);
+                if (FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir)) RollSource = FOpenWillowWeaponGen::RewardSource(ItemDir);
             }
-            if (Source.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
+            if (RollSource.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
             {
                 MissingLink(TEXT("pick_up_gun"), TEXT("no drop to pick up, and the ow.RollGun fallback has no source or generator manifest"));
                 Next(EStep::Equip);
                 return;
             }
-            const int32 Stage = FMath::Clamp(W->GetSkills()->GetLevel(), 1, 80);
-            GEngine->Exec(GetWorld(), *FString::Printf(TEXT("ow.RollGun %s %d 1"), *Source, Stage));
-            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note fallback ow.RollGun %s %d 1"), *Source, Stage);
+            FString Why;
+            Drop = DropRolledGun(1, W->GetActorLocation() + FRotator(0, W->GetControlRotation().Yaw, 0).Vector() * 150.f, Why);
+            if (!Drop) { FailLink(TEXT("pick_up_gun"), Why); Next(EStep::Equip); return; }
+            bTestDrop = true;
             return;
         }
+        if (!RunAimedPickup(Drop)) return;
+        if (bTestDrop) Fixture(TEXT("gun rolled and dropped by the test"));
+        GunId = PickedId == TEXT("none") ? FString() : PickedId;
+        // PASS only when the card named the aimed drop and E picked up that same item.
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s"), *DropId, *CardId, *PickedId);
+        if (CardId == DropId && PickedId == DropId && W->LastPickupAccepted())
+            PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the pickup card named the aimed drop at the use-key press and E picked it up (card state only; HUD drawing not checked)"), *Ids));
+        else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s, accepted %d: the card and the picked-up item must both be the aimed drop"), *Ids, W->LastPickupAccepted()));
+        Next(EStep::PickupDecoy);
+        break;
+    }
+
+    case EStep::PickupDecoy: {
+        // The aimed drop with a nearer decoy beside Maya, outside the card's cone: the card must name the aimed one, and E
+        // must take it. On this build E takes the nearest pickup (PickupNearby; PICKUP_CARD.md's known gap), so taking the
+        // decoy is NOT_AVAILABLE until the inventory lane's E-key switch, and it never passes.
+        if (!DecoyAimed)
         {
-            // Until enemies drop loot: the rolled gun is dropped 150 uu ahead of Maya (as -owpickupcardshots does), so the
-            // pickup path (card, use key) still runs. Named as a fixture on the link.
-            const FString Rolled = NewBackpackItem();
-            FOpenWillowTakenInventoryItem Taken;
-            if (Rolled.IsEmpty() || !W->TakeInventoryItemById(Rolled, Taken))
+            if (RollSource.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
             {
-                MissingLink(TEXT("pick_up_gun"), TEXT("no drop to pick up, and the ow.RollGun fallback added nothing (see its log line)"));
+                MissingLink(TEXT("pick_up_aimed_not_nearest"), TEXT("no ow.RollGun source to make the two test drops"));
                 Next(EStep::Equip);
-                break;
+                return;
             }
-            const FVector Ahead = W->GetActorLocation() + FRotator(0, W->GetControlRotation().Yaw, 0).Vector() * 150.f;
-            FHitResult Ground;
-            FCollisionQueryParams Query(SCENE_QUERY_STAT(OWSliceGateDrop), false, W);
-            const FVector At = GetWorld()->LineTraceSingleByChannel(Ground, Ahead + FVector(0, 0, 100), Ahead - FVector(0, 0, 450), ECC_WorldStatic, Query)
-                ? Ground.ImpactPoint + FVector(0, 0, 12) : Ahead;
-            FActorSpawnParameters Spawn;
-            Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-            Drop = GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(), FTransform(At), Spawn);
-            if (!Drop)
+            const FVector From = W->GetActorLocation();
+            const FVector Forward = FRotator(0, W->GetControlRotation().Yaw, 0).Vector();
+            FString Why;
+            DecoyAimed = DropRolledGun(2, From + Forward * 150.f, Why);
+            // RunAimedPickup stands Maya 80 uu from the aimed drop on the side she comes from; the decoy goes 45 uu to her
+            // right there: nearer than the aimed drop, and about 90 degrees off her aim.
+            const FVector Stand = DecoyAimed ? DecoyAimed->GetActorLocation() + (From - DecoyAimed->GetActorLocation()).GetSafeNormal2D() * 80.f : From;
+            DecoyNear = DecoyAimed ? DropRolledGun(3, Stand + FRotator(0, W->GetControlRotation().Yaw + 90.f, 0).Vector() * 45.f, Why) : nullptr;
+            if (!DecoyAimed || !DecoyNear)
             {
-                FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("the test drop of %s did not spawn"), *Rolled));
+                FailLink(TEXT("pick_up_aimed_not_nearest"), Why);
                 Next(EStep::Equip);
-                break;
+                return;
             }
-            Drop->Initialize(MoveTemp(Taken));
-            bTestDrop = true;
-            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test drop: %s at %s"), *Rolled, *At.ToCompactString());
-            StepTime = 0.f;   // the drop path above runs from its start
+            NearId = PickupId(DecoyNear);
+            return;
         }
+        if (!RunAimedPickup(DecoyAimed)) return;
+        Fixture(TEXT("two guns rolled and dropped by the test"));
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s"), *DropId, *NearId, *CardId, *PickedId);
+        if (CardId != DropId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": the card did not name the aimed drop"));
+        else if (PickedId == DropId) PassLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up the aimed drop, not the nearer decoy"));
+        else if (PickedId == NearId) MissingLink(TEXT("pick_up_aimed_not_nearest"), Ids
+            + TEXT(": E took the nearer decoy, not the aimed drop (PickupNearby takes the nearest; the E-key switch to FindAimedPickup is the inventory lane's, PICKUP_CARD.md)"));
+        else FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up neither"));
+        for (AOpenWillowInventoryPickup* Left : {DecoyAimed.Get(), DecoyNear.Get()}) if (IsValid(Left)) Left->Destroy();
+        Next(EStep::Equip);
         break;
     }
 
@@ -580,6 +721,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         {
             RespawnAtBefore = W->LastRespawnAt();
             DeathLocation = W->GetActorLocation();
+            if (W->IsDown())
+            {
+                MissingLink(TEXT("go_down"), TEXT("Maya down from a previous link before the lethal damage was due"));
+                Next(EStep::Bleed);
+                return;
+            }
+            bLethalApplied = true;
             // Test fixture: lethal damage through the walker's damage entry (no enemy can kill Maya on this build yet).
             Fixture(TEXT("lethal damage applied by the test"));
             FHitResult Hit;
@@ -595,7 +743,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Bleed: {
         const bool bRespawned = W->LastRespawnAt() > RespawnAtBefore;
         if (!bRespawned && StepTime < BleedTimeout) return;
-        Fixture(TEXT("down state from the test's lethal damage"));
+        if (bLethalApplied) Fixture(TEXT("down state from the test's lethal damage"));
         if (bRespawned && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
                 StepTime, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation), W->GetHealth(), W->GetMaxHealth(),
