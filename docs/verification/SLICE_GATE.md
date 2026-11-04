@@ -33,7 +33,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (18, all made-up log lines).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (21, all made-up log lines).
 
 ### How a link is graded (review round 1)
 
@@ -42,7 +42,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   `PASS (fixture: phaselock point granted)`, in the table, the JSON (a `fixtures` list per link) and the markdown.
 - **Run structure:** the checker fails the run unless it finds:
   - exactly one start line;
-  - then each of the 13 links at most once, in the expected order;
+  - then each of the 14 links at most once, in the expected order;
   - then exactly one SUMMARY line that agrees with the link lines.
 
   A shuffled, repeated or unknown link fails the run, and so does a link line before the start or after the SUMMARY.
@@ -50,6 +50,19 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   fight selected. The walker now keeps the causer of the last counted hit (`GetLastHitCauser`; 3 lines in
   `OpenWillowWalker.h/.cpp`). Hits from other causers, or with no causer, are reported in the detail and leave the link
   NOT_AVAILABLE.
+- **The pickup links (review of #98).** Each logs `card_id=<id> picked_id=<id>`: the card's item in the tick of the E
+  press, once Maya is on the ground, and the item E put in the backpack.
+  - `pick_up_gun` passes only when both are the aimed drop.
+  - `pick_up_aimed_not_nearest` repeats the pickup with a nearer decoy 45 uu to Maya's side, about 90 degrees off her
+    aim. If E takes the decoy, the link is NOT_AVAILABLE: E still uses `PickupNearby`, which takes the nearest pickup,
+    and the inventory lane is switching it to the aimed pickup. The link never passes until E takes the aimed drop.
+  - The checker reads both ids itself: a PASS on either link with missing or different ids becomes a FAIL.
+  - A test drop with no floor within 450 uu below its point fails; it is never left in the air.
+- **A link never starts with Maya down.** If Maya is down when a link group is due to start, every link of that group
+  is logged NOT_AVAILABLE ("Maya down from a previous link"), not a misleading FAIL.
+- **A drop in the wrong place is a FAIL.** If a new pickup appears after the kill but more than 1,500 uu from the
+  corpse, `loot_drop_on_kill` FAILs and gives the drop's position. The corpse position is the enemy's position on its
+  last live tick, because a dead actor may be moved.
 - **`mission_turn_in` passes only when all three hold:**
   - the mission status is 3 (complete);
   - the experience rose;
@@ -66,11 +79,26 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 - **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6), because no enemy can attack Maya yet. It is named on
   `go_down`, and `bleed_out_respawn` names the down state it started from.
 - The lent mission pistol is readied with `EquipItem` + `DrawItemById`, as in `test_quest`.
+- **Range mode only** (when `ow.Range` exists):
+  - `ow.RangeLoot always` before the fight (fixture `guaranteed loot roll`): a range kill rolls the stock 0.085 gun
+    chance, and this switch retries up to 8 seeds until a gun comes.
+  - After the fight, `ow.RangeMode passive` (fixture `range set passive after the fight`). The enemies stay alive as
+    Phaselock targets.
+  - Before the mission, `ow.RangeClear` (fixture `range cleared before the mission`), so no range actor attacks Maya or
+    takes the mission's shots.
+- **Restoring Maya after the fight.** Maya has no shield, and four bullymongs can put her down during the fight (the
+  hub's bisect: range #89 alone flipped both `phaselock_enemy` and `mission_objective` that way).
+  - The fixture `Maya revived to full health after the fight` (or `healed`, if she is Up but hurt) sets her Up at full
+    health through `FOpenWillowMayaState::SetHealth`.
+  - If she has already bled out, the walker's own respawn is waited for.
+  - The revive path has not run in this lane's runs yet: each time, the kill gave her a second wind before the fight
+    ended.
 
 ## Current link table
 
-Origin/main 8bb74a0 plus this branch, pc-hummer, 2026-11-04.
-**10 PASS, 0 FAIL, 3 NOT_AVAILABLE of 13**, in 183 s of game time.
+Origin/main 195a016 (after #97, #81, #87) plus this branch, pc-hummer, 2026-11-04.
+**10 PASS, 0 FAIL, 4 NOT_AVAILABLE of 14**, about 185 s of game time. The range is not on main yet; the range-mode table
+follows this one.
 
 | # | Link | Result | Detail (abridged) |
 |---|---|---|---|
@@ -79,23 +107,39 @@ Origin/main 8bb74a0 plus this branch, pc-hummer, 2026-11-04.
 | 3 | kill_enemy | PASS (fixture: ammo reserve refilled) | stand-in killed with 466 `FireOnce` shots in 136 s (two reserve refills) |
 | 4 | enemy_attacks_maya | NOT_AVAILABLE | the stand-in has no attack |
 | 5 | loot_drop_on_kill | NOT_AVAILABLE | no pickup within 1,500 uu of the corpse in 4 s |
-| 6 | pick_up_gun | PASS (fixture: teleport; gun rolled and dropped by the test) | no enemy drop yet, so the test rolls a gun (`ow.RollGun GD_Itempools.WeaponPools.Pool_Weapons_All_01_Common 8 1`) and drops it 150 uu ahead of Maya (as `-owpickupcardshots` does). Aimed at it, the pickup card (PR #95) selects that drop (`OpenWillowPickupCard::FindAimedPickup`) and its state names the item before E; E then picks it up (`PickupNearby`). Card state only: this run uses the canvas HUD, so the movie's drawing of the card is not checked |
-| 7 | equip_gun | PASS | the rolled gun equipped into the free 4th slot and drawn (it is the held weapon) |
-| 8 | phaselock_enemy | PASS (fixture: phaselock point granted) | the respawned stand-in lifted (`LastPhaselockHit`, target `IsPhaselocked`), 13 s lock |
-| 9 | mission_accept | PASS (fixture: teleport) | the use key at Marcus accepted the Fire mission; the lent pistol is in the backpack |
-| 10 | mission_objective | PASS (fixture: teleport) | the trigger was touched and the dummy registered as targetable; one shot from the lent pistol completed the objectives (status 2) |
-| 11 | mission_turn_in | PASS (fixture: teleport) | two use-key presses at Marcus (turn-in, then the reward page): status 3, +395 XP, the lent pistol taken back |
-| 12 | go_down | PASS (fixture: lethal damage applied by the test) | the lethal fixture put Maya in Fight For Your Life (12 s bleed-out) |
-| 13 | bleed_out_respawn | PASS (fixture: down state from the test's lethal damage) | she bled out with no kill and respawned 20 s later at the decoded station, health full, mission still complete |
+| 6 | pick_up_gun | PASS (fixture: teleport; gun rolled and dropped by the test) | no enemy drop yet, so the test rolls a gun (`ow.RollGun GD_Itempools.WeaponPools.Pool_Weapons_All_01_Common 8 1`) and drops it 150 uu ahead of Maya (as `-owpickupcardshots` does). Aimed at it, at the E press, with Maya on the ground, the card's state names the drop (`card_id`), and E picks up that same item (`picked_id`). Card state only: this run uses the canvas HUD, so the movie's drawing of the card is not checked |
+| 7 | pick_up_aimed_not_nearest | NOT_AVAILABLE (fixture: teleport; two guns rolled and dropped by the test) | the card named the aimed drop at the press; E took the nearer decoy (`PickupNearby`) |
+| 8 | equip_gun | PASS | the rolled gun equipped into the free 4th slot and drawn (it is the held weapon) |
+| 9 | phaselock_enemy | PASS (fixture: phaselock point granted) | the respawned stand-in lifted (`LastPhaselockHit`, target `IsPhaselocked`), 13 s lock |
+| 10 | mission_accept | PASS (fixture: teleport) | the use key at Marcus accepted the Fire mission; the lent pistol is in the backpack |
+| 11 | mission_objective | PASS (fixture: teleport) | the trigger was touched and the dummy registered as targetable; one shot from the lent pistol completed the objectives (status 2) |
+| 12 | mission_turn_in | PASS (fixture: teleport) | two use-key presses at Marcus (turn-in, then the reward page): status 3, +395 XP, the lent pistol taken back |
+| 13 | go_down | PASS (fixture: lethal damage applied by the test) | the lethal fixture put Maya in Fight For Your Life (12 s bleed-out) |
+| 14 | bleed_out_respawn | PASS (fixture: down state from the test's lethal damage) | she bled out with no kill and respawned 20 s later at the decoded station, health full, mission still complete |
+
+### With the range stack (throwaway local merge of main + `origin/feature/slice-range-loot`, 2026-11-04)
+
+This is not a merged state: the merge was local and was deleted after the run. **12 PASS, 1 FAIL, 1 NOT_AVAILABLE of
+14**:
+- `reach_fight_area`: `ow.Range` at the pinned spot (-3345, 3823, 3024), yaw 165.
+- `kill_enemy`: an adult bullymong killed with 24 shots in 6.3 s.
+- `enemy_attacks_maya`: 2 hits credited to the selected enemy (3 more came from other causers).
+- `phaselock_enemy`: a range enemy lifted.
+- `mission_objective`: PASS, after the range was cleared.
+- **`loot_drop_on_kill` FAIL:** the forced roll dropped a gun ("Oppressed Rifle"), but its pickup spawned at the world
+  origin, (0, 0, 12), 5,894 uu from the corpse. The range log says "drop_spot no room ... at its feet". The probable
+  cause is that the range takes its drop spot from the dead enemy's collision centre, which reads zero. Reported to the
+  range lane through the hub.
+- `pick_up_aimed_not_nearest` NOT_AVAILABLE: as on main.
 
 ## Gaps, with the owning lane
 
 | Gap | Link(s) | Owner | What closes it |
 |---|---|---|---|
-| No gun range or real enemies on main | 2, 3 | range | PR #76 (`ow.Range`). The suite runs `ow.Range` when the command exists and fights the nearest moving enemy (class name containing `Enemy`) instead of the stand-in |
-| No enemy attacks | 4 (and 12's fixture) | range | PR #83 (enemy AI: notice, approach, melee). Once an enemy hits Maya during the fight, link 4 passes. The down link could then use an enemy's damage instead of the fixture; that change belongs to this lane |
-| No loot drop when an enemy dies | 5 (and 6's test drop) | range | Loot PR3: spawn an `AOpenWillowInventoryPickup` near the corpse. The VM already rolls the pools on death (COMBAT_LOOT.md); the host does not spawn them yet. With a real drop, link 6 uses it and drops the "gun rolled and dropped by the test" fixture |
-| The use key takes the nearest pickup, not the aimed one | 6 | inventory | PICKUP_CARD.md's known gap: E uses `PickupNearby` (nearest within 220 uu); the card uses `FindAimedPickup`. With one drop in reach both agree, so link 6 does not catch the difference |
+| The range is not on main | 2, 3, 4 | range | #76, #83 and #89. Links 2 to 4 pass on the throwaway merge above |
+| A range gun drop spawns at the world origin | 5 (and 6's test drop) | range | #89: take the drop spot from the enemy's last live position, not from the collision centre of the dead enemy. With a drop at the corpse, link 6 uses it and the "gun rolled and dropped by the test" fixture goes away |
+| The use key takes the nearest pickup, not the aimed one | 7 | inventory | E-key switch to `FindAimedPickup` (in progress, per the hub). Link 7 passes once E takes the aimed drop past the nearer decoy |
+| Maya has no shield, so a range fight can down her | 4 to 14 (now fixtures) | maya / skills | A stock shield at spawn would let the later links run without the restore fixture |
 | Generated guns have no firing block | 7 (not graded) | projectiles | `ow.RollGun` guns fire the host's fallback trace (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"). The equip link does not grade the gun's firing |
 | The stand-in is a 20,000-health dummy | 3 | range | Real enemy health per level comes with PR #76 (`range_manifest.json`) |
 
@@ -114,6 +158,8 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-04 | main b945b49 (after #91, #92, #95) | 10 / 0 / 3 | link 6 now drops the rolled gun and checks the pickup card names it before E: NOT_AVAILABLE -> PASS (fixture); ctest 21/21, verify_packages exact |
 | 2026-11-04 | main 998780c (after #96, #86) | 10 / 0 / 3 | same links; ctest 21/21, verify_packages exact |
 | 2026-11-04 | main 8bb74a0 (after #94, #88) | 10 / 0 / 3 | same links; ctest 22/22, verify_packages exact, checker tests 18/18 |
+| 2026-11-04 | main 195a016 (after #97, #81, #87), #98 review 1 and batch 6 fixes | 10 / 0 / 4 of 14 | new link 7 (aimed pickup past a nearer decoy) NOT_AVAILABLE; the card and picked ids are cross-checked; ctest 22/22, verify_packages exact, checker tests 21/21 |
+| 2026-11-04 | throwaway merge with the range stack | 12 / 1 / 1 of 14 | links 2 to 4 PASS with real range enemies; loot drop at the world origin (FAIL, range); passive, restore and clear fixtures named |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
