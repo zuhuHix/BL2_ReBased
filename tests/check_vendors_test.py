@@ -458,24 +458,38 @@ class ItemSectionTest(unittest.TestCase):
                                  f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE - 1} error=')
         self.assertEqual(by_name(run(log))['ammo_buy'][0], 'FAIL')
 
-    def test_full_pool_refusal_is_missing_with_reason(self):
+    def test_full_pool_refusal_fails(self):
+        # The sequence half-empties the pool first, so a refusal is a failure, not a pass-by-default.
         log = good_log().replace(f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE} error=',
                                  'OWVENDOR buy id=A1 ok=0 money=4550 error=Ammo full')
         checks = by_name(run(log))
-        self.assertEqual(checks['ammo_buy'][0], 'MISSING')
+        self.assertEqual(checks['ammo_buy'][0], 'FAIL')
         self.assertIn('Ammo full', checks['ammo_buy'][1])
+
+    def test_report_after_ammo_buy_that_disagrees_fails(self):
+        # The pool line says 54, but the report after the buy still shows the old pool.
+        log = good_log(sections=False) + items_section(4550).replace('"current":54', '"current":0')
+        checks = by_name(cv.grade_ammo_buy(log))
+        self.assertEqual(checks['ammo_buy'][0], 'FAIL')
+        self.assertIn('report after the buy', checks['ammo_buy'][1])
+
+    def test_no_report_after_ammo_buy_fails(self):
+        section = items_section(4550)
+        log = good_log(sections=False) + section[:section.rindex('LogTemp: Display: OWVENDSTATE')]
+        self.assertEqual(by_name(cv.grade_ammo_buy(log))['ammo_buy'][0], 'FAIL')
 
     def test_other_ammo_refusal_fails(self):
         log = good_log().replace(f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE} error=',
                                  'OWVENDOR buy id=A1 ok=0 money=4550 error=Insufficient funds')
         self.assertEqual(by_name(run(log))['ammo_buy'][0], 'FAIL')
 
-    def test_no_items_section_is_missing(self):
+    def test_no_items_section_fails(self):
+        # The sequence always visits both machines: their absence fails the run.
         log = good_log(sections=False)
         checks = by_name(run(log))
-        self.assertEqual(checks['ammo_buy'][0], 'MISSING')
-        self.assertEqual(checks['heal_buy'][0], 'MISSING')
-        self.assertEqual(checks['item_prices'][0], 'MISSING')
+        self.assertEqual(checks['ammo_buy'][0], 'FAIL')
+        self.assertEqual(checks['heal_buy'][0], 'FAIL')
+        self.assertEqual(checks['item_prices'][0], 'FAIL')
 
     def test_heal_passes_and_reports_the_heal(self):
         checks = by_name(run(good_log()))
@@ -487,11 +501,17 @@ class ItemSectionTest(unittest.TestCase):
                                  'OWVENDHEAL before=100.000 after=150.000 max=400.000')
         self.assertEqual(by_name(run(log))['heal_buy'][0], 'FAIL')
 
-    def test_full_health_refusal_is_missing_with_reason(self):
+    def test_full_health_refusal_fails(self):
         log = good_log(sections=False) + health_section(4000, refused='Health full')
         checks = by_name(run(log))
-        self.assertEqual(checks['heal_buy'][0], 'MISSING')
+        self.assertEqual(checks['heal_buy'][0], 'FAIL')
         self.assertIn('Health full', checks['heal_buy'][1])
+
+    def test_report_after_heal_that_disagrees_fails(self):
+        log = good_log(sections=False) + health_section(4000).replace('"current":200.0', '"current":100.0')
+        checks = by_name(cv.grade_heal_buy(log))
+        self.assertEqual(checks['heal_buy'][0], 'FAIL')
+        self.assertIn('report after the buy', checks['heal_buy'][1])
 
     def test_item_value_off_by_one_fails(self):
         log = good_log().replace(f'"value":{AMMO_VALUE},', f'"value":{AMMO_VALUE + 1},')
@@ -503,10 +523,10 @@ class ItemSectionTest(unittest.TestCase):
         log = good_log().replace(f'"price":{AMMO_PRICE},', f'"price":{AMMO_PRICE + 1},', 1)
         self.assertEqual(by_name(run(log))['item_prices'][0], 'FAIL')
 
-    def test_item_rows_without_terms_are_skipped_not_failed(self):
+    def test_item_rows_without_terms_fail(self):
         log = good_log().replace('"valueTerms":', '"valueTermsGone":')
         checks = by_name(run(log))
-        self.assertEqual(checks['item_prices'][0], 'MISSING')
+        self.assertEqual(checks['item_prices'][0], 'FAIL')
         self.assertEqual(checks['prices'][0], 'PASS')   # the gun rows are still checked
 
     def test_automation_items_missing_fails(self):

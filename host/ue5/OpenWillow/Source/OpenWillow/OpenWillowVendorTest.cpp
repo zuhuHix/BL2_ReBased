@@ -265,6 +265,18 @@ bool FOpenWillowVendorItemsTest::RunTest(const FString& Parameters)
     Maya.Health = Maya.Effective().MaxHealth;
     TestFalse(TEXT("full health refuses a heal"), Dr.Buy(TEXT("stock_0"), Inventory, &Maya, 0.0, Error));
     TestEqual(TEXT("health full text"), Error, FString(TEXT("Health full")));
+    // Down (Injured or Dead): refused before anything is charged, and the base maximum is never written.
+    const float BaseMax = Maya.Base.MaxHealth;
+    Maya.Health = 50.f;
+    Maya.Phase = EOpenWillowDownPhase::Injured;
+    Inventory->GetMoney(Money);
+    const int32 MoneyBeforeDown = Money;
+    TestFalse(TEXT("a heal while down is refused"), Dr.Buy(TEXT("stock_0"), Inventory, &Maya, 0.0, Error));
+    TestEqual(TEXT("down refusal text"), Error, FString(TEXT("Cannot heal while down")));
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("nothing charged while down"), Money, MoneyBeforeDown);
+    Maya.Phase = EOpenWillowDownPhase::Up;
+    TestEqual(TEXT("the base maximum is untouched by heals"), Maya.Base.MaxHealth, BaseMax);
     TestFalse(TEXT("a heal with no walker is refused"), Dr.Buy(TEXT("stock_0"), Inventory, nullptr, 0.0, Error));
 
     // Gear: buy a shield (225 = floor(47 x 4.8)), sell it back (47), buy it back (47). The gear keeps its backpack id.
