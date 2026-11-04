@@ -33,38 +33,60 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (12, all made-up log lines).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (18, all made-up log lines).
 
-### Test shortcuts and fixtures (each one is logged as `OWSLICEGATE note` or stated in the link detail)
+### How a link is graded (review round 1)
+
+- **Line format:** `OWSLICEGATE link=<name> result=<PASS|FAIL|NOT_AVAILABLE> fixtures=[a; b] detail=<why>`.
+  `fixtures` lists the test fixtures that link relied on. The report shows them with the result, for example
+  `PASS (fixture: phaselock point granted)`, in the table, the JSON (a `fixtures` list per link) and the markdown.
+- **Run structure:** the checker fails the run unless it finds:
+  - exactly one start line;
+  - then each of the 13 links at most once, in the expected order;
+  - then exactly one SUMMARY line that agrees with the link lines.
+
+  A shuffled, repeated or unknown link fails the run, and so does a link line before the start or after the SUMMARY.
+- **`enemy_attacks_maya` counts only the selected enemy's hits.** It counts only hits whose causer is the enemy the
+  fight selected. The walker now keeps the causer of the last counted hit (`GetLastHitCauser`; 3 lines in
+  `OpenWillowWalker.h/.cpp`). Hits from other causers, or with no causer, are reported in the detail and leave the link
+  NOT_AVAILABLE.
+- **`mission_turn_in` passes only when all three hold:**
+  - the mission status is 3 (complete);
+  - the experience rose;
+  - the lent pistol is neither in the backpack nor held.
+
+### Test shortcuts and fixtures (each one is named in the `fixtures` field of the link that relied on it)
 
 - Maya **teleports** between the places the slice uses: Marcus, the waypoint trigger, a drop. She does not walk there
-  (the quest suite does the same). Aim is set straight on the control rotation.
-- One action-skill point is spent on Phaselock at the start, the way the skills page spends it.
-- When a gun's magazine and reserve are both empty, its reserve is refilled. The stand-in target has 20,000 health, sized
+  (the quest suite does the same). Fixture `teleport`. Aim is set straight on the control rotation.
+- One action-skill point is spent on Phaselock at the start, the way the skills page spends it (fixture `phaselock point
+  granted`, reported on `phaselock_enemy`).
+- When a gun's magazine and reserve are both empty, its reserve is refilled (fixture `ammo reserve refilled`). The stand-in target has 20,000 health, sized
   for level-30 guns, so a level-8 pistol needs about 470 shots.
-- **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6), because no enemy can attack Maya yet.
+- **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6), because no enemy can attack Maya yet. It is named on
+  `go_down`, and `bleed_out_respawn` names the down state it started from.
 - The lent mission pistol is readied with `EquipItem` + `DrawItemById`, as in `test_quest`.
 
 ## Current link table
 
-Origin/main be94f4a plus this branch, pc-hummer, 2026-11-04 (`local/slicegate/run-20261104-021510.log`).
+Origin/main 6a2f35f plus this branch (review round 1), pc-hummer, 2026-11-04.
 **9 PASS, 0 FAIL, 4 NOT_AVAILABLE of 13**, in 183 s of game time.
 
 | # | Link | Result | Detail (abridged) |
 |---|---|---|---|
 | 1 | spawn_maya | PASS | level 8 (slice gear level), health 213/213, grounded, holding a slice pistol |
 | 2 | reach_fight_area | NOT_AVAILABLE | no `ow.Range` on main yet; fallback: the host stand-in target (`AOpenWillowCombatTarget`) 600 uu from Maya in Sanctuary |
-| 3 | kill_enemy | PASS | stand-in killed with 466 `FireOnce` shots in 136 s (two reserve refills) |
+| 3 | kill_enemy | PASS (fixture: ammo reserve refilled) | stand-in killed with 466 `FireOnce` shots in 136 s (two reserve refills) |
 | 4 | enemy_attacks_maya | NOT_AVAILABLE | the stand-in has no attack |
 | 5 | loot_drop_on_kill | NOT_AVAILABLE | no pickup within 1,500 uu of the corpse in 4 s |
 | 6 | pick_up_gun | NOT_AVAILABLE | nothing to pick up; fallback `ow.RollGun GD_Itempools.WeaponPools.Pool_Weapons_All_01_Common 8 1` added a level-8 Torgue pistol to the backpack |
 | 7 | equip_gun | PASS | the rolled gun equipped into the free 4th slot and drawn (it is the held weapon) |
-| 8 | phaselock_enemy | PASS | the respawned stand-in lifted (`LastPhaselockHit`, target `IsPhaselocked`), 13 s lock |
-| 9 | mission_accept | PASS | the use key at Marcus accepted the Fire mission; the lent pistol is in the backpack |
-| 10 | mission_objective | PASS | the trigger was touched and the dummy registered as targetable; one shot from the lent pistol completed the objectives (status 2) |
-| 11 | mission_turn_in | PASS | two use-key presses at Marcus (turn-in, then the reward page): status 3, +395 XP, the lent pistol taken back |
-| 12 | go_down | PASS | the lethal fixture put Maya in Fight For Your Life (12 s bleed-out) |
-| 13 | bleed_out_respawn | PASS | she bled out with no kill and respawned 20 s later at the decoded station, health full, mission still complete |
+| 8 | phaselock_enemy | PASS (fixture: phaselock point granted) | the respawned stand-in lifted (`LastPhaselockHit`, target `IsPhaselocked`), 13 s lock |
+| 9 | mission_accept | PASS (fixture: teleport) | the use key at Marcus accepted the Fire mission; the lent pistol is in the backpack |
+| 10 | mission_objective | PASS (fixture: teleport) | the trigger was touched and the dummy registered as targetable; one shot from the lent pistol completed the objectives (status 2) |
+| 11 | mission_turn_in | PASS (fixture: teleport) | two use-key presses at Marcus (turn-in, then the reward page): status 3, +395 XP, the lent pistol taken back |
+| 12 | go_down | PASS (fixture: lethal damage applied by the test) | the lethal fixture put Maya in Fight For Your Life (12 s bleed-out) |
+| 13 | bleed_out_respawn | PASS (fixture: down state from the test's lethal damage) | she bled out with no kill and respawned 20 s later at the decoded station, health full, mission still complete |
 
 ## Gaps, with the owning lane
 
@@ -87,6 +109,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 |---|---|---|---|
 | 2026-11-04 | main be94f4a | 9 / 0 / 4 | first green run, after four runs that found bugs in this lane's own driver (see below) |
 | 2026-11-04 | main f3947ed (after PR #80) | 9 / 0 / 4 | same links; ctest 21/21, verify_packages exact |
+| 2026-11-04 | main 6a2f35f, review round 1 | 9 / 0 / 4 | stricter grading (causer, full turn-in, run structure, fixtures); same links; ctest 21/21, verify_packages exact, checker tests 18/18 |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
