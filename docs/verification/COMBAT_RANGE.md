@@ -75,7 +75,7 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Rule | Host | Record |
 |---|---|---|
 | One threat record per den, shared by its members | the range is one den, centred on the spot | AI_AWARENESS_LIVE 0 |
-| State update cadence | every 0.2 s per enemy (the line-of-sight trace is taken on these updates only); den fall-back check every 1.0 s | AI_MELEE_TARGETING_LIVE 4; AI_AWARENESS_LIVE 2 |
+| State update cadence | every 0.2 s per enemy (the line-of-sight trace is taken on these updates only, and not at all while passive, lifted or dead); den fall-back check every 1.0 s | AI_MELEE_TARGETING_LIVE 4; AI_AWARENESS_LIVE 2 |
 | Notice by sight | the previous update's line of sight (a Visibility trace, stand-in for the exposure iterator), Maya in the front half-plane, Maya within the den's ThreatRadius (4,665.625, the one den read) of the den centre | AI_AWARENESS_LIVE 0 |
 | Notice by proximity | 3D distance minus the enemy's collision radius below 768 (AICloseThreatRadius), Maya within the den's PatrolRadius (3,667.19) | AI_AWARENESS_LIVE 0 |
 | Notice stamps | level 2, AggroTime = now, ForgetTime = now + 10 (MinEngagementTime), refreshed while a rule holds | AI_AWARENESS_LIVE 2 |
@@ -95,3 +95,13 @@ the stock AI tree's perch, random and leap nodes.
 
 Test steps added to `-owrangetest` and `tools/check_range.py`: notice_proximity, notice_sight, no_notice_far, provoked, approach, melee_hit, melee_interval,
 melee_miss, forget, passive_no_melee.
+
+## Range spot: candidates and the textured-floor rule (PR2 follow-up)
+
+`tools/prepare_range.py` writes `spot_candidates` from the level import's terrain probes (`local/sanctuary/terrain-runtime.json`), Sanctuary_P
+Terrain_2 first (the terrain the gate's floor lies in, SANCTUARY_ARTIFACT_PASS.md), then the other terrains by distance from the plaza. The host tries
+them (each point, then rings of 600 and 1,200 uu) before its ring scout. Every formation slot needs a **textured** floor: the face material the trace
+hits must not be null, an engine material or a collision / fallback / neutral placeholder, **and it must sample at least one texture that is not an
+engine texture** (`GetUsedTextures`; batch 1's scouted canyon floor drew dark with no texture). `tools/test_range.ps1 -Survey` saves one frame per
+candidate (`local/range/shots/survey_<i>.png`) with the material and the reason it was or was not taken; the default spot will be pinned from those
+frames. `prepare_range.py` refuses an `--out` outside `local/` (the manifest holds game-derived coordinates).

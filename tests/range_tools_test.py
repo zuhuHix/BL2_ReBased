@@ -41,6 +41,18 @@ class PrepareRangeTest(unittest.TestCase):
         self.assertFalse(out[2]['gate_terrain'])
         self.assertEqual(out[2]['plaza_distance'], 1000.0)
 
+    def test_output_must_be_inside_local(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as repo:
+            os.makedirs(os.path.join(repo, 'local', 'range'))
+            inside = os.path.join(repo, 'local', 'range', 'm.json')
+            self.assertEqual(prepare_range.local_output(inside, repo), os.path.realpath(inside))
+            for outside in (os.path.join(repo, 'docs', 'm.json'), os.path.join(repo, 'local'),
+                            os.path.join(repo, 'local', '..', 'm.json'), os.path.join(repo, 'localx', 'm.json')):
+                with self.assertRaises(SystemExit):
+                    prepare_range.local_output(outside, repo)
+
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
         clips = prepare_range.find_clips('/Game/X/Anims/Idle_Made.Idle_Made', names)
