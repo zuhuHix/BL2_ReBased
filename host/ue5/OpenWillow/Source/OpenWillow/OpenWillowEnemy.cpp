@@ -325,8 +325,10 @@ void AOpenWillowEnemy::Tick(float DeltaSeconds)
 void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
 {
     // Without the range's den the enemy only patrols (not the case in the range).
-    if (!Den)
+    // Without the range's den, or with the AI switched off, the enemy only patrols.
+    if (!Den || !bAIEnabled)
     {
+        Brain.Stop();
         UpdatePatrol(Now, DeltaSeconds);
         return;
     }

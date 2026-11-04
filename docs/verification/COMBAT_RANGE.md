@@ -90,6 +90,11 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Melee damage | the VM's swing rows per kind and level (`arrival` x `ratio`, both from `ow-package --combat-run maya:L spawn:<kind>:L swing:<n>:melee`), x the level scale (1.0 at or below Maya, 1.1 / 1.2 one / two levels up; a straight line to 3.0 at sixteen beyond that, stand-in) | COMBAT_MELEE (the VM rows reproduce adult L5/6/7 73.6974 / 83.2781 / 94.1042, regular L6 24.9834, baby L6 12.4917, ratios 0.715 / 0.728 / 0.741) |
 | Delivery | one function, `RangeDamagePlayer`: UE ApplyDamage on Maya until the maya lane's `OpenWillowApplyDamageToPlayer` (PR #72) merges | host |
 
+`ow.RangeAI on|off` (on by default): off stops every brain, so the enemies only patrol (for gun testing without being attacked). The range
+test runs its target steps (1-15) and its loot steps with the AI off and its AI steps with it on, topping Maya up to full health before
+each AI step (`ApplyScriptHealth`, a test fixture): in batch 2 the alerted range swarmed Maya during the target steps and put her down,
+after which no AI rule could fire (a downed Maya is no target).
+
 Not modelled: momentum on Maya (75,000 for the adult swing), leaps and the slinger's throw (the slinger has melee numbers from its rock but no throw),
 the stock AI tree's perch, random and leap nodes.
 
@@ -120,6 +125,18 @@ chance, from a seeded stream (`-owrangeseed=N`, default 20261009, so a run repea
 | money (`Pool_Money_1or2`) | quantity a random integer in -1 to 2, at least 1 (the data's range); one range pickup per item, worth `round(4 x 1.13^level)` | **stand-in value, UNVERIFIED**: the value of `ItemGrade_Currency_Money_Little` is not decoded (a live read is wanted) |
 | ammo (the two ammo pools) | one pickup of the held gun's ammo type, a magazine's worth, only when that reserve is below half | stand-in: COMBAT_LOOT shows these pools drop nothing while ammo is not low; the threshold and amount are host choices |
 | other (skins, eridium, health) | logged as not hosted | |
+
+**Item stage.** The adult's stage carries a random offset (`Random_Minus02-Plus01`): `prepare_range.py` samples it over 24 kills per kind
+at level 20 and stores each level's range (`item_stage_min` / `item_stage_max`; adult level 6: 4 to 7). The host draws one stage per death from
+the loot stream before the pools (the game draws it at spawn; host order, UNVERIFIED).
+
+**Determinism.** Every tried weapon pool draws its gun seed whether or not the weapon generator's manifest is installed, so a seed gives the
+same money and ammo rolls on every machine. Money and ammo counters add with saturation (no wrap at the int32 limit), and `ow.RangeLevel` is
+clamped to the levels the manifest's tables cover (with a warning).
+
+**Drops and clean-up.** A drop goes to the first point on three rings around the enemy (60, 120 and 180 uu) with a floor and a free 30 uu
+sphere above it, else the enemy's feet. The range's own pickups expire after 60 s and its gun drops after 120 s (host choice); `ow.RangeClear`
+removes every drop with the range.
 
 `ow.RangeLoot normal|always|off`: `always` tries every weapon, money and ammo pool (for testing guns), `off` drops nothing. The range pickups (money,
 ammo) are engine-shape stand-ins collected on touch. Test steps: loot_roll, loot_money_pickup, loot_weapon_item (may SKIP without the weapon

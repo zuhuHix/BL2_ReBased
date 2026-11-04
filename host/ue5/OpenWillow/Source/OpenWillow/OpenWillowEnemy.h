@@ -31,6 +31,9 @@ public:
     // Returns true when the stock pawn is in use.
     bool SetupKind(const FOpenWillowRangeKind& InKind, int32 InLevel, float RespawnSeconds);
     void SetPassive(bool bOn) { bPassive = bOn; }
+    // AI off: the brain is stopped and the enemy only patrols (ow.RangeAI off; the range test's target steps run this way).
+    void SetAIEnabled(bool bOn) { bAIEnabled = bOn; }
+    bool IsAIEnabled() const { return bAIEnabled; }
     bool IsPassive() const { return bPassive; }
     // The range's threat record (shared by the range's enemies). Null: the enemy patrols only.
     void SetDen(FOpenWillowThreatDen* InDen) { Den = InDen; }
@@ -84,6 +87,7 @@ private:
 
     FRandomStream Rand;
     bool bPassive = false;
+    bool bAIEnabled = true;
     bool bHasTarget = false;
     // PR2 (range AI): the brain, the den's record, the hit-by-Maya flag and the melee clip's hold.
     FOpenWillowEnemyBrain Brain;
