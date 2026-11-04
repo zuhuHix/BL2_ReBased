@@ -363,6 +363,25 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             bPhaselockPointGranted = bSpent;   // reported on the Phaselock link, the one that relies on it
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: action skill point spent=%d %s"), bSpent, *Reason);
         }
+        // -owslicegateshield: Maya fights with a shield, so the fight path can run without the restore fixture. A shield
+        // from the gear manifest when one is there (equipped as the inventory equips gear); else a host stand-in pool with
+        // her maximum health as its capacity and the default recharge (not stock data). Named on the fight links.
+        if (FParse::Param(FCommandLine::Get(), TEXT("owslicegateshield")))
+        {
+            for (const FOpenWillowGearItem& Gear : Inventory->GearItemList())
+                if (Gear.ItemType == TEXT("shield") && Inventory->EquipGearById(Gear.Id, TEXT("shield"), W->GetSkills()->GetLevel()))
+                {
+                    ShieldFixture = FString::Printf(TEXT("shield %s equipped from the gear manifest"), *Gear.Id);
+                    break;
+                }
+            if (ShieldFixture.IsEmpty())
+            {
+                const FOpenWillowMayaStats Defaults;
+                W->GetMayaState().EquipShield(W->GetMaxHealth(), Defaults.ShieldRechargeDelay, Defaults.ShieldRechargeRate, true, GetWorld()->GetTimeSeconds());
+                ShieldFixture = FString::Printf(TEXT("host stand-in shield of %.0f (no shield in the gear manifest; not stock data)"), W->GetShieldCapacity());
+            }
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: %s, shield %.0f/%.0f"), *ShieldFixture, W->GetShield(), W->GetShieldCapacity());
+        }
         Next(EStep::Arena);
         break;
     }
@@ -413,6 +432,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Fight: {
+        if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
         // Each hit on Maya, by its causer (the walker keeps the last one): the selected enemy, another actor, or none given.
         if (W->GetHitCount() != LastHitCount)
         {
@@ -460,7 +480,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         if (W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead && StepTime < BleedTimeout) return;   // respawn due
         FOpenWillowMayaState& State = W->GetMayaState();
-        if (W->IsDown() || W->GetHealth() < W->GetMaxHealth())
+        // With a shield (-owslicegateshield) only a downed Maya is restored: her health after the fight is kept.
+        if (W->IsDown() || (ShieldFixture.IsEmpty() && W->GetHealth() < W->GetMaxHealth()))
         {
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: Maya restored from %s, health %.0f/%.0f"),
                 W->IsDown() ? TEXT("down") : TEXT("up"), W->GetHealth(), W->GetMaxHealth());
