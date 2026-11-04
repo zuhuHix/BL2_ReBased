@@ -2,6 +2,7 @@
 // ow.Vendor.* console commands.
 #include "OpenWillowVendor.h"
 #include "OpenWillowVendorPage.h"
+#include "OpenWillowCurrency.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowWeaponGen.h"
@@ -12,6 +13,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
 #include "TimerManager.h"
@@ -281,6 +283,8 @@ void FOpenWillowVendorStock::Restock(double Now)
     Featured = FOpenWillowVendorItem();
     bHasFeatured = false;
     Notice.Reset();
+    BoughtSinceRestock.Reset();
+    bFeaturedBoughtSinceRestock = false;
     bStocked = true;
     StockedAt = Now;
     const uint32 RestockSeed = Seed + uint32(RestockCount) * 1009u;
@@ -360,8 +364,43 @@ bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FS
     for (const FOpenWillowWeaponItem& Owned : Inventory->Items())
         if (!Before.Contains(UOpenWillowInventory::StableId(Owned))) LastBoughtId = UOpenWillowInventory::StableId(Owned);
     Inventory->SetMoney(Money - Price);
-    if (Item.bFeatured) bHasFeatured = false;
-    else Items.RemoveAll([&Id](const FOpenWillowVendorItem& Shelf) { return Shelf.Id == Id; });
+    if (Item.bFeatured)
+    {
+        bHasFeatured = false;
+        bFeaturedBoughtSinceRestock = true;
+    }
+    else
+    {
+        Items.RemoveAll([&Id](const FOpenWillowVendorItem& Shelf) { return Shelf.Id == Id; });
+        BoughtSinceRestock.Add(Id);
+    }
+    return true;
+}
+
+bool FOpenWillowVendorStock::Restore(const FOpenWillowCurrencyMachine& Saved, double Now, FString& OutError)
+{
+    const double IntervalSeconds = double(MinutesBetweenResets) * 60.0;
+    if (Saved.RestockCount < 1 || Saved.SecondsToReset < 0 || double(Saved.SecondsToReset) > IntervalSeconds)
+    {
+        OutError = TEXT("saved reset clock or restock count out of range");
+        return false;
+    }
+    // Restock() rolls from RestockCount and then counts one more, so one below the saved count rebuilds the saved shelf.
+    RestockCount = Saved.RestockCount - 1;
+    Restock(Now);
+    // Restock() started the clock now; move its start back so that SecondsToReset(Now) is the saved value. UNVERIFIED
+    // host choice: world time does not run while the game is closed, so the saved seconds are taken as they are.
+    StockedAt = Now - (IntervalSeconds - double(Saved.SecondsToReset));
+    for (const FString& Id : Saved.Bought)
+    {
+        // An id that is not on the rebuilt shelf (the manifest changed) is dropped, not kept in the record.
+        if (Items.RemoveAll([&Id](const FOpenWillowVendorItem& Shelf) { return Shelf.Id == Id; }) > 0) BoughtSinceRestock.Add(Id);
+    }
+    if (Saved.bFeaturedBought)
+    {
+        bHasFeatured = false;
+        bFeaturedBoughtSinceRestock = true;
+    }
     return true;
 }
 
@@ -464,6 +503,21 @@ void UOpenWillowVendorSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
     Super::OnWorldBeginPlay(InWorld);
     if (!InWorld.IsGameWorld()) return;
+    // The currency save runs with or without the machines: its load waits for the walker (TickCurrencyLoad).
+    FString CurrencyGiven, CurrencyError;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owcurrencysave="), CurrencyGiven))
+    {
+        if (FOpenWillowCurrencySave::ResolvePath(CurrencyGiven, CurrencyPath, CurrencyError))
+        {
+            CurrencyWaits = 0;
+            InWorld.GetTimerManager().SetTimer(CurrencyTimer, FTimerDelegate::CreateUObject(this, &UOpenWillowVendorSubsystem::TickCurrencyLoad),
+                0.25f, true);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY off: %s (%s)"), *CurrencyGiven, *CurrencyError);
+        }
+    }
     FString Path;
     if (!FParse::Value(FCommandLine::Get(), TEXT("owvendors="), Path))
     {
@@ -554,10 +608,12 @@ void UOpenWillowVendorSubsystem::Deinitialize()
 {
     // Give input back and hide the page before it goes (a controller can outlive the world), and stop both timers.
     if (Page.IsValid() && Page->IsShown()) CloseShop();
+    SaveCurrency(); // a no-op unless the currency load finished (and the inventory still exists)
     if (UWorld* World = GetWorld())
     {
         World->GetTimerManager().ClearTimer(OpenTimer);
         World->GetTimerManager().ClearTimer(TestTimer);
+        World->GetTimerManager().ClearTimer(CurrencyTimer);
     }
     Page.Reset(); // removes the page from the viewport
     Machines.Reset();
@@ -635,6 +691,7 @@ bool UOpenWillowVendorSubsystem::OpenAt(AOpenWillowWalker& Walker, AOpenWillowVe
     ActiveController = PC;
     LastMessage.Reset();
     const bool bRestocked = Machine.Stock.EnsureStocked(GetWorld()->GetTimeSeconds());
+    if (bRestocked) SaveCurrency();
     Page->Show(PC);
     PushState();
     // While open, push the state every second: the page's countdown is the host's world time, and a restock that falls
@@ -648,6 +705,7 @@ void UOpenWillowVendorSubsystem::CloseShop()
 {
     if (Page.IsValid()) Page->Hide(ActiveController.Get());
     if (UWorld* World = GetWorld()) World->GetTimerManager().ClearTimer(OpenTimer);
+    SaveCurrency();
     ActiveMachine.Reset();
     ActiveInventory.Reset();
     ActiveController.Reset();
@@ -705,6 +763,7 @@ bool UOpenWillowVendorSubsystem::Command(const FString& Action, FString Id, FStr
     if (Inventory) Inventory->GetMoney(Money);
     UE_LOG(LogTemp, Display, TEXT("OWVENDOR %s id=%s ok=%d money=%d error=%s"), *Action, *Id, bOk ? 1 : 0, Money, *OutError);
     LastMessage = bOk ? FString() : OutError;
+    if (bOk) SaveCurrency();
     PushState();
     return bOk;
 }
@@ -754,7 +813,104 @@ void UOpenWillowVendorSubsystem::RestockOpen()
     Machine->Stock.Restock(GetWorld()->GetTimeSeconds());
     LastMessage.Reset();
     UE_LOG(LogTemp, Display, TEXT("OWVENDOR restock id=%s ok=1"), *Machine->Id);
+    SaveCurrency();
     PushState();
+}
+
+void UOpenWillowVendorSubsystem::TickCurrencyLoad()
+{
+    UWorld* World = GetWorld();
+    APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+    AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr;
+    // Wait until the walker's BeginPlay has set its start purse; loading earlier would be overwritten by it.
+    if (!World) return;
+    if (!Walker || !Walker->HasActorBegunPlay() || !Walker->GetInventory())
+    {
+        if (++CurrencyWaits > 480) // 120 s at 0.25 s
+        {
+            World->GetTimerManager().ClearTimer(CurrencyTimer);
+            UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY load none (no walker after 120 s); saves are off"));
+        }
+        return;
+    }
+    World->GetTimerManager().ClearTimer(CurrencyTimer);
+    LoadCurrency(*Walker);
+}
+
+void UOpenWillowVendorSubsystem::LoadCurrency(AOpenWillowWalker& Walker)
+{
+    UOpenWillowInventory* Inventory = Walker.GetInventory();
+    CurrencyInventory = Inventory;
+    FOpenWillowCurrencySave Save;
+    bool bHaveFile = false;
+    if (IFileManager::Get().FileExists(*CurrencyPath))
+    {
+        FString Text, Error;
+        if (!FFileHelper::LoadFileToString(Text, *CurrencyPath) || !FOpenWillowCurrencySave::FromJson(Text, Save, Error))
+        {
+            bCurrencyRefused = true;
+            UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY load refused: %s (%s); saves are off so the file is not overwritten"),
+                *CurrencyPath, *Error);
+            return;
+        }
+        bHaveFile = true;
+    }
+    // -owmoney / -owerid replace the saved values (the walker already applied them in its BeginPlay).
+    int32 CommandMoney = 0, CommandEridium = 0;
+    const bool bMoneyGiven = FParse::Value(FCommandLine::Get(), TEXT("owmoney="), CommandMoney);
+    const bool bEridiumGiven = FParse::Value(FCommandLine::Get(), TEXT("owerid="), CommandEridium);
+    if (bHaveFile && !bMoneyGiven) Inventory->SetMoney(Save.Money);
+    if (bHaveFile && !bEridiumGiven) Inventory->SetEridium(Save.Eridium);
+
+    int32 Restored = 0;
+    for (const TPair<FString, FOpenWillowCurrencyMachine>& Pair : Save.Machines)
+    {
+        AOpenWillowVendingMachine* Machine = nullptr;
+        for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Machines)
+            if (Candidate.IsValid() && Candidate->Id == Pair.Key) Machine = Candidate.Get();
+        if (!Machine) continue; // a saved machine that is not spawned in this map (or -owvendors is off)
+        FString Error;
+        if (Machine->Stock.Restore(Pair.Value, GetWorld()->GetTimeSeconds(), Error)) ++Restored;
+        else UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY machine %s not restored: %s"), *Pair.Key, *Error);
+    }
+    bCurrencyReady = true;
+    if (!bHaveFile)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWCURRENCY load none (no file at %s)"), *CurrencyPath);
+        return;
+    }
+    int32 Money = 0;
+    Inventory->GetMoney(Money);
+    int32 Eridium = 0;
+    Inventory->GetEridium(Eridium);
+    UE_LOG(LogTemp, Display, TEXT("OWCURRENCY load money=%d eridium=%d machines=%d"), Money, Eridium, Restored);
+}
+
+void UOpenWillowVendorSubsystem::SaveCurrency()
+{
+    UOpenWillowInventory* Inventory = CurrencyInventory.Get();
+    if (CurrencyPath.IsEmpty() || !bCurrencyReady || bCurrencyRefused || !Inventory) return;
+    FOpenWillowCurrencySave Save;
+    Inventory->GetMoney(Save.Money); // unknown money is 0
+    Inventory->GetEridium(Save.Eridium);
+    const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Machines)
+    {
+        const AOpenWillowVendingMachine* Machine = Candidate.Get();
+        if (!Machine || !Machine->Stock.bStocked) continue; // a machine never opened has nothing to keep
+        FOpenWillowCurrencyMachine& Row = Save.Machines.Add(Machine->Id);
+        Row.RestockCount = Machine->Stock.RestockCount;
+        Row.SecondsToReset = FMath::FloorToInt(Machine->Stock.SecondsToReset(Now));
+        Row.Bought = Machine->Stock.BoughtSinceRestock;
+        Row.bFeaturedBought = Machine->Stock.bFeaturedBoughtSinceRestock;
+    }
+    FString Error;
+    if (!FOpenWillowCurrencySave::WriteFile(CurrencyPath, Save.ToJson(), Error))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY save failed: %s"), *Error);
+        return;
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWCURRENCY save money=%d machines=%d"), Save.Money, Save.Machines.Num());
 }
 
 bool UOpenWillowVendorSubsystem::IsQuestOwned(const FOpenWillowWeaponItem& Item) const
@@ -852,7 +1008,9 @@ FString UOpenWillowVendorSubsystem::StateJson() const
     MachineJson->SetStringField(TEXT("title"), Machine->Title);
     State->SetObjectField(TEXT("machine"), MachineJson);
     State->SetNumberField(TEXT("money"), Money);
-    State->SetNumberField(TEXT("eridium"), 0); // no eridium economy yet
+    int32 Eridium = 0;
+    Inventory->GetEridium(Eridium);
+    State->SetNumberField(TEXT("eridium"), Eridium);
     State->SetNumberField(TEXT("capacity"), Inventory->GetBackpackCapacity());
     State->SetNumberField(TEXT("used"), Inventory->BackpackCount());
 

@@ -159,6 +159,174 @@ def machine_packages(ammo_probability=1.0):
     return {'Map_P': map_pkg, 'Startup': startup}
 
 
+def attr_init(path):
+    """An AttributeInitializationData whose base is an attribute."""
+    return {'BaseValueConstant': 1, 'BaseValueAttribute': ref(path), 'InitializationDefinition': {'index': 0, 'path': None},
+            'BaseValueScaleConstant': 1}
+
+
+def def_init(path):
+    """An AttributeInitializationData that runs an AttributeInitializationDefinition."""
+    return {'InitializationDefinition': ref(path)}
+
+
+def formula(multiplier, level, power):
+    """An AttributeInitializationDefinition: Multiplier * Level ^ Power (no offset)."""
+    return ('Engine.AttributeInitializationDefinition',
+            {'ValueFormula': {'bEnabled': True, 'Multiplier': multiplier, 'Level': level, 'Power': power}})
+
+
+def constant_attribute(path, value):
+    """An attribute with a ConstantAttributeValueResolver subobject (cooked attributes omit ValueResolverChain)."""
+    return {path: ('Engine.AttributeDefinition', {}),
+            f'{path}.ConstantAttributeValueResolver_0': ('Engine.ConstantAttributeValueResolver', {'ConstantValue': value})}
+
+
+def property_attribute(path, name):
+    """An attribute read from an object property (ExpLevel, MonetaryValueModifierTotal)."""
+    resolver = f'{path}.ObjectPropertyAttributeValueResolver_0'
+    return {path: ('Engine.AttributeDefinition', {'ValueResolverChain': [ref(resolver)]}),
+            resolver: ('Engine.ObjectPropertyAttributeValueResolver', {'PropertyName': name})}
+
+
+def item_packages():
+    """Invented Startup objects for the non-weapon stock: a shield, an ammo item, a health item and a class mod.
+
+    Price calculators have the packages' shape with invented constants: scaler 1.5, shield base cost 10 and a part
+    modifier 0.5, ammo base cost 2, class mod base costs 4 (Alpha) and 6 (Beta).
+    """
+    objects = {}
+    for path, value in [('Econ.Scaler', 1.5), ('Econ.Cost_Shield', 10.0), ('Econ.Cost_Ammo', 2.0),
+                        ('Econ.Cost_Alpha', 4.0), ('Econ.Cost_Beta', 6.0), ('Econ.Rarity_Half', 0.5),
+                        ('Ammo.Amount_Shop', 40.0)]:
+        objects.update(constant_attribute(path, value))
+    objects.update(property_attribute('Attr.Total', 'MonetaryValueModifierTotal'))
+    objects.update(property_attribute('Attr.ItemLevel', 'ExpLevel'))
+    one = const(1)
+    objects['Econ.Init_Universal'] = formula(attr_init('Attr.Total'), attr_init('Econ.Scaler'), attr_init('Attr.ItemLevel'))
+    objects['Econ.Init_Shield'] = formula(def_init('Econ.Init_Universal'), attr_init('Econ.Cost_Shield'), one)
+    objects['Econ.Init_Ammo'] = formula(attr_init('Econ.Cost_Ammo'), attr_init('Econ.Scaler'), attr_init('Attr.ItemLevel'))
+    for name in ('Alpha', 'Beta'):
+        objects[f'Econ.Init_{name}'] = formula(def_init('Econ.Init_Universal'), attr_init(f'Econ.Cost_{name}'), one)
+    # Shield: one material part with a monetary modifier, from the definition's own part list.
+    objects['Parts.Material_Half'] = ('WillowGame.ShieldPartDefinition', {'MonetaryValueMod': ref('Econ.Rarity_Half')})
+    objects['Parts.List_Material'] = ('WillowGame.ItemPartListDefinition', {
+        'WeightedParts': [{'Part': ref('Parts.Material_Half'), 'Manufacturers': [], 'MinGameStageIndex': 0,
+                           'MaxGameStageIndex': 1, 'DefaultWeightIndex': 0}],
+        'ConsolidatedAttributeInitData': [const(1), const(100)]})
+    objects['Items.Shield_Def'] = ('WillowGame.ShieldDefinition', {
+        'ItemName': 'Test Shield', 'MaterialParts': ref('Parts.List_Material'), 'BaseMonetaryValueModifier': 1,
+        'MonetaryValue': def_init('Econ.Init_Shield')})
+    objects['Grades.Shield'] = ('WillowGame.InventoryBalanceDefinition', {'InventoryDefinition': ref('Items.Shield_Def')})
+    # Ammo: the pickup effect adds the shop amount attribute to an ammo pool attribute.
+    objects['Attr.Ammo_SMG_Current'] = ('WillowGame.ResourcePoolAttributeDefinition',
+                                        {'Resource': ref('D_Resources.AmmoResources.Ammo_Patrol_SMG')})
+    objects['Items.Ammo_Def'] = ('WillowGame.UsableItemDefinition', {
+        'ItemName': 'Test Ammo', 'MonetaryValue': def_init('Econ.Init_Ammo'),
+        'ExternalAttributeEffects': [{'AttributeToModify': ref('Attr.Ammo_SMG_Current'), 'ModifierType': 'MT_PostAdd',
+                                      'BaseModifierValue': attr_init('Ammo.Amount_Shop')}]})
+    objects['GD_Items.Ammo.Grade'] = ('WillowGame.InventoryBalanceDefinition', {'InventoryDefinition': ref('Items.Ammo_Def')})
+    # Health: a multiply behaviour under the item's behaviour provider.
+    objects['Items.Health_Def'] = ('WillowGame.UsableItemDefinition', {
+        'ItemName': 'Test Health', 'MonetaryValue': def_init('Econ.Init_Ammo'),
+        'BehaviorProviderDefinition': ref('Items.Health_Def.BPD_0')})
+    objects['Items.Health_Def.BPD_0'] = ('GearboxFramework.BehaviorProviderDefinition', {})
+    objects['Items.Health_Def.BPD_0.Behavior_SimpleMath_0'] = ('WillowGame.Behavior_SimpleMath',
+                                                               {'Operation': 'BINARYMATH_Mul', 'B': 0.3})
+    objects['GD_Items.Health.Grade'] = ('WillowGame.InventoryBalanceDefinition',
+                                        {'InventoryDefinition': ref('Items.Health_Def')})
+    # Class mod: no pool lists it; two definitions with their own calculators.
+    for name in ('Alpha', 'Beta'):
+        objects[f'ClassMods.ClassMod_Test_{name}'] = ('WillowGame.ClassModDefinition', {
+            'BaseMonetaryValueModifier': 1, 'MonetaryValue': def_init(f'Econ.Init_{name}')})
+    objects['GD_ItemGrades.ClassMods.BalDef_ClassMod_Test_01_Common'] = ('WillowGame.ClassModBalanceDefinition', {
+        'ClassModDefinitions': [ref('ClassMods.ClassMod_Test_Alpha'), ref('ClassMods.ClassMod_Test_Beta')]})
+    return objects
+
+
+def item_document(oracle=None):
+    """build_document over machine_packages() with item_packages() in Startup (the ammo and health leaves gain items)."""
+    packages = machine_packages()
+    packages['Startup'].update(item_packages())
+    packages['Map_P'].update(pool('GD_ItemPools_Shop.Health.Stock', {'GD_Items.Health.Grade': 1.0, 'Grades.Shield': 1.0}))
+    return pv.build_document(FakeReader(packages, tempfile.gettempdir()), 'Map_P', 8.0, oracle)
+
+
+def leaf_items(doc, kind):
+    """{balance: leaf} of the first machine of a kind."""
+    machine = next(m for m in doc['machines'] if m['kind'] == kind)
+    return {leaf['balance']: leaf for row in machine['inventory'] for leaf in row['items']}
+
+
+class NonWeaponStockTest(unittest.TestCase):
+    def test_shield_value_uses_part_total_scaler_and_base_cost(self):
+        item = leaf_items(item_document(), 'health')['Grades.Shield']['item']
+        self.assertEqual(item['kind'], 'shield')
+        self.assertEqual(item['name'], 'Test Shield')
+        value = item['value']
+        self.assertEqual(value['base_cost'], 10.0)
+        self.assertEqual(value['scaler'], 1.5)
+        self.assertEqual(value['part_totals'], [0.5])
+        self.assertTrue(value['shape_checked'])
+        # 0.5 * 1.5 ^ 2 * 10 = 11.25 -> 11
+        chain = pv.Chain(FakeReader({'Startup': item_packages()}, tempfile.gettempdir()), ['Startup'])
+        self.assertEqual(pv.value_at(chain, value, 2, 0.5), 11)
+
+    def test_ammo_item_names_pool_type_and_amount(self):
+        item = leaf_items(item_document(), 'items')['GD_Items.Ammo.Grade']['item']
+        self.assertEqual(item['kind'], 'ammo')
+        self.assertEqual(item['ammo_pool'], 'D_Resources.AmmoResources.Ammo_Patrol_SMG')
+        self.assertEqual(item['ammo_type'], 'smg')
+        self.assertEqual(item['amount'], 40.0)
+        self.assertIsNone(item['value']['part_total_attribute'])
+        self.assertEqual(item['value']['part_totals'], [1.0])
+
+    def test_health_item_heals_a_fraction(self):
+        item = leaf_items(item_document(), 'health')['GD_Items.Health.Grade']['item']
+        self.assertEqual(item['kind'], 'health')
+        self.assertAlmostEqual(item['heal']['fraction_of_max_health'], 0.3)
+
+    def test_class_mods_are_unpooled_with_variants(self):
+        doc = item_document()
+        unpooled = {u['balance']: u for u in doc['unpooled_items']}
+        item = unpooled['GD_ItemGrades.ClassMods.BalDef_ClassMod_Test_01_Common']['item']
+        self.assertEqual(item['kind'], 'class_mod')
+        self.assertIsNone(item['value'])
+        self.assertEqual([v['key'] for v in item['variants']], ['Alpha', 'Beta'])
+        self.assertEqual([v['value']['base_cost'] for v in item['variants']], [4.0, 6.0])
+
+    def test_oracle_counts_exact_matches_and_lists_misses(self):
+        # Shield at level 2: 11 (match) and 12 (miss); class mod Beta at level 2: 0.5 is not applied (no parts), so
+        # 1 * 1.5 ^ 2 * 6 = 13.5 -> 13.
+        oracle = {'machines': [{'stock': [
+            {'class': 'WillowShield', 'balance': 'Grades.Shield', 'exp_level': 2, 'monetary_value': 11, 'name': 'A'},
+            {'class': 'WillowShield', 'balance': 'Grades.Shield', 'exp_level': 2, 'monetary_value': 12, 'name': 'B'},
+            {'class': 'WillowWeapon', 'balance': 'GD_Weapons.SMG.Balance', 'exp_level': 2, 'monetary_value': 5},
+            {'class': '<error>', 'balance': 'x'},
+            {'class': 'WillowClassMod', 'balance': 'GD_ItemGrades.ClassMods.BalDef_ClassMod_Test_01_Common',
+             'exp_level': 2, 'monetary_value': 13, 'name': 'Beta Class Mod'},
+            {'class': 'WillowClassMod', 'balance': 'GD_DLC.ClassMods.Unknown', 'exp_level': 2, 'monetary_value': 1,
+             'name': 'Other Class Mod'}],
+            'featured': None}]}
+        doc = item_document(oracle)
+        shield = leaf_items(doc, 'health')['Grades.Shield']['item']
+        self.assertEqual(shield['verified'], {'value': '1 of 2 live rows'})
+        mod = doc['unpooled_items'][0]['item']
+        self.assertEqual(mod['verified'], {'value': '1 of 1 live rows'})
+        ammo = leaf_items(doc, 'items')['GD_Items.Ammo.Grade']['item']
+        self.assertTrue(ammo['verified']['value'].startswith('UNVERIFIED'))
+        misses = [u for u in doc['unresolved'] if u.get('balance') == 'Grades.Shield']
+        self.assertEqual(len(misses), 1)
+        self.assertIn('live value 12', misses[0]['reason'])
+        self.assertIn('GD_DLC.ClassMods.Unknown', ' '.join(doc['notes']))
+
+    def test_without_oracle_items_are_unverified(self):
+        doc = item_document()
+        item = leaf_items(doc, 'items')['GD_Items.Ammo.Grade']['item']
+        self.assertIn('UNVERIFIED', item['verified']['value'])
+        json.dumps(doc)  # must be plain JSON
+
+
 class PrepareVendorsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

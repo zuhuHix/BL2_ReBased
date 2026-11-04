@@ -266,6 +266,7 @@ public:
     void SetEridium(int32 Value) { Eridium = FMath::Max(0, Value); bEridiumKnown = true; }
     // The money when the host has set it (the mission log shows it); false while unknown.
     bool GetMoney(int32& Out) const { Out = Money; return bMoneyKnown; }
+    bool GetEridium(int32& Out) const { Out = Eridium; return bEridiumKnown; }
     // Synthetic-item round trip of equip/unequip/take/re-add/favorite/trash
     // and the slot lock; logs each failure. Uses a transient instance.
     static bool RunSelfTest();

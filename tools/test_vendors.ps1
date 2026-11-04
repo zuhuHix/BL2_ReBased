@@ -16,12 +16,17 @@ param(
     # Optional machine-wide hub lock file (OPENWILLOW_HUB_LOCK): the suite waits while it exists and never deletes it.
     [string]$HubLock = $env:OPENWILLOW_HUB_LOCK,
     [switch]$SkipBuild,
-    [switch]$SkipAutomation
+    [switch]$SkipAutomation,
+    # Skips the second launch that checks the currency save carried over (the same -owcurrencysave file, no -owmoney).
+    [switch]$SkipPersist
 )
 # In-engine check of the vending machines (OpenWillowVendor.cpp, the vendors slice). One windowed host run in Sanctuary_P
 # with Maya, -owvendors=<vendors.json>, -owmoney=<Money> and -owvendortest: once the walker exists the host opens the
 # first weapons machine, reports, buys shelf item 0, reports, sells that gun back (ow.Vendor.SellLast), reports, restocks,
-# reports, takes OWVendor_open.png and quits (UOpenWillowVendorSubsystem::TickVendorTest). Then the UE automation test OpenWillow.Vendor.Stock runs in its own -nullrhi launch. tools/check_vendors.py
+# reports, takes OWVendor_open.png and quits (UOpenWillowVendorSubsystem::TickVendorTest). That first launch saves its money and
+# shelf to local/vendors/currency.json (-owcurrencysave). A second launch (unless -SkipPersist) loads that file, with no
+# -owmoney, and runs the same sequence; tools/check_vendors.py compares its first report with the first launch's last one.
+# Then the UE automation tests OpenWillow.Vendor.* (Stock and Persist) run in their own -nullrhi launch. tools/check_vendors.py
 # grades the logs (CHECK lines and SUMMARY, exit code 1 on any FAIL).
 # Refuses to start when vendors.json is missing: run tools/prepare_vendors.py first.
 # Builds the module first (Build.bat, like tools/test_weapon_firing.ps1; -SkipBuild reuses the binary). Owns one editor at a
@@ -102,18 +107,29 @@ try {
         Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 $url | Out-Null
     }
 
-    # --- the game run: Sanctuary_P with Maya, the machines file, a purse, and the console script ---
+    # --- the game runs: Sanctuary_P with Maya, the machines file, the currency save and the console script. Run 1 starts
+    # with no save file and the purse -owmoney=<Money>; run 2 (unless -SkipPersist) has no -owmoney and must start where run 1
+    # stopped. $log is the run in progress; $firstLog keeps run 1's log for the checker.
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
+    $currency = Join-Path $outDir 'currency.json'
+    Remove-Item -LiteralPath $currency -Force -ErrorAction SilentlyContinue
+    $firstLog = $log
+    $persistLog = Join-Path $outDir "persist-$stamp.log"
+    $passes = if ($SkipPersist) { @(1) } else { @(1, 2) }
+    foreach ($pass in $passes) {
+    $log = if ($pass -eq 1) { $firstLog } else { $persistLog }
+    $shotsOut = if ($pass -eq 1) { Join-Path $outDir "shots-$stamp" } else { Join-Path $outDir "shots-$stamp-persist" }
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
-        "-owvendors=`"$((Resolve-Path -LiteralPath $Vendors).Path)`"", "-owmoney=$Money",
+        "-owvendors=`"$((Resolve-Path -LiteralPath $Vendors).Path)`"", "-owcurrencysave=`"$currency`"",
         "-owvendingpage=${url}vending.html",
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', '-owvendortest', "-abslog=`"$log`"")
     $arguments += "-owweapongen=`"$((Resolve-Path -LiteralPath $WeaponGen).Path)`""
     if ($Items) { $arguments += "-owitems=`"$((Resolve-Path -LiteralPath $Items).Path)`"" }
+    if ($pass -eq 1) { $arguments += "-owmoney=$Money" }
     $started = Get-Date
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
-    Write-Output "Launched game pid $($process.Id) (-owvendortest); log: $log"
+    Write-Output "Launched game pid $($process.Id) (run $pass of $($passes.Count), -owvendortest); log: $log"
     # The host quits by itself after the sequence; if it hangs past the deadline, or after four state reports and the
     # screenshot, this run's own game process is stopped.
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -149,10 +165,12 @@ try {
         }
     }
 
-    # --- the automation test, in its own -nullrhi launch (no page, no machines) ---
+    }
+
+    # --- the automation tests, in their own -nullrhi launch (no page, no machines) ---
     if (!$SkipAutomation) {
         $autoArguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-game', '-nullrhi', '-unattended',
-            '-nosplash', '-ddc=InstalledNoZenLocalFallback', '-ExecCmds="Automation RunTests OpenWillow.Vendor.Stock; Quit"',
+            '-nosplash', '-ddc=InstalledNoZenLocalFallback', '-ExecCmds="Automation RunTests OpenWillow.Vendor; Quit"',
             "-abslog=`"$autoLog`"")
         $autoProcess = Start-Process -FilePath $editor -ArgumentList $autoArguments -PassThru
         Write-Output "Launched automation pid $($autoProcess.Id); log: $autoLog"
@@ -164,12 +182,17 @@ try {
 
     # --- grade ---
     Start-Sleep -Seconds 3
-    if (!(Test-Path -LiteralPath $log)) { throw "No game log written: $log" }
-    $checkArgs = @($checker, '--log', $log, '--vendors', $Vendors, '--open-index', "$openIndex", '--open-kind', 'weapons')
+    if (!(Test-Path -LiteralPath $firstLog)) { throw "No game log written: $firstLog" }
+    $checkArgs = @($checker, '--log', $firstLog, '--vendors', $Vendors, '--open-index', "$openIndex", '--open-kind', 'weapons')
+    if ($passes.Count -gt 1) {
+        if (!(Test-Path -LiteralPath $persistLog)) { throw "No second-launch log written: $persistLog" }
+        $checkArgs += @('--persist-log', $persistLog)
+    }
     if (!$SkipAutomation -and (Test-Path -LiteralPath $autoLog)) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs
     $exitCode = $LASTEXITCODE
-    Write-Output "Log: $log"
+    Write-Output "Log: $firstLog"
+    if ($passes.Count -gt 1) { Write-Output "Second launch log: $persistLog" }
 } finally {
     if ($process -and !$process.HasExited) {
         $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$($process.Id)" -ErrorAction SilentlyContinue).CommandLine

@@ -2,11 +2,13 @@
 // too little money, a full backpack, sell and its refusal for an equipped gun, buy-back, and the reset clock. Every number
 // below is invented for the test; no weapon generator, manifest or game data is read. The prices use the buy formula
 // confirmed live (docs/verification/VENDORS.md section 3); the sale and buy-back prices stay UNVERIFIED in game.
-// Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.Vendor.Stock; Quit"
+// The currency save (OpenWillow.Vendor.Persist): the file format round trip, refusals and the restore of a saved clock.
+// Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.Vendor; Quit"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowVendor.h"
+#include "OpenWillowCurrency.h"
 
 namespace
 {
@@ -148,6 +150,94 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("reset 20 minutes after the restock"), Shelf.NeedsRestock(1000.0 + 20 * 60.0));
     TestEqual(TEXT("seconds to reset one minute in"), Shelf.SecondsToReset(1060.0), 1140.0);
     TestEqual(TEXT("empty weapon list says so"), Shelf.Notice, FString(TEXT("No weapons listed")));
+
+    return true;
+}
+
+namespace
+{
+// A currency file with the given money and one machine row; the numbers are typed in as JSON text so bad values can be tried.
+FString SaveText(const TCHAR* Money, const TCHAR* RestockCount, const TCHAR* Seconds, const FString& BoughtList)
+{
+    return FString::Printf(TEXT("{\"schema\":\"openwillow-currency/1\",\"money\":%s,\"eridium\":0,\"machines\":{\"Synthetic:Point_0\":"
+        "{\"restock_count\":%s,\"seconds_to_reset\":%s,\"bought\":[%s],\"featured_bought\":false}}}"),
+        Money, RestockCount, Seconds, *BoughtList);
+}
+
+// N invented shelf ids as JSON strings, comma-separated.
+FString BoughtListOf(int32 Count, int32 Length = 7)
+{
+    FString List;
+    for (int32 I = 0; I < Count; ++I) List += FString::Printf(TEXT("%s\"%s\""), I ? TEXT(",") : TEXT(""), *FString::ChrN(Length, 'x'));
+    return List;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowVendorPersistTest, "OpenWillow.Vendor.Persist",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FOpenWillowVendorPersistTest::RunTest(const FString& Parameters)
+{
+    // An invented save round-trips through its JSON text.
+    FOpenWillowCurrencySave Save;
+    Save.Money = 1234;
+    Save.Eridium = 5;
+    FOpenWillowCurrencyMachine Row;
+    Row.RestockCount = 3;
+    Row.SecondsToReset = 900;
+    Row.Bought.Add(TEXT("stock_1"));
+    Row.Bought.Add(TEXT("stock_4"));
+    Row.bFeaturedBought = true;
+    Save.Machines.Add(TEXT("Synthetic:Point_0"), Row);
+    FOpenWillowCurrencySave Back;
+    FString Error;
+    TestTrue(TEXT("a written save reads back"), FOpenWillowCurrencySave::FromJson(Save.ToJson(), Back, Error));
+    TestEqual(TEXT("money round trip"), Back.Money, 1234);
+    TestEqual(TEXT("eridium round trip"), Back.Eridium, 5);
+    const FOpenWillowCurrencyMachine* Got = Back.Machines.Find(TEXT("Synthetic:Point_0"));
+    TestTrue(TEXT("machine row round trip"), Got != nullptr);
+    if (Got)
+    {
+        TestEqual(TEXT("restock count round trip"), Got->RestockCount, 3);
+        TestEqual(TEXT("seconds round trip"), Got->SecondsToReset, 900);
+        TestEqual(TEXT("bought ids round trip"), Got->Bought.Num(), 2);
+        TestTrue(TEXT("featured flag round trip"), Got->bFeaturedBought);
+    }
+
+    // Good values read; bad ones are refused and leave the output alone.
+    FOpenWillowCurrencySave Ok;
+    TestTrue(TEXT("a plain save reads"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("10"), TEXT("1"), TEXT("0"), TEXT("")), Ok, Error));
+    TestEqual(TEXT("minimum values read"), Ok.Money, 10);
+    FOpenWillowCurrencySave Untouched;
+    Untouched.Money = 77;
+    TestFalse(TEXT("not JSON is refused"), FOpenWillowCurrencySave::FromJson(TEXT("{"), Untouched, Error));
+    TestFalse(TEXT("another schema is refused"), FOpenWillowCurrencySave::FromJson(
+        TEXT("{\"schema\":\"openwillow-currency/0\",\"money\":1,\"eridium\":0,\"machines\":{}}"), Untouched, Error));
+    TestEqual(TEXT("output unchanged after a refusal"), Untouched.Money, 77);
+    TestFalse(TEXT("negative money is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("-1"), TEXT("1"), TEXT("0"), TEXT("")), Untouched, Error));
+    TestFalse(TEXT("fractional money is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1.5"), TEXT("1"), TEXT("0"), TEXT("")), Untouched, Error));
+    TestFalse(TEXT("money above int32 is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("2147483648"), TEXT("1"), TEXT("0"), TEXT("")), Untouched, Error));
+    TestFalse(TEXT("restock count 0 is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("0"), TEXT("0"), TEXT("")), Untouched, Error));
+    TestFalse(TEXT("reset clock above a day is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("1"), TEXT("86401"), TEXT("")), Untouched, Error));
+    TestFalse(TEXT("too many bought ids are refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("1"), TEXT("0"), BoughtListOf(65)), Untouched, Error));
+    TestFalse(TEXT("an over-long bought id is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("1"), TEXT("0"), BoughtListOf(1, 33)), Untouched, Error));
+    TestEqual(TEXT("output still unchanged"), Untouched.Money, 77);
+
+    // Restore: a synthetic stock (no weapon balances, so the shelf is empty) keeps the saved clock. The bought id is not on
+    // the rebuilt shelf, so it is dropped from the record.
+    FOpenWillowVendorStock Shelf;
+    Shelf.Kind = TEXT("weapons");
+    Shelf.Seed = 7;
+    TestTrue(TEXT("restore a saved stock"), Shelf.Restore(Row, 1000.0, Error));
+    TestEqual(TEXT("restock count restored"), Shelf.RestockCount, 3);
+    TestEqual(TEXT("reset clock restored"), Shelf.SecondsToReset(1000.0), 900.0);
+    TestFalse(TEXT("no reset 899 s after the restore"), Shelf.NeedsRestock(1000.0 + 899.0));
+    TestTrue(TEXT("reset at the saved time"), Shelf.NeedsRestock(1000.0 + 900.0));
+    TestEqual(TEXT("an id not on the shelf is not kept"), Shelf.BoughtSinceRestock.Num(), 0);
+    FOpenWillowCurrencyMachine TooLate = Row;
+    TooLate.SecondsToReset = 1201; // above the 20-minute interval
+    TestFalse(TEXT("a clock above the interval is refused"), Shelf.Restore(TooLate, 1000.0, Error));
+    TestEqual(TEXT("refused restore leaves the restock count"), Shelf.RestockCount, 3);
 
     return true;
 }

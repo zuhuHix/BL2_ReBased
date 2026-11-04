@@ -16,6 +16,7 @@ class AOpenWillowVendingMachine;
 class FOpenWillowVendorPage;
 class APlayerController;
 class FJsonObject;
+struct FOpenWillowCurrencyMachine;
 
 // One item on sale, or in the buy-back list. Kind is "weapon" for PR 1; ammo and health machines come later.
 struct FOpenWillowVendorItem
@@ -65,8 +66,11 @@ struct FOpenWillowVendorStock
     TArray<FOpenWillowVendorItem> Items;           // the shelf, in shelf order
     FOpenWillowVendorItem Featured;                // the item of the day (valid when bHasFeatured)
     bool bHasFeatured = false;
-    TArray<FOpenWillowVendorItem> Buyback;         // sold items, oldest first
+    TArray<FOpenWillowVendorItem> Buyback;         // sold items, oldest first (not saved: UNVERIFIED whether the game keeps it)
     FString Notice;                                // why the shelf is empty or short, for the page message line
+    // What was bought since the last restock: the shelf ids and whether the featured item went. Saved in the currency file.
+    TArray<FString> BoughtSinceRestock;
+    bool bFeaturedBoughtSinceRestock = false;
 
     bool bStocked = false;
     double StockedAt = 0;             // world seconds of the last restock
@@ -105,6 +109,11 @@ struct FOpenWillowVendorStock
     bool Sell(FString Id, UOpenWillowInventory* Inventory, FString& OutError,
         const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected = nullptr);
     bool BuyBack(FString Id, UOpenWillowInventory* Inventory, FString& OutError);
+
+    // Puts a saved machine back (currency file): rebuilds the shelf for the saved restock count from the seed, takes the
+    // bought items off again and starts the reset clock at the saved seconds. Needs Load and Seed first. False with
+    // OutError when the saved clock is out of range; the stock is then left as it was.
+    bool Restore(const FOpenWillowCurrencyMachine& Saved, double Now, FString& OutError);
 
     const FOpenWillowVendorItem* FindShopItem(const FString& Id) const;
 
@@ -180,6 +189,18 @@ private:
     void TickVendorTest();
     // True while the quest lends this weapon (it must not be sold or lost to buy-back).
     bool IsQuestOwned(const FOpenWillowWeaponItem& Item) const;
+
+    // Currency save (-owcurrencysave=<file>, OpenWillowCurrency.h). Loaded once the walker has begun play, so the saved
+    // purse replaces the start purse (not when -owmoney / -owerid are on the command line). Saves write the file atomically.
+    void TickCurrencyLoad();
+    void LoadCurrency(AOpenWillowWalker& Walker);
+    void SaveCurrency();
+    FString CurrencyPath;             // the resolved save path; empty = the feature is off
+    TWeakObjectPtr<UOpenWillowInventory> CurrencyInventory;
+    bool bCurrencyReady = false;      // loaded (or there was no file) with the walker found: saves are allowed
+    bool bCurrencyRefused = false;    // the file was unreadable or malformed: saves stay off so it is not overwritten
+    int32 CurrencyWaits = 0;
+    FTimerHandle CurrencyTimer;
     FTimerHandle OpenTimer;           // pushes the state every second while the shop is open
     FTimerHandle TestTimer;
     int32 TestStep = 0;
