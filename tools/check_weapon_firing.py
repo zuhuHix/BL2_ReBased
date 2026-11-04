@@ -153,6 +153,7 @@ def expectations(recipe):
     projectiles = int(card.get('projectiles') or 1)
     burst = max(1, int(firing.get('burst_count') or 0))
     return {
+        'has_firing': bool(firing),
         'momentum': 100.0 * float(10 if momentum is None else momentum),
         'wide': bool(firing) and kind != 'Rocket' and projectiles <= 1 and not firing.get('pattern_lines')
                 and not projectile.get('air_friction') and not accelerates and splash is None and burst == 1,
@@ -226,7 +227,10 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
         rule, last = float(push['momentum_rule']), float(push['momentum_last'])
         hits, pushes, moved = int(push['momentum_hits']), int(push['pushes']), float(push['moved'])
         if abs(rule - expected['momentum']) > 0.05:
-            fails.append(f"momentum {rule:g} != 100 x instant_hit_momentum = {expected['momentum']:g}")
+            # The host logs 0 for a gun it holds without a firing block: usually a recipe whose block was never generated.
+            hint = (' (the recipe has no firing block: stale local data? run tools/weapon_firing_coverage.py --game <BL2> '
+                    '--only-firing)') if rule == 0 and not expected.get('has_firing', True) else ''
+            fails.append(f"momentum {rule:g} != 100 x instant_hit_momentum = {expected['momentum']:g}{hint}")
         if pushes != hits:
             fails.append(f'{hits - pushes} of {hits} momentum hits did not change the dummy velocity by momentum / mass')
         if expected['kind'] != 'Rocket' and phase_a_hits:
@@ -282,9 +286,15 @@ def check_hit_events(log, expected, throw=None, required=True, gun=None, swap=No
     if wrong:
         after = '' if swap is None else f" (after the swap to {swap.get('to')})"
         fails.append(f'status ticks credited to another weapon{after}: {wrong}')
-    # Every status gun swaps to another gun while an effect runs (the test pulls extra shots until one does), and at least
-    # one tick must land after the swap; a missing or failed swap fails (no silent skip).
-    if expected['status'] and required:
+    # Every status gun whose effect ticks (duration and dps above 0) swaps to another gun while an effect runs (the test
+    # pulls extra shots until one does), and at least one tick must land after the swap; a missing or failed swap fails.
+    # A status without damage ticks (slag: no DOT; a recipe duration that did not resolve) has nothing to attribute: the
+    # host logs skipped=no_ticks, accepted only when the recipe agrees.
+    ticking = expected['duration'] > 0 and expected['dps'] > 0
+    if expected['status'] and required and swap is not None and swap.get('skipped'):
+        if ticking:
+            fails.append(f"weapon swap skipped ({swap['skipped']}) for a status that ticks in the recipe")
+    elif expected['status'] and required and ticking:
         if swap is None:
             fails.append('status gun without an OWFIRING swap line (the source-weapon check did not run)')
         elif 'failed' in swap or not swap.get('to'):

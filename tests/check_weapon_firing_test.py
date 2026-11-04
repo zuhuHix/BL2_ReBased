@@ -83,6 +83,10 @@ class Gun(unittest.TestCase):
                 'explode_on_impact': True, 'splash': {'damage': 30.0, 'radius': 200}}}),
             'made_burst': recipe(10.0, firing={'fire_type': None, 'burst_count': 3}),
             'made_throw': recipe(10.0, firing={'fire_type': None, 'reload_throw': {'projectile': {}}}),
+            # A status without damage ticks (an invented slag-like effect: no duration resolved, no dps).
+            'made_debuff': recipe(50.0, firing={'fire_type': 'EWWFT_Rocket',
+                                                'projectile': {'splash': {'damage': 30.0, 'radius': 200}},
+                                                'status': {'duration': 0.0, 'dps': 0.0}}),
         })
 
     def tearDown(self):
@@ -144,6 +148,26 @@ class Gun(unittest.TestCase):
                       hit_throw=0, tick_weapons='made_rocket:1')
         fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), swap, late), ['made_rocket'])[0]
         self.assertTrue(any('no tick landed after it' in r for r in fails), fails)
+
+    def test_a_status_without_ticks_skips_the_swap(self):
+        common = dict(kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0, damage='60.00',
+                      direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=0)
+        skip = 'LogTemp: Display: OWFIRING swap id=made_debuff skipped=no_ticks duration=0.00 dps=0.00'
+        fails, _, _ = self.run_check(log(segment('made_debuff', 0, 0, 0), skip, result('made_debuff', **common)),
+                                     ['made_debuff'])[0]
+        self.assertEqual(fails, [], fails)
+        # No swap line at all is fine too for a status that cannot tick (nothing to attribute).
+        fails, _, _ = self.run_check(log(segment('made_debuff', 0, 0, 0), result('made_debuff', **common)),
+                                     ['made_debuff'])[0]
+        self.assertEqual(fails, [], fails)
+
+    def test_a_ticking_status_may_not_skip_the_swap(self):
+        common = dict(kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0, damage='60.00',
+                      direct='0.00', splash='60.00', splash_hits=2, status_rolls=2, procs=1, ticks=3)
+        skip = 'LogTemp: Display: OWFIRING swap id=made_rocket skipped=no_ticks duration=0.00 dps=0.00'
+        fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), skip, result('made_rocket', **common)),
+                                     ['made_rocket'])[0]
+        self.assertTrue(any('skipped (no_ticks) for a status that ticks' in r for r in fails), fails)
 
     def test_status_gun_without_a_successful_swap_fails(self):
         common = dict(kind='Rocket', shots=28, pellets=28, launches=28, impacts=28, target_hits=0, damage='60.00',
@@ -310,6 +334,15 @@ class Momentum(unittest.TestCase):
         self.assertTrue(check.check_momentum(fields(push('g', 800, 800, pushes=4)), fields(wide('g')), e, 5))
         self.assertTrue(check.check_momentum(fields(push('g', 800, 800, moved=0.0)), fields(wide('g')), e, 5))
         self.assertTrue(check.check_momentum(fields(push('g', 800, 800, hits=3, pushes=3)), fields(wide('g')), e, 5))
+
+    def test_a_recipe_without_a_firing_block_names_stale_data(self):
+        # The host logs momentum_rule 0 for a gun it holds without a firing block; the recipe the checker reads has none
+        # either (class default 10 x 100 expected): the failure names the likely cause.
+        stale = check.expectations(recipe(10))
+        fails = check.check_momentum(fields(push('g', 0, 0)), fields(wide('g')), stale, 5)
+        self.assertTrue(any('no firing block: stale local data' in reason for reason in fails), fails)
+        fails = check.check_momentum(fields(push('g', 0, 0)), fields(wide('g')), self.expected(), 5)
+        self.assertFalse(any('stale' in reason for reason in fails), fails)
 
     def test_wide_line_must_miss_and_box_must_hit(self):
         e = self.expected()
