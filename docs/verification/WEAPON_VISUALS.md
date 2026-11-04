@@ -545,3 +545,53 @@ about 15 percent smaller than the real frames (both point at the zoomed foregrou
 host keeps the hip foreground FOV during ADS); SMG hip size (roll-confounded, as before); the flash quads' noisy edges
 (no hosted textures). Live items not done (blocked by the Steam dialog): the world FOV through the HUD canvas, the
 particle reads in the running game, the status chance at an equal-level target, the reload mid-poses.
+
+## 19. Slice gun look (gunlook lane, 2026-11-03/04): the part library on the second PC, the Inspect light fit
+
+AI-assisted (Claude Opus 5.5; implementation sub-agents on Haiku 5.5; critic Luna, a different model family). Nothing here was
+compared with new real-game frames; the real frames are the existing Widow Maker Inspect captures and lane E's held frames.
+
+**The part library had never been built on this PC.** Every gun here was drawn from its pre-built per-recipe mesh (the
+fallback of section 16). Rebuilt with the documented chain (WEAPON_PART_ASSETS.md sections 2-4; commands in TOOLING.md): census
+904 parts / 301 skins; UModel 1590 skin export 301/301 resolvable (13.0 GB, about 9 min with 4 workers); library meshes 279
+fragment slots in 6 types; skins 300/301 prepared (the BuzzAxe melee skin is unsupported, as before); UE import 6/6 meshes,
+279/279 slots, 300 skins. The index was built without a live census, so the 22 Torgue parts whose `p_EmissiveColor` exists only
+in the running game (DECISIONS 2026-10-23) have no glow colour here (open). Oracle on 33 guns, one per type x manufacturer
+(`weapon_assembly_sample.py --sets matrix`): 33/33 pass against the cooked prediction (no live check on this PC), no fallback.
+
+**Capture sets** (ignored `local/wpa/`): the 33-gun matrix; an elemental set (fire Bandit AR, corrosive/shock/slag Maliwan
+pistols, fire Maliwan launcher: the matrix has no elemental gun); a rarity set (Jakobs pistol, Vladof AR, Uncommon/Rare/Epic
+skins). `-owgunturn=<yaw>,...` (with `-owgunshots`) adds Inspect turntable frames `OWGun_<id>_turn<yaw>.png` (pitch 15).
+
+**Inspect light fit (host choice, UNVERIFIED stand-in light).** The inventory preview capture now has its own light values
+(`OpenWillowGunLook::CurrentInspect`, `-owinspectlook=D,A,K,F,E` overrides). The slice Jakobs pistol's side capture registers
+with the real Inspect frame of the same gun to within about 4 px, so its luma can be compared percentile by percentile
+(ignored `local/gunlook/measure_inspect.py`). Hue already agreed; the host was darker. Sweep (diffuse 0.5, emissive 1;
+real minus host at the luma percentiles 5 / 25 / 50 / 75 / 95):
+
+| ambient, key, fill | p05 | p25 | p50 | p75 | p95 |
+|---|---|---|---|---|---|
+| 1.6, 1.2, 0.5 (old, = the world look) | +7.8 | +21.4 | +28.0 | +25.6 | +18.1 |
+| 2.2, 1.2, 0.5 | +12.4 | +11.4 | +16.2 | +10.7 | +1.0 |
+| 2.6, 1.0, 0.4 | +16.3 | +7.9 | +12.5 | +6.0 | -3.9 |
+| **3.2, 0.7, 0.3 (adopted)** | +16.4 | +2.7 | +6.4 | -1.5 | -10.7 |
+
+One gun only; the thumbnails use the same capture and change with it. The darkest 5 percent stay about 16 too dark whatever the
+light, so that gap is in the paint (the grip weave), not the light.
+
+**Critic** (0-10, gun look only): round 0 (old light) mean 7.6 over six held/Inspect pairs, Inspect side 8.6; round 1 (fit)
+Inspect side 8.0, turn pairs 6.6-7.7 (the real rotated frames' angles are unknown and the host turns of +-30 degrees do not
+reach the real reverse view). The two Inspect side scores come from different critic runs and are not comparable; the measured
+percentiles above are the evidence for the fit. The critic read the elemental set as correct (element-coloured glow part in
+side and first-person views; high confidence for four of five guns, medium for the fire AR, partly hidden by its red paint)
+and the six rarity skins as distinct and plausible (medium; no real rarity frames).
+
+**Checked against the data instead of changed:** the round-0 critic's "Vladof guns lack red" (from general knowledge) does not
+hold for the common skin: `Mati_VladofCommon` / `Mati_VladofCommonAR` zone colours are warm and cool greys, while the
+Uncommon/Rare/Epic Vladof skins carry red decal colours (and show them in the host). Needs a real common Vladof frame to close.
+
+**Open, most visible first:** metal highlights plateau near white on the Inspect render (host p99 luma 248 against 235) while
+the wood mid-tones are darker than real: a soft shoulder in the paint material rather than one light level; the grip weave
+(host median 31 against 68); the real Inspect's thin pale silhouette rim; turntable frames covering the reverse side; a
+real-game reference session (Inspect and held frames of the 33 matrix guns, a dropped gun per rarity, the live Torgue glow
+colours), which on this PC needs the Steam account that owns the game.
