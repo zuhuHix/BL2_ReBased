@@ -39,6 +39,19 @@ tools = unreal.AssetToolsHelpers.get_asset_tools()
 mel = unreal.MaterialEditingLibrary
 eal = unreal.EditorAssetLibrary
 report = {'materials': {}, 'textures': {}, 'meshes': {}, 'skipped': {}}
+# Stock colour constants of the effect shaders (game-derived, so not in this tracked file): an ignored local input next to the
+# emitters, local/phaselock/fx_constants.json, e.g. {"Mat_SirenHandInnerOrb": {"blue": [r, g, b]}}. The values were read from
+# the effect shaders (round 6, the shader-cache reading); they are gamma-space numbers and are converted to linear here.
+constants_path = Path(os.environ.get('OPENWILLOW_PHASELOCK_CONSTANTS', emitter_dir.parent / 'fx_constants.json'))
+if not constants_path.is_file():
+    raise SystemExit(f'OW_PLFX missing {constants_path}: the stock effect colour constants (ignored local input) are required')
+FX_CONSTANTS = json.loads(constants_path.read_text(encoding='utf-8'))
+
+
+def stock_colour_linear(material, name):
+    """A stock colour constant as an HLSL float3 literal, converted from gamma to linear (x^2.2 per channel, round 23)."""
+    rgb = [max(0.0, float(c)) ** 2.2 for c in FX_CONSTANTS[material][name][:3]]
+    return 'float3({:.6f}, {:.6f}, {:.6f})'.format(*rgb)
 
 
 def log(text):
@@ -646,8 +659,8 @@ return float4(min(1.0, Col.rgb * t.rgb), t.a * Col.a * saturate((SD - PD) / 21.0
 # Mat_SirenHandInnerOrb (translucent): the blue palm orb. Four reads of a nebula texture in two rotating frames (0.18 rad/s
 # about 0.5 and -0.25 rad/s about 0.8, each with its own drift) are combined as (n3 - n4) + (n1 - n2) + 2; that number
 # shifts a read m1 of a mirrored centre texture at twice the UV. With the unshifted read m2, a blend weight
-# 12 (1 - m2)^6 m2 mixes saturate(2 m2) toward m1, giving k. Colour = lerp(blue, 1.25 x orb texture, k) with the blue
-# (0.2508, 0.6524, 0.9323); alpha = saturate(k) x particle alpha. The particle colour is not used.
+# 12 (1 - m2)^6 m2 mixes saturate(2 m2) toward m1, giving k. Colour = lerp(blue, 1.25 x orb texture, k) with the shader's stock
+# blue constant (from local/phaselock/fx_constants.json); alpha = saturate(k) x particle alpha. The particle colour is not used.
 exact('Mat_SirenHandInnerOrb', 'trans', ['EnergyOrbCenter2_Dif_Tex', 'EnergyOrbCenter_Dif_Mirror', 'Tiling_Nebulous_Dif'], r"""
 float2 uv = UV;
 float t = GT;
@@ -667,12 +680,12 @@ float k = base + mixWeight * (m1 - base);
 // Round 20 tint trial (UNVERIFIED): applying the measured red/green ratios barely changed the matched 40x40 px host crop
 // (157.8/206.6/252.6 before, 156.9/205.9/252.6 after; game 117.3/171.0/252.4). The crop includes glow and overlapping
 // layers may dominate it, but their contribution is unresolved. Retain the prior fit instead of stacking on another guess.
-// Round 23 (UNVERIFIED): the stock blue is read as a gamma-space value and converted to linear (x^2.2), which shows it as the
-// game's cobalt instead of pale cyan; the earlier x0.7 compensation is dropped.
-float3 blue = pow(float3(0.2508, 0.6524, 0.9323), 2.2);
+// Round 23 (UNVERIFIED): the stock blue is read as a gamma-space value and converted to linear (stock_colour_linear), which
+// shows it as the game's cobalt instead of pale cyan; the earlier x0.7 compensation is dropped.
+float3 blue = OW_STOCK_BLUE;
 float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9 * float3(0.55, 0.70, 1.0);
 return float4(min(1.0, lerp(blue, orb, k)), saturate(k) * Col.a);
-""")
+""".replace('OW_STOCK_BLUE', stock_colour_linear('Mat_SirenHandInnerOrb', 'blue')))
 
 # Mat_SirenHandPowerDiffuse (translucent): the smoke after the orb leaves. Colour is just the particle colour. Alpha = 35 x
 # a nebula read drifting upward x (1 - (1 - 0.1 x second smoke read)(1 - mask))^2 x particle alpha x soft fade over 16 units.
