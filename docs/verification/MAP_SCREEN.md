@@ -44,16 +44,25 @@ captures under ignored `local/inv24/mapshots/`. Nothing below was observed in th
   north up; one key press zooms by 1.2 and pans one PanIncrement (the native frame-time term is not read); icon scale 100;
   the header name is the map package's name without `_P`, upper case (`SetMapHeader` is native); fog stays "not uncovered";
   Enter (custom waypoint), mouse drag, the info box and the player list's names are not driven.
+- Failures are visible (PR #97 review 1): the loading panel stays up until the map movie has loaded and says why when the
+  host sent no state or no map movie (no minimap manifest), when the map movie does not load within 10 s, or when the
+  StatusMenu movie is not ready within 15 s (the polling then stops); Escape, Tab and M close the page in every case.
+- Pan is limited so the map point under the crosshairs stays inside the map movie's own rectangle (`getRect`) at the current
+  zoom, re-applied after a zoom and when Maya moves (host rule; the game clamps natively, UNVERIFIED).
 - Tabs from the Map: 1 Missions, 3 Inventory, 4 Skills, 5 nothing (no Challenges page), Comma Missions, Period Inventory,
   Escape / Tab / M close; I, K, L as on the other pages. The Inventory's key 2, Comma and its Map tab now open this page.
 
 ## Checks
 
-- `tests/map_screen_test.js` (7, synthetic): the movie-unit projection, scale clamp, pan step, layout (centring, icons
-  with the map, pan), the landmark frames and the tab routes. `tests/prepare_map_screen_test.py` (4): token resolution and
+- `tests/map_screen_test.js` (10, synthetic): the movie-unit projection, scale clamp, pan step and pan limits, layout
+  (centring, icons with the map, pan), the landmark frames, the tab routes, and the page part with a fake Ruffle: the 15 s
+  status-menu deadline (polling stops, message shown, Escape closes) and the no-state, no-movie and map-load messages. `tests/prepare_map_screen_test.py` (4): token resolution and
   the local/ output guard.
 - In engine, `-owmapshots` (the slice quest resumed from a local save with the Fire mission active): opens the Map, captures
   it, turns Maya 90 degrees, zooms in twice, pans, toggles the legend, closes with Escape, opens the Inventory and presses 2.
+
+- Not tested yet: opening the Map while the vending page (vendors lane, PR #81) is up. #81 had not landed on main when this
+  was written; the check belongs to the first run after it does.
 
 ## Open, for a real-game session
 
