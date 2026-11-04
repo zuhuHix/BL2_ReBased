@@ -667,7 +667,9 @@ float k = base + mixWeight * (m1 - base);
 // Round 20 tint trial (UNVERIFIED): applying the measured red/green ratios barely changed the matched 40x40 px host crop
 // (157.8/206.6/252.6 before, 156.9/205.9/252.6 after; game 117.3/171.0/252.4). The crop includes glow and overlapping
 // layers may dominate it, but their contribution is unresolved. Retain the prior fit instead of stacking on another guess.
-float3 blue = float3(0.2508, 0.6524, 0.9323) * 0.7;
+// Round 23 (UNVERIFIED): the stock blue is read as a gamma-space value and converted to linear (x^2.2), which shows it as the
+// game's cobalt instead of pale cyan; the earlier x0.7 compensation is dropped.
+float3 blue = pow(float3(0.2508, 0.6524, 0.9323), 2.2);
 float3 orb = Texture2DSample(T0, T0Sampler, uv).rgb * 0.9 * float3(0.55, 0.70, 1.0);
 return float4(min(1.0, lerp(blue, orb, k)), saturate(k) * Col.a);
 """)
