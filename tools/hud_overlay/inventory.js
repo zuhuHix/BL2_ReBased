@@ -2178,6 +2178,9 @@ function handleKey(event) {
   // TrySwitchToScreen 1..5: Missions, Map, Inventory, Skills, Challenges. No inventory panel handles digits,
   // also not during a transfer. Read from the script; not yet seen in the running game (UNVERIFIED).
   else if (/^[1-5]$/.test(event.key)) { event.preventDefault(); switchTab(headerTabs[Number(event.key)-1]); }
+  // Comma and Period are the same handler's GotoPrevTab / GotoNextTab: from Inventory, Map and Skills (UNVERIFIED in game).
+  else if (event.key === ',') { event.preventDefault(); switchTab(headerTabs[1]); }
+  else if (event.key === '.') { event.preventDefault(); switchTab(headerTabs[3]); }
   else if (key === 'enter') { event.preventDefault(); equip(); }
   else if (key === 'e') { event.preventDefault(); equip(); }
   else if (key === 'c') { event.preventDefault(); toggleCompare(); }

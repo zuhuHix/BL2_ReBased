@@ -3404,3 +3404,5 @@ script bytecode (`StatusMenuExGFxMovie.HandleInputKey` -> `TrySwitchToScreen`); 
   digits, and the transfer's slot is chosen with Up and Down.
 - The inventory action suite follows: its digit presses became Up/Down in the transfer and one step was added (50 steps,
   50 PASS on a bounded set rebuilt on pc-hummer).
+- Follow-up: Comma and Period are the script's previous and next tab (`GotoPrevTab` / `GotoNextTab`); from Inventory, Map
+  (no host page: nothing happens) and Skills. UNVERIFIED in game.

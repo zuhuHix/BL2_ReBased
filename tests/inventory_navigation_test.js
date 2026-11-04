@@ -89,6 +89,10 @@ check('Number keys switch status-menu tabs (TrySwitchToScreen), not weapon slots
   assert.equal(run('targetSlot'), 0); assert.equal(run('compareId'), 'w0'); // the transfer kept the analogue slot
   run('reset()'); press('4'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
+check('Comma and Period are the previous and next tab (GotoPrevTab / GotoNextTab): Map (no host page), Skills', () => {
+  run('reset()'); press(','); assert.equal(run('location.href'), undefined);
+  press('.'); assert.equal(run('location.href'), '/__ow_tab_skills');
+});
 check('Backpack keeps its row when re-entered and stops at the top', () => {
   run('reset()'); press('ArrowRight', 'ArrowUp'); assert.equal(selected(), 'b0');
   press('ArrowDown', 'ArrowDown', 'ArrowDown'); assert.equal(selected(), 'b3');

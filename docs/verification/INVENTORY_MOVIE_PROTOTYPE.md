@@ -1427,3 +1427,9 @@ names of the yorad copy (each slot forced to the named part in a local wrapper a
 **Checks.** Inventory suite **50 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (rebuilt bounded set; before the step-22 fix
 49 / 1). A freshly provisioned worktree again had the 2026-11-02 converted movies (the provisioning copies only missing files),
 and the page never opened (0 / 1 / 48 NOT_RUN) until the 2026-11-03 movies were copied from the main checkout.
+
+**Comma and Period (follow-up).** The same `HandleInputKey` sends Comma and Period (and the shoulder buttons) to `GotoPrevTab`
+and `GotoNextTab`. From Inventory, previous is Map and next is Skills (Challenges under vehicle restrictions); from Skills,
+previous is Inventory and next Challenges; Missions sits between Challenges and Map when there are missions. The inventory
+page now sends Period to Skills and treats Comma as Map (no host page, so nothing happens). UNVERIFIED in the running game.
+Navigation test 42/42.
