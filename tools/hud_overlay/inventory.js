@@ -588,11 +588,11 @@ function finishTransfer(cancel = false) {
 function closeInventory() { location.href = '/__ow_close_inventory'; }
 
 // The StatusMenu header's five tabs, left to right (nav1..nav5 in the converted movie). Only the
-// pages this host has (missions, inventory, skills) are reachable; Map and Challenges have no host
-// data yet, so their hit boxes are disabled rather than pretending. The route is intercepted by the UE
+// pages this host has (missions, map, inventory, skills) are reachable; Challenges has no host
+// data yet, so its hit box is disabled rather than pretending. The route is intercepted by the UE
 // browser (OnBeforeNavigation) like the close route.
 const headerTabs = [
-  {nav:'nav1', label:'Missions', route:'/__ow_tab_missions'}, {nav:'nav2', label:'Map'},
+  {nav:'nav1', label:'Missions', route:'/__ow_tab_missions'}, {nav:'nav2', label:'Map', route:'/__ow_tab_map'},
   {nav:'nav3', label:'Inventory', current:true},
   {nav:'nav4', label:'Skills', route:'/__ow_tab_skills'},
   {nav:'nav5', label:'Challenges'}

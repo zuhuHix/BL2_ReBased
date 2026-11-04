@@ -112,7 +112,8 @@ seen in the engine capture).
 
 1. Real-game frames and live strings: the htmlText of the description per state, the list order and category rows, the
    PC keys of the mission log, the Map movie path. Needs bl-sdk on this machine (a maintainer decision) or the other PC.
-2. Map tab; accept / turn-in briefing screens; pause menu.
+2. Accept / turn-in briefing screens; pause menu. The Map tab has a first page since 2026-11-04 (`MAP_SCREEN.md`;
+   centring, arrow, pan/zoom steps and the custom waypoint UNVERIFIED).
 3. Inventory round-23 open list (see `INVENTORY_MOVIE_PROTOTYPE.md`, "Round 23"): Inspect weapon paint and emblem, glass-sheet
    curve, thumbnail renders, D3 card border, zoom lines (`weapon_gen.cpp`) and one flavour wrap, BRANDS order (native, UNVERIFIED),
    number keys (round 24: the script switches tabs 1-5, the page follows it; not yet seen in game).
