@@ -9,6 +9,7 @@
 #include "OpenWillowProjectile.h"
 #include "OpenWillowWalker.h"
 #include "EngineUtils.h"
+#include "GameFramework/Controller.h"
 
 UOpenWillowSkills::UOpenWillowSkills()
 {
@@ -84,6 +85,27 @@ void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
         A.At = Now; A.Kind = FAction::EKind::SingleHit; A.Target = Event.Target; A.Damage = 0.1f * G * Applied;
         A.DamageType = TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"); A.Skill = TEXT("Immolate"); A.Why = TEXT("Immolate");
     }
+}
+
+// Recompense: when an enemy takes health from Maya, with chance 0.1 x grade (Att_Recompense_Chance 0.10) that enemy takes
+// the same amount back (DmgType_Normal), as a non-critical skill hit. Paused while Maya is down (the healthy constraint).
+// The host has no shield, so every hit is health damage. The reflected hit goes to the attacker only, never back to Maya.
+void UOpenWillowSkills::OnMayaDamaged(AActor* Causer, AController* Instigator, float Damage)
+{
+    AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner());
+    const int32 G = Maya && Effects.IsLoaded() && !Maya->IsDown() ? GradeOfNamed(TEXT("Recompense")) : 0;
+    if (G <= 0 || Damage <= 0.f || !GetWorld()) return;
+    // The attacker: the causer or the first owner of it (a projectile's shooter) that takes Maya's hits, else the
+    // instigator's pawn. Maya herself never counts.
+    AActor* Attacker = nullptr;
+    for (AActor* A = Causer; A && !Attacker; A = A->GetOwner())
+        if (A != Maya && OpenWillowHit::AsTarget(A)) Attacker = A;
+    if (!Attacker && Instigator && Instigator->GetPawn() != Maya && OpenWillowHit::AsTarget(Instigator->GetPawn()))
+        Attacker = Instigator->GetPawn();
+    if (!Attacker || FMath::FRand() >= 0.1f * G) return;
+    FAction& A = Actions.AddDefaulted_GetRef();
+    A.At = GetWorld()->GetTimeSeconds(); A.Kind = FAction::EKind::SingleHit; A.Target = Attacker; A.Damage = Damage;
+    A.DamageType = TEXT("GD_Impact.DamageType.DmgType_Normal"); A.Skill = TEXT("Recompense"); A.Why = TEXT("Recompense");
 }
 
 void UOpenWillowSkills::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
