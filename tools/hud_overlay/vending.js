@@ -11,16 +11,28 @@ let state = null, lists = {shop: [], backpack: [], buyback: []};
 let sel = {column: 'shop', index: 0};
 let lastSerial = -1, localMessage = '', lastRequest = '', movieState = 'loading';
 
-// Stock movie as frame art. Any failure leaves the plain HTML panel, which works on its own.
-try {
+// Stock movie as frame art. Any failure leaves the plain HTML panel, which works on its own, and removes the player:
+// Ruffle shows its own "Something went wrong" panel for a missing or broken movie, and its load() still resolves.
+const MOVIE_URL = 'UI_VendingMachine/VendingMachineInterface.swf';
+function dropMovie(reason) {
+  movieState = reason;
+  if (window.owPlayer) window.owPlayer.remove();
+  window.owPlayer = null;
+}
+// Ruffle marks a failed movie by showing its #panic element (seen in the browser with a missing file).
+function watchForPanic(player, checksLeft) {
+  const panic = player.shadowRoot && player.shadowRoot.querySelector('#panic');
+  if (panic && !panic.classList.contains('hidden')) { dropMovie('failed'); return; }
+  if (checksLeft > 0) setTimeout(() => watchForPanic(player, checksLeft - 1), 500);
+}
+fetch(MOVIE_URL, {method: 'HEAD'}).then(response => {
+  if (!response.ok) { movieState = 'missing'; return; } // no player at all: the HTML panel only
   const player = window.RufflePlayer.newest().createPlayer();
   $('stage').appendChild(player);
   window.owPlayer = player;
-  player.ruffle().load({url: 'UI_VendingMachine/VendingMachineInterface.swf', base: 'UI_VendingMachine/'})
-    .then(() => { movieState = 'loaded'; }, () => { movieState = 'failed'; });
-} catch (error) {
-  movieState = 'failed';
-}
+  player.ruffle().load({url: MOVIE_URL, base: 'UI_VendingMachine/'})
+    .then(() => { movieState = 'loaded'; watchForPanic(player, 20); }, () => dropMovie('failed'));
+}).catch(() => { movieState = 'missing'; });
 
 function send(action, id) {
   const line = model.buildRequest(state ? state.serial : 0, action, id);
