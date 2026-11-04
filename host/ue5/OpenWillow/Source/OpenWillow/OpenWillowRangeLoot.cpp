@@ -22,7 +22,8 @@ constexpr float DropLift = 12.f;                // above the floor under the spo
 constexpr int32 DropSpots = 6;                  // spots 60 degrees apart on each ring
 constexpr int32 DropRings = 3;                  // rings at 1, 2 and 3 x DropRadius, tried in turn when a spot has no room
 constexpr float DropRoomRadius = 30.f;          // the room a drop needs: a free sphere this size just above the floor
-constexpr float WeaponDropLifeSeconds = 120.f;  // a range gun drop expires after this (the range's own pickups after 60 s)
+constexpr float WeaponDropLifeSeconds = 120.f;
+constexpr int32 AlwaysWeaponTries = 8;          // ow.RangeLoot always: seeds tried until the weapon pool gives a gun  // a range gun drop expires after this (the range's own pickups after 60 s)
 
 // The money of one pickup at Level: round(4 x 1.13^level), saturated to the int32 range. The value of
 // ItemGrade_Currency_Money_Little is not decoded.
@@ -225,7 +226,19 @@ FOpenWillowRangeLootResult RollRangeLoot(UWorld* World, AOpenWillowEnemy* Enemy,
             else
             {
                 FOpenWillowWeaponItem Item;
-                if (FOpenWillowWeaponGen::RollPoolWeapon(Pool.Pool, ItemStage, Seed, Item))
+                // One roll as the stock death does; in always mode (gun testing) up to AlwaysWeaponTries seeds, so a pick that is a
+                // shield or a grenade mod does not leave the tester without a gun. The tries' seeds follow the first one, so the loot
+                // stream is not touched again.
+                const int32 Tries = Mode == EOpenWillowRangeLootMode::Always ? AlwaysWeaponTries : 1;
+                bool bRolled = false;
+                for (int32 Try = 0; Try < Tries && !bRolled; ++Try)
+                {
+                    TArray<FString> Drops;
+                    bRolled = FOpenWillowWeaponGen::RollPoolWeapon(Pool.Pool, ItemStage, Seed + uint32(Try) * 7919u, Item, &Drops);
+                    UE_LOG(LogTemp, Display, TEXT("OWRANGE loot weapon_try %d pool=%s stage=%d gun=%d drops=%s"), Try, *Leaf, ItemStage,
+                        bRolled ? 1 : 0, *FString::Join(Drops, TEXT(",")));
+                }
+                if (bRolled)
                 {
                     const FVector At = DropSpot(World, Enemy, DropIndex++);
                     SpawnWeaponPickup(World, At, Item, Result);

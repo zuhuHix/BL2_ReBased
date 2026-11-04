@@ -287,6 +287,21 @@ void AOpenWillowEnemy::OnDied(AActor* DamageCauser)
     OnEnemyDied.Broadcast(this, DamageCauser);
 }
 
+void AOpenWillowEnemy::ResetForAITest(float Now, float Yaw, float HoldSeconds)
+{
+    ResetForTest();
+    SetActorRotation(FRotator(0.f, Yaw, 0.f));
+    Brain.Stop();
+    bDamagedByMaya = false;
+    bHasTarget = false;
+    bHitPlaying = false;
+    bMeleePlaying = false;
+    ChaseCheckAt = -1.f;
+    ChaseBlockedSince = -1.f;
+    MoveClipNow = nullptr;
+    PauseUntil = Now + HoldSeconds;
+}
+
 void AOpenWillowEnemy::OnRespawned()
 {
     bHasTarget = false;
