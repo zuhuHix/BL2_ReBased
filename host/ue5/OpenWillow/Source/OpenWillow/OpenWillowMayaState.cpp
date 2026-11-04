@@ -45,6 +45,10 @@ void FOpenWillowMayaState::GoDown(float Now)
 FOpenWillowMayaState::ETickEvent FOpenWillowMayaState::Tick(float Now, float DeltaSeconds)
 {
     const FOpenWillowMayaStats S = Effective();
+    // A modifier that ends (a skill respec lowering the maximum, Ward or Restoration) leaves the pools above their new
+    // maxima; clamp them back. Host rule, UNVERIFIED as stock behaviour.
+    Health = FMath::Min(Health, S.MaxHealth);
+    Shield = FMath::Min(Shield, S.ShieldCapacity);
     if (Phase == EOpenWillowDownPhase::Up)
     {
         // The shield waits the delay after the last hit, then rises at the rate (live: 1.613-1.618 s, one frame past the
