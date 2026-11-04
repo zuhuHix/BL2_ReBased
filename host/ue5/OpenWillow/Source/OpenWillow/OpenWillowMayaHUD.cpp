@@ -1,5 +1,6 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMapScreen.h"
+#include "OpenWillowStatusShots.h"
 #include "OpenWillowMinimap.h"
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowWeaponAssembly.h"
@@ -1462,6 +1463,7 @@ void AOpenWillowMayaHUD::DrawHUD()
     TickMissionLogTest();
     if (bFlashHudReady && PlayerOwner)
         if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn())) OpenWillowMapScreen::TickShots(*this, *Walker, *PlayerOwner);
+    if (bFlashHudReady && GetWorld()) OpenWillowStatusShots::Tick(*this, *GetWorld());
     if (!bWeaponMeshesPreloaded && PlayerOwner)
         if (const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()))
             if (const UOpenWillowInventory* Held = Walker->GetInventory())

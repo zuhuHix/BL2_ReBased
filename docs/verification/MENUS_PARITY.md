@@ -105,6 +105,24 @@ reward, the level bar). The list row's embedded font subset dropped some punctua
 capture; rows now use the movie's `$WillowBody` face like the other fields. No real-game frame exists to score against, so no
 critic round was run for this page.
 
+**All four Fire mission states (2026-11-04, inventory lane, pc-hummer).** The slice quest resumed from local saves in each state
+(`-owquestresume`; saves under ignored `local/inv24/`), the page opened with `-owstatusshots=missions,<state>` and its own
+`OWMISSIONPAGE` report read (captures under ignored `local/inv24/missionshots/`). Host only, no real frame:
+
+| State (saved status) | Category row | Header | Summary panel |
+|---|---|---|---|
+| Accepted (Active, GoToRange set) | IN PROGRESS | `inprogress` | the go-to-the-range objective |
+| At the range (Active, final set) | IN PROGRESS | `inprogress` | "Burn vandal" (the active set's objective) |
+| Objective done (ReadyToTurnIn) | TURN IN | `turnin` (green "?") | "TURN IN!", the turn-in text, "Turn In: Marcus" |
+| Turned in (Complete) | COMPLETED MISSIONS | `complete` (grey tick) | the description and "Turn In: Marcus" |
+
+The Fire mission is selected in each. No page change was needed. UNVERIFIED against the game: whether the log drops the
+finished go-to-the-range line at the range, and whether a completed mission still shows "Turn In: Marcus".
+
+**Quest text over the status pages fixed.** Under `-owquest` the quest's tracker and talk hints (`UOpenWillowQuest::
+UpdateHints`, an on-screen debug line posted every frame) drew over every status page. They are no longer posted while a
+status page is open; the four captures above show none.
+
 Known artefact: in a headless replay, a column of list scroll ticks shows after a no-missions -> missions transition (not
 seen in the engine capture).
 
