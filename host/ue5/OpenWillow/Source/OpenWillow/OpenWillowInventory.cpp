@@ -740,6 +740,89 @@ int32 UOpenWillowInventory::CompleteReload(FOpenWillowWeaponItem& Item)
     return Moved;
 }
 
+TSharedRef<FJsonObject> UOpenWillowInventory::WeaponItemJson(const FOpenWillowWeaponItem& Item)
+{
+    TSharedRef<FJsonObject> Value = MakeShared<FJsonObject>();
+    Value->SetStringField(TEXT("id"), StableId(Item));
+    Value->SetStringField(TEXT("assetId"), Item.Id);
+    Value->SetStringField(TEXT("itemType"), TEXT("weapon"));
+    Value->SetStringField(TEXT("name"), Item.Name);
+    EOpenWillowAmmoType ItemAmmo;
+    const bool bHasAmmo = ResolveAmmoType(Item, ItemAmmo);
+    Value->SetStringField(TEXT("type"), Item.Type.IsEmpty() && bHasAmmo ? FString(WeaponTypeLabel(ItemAmmo)) : Item.Type);
+    if (bHasAmmo) Value->SetStringField(TEXT("ammoType"), AmmoTypeKey(ItemAmmo));
+    Value->SetStringField(TEXT("manufacturer"), Item.Manufacturer);
+    Value->SetStringField(TEXT("element"), Item.Element);
+    Value->SetNumberField(TEXT("rarity"), Item.Rarity);
+    Value->SetBoolField(TEXT("rarityKnown"), true);
+    if (!Item.RarityColor.IsEmpty()) Value->SetStringField(TEXT("rarityColor"), Item.RarityColor);
+    Value->SetNumberField(TEXT("level"), Item.Level);
+    Value->SetBoolField(TEXT("levelKnown"), true);
+    // Raw evaluated stats; the page rounds them as the card does (inventory.js cardRound).
+    Value->SetNumberField(TEXT("damage"), Item.Damage);
+    Value->SetNumberField(TEXT("fireRate"), Item.FireRate);
+    Value->SetNumberField(TEXT("reloadTime"), Item.ReloadTime);
+    Value->SetNumberField(TEXT("magazine"), Item.Magazine);
+    Value->SetNumberField(TEXT("spread"), Item.Spread);
+    // Absent unless derived; the Known flags mark whether it was checked.
+    if (Item.bHasAccuracy) Value->SetNumberField(TEXT("accuracy"), Item.Accuracy);
+    Value->SetBoolField(TEXT("accuracyKnown"), Item.bHasAccuracy && Item.bAccuracyKnown);
+    if (Item.bHasSaleValue) Value->SetNumberField(TEXT("value"), Item.SaleValue);
+    Value->SetBoolField(TEXT("valueKnown"), Item.bHasSaleValue && Item.bSaleValueKnown);
+    if (!Item.FunStats.IsEmpty()) Value->SetStringField(TEXT("funStats"), Item.FunStats);
+    if (!Item.FunStatsMarkup.IsEmpty()) Value->SetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
+    if (Item.Projectiles > 1) Value->SetNumberField(TEXT("projectiles"), Item.Projectiles);
+    if (Item.bHasStatus)
+    {
+        Value->SetNumberField(TEXT("statusDps"), Item.StatusDps);
+        Value->SetNumberField(TEXT("statusChance"), Item.StatusChance);
+    }
+    Value->SetNumberField(TEXT("shotCost"), Item.ShotCost);
+    Value->SetNumberField(TEXT("spinUp"), Item.SpinUp);
+    Value->SetStringField(TEXT("spinMode"), Item.SpinMode);
+    Value->SetNumberField(TEXT("spinStartIntervalScale"), Item.SpinStartIntervalScale);
+    Value->SetBoolField(TEXT("favorite"), Item.bFavorite);
+    Value->SetBoolField(TEXT("trash"), Item.bTrash);
+    Value->SetBoolField(TEXT("favoriteKnown"), Item.bFavoriteKnown);
+    Value->SetBoolField(TEXT("trashKnown"), Item.bTrashKnown);
+    return Value;
+}
+
+TSharedRef<FJsonObject> UOpenWillowInventory::GearItemJson(const FOpenWillowGearItem& Item)
+{
+    TSharedRef<FJsonObject> Value = MakeShared<FJsonObject>();
+    Value->SetStringField(TEXT("id"), Item.Id);
+    Value->SetStringField(TEXT("assetId"), Item.AssetId);
+    Value->SetStringField(TEXT("itemType"), Item.ItemType);
+    Value->SetStringField(TEXT("name"), Item.Name);
+    Value->SetStringField(TEXT("manufacturer"), Item.Manufacturer);
+    Value->SetNumberField(TEXT("rarity"), Item.Rarity);
+    Value->SetBoolField(TEXT("rarityKnown"), Item.bRarityKnown);
+    Value->SetStringField(TEXT("rarityColor"), Item.RarityColor);
+    Value->SetNumberField(TEXT("level"), Item.Level);
+    Value->SetBoolField(TEXT("levelKnown"), Item.bLevelKnown);
+    Value->SetNumberField(TEXT("value"), Item.SaleValue);
+    Value->SetBoolField(TEXT("valueKnown"), Item.bSaleValueKnown);
+    Value->SetBoolField(TEXT("favorite"), Item.bFavorite);
+    Value->SetBoolField(TEXT("trash"), Item.bTrash);
+    Value->SetBoolField(TEXT("favoriteKnown"), Item.bFavoriteKnown);
+    Value->SetBoolField(TEXT("trashKnown"), Item.bTrashKnown);
+    Value->SetStringField(TEXT("funStats"), Item.FunStats);
+    if (!Item.FunStatsMarkup.IsEmpty()) Value->SetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
+    TArray<TSharedPtr<FJsonValue>> StatsJson;
+    for (const FOpenWillowGearStat& Stat : Item.Stats)
+    {
+        TSharedRef<FJsonObject> StatValue = MakeShared<FJsonObject>();
+        StatValue->SetStringField(TEXT("label"), Stat.Label);
+        if (!Stat.Icon.IsEmpty()) StatValue->SetStringField(TEXT("icon"), Stat.Icon);
+        StatValue->SetStringField(TEXT("value"), Stat.Value);
+        if (Stat.bHasBetterDirection) StatValue->SetBoolField(TEXT("higherIsBetter"), Stat.bHigherIsBetter);
+        StatsJson.Add(MakeShared<FJsonValueObject>(StatValue));
+    }
+    Value->SetArrayField(TEXT("stats"), StatsJson);
+    return Value;
+}
+
 FString UOpenWillowInventory::StateJson(int32 Level) const
 {
     TSharedRef<FJsonObject> State = MakeShared<FJsonObject>();
@@ -766,86 +849,9 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
         if (ResolveAmmoType(*Held, ActiveAmmo)) State->SetStringField(TEXT("activeAmmoType"), AmmoTypeKey(ActiveAmmo));
     TArray<TSharedPtr<FJsonValue>> ItemsJson, SlotsJson;
     for (const FOpenWillowWeaponItem& Item : Backpack)
-    {
-        TSharedRef<FJsonObject> Value = MakeShared<FJsonObject>();
-        Value->SetStringField(TEXT("id"), StableId(Item));
-        Value->SetStringField(TEXT("assetId"), Item.Id);
-        Value->SetStringField(TEXT("itemType"), TEXT("weapon"));
-        Value->SetStringField(TEXT("name"), Item.Name);
-        EOpenWillowAmmoType ItemAmmo;
-        const bool bHasAmmo = ResolveAmmoType(Item, ItemAmmo);
-        Value->SetStringField(TEXT("type"), Item.Type.IsEmpty() && bHasAmmo ? FString(WeaponTypeLabel(ItemAmmo)) : Item.Type);
-        if (bHasAmmo) Value->SetStringField(TEXT("ammoType"), AmmoTypeKey(ItemAmmo));
-        Value->SetStringField(TEXT("manufacturer"), Item.Manufacturer);
-        Value->SetStringField(TEXT("element"), Item.Element);
-        Value->SetNumberField(TEXT("rarity"), Item.Rarity);
-        Value->SetBoolField(TEXT("rarityKnown"), true);
-        if (!Item.RarityColor.IsEmpty()) Value->SetStringField(TEXT("rarityColor"), Item.RarityColor);
-        Value->SetNumberField(TEXT("level"), Item.Level);
-        Value->SetBoolField(TEXT("levelKnown"), true);
-        // Raw evaluated stats; the page rounds them as the card does (inventory.js cardRound).
-        Value->SetNumberField(TEXT("damage"), Item.Damage);
-        Value->SetNumberField(TEXT("fireRate"), Item.FireRate);
-        Value->SetNumberField(TEXT("reloadTime"), Item.ReloadTime);
-        Value->SetNumberField(TEXT("magazine"), Item.Magazine);
-        Value->SetNumberField(TEXT("spread"), Item.Spread);
-        // Absent unless derived; the Known flags mark whether it was checked.
-        if (Item.bHasAccuracy) Value->SetNumberField(TEXT("accuracy"), Item.Accuracy);
-        Value->SetBoolField(TEXT("accuracyKnown"), Item.bHasAccuracy && Item.bAccuracyKnown);
-        if (Item.bHasSaleValue) Value->SetNumberField(TEXT("value"), Item.SaleValue);
-        Value->SetBoolField(TEXT("valueKnown"), Item.bHasSaleValue && Item.bSaleValueKnown);
-        if (!Item.FunStats.IsEmpty()) Value->SetStringField(TEXT("funStats"), Item.FunStats);
-        if (!Item.FunStatsMarkup.IsEmpty()) Value->SetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
-        if (Item.Projectiles > 1) Value->SetNumberField(TEXT("projectiles"), Item.Projectiles);
-        if (Item.bHasStatus)
-        {
-            Value->SetNumberField(TEXT("statusDps"), Item.StatusDps);
-            Value->SetNumberField(TEXT("statusChance"), Item.StatusChance);
-        }
-        Value->SetNumberField(TEXT("shotCost"), Item.ShotCost);
-        Value->SetNumberField(TEXT("spinUp"), Item.SpinUp);
-        Value->SetStringField(TEXT("spinMode"), Item.SpinMode);
-        Value->SetNumberField(TEXT("spinStartIntervalScale"), Item.SpinStartIntervalScale);
-        Value->SetBoolField(TEXT("favorite"), Item.bFavorite);
-        Value->SetBoolField(TEXT("trash"), Item.bTrash);
-        Value->SetBoolField(TEXT("favoriteKnown"), Item.bFavoriteKnown);
-        Value->SetBoolField(TEXT("trashKnown"), Item.bTrashKnown);
-        ItemsJson.Add(MakeShared<FJsonValueObject>(Value));
-    }
+        ItemsJson.Add(MakeShared<FJsonValueObject>(WeaponItemJson(Item)));
     for (const FOpenWillowGearItem& Item : GearItems)
-    {
-        TSharedRef<FJsonObject> Value = MakeShared<FJsonObject>();
-        Value->SetStringField(TEXT("id"), Item.Id);
-        Value->SetStringField(TEXT("assetId"), Item.AssetId);
-        Value->SetStringField(TEXT("itemType"), Item.ItemType);
-        Value->SetStringField(TEXT("name"), Item.Name);
-        Value->SetStringField(TEXT("manufacturer"), Item.Manufacturer);
-        Value->SetNumberField(TEXT("rarity"), Item.Rarity);
-        Value->SetBoolField(TEXT("rarityKnown"), Item.bRarityKnown);
-        Value->SetStringField(TEXT("rarityColor"), Item.RarityColor);
-        Value->SetNumberField(TEXT("level"), Item.Level);
-        Value->SetBoolField(TEXT("levelKnown"), Item.bLevelKnown);
-        Value->SetNumberField(TEXT("value"), Item.SaleValue);
-        Value->SetBoolField(TEXT("valueKnown"), Item.bSaleValueKnown);
-        Value->SetBoolField(TEXT("favorite"), Item.bFavorite);
-        Value->SetBoolField(TEXT("trash"), Item.bTrash);
-        Value->SetBoolField(TEXT("favoriteKnown"), Item.bFavoriteKnown);
-        Value->SetBoolField(TEXT("trashKnown"), Item.bTrashKnown);
-        Value->SetStringField(TEXT("funStats"), Item.FunStats);
-        if (!Item.FunStatsMarkup.IsEmpty()) Value->SetStringField(TEXT("funStatsMarkup"), Item.FunStatsMarkup);
-        TArray<TSharedPtr<FJsonValue>> StatsJson;
-        for (const FOpenWillowGearStat& Stat : Item.Stats)
-        {
-            TSharedRef<FJsonObject> StatValue = MakeShared<FJsonObject>();
-            StatValue->SetStringField(TEXT("label"), Stat.Label);
-            if (!Stat.Icon.IsEmpty()) StatValue->SetStringField(TEXT("icon"), Stat.Icon);
-            StatValue->SetStringField(TEXT("value"), Stat.Value);
-            if (Stat.bHasBetterDirection) StatValue->SetBoolField(TEXT("higherIsBetter"), Stat.bHigherIsBetter);
-            StatsJson.Add(MakeShared<FJsonValueObject>(StatValue));
-        }
-        Value->SetArrayField(TEXT("stats"), StatsJson);
-        ItemsJson.Add(MakeShared<FJsonValueObject>(Value));
-    }
+        ItemsJson.Add(MakeShared<FJsonValueObject>(GearItemJson(Item)));
     for (int32 Slot = 0; Slot < SlotCount; ++Slot)
     {
         const FOpenWillowWeaponItem* Item = SlotItem(Slot);
