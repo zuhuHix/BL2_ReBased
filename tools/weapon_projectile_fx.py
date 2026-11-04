@@ -10,7 +10,9 @@ What is read, from cooked Startup.upk through ow-package (the recipe's `firing` 
 Each particle system is read into layers with tools/weapon_muzzle_fx.py (the same fitted lookup-table reading,
 UNVERIFIED against the engine). The host draws the layers with its billboard stand-in, not the game's particle renderer.
 
-Writes `firing.fx` into each recipe given, in place; recipes are game-derived and stay under ignored local/.
+Writes `firing.fx` into each recipe given, in place. Recipes are game-derived: every recipe path is resolved (symlinks
+followed) and must lie strictly inside the repository's ignored local/ folder, or the tool stops before reading anything;
+its temporary schema file is written under local/ too.
 
   python tools/weapon_projectile_fx.py --game "<BL2 install>" local/items/slice/*.json local/items/firing/coverage/*.json
 """
@@ -27,6 +29,16 @@ import weapon_muzzle_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
 
 SCHEMA_LINES = weapon_muzzle_fx.SCHEMA_LINES + ['ExplosionScale=StructProperty:ExplosionScaleData']
+
+
+def local_path(path, repo=ROOT):
+    """The path resolved (symlinks followed); refuses anything not strictly inside the repository's local/ folder,
+    because the tool writes game-derived particle data into it (the skills lane's local_output rule)."""
+    resolved = Path(path).resolve()
+    local = (Path(repo) / 'local').resolve()
+    if local not in resolved.parents:
+        raise SystemExit(f'refusing {path}: recipes must be inside {local} (ignored game-derived data)')
+    return resolved
 
 
 def system_layers(package, path, cache):
@@ -98,7 +110,10 @@ def main():
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('recipes', nargs='+', type=Path)
     args = parser.parse_args()
-    handle, name = tempfile.mkstemp(suffix='.schema')
+    recipes = [local_path(path) for path in args.recipes]   # all checked before anything is read or written
+    scratch = ROOT / 'local' / 'projectiles'
+    scratch.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(suffix='.schema', dir=scratch)
     os.close(handle)
     schema = Path(name)
     try:
@@ -106,7 +121,7 @@ def main():
         package = weapon_recipe.Package(str(Path(args.reader).resolve()),
                                         args.game / 'WillowGame/CookedPCConsole/Startup.upk', str(schema.resolve()))
         cache = {}
-        for path in args.recipes:
+        for path in recipes:
             recipe = json.loads(path.read_text(encoding='utf-8'))
             firing = recipe.get('firing')
             if not isinstance(firing, dict):

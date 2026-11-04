@@ -38,6 +38,7 @@ def result(gun, **values):
         base.update({k: str(v) for k, v in hits.items()})
         base['hit_events'] = str(sum(hits.values()))
     if 'legacy' not in base:
+        base.setdefault('unknown_sources', '0')
         base.setdefault('tick_weapons', f"{gun}:{base['ticks']}" if int(base['ticks']) else '-')
     base.pop('legacy', None)
     return f"LogTemp: Display: OWFIRING result id={gun} " + ' '.join(f'{k}={v}' for k, v in base.items() if k != 'id')
@@ -204,6 +205,9 @@ class Gun(unittest.TestCase):
                         hit_events=7, hit_direct=2, hit_splash=2, hit_tick=3, hit_throw=0)
         fails, _, _ = self.run_check(log(segment('made_rocket', 0, 0, 0), rocket), ['made_rocket'])[0]
         self.assertTrue(any('2 direct hit events, expected 0' in reason for reason in fails), fails)
+        missing = result('made_trace').replace(' unknown_sources=0', '')
+        fails, _, _ = self.run_check(log(segment('made_trace', 0, 0, 5), missing), ['made_trace'])[0]
+        self.assertTrue(any('no unknown_sources field' in reason for reason in fails), fails)
         unknown = result('made_trace', unknown_sources=2)
         fails, _, _ = self.run_check(log(segment('made_trace', 0, 0, 5), unknown), ['made_trace'])[0]
         self.assertTrue(any('2 hit events with an Unknown source' in reason for reason in fails), fails)
