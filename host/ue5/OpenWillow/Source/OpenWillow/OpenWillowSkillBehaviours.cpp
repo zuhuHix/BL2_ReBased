@@ -46,7 +46,12 @@ void UOpenWillowSkills::BeginPlay()
     Super::BeginPlay();
     HitHandle = OpenWillowHit::OnHit().AddUObject(this, &UOpenWillowSkills::HandleHit);
     if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner()))
-        Maya->GetMayaState().Modifiers = [this](FOpenWillowMayaStats& Stats) { ApplyStatModifiers(Stats); };
+    {
+        // The component is a default subobject of the walker that owns the state, and EndPlay clears the callback; the
+        // weak pointer also keeps a late call from reaching a destroyed component.
+        TWeakObjectPtr<UOpenWillowSkills> Self(this);
+        Maya->GetMayaState().Modifiers = [Self](FOpenWillowMayaStats& Stats) { if (const UOpenWillowSkills* S = Self.Get()) S->ApplyStatModifiers(Stats); };
+    }
 }
 
 void UOpenWillowSkills::EndPlay(const EEndPlayReason::Type Reason)

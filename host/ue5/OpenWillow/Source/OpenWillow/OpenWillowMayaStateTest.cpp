@@ -103,6 +103,27 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         S.EquipShield(0.f, 1.f, 5.f, false, 220.f);
         TestTrue(TEXT("no shield: fraction 0, hits go to health"), S.ShieldFraction() == 0.f && S.ApplyDamage(10.f, 221.f).ToHealth == 10.f);
     }
+    {
+        // Skill modifiers through Effective(): raised maxima fill by regeneration and recharge; when the modifier ends the
+        // next tick clamps health and shield back to the base maxima (host rule, UNVERIFIED).
+        FOpenWillowMayaState S = Synthetic();
+        bool bBoost = true;
+        S.Modifiers = [&bBoost](FOpenWillowMayaStats& Stats)
+        {
+            if (!bBoost) return;
+            Stats.MaxHealth *= 1.5f;
+            Stats.ShieldCapacity *= 1.25f;
+            Stats.HealthRegenRate += 30.f;
+        };
+        TestTrue(TEXT("Effective applies the modifiers to Base"), S.Effective().MaxHealth == 150.f && S.Base.MaxHealth == 100.f);
+        Run(S, 300.f, 305.f);
+        TestTrue(TEXT("boosted pools fill past the base maxima"), S.Health > 100.f && S.Shield > 50.f);
+        bBoost = false;
+        S.Tick(305.1f, 1.f / 60.f);
+        TestTrue(TEXT("modifier ended: health and shield clamp to the base maxima"), S.Health == 100.f && S.Shield == 50.f);
+        S.Modifiers = nullptr;
+        TestTrue(TEXT("no modifiers: Effective is Base"), S.Effective().MaxHealth == 100.f);
+    }
     return true;
 }
 #endif
