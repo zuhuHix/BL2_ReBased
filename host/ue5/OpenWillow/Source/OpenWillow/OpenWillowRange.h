@@ -34,6 +34,8 @@ public:
     void RebuildLast();
     // Toggles for every range actor: invulnerable (dummies and enemies), passive (enemies only).
     void SetMode(bool bInvulnerableNow, bool bPassiveNow);
+    // AI switch for every range enemy (ow.RangeAI): off = patrol only, the shared threat record reset.
+    void SetAI(bool bOn);
     // The spot for ow.Range without arguments: -owrangeat=X,Y,Z[,Yaw], else local/range/range.json "spot", else the manifest's
     // candidates (PR2 follow-up), else the scout.
     bool ResolveSpot(FVector& OutSpot, float& OutYaw, FString& OutSource);
@@ -49,6 +51,8 @@ public:
     bool ResolveCandidate(int32 Index, FVector& OutSpot, float& OutYaw, FString& OutMaterial, FString& OutWhy);
     // Enemies the manifest asks for (spawn entries of known kinds) and the dummy count: what a complete build holds.
     int32 ExpectedEnemies() const;
+    // The lowest and highest level of the manifest's tables (false when it has none: the stand-in kind).
+    bool TableLevels(int32& OutLow, int32& OutHigh);
     static constexpr int32 ExpectedDummies = 3;
     // Enemy level for the next build: the override (ow.RangeLevel) or the walker's level.
     void SetLevelOverride(int32 Level) { LevelOverride = Level; }
@@ -84,6 +88,7 @@ private:
     int32 LootSeed = 20261009;
     TMap<const AOpenWillowEnemy*, FString> EnemyKinds;
     FOpenWillowRangeLootResult LastLoot;
+    TArray<TWeakObjectPtr<AActor>> LootActors;   // every drop of the range (ClearRange destroys them)
 
     TArray<TWeakObjectPtr<AOpenWillowCombatTarget>> Dummies;
     TArray<TWeakObjectPtr<AOpenWillowEnemy>> Enemies;
@@ -94,6 +99,7 @@ private:
     bool bSliceLoaded = false;
     bool bModeInvulnerable = false;
     bool bModePassive = false;
+    bool bModeAI = true;
     int32 LevelOverride = 0;            // 0 = the walker's level
     bool bBuilt = false;
     FVector SpotNow = FVector::ZeroVector;

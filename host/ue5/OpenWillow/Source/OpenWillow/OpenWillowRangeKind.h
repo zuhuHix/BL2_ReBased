@@ -28,7 +28,11 @@ struct FOpenWillowRangeLootPool
 // The loot of one level entry: the item stage the weapon pools roll at, and the pools in the VM's order.
 struct FOpenWillowRangeLoot
 {
+    // The pawn's item game stage: ItemStageMin..ItemStageMax (the adult's stage carries a random offset, COMBAT_LOOT); the
+    // host draws one per death from the loot stream. Min == Max for a kind without an offset.
     int32 ItemStage = 0;
+    int32 ItemStageMin = 0;
+    int32 ItemStageMax = 0;
     TArray<FOpenWillowRangeLootPool> Pools;
 };
 

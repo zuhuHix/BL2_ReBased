@@ -65,6 +65,16 @@ class PrepareRangeTest(unittest.TestCase):
         self.assertEqual([p['kind'] for p in table['Beast'][4]['pools']], ['weapon', 'money', 'other', 'other'])
         self.assertNotIn('roll', table['Beast'][4]['pools'][0])   # the host rolls its own draw
 
+    def test_stage_range_from_sample_kills(self):
+        def kill(index, stage):
+            return {'step': 'hit:%d:9:T:S' % index, 'result': {'loot': {'item_stage': stage, 'pools': []}}}
+        run = {'pawns': [{'archetype': 'P/M.Pawn_Beast', 'level': 3}] + [{'archetype': 'P/M.Pawn_Beast', 'level': 20}] * 3,
+               'steps': [kill(0, 3), kill(1, 18), kill(2, 21), kill(3, 20)]}
+        self.assertEqual(prepare_range.stage_offsets(run), {'Beast': (-2, 1)})
+        row = prepare_range.loot_tables(run)['Beast'][3]
+        self.assertEqual((row['item_stage'], row['item_stage_min'], row['item_stage_max']), (3, 1, 4))   # 3-2 = 1, 3+1 = 4
+        self.assertEqual(prepare_range.loot_tables(run)['Beast'][20]['item_stage'], 18)   # the first kill of a level is its row
+
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
         clips = prepare_range.find_clips('/Game/X/Anims/Idle_Made.Idle_Made', names)

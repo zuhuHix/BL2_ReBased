@@ -235,6 +235,20 @@ bool UOpenWillowRangeSubsystem::FormationSlots(const FVector& Spot, float Yaw, T
     return true;
 }
 
+bool UOpenWillowRangeSubsystem::TableLevels(int32& OutLow, int32& OutHigh)
+{
+    EnsureManifest();
+    OutLow = MAX_int32;
+    OutHigh = 0;
+    for (const auto& Pair : Manifest.Kinds)
+        for (const auto& Row : Pair.Value.HealthByLevel)
+        {
+            OutLow = FMath::Min(OutLow, Row.Key);
+            OutHigh = FMath::Max(OutHigh, Row.Key);
+        }
+    return OutHigh > 0;
+}
+
 int32 UOpenWillowRangeSubsystem::ExpectedEnemies() const
 {
     int32 Total = 0;
@@ -363,6 +377,12 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                         FOpenWillowRangeLoot Loot;
                         double ItemStage = 0.0;
                         if (LevelObj->TryGetNumberField(TEXT("item_stage"), ItemStage)) Loot.ItemStage = int32(ItemStage);
+                        // The stage range (prepare_range.py: min and max over several kills); one VM draw when absent.
+                        double StageMin = ItemStage, StageMax = ItemStage;
+                        LevelObj->TryGetNumberField(TEXT("item_stage_min"), StageMin);
+                        LevelObj->TryGetNumberField(TEXT("item_stage_max"), StageMax);
+                        Loot.ItemStageMin = FMath::Max(1, int32(StageMin));
+                        Loot.ItemStageMax = FMath::Max(Loot.ItemStageMin, int32(StageMax));
                         const TArray<TSharedPtr<FJsonValue>>* PoolList = nullptr;
                         if (LevelObj->TryGetArrayField(TEXT("pools"), PoolList))
                             for (const TSharedPtr<FJsonValue>& Value : *PoolList)
@@ -525,6 +545,7 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             Enemy->SetupKind(*Kind, Level, Manifest.RespawnSeconds);
             Enemy->SetInvulnerable(bModeInvulnerable);
             Enemy->SetPassive(bModePassive);
+            Enemy->SetAIEnabled(bModeAI);
             Enemy->SetDen(&Den);
             Enemy->OnEnemyDied.AddUObject(this, &UOpenWillowRangeSubsystem::HandleEnemyDied);
             Enemies.Add(Enemy);
@@ -560,6 +581,14 @@ void UOpenWillowRangeSubsystem::ClearRange()
             Enemy->Destroy();
             ++Count;
         }
+    // The loot of the range (gun drops and the range's own pickups) goes with it.
+    for (const auto& Weak : LootActors)
+        if (AActor* Loot = Weak.Get())
+        {
+            Loot->Destroy();
+            ++Count;
+        }
+    LootActors.Reset();
     Dummies.Reset();
     Enemies.Reset();
     EnemyKinds.Reset();
@@ -570,6 +599,15 @@ void UOpenWillowRangeSubsystem::ClearRange()
 void UOpenWillowRangeSubsystem::RebuildLast()
 {
     if (bBuilt) BuildRange(SpotNow, SpotYawNow);
+}
+
+void UOpenWillowRangeSubsystem::SetAI(bool bOn)
+{
+    bModeAI = bOn;
+    for (const auto& Weak : Enemies)
+        if (AOpenWillowEnemy* Enemy = Weak.Get()) Enemy->SetAIEnabled(bModeAI);
+    if (!bModeAI) Den.ResetRecord();
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE ai=%d (%d enemies)"), bModeAI ? 1 : 0, Enemies.Num());
 }
 
 void UOpenWillowRangeSubsystem::SetMode(bool bInvulnerableNow, bool bPassiveNow)
@@ -773,6 +811,9 @@ void UOpenWillowRangeSubsystem::HandleEnemyDied(AOpenWillowEnemy* Enemy, AActor*
         return;
     }
     LastLoot = RollRangeLoot(GetWorld(), Enemy, *KindName, *Kind, Enemy->GetLevel(), LootStream, LootMode);
+    // Every drop is the range's: ow.RangeClear removes it (gone ones are pruned here).
+    LootActors.RemoveAll([](const TWeakObjectPtr<AActor>& Weak) { return !Weak.IsValid(); });
+    LootActors.Append(LastLoot.Spawned);
 }
 
 // ---------------------------------------------------------------------------------------------- test driver (-owrangetest)
@@ -839,11 +880,16 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
 
     if (TestStep >= 16 && TestStep < 37)
     {
+        // The AI steps need the AI; the target steps before them ran with it off (an alerted range swarmed Maya and put her
+        // down before the AI steps began, batch 2).
+        if (!bModeAI) SetAI(true);
         TickAITest(Now);
         return;
     }
     if (TestStep >= 37 && TestStep < 99)
     {
+        // The loot steps test the drops: the AI is off again so no blow lands on Maya while she walks onto a pickup.
+        if (bModeAI) SetAI(false);
         TickLootTest(Now);
         return;
     }
@@ -865,6 +911,8 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
             return;
         }
         TestSpot = Spot;
+        // The target steps (1-15) test the targets, not the AI: the enemies only patrol until the AI steps switch it on.
+        SetAI(false);
         TeleportMaya(World, Spot, Yaw);
         UE_LOG(LogTemp, Display, TEXT("OWRANGETEST spot source=%s at=%s yaw=%.0f"), *Source, *Spot.ToString(), Yaw);
         StepStart = Now;
@@ -1182,10 +1230,18 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     // The enemy's facing, horizontal.
     auto Forward = [](const AOpenWillowEnemy* Enemy) { return FRotator(0.f, Enemy->GetActorRotation().Yaw, 0.f).Vector(); };
     auto YawToward = [](const FVector& From, const FVector& To) { return (To - From).Rotation().Yaw; };
-    auto Reset = [this](const TCHAR* Why)
+    auto Reset = [this, Pawn](const TCHAR* Why)
     {
         Den.ResetRecord();
         UE_LOG(LogTemp, Display, TEXT("OWRANGE threat reset (test, %s) level=1"), Why);
+        // Test fixture: Maya back to full health before each step, so the earlier steps' blows cannot put her down
+        // (ApplyScriptHealth sets the maximum and current health; it does not raise a downed Maya, which the steps report).
+        if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(Pawn); Maya && !Maya->IsDown())
+        {
+            const float Before = Maya->GetHealth();
+            Maya->ApplyScriptHealth(Maya->GetMaxHealth(), Maya->GetMaxHealth());
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE maya restored health %.1f -> %.1f (test)"), Before, Maya->GetHealth());
+        }
     };
     // Only Keep is active; every other enemy is passive (no notice, no melee).
     auto OnlyActive = [this](const AOpenWillowEnemy* Keep)
@@ -1845,7 +1901,16 @@ void RangeLevelCommand(const TArray<FString>& Args, UWorld* World)
         UE_LOG(LogTemp, Warning, TEXT("OWRANGE usage: ow.RangeLevel <N> (0 = the walker's level)"));
         return;
     }
-    Range->SetLevelOverride(FCString::Atoi(*Args[0]));
+    // Clamped to the levels the manifest's tables cover (the health, melee and loot rows stop there).
+    int32 Wanted = FCString::Atoi(*Args[0]);
+    int32 Low = 0, High = 0;
+    if (Wanted > 0 && Range->TableLevels(Low, High) && (Wanted < Low || Wanted > High))
+    {
+        const int32 Clamped = FMath::Clamp(Wanted, Low, High);
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE ow.RangeLevel %d is outside the manifest's levels %d-%d: using %d"), Wanted, Low, High, Clamped);
+        Wanted = Clamped;
+    }
+    Range->SetLevelOverride(Wanted);
     Range->RebuildLast();
 }
 
@@ -1884,6 +1949,19 @@ FAutoConsoleCommandWithWorldAndArgs GRangeModeCommand(TEXT("ow.RangeMode"),
 FAutoConsoleCommandWithWorldAndArgs GRangeLevelCommand(TEXT("ow.RangeLevel"),
     TEXT("ow.RangeLevel <N>: enemy level for the range (0 = the walker's level), rebuilds the range"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RangeLevelCommand));
+void RangeAICommand(const TArray<FString>& Args, UWorld* World)
+{
+    UOpenWillowRangeSubsystem* Range = World ? World->GetSubsystem<UOpenWillowRangeSubsystem>() : nullptr;
+    if (!Range) return;
+    const FString Mode = Args.Num() > 0 ? Args[0] : FString();
+    if (Mode.Equals(TEXT("on"), ESearchCase::IgnoreCase)) Range->SetAI(true);
+    else if (Mode.Equals(TEXT("off"), ESearchCase::IgnoreCase)) Range->SetAI(false);
+    else UE_LOG(LogTemp, Warning, TEXT("OWRANGE usage: ow.RangeAI on|off"));
+}
+
+FAutoConsoleCommandWithWorldAndArgs GRangeAICommand(TEXT("ow.RangeAI"),
+    TEXT("ow.RangeAI on|off: range enemies notice and attack Maya (on, default) or only patrol (off)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RangeAICommand));
 FAutoConsoleCommandWithWorldAndArgs GRangeClearCommand(TEXT("ow.RangeClear"),
     TEXT("ow.RangeClear: remove the range actors"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RangeClearCommand));

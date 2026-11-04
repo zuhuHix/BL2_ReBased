@@ -131,6 +131,10 @@ def local_output(path, repo=REPO):
         raise SystemExit("refusing --out %s: it must be inside %s (ignored game-derived output)" % (path, local))
     return resolved
 LETHAL = "GD_Impact.DamageType.DmgType_Normal:Shotgun"   # the kill shot of COMBAT_LOOT's runs (damage type and source)
+# The item stage carries a random offset for some kinds (the adult's Random_Minus02-Plus01, COMBAT_LOOT): it is sampled over
+# SAMPLE_KILLS kills of fresh pawns at SAMPLE_LEVEL, and the offset's range is applied to every level.
+SAMPLE_LEVEL = 20
+SAMPLE_KILLS = 24
 # What the host does with a pool of the death roll, by the pool's name (host choice): a weapon pool goes to the weapon
 # generator (ow.RollGun's roll), money and ammo pools to the range's own pickups; anything else is logged as not hosted.
 POOL_KINDS = (("GunsAndGear", "weapon"), ("Money", "money"), ("Ammo", "ammo"))
@@ -142,9 +146,28 @@ def pool_kind(pool):
     return next((kind for key, kind in POOL_KINDS if key in name), "other")
 
 
-def loot_tables(run_json):
-    """{row class: {level: {"item_stage": n, "pools": [{"pool", "chance", "kind"}]}}} from the death rolls of the kill steps."""
+def stage_offsets(run_json):
+    """{row class: (lowest, highest)} of item stage minus pawn level over every kill of the run (the sampled offset range)."""
     pawns = run_json.get("pawns", [])
+    out = {}
+    for step in run_json.get("steps", []):
+        loot = (step.get("result") or {}).get("loot") if step.get("step", "").startswith("hit:") else None
+        index = int(step["step"].split(":")[1]) if loot else -1
+        if not loot or index >= len(pawns):
+            continue
+        leaf = pawns[index].get("archetype", "").rsplit(".", 1)[-1]
+        row_class = leaf[5:] if leaf.startswith("Pawn_") else leaf
+        offset = int(loot.get("item_stage", 0)) - int(pawns[index].get("level", 0))
+        low, high = out.get(row_class, (offset, offset))
+        out[row_class] = (min(low, offset), max(high, offset))
+    return out
+
+
+def loot_tables(run_json):
+    """{row class: {level: {"item_stage", "item_stage_min", "item_stage_max", "pools": [{"pool", "chance", "kind"}]}}} from the
+    death rolls of the kill steps; the stage range is the level plus the sampled offset range (at least 1)."""
+    pawns = run_json.get("pawns", [])
+    offsets = stage_offsets(run_json)
     out = {}
     for step in run_json.get("steps", []):
         if not step.get("step", "").startswith("hit:"):
@@ -156,8 +179,13 @@ def loot_tables(run_json):
         archetype = pawns[index].get("archetype", "")
         row_class = archetype.rsplit(".", 1)[-1]
         row_class = row_class[5:] if row_class.startswith("Pawn_") else row_class
-        out.setdefault(row_class, {})[int(pawns[index].get("level", 0))] = {
+        level = int(pawns[index].get("level", 0))
+        if level in out.get(row_class, {}):
+            continue   # the first kill of a level is its row (the sample kills only widen the offset range)
+        low, high = offsets.get(row_class, (0, 0))
+        out.setdefault(row_class, {})[level] = {
             "item_stage": loot.get("item_stage", 0),
+            "item_stage_min": max(1, level + low), "item_stage_max": max(1, level + high),
             "pools": [{"pool": p["pool"], "chance": p["chance"], "kind": pool_kind(p["pool"])} for p in loot.get("pools", [])]}
     return out
 
@@ -193,6 +221,11 @@ def run_vm(reader, levels):
         for level in levels:
             steps += ["maya:%d" % level, "spawn:%s:%d" % (vm_kind, level), "swing:%d:%s" % (pawn, SWINGS[vm_kind]),
                       "hit:%d:999999:%s" % (pawn, LETHAL)]
+            pawn += 1
+        # The stage-offset sample: more kills of fresh pawns of this kind at one level.
+        steps.append("maya:%d" % SAMPLE_LEVEL)
+        for _ in range(SAMPLE_KILLS):
+            steps += ["spawn:%s:%d" % (vm_kind, SAMPLE_LEVEL), "hit:%d:999999:%s" % (pawn, LETHAL)]
             pawn += 1
     command = [reader, os.path.join(cooked, "Sanctuary_Dynamic.upk"), "--combat-run", "--cooked", cooked] + steps
     out = subprocess.run(command, capture_output=True, text=True, check=True)
