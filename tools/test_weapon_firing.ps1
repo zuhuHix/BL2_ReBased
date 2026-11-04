@@ -6,7 +6,9 @@ param(
         'pistol_tediore', 'ar_dahl_burst3'),
     [int]$TimeoutSeconds = 1500,
     [int]$WaitForEditorSeconds = 3600,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # Extra arguments for the game command line, e.g. -Extra '-owaimmodel' (the accuracy pool and kick on during the test).
+    [string[]]$Extra = @()
 )
 # Unattended firing test in the host (Sanctuary_P, -owfiringtest): each named gun is equipped, fired at the stand-in dummy
 # (five pulls), at a wall (three) and, when its firing block has a status block, at the dummy again (twenty); a Tediore gun
@@ -27,6 +29,27 @@ $checker = Join-Path $repo 'tools/check_weapon_firing.py'
 # The host's recipe folders in load order: -owitems first, then -owitemdir (the first recipe with a given id wins).
 $itemDirs = @((Join-Path $repo 'local/items'), (Join-Path $repo 'local/items/slice'), (Join-Path $repo 'local/items/firing/coverage'))
 foreach ($dir in $itemDirs) { if (!(Test-Path -LiteralPath $dir)) { throw "Missing recipe folder $dir (tools/weapon_stats.py, weapon_slice_gear.py, weapon_firing.py)" } }
+# Stale local data: a listed gun whose recipe has no firing block (made before tools/weapon_firing.py ran on it, or kept from
+# an older checkout) is fired as a plain trace and fails on momentum. Regenerate the firing blocks first (light: Python
+# only, no rerolls), then require every listed recipe that exists to have one. ar_dahl_burst3 is the fixture made below.
+function Get-RecipesWithoutFiring {
+    $missing = @()
+    foreach ($id in $Guns) {
+        $file = $itemDirs | ForEach-Object { Join-Path $_ "$id.json" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (!$file) { continue }
+        $hasFiring = & python -c "import json,sys; print(1 if json.load(open(sys.argv[1], encoding='utf-8')).get('firing') else 0)" $file
+        if ($hasFiring -ne '1') { $missing += $id }
+    }
+    return $missing
+}
+$stale = @(Get-RecipesWithoutFiring)
+if ($stale.Count) {
+    Write-Host "Recipes without a firing block: $($stale -join ', '); regenerating the firing blocks (tools/weapon_firing_coverage.py --only-firing)"
+    & python (Join-Path $repo 'tools/weapon_firing_coverage.py') --game $env:OPENWILLOW_BL2 --only-firing
+    if ($LASTEXITCODE -ne 0) { throw "tools/weapon_firing_coverage.py --only-firing failed ($LASTEXITCODE)" }
+    $stale = @(Get-RecipesWithoutFiring)
+    if ($stale.Count) { throw "Still no firing block after regeneration: $($stale -join ', ')" }
+}
 # Host fixture (ignored local/; built from the coverage Dahl AR): the same gun with burst_count 3, because no weapon type in
 # the data has an AutomaticBurstCount above 1 (Dahl's bursts come from zoom effects the host does not apply yet). It tests
 # the host's burst rule, not game data.
@@ -52,7 +75,7 @@ try {
         "-owgunids=$($Guns -join ',')", "-owitemids=$($Guns -join ',')", '-owlevel=36', "-owitems=`"$($itemDirs[0])`"",
         "-owitemdir=`"$($itemDirs[1]);$($itemDirs[2]);$($itemDirs[3])`"",
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
-        '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
+        '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"") + $Extra
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Host "Launched firing test pid $($process.Id) for $($Guns.Count) guns; log: $log"
     if (!$process.WaitForExit($TimeoutSeconds * 1000)) {

@@ -302,3 +302,11 @@ numbers, AI reactions) read the same data the host dummy does. Host code only; n
   more at the dummy (up to 40 extra pulls, `extra_pulls` on the swap line, counted in the expected shots) until one runs.
   The checker fails a status gun with no swap line, a failed swap, no tick after the swap, or `tick_weapons` totals that
   differ from `ticks` / `hit_tick`.
+- **Integration batches 2 and 3.** *Slag:* the swap applies only to a status whose effect deals damage over time
+  (duration and dps above 0). The slag recipe's status has no resolved duration (section 4) and slag has no damage ticks, so
+  the host never runs it (32 procs, 0 ticks in batch 2) and there is nothing to attribute. The test logs
+  `OWFIRING swap ... skipped=no_ticks`, which the checker accepts only when the recipe agrees. *Stale recipes:* a gun held
+  without a firing block logs `momentum_rule` 0, which batch 3 saw on three slice guns whose local recipes had never been
+  given one. `tools/test_weapon_firing.ps1` now runs `tools/weapon_firing_coverage.py --only-firing` when a listed recipe
+  has no firing block, and stops if one is still missing. The checker's momentum failure names that cause. `-Extra`
+  passes extra game arguments (for example `-Extra '-owaimmodel'`).

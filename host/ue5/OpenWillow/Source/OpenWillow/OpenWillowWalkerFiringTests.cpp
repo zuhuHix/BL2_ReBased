@@ -546,12 +546,21 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         if (Now < FinishAt + 0.5f) break;
         const bool bStatus = UOpenWillowStatusEffects::AnyActive(CombatTarget.Get());
         // Weapon swap during the status ticks: the ticks still to come must name the gun that caused the proc, not the one
-        // now in hand (the hit event stores the source weapon at the proc). Every status gun swaps once; with no effect
-        // running it first pulls once more at the dummy (up to 40 extra pulls, logged) until one runs. Each outcome is
-        // logged: the checker requires a swap and ticks after it.
+        // now in hand (the hit event stores the source weapon at the proc). Every status gun whose effect deals damage over
+        // time (duration and dps above 0) swaps once; with no effect running it first pulls once more at the dummy (up to
+        // 40 extra pulls, logged) until one runs. A status without damage ticks has nothing to attribute: slag (Amp) has no
+        // DOT in BL2, and the recipe's slag duration is unresolved, so the host never runs it. It logs a skip instead. Each
+        // outcome is logged: the checker requires a swap and ticks after it for ticking statuses only.
         static int32 SwappedGun = -1, ExtraPulls = 0, ExtraFor = -1;
         if (ExtraFor != Gun) { ExtraFor = Gun; ExtraPulls = 0; }
         const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        if (SwappedGun != Gun && Held && Held->Id == Id && Held->Firing.bLoaded && Held->Firing.Status.bValid
+            && !(Held->Firing.Status.Duration > 0.f && Held->Firing.Status.Dps > 0.f))
+        {
+            SwappedGun = Gun;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING swap id=%s skipped=no_ticks duration=%.2f dps=%.2f"), *Id,
+                Held->Firing.Status.Duration, Held->Firing.Status.Dps);
+        }
         if (SwappedGun != Gun && Held && Held->Id == Id && Held->Firing.bLoaded && Held->Firing.Status.bValid)
         {
             if (!bStatus && ExtraPulls < 40)
