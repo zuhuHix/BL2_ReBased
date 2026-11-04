@@ -1397,3 +1397,33 @@ picker for a backpack transfer (UNVERIFIED host control).
 **Checks.** Inventory suite 49 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE on the final page code (round-21 recipe set);
 `inventory_navigation_test.js` 41/41 (one new check); `inventory_preview_cache_test.js` 4/4 (review fix: listeners removed after load, cache pruned to the snapshot); `skill_navigation_test.js` 6/6; the other page tests pass; CTest 21/21; verify_packages 9/9
 packages with exact class bodies.
+
+## Round 24 (2026-11-04, inventory lane, pc-hummer)
+
+AI-assisted (Claude). No real-game session on this machine (bl-sdk is not installed here); script listings stay under ignored
+`local/analysis/inv24/`.
+
+**Number keys (round-21 item 6): read from the script, not yet seen in game.** `research/script_disasm.py` on
+`StatusMenuExGFxMovie.HandleInputKey`: after the current screen's handler has not used the key and the event is a press, the
+keys One to Five call `TrySwitchToScreen` with 1 to 5, the same screens the tab strip and the Logs, Map, Inventory, Skills and
+Challenges bindings reach: Missions, Map, Inventory, Skills, Challenges. `TrySwitchToScreen` waits out a one-tick switch
+guard, opens Missions only when there are missions, and refuses Inventory and Skills under vehicle restrictions. None of
+the inventory panels' input functions (`StatusMenuInventoryPanelGFxObject.NormalInputKey` / `EquipInputKey`,
+`InventoryListPanelGFxObject`, `StatusMenuEquippedPanelGFxObject`, `BaseInventoryPanelGFxObject` `PanelOnInputKey`) names a
+digit, so during a backpack transfer too a digit switches the screen; the transfer's slot is chosen with Up and Down in the
+equipped panel. The page now does the same: 1 opens Missions, 4 Skills, 3 (this page), 2 and 5 (no host page yet) do nothing,
+and the old host slot picker (1-4 chose the weapon slot for the next transfer) is gone. UNVERIFIED in the running game; a
+real-game check is asked of the hub. Navigation test 41/41 (the slot-picker check is replaced by a tab check).
+
+**The action suite pressed digits too.** Steps 18, 20, 24 and 38 used 1, 2 and 4 as the slot picker, and step 22 relied on the
+picker's memory. They now use Down and Up in the transfer (`OpenWillowInventoryActionTest.cpp`); the locked-slot check walks Down
+past slot 2 in a backpack transfer, and a new step `locked_slot_transfer_cancel` cancels it: 50 steps.
+
+**Bounded recipe set rebuilt on pc-hummer.** The six-weapon set was not on this machine; it was rebuilt from the per-slot part
+names of the yorad copy (each slot forced to the named part in a local wrapper around `weapon_recipe.roll`, then
+`weapon_stats.py`, the glTF filter and `weapon_view_model.py`). The parts match; three name prefixes differ from the yorad copy
+(Infinity, Nukem, Volcano: the current name rule chooses another name part on the same parts), so card names differ there.
+
+**Checks.** Inventory suite **50 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (rebuilt bounded set; before the step-22 fix
+49 / 1). A freshly provisioned worktree again had the 2026-11-02 converted movies (the provisioning copies only missing files),
+and the page never opened (0 / 1 / 48 NOT_RUN) until the 2026-11-03 movies were copied from the main checkout.
