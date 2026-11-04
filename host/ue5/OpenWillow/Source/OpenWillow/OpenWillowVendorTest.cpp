@@ -69,6 +69,20 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("invalid price text"), Error, FString(TEXT("No valid price")));
     }
 
+    // The id may be passed straight from the shelf (as ow.Vendor.Buy does): the gun bought is that one, not the next.
+    {
+        FOpenWillowVendorStock Pair;
+        Pair.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_p"), 101), TEXT("stock_0"), false));
+        Pair.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_q"), 41), TEXT("stock_1"), false));
+        UOpenWillowInventory* Buyer = SyntheticInventory(1000);
+        TestTrue(TEXT("buy by the shelf's own id"), Pair.Buy(Pair.Items[0].Id, Buyer, Error));
+        TestEqual(TEXT("one gun left"), Pair.Items.Num(), 1);
+        TestEqual(TEXT("the other gun stays"), Pair.Items.Num() == 1 ? Pair.Items[0].Id : FString(), FString(TEXT("stock_1")));
+        int32 Left = 0;
+        Buyer->GetMoney(Left);
+        TestEqual(TEXT("charged the first gun's price"), Left, 1000 - 484);
+    }
+
     // Enough money: buy gun A (484) then gun B (196) from 1000.
     UOpenWillowInventory* Inventory = SyntheticInventory(1000);
     TestTrue(TEXT("buy with enough money"), Stock.Buy(TEXT("stock_0"), Inventory, Error));

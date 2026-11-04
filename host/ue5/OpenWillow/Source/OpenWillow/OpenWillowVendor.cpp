@@ -321,7 +321,7 @@ const FOpenWillowVendorItem* FOpenWillowVendorStock::FindShopItem(const FString&
     return nullptr;
 }
 
-bool FOpenWillowVendorStock::Buy(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError)
+bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FString& OutError)
 {
     const FOpenWillowVendorItem* Found = FindShopItem(Id);
     if (!Found || !Inventory)
@@ -365,7 +365,7 @@ bool FOpenWillowVendorStock::Buy(const FString& Id, UOpenWillowInventory* Invent
     return true;
 }
 
-bool FOpenWillowVendorStock::Sell(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError,
+bool FOpenWillowVendorStock::Sell(FString Id, UOpenWillowInventory* Inventory, FString& OutError,
     const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected)
 {
     const FOpenWillowWeaponItem* Owned = Inventory ? Inventory->FindItemById(Id) : nullptr;
@@ -403,7 +403,7 @@ bool FOpenWillowVendorStock::Sell(const FString& Id, UOpenWillowInventory* Inven
     return true;
 }
 
-bool FOpenWillowVendorStock::BuyBack(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError)
+bool FOpenWillowVendorStock::BuyBack(FString Id, UOpenWillowInventory* Inventory, FString& OutError)
 {
     const int32 Index = Buyback.IndexOfByPredicate([&Id](const FOpenWillowVendorItem& Item) { return Item.Id == Id; });
     if (Index == INDEX_NONE || !Inventory)
@@ -685,7 +685,7 @@ void UOpenWillowVendorSubsystem::HandlePageMessage(const FString& Line)
     Command(Action, Id, Error);
 }
 
-bool UOpenWillowVendorSubsystem::Command(const FString& Action, const FString& Id, FString& OutError)
+bool UOpenWillowVendorSubsystem::Command(const FString& Action, FString Id, FString& OutError)
 {
     AOpenWillowVendingMachine* Machine = ActiveMachine.Get();
     UOpenWillowInventory* Inventory = ActiveInventory.Get();
