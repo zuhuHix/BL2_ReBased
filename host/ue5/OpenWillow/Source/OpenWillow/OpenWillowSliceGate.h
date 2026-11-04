@@ -7,7 +7,7 @@
 // other lanes build: spawn, fight and kill an enemy, loot (or roll) a gun, equip it, Phaselock an enemy, the Fire
 // mission from accept to turn-in, then go down, bleed out and respawn. It drives the host through its public calls
 // (the use key, FireOnce, EquipItem, UsePhaselock) and implements no gameplay itself. Each link logs one line:
-//   OWSLICEGATE link=<name> result=PASS|FAIL|NOT_AVAILABLE detail=<why>
+//   OWSLICEGATE link=<name> result=PASS|FAIL|NOT_AVAILABLE fixtures=[<test fixtures it relied on>] detail=<why>
 // and the run ends with OWSLICEGATE SUMMARY; tools/check_slice_gate.py grades the log (tools/test_slice_gate.ps1).
 // NOT_AVAILABLE marks a piece the host does not have yet (for example no loot drop on a kill); the run then uses a
 // stated fallback so the later links still run. Host behaviour only: nothing here is checked against the real game.
@@ -43,7 +43,6 @@ private:
     UPROPERTY() mutable TObjectPtr<class AOpenWillowNpc> Marcus;   // found once at the giver marker
     TSet<TObjectKey<AActor>> PickupsBeforeKill;
     FVector KillLocation = FVector::ZeroVector;
-    int32 HitsAtFightStart = 0;
     int32 KillShots = 0;
     int32 PickupAttemptsBefore = 0;
     TSet<FString> BackpackBefore;   // stable item ids before an action that should add one
@@ -56,6 +55,11 @@ private:
 
     class AOpenWillowWalker* Walker() const;
     void Link(const TCHAR* Name, const TCHAR* Result, const FString& Detail);
+    // A test fixture the next link relies on; Link prints the list as fixtures=[a; b] and clears it.
+    void Fixture(const FString& What) { Fixtures.AddUnique(What); }
+    TArray<FString> Fixtures;
+    bool bPhaselockPointGranted = false;
+    int32 LastHitCount = 0, EnemyHits = 0, OtherHits = 0, UnattributedHits = 0;   // Maya's hits during the fight, by causer
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }
     void MissingLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("NOT_AVAILABLE"), Detail); }

@@ -225,6 +225,7 @@ float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const
     if (Applied > 0.f && From.Normalize())
     {
         LastHitFrom = From;
+        LastHitCauser = Causer;
         ++HitsTaken;
     }
     if (Hit.bWentDown) OnWentDown();

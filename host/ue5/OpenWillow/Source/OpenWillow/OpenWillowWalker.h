@@ -159,6 +159,7 @@ public:
     // instigator's position).
     int32 GetHitCount() const { return HitsTaken; }
     FVector GetLastHitFrom() const { return LastHitFrom; }
+    AActor* GetLastHitCauser() const { return LastHitCauser.Get(); }   // the causer of the hit GetHitCount last counted (null: none given)
     // Maya killed an enemy (AOpenWillowCombatTarget calls it with her as the damage causer): while Injured, a second wind.
     void NotifyKilledEnemy();
     // -owquest: sets maximum health from the recovered formula when Maya's level differs from the level it was last
@@ -272,6 +273,7 @@ private:
     void Respawn();
     int32 HitsTaken = 0;
     FVector LastHitFrom = FVector::ZeroVector;
+    TWeakObjectPtr<AActor> LastHitCauser;
     void OnWentDown();
     void TickDown(float Now, float DeltaSeconds);
     UPROPERTY() TObjectPtr<class UOpenWillowInventoryWidget> InventoryScreen;
