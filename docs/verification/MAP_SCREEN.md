@@ -61,8 +61,10 @@ captures under ignored `local/inv24/mapshots/`. Nothing below was observed in th
 - In engine, `-owmapshots` (the slice quest resumed from a local save with the Fire mission active): opens the Map, captures
   it, turns Maya 90 degrees, zooms in twice, pans, toggles the legend, closes with Escape, opens the Inventory and presses 2.
 
-- Not tested yet: opening the Map while the vending page (vendors lane, PR #81) is up. #81 had not landed on main when this
-  was written; the check belongs to the first run after it does.
+- Over the vending page (vendors #81): the shop page holds the keyboard, so no key opens a status page over it. Forced
+  through `ToggleMap` (`-owmapshots` with `-owvendors`), the Map opened on top and closing it handed the input back to the
+  game under the still-open shop (cursor hidden, shop still open). Since 2026-11-04 no status page opens while a shop is
+  open (`UOpenWillowVendorSubsystem::IsShopOpen`); the capture logs the refusal.
 
 ## Open, for a real-game session
 

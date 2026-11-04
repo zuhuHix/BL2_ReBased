@@ -173,7 +173,8 @@ namespace
 {
     int32 ShotStep = 0;
     float ShotAt = 0.f;
-    FVector DropLocation = FVector::ZeroVector;
+    FVector DropLocation = FVector::ZeroVector, AimedAt = FVector::ZeroVector;
+    TWeakObjectPtr<AOpenWillowInventoryPickup> Decoy, DecoyAimed;
     bool bReleaseUse = false;
 
     void Aim(APlayerController& Player, const FVector& Target, float ExtraYaw = 0.f)
@@ -194,8 +195,9 @@ namespace
     }
 
     // A generated gun into the backpack (ow.RollGun <balance> 34 <seed>; -owpickupcardgun=<balance> overrides the default),
-    // then dropped 150 uu ahead of Maya on the ground, as the inventory's drop does. False (logged) when it failed.
-    bool DropRolledGun(AOpenWillowWalker& Maya, int32 Seed)
+    // then dropped on the ground `Ahead` uu in front of Maya and `Right` uu to her right (default: 150 uu ahead, as the
+    // inventory's drop does). The pickup, or null (logged) when it failed.
+    AOpenWillowInventoryPickup* DropRolledGun(AOpenWillowWalker& Maya, int32 Seed, float AheadUu = 150.f, float RightUu = 0.f)
     {
         UWorld* World = Maya.GetWorld();
         UOpenWillowInventory* Inventory = Maya.GetInventory();
@@ -211,9 +213,9 @@ namespace
         if (NewId.IsEmpty() || !Maya.TakeInventoryItemById(NewId, Taken))
         {
             UE_LOG(LogTemp, Warning, TEXT("OWPICKUPCARDSHOTS failed: ow.RollGun added no gun (weapon generator manifest missing?)"));
-            return false;
+            return nullptr;
         }
-        const FVector Ahead = Maya.GetActorLocation() + Maya.GetActorForwardVector() * 150.f;
+        const FVector Ahead = Maya.GetActorLocation() + Maya.GetActorForwardVector() * AheadUu + Maya.GetActorRightVector() * RightUu;
         FHitResult Ground;
         FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPickupCardDrop), false, &Maya);
         DropLocation = World->LineTraceSingleByChannel(Ground, Ahead + FVector(0.f, 0.f, 100.f), Ahead - FVector(0.f, 0.f, 450.f),
@@ -225,11 +227,11 @@ namespace
         if (!Pickup)
         {
             UE_LOG(LogTemp, Warning, TEXT("OWPICKUPCARDSHOTS failed: the pickup did not spawn"));
-            return false;
+            return nullptr;
         }
         Pickup->Initialize(MoveTemp(Taken));
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS dropped %s at (%.0f, %.0f, %.0f)"), *NewId, DropLocation.X, DropLocation.Y, DropLocation.Z);
-        return true;
+        return Pickup;
     }
 }
 
@@ -266,17 +268,33 @@ void OpenWillowPickupCard::TickShots(AOpenWillowWalker& Maya, APlayerController&
         bReleaseUse = true;
         break;
     case 5:
+    {
         Shot(5, TEXT("PickedUp"), Now);
-        // A second gun, aimed at, then Maya goes down: the card must hide.
-        if (!DropRolledGun(Maya, 2)) { Fail(); return; }
-        Aim(Player, DropLocation);
+        // The decoy: a gun 70 uu to Maya's right (nearer) and one 150 uu ahead (aimed at). E must take the aimed one.
+        Decoy = DropRolledGun(Maya, 3, 0.f, 70.f);
+        DecoyAimed = DropRolledGun(Maya, 2);
+        if (!Decoy.IsValid() || !DecoyAimed.IsValid()) { Fail(); return; }
+        AimedAt = DropLocation;
+        Aim(Player, AimedAt);
         break;
+    }
     case 6:
-        Shot(6, TEXT("SecondAimed"), Now);
+        Shot(6, TEXT("DecoyAimed"), Now);
+        Player.InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::E, IE_Pressed, 1.f));
+        bReleaseUse = true;
+        break;
+    case 7:
+        UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS decoy aimed_taken=%d nearer_left=%d"),
+            DecoyAimed.IsValid() ? 0 : 1, Decoy.IsValid() ? 1 : 0);
+        // Then the decoy, aimed at, and Maya goes down: the card must hide.
+        if (Decoy.IsValid()) Aim(Player, Decoy->GetActorLocation());
+        break;
+    case 8:
+        Shot(7, TEXT("SecondAimed"), Now);
         OpenWillowApplyDamageToPlayer(World, 1.e6f);
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS down=%d"), Maya.IsDown() ? 1 : 0);
         break;
-    case 7: Shot(7, TEXT("Down"), Now); break;
+    case 9: Shot(8, TEXT("Down"), Now); break;
     default:
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS done"));
         Fail();

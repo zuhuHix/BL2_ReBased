@@ -3660,3 +3660,14 @@ AI-assisted (Claude). With the hit-event `Source` field on main (PR #88), every 
 Immolate's extra hit) sets `Source = Skill`, the hit listener ignores Skill and Status sources, and Cloud Kill and
 Immolate proc on `Source` Bullet or Rocket, the game's two damage sources for them (a rocket's explosion now counts; a
 bullet's impact explosion and a Tediore throw do not). Record: `NATIVE_SKILL_BEHAVIOURS.md` section 7. UNVERIFIED in game.
+
+## 2026-11-04: E takes the aimed pickup; no status page over an open shop (inventory lane)
+
+AI-assisted (Claude). Records: `docs/verification/PICKUP_CARD.md`, `MAP_SCREEN.md`. Host behaviour change; UNVERIFIED in game.
+
+- `PickupNearby` takes the pickup the world pickup card shows (`OpenWillowPickupCard::FindAimedPickup`: reach 220 uu, a 12-degree
+  cone, line of sight) before the nearest-target rule for vending machines, doors and pickups (vendors #81). Decoy capture:
+  the aimed gun is taken, the nearer un-aimed one stays.
+- The status pages (Inventory, Skills, Missions, Map) do not open while a vending shop is open: forced over a shop, closing the
+  page left the shop without input or cursor.
+

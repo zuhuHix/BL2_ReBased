@@ -173,6 +173,8 @@ public:
     // Sells the gun the open shop sold last (ow.Vendor.SellLast; the in-engine suite cannot know the id in advance).
     bool SellLast(FString& OutError);
     FString ReportJson() const;
+    // True while a shop page is shown (the status pages do not open over it).
+    bool IsShopOpen() const { return ActiveMachine.IsValid(); }
 
 private:
     bool OpenAt(AOpenWillowWalker& Walker, AOpenWillowVendingMachine& Machine);

@@ -1,6 +1,8 @@
 #include "OpenWillowMapScreen.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMinimap.h"
+#include "OpenWillowVendor.h"
+#include "Engine/Engine.h"
 #include "OpenWillowWalker.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -22,6 +24,13 @@ namespace
     int32 ShotStep = 0;
     float ShotAt = 0.f;
 
+    // The vending subsystem's report (whether a shop is open), on one log line.
+    void VendorReport(const AOpenWillowWalker& Maya, const TCHAR* Label)
+    {
+        const UOpenWillowVendorSubsystem* Vendors = Maya.GetWorld() ? Maya.GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr;
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS %s %s"), Label, Vendors ? *Vendors->ReportJson().Left(300) : TEXT("no vendor subsystem"));
+    }
+
     void Shot(int32 Index, const TCHAR* Name, float Now)
     {
         const FString File = FString::Printf(TEXT("OWMap_%d_%s.png"), Index, Name);
@@ -37,7 +46,7 @@ void OpenWillowMapScreen::TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& 
     // The movie HUD settles a few seconds after it is ready; each step then waits for the page (the map movie loads after
     // the StatusMenu movie).
     constexpr float Start = 10.f;
-    static const float Waits[] = {4.f, 1.5f, 1.5f, 1.5f, 1.5f, 1.5f, 6.f, 5.f};
+    static const float Waits[] = {4.f, 1.5f, 1.5f, 1.5f, 1.5f, 1.5f, 6.f, 5.f, 4.f, 5.f, 2.f, 2.f};
     const float Now = Maya.GetWorld()->GetTimeSeconds();
     if (Now < Start) return;
     if (ShotStep > 0 && ShotStep <= int32(UE_ARRAY_COUNT(Waits)) && Now < ShotAt + Waits[ShotStep - 1]) return;
@@ -62,8 +71,30 @@ void OpenWillowMapScreen::TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& 
         break;
     case 7: Hud.SendPageKey(TEXT("2")); break; // the Inventory's Map tab key
     case 8:
+    {
         Shot(7, TEXT("FromInventoryKey2"), Now);
         UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS map_from_inventory=%d"), Hud.IsMapOpen() ? 1 : 0);
+        // With -owvendors: the Map over the vending page. The vending page holds the keyboard (UI-only input), so no key
+        // can open a status page over it; the worst case is a direct ToggleMap, tested here.
+        FString Vendors;
+        if (!FParse::Value(FCommandLine::Get(), TEXT("owvendors="), Vendors)) { ShotStep = 99; return; }
+        Hud.CloseSkills();
+        if (GEngine) GEngine->Exec(Maya.GetWorld(), TEXT("ow.Vendor.Open 0"));
+        break;
+    }
+    case 9:
+        VendorReport(Maya, TEXT("vendor_open"));
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS map_over_vending open=%d (expected 0: refused over a shop)"), Hud.ToggleMap() ? 1 : 0);
+        break;
+    case 10:
+        Shot(8, TEXT("MapOverVending"), Now);
+        Hud.SendPageKey(TEXT("Escape"));
+        break;
+    case 11:
+        Shot(9, TEXT("AfterMapClose"), Now);
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS after_map_close map_open=%d status_page_open=%d mouse_cursor=%d"),
+            Hud.IsMapOpen() ? 1 : 0, Hud.IsSkillsOpen() ? 1 : 0, Player.ShouldShowMouseCursor() ? 1 : 0);
+        VendorReport(Maya, TEXT("vendor_after_map_close"));
         break;
     default:
         UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS done"));
