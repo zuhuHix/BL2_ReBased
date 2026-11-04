@@ -99,11 +99,12 @@ struct FOpenWillowVendorStock
     bool EnsureStocked(double Now) { if (!NeedsRestock(Now)) return false; Restock(Now); return true; }
 
     // The actions. Each returns false with OutError set and changes nothing on refusal.
-    bool Buy(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError);
+    // The actions take the id by value: a caller may pass a shelf item's own Id, and the shelf changes during the action.
+    bool Buy(FString Id, UOpenWillowInventory* Inventory, FString& OutError);
     // IsProtected: items the caller will not let go (a weapon the quest lends); refused with "Mission items cannot be sold".
-    bool Sell(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError,
+    bool Sell(FString Id, UOpenWillowInventory* Inventory, FString& OutError,
         const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected = nullptr);
-    bool BuyBack(const FString& Id, UOpenWillowInventory* Inventory, FString& OutError);
+    bool BuyBack(FString Id, UOpenWillowInventory* Inventory, FString& OutError);
 
     const FOpenWillowVendorItem* FindShopItem(const FString& Id) const;
 
@@ -156,7 +157,7 @@ public:
     bool OpenByIndex(int32 Index, FString& OutError);
     bool BuyByIndex(int32 ShopIndex, FString& OutError);
     // Runs buy, sell or buyback on the open shop and pushes the new state. Action names as the page sends them.
-    bool Command(const FString& Action, const FString& Id, FString& OutError);
+    bool Command(const FString& Action, FString Id, FString& OutError);
     void RestockOpen();
     // Sells the gun the open shop sold last (ow.Vendor.SellLast; the in-engine suite cannot know the id in advance).
     bool SellLast(FString& OutError);
