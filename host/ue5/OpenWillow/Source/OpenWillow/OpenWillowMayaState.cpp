@@ -42,6 +42,19 @@ void FOpenWillowMayaState::GoDown(float Now)
     LastInjuryAt = Now;
 }
 
+FOpenWillowMayaStats FOpenWillowMayaState::Effective() const
+{
+    if (!Modifiers) return Base;
+    if (CachedFrame != GFrameCounter || FMemory::Memcmp(&CachedBase, &Base, sizeof(Base)) != 0)
+    {
+        CachedBase = Base;
+        CachedStats = Base;
+        Modifiers(CachedStats);
+        CachedFrame = GFrameCounter;
+    }
+    return CachedStats;
+}
+
 FOpenWillowMayaState::ETickEvent FOpenWillowMayaState::Tick(float Now, float DeltaSeconds)
 {
     const FOpenWillowMayaStats S = Effective();
@@ -93,7 +106,7 @@ void FOpenWillowMayaState::Respawn(float Now)
 bool FOpenWillowMayaState::SetHealth(float NewMax, float NewCurrent, float Now)
 {
     Base.MaxHealth = NewMax;
-    Health = NewCurrent;
+    Health = NewCurrent >= NewMax ? Effective().MaxHealth : NewCurrent;
     if (Phase != EOpenWillowDownPhase::Injured || Health <= 0.f) return false;
     Phase = EOpenWillowDownPhase::Up;
     SecondWindAt = Now;
@@ -105,7 +118,7 @@ void FOpenWillowMayaState::EquipShield(float Capacity, float RechargeDelay, floa
     Base.ShieldCapacity = FMath::Max(0.f, Capacity);
     Base.ShieldRechargeDelay = FMath::Max(0.f, RechargeDelay);
     Base.ShieldRechargeRate = FMath::Max(0.f, RechargeRate);
-    Shield = bStartFull ? Base.ShieldCapacity : 0.f;
+    Shield = bStartFull ? Effective().ShieldCapacity : 0.f;
     LastDamageAt = Now;
 }
 

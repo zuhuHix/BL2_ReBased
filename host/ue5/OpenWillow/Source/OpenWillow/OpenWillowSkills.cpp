@@ -4,6 +4,7 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "OpenWillowWalker.h"
 
 bool UOpenWillowSkills::LoadTree(const FString& File)
 {
@@ -47,7 +48,7 @@ bool UOpenWillowSkills::LoadTree(const FString& File)
     // skilltree_<class>.json -> skilleffects_<class>.json in the same folder.
     const FString EffectsFile = FPaths::Combine(FPaths::GetPath(File), FPaths::GetCleanFilename(File).Replace(TEXT("skilltree_"), TEXT("skilleffects_")));
     FString Error;
-    ++GradeVersion;
+    GradesChanged();
     if (Effects.Load(EffectsFile, Error))
     {
         UE_LOG(LogTemp, Display, TEXT("OpenWillow skill effects: %d skills from %s"), Effects.GetSkills().Num(), *EffectsFile);
@@ -153,7 +154,7 @@ bool UOpenWillowSkills::TrySpend(int32 Branch, int32 Tier, int32 Cell, FString& 
         if (ActionGrade >= ActionMaxGrade) { OutReason = TEXT("action skill at max grade"); return false; }
         if (AvailablePoints() < 1) { OutReason = TEXT("no skill points"); return false; }
         ++ActionGrade;
-        ++GradeVersion;
+        GradesChanged();
         return true;
     }
     if (!Branches.IsValidIndex(Branch) || !Branches[Branch].IsValidIndex(Tier))
@@ -176,8 +177,14 @@ bool UOpenWillowSkills::TrySpend(int32 Branch, int32 Tier, int32 Cell, FString& 
         return false;
     }
     ++Skill->Grade;
-    ++GradeVersion;
+    GradesChanged();
     return true;
+}
+
+void UOpenWillowSkills::GradesChanged()
+{
+    ++GradeVersion;
+    if (const AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner())) Maya->GetMayaState().InvalidateEffective();
 }
 
 int32 UOpenWillowSkills::ResetTree()
@@ -187,7 +194,7 @@ int32 UOpenWillowSkills::ResetTree()
     for (TArray<FTier>& Branch : Branches)
         for (FTier& Tier : Branch)
             for (FSkill& Skill : Tier.Skills) Skill.Grade = 0;
-    ++GradeVersion;
+    GradesChanged();
     return Refund;
 }
 
@@ -296,6 +303,6 @@ bool UOpenWillowSkills::RestoreProgression(const FJsonObject& Data, FString& Out
     Level = NewLevel;
     Experience = NewExperience;
     ActionGrade = NewActionGrade;
-    ++GradeVersion;
+    GradesChanged();
     return true;
 }

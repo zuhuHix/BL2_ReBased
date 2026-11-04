@@ -54,8 +54,10 @@ public:
     FOpenWillowMayaStats Base;
     // The skills lane's modifiers (UOpenWillowSkills installs them; unset: none). They read Base, never Effective().
     TFunction<void(FOpenWillowMayaStats&)> Modifiers;
-    // The stats the rules use: Base with the skills lane's modifiers.
-    FOpenWillowMayaStats Effective() const { FOpenWillowMayaStats S = Base; if (Modifiers) Modifiers(S); return S; }
+    // The stats the rules use: Base with the skills lane's modifiers. Computed once per frame (and again when Base
+    // changes), so every read in a frame sees the same numbers; InvalidateEffective forces a recompute (grade changes).
+    FOpenWillowMayaStats Effective() const;
+    void InvalidateEffective() const { CachedFrame = MAX_uint64; }
 
     float Health = 400.f;
     float Shield = 0.f;
@@ -80,7 +82,8 @@ public:
     bool SecondWind(float Now);
     // Full health and shield, the successive-injury counter reset (ResurrectPlayer), up again.
     void Respawn(float Now);
-    // New maximum and current health (a level change). A refill while Injured ends the down state like a second wind
+    // New maximum and current health (a level change); a refill (current at or above the new maximum) fills to the
+    // effective maximum, skill modifiers included. A refill while Injured ends the down state like a second wind
     // (widely reported in game, UNVERIFIED). Returns true when it did.
     bool SetHealth(float NewMax, float NewCurrent, float Now);
     // An equipped shield (capacity 0: none). bStartFull fills it (the session's first shield); otherwise it starts empty and
@@ -98,6 +101,8 @@ public:
 
 private:
     void GoDown(float Now);
+    mutable FOpenWillowMayaStats CachedStats, CachedBase;
+    mutable uint64 CachedFrame = MAX_uint64;
 };
 
 // The entry point for anything in the world that hurts the player (the range lane's enemies, hazards): finds the player
