@@ -154,3 +154,15 @@ removes every drop with the range.
 `ow.RangeLoot normal|always|off`: `always` tries every weapon, money and ammo pool (for testing guns), `off` drops nothing. The range pickups (money,
 ammo) are engine-shape stand-ins collected on touch. Test steps: loot_roll, loot_money_pickup, loot_weapon_item (may SKIP without the weapon
 generator manifest), loot_off, loot_seeded_roll.
+
+## Batch 6 (pc-hummer, 2026-11-04) and the pinned spot
+
+- **Default spot.** The survey accepted 2 of 8 candidates; the hub picked one from the frames, the only one with open snow and no buildings
+  (floor `M_TerrainBlend`). The choice is kept in ignored local data, never as coordinates in a tracked file (see "Where the spot comes from").
+- **AI steps lay out from home.** approach and forget read level 1 in batch 6. Each step placed Maya relative to enemy 0 where it stood, and the
+  earlier steps' chases had moved it, so the placements could land outside the den's ThreatRadius or PatrolRadius from its centre (cause inferred
+  from the rules; the batch log was not read here). Every AI step now starts with enemy 0 back home, facing the spot, with no target or chase and
+  its patrol held for 3 s (a test fixture), and the threat checks log the scene (Maya's distances to the enemy and the den centre, the radii).
+- **Gun drops in `always` mode** try up to 8 seeds until the weapon pool gives a gun (the pool also holds shields and grenade mods, and a pick that is
+  not a gun drops nothing); each try's drops are logged. Normal mode keeps the one stock roll. `-owrangeloot=always|normal|off` sets the mode at
+  start-up (for the slice gate, whose kill in range mode otherwise has the stock 0.085 gun chance).

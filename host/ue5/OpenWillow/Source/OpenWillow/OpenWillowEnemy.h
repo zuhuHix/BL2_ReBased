@@ -38,6 +38,9 @@ public:
     // The range's threat record (shared by the range's enemies). Null: the enemy patrols only.
     void SetDen(FOpenWillowThreatDen* InDen) { Den = InDen; }
     const FOpenWillowEnemyBrain& GetBrain() const { return Brain; }
+    // Test fixture (the range test's AI steps): the enemy back at home at full health, facing Yaw, with no target, no swing and
+    // no chase, and its patrol held for HoldSeconds, so each step's scene is laid out from the same place.
+    void ResetForAITest(float Now, float Yaw, float HoldSeconds);
     // Hits from Maya (her pawn, its controller, or an actor she instigated) set the "hit by Maya" flag; the brain reads it.
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator,
         AActor* DamageCauser) override;

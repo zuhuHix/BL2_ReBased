@@ -457,6 +457,14 @@ void UOpenWillowRangeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
     bTestMode = FParse::Param(FCommandLine::Get(), TEXT("owrangetest"));
     bSurveyMode = FParse::Param(FCommandLine::Get(), TEXT("owrangesurvey"));
+    FString LootSwitch;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrangeloot="), LootSwitch))
+    {
+        if (LootSwitch.Equals(TEXT("always"), ESearchCase::IgnoreCase)) LootMode = EOpenWillowRangeLootMode::Always;
+        else if (LootSwitch.Equals(TEXT("off"), ESearchCase::IgnoreCase)) LootMode = EOpenWillowRangeLootMode::Off;
+        else LootMode = EOpenWillowRangeLootMode::Normal;
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE loot mode from the command line: %s"), *LootSwitch);
+    }
     if (bTestMode && bSurveyMode)
     {
         UE_LOG(LogTemp, Warning, TEXT("OWRANGE -owrangetest and -owrangesurvey are exclusive: the survey is off"));
@@ -1262,13 +1270,25 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         TeleportMaya(World, Floor, Yaw);
         return true;
     };
+    // The scene of a check, for its log line: Maya's distance from E0 and from the den's centre, E0's distance from home, the den's radii.
+    auto Scene = [this, Walker, E0]()
+    {
+        const FVector Maya = Walker->GetActorLocation();
+        const float FromDen = float(FVector2D::Distance(FVector2D(Maya.X, Maya.Y), Den.Centre));
+        return FString::Printf(TEXT("maya_to_e0=%.0f maya_from_den=%.0f (threat %.0f, patrol %.0f) e0_from_home=%.0f ai=%d passive=%d down=%d"),
+            FVector::Dist(Maya, E0->GetActorLocation()), FromDen, Den.ThreatRadius, Den.PatrolRadius,
+            FVector::Dist2D(E0->GetActorLocation(), E0->GetHome()), E0->IsAIEnabled() ? 1 : 0, E0->IsPassive() ? 1 : 0,
+            Walker->IsDown() ? 1 : 0);
+    };
     // The enemy's facing, horizontal.
     auto Forward = [](const AOpenWillowEnemy* Enemy) { return FRotator(0.f, Enemy->GetActorRotation().Yaw, 0.f).Vector(); };
     auto YawToward = [](const FVector& From, const FVector& To) { return (To - From).Rotation().Yaw; };
-    auto Reset = [this, Pawn](const TCHAR* Why)
+    auto Reset = [this, Pawn, E0, Now](const TCHAR* Why)
     {
         Den.ResetRecord();
         UE_LOG(LogTemp, Display, TEXT("OWRANGE threat reset (test, %s) level=1"), Why);
+        // E0 back home, facing the spot as built, its patrol held 3 s: every step lays its scene out from the same place.
+        E0->ResetForAITest(Now, (SpotNow - E0->GetHome()).Rotation().Yaw, 3.f);
         // Test fixture: Maya back to full health before each step, so the earlier steps' blows cannot put her down
         // (ApplyScriptHealth sets the maximum and current health; it does not raise a downed Maya, which the steps report).
         if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(Pawn); Maya && !Maya->IsDown())
@@ -1311,8 +1331,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     case 17:
     {
         if (Now - StepStart < 0.5f) return;
-        TestCheck(TEXT("notice_proximity"), Den.Level >= Seen, FString::Printf(TEXT("level %d, %.2f s after the teleport (500 uu behind)"),
-            Den.Level, Now - StepStart));
+        TestCheck(TEXT("notice_proximity"), Den.Level >= Seen, FString::Printf(TEXT("level %d, %.2f s after the teleport (500 uu behind), %s"),
+            Den.Level, Now - StepStart, *Scene()));
         TestStep = 18;
         return;
     }
@@ -1405,7 +1425,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         if (Now - StepStart < 2.f) return;
         const float Gap = FVector::Dist2D(E0->GetActorLocation(), Walker->GetActorLocation());
         TestCheck(TEXT("approach"), TestDistance - Gap >= 300.f && Den.Level >= Seen,
-            FString::Printf(TEXT("closed %.0f uu in 2 s (%.0f to %.0f), level %d"), TestDistance - Gap, TestDistance, Gap, Den.Level));
+            FString::Printf(TEXT("closed %.0f uu in 2 s (%.0f to %.0f), level %d, %s"), TestDistance - Gap, TestDistance, Gap, Den.Level, *Scene()));
         TestStep = 26;
         return;
     }
@@ -1580,7 +1600,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         if (Now - StepStart < 0.5f) return;
         if (Den.Level < Seen)
         {
-            TestCheck(TEXT("forget"), false, TEXT("not raised by the proximity rule"));
+            TestCheck(TEXT("forget"), false, FString::Printf(TEXT("not raised by the proximity rule, %s"), *Scene()));
             TestStep = 35;
             return;
         }
