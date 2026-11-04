@@ -5,6 +5,8 @@
 #include "OpenWillowFiring.h"
 #include "OpenWillowInventory.generated.h"
 
+class FJsonObject;
+
 // BL2 ammo pools, in the order the inventory screen lists them. The pool
 // names in the game data are Repeater_Pistol, Patrol_SMG, Combat_Rifle,
 // Combat_Shotgun, Sniper_Rifle, Rocket_Launcher and Grenade_Protean.
@@ -271,6 +273,9 @@ public:
     const TArray<FOpenWillowWeaponItem>& Items() const { return Backpack; }
     const TArray<FOpenWillowGearItem>& GearItemList() const { return GearItems; }
     FString StateJson(int32 Level) const;
+    // One backpack or equipped item as the inventory page receives it (StateJson's "items" entries).
+    static TSharedRef<FJsonObject> WeaponItemJson(const FOpenWillowWeaponItem& Item);
+    static TSharedRef<FJsonObject> GearItemJson(const FOpenWillowGearItem& Item);
     static FString StableId(const FOpenWillowWeaponItem& Item)
     {
         return Item.InstanceId.IsEmpty() ? Item.Id : Item.InstanceId;
