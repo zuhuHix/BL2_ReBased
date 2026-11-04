@@ -126,7 +126,7 @@ try {
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', '-owvendortest', "-abslog=`"$log`"")
     $arguments += "-owweapongen=`"$((Resolve-Path -LiteralPath $WeaponGen).Path)`""
     if ($Items) { $arguments += "-owitems=`"$((Resolve-Path -LiteralPath $Items).Path)`"" }
-    if ($pass -eq 1) { $arguments += "-owmoney=$Money" }
+    if ($pass -eq 1) { $arguments += "-owmoney=$Money"; $arguments += '-owerid=7' }   # invented eridium, checked across the restart
     $started = Get-Date
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Output "Launched game pid $($process.Id) (run $pass of $($passes.Count), -owvendortest); log: $log"

@@ -3,6 +3,7 @@
 #include "OpenWillowMover.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowVendor.h"
+#include "OpenWillowCurrency.h"
 #include "Engine/DamageEvents.h"
 #include "GameFramework/WorldSettings.h"
 #include "OpenWillowArmsAnimInstance.h"
@@ -630,8 +631,12 @@ void AOpenWillowWalker::BeginPlay()
         && !Inventory->SetWeaponSlotsUnlocked(SlotsUnlocked))
         UE_LOG(LogTemp, Warning, TEXT("OpenWillow ignored -owslots=%d (must be 2..4)"), SlotsUnlocked);
     int32 Purse = 0;
-    if (FParse::Value(FCommandLine::Get(), TEXT("owmoney="), Purse)) Inventory->SetMoney(Purse);
-    if (FParse::Value(FCommandLine::Get(), TEXT("owerid="), Purse)) Inventory->SetEridium(Purse);
+    // Strict: a whole number in range, else warned and ignored ("12junk" is not 12).
+    bool bPurseInvalid = false;
+    if (FOpenWillowCurrencySave::ParsePurseSwitch(TEXT("owmoney="), Purse, bPurseInvalid)) Inventory->SetMoney(Purse);
+    else if (bPurseInvalid) UE_LOG(LogTemp, Warning, TEXT("OpenWillow ignored -owmoney= (not a whole number in range)"));
+    if (FOpenWillowCurrencySave::ParsePurseSwitch(TEXT("owerid="), Purse, bPurseInvalid)) Inventory->SetEridium(Purse);
+    else if (bPurseInvalid) UE_LOG(LogTemp, Warning, TEXT("OpenWillow ignored -owerid= (not a whole number in range)"));
     if (bCombatShotsRun)
     {
         // Test-only demo purse so the capture shows the currency bar. These

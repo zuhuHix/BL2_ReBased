@@ -91,7 +91,13 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
     restore, is refused whole. Nothing is applied and saving stays off, so the file is never overwritten.
   - Writes go to a unique temp file and replace the save in one step (Windows `ReplaceFileW`, which keeps the previous
     save as `.bak`).
-  - The path must resolve, links followed, inside this checkout's `local/`.
+  - The new file is flushed first, and if the replace stops half way the host finishes the move or puts the backup back.
+    A load that finds only the `.bak` reads it, and logs that it did.
+  - The path must resolve, links followed, inside this checkout's `local/`. The deepest existing folder is checked
+    before any folder is created, and the target folder is checked again before every write. A small check-then-use
+    gap remains: a link swapped in between that check and the write is not caught. That is accepted for a local
+    development tool; the checks are not handle-based.
+  - With no vendor machines spawned (no usable `-owvendors`) there is no manifest identity, so saving stays off.
   - A `-owmoney=` / `-owerid=` value that is not a whole number in range is ignored with a warning.
   - Restock counts are bounded on load (1,000,000) and the increment saturates.
 - PR 1 stocks guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory

@@ -281,6 +281,16 @@ def grade_persist(first_text, second_text):
     else:
         out.add('persist_money', 'PASS', f'money {after["money"]} carried over')
 
+    if before.get('eridium') is None or after.get('eridium') is None or not load:
+        out.add('persist_eridium', 'MISSING', 'no eridium in a state report or no load line')
+    elif not (int(before['eridium']) == int(after['eridium']) == int(load.group(2))):
+        out.add('persist_eridium', 'FAIL', f'eridium {before["eridium"]} at the end of the first launch, loaded '
+                f'{load.group(2)}, {after["eridium"]} at the start of the second')
+    elif int(after['eridium']) == 0:
+        out.add('persist_eridium', 'MISSING', 'eridium is 0 in both launches (seed it with -owerid in the first)')
+    else:
+        out.add('persist_eridium', 'PASS', f'eridium {after["eridium"]} carried over')
+
     key = lambda row: row.get('gun') or row.get('id')
     before_shelf = [key(row) for row in before.get('shop') or []]
     after_shelf = [key(row) for row in after.get('shop') or []]

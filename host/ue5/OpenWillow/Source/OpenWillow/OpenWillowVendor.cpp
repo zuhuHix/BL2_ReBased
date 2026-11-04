@@ -288,7 +288,8 @@ void FOpenWillowVendorStock::Restock(double Now)
     bStocked = true;
     StockedAt = Now;
     const uint32 RestockSeed = Seed + uint32(RestockCount) * 1009u; // unsigned: wraps by definition
-    if (RestockCount < MAX_int32) ++RestockCount;
+    // Saturates at the bound a save accepts, so a saved count always loads again.
+    if (RestockCount < FOpenWillowCurrencySave::MaxRestockCount) ++RestockCount;
     if (Kind != TEXT("weapons"))
     {
         Notice = TEXT("Not stocked yet");
@@ -875,10 +876,25 @@ void UOpenWillowVendorSubsystem::LoadCurrency(AOpenWillowWalker& Walker)
     CurrencyInventory = Inventory;
     FOpenWillowCurrencySave Save;
     bool bHaveFile = false;
-    if (IFileManager::Get().FileExists(*CurrencyPath))
+    // Without a manifest identity (no usable -owvendors) a save could never be checked: keep saving off.
+    if (ManifestId.IsEmpty())
+    {
+        bCurrencyRefused = true;
+        UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY off: no vendor machines spawned (-owvendors missing or unusable), so a save cannot be checked"));
+        return;
+    }
+    // A missing save with a backup beside it (a replace interrupted half way) is read from the backup; the next save writes
+    // the main file again.
+    FString ReadPath = CurrencyPath;
+    if (!IFileManager::Get().FileExists(*CurrencyPath) && IFileManager::Get().FileExists(*(CurrencyPath + TEXT(".bak"))))
+    {
+        ReadPath = CurrencyPath + TEXT(".bak");
+        UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY %s is missing; reading the backup %s"), *CurrencyPath, *ReadPath);
+    }
+    if (IFileManager::Get().FileExists(*ReadPath))
     {
         FString Text, Error;
-        if (!FFileHelper::LoadFileToString(Text, *CurrencyPath) || !FOpenWillowCurrencySave::FromJson(Text, Save, Error))
+        if (!FFileHelper::LoadFileToString(Text, *ReadPath) || !FOpenWillowCurrencySave::FromJson(Text, Save, Error))
         {
             bCurrencyRefused = true;
             UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY load refused: %s (%s); saves are off so the file is not overwritten"),
