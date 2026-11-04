@@ -421,13 +421,14 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         if (Enemy && Enemy->IsAutoAimTarget())
         {
+            LastEnemyLocation = Enemy->GetActorLocation();   // where it stands while alive (a dead actor may be moved away)
             if (StepTime < KillTimeout) { if (ShootAt(Enemy, 0.f)) ++KillShots; return; }
             FailLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s still alive after %.0fs and %d shots (health %.0f%%)"),
                 *Enemy->GetName(), StepTime, KillShots, 100.f * Enemy->HealthFraction()));
         }
         else if (Enemy)
         {
-            KillLocation = Enemy->GetActorLocation();
+            KillLocation = LastEnemyLocation;
             const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
             PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs"), *Enemy->GetName(), KillShots,
                 Held ? *Held->Name : TEXT("?"), StepTime));
@@ -475,9 +476,17 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
                 if (!PickupsBeforeKill.Contains(*It) && FVector::Dist(It->GetActorLocation(), KillLocation) < LootRadius) { Drop = *It; break; }
         if (!Drop && StepTime < LootWait) return;
+        // A new pickup elsewhere is a drop in the wrong place: a FAIL with where it is, not "no drop".
+        AOpenWillowInventoryPickup* FarDrop = nullptr;
+        if (!Drop)
+            for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
+                if (!PickupsBeforeKill.Contains(*It)) { FarDrop = *It; break; }
         if (bLootForced) Fixture(TEXT("guaranteed loot roll"));
         if (Drop) PassLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("pickup \"%s\" %.0f uu from the corpse"), *Drop->DisplayName(),
             FVector::Dist(Drop->GetActorLocation(), KillLocation)));
+        else if (FarDrop) FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("a pickup \"%s\" appeared after the kill, but at %s, %.0f uu from the corpse at %s (more than %.0f)"),
+            *FarDrop->DisplayName(), *FarDrop->GetActorLocation().ToCompactString(), FVector::Dist(FarDrop->GetActorLocation(), KillLocation),
+            *KillLocation.ToCompactString(), LootRadius));
         else MissingLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no pickup appeared within %.0f uu of the kill in %.0fs: no loot drop on kill yet (range lane, loot PR3)"),
             LootRadius, LootWait));
         Next(EStep::Pickup);
@@ -607,6 +616,12 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         {
             if (W->IsPhaselockActive() && StepTime < 20.f) return;
             bAcceptStarted = true;
+            // The range is done with: clear it (fixture) so no range actor takes the mission's shots or attacks Maya.
+            if (bRangeMode && IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeClear")))
+            {
+                GEngine->Exec(GetWorld(), TEXT("ow.RangeClear"));
+                Fixture(TEXT("range cleared before the mission"));
+            }
             StepTime = 0.f;
             return;
         }
