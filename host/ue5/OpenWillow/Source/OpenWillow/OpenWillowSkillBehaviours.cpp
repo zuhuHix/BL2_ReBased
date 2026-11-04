@@ -90,12 +90,13 @@ void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
 {
     AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner());
     if (!Maya || !GetWorld() || !Effects.IsLoaded() || Event.Instigator.Get() != Maya || !Event.Target.IsValid()) return;
-    if (Event.WeaponId.StartsWith(TEXT("skill:")) || Event.Kind == EOpenWillowHitKind::StatusTick) return;
+    if (Event.Source == EOpenWillowHitSource::Skill || Event.Source == EOpenWillowHitSource::Status
+        || Event.WeaponId.StartsWith(TEXT("skill:")) || Event.Kind == EOpenWillowHitKind::StatusTick) return;
     const float Now = GetWorld()->GetTimeSeconds();
     const float Applied = FMath::Max(0.f, Event.Applied);
-    // The game's Bullet or Rocket damage source: a Direct hit (a bullet, trace pellet or rocket body). Splash cannot be
-    // told apart from the other explosions yet, and Tediore throws (Throw) are not bullets, so neither counts.
-    const bool bBulletOrRocket = Event.Kind == EOpenWillowHitKind::Direct;
+    // The game's Bullet or Rocket damage source (the hit event's Source, set by the shooter): bullets and trace pellets,
+    // and a rocket's explosion; not a bullet's impact explosion (Explosion), a Tediore throw (Throw) or status damage.
+    const bool bBulletOrRocket = Event.Source == EOpenWillowHitSource::Bullet || Event.Source == EOpenWillowHitSource::Rocket;
 
     // Life Tap (kill skill): Maya heals PlayerConvertDamageToHealingPercent (0.012 x grade while the kill-skill timer runs)
     // of the damage she deals. The conversion is native in the game (UNVERIFIED rule: applied damage x the fraction).
@@ -106,7 +107,7 @@ void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
         if (Convert > 0.f) Maya->Heal(Applied * Convert);
     }
 
-    // Cloud Kill: a bullet or rocket hit (Direct) on an enemy, when CloudKill_Feedback (5.5 s) is not running, leaves a corrosive
+    // Cloud Kill: a bullet or rocket hit on an enemy, when CloudKill_Feedback (5.5 s) is not running, leaves a corrosive
     // cloud at the enemy for 5 s: every 0.25 s radius 220, 0.25 x PlayerSkillDamage, no falloff.
     if (bBulletOrRocket && Now >= CloudKillReadyAt && GradeOfNamed(TEXT("CloudKill")) > 0)
     {
@@ -122,7 +123,7 @@ void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
         UE_LOG(LogTemp, Display, TEXT("OWSKILLFX Cloud Kill cloud at %s for 5 s"), *Where.ToCompactString());
     }
 
-    // Immolate: in Fight For Your Life (health below 1), each bullet or rocket hit (Direct) adds incendiary damage of 0.1 x grade x the hit's
+    // Immolate: in Fight For Your Life (health below 1), each bullet or rocket hit adds incendiary damage of 0.1 x grade x the hit's
     // damage to that enemy.
     if (const int32 G = bBulletOrRocket && Maya->IsDown() && Applied > 0.f ? GradeOfNamed(TEXT("Immolate")) : 0; G > 0)
     {
@@ -272,6 +273,7 @@ void UOpenWillowSkills::RunAction(const FAction& Action)
         // Sent as Splash: the dispatcher lets only Direct and Throw hits crit, and skill damage does not (UNVERIFIED).
         FOpenWillowHitEvent Event;
         Event.Kind = EOpenWillowHitKind::Splash;
+        Event.Source = EOpenWillowHitSource::Skill;
         Event.WeaponId = TEXT("skill:") + Action.Skill;
         Event.Damage = Action.Damage;
         Event.DamageType = Action.DamageType;
@@ -301,6 +303,7 @@ void UOpenWillowSkills::RunAction(const FAction& Action)
         if (FVector::Dist(TargetCentre, Centre) > Action.Radius) continue;
         FOpenWillowHitEvent Event;
         Event.Kind = EOpenWillowHitKind::Splash;
+        Event.Source = EOpenWillowHitSource::Skill;
         Event.WeaponId = TEXT("skill:") + Action.Skill;
         Event.Damage = Action.Damage;
         Event.DamageType = Action.DamageType;
