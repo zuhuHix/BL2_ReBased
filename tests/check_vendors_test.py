@@ -293,12 +293,19 @@ class MainTest(unittest.TestCase):
             self.assertEqual(code, 2)
 
 
-def second_launch(money, ids, reset=1195, load=True, featured=FEATURED):
+def second_launch(money, ids, reset=1195, load=True, featured=FEATURED, eridium=0, loaded_eridium=None):
     """The second launch: its OWCURRENCY load line and its first report (the saved purse, shelf and clock)."""
-    text = line(f'OWCURRENCY load money={money} eridium=0 machines=1') if load else ''
+    loaded = eridium if loaded_eridium is None else loaded_eridium
+    text = line(f'OWCURRENCY load money={money} eridium={loaded} machines=1') if load else ''
     doc = state(shelf(ids), money=money, featured=featured)
     doc['resetSeconds'] = reset
+    doc['eridium'] = eridium
     return text + state_line(doc)
+
+
+def seeded(log_text, eridium):
+    """A first launch whose reports carry this invented eridium amount."""
+    return log_text.replace('"eridium":0', f'"eridium":{eridium}')
 
 
 class PersistTest(unittest.TestCase):
@@ -315,6 +322,19 @@ class PersistTest(unittest.TestCase):
         checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS))
         for name in ('persist_load', 'persist_money', 'persist_shelf', 'persist_featured', 'persist_clock'):
             self.assertEqual(checks[name][0], 'PASS', name)
+
+    def test_seeded_eridium_carried_over_passes(self):
+        first = cv.grade_persist(seeded(good_log(), 7), second_launch(self.SAVED_MONEY, self.FIRST_IDS, eridium=7))
+        self.assertEqual({r[0]: r[1] for r in first.rows}['persist_eridium'], 'PASS')
+
+    def test_eridium_lost_on_load_fails(self):
+        first = cv.grade_persist(seeded(good_log(), 7),
+                                 second_launch(self.SAVED_MONEY, self.FIRST_IDS, eridium=0, loaded_eridium=0))
+        self.assertEqual({r[0]: r[1] for r in first.rows}['persist_eridium'], 'FAIL')
+
+    def test_unseeded_eridium_is_missing(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS))
+        self.assertEqual(checks['persist_eridium'][0], 'MISSING')
 
     def test_missing_load_line_fails(self):
         checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS, load=False))
