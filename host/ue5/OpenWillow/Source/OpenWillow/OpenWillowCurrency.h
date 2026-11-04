@@ -15,15 +15,20 @@ struct FOpenWillowCurrencyMachine
     bool bFeaturedBought = false;    // the featured item was bought since that restock
 };
 
-// The whole currency file: schema "openwillow-currency/1".
+// The whole currency file: schema "openwillow-currency/2" (version 1 had no manifest identity and is refused).
 struct FOpenWillowCurrencySave
 {
     static constexpr int32 MaxMachines = 256;
+    // Restock counts above this are refused on load (a session restocks at most once a minute; this is decades).
+    static constexpr int32 MaxRestockCount = 1000000;
     static constexpr int32 MaxBought = 64;
     static constexpr int32 MaxIdLength = 32;
 
     int32 Money = 0;
     int32 Eridium = 0;
+    // Identity of the machine set the save was written against (FOpenWillowCurrencySave::ManifestIdentity of the spawned
+    // machines). A save whose identity differs from the session's is incompatible and is never applied or overwritten.
+    FString Manifest;
     // Keyed by the machine id from vendors.json (for example "Sanctuary_P:WillowPopulationOpportunityPoint_1").
     TMap<FString, FOpenWillowCurrencyMachine> Machines;
 
@@ -33,9 +38,16 @@ struct FOpenWillowCurrencySave
     // or negative money, a restock count below 1, a reset clock above a day, too many machines or bought items). Out is
     // only written on success.
     static bool FromJson(const FString& Text, FOpenWillowCurrencySave& Out, FString& OutError);
-    // Writes Text to Path through "<Path>.tmp" and a move, so an interrupted write never leaves half a file.
+    // Writes Text to a unique temp file next to Path, then replaces Path in one step. On Windows that is ReplaceFileW
+    // (the previous good save is kept as "<Path>.bak", and Path is left as it was if the replace fails) or, for a first
+    // save, MoveFileExW with write-through. Never deletes Path before the new file is in place.
     static bool WriteFile(const FString& Path, const FString& Text, FString& OutError);
-    // The save must be a .json file inside a local/ folder of the checkout (ignored by git). OutFullPath is the
-    // normalised absolute path.
+    // The save must be a .json file inside this checkout's local/ folder (<repo>/local, from the project directory), after
+    // links are resolved: a junction or symlink that leads outside local/ is refused. OutFullPath is the absolute path.
     static bool ResolvePath(const FString& Given, FString& OutFullPath, FString& OutError);
+    // A strict whole-number command-line value in [0, MAX_int32] (for -owmoney= / -owerid=): false when the switch is
+    // absent; OutInvalid is set when it is present but not such a number ("oops", "12x", "-5", too large).
+    static bool ParsePurseSwitch(const TCHAR* Switch, int32& Out, bool& OutInvalid);
+    // Hex SHA-1 of the given lines in order (the manifest identity).
+    static FString ManifestIdentity(const TArray<FString>& Lines);
 };

@@ -114,6 +114,8 @@ struct FOpenWillowVendorStock
     // bought items off again and starts the reset clock at the saved seconds. Needs Load and Seed first. False with
     // OutError when the saved clock is out of range; the stock is then left as it was.
     bool Restore(const FOpenWillowCurrencyMachine& Saved, double Now, FString& OutError);
+    // The checks of Restore without changing anything (ranges and shelf ids), for validating a whole save first.
+    bool CanRestore(const FOpenWillowCurrencyMachine& Saved, FString& OutError) const;
 
     const FOpenWillowVendorItem* FindShopItem(const FString& Id) const;
 
@@ -196,6 +198,7 @@ private:
     void LoadCurrency(AOpenWillowWalker& Walker);
     void SaveCurrency();
     FString CurrencyPath;             // the resolved save path; empty = the feature is off
+    FString ManifestId;               // identity of the spawned machine set (see OnWorldBeginPlay)
     TWeakObjectPtr<UOpenWillowInventory> CurrencyInventory;
     bool bCurrencyReady = false;      // loaded (or there was no file) with the walker found: saves are allowed
     bool bCurrencyRefused = false;    // the file was unreadable or malformed: saves stay off so it is not overwritten

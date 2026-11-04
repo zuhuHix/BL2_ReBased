@@ -8,6 +8,9 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowVendor.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "OpenWillowCurrency.h"
 
 namespace
@@ -157,11 +160,14 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
 namespace
 {
 // A currency file with the given money and one machine row; the numbers are typed in as JSON text so bad values can be tried.
+// An invented 40-hex-digit manifest identity.
+const TCHAR* const SyntheticManifest = TEXT("0123456789abcdef0123456789abcdef01234567");
+
 FString SaveText(const TCHAR* Money, const TCHAR* RestockCount, const TCHAR* Seconds, const FString& BoughtList)
 {
-    return FString::Printf(TEXT("{\"schema\":\"openwillow-currency/1\",\"money\":%s,\"eridium\":0,\"machines\":{\"Synthetic:Point_0\":"
+    return FString::Printf(TEXT("{\"schema\":\"openwillow-currency/2\",\"money\":%s,\"eridium\":0,\"manifest\":\"%s\",\"machines\":{\"Synthetic:Point_0\":"
         "{\"restock_count\":%s,\"seconds_to_reset\":%s,\"bought\":[%s],\"featured_bought\":false}}}"),
-        Money, RestockCount, Seconds, *BoughtList);
+        Money, SyntheticManifest, RestockCount, Seconds, *BoughtList);
 }
 
 // N invented shelf ids as JSON strings, comma-separated.
@@ -182,6 +188,7 @@ bool FOpenWillowVendorPersistTest::RunTest(const FString& Parameters)
     FOpenWillowCurrencySave Save;
     Save.Money = 1234;
     Save.Eridium = 5;
+    Save.Manifest = SyntheticManifest;
     FOpenWillowCurrencyMachine Row;
     Row.RestockCount = 3;
     Row.SecondsToReset = 900;
@@ -194,6 +201,7 @@ bool FOpenWillowVendorPersistTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("a written save reads back"), FOpenWillowCurrencySave::FromJson(Save.ToJson(), Back, Error));
     TestEqual(TEXT("money round trip"), Back.Money, 1234);
     TestEqual(TEXT("eridium round trip"), Back.Eridium, 5);
+    TestEqual(TEXT("manifest round trip"), Back.Manifest, FString(SyntheticManifest));
     const FOpenWillowCurrencyMachine* Got = Back.Machines.Find(TEXT("Synthetic:Point_0"));
     TestTrue(TEXT("machine row round trip"), Got != nullptr);
     if (Got)
@@ -217,6 +225,9 @@ bool FOpenWillowVendorPersistTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("negative money is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("-1"), TEXT("1"), TEXT("0"), TEXT("")), Untouched, Error));
     TestFalse(TEXT("fractional money is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1.5"), TEXT("1"), TEXT("0"), TEXT("")), Untouched, Error));
     TestFalse(TEXT("money above int32 is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("2147483648"), TEXT("1"), TEXT("0"), TEXT("")), Untouched, Error));
+    TestFalse(TEXT("a version-1 save (no manifest identity) is refused"), FOpenWillowCurrencySave::FromJson(
+        TEXT("{\"schema\":\"openwillow-currency/1\",\"money\":1,\"eridium\":0,\"machines\":{}}"), Untouched, Error));
+    TestFalse(TEXT("a restock count above the bound is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("2147483647"), TEXT("0"), TEXT("")), Untouched, Error));
     TestFalse(TEXT("restock count 0 is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("0"), TEXT("0"), TEXT("")), Untouched, Error));
     TestFalse(TEXT("reset clock above a day is refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("1"), TEXT("86401"), TEXT("")), Untouched, Error));
     TestFalse(TEXT("too many bought ids are refused"), FOpenWillowCurrencySave::FromJson(SaveText(TEXT("1"), TEXT("1"), TEXT("0"), BoughtListOf(65)), Untouched, Error));
@@ -238,6 +249,42 @@ bool FOpenWillowVendorPersistTest::RunTest(const FString& Parameters)
     TooLate.SecondsToReset = 1201; // above the 20-minute interval
     TestFalse(TEXT("a clock above the interval is refused"), Shelf.Restore(TooLate, 1000.0, Error));
     TestEqual(TEXT("refused restore leaves the restock count"), Shelf.RestockCount, 3);
+
+    // A bought id that is not a shelf id is refused by the whole-file validation (CanRestore), before anything is applied.
+    FOpenWillowCurrencyMachine Odd = Row;
+    Odd.Bought = {TEXT("stock_99")};
+    TestFalse(TEXT("a bought id off the shelf range is refused"), Shelf.CanRestore(Odd, Error));
+    Odd.Bought = {TEXT("featured")};
+    TestFalse(TEXT("a non-shelf bought id is refused"), Shelf.CanRestore(Odd, Error));
+
+    // The manifest identity is stable for the same lines and differs for different ones.
+    const FString IdA = FOpenWillowCurrencySave::ManifestIdentity({TEXT("stage 8"), TEXT("machine a")});
+    TestEqual(TEXT("identity is 40 hex digits"), IdA.Len(), 40);
+    TestEqual(TEXT("identity is stable"), FOpenWillowCurrencySave::ManifestIdentity({TEXT("stage 8"), TEXT("machine a")}), IdA);
+    TestNotEqual(TEXT("identity follows the machine set"), FOpenWillowCurrencySave::ManifestIdentity({TEXT("stage 8"), TEXT("machine b")}), IdA);
+
+    // Paths: only .json files under this checkout's local/ are accepted.
+    FString Resolved;
+    TestFalse(TEXT("a local/ folder elsewhere is refused"), FOpenWillowCurrencySave::ResolvePath(TEXT("C:/temp/local/x.json"), Resolved, Error));
+    const FString Inside = FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/vendors/automation/currency_test.json"));
+    TestTrue(TEXT("a file under <repo>/local is accepted"), FOpenWillowCurrencySave::ResolvePath(Inside, Resolved, Error));
+    TestFalse(TEXT("a non-json file is refused"), FOpenWillowCurrencySave::ResolvePath(Inside + TEXT(".txt"), Resolved, Error));
+
+    // Writing twice replaces the file in one step and keeps the previous good save as .bak.
+    FOpenWillowCurrencySave::ResolvePath(Inside, Resolved, Error);
+    IFileManager::Get().Delete(*Resolved, false, true, true);
+    IFileManager::Get().Delete(*(Resolved + TEXT(".bak")), false, true, true);
+    TestTrue(TEXT("first write"), FOpenWillowCurrencySave::WriteFile(Resolved, TEXT("first"), Error));
+    TestTrue(TEXT("second write"), FOpenWillowCurrencySave::WriteFile(Resolved, TEXT("second"), Error));
+    FString Text;
+    FFileHelper::LoadFileToString(Text, *Resolved);
+    TestEqual(TEXT("the file holds the second write"), Text, FString(TEXT("second")));
+#if PLATFORM_WINDOWS
+    FFileHelper::LoadFileToString(Text, *(Resolved + TEXT(".bak")));
+    TestEqual(TEXT("the backup holds the first write"), Text, FString(TEXT("first")));
+#endif
+    IFileManager::Get().Delete(*Resolved, false, true, true);
+    IFileManager::Get().Delete(*(Resolved + TEXT(".bak")), false, true, true);
 
     return true;
 }
