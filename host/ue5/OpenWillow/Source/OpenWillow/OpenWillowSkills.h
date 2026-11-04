@@ -133,8 +133,10 @@ private:
 
     TArray<TArray<FTier>> Branches;
     FOpenWillowSkillEffects Effects;
-    // Bumped by every grade change (spend, respec, load); caches compare against it.
+    // Bumped by every grade change (spend, respec, load); caches compare against it. GradesChanged also makes Maya's
+    // survival stats recompute.
     int32 GradeVersion = 0;
+    void GradesChanged();
     mutable int32 CritScaleVersion = -1;
     mutable float CritScale = 1.f;
     FRandomStream Random;
@@ -161,6 +163,12 @@ private:
     // FOpenWillowMayaState::Modifiers: the skills' stat modifiers on Maya's survival stats.
     void ApplyStatModifiers(struct FOpenWillowMayaStats& Stats) const;
     mutable bool bApplyingStats = false;   // re-entry guard
+public:
+    // While ApplyStatModifiers runs: the effective maximum health computed so far (formulas on max health, such as
+    // Sustenance's missing health and Elated's regeneration, read it); -1 otherwise (they read the pool's Base).
+    float StatsMaxHealth() const { return ComputedMaxHealth; }
+private:
+    mutable float ComputedMaxHealth = -1.f;
 public:
     // Recompense (AOpenWillowWalker::ApplyDamageToPlayer hook): Maya lost Damage health to Causer (or Instigator's pawn).
     void OnMayaDamaged(AActor* Causer, class AController* Instigator, float Damage);

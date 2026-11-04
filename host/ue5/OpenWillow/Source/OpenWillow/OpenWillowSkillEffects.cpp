@@ -339,7 +339,12 @@ FOpenWillowSkillEffects::FWorld WorldOf(const AOpenWillowWalker& Maya)
         // Pool maxima come from the stats' Base: the effective ones are what these modifiers produce (Effective() would
         // recurse into them).
         if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue_Player")
-            || Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue")) { Out = Maya.GetMayaState().Base.MaxHealth; return true; }
+            || Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue"))
+        {
+            const float Computed = Maya.GetSkills() ? Maya.GetSkills()->StatsMaxHealth() : -1.f;
+            Out = Computed >= 0.f ? Computed : Maya.GetMayaState().Base.MaxHealth;
+            return true;
+        }
         if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthCurrentValue")) { Out = Maya.GetHealth(); return true; }
         if (Attribute == TEXT("D_Attributes.ShieldResourcePool.ShieldMaxValue")) { Out = Maya.GetMayaState().Base.ShieldCapacity; return true; }
         if (Attribute == TEXT("D_Attributes.ShieldResourcePool.ShieldCurrentValue")) { Out = Maya.GetShield(); return true; }

@@ -119,10 +119,24 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         Run(S, 300.f, 305.f);
         TestTrue(TEXT("boosted pools fill past the base maxima"), S.Health > 100.f && S.Shield > 50.f);
         bBoost = false;
+        S.InvalidateEffective();   // what the skills component does on a grade change
         S.Tick(305.1f, 1.f / 60.f);
         TestTrue(TEXT("modifier ended: health and shield clamp to the base maxima"), S.Health == 100.f && S.Shield == 50.f);
+        bBoost = true;
+        S.InvalidateEffective();
+        S.SetHealth(120.f, 120.f, 306.f);
+        TestTrue(TEXT("a level-up refill fills to the effective maximum"), S.Health == 180.f && S.Base.MaxHealth == 120.f);
+        S.SetHealth(120.f, 60.f, 307.f);
+        TestTrue(TEXT("a non-refill keeps the given current health"), S.Health == 60.f);
+        int32 Calls = 0;
+        S.Modifiers = [&Calls](FOpenWillowMayaStats& Stats) { ++Calls; Stats.GroundSpeed += 1.f; };
+        S.InvalidateEffective();
+        const float First = S.Effective().GroundSpeed, Second = S.Effective().GroundSpeed;
+        TestTrue(TEXT("one evaluation per frame: reads agree"), Calls == 1 && First == Second);
+        S.Base.GroundSpeed += 10.f;
+        TestTrue(TEXT("a Base change recomputes within the frame"), S.Effective().GroundSpeed == S.Base.GroundSpeed + 1.f && Calls == 2);
         S.Modifiers = nullptr;
-        TestTrue(TEXT("no modifiers: Effective is Base"), S.Effective().MaxHealth == 100.f);
+        TestTrue(TEXT("no modifiers: Effective is Base"), S.Effective().MaxHealth == 120.f);
     }
     return true;
 }

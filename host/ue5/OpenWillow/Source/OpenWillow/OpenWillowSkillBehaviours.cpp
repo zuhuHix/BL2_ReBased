@@ -71,7 +71,10 @@ void UOpenWillowSkills::ApplyStatModifiers(FOpenWillowMayaStats& Stats) const
     if (bApplyingStats || !Maya || !Effects.IsLoaded()) return;
     TGuardValue<bool> Guard(bApplyingStats, true);
     using namespace OpenWillowSkillEffects;
+    // The max-health modifier reads the pool's Base; the formulas after it (Sustenance's missing health, Elated's share of
+    // the maximum) read the effective maximum just computed.
     Stats.MaxHealth = Apply(Maya, Attr::HealthMax, Stats.MaxHealth);
+    TGuardValue<float> Max(ComputedMaxHealth, Stats.MaxHealth);
     Stats.HealthRegenRate = Apply(Maya, Attr::HealthRegen, Stats.HealthRegenRate);
     if (Stats.ShieldCapacity > 0.f)
     {
