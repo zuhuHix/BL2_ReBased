@@ -23,7 +23,9 @@ param(
 # In-engine check of the vending machines (OpenWillowVendor.cpp, the vendors slice). One windowed host run in Sanctuary_P
 # with Maya, -owvendors=<vendors.json>, -owmoney=<Money> and -owvendortest: once the walker exists the host opens the
 # first weapons machine, reports, buys shelf item 0, reports, sells that gun back (ow.Vendor.SellLast), reports, restocks,
-# reports, takes OWVendor_open.png and quits (UOpenWillowVendorSubsystem::TickVendorTest). That first launch saves its money and
+# reports, takes OWVendor_open.png; then the first items (Ammo Dump) machine: reports, buys shelf row 0 (ammo), reports;
+# then the first health machine: reports, buys shelf row 0 (a heal), reports; and quits
+# (UOpenWillowVendorSubsystem::TickVendorTest). That first launch saves its money and
 # shelf to local/vendors/currency.json (-owcurrencysave). A second launch (unless -SkipPersist) loads that file, with no
 # -owmoney, and runs the same sequence; tools/check_vendors.py compares its first report with the first launch's last one.
 # Then the UE automation tests OpenWillow.Vendor.* (Stock and Persist) run in their own -nullrhi launch. tools/check_vendors.py
@@ -130,20 +132,14 @@ try {
     $started = Get-Date
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Output "Launched game pid $($process.Id) (run $pass of $($passes.Count), -owvendortest); log: $log"
-    # The host quits by itself after the sequence; if it hangs past the deadline, or after four state reports and the
-    # screenshot, this run's own game process is stopped.
+    # The host quits by itself after the sequence ("OWVENDTEST done"); if it hangs past the deadline, this run's own game
+    # process is stopped.
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (!$process.HasExited -and (Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
         if (Test-Path -LiteralPath $log) {
             $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
-            $reports = ([regex]::Matches("$text", 'OWVENDSTATE \{')).Count
-            $shot = $false
-            if (Test-Path -LiteralPath $shotsSource) {
-                $shot = [bool](Get-ChildItem -LiteralPath $shotsSource -Filter '*.png' -ErrorAction SilentlyContinue |
-                    Where-Object { $_.LastWriteTime -ge $started })
-            }
-            if ($reports -ge 4 -and $shot) { Start-Sleep -Seconds 8; break }
+            if ($text -match 'OWVENDTEST done') { Start-Sleep -Seconds 3; break }
         }
     }
     if (!$process.HasExited) {

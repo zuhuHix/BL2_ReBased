@@ -4,7 +4,8 @@
 const model = window.OwVendingModel;
 const $ = id => document.getElementById(id);
 const COLUMN_LISTS = {shop: 'list-shop', backpack: 'list-backpack', buyback: 'list-buyback'};
-const KIND_LABEL = {weapon: 'Weapon', item: 'Item', ammo: 'Ammo', health: 'Health'};
+const KIND_LABEL = {weapon: 'Weapon', item: 'Item', ammo: 'Ammo', health: 'Health', shield: 'Shield',
+  grenade_mod: 'Grenade mod', class_mod: 'Class mod'};
 
 let state = null, lists = {shop: [], backpack: [], buyback: []};
 let sel = {column: 'shop', index: 0};
@@ -87,11 +88,13 @@ function render() {
   $('used').textContent = `${state.used}/${state.capacity}`;
   sel = {column: sel.column, index: model.clampIndex(sel.index, model.lengths(lists)[sel.column])};
   renderFeatured();
-  renderList('shop', lists.shop, state.machine.kind === 'weapons' || state.machine.kind === 'items' ? 'Nothing in stock' : 'Not stocked yet');
+  renderList('shop', lists.shop, state.machine.kind === 'blackmarket' ? 'Not stocked yet' : 'Nothing in stock');
   renderList('backpack', lists.backpack, 'Backpack is empty');
   renderList('buyback', lists.buyback, 'Nothing to buy back');
   const picked = lists[sel.column][sel.index];
-  $('detail').textContent = picked ? `${picked.name}: ${KIND_LABEL[picked.kind] || picked.kind}, rarity ${picked.rarity}` : '';
+  const note = picked ? model.poolNote(state, picked) : '';
+  $('detail').textContent = picked ? `${picked.name}: ${KIND_LABEL[picked.kind] || picked.kind}, rarity ${picked.rarity}`
+    + (note ? `. ${note}` : '') : '';
   $('message').textContent = localMessage || state.message;
   tickCountdown();
 }

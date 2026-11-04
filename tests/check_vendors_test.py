@@ -19,8 +19,11 @@ FEATURED = {'id': 'F1', 'name': 'Featured', 'kind': 'weapon', 'rarity': 'rare', 
             'value': 200, 'affordable': True, 'featured': True, 'quantity': 1, 'card': {}}
 
 
+MACHINE_KINDS = ['weapons', 'items', 'health']
+
+
 def machines_doc(count=3, unsupported=1):
-    machines = [{'id': f'Map:Point_{i}', 'kind': 'weapons' if i == 0 else 'items', 'title': f'Machine {i}',
+    machines = [{'id': f'Map:Point_{i}', 'kind': MACHINE_KINDS[i], 'title': f'Machine {i}',
                  'supported': True, 'fixed_item_cost': 0, 'fixed_featured_cost': 0} for i in range(count)]
     machines += [{'id': f'Map:Black_{i}', 'kind': 'blackmarket', 'supported': False} for i in range(unsupported)]
     return {'schema': 'openwillow-vendors/1', 'machines': machines}
@@ -37,6 +40,34 @@ def shelf(ids, values=SHOP_VALUES, prices=SHOP_PRICES, with_value=True):
     return rows
 
 
+AMMO_TERMS = {'base_cost': 5.0, 'scaler': cv.f32(1.12), 'part_total': 1.0}
+HEAL_TERMS = {'base_cost': 3.0, 'scaler': cv.f32(1.12), 'part_total': 1.0}
+AMMO_VALUE = cv.item_value(AMMO_TERMS, LEVEL)
+AMMO_PRICE = cv.buy_price(AMMO_VALUE, LEVEL)
+HEAL_VALUE = cv.item_value(HEAL_TERMS, LEVEL)
+HEAL_PRICE = cv.buy_price(HEAL_VALUE, LEVEL)
+
+
+def item_row(item_id, kind, terms, **extra):
+    """A non-gun shelf row with its value and price worked out from its terms (as the host sends them)."""
+    value = cv.item_value(terms, LEVEL)
+    row = {'id': item_id, 'name': item_id, 'kind': kind, 'rarity': 1, 'level': LEVEL, 'price': cv.buy_price(value, LEVEL),
+           'value': value, 'valueTerms': terms, 'affordable': True, 'featured': False, 'quantity': 1}
+    row.update(extra)
+    return row
+
+
+def section_state(machine_id, kind, shop, money, ammo=None, health=None):
+    doc = {'serial': 1, 'open': True, 'machine': {'id': machine_id, 'kind': kind, 'title': machine_id}, 'money': money,
+           'eridium': 0, 'capacity': 12, 'used': 0, 'shop': shop, 'featured': None, 'backpack': [], 'buyback': [],
+           'resetSeconds': 600, 'message': ''}
+    if ammo is not None:
+        doc['ammo'] = ammo
+    if health is not None:
+        doc['health'] = health
+    return doc
+
+
 def state(shop, money=START_MONEY, featured=FEATURED):
     return {'serial': 1, 'open': True, 'machine': {'id': 'Map:Point_0', 'kind': 'weapons', 'title': 'Machine 0'},
             'money': money, 'eridium': 0, 'capacity': 12, 'used': 0, 'shop': shop, 'featured': featured,
@@ -51,7 +82,7 @@ def state_line(doc):
     return line('OWVENDSTATE ' + json.dumps(doc, separators=(',', ':')))
 
 
-def good_log(spawned=3, sell=True, restock=True, first_ids=None, second_ids=None, with_value=True):
+def good_log(spawned=3, sell=True, restock=True, first_ids=None, second_ids=None, with_value=True, sections=True):
     """A complete run: open, report, buy the first item, report, sell it, restock, report.
 
     The report after the buy shows the shelf without the bought item plus one new item (S8)."""
@@ -71,13 +102,44 @@ def good_log(spawned=3, sell=True, restock=True, first_ids=None, second_ids=None
         text += line('OWVENDOR restock id=Map:Point_0 ok=1')
         text += state_line(state(shelf(second_ids, with_value=with_value),
                                  money=START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0], featured=featured))
+    if sections:
+        text += items_section(START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0])
+        text += health_section(START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0] - AMMO_PRICE)
     return text
+
+
+def items_section(money, ammo_before=0, ammo_after=54, pool_max=100, bought='A1', price=AMMO_PRICE):
+    """The Ammo Dump: open, report, buy row 0 (ammo), the pool line, report."""
+    shelf = [item_row('A1', 'ammo', AMMO_TERMS, ammoType='pistol', amount=54)]
+    before = section_state('Map:Point_1', 'items', shelf, money, ammo={'pistol': {'current': ammo_before, 'max': pool_max}})
+    after = section_state('Map:Point_1', 'items', shelf, money - price,
+                          ammo={'pistol': {'current': ammo_after, 'max': pool_max}})
+    text = line('OWVENDOR open id=Map:Point_1 kind=items restocked=1') + state_line(before)
+    text += line(f'OWVENDAMMO type=pistol before={ammo_before} after={ammo_after} max={pool_max}')
+    text += line(f'OWVENDOR buy id={bought} ok=1 money={money - price} error=')
+    return text + state_line(after)
+
+
+def health_section(money, health_before=100.0, health_after=200.0, health_max=400.0, refused=None):
+    """Dr. Zed: open, report, buy row 0 (a heal of a quarter of max health), the heal line, report."""
+    heal = item_row('H1', 'health', HEAL_TERMS, healFraction=0.25)
+    before = section_state('Map:Point_2', 'health', [heal], money, health={'current': health_before, 'max': health_max})
+    after = section_state('Map:Point_2', 'health', [heal], money - HEAL_PRICE,
+                          health={'current': health_after, 'max': health_max})
+    text = line('OWVENDOR open id=Map:Point_2 kind=health restocked=1') + state_line(before)
+    if refused:
+        return text + line(f'OWVENDOR buy id=H1 ok=0 money={money} error={refused}')
+    text += line(f'OWVENDHEAL before={health_before:.3f} after={health_after:.3f} max={health_max:.3f}')
+    text += line(f'OWVENDOR buy id=H1 ok=1 money={money - HEAL_PRICE} error=')
+    return text + state_line(after)
 
 
 GOOD_AUTOMATION = ('LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Stock}'
                    '\tPath={OpenWillow.Vendor.Stock}\n'
                    'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Persist}'
-                   '\tPath={OpenWillow.Vendor.Persist}\n')
+                   '\tPath={OpenWillow.Vendor.Persist}\n'
+                   'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Items}'
+                   '\tPath={OpenWillow.Vendor.Items}\n')
 
 
 def run(log, automation=GOOD_AUTOMATION, doc=None, open_index=0):
@@ -108,7 +170,7 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(sum(1 for _, s, _ in results.rows if s == 'MISSING'), 0)
         checks = by_name(results)
         for name in ('machines_spawned', 'open_machine', 'open_shelf', 'prices', 'buy', 'sell', 'restock',
-                     'automation_stock', 'automation_persist'):
+                     'item_prices', 'ammo_buy', 'heal_buy', 'automation_stock', 'automation_persist', 'automation_items'):
             self.assertEqual(checks[name][0], 'PASS', f'{name}: {checks[name][1]}')
         self.assertEqual(checks['buy'][1], 'bought S1 for 550; money 5000 -> 4450')
         self.assertEqual(checks['sell'][1], 'sold G1 for 100; money 4450 -> 4550')
@@ -269,7 +331,7 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=11 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=15 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
 
     def test_exit_one_on_any_fail(self):
@@ -310,11 +372,12 @@ def seeded(log_text, eridium):
 
 class PersistTest(unittest.TestCase):
     """grade_persist: the first launch's last report against the second launch's first one."""
-    SAVED_MONEY = START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0]
+    # good_log() ends with the health section: the purse after the sale, the ammo and the heal.
+    SAVED_MONEY = START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0] - AMMO_PRICE - HEAL_PRICE
     FIRST_IDS = [f'N{i}' for i in range(1, 8)]
 
     def check(self, second):
-        # good_log() ends with a restock: shelf N1..N7, money SAVED_MONEY, reset 1200.
+        # good_log() restocks, then runs the items and health sections: the shelf is N1..N7, money SAVED_MONEY, reset 1200.
         results = cv.grade_persist(good_log(), second)
         return {row[0]: (row[1], row[2]) for row in results.rows}
 
@@ -364,6 +427,93 @@ class PersistTest(unittest.TestCase):
     def test_broken_second_launch_state_fails(self):
         checks = self.check('OWVENDSTATE {"serial":1,\n')
         self.assertEqual(checks['persist_state'][0], 'FAIL')
+
+
+class ItemSectionTest(unittest.TestCase):
+    """The PR 2b checks: the value formula, the ammo and heal buys, and the non-gun rows' prices (synthetic numbers)."""
+
+    def test_item_value_is_the_trunc_of_the_product(self):
+        # 50 x 1.12^5 = 88.1 -> 88 (the same numbers as the automation test); the part total scales it: 0.96 x 28 -> 47.
+        self.assertEqual(cv.item_value({'base_cost': 50.0, 'scaler': cv.f32(1.12), 'part_total': 1.0}, 5), 88)
+        self.assertEqual(cv.item_value({'base_cost': 28.0, 'scaler': cv.f32(1.12), 'part_total': 0.96}, 5), 47)
+        self.assertEqual(cv.item_value({'base_cost': 50.0, 'scaler': cv.f32(1.12), 'part_total': 1.0}, 0), 50)
+
+    def test_ammo_buy_passes_with_the_numbers_in_the_detail(self):
+        checks = by_name(cv.grade_ammo_buy(good_log()))
+        self.assertEqual(checks['ammo_buy'][0], 'PASS')
+        self.assertIn('pistol pool 0 -> 54 (max 100); bought A1 for 82', checks['ammo_buy'][1])
+
+    def test_ammo_pool_that_does_not_rise_by_the_amount_fails(self):
+        log = good_log().replace('OWVENDAMMO type=pistol before=0 after=54 max=100',
+                                 'OWVENDAMMO type=pistol before=0 after=40 max=100')
+        self.assertEqual(by_name(run(log))['ammo_buy'][0], 'FAIL')
+
+    def test_ammo_pool_capped_at_the_maximum_passes(self):
+        # The pool holds 20 at most: 0 + 54 is capped to 20, and the checker expects the cap.
+        log = good_log(sections=False) + items_section(4550, ammo_before=0, ammo_after=20, pool_max=20)
+        self.assertEqual(by_name(cv.grade_ammo_buy(log))['ammo_buy'][0], 'PASS')
+
+    def test_ammo_money_drop_wrong_fails(self):
+        log = good_log().replace(f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE} error=',
+                                 f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE - 1} error=')
+        self.assertEqual(by_name(run(log))['ammo_buy'][0], 'FAIL')
+
+    def test_full_pool_refusal_is_missing_with_reason(self):
+        log = good_log().replace(f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE} error=',
+                                 'OWVENDOR buy id=A1 ok=0 money=4550 error=Ammo full')
+        checks = by_name(run(log))
+        self.assertEqual(checks['ammo_buy'][0], 'MISSING')
+        self.assertIn('Ammo full', checks['ammo_buy'][1])
+
+    def test_other_ammo_refusal_fails(self):
+        log = good_log().replace(f'OWVENDOR buy id=A1 ok=1 money={4550 - AMMO_PRICE} error=',
+                                 'OWVENDOR buy id=A1 ok=0 money=4550 error=Insufficient funds')
+        self.assertEqual(by_name(run(log))['ammo_buy'][0], 'FAIL')
+
+    def test_no_items_section_is_missing(self):
+        log = good_log(sections=False)
+        checks = by_name(run(log))
+        self.assertEqual(checks['ammo_buy'][0], 'MISSING')
+        self.assertEqual(checks['heal_buy'][0], 'MISSING')
+        self.assertEqual(checks['item_prices'][0], 'MISSING')
+
+    def test_heal_passes_and_reports_the_heal(self):
+        checks = by_name(run(good_log()))
+        self.assertEqual(checks['heal_buy'][0], 'PASS')
+        self.assertIn('health 100.0 -> 200.0 of 400.0; bought H1 for 49', checks['heal_buy'][1])
+
+    def test_heal_that_does_not_add_the_fraction_fails(self):
+        log = good_log().replace('OWVENDHEAL before=100.000 after=200.000 max=400.000',
+                                 'OWVENDHEAL before=100.000 after=150.000 max=400.000')
+        self.assertEqual(by_name(run(log))['heal_buy'][0], 'FAIL')
+
+    def test_full_health_refusal_is_missing_with_reason(self):
+        log = good_log(sections=False) + health_section(4000, refused='Health full')
+        checks = by_name(run(log))
+        self.assertEqual(checks['heal_buy'][0], 'MISSING')
+        self.assertIn('Health full', checks['heal_buy'][1])
+
+    def test_item_value_off_by_one_fails(self):
+        log = good_log().replace(f'"value":{AMMO_VALUE},', f'"value":{AMMO_VALUE + 1},')
+        checks = by_name(run(log))
+        self.assertEqual(checks['item_prices'][0], 'FAIL')
+        self.assertIn('value', checks['item_prices'][1])
+
+    def test_item_price_not_from_the_formula_fails(self):
+        log = good_log().replace(f'"price":{AMMO_PRICE},', f'"price":{AMMO_PRICE + 1},', 1)
+        self.assertEqual(by_name(run(log))['item_prices'][0], 'FAIL')
+
+    def test_item_rows_without_terms_are_skipped_not_failed(self):
+        log = good_log().replace('"valueTerms":', '"valueTermsGone":')
+        checks = by_name(run(log))
+        self.assertEqual(checks['item_prices'][0], 'MISSING')
+        self.assertEqual(checks['prices'][0], 'PASS')   # the gun rows are still checked
+
+    def test_automation_items_missing_fails(self):
+        automation = GOOD_AUTOMATION.split('LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Items}')[0]
+        checks = by_name(run(good_log(), automation=automation))
+        self.assertEqual(checks['automation_items'][0], 'FAIL')
+        self.assertIn('did not run', checks['automation_items'][1])
 
 
 if __name__ == '__main__':

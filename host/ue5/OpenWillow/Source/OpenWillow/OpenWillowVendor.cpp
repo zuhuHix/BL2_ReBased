@@ -4,6 +4,7 @@
 #include "OpenWillowVendorPage.h"
 #include "OpenWillowCurrency.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowMayaState.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowWeaponGen.h"
 #include "Components/SceneComponent.h"
@@ -31,7 +32,7 @@
 
 namespace
 {
-// Only weapon balances are rolled in PR 1; ammo and health machines come later.
+// Only weapon balances are rolled as guns; the non-gun leaves carry the manifest's item block (see ReadLeafItem).
 bool IsWeaponLeaf(const FOpenWillowVendorLeaf& Leaf)
 {
     return Leaf.Class == TEXT("WeaponBalanceDefinition");
@@ -51,6 +52,82 @@ bool ManifestInt(double Number, int32 Low, int32 High, int32& Out)
 int32 SaturatingAdd(int32 A, int32 B)
 {
     return int32(FMath::Clamp(int64(A) + int64(B), int64(0), int64(MAX_int32)));
+}
+
+// The ammo pool key of the manifest (tools/prepare_vendors.py maps the pool to these) as the host's enum; false when unknown.
+bool AmmoTypeFromKey(const FString& Key, EOpenWillowAmmoType& OutType)
+{
+    for (int32 Type = 0; Type < UOpenWillowInventory::AmmoTypeCount; ++Type)
+    {
+        if (Key == UOpenWillowInventory::AmmoTypeKey(EOpenWillowAmmoType(Type)))
+        {
+            OutType = EOpenWillowAmmoType(Type);
+            return true;
+        }
+    }
+    return false;
+}
+
+// A manifest number as a float, for the value terms and the heal fraction: false when it is not finite.
+bool ManifestFloat(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, float& Out)
+{
+    double Number = 0;
+    if (!Obj->TryGetNumberField(Key, Number) || !FMath::IsFinite(Number)) return false;
+    Out = float(Number);
+    return true;
+}
+
+// The item block of one leaf (tools/prepare_vendors.py, docs/verification/VENDORS.md section 6). A block that does not
+// read cleanly leaves the leaf with no kind, so it is never stocked (and never fails the whole machine).
+void ReadLeafItem(const TSharedPtr<FJsonObject>& Item, FOpenWillowVendorLeaf& Leaf)
+{
+    if (!Item.IsValid() || !Item->TryGetStringField(TEXT("kind"), Leaf.Kind)) return;
+    Item->TryGetStringField(TEXT("name"), Leaf.Name);
+    const bool bKindOk = Leaf.Kind == TEXT("ammo") || Leaf.Kind == TEXT("health") || Leaf.Kind == TEXT("shield")
+        || Leaf.Kind == TEXT("grenade_mod") || Leaf.Kind == TEXT("usable");
+    if (!bKindOk)
+    {
+        Leaf.Kind.Reset();
+        return;
+    }
+    // Ammo: the pool key and the rounds one purchase adds (a whole number in [1, 9999]).
+    if (Leaf.Kind == TEXT("ammo"))
+    {
+        double Amount = 0;
+        EOpenWillowAmmoType Type = EOpenWillowAmmoType::Pistol;
+        if (!Item->TryGetStringField(TEXT("ammo_type"), Leaf.AmmoType) || !AmmoTypeFromKey(Leaf.AmmoType, Type)
+            || !Item->TryGetNumberField(TEXT("amount"), Amount) || !ManifestInt(Amount, 1, 9999, Leaf.Amount))
+        {
+            Leaf.Kind.Reset();
+            return;
+        }
+    }
+    // Health: the fraction of max health one purchase heals, in (0, 1].
+    if (Leaf.Kind == TEXT("health"))
+    {
+        const TSharedPtr<FJsonObject>* Heal = nullptr;
+        if (!Item->TryGetObjectField(TEXT("heal"), Heal) || !Heal->IsValid() || !ManifestFloat(*Heal, TEXT("fraction_of_max_health"), Leaf.HealFraction)
+            || Leaf.HealFraction <= 0.f || Leaf.HealFraction > 1.f)
+        {
+            Leaf.Kind.Reset();
+            return;
+        }
+    }
+    // Value terms: the first part total is the one the host uses (UNVERIFIED pick when a grade lists several).
+    const TSharedPtr<FJsonObject>* Value = nullptr;
+    if (!Item->TryGetObjectField(TEXT("value"), Value) || !Value->IsValid()) return; // null: no price data, never stocked
+    FOpenWillowValueTerms& Terms = Leaf.Value;
+    const TArray<TSharedPtr<FJsonValue>>* Totals = nullptr;
+    if (ManifestFloat(*Value, TEXT("base_cost"), Terms.BaseCost) && ManifestFloat(*Value, TEXT("scaler"), Terms.Scaler)
+        && (*Value)->TryGetArrayField(TEXT("part_totals"), Totals) && Totals->Num() > 0 && (*Totals)[0].IsValid())
+    {
+        double Total = 0;
+        if ((*Totals)[0]->TryGetNumber(Total) && FMath::IsFinite(Total) && Total >= 0 && Terms.BaseCost > 0 && Terms.Scaler > 0)
+        {
+            Terms.PartTotal = float(Total);
+            Terms.bSet = true;
+        }
+    }
 }
 
 // Pools in the manifest: each pool has a probability and a list of leaf balances with weights.
@@ -75,9 +152,59 @@ void ReadPools(const TArray<TSharedPtr<FJsonValue>>& Pools, TArray<FOpenWillowVe
             double Weight = 0;
             (*Item)->TryGetNumberField(TEXT("weight"), Weight);
             Leaf.Weight = float(Probability * Weight);
+            const TSharedPtr<FJsonObject>* ItemBlock = nullptr;
+            if ((*Item)->TryGetObjectField(TEXT("item"), ItemBlock)) ReadLeafItem(*ItemBlock, Leaf);
             if (!Leaf.Balance.IsEmpty() && FMath::IsFinite(Leaf.Weight) && Leaf.Weight > 0) Out.Add(Leaf);
         }
     }
+}
+
+// Leaves that can go on a shelf as a non-gun row.
+bool IsStockKind(const FString& Kind)
+{
+    return Kind == TEXT("ammo") || Kind == TEXT("health") || Kind == TEXT("shield") || Kind == TEXT("grenade_mod");
+}
+
+// The kind a gear item shows as on the page: the page knows shield, grenade mod and class mod; any other gear (a relic)
+// is listed as a plain item.
+FString GearPageKind(const FString& ItemType)
+{
+    return (ItemType == TEXT("shield") || ItemType == TEXT("grenade_mod") || ItemType == TEXT("class_mod")) ? ItemType : TEXT("item");
+}
+
+// Picks one leaf of Candidates by weight with a stream seeded from Seed (the draw the gun shelf already uses). Null when
+// there is none.
+const FOpenWillowVendorLeaf* PickByWeight(const TArray<const FOpenWillowVendorLeaf*>& Candidates, uint32 Seed)
+{
+    if (Candidates.IsEmpty()) return nullptr;
+    float Total = 0;
+    for (const FOpenWillowVendorLeaf* Leaf : Candidates) Total += Leaf->Weight;
+    FRandomStream Rng{static_cast<int32>(Seed)};
+    float Pick = Rng.FRand() * Total;
+    for (const FOpenWillowVendorLeaf* Leaf : Candidates)
+    {
+        if (Pick < Leaf->Weight) return Leaf;
+        Pick -= Leaf->Weight;
+    }
+    return Candidates.Last();
+}
+
+// The leaves of Pool that Keep accepts, in pool order.
+template <typename Predicate>
+TArray<const FOpenWillowVendorLeaf*> LeavesWhere(const TArray<FOpenWillowVendorLeaf>& Pool, Predicate Keep)
+{
+    TArray<const FOpenWillowVendorLeaf*> Out;
+    for (const FOpenWillowVendorLeaf& Leaf : Pool)
+        if (Keep(Leaf)) Out.Add(&Leaf);
+    return Out;
+}
+
+// Identity line of one leaf for the manifest identity: everything that changes what the shelf can hold.
+FString LeafIdentity(const TCHAR* Prefix, const FOpenWillowVendorLeaf& Leaf)
+{
+    return FString::Printf(TEXT("%s %s %s %.9g %s %s %d %.9g %d %.9g %.9g %.9g"), Prefix, *Leaf.Balance, *Leaf.Class, Leaf.Weight,
+        *Leaf.Kind, *Leaf.AmmoType, Leaf.Amount, Leaf.HealFraction, Leaf.Value.bSet ? 1 : 0, Leaf.Value.BaseCost,
+        Leaf.Value.Scaler, Leaf.Value.PartTotal);
 }
 
 // [x, y, z] of numbers from the manifest, as-is.
@@ -145,10 +272,26 @@ TSharedRef<FJsonObject> ShopItemJson(const FOpenWillowVendorItem& Item, TOptiona
     Json->SetBoolField(TEXT("featured"), Item.bFeatured);
     Json->SetNumberField(TEXT("quantity"), 1);
     if (Item.bHasWeapon) Json->SetObjectField(TEXT("card"), CardJson(Item.Weapon));
+    // Kind-specific fields: the ammo type and rounds, the heal fraction, and the value terms the price came from (the
+    // checker recomputes the value from them; VENDORS.md section 6).
+    if (Item.Kind == TEXT("ammo"))
+    {
+        Json->SetStringField(TEXT("ammoType"), Item.AmmoType);
+        Json->SetNumberField(TEXT("amount"), Item.Amount);
+    }
+    if (Item.Kind == TEXT("health")) Json->SetNumberField(TEXT("healFraction"), Item.HealFraction);
+    if (Item.Terms.bSet)
+    {
+        TSharedRef<FJsonObject> Terms = MakeShared<FJsonObject>();
+        Terms->SetNumberField(TEXT("base_cost"), Item.Terms.BaseCost);
+        Terms->SetNumberField(TEXT("scaler"), Item.Terms.Scaler);
+        Terms->SetNumberField(TEXT("part_total"), Item.Terms.PartTotal);
+        Json->SetObjectField(TEXT("valueTerms"), Terms);
+    }
     return Json;
 }
 
-// One backpack row for the page.
+// One backpack row for a gun.
 TSharedRef<FJsonObject> BackpackJson(const FOpenWillowWeaponItem& Gun, bool bEquipped)
 {
     TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
@@ -160,6 +303,20 @@ TSharedRef<FJsonObject> BackpackJson(const FOpenWillowWeaponItem& Gun, bool bEqu
     Json->SetNumberField(TEXT("sell"), Gun.bHasSaleValue ? Gun.SaleValue : 0);
     Json->SetBoolField(TEXT("equipped"), bEquipped);
     Json->SetObjectField(TEXT("card"), CardJson(Gun));
+    return Json;
+}
+
+// One backpack row for a shield, grenade mod or other gear (no card: the stand-in gear has no stats).
+TSharedRef<FJsonObject> GearBackpackJson(const FOpenWillowGearItem& Gear, bool bEquipped)
+{
+    TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+    Json->SetStringField(TEXT("id"), Gear.Id);
+    Json->SetStringField(TEXT("kind"), GearPageKind(Gear.ItemType));
+    Json->SetStringField(TEXT("name"), Gear.Name);
+    Json->SetNumberField(TEXT("rarity"), FMath::Clamp(Gear.Rarity, 1, 5));
+    Json->SetNumberField(TEXT("level"), FMath::Max(1, Gear.Level));
+    Json->SetNumberField(TEXT("sell"), FMath::Max(0, Gear.SaleValue));
+    Json->SetBoolField(TEXT("equipped"), bEquipped);
     return Json;
 }
 
@@ -253,28 +410,168 @@ double FOpenWillowVendorStock::SecondsToReset(double Now) const
 bool FOpenWillowVendorStock::RollWeapon(const TArray<FOpenWillowVendorLeaf>& Pool, uint32 GunSeed, FOpenWillowWeaponItem& OutGun) const
 {
     // Weapon leaves only, picked by weight with a seeded stream, then rolled by the weapon generator.
-    TArray<const FOpenWillowVendorLeaf*> Weapons;
-    float Total = 0;
-    for (const FOpenWillowVendorLeaf& Leaf : Pool)
+    const FOpenWillowVendorLeaf* Chosen = PickByWeight(
+        LeavesWhere(Pool, [](const FOpenWillowVendorLeaf& Leaf) { return IsWeaponLeaf(Leaf) && Leaf.Weight > 0; }), GunSeed);
+    return Chosen && FOpenWillowWeaponGen::RollBalance(Chosen->Balance, Stage, GunSeed, OutGun);
+}
+
+int32 FOpenWillowVendorStock::ShelfSize() const
+{
+    if (Kind == TEXT("weapons")) return WeaponShelfSize;
+    if (Kind == TEXT("items")) return ItemsShelfSize;
+    if (Kind == TEXT("health")) return HealthShelfSize;
+    return 0; // the black market is listed, not stocked (PR 2b)
+}
+
+TOptional<int32> FOpenWillowVendorStock::ItemValue(const FOpenWillowValueTerms& Terms, int32 Level)
+{
+    // The same single-precision steps as the tool's check (tools/prepare_vendors.py item_value, which reproduces the live
+    // rows): the scaler to the level in double and then rounded to float, the part total times that, then the base cost,
+    // each step rounded to float. Doubles here could land on the other side of a whole number at some level.
+    if (!Terms.bSet || Level < 0) return {};
+    const float ScalerToLevel = float(FMath::Pow(double(Terms.Scaler), double(Level)));
+    const float Partial = Terms.PartTotal * ScalerToLevel;
+    const float Value = Partial * Terms.BaseCost;
+    if (!FMath::IsFinite(Value) || Value < 0.f || Value >= 2147483520.f) return {};
+    return FMath::TruncToInt(Value);
+}
+
+bool FOpenWillowVendorStock::IsStockableLeaf(const FOpenWillowVendorLeaf& Leaf)
+{
+    return IsStockKind(Leaf.Kind) && Leaf.Value.bSet;
+}
+
+FString FOpenWillowVendorStock::GearIdFor(const FString& ShelfId) const
+{
+    // A gear row's backpack id: unique per machine (the seed), restock (the count) and shelf position.
+    return FString::Printf(TEXT("vend_%u_%d_%s"), Seed, RestockCount, *ShelfId);
+}
+
+bool FOpenWillowVendorStock::MakeLeafItem(const FOpenWillowVendorLeaf& Leaf, const FString& Id, bool bFeatured, FOpenWillowVendorItem& OutItem) const
+{
+    if (!IsStockableLeaf(Leaf)) return false;
+    const TOptional<int32> Value = ItemValue(Leaf.Value, Stage);
+    if (!Value.IsSet()) return false;
+    FOpenWillowVendorItem Item;
+    Item.Id = Id;
+    Item.Kind = Leaf.Kind;
+    Item.Name = Leaf.Name.IsEmpty() ? Leaf.Kind : Leaf.Name;
+    Item.Level = FMath::Max(1, Stage);
+    Item.Rarity = 1; // UNVERIFIED stand-in: the grade of a non-gun row is not read yet
+    Item.SaleValue = Value.GetValue();
+    Item.bFeatured = bFeatured;
+    Item.AmmoType = Leaf.AmmoType;
+    Item.Amount = Leaf.Amount;
+    Item.HealFraction = Leaf.HealFraction;
+    Item.Terms = Leaf.Value;
+    if (Leaf.Kind == TEXT("shield") || Leaf.Kind == TEXT("grenade_mod"))
     {
-        if (!IsWeaponLeaf(Leaf) || Leaf.Weight <= 0) continue;
-        Weapons.Add(&Leaf);
-        Total += Leaf.Weight;
+        // Stand-in gear: the name, level (the stage) and value are the shelf's; the stats and the grade are not modelled.
+        // The value matches the live rows (VENDORS.md section 6), so it is marked known.
+        Item.bHasGear = true;
+        Item.Gear.Id = GearIdFor(Id);
+        Item.Gear.ItemType = Leaf.Kind;
+        Item.Gear.Name = Item.Name;
+        Item.Gear.Level = Item.Level;
+        Item.Gear.bLevelKnown = true;
+        Item.Gear.Rarity = Item.Rarity;
+        Item.Gear.SaleValue = Item.SaleValue;
+        Item.Gear.bSaleValueKnown = true;
     }
-    if (Weapons.IsEmpty()) return false;
-    FRandomStream Rng{static_cast<int32>(GunSeed)};
-    float Pick = Rng.FRand() * Total;
-    const FOpenWillowVendorLeaf* Chosen = Weapons.Last();
-    for (const FOpenWillowVendorLeaf* Leaf : Weapons)
+    OutItem = MoveTemp(Item);
+    return true;
+}
+
+bool FOpenWillowVendorStock::AddLeafRow(const FOpenWillowVendorLeaf& Leaf)
+{
+    FOpenWillowVendorItem Row;
+    if (!MakeLeafItem(Leaf, FString::Printf(TEXT("stock_%d"), Items.Num()), false, Row)) return false;
+    Items.Add(MoveTemp(Row));
+    return true;
+}
+
+void FOpenWillowVendorStock::FillWeaponShelf(uint32 RestockSeed)
+{
+    if (!Leaves.ContainsByPredicate([](const FOpenWillowVendorLeaf& Leaf) { return IsWeaponLeaf(Leaf); }))
     {
-        if (Pick < Leaf->Weight)
+        Notice = TEXT("No weapons listed");
+        return;
+    }
+    for (int32 I = 0; I < ShelfSize(); ++I)
+    {
+        FOpenWillowWeaponItem Gun;
+        if (!RollWeapon(Leaves, RestockSeed + 1u + uint32(I), Gun))
         {
-            Chosen = Leaf;
+            Notice = TEXT("No weapon could be rolled");
             break;
         }
-        Pick -= Leaf->Weight;
+        Items.Add(MakeItem(Gun, FString::Printf(TEXT("stock_%d"), Items.Num()), false));
     }
-    return FOpenWillowWeaponGen::RollBalance(Chosen->Balance, Stage, GunSeed, OutGun);
+}
+
+void FOpenWillowVendorStock::FillItemsShelf(uint32 RestockSeed)
+{
+    // One row per ammo type (the first valued leaf of each type, in pool order), then grenade mods rolled by weight.
+    TSet<FString> Types;
+    for (const FOpenWillowVendorLeaf& Leaf : Leaves)
+    {
+        if (Items.Num() >= ShelfSize()) break;
+        if (Leaf.Kind != TEXT("ammo") || !IsStockableLeaf(Leaf) || Types.Contains(Leaf.AmmoType)) continue;
+        Types.Add(Leaf.AmmoType);
+        AddLeafRow(Leaf);
+    }
+    FillRolledRows(TEXT("grenade_mod"), RestockSeed);
+}
+
+void FOpenWillowVendorStock::FillHealthShelf(uint32 RestockSeed)
+{
+    // One row per distinct health balance, then shields rolled by weight.
+    TSet<FString> Balances;
+    for (const FOpenWillowVendorLeaf& Leaf : Leaves)
+    {
+        if (Items.Num() >= ShelfSize()) break;
+        if (Leaf.Kind != TEXT("health") || !IsStockableLeaf(Leaf) || Balances.Contains(Leaf.Balance)) continue;
+        Balances.Add(Leaf.Balance);
+        AddLeafRow(Leaf);
+    }
+    FillRolledRows(TEXT("shield"), RestockSeed);
+}
+
+void FOpenWillowVendorStock::FillRolledRows(const TCHAR* LeafKind, uint32 RestockSeed)
+{
+    // Each row is one weighted draw with its own seed (the gun shelf's rule: RestockSeed + 1 + the row index).
+    while (Items.Num() < ShelfSize())
+    {
+        const FOpenWillowVendorLeaf* Leaf = PickByWeight(
+            LeavesWhere(Leaves, [LeafKind](const FOpenWillowVendorLeaf& Candidate)
+                { return Candidate.Kind == LeafKind && IsStockableLeaf(Candidate); }),
+            RestockSeed + 1u + uint32(Items.Num()));
+        // Stops when nothing is left to draw or a draw does not become a row (the loop must always make progress).
+        if (!Leaf || !AddLeafRow(*Leaf))
+        {
+            Notice = FString::Printf(TEXT("No %ss listed"), LeafKind);
+            break;
+        }
+    }
+}
+
+void FOpenWillowVendorStock::FillFeatured(uint32 RestockSeed)
+{
+    if (Kind == TEXT("weapons"))
+    {
+        FOpenWillowWeaponItem FeaturedGun;
+        if (RollWeapon(FeaturedLeaves, RestockSeed + 1000u, FeaturedGun))
+        {
+            Featured = MakeItem(FeaturedGun, TEXT("featured"), true);
+            bHasFeatured = true;
+        }
+        return;
+    }
+    // Non-gun machines: one weighted draw from the featured leaves that have a value.
+    const FOpenWillowVendorLeaf* Leaf = PickByWeight(
+        LeavesWhere(FeaturedLeaves, [](const FOpenWillowVendorLeaf& Candidate) { return IsStockableLeaf(Candidate); }),
+        RestockSeed + 1000u);
+    bHasFeatured = Leaf && MakeLeafItem(*Leaf, TEXT("featured"), true, Featured);
 }
 
 void FOpenWillowVendorStock::Restock(double Now)
@@ -290,32 +587,15 @@ void FOpenWillowVendorStock::Restock(double Now)
     const uint32 RestockSeed = Seed + uint32(RestockCount) * 1009u; // unsigned: wraps by definition
     // Saturates at the bound a save accepts, so a saved count always loads again.
     if (RestockCount < FOpenWillowCurrencySave::MaxRestockCount) ++RestockCount;
-    if (Kind != TEXT("weapons"))
+    if (Kind == TEXT("weapons")) FillWeaponShelf(RestockSeed);
+    else if (Kind == TEXT("items")) FillItemsShelf(RestockSeed);
+    else if (Kind == TEXT("health")) FillHealthShelf(RestockSeed);
+    else
     {
         Notice = TEXT("Not stocked yet");
         return;
     }
-    if (!Leaves.ContainsByPredicate([](const FOpenWillowVendorLeaf& Leaf) { return IsWeaponLeaf(Leaf); }))
-    {
-        Notice = TEXT("No weapons listed");
-        return;
-    }
-    for (int32 I = 0; I < StockWeaponCount; ++I)
-    {
-        FOpenWillowWeaponItem Gun;
-        if (!RollWeapon(Leaves, RestockSeed + 1u + uint32(I), Gun))
-        {
-            Notice = TEXT("No weapon could be rolled");
-            break;
-        }
-        Items.Add(MakeItem(Gun, FString::Printf(TEXT("stock_%d"), Items.Num()), false));
-    }
-    FOpenWillowWeaponItem FeaturedGun;
-    if (RollWeapon(FeaturedLeaves, RestockSeed + 1000u, FeaturedGun))
-    {
-        Featured = MakeItem(FeaturedGun, TEXT("featured"), true);
-        bHasFeatured = true;
-    }
+    FillFeatured(RestockSeed);
 }
 
 const FOpenWillowVendorItem* FOpenWillowVendorStock::FindShopItem(const FString& Id) const
@@ -326,7 +606,146 @@ const FOpenWillowVendorItem* FOpenWillowVendorStock::FindShopItem(const FString&
     return nullptr;
 }
 
-bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FString& OutError)
+// ---- Purchase effects, one per kind ------------------------------------------------------------------------------------
+
+namespace
+{
+// Puts a gun in the backpack. OutNewId is the id the backpack gave the copy (it may differ from the shelf's: "<id>#2").
+bool AddWeaponToPack(const FOpenWillowWeaponItem& Gun, UOpenWillowInventory* Inventory, FString& OutNewId, FString& OutError)
+{
+    TSet<FString> Before;
+    for (const FOpenWillowWeaponItem& Owned : Inventory->Items()) Before.Add(UOpenWillowInventory::StableId(Owned));
+    if (!Inventory->CanAddToBackpack() || !Inventory->AddToBackpack(Gun))
+    {
+        OutError = TEXT("Backpack full");
+        return false;
+    }
+    // The backpack may give the copy a new instance id, so take the id that was not there before.
+    for (const FOpenWillowWeaponItem& Owned : Inventory->Items())
+        if (!Before.Contains(UOpenWillowInventory::StableId(Owned))) OutNewId = UOpenWillowInventory::StableId(Owned);
+    return true;
+}
+
+// Puts a shield or grenade mod in the backpack.
+bool AddGearToPack(const FOpenWillowGearItem& Gear, UOpenWillowInventory* Inventory, FString& OutError)
+{
+    if (!Inventory->CanAddToBackpack() || !Inventory->AddGearToBackpack(Gear))
+    {
+        OutError = TEXT("Backpack full");
+        return false;
+    }
+    return true;
+}
+
+// True when a gun or gear item with this backpack id is in a weapon slot or a gear slot.
+bool IsEquippedId(const UOpenWillowInventory* Inventory, const FString& Id)
+{
+    for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
+    {
+        const FOpenWillowWeaponItem* Equipped = Inventory->SlotItem(Slot);
+        if (Equipped && UOpenWillowInventory::StableId(*Equipped) == Id) return true;
+    }
+    for (int32 Slot = 0; Slot < UOpenWillowInventory::GearSlotCount; ++Slot)
+    {
+        const FOpenWillowGearItem* Worn = Inventory->GearSlotItem(UOpenWillowInventory::GearSlotName(Slot));
+        if (Worn && Worn->Id == Id) return true;
+    }
+    return false;
+}
+
+// A gear item sold to the shop, as a buy-back row. Its rarity and level are clamped to what the page accepts (1 to 5, 1 up).
+FOpenWillowVendorItem MakeGearItem(const FOpenWillowGearItem& Gear, const FString& Id)
+{
+    FOpenWillowVendorItem Item;
+    Item.Id = Id;
+    Item.Kind = GearPageKind(Gear.ItemType);
+    Item.Name = Gear.Name;
+    Item.Level = FMath::Max(1, Gear.Level);
+    Item.Rarity = FMath::Clamp(Gear.Rarity, 1, 5);
+    Item.SaleValue = FMath::Max(0, Gear.SaleValue);
+    Item.bHasGear = true;
+    Item.Gear = Gear;
+    return Item;
+}
+
+// Ammo: the pool gets the rounds, up to its maximum. Nothing is charged here (Buy charges after this succeeds). The row
+// stays on the shelf (UNVERIFIED: the game may use the stock up).
+bool ApplyAmmoBuy(const FOpenWillowVendorItem& Item, UOpenWillowInventory* Inventory, FString& OutError)
+{
+    EOpenWillowAmmoType Type = EOpenWillowAmmoType::Pistol;
+    if (!AmmoTypeFromKey(Item.AmmoType, Type))
+    {
+        OutError = TEXT("Unknown item");
+        return false;
+    }
+    const FOpenWillowAmmoPool Pool = Inventory->AmmoPool(Type);
+    if (Pool.Current >= Pool.Max)
+    {
+        OutError = TEXT("Ammo full");
+        return false;
+    }
+    const int32 After = int32(FMath::Min<int64>(int64(Pool.Max), int64(Pool.Current) + int64(Item.Amount)));
+    Inventory->SetAmmoCurrent(Type, After);
+    UE_LOG(LogTemp, Display, TEXT("OWVENDAMMO type=%s before=%d after=%d max=%d"), UOpenWillowInventory::AmmoTypeKey(Type),
+        Pool.Current, After, Pool.Max);
+    return true;
+}
+
+// Health: heals a fraction of the maximum, up to the maximum. The row stays on the shelf (UNVERIFIED, as for ammo).
+bool ApplyHealthBuy(const FOpenWillowVendorItem& Item, FOpenWillowMayaState* Maya, double Now, FString& OutError)
+{
+    if (!Maya)
+    {
+        OutError = TEXT("No walker");
+        return false;
+    }
+    const float Max = Maya->Effective().MaxHealth;
+    const float Before = Maya->Health;
+    if (Before >= Max)
+    {
+        OutError = TEXT("Health full");
+        return false;
+    }
+    const float After = FMath::Min(Max, Before + Item.HealFraction * Max);
+    Maya->SetHealth(Max, After, float(Now));
+    UE_LOG(LogTemp, Display, TEXT("OWVENDHEAL before=%.3f after=%.3f max=%.3f"), Before, After, Max);
+    return true;
+}
+}
+
+bool FOpenWillowVendorStock::ApplyBuy(const FOpenWillowVendorItem& Item, UOpenWillowInventory* Inventory, FOpenWillowMayaState* Maya,
+    double Now, FString& OutError)
+{
+    if (Item.bHasWeapon)
+    {
+        FString NewId;
+        if (!AddWeaponToPack(Item.Weapon, Inventory, NewId, OutError)) return false;
+        if (!NewId.IsEmpty()) LastBoughtId = NewId;
+        return true;
+    }
+    if (Item.bHasGear) return AddGearToPack(Item.Gear, Inventory, OutError);
+    if (Item.Kind == TEXT("ammo")) return ApplyAmmoBuy(Item, Inventory, OutError);
+    if (Item.Kind == TEXT("health")) return ApplyHealthBuy(Item, Maya, Now, OutError);
+    OutError = TEXT("Not for sale yet");
+    return false;
+}
+
+void FOpenWillowVendorStock::RemoveBoughtRow(const FOpenWillowVendorItem& Item, const FString& Id)
+{
+    if (Item.bFeatured)
+    {
+        bHasFeatured = false;
+        bFeaturedBoughtSinceRestock = true;
+        return;
+    }
+    // Ammo and health rows stay on the shelf; guns and gear leave it (and are kept for the save).
+    if (Item.Kind == TEXT("ammo") || Item.Kind == TEXT("health")) return;
+    Items.RemoveAll([&Id](const FOpenWillowVendorItem& Shelf) { return Shelf.Id == Id; });
+    BoughtSinceRestock.Add(Id);
+}
+
+bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FOpenWillowMayaState* Maya, double Now,
+    FString& OutError)
 {
     const FOpenWillowVendorItem* Found = FindShopItem(Id);
     if (!Found || !Inventory)
@@ -335,11 +754,6 @@ bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FS
         return false;
     }
     const FOpenWillowVendorItem Item = *Found; // a copy: the shelf changes below
-    if (!Item.bHasWeapon)
-    {
-        OutError = TEXT("Not for sale yet");
-        return false;
-    }
     int32 Money = 0;
     Inventory->GetMoney(Money); // unknown money counts as 0
     const TOptional<int32> PriceOrUnset = PriceOf(Item);
@@ -354,27 +768,10 @@ bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FS
         OutError = TEXT("Insufficient funds");
         return false;
     }
-    TSet<FString> Before;
-    for (const FOpenWillowWeaponItem& Owned : Inventory->Items()) Before.Add(UOpenWillowInventory::StableId(Owned));
-    if (!Inventory->CanAddToBackpack() || !Inventory->AddToBackpack(Item.Weapon))
-    {
-        OutError = TEXT("Backpack full");
-        return false;
-    }
-    // The backpack may give the copy a new instance id ("<id>#2"), so take the id that was not there before.
-    for (const FOpenWillowWeaponItem& Owned : Inventory->Items())
-        if (!Before.Contains(UOpenWillowInventory::StableId(Owned))) LastBoughtId = UOpenWillowInventory::StableId(Owned);
+    // The effect first (a refusal changes nothing), then the charge, then the shelf.
+    if (!ApplyBuy(Item, Inventory, Maya, Now, OutError)) return false;
     Inventory->SetMoney(Money - Price);
-    if (Item.bFeatured)
-    {
-        bHasFeatured = false;
-        bFeaturedBoughtSinceRestock = true;
-    }
-    else
-    {
-        Items.RemoveAll([&Id](const FOpenWillowVendorItem& Shelf) { return Shelf.Id == Id; });
-        BoughtSinceRestock.Add(Id);
-    }
+    RemoveBoughtRow(Item, Id);
     return true;
 }
 
@@ -389,9 +786,9 @@ bool FOpenWillowVendorStock::CanRestore(const FOpenWillowCurrencyMachine& Saved,
     }
     for (const FString& Id : Saved.Bought)
     {
-        // Shelf ids are "stock_<n>" with n below the shelf size.
+        // Shelf ids are "stock_<n>" with n below this machine's shelf size.
         const int32 Index = Id.StartsWith(TEXT("stock_")) ? FCString::Atoi(*Id.Mid(6)) : -1;
-        if (Index < 0 || Index >= StockWeaponCount || Id != FString::Printf(TEXT("stock_%d"), Index))
+        if (Index < 0 || Index >= ShelfSize() || Id != FString::Printf(TEXT("stock_%d"), Index))
         {
             OutError = FString::Printf(TEXT("bought id %s is not a shelf id"), *Id);
             return false;
@@ -426,33 +823,31 @@ bool FOpenWillowVendorStock::Restore(const FOpenWillowCurrencyMachine& Saved, do
 bool FOpenWillowVendorStock::Sell(FString Id, UOpenWillowInventory* Inventory, FString& OutError,
     const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected)
 {
+    // A gun or a gear item (shield, grenade mod, ...) from the backpack; a mission gun is refused first.
     const FOpenWillowWeaponItem* Owned = Inventory ? Inventory->FindItemById(Id) : nullptr;
-    if (!Owned)
+    if (!Inventory || (!Owned && !Inventory->FindGearById(Id)))
     {
         OutError = TEXT("Unknown item");
         return false;
     }
-    if (IsProtected && IsProtected(*Owned))
+    if (Owned && IsProtected && IsProtected(*Owned))
     {
         OutError = TEXT("Mission items cannot be sold");
         return false;
     }
-    for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount; ++Slot)
+    if (IsEquippedId(Inventory, Id))
     {
-        const FOpenWillowWeaponItem* Equipped = Inventory->SlotItem(Slot);
-        if (Equipped && UOpenWillowInventory::StableId(*Equipped) == Id)
-        {
-            OutError = TEXT("Equipped items cannot be sold");
-            return false;
-        }
+        OutError = TEXT("Equipped items cannot be sold");
+        return false;
     }
     FOpenWillowTakenInventoryItem Taken;
-    if (!Inventory->TakeById(Id, Taken) || Taken.bIsGear)
+    if (!Inventory->TakeById(Id, Taken))
     {
         OutError = TEXT("Unknown item");
         return false;
     }
-    const FOpenWillowVendorItem Sold = MakeItem(Taken.Weapon, FString::Printf(TEXT("buyback_%d"), ++BuybackSerial), false);
+    const FString BuybackId = FString::Printf(TEXT("buyback_%d"), ++BuybackSerial);
+    const FOpenWillowVendorItem Sold = Taken.bIsGear ? MakeGearItem(Taken.Gear, BuybackId) : MakeItem(Taken.Weapon, BuybackId, false);
     Buyback.Add(Sold);
     while (Buyback.Num() > BuybackCapacity) Buyback.RemoveAt(0);
     int32 Money = 0;
@@ -478,11 +873,10 @@ bool FOpenWillowVendorStock::BuyBack(FString Id, UOpenWillowInventory* Inventory
         OutError = TEXT("Insufficient funds");
         return false;
     }
-    if (!Inventory->CanAddToBackpack() || !Inventory->AddToBackpack(Item.Weapon))
-    {
-        OutError = TEXT("Backpack full");
-        return false;
-    }
+    // Back into the backpack as it was sold: a gear item as gear, a gun as a gun.
+    FString NewId;
+    const bool bAdded = Item.bHasGear ? AddGearToPack(Item.Gear, Inventory, OutError) : AddWeaponToPack(Item.Weapon, Inventory, NewId, OutError);
+    if (!bAdded) return false;
     Inventory->SetMoney(Money - Cost);
     Buyback.RemoveAt(Index);
     return true;
@@ -626,10 +1020,8 @@ void UOpenWillowVendorSubsystem::OnWorldBeginPlay(UWorld& InWorld)
         const AOpenWillowVendingMachine* Machine = Candidate.Get();
         if (!Machine) continue;
         IdentityLines.Add(FString::Printf(TEXT("machine %s %s %u"), *Machine->Id, *Machine->Stock.Kind, Machine->Stock.Seed));
-        for (const FOpenWillowVendorLeaf& Leaf : Machine->Stock.Leaves)
-            IdentityLines.Add(FString::Printf(TEXT("leaf %s %s %.9g"), *Leaf.Balance, *Leaf.Class, Leaf.Weight));
-        for (const FOpenWillowVendorLeaf& Leaf : Machine->Stock.FeaturedLeaves)
-            IdentityLines.Add(FString::Printf(TEXT("featured %s %s %.9g"), *Leaf.Balance, *Leaf.Class, Leaf.Weight));
+        for (const FOpenWillowVendorLeaf& Leaf : Machine->Stock.Leaves) IdentityLines.Add(LeafIdentity(TEXT("leaf"), Leaf));
+        for (const FOpenWillowVendorLeaf& Leaf : Machine->Stock.FeaturedLeaves) IdentityLines.Add(LeafIdentity(TEXT("featured"), Leaf));
     }
     ManifestId = FOpenWillowCurrencySave::ManifestIdentity(IdentityLines);
     if (FParse::Param(FCommandLine::Get(), TEXT("owvendortest")))
@@ -787,7 +1179,11 @@ bool UOpenWillowVendorSubsystem::Command(const FString& Action, FString Id, FStr
     // its id may now name a different gun.
     else if (Machine->Stock.EnsureStocked(GetWorld()->GetTimeSeconds()) && Action == TEXT("buy"))
         OutError = TEXT("The stock changed");
-    else if (Action == TEXT("buy")) bOk = Machine->Stock.Buy(Id, Inventory, OutError);
+    else if (Action == TEXT("buy"))
+    {
+        AOpenWillowWalker* Walker = ActiveWalker();
+        bOk = Machine->Stock.Buy(Id, Inventory, Walker ? &Walker->GetMayaState() : nullptr, GetWorld()->GetTimeSeconds(), OutError);
+    }
     else if (Action == TEXT("sell"))
         bOk = Machine->Stock.Sell(Id, Inventory, OutError, [this](const FOpenWillowWeaponItem& Item) { return IsQuestOwned(Item); });
     else if (Action == TEXT("buyback")) bOk = Machine->Stock.BuyBack(Id, Inventory, OutError);
@@ -1000,6 +1396,19 @@ bool UOpenWillowVendorSubsystem::IsQuestOwned(const FOpenWillowWeaponItem& Item)
     return Quest && Quest->OwnsItem(Item);
 }
 
+AOpenWillowWalker* UOpenWillowVendorSubsystem::ActiveWalker() const
+{
+    const APlayerController* PC = ActiveController.Get();
+    return PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr;
+}
+
+int32 UOpenWillowVendorSubsystem::FirstMachineIndexOfKind(const TCHAR* Kind) const
+{
+    for (int32 Index = 0; Index < Machines.Num(); ++Index)
+        if (Machines[Index].IsValid() && Machines[Index]->Kind == Kind) return Index;
+    return INDEX_NONE;
+}
+
 bool UOpenWillowVendorSubsystem::SellLast(FString& OutError)
 {
     const AOpenWillowVendingMachine* Machine = ActiveMachine.Get();
@@ -1022,17 +1431,18 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     }
     FString Error;
     auto Report = [this]() { UE_LOG(LogTemp, Display, TEXT("OWVENDSTATE %s"), *ReportJson()); };
+    // Closes any open shop, then opens the first spawned machine of the kind (the page stays the same widget).
+    auto OpenFirstOfKind = [this, &Error](const TCHAR* Kind)
+    {
+        if (Page.IsValid() && Page->IsShown()) CloseShop();
+        const int32 Index = FirstMachineIndexOfKind(Kind);
+        UE_LOG(LogTemp, Display, TEXT("OWVENDTEST open index=%d kind=%s"), Index, Kind);
+        if (Index == INDEX_NONE) Error = FString::Printf(TEXT("no %s machine spawned"), Kind);
+        if (Index == INDEX_NONE || !OpenByIndex(Index, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST open refused: %s"), *Error);
+    };
     switch (TestStep++)
     {
-    case 0:
-    {
-        int32 Index = INDEX_NONE; // the first weapon machine: only those are stocked in PR 1
-        for (int32 I = 0; I < Machines.Num() && Index == INDEX_NONE; ++I)
-            if (Machines[I].IsValid() && Machines[I]->Kind == TEXT("weapons")) Index = I;
-        UE_LOG(LogTemp, Display, TEXT("OWVENDTEST open index=%d"), Index);
-        if (!OpenByIndex(Index, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST open refused: %s"), *Error);
-        break;
-    }
+    case 0: OpenFirstOfKind(TEXT("weapons")); break; // only the first weapon machine is stocked with guns
     case 1: Report(); break;
     case 2: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST buy refused: %s"), *Error); break;
     case 3: Report(); break;
@@ -1041,7 +1451,28 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     case 6: RestockOpen(); break;
     case 7: Report(); break;
     case 8: FScreenshotRequest::RequestScreenshot(TEXT("OWVendor_open.png"), false, false); break;
-    case 10:
+    // Ammo: the first items machine, report, buy shelf row 0 (an ammo row), report.
+    case 9: OpenFirstOfKind(TEXT("items")); break;
+    case 10: Report(); break;
+    case 11: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST ammo buy refused: %s"), *Error); break;
+    case 12: Report(); break;
+    // Health: the first health machine, the same.
+    case 13: OpenFirstOfKind(TEXT("health")); break;
+    case 14: Report(); break;
+    case 15:
+        // Test fixture only: half health first, so the heal can be measured ("Health full" refuses at full health).
+        if (AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr)
+        {
+            FOpenWillowMayaState& State = Walker->GetMayaState();
+            const float Max = State.Effective().MaxHealth;
+            State.SetHealth(Max, Max * 0.5f, World->GetTimeSeconds());
+            UE_LOG(LogTemp, Display, TEXT("OWVENDTEST health set to %.1f of %.1f for the heal buy"), Max * 0.5f, Max);
+        }
+        if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST heal buy refused: %s"), *Error);
+        break;
+    case 16: Report(); break;
+    case 17:
+        if (Page.IsValid() && Page->IsShown()) CloseShop();
         UE_LOG(LogTemp, Display, TEXT("OWVENDTEST done"));
         World->GetTimerManager().ClearTimer(TestTimer);
         FPlatformMisc::RequestExit(false);
@@ -1092,6 +1523,23 @@ FString UOpenWillowVendorSubsystem::StateJson() const
     State->SetNumberField(TEXT("capacity"), Inventory->GetBackpackCapacity());
     State->SetNumberField(TEXT("used"), Inventory->BackpackCount());
 
+    // Ammo pools and health, for the page's detail line and the checker (ammo_buy, heal_buy).
+    TSharedRef<FJsonObject> AmmoJson = MakeShared<FJsonObject>();
+    for (int32 Type = 0; Type < UOpenWillowInventory::AmmoTypeCount; ++Type)
+    {
+        const FOpenWillowAmmoPool& Pool = Inventory->AmmoPool(EOpenWillowAmmoType(Type));
+        TSharedRef<FJsonObject> PoolJson = MakeShared<FJsonObject>();
+        PoolJson->SetNumberField(TEXT("current"), Pool.Current);
+        PoolJson->SetNumberField(TEXT("max"), Pool.Max);
+        AmmoJson->SetObjectField(UOpenWillowInventory::AmmoTypeKey(EOpenWillowAmmoType(Type)), PoolJson);
+    }
+    State->SetObjectField(TEXT("ammo"), AmmoJson);
+    const AOpenWillowWalker* Walker = ActiveWalker();
+    TSharedRef<FJsonObject> HealthJson = MakeShared<FJsonObject>();
+    HealthJson->SetNumberField(TEXT("current"), Walker ? Walker->GetHealth() : 0.f);
+    HealthJson->SetNumberField(TEXT("max"), Walker ? Walker->GetMaxHealth() : 0.f);
+    State->SetObjectField(TEXT("health"), HealthJson);
+
     TArray<TSharedPtr<FJsonValue>> ShopJson;
     for (const FOpenWillowVendorItem& Item : Stock.Items)
         ShopJson.Add(MakeShared<FJsonValueObject>(ShopItemJson(Item, Stock.PriceOf(Item), Money)));
@@ -1112,6 +1560,14 @@ FString UOpenWillowVendorSubsystem::StateJson() const
         }
         TSharedRef<FJsonObject> Row = BackpackJson(Gun, bEquipped);
         Row->SetBoolField(TEXT("sellable"), !bEquipped && !IsQuestOwned(Gun));
+        BackpackJsonList.Add(MakeShared<FJsonValueObject>(Row));
+    }
+    // Shields and grenade mods (and other gear) are listed after the guns; gear is sellable unless it is worn.
+    for (const FOpenWillowGearItem& Gear : Inventory->GearItemList())
+    {
+        const bool bWorn = IsEquippedId(Inventory, Gear.Id);
+        TSharedRef<FJsonObject> Row = GearBackpackJson(Gear, bWorn);
+        Row->SetBoolField(TEXT("sellable"), !bWorn);
         BackpackJsonList.Add(MakeShared<FJsonValueObject>(Row));
     }
     State->SetArrayField(TEXT("backpack"), BackpackJsonList);

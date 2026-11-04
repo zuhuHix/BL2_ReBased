@@ -188,6 +188,49 @@ check('Request line has the serial, action and id', () => {
   assert.throws(() => model.buildRequest(1, 'sell', ''), RangeError);
 });
 
+check('Every row kind the host sends is accepted, and an unknown kind is not', () => {
+  for (const kind of ['weapon', 'item', 'ammo', 'health', 'shield', 'grenade_mod', 'class_mod']) {
+    assert.equal(model.validateState(state({shop: [item('k1', {kind})]})).ok, true, `kind ${kind} should validate`);
+  }
+  assert.equal(model.validateState(state({shop: [item('k2', {kind: 'relic'})]})).ok, false);
+});
+
+check('An ammo or health buy goes through a full backpack; a shield or grenade mod buy does not', () => {
+  const full = state({used: 12, capacity: 12, shop: [item('a1', {kind: 'ammo', price: 10}), item('h1', {kind: 'health', price: 10}),
+    item('g1', {kind: 'shield', price: 10}), item('n1', {kind: 'grenade_mod', price: 10})]});
+  const lists = model.buildLists(full);
+  assert.deepEqual(model.actionFor({column: 'shop', index: 0}, lists, full), {ok: true, action: 'buy', id: 'a1'});
+  assert.deepEqual(model.actionFor({column: 'shop', index: 1}, lists, full), {ok: true, action: 'buy', id: 'h1'});
+  assert.deepEqual(model.actionFor({column: 'shop', index: 2}, lists, full), {ok: false, message: 'Backpack full'});
+  assert.deepEqual(model.actionFor({column: 'shop', index: 3}, lists, full), {ok: false, message: 'Backpack full'});
+});
+
+check('A shield in the backpack is sold unless it is worn', () => {
+  const current = state({backpack: [bagItem('sh1', {kind: 'shield', sell: 47, sellable: true}),
+    bagItem('sh2', {kind: 'shield', sell: 47, equipped: true})]});
+  const lists = model.buildLists(current);
+  assert.deepEqual(model.actionFor({column: 'backpack', index: 0}, lists, current), {ok: true, action: 'sell', id: 'sh1'});
+  assert.deepEqual(model.actionFor({column: 'backpack', index: 1}, lists, current),
+    {ok: false, message: 'Equipped items cannot be sold'});
+});
+
+check('Ammo and health state objects are checked when present, and a health float is allowed', () => {
+  const good = state({ammo: {pistol: {current: 40, max: 100}}, health: {current: 136.97, max: 400}});
+  assert.equal(model.validateState(good).ok, true);
+  assert.equal(model.validateState(state({ammo: {pistol: {current: 1.5, max: 100}}})).ok, false);
+  assert.equal(model.validateState(state({ammo: 'many'})).ok, false);
+  assert.equal(model.validateState(state({health: {current: -1, max: 400}})).ok, false);
+  assert.equal(model.validateState(state({health: {current: 'high', max: 400}})).ok, false);
+});
+
+check('The pool note shows the ammo pool for an ammo row and the health for a health row only', () => {
+  const current = state({ammo: {pistol: {current: 40, max: 100}}, health: {current: 136.97, max: 400}});
+  assert.equal(model.poolNote(current, {kind: 'ammo', ammoType: 'pistol'}), '40/100 rounds in the pool');
+  assert.equal(model.poolNote(current, {kind: 'health'}), 'Health 136/400');
+  assert.equal(model.poolNote(current, {kind: 'weapon'}), '');
+  assert.equal(model.poolNote(current, {kind: 'ammo', ammoType: 'grenade'}), '');
+});
+
 check('Page script parses and stays small', () => {
   const dir = path.join(__dirname, '../tools/hud_overlay');
   const source = fs.readFileSync(path.join(dir, 'vending.js'), 'utf8');
