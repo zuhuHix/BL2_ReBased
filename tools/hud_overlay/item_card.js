@@ -214,9 +214,13 @@
       // Preserve observed gear colours/emphasis in the movie's TextField. This payload
       // is passed only to Flash; it must never be inserted into browser HTML.
       call(card, 'SetFunStats', typeof item.funStatsMarkup === 'string' && item.funStatsMarkup ? item.funStatsMarkup : funStats);
+      // ItemCardGFxObject.SetItemCardEx (script): the strip shows only for a required level above 1; `met` is
+      // IsLevelRequirementMet. The movie's own SetLevelRequirement turns the card red when it is not met. Overpower levels
+      // and DLC-restricted items have their own texts there; the host has neither.
       const levelKnown = item.levelKnown !== false && Number.isFinite(Number(item.level));
-      call(card, 'SetLevelRequirement', levelKnown, levelKnown && Number(item.level) <= Number(playerLevel), false,
-        levelKnown ? `LEVEL REQUIREMENT: ${item.level}` : '');
+      const showLevel = levelKnown && Number(item.level) > 1;
+      call(card, 'SetLevelRequirement', showLevel, !levelKnown || Number(item.level) <= Number(playerLevel), false,
+        showLevel ? `LEVEL REQUIREMENT: ${item.level}` : '');
       // Show the sale value whenever the host sends a number (valueKnown only says how sure it is).
       const valueKnown = item.value !== null && item.value !== '' && item.value !== undefined && Number.isFinite(Number(item.value));
       call(card, 'SetValue', valueKnown ? Number(item.value) : 0);
