@@ -10,15 +10,31 @@
 
 namespace
 {
+// A number field, only when the JSON value really is a number: UE's TryGetNumberField also converts numeric-looking
+// strings, which a malformed manifest must not pass. Present with another type (not null): sets *bWrongType.
+template <typename T>
+bool NumberField(const FJsonObject& Object, const TCHAR* Name, T& Out, bool* bWrongType = nullptr)
+{
+    const TSharedPtr<FJsonValue> Value = Object.TryGetField(Name);
+    if (!Value.IsValid() || Value->Type == EJson::Null) return false;
+    if (Value->Type != EJson::Number)
+    {
+        if (bWrongType) *bWrongType = true;
+        return false;
+    }
+    Out = T(Value->AsNumber());
+    return true;
+}
+
 FOpenWillowSkillEffects::FValue ReadValue(const FJsonObject* Object)
 {
     FOpenWillowSkillEffects::FValue Value;
     if (!Object) return Value;
     double Number = 0;
-    if (Object->TryGetNumberField(TEXT("constant"), Number)) Value.Constant = float(Number);
+    if (NumberField(*Object, TEXT("constant"), Number)) Value.Constant = float(Number);
     else if (Object->TryGetStringField(TEXT("attribute"), Value.Attribute))
     {
-        if (Object->TryGetNumberField(TEXT("scale"), Number)) Value.Scale = float(Number);
+        if (NumberField(*Object, TEXT("scale"), Number)) Value.Scale = float(Number);
     }
     else Value.bResolved = false;   // {"unresolved": <definition>}
     return Value;
@@ -44,7 +60,7 @@ FOpenWillowSkillEffects::FTest ReadTest(const FJsonObject& Object)
         Object.TryGetStringField(TEXT("op"), Test.Op);
         Test.bMultiply = Object.TryGetStringField(TEXT("usage"), Usage) && Usage == TEXT("Multiply");
         double Constant = 0;
-        Object.TryGetNumberField(TEXT("constant"), Constant);
+        NumberField(Object, TEXT("constant"), Constant);
         Test.Constant = float(Constant);
     }
     else if (Kind == TEXT("and") || Kind == TEXT("or"))
@@ -104,7 +120,7 @@ bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutErro
         FString Type;
         const TArray<TSharedPtr<FJsonValue>>* EffectValues = nullptr;
         if (!Object.TryGetStringField(TEXT("id"), Skill.Id) || !Object.TryGetStringField(TEXT("type"), Type)
-            || !Object.TryGetNumberField(TEXT("maxGrade"), Skill.MaxGrade) || !Object.TryGetArrayField(TEXT("effects"), EffectValues))
+            || !NumberField(Object, TEXT("maxGrade"), Skill.MaxGrade) || !Object.TryGetArrayField(TEXT("effects"), EffectValues))
             return Fail(FString::Printf(TEXT("skill %d lacks id, type, maxGrade or effects"), SkillIndex));
         Object.TryGetStringField(TEXT("name"), Skill.Name);
         Skill.Type = Type == TEXT("Action") ? ESkillType::Action : Type == TEXT("ActionAugment") ? ESkillType::ActionAugment
@@ -123,8 +139,10 @@ bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutErro
             E.TryGetStringField(TEXT("attribute"), Effect.Attribute);   // null stays empty
             Effect.Type = Mod == TEXT("PreAdd") ? EModifier::PreAdd : Mod == TEXT("PostAdd") ? EModifier::PostAdd : EModifier::Scale;
             Effect.bSelf = Target == TEXT("Self");
-            E.TryGetNumberField(TEXT("startGrade"), Effect.StartGrade);
-            E.TryGetNumberField(TEXT("interval"), Effect.Interval);
+            bool bWrongType = false;
+            NumberField(E, TEXT("startGrade"), Effect.StartGrade, &bWrongType);
+            NumberField(E, TEXT("interval"), Effect.Interval, &bWrongType);
+            if (bWrongType) return Fail(Skill.Id + TEXT(": startGrade or interval is not a number"));
             Effect.Base = ReadValue(ObjectField(E, TEXT("base")));
             Effect.PerGrade = ReadValue(ObjectField(E, TEXT("perGrade")));
             const TArray<TSharedPtr<FJsonValue>>* Bonus = nullptr;
@@ -134,8 +152,8 @@ bool FOpenWillowSkillEffects::LoadJson(const FJsonObject& Root, FString& OutErro
                     const TSharedPtr<FJsonObject>* BPtr = nullptr;
                     int32 Grade = 0;
                     double Value = 0;
-                    if (!B.IsValid() || !B->TryGetObject(BPtr) || !BPtr->IsValid() || !(*BPtr)->TryGetNumberField(TEXT("grade"), Grade)
-                        || !(*BPtr)->TryGetNumberField(TEXT("value"), Value))
+                    if (!B.IsValid() || !B->TryGetObject(BPtr) || !BPtr->IsValid() || !NumberField(**BPtr, TEXT("grade"), Grade)
+                        || !NumberField(**BPtr, TEXT("value"), Value))
                         return Fail(Skill.Id + TEXT(": a bonus entry lacks grade or value"));
                     Effect.Bonus.Add({Grade, float(Value)});
                 }
