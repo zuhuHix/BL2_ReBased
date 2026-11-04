@@ -18,7 +18,7 @@ EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "crit_trace", "shie
             "patrol", "death", "ragdoll", "respawn", "popup_crit", "dummy_respawn",
             "notice_proximity", "notice_sight", "no_notice_far", "provoked", "approach", "melee_hit", "melee_interval",
             "melee_miss", "forget", "passive_no_melee",
-            "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll"]
+            "loot_near_corpse", "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll"]
 # Steps that may be SKIP when their data is absent: no imported stock mesh / physics asset (ragdoll), and no weapon generator
 # manifest (loot_weapon_item: no gun is rolled, the money checks still decide).
 MAY_SKIP = {"ragdoll", "loot_weapon_item"}

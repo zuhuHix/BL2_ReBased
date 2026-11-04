@@ -166,3 +166,6 @@ generator manifest), loot_off, loot_seeded_roll.
 - **Gun drops in `always` mode** try up to 8 seeds until the weapon pool gives a gun (the pool also holds shields and grenade mods, and a pick that is
   not a gun drops nothing); each try's drops are logged. Normal mode keeps the one stock roll. `-owrangeloot=always|normal|off` sets the mode at
   start-up (for the slice gate, whose kill in range mode otherwise has the stock 0.085 gun chance).
+- **Drops at the origin (slice gate report).** The drop spot was taken from the enemy's collision centre, which reads zero once the death has
+  turned the collision off, so every ring trace missed and the fall-back put a gun at the world origin, 5,894 uu from the corpse. The rings now
+  centre on the actor's location (its floor point), and the test's new `loot_near_corpse` step checks every drop lies within 400 uu of the corpse.
