@@ -33,7 +33,7 @@ run(`
   function reset(open=4, gear=true) {
     selectedId=null; targetSlot=0; targetGearSlot=null; firstRow=0;
     navigationPanel='equipped'; lastBackpackId=null; lastEquippedIndex=0;
-    transferSourceId=null; transferFromEquipped=false; compareId=null; location.href=undefined;
+    transferSourceId=null; transferFromEquipped=false; compareId=null; location.href=undefined; lastTabRequest=null;
     categoryIndex=sortIndex=0; inspectMode=false; state=null; lastState='';
     const weapons=['w0','w1','w2','w3'].map((id,i)=>i<open?id:null);
     window.owInventory({level:10,activeSlot:0,slotsUnlocked:open,
@@ -81,7 +81,9 @@ check('Left in the backpack returns to the equipped analogue, even after another
   assert.equal(selected(), 'w0');
 });
 check('Number keys switch status-menu tabs (TrySwitchToScreen), not weapon slots', () => {
-  run('reset(2)'); press('ArrowRight', '2', '3', '5');
+  run('reset(2)'); press('ArrowRight', '2'); assert.equal(run('lastTabRequest'), 'Map');
+  press('3'); assert.equal(run('lastTabRequest'), 'Inventory');
+  press('5'); assert.equal(run('lastTabRequest'), 'Challenges');
   assert.equal(run('location.href'), undefined); // Map and Challenges have no host page; Inventory is this page
   assert.equal(run('targetSlot'), 0); assert.equal(selected(), 'b0');
   press('Enter', '1');
@@ -90,8 +92,18 @@ check('Number keys switch status-menu tabs (TrySwitchToScreen), not weapon slots
   run('reset()'); press('4'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
 check('Comma and Period are the previous and next tab (GotoPrevTab / GotoNextTab): Map (no host page), Skills', () => {
-  run('reset()'); press(','); assert.equal(run('location.href'), undefined);
-  press('.'); assert.equal(run('location.href'), '/__ow_tab_skills');
+  run('reset()'); press(',');
+  assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), undefined); // Map has no host page
+  press('.');
+  assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
+});
+check('Comma and Period switch tabs during a transfer and during a compare too', () => {
+  run('reset()'); press('ArrowRight', 'Enter'); assert.equal(run('transferSourceId'), 'b0');
+  press(','); assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('transferSourceId'), 'b0');
+  press('.'); assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
+  run('reset()'); press('ArrowRight', 'c'); assert.ok(run('compareId'));
+  press(','); assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), undefined);
+  press('.'); assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
 check('Backpack keeps its row when re-entered and stops at the top', () => {
   run('reset()'); press('ArrowRight', 'ArrowUp'); assert.equal(selected(), 'b0');

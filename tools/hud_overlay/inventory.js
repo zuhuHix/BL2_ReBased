@@ -661,7 +661,9 @@ const headerTabs = [
   {nav:'nav4', label:'Skills', route:'/__ow_tab_skills'},
   {nav:'nav5', label:'Challenges'}
 ];
+let lastTabRequest = null; // the tab a key or click last asked for (read by the navigation test)
 function switchTab(tab) {
+  lastTabRequest = tab.label;
   if (tab.route) location.href = tab.route;
 }
 function addHeaderTabs() {
