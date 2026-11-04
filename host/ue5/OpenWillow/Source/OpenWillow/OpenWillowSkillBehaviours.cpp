@@ -47,16 +47,22 @@ void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
     if (Event.WeaponId.StartsWith(TEXT("skill:")) || Event.Kind == EOpenWillowHitKind::StatusTick) return;
     const float Now = GetWorld()->GetTimeSeconds();
     const float Applied = FMath::Max(0.f, Event.Applied);
+    // The game's Bullet or Rocket damage source: a Direct hit (a bullet, trace pellet or rocket body). Splash cannot be
+    // told apart from the other explosions yet, and Tediore throws (Throw) are not bullets, so neither counts.
+    const bool bBulletOrRocket = Event.Kind == EOpenWillowHitKind::Direct;
 
     // Life Tap (kill skill): Maya heals PlayerConvertDamageToHealingPercent (0.012 x grade while the kill-skill timer runs)
     // of the damage she deals. The conversion is native in the game (UNVERIFIED rule: applied damage x the fraction).
-    const float Convert = OpenWillowSkillEffects::Apply(Maya,
-        TEXT("D_Attributes.DamageEnhancementModifiers.PlayerConvertDamageToHealingPercent"), 0.f);
-    if (Convert > 0.f && Applied > 0.f) Maya->Heal(Applied * Convert);
+    if (Applied > 0.f && KillSkillsActiveAt(Now) && GradeOfNamed(TEXT("LifeTap")) > 0)
+    {
+        const float Convert = OpenWillowSkillEffects::Apply(Maya,
+            TEXT("D_Attributes.DamageEnhancementModifiers.PlayerConvertDamageToHealingPercent"), 0.f);
+        if (Convert > 0.f) Maya->Heal(Applied * Convert);
+    }
 
-    // Cloud Kill: a bullet or rocket hit on an enemy, when CloudKill_Feedback (5.5 s) is not running, leaves a corrosive
+    // Cloud Kill: a bullet or rocket hit (Direct) on an enemy, when CloudKill_Feedback (5.5 s) is not running, leaves a corrosive
     // cloud at the enemy for 5 s: every 0.25 s radius 220, 0.25 x PlayerSkillDamage, no falloff.
-    if (GradeOfNamed(TEXT("CloudKill")) > 0 && Now >= CloudKillReadyAt)
+    if (bBulletOrRocket && Now >= CloudKillReadyAt && GradeOfNamed(TEXT("CloudKill")) > 0)
     {
         CloudKillReadyAt = Now + 5.5f;
         const FVector Where = Event.Target->GetActorLocation();
@@ -70,12 +76,12 @@ void UOpenWillowSkills::HandleHit(const FOpenWillowHitEvent& Event)
         UE_LOG(LogTemp, Display, TEXT("OWSKILLFX Cloud Kill cloud at %s for 5 s"), *Where.ToCompactString());
     }
 
-    // Immolate: in Fight For Your Life (health below 1), each gun hit adds incendiary damage of 0.1 x grade x the hit's
+    // Immolate: in Fight For Your Life (health below 1), each bullet or rocket hit (Direct) adds incendiary damage of 0.1 x grade x the hit's
     // damage to that enemy.
-    if (const int32 G = GradeOfNamed(TEXT("Immolate")); G > 0 && Maya->IsDown() && Applied > 0.f)
+    if (const int32 G = bBulletOrRocket && Maya->IsDown() && Applied > 0.f ? GradeOfNamed(TEXT("Immolate")) : 0; G > 0)
     {
         FAction& A = Actions.AddDefaulted_GetRef();
-        A.At = Now; A.Kind = FAction::EKind::Direct; A.Target = Event.Target; A.Damage = 0.1f * G * Applied;
+        A.At = Now; A.Kind = FAction::EKind::SingleHit; A.Target = Event.Target; A.Damage = 0.1f * G * Applied;
         A.DamageType = TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"); A.Skill = TEXT("Immolate"); A.Why = TEXT("Immolate");
     }
 }
@@ -192,7 +198,7 @@ void UOpenWillowSkills::RunAction(const FAction& Action)
             Maya->GetHealth(), Maya->GetMaxHealth());
         return;
     }
-    if (Action.Kind == FAction::EKind::Direct)
+    if (Action.Kind == FAction::EKind::SingleHit)
     {
         AActor* Victim = Action.Target.Get();
         IOpenWillowHitTarget* Target = OpenWillowHit::AsTarget(Victim);
@@ -200,8 +206,9 @@ void UOpenWillowSkills::RunAction(const FAction& Action)
         FVector TargetCentre;
         float TargetRadius = 0.f;
         Target->GetHitCentre(TargetCentre, TargetRadius);
+        // Sent as Splash: the dispatcher lets only Direct and Throw hits crit, and skill damage does not (UNVERIFIED).
         FOpenWillowHitEvent Event;
-        Event.Kind = EOpenWillowHitKind::Direct;
+        Event.Kind = EOpenWillowHitKind::Splash;
         Event.WeaponId = TEXT("skill:") + Action.Skill;
         Event.Damage = Action.Damage;
         Event.DamageType = Action.DamageType;

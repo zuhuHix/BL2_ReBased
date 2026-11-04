@@ -130,7 +130,7 @@ private:
     struct FAction
     {
         float At = 0.f;
-        enum class EKind : uint8 { Blast, HealOrb, Direct } Kind = EKind::Blast;   // Direct: one hit on Target
+        enum class EKind : uint8 { Blast, HealOrb, SingleHit } Kind = EKind::Blast;   // SingleHit: one hit on Target
         TWeakObjectPtr<AActor> Target;   // centre of a blast while it exists
         FVector Where = FVector::ZeroVector;
         float Radius = 0.f, Damage = 0.f;
