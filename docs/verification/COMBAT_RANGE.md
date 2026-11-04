@@ -111,6 +111,16 @@ engine texture** (`GetUsedTextures`; batch 1's scouted canyon floor drew dark wi
 candidate (`local/range/shots/survey_<i>.png`) with the material and the reason it was or was not taken; the default spot will be pinned from those
 frames. `prepare_range.py` refuses an `--out` outside `local/` (the manifest holds game-derived coordinates).
 
+Batch 4 (pc-hummer, 2026-11-04) rejected all 8 candidates and every ring point; the rules were then changed (host choices, UNVERIFIED):
+- **Terrain is textured through its blend layers.** Every terrain hit was `M_TerrainBlend`, the import's terrain material (`tools/prepare_terrain.py`
+  writes it with a `terrain_blend` block): it samples no texture of its own. A floor now also counts as textured when a texture parameter of the
+  material names a texture that is not an engine texture, or when the material or one of its parents is the terrain blend material.
+- **Slopes.** The eight probes started 300 uu above the centre's floor, so on a rising slope they began under the ground and met nothing ("a floor
+  probe found no floor"). They now reach 1,500 uu up and down; a walkable floor is one with normal Z >= 0.85 (about 32 degrees), a probe may lie
+  250 uu above or below the centre (was 100) and a formation slot 400 uu (was 150). Rings of 2,400 and 3,600 uu around a candidate were added.
+- **`-owrangeat=X,Y,Z,Yaw`** was cut at the first comma (`FParse::Value` stops at separators by default) and fell through to the candidates; it is
+  now read whole.
+
 ## Loot on death (PR3)
 
 `tools/prepare_range.py` kills each spawned pawn in the VM (`hit:<n>:999999:DmgType_Normal:Shotgun`) and keeps its death roll per kind and level: the

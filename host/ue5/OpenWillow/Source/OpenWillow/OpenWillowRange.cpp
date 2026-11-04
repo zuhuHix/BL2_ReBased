@@ -1,6 +1,7 @@
 #include "OpenWillowRange.h"
 #include "RHIGlobals.h"
 #include "Engine/Texture.h"
+#include "Materials/MaterialInstance.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowEnemy.h"
 #include "OpenWillowInventory.h"
@@ -40,6 +41,13 @@ constexpr float EnemyRing = 1600.f;         // the enemies stand on an arc this 
 constexpr float EnemyArcDegrees = 60.f;     // the arc runs from -60 to +60 degrees around the facing
 constexpr int32 ScoutRings = 9;             // radii 6000, 7000, ... 14000 uu
 constexpr int32 ScoutAngles = 24;
+// Floor rules of the scout and the formation (host choice, UNVERIFIED). Real terrain slopes: a walkable floor is one whose normal
+// is within about 32 degrees of up (cos 32 = 0.85); the probes reach ProbeReach above and below, a probe may sit ProbeMaxRise
+// above or below the centre, a formation slot SlotMaxRise (the enemies and dummies snap to the floor under them).
+constexpr float WalkableNormalZ = 0.85f;
+constexpr float ProbeReach = 1500.f;
+constexpr float ProbeMaxRise = 250.f;
+constexpr float SlotMaxRise = 400.f;
 const FVector2D ScoutCentre(0.f, 0.f); // set from ignored local data later in this stack
 
 // -<Switch>=<path>, else the project-relative default.
@@ -91,11 +99,34 @@ bool FloorIsTextured(const FHitResult& Hit, FString& OutPath)
         if (Name.Contains(Placeholder, ESearchCase::IgnoreCase)) return false;
     // A name says little: the material must actually sample a texture of its own (one that is not an engine texture). An
     // imported surface without its diffuse (the dark canyon floor of batch 1) uses none, or only engine defaults.
+    auto OwnTexture = [](const UTexture* Texture)
+    {
+        return Texture && !Texture->GetPathName().StartsWith(TEXT("/Engine/"), ESearchCase::CaseSensitive);
+    };
     TArray<UTexture*> Textures;
     Material->GetUsedTextures(Textures, EMaterialQualityLevel::Num, true, GMaxRHIFeatureLevel, true);
     for (const UTexture* Texture : Textures)
-        if (Texture && !Texture->GetPathName().StartsWith(TEXT("/Engine/"), ESearchCase::CaseSensitive)) return true;
-    OutPath += FString::Printf(TEXT(" (no texture of its own, %d used)"), Textures.Num());
+        if (OwnTexture(Texture)) return true;
+    // Textures given as parameter values (a material instance, or the terrain blend whose layer textures are parameters; batch 4:
+    // every terrain spot was M_TerrainBlend, which samples nothing of its own).
+    TArray<FMaterialParameterInfo> Infos;
+    TArray<FGuid> Ids;
+    Material->GetAllTextureParameterInfo(Infos, Ids);
+    for (const FMaterialParameterInfo& Info : Infos)
+    {
+        UTexture* Texture = nullptr;
+        if (Material->GetTextureParameterValue(Info, Texture) && OwnTexture(Texture)) return true;
+    }
+    // The level import's terrain blend material (and its instances) is the textured terrain by construction (its weighted layers
+    // are the cooked terrain layers: tools/prepare_terrain.py writes it with a terrain_blend block); counted as textured even when its layers are set
+    // at run time (host choice, UNVERIFIED).
+    for (const UMaterialInterface* Walk = Material; Walk; )
+    {
+        if (Walk->GetName().StartsWith(TEXT("M_TerrainBlend"))) return true;
+        const UMaterialInstance* Instance = Cast<UMaterialInstance>(Walk);
+        Walk = Instance ? Instance->Parent.Get() : nullptr;
+    }
+    OutPath += FString::Printf(TEXT(" (no texture of its own, %d used, %d texture parameters)"), Textures.Num(), Infos.Num());
     return false;
 }
 
@@ -116,7 +147,7 @@ bool ScoutAccepts(UWorld* World, const FVector2D& XY, float RefZ, float MaxFloor
         OutWhy = TEXT("no floor under the point");
         return false;
     }
-    if (Hit.ImpactNormal.Z < 0.9f || FMath::Abs(Hit.Location.Z - RefZ) > MaxFloorDelta)
+    if (Hit.ImpactNormal.Z < WalkableNormalZ || FMath::Abs(Hit.Location.Z - RefZ) > MaxFloorDelta)
     {
         OutWhy = FString::Printf(TEXT("floor at z=%.0f is not flat or not within %.0f uu of %.0f"), Hit.Location.Z, MaxFloorDelta, RefZ);
         return false;
@@ -124,19 +155,20 @@ bool ScoutAccepts(UWorld* World, const FVector2D& XY, float RefZ, float MaxFloor
     const float FloorZ = Hit.Location.Z;
     const FVector Floor = Hit.Location;
     OutFloorHit = Hit;
-    // Eight probes on a 700 uu circle all find the floor at the same height, and it is flat there.
+    // Eight probes on a 700 uu circle all find a walkable floor near the same height. Each probe starts ProbeReach above the
+    // centre's floor: a probe that started lower would begin under a rising slope and never meet it (batch 4: "found no floor").
     for (int32 Probe = 0; Probe < 8; ++Probe)
     {
         const float Rad = FMath::DegreesToRadians(45.f * Probe);
         const FVector2D At = XY + FVector2D(FMath::Cos(Rad), FMath::Sin(Rad)) * 700.f;
         FHitResult Down;
-        if (!TraceVisibility(World, FVector(At.X, At.Y, FloorZ + 300.f), FVector(At.X, At.Y, FloorZ - 600.f), Down)
+        if (!TraceVisibility(World, FVector(At.X, At.Y, FloorZ + ProbeReach), FVector(At.X, At.Y, FloorZ - ProbeReach), Down)
             || Down.bStartPenetrating)
         {
             OutWhy = TEXT("a floor probe found no floor");
             return false;
         }
-        if (FMath::Abs(Down.Location.Z - FloorZ) > 100.f || Down.ImpactNormal.Z < 0.85f)
+        if (FMath::Abs(Down.Location.Z - FloorZ) > ProbeMaxRise || Down.ImpactNormal.Z < WalkableNormalZ)
         {
             OutWhy = TEXT("the floor drops or slopes around the point");
             return false;
@@ -185,10 +217,10 @@ bool SlotFloor(UWorld* World, const FVector& Spot, const FVector& Centre, bool b
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSlot), true);
     Query.bTraceComplex = true;
     Query.bReturnFaceIndex = true;
-    if (!World->LineTraceSingleByChannel(Hit, FVector(Centre.X, Centre.Y, Spot.Z + 300.f), FVector(Centre.X, Centre.Y, Spot.Z - 600.f),
+    if (!World->LineTraceSingleByChannel(Hit, FVector(Centre.X, Centre.Y, Spot.Z + ProbeReach), FVector(Centre.X, Centre.Y, Spot.Z - ProbeReach),
             ECC_Visibility, Query) || Hit.bStartPenetrating)
         return false;
-    if (Hit.ImpactNormal.Z < 0.85f || FMath::Abs(Hit.Location.Z - Spot.Z) > 150.f) return false;
+    if (Hit.ImpactNormal.Z < WalkableNormalZ || FMath::Abs(Hit.Location.Z - Spot.Z) > SlotMaxRise) return false;
     FString Material;
     if (bRequireTextured && !FloorIsTextured(Hit, Material)) return false;
     OutFloor = Hit.Location;
@@ -630,7 +662,7 @@ bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FSt
 {
     // 1. -owrangeat=X,Y,Z[,Yaw]
     FString At;
-    if (FParse::Value(FCommandLine::Get(), TEXT("owrangeat="), At))
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrangeat="), At, /*bShouldStopOnSeparator=*/false))
     {
         TArray<FString> Parts;
         At.ParseIntoArray(Parts, TEXT(","));
@@ -749,7 +781,7 @@ bool UOpenWillowRangeSubsystem::ResolveCandidate(int32 Index, FVector& OutSpot, 
     const FVector Candidate = Manifest.Candidates[Index].Location;
     TArray<FVector2D> Points;
     Points.Add(FVector2D(Candidate.X, Candidate.Y));
-    for (const float Radius : {600.f, 1200.f})
+    for (const float Radius : {600.f, 1200.f, 2400.f, 3600.f})
         for (int32 Angle = 0; Angle < 8; ++Angle)
         {
             const float Rad = FMath::DegreesToRadians(45.f * float(Angle));
