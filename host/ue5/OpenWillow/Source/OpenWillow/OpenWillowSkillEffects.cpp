@@ -325,8 +325,8 @@ const AOpenWillowWalker* FindMaya(const AActor* Actor)
 
 // The attributes the host can answer for conditions and attribute-valued numbers (host mappings, UNVERIFIED):
 // Att_EnemyIsPhaseLocked is 1 while Maya's Phaselock holds a target; the weapon damage-type flags come from the held
-// gun's damage type name; OpenWillow.Down is the host's own name for Fight For Your Life. The host has no shield, so
-// the shield attributes do not resolve.
+// gun's damage type name; OpenWillow.Down is the host's own name for Fight For Your Life; the health and shield pools'
+// current values and their base maxima (before skill modifiers).
 FOpenWillowSkillEffects::FWorld WorldOf(const AOpenWillowWalker& Maya)
 {
     FOpenWillowSkillEffects::FWorld World;
@@ -336,9 +336,13 @@ FOpenWillowSkillEffects::FWorld WorldOf(const AOpenWillowWalker& Maya)
     {
         if (Attribute == TEXT("GD_Siren_Skills.Misc.Att_EnemyIsPhaseLocked")) { Out = Maya.IsPhaselockActive() && Maya.LastPhaselockHit() ? 1.f : 0.f; return true; }
         if (Attribute == TEXT("OpenWillow.Down")) { Out = Maya.IsDown() ? 1.f : 0.f; return true; }
+        // Pool maxima come from the stats' Base: the effective ones are what these modifiers produce (Effective() would
+        // recurse into them).
         if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue_Player")
-            || Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue")) { Out = Maya.GetMaxHealth(); return true; }
+            || Attribute == TEXT("D_Attributes.HealthResourcePool.HealthMaxValue")) { Out = Maya.GetMayaState().Base.MaxHealth; return true; }
         if (Attribute == TEXT("D_Attributes.HealthResourcePool.HealthCurrentValue")) { Out = Maya.GetHealth(); return true; }
+        if (Attribute == TEXT("D_Attributes.ShieldResourcePool.ShieldMaxValue")) { Out = Maya.GetMayaState().Base.ShieldCapacity; return true; }
+        if (Attribute == TEXT("D_Attributes.ShieldResourcePool.ShieldCurrentValue")) { Out = Maya.GetShield(); return true; }
         const bool bNormal = Attribute == TEXT("D_Attributes.WeaponDamageType.WeaponDamage_Is_Normal");
         const bool bExplosive = Attribute == TEXT("D_Attributes.WeaponDamageType.WeaponDamage_Is_Explosive");
         if (bNormal || bExplosive)

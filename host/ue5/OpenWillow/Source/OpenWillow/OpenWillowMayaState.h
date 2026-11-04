@@ -52,8 +52,10 @@ public:
     static constexpr float DeathCamera = 5.76f;        // dead state to the respawn
 
     FOpenWillowMayaStats Base;
-    // The stats the rules use: Base with the skills lane's modifiers (none yet).
-    FOpenWillowMayaStats Effective() const { return Base; }
+    // The skills lane's modifiers (UOpenWillowSkills installs them; unset: none). They read Base, never Effective().
+    TFunction<void(FOpenWillowMayaStats&)> Modifiers;
+    // The stats the rules use: Base with the skills lane's modifiers.
+    FOpenWillowMayaStats Effective() const { FOpenWillowMayaStats S = Base; if (Modifiers) Modifiers(S); return S; }
 
     float Health = 400.f;
     float Shield = 0.f;

@@ -158,6 +158,9 @@ private:
     float CloudKillReadyAt = -1.f;   // CloudKill_Feedback runs 5.5 s and blocks the next proc
     float NextBlightAt = -1.f;
     void HandleHit(const FOpenWillowHitEvent& Event);
+    // FOpenWillowMayaState::Modifiers: the skills' stat modifiers on Maya's survival stats.
+    void ApplyStatModifiers(struct FOpenWillowMayaStats& Stats) const;
+    mutable bool bApplyingStats = false;   // re-entry guard
 public:
     // Recompense (AOpenWillowWalker::ApplyDamageToPlayer hook): Maya lost Damage health to Causer (or Instigator's pawn).
     void OnMayaDamaged(AActor* Causer, class AController* Instigator, float Damage);

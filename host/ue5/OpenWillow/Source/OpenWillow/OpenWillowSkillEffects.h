@@ -130,5 +130,7 @@ namespace OpenWillowSkillEffects
         inline const TCHAR* HealthMax = TEXT("D_Attributes.HealthResourcePool.HealthMaxValue");
         inline const TCHAR* FootSpeed = TEXT("D_Attributes.GameplayAttributes.FootSpeed");
         inline const TCHAR* HealthRegen = TEXT("D_Attributes.HealthResourcePool.HealthPassiveRegenerationRate");
+        inline const TCHAR* ShieldMax = TEXT("D_Attributes.ShieldResourcePool.ShieldMaxValue");
+        inline const TCHAR* ShieldDelay = TEXT("D_Attributes.ShieldResourcePool.ShieldOnIdleRegenerationDelay");
     }
 }
