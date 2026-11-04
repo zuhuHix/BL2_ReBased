@@ -118,6 +118,17 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
     return entry
 
 
+def local_output(path, repo=REPO):
+    """The output file, resolved; refuses anything not strictly below the repository's ignored local/ folder, because the
+    manifest holds game-derived names, numbers and coordinates that must never land in a tracked file (the pattern of
+    tools/prepare_skill_effects.py)."""
+    resolved = os.path.realpath(path)
+    local = os.path.realpath(os.path.join(repo, "local"))
+    if os.path.commonpath([resolved, local]) != local or resolved == local:
+        raise SystemExit("refusing --out %s: it must be inside %s (ignored game-derived output)" % (path, local))
+    return resolved
+
+
 PLAZA = (0.0, 0.0)             # the scout centre; from ignored local data later in this stack
 GATE_TERRAIN = "Sanctuary_P:TheWorld.PersistentLevel.Terrain_2"
 
@@ -163,6 +174,7 @@ def main(argv=None):
                         help="terrain probes of the level import (spot candidates); missing: the host scouts rings only")
     parser.add_argument("--no-vm", action="store_true", help="skip the VM run (empty health tables: the host uses its stand-in)")
     args = parser.parse_args(argv)
+    args.out = local_output(args.out)
     run = {} if args.no_vm else run_vm(args.reader, parse_levels(args.levels))
     targets = {}
     if os.path.isfile(args.target):

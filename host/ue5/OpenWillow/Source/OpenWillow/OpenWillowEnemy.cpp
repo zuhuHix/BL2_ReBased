@@ -348,7 +348,9 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
         In.MayaLevel = Walker->GetSkills() ? Walker->GetSkills()->GetLevel() : GetLevel();
         // Exposure stand-in (UNVERIFIED): a Visibility line from the enemy's centre to Maya's centre, both ignored. Sampled only
         // on the brain's state updates (the only time it reads it); in between the last sample is passed on.
-        if (Brain.IsUpdateDue(Now))
+        // Not while passive, lifted or dead: the brain then skips its updates (NextUpdateAt does not advance), so "due" would
+        // stay true every frame; the next sample comes with the first update after it resumes.
+        if (!bPassive && !IsPhaselocked() && !IsDead() && Brain.IsUpdateDue(Now))
         {
             FVector Centre;
             float HalfHeight = 0.f;

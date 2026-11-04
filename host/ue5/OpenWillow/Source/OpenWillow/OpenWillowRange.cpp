@@ -1,4 +1,6 @@
 #include "OpenWillowRange.h"
+#include "RHIGlobals.h"
+#include "Engine/Texture.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowEnemy.h"
 #include "OpenWillowSkills.h"
@@ -84,7 +86,14 @@ bool FloorIsTextured(const FHitResult& Hit, FString& OutPath)
     const FString Name = Material->GetName();
     for (const TCHAR* Placeholder : {TEXT("Collision"), TEXT("Fallback"), TEXT("Neutral")})
         if (Name.Contains(Placeholder, ESearchCase::IgnoreCase)) return false;
-    return true;
+    // A name says little: the material must actually sample a texture of its own (one that is not an engine texture). An
+    // imported surface without its diffuse (the dark canyon floor of batch 1) uses none, or only engine defaults.
+    TArray<UTexture*> Textures;
+    Material->GetUsedTextures(Textures, EMaterialQualityLevel::Num, true, GMaxRHIFeatureLevel, true);
+    for (const UTexture* Texture : Textures)
+        if (Texture && !Texture->GetPathName().StartsWith(TEXT("/Engine/"), ESearchCase::CaseSensitive)) return true;
+    OutPath += FString::Printf(TEXT(" (no texture of its own, %d used)"), Textures.Num());
+    return false;
 }
 
 // The facing away from the town: the yaw from the plaza centre to Spot (only X and Y count for a yaw).
