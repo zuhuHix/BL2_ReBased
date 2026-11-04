@@ -83,5 +83,34 @@ class ProjectileFxTests(unittest.TestCase):
         self.assertEqual(out['explosion']['bands'], [])
 
 
+class LocalPathTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.repo = Path(tempfile.mkdtemp())
+        (self.repo / 'local' / 'items').mkdir(parents=True)
+        (self.repo / 'tools').mkdir()
+
+    def test_a_recipe_inside_local_is_accepted(self):
+        path = self.repo / 'local' / 'items' / 'gun.json'
+        self.assertEqual(fx.local_path(path, self.repo), path.resolve())
+
+    def test_tracked_paths_and_escapes_are_refused(self):
+        for path in (self.repo / 'tools' / 'gun.json', self.repo / 'local' / '..' / 'tools' / 'gun.json',
+                     self.repo / 'local', self.repo / 'elsewhere.json'):
+            with self.assertRaises(SystemExit, msg=str(path)):
+                fx.local_path(path, self.repo)
+
+    def test_a_link_out_of_local_is_refused(self):
+        import os
+        target = self.repo / 'tools'
+        link = self.repo / 'local' / 'escape'
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest('symbolic links are not available to this user')
+        with self.assertRaises(SystemExit):
+            fx.local_path(link / 'gun.json', self.repo)
+
+
 if __name__ == '__main__':
     unittest.main()
