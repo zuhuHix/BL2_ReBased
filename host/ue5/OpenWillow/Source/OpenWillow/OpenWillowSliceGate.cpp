@@ -3,6 +3,7 @@
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowNpc.h"
+#include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
@@ -338,14 +339,29 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 Place(Drop->GetActorLocation() + Away * 80.f + FVector(0, 0, 100.f), Drop->GetActorLocation());
                 return;
             }
-            if (StepTime < 0.5f) return;
+            // Before E: the pickup card (PR #95) selects this drop and its state field names it. The card's state is
+            // read here; whether the HUD movie draws it is not checked (this run uses the canvas HUD).
+            if (StepTime < 0.5f)
+            {
+                const APlayerController* PC = Cast<APlayerController>(W->GetController());
+                if (Drop && PC && !bCardSeen && OpenWillowPickupCard::FindAimedPickup(*W, *PC) == Drop)
+                {
+                    const FOpenWillowTakenInventoryItem& Item = Drop->GetItem();
+                    DropId = Item.bIsGear ? Item.Gear.Id : UOpenWillowInventory::StableId(Item.Weapon);
+                    bCardSeen = OpenWillowPickupCard::StateField(*W, *PC).Contains(FString::Printf(TEXT("\"id\":\"%s\""), *DropId));
+                }
+                return;
+            }
             if (W->PickupAttemptCount() == PickupAttemptsBefore && StepTime < 0.6f) { if (!bUseHeld) PressUse(); return; }
             if (W->PickupAttemptCount() == PickupAttemptsBefore && StepTime < 2.f) return;
             GunId = NewBackpackItem();
-            if (W->PickupAttemptCount() > PickupAttemptsBefore && W->LastPickupAccepted() && !GunId.IsEmpty())
-                PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("use key picked up %s"), *GunId));
-            else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("use key: attempts %d -> %d, accepted %d, new backpack item '%s'"),
-                PickupAttemptsBefore, W->PickupAttemptCount(), W->LastPickupAccepted(), *GunId));
+            if (bTestDrop) Fixture(TEXT("gun rolled and dropped by the test"));
+            const FString Card = bCardSeen ? FString::Printf(TEXT("pickup card aimed at it named %s before E (card state only; HUD drawing not checked)"), *DropId)
+                : TEXT("no pickup card for it before E (FindAimedPickup or the card state did not name the drop)");
+            if (bCardSeen && W->PickupAttemptCount() > PickupAttemptsBefore && W->LastPickupAccepted() && !GunId.IsEmpty())
+                PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s; use key picked up %s"), *Card, *GunId));
+            else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s; use key: attempts %d -> %d, accepted %d, new backpack item '%s'"),
+                *Card, PickupAttemptsBefore, W->PickupAttemptCount(), W->LastPickupAccepted(), *GunId));
             Next(EStep::Equip);
             return;
         }
@@ -371,11 +387,36 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note fallback ow.RollGun %s %d 1"), *Source, Stage);
             return;
         }
-        GunId = NewBackpackItem();
-        if (!GunId.IsEmpty()) MissingLink(TEXT("pick_up_gun"), FString::Printf(TEXT("no drop to pick up; fallback ow.RollGun added %s \"%s\" to the backpack"),
-            *GunId, *Inventory->FindItemById(GunId)->Name));
-        else MissingLink(TEXT("pick_up_gun"), TEXT("no drop to pick up, and the ow.RollGun fallback added nothing (see its log line)"));
-        Next(EStep::Equip);
+        {
+            // Until enemies drop loot: the rolled gun is dropped 150 uu ahead of Maya (as -owpickupcardshots does), so the
+            // pickup path (card, use key) still runs. Named as a fixture on the link.
+            const FString Rolled = NewBackpackItem();
+            FOpenWillowTakenInventoryItem Taken;
+            if (Rolled.IsEmpty() || !W->TakeInventoryItemById(Rolled, Taken))
+            {
+                MissingLink(TEXT("pick_up_gun"), TEXT("no drop to pick up, and the ow.RollGun fallback added nothing (see its log line)"));
+                Next(EStep::Equip);
+                break;
+            }
+            const FVector Ahead = W->GetActorLocation() + FRotator(0, W->GetControlRotation().Yaw, 0).Vector() * 150.f;
+            FHitResult Ground;
+            FCollisionQueryParams Query(SCENE_QUERY_STAT(OWSliceGateDrop), false, W);
+            const FVector At = GetWorld()->LineTraceSingleByChannel(Ground, Ahead + FVector(0, 0, 100), Ahead - FVector(0, 0, 450), ECC_WorldStatic, Query)
+                ? Ground.ImpactPoint + FVector(0, 0, 12) : Ahead;
+            FActorSpawnParameters Spawn;
+            Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+            Drop = GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(), FTransform(At), Spawn);
+            if (!Drop)
+            {
+                FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("the test drop of %s did not spawn"), *Rolled));
+                Next(EStep::Equip);
+                break;
+            }
+            Drop->Initialize(MoveTemp(Taken));
+            bTestDrop = true;
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test drop: %s at %s"), *Rolled, *At.ToCompactString());
+            StepTime = 0.f;   // the drop path above runs from its start
+        }
         break;
     }
 
