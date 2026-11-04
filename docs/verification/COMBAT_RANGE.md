@@ -88,7 +88,10 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Melee volume | horizontal 640 from a point 100 uu behind the enemy, 64 degree half angle, Maya's centre -143 to +339 uu from the enemy's location | AI_MELEE_TARGETING_LIVE 5 (fitted) |
 | Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing 1.25 s after the previous start | AI_MELEE_TARGETING_LIVE 4 |
 | Melee damage | the VM's swing rows per kind and level (`arrival` x `ratio`, both from `ow-package --combat-run maya:L spawn:<kind>:L swing:<n>:melee`), x the level scale (1.0 at or below Maya, 1.1 / 1.2 one / two levels up; a straight line to 3.0 at sixteen beyond that, stand-in) | COMBAT_MELEE (the VM rows reproduce adult L5/6/7 73.6974 / 83.2781 / 94.1042, regular L6 24.9834, baby L6 12.4917, ratios 0.715 / 0.728 / 0.741) |
-| Delivery | one function, `RangeDamagePlayer`: UE ApplyDamage on Maya until the maya lane's `OpenWillowApplyDamageToPlayer` (PR #72) merges | host |
+| Delivery | one function, `RangeDamagePlayer`: the maya lane's `OpenWillowApplyDamageToPlayer` (PR #72), shield first, then health, then Fight For Your Life; the test's melee checks compare health plus shield | host |
+
+Maya's teleports (`TeleportMaya`: `ow.Range`, the test's placements) call `AOpenWillowWalker::NotifyTeleported` (PR #77), so a teleport is never taken
+as a fall.
 
 `ow.RangeAI on|off` (on by default): off stops every brain, so the enemies only patrol (for gun testing without being attacked). The range
 test runs its target steps (1-15) and its loot steps with the AI off and its AI steps with it on, topping Maya up to full health before
