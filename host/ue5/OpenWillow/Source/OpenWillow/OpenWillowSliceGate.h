@@ -64,6 +64,7 @@ private:
     bool bLootForced = false;       // ow.RangeLoot always ran before the fight
     bool bRecoverStarted = false;
     bool bLethalApplied = false;
+    FString ShieldFixture;          // -owslicegateshield: what was equipped ("" without the switch)
     bool SkipWhileDown();
     FString RollSource;             // ow.RollGun source for the test drops
     FString DropId, CardId, PickedId, NearId;   // the aimed drop, the card's id at the press, what E picked up, the decoy

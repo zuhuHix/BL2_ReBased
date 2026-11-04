@@ -6,7 +6,8 @@ param(
     [int]$TimeoutSeconds = 600,
     [int]$WaitForEditorSeconds = 3600,
     [int]$MaxParallelActions = 12,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Shield                     # -owslicegateshield: Maya fights with a shield (a fixture; see SLICE_GATE.md)
 )
 # The Phase 4 slice gate as one unattended run (ROADMAP.md): Maya in Sanctuary_P with the Fire mission (-owquest, the
 # same manifests as tools/test_quest.ps1) and -owslicegate, the host sequence in OpenWillowSliceGate.cpp. It spawns Maya,
@@ -62,6 +63,7 @@ try {
         "-owaudio=`"$($manifests.audio)`"", '-owquest', "-owquestsave=`"$save`"", "-owitems=`"$itemDir`"",
         "-owactionskill=`"$($manifests.actionskill)`"", "-owlevel=$gearLevel", '-owslicegate')
     if ($Gun) { $arguments += "-owslicegategun=$Gun" }
+    if ($Shield) { $arguments += '-owslicegateshield' }
     $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
