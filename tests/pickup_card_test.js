@@ -51,6 +51,8 @@ check('In the HUD page apply() forwards to the frame; the frame page drives the 
     addEventListener(k, f) { this.listeners[k] = f; }}; made.push(el); return el; }, body:{appendChild(){}}};
   const page = load('/', {document:doc});
   const card = {id:'a', x:0.5, y:0.5, level:36, item:{id:'a'}, compare:null};
+  page.owPickupCard.apply(null);
+  assert.strictEqual(made.length, 0); // no frame before the first card
   page.owPickupCard.apply(card);
   assert.strictEqual(made.length, 1); assert.strictEqual(made[0].tag, 'iframe'); assert.strictEqual(made[0].src, 'pickup_card.html');
   const received = [];
@@ -80,6 +82,20 @@ check('The shared card writer fills BL2 card rows with arrows against the compar
   const level = calls.find(c => c[1] === 'SetLevelRequirement');
   assert.deepStrictEqual(level.slice(2), [true, true, false, 'LEVEL REQUIREMENT: 34']);
   assert.strictEqual(calls.find(c => c[1] === 'SetBackgroundStyle')[2], 'default');
+});
+check('A frame whose card clip never appears stops polling and logs why', () => {
+  let now = 0, timers = 0;
+  const logs = [];
+  const fakePlayer = {style:{}, ow:() => null, ruffle:() => ({load:() => ({then:ok => ok()})})};
+  const ctx = load('/pickup_card.html', {
+    console:{log:line => logs.push(line)},
+    Date:{now:() => now},
+    setTimeout:(f) => { timers++; now += 1000; if (timers < 100) f(); },
+    RufflePlayer:{newest:() => ({createPlayer:() => fakePlayer})},
+    document:{body:{appendChild(){}}}});
+  ctx.owPickupCard.apply({id:'a', x:0.5, y:0.5, level:1, item:{id:'a'}, compare:null});
+  assert.ok(timers > 0 && timers < 100, `polled ${timers} times`);
+  assert.ok(logs.some(line => /pickup card movie failed: no .*card1 after 15 s/.test(line)), logs.join(' | '));
 });
 
 console.log(`${passed}/${passed} pickup card checks passed (synthetic items; card size, placement and timing UNVERIFIED)`);

@@ -12,15 +12,17 @@ class APlayerController;
 // draws the converted movie (tools/hud_overlay/pickup_card.js) from the "pickupCard" field of the Flash HUD state.
 namespace OpenWillowPickupCard
 {
-    // The pickup Maya aims at: within the reach PickupNearby uses (220 uu from Maya) and within a small cone around the
-    // view direction, the one nearest the view's centre line. The cone is a host choice (UNVERIFIED: the game's look-at
-    // test is native). Null when none.
+    // The pickup Maya aims at: within the reach PickupNearby uses (220 uu from Maya), within a small cone around the view
+    // direction and in sight of the view (a visibility trace that ignores Maya and the pickup). Ties go by angle, then
+    // distance from Maya, then name, so the choice never depends on actor order. The one selection rule for the card and,
+    // later, for E. Reach and cone are host choices (UNVERIFIED: the game's look-at test is native). Null when none.
     AOpenWillowInventoryPickup* FindAimedPickup(const AOpenWillowWalker& Maya, const APlayerController& Player);
 
-    // JSON text for the "pickupCard" field: null, or {id, x, y, level, item, compare}. `item` and `compare` are the
-    // inventory page's item objects (UOpenWillowInventory::WeaponItemJson / GearItemJson); `compare` is the equipped
-    // analogue (the held weapon, or the equipped gear of the item's slot) or null. x and y are the item's screen point
-    // as fractions of the viewport. Logs "OWPICKUPCARD ..." once per change of the shown item.
+    // JSON text for the "pickupCard" field: null (also while Maya is down or dead), or {id, level, item, compare, x, y}.
+    // `item` and `compare` are the inventory page's item objects (UOpenWillowInventory::WeaponItemJson / GearItemJson);
+    // `compare` is the equipped analogue (the held weapon, or the equipped gear of the item's slot) or null. x and y are
+    // the item's screen point as fractions of the viewport. The target is searched at most 10 times a second and the card
+    // body rebuilt only when the target, the analogue or the level changes. Logs "OWPICKUPCARD ..." once per change.
     FString StateField(const AOpenWillowWalker& Maya, const APlayerController& Player);
 
     // -owpickupcardshots (with the movie HUD): rolls a gun with ow.RollGun, drops it ahead of Maya, captures the screen

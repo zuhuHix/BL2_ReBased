@@ -41,6 +41,7 @@
   function forward(card) {
     forwarded = card || null;
     if (!frame) {
+      if (!forwarded) return; // the frame (and its movie) is made only once there is a card to show
       const doc = root.document;
       frame = doc.createElement('iframe');
       frame.src = 'pickup_card.html';
@@ -58,6 +59,7 @@
   // TurnOnPickupCard / TurnOffPickupCard, which play its "in" and "out" frames (the game's timing around them is native,
   // UNVERIFIED).
   const MOVIE_WIDTH = 1280, MOVIE_HEIGHT = 720;
+  const READY_TIMEOUT_MS = 15000; // give up waiting for the card clip after this long (logged)
   let player = null, writer = null, api = null, ready = false, wanted = null, shown = null;
 
   function start(doc) {
@@ -71,9 +73,14 @@
       set:(path, member, value) => player.ow(path, 'set', member, value)
     };
     player.ruffle().load({url:'UI_Inworld/harness.swf', base:'UI_Inworld/'}).then(() => {
+      const giveUpAt = Date.now() + READY_TIMEOUT_MS;
       const poll = () => {
         let name = null;
         try { name = typeof player.ow === 'function' ? api.get(CARD, '_name') : null; } catch (e) { name = null; }
+        if (!name && Date.now() > giveUpAt) {
+          console.log(`OpenWillow pickup card movie failed: no ${CARD} after ${READY_TIMEOUT_MS / 1000} s (is UI_Inworld/Weapon_Card.swf converted?)`);
+          return;
+        }
         if (!name) { setTimeout(poll, 100); return; }
         writer = root.owItemCard.createCardWriter(api);
         ready = true;
