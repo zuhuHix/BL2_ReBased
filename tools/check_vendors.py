@@ -304,7 +304,7 @@ def grade_item_rows(rows):
             mismatches.append(f'report {index} {where} {row.get("id")}: price {row["price"]} != {expected_price} '
                               f'(value {value}, level {row["level"]})')
     if checked == 0:
-        out.add('item_prices', 'MISSING', f'{skipped} non-gun rows without valueTerms (no items or health section)')
+        out.add('item_prices', 'FAIL', f'{skipped} non-gun rows without valueTerms (no items or health section)')
     elif mismatches:
         out.add('item_prices', 'FAIL', f'{len(mismatches)} of {checked} non-gun rows differ; first: {mismatches[0]}')
     else:
@@ -343,15 +343,12 @@ def grade_ammo_buy(log_text):
     out = Results()
     shop, reason = shop_buy(log_text, 'items')
     if shop is None:
-        out.add('ammo_buy', 'MISSING', reason)
+        out.add('ammo_buy', 'FAIL', reason)   # expected: the -owvendortest sequence always buys here
         return out
-    buy, before, _, opened = shop
+    buy, before, after, opened = shop
     if buy.group(3) != '1':
-        text = buy.group(5).strip()
-        if text == 'Ammo full':
-            out.add('ammo_buy', 'MISSING', 'Ammo full: the pool was already full (a valid refusal)')
-        else:
-            out.add('ammo_buy', 'FAIL', f'ammo buy ok=0: {text}')
+        # The sequence half-empties the pool first, so even "Ammo full" is a failure here.
+        out.add('ammo_buy', 'FAIL', f'ammo buy ok=0: {buy.group(5).strip()}')
         return out
     row = (before.get('shop') or [None])[0]
     if not row or row.get('kind') != 'ammo' or row.get('ammoType') is None or row.get('amount') is None or row.get('price') is None:
@@ -376,6 +373,11 @@ def grade_ammo_buy(log_text):
         out.add('ammo_buy', 'FAIL', f'pool {pool_before} + {row["amount"]} -> {pool_after}, expected {expected} (max {pool_max})')
     elif money_before - money_after != price:
         out.add('ammo_buy', 'FAIL', f'money {money_before} -> {money_after} (drop {money_before - money_after}), price {price}')
+    elif after is None:
+        out.add('ammo_buy', 'FAIL', 'no report after the ammo buy')
+    elif int(((after.get('ammo') or {}).get(ammo_type) or {}).get('current', -1)) != pool_after or int(after.get('money', -1)) != money_after:
+        out.add('ammo_buy', 'FAIL', f'the report after the buy shows pool {((after.get("ammo") or {}).get(ammo_type) or {}).get("current")} '
+                f'and money {after.get("money")}, the buy logged {pool_after} and {money_after}')
     else:
         out.add('ammo_buy', 'PASS', f'{ammo_type} pool {pool_before} -> {pool_after} (max {pool_max}); bought {row["id"]} for {price}')
     return out
@@ -387,15 +389,12 @@ def grade_heal_buy(log_text):
     out = Results()
     shop, reason = shop_buy(log_text, 'health')
     if shop is None:
-        out.add('heal_buy', 'MISSING', reason)
+        out.add('heal_buy', 'FAIL', reason)   # expected: the -owvendortest sequence always buys here
         return out
-    buy, before, _, opened = shop
+    buy, before, after, opened = shop
     if buy.group(3) != '1':
-        text = buy.group(5).strip()
-        if text == 'Health full':
-            out.add('heal_buy', 'MISSING', 'Health full: the walker was at full health (a valid refusal)')
-        else:
-            out.add('heal_buy', 'FAIL', f'heal buy ok=0: {text}')
+        # The sequence drops Maya to half health first, so even "Health full" is a failure here.
+        out.add('heal_buy', 'FAIL', f'heal buy ok=0: {buy.group(5).strip()}')
         return out
     row = (before.get('shop') or [None])[0]
     if not row or row.get('kind') != 'health' or row.get('healFraction') is None or row.get('price') is None:
@@ -415,6 +414,11 @@ def grade_heal_buy(log_text):
         out.add('heal_buy', 'FAIL', f'health {health_before:.2f} -> {health_after:.2f}, expected {expected:.2f} (max {health_max:.2f})')
     elif money_before - money_after != price:
         out.add('heal_buy', 'FAIL', f'money {money_before} -> {money_after} (drop {money_before - money_after}), price {price}')
+    elif after is None:
+        out.add('heal_buy', 'FAIL', 'no report after the heal buy')
+    elif abs(float((after.get('health') or {}).get('current', -1)) - health_after) > 0.01 or int(after.get('money', -1)) != money_after:
+        out.add('heal_buy', 'FAIL', f'the report after the buy shows health {(after.get("health") or {}).get("current")} '
+                f'and money {after.get("money")}, the buy logged {health_after:.2f} and {money_after}')
     else:
         out.add('heal_buy', 'PASS', f'health {health_before:.1f} -> {health_after:.1f} of {health_max:.1f}; bought {row["id"]} for {price}')
     return out
