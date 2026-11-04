@@ -43,6 +43,8 @@
 <script src="hud3d.js"></script>
 <script src="hud_fields.js"></script>
 <script src="minimap.js"></script>
+<script src="item_card.js"></script>
+<script src="pickup_card.js"></script>
 </head><body>
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
@@ -99,6 +101,7 @@
       if (line !== lastSkillPage) { console.log(line); lastSkillPage = line; }
     }
     if ('minimap' in s) window.owMinimap.apply(call, s.minimap);
+    if ('pickupCard' in s && window.owPickupCard) window.owPickupCard.apply(s.pickupCard);
     const F = window.owHudFields;
     if ('down' in s) for (const c of F.downCalls(s.down, hudStrings)) call(c[0], c[1], c[2], c[3]);
     if ('secondWind' in s) {

@@ -1,5 +1,6 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMinimap.h"
+#include "OpenWillowPickupCard.h"
 #include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
@@ -1104,6 +1105,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     }
     const FString Minimap = PlayerOwner ? OpenWillowMinimap::StateField(Maya, *PlayerOwner) : FString();
     if (!Minimap.IsEmpty()) State = State.LeftChop(1) + TEXT(",\"minimap\":") + Minimap + TEXT("}");
+    if (PlayerOwner) State = State.LeftChop(1) + TEXT(",\"pickupCard\":") + OpenWillowPickupCard::StateField(Maya, *PlayerOwner) + TEXT("}");
     State = State.LeftChop(1) + TEXT(",") + DownHudFields(Maya) + TEXT(",\"tracker\":") + TrackerHudField(Maya) + TEXT("}");
     State = State.LeftChop(1) + TEXT(",\"feedback\":") + FeedbackHudField(Maya) + TEXT("}");
     // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
@@ -1665,6 +1667,7 @@ void AOpenWillowMayaHUD::DrawHUD()
         if (bHudFxShots && bFlashHudReady) TickHudFxShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
 #endif
         if (bFlashHudReady) OpenWillowMinimap::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
+        if (bFlashHudReady) OpenWillowPickupCard::TickShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         PushFlashHudState(*Maya);
         if (bFlashHudReady)
         {
