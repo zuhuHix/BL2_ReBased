@@ -8,6 +8,9 @@ then SUMMARY passed=N failed=M missing=K. Exit 0 when nothing FAILs, 1 on any FA
 MISSING means the log or the state does not carry the value a check needs (for example a sell that was not run, or a
 state row without "value"). It is reported, not counted as a failure.
 
+--persist-log adds the persist_* checks: the second launch (same -owcurrencysave file, no -owmoney) must load the money,
+shelf, featured item and reset clock that the first launch ended with (grade_persist).
+
 Expected values:
 - machines spawned = the supported machines in the vendors.json file (the host skips "supported": false ones);
 - the shop price of an item = floor(value * (level * 0.14 + 4.1)), each step rounded to float32 as the host does
@@ -34,7 +37,10 @@ RESTOCK = re.compile(r'OWVENDOR restock id=(\S*) ok=(\d)')
 REFUSED = re.compile(r'ow\.Vendor\.(\w+) refused: (.*)$', re.M)
 STATE = re.compile(r'OWVENDSTATE (\{.*)$', re.M)   # the whole rest of the line: a broken JSON is reported, not skipped
 PAGE_ERROR = re.compile(r'OWVENDERR (.*)$', re.M)   # the page refused a host state
-AUTOMATION = re.compile(r'Result=\{(\w+)\}[^\n]*Vendor\.Stock|Vendor\.Stock[^\n]*Result=\{(\w+)\}')
+AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist')
+CURRENCY_LOAD = re.compile(r'OWCURRENCY load money=(-?\d+) eridium=(-?\d+) machines=(\d+)')
+# The second run starts its clock from the saved seconds; a few seconds of world time pass before its first report.
+RESET_TOLERANCE_SECONDS = 120
 
 
 def f32(value):
@@ -215,14 +221,92 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
     if automation_text is None:
         out.add('automation', 'MISSING', 'no automation log given')
     else:
-        found = AUTOMATION.search(automation_text)
-        if not found:
-            out.add('automation', 'FAIL', 'no result line for OpenWillow.Vendor.Stock (the test did not run)')
+        for name in AUTOMATION_TESTS:
+            row = 'automation_' + name.rsplit('.', 1)[1].lower()     # automation_stock, automation_persist
+            status = automation_status(automation_text, name)
+            if status is None:
+                out.add(row, 'FAIL', f'no result line for {name} (the test did not run)')
+            else:
+                # UE 5.8 prints Result={Success}; older builds printed Passed.
+                out.add(row, 'PASS' if status in ('Success', 'Passed') else 'FAIL', f'{name} Result={status}')
+    return out
+
+
+def automation_status(text, name):
+    """The Result={...} of one automation test from its log line, or None when the line is absent."""
+    pattern = (rf'Result=\{{(\w+)\}}[^\n]*{re.escape(name)}(?![\w.])|'
+               rf'{re.escape(name)}(?![\w.])[^\n]*Result=\{{(\w+)\}}')
+    found = re.search(pattern, text)
+    return (found.group(1) or found.group(2)) if found else None
+
+
+def parse_states(text):
+    """Every OWVENDSTATE report in text, and the JSON error text of the first one that is broken (else None)."""
+    states = []
+    for raw in STATE.findall(text):
+        try:
+            states.append(json.loads(raw.strip()))
+        except json.JSONDecodeError as error:
+            return states, str(error)
+    return states, None
+
+
+def grade_persist(first_text, second_text):
+    """The currency save across two launches: run 2 must start with run 1's money, shelf, featured item and reset clock.
+
+    The second launch must load the same -owcurrencysave file (its OWCURRENCY load line), and its first report is
+    compared with the last report of the first launch. Only the shelf guns (ids rolled per restock) are compared, not
+    the buy-back list, which is not saved (UNVERIFIED whether the game keeps it)."""
+    out = Results()
+    first, first_error = parse_states(first_text)
+    second, second_error = parse_states(second_text)
+    if first_error or second_error or not first or not second:
+        out.add('persist_state', 'FAIL', 'the two launches need a readable OWVENDSTATE report each'
+                + (f' (broken JSON: {first_error or second_error})' if first_error or second_error else ''))
+        return out
+    before, after = first[-1], second[0]
+
+    load = CURRENCY_LOAD.search(second_text)
+    if not load:
+        out.add('persist_load', 'FAIL', 'no "OWCURRENCY load" line in the second launch (-owcurrencysave did not load)')
+    elif before.get('money') is None or int(load.group(1)) != int(before['money']):
+        out.add('persist_load', 'FAIL', f'loaded money {load.group(1)}, the first launch ended with {before.get("money")}')
+    else:
+        out.add('persist_load', 'PASS', f'loaded money={load.group(1)} machines={load.group(3)}')
+
+    if before.get('money') is None or after.get('money') is None:
+        out.add('persist_money', 'MISSING', 'no money in a state report')
+    elif int(before['money']) != int(after['money']):
+        out.add('persist_money', 'FAIL', f'money {before["money"]} at the end of the first launch, {after["money"]} at the start of the second')
+    else:
+        out.add('persist_money', 'PASS', f'money {after["money"]} carried over')
+
+    key = lambda row: row.get('gun') or row.get('id')
+    before_shelf = [key(row) for row in before.get('shop') or []]
+    after_shelf = [key(row) for row in after.get('shop') or []]
+    if not before_shelf:
+        out.add('persist_shelf', 'MISSING', 'no shelf in the last report of the first launch')
+    elif before_shelf == after_shelf:
+        out.add('persist_shelf', 'PASS', f'{len(after_shelf)} shelf items carried over')
+    else:
+        out.add('persist_shelf', 'FAIL', f'shelf {before_shelf} became {after_shelf}')
+
+    featured_before = key(before['featured']) if before.get('featured') else None
+    featured_after = key(after['featured']) if after.get('featured') else None
+    if featured_before is None or featured_before != featured_after:
+        out.add('persist_featured', 'FAIL', f'featured {featured_before} became {featured_after}')
+    else:
+        out.add('persist_featured', 'PASS', f'featured {featured_after} carried over')
+
+    if before.get('resetSeconds') is None or after.get('resetSeconds') is None:
+        out.add('persist_clock', 'MISSING', 'no resetSeconds in a state report')
+    else:
+        gap = int(before['resetSeconds']) - int(after['resetSeconds'])
+        if 0 <= gap <= RESET_TOLERANCE_SECONDS:
+            out.add('persist_clock', 'PASS', f'reset clock {before["resetSeconds"]} s -> {after["resetSeconds"]} s')
         else:
-            status = found.group(1) or found.group(2)
-            # UE 5.8 prints Result={Success}; older builds printed Passed.
-            out.add('automation', 'PASS' if status in ('Success', 'Passed') else 'FAIL',
-                    f'OpenWillow.Vendor.Stock Result={status}')
+            out.add('persist_clock', 'FAIL', f'reset clock {before["resetSeconds"]} s -> {after["resetSeconds"]} s '
+                    f'(allowed to fall by at most {RESET_TOLERANCE_SECONDS} s)')
     return out
 
 
@@ -233,16 +317,21 @@ def main(argv=None):
     parser.add_argument('--vendors', required=True, type=Path, help='local/slice/vendors.json')
     parser.add_argument('--open-index', required=True, type=int, help='spawn index of the machine the suite opens')
     parser.add_argument('--open-kind', default='weapons')
+    parser.add_argument('--persist-log', type=Path,
+                        help='the second launch, with the same -owcurrencysave file (checks the save carried over)')
     args = parser.parse_args(argv)
     try:
         log_text = args.log.read_text(encoding='utf-8', errors='replace')
         vendors = json.loads(args.vendors.read_text(encoding='utf-8'))
         automation_text = (args.automation_log.read_text(encoding='utf-8', errors='replace')
                            if args.automation_log else None)
+        persist_text = args.persist_log.read_text(encoding='utf-8', errors='replace') if args.persist_log else None
     except (OSError, json.JSONDecodeError) as error:
         print(f'check_vendors: cannot read input: {error}', file=sys.stderr)
         return 2
     results = grade(log_text, automation_text, vendors, args.open_index, args.open_kind)
+    if persist_text is not None:
+        results.rows.extend(grade_persist(log_text, persist_text).rows)
     return 1 if results.print() else 0
 
 

@@ -75,7 +75,9 @@ def good_log(spawned=3, sell=True, restock=True, first_ids=None, second_ids=None
 
 
 GOOD_AUTOMATION = ('LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Stock}'
-                   '\tPath={OpenWillow.Vendor.Stock}\n')
+                   '\tPath={OpenWillow.Vendor.Stock}\n'
+                   'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Persist}'
+                   '\tPath={OpenWillow.Vendor.Persist}\n')
 
 
 def run(log, automation=GOOD_AUTOMATION, doc=None, open_index=0):
@@ -105,7 +107,8 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(sum(1 for _, s, _ in results.rows if s == 'FAIL'), 0)
         self.assertEqual(sum(1 for _, s, _ in results.rows if s == 'MISSING'), 0)
         checks = by_name(results)
-        for name in ('machines_spawned', 'open_machine', 'open_shelf', 'prices', 'buy', 'sell', 'restock', 'automation'):
+        for name in ('machines_spawned', 'open_machine', 'open_shelf', 'prices', 'buy', 'sell', 'restock',
+                     'automation_stock', 'automation_persist'):
             self.assertEqual(checks[name][0], 'PASS', f'{name}: {checks[name][1]}')
         self.assertEqual(checks['buy'][1], 'bought S1 for 550; money 5000 -> 4450')
         self.assertEqual(checks['sell'][1], 'sold G1 for 100; money 4450 -> 4550')
@@ -195,17 +198,20 @@ class GradeTest(unittest.TestCase):
         # UE 5.8 prints Result={Success} (seen in the batch-2 integration run).
         success = GOOD_AUTOMATION.replace('Result={Passed}', 'Result={Success}')
         checks = by_name(run(good_log(), automation=success))
-        self.assertEqual(checks['automation'][0], 'PASS')
+        self.assertEqual(checks['automation_stock'][0], 'PASS')
+        self.assertEqual(checks['automation_persist'][0], 'PASS')
 
     def test_failed_automation_fails(self):
-        failed = GOOD_AUTOMATION.replace('Result={Passed}', 'Result={Failed}')
+        failed = GOOD_AUTOMATION.replace('Result={Passed}', 'Result={Failed}', 1)   # the Stock line only
         checks = by_name(run(good_log(), automation=failed))
-        self.assertEqual(checks['automation'][0], 'FAIL')
-        self.assertIn('Result=Failed', checks['automation'][1])
+        self.assertEqual(checks['automation_stock'][0], 'FAIL')
+        self.assertIn('Result=Failed', checks['automation_stock'][1])
+        self.assertEqual(checks['automation_persist'][0], 'PASS')
 
     def test_automation_without_result_line_fails(self):
         checks = by_name(run(good_log(), automation='LogAutomationController: nothing ran\n'))
-        self.assertEqual(checks['automation'][0], 'FAIL')
+        self.assertEqual(checks['automation_stock'][0], 'FAIL')
+        self.assertEqual(checks['automation_persist'][0], 'FAIL')
 
     def test_no_automation_log_is_missing(self):
         checks = by_name(run(good_log(), automation=None))
@@ -263,7 +269,7 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=10 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=11 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
 
     def test_exit_one_on_any_fail(self):
@@ -285,6 +291,59 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(Path(folder) / 'absent.log'), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 2)
+
+
+def second_launch(money, ids, reset=1195, load=True, featured=FEATURED):
+    """The second launch: its OWCURRENCY load line and its first report (the saved purse, shelf and clock)."""
+    text = line(f'OWCURRENCY load money={money} eridium=0 machines=1') if load else ''
+    doc = state(shelf(ids), money=money, featured=featured)
+    doc['resetSeconds'] = reset
+    return text + state_line(doc)
+
+
+class PersistTest(unittest.TestCase):
+    """grade_persist: the first launch's last report against the second launch's first one."""
+    SAVED_MONEY = START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0]
+    FIRST_IDS = [f'N{i}' for i in range(1, 8)]
+
+    def check(self, second):
+        # good_log() ends with a restock: shelf N1..N7, money SAVED_MONEY, reset 1200.
+        results = cv.grade_persist(good_log(), second)
+        return {row[0]: (row[1], row[2]) for row in results.rows}
+
+    def test_saved_state_carried_over_all_pass(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS))
+        for name in ('persist_load', 'persist_money', 'persist_shelf', 'persist_featured', 'persist_clock'):
+            self.assertEqual(checks[name][0], 'PASS', name)
+
+    def test_missing_load_line_fails(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS, load=False))
+        self.assertEqual(checks['persist_load'][0], 'FAIL')
+
+    def test_money_not_carried_over_fails(self):
+        checks = self.check(second_launch(self.SAVED_MONEY - 1, self.FIRST_IDS))
+        self.assertEqual(checks['persist_load'][0], 'FAIL')
+        self.assertEqual(checks['persist_money'][0], 'FAIL')
+
+    def test_different_shelf_fails(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, [f'S{i}' for i in range(1, 8)]))
+        self.assertEqual(checks['persist_shelf'][0], 'FAIL')
+
+    def test_different_featured_fails(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS, featured=dict(FEATURED, id='F2')))
+        self.assertEqual(checks['persist_featured'][0], 'FAIL')
+
+    def test_clock_that_went_up_fails(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS, reset=1300))
+        self.assertEqual(checks['persist_clock'][0], 'FAIL')
+
+    def test_clock_that_fell_too_far_fails(self):
+        checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS, reset=1000))
+        self.assertEqual(checks['persist_clock'][0], 'FAIL')
+
+    def test_broken_second_launch_state_fails(self):
+        checks = self.check('OWVENDSTATE {"serial":1,\n')
+        self.assertEqual(checks['persist_state'][0], 'FAIL')
 
 
 if __name__ == '__main__':

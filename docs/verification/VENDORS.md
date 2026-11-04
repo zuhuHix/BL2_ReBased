@@ -80,8 +80,13 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
     a second use press closes it from the host side.
   - The use key goes to the nearest of vending machine (350 uu), door (220 uu) and pickup (220 uu), each within its own
     reach.
-- **Not persisted yet:** stock, the reset timer and the buy-back list live in memory and are lost on save/load or map
-  reload. Planned for PR 2 with the currency save. Whether the game keeps them across a save is `UNVERIFIED`.
+- **Persistence (PR 2a):** with `-owcurrencysave=<file under local/>`, the host saves money and eridium, plus each
+  machine's restock count and remaining timer, after every action and at teardown. On load it re-rolls the shelf from the
+  machine's seed and restock count and removes the items already bought. `-owmoney` / `-owerid` override the saved purse.
+  Host choices, all `UNVERIFIED` against the game:
+  - Buy-back is not saved.
+  - The timer does not run while the game is closed.
+  - A save written against a different `vendors.json` is not detected.
 - PR 1 stocks guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory
   does not have yet (PR 2).
 
@@ -90,3 +95,73 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
 - The sale price, buy-back, and the stock roll rule (sections 2 and 3).
 - The Black Market (eridium upgrades): placed in the data, marked unsupported.
 - Currency HUD readout and save/load, ammo pickups and purchases, chests and lootables: later PRs.
+
+## 6. Non-weapon stock
+
+AI-assisted (Claude), 2026-11-04. Package data through `tools/prepare_vendors.py` (no disassembly); live values from
+the same read-only dump as section 3 (`local/realgame/vendors/sanctuary.json`, player level 8). The tool writes one
+`item` block per non-weapon leaf balance of `local/slice/vendors.json` and, with `--oracle <dump>`, counts exact live
+matches into `item.verified.value`.
+
+**Monetary value, package data, confirmed (live) on 63 of 63 rows that the packages describe.** Every non-weapon
+item in these shops has the same shape as the guns (NATIVE_WEAPON_RULES.md section 6):
+
+    value = trunc(part_total * 1.12 ^ item_level * base_cost)
+
+- `1.12` is `GD_Economy.Universal.Att_UniversalPriceIncreasePerLevelScaler`.
+- `item_level` is the item's `ExpLevel`. The calculators read it through `ShieldItemLevel`, `GrenadeModItemLevel` or
+  `UnownedItemLevel`, which all name that property.
+- `base_cost` is a constant `GD_Economy.BaseCost.Att_BaseCost_*` attribute that the definition's `MonetaryValue`
+  calculator names. Observed values: standard, spike and juggernaut shields 28; grenade mods 25; standard class mods 40,
+  "team" class mods (Init_ClassMods_Team) 42; Health Now! 3; pistol, SMG, rifle, shotgun and sniper ammo 0.9 each;
+  grenades 5; launcher ammo 10.
+- `part_total` is the definition's `BaseMonetaryValueModifier` multiplied by the `MonetaryValueMod` of each drawn
+  part, in single precision. Ammo and health calculators do not read a part total, so they use 1. For shields,
+  grenade mods and class mods it depends only on the grade, because every part a slot can draw carries the same
+  modifier (the `Att_Price_RarityMultiplier_*` constants). Totals: shields 0.96 / 1.6 / 2.6 / 3.6 / 5.6 (common to
+  legendary); grenade mods 0.9216 / 1.536 / 2.496 / 3.456, which is two modified parts; class mods 0.96 (common). Some
+  legendary grenade balances can draw parts with different modifiers. For those the block lists every distinct
+  total, and the host must pick one by the parts it rolls.
+- The tool evaluates each calculator with `weapon_stats.price_init`, the evaluator that matches 69/69 gun cards. It
+  checks that the reduced form above gives the same integer at levels 1 to 80 for every total (`shape_checked`).
+
+Live rows, by kind (exact integer `monetary_value`):
+
+| kind | rows | match |
+|---|---|---|
+| ammo and grenade ammo (`ItemGrade_AmmoShop_*`) | 18 | 18 |
+| Health Now! (`ItemGrade_HealthDrops`) | 3 | 3 |
+| grenade mods (`GM_Standard`, `GM_Standard_2_Uncommon`) | 18 | 18 |
+| shields (standard, spike, juggernaut, common to rare) | 18 | 18 |
+| class mods, Siren and Assassin | 4 | 4 |
+| class mods, Mechromancer and Psycho (DLC packages) | 2 | not described |
+
+Class mod rows are matched to a variant by the name word that ends the definition's object name (`ClassMod_Siren_Nurse`
+for "Nurse Class Mod"). The two DLC class mod balances live in packages under `DLC/`, which the tool does not read, so
+they stay `UNVERIFIED`. Every leaf balance with no live row (rare and better grades, other grenade and shield
+types, launcher ammo) is labelled `UNVERIFIED (no live row)` in the JSON. Its value comes from the same calculator
+shape.
+
+**Ammo, package data.** A shop ammo item (`GD_Ammodrops.Shop.AmmoShop_*`, a `UsableItemDefinition` in the map package)
+has one `ExternalAttributeEffects` entry. It is a `MT_PostAdd` on a `ResourcePoolAttributeDefinition` whose
+`Resource` is the ammo pool (`D_Resources.AmmoResources.Ammo_*`), and the amount is the `AmmoAmountShop_*`
+constant: pistol 54, SMG 72, rifle 54, shotgun 24, sniper 18, launcher 12, grenades 3. The item's card text agrees
+("Contains 72 SMG bullets."). The tool maps the pool to the host's ammo key (`pistol`, `smg`, `ar`, `shotgun`,
+`sniper`, `launcher`, `grenade`). `UNVERIFIED`: that a purchase applies the effect at once (the definition sets
+`bPlayerUseItemOnPickup`), and how the `OnUseConstraints` "pool is full" test refuses a buy.
+
+**Health, package data.** Health Now! (`GD_BuffDrinks.A_Item.BuffDrink_HealingInstant`) heals through its behaviours,
+not through an attribute effect. The tool reports the multiplier of the `Behavior_SimpleMath` multiply under its
+behaviour provider (0.25), and the card text agrees ("Instantly heals 25% of your Max Health"). The behaviour graph
+that applies it is not decoded, so the heal is `UNVERIFIED`.
+
+**Stock, package data.** `GD_Itempools.ClassModPools.Pool_ClassMod_01_Common` and `_02_Uncommon`, which
+`HealthShop_Items` lists, have no entries in the packages. The live Dr. Zed machines still sold class mods, so the
+running game fills these pools in some way that is `UNVERIFIED`. The tool therefore lists the Startup
+`BalDef_ClassMod_*_01_Common` / `_02_Uncommon` balances under `unpooled_items`, each with its `ClassModDefinitions`
+as `variants`. The Ammo Dump pools also name `GD_CustomItems.Items.CustomItem_AmmoSDU_*` balances (ammo capacity
+upgrades). Their definition has no `MonetaryValue` calculator in the packages and no live row was seen, so they are
+`UNVERIFIED` and carry no value.
+
+Not settled here: the item's display name (the block gives the definition's base `ItemName`; the card name comes from
+name parts), part rolls and stats of shields and grenade mods, rarity, and the sale price (section 3).
