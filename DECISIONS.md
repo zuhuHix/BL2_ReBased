@@ -3419,3 +3419,6 @@ observed in the running game.
   is filled by `item_card.js`, the inventory page's card code (moved out of `inventory.js` unchanged).
 - UNVERIFIED host choices: reach 220 uu (as `PickupNearby`), a 12-degree aim cone, card size 30 % of the screen height,
   placement over the item, frame style 'default', and showing and hiding at once. E still takes the nearest pickup (known gap).
+- Follow-up (same day): the card's level-requirement strip shows only for a required level above 1, as
+  `ItemCardGFxObject.SetItemCardEx` does; an item above the player's level turns the card red through the movie's own
+  `SetLevelRequirement` (headless replays of both pages; the selected inventory card keeps a yellow outline, UNVERIFIED).

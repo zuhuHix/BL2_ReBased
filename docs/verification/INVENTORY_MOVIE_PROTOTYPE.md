@@ -1433,3 +1433,13 @@ and `GotoNextTab`. From Inventory, previous is Map and next is Skills (Challenge
 previous is Inventory and next Challenges; Missions sits between Challenges and Map when there are missions. The inventory
 page now sends Period to Skills and treats Comma as Map (no host page, so nothing happens). UNVERIFIED in the running game.
 Navigation test 42/42.
+
+**Items above the player's level (2026-11-04).** The red card the 2026-10-21 session saw ("red card frame and red LEVEL
+REQUIREMENT strip") is the movie's own `SetLevelRequirement` with `met` false: the pages already pass that, and a headless
+replay of the r24a host snapshot with Maya's level lowered to 30 shows the selected Wild Rifle (level 33) with a red body and
+a red "LEVEL REQUIREMENT: 33" strip; earlier rounds never had an item above Maya's level. The outer frame stays yellow there
+because the selected card's background is on its 'highlight' frame (the background sprite has only the default, 'highlight'
+and 'compare' frames); whether the game's selected card shows a red or a yellow outline then is not settled (needs a real
+frame). From `ItemCardGFxObject.SetItemCardEx` (script): the strip shows only for a required level above 1, which the shared
+card code (`item_card.js`) now follows; overpower and DLC-restricted texts do not apply to the host.
+

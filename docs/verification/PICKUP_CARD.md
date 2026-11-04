@@ -63,4 +63,5 @@ Without it the frame logs `OpenWillow pickup card movie failed` and the HUD is u
 ## Open, for a real-game session
 
 The look-at reach, cone and sight test, which item a weapon is compared against, the card's on-screen size and placement relative to the item, its frame style, the in/out timing,
-whether the card hides at once when the player looks away, and what the card shows for an item above the player's level.
+whether the card hides at once when the player looks away, and whether the selected inventory card's outline turns red too for an item above the player's level (the pickup card,
+on its default frame, turns red as a whole: the movie's own `SetLevelRequirement`; see INVENTORY_MOVIE_PROTOTYPE.md).

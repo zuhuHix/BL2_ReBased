@@ -83,6 +83,20 @@ check('The shared card writer fills BL2 card rows with arrows against the compar
   assert.deepStrictEqual(level.slice(2), [true, true, false, 'LEVEL REQUIREMENT: 34']);
   assert.strictEqual(calls.find(c => c[1] === 'SetBackgroundStyle')[2], 'default');
 });
+check('Level requirement as SetItemCardEx sets it: shown above level 1, not met above the player level', () => {
+  const levelCall = (itemLevel, playerLevel, extra = {}) => {
+    const calls = [];
+    const writer = hud.owItemCard.createCardWriter({call:(p, m, ...a) => { calls.push([m, ...a]); }, get:() => 0, set(){}});
+    writer.configureCard('c', {id:'a', name:'Gun', level:itemLevel, ...extra}, null, 'default', false, playerLevel);
+    return calls.find(c => c[0] === 'SetLevelRequirement').slice(1);
+  };
+  assert.deepStrictEqual(levelCall(34, 36), [true, true, false, 'LEVEL REQUIREMENT: 34']);
+  assert.deepStrictEqual(levelCall(36, 36), [true, true, false, 'LEVEL REQUIREMENT: 36']);
+  assert.deepStrictEqual(levelCall(40, 36), [true, false, false, 'LEVEL REQUIREMENT: 40']);
+  assert.deepStrictEqual(levelCall(1, 36), [false, true, false, '']);
+  assert.deepStrictEqual(levelCall(30, 36, {levelKnown:false}), [false, true, false, '']);
+});
+
 check('A frame whose card clip never appears stops polling and logs why', () => {
   let now = 0, timers = 0;
   const logs = [];
