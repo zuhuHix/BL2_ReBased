@@ -16,6 +16,8 @@
   const MIN_SCALE = 135, MAX_SCALE = 395, ZOOM_FACTOR = 1.2, PAN_INCREMENT = 0.05, PAN_ZOOM_FACTOR = 0.25;
   // Landmark template frames (the StatusMenu movie's landmark sprite) for the minimap state's icon kinds; the stock kinds
   // follow StatusMenuMapGFxObject.CompassIconFrames (shop, health, rstation = travel station, customization, transition).
+  // How long the page waits for the StatusMenu movie, and then for the map movie, before it shows why the map is missing.
+  const READY_TIMEOUT_MS = 15000, MAP_LOAD_TIMEOUT_MS = 10000;
   const LANDMARK_FRAMES = {shop:'shop', health:'health', fasttravel:'rstation', customize:'customization', leveltravel:'transition',
     eligible:'missionNew', turnin:'missionComplete', objective:'objective'};
 
@@ -48,6 +50,17 @@
     return {mapX, mapY, scale:view.scale, landmarks};
   }
 
+  // Pan limits: the map point under the crosshairs (the player's point minus pan / scale) stays inside the map movie's own
+  // rectangle `rect` (movie units), so the map cannot be pushed out of the mask at any zoom. A host rule (the game clamps
+  // its DesiredCenter natively; UNVERIFIED).
+  function clampPan(pan, player, rect, scalePercent) {
+    if (!rect) return pan;
+    const s = scalePercent / 100;
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    return [clamp(pan[0], (player[0] - rect.xMax) * s, (player[0] - rect.xMin) * s),
+      clamp(pan[1], (player[1] - rect.yMax) * s, (player[1] - rect.yMin) * s)];
+  }
+
   // Status-menu tabs from the Map screen (StatusMenuExGFxMovie: One..Five -> TrySwitchToScreen, Comma / Period ->
   // GotoPrevTab / GotoNextTab). From Map, previous is Missions when there are missions (else Challenges) and next is
   // Inventory. Returns a route, '' for "stay", or null for a page the host does not have.
@@ -59,7 +72,7 @@
     return undefined;
   }
 
-  root.owMapScreen = {moviePoint, clampScale, panFraction, layout, tabRoute, LANDMARK_FRAMES, MIN_SCALE, MAX_SCALE, ZOOM_FACTOR};
+  root.owMapScreen = {moviePoint, clampScale, panFraction, clampPan, layout, tabRoute, READY_TIMEOUT_MS, MAP_LOAD_TIMEOUT_MS, LANDMARK_FRAMES, MIN_SCALE, MAX_SCALE, ZOOM_FACTOR};
 
   // ---- Page ----------------------------------------------------------------------------------------------------------
   if (!root.RufflePlayer || !root.document) return;
@@ -73,11 +86,27 @@
   const get = (path, member) => player.ow(path, 'get', member);
   const set = (path, member, value) => player.ow(path, 'set', member, value);
 
-  let ready = false, mapLoaded = false, loadingMovie = '', state = null;
+  let ready = false, mapLoaded = false, loadingMovie = '', state = null, mapRect = null, mapLoadTimer = 0;
   const view = {scale:MIN_SCALE, pan:[0, 0], centre:[0, 0]};
   const placed = new Map(); // landmark key -> clip name the movie gave it
 
   function close() { root.location.href = '/__ow_close_map'; }
+  // The loading panel stays up until the map movie has loaded; on a failure it shows why (Escape, Tab and M still close).
+  let lastMessage = '';
+  function showMessage(text) {
+    if (text === lastMessage) return; // the host pushes its state every second
+    lastMessage = text;
+    const loading = root.document.getElementById('loading');
+    loading.hidden = false;
+    loading.classList.remove('finished');
+    loading.querySelector('small').textContent = `${text} Press Esc to return.`;
+    console.log(`OpenWillow Map message: ${text}`);
+  }
+  function hideLoading() {
+    const loading = root.document.getElementById('loading');
+    loading.classList.add('finished');
+    setTimeout(() => { loading.hidden = true; }, 350);
+  }
   function go(route) { if (route) root.location.href = route; }
   root.addEventListener('keydown', event => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -101,15 +130,19 @@
     view.scale = clampScale(view.scale * factor);
     // Keep the point under the crosshairs where it is.
     const k = view.scale / before;
-    view.pan = [view.pan[0] * k, view.pan[1] * k];
+    view.pan = limitPan([view.pan[0] * k, view.pan[1] * k]);
     render();
+  }
+  function limitPan(pan) {
+    const m = state?.minimap;
+    return m ? clampPan(pan, moviePoint(m.x, m.y, m.centre), mapRect, view.scale) : pan;
   }
   function pan(direction) {
     const step = {left:[1, 0], right:[-1, 0], up:[0, 1], down:[0, -1]}[direction];
     if (!step) return;
     const width = Number(get(`${MAP}.mapPlaceholder`, '_width')) || 0, height = Number(get(`${MAP}.mapPlaceholder`, '_height')) || 0;
     const f = panFraction(view.scale);
-    view.pan = [view.pan[0] + step[0] * width * f, view.pan[1] + step[1] * height * f];
+    view.pan = limitPan([view.pan[0] + step[0] * width * f, view.pan[1] + step[1] * height * f]);
     render();
   }
 
@@ -118,7 +151,13 @@
   root.extStatusMenuMapOnLoad = () => {};
   root.extStatusMenuMapPostMapMovieLoad = () => {
     mapLoaded = true;
+    clearTimeout(mapLoadTimer);
+    call(MAP, 'setMapScale', 100);
+    // The map movie's own rectangle in its units (the pan limits).
+    const rect = call(`${MAP}.mapPlaceholder`, 'getRect', `${MAP}.mapPlaceholder`);
+    mapRect = rect && [rect.xMin, rect.xMax, rect.yMin, rect.yMax].every(Number.isFinite) && rect.xMax > rect.xMin ? rect : null;
     call(MAP, 'setMapScale', view.scale);
+    hideLoading();
     for (const [blob, uncovered] of Object.entries(state?.minimap?.blobs || {})) call(MAP, 'toggleFogOfWarBlob', blob, Boolean(uncovered));
     console.log(`OpenWillow Map movie loaded ${loadingMovie}`);
     render();
@@ -128,9 +167,16 @@
     if (!ready || !state) return;
     if (state.name) set(`${MAP}.header.mapName`, 'text', state.name);
     const m = state.minimap;
-    if (!m || !m.movie) return;
-    if (loadingMovie !== m.movie) { loadingMovie = m.movie; mapLoaded = false; call(MAP, 'setMapMovie', m.movie); return; }
+    if (!m || !m.movie) { showMessage('No map for this area (the minimap manifest is missing: tools/prepare_minimap.py).'); return; }
+    if (loadingMovie !== m.movie) {
+      loadingMovie = m.movie; mapLoaded = false; mapRect = null;
+      call(MAP, 'setMapMovie', m.movie);
+      clearTimeout(mapLoadTimer);
+      mapLoadTimer = setTimeout(() => { if (!mapLoaded) showMessage(`The map movie did not load (${m.movie}).`); }, MAP_LOAD_TIMEOUT_MS);
+      return;
+    }
     if (!mapLoaded) return;
+    view.pan = limitPan(view.pan); // the player moves too
     const out = layout(state, view);
     call(MAP, 'setMapScale', out.scale);
     set(`${MAP}.mapPlaceholder`, '_x', out.mapX);
@@ -190,7 +236,13 @@
     }
   }
 
+  const readyBy = performance.now() + READY_TIMEOUT_MS;
   const timer = setInterval(() => {
+    if (performance.now() > readyBy) {
+      clearInterval(timer);
+      showMessage('The status menu movie did not load (UI_StatusMenu in local/ui/run).');
+      return;
+    }
     try {
       if (typeof player.ow !== 'function') return;
       const total = get(ROOT, '_totalframes');
@@ -205,9 +257,10 @@
       addHeaderHits();
       ready = true;
       console.log(`OpenWillow Map page ready in ${Math.round(performance.now() - startupAt)}ms`);
-      const loading = root.document.getElementById('loading');
-      loading.classList.add('finished');
-      setTimeout(() => { loading.hidden = true; }, 350);
+      // No state or no map movie within the deadline: say so instead of an empty map.
+      mapLoadTimer = setTimeout(() => {
+        if (!mapLoaded) showMessage(state ? 'The map movie did not load.' : 'The host sent no map state.');
+      }, MAP_LOAD_TIMEOUT_MS);
       render();
     } catch (error) {
       console.warn('Waiting for StatusMenu:', error);

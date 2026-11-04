@@ -48,6 +48,72 @@ check('Pan moves the map and every icon together, not the crosshairs', () => {
     assert.ok(close(b.landmarks[i].x - a.landmarks[i].x, 40) && close(b.landmarks[i].y - a.landmarks[i].y, -20));
   assert.ok(close(b.mapX - a.mapX, 40) && close(b.mapY - a.mapY, -20));
 });
+check('Pan is limited so the point under the crosshairs stays on the map, at any zoom', () => {
+  const rect = {xMin:-10, xMax:20, yMin:-5, yMax:5}, player = [0, 0];
+  // At 100 %: the crosshair point (player - pan) must stay within x -10..20, y -5..5.
+  assert.deepStrictEqual(plain(M.clampPan([0, 0], player, rect, 100)), [0, 0]);
+  assert.deepStrictEqual(plain(M.clampPan([1000, -1000], player, rect, 100)), [10, -5]);
+  assert.deepStrictEqual(plain(M.clampPan([-1000, 1000], player, rect, 100)), [-20, 5]);
+  // At 200 % the limits double (pan is in screen units).
+  assert.deepStrictEqual(plain(M.clampPan([1000, 1000], player, rect, 200)), [20, 10]);
+  // A player off-centre on the map shifts the limits.
+  assert.deepStrictEqual(plain(M.clampPan([1000, 1000], [5, 2], rect, 100)), [15, 7]);
+  // No rectangle yet (the map movie still loading): unchanged.
+  assert.deepStrictEqual(plain(M.clampPan([3, 4], player, null, 100)), [3, 4]);
+});
+function fakePage(owReply) {
+  // The page part of map.js with a fake Ruffle (`owReply` answers every harness call), document and clock.
+  let now = 0;
+  const intervals = [], timeouts = [], keys = [];
+  const small = {textContent:''};
+  const loading = {hidden:false, classList:{add(){}, remove(){}}, querySelector:() => small};
+  const page = vm.createContext({console:{log(){}, warn(){}}, Math, JSON, Number, Object, String, Map, Set, Array, Promise,
+    performance:{now:() => now},
+    setInterval:(f) => { intervals.push(f); return intervals.length; }, clearInterval:(i) => { intervals[i - 1] = null; },
+    setTimeout:(f, ms) => { timeouts.push({f, at:now + (ms || 0)}); return timeouts.length; }, clearTimeout:(i) => { if (timeouts[i - 1]) timeouts[i - 1].f = null; },
+    fetch:() => Promise.reject(new Error('no map.json')),
+    location:{href:''},
+    addEventListener:(type, f) => { if (type === 'keydown') keys.push(f); },
+    RufflePlayer:{newest:() => ({createPlayer:() => ({style:{}, ow:owReply, ruffle:() => ({load(){}})})})},
+    document:{body:{appendChild(){}}, getElementById:() => loading, createElement:() => ({style:{}, setAttribute(){}, addEventListener(){}})}});
+  page.window = page;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/map.js'), 'utf8'), page);
+  const advance = ms => {
+    for (let t = 0; t < ms; t += 100) {
+      now += 100;
+      for (const f of intervals) if (f) f();
+      for (const t2 of timeouts) if (t2.f && t2.at <= now) { const f = t2.f; t2.f = null; f(); }
+    }
+  };
+  const press = key => keys.forEach(f => f({key, preventDefault(){}}));
+  return {page, small, loading, advance, press, intervals};
+}
+check('A status menu that never loads stops the polling at 15 s and says so; Escape still closes', () => {
+  const p = fakePage(() => undefined);
+  p.advance(14000);
+  assert.strictEqual(p.small.textContent, '');
+  p.advance(2000);
+  assert.ok(/status menu movie did not load.*Press Esc/.test(p.small.textContent), p.small.textContent);
+  assert.ok(p.intervals.every(f => f === null), 'polling stopped');
+  p.press('Escape');
+  assert.strictEqual(p.page.location.href, '/__ow_close_map');
+});
+check('A ready page with no map state, or with a map movie that never loads, shows why after 10 s', () => {
+  // A harness that is ready at once and answers every read with 1 (frames loaded, clips present).
+  const p = fakePage((target, op) => (op === 'get' ? 1 : undefined));
+  p.advance(200);
+  p.advance(10000);
+  assert.ok(/host sent no map state/.test(p.small.textContent), p.small.textContent);
+  const q = fakePage((target, op) => (op === 'get' ? 1 : undefined));
+  q.advance(200);
+  q.page.owMap({name:'X', minimap:null});
+  assert.ok(/No map for this area/.test(q.small.textContent), q.small.textContent);
+  const r = fakePage((target, op) => (op === 'get' ? 1 : undefined));
+  r.advance(200);
+  r.page.owMap({name:'X', minimap:{movie:'/m', centre:[0, 0], x:0, y:0, yaw:0, icons:[]}});
+  r.advance(10100);
+  assert.ok(/map movie did not load \(\/m\)/.test(r.small.textContent), r.small.textContent);
+});
 check('Icon kinds map to the landmark frames (CompassIconFrames and the mission frames)', () => {
   assert.deepStrictEqual(plain(M.LANDMARK_FRAMES), {shop:'shop', health:'health', fasttravel:'rstation',
     customize:'customization', leveltravel:'transition', eligible:'missionNew', turnin:'missionComplete', objective:'objective'});
