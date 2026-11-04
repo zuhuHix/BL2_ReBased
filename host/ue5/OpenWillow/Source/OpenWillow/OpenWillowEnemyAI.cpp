@@ -54,7 +54,23 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
         const bool bSightBefore = bExposedBefore;
         bExposedBefore = In.bLineOfSight;
         if (In.bHasMaya) UpdateThreat(Now, In, Den, bDamaged, bSightBefore);
-        bTargeting = In.bHasMaya && Den.Level >= SeenInThreatRadius;
+        // The enemy's own target (see bTargeting): valid while the den is alerted and Maya is inside its ThreatRadius.
+        const float FromDen = In.bHasMaya
+            ? float(FVector2D::Distance(FVector2D(In.MayaLocation.X, In.MayaLocation.Y), Den.Centre)) : 0.f;
+        const bool bValid = In.bHasMaya && Den.Level >= SeenInThreatRadius && FromDen < Den.ThreatRadius && Now >= GiveUpUntil;
+        const bool bClose = In.bHasMaya && float((In.MayaLocation - In.Location).Size()) - In.CollisionRadius < AICloseThreatRadius;
+        if (bValid && (In.bLineOfSight || bClose))
+        {
+            // Where it sees (or hears) her now: the spot it goes for.
+            TargetLocation = In.MayaLocation;
+            bHasTargetLocation = true;
+        }
+        if (bTargeting && !bValid)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE target_lost enemy=%s t=%.2f last_known=%s"), *In.Self->GetName(), Now,
+                bHasTargetLocation ? *TargetLocation.ToString() : TEXT("none"));
+        }
+        bTargeting = bValid;
     }
 
     // Aware for attack decisions only after AggroTime + MinAggroTimeToConsiderAwareOfTarget (AI_AWARENESS_LIVE 2).
@@ -79,14 +95,26 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
         Orders.bSwingStarted = true;
     }
 
-    Orders.bChase = bAware;
-    Orders.bRun = bAware && !bInStop && !bSwingPending;
+    // Going for the target's last-known spot; a lost target's spot is visited once (reached: back to the patrol).
+    if (!bTargeting && bHasTargetLocation
+        && FVector::Dist2D(In.Location, TargetLocation) < SearchArrival) bHasTargetLocation = false;
+    Orders.bChase = (bAware || !bTargeting) && bHasTargetLocation;
+    Orders.ChaseTo = TargetLocation;
+    Orders.bRun = Orders.bChase && !bSwingPending && !(bAware && bInStop);
     return Orders;
+}
+
+void FOpenWillowEnemyBrain::GiveUp(float Now, float Seconds)
+{
+    bTargeting = false;
+    bHasTargetLocation = false;
+    GiveUpUntil = Now + Seconds;
 }
 
 void FOpenWillowEnemyBrain::Stop()
 {
     bTargeting = false;
+    bHasTargetLocation = false;
     bSwingPending = false;
 }
 

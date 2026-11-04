@@ -15,6 +15,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -51,17 +52,66 @@ bool TraceVisibility(UWorld* World, const FVector& From, const FVector& To, FHit
     return World->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, Query);
 }
 
-// The scout rules (host choice, UNVERIFIED): see UOpenWillowRangeSubsystem::ScoutSpot.
-bool ScoutAccepts(UWorld* World, const FVector2D& XY, float PlazaZ, FVector& OutFloor)
+// A complex down trace for the floor. Its hit keeps the face index, which names the material (see FloorIsTextured).
+bool TraceFloor(UWorld* World, const FVector& From, const FVector& To, FHitResult& Hit)
+{
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeFloor), true);
+    Query.bTraceComplex = true;
+    Query.bReturnFaceIndex = true;
+    return World->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, Query);
+}
+
+// Is the floor a textured one? (host choice, UNVERIFIED) The hit's material is the one of the face that was hit (the first
+// material when there is no face). Engine materials, and materials whose name holds Collision, Fallback or Neutral, do not count.
+bool FloorIsTextured(const FHitResult& Hit, FString& OutPath)
+{
+    OutPath = TEXT("none");
+    UPrimitiveComponent* Component = Hit.GetComponent();
+    if (!Component) return false;
+    UMaterialInterface* Material = nullptr;
+    if (Hit.FaceIndex >= 0)
+    {
+        int32 SectionIndex = 0;
+        Material = Component->GetMaterialFromCollisionFaceIndex(Hit.FaceIndex, SectionIndex);
+    }
+    else
+    {
+        Material = Component->GetMaterial(0);
+    }
+    if (!Material) return false;
+    OutPath = Material->GetPathName();
+    if (OutPath.StartsWith(TEXT("/Engine/"), ESearchCase::CaseSensitive)) return false;
+    const FString Name = Material->GetName();
+    for (const TCHAR* Placeholder : {TEXT("Collision"), TEXT("Fallback"), TEXT("Neutral")})
+        if (Name.Contains(Placeholder, ESearchCase::IgnoreCase)) return false;
+    return true;
+}
+
+// The facing away from the town: the yaw from the plaza centre to Spot (only X and Y count for a yaw).
+float AwayFromTown(const FVector& Spot)
+{
+    return FVector(Spot.X - ScoutCentre.X, Spot.Y - ScoutCentre.Y, 0.f).Rotation().Yaw;
+}
+
+// The scout rules (host choice, UNVERIFIED): see UOpenWillowRangeSubsystem::ScoutSpot. The floor is the complex hit of a down
+// trace around RefZ and must lie within MaxFloorDelta of it; OutFloorHit keeps that hit, OutWhy says which rule failed.
+bool ScoutAccepts(UWorld* World, const FVector2D& XY, float RefZ, float MaxFloorDelta, FHitResult& OutFloorHit, FString& OutWhy)
 {
     FHitResult Hit;
-    // The floor: a down trace from 6000 uu above the plaza floor, flat enough and within 1500 uu of it.
-    if (!TraceVisibility(World, FVector(XY.X, XY.Y, PlazaZ + 6000.f), FVector(XY.X, XY.Y, PlazaZ - 6000.f), Hit)
-        || Hit.bStartPenetrating)
+    // The floor: a down trace from 6000 uu above the reference height, flat enough and within MaxFloorDelta of it.
+    if (!TraceFloor(World, FVector(XY.X, XY.Y, RefZ + 6000.f), FVector(XY.X, XY.Y, RefZ - 6000.f), Hit) || Hit.bStartPenetrating)
+    {
+        OutWhy = TEXT("no floor under the point");
         return false;
-    if (Hit.ImpactNormal.Z < 0.9f || FMath::Abs(Hit.Location.Z - PlazaZ) > 1500.f) return false;
+    }
+    if (Hit.ImpactNormal.Z < 0.9f || FMath::Abs(Hit.Location.Z - RefZ) > MaxFloorDelta)
+    {
+        OutWhy = FString::Printf(TEXT("floor at z=%.0f is not flat or not within %.0f uu of %.0f"), Hit.Location.Z, MaxFloorDelta, RefZ);
+        return false;
+    }
     const float FloorZ = Hit.Location.Z;
-    OutFloor = Hit.Location;
+    const FVector Floor = Hit.Location;
+    OutFloorHit = Hit;
     // Eight probes on a 700 uu circle all find the floor at the same height, and it is flat there.
     for (int32 Probe = 0; Probe < 8; ++Probe)
     {
@@ -70,18 +120,31 @@ bool ScoutAccepts(UWorld* World, const FVector2D& XY, float PlazaZ, FVector& Out
         FHitResult Down;
         if (!TraceVisibility(World, FVector(At.X, At.Y, FloorZ + 300.f), FVector(At.X, At.Y, FloorZ - 600.f), Down)
             || Down.bStartPenetrating)
+        {
+            OutWhy = TEXT("a floor probe found no floor");
             return false;
-        if (FMath::Abs(Down.Location.Z - FloorZ) > 100.f || Down.ImpactNormal.Z < 0.85f) return false;
+        }
+        if (FMath::Abs(Down.Location.Z - FloorZ) > 100.f || Down.ImpactNormal.Z < 0.85f)
+        {
+            OutWhy = TEXT("the floor drops or slopes around the point");
+            return false;
+        }
     }
     // Nothing solid in a 250 uu sphere at floor + 300.
     FCollisionObjectQueryParams Objects;
     Objects.AddObjectTypesToQuery(ECC_WorldStatic);
     Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
-    if (World->OverlapAnyTestByObjectType(OutFloor + FVector(0.f, 0.f, 300.f), FQuat::Identity, Objects,
-            FCollisionShape::MakeSphere(250.f)))
+    if (World->OverlapAnyTestByObjectType(Floor + FVector(0.f, 0.f, 300.f), FQuat::Identity, Objects, FCollisionShape::MakeSphere(250.f)))
+    {
+        OutWhy = TEXT("a solid object stands on the floor");
         return false;
+    }
     // Open sky: nothing between floor + 150 and floor + 1500.
-    if (TraceVisibility(World, OutFloor + FVector(0.f, 0.f, 150.f), OutFloor + FVector(0.f, 0.f, 1500.f), Hit)) return false;
+    if (TraceVisibility(World, Floor + FVector(0.f, 0.f, 150.f), Floor + FVector(0.f, 0.f, 1500.f), Hit))
+    {
+        OutWhy = TEXT("something overhead");
+        return false;
+    }
     return true;
 }
 
@@ -94,6 +157,7 @@ void TeleportMaya(UWorld* World, const FVector& Spot, float Yaw)
     if (const ACharacter* Character = Cast<ACharacter>(Pawn))
         HalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
     Pawn->SetActorLocation(Spot + FVector(0.f, 0.f, HalfHeight), false, nullptr, ETeleportType::TeleportPhysics);
+    // TODO(#77): tell the walker it was teleported (Walker->NotifyTeleported()) once PR #77 is merged.
     if (APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0)) PC->SetControlRotation(FRotator(0.f, Yaw, 0.f));
     UE_LOG(LogTemp, Display, TEXT("OWRANGE player moved to %s yaw %.0f"), *Spot.ToString(), Yaw);
 }
@@ -102,36 +166,45 @@ void TeleportMaya(UWorld* World, const FVector& Spot, float Yaw)
 namespace
 {
 // The floor of one formation slot (host choice, UNVERIFIED): a down trace near the spot's height that meets a walkable floor
-// (normal Z >= 0.85) within 150 uu of the spot. False when there is none.
-bool SlotFloor(UWorld* World, const FVector& Spot, const FVector& Centre, FVector& OutFloor)
+// (normal Z >= 0.85) within 150 uu of the spot, and a textured one when bRequireTextured is set. False when there is none.
+bool SlotFloor(UWorld* World, const FVector& Spot, const FVector& Centre, bool bRequireTextured, FVector& OutFloor)
 {
     FHitResult Hit;
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSlot), true);
+    Query.bTraceComplex = true;
+    Query.bReturnFaceIndex = true;
     if (!World->LineTraceSingleByChannel(Hit, FVector(Centre.X, Centre.Y, Spot.Z + 300.f), FVector(Centre.X, Centre.Y, Spot.Z - 600.f),
             ECC_Visibility, Query) || Hit.bStartPenetrating)
         return false;
     if (Hit.ImpactNormal.Z < 0.85f || FMath::Abs(Hit.Location.Z - Spot.Z) > 150.f) return false;
+    FString Material;
+    if (bRequireTextured && !FloorIsTextured(Hit, Material)) return false;
     OutFloor = Hit.Location;
     return true;
 }
 }
 
 bool UOpenWillowRangeSubsystem::FormationSlots(const FVector& Spot, float Yaw, TArray<FVector>& OutDummies, TArray<FVector>& OutEnemies,
-    FString& OutWhy) const
+    FString& OutWhy, bool bRequireTexturedFloor) const
 {
     // Every slot of the formation must stand on floor: the dummy row DummyAhead ahead and the enemy arc EnemyRing ahead, one
-    // slot per enemy the manifest spawns. The scout uses this too, so a scouted spot always holds the whole range.
+    // slot per enemy the manifest spawns. The scout and the candidates use this too, so a chosen spot always holds the whole range.
     UWorld* World = GetWorld();
     OutDummies.Reset();
     OutEnemies.Reset();
     if (!World) { OutWhy = TEXT("no world"); return false; }
+    const TCHAR* Kind = bRequireTexturedFloor ? TEXT("textured walkable") : TEXT("walkable");
     const FVector Forward = FRotator(0.f, Yaw, 0.f).Vector();
     const FVector Side = FRotator(0.f, Yaw + 90.f, 0.f).Vector();
     for (int32 Index = 0; Index < ExpectedDummies; ++Index)
     {
         const FVector Centre = Spot + Forward * DummyAhead + Side * (float(Index) - 1.f) * DummySpacing;
         FVector Floor;
-        if (!SlotFloor(World, Spot, Centre, Floor)) { OutWhy = FString::Printf(TEXT("dummy slot %d at %s has no walkable floor"), Index, *Centre.ToString()); return false; }
+        if (!SlotFloor(World, Spot, Centre, bRequireTexturedFloor, Floor))
+        {
+            OutWhy = FString::Printf(TEXT("dummy slot %d at %s has no %s floor"), Index, *Centre.ToString(), Kind);
+            return false;
+        }
         OutDummies.Add(Floor);
     }
     const int32 Total = ExpectedEnemies();
@@ -140,7 +213,11 @@ bool UOpenWillowRangeSubsystem::FormationSlots(const FVector& Spot, float Yaw, T
         const float Angle = Total > 1 ? FMath::Lerp(-EnemyArcDegrees, EnemyArcDegrees, float(Index) / float(Total - 1)) : 0.f;
         const FVector Centre = Spot + FRotator(0.f, Yaw + Angle, 0.f).Vector() * EnemyRing;
         FVector Floor;
-        if (!SlotFloor(World, Spot, Centre, Floor)) { OutWhy = FString::Printf(TEXT("enemy slot %d at %s has no walkable floor"), Index, *Centre.ToString()); return false; }
+        if (!SlotFloor(World, Spot, Centre, bRequireTexturedFloor, Floor))
+        {
+            OutWhy = FString::Printf(TEXT("enemy slot %d at %s has no %s floor"), Index, *Centre.ToString(), Kind);
+            return false;
+        }
         OutEnemies.Add(Floor);
     }
     return true;
@@ -200,6 +277,21 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 Entry->TryGetStringField(TEXT("kind"), Spawn.Kind);
                 if (Entry->TryGetNumberField(TEXT("count"), Count)) Spawn.Count = int32(Count);
                 Out.Spawns.Add(Spawn);
+            }
+        const TArray<TSharedPtr<FJsonValue>>* CandidateList = nullptr;
+        if (Root->TryGetArrayField(TEXT("spot_candidates"), CandidateList))
+            for (const TSharedPtr<FJsonValue>& Value : *CandidateList)
+            {
+                const TSharedPtr<FJsonObject> Entry = Value.IsValid() ? Value->AsObject() : nullptr;
+                double X = 0.0, Y = 0.0, Z = 0.0;
+                if (!Entry.IsValid() || !Entry->TryGetNumberField(TEXT("x"), X) || !Entry->TryGetNumberField(TEXT("y"), Y)
+                    || !Entry->TryGetNumberField(TEXT("z"), Z))
+                    continue;
+                FOpenWillowRangeCandidate Candidate;
+                Candidate.Location = FVector(X, Y, Z);
+                Entry->TryGetStringField(TEXT("source"), Candidate.Source);
+                Entry->TryGetBoolField(TEXT("gate_terrain"), Candidate.bGateTerrain);
+                Out.Candidates.Add(Candidate);
             }
         const TSharedPtr<FJsonObject>* KindObjects = nullptr;
         if (Root->TryGetObjectField(TEXT("kinds"), KindObjects))
@@ -274,6 +366,14 @@ void UOpenWillowRangeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
     bTestMode = FParse::Param(FCommandLine::Get(), TEXT("owrangetest"));
+    bSurveyMode = FParse::Param(FCommandLine::Get(), TEXT("owrangesurvey"));
+    if (bTestMode && bSurveyMode)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE -owrangetest and -owrangesurvey are exclusive: the survey is off"));
+        bSurveyMode = false;
+    }
+    FString CountText;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrangesurveycount="), CountText)) SurveyCount = FMath::Max(0, FCString::Atoi(*CountText));
 }
 
 bool UOpenWillowRangeSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -291,6 +391,7 @@ void UOpenWillowRangeSubsystem::Tick(float DeltaTime)
     const float Now = GetWorld()->GetTimeSeconds();
     if (bBuilt) UpdateThreatDen(Den, Now);   // PR2: the den's fall-back check (every second)
     if (bTestMode && !bTestDone) TickTest(Now);
+    if (bSurveyMode && !bSurveyDone) TickSurvey(Now);
 }
 
 bool UOpenWillowRangeSubsystem::LoadSliceData()
@@ -478,7 +579,21 @@ bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FSt
             return true;
         }
     }
-    // 3. The scout.
+    // 3. The manifest's candidates, in manifest order (gate terrain first).
+    EnsureManifest();
+    for (int32 Index = 0; Index < Manifest.Candidates.Num(); ++Index)
+    {
+        FString Material, Why;
+        if (ResolveCandidate(Index, OutSpot, OutYaw, Material, Why))
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE spot source=candidate index=%d terrain=%s at=%.0f,%.0f,%.0f yaw=%.0f material=%s"), Index,
+                *Manifest.Candidates[Index].Source, OutSpot.X, OutSpot.Y, OutSpot.Z, OutYaw, *Material);
+            OutSource = TEXT("candidate");
+            return true;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE candidate index=%d not accepted: %s"), Index, *Why);
+    }
+    // 4. The scout.
     FString Log;
     if (ScoutSpot(OutSpot, OutYaw, Log))
     {
@@ -501,41 +616,91 @@ bool UOpenWillowRangeSubsystem::ScoutSpot(FVector& OutSpot, float& OutYaw, FStri
         return false;
     }
     const float PlazaZ = Plaza.Location.Z;
-    const FVector Centre(ScoutCentre.X, ScoutCentre.Y, PlazaZ);
     // Rings closest first; the first accepted candidate of the first ring that has one wins (all of its ring is counted).
     for (int32 Ring = 0; Ring < ScoutRings; ++Ring)
     {
         const float Radius = 6000.f + 1000.f * float(Ring);
         int32 Accepted = 0;
         bool bWon = false;
+        FString WonMaterial;
         for (int32 Index = 0; Index < ScoutAngles; ++Index)
         {
             const float Rad = FMath::DegreesToRadians(360.f * float(Index) / float(ScoutAngles));
             const FVector2D XY = ScoutCentre + FVector2D(FMath::Cos(Rad), FMath::Sin(Rad)) * Radius;
-            FVector Floor;
-            if (!ScoutAccepts(World, XY, PlazaZ, Floor)) continue;
-            // The whole formation (dummy row and enemy arc, facing away from the town) must have floor too.
+            FHitResult FloorHit;
+            FString Material, Why;
+            if (!ScoutAccepts(World, XY, PlazaZ, 1500.f, FloorHit, Why) || !FloorIsTextured(FloorHit, Material)) continue;
+            const FVector Floor = FloorHit.Location;
+            // The whole formation (dummy row and enemy arc, facing away from the town) must have textured floor too.
             TArray<FVector> DummySlots, EnemySlots;
-            FString Why;
-            if (!FormationSlots(Floor, (Floor - Centre).Rotation().Yaw, DummySlots, EnemySlots, Why)) continue;
+            if (!FormationSlots(Floor, AwayFromTown(Floor), DummySlots, EnemySlots, Why, true)) continue;
             ++Accepted;
             if (!bWon)
             {
                 bWon = true;
                 OutSpot = Floor;
-                OutYaw = (Floor - Centre).Rotation().Yaw;   // facing away from the town
+                OutYaw = AwayFromTown(Floor);   // facing away from the town
+                WonMaterial = Material;
             }
         }
         UE_LOG(LogTemp, Display, TEXT("OWRANGE scout ring=%.0f accepted=%d of %d"), Radius, Accepted, ScoutAngles);
         if (bWon)
         {
-            UE_LOG(LogTemp, Display, TEXT("OWRANGE spot source=scout at=%.0f,%.0f,%.0f yaw=%.0f ring=%.0f"), OutSpot.X, OutSpot.Y, OutSpot.Z,
-                OutYaw, Radius);
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE spot source=scout at=%.0f,%.0f,%.0f yaw=%.0f ring=%.0f material=%s"), OutSpot.X, OutSpot.Y,
+                OutSpot.Z, OutYaw, Radius, *WonMaterial);
             OutLog = TEXT("scout");
             return true;
         }
     }
     OutLog = TEXT("no accepted candidate on rings 6000-14000 uu");
+    return false;
+}
+
+bool UOpenWillowRangeSubsystem::ResolveCandidate(int32 Index, FVector& OutSpot, float& OutYaw, FString& OutMaterial, FString& OutWhy)
+{
+    // One candidate (PR2 follow-up, host choice, UNVERIFIED): the candidate point, then eight points on a 600 uu ring and eight on
+    // a 1200 uu ring, in that order. The first point that passes every rule wins. The floor must lie within 300 uu of the
+    // candidate's own height (the gate terrain sits well below the plaza), be textured, and the whole formation must stand on
+    // textured floor, facing away from the town.
+    EnsureManifest();
+    UWorld* World = GetWorld();
+    if (!World || !Manifest.Candidates.IsValidIndex(Index)) { OutWhy = TEXT("no such candidate"); return false; }
+    const FVector Candidate = Manifest.Candidates[Index].Location;
+    TArray<FVector2D> Points;
+    Points.Add(FVector2D(Candidate.X, Candidate.Y));
+    for (const float Radius : {600.f, 1200.f})
+        for (int32 Angle = 0; Angle < 8; ++Angle)
+        {
+            const float Rad = FMath::DegreesToRadians(45.f * float(Angle));
+            Points.Add(FVector2D(Candidate.X, Candidate.Y) + FVector2D(FMath::Cos(Rad), FMath::Sin(Rad)) * Radius);
+        }
+    FString FirstWhy;
+    for (const FVector2D& XY : Points)
+    {
+        FHitResult FloorHit;
+        FString Material, Why;   // Why is set by whichever rule fails
+        if (ScoutAccepts(World, XY, Candidate.Z, 300.f, FloorHit, Why))
+        {
+            if (!FloorIsTextured(FloorHit, Material))
+            {
+                Why = FString::Printf(TEXT("floor is not textured (material %s)"), *Material);
+            }
+            else
+            {
+                TArray<FVector> DummySlots, EnemySlots;
+                const FVector Floor = FloorHit.Location;
+                if (FormationSlots(Floor, AwayFromTown(Floor), DummySlots, EnemySlots, Why, true))
+                {
+                    OutSpot = Floor;
+                    OutYaw = AwayFromTown(Floor);
+                    OutMaterial = Material;
+                    return true;
+                }
+            }
+        }
+        if (FirstWhy.IsEmpty()) FirstWhy = Why;
+    }
+    OutWhy = FirstWhy;
     return false;
 }
 
@@ -590,12 +755,21 @@ void UOpenWillowRangeSubsystem::TestHit(AOpenWillowCombatTarget* Target, float A
         Causer, UDamageType::StaticClass());
 }
 
+// A frame saved as local/range/shots/<FileName> (the test and the survey use it; -owrangeshots gates both).
+namespace
+{
+void RequestRangeShot(const FString& FileName)
+{
+    const FString Dir = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/range/shots")));
+    IFileManager::Get().MakeDirectory(*Dir, true);
+    FScreenshotRequest::RequestScreenshot(FPaths::Combine(Dir, FileName), true, false);
+}
+}
+
 void UOpenWillowRangeSubsystem::TestShot(int32 Number)
 {
     if (!FParse::Param(FCommandLine::Get(), TEXT("owrangeshots"))) return;
-    const FString Dir = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/range/shots")));
-    IFileManager::Get().MakeDirectory(*Dir, true);
-    FScreenshotRequest::RequestScreenshot(FPaths::Combine(Dir, FString::Printf(TEXT("range_%d.png"), Number)), true, false);
+    RequestRangeShot(FString::Printf(TEXT("range_%d.png"), Number));
 }
 
 void UOpenWillowRangeSubsystem::TickTest(float Now)
@@ -1166,6 +1340,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             }
             return;
         }
+        // The second swing is still pending at its start: wait for it to resolve, so its hit cannot land inside the next step.
+        if (Brain.IsSwingPending()) return;
         const float Gap = Brain.LastSwingStart - Brain.PrevSwingStart;
         TestCheck(TEXT("melee_interval"), FMath::Abs(Gap - OpenWillowThreat::SwingInterval) <= 0.1f,
             FString::Printf(TEXT("%.3f s between the last two swing starts"), Gap));
@@ -1174,6 +1350,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     }
     case 30: // melee_miss setup: Maya in the volume; she steps out after the swing starts.
     {
+        // No swing of the earlier steps may still be pending when the baseline is taken (it would resolve inside this step).
+        if (E0 && E0->GetBrain().IsSwingPending()) return;
         Reset(TEXT("melee"));
         OnlyActive(E0);
         if (!PlaceInVolume(E0))
@@ -1309,6 +1487,74 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     default:
         TestStep = 99;
         return;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- survey driver (-owrangesurvey)
+
+void UOpenWillowRangeSubsystem::TickSurvey(float Now)
+{
+    // PR2 follow-up: for each of the first SurveyCount manifest candidates, the accepted spot (a range is built there) or, when no
+    // point passes, the raw candidate (no range). Maya is moved there, a frame is saved 2.5 s later, and the next candidate starts
+    // a second after that frame, so the next move is not in its picture. Host stand-in layout (UNVERIFIED in game).
+    UWorld* World = GetWorld();
+    APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
+    APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
+    if (!Pawn) return;
+    if (SurveyArmedAt < 0.f) { SurveyArmedAt = Now; return; }
+    if (Now - SurveyArmedAt < 4.f) return;
+    EnsureManifest();
+    const int32 Total = FMath::Min(SurveyCount, Manifest.Candidates.Num());
+    if (SurveyStepAt < 0.f)
+    {
+        if (SurveyIndex >= Total)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGESURVEY done candidates=%d"), Total);
+            bSurveyDone = true;
+            if (PC) PC->ConsoleCommand(TEXT("quit"));
+            return;
+        }
+        // One candidate: its accepted spot with the range built there, else the raw candidate with no range.
+        ClearRange();
+        const FString Terrain = Manifest.Candidates[SurveyIndex].Source;
+        FVector Spot = Manifest.Candidates[SurveyIndex].Location;
+        float Yaw = AwayFromTown(Spot);
+        FString Material = TEXT("none"), Why;
+        bool bAccepted = false;
+        FVector Found;
+        float FoundYaw = 0.f;
+        FString FoundMaterial;
+        if (ResolveCandidate(SurveyIndex, Found, FoundYaw, FoundMaterial, Why))
+        {
+            if (BuildRange(Found, FoundYaw))
+            {
+                bAccepted = true;
+                Spot = Found;
+                Yaw = FoundYaw;
+                Material = FoundMaterial;
+                Why = TEXT("none");
+            }
+            else
+            {
+                Why = TEXT("build failed");
+            }
+        }
+        TeleportMaya(World, Spot, Yaw);
+        UE_LOG(LogTemp, Display, TEXT("OWRANGESURVEY index=%d accepted=%d at=%.0f,%.0f,%.0f yaw=%.0f terrain=%s material=%s reason=%s"),
+            SurveyIndex, bAccepted ? 1 : 0, Spot.X, Spot.Y, Spot.Z, Yaw, *Terrain, *Material, *Why);
+        SurveyStepAt = Now;
+        bSurveyShot = false;
+        return;
+    }
+    if (!bSurveyShot && Now - SurveyStepAt >= 2.5f)
+    {
+        if (FParse::Param(FCommandLine::Get(), TEXT("owrangeshots"))) RequestRangeShot(FString::Printf(TEXT("survey_%d.png"), SurveyIndex));
+        bSurveyShot = true;
+    }
+    else if (bSurveyShot && Now - SurveyStepAt >= 3.5f)
+    {
+        ++SurveyIndex;
+        SurveyStepAt = -1.f;
     }
 }
 

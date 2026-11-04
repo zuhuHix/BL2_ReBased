@@ -346,15 +346,20 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     {
         In.MayaLocation = Walker->GetActorLocation();
         In.MayaLevel = Walker->GetSkills() ? Walker->GetSkills()->GetLevel() : GetLevel();
-        // Exposure stand-in (UNVERIFIED): a Visibility line from the enemy's centre to Maya's centre, both ignored.
-        FVector Centre;
-        float HalfHeight = 0.f;
-        CollisionCentre(Centre, HalfHeight);
-        FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSight), true);
-        Query.AddIgnoredActor(this);
-        Query.AddIgnoredActor(Walker);
-        FHitResult Hit;
-        In.bLineOfSight = !GetWorld()->LineTraceSingleByChannel(Hit, Centre, In.MayaLocation, ECC_Visibility, Query);
+        // Exposure stand-in (UNVERIFIED): a Visibility line from the enemy's centre to Maya's centre, both ignored. Sampled only
+        // on the brain's state updates (the only time it reads it); in between the last sample is passed on.
+        if (Brain.IsUpdateDue(Now))
+        {
+            FVector Centre;
+            float HalfHeight = 0.f;
+            CollisionCentre(Centre, HalfHeight);
+            FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSight), true);
+            Query.AddIgnoredActor(this);
+            Query.AddIgnoredActor(Walker);
+            FHitResult Hit;
+            bLineOfSightSample = !GetWorld()->LineTraceSingleByChannel(Hit, Centre, In.MayaLocation, ECC_Visibility, Query);
+        }
+        In.bLineOfSight = bLineOfSightSample;
     }
     // The melee numbers of this kind at the enemy's level (no entry: no melee for it).
     float Arrival = 0.f, Ratio = 0.f;
@@ -363,11 +368,18 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
 
     const FOpenWillowBrainOrders Orders = Brain.Tick(Now, In, *Den, bDamagedByMaya);
     if (Orders.bSwingStarted) PlayMelee(Now);
-    if (Orders.bChase) UpdateChase(In.MayaLocation, Orders.bRun, DeltaSeconds);
-    else UpdatePatrol(Now, DeltaSeconds);
+    if (Orders.bChase)
+    {
+        UpdateChase(Orders.ChaseTo, Orders.bRun, Now, DeltaSeconds);
+    }
+    else
+    {
+        ChaseCheckAt = -1.f;   // the progress watch starts afresh with the next chase
+        UpdatePatrol(Now, DeltaSeconds);
+    }
 }
 
-void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float DeltaSeconds)
+void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float Now, float DeltaSeconds)
 {
     // Host stand-in (UNVERIFIED): turn toward Maya at 360 deg/s, run at the kind's RunSpeed (the walk clip when there is no run
     // clip) until the brain stops it inside the melee volume. Floor snapping as the patrol.
@@ -380,13 +392,42 @@ void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float Delta
         SetMoveAnim(false);
         return;
     }
-    const FVector Dir = ToTarget / Left;
-    TurnToward(Dir, DeltaSeconds);
+    FVector Dir = ToTarget / Left;
     if (!bRun)
     {
+        TurnToward(Dir, DeltaSeconds);
+        ChaseCheckAt = -1.f;
         SetMoveAnim(false);
         return;
     }
+    // Progress watch (host choice, UNVERIFIED): every ChaseCheckSeconds, under ChaseMinProgress uu moved counts as blocked. While
+    // blocked the enemy side-steps (the direction turned ChaseSideStepDegrees, alternating sides each check); blocked for
+    // ChaseGiveUpSeconds it drops the target for ChaseRetrySeconds (the brain's GiveUp) and patrols.
+    if (ChaseCheckAt < 0.f)
+    {
+        ChaseCheckAt = Now + ChaseCheckSeconds;
+        ChaseCheckFrom = Here;
+        ChaseBlockedSince = -1.f;
+    }
+    else if (Now >= ChaseCheckAt)
+    {
+        const bool bBlocked = FVector::Dist2D(Here, ChaseCheckFrom) < ChaseMinProgress;
+        if (!bBlocked) ChaseBlockedSince = -1.f;
+        else if (ChaseBlockedSince < 0.f) ChaseBlockedSince = Now - ChaseCheckSeconds;
+        if (bBlocked) ChaseSideSign = -ChaseSideSign;
+        ChaseCheckAt = Now + ChaseCheckSeconds;
+        ChaseCheckFrom = Here;
+        if (ChaseBlockedSince >= 0.f && Now - ChaseBlockedSince >= ChaseGiveUpSeconds)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE chase_giveup enemy=%s t=%.2f blocked_for=%.1f"), *GetName(), Now, Now - ChaseBlockedSince);
+            Brain.GiveUp(Now, ChaseRetrySeconds);
+            ChaseCheckAt = -1.f;
+            SetMoveAnim(false);
+            return;
+        }
+    }
+    if (ChaseBlockedSince >= 0.f) Dir = Dir.RotateAngleAxis(ChaseSideSign * ChaseSideStepDegrees, FVector::UpVector);
+    TurnToward(Dir, DeltaSeconds);
 
     const FVector Next = Here + Dir * FMath::Min(Kind.RunSpeed * DeltaSeconds, Left);
     FVector Floor;

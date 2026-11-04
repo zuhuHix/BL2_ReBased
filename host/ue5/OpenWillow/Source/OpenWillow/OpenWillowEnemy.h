@@ -67,7 +67,7 @@ private:
     void UpdatePatrol(float Now, float DeltaSeconds);
     void TurnToward(const FVector& Dir, float DeltaSeconds);
     void UpdateBrain(float Now, float DeltaSeconds);
-    void UpdateChase(const FVector& Target, bool bRun, float DeltaSeconds);
+    void UpdateChase(const FVector& Target, bool bRun, float Now, float DeltaSeconds);
     void PlayMelee(float Now);
     void SetMoveAnim(bool bMoving, bool bRun = false);
     void UpdateHealthBars();
@@ -101,4 +101,16 @@ private:
     float ShieldCurrent = 0.f;
     float ShieldRate = 0.f;             // per second, after ShieldDelay without a hit
     float ShieldDelay = 0.f;
+    // The brain's last line-of-sight sample (taken on its state updates only).
+    bool bLineOfSightSample = false;
+    // Chase progress watch (UpdateChase; host choice, UNVERIFIED).
+    static constexpr float ChaseCheckSeconds = 1.f;
+    static constexpr float ChaseMinProgress = 10.f;
+    static constexpr float ChaseSideStepDegrees = 70.f;
+    static constexpr float ChaseGiveUpSeconds = 3.f;
+    static constexpr float ChaseRetrySeconds = 5.f;
+    float ChaseCheckAt = -1.f;
+    FVector ChaseCheckFrom = FVector::ZeroVector;
+    float ChaseBlockedSince = -1.f;
+    float ChaseSideSign = 1.f;
 };

@@ -4,6 +4,10 @@ param(
     [string]$Manifest,
     # X,Y,Z[,Yaw]: put the range here instead of the host's scout (OpenWillowRange.cpp ScoutSpot).
     [string]$At,
+    # Survey mode (-owrangesurvey): walks the manifest's first SurveyCount spot candidates, saves a frame of each to
+    # local/range/shots/survey_<i>.png and prints the OWRANGESURVEY lines instead of running the checker. Not with -At.
+    [switch]$Survey,
+    [int]$SurveyCount = 8,
     [int]$TimeoutSeconds = 300,
     [int]$WaitForEditorSeconds = 3600,
     [switch]$Shots,
@@ -13,6 +17,7 @@ param(
 # town (scout or -At), Maya is teleported there, and the host's driver checks placement, body and critical hits, the shield
 # order, the invulnerable and passive toggles, patrol, death, ragdoll, respawn and the damage popups. It logs one
 # OWRANGETEST line per step; tools/check_range.py grades them (exit code). -Shots also saves frames to local/range/shots.
+# -Survey runs the spot-candidate survey instead (OWRANGESURVEY lines; exit 0 when it finished).
 # Prepare the manifest first: python tools/prepare_range.py (stock health from the VM; enemy assets from
 # tools/import_phaselock_target.ps1 when imported). Builds the module first unless -SkipBuild. Owns one editor at a time and
 # the machine-wide UE run lock (tools/ue_lock.ps1); it never touches another process. Host behaviour only: UNVERIFIED in game.
@@ -22,6 +27,7 @@ if (!$Game) { throw 'Set OPENWILLOW_BL2 or pass -Game (the installed Borderlands
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 if (!$Manifest) { $Manifest = Join-Path $repo 'local/range/range_manifest.json' }
 if (!(Test-Path -LiteralPath $Manifest)) { throw "No range manifest at $Manifest (run python tools/prepare_range.py)" }
+if ($Survey -and $At) { throw 'Pass -At or -Survey, not both (the survey picks its own spots).' }
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
@@ -38,7 +44,8 @@ try {
     $logDir = Join-Path $repo 'local/range'
     New-Item -ItemType Directory -Force $logDir | Out-Null
     $log = Join-Path $logDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', '-owrangetest',
+    $mode = if ($Survey) { '-owrangesurvey' } else { '-owrangetest' }
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', $mode,
         "-owrange=`"$Manifest`"", '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     # The Fire mission's stock dummy (local/slice manifests, as tools/test_quest.ps1 uses them); without them the host
@@ -50,6 +57,7 @@ try {
     } else { Write-Host 'Slice manifests missing under local/slice: the range uses engine-shape dummies.' }
     if ($At) { $arguments += "-owrangeat=$At" }
     if ($Shots) { $arguments += '-owrangeshots' }
+    if ($Survey) { $arguments += '-owrangeshots', "-owrangesurveycount=$SurveyCount" }
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Host "Launched range test pid $($process.Id); log: $log"
     if (!$process.WaitForExit($TimeoutSeconds * 1000)) {
@@ -62,10 +70,17 @@ try {
     }
     Start-Sleep -Seconds 3
     if (!(Test-Path -LiteralPath $log)) { throw "No log written: $log" }
-    Select-String -LiteralPath $log -Pattern 'OWRANGE' |
-        ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
-    & python $checker $log
-    $code = $LASTEXITCODE
+    if ($Survey) {
+        Select-String -LiteralPath $log -Pattern 'OWRANGESURVEY' |
+            ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
+        $code = 2
+        if (Select-String -LiteralPath $log -Pattern 'OWRANGESURVEY done' -Quiet) { $code = 0 }
+    } else {
+        Select-String -LiteralPath $log -Pattern 'OWRANGE' |
+            ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
+        & python $checker $log
+        $code = $LASTEXITCODE
+    }
     Write-Host "Log: $log"
 } finally {
     Exit-OwUeLock

@@ -30,6 +30,7 @@ constexpr float MeleeBelow = -143.f;         // Maya's centre Z minus the enemy'
 constexpr float MeleeAbove = 339.f;
 constexpr float MeleeStopMargin = 60.f;      // host choice: the enemy stops running this far inside the reach
 constexpr float DefaultCollisionRadius = 50.f;  // host stand-in when the kind's collision radius is 0
+constexpr float SearchArrival = 100.f;       // host choice: a lost target's last-known spot counts as reached this close
 }
 
 // The one threat record of the range den (AI_AWARENESS_LIVE 0, 2, 3). The range is one den: its centre is the range spot,
@@ -75,7 +76,8 @@ struct FOpenWillowBrainInput
 // What the brain asks the enemy to do this tick.
 struct FOpenWillowBrainOrders
 {
-    bool bChase = false;          // aware of Maya: turn to her, and run unless bRun is false
+    bool bChase = false;          // go for ChaseTo: turn to it, and run unless bRun is false
+    FVector ChaseTo = FVector::ZeroVector;   // where Maya was last seen (the target's location, or a lost target's last-known spot)
     bool bRun = false;            // run at her (false inside the stop margin, or during a swing)
     bool bSwingStarted = false;   // a swing started this tick: play the melee clip
 };
@@ -89,6 +91,11 @@ public:
     FOpenWillowBrainOrders Tick(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool& bDamagedByMaya);
     // Drops the target and any swing in progress (death, respawn, passive, paused).
     void Stop();
+    // The enemy could not make progress toward its target: drop it, forget the last-known spot, and do not take a target
+    // again for Seconds (host choice, UNVERIFIED).
+    void GiveUp(float Now, float Seconds);
+    // True when the next tick runs a state update (the enemy samples the line of sight only then).
+    bool IsUpdateDue(float Now) const { return Now >= NextUpdateAt; }
     bool IsTargeting() const { return bTargeting; }
     bool IsSwingPending() const { return bSwingPending; }
 
@@ -111,7 +118,14 @@ private:
 
     float NextUpdateAt = 0.f;
     bool bExposedBefore = false;    // the line of sight at the previous state update (the sight rule reads it)
+    // The enemy's own target, apart from the den's threat record (AI_AWARENESS_LIVE 2: targets are dropped at the member's
+    // next update once its rules no longer hold). Host stand-in: a target is valid while the den level is 2 or more and Maya is
+    // within the den's ThreatRadius of its centre; the enemy goes for where it last saw her (line of sight or proximity), and
+    // after losing the target it walks to that spot once, then patrols.
     bool bTargeting = false;
+    bool bHasTargetLocation = false;
+    FVector TargetLocation = FVector::ZeroVector;
+    float GiveUpUntil = -10.f;
     bool bSwingPending = false;
     float SwingStartAt = -10.f;
 };
