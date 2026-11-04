@@ -343,7 +343,17 @@ gives the player (`accuracy_pool`: the pool definition's base values scaled by t
 type's and parts' `ExternalAttributeEffects`) and the type's full kick fields (`recoil`). The walker draws one pool-cone offset
 per shot (x 1 - zoom) before pattern and spread, adds the impulse and the kick after the shot, and adds the change of the
 current kick to the view each frame (so the view returns when the kick has recovered). The firing suite runs without it unless
-`-owaimmodel` is given (its dummy pulls keep their aim); each shot logs `OWFIRING aim`. Not modelled: the zoomed view wander,
+`-owaimmodel` is given (its dummy pulls keep their aim); each shot logs `OWFIRING aim`.
+
+*Review round 1 (PR #84).* The chase stays the per-frame linear step `current += (target - current) x speed x dt`, not the
+frame-independent `1 - exp(-speed dt)`. The live fit came out at exactly the type's 8.00 on every frame pair at about 8.5 ms,
+which is what the linear step gives; the exponential form would read 7.73 there. A frame longer than 1/30 s is cut into 1/30 s
+substeps, so a hitch cannot snap the kick onto its target; frames up to 33 ms are one step, as before. The kick keeps its sign
+(a negative impulse kicks the other way; the game's sign handling for that case is UNVERIFIED). A non-finite impulse, kick or
+pool value is ignored, a negative kick speed counts as 0, and pool bounds given as min above max are read the other way
+round. The pool (`accuracy_pool`) and the kick (`recoil`) are gated separately. The model is off in every scripted test or
+capture mode, meaning any `-ow...shots`, `-ow...test` or `-owautowalk` switch, unless `-owaimmodel` is given. CTest cases cover
+the substepping, the signed kick and the bad inputs. Not modelled: the zoomed view wander,
 the Hyperion `AlternativeWeaponKick`, skill modifiers on the pool and the impulse.
 
 **Equal-level status chance (Ice_P, third run).** The Maliwan fire pistol (the slice mission pistol's parts on the elemental

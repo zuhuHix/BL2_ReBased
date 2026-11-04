@@ -81,7 +81,8 @@ struct FOpenWillowFiringData
     float SpinStartMultiplier = 1;
     bool bSpinsToFullRate = false;
     // The player's accuracy pool while this weapon is held (accuracy_pool) and the shot's impulse and kick (recoil).
-    bool bHasAccuracyPool = false;
+    bool bHasAccuracyPool = false;  // accuracy_pool present: the shot's impulse feeds the pool and its cone
+    bool bHasKick = false;          // recoil present: the shot kicks the view (independent of the pool)
     bool bPoolStartsAtMax = true;
     weapon_firing::AccuracyPool Pool;
     float AccuracyImpulse = 0;      // PerShotAccuracyImpulse (degrees; negative on reverse-recoil types)
@@ -167,6 +168,9 @@ bool IsElemental(const FString& Element);
 // Once per frame: the held weapon's pool limits (a new weapon clamps the value into them), the pool's idle fall and the
 // kick's decay and chase. Returns the view change to add this frame (degrees, pitch and yaw).
 FRotator TickAim(FOpenWillowAimState& State, const FOpenWillowFiringData* Held, const FString& HeldInstance, float Dt);
+// Whether the accuracy pool and kick act on the player's aim: off in every scripted test or capture mode (any -ow...shots,
+// -ow...test or -owautowalk switch), so their aim stays where the script put it; -owaimmodel turns it on again.
+bool AimModelEnabled();
 // The shot's aim: the view plus one draw in the pool's cone (x 1 - zoom), shared by every pellet of the shot.
 FRotator ShotAim(const FOpenWillowAimState& State, const FRotator& View, float ZoomEffect, FRandomStream& Rng);
 // After a shot: the pool impulse (x the burst scale inside an automatic burst) and the view kick.

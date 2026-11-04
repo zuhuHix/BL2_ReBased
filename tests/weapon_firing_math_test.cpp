@@ -173,9 +173,51 @@ int main() {
     side.add(100, kd, 0.5, 0.5, 1.0);   // m = 50, v = 0.5, h = +1: vertical 0.4 + 0.6 x 0.5 / 1.5 = 0.6
     check(near(side.targetPitch, 30) && near(side.targetYaw, 20), "kick: shares and FOV ratio");
     side.tick(0.5, kd);
-    check(near(side.targetPitch, 15) && near(side.currentPitch, 15), "kick: target decays linearly, current chases");
-    side.tick(0.6, kd);
-    check(near(side.targetPitch, 0) && near(side.currentPitch, 0), "kick: targets reach 0 at the recovery time");
+    check(near(side.targetPitch, 15) && side.currentPitch > 5 && side.currentPitch < 30, "kick: target decays linearly, current chases");
+    side.tick(2.0, kd);
+    check(near(side.targetPitch, 0) && std::fabs(side.currentPitch) < 1e-3, "kick: targets reach 0, current follows them home");
+
+    // The chase step is the per-frame linear one (live fit): one short frame moves speed x dt of the gap.
+    KickData chase = kd;
+    chase.speed = 8; chase.recoveryTime = 100;   // targets nearly still over the frames below
+    Kick one;
+    one.targetPitch = 1000; one.recoverLeft = 100;
+    one.tick(0.0085, chase);
+    check(near(one.currentPitch, 1000 * (1 - 0.0085 / 100) * 8 * 0.0085, 1e-6), "kick chase: linear per-frame step at a normal frame");
+    // A hitch is substepped: one 0.25 s frame equals eight 1/32 s frames, and does not snap to the target.
+    Kick hitch, steps;
+    hitch.targetPitch = steps.targetPitch = 1000; hitch.recoverLeft = steps.recoverLeft = 100;
+    hitch.tick(0.25, chase);
+    for (int i = 0; i < 8; ++i) steps.tick(0.25 / 8, chase);
+    check(near(hitch.currentPitch, steps.currentPitch, 1e-9), "kick chase: a long frame equals its substeps");
+    check(hitch.currentPitch < hitch.targetPitch * 0.95, "kick chase: a 0.25 s hitch does not snap to the target (one unsplit step would)");
+
+    // Signed kick: a negative impulse kicks the other way; non-finite and bad configs are ignored or clamped.
+    check(Kick::amount(-2.0, 0.0, 1.0) < 0, "kick: amount keeps the impulse's sign");
+    KickData up = kd;
+    up.up = 1; up.down = 0; up.left = 0; up.right = 0; up.minVertical = 0; up.minHorizontal = 0;
+    Kick neg;
+    neg.add(-100, up, 1.0, 0.5, 0.0);
+    check(near(neg.targetPitch, -100) && near(neg.targetYaw, 0), "kick: a negative kick moves the target down");
+    Kick nan;
+    nan.add(std::nan(""), up, 1.0, 0.5, 0.0);
+    check(near(nan.targetPitch, 0), "kick: a NaN kick is ignored");
+    KickData backwards = chase;
+    backwards.speed = -8;
+    Kick still;
+    still.targetPitch = 1000; still.recoverLeft = 100;
+    still.tick(0.1, backwards);
+    check(near(still.currentPitch, 0), "kick: a negative speed does not move away from the target");
+    AccuracyPool bad;
+    bad.minValue = 10; bad.maxValue = 1; bad.idleRate = -4; bad.idleDelay = 0;
+    bad.reset(false);
+    bad.impulse(std::nan(""));
+    check(std::isfinite(bad.value), "pool: a NaN impulse leaves the value finite");
+    bad.impulse(100);
+    check(near(bad.value, 10), "pool: min above max is read the other way round");
+    bad.impulse(-100);
+    check(near(bad.value, 1), "pool: a negative impulse narrows the cone, clamped to the floor");
+    check(near(accuracyOffset(std::nan(""), 0.0, 0.1, 0.2).yaw, 0), "pool cone: a NaN pool value gives no offset");
 
     if (failures) return 1;
     std::printf("weapon_firing_math: all checks passed\n");

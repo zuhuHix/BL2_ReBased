@@ -144,11 +144,14 @@ struct Kick {
     double targetPitch = 0, targetYaw = 0;    // rotator units
     double currentPitch = 0, currentYaw = 0;
     double recoverLeft = 0;                   // s until the targets reach 0
+    static constexpr double MaxStep = 1.0 / 30.0;   // tick() substeps longer frames (s)
     // Kick amount (rotator units) of one shot before the split.
     static double amount(double impulseDegrees, double zoomEffect, double zoomMultiplier);
     // AddWeaponKick: r1, r2 in [0, 1) pick the vertical and horizontal draws; fovRatio = tan(FOV/2) / tan(DefaultFOV/2).
     void add(double kick, const KickData& data, double fovRatio, double r1, double r2);
-    // ApplyWanderingAndKick for one frame (first-order chase: the routine's exact form was not read, UNVERIFIED).
+    // ApplyWanderingAndKick for one frame: targets fall linearly to 0, the current amounts take the per-frame linear step
+    // (target - current) x speed x dt (the live fit, WEAPON_PROJECTILES.md section 10), substepped at MaxStep. Non-finite
+    // inputs are ignored; a negative speed counts as 0.
     void tick(double dt, const KickData& data);
 };
 
