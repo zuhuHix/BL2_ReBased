@@ -406,3 +406,31 @@ The hit-driven skills (PR 4) listen to `OpenWillowHit::OnHit()`; they ignore sta
 (weapon id `skill:<name>`, `Source` Skill), and queue their extra damage for the next tick instead of applying it inside
 the broadcast. Every skill hit sets `Source = Skill` (the field from the projectiles lane, PR #88).
 PlayerMeleeDamage is taken as 2.5 x PlayerSkillDamage (no melee buff in the host).
+
+## Skills live capture (prepared 2026-11-04, not yet run)
+
+Two files prepare a bl-sdk capture of the questions in section 6. Neither has been run; nothing below is observed yet.
+
+- `tools/real_game/skills_live_capture.ps1`: the session driver (hub and run locks, saves backed up and blocked in game, the
+  save folder compared and restored at the end, the same as the Phaselock integrity capture). It travels to Ice_P, makes Maya
+  immune with the existing `protect_player` hook and aims at adult bullymongs.
+- `tools/real_game/scripts/skills_live.py`: the in-game probe (grades in memory through the skill tree, the kill-skill timer
+  sampler, TakeDamage on every pawn, the instant-hit crit bonus, the lift skill's kill events). Calls it does not show in any
+  existing script are marked `TODO(live)`; a step that needs one records "not implemented".
+
+Step order (each step sets its grades in memory, runs and puts them back):
+
+| Step | Sets | Answers (section 6) |
+|---|---|---|
+| discover | nothing (lists the SkillDefinition paths that match each name) | confirms the object names the other steps use |
+| killskill_timer | Life Tap 5 (kill skill); two kills about 2 s apart | 2: whether a second kill refreshes or adds to `KillSkillTimeRemaining`, and what `DurationOfLastKillSkillActivation` reads |
+| helios | Helios 5; one cast on a lifted bullymong | 6: blast radius and damage (the TakeDamage rows, victim location) |
+| ruin | Ruin 1; one cast | 5: the pulses at +1, +2, +3 s and their radius (TakeDamage timing; the status damage is not visible here) |
+| converge | Converge 1; one cast | not a listed question; recorded for the damage rows |
+| minds_eye_crit | Mind's Eye 0, then 5 | 7: `CurrentInstantHitCriticalHitBonus` at each grade (the base value is read only if the build exposes it) |
+| subsequence_sweet_release | Sub-Sequence 5, Sweet Release 5; the lifted bullymong is killed 1.5 s after the cast | 3: `OnKilledTarget`, `InterruptPhaseLock` and `EndSkill` counted per cast (one or two `OnKilledTarget` per kill); the orb count is not read here |
+
+Not covered by this capture: question 1 (no blocked-target cast), question 4 (the Sweet Release heal target), 8 to 11.
+
+Results are JSON under the ignored `local/realgame/skills_live/` (one file per step, `summary.json`, `save_compare.json`).
+Nothing from them is copied into this note until a run has been checked against the game.
