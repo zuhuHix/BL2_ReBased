@@ -45,7 +45,9 @@ void UOpenWillowSliceGate::Link(const TCHAR* Name, const TCHAR* Result, const FS
 {
     const FString R(Result);
     if (R == TEXT("PASS")) ++Pass; else if (R == TEXT("FAIL")) ++Failed; else ++NotAvailable;
-    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE link=%s result=%s detail=%s (t=%.1fs)"), Name, Result, *Detail, RunTime);
+    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE link=%s result=%s fixtures=[%s] detail=%s (t=%.1fs)"), Name, Result,
+        *FString::Join(Fixtures, TEXT("; ")), *Detail, RunTime);
+    Fixtures.Reset();
 }
 
 void UOpenWillowSliceGate::Finish(const FString& Why)
@@ -86,6 +88,7 @@ void UOpenWillowSliceGate::AimAt(const FVector& Point)
 void UOpenWillowSliceGate::Place(const FVector& Location, const FVector& Look)
 {
     AOpenWillowWalker* W = Walker();
+    Fixture(TEXT("teleport"));
     W->SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
     W->GetCharacterMovement()->StopMovementImmediately();
     AimAt(Look);
@@ -109,6 +112,7 @@ bool UOpenWillowSliceGate::ShootAt(AOpenWillowCombatTarget* Target, float Interv
     if (!Inventory->CanReload(*Held) && UOpenWillowInventory::ResolveAmmoType(*Held, Ammo))
     {
         Inventory->SetAmmoCurrent(Ammo, Inventory->AmmoPool(Ammo).Max);
+        Fixture(TEXT("ammo reserve refilled"));
         UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: %s reserve refilled to %d"),
             UOpenWillowInventory::AmmoTypeKey(Ammo), Inventory->AmmoPool(Ammo).Max);
     }
@@ -232,6 +236,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         {
             FString Reason;
             const bool bSpent = W->GetSkills()->TrySpend(-1, -1, -1, Reason);
+            bPhaselockPointGranted = bSpent;   // reported on the Phaselock link, the one that relies on it
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: action skill point spent=%d %s"), bSpent, *Reason);
         }
         Next(EStep::Arena);
@@ -271,12 +276,18 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 "fallback: the host stand-in target at %s next to Maya in Sanctuary"), *At.ToCompactString()));
         }
         for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
-        HitsAtFightStart = W->GetHitCount();
+        LastHitCount = W->GetHitCount();
         Next(EStep::Fight);
         break;
     }
 
     case EStep::Fight: {
+        // Each hit on Maya, by its causer (the walker keeps the last one): the selected enemy, another actor, or none given.
+        if (W->GetHitCount() != LastHitCount)
+        {
+            LastHitCount = W->GetHitCount();
+            if (W->GetLastHitCauser() == Enemy) ++EnemyHits; else if (W->GetLastHitCauser()) ++OtherHits; else ++UnattributedHits;
+        }
         if (Enemy && Enemy->IsAutoAimTarget())
         {
             if (StepTime < KillTimeout) { if (ShootAt(Enemy, 0.f)) ++KillShots; return; }
@@ -291,8 +302,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 Held ? *Held->Name : TEXT("?"), StepTime));
         }
         else FailLink(TEXT("kill_enemy"), TEXT("the enemy disappeared before it died"));
-        const int32 Hits = W->GetHitCount() - HitsAtFightStart;
-        if (Hits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya during the fight, health %.0f/%.0f"), Hits, W->GetHealth(), W->GetMaxHealth()));
+        // Only a hit whose causer is the selected enemy counts; others are reported, not credited.
+        const FString Others = FString::Printf(TEXT("other hits: %d by other causers, %d with no causer"), OtherHits, UnattributedHits);
+        if (EnemyHits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya caused by %s during the fight (%s), health %.0f/%.0f"),
+            EnemyHits, *Enemy->GetName(), *Others, W->GetHealth(), W->GetMaxHealth()));
+        else if (OtherHits + UnattributedHits > 0) MissingLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("Maya was hit, but not by the selected enemy (%s)"), *Others));
         else MissingLink(TEXT("enemy_attacks_maya"), bRangeMode ? TEXT("no enemy hit Maya during the fight (enemy AI: range lane, PR #83)")
             : TEXT("the stand-in target has no attack; enemy AI is the range lane's PR #83"));
         Next(EStep::Loot);
@@ -396,6 +410,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             return;
         }
         // The cast went out on an earlier tick.
+        if (bPhaselockPointGranted) Fixture(TEXT("phaselock point granted"));
         if (W->LastPhaselockHit() && W->LastPhaselockTarget() == Enemy && Enemy->IsPhaselocked())
             PassLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("%s lifted, lock %.1fs left"), *Enemy->GetName(), W->PhaselockRemaining()));
         else FailLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("cast hit=%d blocked=%d target=%s"), W->LastPhaselockHit(), W->LastPhaselockBlocked(),
@@ -503,11 +518,18 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (StepTime < 1.0f) return;
         if (StepTime < 1.05f) { if (!bUseHeld) PressUse(); return; }
         if (StepTime < 2.5f) return;
-        if (Quest->Status() == 3)
-            PassLink(TEXT("mission_turn_in"), FString::Printf(TEXT("turned in at Marcus: experience +%lld, lent weapon %s"),
-                W->GetSkills()->GetExperience() - ExperienceBeforeTurnIn,
-                Inventory->FindItemIndexById(LentId) == INDEX_NONE ? TEXT("taken back") : TEXT("STILL in the backpack")));
-        else FailLink(TEXT("mission_turn_in"), FString::Printf(TEXT("status %d after two use-key presses at Marcus"), Quest->Status()));
+    {
+        // All three, as SLICE_GATE.md records them: the mission complete, the experience reward, and the lent pistol
+        // taken back (neither in the backpack nor held).
+        const int64 Gained = W->GetSkills()->GetExperience() - ExperienceBeforeTurnIn;
+        const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        const bool bReturned = !LentId.IsEmpty() && Inventory->FindItemIndexById(LentId) == INDEX_NONE
+            && !(Held && UOpenWillowInventory::StableId(*Held) == LentId);
+        const FString Detail = FString::Printf(TEXT("status %d (want 3), experience %+lld (want > 0), lent weapon %s %s"), Quest->Status(), Gained,
+            LentId.IsEmpty() ? TEXT("(none recorded)") : *LentId, bReturned ? TEXT("taken back") : TEXT("NOT taken back"));
+        if (Quest->Status() == 3 && Gained > 0 && bReturned) PassLink(TEXT("mission_turn_in"), Detail);
+        else FailLink(TEXT("mission_turn_in"), Detail);
+    }
         Next(EStep::Down);
         break;
 
@@ -518,6 +540,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             RespawnAtBefore = W->LastRespawnAt();
             DeathLocation = W->GetActorLocation();
             // Test fixture: lethal damage through the walker's damage entry (no enemy can kill Maya on this build yet).
+            Fixture(TEXT("lethal damage applied by the test"));
             FHitResult Hit;
             UGameplayStatics::ApplyPointDamage(W, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
             return;
@@ -531,6 +554,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Bleed: {
         const bool bRespawned = W->LastRespawnAt() > RespawnAtBefore;
         if (!bRespawned && StepTime < BleedTimeout) return;
+        Fixture(TEXT("down state from the test's lethal damage"));
         if (bRespawned && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
                 StepTime, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation), W->GetHealth(), W->GetMaxHealth(),

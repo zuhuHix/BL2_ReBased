@@ -19,18 +19,20 @@ PREFIX = '[2026.11.04-10.00.00:000][123]LogTemp: Display: '
 TOTAL = len(chk.LINKS)
 
 
-def build(results=None, stop_after=None, summary='auto', start=True, extra=()):
+def build(results=None, stop_after=None, summary='auto', start=True, extra=(), fixtures=None, order=None):
     """Synthetic log lines: a start line, one link line per link (PASS unless results says otherwise, and only up to
-    stop_after), the extra lines, then the SUMMARY line (counted from the results, unless summary is given or None)."""
+    stop_after), the extra lines, then the SUMMARY line (counted from the results, unless summary is given or None).
+    fixtures maps a link name to its fixtures text; order, a list of link names, replaces the expected order."""
     results = results or {}
     lines = [PREFIX + 'OWSLICEGATE start synthetic run'] if start else []
     effective = {}
-    for index, (name, _owner) in enumerate(chk.LINKS, 1):
+    fixtures = fixtures or {}
+    for index, name in enumerate(order or chk.NAMES, 1):
         if stop_after is not None and index > stop_after:
             break
         result, detail = results.get(name, ('PASS', 'synthetic detail'))
         effective[name] = result
-        lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} detail={detail}')
+        lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} fixtures=[{fixtures.get(name, "")}] detail={detail}')
     lines.append(PREFIX + 'OWSLICEGATE note synthetic note, ignored')
     lines.extend(extra)
     if summary == 'auto':
@@ -75,7 +77,7 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
         header = out.splitlines()[0]
         self.assertEqual(header.split(), ['#', 'link', 'result', 'owner', 'detail'])
-        self.assertNotIn('warning', out)
+        self.assertNotIn('error', out)
 
     def test_not_available_exits_zero_and_shows_owner(self):
         results = {'enemy_attacks_maya': ('NOT_AVAILABLE', 'synthetic gap')}
@@ -103,7 +105,7 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('not reached: the run stopped before this link', self.row(out, 6))
         report = json.loads((self.dir / 'run.json').read_text(encoding='utf-8'))
         self.assertFalse(report['summary_seen'])
-        self.assertIn('no SUMMARY line: the run did not finish (crash or timeout)', report['warnings'])
+        self.assertIn('no SUMMARY line: the run did not finish (crash or timeout)', report['errors'])
         self.assertEqual(report['links'][5]['result'], 'FAIL')
         self.assertEqual(report['links'][5]['owner'], 'range')   # pick_up_gun, the sixth link
         self.assertEqual(report['links'][12]['owner'], 'maya')   # bleed_out_respawn, the last link
@@ -113,28 +115,70 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('no slice-gate run in this log', out)
 
-    def test_duplicate_link_last_one_wins(self):
+    def test_duplicate_link_fails(self):
         extra = [PREFIX + 'OWSLICEGATE link=spawn_maya result=PASS detail=second try']
-        results = {'spawn_maya': ('FAIL', 'first try')}
-        lines = build(results, summary='pass=13 fail=0 na=0', extra=extra)
+        code, out = self.run_checker(self.write_log(build(extra=extra)))
+        self.assertEqual(code, 1)
+        self.assertIn('error: line', out)
+        self.assertIn('link spawn_maya logged a second time', out)
+
+    def test_unknown_link_fails(self):
+        extra = [PREFIX + 'OWSLICEGATE link=made_up_link result=PASS detail=synthetic']
+        code, out = self.run_checker(self.write_log(build(extra=extra)))
+        self.assertEqual(code, 1)
+        self.assertIn('link made_up_link is not in the expected list', out)
+
+    def test_shuffled_pass_lines_fail(self):
+        order = list(chk.NAMES)
+        order[2], order[7] = order[7], order[2]
+        code, out = self.run_checker(self.write_log(build(order=order)))
+        self.assertEqual(code, 1)
+        self.assertIn('link phaselock_enemy out of order (expected kill_enemy next)', out)
+        self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
+
+    def test_link_after_summary_fails(self):
+        lines = build(stop_after=12, summary='pass=12 fail=0 na=0')
+        lines.append(PREFIX + 'OWSLICEGATE link=bleed_out_respawn result=PASS detail=late')
+        code, out = self.run_checker(self.write_log(lines))
+        self.assertEqual(code, 1)
+        self.assertIn('link bleed_out_respawn after the SUMMARY line', out)
+
+    def test_link_before_start_fails(self):
+        lines = [PREFIX + 'OWSLICEGATE link=spawn_maya result=PASS detail=early'] + build(order=chk.NAMES[1:])
+        code, out = self.run_checker(self.write_log(lines))
+        self.assertEqual(code, 1)
+        self.assertIn('link spawn_maya before the start line', out)
+
+    def test_two_runs_in_one_log_fail(self):
+        code, out = self.run_checker(self.write_log(build() + build()))
+        self.assertEqual(code, 1)
+        self.assertIn('a second start line', out)
+        self.assertIn('a second SUMMARY line', out)
+
+    def test_fixtures_reach_table_json_and_markdown(self):
+        fixtures = {'phaselock_enemy': 'phaselock point granted', 'go_down': 'lethal damage; teleport'}
+        json_path, md_path = self.dir / 'f.json', self.dir / 'f.md'
+        code, out = self.run_checker(self.write_log(build(fixtures=fixtures)), '--json', str(json_path), '--markdown', str(md_path))
+        self.assertEqual(code, 0)
+        self.assertIn('PASS (fixture: phaselock point granted)', self.row(out, 8))
+        self.assertIn('PASS (fixture: lethal damage; teleport)', self.row(out, 12))
+        self.assertEqual(self.row(out, 1).split()[2], 'PASS')
+        report = json.loads(json_path.read_text(encoding='utf-8'))
+        self.assertEqual(report['links'][11]['fixtures'], ['lethal damage', 'teleport'])
+        self.assertEqual(report['links'][0]['fixtures'], [])
+        self.assertIn('| 8 | phaselock_enemy | PASS (fixture: phaselock point granted) | - |', md_path.read_text(encoding='utf-8'))
+
+    def test_link_line_without_fixtures_field_is_read(self):
+        lines = build()
+        lines[1] = PREFIX + 'OWSLICEGATE link=spawn_maya result=PASS detail=old format'
         code, out = self.run_checker(self.write_log(lines))
         self.assertEqual(code, 0)
-        self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
-        self.assertIn('warning: line', out)
-        self.assertIn('spawn_maya logged again, the last result wins', out)
-
-    def test_unknown_link_is_a_warning_and_ignored(self):
-        extra = [PREFIX + 'OWSLICEGATE link=made_up_link result=FAIL detail=synthetic']
-        code, out = self.run_checker(self.write_log(build(extra=extra)))
-        self.assertEqual(code, 0)
-        self.assertIn('warning: line', out)
-        self.assertIn('made_up_link is not in the expected list, ignored', out)
-        self.assertIn('slice gate: 13 PASS, 0 FAIL, 0 NOT_AVAILABLE of 13', out)
+        self.assertIn('old format', self.row(out, 1))
 
     def test_summary_mismatch_exits_one(self):
         code, out = self.run_checker(self.write_log(build(summary='pass=12 fail=1 na=0')))
         self.assertEqual(code, 1)
-        self.assertIn('warning: SUMMARY says pass=12 fail=1 na=0, but the link lines say pass=13 fail=0 na=0', out)
+        self.assertIn('error: SUMMARY says pass=12 fail=1 na=0, but the link lines say pass=13 fail=0 na=0', out)
 
     def test_json_output(self):
         results = {'pick_up_gun': ('FAIL', 'synthetic | pipe')}
@@ -144,14 +188,14 @@ class SliceGateTest(unittest.TestCase):
         text = out_path.read_text(encoding='utf-8')
         self.assertTrue(text.startswith('{\n "links": ['), 'indent=1 layout')
         report = json.loads(text)
-        self.assertEqual(sorted(report), ['fail', 'links', 'not_available', 'pass', 'summary_seen', 'warnings'])
+        self.assertEqual(sorted(report), ['errors', 'fail', 'links', 'not_available', 'pass', 'summary_seen'])
         self.assertEqual(len(report['links']), TOTAL)
-        self.assertEqual(report['links'][0], {'index': 1, 'name': 'spawn_maya', 'result': 'PASS',
+        self.assertEqual(report['links'][0], {'index': 1, 'name': 'spawn_maya', 'result': 'PASS', 'fixtures': [],
                                               'owner': 'maya', 'detail': 'synthetic detail'})
         self.assertEqual(report['links'][5]['detail'], 'synthetic | pipe')
         self.assertEqual((report['pass'], report['fail'], report['not_available']), (12, 1, 0))
         self.assertTrue(report['summary_seen'])
-        self.assertEqual(report['warnings'], [])
+        self.assertEqual(report['errors'], [])
 
     def test_markdown_output_escapes_pipes(self):
         results = {'pick_up_gun': ('FAIL', 'a | b')}
