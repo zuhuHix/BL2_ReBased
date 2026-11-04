@@ -5,6 +5,11 @@ param(
     # The machines file from tools/prepare_vendors.py (ignored local/ data). Refused when missing.
     [string]$Vendors = (Join-Path (Split-Path -Parent $PSScriptRoot) 'local/slice/vendors.json'),
     [int]$Money = 5000,
+    # The recipe folder the walker loads (-owitems). The default is the inventory suite's six-weapon set when it exists, so
+    # the backpack has room for the gun the suite buys; a full backpack makes the buy fail.
+    [string]$Items = (Join-Path (Split-Path -Parent $PSScriptRoot) 'local/inventory-actions/bounded-recipes'),
+    # The weapon generator manifest: the shops roll their guns with it. Refused when missing.
+    [string]$WeaponGen = (Join-Path (Split-Path -Parent $PSScriptRoot) 'local/weapons/gen/weapon_gen_manifest.txt'),
     [int]$Port = 8767,
     [int]$TimeoutSeconds = 600,
     [int]$LockWaitSeconds = 900,
@@ -31,6 +36,13 @@ if (!$Game) { throw 'Set OPENWILLOW_BL2 or pass -Game (the installed Borderlands
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 if (!(Test-Path -LiteralPath $Vendors)) {
     throw "Missing ${Vendors}: run tools/prepare_vendors.py first (it writes local/slice/vendors.json from the installed game)."
+}
+if (!(Test-Path -LiteralPath $WeaponGen)) {
+    throw "Missing ${WeaponGen}: run python tools/weapon_gen_manifest.py --game <BL2 folder> first (the shops roll their guns with it)."
+}
+if ($Items -and !(Test-Path -LiteralPath $Items)) {
+    Write-Output "No recipe set at $Items; the walker loads its default items (the backpack may be full and the buy then fails)."
+    $Items = ''
 }
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
@@ -97,6 +109,8 @@ try {
         "-owvendingpage=${url}vending.html",
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', '-owvendortest', "-abslog=`"$log`"")
+    $arguments += "-owweapongen=`"$((Resolve-Path -LiteralPath $WeaponGen).Path)`""
+    if ($Items) { $arguments += "-owitems=`"$((Resolve-Path -LiteralPath $Items).Path)`"" }
     $started = Get-Date
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Output "Launched game pid $($process.Id) (-owvendortest); log: $log"
