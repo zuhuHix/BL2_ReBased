@@ -387,8 +387,8 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 | Ruin (1.2) | slag, shock, corrosive blasts 1, 2, 3 s after the lock, radius 650, 7.2 x PlayerSkillStatusEffectDamage | the status effects; blocked chain |
 | Sweet Release (2.1) | when the held target dies, g orbs each heal 15 % of Maya's missing health after flight time at 800 uu/s | the orb actor and homing; other players |
 | Life Tap (3.4) | while the kill-skill timer runs, Maya heals `PlayerConvertDamageToHealingPercent` (0.012 x g) of each gun hit's applied damage | the native conversion rule (guess: applied damage x fraction) |
-| Cloud Kill (4.2) | a gun hit on an enemy, outside a 5.5 s cooldown, leaves a cloud at the enemy: 20 corrosive blasts every 0.25 s, radius 220, 0.25 x PlayerSkillDamage | the cloud actor; host procs on Direct hits only (bullets, pellets, rocket bodies), not on splash or Tediore throws, because splash carries no damage-source flag yet |
-| Immolate (4.4) | while Maya is down, each Direct hit adds an incendiary hit of 0.1 x g x its applied damage, sent as a non-critical splash event | the status damage |
+| Cloud Kill (4.2) | a gun hit on an enemy, outside a 5.5 s cooldown, leaves a cloud at the enemy: 20 corrosive blasts every 0.25 s, radius 220, 0.25 x PlayerSkillDamage | the cloud actor; procs on hits whose `Source` is Bullet or Rocket (a rocket's explosion counts; a bullet's impact explosion, a Tediore throw and status damage do not) |
+| Immolate (4.4) | while Maya is down, each Bullet or Rocket hit adds an incendiary hit of 0.1 x g x its applied damage, sent as a non-critical splash event | the status damage |
 | Blight Phoenix (3.5) | while the kill-skill timer runs, every 0.5 s a corrosive and an incendiary blast around Maya, radius 512, 0.02 x g x PlayerMeleeDamage each | the status damage; the body effect |
 | Recompense (4.5) | when an enemy takes health from Maya (after the shield; hook in `ApplyDamageToPlayer`), chance 0.1 x g (the component's seeded stream, `-owskillseed=<n>`) that it takes the same amount back (DmgType_Normal, non-critical); not while Maya is down | shield-only hits (the host has no shield) |
 | Mind's Eye (2.2) | gun hits that can crit (not skill hits) have their crit bonus multiplied by `PlayerCriticalHitBonus` over its live base 2.0, i.e. 1 + 0.05 g (2.5 at grade 5); cached until a grade changes. No effect until a target applies the bonus (range #76) | the melee row (no host melee); how the bonus multiplies damage is the dispatcher's rule |
@@ -403,5 +403,6 @@ Kinetic Reflection (needs the incoming hit's source), Scorn and Backdraft (no ho
 target's health inside the dispatcher), the blocked-target damage. All of it is UNVERIFIED in game; the live questions are in section 6.
 
 The hit-driven skills (PR 4) listen to `OpenWillowHit::OnHit()`; they ignore status ticks and the skills' own hits
-(weapon id `skill:<name>`), and queue their extra damage for the next tick instead of applying it inside the broadcast.
+(weapon id `skill:<name>`, `Source` Skill), and queue their extra damage for the next tick instead of applying it inside
+the broadcast. Every skill hit sets `Source = Skill` (the field from the projectiles lane, PR #88).
 PlayerMeleeDamage is taken as 2.5 x PlayerSkillDamage (no melee buff in the host).
