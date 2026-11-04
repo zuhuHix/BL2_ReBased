@@ -126,6 +126,13 @@ check('The page tells the host when it can take input and keeps no local clock',
   assert.ok(!source.includes('Date.now'));
 });
 
+check('A row the host gives no valid price is never bought, even when marked affordable', () => {
+  const current = state({shop: [item('s9', {priceValid: false, affordable: true, price: 0})]});
+  const lists = model.buildLists(current);
+  const index = lists.shop.findIndex(row => row.id === 's9');
+  assert.deepEqual(model.actionFor({column: 'shop', index}, lists, current), {ok: false, message: 'Not for sale'});
+});
+
 check('Buy-back needs enough money', () => {
   const current = state({buyback: [item('r1', {affordable: false})]});
   const lists = model.buildLists(current);
