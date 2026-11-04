@@ -387,8 +387,8 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 | Ruin (1.2) | slag, shock, corrosive blasts 1, 2, 3 s after the lock, radius 650, 7.2 x PlayerSkillStatusEffectDamage | the status effects; blocked chain |
 | Sweet Release (2.1) | when the held target dies, g orbs each heal 15 % of Maya's missing health after flight time at 800 uu/s | the orb actor and homing; other players |
 | Life Tap (3.4) | while the kill-skill timer runs, Maya heals `PlayerConvertDamageToHealingPercent` (0.012 x g) of each gun hit's applied damage | the native conversion rule (guess: applied damage x fraction) |
-| Cloud Kill (4.2) | a gun hit on an enemy, outside a 5.5 s cooldown, leaves a cloud at the enemy: 20 corrosive blasts every 0.25 s, radius 220, 0.25 x PlayerSkillDamage | the cloud actor; only bullet/rocket damage sources (host: any gun hit) |
-| Immolate (4.4) | while Maya is down, each gun hit adds an incendiary hit of 0.1 x g x its applied damage | the status damage |
+| Cloud Kill (4.2) | a gun hit on an enemy, outside a 5.5 s cooldown, leaves a cloud at the enemy: 20 corrosive blasts every 0.25 s, radius 220, 0.25 x PlayerSkillDamage | the cloud actor; host procs on Direct hits only (bullets, pellets, rocket bodies), not on splash or Tediore throws, because splash carries no damage-source flag yet |
+| Immolate (4.4) | while Maya is down, each Direct hit adds an incendiary hit of 0.1 x g x its applied damage, sent as a non-critical splash event | the status damage |
 | Blight Phoenix (3.5) | while the kill-skill timer runs, every 0.5 s a corrosive and an incendiary blast around Maya, radius 512, 0.02 x g x PlayerMeleeDamage each | the status damage; the body effect |
 | Sustenance (4.8), Elated (4.6) | health regeneration per second from `HealthPassiveRegenerationRate` (the effects file now carries balance formulas) | the 0.5 s refresh cadence; allies |
 
