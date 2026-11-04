@@ -201,7 +201,8 @@ void TeleportMaya(UWorld* World, const FVector& Spot, float Yaw)
     if (const ACharacter* Character = Cast<ACharacter>(Pawn))
         HalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
     Pawn->SetActorLocation(Spot + FVector(0.f, 0.f, HalfHeight), false, nullptr, ETeleportType::TeleportPhysics);
-    // TODO(#77): tell the walker it was teleported (Walker->NotifyTeleported()) once PR #77 is merged.
+    // The walker resets its fall tracking, so the teleport is never taken as a landing (PR #77, NotifyTeleported).
+    if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(Pawn)) Walker->NotifyTeleported();
     if (APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0)) PC->SetControlRotation(FRotator(0.f, Yaw, 0.f));
     UE_LOG(LogTemp, Display, TEXT("OWRANGE player moved to %s yaw %.0f"), *Spot.ToString(), Yaw);
 }
@@ -1249,6 +1250,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         return;
     }
     const FOpenWillowEnemyBrain& Brain = E0->GetBrain();
+    // What Maya's pools hold (health plus shield): the delivery drains the shield first, then health.
+    auto Pools = [Walker]() { return Walker->GetHealth() + Walker->GetShield(); };
     const int32 Seen = OpenWillowThreat::SeenInThreatRadius;
 
     // Maya on the floor under XY (her origin at the floor plus her half height), facing Yaw. False when there is no floor there.
@@ -1418,7 +1421,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         }
         TestSwingBase = Brain.SwingCount;
         TestResolvedBase = Brain.MeleeResolved;
-        TestHealthBefore = Walker->GetHealth();
+        TestHealthBefore = Pools();
         StepStart = Now;
         TestStep = 27;
         return;
@@ -1441,7 +1444,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             }
             return;
         }
-        const float Delta = TestHealthBefore - Walker->GetHealth();
+        const float Delta = TestHealthBefore - Pools();
         const float Expected = Brain.LastArrival * Brain.LastRatio * Brain.LastScale;
         const float Timing = Brain.LastAt - Brain.LastSwingStart;
         const bool bOk = Brain.MeleeResolved == TestResolvedBase + 1 && Brain.LastHit && Brain.LastApplied > 0.f
@@ -1449,7 +1452,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             && FMath::IsNearlyEqual(Delta, Brain.LastApplied, 0.01f);
         TestCheck(TEXT("melee_hit"), bOk, FString::Printf(TEXT("hit %d at +%.3f s, applied %.2f (arrival %.2f x ratio %.4f x scale %.2f), "
             "maya health %.1f -> %.1f"), Brain.LastHit ? 1 : 0, Timing, Brain.LastApplied, Brain.LastArrival, Brain.LastRatio,
-            Brain.LastScale, TestHealthBefore, Walker->GetHealth()));
+            Brain.LastScale, TestHealthBefore, Pools()));
         TestStep = 28;
         return;
     }
@@ -1508,7 +1511,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         }
         TestSwingBase = Brain.SwingCount;
         TestResolvedBase = Brain.MeleeResolved;
-        TestHealthBefore = Walker->GetHealth();
+        TestHealthBefore = Pools();
         TestMovedAt = -1.f;
         StepStart = Now;
         TestStep = 31;
@@ -1550,10 +1553,10 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             return;
         }
         const bool bOk = !Brain.LastHit && FMath::IsNearlyZero(Brain.LastApplied)
-            && FMath::IsNearlyEqual(Walker->GetHealth(), TestHealthBefore, 0.01f)
+            && FMath::IsNearlyEqual(Pools(), TestHealthBefore, 0.01f)
             && TestMovedAt < Brain.LastSwingStart + OpenWillowThreat::SwingDamageDelay;
         TestCheck(TEXT("melee_miss"), bOk, FString::Printf(TEXT("hit %d, applied %.2f, moved %.3f s after the swing start, maya health %.1f -> %.1f"),
-            Brain.LastHit ? 1 : 0, Brain.LastApplied, TestMovedAt - Brain.LastSwingStart, TestHealthBefore, Walker->GetHealth()));
+            Brain.LastHit ? 1 : 0, Brain.LastApplied, TestMovedAt - Brain.LastSwingStart, TestHealthBefore, Pools()));
         TestStep = 32;
         return;
     }
@@ -1614,7 +1617,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             return;
         }
         TestSwingBase = Brain.SwingCount;
-        TestHealthBefore = Walker->GetHealth();
+        TestHealthBefore = Pools();
         StepStart = Now;
         TestStep = 36;
         return;
@@ -1622,10 +1625,10 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     case 36:
     {
         if (Now - StepStart < 2.f) return;
-        const bool bOk = Brain.SwingCount == TestSwingBase && FMath::IsNearlyEqual(Walker->GetHealth(), TestHealthBefore, 0.01f)
+        const bool bOk = Brain.SwingCount == TestSwingBase && FMath::IsNearlyEqual(Pools(), TestHealthBefore, 0.01f)
             && Den.Level == OpenWillowThreat::InThreatRadius;
         TestCheck(TEXT("passive_no_melee"), bOk, FString::Printf(TEXT("swing starts %d, maya health %.1f -> %.1f, level %d"),
-            Brain.SwingCount - TestSwingBase, TestHealthBefore, Walker->GetHealth(), Den.Level));
+            Brain.SwingCount - TestSwingBase, TestHealthBefore, Pools(), Den.Level));
         SetMode(false, false);
         TestStep = 37;
         return;

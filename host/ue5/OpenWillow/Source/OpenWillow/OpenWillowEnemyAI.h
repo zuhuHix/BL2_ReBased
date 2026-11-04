@@ -137,7 +137,6 @@ void UpdateThreatDen(FOpenWillowThreatDen& Den, float Now);
 // 1.2 two up, then a straight line to 3.0 at sixteen up (host stand-in beyond two, UNVERIFIED).
 float MeleeLevelScale(int32 EnemyLevel, int32 MayaLevel);
 
-// The ONE delivery of range melee to Maya. Host stand-in until PR #72 (maya lane) merges: the engine's damage path on her
-// pawn. After #72 this becomes OpenWillowApplyDamageToPlayer(Causer, Amount, Causer, Causer->GetActorLocation()).
-// Returns the damage applied.
+// The ONE delivery of range melee to Maya: OpenWillowApplyDamageToPlayer (OpenWillowMayaState.h, the maya lane's PR #72), shield
+// first, then health, then the down state. Returns the damage the pools took.
 float RangeDamagePlayer(AActor* Causer, float Amount);

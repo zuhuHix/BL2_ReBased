@@ -1,5 +1,6 @@
 #include "OpenWillowEnemyAI.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowMayaState.h"
 #include "GameFramework/DamageType.h"
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
@@ -203,15 +204,14 @@ float MeleeLevelScale(int32 EnemyLevel, int32 MayaLevel)
 
 float RangeDamagePlayer(AActor* Causer, float Amount)
 {
-    UWorld* World = Causer ? Causer->GetWorld() : nullptr;
-    APawn* Maya = World ? UGameplayStatics::GetPlayerPawn(World, 0) : nullptr;
-    if (!Maya || Amount <= 0.f) return 0.f;
-    const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(Maya);
-    const float Before = Walker ? Walker->GetHealth() : 0.f;
-    // Stub until PR #72 merges: the engine damage path on Maya's pawn, with no instigator controller.
-    // After #72: OpenWillowApplyDamageToPlayer(Causer, Amount, Causer, Causer->GetActorLocation());
-    const float Applied = UGameplayStatics::ApplyDamage(Maya, Amount, nullptr, Causer, UDamageType::StaticClass());
-    const float After = Walker ? Walker->GetHealth() : 0.f;
-    UE_LOG(LogTemp, Display, TEXT("OWRANGE melee_stub amount=%.2f maya_health_before=%.2f after=%.2f"), Amount, Before, After);
+    if (!Causer || Amount <= 0.f) return 0.f;
+    const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(Causer, 0));
+    const float Before = Walker ? Walker->GetHealth() + Walker->GetShield() : 0.f;
+    // The maya lane's entry point for world damage (PR #72): shield first, then health, then Fight For Your Life; the hit
+    // comes from the enemy's location (the HUD's hit direction). Returns what the pools took.
+    const float Applied = OpenWillowApplyDamageToPlayer(Causer, Amount, Causer, Causer->GetActorLocation());
+    const float After = Walker ? Walker->GetHealth() + Walker->GetShield() : 0.f;
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE melee_delivery amount=%.2f applied=%.2f maya_pools_before=%.2f after=%.2f"), Amount, Applied,
+        Before, After);
     return Applied;
 }
