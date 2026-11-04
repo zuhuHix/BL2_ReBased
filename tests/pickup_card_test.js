@@ -95,6 +95,12 @@ check('Level requirement as SetItemCardEx sets it: shown above level 1, not met 
   assert.deepStrictEqual(levelCall(40, 36), [true, false, false, 'LEVEL REQUIREMENT: 40']);
   assert.deepStrictEqual(levelCall(1, 36), [false, true, false, '']);
   assert.deepStrictEqual(levelCall(30, 36, {levelKnown:false}), [false, true, false, '']);
+  // Level 0, a missing, null or non-numeric level: no strip, never shown as unmet (PR #96 review).
+  assert.deepStrictEqual(levelCall(0, 36), [false, true, false, '']);
+  assert.deepStrictEqual(levelCall(undefined, 36), [false, true, false, '']);
+  assert.deepStrictEqual(levelCall(null, 36), [false, true, false, '']);
+  assert.deepStrictEqual(levelCall('abc', 36), [false, true, false, '']);
+  assert.deepStrictEqual(levelCall('', 36), [false, true, false, '']);
 });
 
 check('A frame whose card clip never appears stops polling and logs why', () => {
