@@ -3670,4 +3670,5 @@ AI-assisted (Claude). Records: `docs/verification/PICKUP_CARD.md`, `MAP_SCREEN.m
   the aimed gun is taken, the nearer un-aimed one stays.
 - The status pages (Inventory, Skills, Missions, Map) do not open while a vending shop is open: forced over a shop, closing the
   page left the shop without input or cursor.
+- The quest's on-screen tracker text is not posted while a vending shop is open either (it already hid behind the status pages).
 

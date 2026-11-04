@@ -1,5 +1,6 @@
 #include "OpenWillowQuest.h"
 #include "OpenWillowMayaHUD.h"
+#include "OpenWillowVendor.h"
 #include "Misc/PackageName.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventoryPickup.h"
@@ -983,12 +984,14 @@ void UOpenWillowQuest::UpdateHints()
     if (bCanTalk && !bTalkHintLogged) UE_LOG(LogTemp, Display, TEXT("OWQUEST hint: press E (use) to talk to Marcus"));
     bTalkHintLogged = bCanTalk;
     if (!GEngine || bTesting) return;
-    // The text is a debug overlay drawn over everything; the status pages (inventory, skills, missions, map) cover the
-    // gameplay HUD, so it is not posted while one is open (each line lasts one frame).
+    // The text is a debug overlay drawn over everything; the status pages (inventory, skills, missions, map) and the vending
+    // shop cover the gameplay HUD, so it is not posted while one is open (each line lasts one frame).
     const APawn* Pawn = Cast<APawn>(GetOwner());
     const APlayerController* Player = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
     if (const AOpenWillowMayaHUD* Hud = Player ? Cast<AOpenWillowMayaHUD>(Player->GetHUD()) : nullptr)
         if (Hud->IsSkillsOpen()) return;
+    if (const UOpenWillowVendorSubsystem* Vendors = GetWorld() ? GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr)
+        if (Vendors->IsShopOpen()) return;
     FString Line = TEXT("Rock, Paper, Genocide: Fire Weapons! - ");
     if (Current == S::NotStarted) Line += TEXT("talk to Marcus (E)");
     else if (Current == S::Active && Impl->ObjectiveState(Impl->Data.TriggerObjective) == "Active") Line += TEXT("go to the range");
