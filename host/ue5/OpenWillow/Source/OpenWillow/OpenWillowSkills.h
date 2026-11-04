@@ -159,7 +159,7 @@ private:
     float NextBlightAt = -1.f;
     void HandleHit(const FOpenWillowHitEvent& Event);
 public:
-    // Recompense (AOpenWillowWalker::TakeDamage hook): Maya lost Damage health to Causer (or Instigator's pawn).
+    // Recompense (AOpenWillowWalker::ApplyDamageToPlayer hook): Maya lost Damage health to Causer (or Instigator's pawn).
     void OnMayaDamaged(AActor* Causer, class AController* Instigator, float Damage);
 private:
     void TickBehaviours(float Now, float DeltaTime);
