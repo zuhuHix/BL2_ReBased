@@ -21,6 +21,7 @@ public:
     void Initialize(FOpenWillowTakenInventoryItem InItem);
     bool TryPickup(UOpenWillowInventory* Inventory);
     FString DisplayName() const;
+    const FOpenWillowTakenInventoryItem& GetItem() const { return Item; }
 
 private:
     UPROPERTY() TObjectPtr<USceneComponent> SceneRoot;
