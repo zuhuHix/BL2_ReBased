@@ -16,6 +16,22 @@ inline bool OpenWillowValueAtLevel(const TMap<int32, float>& Table, int32 Level,
     return BestLevel >= 0;
 }
 
+// One pool of a loot entry (PR3, manifest "loot_by_level"). Chance is the VM's per-death probability for the pool (its
+// draw is the host's stand-in, UNVERIFIED). Kind is weapon, money, ammo or other.
+struct FOpenWillowRangeLootPool
+{
+    FString Pool;                        // the pool's object path (from the ignored manifest)
+    float Chance = 0.f;
+    FString Kind;
+};
+
+// The loot of one level entry: the item stage the weapon pools roll at, and the pools in the VM's order.
+struct FOpenWillowRangeLoot
+{
+    int32 ItemStage = 0;
+    TArray<FOpenWillowRangeLootPool> Pools;
+};
+
 // One range enemy kind, read at run time from local/range/range_manifest.json (schema ow-range-v1, written by
 // tools/prepare_range.py). Nothing here is game data: the asset paths and numbers come from the ignored local/ folder.
 // Host stand-ins (UNVERIFIED in game) are labelled where they are used.
@@ -40,9 +56,24 @@ struct FOpenWillowRangeKind
     TMap<int32, float> HealthByLevel;    // level -> max health (entries of 0 are missing data)
     TMap<int32, float> MeleeArrivalByLevel;  // level -> melee arrival damage (the VM swing rows; 0 = missing: no melee)
     TMap<int32, float> MeleeRatioByLevel;    // level -> the AdjustDamage ratio of that level (0 = missing: no melee)
+    TMap<int32, FOpenWillowRangeLoot> LootByLevel;  // PR3: level -> the loot entry (the death roll reads it)
 
     // Health for Level: the entry of the nearest level at or below it. False when there is none (use the stand-in).
     bool HealthFor(int32 Level, float& OutHealth) const { return OpenWillowValueAtLevel(HealthByLevel, Level, OutHealth); }
+
+    // The loot entry of the nearest level at or below Level (an entry of level 0 counts). Null when there is none.
+    const FOpenWillowRangeLoot* LootFor(int32 Level) const
+    {
+        const FOpenWillowRangeLoot* Found = nullptr;
+        int32 FoundLevel = -1;
+        for (const auto& Pair : LootByLevel)
+            if (Pair.Key <= Level && Pair.Key > FoundLevel)
+            {
+                FoundLevel = Pair.Key;
+                Found = &Pair.Value;
+            }
+        return Found;
+    }
 };
 
 struct FOpenWillowRangeSpawn

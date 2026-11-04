@@ -1,8 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "OpenWillowEnemyAI.h"
 #include "OpenWillowRangeKind.h"
+#include "OpenWillowRangeLoot.h"
 #include "OpenWillowSliceData.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "OpenWillowRange.generated.h"
@@ -13,7 +15,7 @@ class AOpenWillowEnemy;
 class UPrimitiveComponent;
 
 // The range (PR1): a spot in the world with three static dummies and the manifest's moving enemies, plus the console
-// commands (ow.Range, ow.RangeMode, ow.RangeLevel, ow.RangeClear, ow.RangeReport) and the -owrangetest driver.
+// commands (ow.Range, ow.RangeMode, ow.RangeLevel, ow.RangeClear, ow.RangeReport, ow.RangeLoot from PR3) and the -owrangetest driver.
 // Host stand-in layout (UNVERIFIED in game): the placement distances are the host's choice, not stock data.
 UCLASS()
 class OPENWILLOW_API UOpenWillowRangeSubsystem : public UTickableWorldSubsystem
@@ -53,6 +55,9 @@ public:
     void Report() const;
     // The range's threat record (PR2): one den for all of its enemies.
     const FOpenWillowThreatDen& GetDen() const { return Den; }
+    // PR3 loot: ow.RangeLoot normal|always|off, and the death roll's stream restarted at its seed (the test repeats a roll).
+    void SetLootMode(EOpenWillowRangeLootMode Mode) { LootMode = Mode; }
+    void ResetLootStream() { LootStream.Initialize(LootSeed); }
 
 private:
     void EnsureManifest();
@@ -61,6 +66,7 @@ private:
     bool LoadSliceData();
     void TickTest(float Now);
     void TickAITest(float Now);
+    void TickLootTest(float Now);
     void TestCheck(const TCHAR* Step, bool bPass, const FString& Detail);
     void TestSkip(const TCHAR* Step, const TCHAR* Reason);
     void TestHit(AOpenWillowCombatTarget* Target, float Amount, UPrimitiveComponent* Where, AController* Instigator = nullptr,
@@ -70,6 +76,14 @@ private:
     void TickSurvey(float Now);
 
     FOpenWillowThreatDen Den;          // PR2: the threat record of the range den (centre = the spot)
+
+    // PR3 loot: the death roll's mode and stream (seed -owrangeseed=N, default 20261009), the kind name of each enemy the range
+    // built (the roll looks its loot up by it), and the last roll (the test driver reads it).
+    EOpenWillowRangeLootMode LootMode = EOpenWillowRangeLootMode::Normal;
+    FRandomStream LootStream;
+    int32 LootSeed = 20261009;
+    TMap<const AOpenWillowEnemy*, FString> EnemyKinds;
+    FOpenWillowRangeLootResult LastLoot;
 
     TArray<TWeakObjectPtr<AOpenWillowCombatTarget>> Dummies;
     TArray<TWeakObjectPtr<AOpenWillowEnemy>> Enemies;
@@ -106,6 +120,12 @@ private:
     float TestHealthBefore = 0.f;
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;
+    // PR3 driver state (TickLootTest): the money pickup under test and its baseline, the first seeded trace, the last death.
+    TWeakObjectPtr<AActor> LootMoneyPickup;
+    int32 LootMoneyBefore = 0;
+    int32 LootMoneyAmount = 0;
+    FString LootTraceA;
+    float LootDeathAt = 0.f;
 
     // -owrangesurvey driver state: one candidate per step (teleport, then a shot 2.5 s later, then a second's settle).
     bool bSurveyMode = false;

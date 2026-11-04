@@ -12,13 +12,16 @@ import argparse
 import re
 import sys
 
-# The steps of the driver, in order (OpenWillowRange.cpp): PR1's, then PR2's enemy AI (TickAITest, steps 16-36).
+# The steps of the driver, in order (OpenWillowRange.cpp): PR1's, then PR2's enemy AI (TickAITest, steps 16-36), then PR3's loot
+# on death (TickLootTest, steps 37-44).
 EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "crit_trace", "shield_order", "invulnerable", "passive",
             "patrol", "death", "ragdoll", "respawn", "popup_crit", "dummy_respawn",
             "notice_proximity", "notice_sight", "no_notice_far", "provoked", "approach", "melee_hit", "melee_interval",
-            "melee_miss", "forget", "passive_no_melee"]
-# Steps that may be SKIP when their data is absent (no imported stock mesh / physics asset).
-MAY_SKIP = {"ragdoll"}
+            "melee_miss", "forget", "passive_no_melee",
+            "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll"]
+# Steps that may be SKIP when their data is absent: no imported stock mesh / physics asset (ragdoll), and no weapon generator
+# manifest (loot_weapon_item: no gun is rolled, the money checks still decide).
+MAY_SKIP = {"ragdoll", "loot_weapon_item"}
 
 LINE = re.compile(r"OWRANGETEST step=(\S+) result=(PASS|FAIL|SKIP)(.*)")
 SUMMARY = re.compile(r"OWRANGETEST SUMMARY result=(PASS|FAIL)(.*)")

@@ -3,8 +3,11 @@
 #include "Engine/Texture.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowEnemy.h"
+#include "OpenWillowInventory.h"
+#include "OpenWillowInventoryPickup.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowWeaponGen.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -350,6 +353,31 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 ReadLevels(TEXT("health_by_level"), Kind.HealthByLevel);
                 ReadLevels(TEXT("melee_arrival_by_level"), Kind.MeleeArrivalByLevel);
                 ReadLevels(TEXT("melee_ratio_by_level"), Kind.MeleeRatioByLevel);
+                // PR3: the loot of each level (the VM's pool chances; the host rolls them). A level with a bad shape is skipped.
+                const TSharedPtr<FJsonObject>* LootObject = nullptr;
+                if (Obj->TryGetObjectField(TEXT("loot_by_level"), LootObject))
+                    for (const auto& LevelPair : (*LootObject)->Values)
+                    {
+                        const TSharedPtr<FJsonObject> LevelObj = LevelPair.Value.IsValid() ? LevelPair.Value->AsObject() : nullptr;
+                        if (!LevelObj.IsValid()) continue;
+                        FOpenWillowRangeLoot Loot;
+                        double ItemStage = 0.0;
+                        if (LevelObj->TryGetNumberField(TEXT("item_stage"), ItemStage)) Loot.ItemStage = int32(ItemStage);
+                        const TArray<TSharedPtr<FJsonValue>>* PoolList = nullptr;
+                        if (LevelObj->TryGetArrayField(TEXT("pools"), PoolList))
+                            for (const TSharedPtr<FJsonValue>& Value : *PoolList)
+                            {
+                                const TSharedPtr<FJsonObject> PoolObj = Value.IsValid() ? Value->AsObject() : nullptr;
+                                if (!PoolObj.IsValid()) continue;
+                                FOpenWillowRangeLootPool Pool;
+                                double Chance = 0.0;
+                                PoolObj->TryGetStringField(TEXT("pool"), Pool.Pool);
+                                if (PoolObj->TryGetNumberField(TEXT("chance"), Chance)) Pool.Chance = float(Chance);
+                                PoolObj->TryGetStringField(TEXT("kind"), Pool.Kind);
+                                Loot.Pools.Add(Pool);
+                            }
+                        Kind.LootByLevel.Add(FCString::Atoi(*LevelPair.Key), Loot);
+                    }
                 Out.Kinds.Add(Kind.Name, Kind);
             }
         OutLog = TEXT("ok");
@@ -383,6 +411,10 @@ void UOpenWillowRangeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     }
     FString CountText;
     if (FParse::Value(FCommandLine::Get(), TEXT("owrangesurveycount="), CountText)) SurveyCount = FMath::Max(0, FCString::Atoi(*CountText));
+    // PR3: the death roll's stream (-owrangeseed=N; the default makes a run repeat).
+    FString SeedText;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrangeseed="), SeedText)) LootSeed = FCString::Atoi(*SeedText);
+    ResetLootStream();
 }
 
 bool UOpenWillowRangeSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -496,6 +528,7 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             Enemy->SetDen(&Den);
             Enemy->OnEnemyDied.AddUObject(this, &UOpenWillowRangeSubsystem::HandleEnemyDied);
             Enemies.Add(Enemy);
+            EnemyKinds.Add(Enemy, Spawn.Kind);   // PR3: the death roll looks the enemy's loot up by its kind
         }
     }
     // Every slot must hold its actor; an incomplete range is a failed build (nothing is left standing).
@@ -529,6 +562,7 @@ void UOpenWillowRangeSubsystem::ClearRange()
         }
     Dummies.Reset();
     Enemies.Reset();
+    EnemyKinds.Reset();
     bBuilt = false;
     if (Count > 0) UE_LOG(LogTemp, Display, TEXT("OWRANGE cleared %d range actor(s)"), Count);
 }
@@ -729,6 +763,16 @@ void UOpenWillowRangeSubsystem::Report() const
 void UOpenWillowRangeSubsystem::HandleEnemyDied(AOpenWillowEnemy* Enemy, AActor* Killer)
 {
     ++DeathsSeen;
+    // PR3: the death roll, with the enemy's kind (as built) and its level now. Nothing is rolled for an unknown kind.
+    const FString* KindName = EnemyKinds.Find(Enemy);
+    const FOpenWillowRangeKind* Kind = KindName ? Manifest.Kinds.Find(*KindName) : nullptr;
+    if (!Kind)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE loot no_kind: the enemy was not built by the range, nothing rolled"));
+        LastLoot = FOpenWillowRangeLootResult();
+        return;
+    }
+    LastLoot = RollRangeLoot(GetWorld(), Enemy, *KindName, *Kind, Enemy->GetLevel(), LootStream, LootMode);
 }
 
 // ---------------------------------------------------------------------------------------------- test driver (-owrangetest)
@@ -785,7 +829,7 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
 {
     // Steps: 0 wait for Maya, build and move her; 1 teleport; 2 placement; 3 body hit; 4 crit hit; 5 crit trace; 6 shield order;
     // 7 invulnerable; 8 passive; 9 passive held; 10 patrol; 11 death; 12 ragdoll; 13 respawn; 14-15 dummy respawn;
-    // 16-36 enemy AI (TickAITest); 99 summary.
+    // 16-36 enemy AI (TickAITest); 37-44 loot on death (TickLootTest, PR3); 99 summary.
     UWorld* World = GetWorld();
     APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
     APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
@@ -793,9 +837,14 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     AOpenWillowEnemy* Enemy1 = Enemies.Num() > 1 ? Enemies[1].Get() : nullptr;
     AOpenWillowCombatTarget* Dummy0 = Dummies.Num() > 0 ? Dummies[0].Get() : nullptr;
 
-    if (TestStep >= 16 && TestStep < 99)
+    if (TestStep >= 16 && TestStep < 37)
     {
         TickAITest(Now);
+        return;
+    }
+    if (TestStep >= 37 && TestStep < 99)
+    {
+        TickLootTest(Now);
         return;
     }
     switch (TestStep)
@@ -1108,7 +1157,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     if (!Walker || !PC)
     {
         TestSkip(TEXT("ai"), TEXT("no walker pawn"));
-        TestStep = 99;
+        TestStep = 37;
         return;
     }
     if (!E0)
@@ -1116,7 +1165,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         const TCHAR* Names[] = {TEXT("notice_proximity"), TEXT("notice_sight"), TEXT("no_notice_far"), TEXT("provoked"),
             TEXT("approach"), TEXT("melee_hit"), TEXT("melee_interval"), TEXT("melee_miss"), TEXT("forget"), TEXT("passive_no_melee")};
         for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no enemy"));
-        TestStep = 99;
+        TestStep = 37;
         return;
     }
     const FOpenWillowEnemyBrain& Brain = E0->GetBrain();
@@ -1473,7 +1522,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         {
             TestSkip(TEXT("passive_no_melee"), TEXT("no floor in front of the enemy"));
             SetMode(false, false);
-            TestStep = 99;
+            TestStep = 37;
             return;
         }
         TestSwingBase = Brain.SwingCount;
@@ -1490,10 +1539,194 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         TestCheck(TEXT("passive_no_melee"), bOk, FString::Printf(TEXT("swing starts %d, maya health %.1f -> %.1f, level %d"),
             Brain.SwingCount - TestSwingBase, TestHealthBefore, Walker->GetHealth(), Den.Level));
         SetMode(false, false);
+        TestStep = 37;
+        return;
+    }
+    default:
+        TestStep = 37;
+        return;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- loot driver (PR3, steps 37-44)
+
+namespace
+{
+// The pickups of a roll that are still in the world: weapon pickups (bWeapon) or range pickups (money and ammo).
+int32 CountLivePickups(const FOpenWillowRangeLootResult& Loot, bool bWeapon)
+{
+    int32 Count = 0;
+    for (const TWeakObjectPtr<AActor>& Weak : Loot.Spawned)
+        if (Weak.IsValid() && (bWeapon ? Weak->IsA<AOpenWillowInventoryPickup>() : Weak->IsA<AOpenWillowRangePickup>())) ++Count;
+    return Count;
+}
+
+// The first live pickup of that kind (see CountLivePickups), or null.
+AActor* FirstLivePickup(const FOpenWillowRangeLootResult& Loot, bool bWeapon)
+{
+    for (const TWeakObjectPtr<AActor>& Weak : Loot.Spawned)
+        if (Weak.IsValid() && (bWeapon ? Weak->IsA<AOpenWillowInventoryPickup>() : Weak->IsA<AOpenWillowRangePickup>())) return Weak.Get();
+    return nullptr;
+}
+}
+
+void UOpenWillowRangeSubsystem::TickLootTest(float Now)
+{
+    // Steps 37-44 (PR3, loot on death). A kill's roll runs inside the kill (HandleEnemyDied), so LastLoot is ready at once; the
+    // pickups are read after their own short waits. Mode always is set for the roll checks; the mode is normal again at the end.
+    // Host stand-ins (UNVERIFIED in game): the drops, the money value and the pickup look.
+    UWorld* World = GetWorld();
+    APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
+    const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(Pawn);
+    const UOpenWillowInventory* Inventory = Walker ? Walker->GetInventory() : nullptr;
+    AOpenWillowEnemy* E0 = Enemies.Num() > 0 ? Enemies[0].Get() : nullptr;
+    AOpenWillowEnemy* E1 = Enemies.Num() > 1 ? Enemies[1].Get() : nullptr;
+    const bool bWeaponsAvailable = FOpenWillowWeaponGen::IsAvailable();
+
+    switch (TestStep)
+    {
+    case 37: // loot_roll: mode always, kill enemy 0. Money (and a weapon, when the weapon manifest is there) lies at its spot.
+    {
+        if (!Walker || !Inventory || !E0 || E0->IsDead())
+        {
+            const TCHAR* Names[] = {TEXT("loot_roll"), TEXT("loot_money_pickup"), TEXT("loot_weapon_item"), TEXT("loot_off"),
+                TEXT("loot_seeded_roll")};
+            for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no walker or no live enemy 0"));
+            TestStep = 99;
+            return;
+        }
+        SetLootMode(EOpenWillowRangeLootMode::Always);
+        TestHit(E0, 1.e6f, E0->BodyComponent());
+        LootDeathAt = Now;
+        const int32 MoneyCount = CountLivePickups(LastLoot, false);
+        const int32 WeaponCount = CountLivePickups(LastLoot, true);
+        const bool bOk = E0->IsDead() && MoneyCount >= 1 && (WeaponCount >= 1 || !bWeaponsAvailable);
+        TestCheck(TEXT("loot_roll"), bOk, FString::Printf(TEXT("money pickups %d, weapon pickups %d (weapon manifest %s), ammo pickups %d"),
+            MoneyCount, WeaponCount, bWeaponsAvailable ? TEXT("yes") : TEXT("no"), LastLoot.Ammo));
+        TestStep = 38;
+        return;
+    }
+    case 38: // loot_money_pickup: Maya is moved onto the roll's money pickup.
+    {
+        AActor* Money = FirstLivePickup(LastLoot, false);
+        if (!Money || !Inventory)
+        {
+            TestCheck(TEXT("loot_money_pickup"), false, TEXT("no money pickup from the roll"));
+            TestStep = 40;
+            return;
+        }
+        LootMoneyPickup = Money;
+        LootMoneyAmount = Cast<AOpenWillowRangePickup>(Money)->GetAmount();
+        Inventory->GetMoney(LootMoneyBefore);
+        TeleportMaya(World, Money->GetActorLocation(), Pawn->GetActorRotation().Yaw);
+        StepStart = Now;
+        TestStep = 39;
+        return;
+    }
+    case 39: // loot_money_pickup, a second later: the money rose by the pickup's amount and the pickup is gone.
+    {
+        if (Now - StepStart < 1.f) return;
+        int32 MoneyAfter = 0;
+        if (Inventory) Inventory->GetMoney(MoneyAfter);
+        const bool bGone = !LootMoneyPickup.IsValid();
+        const bool bOk = bGone && MoneyAfter == LootMoneyBefore + LootMoneyAmount;
+        TestCheck(TEXT("loot_money_pickup"), bOk, FString::Printf(TEXT("money %d -> %d (pickup amount %d), pickup gone=%d"),
+            LootMoneyBefore, MoneyAfter, LootMoneyAmount, bGone ? 1 : 0));
+        TestStep = 40;
+        return;
+    }
+    case 40: // loot_weapon_item: the roll's weapon pickup has a name (it carries a rolled gun).
+    {
+        if (!bWeaponsAvailable)
+        {
+            TestSkip(TEXT("loot_weapon_item"), TEXT("weapon generator manifest missing: no gun is rolled"));
+            TestStep = 41;
+            return;
+        }
+        const AOpenWillowInventoryPickup* Weapon = Cast<AOpenWillowInventoryPickup>(FirstLivePickup(LastLoot, true));
+        const FString Name = Weapon ? Weapon->DisplayName() : FString();
+        TestCheck(TEXT("loot_weapon_item"), Weapon && !Name.IsEmpty(),
+            Weapon ? FString::Printf(TEXT("pickup %s"), *Name) : FString(TEXT("no weapon pickup from the roll")));
+        TestStep = 41;
+        return;
+    }
+    case 41: // loot_off: mode off, kill enemy 1 (it must be alive). The mode is normal again straight after that kill.
+    {
+        SetLootMode(EOpenWillowRangeLootMode::Normal);
+        if (!E1 || E1->IsDead())
+        {
+            TestSkip(TEXT("loot_off"), TEXT("no second live enemy"));
+            TestStep = 43;
+            return;
+        }
+        SetLootMode(EOpenWillowRangeLootMode::Off);
+        TestHit(E1, 1.e6f, E1->BodyComponent());
+        SetLootMode(EOpenWillowRangeLootMode::Normal);
+        StepStart = Now;
+        TestStep = 42;
+        return;
+    }
+    case 42: // loot_off, half a second later: the kill left nothing behind.
+    {
+        if (Now - StepStart < 0.5f) return;
+        const bool bDead = E1 && E1->IsDead();
+        const bool bOk = bDead && LastLoot.Spawned.Num() == 0 && LastLoot.Trace.IsEmpty();
+        TestCheck(TEXT("loot_off"), bOk, FString::Printf(TEXT("enemy 1 dead=%d, pickups from the kill %d"), bDead ? 1 : 0,
+            LastLoot.Spawned.Num()));
+        TestStep = 43;
+        return;
+    }
+    case 43: // loot_seeded_roll, first kill: enemy 0 after its respawn, the stream reset, mode normal.
+    {
+        if (!E0)
+        {
+            TestSkip(TEXT("loot_seeded_roll"), TEXT("no enemy 0"));
+            TestStep = 99;
+            return;
+        }
+        if (E0->IsDead())
+        {
+            if (Now - LootDeathAt > Manifest.RespawnSeconds + 5.f)
+            {
+                TestCheck(TEXT("loot_seeded_roll"), false, TEXT("enemy 0 did not respawn"));
+                TestStep = 99;
+            }
+            return;
+        }
+        ResetLootStream();
+        TestHit(E0, 1.e6f, E0->BodyComponent());
+        LootTraceA = LastLoot.Trace;
+        LootDeathAt = Now;
+        TestStep = 44;
+        return;
+    }
+    case 44: // loot_seeded_roll, second kill: the stream reset to its seed again, so the roll's trace must repeat.
+    {
+        if (!E0)
+        {
+            TestCheck(TEXT("loot_seeded_roll"), false, TEXT("enemy 0 is gone"));
+            TestStep = 99;
+            return;
+        }
+        if (E0->IsDead())
+        {
+            if (Now - LootDeathAt > Manifest.RespawnSeconds + 5.f)
+            {
+                TestCheck(TEXT("loot_seeded_roll"), false, TEXT("enemy 0 did not respawn for the second kill"));
+                TestStep = 99;
+            }
+            return;
+        }
+        ResetLootStream();
+        TestHit(E0, 1.e6f, E0->BodyComponent());
+        const bool bOk = !LootTraceA.IsEmpty() && LastLoot.Trace == LootTraceA;
+        TestCheck(TEXT("loot_seeded_roll"), bOk, FString::Printf(TEXT("first %s, second %s"), *LootTraceA, *LastLoot.Trace));
+        SetLootMode(EOpenWillowRangeLootMode::Normal);
         TestStep = 99;
         return;
     }
     default:
+        SetLootMode(EOpenWillowRangeLootMode::Normal);
         TestStep = 99;
         return;
     }
@@ -1626,6 +1859,22 @@ void RangeReportCommand(const TArray<FString>& Args, UWorld* World)
     if (UOpenWillowRangeSubsystem* Range = World ? World->GetSubsystem<UOpenWillowRangeSubsystem>() : nullptr) Range->Report();
 }
 
+void RangeLootCommand(const TArray<FString>& Args, UWorld* World)
+{
+    UOpenWillowRangeSubsystem* Range = World ? World->GetSubsystem<UOpenWillowRangeSubsystem>() : nullptr;
+    if (!Range) return;
+    const FString LootModeName = Args.Num() > 0 ? Args[0] : FString();
+    if (LootModeName.Equals(TEXT("normal"), ESearchCase::IgnoreCase)) Range->SetLootMode(EOpenWillowRangeLootMode::Normal);
+    else if (LootModeName.Equals(TEXT("always"), ESearchCase::IgnoreCase)) Range->SetLootMode(EOpenWillowRangeLootMode::Always);
+    else if (LootModeName.Equals(TEXT("off"), ESearchCase::IgnoreCase)) Range->SetLootMode(EOpenWillowRangeLootMode::Off);
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE usage: ow.RangeLoot normal|always|off"));
+        return;
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE loot mode=%s"), *LootModeName);
+}
+
 FAutoConsoleCommandWithWorldAndArgs GRangeCommand(TEXT("ow.Range"),
     TEXT("ow.Range [x y z [yaw]]: build the range at the spot (args, -owrangeat, local/range/range.json or the scout) and move Maya there"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RangeCommand));
@@ -1641,4 +1890,7 @@ FAutoConsoleCommandWithWorldAndArgs GRangeClearCommand(TEXT("ow.RangeClear"),
 FAutoConsoleCommandWithWorldAndArgs GRangeReportCommand(TEXT("ow.RangeReport"),
     TEXT("ow.RangeReport: log the state of every range actor"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RangeReportCommand));
+FAutoConsoleCommandWithWorldAndArgs GRangeLootCommand(TEXT("ow.RangeLoot"),
+    TEXT("ow.RangeLoot normal|always|off: loot on death (always = every gun, money and ammo pool is tried)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RangeLootCommand));
 }

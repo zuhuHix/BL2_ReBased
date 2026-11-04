@@ -105,3 +105,22 @@ hits must not be null, an engine material or a collision / fallback / neutral pl
 engine texture** (`GetUsedTextures`; batch 1's scouted canyon floor drew dark with no texture). `tools/test_range.ps1 -Survey` saves one frame per
 candidate (`local/range/shots/survey_<i>.png`) with the material and the reason it was or was not taken; the default spot will be pinned from those
 frames. `prepare_range.py` refuses an `--out` outside `local/` (the manifest holds game-derived coordinates).
+
+## Loot on death (PR3)
+
+`tools/prepare_range.py` kills each spawned pawn in the VM (`hit:<n>:999999:DmgType_Normal:Shotgun`) and keeps its death roll per kind and level: the
+item stage and every pool of the pawn's item pool list with the chance the VM evaluated (COMBAT_LOOT.md). For the adult at level 7 they are COMBAT_LOOT's
+table: guns and gear 0.085, vehicle skins 0.05, money 0.25, eridium bar 0.0015, stick 0.008, health 0.03, the two ammo pools 0.2 each. The host
+(`OpenWillowRangeLoot.cpp`) rolls them itself in COMBAT_LOOT's order: one draw per pool, tried when the chance is above 0 and the draw is at most the
+chance, from a seeded stream (`-owrangeseed=N`, default 20261009, so a run repeats; the game's own seed is unknown).
+
+| Pool kind | What the host does | Status |
+|---|---|---|
+| weapon (`Pool_GunsAndGear`) | `FOpenWillowWeaponGen::RollPoolWeapon` at the item stage (the roll `ow.RollGun` uses), dropped through the inventory pickup's existing API | the pool's own gun choice is the weapon generator's; a pick that is not a gun (shield, grenade mod) drops nothing here |
+| money (`Pool_Money_1or2`) | quantity a random integer in -1 to 2, at least 1 (the data's range); one range pickup per item, worth `round(4 x 1.13^level)` | **stand-in value, UNVERIFIED**: the value of `ItemGrade_Currency_Money_Little` is not decoded (a live read is wanted) |
+| ammo (the two ammo pools) | one pickup of the held gun's ammo type, a magazine's worth, only when that reserve is below half | stand-in: COMBAT_LOOT shows these pools drop nothing while ammo is not low; the threshold and amount are host choices |
+| other (skins, eridium, health) | logged as not hosted | |
+
+`ow.RangeLoot normal|always|off`: `always` tries every weapon, money and ammo pool (for testing guns), `off` drops nothing. The range pickups (money,
+ammo) are engine-shape stand-ins collected on touch. Test steps: loot_roll, loot_money_pickup, loot_weapon_item (may SKIP without the weapon
+generator manifest), loot_off, loot_seeded_roll.
