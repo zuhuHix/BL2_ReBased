@@ -16,7 +16,8 @@ namespace OpenWillowMapScreen
     FString StateJson(const AOpenWillowWalker& Maya, const APlayerController& Player);
 
     // -owmapshots (with the status pages): opens the Map screen, captures it (OWMap_<n>_<name>.png), turns Maya 90 degrees
-    // and captures again, zooms in, closes it with Escape, opens the Inventory and presses 2 (the Map tab), captures, and
-    // quits. Call every HUD frame once the HUD movie is ready; does nothing without the flag.
+    // and captures again, zooms in, closes it with Escape, opens the Inventory and presses 2 (the Map tab), captures; with
+    // -owvendors also opens a vending machine, opens the Map over it, closes the Map and logs both pages' state; then quits.
+    // Call every HUD frame once the HUD movie is ready; does nothing without the flag.
     void TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Maya, APlayerController& Player);
 }

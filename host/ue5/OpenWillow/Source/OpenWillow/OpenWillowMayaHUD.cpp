@@ -1,6 +1,7 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMapScreen.h"
 #include "OpenWillowStatusShots.h"
+#include "OpenWillowVendor.h"
 #include "OpenWillowMinimap.h"
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowWeaponAssembly.h"
@@ -516,6 +517,13 @@ void AOpenWillowMayaHUD::OpenStatusMenu(EOpenWillowStatusPage Page)
         UE_LOG(LogTemp, Warning, TEXT("OpenWillow Skills: the engine's web browser is not available"));
         return;
     }
+    // Not over an open vending shop: closing the page would hand the input back to the game under the still-open shop.
+    if (const UOpenWillowVendorSubsystem* Vendors = GetWorld() ? GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr)
+        if (Vendors->IsShopOpen())
+        {
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow status page not opened: a vending shop is open"));
+            return;
+        }
     bInventoryOpen = bInventory;
     bMissionsOpen = bMissions;
     bMapOpen = bMap;

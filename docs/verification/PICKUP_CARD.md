@@ -36,9 +36,11 @@ ignored `local/inv24/pickup/`.
   of the HUD document in place of the HUD movie (a second player in the HUD document blanked the HUD in the first capture).
 - Card size (30 % of the viewport height), placement (centred over the item, its bottom 3 % of the height above it), the frame
   style ('default') and the show/hide timing (the movie's in/out frames, at once) are **UNVERIFIED** host fits.
-- **Known gap:** E still takes the nearest pickup within reach (`PickupNearby`), not the aimed one, so with two drops close
-  together the card and E can disagree. `OpenWillowPickupCard::FindAimedPickup` is exposed for that change, which waits for the
-  vendors lane's rewrite of `PickupNearby`.
+- **E takes the aimed pickup (2026-11-04, after vendors #81).** `AOpenWillowWalker::PickupNearby` first takes the pickup
+  `FindAimedPickup` returns (the one the card shows); without one, the nearest use target in reach wins as before (vending
+  machine, door, pickup). Marcus's talk check still comes first. The decoy capture (a gun 70 uu to Maya's right, nearer and
+  not aimed at, and one 150 uu ahead, aimed at) logs `decoy aimed_taken=1 nearer_left=1`. The rule is the host's
+  (UNVERIFIED: the game's use target is native).
 
 ## Local data
 
@@ -57,8 +59,8 @@ Without it the frame logs `OpenWillow pickup card movie failed` and the HUD is u
 - `tests/pickup_card_test.js` (synthetic): placement, the refill/show/hide plan, the HUD-to-frame forwarding and the shared
   card writer's rows and arrows.
 - In engine, `-owpickupcardshots` (with the movie HUD): rolls a gun (`ow.RollGun`, default the Hellfire balance at stage 34),
-  drops it 150 uu ahead, and captures aimed away, aimed, aimed away, aimed again and after E picked it up; then drops a
-  second gun, captures it aimed at, puts Maya down and captures again (the card must be gone).
+  drops it 150 uu ahead, and captures aimed away, aimed, aimed away, aimed again and after E picked it up; then the decoy
+  (E must take the aimed gun, not the nearer one); then the decoy aimed at and Maya put down (the card must be gone).
 
 ## Open, for a real-game session
 

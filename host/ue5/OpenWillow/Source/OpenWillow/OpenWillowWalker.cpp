@@ -1,6 +1,7 @@
 #include "OpenWillowWalker.h"
 #include "OpenWillowMayaMovement.h"
 #include "OpenWillowMover.h"
+#include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowVendor.h"
 #include "OpenWillowCurrency.h"
@@ -1342,6 +1343,19 @@ void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
     if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
+    auto Take = [this](AOpenWillowInventoryPickup* Pickup)
+    {
+        const FString Name = Pickup->DisplayName();
+        const bool bPickedUp = Pickup->TryPickup(Inventory);
+        ++PickupAttempts;
+        bLastPickupAccepted = bPickedUp;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow pickup %s: %s"), *Name,
+            bPickedUp ? TEXT("accepted") : TEXT("rejected: backpack full"));
+    };
+    // An aimed pickup within reach wins, the one the world pickup card shows (OpenWillowPickupCard::FindAimedPickup: the
+    // same 220 uu reach, a view cone, line of sight; UNVERIFIED host rule). Otherwise the nearest use target below.
+    if (const APlayerController* Player = Cast<APlayerController>(GetController()))
+        if (AOpenWillowInventoryPickup* Aimed = OpenWillowPickupCard::FindAimedPickup(*this, *Player)) { Take(Aimed); return; }
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);
     for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
@@ -1359,13 +1373,7 @@ void AOpenWillowWalker::PickupNearby()
     if (bVendor && (!bMover || VendorDistance <= MoverDistance) && VendorDistance <= PickupDistance
         && UOpenWillowVendorSubsystem::TryUseNearest(*this)) return;
     if (bMover && MoverDistance <= PickupDistance && Mover->TryInteract()) return;
-    if (!Nearest) return;
-    const FString Name = Nearest->DisplayName();
-    const bool bPickedUp = Nearest->TryPickup(Inventory);
-    ++PickupAttempts;
-    bLastPickupAccepted = bPickedUp;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow pickup %s: %s"), *Name,
-        bPickedUp ? TEXT("accepted") : TEXT("rejected: backpack full"));
+    if (Nearest) Take(Nearest);
 }
 void AOpenWillowWalker::SetInventoryPresentation(bool bShow)
 {
