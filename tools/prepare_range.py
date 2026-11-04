@@ -10,6 +10,8 @@
 #    The same run swings each kind's melee (or the slinger's rock) at a Maya of the same level: the rows
 #    arrival.<class>.L<level> (the evaluated damage) and ratio.<class>.L<level> (what the damage pipeline passed on) reproduce
 #    the live melee rows (COMBAT_MELEE.md); the host multiplies them for an enemy at Maya's level.
+#    Then a lethal hit kills the pawn: its death roll (COMBAT_LOOT.md) reports every pool of its item pool list with the chance
+#    the VM evaluated; the host rolls those chances itself (loot_by_level) and turns a weapon pool into ow.RollGun's roll.
 # 2. The imported enemy assets: local/phaselock/target/host_target.json (tools/import_phaselock_target.ps1, the bullymong).
 #    Extra clips (walk, run, hit, melee) are picked by name from the imported AnimSequence files next to the idle clip; the
 #    choice is a name match (UNVERIFIED that it is the clip the game plays) and the manifest says which file was taken.
@@ -98,7 +100,7 @@ def find_clips(idle_path, listing=None):
     return {role: (base + "/" + n + "." + n if n else "") for role, n in ((r, pick_clip(names, r)) for r in CLIP_PATTERNS)}
 
 
-def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=None):
+def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=None, loot=None):
     entry = {"label": label, "mesh": "", "idle": "", "death": "", "walk": "", "run": "", "hit": "", "melee": "",
              "mesh_offset_z": 0.0, "mesh_scale": 1.0, "collision_radius": 0.0, "collision_height": 0.0,
              "head_bone": "", "head_radius": 18.0, "walk_speed": 150.0, "patrol_radius": 500.0,
@@ -106,7 +108,8 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
              "run_speed": 400.0,
              "health_by_level": {str(k): v for k, v in health.items()},
              "melee_arrival_by_level": {str(k): v for k, v in (arrival or {}).items()},
-             "melee_ratio_by_level": {str(k): v for k, v in (ratio or {}).items()}, "source": source}
+             "melee_ratio_by_level": {str(k): v for k, v in (ratio or {}).items()},
+             "loot_by_level": {str(k): v for k, v in sorted((loot or {}).items())}, "source": source}
     if target:
         for key in ("mesh", "idle", "death"):
             entry[key] = target.get(key, "")
@@ -127,6 +130,36 @@ def local_output(path, repo=REPO):
     if os.path.commonpath([resolved, local]) != local or resolved == local:
         raise SystemExit("refusing --out %s: it must be inside %s (ignored game-derived output)" % (path, local))
     return resolved
+LETHAL = "GD_Impact.DamageType.DmgType_Normal:Shotgun"   # the kill shot of COMBAT_LOOT's runs (damage type and source)
+# What the host does with a pool of the death roll, by the pool's name (host choice): a weapon pool goes to the weapon
+# generator (ow.RollGun's roll), money and ammo pools to the range's own pickups; anything else is logged as not hosted.
+POOL_KINDS = (("GunsAndGear", "weapon"), ("Money", "money"), ("Ammo", "ammo"))
+
+
+def pool_kind(pool):
+    """By the pool's own name (the last path part): the package part (e.g. AmmoAndResourcePools) names a whole group."""
+    name = pool.rsplit(".", 1)[-1]
+    return next((kind for key, kind in POOL_KINDS if key in name), "other")
+
+
+def loot_tables(run_json):
+    """{row class: {level: {"item_stage": n, "pools": [{"pool", "chance", "kind"}]}}} from the death rolls of the kill steps."""
+    pawns = run_json.get("pawns", [])
+    out = {}
+    for step in run_json.get("steps", []):
+        if not step.get("step", "").startswith("hit:"):
+            continue
+        loot = (step.get("result") or {}).get("loot")
+        index = int(step["step"].split(":")[1])
+        if not loot or index >= len(pawns):
+            continue
+        archetype = pawns[index].get("archetype", "")
+        row_class = archetype.rsplit(".", 1)[-1]
+        row_class = row_class[5:] if row_class.startswith("Pawn_") else row_class
+        out.setdefault(row_class, {})[int(pawns[index].get("level", 0))] = {
+            "item_stage": loot.get("item_stage", 0),
+            "pools": [{"pool": p["pool"], "chance": p["chance"], "kind": pool_kind(p["pool"])} for p in loot.get("pools", [])]}
+    return out
 
 
 PLAZA = (0.0, 0.0)             # the scout centre; from ignored local data later in this stack
@@ -155,10 +188,12 @@ def run_vm(reader, levels):
     if not os.path.isdir(cooked):
         raise SystemExit("set OPENWILLOW_BL2 to the installed Borderlands 2 folder")
     # Per kind and level: a Maya of that level (refilled), the pawn, its swing at her. Pawn indices count up from 0.
-    steps = []
+    steps, pawn = [], 0
     for vm_kind, _ in KINDS.values():
         for level in levels:
-            steps += ["maya:%d" % level, "spawn:%s:%d" % (vm_kind, level), "swing:%d:%s" % (len(steps) // 3, SWINGS[vm_kind])]
+            steps += ["maya:%d" % level, "spawn:%s:%d" % (vm_kind, level), "swing:%d:%s" % (pawn, SWINGS[vm_kind]),
+                      "hit:%d:999999:%s" % (pawn, LETHAL)]
+            pawn += 1
     command = [reader, os.path.join(cooked, "Sanctuary_Dynamic.upk"), "--combat-run", "--cooked", cooked] + steps
     out = subprocess.run(command, capture_output=True, text=True, check=True)
     return json.loads(out.stdout)
@@ -184,11 +219,13 @@ def main(argv=None):
     # stock meshes, which are not imported yet).
     target = next(iter(targets.values()), None)
     kinds = {}
+    loot = loot_tables(run)
     for name, (vm_kind, row_class) in KINDS.items():
         health = health_table(run, row_class)
         source = "combat-run spawn:%s (VM spawn health, UNVERIFIED)" % vm_kind if health else "no VM run"
         kinds[name] = kind_entry(name.replace("_", " ").title(), target, health, source,
-                                 arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"))
+                                 arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"),
+                                 loot=loot.get(row_class))
     candidates = []
     if os.path.isfile(args.terrain):
         with open(args.terrain, encoding="utf-8") as f:
@@ -200,7 +237,7 @@ def main(argv=None):
         json.dump(manifest, f, indent=1)
     for name, kind in kinds.items():
         levels = kind["health_by_level"]
-        print("%s: %d health levels, %d melee levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), len(kind["melee_arrival_by_level"]), "yes" if kind["mesh"] else "no",
+        print("%s: %d health levels, %d melee levels, %d loot levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), len(kind["melee_arrival_by_level"]), len(kind["loot_by_level"]), "yes" if kind["mesh"] else "no",
               kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-"))
     print("spot candidates: %d (%d on the gate terrain)" % (len(candidates), sum(c["gate_terrain"] for c in candidates)))
     print("wrote " + args.out)

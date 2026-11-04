@@ -52,6 +52,18 @@ class PrepareRangeTest(unittest.TestCase):
                             os.path.join(repo, 'local', '..', 'm.json'), os.path.join(repo, 'localx', 'm.json')):
                 with self.assertRaises(SystemExit):
                     prepare_range.local_output(outside, repo)
+    def test_loot_tables_from_kill_steps(self):
+        run = {'pawns': [{'archetype': 'Pkg/Made.Character.Pawn_Beast', 'level': 4}],
+               'steps': [{'step': 'spawn:x:4', 'result': {}},
+                         {'step': 'hit:0:9:T:S', 'result': {'loot': {'item_stage': 4, 'pools': [
+                             {'pool': 'Made.Pool_GunsAndGear', 'chance': 0.1, 'roll': 0.5},
+                             {'pool': 'Made.Pool_Money_1or2', 'chance': 0.25},
+                             {'pool': 'Made.Pool_Skins', 'chance': 0.05},
+                             {'pool': 'Made.AmmoAndResourcePools.Pool_Eridium_Bar', 'chance': 0.01}]}}}]}
+        table = prepare_range.loot_tables(run)
+        self.assertEqual(table['Beast'][4]['item_stage'], 4)
+        self.assertEqual([p['kind'] for p in table['Beast'][4]['pools']], ['weapon', 'money', 'other', 'other'])
+        self.assertNotIn('roll', table['Beast'][4]['pools'][0])   # the host rolls its own draw
 
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
