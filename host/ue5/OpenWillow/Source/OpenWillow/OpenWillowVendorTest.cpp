@@ -40,10 +40,10 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     Stock.Kind = TEXT("weapons");
     Stock.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_a"), 101), TEXT("stock_0"), false));
     Stock.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_b"), 41), TEXT("stock_1"), false));
-    TestEqual(TEXT("price is floor(value x markup)"), Stock.PriceOf(Stock.Items[0]), 484);
-    TestEqual(TEXT("second gun's price"), Stock.PriceOf(Stock.Items[1]), 196);
-    TestEqual(TEXT("formula on its own, level 10: floor(51 x 5.5)"), FOpenWillowVendorStock::BuyPrice(51, 10), 280);
-    TestEqual(TEXT("an absurd value is unaffordable, not wrapped"), FOpenWillowVendorStock::BuyPrice(MAX_int32, 100), MAX_int32);
+    TestEqual(TEXT("price is floor(value x markup)"), Stock.PriceOf(Stock.Items[0]).Get(-1), 484);
+    TestEqual(TEXT("second gun's price"), Stock.PriceOf(Stock.Items[1]).Get(-1), 196);
+    TestEqual(TEXT("formula on its own, level 10: floor(51 x 5.5)"), FOpenWillowVendorStock::BuyPrice(51, 10).Get(-1), 280);
+    TestFalse(TEXT("an absurd value has no price (not a sentinel)"), FOpenWillowVendorStock::BuyPrice(MAX_int32, 100).IsSet());
     TestEqual(TEXT("sell price is the card value"), FOpenWillowVendorStock::SellPriceOf(Stock.Items[0]), 101);
 
     // Too little money: refused, nothing taken, the gun stays on the shelf.
@@ -57,6 +57,17 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("shelf unchanged after a refused buy"), Stock.Items.Num(), 2);
     TestFalse(TEXT("unknown id is refused"), Stock.Buy(TEXT("stock_9"), Poor, Error));
     TestEqual(TEXT("unknown id text"), Error, FString(TEXT("Unknown item")));
+
+    // A shelf item with no valid price is refused even with the largest purse.
+    {
+        FOpenWillowVendorStock Odd;
+        FOpenWillowWeaponItem Huge = SyntheticGun(TEXT("synthetic_huge"), MAX_int32);
+        Huge.Level = 100;
+        Odd.Items.Add(FOpenWillowVendorStock::MakeItem(Huge, TEXT("stock_0"), false));
+        UOpenWillowInventory* Rich = SyntheticInventory(MAX_int32);
+        TestFalse(TEXT("item without a valid price is refused"), Odd.Buy(TEXT("stock_0"), Rich, Error));
+        TestEqual(TEXT("invalid price text"), Error, FString(TEXT("No valid price")));
+    }
 
     // Enough money: buy gun A (484) then gun B (196) from 1000.
     UOpenWillowInventory* Inventory = SyntheticInventory(1000);
@@ -109,9 +120,9 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     // Featured item uses its own fixed cost when the manifest sets one.
     Stock.FixedFeaturedCost = 50;
     FOpenWillowVendorItem Featured = FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_d"), 100), TEXT("featured"), true);
-    TestEqual(TEXT("fixed featured cost wins over the markup"), Stock.PriceOf(Featured), 50);
+    TestEqual(TEXT("fixed featured cost wins over the markup"), Stock.PriceOf(Featured).Get(-1), 50);
     Stock.FixedItemCost = 70;
-    TestEqual(TEXT("fixed item cost wins over the markup"), Stock.PriceOf(Stock.Items[0]), 70);
+    TestEqual(TEXT("fixed item cost wins over the markup"), Stock.PriceOf(Stock.Items[0]).Get(-1), 70);
 
     // Reset clock: 20 minutes by default, counted from the last restock. Restock with no weapon balances rolls nothing
     // (no generator call), so this part is synthetic too.

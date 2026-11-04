@@ -90,7 +90,8 @@
 
   function row(item, source, featured) {
     return {source, id: item.id, name: item.name, kind: item.kind, rarity: item.rarity, level: item.level || 0,
-      price: item[source === 'backpack' ? 'sell' : 'price'], affordable: item.affordable === true,
+      price: item[source === 'backpack' ? 'sell' : 'price'], priceValid: item.priceValid !== false,
+      affordable: item.affordable === true && item.priceValid !== false,
       equipped: item.equipped === true, sellable: item.sellable !== false, featured, card: item.card || null};
   }
 
@@ -151,6 +152,7 @@
       return {ok: true, action: 'sell', id: item.id};
     }
     if (state.used >= state.capacity) return {ok: false, message: 'Backpack full'};
+    if (!item.priceValid) return {ok: false, message: 'Not for sale'};
     if (!item.affordable) return {ok: false, message: 'Insufficient funds'};
     return {ok: true, action: sel.column === 'buyback' ? 'buyback' : 'buy', id: item.id};
   }

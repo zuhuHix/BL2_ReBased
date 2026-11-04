@@ -124,7 +124,8 @@ TSharedRef<FJsonObject> CardJson(const FOpenWillowWeaponItem& Gun)
 }
 
 // One shop or buy-back row for the page.
-TSharedRef<FJsonObject> ShopItemJson(const FOpenWillowVendorItem& Item, int32 Price, int32 Money)
+// Price unset: no valid price (see BuyPrice); the row says so ("priceValid": false) and is never affordable.
+TSharedRef<FJsonObject> ShopItemJson(const FOpenWillowVendorItem& Item, TOptional<int32> Price, int32 Money)
 {
     TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
     Json->SetStringField(TEXT("id"), Item.Id);
@@ -132,10 +133,11 @@ TSharedRef<FJsonObject> ShopItemJson(const FOpenWillowVendorItem& Item, int32 Pr
     Json->SetStringField(TEXT("kind"), Item.Kind);
     Json->SetNumberField(TEXT("rarity"), Item.Rarity);
     Json->SetNumberField(TEXT("level"), Item.Level);
-    Json->SetNumberField(TEXT("price"), Price);
+    Json->SetNumberField(TEXT("price"), Price.Get(0));
+    Json->SetBoolField(TEXT("priceValid"), Price.IsSet());
     Json->SetNumberField(TEXT("value"), Item.SaleValue);   // the price formula's input, for the checker
     if (Item.bHasWeapon) Json->SetStringField(TEXT("gun"), Item.Weapon.Id);   // gen_<balance>_<stage>_<seed>: one per roll
-    Json->SetBoolField(TEXT("affordable"), Money >= Price);
+    Json->SetBoolField(TEXT("affordable"), Price.IsSet() && Money >= Price.GetValue());
     Json->SetBoolField(TEXT("featured"), Item.bFeatured);
     Json->SetNumberField(TEXT("quantity"), 1);
     if (Item.bHasWeapon) Json->SetObjectField(TEXT("card"), CardJson(Item.Weapon));
@@ -212,22 +214,23 @@ FOpenWillowVendorItem FOpenWillowVendorStock::MakeItem(const FOpenWillowWeaponIt
     return Item;
 }
 
-int32 FOpenWillowVendorStock::PriceOf(const FOpenWillowVendorItem& Item) const
+TOptional<int32> FOpenWillowVendorStock::PriceOf(const FOpenWillowVendorItem& Item) const
 {
     const int32 Fixed = Item.bFeatured ? FixedFeaturedCost : FixedItemCost;
     if (Fixed > 0) return Fixed;
     return BuyPrice(Item.SaleValue, Item.Level);
 }
 
-int32 FOpenWillowVendorStock::BuyPrice(int32 Value, int32 Level)
+TOptional<int32> FOpenWillowVendorStock::BuyPrice(int32 Value, int32 Level)
 {
     // price = floor(value * (level * SellExponentializer + BaseMarkupIncrease)), in single precision. Confirmed live
     // 2026-11-03: 79 of 79 stock and featured prices of Sanctuary's eight machines at player level 8
     // (docs/verification/VENDORS.md section 3).
     const float Markup = float(Level) * SellExponentializer + BaseMarkupIncrease;
     const float Price = float(Value) * Markup;
-    // A price that is not a finite, non-negative int32 (absurd value or level) is unaffordable rather than wrapped.
-    if (!FMath::IsFinite(Price) || Price < 0.f || Price >= 2147483520.f) return MAX_int32; // largest float below 2^31
+    // A price that is not a finite, non-negative int32 (absurd value or level) is no price at all: unset, refused by
+    // Buy and shown as not for sale, never a sentinel that a large purse could afford.
+    if (!FMath::IsFinite(Price) || Price < 0.f || Price >= 2147483520.f) return {}; // largest float below 2^31
     return FMath::FloorToInt(Price);
 }
 
@@ -331,7 +334,13 @@ bool FOpenWillowVendorStock::Buy(const FString& Id, UOpenWillowInventory* Invent
     }
     int32 Money = 0;
     Inventory->GetMoney(Money); // unknown money counts as 0
-    const int32 Price = PriceOf(Item);
+    const TOptional<int32> PriceOrUnset = PriceOf(Item);
+    if (!PriceOrUnset.IsSet())
+    {
+        OutError = TEXT("No valid price");
+        return false;
+    }
+    const int32 Price = PriceOrUnset.GetValue();
     if (Money < Price)
     {
         OutError = TEXT("Insufficient funds");
@@ -540,6 +549,13 @@ void UOpenWillowVendorSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 
 void UOpenWillowVendorSubsystem::Deinitialize()
 {
+    // Give input back and hide the page before it goes (a controller can outlive the world), and stop both timers.
+    if (Page.IsValid() && Page->IsShown()) CloseShop();
+    if (UWorld* World = GetWorld())
+    {
+        World->GetTimerManager().ClearTimer(OpenTimer);
+        World->GetTimerManager().ClearTimer(TestTimer);
+    }
     Page.Reset(); // removes the page from the viewport
     Machines.Reset();
     ActiveMachine.Reset();
@@ -651,14 +667,15 @@ void UOpenWillowVendorSubsystem::HandlePageMessage(const FString& Line)
     Json->TryGetNumberField(TEXT("serial"), ReceivedSerial);
     Json->TryGetStringField(TEXT("action"), Action);
     Json->TryGetStringField(TEXT("id"), Id);
-    if (Action == TEXT("close"))
-    {
-        CloseShop();
-        return;
-    }
+    // The serial first, for close too: a close left over from an earlier opening must not close the shop just reopened.
     if (int64(ReceivedSerial) != Serial)
     {
         UE_LOG(LogTemp, Display, TEXT("OWVENDOR ignored stale %s (serial %lld, current %lld)"), *Action, int64(ReceivedSerial), Serial);
+        return;
+    }
+    if (Action == TEXT("close"))
+    {
+        CloseShop();
         return;
     }
     FString Error;
@@ -862,7 +879,7 @@ FString UOpenWillowVendorSubsystem::StateJson() const
 
     TArray<TSharedPtr<FJsonValue>> BuybackJsonList;
     for (const FOpenWillowVendorItem& Item : Stock.Buyback)
-        BuybackJsonList.Add(MakeShared<FJsonValueObject>(ShopItemJson(Item, FOpenWillowVendorStock::SellPriceOf(Item), Money)));
+        BuybackJsonList.Add(MakeShared<FJsonValueObject>(ShopItemJson(Item, TOptional<int32>(FOpenWillowVendorStock::SellPriceOf(Item)), Money)));
     State->SetArrayField(TEXT("buyback"), BuybackJsonList);
 
     State->SetNumberField(TEXT("resetSeconds"), FMath::FloorToInt(Stock.SecondsToReset(Now)));

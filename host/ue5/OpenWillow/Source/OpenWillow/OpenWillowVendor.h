@@ -81,10 +81,12 @@ struct FOpenWillowVendorStock
     // Shelf item from a rolled or hand-made gun. Sell value comes from the card's SaleValue (0 when absent).
     static FOpenWillowVendorItem MakeItem(const FOpenWillowWeaponItem& Gun, const FString& Id, bool bFeatured);
 
-    // What buying costs: the fixed cost when the manifest sets one, else BuyPrice(SaleValue, Level).
-    int32 PriceOf(const FOpenWillowVendorItem& Item) const;
+    // What buying costs: the fixed cost when the manifest sets one, else BuyPrice(SaleValue, Level). Unset when there is
+    // no valid price; Buy refuses such an item.
+    TOptional<int32> PriceOf(const FOpenWillowVendorItem& Item) const;
     // The shop's price for an item of this value and level (confirmed live, see the .cpp).
-    static int32 BuyPrice(int32 Value, int32 Level);
+    // Unset when the single-precision result is not a finite int32.
+    static TOptional<int32> BuyPrice(int32 Value, int32 Level);
     // What selling pays and what buying back costs: the card value (UNVERIFIED for shops).
     static int32 SellPriceOf(const FOpenWillowVendorItem& Item) { return Item.SaleValue; }
 
