@@ -4,9 +4,18 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Misc/DefaultValueHelper.h"
 
 namespace OpenWillowGunLook
 {
+bool ParseFiniteFloat(const FString& Token, float& Out)
+{
+    float Value = 0.f;
+    if (!FDefaultValueHelper::ParseFloat(Token.TrimStartAndEnd(), Value) || !FMath::IsFinite(Value)) return false;
+    Out = Value;
+    return true;
+}
+
 static bool ParseList(const TCHAR* Key, TArray<float>& Out)
 {
     FString Text;
@@ -46,10 +55,23 @@ FLook CurrentInspect()
         // the 25th-75th luma percentiles within 6 of the real frame (1.6 / 1.2 / 0.5 left them 21-28 darker).
         FLook Result = Current();
         Result.Ambient = 3.2f; Result.Key = 0.7f; Result.Fill = 0.3f;
-        TArray<float> V;
-        if (ParseList(TEXT("owinspectlook="), V) && V.Num() == 5)
+        // -owinspectlook=<Diffuse>,<Ambient>,<Key>,<Fill>,<Emissive>: all five, each a finite number in [0, 16], or the fit stays.
+        FString Text;
+        if (FParse::Value(FCommandLine::Get(), TEXT("owinspectlook="), Text, false))
         {
-            Result.Diffuse = V[0]; Result.Ambient = V[1]; Result.Key = V[2]; Result.Fill = V[3]; Result.Emissive = V[4];
+            TArray<FString> Parts;
+            Text.ParseIntoArray(Parts, TEXT(","));
+            float V[5] = {};
+            bool bOk = Parts.Num() == 5;
+            for (int32 I = 0; bOk && I < 5; ++I)
+                bOk = ParseFiniteFloat(Parts[I], V[I]) && V[I] >= 0.f && V[I] <= 16.f;
+            if (bOk)
+            {
+                Result.Diffuse = V[0]; Result.Ambient = V[1]; Result.Key = V[2]; Result.Fill = V[3]; Result.Emissive = V[4];
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow inspect look from the command line: %s"), *Text);
+            }
+            else
+                UE_LOG(LogTemp, Warning, TEXT("OpenWillow -owinspectlook=%s ignored: needs five finite values in [0, 16] (D,A,K,F,E); keeping the fitted look"), *Text);
         }
         return Result;
     }();

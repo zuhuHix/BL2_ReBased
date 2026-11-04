@@ -22,6 +22,8 @@ struct FLook
     FVector KeyDir = FVector(-0.45, 0.55, -0.70), FillDir = FVector(0.70, -0.20, -0.40);
 };
 FLook Current();
+// Strict number parse for command-line calibration values: the whole token must be a number and finite.
+bool ParseFiniteFloat(const FString& Token, float& Out);
 // The look of the inventory preview capture (Inspect, thumbnails): Current() with the fitted Inspect light (ambient 3.2, key 0.7, fill 0.3) unless -owinspectlook=<D>,<A>,<K>,<F>,<E> sets its
 // own values (calibration against the real Inspect frames; docs/verification/WEAPON_VISUALS.md section 19).
 FLook CurrentInspect();
