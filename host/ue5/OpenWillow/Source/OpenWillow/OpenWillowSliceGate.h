@@ -43,6 +43,7 @@ private:
     UPROPERTY() mutable TObjectPtr<class AOpenWillowNpc> Marcus;   // found once at the giver marker
     TSet<TObjectKey<AActor>> PickupsBeforeKill;
     FVector KillLocation = FVector::ZeroVector;
+    FVector LastEnemyLocation = FVector::ZeroVector;
     int32 KillShots = 0;
     int32 PickupAttemptsBefore = 0;
     TSet<FString> BackpackBefore;   // stable item ids before an action that should add one
