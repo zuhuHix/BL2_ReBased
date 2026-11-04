@@ -39,6 +39,13 @@ public:
     // PlayerMeleeDamage = 2.5 x (8 x 1.13 ^ level + InstigatedMeleeDamageAddedBuff), the buff taken as 0 (no melee buffs
     // in the host). Init_PlayerMeleeDamage, read from data, UNVERIFIED in game.
     static float MeleeDamageAt(int32 AtLevel) { return 2.5f * SkillDamageAt(AtLevel); }
+    // Mind's Eye: PlayerCriticalHitBonus over its live base 2.0, i.e. 1 + 0.05 x grade (1 when untrained or without
+    // effects data). Cached; recomputed after any grade change.
+    float CritBonusScale() const;
+    // Recompense's proc roll, chance 0.1 x grade, from the component's own random stream (seed: -owskillseed=<n>, or
+    // SetRandomSeed for tests).
+    bool RollRecompense(int32 Grade) { return Grade > 0 && Random.FRand() < 0.1f * Grade; }
+    void SetRandomSeed(int32 Seed) { Random.Initialize(Seed); }
     // Grade of the tree skill with this effects name (e.g. TEXT("Helios")); 0 when untrained or unknown.
     int32 GradeOfNamed(const TCHAR* Name) const;
 
@@ -126,6 +133,11 @@ private:
 
     TArray<TArray<FTier>> Branches;
     FOpenWillowSkillEffects Effects;
+    // Bumped by every grade change (spend, respec, load); caches compare against it.
+    int32 GradeVersion = 0;
+    mutable int32 CritScaleVersion = -1;
+    mutable float CritScale = 1.f;
+    FRandomStream Random;
     // Behaviour state (OpenWillowSkillBehaviours.cpp).
     struct FAction
     {
