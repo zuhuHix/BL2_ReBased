@@ -12,6 +12,7 @@
 #include "OpenWillowInventoryWidget.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowSkills.h"
+#include "OpenWillowSliceGate.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
 #include "Misc/PackageName.h"
@@ -412,6 +413,8 @@ void AOpenWillowWalker::BeginPlay()
         GetCharacterMovement()->GravityScale = 500.f / HostGravity;
     }
     bMayaActive = FParse::Param(FCommandLine::Get(), TEXT("owmaya"));
+    // -owslicegate: the unattended slice-gate run (OpenWillowSliceGate.h, tools/test_slice_gate.ps1).
+    if (FParse::Param(FCommandLine::Get(), TEXT("owslicegate"))) NewObject<UOpenWillowSliceGate>(this, TEXT("SliceGate"))->RegisterComponent();
     if (!bMayaActive) return;
     ApplyMayaMovementDefaults();
     if (APlayerController* PC = Cast<APlayerController>(Controller))
