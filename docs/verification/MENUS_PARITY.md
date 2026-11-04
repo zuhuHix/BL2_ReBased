@@ -121,7 +121,7 @@ finished go-to-the-range line at the range, and whether a completed mission stil
 
 **Quest text over the status pages fixed.** Under `-owquest` the quest's tracker and talk hints (`UOpenWillowQuest::
 UpdateHints`, an on-screen debug line posted every frame) drew over every status page. They are no longer posted while a
-status page is open; the four captures above show none.
+status page or a vending shop is open (the shop since PR #101); the four captures above show none.
 
 Known artefact: in a headless replay, a column of list scroll ticks shows after a no-missions -> missions transition (not
 seen in the engine capture).
