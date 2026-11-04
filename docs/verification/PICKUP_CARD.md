@@ -20,12 +20,16 @@ ignored `local/inv24/pickup/`.
 
 ## What the host does
 
-- `OpenWillowPickupCard.cpp` finds the aimed pickup: within 220 uu of Maya (the reach `AOpenWillowWalker::PickupNearby` uses)
-  and within 12 degrees of the view direction, the one nearest the view's centre line. **UNVERIFIED** (reach and cone are host
-  choices; the game's test is native). It sends the HUD state field `pickupCard`: the item as the inventory page receives it
+- `OpenWillowPickupCard.cpp` finds the aimed pickup: within 220 uu of Maya (the reach `AOpenWillowWalker::PickupNearby` uses),
+  within 12 degrees of the view direction and in sight of the view (a visibility trace ignoring Maya and the pickup, so no
+  card through walls). Ties go by angle, then distance from Maya, then name, so the choice never depends on actor order; this
+  is the one selection rule meant for E too. **UNVERIFIED** (reach, cone and the sight test are host choices; the game's test
+  is native). The search runs at most 10 times a second and the card JSON is rebuilt only when the target, the compared item
+  or the level changes. No card while Maya is down or dead (`IsDown`). It sends the HUD state field `pickupCard`: the item as the inventory page receives it
   (`UOpenWillowInventory::WeaponItemJson` / `GearItemJson`, moved out of `StateJson` unchanged), the equipped analogue for the
-  compare arrows (the held weapon, as `WillowInventoryManager.GetEquippedAnalogue` does for the menu; for gear the equipped item
-  of the same slot), Maya's level and the item's screen point. `OWPICKUPCARD shown|hidden` log lines record each change.
+  compare arrows (the held weapon whatever its type: `WillowInventoryManager.GetEquippedAnalogue` returns the pawn's current
+  weapon for any weapon, and the menu compares the same way; for gear the equipped item of the same slot. Whether the native
+  pickup card uses that analogue is not read: UNVERIFIED), Maya's level and the item's screen point. `OWPICKUPCARD shown|hidden` log lines record each change.
 - The HUD page forwards the field to a transparent same-origin frame (`pickup_card.html`), which plays the converted movie in
   its own Ruffle player and fills the card with `item_card.js`, the card code the inventory page uses (moved out of
   `inventory.js` unchanged). The frame keeps the card's canvas away from `hud_warp.js`, which redraws the newest WebGL canvas
@@ -53,9 +57,10 @@ Without it the frame logs `OpenWillow pickup card movie failed` and the HUD is u
 - `tests/pickup_card_test.js` (synthetic): placement, the refill/show/hide plan, the HUD-to-frame forwarding and the shared
   card writer's rows and arrows.
 - In engine, `-owpickupcardshots` (with the movie HUD): rolls a gun (`ow.RollGun`, default the Hellfire balance at stage 34),
-  drops it 150 uu ahead, and captures aimed away, aimed, aimed away, aimed again and after E picked it up.
+  drops it 150 uu ahead, and captures aimed away, aimed, aimed away, aimed again and after E picked it up; then drops a
+  second gun, captures it aimed at, puts Maya down and captures again (the card must be gone).
 
 ## Open, for a real-game session
 
-The look-at reach and cone, the card's on-screen size and placement relative to the item, its frame style, the in/out timing,
+The look-at reach, cone and sight test, which item a weapon is compared against, the card's on-screen size and placement relative to the item, its frame style, the in/out timing,
 whether the card hides at once when the player looks away, and what the card shows for an item above the player's level.
