@@ -45,12 +45,35 @@ void UOpenWillowSkills::BeginPlay()
 {
     Super::BeginPlay();
     HitHandle = OpenWillowHit::OnHit().AddUObject(this, &UOpenWillowSkills::HandleHit);
+    if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner()))
+        Maya->GetMayaState().Modifiers = [this](FOpenWillowMayaStats& Stats) { ApplyStatModifiers(Stats); };
 }
 
 void UOpenWillowSkills::EndPlay(const EEndPlayReason::Type Reason)
 {
     OpenWillowHit::OnHit().Remove(HitHandle);
+    if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner())) Maya->GetMayaState().Modifiers = nullptr;
     Super::EndPlay(Reason);
+}
+
+// Maya's survival stats with the skills' modifiers (the stack formula over each Base value): max health (Restoration),
+// health regeneration per second (Sustenance, Elated), shield capacity and recharge delay (Ward), ground speed (Fleet,
+// while the shield is empty). Evaluated each time the rules read them, so conditions such as an empty shield or a held
+// target apply at once (the game refreshes every 0.5 s; UNVERIFIED difference).
+void UOpenWillowSkills::ApplyStatModifiers(FOpenWillowMayaStats& Stats) const
+{
+    const AActor* Maya = GetOwner();
+    if (bApplyingStats || !Maya || !Effects.IsLoaded()) return;
+    TGuardValue<bool> Guard(bApplyingStats, true);
+    using namespace OpenWillowSkillEffects;
+    Stats.MaxHealth = Apply(Maya, Attr::HealthMax, Stats.MaxHealth);
+    Stats.HealthRegenRate = Apply(Maya, Attr::HealthRegen, Stats.HealthRegenRate);
+    if (Stats.ShieldCapacity > 0.f)
+    {
+        Stats.ShieldCapacity = Apply(Maya, Attr::ShieldMax, Stats.ShieldCapacity);
+        Stats.ShieldRechargeDelay = Apply(Maya, Attr::ShieldDelay, Stats.ShieldRechargeDelay);
+    }
+    Stats.GroundSpeed = Apply(Maya, Attr::FootSpeed, Stats.GroundSpeed);
 }
 
 // Hits of Maya's guns (not her skills' own hits, not status ticks). The skills' extra damage is queued for the next tick
@@ -133,11 +156,7 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
     AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner());
     if (!Maya) return;
 
-    // Health regeneration: HealthPassiveRegenerationRate on Maya's pool is 0 without skills; Sustenance
-    // (0.004 x grade x missing health) and Elated (0.01 x grade x max health while a target is phaselocked) add to it.
-    // The game re-evaluates these every 0.5 s (SkillEffectUpdateIterval); the host every frame. Per second (UNVERIFIED).
-    const float Regen = OpenWillowSkillEffects::Apply(Maya, OpenWillowSkillEffects::Attr::HealthRegen, 0.f);
-    if (Regen > 0.f) Maya->Heal(Regen * DeltaTime);
+    // Health regeneration (Sustenance, Elated) now goes through FOpenWillowMayaState's HealthRegenRate (ApplyStatModifiers).
 
     // A new Phaselock cast that lifted a target: schedule the upgrades that the action skill's behaviour graph runs from
     // OnSelectedTarget (t = 0) and from the lock (Ruin, via the Phaselocked event at the timeline's LockedAt).
