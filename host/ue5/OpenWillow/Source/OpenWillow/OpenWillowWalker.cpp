@@ -2481,8 +2481,19 @@ void AOpenWillowWalker::RunGunShots(float Now)
             {
                 TArray<FString> Yaws;
                 Turn.ParseIntoArray(Yaws, TEXT(","));
-                for (const FString& Yaw : Yaws)
-                    GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_turn%s.png"), *Id, *Yaw), FCString::Atof(*Yaw), 15.f, Radius, 1280, 720);
+                for (const FString& Token : Yaws)
+                {
+                    float Yaw = 0.f;
+                    if (!OpenWillowGunLook::ParseFiniteFloat(Token, Yaw))
+                    {
+                        UE_LOG(LogTemp, Warning, TEXT("OpenWillow gunshots: -owgunturn token '%s' is not a finite angle, skipped"), *Token);
+                        continue;
+                    }
+                    // Name from the parsed value: turn30, turn_m30, turn12p5.
+                    const FString Name = FString::Printf(TEXT("%s%s"), Yaw < 0.f ? TEXT("_m") : TEXT(""),
+                        *FString::SanitizeFloat(FMath::Abs(Yaw), 0).Replace(TEXT("."), TEXT("p")));
+                    GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_turn%s.png"), *Id, *Name), Yaw, 15.f, Radius, 1280, 720);
+                }
             }
         }
         ++GunShotStep;
