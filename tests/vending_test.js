@@ -120,6 +120,13 @@ check('An item the host marks unsellable (a lent mission weapon) is never sold',
   assert.deepEqual(model.actionFor({column: 'backpack', index: other}, lists, current), {ok: true, action: 'sell', id: 'b1'});
 });
 
+check('A missing or failed movie removes the Ruffle player instead of leaving its error panel', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'hud_overlay', 'vending.js'), 'utf8');
+  assert.ok(source.includes("method: 'HEAD'"));          // checks the movie exists before creating a player
+  assert.ok(source.includes("querySelector('#panic')"));  // and drops the player when Ruffle panics
+  assert.ok(source.includes('window.owPlayer.remove()'));
+});
+
 check('The page tells the host when it can take input and keeps no local clock', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'hud_overlay', 'vending.js'), 'utf8');
   assert.ok(source.includes("console.log('OWVENDREADY')"));
