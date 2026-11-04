@@ -287,8 +287,8 @@ void FOpenWillowVendorStock::Restock(double Now)
     bFeaturedBoughtSinceRestock = false;
     bStocked = true;
     StockedAt = Now;
-    const uint32 RestockSeed = Seed + uint32(RestockCount) * 1009u;
-    ++RestockCount;
+    const uint32 RestockSeed = Seed + uint32(RestockCount) * 1009u; // unsigned: wraps by definition
+    if (RestockCount < MAX_int32) ++RestockCount;
     if (Kind != TEXT("weapons"))
     {
         Notice = TEXT("Not stocked yet");
@@ -377,14 +377,32 @@ bool FOpenWillowVendorStock::Buy(FString Id, UOpenWillowInventory* Inventory, FS
     return true;
 }
 
-bool FOpenWillowVendorStock::Restore(const FOpenWillowCurrencyMachine& Saved, double Now, FString& OutError)
+bool FOpenWillowVendorStock::CanRestore(const FOpenWillowCurrencyMachine& Saved, FString& OutError) const
 {
     const double IntervalSeconds = double(MinutesBetweenResets) * 60.0;
-    if (Saved.RestockCount < 1 || Saved.SecondsToReset < 0 || double(Saved.SecondsToReset) > IntervalSeconds)
+    if (Saved.RestockCount < 1 || Saved.RestockCount > FOpenWillowCurrencySave::MaxRestockCount || Saved.SecondsToReset < 0
+        || double(Saved.SecondsToReset) > IntervalSeconds)
     {
         OutError = TEXT("saved reset clock or restock count out of range");
         return false;
     }
+    for (const FString& Id : Saved.Bought)
+    {
+        // Shelf ids are "stock_<n>" with n below the shelf size.
+        const int32 Index = Id.StartsWith(TEXT("stock_")) ? FCString::Atoi(*Id.Mid(6)) : -1;
+        if (Index < 0 || Index >= StockWeaponCount || Id != FString::Printf(TEXT("stock_%d"), Index))
+        {
+            OutError = FString::Printf(TEXT("bought id %s is not a shelf id"), *Id);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool FOpenWillowVendorStock::Restore(const FOpenWillowCurrencyMachine& Saved, double Now, FString& OutError)
+{
+    if (!CanRestore(Saved, OutError)) return false;
+    const double IntervalSeconds = double(MinutesBetweenResets) * 60.0;
     // Restock() rolls from RestockCount and then counts one more, so one below the saved count rebuilds the saved shelf.
     RestockCount = Saved.RestockCount - 1;
     Restock(Now);
@@ -599,6 +617,20 @@ void UOpenWillowVendorSubsystem::OnWorldBeginPlay(UWorld& InWorld)
         Machines.Add(Machine);
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow vendors: %d machine(s) spawned from %s"), Machines.Num(), *Path);
+    // The identity of what a save depends on: the stage, the reset interval and each spawned machine's id, kind, seed and
+    // pools (the shelf is rolled from these).
+    TArray<FString> IdentityLines{FString::Printf(TEXT("stage %d minutes %d"), Stage, Minutes)};
+    for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Machines)
+    {
+        const AOpenWillowVendingMachine* Machine = Candidate.Get();
+        if (!Machine) continue;
+        IdentityLines.Add(FString::Printf(TEXT("machine %s %s %u"), *Machine->Id, *Machine->Stock.Kind, Machine->Stock.Seed));
+        for (const FOpenWillowVendorLeaf& Leaf : Machine->Stock.Leaves)
+            IdentityLines.Add(FString::Printf(TEXT("leaf %s %s %.9g"), *Leaf.Balance, *Leaf.Class, Leaf.Weight));
+        for (const FOpenWillowVendorLeaf& Leaf : Machine->Stock.FeaturedLeaves)
+            IdentityLines.Add(FString::Printf(TEXT("featured %s %s %.9g"), *Leaf.Balance, *Leaf.Class, Leaf.Weight));
+    }
+    ManifestId = FOpenWillowCurrencySave::ManifestIdentity(IdentityLines);
     if (FParse::Param(FCommandLine::Get(), TEXT("owvendortest")))
         InWorld.GetTimerManager().SetTimer(TestTimer, FTimerDelegate::CreateUObject(this, &UOpenWillowVendorSubsystem::TickVendorTest),
             2.f, true, 5.f); // one step every 2 s once the walker is there (the page needs a moment to load)
@@ -855,23 +887,52 @@ void UOpenWillowVendorSubsystem::LoadCurrency(AOpenWillowWalker& Walker)
         }
         bHaveFile = true;
     }
-    // -owmoney / -owerid replace the saved values (the walker already applied them in its BeginPlay).
+    // Validate the whole file against this session before applying anything: same machine set (manifest identity),
+    // every saved machine spawned, every row restorable. An incompatible save is left untouched and saves stay off.
+    if (bHaveFile)
+    {
+        FString Why;
+        TMap<FString, AOpenWillowVendingMachine*> ById;
+        for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Machines)
+            if (Candidate.IsValid()) ById.Add(Candidate->Id, Candidate.Get());
+        if (Save.Manifest != ManifestId) Why = TEXT("written against a different vendors.json (manifest identity differs)");
+        for (const TPair<FString, FOpenWillowCurrencyMachine>& Pair : Save.Machines)
+        {
+            if (!Why.IsEmpty()) break;
+            AOpenWillowVendingMachine* const* Machine = ById.Find(Pair.Key);
+            if (!Machine) Why = FString::Printf(TEXT("machine %s is not spawned in this session"), *Pair.Key);
+            else if (FString Error; !(*Machine)->Stock.CanRestore(Pair.Value, Error))
+                Why = FString::Printf(TEXT("machine %s: %s"), *Pair.Key, *Error);
+        }
+        if (!Why.IsEmpty())
+        {
+            bCurrencyRefused = true;
+            UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY load refused: %s (%s); nothing applied, saves are off so the file is kept"),
+                *CurrencyPath, *Why);
+            return;
+        }
+    }
+    // -owmoney / -owerid replace the saved values (the walker already applied them in its BeginPlay); a value that is not a
+    // whole number in range is ignored with a warning and the saved amount stays.
     int32 CommandMoney = 0, CommandEridium = 0;
-    const bool bMoneyGiven = FParse::Value(FCommandLine::Get(), TEXT("owmoney="), CommandMoney);
-    const bool bEridiumGiven = FParse::Value(FCommandLine::Get(), TEXT("owerid="), CommandEridium);
+    bool bMoneyInvalid = false, bEridiumInvalid = false;
+    const bool bMoneyGiven = FOpenWillowCurrencySave::ParsePurseSwitch(TEXT("owmoney="), CommandMoney, bMoneyInvalid);
+    const bool bEridiumGiven = FOpenWillowCurrencySave::ParsePurseSwitch(TEXT("owerid="), CommandEridium, bEridiumInvalid);
+    if (bMoneyInvalid) UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY -owmoney= is not a whole number in range; ignored"));
+    if (bEridiumInvalid) UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY -owerid= is not a whole number in range; ignored"));
     if (bHaveFile && !bMoneyGiven) Inventory->SetMoney(Save.Money);
     if (bHaveFile && !bEridiumGiven) Inventory->SetEridium(Save.Eridium);
 
     int32 Restored = 0;
     for (const TPair<FString, FOpenWillowCurrencyMachine>& Pair : Save.Machines)
     {
-        AOpenWillowVendingMachine* Machine = nullptr;
         for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Machines)
-            if (Candidate.IsValid() && Candidate->Id == Pair.Key) Machine = Candidate.Get();
-        if (!Machine) continue; // a saved machine that is not spawned in this map (or -owvendors is off)
-        FString Error;
-        if (Machine->Stock.Restore(Pair.Value, GetWorld()->GetTimeSeconds(), Error)) ++Restored;
-        else UE_LOG(LogTemp, Warning, TEXT("OWCURRENCY machine %s not restored: %s"), *Pair.Key, *Error);
+        {
+            if (!Candidate.IsValid() || Candidate->Id != Pair.Key) continue;
+            FString Error;
+            if (Candidate->Stock.Restore(Pair.Value, GetWorld()->GetTimeSeconds(), Error)) ++Restored;
+            else UE_LOG(LogTemp, Error, TEXT("OWCURRENCY machine %s not restored after validation: %s"), *Pair.Key, *Error);
+        }
     }
     bCurrencyReady = true;
     if (!bHaveFile)
@@ -893,6 +954,7 @@ void UOpenWillowVendorSubsystem::SaveCurrency()
     FOpenWillowCurrencySave Save;
     Inventory->GetMoney(Save.Money); // unknown money is 0
     Inventory->GetEridium(Save.Eridium);
+    Save.Manifest = ManifestId;
     const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
     for (const TWeakObjectPtr<AOpenWillowVendingMachine>& Candidate : Machines)
     {

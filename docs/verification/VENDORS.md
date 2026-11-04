@@ -86,7 +86,14 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
   Host choices, all `UNVERIFIED` against the game:
   - Buy-back is not saved.
   - The timer does not run while the game is closed.
-  - A save written against a different `vendors.json` is not detected.
+  - The file (schema `openwillow-currency/2`) carries a manifest identity: a SHA-1 over the stage, the reset interval and
+    each spawned machine's id, kind, seed and pools. A save from a different machine set, or with any row that would not
+    restore, is refused whole. Nothing is applied and saving stays off, so the file is never overwritten.
+  - Writes go to a unique temp file and replace the save in one step (Windows `ReplaceFileW`, which keeps the previous
+    save as `.bak`).
+  - The path must resolve, links followed, inside this checkout's `local/`.
+  - A `-owmoney=` / `-owerid=` value that is not a whole number in range is ignored with a warning.
+  - Restock counts are bounded on load (1,000,000) and the increment saturates.
 - PR 1 stocks guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory
   does not have yet (PR 2).
 
