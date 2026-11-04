@@ -86,6 +86,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | Date | Base | Result | Notes |
 |---|---|---|---|
 | 2026-11-04 | main be94f4a | 9 / 0 / 4 | first green run, after four runs that found bugs in this lane's own driver (see below) |
+| 2026-11-04 | main f3947ed (after PR #80) | 9 / 0 / 4 | same links; ctest 21/21, verify_packages exact |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
