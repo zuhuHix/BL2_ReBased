@@ -59,6 +59,8 @@ private:
     void Fixture(const FString& What) { Fixtures.AddUnique(What); }
     TArray<FString> Fixtures;
     bool bPhaselockPointGranted = false;
+    bool bTestDrop = false, bCardSeen = false;   // the pickup link: the test dropped the gun; the card named the drop
+    FString DropId;
     int32 LastHitCount = 0, EnemyHits = 0, OtherHits = 0, UnattributedHits = 0;   // Maya's hits during the fight, by causer
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }
