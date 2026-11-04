@@ -218,6 +218,7 @@ float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const
     const FOpenWillowDamageResult Hit = MayaState.ApplyDamage(Amount, Now);
     if (Hit.bIgnored) return 0.f;
     const float Applied = Hit.ToShield + Hit.ToHealth;
+    if (Skills && Hit.ToHealth > 0.f && Causer != this) Skills->OnMayaDamaged(Causer, nullptr, Hit.ToHealth);   // skills lane hook (Recompense: health damage only)
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya took %.1f damage (shield %.1f, health %.1f), shield %.1f/%.1f health %.1f/%.1f"),
         Applied, Hit.ToShield, Hit.ToHealth, GetShield(), GetShieldCapacity(), GetHealth(), GetMaxHealth());
     // Where the hit came from, for the HUD's damage-direction arrows: the source location, else the causer's position;
@@ -1825,7 +1826,7 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
         E.Element = OpenWillowHit::ElementOf(DamageType, In.WeaponId.IsEmpty() && Held ? Held->Element : FString());
     // BL2: status-effect damage never crits; splash crits are not measured (taken as none, UNVERIFIED).
     E.bCanCrit = In.Kind == EOpenWillowHitKind::Direct || In.Kind == EOpenWillowHitKind::Throw;
-    E.CritBonus = 2.f;   // CurrentInstantHitCriticalHitBonus base value (live); skills and the weapon's crit bonus not applied yet
+    E.CritBonus = In.CritBonus != 2.f ? In.CritBonus : OpenWillowSkillEffects::Apply(this, TEXT("D_Attributes.GameplayAttributes.PlayerCriticalHitBonus"), 2.f);   // skills lane hook (Mind's Eye): base 2.0 (live) with skill Scale; a caller's own bonus wins
     E.Time = GetWorld()->GetTimeSeconds();
     E.bCritical = false;
     E.Applied = -1;

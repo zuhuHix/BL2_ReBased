@@ -3621,3 +3621,16 @@ behaviour graphs and effect data; UNVERIFIED in game.
   0.1 x grade x the hit as fire damage while Maya is down; Blight Phoenix pulses corrosive and fire around Maya every
   0.5 s while the kill-skill timer runs (radius 512, 0.02 x grade x PlayerMeleeDamage, melee buff taken as 0).
 - Skill hits go through `ApplyShotDamage` with weapon id `skill:<name>`; the listener ignores them and status ticks.
+
+## 2026-11-03: Recompense and Mind's Eye in the host (Skills lane PR 5)
+
+AI-assisted (Claude). Record: `docs/verification/NATIVE_SKILL_BEHAVIOURS.md` section 7. Behaviour change; read from the
+behaviour graph and effect data, UNVERIFIED in game.
+
+- **Recompense.** When an enemy takes health from Maya, with chance 0.1 x grade the attacker takes the same damage back
+  (DmgType_Normal, non-critical skill hit); not while Maya is down. Hook (hub-approved): one line in
+  `AOpenWillowWalker::TakeDamage`; the reflected hit goes to the attacker only, never to Maya.
+- **Mind's Eye.** The shared hit dispatcher's crit bonus is now `PlayerCriticalHitBonus` = 2.0 (the live base) with the
+  skill's Scale, 2 x (1 + 0.05 x grade); a caller's own bonus (other than 2.0) wins. Hook (hub-approved): one line in
+  `AOpenWillowWalker::ApplyShotDamage`.
+- Open, recorded: Sub-Sequence, Thoughtlock, Res, Chain Reaction, Kinetic Reflection, Reaper, Scorn, Backdraft.
