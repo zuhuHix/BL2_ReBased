@@ -115,4 +115,4 @@ seen in the engine capture).
 2. Map tab; accept / turn-in briefing screens; pause menu.
 3. Inventory round-23 open list (see `INVENTORY_MOVIE_PROTOTYPE.md`, "Round 23"): Inspect weapon paint and emblem, glass-sheet
    curve, thumbnail renders, D3 card border, zoom lines (`weapon_gen.cpp`) and one flavour wrap, BRANDS order (native, UNVERIFIED),
-   number keys (needs a real-game session; Steam blocked the 2026-11-03 attempt).
+   number keys (round 24: the script switches tabs 1-5, the page follows it; not yet seen in game).

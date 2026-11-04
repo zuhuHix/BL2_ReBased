@@ -709,8 +709,10 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             if (!InBackpack(SelId)) { Why = TEXT("the selected weapon is not an unequipped host weapon"); return false; }
             return true;
         });
+    // The transfer's destination moves with Up/Down in the equipped panel; digits switch status-menu tabs
+    // (StatusMenuExGFxMovie.HandleInputKey -> TrySwitchToScreen, read from script, UNVERIFIED in game).
     Add(TEXT("backpack_transfer_changes_destination"), false,
-        [this] { PressKey(TEXT("2")); },
+        [this] { PressKey(TEXT("ArrowDown")); },
         [this, Snapshot](FString& D)
         {
             auto Page = Snapshot(D);
@@ -726,7 +728,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             auto Page = PageOrWhy(Why);
             if (!Page) return false;
             if (PageString(Page, TEXT("transfer")) != SelId || SelId.IsEmpty()) return Needed(Why, TEXT("transfer source"), PageString(Page, TEXT("transfer")), SelId);
-            if (PageNumber(Page, TEXT("target")) == 1) { Why = TEXT("destination is already slot 2, so key 2 would prove nothing"); return false; }
+            if (PageNumber(Page, TEXT("target")) != 0) { Why = TEXT("destination is not slot 1, so Down would not show slot 2 being chosen"); return false; }
             if (HostSlotId(1).IsEmpty()) { Why = TEXT("host weapon slot 2 is empty, so there is no destination weapon to compare"); return false; }
             return true;
         });
@@ -749,7 +751,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             return true;
         });
     Add(TEXT("equip_weapon_slot2"), true,
-        [this] { DisplacedId = HostSlotId(1); PressKey(TEXT("2")); PressKey(TEXT("Enter")); PressKey(TEXT("Enter")); },
+        [this] { DisplacedId = HostSlotId(1); PressKey(TEXT("Enter")); PressKey(TEXT("ArrowDown")); PressKey(TEXT("Enter")); },
         [this, CheckAction, Snapshot](FString& D)
         {
             if (!CheckAction(TEXT("equip"), true, SelId, D)) return false;
@@ -799,8 +801,9 @@ void UOpenWillowInventoryActionTest::BuildSteps()
 
     Add(TEXT("backpack_transfer_empty_destination"), false,
         // After the unequip the page keeps the now-empty equipment cell selected (as the
-        // original does for an empty cell), so Right re-enters Backpack on its remembered row.
-        [this] { PressKey(TEXT("ArrowRight")); PressKey(TEXT("e")); },
+        // original does for an empty cell), so Right re-enters Backpack on its remembered row. The transfer
+        // starts on the equipped analogue (slot 1); Down moves it to the empty slot 2.
+        [this] { PressKey(TEXT("ArrowRight")); PressKey(TEXT("e")); PressKey(TEXT("ArrowDown")); },
         [this, Snapshot](FString& D)
         {
             auto Page = Snapshot(D);
@@ -839,7 +842,7 @@ void UOpenWillowInventoryActionTest::BuildSteps()
             return true;
         });
     Add(TEXT("equip_weapon_slot1_active"), true,
-        [this] { DisplacedId = HostSlotId(0); PressKey(TEXT("1")); PressKey(TEXT("Enter")); PressKey(TEXT("Enter")); },
+        [this] { DisplacedId = HostSlotId(0); PressKey(TEXT("Enter")); PressKey(TEXT("ArrowUp")); PressKey(TEXT("Enter")); },
         [this, CheckAction, Snapshot](FString& D)
         {
             if (!CheckAction(TEXT("equip"), true, SelId, D)) return false;
@@ -1132,23 +1135,42 @@ void UOpenWillowInventoryActionTest::BuildSteps()
 
     // slots=2 (-owslots=2): slots 3 and 4 are locked.
     Add(TEXT("locked_slot_ignored_by_page"), false,
-        [this] { PressKey(TEXT("2")); PressKey(TEXT("4")); },
+        [this] { PressKey(TEXT("ArrowRight")); PressKey(TEXT("Enter")); PressKey(TEXT("ArrowDown")); PressKey(TEXT("ArrowDown")); PressKey(TEXT("ArrowDown")); },
         [this, Snapshot](FString& D)
         {
             TSharedPtr<FJsonObject> Page = Snapshot(D);
             if (!Page) return false;
+            bool FromEquipped = true;
+            if (!PageHasString(Page, TEXT("transfer")) || !Page->TryGetBoolField(TEXT("transferFromEquipped"), FromEquipped) || FromEquipped)
+            { D = FString::Printf(TEXT("no backpack transfer started (selection '%s')"), *PageString(Page, TEXT("sel"))); return false; }
             const double Target = PageNumber(Page, TEXT("target"));
-            if (int32(Target) == 3) { D = TEXT("page targeted locked slot 4"); return false; }
+            if (int32(Target) >= 2) { D = FString::Printf(TEXT("page targeted locked slot %d"), int32(Target) + 1); return false; }
             if (int32(Target) != 1) { D = FString::Printf(TEXT("target slot %d, wanted 2 as the key-delivery control"), int32(Target) + 1); return false; }
-            D = TEXT("key 2 moved the target to slot 2 (control), key 4 (locked) was ignored");
+            D = TEXT("Down moved the transfer target to slot 2 (control) and stopped there; locked slots 3-4 skipped");
             return true;
         });
     Pre([this, PageOrWhy](FString& Why)
         {
             auto Page = PageOrWhy(Why);
             if (!Page) return false;
-            if (PageNumber(Page, TEXT("target")) == 1) { Why = TEXT("target is already slot 2, so key 2 would not show the keys arrive"); return false; }
+            if (PageHasString(Page, TEXT("transfer"))) { Why = TEXT("a transfer is active"); return false; }
             if (Walker->GetInventory()->GetWeaponSlotsUnlocked() != 2) { Why = TEXT("the run does not have exactly two unlocked slots"); return false; }
+            return true;
+        });
+    Add(TEXT("locked_slot_transfer_cancel"), false,
+        [this] { PressKey(TEXT("Escape")); },
+        [this, Snapshot](FString& D)
+        {
+            auto Page = Snapshot(D);
+            if (!Page || PageHasString(Page, TEXT("transfer")) || !Hud->IsInventoryOpen())
+            { D = TEXT("Escape did not cancel the transfer, or closed the inventory"); return false; }
+            D = TEXT("transfer cancelled; inventory still open"); return true;
+        });
+    Pre([this, PageOrWhy](FString& Why)
+        {
+            auto Page = PageOrWhy(Why);
+            if (!Page) return false;
+            if (!PageHasString(Page, TEXT("transfer"))) { Why = TEXT("no transfer to cancel"); return false; }
             return true;
         });
 

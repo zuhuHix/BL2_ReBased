@@ -43,6 +43,8 @@ after the 20 s bleed-out pass. `run_hud_shots.ps1 -Down` 10/10, `-Tracker` 4/4, 
   `tools/hud_overlay/inventory.js` or the HUD page report. Report pass and fail counts honestly, including steps that fail only
   because local data is missing. Run the inventory suite with `-Items local/inventory-actions/bounded-recipes` (the six-weapon set the
   baseline uses): a larger local set can fill the backpack, and the suite then refuses to start (fewer than 2 free rows after its fixture).
+  Since 2026-11-04 (inventory round 24) the suite has 50 steps (number keys no longer pick a transfer slot; `locked_slot_transfer_cancel`
+  added); baseline 50 pass / 0 fail.
 
 ## Records
 - `python tools/decisions_index.py --check` after moving decisions between files.

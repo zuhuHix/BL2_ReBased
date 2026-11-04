@@ -146,7 +146,6 @@ const HEADER_SHRINK = 0.93, HEADER_SHIFT_X = 15, HINT_LIFT = 2, HINT_SHIFT_X = -
 const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
 const READY_SETTLE_MS = 300, LAYOUT_SETTLE_MS = 250, LAYOUT_POLL_MS = 100;
 let ready = false, state = null, selectedId = null, targetSlot = 0, targetGearSlot = null, firstRow = 0;
-let slotKeyChoiceFor = null; // the backpack item a number key last chose a weapon slot for
 let renderedLayout = '', pendingLayout = '', pendingSince = 0, renderedCard = '';
 let sortIndex = 0, compareId = null, compareLayoutActive = false, lastState = '';
 let transferSourceId = null;
@@ -614,10 +613,8 @@ function beginBackpackTransfer() {
   targetGearSlot = gearSlotForItem(source);
   compareId = equippedIdFor(source);
   const compareWeaponSlot = state.slots.indexOf(compareId);
-  // The transfer starts on the equipped analogue (the compare partner) unless a number key already chose a slot for
-  // this item (a host control; the original's number-key behaviour here is not observed).
-  if (!targetGearSlot && compareWeaponSlot >= 0 && slotKeyChoiceFor !== source.id) targetSlot = compareWeaponSlot;
-  else if (!targetGearSlot && slotKeyChoiceFor === source.id) compareId = state.slots[targetSlot] || null;
+  // The transfer starts on the equipped analogue (the compare partner).
+  if (!targetGearSlot && compareWeaponSlot >= 0) targetSlot = compareWeaponSlot;
   firstRow = scrollForSelected(backpackEntries());
   render();
 }
@@ -2177,7 +2174,10 @@ function handleKey(event) {
   else if (key === 'escape' && transferSourceId) { event.preventDefault(); finishTransfer(true); syncSelection(); }
   else if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
-  else if (/^[1-4]$/.test(event.key)) { event.preventDefault(); if (setTargetSlot(Number(event.key)-1)) slotKeyChoiceFor = selectedId; }
+  // StatusMenuExGFxMovie.HandleInputKey sends One..Five (on press, when no panel used the key) to
+  // TrySwitchToScreen 1..5: Missions, Map, Inventory, Skills, Challenges. No inventory panel handles digits,
+  // also not during a transfer. Read from the script; not yet seen in the running game (UNVERIFIED).
+  else if (/^[1-5]$/.test(event.key)) { event.preventDefault(); switchTab(headerTabs[Number(event.key)-1]); }
   else if (key === 'enter') { event.preventDefault(); equip(); }
   else if (key === 'e') { event.preventDefault(); equip(); }
   else if (key === 'c') { event.preventDefault(); toggleCompare(); }
