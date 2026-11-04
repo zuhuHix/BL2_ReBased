@@ -3479,3 +3479,6 @@ tool; one real-game session (hub heavy slot, saves restored and hash-identical).
 - **Not settled:** the zoomed yaw offsets (view wander, suspected), the kick's horizontal sign, the Hyperion alternative kick,
   per-gun pool values. The equal-level status chance came out about x1.8 of the card chance with skills on (section 10), so the
   level-scale reading of the older x2 is now in doubt; a skills-off rerun is queued.
+- **PR #84 review 1 (same day):** the kick chase keeps the live per-frame linear step for parity (the exponential form does
+  not fit the 8.00 measurement) and substeps frames over 1/30 s; signed kicks; non-finite and inverted inputs are guarded; pool and
+  kick are gated separately; the aim model is off in every scripted shot or test mode unless `-owaimmodel`.

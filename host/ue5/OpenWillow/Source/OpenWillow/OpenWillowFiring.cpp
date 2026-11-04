@@ -1,6 +1,8 @@
 #include "OpenWillowFiring.h"
 
 #include "Dom/JsonObject.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Engine/World.h"
 
 namespace
@@ -105,6 +107,7 @@ bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, F
     }
     if (const FJsonObject* Recoil = ObjectOrNull(Firing, TEXT("recoil")))
     {
+        Out.bHasKick = true;
         Out.AccuracyImpulse = float(NumberOr(*Recoil, TEXT("per_shot_accuracy_impulse"), 0));
         Out.BurstImpulseScale = float(NumberOr(*Recoil, TEXT("burst_accuracy_impulse_scale"), 1));
         Out.KickData.up = NumberOr(*Recoil, TEXT("kick_up"), Out.KickData.up);
@@ -288,9 +291,30 @@ FRotator OpenWillowFiring::ShotAim(const FOpenWillowAimState& State, const FRota
 void OpenWillowFiring::OnShot(FOpenWillowAimState& State, const FOpenWillowFiringData& Data, float ZoomEffect, float FovRatio,
     bool bBurstShot, FRandomStream& Rng)
 {
-    if (!Data.bHasAccuracyPool) return;
+    // The pool and the kick are gated separately: a recipe can carry the kick fields without a pool block.
     const double Impulse = Data.AccuracyImpulse * (bBurstShot ? Data.BurstImpulseScale : 1.f);
-    State.Pool.impulse(Impulse);
+    if (Data.bHasAccuracyPool) State.Pool.impulse(Impulse);
+    if (!Data.bHasKick) return;
     const double Amount = weapon_firing::Kick::amount(Impulse, ZoomEffect, Data.KickData.zoomMultiplier);
     State.Kick.add(Amount, Data.KickData, FovRatio, Rng.FRand(), Rng.FRand());
+}
+
+bool OpenWillowFiring::AimModelEnabled()
+{
+    static const bool bEnabled = []()
+    {
+        const TCHAR* Line = FCommandLine::Get();
+        if (FParse::Param(Line, TEXT("owaimmodel"))) return true;
+        FString Token;
+        while (FParse::Token(Line, Token, false))
+        {
+            if (!Token.StartsWith(TEXT("-ow"))) continue;
+            const FString Name = Token.Mid(1).ToLower();
+            const int32 Eq = Name.Find(TEXT("="));
+            const FString Switch = Eq == INDEX_NONE ? Name : Name.Left(Eq);
+            if (Switch.EndsWith(TEXT("shots")) || Switch.EndsWith(TEXT("test")) || Switch == TEXT("owautowalk")) return false;
+        }
+        return true;
+    }();
+    return bEnabled;
 }

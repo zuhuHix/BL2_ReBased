@@ -439,8 +439,8 @@ private:
     FVector ShotMomentumInFlight = FVector::ZeroVector;
     // Pattern index, barrel spin and the host random stream between shots, per weapon (OpenWillowFiring).
     TMap<FString, FOpenWillowFiringState> FiringStates;
-    // The accuracy pool and the view kick (OpenWillowFiring::TickAim / ShotAim / OnShot). Off under -owfiringtest unless
-    // -owaimmodel is given, so the suite's dummy pulls keep their aim.
+    // The accuracy pool and the view kick (OpenWillowFiring::TickAim / ShotAim / OnShot). Off in every scripted test or
+    // capture mode (OpenWillowFiring::AimModelEnabled) unless -owaimmodel is given, so scripted shots keep their aim.
     FOpenWillowAimState AimState;
     FRandomStream AimRng{0x41AC};
     bool bAimModel = true;

@@ -706,9 +706,7 @@ void AOpenWillowWalker::BeginPlay()
 void AOpenWillowWalker::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    static const bool bAimModelOff = FParse::Param(FCommandLine::Get(), TEXT("owfiringtest"))
-        && !FParse::Param(FCommandLine::Get(), TEXT("owaimmodel"));
-    bAimModel = !bAimModelOff;
+    bAimModel = OpenWillowFiring::AimModelEnabled();   // off in scripted test and capture modes unless -owaimmodel
     if (bAimModel)
     {
         // Accuracy pool fall and view kick (live 2026-11-03): the kick is a view offset, added here as this frame's change.
@@ -1585,7 +1583,7 @@ void AOpenWillowWalker::FireWeapon()
                                         : Camera->GetComponentRotation();
     OpenWillowFiring::PelletDirections(Firing, FiredItem ? FiredItem->Spread : 0.f, FiredItem ? FiredItem->Projectiles : 1,
         ShotView, FiredItem ? FiringStateFor(*FiredItem) : FiringStates.FindOrAdd(FString()), Directions);
-    if (bAimModel && Firing.bLoaded)
+    if (bAimModel && Firing.bLoaded && (Firing.bHasAccuracyPool || Firing.bHasKick))
     {
         // The pool impulse and the kick after the shot; inside an automatic burst (not its last shot) the impulse is scaled.
         const int32 Count = Firing.BurstCount;
