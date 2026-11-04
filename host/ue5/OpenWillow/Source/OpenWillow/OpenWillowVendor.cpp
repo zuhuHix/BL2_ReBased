@@ -92,10 +92,12 @@ bool ReadVector(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, FVector& O
     return true;
 }
 
+// One line of JSON: TJsonWriter<> defaults to the pretty policy, which splits a report over hundreds of log lines.
 FString Compact(const TSharedRef<FJsonObject>& Object)
 {
     FString Out;
-    const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
+    const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+        TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Out);
     FJsonSerializer::Serialize(Object, Writer);
     return Out;
 }
@@ -149,6 +151,7 @@ TSharedRef<FJsonObject> BackpackJson(const FOpenWillowWeaponItem& Gun, bool bEqu
 {
     TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
     Json->SetStringField(TEXT("id"), UOpenWillowInventory::StableId(Gun));
+    Json->SetStringField(TEXT("kind"), TEXT("weapon")); // the page validates every row's kind (vending_model.js ITEM_KINDS)
     Json->SetStringField(TEXT("name"), Gun.Name);
     Json->SetNumberField(TEXT("rarity"), Gun.Rarity);
     Json->SetNumberField(TEXT("level"), Gun.Level);

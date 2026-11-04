@@ -33,6 +33,7 @@ ACTION = re.compile(r'OWVENDOR (buy|sell|buyback) id=(\S*) ok=(\d) money=(-?\d+)
 RESTOCK = re.compile(r'OWVENDOR restock id=(\S*) ok=(\d)')
 REFUSED = re.compile(r'ow\.Vendor\.(\w+) refused: (.*)$', re.M)
 STATE = re.compile(r'OWVENDSTATE (\{.*)$', re.M)   # the whole rest of the line: a broken JSON is reported, not skipped
+PAGE_ERROR = re.compile(r'OWVENDERR (.*)$', re.M)   # the page refused a host state
 AUTOMATION = re.compile(r'Result=\{(\w+)\}[^\n]*Vendor\.Stock|Vendor\.Stock[^\n]*Result=\{(\w+)\}')
 
 
@@ -109,6 +110,13 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
         out.add('state_json', 'FAIL', 'no OWVENDSTATE line (ow.Vendor.Report never ran, or no shop was open)')
     else:
         out.add('state_json', 'PASS', f'{len(states)} state report(s) parsed')
+    # The page refuses a host state it cannot validate and logs why (vending.js); one such line means the page and host
+    # disagree on the state's shape, even when the host's own report parses.
+    page_errors = PAGE_ERROR.findall(log_text)
+    if page_errors:
+        out.add('page_state', 'FAIL', f'{len(page_errors)} OWVENDERR line(s), first: {page_errors[0].strip()[:160]}')
+    else:
+        out.add('page_state', 'PASS', 'the page accepted every state (no OWVENDERR)')
     first = states[0] if states else None
 
     if first is None:
@@ -212,7 +220,8 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
             out.add('automation', 'FAIL', 'no result line for OpenWillow.Vendor.Stock (the test did not run)')
         else:
             status = found.group(1) or found.group(2)
-            out.add('automation', 'PASS' if status == 'Passed' else 'FAIL',
+            # UE 5.8 prints Result={Success}; older builds printed Passed.
+            out.add('automation', 'PASS' if status in ('Success', 'Passed') else 'FAIL',
                     f'OpenWillow.Vendor.Stock Result={status}')
     return out
 

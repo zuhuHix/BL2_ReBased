@@ -182,6 +182,21 @@ class GradeTest(unittest.TestCase):
         checks = by_name(run(good_log(restock=False)))
         self.assertEqual(checks['restock'][0], 'FAIL')
 
+    def test_page_error_line_fails(self):
+        log = good_log() + '\nLogTemp: Display: OpenWillow vending console: OWVENDERR {"error":"backpack[0].kind must be one of weapon"} (x:1)\n'
+        checks = by_name(run(log))
+        self.assertEqual(checks['page_state'][0], 'FAIL')
+        self.assertIn('backpack[0].kind', checks['page_state'][1])
+
+    def test_no_page_error_passes(self):
+        self.assertEqual(by_name(run(good_log()))['page_state'][0], 'PASS')
+
+    def test_ue58_success_result_passes(self):
+        # UE 5.8 prints Result={Success} (seen in the batch-2 integration run).
+        success = GOOD_AUTOMATION.replace('Result={Passed}', 'Result={Success}')
+        checks = by_name(run(good_log(), automation=success))
+        self.assertEqual(checks['automation'][0], 'PASS')
+
     def test_failed_automation_fails(self):
         failed = GOOD_AUTOMATION.replace('Result={Passed}', 'Result={Failed}')
         checks = by_name(run(good_log(), automation=failed))
@@ -248,7 +263,7 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=9 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=10 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
 
     def test_exit_one_on_any_fail(self):
