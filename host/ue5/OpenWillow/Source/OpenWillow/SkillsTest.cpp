@@ -205,6 +205,9 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
         TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":1,\"effects\":[7]}]}"),
         TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":1,\"effects\":[],\"conditions\":[null]}]}"),
         TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":{\"id\":\"T.X\"}}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":\"5\",\"effects\":[]}]}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":1,\"effects\":[{\"modifierType\":\"Scale\",\"target\":\"Self\",\"startGrade\":\"1\"}]}]}"),
+        TEXT("{\"format\":\"openwillow.skill_effects/1\",\"skills\":[{\"id\":\"T.X\",\"type\":\"Passive\",\"maxGrade\":1,\"effects\":[{\"modifierType\":\"Scale\",\"target\":\"Self\",\"bonus\":[{\"grade\":\"2\",\"value\":1}]}]}]}"),
         TEXT("{\"format\":2,\"skills\":[]}")};
     for (const TCHAR* Bad : BadManifests)
     {
