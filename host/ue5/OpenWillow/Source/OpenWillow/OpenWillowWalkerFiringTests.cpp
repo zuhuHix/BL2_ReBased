@@ -613,10 +613,10 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             TickWeapons += FString::Printf(TEXT("%s%s:%d"), TickWeapons.IsEmpty() ? TEXT("") : TEXT(","),
                 Pair.Key.IsEmpty() ? TEXT("-") : *Pair.Key, Pair.Value);
         UE_LOG(LogTemp, Display, TEXT("OWFIRING dummy id=%s health=%.3f"), *Id, CombatTarget->HealthFraction());
-        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d hit_events=%d hit_direct=%d hit_splash=%d hit_tick=%d hit_throw=%d tick_weapons=%s"),
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING result id=%s kind=%s pellets=%d shots=%d launches=%d impacts=%d target_hits=%d damage=%.2f direct=%.2f splash=%.2f splash_hits=%d status_rolls=%d procs=%d ticks=%d timed=%d on_time=%d hit_events=%d hit_direct=%d hit_splash=%d hit_tick=%d hit_throw=%d tick_weapons=%s unknown_sources=%d"),
             *Id, *Kind, C.Pellets, C.Shots, C.Launches, C.Impacts, C.TargetHits, C.Damage, C.Direct, C.Splash, C.SplashHits,
             C.StatusRolls, C.Procs, C.Ticks, C.TimedImpacts, C.OnTimeImpacts, C.HitEvents, C.HitKinds[0], C.HitKinds[1],
-            C.HitKinds[2], C.HitKinds[3], TickWeapons.IsEmpty() ? TEXT("-") : *TickWeapons);
+            C.HitKinds[2], C.HitKinds[3], TickWeapons.IsEmpty() ? TEXT("-") : *TickWeapons, C.UnknownSources);
         if ((!Item || Item->Id != Id) && SwappedGun != Gun)
             UE_LOG(LogTemp, Warning, TEXT("OWFIRING id=%s reported after the weapon changed"), *Id);
         ++Gun;

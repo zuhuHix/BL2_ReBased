@@ -310,6 +310,13 @@ numbers, AI reactions) read the same data the host dummy does. Host code only; n
   given one. `tools/test_weapon_firing.ps1` now runs `tools/weapon_firing_coverage.py --only-firing` when a listed recipe
   has no firing block, and stops if one is still missing. The checker's momentum failure names that cause. `-Extra`
   passes extra game arguments (for example `-Extra '-owaimmodel'`).
+- **Damage source (skills lane request).** `FOpenWillowHitEvent::Source` (`EOpenWillowHitSource`: `Unknown` default,
+  `Bullet`, `Rocket`, `Explosion`, `Throw`, `Status`, `Skill`) says what dealt the damage, separately from `Kind`. A
+  rocket's explosion is `Source` Rocket with `Kind` Splash; a bullet's impact explosion (Maliwan, Torgue gyrojet) is
+  `Explosion`, as the running game sends those hits as `WillowDmgSource_Grenade` (R6 and section 10), not as the gun's
+  bullet source; a Tediore throw's strike and explosion are `Throw`; status ticks are `Status`. Skills set `Skill`
+  themselves. Every firing path sets it: the firing test counts events left `Unknown` (`unknown_sources`) and the checker
+  requires 0. Which skills react to which source (Cloud Kill, Immolate) is the skills lane's reading, not checked here.
 
 ## 10. Accuracy pool, view kick and the spread draw, live (2026-11-03, slice projectiles lane)
 
@@ -376,3 +383,32 @@ modifier of that size, the equal-level x1 level scale would fit. The same profil
 (Maya 54 against level 7), so the "x2 = level scale" reading of section 3 is suspect too. The rerun, with skills and Badass
 Rank zeroed in memory, should also read the controller's `InstigatedStatusEffectStatusChanceModifier` and
 `InstigatedIncendiaryStatusChanceModifier` before firing.
+
+## 11. Shot visuals from the cooked particle systems (2026-11-04, slice projectiles lane)
+
+AI-assisted (Claude). The section 6 critic stalled at 4.2 / 10 because the host's explosions and trails were hand-made shapes;
+the note there said the next step was to read BL2's own particle systems. This section is that first step, for explosions and
+rocket trails. It is data and host code; no live session was used, and the look is still a stand-in (UNVERIFIED).
+
+- **Data (cooked Startup.upk).** A firing mode names its tracer (`FiringModeDefinition.PartSysTemplate`), a projectile its
+  in-flight effect (`ProjectileDefinition.InFlightEffects`, scaled by `InFlightEffectsScale`), and an explosion definition its
+  look in `ExplosionScale`. That field decodes with the array schema line `ExplosionScale=StructProperty:ExplosionScaleData`
+  into bands, each with `MinRadius` / `MaxRadius`, `MinParticleScale` / `MaxParticleScale`, `ExplosionPSTemplate`, a sound,
+  a camera shake and an `ImpactEffect`. The default explosive, shock, corrosive, slag and incendiary explosions have three
+  bands each (0-192, 193-384 and above).
+- **Tool.** `tools/weapon_projectile_fx.py` adds an `fx` block to each recipe's firing block, and one to its Tediore reload
+  throw. The block holds the tracer, the trail and the explosion bands, each with its particle layers read by
+  `tools/weapon_muzzle_fx.py` (the same fitted lookup-table reading, UNVERIFIED against the engine). A splash that names no
+  explosion takes the projectile definition's `DefaultExplosionDefinition`; this is how the Tediore throw gets its explosion.
+  On the 21 local recipes: a tracer on every bullet gun, a trail on the three launchers, three explosion bands on the
+  launchers, the Maliwan guns, the fire mission pistol, both Torgue guns and the Tediore throw. Synthetic tests in
+  `tests/weapon_projectile_fx_test.py` (CTest `weapon-projectile-fx-synthetic`).
+- **Host.** An explosion plays the band whose radius range holds its radius (else the nearest), at a particle scale lerped
+  across the band. The band choice by radius is read from the field names, not from the native: UNVERIFIED. The band's layers
+  are drawn by `AOpenWillowShotFx::WorldLayers`: camera-facing soft quads with the cooked size x scale, life, colour and alpha,
+  one quad per layer. Burst counts, velocities, size-over-life and textures are not modelled. Recipes without the block keep the
+  older look. Rockets leave their trail's layers behind every 0.05 s (host rate, since the emitter spawn rate is not read). All of
+  it goes through the shot effects' per-frame budget (96).
+- **Not done here.** The tracer's look: the cooked tracer colour is multiplied by a texture the host does not have, so lane E's
+  tracer look and gate stay. Per-surface impact effects (`WeaponImpact`, `ImpactEffect`); the element tracer collections
+  (`ConditionalPartSysTemplate`); grenades. The matched-frame critic round for this look is pending the hub's frame capture.

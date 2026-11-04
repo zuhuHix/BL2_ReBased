@@ -3482,3 +3482,17 @@ tool; one real-game session (hub heavy slot, saves restored and hash-identical).
 - **PR #84 review 1 (same day):** the kick chase keeps the live per-frame linear step for parity (the exponential form does
   not fit the 8.00 measurement) and substeps frames over 1/30 s; signed kicks; non-finite and inverted inputs are guarded; pool and
   kick are gated separately; the aim model is off in every scripted shot or test mode unless `-owaimmodel`.
+
+## 2026-11-04: hit damage source, and explosions and rocket trails from the cooked particle systems (slice projectiles lane)
+
+AI-assisted (Claude). Records: `docs/verification/WEAPON_PROJECTILES.md` sections 9 and 11. Host behaviour change and a new
+data tool; no live session.
+
+- **Hit source (skills lane request).** `FOpenWillowHitEvent::Source` (`EOpenWillowHitSource`) says what dealt the damage,
+  separately from `Kind`. A rocket's explosion is Rocket with Kind Splash; a bullet's impact explosion is Explosion (the game
+  sends it as a grenade source); the default is Unknown. The firing checker requires every firing path to set one.
+- **Particle data.** `ExplosionDefinition.ExplosionScale` decodes as `ExplosionScaleData` radius bands, each naming its
+  particle system and scale. `tools/weapon_projectile_fx.py` writes the tracer, trail and explosion layers into the recipes.
+  The host draws the band for the explosion's radius, and the rocket trail, as camera-facing quads with the cooked values.
+  The band choice and the drawing are UNVERIFIED; the critic round is pending.
+

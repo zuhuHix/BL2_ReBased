@@ -37,7 +37,8 @@ public:
 
     // Splash from an explosion at Origin (also used by trace shots of guns whose firing mode explodes on impact).
     static void Explode(UWorld* World, class AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data,
-        const FVector& Origin, const FVector& Normal, float SplashDamage, const FString& WeaponId = FString());
+        const FVector& Origin, const FVector& Normal, float SplashDamage, const FString& WeaponId = FString(),
+        EOpenWillowHitSource Source = EOpenWillowHitSource::Explosion);
     // Host impact and explosion looks (stand-ins for the particle systems).
     static void ImpactFx(UWorld* World, const FVector& Point, const FVector& Normal, const FString& Element);
     static void ExplosionFx(UWorld* World, const FVector& Origin, const FVector& Normal, float Radius,
@@ -71,4 +72,5 @@ private:
     FVector StartPoint = FVector::ZeroVector;
     float LastDelta = 0;                        // the last tick's seconds (the arrival check allows one frame)
     float Travelled = 0;
+    float TrailClock = 0;                       // s since the last trail puff
 };
