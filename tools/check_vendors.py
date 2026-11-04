@@ -15,7 +15,13 @@ Expected values:
 - machines spawned = the supported machines in the vendors.json file (the host skips "supported": false ones);
 - the shop price of an item = floor(value * (level * 0.14 + 4.1)), each step rounded to float32 as the host does
   (FOpenWillowVendorStock::BuyPrice). A machine's fixed_item_cost / fixed_featured_cost, when above 0, replaces the formula.
+  The state's machine id names which machine's fixed costs apply.
+- a non-gun row's value = trunc(part_total * scaler^level * base_cost) in float32 steps (FOpenWillowVendorStock::ItemValue),
+  recomputed from the row's "valueTerms" (PR 2b; docs/verification/VENDORS.md section 6).
 - buy: money after = money before - the first shelf price; sell: money after = money before + the sold item's value.
+- ammo_buy: the first buy from the Ammo Dump's shelf (row 0, an ammo row) raises its pool by min(max, before + amount) and
+  charges its price. heal_buy: the first buy from the Dr. Zed health shelf heals the row's healFraction of max
+  health; "Health full" or "Ammo full" is a valid refusal and reports MISSING with that reason.
 Rules are the host's (UNVERIFIED in game beyond what its own comments say); this script only compares the logged numbers.
 """
 import argparse
@@ -37,7 +43,9 @@ RESTOCK = re.compile(r'OWVENDOR restock id=(\S*) ok=(\d)')
 REFUSED = re.compile(r'ow\.Vendor\.(\w+) refused: (.*)$', re.M)
 STATE = re.compile(r'OWVENDSTATE (\{.*)$', re.M)   # the whole rest of the line: a broken JSON is reported, not skipped
 PAGE_ERROR = re.compile(r'OWVENDERR (.*)$', re.M)   # the page refused a host state
-AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist')
+AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist', 'OpenWillow.Vendor.Items')
+AMMO_LINE = re.compile(r'OWVENDAMMO type=(\w+) before=(-?\d+) after=(-?\d+) max=(-?\d+)')
+HEAL_LINE = re.compile(r'OWVENDHEAL before=(-?[\d.]+) after=(-?[\d.]+) max=(-?[\d.]+)')
 CURRENCY_LOAD = re.compile(r'OWCURRENCY load money=(-?\d+) eridium=(-?\d+) machines=(\d+)')
 # The second run starts its clock from the saved seconds; a few seconds of world time pass before its first report.
 RESET_TOLERANCE_SECONDS = 120
@@ -52,6 +60,15 @@ def buy_price(value, level):
     """The host's BuyPrice in single precision: floor(value * (level * 0.14 + 4.1))."""
     markup = f32(f32(float(level) * f32(SELL_EXPONENTIALIZER)) + f32(BASE_MARKUP_INCREASE))
     return math.floor(f32(float(value) * markup))
+
+
+def item_value(terms, level):
+    """The host's ItemValue for a non-gun row: trunc(part_total * scaler^level * base_cost), each step in float32.
+
+    The scaler to the level is taken in double and then rounded, as the host does; the terms are the row's valueTerms."""
+    scaler_to_level = f32(float(terms['scaler']) ** int(level))
+    partial = f32(float(terms['part_total']) * scaler_to_level)
+    return math.trunc(f32(partial * f32(float(terms['base_cost']))))
 
 
 class Results:
@@ -134,33 +151,38 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
     else:
         out.add('open_shelf', 'PASS', f'{SHOP_ITEM_COUNT} shop items and one featured item')
 
-    # Prices: every shelf and featured row in every report.
+    # Prices: every shelf and featured row in every report. Each report's own machine gives its fixed costs.
+    by_id = {m.get('id'): m for m in machines}
     rows = []
     for index, state in enumerate(states):
+        state_machine = by_id.get((state.get('machine') or {}).get('id'), machine)
         for row in state.get('shop') or []:
-            rows.append((index, 'shop', row, int(machine.get('fixed_item_cost') or 0)))
+            rows.append((index, 'shop', row, state_machine))
         if state.get('featured'):
-            rows.append((index, 'featured', state['featured'], int(machine.get('fixed_featured_cost') or 0)))
-    if not rows:
-        out.add('prices', 'MISSING', 'no shelf rows in any state report')
+            rows.append((index, 'featured', state['featured'], state_machine))
+    weapon_rows = [(i, w, r, m) for i, w, r, m in rows if is_gun_row(r)]
+    if not weapon_rows:
+        out.add('prices', 'MISSING', 'no gun rows in any state report')
     else:
         checked, mismatches, unknown = 0, [], 0
-        for index, where, row, fixed in rows:
+        for index, where, row, state_machine in weapon_rows:
             if row.get('price') is None or row.get('value') is None or row.get('level') is None:
                 unknown += 1
                 continue
+            fixed = int((state_machine.get('fixed_featured_cost' if where == 'featured' else 'fixed_item_cost')) or 0)
             expected = fixed if fixed > 0 else buy_price(row['value'], row['level'])
             checked += 1
             if int(row['price']) != expected:
                 mismatches.append(f'report {index} {where} {row.get("id")}: price {row["price"]} != {expected} '
                                   f'(value {row["value"]}, level {row["level"]})')
         if checked == 0:
-            out.add('prices', 'MISSING', f'{unknown} rows without price/value/level')
+            out.add('prices', 'MISSING', f'{unknown} gun rows without price/value/level')
         elif mismatches:
             out.add('prices', 'FAIL', f'{len(mismatches)} of {checked} prices differ; first: {mismatches[0]}')
         else:
-            note = f'; {unknown} rows without value skipped' if unknown else ''
-            out.add('prices', 'PASS', f'{checked} prices equal floor(value x (level x 0.14 + 4.1)){note}')
+            note = f'; {unknown} gun rows without value skipped' if unknown else ''
+            out.add('prices', 'PASS', f'{checked} gun prices equal floor(value x (level x 0.14 + 4.1)){note}')
+    out.rows.extend(grade_item_rows(rows).rows)
 
     buys = [m for m in ACTION.finditer(log_text) if m.group(1) == 'buy']
     buy = buys[0] if buys else None
@@ -198,25 +220,33 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
         else:
             out.add('sell', 'PASS', f'sold {sells[0].group(2)} for {value}; money {before} -> {after}')
 
-    restocks = RESTOCK.findall(log_text)
-    if not restocks:
+    restock = RESTOCK.search(log_text)
+    if restock is None:
         out.add('restock', 'FAIL', 'no "OWVENDOR restock" line')
-    elif restocks[-1][1] != '1':
+    elif restock.group(2) != '1':
         out.add('restock', 'FAIL', 'restock ok=0')
-    elif len(states) < 2:
-        out.add('restock', 'MISSING', f'{len(states)} state reports; the restock needs one before and one after it')
     else:
-        # The last report before the restock against the one after it. Shelf ids ("stock_<n>") repeat across restocks, so
-        # compare the rolled guns' own ids ("gun", one per roll) and fall back to the shelf id only when it is absent.
-        key = lambda row: row.get('gun') or row.get('id')
-        before_ids = [key(row) for row in states[-2].get('shop') or []]
-        after_ids = [key(row) for row in states[-1].get('shop') or []]
-        if not after_ids:
-            out.add('restock', 'MISSING', 'no shelf in the report after the restock')
-        elif before_ids == after_ids:
-            out.add('restock', 'FAIL', 'shelf ids unchanged by the restock')
+        # The last weapon report before the restock line against the first one after it. Shelf ids ("stock_<n>") repeat
+        # across restocks, so compare the rolled guns' own ids ("gun", one per roll) and fall back to the shelf id.
+        timed = timed_states(log_text)
+        before = [s for pos, s in timed if pos < restock.start() and is_gun_state(s)]
+        after = [s for pos, s in timed if pos > restock.start() and is_gun_state(s)]
+        if not before or not after:
+            out.add('restock', 'MISSING', f'{len(before)} report(s) before and {len(after)} after the restock; need one each')
         else:
-            out.add('restock', 'PASS', f'shelf ids changed ({len(before_ids)} -> {len(after_ids)} items)')
+            key = lambda row: row.get('gun') or row.get('id')
+            before_ids = [key(row) for row in before[-1].get('shop') or []]
+            after_ids = [key(row) for row in after[0].get('shop') or []]
+            if not after_ids:
+                out.add('restock', 'MISSING', 'no shelf in the report after the restock')
+            elif before_ids == after_ids:
+                out.add('restock', 'FAIL', 'shelf ids unchanged by the restock')
+            else:
+                out.add('restock', 'PASS', f'shelf ids changed ({len(before_ids)} -> {len(after_ids)} items)')
+
+    # The non-gun sections: the Ammo Dump's ammo buy and the health machine's heal (PR 2b).
+    out.rows.extend(grade_ammo_buy(log_text).rows)
+    out.rows.extend(grade_heal_buy(log_text).rows)
 
     if automation_text is None:
         out.add('automation', 'MISSING', 'no automation log given')
@@ -229,6 +259,164 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
             else:
                 # UE 5.8 prints Result={Success}; older builds printed Passed.
                 out.add(row, 'PASS' if status in ('Success', 'Passed') else 'FAIL', f'{name} Result={status}')
+    return out
+
+
+def is_gun_row(row):
+    """A shelf or buy-back row is a gun unless its kind says otherwise (rows from before PR 2b have no kind)."""
+    return row.get('kind') in (None, 'weapon')
+
+
+def is_gun_state(state):
+    """A report of a weapons machine (the reports carry the machine's kind)."""
+    return (state.get('machine') or {}).get('kind') in (None, 'weapons')
+
+
+def timed_states(text):
+    """Every OWVENDSTATE report in text with its position: (position, dict) pairs. A broken report ends the list."""
+    found = []
+    for match in STATE.finditer(text):
+        try:
+            found.append((match.start(), json.loads(match.group(1).strip())))
+        except json.JSONDecodeError:
+            break
+    return found
+
+
+def grade_item_rows(rows):
+    """item_prices: every non-gun row carries its value terms; the value and the price must follow from them."""
+    out = Results()
+    checked, mismatches, skipped = 0, [], 0
+    for index, where, row, state_machine in rows:
+        if is_gun_row(row):
+            continue
+        terms = row.get('valueTerms')
+        if not terms or row.get('value') is None or row.get('level') is None or row.get('price') is None:
+            skipped += 1
+            continue
+        value = item_value(terms, row['level'])
+        fixed = int(state_machine.get('fixed_featured_cost' if where == 'featured' else 'fixed_item_cost') or 0)
+        expected_price = fixed if fixed > 0 else buy_price(value, row['level'])
+        checked += 1
+        if int(row['value']) != value:
+            mismatches.append(f'report {index} {where} {row.get("id")}: value {row["value"]} != {value} (terms {terms})')
+        elif int(row['price']) != expected_price:
+            mismatches.append(f'report {index} {where} {row.get("id")}: price {row["price"]} != {expected_price} '
+                              f'(value {value}, level {row["level"]})')
+    if checked == 0:
+        out.add('item_prices', 'MISSING', f'{skipped} non-gun rows without valueTerms (no items or health section)')
+    elif mismatches:
+        out.add('item_prices', 'FAIL', f'{len(mismatches)} of {checked} non-gun rows differ; first: {mismatches[0]}')
+    else:
+        note = f'; {skipped} rows without terms skipped' if skipped else ''
+        out.add('item_prices', 'PASS', f'{checked} non-gun rows: value and price follow from valueTerms{note}')
+    return out
+
+
+def shop_buy(log_text, kind):
+    """The first buy from a shop of this kind opened in the log: ((buy, report before it, report after it), None), or
+    (None, reason) when there is no such shop or buy."""
+    opened = next((m for m in OPEN.finditer(log_text) if m.group(2) == kind), None)
+    if opened is None:
+        return None, f'no "OWVENDOR open" line for a {kind} machine'
+    buy = next((m for m in ACTION.finditer(log_text, opened.end()) if m.group(1) == 'buy'), None)
+    if buy is None:
+        return None, f'no buy from the {kind} machine'
+    timed = timed_states(log_text)
+    before = [state for pos, state in timed if pos < buy.start()]
+    after = [state for pos, state in timed if pos > buy.start()]
+    if not before:
+        return None, f'no report before the {kind} buy'
+    return (buy, before[-1], after[0] if after else None, opened), None
+
+
+def effect_line(pattern, log_text, opened, buy):
+    """The last line matching pattern between the shop's open line and its buy. The host logs the effect (OWVENDAMMO,
+    OWVENDHEAL) inside the purchase, before the OWVENDOR buy line that reports the action."""
+    found = list(pattern.finditer(log_text, opened.end(), buy.start()))
+    return found[-1] if found else None
+
+
+def grade_ammo_buy(log_text):
+    """ammo_buy: the first buy of the Ammo Dump (shelf row 0, an ammo row) raises its pool by min(max, before + amount)
+    and charges the row's price. A full pool is a valid refusal (MISSING with its reason)."""
+    out = Results()
+    shop, reason = shop_buy(log_text, 'items')
+    if shop is None:
+        out.add('ammo_buy', 'MISSING', reason)
+        return out
+    buy, before, _, opened = shop
+    if buy.group(3) != '1':
+        text = buy.group(5).strip()
+        if text == 'Ammo full':
+            out.add('ammo_buy', 'MISSING', 'Ammo full: the pool was already full (a valid refusal)')
+        else:
+            out.add('ammo_buy', 'FAIL', f'ammo buy ok=0: {text}')
+        return out
+    row = (before.get('shop') or [None])[0]
+    if not row or row.get('kind') != 'ammo' or row.get('ammoType') is None or row.get('amount') is None or row.get('price') is None:
+        out.add('ammo_buy', 'FAIL', 'shelf row 0 of the items machine is not an ammo row with a type, amount and price')
+        return out
+    if buy.group(2) != row.get('id'):
+        out.add('ammo_buy', 'FAIL', f'bought {buy.group(2)}, the first shelf row was {row.get("id")}')
+        return out
+    found = effect_line(AMMO_LINE, log_text, opened, buy)
+    if not found:
+        out.add('ammo_buy', 'FAIL', 'no "OWVENDAMMO" line between the shop open and the buy')
+        return out
+    ammo_type, pool_before, pool_after, pool_max = found.group(1), int(found.group(2)), int(found.group(3)), int(found.group(4))
+    expected = min(pool_max, pool_before + int(row['amount']))
+    pool_report = (before.get('ammo') or {}).get(ammo_type)
+    price, money_before, money_after = int(row['price']), int(before['money']), int(buy.group(4))
+    if ammo_type != row['ammoType']:
+        out.add('ammo_buy', 'FAIL', f'pool {ammo_type}, the row sells {row["ammoType"]}')
+    elif pool_report is not None and int(pool_report['current']) != pool_before:
+        out.add('ammo_buy', 'FAIL', f'pool was {pool_before} before the buy, the report said {pool_report["current"]}')
+    elif pool_after != expected:
+        out.add('ammo_buy', 'FAIL', f'pool {pool_before} + {row["amount"]} -> {pool_after}, expected {expected} (max {pool_max})')
+    elif money_before - money_after != price:
+        out.add('ammo_buy', 'FAIL', f'money {money_before} -> {money_after} (drop {money_before - money_after}), price {price}')
+    else:
+        out.add('ammo_buy', 'PASS', f'{ammo_type} pool {pool_before} -> {pool_after} (max {pool_max}); bought {row["id"]} for {price}')
+    return out
+
+
+def grade_heal_buy(log_text):
+    """heal_buy: the first buy of the health machine (shelf row 0) heals healFraction of max health, up to the max, and
+    charges the price. "Health full" is a valid refusal (MISSING with its reason)."""
+    out = Results()
+    shop, reason = shop_buy(log_text, 'health')
+    if shop is None:
+        out.add('heal_buy', 'MISSING', reason)
+        return out
+    buy, before, _, opened = shop
+    if buy.group(3) != '1':
+        text = buy.group(5).strip()
+        if text == 'Health full':
+            out.add('heal_buy', 'MISSING', 'Health full: the walker was at full health (a valid refusal)')
+        else:
+            out.add('heal_buy', 'FAIL', f'heal buy ok=0: {text}')
+        return out
+    row = (before.get('shop') or [None])[0]
+    if not row or row.get('kind') != 'health' or row.get('healFraction') is None or row.get('price') is None:
+        out.add('heal_buy', 'FAIL', 'shelf row 0 of the health machine is not a health row with a fraction and a price')
+        return out
+    if buy.group(2) != row.get('id'):
+        out.add('heal_buy', 'FAIL', f'bought {buy.group(2)}, the first shelf row was {row.get("id")}')
+        return out
+    found = effect_line(HEAL_LINE, log_text, opened, buy)
+    if not found:
+        out.add('heal_buy', 'FAIL', 'no "OWVENDHEAL" line between the shop open and the buy')
+        return out
+    health_before, health_after, health_max = (float(found.group(i)) for i in (1, 2, 3))
+    expected = min(health_max, health_before + float(row['healFraction']) * health_max)
+    price, money_before, money_after = int(row['price']), int(before['money']), int(buy.group(4))
+    if abs(health_after - expected) > 0.01:
+        out.add('heal_buy', 'FAIL', f'health {health_before:.2f} -> {health_after:.2f}, expected {expected:.2f} (max {health_max:.2f})')
+    elif money_before - money_after != price:
+        out.add('heal_buy', 'FAIL', f'money {money_before} -> {money_after} (drop {money_before - money_after}), price {price}')
+    else:
+        out.add('heal_buy', 'PASS', f'health {health_before:.1f} -> {health_after:.1f} of {health_max:.1f}; bought {row["id"]} for {price}')
     return out
 
 
@@ -264,7 +452,10 @@ def grade_persist(first_text, second_text):
         out.add('persist_state', 'FAIL', 'the two launches need a readable OWVENDSTATE report each'
                 + (f' (broken JSON: {first_error or second_error})' if first_error or second_error else ''))
         return out
+    # Money and eridium: the last report of the first launch (any machine; the run ends on the health machine). The shelf,
+    # featured item and clock: its last weapons report (the second launch opens the weapons machine first).
     before, after = first[-1], second[0]
+    gun_before = next((state for state in reversed(first) if is_gun_state(state)), before)
 
     load = CURRENCY_LOAD.search(second_text)
     if not load:
@@ -292,7 +483,7 @@ def grade_persist(first_text, second_text):
         out.add('persist_eridium', 'PASS', f'eridium {after["eridium"]} carried over')
 
     key = lambda row: row.get('gun') or row.get('id')
-    before_shelf = [key(row) for row in before.get('shop') or []]
+    before_shelf = [key(row) for row in gun_before.get('shop') or []]
     after_shelf = [key(row) for row in after.get('shop') or []]
     if not before_shelf:
         out.add('persist_shelf', 'MISSING', 'no shelf in the last report of the first launch')
@@ -301,21 +492,21 @@ def grade_persist(first_text, second_text):
     else:
         out.add('persist_shelf', 'FAIL', f'shelf {before_shelf} became {after_shelf}')
 
-    featured_before = key(before['featured']) if before.get('featured') else None
+    featured_before = key(gun_before['featured']) if gun_before.get('featured') else None
     featured_after = key(after['featured']) if after.get('featured') else None
     if featured_before is None or featured_before != featured_after:
         out.add('persist_featured', 'FAIL', f'featured {featured_before} became {featured_after}')
     else:
         out.add('persist_featured', 'PASS', f'featured {featured_after} carried over')
 
-    if before.get('resetSeconds') is None or after.get('resetSeconds') is None:
+    if gun_before.get('resetSeconds') is None or after.get('resetSeconds') is None:
         out.add('persist_clock', 'MISSING', 'no resetSeconds in a state report')
     else:
-        gap = int(before['resetSeconds']) - int(after['resetSeconds'])
+        gap = int(gun_before['resetSeconds']) - int(after['resetSeconds'])
         if 0 <= gap <= RESET_TOLERANCE_SECONDS:
-            out.add('persist_clock', 'PASS', f'reset clock {before["resetSeconds"]} s -> {after["resetSeconds"]} s')
+            out.add('persist_clock', 'PASS', f'reset clock {gun_before["resetSeconds"]} s -> {after["resetSeconds"]} s')
         else:
-            out.add('persist_clock', 'FAIL', f'reset clock {before["resetSeconds"]} s -> {after["resetSeconds"]} s '
+            out.add('persist_clock', 'FAIL', f'reset clock {gun_before["resetSeconds"]} s -> {after["resetSeconds"]} s '
                     f'(allowed to fall by at most {RESET_TOLERANCE_SECONDS} s)')
     return out
 

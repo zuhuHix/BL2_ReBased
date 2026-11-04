@@ -7,9 +7,11 @@
   else root.OwVendingModel = api;
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   // Machine kinds follow the host's classification (tools/prepare_vendors.py): weapons, items (ammo and grenades),
-  // health, and the black market (listed, not stocked in PR 1).
+  // health, and the black market (listed, not stocked yet).
   const MACHINE_KINDS = ['weapons', 'items', 'health', 'blackmarket'];
-  const ITEM_KINDS = ['weapon', 'item', 'ammo', 'health'];
+  // Row kinds the host sends (OpenWillowVendor.cpp): guns, the item rows (ammo, health), shields and grenade mods, and gear
+  // the page lists as plain items or class mods.
+  const ITEM_KINDS = ['weapon', 'item', 'ammo', 'health', 'shield', 'grenade_mod', 'class_mod'];
   const ACTIONS = ['buy', 'sell', 'buyback', 'close'];
   const COLUMNS = ['shop', 'backpack', 'buyback'];
   // Host choice (UNVERIFIED): the buy-back list keeps at most this many sold items.
@@ -18,6 +20,9 @@
   const isInt = (value, min = 0) => Number.isInteger(value) && value >= min;
   const isText = value => typeof value === 'string' && value.length > 0;
   const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const isNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  // Ammo and health rows do not go into the backpack, so a full backpack does not stop them.
+  const entersBackpack = kind => kind !== 'ammo' && kind !== 'health';
 
   // "$1,234": the price text the page shows.
   function formatPrice(amount) {
@@ -57,6 +62,17 @@
     }
     if (state.used > state.capacity) return fail('used is larger than capacity');
     if (typeof state.message !== 'string') return fail('message must be a string');
+    // The ammo pools and the health (host numbers; health is a float on the host, so it is only checked as a number).
+    if (state.ammo !== undefined) {
+      if (!isObject(state.ammo)) return fail('ammo must be an object');
+      for (const key of Object.keys(state.ammo)) {
+        const pool = state.ammo[key];
+        if (!isObject(pool) || !isInt(pool.current) || !isInt(pool.max)) return fail(`ammo.${key} needs current and max`);
+      }
+    }
+    if (state.health !== undefined && (!isObject(state.health) || !isNumber(state.health.current) || !isNumber(state.health.max))) {
+      return fail('health needs current and max');
+    }
     if (!Array.isArray(state.shop)) return fail('shop must be an array');
     if (!Array.isArray(state.backpack)) return fail('backpack must be an array');
     if (!Array.isArray(state.buyback)) return fail('buyback must be an array');
@@ -92,7 +108,19 @@
     return {source, id: item.id, name: item.name, kind: item.kind, rarity: item.rarity, level: item.level || 0,
       price: item[source === 'backpack' ? 'sell' : 'price'], priceValid: item.priceValid !== false,
       affordable: item.affordable === true && item.priceValid !== false,
-      equipped: item.equipped === true, sellable: item.sellable !== false, featured, card: item.card || null};
+      equipped: item.equipped === true, sellable: item.sellable !== false, featured, card: item.card || null,
+      ammoType: item.ammoType || null};
+  }
+
+  // The line under the detail for what the row does to the player: the ammo pool it fills, or the health it heals.
+  // Empty for other rows.
+  function poolNote(state, item) {
+    if (item.kind === 'ammo' && state.ammo && state.ammo[item.ammoType]) {
+      const pool = state.ammo[item.ammoType];
+      return `${pool.current}/${pool.max} rounds in the pool`;
+    }
+    if (item.kind === 'health' && state.health) return `Health ${Math.floor(state.health.current)}/${Math.floor(state.health.max)}`;
+    return '';
   }
 
   // The three lists the page shows. Shop: the item of the day first, then the stock in the host's order (an item
@@ -151,7 +179,7 @@
       if (!item.sellable) return {ok: false, message: 'Mission items cannot be sold'};
       return {ok: true, action: 'sell', id: item.id};
     }
-    if (state.used >= state.capacity) return {ok: false, message: 'Backpack full'};
+    if (state.used >= state.capacity && entersBackpack(item.kind)) return {ok: false, message: 'Backpack full'};
     if (!item.priceValid) return {ok: false, message: 'Not for sale'};
     if (!item.affordable) return {ok: false, message: 'Insufficient funds'};
     return {ok: true, action: sel.column === 'buyback' ? 'buyback' : 'buy', id: item.id};
@@ -174,5 +202,5 @@
   }
 
   return {MACHINE_KINDS, ITEM_KINDS, ACTIONS, COLUMNS, BUYBACK_LIMIT, formatPrice, formatCountdown, validateState,
-    sortRows, buildLists, lengths, moveSelection, clampIndex, actionFor, buildRequest, keyCommand};
+    sortRows, buildLists, lengths, moveSelection, clampIndex, actionFor, buildRequest, keyCommand, poolNote, entersBackpack};
 });

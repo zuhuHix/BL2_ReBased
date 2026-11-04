@@ -12,6 +12,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "OpenWillowCurrency.h"
+#include "OpenWillowMayaState.h"
 
 namespace
 {
@@ -54,13 +55,13 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     // Too little money: refused, nothing taken, the gun stays on the shelf.
     FString Error;
     UOpenWillowInventory* Poor = SyntheticInventory(150);
-    TestFalse(TEXT("buy with too little money is refused"), Stock.Buy(TEXT("stock_0"), Poor, Error));
+    TestFalse(TEXT("buy with too little money is refused"), Stock.Buy(TEXT("stock_0"), Poor, nullptr, 0.0, Error));
     TestEqual(TEXT("refusal text"), Error, FString(TEXT("Insufficient funds")));
     int32 Money = 0;
     Poor->GetMoney(Money);
     TestEqual(TEXT("money unchanged after a refused buy"), Money, 150);
     TestEqual(TEXT("shelf unchanged after a refused buy"), Stock.Items.Num(), 2);
-    TestFalse(TEXT("unknown id is refused"), Stock.Buy(TEXT("stock_9"), Poor, Error));
+    TestFalse(TEXT("unknown id is refused"), Stock.Buy(TEXT("stock_9"), Poor, nullptr, 0.0, Error));
     TestEqual(TEXT("unknown id text"), Error, FString(TEXT("Unknown item")));
 
     // A shelf item with no valid price is refused even with the largest purse.
@@ -70,7 +71,7 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
         Huge.Level = 100;
         Odd.Items.Add(FOpenWillowVendorStock::MakeItem(Huge, TEXT("stock_0"), false));
         UOpenWillowInventory* Rich = SyntheticInventory(MAX_int32);
-        TestFalse(TEXT("item without a valid price is refused"), Odd.Buy(TEXT("stock_0"), Rich, Error));
+        TestFalse(TEXT("item without a valid price is refused"), Odd.Buy(TEXT("stock_0"), Rich, nullptr, 0.0, Error));
         TestEqual(TEXT("invalid price text"), Error, FString(TEXT("No valid price")));
     }
 
@@ -80,7 +81,7 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
         Pair.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_p"), 101), TEXT("stock_0"), false));
         Pair.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_q"), 41), TEXT("stock_1"), false));
         UOpenWillowInventory* Buyer = SyntheticInventory(1000);
-        TestTrue(TEXT("buy by the shelf's own id"), Pair.Buy(Pair.Items[0].Id, Buyer, Error));
+        TestTrue(TEXT("buy by the shelf's own id"), Pair.Buy(Pair.Items[0].Id, Buyer, nullptr, 0.0, Error));
         TestEqual(TEXT("one gun left"), Pair.Items.Num(), 1);
         TestEqual(TEXT("the other gun stays"), Pair.Items.Num() == 1 ? Pair.Items[0].Id : FString(), FString(TEXT("stock_1")));
         int32 Left = 0;
@@ -90,12 +91,12 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
 
     // Enough money: buy gun A (484) then gun B (196) from 1000.
     UOpenWillowInventory* Inventory = SyntheticInventory(1000);
-    TestTrue(TEXT("buy with enough money"), Stock.Buy(TEXT("stock_0"), Inventory, Error));
+    TestTrue(TEXT("buy with enough money"), Stock.Buy(TEXT("stock_0"), Inventory, nullptr, 0.0, Error));
     Inventory->GetMoney(Money);
     TestEqual(TEXT("money after buying A"), Money, 516);
     TestEqual(TEXT("A is in the backpack"), Inventory->Items().Num(), 1);
     TestEqual(TEXT("A left the shelf"), Stock.Items.Num(), 1);
-    TestTrue(TEXT("buy B"), Stock.Buy(TEXT("stock_1"), Inventory, Error));
+    TestTrue(TEXT("buy B"), Stock.Buy(TEXT("stock_1"), Inventory, nullptr, 0.0, Error));
     Inventory->GetMoney(Money);
     TestEqual(TEXT("money after buying B"), Money, 320);
 
@@ -131,7 +132,7 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     }
     TestEqual(TEXT("backpack count is at capacity"), Inventory->BackpackCount(), Inventory->GetBackpackCapacity());
     Stock.Items.Add(FOpenWillowVendorStock::MakeItem(SyntheticGun(TEXT("synthetic_c"), 10), TEXT("stock_2"), false));
-    TestFalse(TEXT("buy into a full backpack is refused"), Stock.Buy(TEXT("stock_2"), Inventory, Error));
+    TestFalse(TEXT("buy into a full backpack is refused"), Stock.Buy(TEXT("stock_2"), Inventory, nullptr, 0.0, Error));
     TestEqual(TEXT("full backpack text"), Error, FString(TEXT("Backpack full")));
     Inventory->GetMoney(Money);
     TestEqual(TEXT("money unchanged after a refused buy into a full backpack"), Money, 320);
@@ -154,6 +155,135 @@ bool FOpenWillowVendorStockTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("seconds to reset one minute in"), Shelf.SecondsToReset(1060.0), 1140.0);
     TestEqual(TEXT("empty weapon list says so"), Shelf.Notice, FString(TEXT("No weapons listed")));
 
+    return true;
+}
+
+namespace
+{
+// Invented non-gun leaf: its kind, a weight, and value terms (base cost, part total; scaler 1.12 as in the game).
+FOpenWillowVendorLeaf SyntheticLeaf(const TCHAR* Balance, const TCHAR* Kind, float Weight, float BaseCost, float PartTotal)
+{
+    FOpenWillowVendorLeaf Leaf;
+    Leaf.Balance = Balance;
+    Leaf.Class = TEXT("InventoryBalanceDefinition");
+    Leaf.Weight = Weight;
+    Leaf.Kind = Kind;
+    Leaf.Name = FString(TEXT("Synthetic ")) + Kind;
+    Leaf.Value.bSet = true;
+    Leaf.Value.BaseCost = BaseCost;
+    Leaf.Value.Scaler = 1.12f;
+    Leaf.Value.PartTotal = PartTotal;
+    return Leaf;
+}
+
+FOpenWillowVendorLeaf SyntheticAmmoLeaf(const TCHAR* AmmoType, int32 Amount)
+{
+    FOpenWillowVendorLeaf Leaf = SyntheticLeaf(*FString::Printf(TEXT("AmmoSynthetic_%s"), AmmoType), TEXT("ammo"), 1.f, 50.f, 1.f);
+    Leaf.AmmoType = AmmoType;
+    Leaf.Amount = Amount;
+    return Leaf;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowVendorItemsTest, "OpenWillow.Vendor.Items",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FOpenWillowVendorItemsTest::RunTest(const FString& Parameters)
+{
+    // Value formula on invented terms, level 5, scaler 1.12: 50 x 1.12^5 = 88.1 -> 88; 0.96 x 28 x 1.12^5 = 47.4 -> 47.
+    FOpenWillowValueTerms Terms;
+    Terms.bSet = true;
+    Terms.BaseCost = 50.f;
+    Terms.Scaler = 1.12f;
+    Terms.PartTotal = 1.f;
+    TestEqual(TEXT("value of 50 at level 5"), FOpenWillowVendorStock::ItemValue(Terms, 5).Get(-1), 88);
+    TestEqual(TEXT("value at level 0 is the base cost"), FOpenWillowVendorStock::ItemValue(Terms, 0).Get(-1), 50);
+    FOpenWillowValueTerms NoPrice;
+    TestFalse(TEXT("terms without price data give no value"), FOpenWillowVendorStock::ItemValue(NoPrice, 5).IsSet());
+
+    // The Ammo Dump's shape: one row per ammo type, then grenade mods up to 11 rows. Price = floor(88 x 4.8) = 422 at level 5.
+    FOpenWillowVendorStock Dump;
+    Dump.Kind = TEXT("items");
+    Dump.Stage = 5;
+    Dump.Seed = 11;
+    Dump.Leaves.Add(SyntheticAmmoLeaf(TEXT("pistol"), 54));
+    Dump.Leaves.Add(SyntheticLeaf(TEXT("GM_Synthetic"), TEXT("grenade_mod"), 1.f, 25.f, 1.f));
+    Dump.FeaturedLeaves.Add(SyntheticLeaf(TEXT("GM_Featured"), TEXT("grenade_mod"), 1.f, 25.f, 1.f));
+    Dump.Restock(0.0);
+    TestEqual(TEXT("items shelf holds 11 rows"), Dump.Items.Num(), FOpenWillowVendorStock::ItemsShelfSize);
+    TestEqual(TEXT("the first row is the ammo type"), Dump.Items[0].Kind, FString(TEXT("ammo")));
+    TestEqual(TEXT("ammo row value 88"), Dump.Items[0].SaleValue, 88);
+    TestEqual(TEXT("ammo row price 422"), Dump.PriceOf(Dump.Items[0]).Get(-1), 422);
+    TestEqual(TEXT("the grenade mod rows follow"), Dump.Items[1].Kind, FString(TEXT("grenade_mod")));
+    TestTrue(TEXT("a grenade mod row carries its gear"), Dump.Items[1].bHasGear);
+    TestTrue(TEXT("gear rows get distinct backpack ids"), Dump.Items[1].Gear.Id != Dump.Items[2].Gear.Id);
+    TestTrue(TEXT("the featured grenade mod is stocked"), Dump.bHasFeatured);
+
+    // Buying ammo: the pool gets the rounds up to its maximum, nothing else changes, and the row stays on the shelf.
+    UOpenWillowInventory* Inventory = SyntheticInventory(1000);
+    FString Error;
+    Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Pistol, 0);
+    const int32 PistolMax = Inventory->AmmoPool(EOpenWillowAmmoType::Pistol).Max;
+    TestTrue(TEXT("buy pistol ammo"), Dump.Buy(TEXT("stock_0"), Inventory, nullptr, 0.0, Error));
+    TestEqual(TEXT("pool gets the rounds, capped at the maximum"), Inventory->AmmoPool(EOpenWillowAmmoType::Pistol).Current,
+        FMath::Min(PistolMax, 54));
+    int32 Money = 0;
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("ammo is charged its price"), Money, 578);
+    TestEqual(TEXT("ammo row stays on the shelf"), Dump.Items.Num(), FOpenWillowVendorStock::ItemsShelfSize);
+    Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Pistol, PistolMax);
+    TestFalse(TEXT("a full pool refuses ammo"), Dump.Buy(TEXT("stock_0"), Inventory, nullptr, 0.0, Error));
+    TestEqual(TEXT("ammo full text"), Error, FString(TEXT("Ammo full")));
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("nothing is charged for refused ammo"), Money, 578);
+
+    // The health machine: one health row (heals 25% of max), then shields. Health 100 of 400 heals to 200 for 249.
+    FOpenWillowVendorStock Dr;
+    Dr.Kind = TEXT("health");
+    Dr.Stage = 5;
+    Dr.Seed = 12;
+    FOpenWillowVendorLeaf HealLeaf = SyntheticLeaf(TEXT("HealSynthetic"), TEXT("health"), 1.f, 30.f, 1.f);
+    HealLeaf.HealFraction = 0.25f;
+    Dr.Leaves.Add(HealLeaf);
+    Dr.Leaves.Add(SyntheticLeaf(TEXT("ShieldSynthetic"), TEXT("shield"), 1.f, 28.f, 0.96f));
+    Dr.Restock(0.0);
+    TestEqual(TEXT("health shelf holds 8 rows"), Dr.Items.Num(), FOpenWillowVendorStock::HealthShelfSize);
+    TestEqual(TEXT("the first row is the health item"), Dr.Items[0].Kind, FString(TEXT("health")));
+    TestEqual(TEXT("health row value 52"), Dr.Items[0].SaleValue, 52);
+    TestEqual(TEXT("health row price 249"), Dr.PriceOf(Dr.Items[0]).Get(-1), 249);
+    TestEqual(TEXT("shield rows follow"), Dr.Items[1].Kind, FString(TEXT("shield")));
+    TestEqual(TEXT("shield value 47 (0.96 x 28 x 1.12^5)"), Dr.Items[1].SaleValue, 47);
+
+    FOpenWillowMayaState Maya;
+    Maya.Health = 100.f;
+    Inventory->SetMoney(1000);
+    TestTrue(TEXT("buy a heal"), Dr.Buy(TEXT("stock_0"), Inventory, &Maya, 0.0, Error));
+    TestTrue(TEXT("heal adds a quarter of max health"), FMath::IsNearlyEqual(Maya.Health, 200.f));
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("heal is charged its price"), Money, 751);
+    TestEqual(TEXT("health row stays on the shelf"), Dr.Items.Num(), FOpenWillowVendorStock::HealthShelfSize);
+    Maya.Health = Maya.Effective().MaxHealth;
+    TestFalse(TEXT("full health refuses a heal"), Dr.Buy(TEXT("stock_0"), Inventory, &Maya, 0.0, Error));
+    TestEqual(TEXT("health full text"), Error, FString(TEXT("Health full")));
+    TestFalse(TEXT("a heal with no walker is refused"), Dr.Buy(TEXT("stock_0"), Inventory, nullptr, 0.0, Error));
+
+    // Gear: buy a shield (225 = floor(47 x 4.8)), sell it back (47), buy it back (47). The gear keeps its backpack id.
+    const FString ShieldShelfId = TEXT("stock_1");
+    const FString ShieldGearId = Dr.Items[1].Gear.Id;
+    TestTrue(TEXT("buy a shield"), Dr.Buy(*ShieldShelfId, Inventory, &Maya, 0.0, Error));
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("shield is charged its price"), Money, 526);
+    TestEqual(TEXT("the shield is in the gear backpack"), Inventory->GearItemList().Num(), 1);
+    TestEqual(TEXT("the bought shield leaves the shelf"), Dr.Items.Num(), FOpenWillowVendorStock::HealthShelfSize - 1);
+    TestTrue(TEXT("sell the shield"), Dr.Sell(ShieldGearId, Inventory, Error));
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("selling pays the value"), Money, 573);
+    TestEqual(TEXT("the shield is in the buy-back list"), Dr.Buyback.Num(), 1);
+    TestEqual(TEXT("the shield left the backpack"), Inventory->GearItemList().Num(), 0);
+    TestTrue(TEXT("buy the shield back"), Dr.BuyBack(Dr.Buyback[0].Id, Inventory, Error));
+    Inventory->GetMoney(Money);
+    TestEqual(TEXT("buy-back costs the sell price"), Money, 526);
+    TestEqual(TEXT("the shield is back in the gear backpack"), Inventory->GearItemList().Num(), 1);
     return true;
 }
 

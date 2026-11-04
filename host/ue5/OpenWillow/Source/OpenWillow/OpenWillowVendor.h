@@ -1,7 +1,8 @@
-// AI-assisted (Claude). Vending machines (PR 1): the stock rules, the placed machine actor and the world subsystem that
-// spawns the machines from the ignored local/ vendors.json (tools/prepare_vendors.py, schema openwillow-vendors/1).
-// Game-derived values come only from that file at run time; nothing here is game data. Rules marked UNVERIFIED are
-// host choices or stand-ins, not behaviour confirmed in the running game.
+// AI-assisted (Claude). Vending machines: the stock rules, the placed machine actor and the world subsystem that spawns the
+// machines from the ignored local/ vendors.json (tools/prepare_vendors.py, schema openwillow-vendors/1). PR 2b adds the
+// Ammo Dump (ammo), Dr. Zed (health and shields) and the grenade mods. Game-derived values come only from that file at run
+// time; nothing here is game data. Rules marked UNVERIFIED are host choices or stand-ins, not behaviour confirmed in the
+// running game.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -16,9 +17,35 @@ class AOpenWillowVendingMachine;
 class FOpenWillowVendorPage;
 class APlayerController;
 class FJsonObject;
+class FOpenWillowMayaState;
 struct FOpenWillowCurrencyMachine;
 
-// One item on sale, or in the buy-back list. Kind is "weapon" for PR 1; ammo and health machines come later.
+// The monetary value terms of a non-gun leaf (the manifest's item.value block): value at a level is
+// trunc(PartTotal * Scaler^level * BaseCost), evaluated in single precision (VENDORS.md section 6).
+struct FOpenWillowValueTerms
+{
+    bool bSet = false;            // false: no price data, so the leaf is never stocked
+    float BaseCost = 0;           // the calculator's base cost constant (GD_Economy.BaseCost.Att_BaseCost_*)
+    float Scaler = 1;             // GD_Economy.Universal.Att_UniversalPriceIncreasePerLevelScaler (1.12)
+    float PartTotal = 1;          // the first listed part total (UNVERIFIED pick when a grade lists several)
+};
+
+// Leaf balance of a machine's pool: the weight is the pool's probability times the item's weight. Non-gun leaves also carry
+// the manifest's item block (kind, ammo type, heal, value terms); a leaf with no usable kind is kept but never stocked.
+struct FOpenWillowVendorLeaf
+{
+    FString Balance;                  // game object path (or the host's stand-in name)
+    FString Class;                    // "WeaponBalanceDefinition", "InventoryBalanceDefinition", ...
+    float Weight = 0;
+    FString Kind;                     // item.kind: ammo, health, shield, grenade_mod, usable; empty for weapons
+    FString Name;                     // item.name, the definition's base name (may be empty)
+    FString AmmoType;                 // ammo leaves: pistol, smg, ar, shotgun, sniper, launcher or grenade
+    int32 Amount = 0;                 // ammo leaves: rounds one purchase adds
+    float HealFraction = 0;           // health leaves: fraction of max health one purchase heals
+    FOpenWillowValueTerms Value;
+};
+
+// One item on sale, or in the buy-back list. Kind: weapon, ammo, health, shield or grenade_mod.
 struct FOpenWillowVendorItem
 {
     FString Id;                       // "stock_<n>", "featured", or "buyback_<n>"
@@ -26,18 +53,16 @@ struct FOpenWillowVendorItem
     FString Name;
     int32 Level = 1;
     int32 Rarity = 1;
-    int32 SaleValue = 0;              // the item's card value in dollars (0 when the recipe did not carry one)
+    int32 SaleValue = 0;              // the item's value in dollars (0 when unknown); the sell price and the buy-back cost
     bool bFeatured = false;
     bool bHasWeapon = false;
     FOpenWillowWeaponItem Weapon;     // the gun that enters the backpack on purchase
-};
-
-// Leaf balance of a machine's pool: the weight is the pool's probability times the item's weight.
-struct FOpenWillowVendorLeaf
-{
-    FString Balance;                  // game object path (or the host's stand-in name)
-    FString Class;                    // "WeaponBalanceDefinition", "InventoryBalanceDefinition", ...
-    float Weight = 0;
+    bool bHasGear = false;            // a shield or grenade mod: enters the backpack as gear
+    FOpenWillowGearItem Gear;
+    FString AmmoType;                 // ammo rows: the pool key (pistol, smg, ...)
+    int32 Amount = 0;                 // ammo rows: rounds one purchase adds
+    float HealFraction = 0;           // health rows: fraction of max health one purchase heals
+    FOpenWillowValueTerms Terms;      // non-gun rows: the value terms the price comes from (the state shows them to the checker)
 };
 
 // The stock of one machine: what it sells now, its buy-back list and the reset clock. Plain data with the rules;
@@ -46,7 +71,11 @@ struct FOpenWillowVendorStock
 {
     // Seen live (docs/verification/VENDORS.md section 2): a weapon machine shows 7 guns plus the featured one. How the
     // game rolls them is native code not read; the host's roll is UNVERIFIED.
-    static constexpr int32 StockWeaponCount = 7;
+    static constexpr int32 WeaponShelfSize = 7;
+    // Live (VENDORS.md section 6): the Ammo Dump shows 10 to 12 rows (one per ammo type, then grenade mods); the Dr. Zed
+    // health machine shows 8 (one health row, then shields). The sizes are UNVERIFIED host choices for the rolled part.
+    static constexpr int32 ItemsShelfSize = 11;
+    static constexpr int32 HealthShelfSize = 8;
     // The live values of GD_Economy.VendingMachine.Att_SellExponentializer and Att_BaseVendingMarkupIncrease (read
     // 2026-11-03; they have no value in the packages). See BuyPrice.
     static constexpr float SellExponentializer = 0.14f;
@@ -54,7 +83,7 @@ struct FOpenWillowVendorStock
     static constexpr int32 BuybackCapacity = 10;          // UNVERIFIED host choice: newest sales kept for buy-back
     static constexpr int32 DefaultMinutesBetweenResets = 20; // GlobalsDefinition.MinutesBetweenShopResets class default
 
-    FString Kind = TEXT("weapons");   // the machine kind from the manifest: weapons, items, health
+    FString Kind = TEXT("weapons");   // the machine kind from the manifest: weapons, items, health, blackmarket
     int32 Stage = 1;                  // the item level the pools were evaluated at (manifest "stage")
     int32 MinutesBetweenResets = DefaultMinutesBetweenResets;
     int32 FixedItemCost = 0;          // manifest fixed_item_cost; 0 = use the markup
@@ -69,6 +98,7 @@ struct FOpenWillowVendorStock
     TArray<FOpenWillowVendorItem> Buyback;         // sold items, oldest first (not saved: UNVERIFIED whether the game keeps it)
     FString Notice;                                // why the shelf is empty or short, for the page message line
     // What was bought since the last restock: the shelf ids and whether the featured item went. Saved in the currency file.
+    // Ammo and health rows stay on the shelf after a purchase, so they are never listed here.
     TArray<FString> BoughtSinceRestock;
     bool bFeaturedBoughtSinceRestock = false;
 
@@ -84,6 +114,8 @@ struct FOpenWillowVendorStock
 
     // Shelf item from a rolled or hand-made gun. Sell value comes from the card's SaleValue (0 when absent).
     static FOpenWillowVendorItem MakeItem(const FOpenWillowWeaponItem& Gun, const FString& Id, bool bFeatured);
+    // Shelf-size of this machine's kind (0 for a kind that is not stocked).
+    int32 ShelfSize() const;
 
     // What buying costs: the fixed cost when the manifest sets one, else BuyPrice(SaleValue, Level). Unset when there is
     // no valid price; Buy refuses such an item.
@@ -91,20 +123,26 @@ struct FOpenWillowVendorStock
     // The shop's price for an item of this value and level (confirmed live, see the .cpp).
     // Unset when the single-precision result is not a finite int32.
     static TOptional<int32> BuyPrice(int32 Value, int32 Level);
+    // The monetary value of a non-gun leaf at an item level (VENDORS.md section 6, reproduced 63/63 live). Unset when the
+    // result is not a finite, non-negative int32.
+    static TOptional<int32> ItemValue(const FOpenWillowValueTerms& Terms, int32 Level);
+    // A non-gun leaf the shelf may stock: a shield, grenade mod, ammo or health leaf with price data.
+    static bool IsStockableLeaf(const FOpenWillowVendorLeaf& Leaf);
     // What selling pays and what buying back costs: the card value (UNVERIFIED for shops).
     static int32 SellPriceOf(const FOpenWillowVendorItem& Item) { return Item.SaleValue; }
 
     // Stock resets once MinutesBetweenResets have passed since the last restock (world seconds).
     bool NeedsRestock(double Now) const;
     double SecondsToReset(double Now) const;
-    // Rerolls the shelf and the featured item. Weapon machines only; other kinds get an empty shelf and a Notice.
+    // Rerolls the shelf and the featured item. A kind with no stock rule gets an empty shelf and a Notice.
     void Restock(double Now);
     // Restocks when due. True when it did.
     bool EnsureStocked(double Now) { if (!NeedsRestock(Now)) return false; Restock(Now); return true; }
 
-    // The actions. Each returns false with OutError set and changes nothing on refusal.
+    // The actions. Each returns false with OutError set and changes nothing on refusal. Maya is the walker's health state
+    // (health rows only; null when there is no walker); Now is the world time for the health refill.
     // The actions take the id by value: a caller may pass a shelf item's own Id, and the shelf changes during the action.
-    bool Buy(FString Id, UOpenWillowInventory* Inventory, FString& OutError);
+    bool Buy(FString Id, UOpenWillowInventory* Inventory, FOpenWillowMayaState* Maya, double Now, FString& OutError);
     // IsProtected: items the caller will not let go (a weapon the quest lends); refused with "Mission items cannot be sold".
     bool Sell(FString Id, UOpenWillowInventory* Inventory, FString& OutError,
         const TFunction<bool(const FOpenWillowWeaponItem&)>& IsProtected = nullptr);
@@ -122,6 +160,24 @@ struct FOpenWillowVendorStock
 private:
     // Rolls one gun from the weapon balances of Pool, picked by weight. False when there is none or it does not roll.
     bool RollWeapon(const TArray<FOpenWillowVendorLeaf>& Pool, uint32 GunSeed, FOpenWillowWeaponItem& OutGun) const;
+    // The shelf fillers, one per kind. Each reads the restock's seed and appends rows to Items.
+    void FillWeaponShelf(uint32 RestockSeed);
+    void FillItemsShelf(uint32 RestockSeed);
+    void FillHealthShelf(uint32 RestockSeed);
+    // Appends one row per leaf of the given kind, then rolled rows (by weight) until the shelf is full.
+    void FillRolledRows(const TCHAR* LeafKind, uint32 RestockSeed);
+    void FillFeatured(uint32 RestockSeed);
+    // Appends the leaf as the next shelf row (false when it cannot be stocked).
+    bool AddLeafRow(const FOpenWillowVendorLeaf& Leaf);
+    // A shelf row for a non-gun leaf. Shields and grenade mods also get the gear they become when bought.
+    bool MakeLeafItem(const FOpenWillowVendorLeaf& Leaf, const FString& Id, bool bFeatured, FOpenWillowVendorItem& OutItem) const;
+    // The backpack id a shelf gear row gets: unique per machine, restock and shelf position.
+    FString GearIdFor(const FString& ShelfId) const;
+    // The purchase effects, one per kind. Each returns false with OutError and changes nothing on refusal.
+    bool ApplyBuy(const FOpenWillowVendorItem& Item, UOpenWillowInventory* Inventory, FOpenWillowMayaState* Maya, double Now,
+        FString& OutError);
+    // Takes a bought row off the shelf (ammo and health rows stay; a featured item is taken off the day's slot).
+    void RemoveBoughtRow(const FOpenWillowVendorItem& Item, const FString& Id);
 };
 
 // The placed machine. The body is the engine's cube stand-in (UNVERIFIED layout; the real skeletal mesh is not
@@ -180,6 +236,8 @@ private:
     void CloseShop();
     void PushState();
     FString StateJson() const;
+    // The walker the shop is open for (null when none); its health state is what a health purchase changes.
+    AOpenWillowWalker* ActiveWalker() const;
 
     TArray<TWeakObjectPtr<AOpenWillowVendingMachine>> Machines;
     TWeakObjectPtr<AOpenWillowVendingMachine> ActiveMachine;
@@ -189,6 +247,8 @@ private:
     // -owvendortest: a scripted open / buy / sell / restock sequence with reports and a screenshot, then quit
     // (tools/test_vendors.ps1). Driven by a world timer so it starts only once the walker exists.
     void TickVendorTest();
+    // The index of the first spawned machine of this kind, or INDEX_NONE.
+    int32 FirstMachineIndexOfKind(const TCHAR* Kind) const;
     // True while the quest lends this weapon (it must not be sold or lost to buy-back).
     bool IsQuestOwned(const FOpenWillowWeaponItem& Item) const;
 

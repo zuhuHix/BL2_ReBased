@@ -100,7 +100,16 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
   - With no vendor machines spawned (no usable `-owvendors`) there is no manifest identity, so saving stays off.
   - A `-owmoney=` / `-owerid=` value that is not a whole number in range is ignored with a warning.
   - Restock counts are bounded on load (1,000,000) and the increment saturates.
-- PR 1 stocks guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory
+- **PR 2b:** the Ammo Dump and Dr. Zed are stocked from the decoded item blocks (section 6). All host choices, `UNVERIFIED`:
+  - Shelf sizes 11 and 8 follow the live row counts.
+  - The Ammo Dump has one row per ammo type, then grenade mods by weight. Dr. Zed has one row per health item, then
+    shields by weight.
+  - Buying ammo adds the item's rounds to the pool, capped at its maximum, and is refused with "Ammo full". Health Now!
+    heals 25 % of max health and is refused at full health. Ammo and health rows stay on the shelf.
+  - Shields and grenade mods are bought as stand-in gear with no stats and rarity 1.
+  - Class mods are left out: their shop pools are empty in the packages, and how the game fills them is open.
+  - Item value is evaluated in single precision, in the tool's order.
+- PR 1 stocked guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory
   does not have yet (PR 2).
 
 ## 5. Open items
