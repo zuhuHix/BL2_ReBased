@@ -2670,10 +2670,10 @@ void AOpenWillowWalker::SpawnCombatTarget()
         ECC_Visibility, Query)) Location = Floor.ImpactPoint;
     FActorSpawnParameters Params;
     Params.Owner = this;
-    // Other -owcombattest runs keep the +180 offset (the stand-in's hit reactions read the damage direction in actor space).
-    // Phaselock captures use 0: the exported bullymong presents its rear under +180, while the game frames show its front
-    // (visual fit, UNVERIFIED against a live actor rotation). -owcombatpawyawoffset=<degrees> overrides either.
-    float FacingYawOffset = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots")) ? 0.f : 180.f;
+    // The target faces Maya (+180). Phaselock round 22 settled it for the captures too: with +180 the held bullymong is the game's
+    // compact ball with its back up; with 0 (rounds 16 to 21) it showed its rear. The converted clips put the head at the mesh's +X
+    // (an FK check of the conversion). -owcombatpawyawoffset=<degrees> overrides it.
+    float FacingYawOffset = 180.f;
     FParse::Value(FCommandLine::Get(), TEXT("owcombatpawyawoffset="), FacingYawOffset);
     const FRotator Facing(0, GetControlRotation().Yaw + FacingYawOffset, 0);
     CombatTarget = GetWorld()->SpawnActor<AOpenWillowCombatTarget>(Location, Facing, Params);

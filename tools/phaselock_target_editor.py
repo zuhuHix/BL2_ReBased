@@ -66,9 +66,17 @@ for npc in job['npcs']:
             eal.save_loaded_asset(normal, only_if_is_dirty=False)
             mel.set_material_instance_texture_parameter_value(instance, 'Normal', normal)
         applied = []
+        # Round 23 (UNVERIFIED): the stock colour vectors are read as gamma-space values and converted to linear (x^2.2 per
+        # RGB channel) before they reach UE5's linear shader. As linear values the light tan / brown zones rendered pale and
+        # olive in round 22 next to the game's saturated tan (a product of gamma values, converted, equals the product of the
+        # converted values, so the multiply by the sRGB diffuse is unchanged otherwise). OPENWILLOW_ZONE_GAMMA=0 turns it off.
+        gamma = os.environ.get('OPENWILLOW_ZONE_GAMMA', '1') != '0'
         for parameter, value in slot.get('vectors', {}).items():
             if parameter.startswith('p_') and parameter.endswith(('Hilight', 'Midtone', 'Shadow', 'ColorD')) and value:
-                mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*[float(v) for v in value]))
+                rgba = [float(v) for v in value]
+                if gamma:
+                    rgba = [max(0.0, c) ** 2.2 for c in rgba[:3]] + rgba[3:]
+                mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))
                 applied.append(parameter)
         eal.save_loaded_asset(instance, only_if_is_dirty=False)
         for i in range(len(slots)):
@@ -76,7 +84,7 @@ for npc in job['npcs']:
                 item = slots[i]
                 item.set_editor_property('material_interface', instance)
                 slots[i] = item
-        entry.update({'status': 'zone material', 'instance': path, 'vectors': sorted(applied)})
+        entry.update({'status': 'zone material', 'instance': path, 'vectors': sorted(applied), 'gamma_to_linear': gamma})
         log(f'{npc["id"]}: {path} with {len(applied)} zone vectors')
     mesh.modify()
     mesh.set_editor_property('materials', slots)

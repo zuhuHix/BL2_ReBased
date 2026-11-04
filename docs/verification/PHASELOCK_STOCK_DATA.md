@@ -1288,3 +1288,35 @@ capture run and a critic score.
   stand-in is the next step), the rim's dark spikes layer, the head look-at control of the stock AnimTree, and the tone mapping. The capture switch
   `-owtonecurve=<0..1>` (above) is for that A/B: if the shell, rim and orb all move toward the game with 0, the remaining gap is tone mapping
   rather than per-material fits.
+
+### Round 22 results (2026-11-04: the hub's re-import and captures, a Luna critic)
+
+The hub's batch re-imported the target (`MI_Mati_BullymongAdult_Zone`, all nine zone vectors, six clips) and the effects, and captured three
+variants at the round-20 framing (ignored `local/phaselock/r22/yaw0`, `yaw180`, `tone0`; host|game pairs in `local/phaselock/r22/critic/`).
+An independent critic (Luna, pairs only) scored them:
+
+| Round | 0.25 s | 0.50 s | 0.80 s | 1.50 s | 3.00 s | 4.50 s | Overall |
+|---|---|---|---|---|---|---|---|
+| 20 (rescored by the same critic) | 5.0 | 5.9 | 5.2 | 5.6 | 5.7 | 5.4 | 5.5 |
+| 22 (best variant per time: yaw0, tone0 at 0.50 s) | 5.2 | 6.2 | 5.7 | 6.0 | 6.1 | 5.7 | 5.8 |
+
+The 8/10 target is not reached. **Facing is disputed:** the critic preferred offset 0 ("the face is visible"; it read the red ridge at
+offset 180 as the back). Before the lift (0.25 s) the game's bullymong faces the player with its claws reaching toward the camera; only the
+offset-180 frame shows the claws toward the camera, and the FK check of round 22 puts the head at +X, which faces Maya at 180. The host
+therefore uses 180 (round 23); the red ridge is read as the head crest the game frame also shows. UNVERIFIED either way until a live read of
+the target's rotation or a second critic. **Tone curve off** moves the palm orb closer (deeper blue) but the bubble rim and the target's fur
+farther: tone mapping is not the main gap; the switch stays a diagnostic. **Remaining, most visible first (critic):** the held target looks
+larger and more tightly curled; the bubble is a regular sphere with a thick bright rim and a very dark interior, where the game's is smokier
+and blue-violet; at 0.80 s the game's white-blue flash swallows the target and the host's ring stays crisp; the palm orb is pale and soft
+(the game's has a dark blue centre and distinct cyan rays); the target's fur is washed toward white or grey (the game's is warm brown and olive).
+
+## Round 23 (2026-11-04, maya lane): gamma-space colour constants
+
+AI-assisted (Claude). Both washed-out colours (the target's fur and the palm orb) fit one cause: the stock material's colour constants behave as
+gamma-space values, and the host used them as linear ones. A tan zone colour multiplied by the grey-cyan diffuse comes out pale olive in linear
+space and saturated tan when both are gamma values; the orb's blue constant shows as pale cyan when read as linear and as cobalt when read as
+gamma. **Changes (UNVERIFIED until the capture):** `tools/phaselock_target_editor.py` converts the zone vectors to linear (x^2.2 per channel;
+`OPENWILLOW_ZONE_GAMMA=0` turns it off; the product with the sRGB diffuse is otherwise unchanged), the palm orb's blue in
+`host/ue5/import_phaselock_fx.py` is converted the same way (the old x0.7 compensation dropped), and the capture target faces Maya (+180) by
+default. If the target and the orb move toward the game, the same reading applies to the other effect constants (not changed yet: many
+round-2 to round-20 fits were made on top of the linear reading).
