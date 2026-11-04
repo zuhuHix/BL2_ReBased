@@ -11,6 +11,7 @@ class UObject;
 // Every number the survival rules read, in one struct. `Base` is what the data gives (level formula, equipped shield,
 // the injured definition); the skills lane applies its modifiers in FOpenWillowMayaState::Effective(), the one place the
 // rules read stats from. Defaults are host stand-ins (UNVERIFIED unless the comment names the live read).
+// Keep this struct plain floats and ints: FOpenWillowMayaState::Effective() detects Base changes with a byte compare.
 struct OPENWILLOW_API FOpenWillowMayaStats
 {
     float MaxHealth = 400.f;              // replaced by the level formula with -owquest

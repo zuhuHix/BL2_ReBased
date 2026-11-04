@@ -45,6 +45,8 @@ void FOpenWillowMayaState::GoDown(float Now)
 FOpenWillowMayaStats FOpenWillowMayaState::Effective() const
 {
     if (!Modifiers) return Base;
+    // The byte compare is safe only while FOpenWillowMayaStats holds plain floats and ints (no FString, TArray or other
+    // heap or padding-sensitive members); if it gains one, compare field by field instead.
     if (CachedFrame != GFrameCounter || FMemory::Memcmp(&CachedBase, &Base, sizeof(Base)) != 0)
     {
         CachedBase = Base;
