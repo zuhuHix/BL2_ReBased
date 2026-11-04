@@ -46,14 +46,14 @@ FString PoolLeaf(const FString& Pool)
     return Pool.FindLastChar(TEXT('.'), Dot) ? Pool.Mid(Dot + 1) : Pool;
 }
 
-// Drop spot Index (host stand-in): points on rings around the enemy's collision centre, starting at spot Index of the first ring;
-// a point needs a floor under it and room above it (no world geometry in a DropRoomRadius sphere just above the floor). The
-// first point that has both wins, DropLift above its floor; when none has, the enemy's feet.
+// Drop spot Index (host stand-in): points on rings around the corpse, starting at spot Index of the first ring; a point needs a
+// floor under it and room above it (no world geometry in a DropRoomRadius sphere just above the floor). The first point that has
+// both wins, DropLift above its floor; when none has, the corpse's feet. The corpse is the actor's location (its floor point):
+// the death turns the collision off, so the collision centre reads zero then (slice gate report: a gun dropped at the origin).
 FVector DropSpot(UWorld* World, const AOpenWillowEnemy* Enemy, int32 Index)
 {
-    FVector Centre = FVector::ZeroVector;
-    float HalfHeight = 0.f;
-    Enemy->CollisionCentre(Centre, HalfHeight);
+    const FVector Feet = Enemy->GetActorLocation();
+    const FVector Centre = Feet + FVector(0.f, 0.f, 100.f);   // the rings' traces start from here (above the floor point)
     FCollisionObjectQueryParams Solid;
     Solid.AddObjectTypesToQuery(ECC_WorldStatic);
     Solid.AddObjectTypesToQuery(ECC_WorldDynamic);
@@ -70,7 +70,7 @@ FVector DropSpot(UWorld* World, const AOpenWillowEnemy* Enemy, int32 Index)
         return Floor + FVector(0.f, 0.f, DropLift);
     }
     UE_LOG(LogTemp, Display, TEXT("OWRANGE loot drop_spot no room near %s: at its feet"), *Enemy->GetName());
-    return FVector(Centre.X, Centre.Y, Centre.Z - HalfHeight + DropLift);
+    return Feet + FVector(0.f, 0.f, DropLift);
 }
 
 // Spawns one money or ammo pickup at At and counts it in Result.

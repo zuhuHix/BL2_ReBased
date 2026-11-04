@@ -1,5 +1,4 @@
 #include "OpenWillowRange.h"
-#include "RHIGlobals.h"
 #include "Engine/Texture.h"
 #include "Materials/MaterialInstance.h"
 #include "OpenWillowCombatTarget.h"
@@ -41,6 +40,7 @@ constexpr float EnemyRing = 1600.f;         // the enemies stand on an arc this 
 constexpr float EnemyArcDegrees = 60.f;     // the arc runs from -60 to +60 degrees around the facing
 constexpr int32 ScoutRings = 9;             // radii 6000, 7000, ... 14000 uu
 constexpr int32 ScoutAngles = 24;
+constexpr float LootNearCorpse = 400.f;     // the range test's limit for a drop's distance from the corpse (host choice)
 // Floor rules of the scout and the formation (host choice, UNVERIFIED). Real terrain slopes: a walkable floor is one whose normal
 // is within about 32 degrees of up (cos 32 = 0.85); the probes reach ProbeReach above and below, a probe may sit ProbeMaxRise
 // above or below the centre, a formation slot SlotMaxRise (the enemies and dummies snap to the floor under them).
@@ -104,7 +104,7 @@ bool FloorIsTextured(const FHitResult& Hit, FString& OutPath)
         return Texture && !Texture->GetPathName().StartsWith(TEXT("/Engine/"), ESearchCase::CaseSensitive);
     };
     TArray<UTexture*> Textures;
-    Material->GetUsedTextures(Textures, EMaterialQualityLevel::Num, true, GMaxRHIFeatureLevel, true);
+    Material->GetUsedTextures(Textures);   // every quality level and shader platform (the default of the current API)
     for (const UTexture* Texture : Textures)
         if (OwnTexture(Texture)) return true;
     // Textures given as parameter values (a material instance, or the terrain blend whose layer textures are parameters; batch 4:
@@ -1700,15 +1700,27 @@ void UOpenWillowRangeSubsystem::TickLootTest(float Now)
     {
         if (!Walker || !Inventory || !E0 || E0->IsDead())
         {
-            const TCHAR* Names[] = {TEXT("loot_roll"), TEXT("loot_money_pickup"), TEXT("loot_weapon_item"), TEXT("loot_off"),
+            const TCHAR* Names[] = {TEXT("loot_near_corpse"), TEXT("loot_roll"), TEXT("loot_money_pickup"), TEXT("loot_weapon_item"), TEXT("loot_off"),
                 TEXT("loot_seeded_roll")};
             for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no walker or no live enemy 0"));
             TestStep = 99;
             return;
         }
         SetLootMode(EOpenWillowRangeLootMode::Always);
+        const FVector Corpse = E0->GetActorLocation();
         TestHit(E0, 1.e6f, E0->BodyComponent());
         LootDeathAt = Now;
+        // Every drop of the roll lies near the corpse (the drop rings reach 180 uu; the slack covers the floor's height).
+        float Farthest = 0.f;
+        int32 Drops = 0;
+        for (const TWeakObjectPtr<AActor>& Weak : LastLoot.Spawned)
+            if (const AActor* Drop = Weak.Get())
+            {
+                ++Drops;
+                Farthest = FMath::Max(Farthest, float(FVector::Dist(Drop->GetActorLocation(), Corpse)));
+            }
+        TestCheck(TEXT("loot_near_corpse"), Drops > 0 && Farthest <= LootNearCorpse,
+            FString::Printf(TEXT("%d drop(s), farthest %.0f uu from the corpse (limit %.0f)"), Drops, Farthest, LootNearCorpse));
         const int32 MoneyCount = CountLivePickups(LastLoot, false);
         const int32 WeaponCount = CountLivePickups(LastLoot, true);
         const bool bOk = E0->IsDead() && MoneyCount >= 1 && (WeaponCount >= 1 || !bWeaponsAvailable);
