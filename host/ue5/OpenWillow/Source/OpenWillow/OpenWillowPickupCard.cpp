@@ -315,7 +315,8 @@ void OpenWillowPickupCard::TickShots(AOpenWillowWalker& Maya, APlayerController&
     case 7:
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS decoy aimed_taken=%d nearer_left=%d"),
             DecoyAimed.IsValid() ? 0 : 1, Decoy.IsValid() ? 1 : 0);
-        // Then the decoy, aimed at, behind a block: E must leave it. Afterwards, the block gone, Maya goes down: the card must hide.
+        // Then the decoy, aimed at, behind a block: E must leave it; the block gone, E from the same spot must take it, so
+        // only the block can have refused the first press.
         if (Decoy.IsValid()) Aim(Player, Decoy->GetActorLocation());
         break;
     case 8:
@@ -329,13 +330,21 @@ void OpenWillowPickupCard::TickShots(AOpenWillowWalker& Maya, APlayerController&
     case 9:
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS wall decoy_left=%d"), Decoy.IsValid() ? 1 : 0);
         if (Wall.IsValid()) Wall->Destroy();
+        Player.InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::E, IE_Pressed, 1.f));
+        bReleaseUse = true;
         break;
     case 10:
+        UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS wall_removed decoy_taken=%d (expected 1)"), Decoy.IsValid() ? 0 : 1);
+        // A last gun, aimed at, then Maya goes down: the card must hide.
+        if (!DropRolledGun(Maya, 4)) { Fail(); return; }
+        Aim(Player, DropLocation);
+        break;
+    case 11:
         Shot(7, TEXT("SecondAimed"), Now);
         OpenWillowApplyDamageToPlayer(World, 1.e6f);
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS down=%d"), Maya.IsDown() ? 1 : 0);
         break;
-    case 11: Shot(8, TEXT("Down"), Now); break;
+    case 12: Shot(8, TEXT("Down"), Now); break;
     default:
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS done"));
         Fail();

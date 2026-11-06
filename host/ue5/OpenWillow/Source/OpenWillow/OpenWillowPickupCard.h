@@ -32,8 +32,8 @@ namespace OpenWillowPickupCard
     // -owpickupcardshots (with the movie HUD): rolls a gun with ow.RollGun, drops it ahead of Maya, captures the screen
     // aimed at it, aimed away, aimed again and after E picked it up; then the decoy case (a gun 70 uu to her right and one
     // 150 uu ahead, aimed at: E must take the aimed one, logged "decoy aimed_taken=1 nearer_left=1"); then E with a test
-    // block between the view and the decoy (logged "wall decoy_left=1"); then the decoy aimed at and Maya put down (the card
-    // must hide). Captures OWPickupCard_<n>_<name>.png and quits. Call every HUD frame once
+    // block between the view and the decoy (logged "wall decoy_left=1"), and again with the block gone (logged "wall_removed
+    // decoy_taken=1"); then a last gun aimed at and Maya put down (the card must hide). Captures OWPickupCard_<n>_<name>.png and quits. Call every HUD frame once
     // the movie is ready; does nothing without the flag.
     void TickShots(AOpenWillowWalker& Maya, APlayerController& Player);
 }
