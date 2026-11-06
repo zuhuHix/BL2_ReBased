@@ -82,7 +82,9 @@ struct FOpenWillowFiringData
     float ProjectileLifetime = 0; // MaxLifespan
     bool bFalls = false;         // gravity applies (thrown guns; weapon rockets fly straight, observed live)
     float Elasticity = 0.4f;     // speed kept on a bounce (the first Bounce behaviour's elasticity)
-    float FuseTime = 0;          // s from launch to the explosion (grenades); 0 = no fuse
+    float FuseTime = 0;          // s from launch to the explosion (grenades: the spawn timer); 0 = no fuse
+    float ContactFuse = 0;       // s from the first contact to the explosion (grenades); 0 = contact starts nothing
+    float TargetElasticity = 0.2f; // speed kept on a bounce off a damagable object (grenades); Elasticity is off the world
     float UpwardVelocity = 0;    // uu/s added to the launch velocity's Z (grenades)
     bool bExplodeOnImpact = false;
     int32 Bounces = 0;
@@ -170,6 +172,8 @@ struct FOpenWillowFiringStats
     TMap<FString, int32> TickWeapons;  // status tick events by the weapon id they carry
     int32 UnknownSources = 0;          // hit events whose Source was left Unknown (every firing path sets one)
     int32 GrenadeHits = 0;             // hit events whose Source is Grenade
+    float GrenadeContactAge = -1;      // s from the launch to the grenade's first contact; -1 = none
+    float GrenadeFuseAge = -1;         // s from the launch to the grenade's explosion; -1 = none
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 

@@ -140,20 +140,28 @@ bool FOpenWillowFiringData::ParseGrenade(const FJsonObject& Grenade, FOpenWillow
     Out.ProjectileSpeed = float(NumberOr(*Projectile, TEXT("speed"), 0));
     Out.GravityScale = float(NumberOr(*Projectile, TEXT("gravity_scale"), 1));
     Out.bFalls = true;   // PHYS_Falling
-    Out.Bounces = FMath::Max(0, int32(NumberOr(*Projectile, TEXT("bounces"), 0)));
     Projectile->TryGetBoolField(TEXT("explode_on_impact"), Out.bExplodeOnImpact);
+    // The projectile's behaviour graph (tools/grenade_mod.py contact): a contact bounces, the first one starts a timer, and
+    // the spawn timer is the fallback. A block without it (older than the graph read) does not load.
+    const FJsonObject* Contact = ObjectOrNull(*Projectile, TEXT("contact"));
+    if (Contact)
+    {
+        Out.Elasticity = float(NumberOr(*Contact, TEXT("world_elasticity"), 0));
+        Out.TargetElasticity = float(NumberOr(*Contact, TEXT("target_elasticity"), 0));
+        Out.ContactFuse = float(NumberOr(*Contact, TEXT("fuse_after_contact"), 0));
+        Out.FuseTime = float(NumberOr(*Contact, TEXT("fuse_after_spawn"), 0));
+        Contact->TryGetBoolField(TEXT("full_damage"), Out.Splash.bFullDamage);
+    }
     Out.ProjectileLifetime = float(NumberOr(*Projectile, TEXT("max_lifespan"), 0));
     // ProjectileDefinition.UpwardVelocityBonus: added to the launch velocity's Z (NATIVE_WEAPON_FIRING 2.1, read; UNVERIFIED).
     Out.UpwardVelocity = float(NumberOr(*Projectile, TEXT("upward_velocity_bonus"), 0));
-    if (const FJsonObject* Fuse = ObjectOrNull(Grenade, TEXT("fuse_time"))) Out.FuseTime = float(NumberOr(*Fuse, TEXT("value"), 0));
     Out.Splash.bValid = true;
     Out.Splash.Radius = float(weapon_firing::explosionRadius(NumberOr(*Radius, TEXT("value"), 0)));
     Out.Splash.Damage = float(NumberOr(*Damage, TEXT("value"), 0));
     Grenade.TryGetStringField(TEXT("damage_type"), Out.Splash.DamageType);
-    // The grenade's falloff bands are not in the block: the class defaults (0.2 / 0.8 / 0.2) stand in (UNVERIFIED).
     ParseFx(Grenade, Out);
     // A grenade without positive damage does not load: an unresolved value (null in the block) must not throw a harmless one.
-    Out.bLoaded = Out.ProjectileSpeed > 0.f && Out.Splash.Radius > 0.f && Out.Splash.Damage > 0.f;
+    Out.bLoaded = Out.ProjectileSpeed > 0.f && Out.Splash.Radius > 0.f && Out.Splash.Damage > 0.f && Out.ContactFuse > 0.f && Out.FuseTime > 0.f;
     return Out.bLoaded;
 }
 

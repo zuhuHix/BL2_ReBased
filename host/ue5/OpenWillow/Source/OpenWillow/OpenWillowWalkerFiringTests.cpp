@@ -286,9 +286,10 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             const bool bRefusedEmpty = GrenadeReleaseAt == 0.f && InFlight() == 0 && Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current == 0;
             Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, GrenadeAmmoAfter);
             const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d damage=%.2f splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d"),
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d damage=%.2f splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d contact_age=%.3f fuse_age=%.3f contact_fuse=%.3f"),
                 GrenadeAmmoAfter < GrenadeAmmoBefore ? 1 : 0, GrenadeAmmoBefore, GrenadeAmmoAfter, bRefusedEmpty ? 1 : 0,
-                GrenadeData.bLoaded ? GrenadeData.Splash.Damage : 0.f, C.SplashHits, C.Splash, C.GrenadeHits, C.UnknownSources);
+                GrenadeData.bLoaded ? GrenadeData.Splash.Damage : 0.f, C.SplashHits, C.Splash, C.GrenadeHits, C.UnknownSources,
+                C.GrenadeContactAge, C.GrenadeFuseAge, GrenadeData.ContactFuse);
             GrenadeStep = 5;
         }
         return;

@@ -63,6 +63,7 @@ AOpenWillowProjectile* AOpenWillowProjectile::Launch(UWorld* World, const FLaunc
         P->Motion.gravityZ = In.Data->bFalls ? OpenWillowFiring::WorldGravityZ * In.Data->GravityScale : 0.0;
         P->MaxAge = In.Data->ProjectileLifetime > 0.f ? In.Data->ProjectileLifetime : 5.f;
         P->BouncesLeft = In.Data->Bounces;
+        P->FuseAt = In.Data->FuseTime;
     }
     else
     {
@@ -110,14 +111,15 @@ void AOpenWillowProjectile::Tick(float DeltaSeconds)
     FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowProjectile), true, this);
     if (Shooter.IsValid()) Query.AddIgnoredActor(Shooter.Get());
     // Light bullets sweep their firing mode's TraceExtent box (zero: a line); rockets are traced as a line.
-    if (OpenWillowFiring::SweepShot(GetWorld(), Hit, From, To, bRocket ? FVector::ZeroVector : Data.TraceExtent, Query))
+    if (!bAtRest && OpenWillowFiring::SweepShot(GetWorld(), Hit, From, To, bRocket ? FVector::ZeroVector : Data.TraceExtent, Query))
     {
         Impact(Hit);
         return;
     }
-    // A grenade's fuse: it explodes where it is once the fuse time has passed since the launch.
-    if (Data.FuseTime > 0.f && Flight.age >= Data.FuseTime)
+    // A grenade's fuse: it explodes where it is once its timer has run out (the spawn timer, or the one its first contact started).
+    if (FuseAt > 0.f && Flight.age >= FuseAt)
     {
+        if (Data.FiringMode == TEXT("grenade")) OpenWillowFiring::Counts.GrenadeFuseAge = float(Flight.age);
         UE_LOG(LogTemp, Display, TEXT("OWFIRING fuse %s after %.2f s at (%.0f %.0f %.0f)"), *Data.FiringMode, float(Flight.age), To.X, To.Y, To.Z);
         if (Data.Splash.bValid) Explode(GetWorld(), Shooter.Get(), Data, To, FVector::UpVector, SplashDamage, WeaponId, SourceOfThis());
         Destroy();
@@ -265,6 +267,28 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
     UE_LOG(LogTemp, Display, TEXT("OWFIRING impact %s on %s at (%.0f %.0f %.0f) after %.3f s, speed %.0f"),
         bRocket ? TEXT("rocket") : TEXT("bullet"), Other ? *Other->GetName() : TEXT("world"),
         Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z, float(Flight.age), float(Velocity.Size()));
+    if (Data.ContactFuse > 0.f && !Data.bExplodeOnImpact)
+    {
+        // A grenade (the projectile's behaviour graph; live 2026-11-06): every contact only bounces, and a target takes no
+        // direct damage. The first contact starts the timer once; the spawn timer still runs.
+        if (!bContactFuseStarted)
+        {
+            bContactFuseStarted = true;
+            FuseAt = FMath::Min(FuseAt, float(Flight.age) + Data.ContactFuse);
+            if (Data.FiringMode == TEXT("grenade")) OpenWillowFiring::Counts.GrenadeContactAge = float(Flight.age);
+        }
+        const FVector Bounced = Velocity.MirrorByVector(Hit.ImpactNormal) * (bTarget ? Data.TargetElasticity : Data.Elasticity);
+        Flight.position = ToVec(Hit.ImpactPoint + Hit.ImpactNormal * 2.f);
+        Flight.velocity = ToVec(Bounced);
+        // Stops on the ground, as the live one did well before its fuse. The speed limit is a stand-in (UNVERIFIED).
+        if (Bounced.Size() < 20.f && Hit.ImpactNormal.Z > 0.7f)
+        {
+            bAtRest = true;
+            Flight.velocity = ToVec(FVector::ZeroVector);
+            Motion.gravityZ = 0.0;
+        }
+        return;
+    }
     if (bRocket && BouncesLeft > 0 && !bTarget)
     {
         // ProjectileBehavior_Bounce: reflect off the wall keeping the first bounce's elasticity (UNVERIFIED reading).
