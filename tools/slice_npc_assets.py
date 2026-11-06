@@ -552,12 +552,47 @@ def convert_subset(mesh_md5, reference_json, clips):
     fit_error = float(np.abs(linear - MIRROR[:3, :3]).max())
     if fit_error > MAX_FIT_ERROR or np.abs(offset).max() > 0.05:
         raise ValueError(f'MD5 to UE map is not the expected Y mirror: {linear} {offset}')
+    return clip_tracks(joints, names, bind_md5, bind_ue, clips, {'fit_error': fit_error})
+
+
+def convert_subset_rank_deficient(mesh_md5, reference_json, clips, log=print):
+    """convert_subset for skeletons too small to fit the MD5-to-UE map: the lootables import only (tools/lootables_editor.py).
+
+    The fit needs bind positions of rank 4 (three axes and an offset). Prop skeletons have 2 or 3 bones, so the fit is
+    underdetermined and fails whatever the data says. Here, when the rank is below 4, the known Y mirror is tested
+    directly on every bone, at the same 0.05 tolerance convert_subset gives the fitted offset. At rank 4 this calls
+    convert_subset, so the usual check applies. This proves less than a fit: directions the bones do not span are not
+    tested, so the clips stay UNVERIFIED until a frame shows the lid opening the right way (docs/verification/VENDORS.md 7).
+    """
+    joints = read_joints(Path(mesh_md5).read_text(encoding='utf-8'))
+    reference = {b['name']: b for b in json.loads(Path(reference_json).read_text(encoding='utf-8'))}
+    names = [j[0] for j in joints]
+    if set(names) != set(reference):
+        raise ValueError(f'UE skeleton and MD5 mesh bones differ: {sorted(set(names) ^ set(reference))[:10]}')
+    bind_md5 = [matrix(position, q) for _, _, position, q in joints]
+    bind_ue = [ue_matrix(reference[n]['loc'], reference[n]['quat']) for n in names]
+    source = np.array([m[:3, 3] for m in bind_md5])
+    target = np.array([m[:3, 3] for m in bind_ue])
+    rank = int(np.linalg.matrix_rank(np.c_[source, np.ones(len(source))], tol=1e-3))
+    if rank >= 4:
+        return convert_subset(mesh_md5, reference_json, clips)
+    residual = float(np.abs(source @ MIRROR[:3, :3].T - target).max())
+    if residual > 0.05:
+        raise ValueError(f'rank-deficient (rank {rank}): bind positions are not the expected Y mirror, off by {residual:.4f} cm')
+    for label in clips:
+        log(f'rank-deficient: mirror tested directly on {len(names)} bones ({label}, rank {rank}, residual {residual:.6f} cm)')
+    return clip_tracks(joints, names, bind_md5, bind_ue, clips,
+                       {'fit_error': residual, 'rank': rank, 'mirror_tested_directly': True})
+
+
+def clip_tracks(joints, names, bind_md5, bind_ue, clips, report):
+    """The conversion after the map check: T_i(t) = C W_i(t) D_i (see convert_subset). report gets one row per clip."""
     c = MIRROR
     inverse_c = np.linalg.inv(c)
     fix = [np.linalg.inv(w) @ inverse_c @ t for w, t in zip(bind_md5, bind_ue)]
     parents = [j[1] for j in joints]
     index = {n: i for i, n in enumerate(names)}
-    output, report = {}, {'fit_error': fit_error}
+    output = {}
     for label, path in clips.items():
         anim_names, rate, frames = read_md5anim(path)
         missing = [n for n in anim_names if n not in index]
