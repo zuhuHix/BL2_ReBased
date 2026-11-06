@@ -364,21 +364,31 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: action skill point spent=%d %s"), bSpent, *Reason);
         }
         // -owslicegateshield: Maya fights with a shield, so the fight path can run without the restore fixture. A shield
-        // from the gear manifest when one is there (equipped as the inventory equips gear); else a host stand-in pool with
-        // her maximum health as its capacity and the default recharge (not stock data). Named on the fight links.
+        // from the gear manifest when one is there (equipped as the inventory equips gear). If all of them are above her
+        // level, the lowest one, by passing its own level to the equip call: a test override of the level rule, not how
+        // equipping works, and the fixture's name says so. With no manifest shield, a host stand-in pool with her maximum
+        // health as its capacity and the default recharge (not stock data). Named on the fight links.
         if (FParse::Param(FCommandLine::Get(), TEXT("owslicegateshield")))
         {
+            const int32 MayaLevel = W->GetSkills()->GetLevel();
+            const FOpenWillowGearItem* Lowest = nullptr;
             for (const FOpenWillowGearItem& Gear : Inventory->GearItemList())
-                if (Gear.ItemType == TEXT("shield") && Inventory->EquipGearById(Gear.Id, TEXT("shield"), W->GetSkills()->GetLevel()))
+            {
+                if (Gear.ItemType != TEXT("shield")) continue;
+                if (Inventory->EquipGearById(Gear.Id, TEXT("shield"), MayaLevel))
                 {
                     ShieldFixture = FString::Printf(TEXT("shield %s equipped from the gear manifest"), *Gear.Id);
                     break;
                 }
+                if (Gear.bLevelKnown && (!Lowest || Gear.Level < Lowest->Level)) Lowest = &Gear;
+            }
+            if (ShieldFixture.IsEmpty() && Lowest && Inventory->EquipGearById(Lowest->Id, TEXT("shield"), Lowest->Level))
+                ShieldFixture = FString::Printf(TEXT("level rule overridden by the test: shield %s of level %d equipped on Maya of level %d"), *Lowest->Id, Lowest->Level, MayaLevel);
             if (ShieldFixture.IsEmpty())
             {
                 const FOpenWillowMayaStats Defaults;
                 W->GetMayaState().EquipShield(W->GetMaxHealth(), Defaults.ShieldRechargeDelay, Defaults.ShieldRechargeRate, true, GetWorld()->GetTimeSeconds());
-                ShieldFixture = FString::Printf(TEXT("host stand-in shield of %.0f (no gear-manifest shield Maya's level %d can equip; not stock data)"), W->GetShieldCapacity(), W->GetSkills()->GetLevel());
+                ShieldFixture = FString::Printf(TEXT("host stand-in shield of %.0f (no shield could be equipped from the gear manifest; not stock data)"), W->GetShieldCapacity());
             }
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: %s, shield %.0f/%.0f"), *ShieldFixture, W->GetShield(), W->GetShieldCapacity());
         }
@@ -426,19 +436,17 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 "fallback: the host stand-in target at %s next to Maya in Sanctuary"), *At.ToCompactString()));
         }
         for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
-        LastHitCount = W->GetHitCount();
+        HitsBeforeFight = W->GetHitCount();
+        EnemyHitsBeforeFight = W->GetHitCountFrom(Enemy.Get());
+        NoCauserHitsBeforeFight = W->GetHitCountFrom(nullptr);
+        if (!ShieldFixture.IsEmpty())
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note Maya's shield at the start of the fight: %.0f/%.0f"), W->GetShield(), W->GetShieldCapacity());
         Next(EStep::Fight);
         break;
     }
 
     case EStep::Fight: {
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
-        // Each hit on Maya, by its causer (the walker keeps the last one): the selected enemy, another actor, or none given.
-        if (W->GetHitCount() != LastHitCount)
-        {
-            LastHitCount = W->GetHitCount();
-            if (W->GetLastHitCauser() == Enemy) ++EnemyHits; else if (W->GetLastHitCauser()) ++OtherHits; else ++UnattributedHits;
-        }
         if (Enemy && Enemy->IsAutoAimTarget())
         {
             LastEnemyLocation = Enemy->GetActorLocation();   // where it stands while alive (a dead actor may be moved away)
@@ -457,6 +465,10 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,
         // and this link relied on the shield too.
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
+        // The fight's hits by causer: the selected enemy, another actor, or none given.
+        const int32 EnemyHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) - EnemyHitsBeforeFight : 0;
+        const int32 UnattributedHits = W->GetHitCountFrom(nullptr) - NoCauserHitsBeforeFight;
+        const int32 OtherHits = W->GetHitCount() - HitsBeforeFight - EnemyHits - UnattributedHits;
         const FString Others = FString::Printf(TEXT("other hits: %d by other causers, %d with no causer"), OtherHits, UnattributedHits);
         if (EnemyHits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya caused by %s during the fight (%s), health %.0f/%.0f"),
             EnemyHits, *Enemy->GetName(), *Others, W->GetHealth(), W->GetMaxHealth()));
@@ -631,10 +643,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (!W->CanCastPhaselock(Reason))
             {
                 if (StepTime < PhaselockTargetWait) return;   // e.g. still drawing the new gun
-                // A miss leaves no target and a short cooldown, so the retries can end inside that cooldown: say so.
+                // A miss leaves no target and a short cooldown, so the last retry usually falls inside that cooldown. The misses
+                // are the result, not the refusal; a cast that never went out reports its reason.
                 FailLink(TEXT("phaselock_enemy"), PhaselockCasts > 0
-                    ? FString::Printf(TEXT("%d cast(s) went out and all missed, no preferred target (the log's \"Phaselock targeting\" line says why); the last retry was refused: %s"), PhaselockCasts, *Reason)
-                    : FString::Printf(TEXT("cast refused: %s"), *Reason));
+                    ? FString::Printf(TEXT("%d cast(s) went out and all missed: no preferred target (the log's \"Phaselock targeting\" line says why)"), PhaselockCasts)
+                    : FString::Printf(TEXT("no cast went out: %s"), *Reason));
                 Next(EStep::Accept);
                 return;
             }

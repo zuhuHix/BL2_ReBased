@@ -47,9 +47,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 
   A shuffled, repeated or unknown link fails the run, and so does a link line before the start or after the SUMMARY.
 - **`enemy_attacks_maya` counts only the selected enemy's hits.** It counts only hits whose causer is the enemy the
-  fight selected. The walker now keeps the causer of the last counted hit (`GetLastHitCauser`; 3 lines in
-  `OpenWillowWalker.h/.cpp`). Hits from other causers, or with no causer, are reported in the detail and leave the link
-  NOT_AVAILABLE.
+  fight selected. The walker counts hits per causer where they land (`GetHitCountFrom`; a few lines in
+  `OpenWillowWalker.h/.cpp`), because several hits can land in one tick. Hits from other causers, or with no causer, are
+  reported in the detail and leave the link NOT_AVAILABLE.
 - **The pickup links (review of #98).** Each logs `card_id=<id> picked_id=<id>`: the card's item in the tick of the E
   press, once Maya is on the ground, and the item E put in the backpack.
   - `pick_up_gun` passes only when both are the aimed drop.
@@ -136,7 +136,17 @@ starts from a fresh save, and the log has no cast before the gate's. Owner: the 
 
 **Why `-Shield` used the stand-in.** All four shields in this PC's gear manifest are level 36 to 46, and
 `EquipGearById` refuses an item above the player's level, which is 8 here. The old fixture text said "no shield in the
-gear manifest", which was wrong; it now says none Maya's level can equip. The stock-shield path has still not run.
+gear manifest", which was wrong. The driver now equips the lowest of them by passing its own level to the call, named as
+the fixture `level rule overridden by the test: shield <id> of level <n> equipped on Maya of level <m>`. This is a test
+override, not how equipping works. It has not run yet, so the stock-shield path is still unproven.
+
+**Why link 4 was NOT_AVAILABLE in two runs.** This was a bug in this lane's driver, and its detail was false: "Maya was
+hit, but not by the selected enemy". The range log shows all four enemies hitting Maya before the kill in all three runs,
+the selected one included. In those two runs its hit landed in the same tick as the others. The driver compared the hit
+count once per tick and credited only the last causer, so it also counted 1 hit where there were 4. It passed in the
+`-Shield` run only because the selected enemy's hit came 0.03 s later. The walker now counts hits per causer where they
+land, and the driver reads those counts. Only the selected enemy's hits still count. No longer fight or fixture was
+needed. This has not run yet; the numbers in the table above are from the old counting.
 
 ### Before the range was on main
 
@@ -180,8 +190,9 @@ This is not a merged state: the merge was local and was deleted after the run. *
 Maya fights with a shield, so the fight path can run without the restore fixture: only a downed Maya is restored, and
 her health after the fight is kept. She gets a shield from the gear manifest when it has one. Otherwise she gets a host
 stand-in with her maximum health as its capacity and the default recharge, which is **not stock data**. Both are named
-as fixtures, on `kill_enemy` and `enemy_attacks_maya`. The stock-shield path has not run: it needs a manifest shield at
-or below Maya's level (see "Why `-Shield` used the stand-in" above).
+as fixtures, on `kill_enemy` and `enemy_attacks_maya`. If every manifest shield is above her level, the lowest is
+equipped under a fixture that says the level rule was overridden (see "Why `-Shield` used the stand-in" above). The
+stock-shield path has not run.
 
 Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
 2026-11-04), not on main:
@@ -196,9 +207,8 @@ Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/featur
 | Gap | Link(s) | Owner | What closes it |
 |---|---|---|---|
 | With the quest on, Phaselock rejects the range's stock pawns | 9 | range | The range's pawns count as targetable, or the walker's rule applies only to the mission's dummy (`Why link 9 FAILs` above) |
-| The selected enemy does not always hit Maya in the 2.4 s fight | 4 | range | NOT_AVAILABLE in two of the three runs: the one hit came from another enemy. A longer fight or a provoked enemy would make it repeatable |
 | No fight has left Maya down | revive fixture | slice-gate | Only `-DownAfterFight` runs the revive so far |
-| No low-level stock shield in the gear manifest | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8. Maya still has no shield at spawn, so the restore fixture stays |
+| No low-level stock shield in the gear manifest | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8 would remove the level-override fixture. Maya still has no shield at spawn, so the restore fixture stays |
 | Generated guns have no firing block | 7 (not graded) | projectiles | `ow.RollGun` guns fire the host's fallback trace (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"). The equip link does not grade the gun's firing |
 | The stand-in is a 20,000-health dummy | 3 | range | Real enemy health per level comes with PR #76 (`range_manifest.json`) |
 
