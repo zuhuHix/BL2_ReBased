@@ -1415,11 +1415,17 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         {
             if (Hud->IsSkillsOpen()) { Why = TEXT("a status page is still open"); return false; }
             if (!Walker->AreArmsShown()) { Why = TEXT("no first-person arms to hide (run without the arm meshes)"); return false; }
-            // The suite may have ended holding nothing: draw whatever is equipped.
+            // The suite's own steps leave every slot empty: draw what is equipped, or else equip a gun from the backpack.
+            UOpenWillowInventory* Inventory = Walker->GetInventory();
             for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount && !Walker->IsWeaponShown(); ++Slot)
-                if (const FOpenWillowWeaponItem* Item = Walker->GetInventory()->SlotItem(Slot)) Walker->DrawItemById(UOpenWillowInventory::StableId(*Item));
-            if (!Walker->IsWeaponShown() || !Walker->GetInventory()->ActiveWeapon()) { Why = TEXT("no gun in hand to test firing with (no weapon or no mesh in this run's data)"); return false; }
-            return true;
+                if (const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot)) Walker->DrawItemById(UOpenWillowInventory::StableId(*Item));
+            const int32 Weapons = Inventory->Items().Num();
+            for (int32 Item = 0; Item < Weapons && !Walker->IsWeaponShown(); ++Item) Walker->EquipItem(Item, 0);
+            if (Walker->IsWeaponShown() && Inventory->ActiveWeapon()) return true;
+            Why = Weapons == 0 ? TEXT("no weapon in this run's data to test firing with")
+                : Inventory->ActiveWeapon() ? FString::Printf(TEXT("%s is in hand but no gun mesh shows (this run's data)"), *Inventory->ActiveWeapon()->Id)
+                : FString::Printf(TEXT("none of the %d weapons could be equipped in slot 1"), Weapons);
+            return false;
         }, false);
     Add(TEXT("map_hides_first_person_no_shot"), false, [this] { Hud->ToggleMap(); },
         [this, FirstPersonHidden, StockMagazine](FString& D)
