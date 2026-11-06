@@ -76,6 +76,12 @@ class RunLimit(unittest.TestCase):
                             "Wait-OwStartedProcess -Process $p -LimitSeconds 30")
         self.assertEqual(out.split()[-1], 'True')
 
+    def test_an_exit_code_can_be_read_after_the_process_has_gone(self):
+        # The launcher tells a crash from a clean exit by this; PowerShell 5 reads it empty without the handle Wait-OwStartedProcess opens.
+        out, _ = powershell(f"$p = Start-Process -PassThru -WindowStyle Hidden -FilePath '{sys.executable}' -ArgumentList @('-c', '\"import time, sys; time.sleep(1); sys.exit(3)\"'); "
+                            "$exited = Wait-OwStartedProcess -Process $p -LimitSeconds 30; Write-Output \"$exited $($p.ExitCode)\"")
+        self.assertEqual(out.split()[-2:], ['True', '3'])
+
     def test_the_wrong_command_line_is_left_running(self):
         out, _ = powershell(start_sleeper('owlimittest2') +
             "$stopped = Stop-OwStartedProcess -Process $p -Expected @('owlimittest2', 'not-this-process') -WarningAction SilentlyContinue; "
@@ -87,7 +93,7 @@ class RunLimit(unittest.TestCase):
                                "Write-Output $e.Count")
         self.assertEqual((out, code), ('0', 0))
         source = LAUNCHER.read_text(encoding='utf-8')
-        for piece in ('run_limit.ps1', 'Wait-OwStartedProcess', 'Stop-OwStartedProcess', '[int]$TimeoutSeconds = -1'):
+        for piece in ('run_limit.ps1', 'Wait-OwStartedProcess', 'Stop-OwStartedProcess', '[int]$TimeoutSeconds = -1', '$process.ExitCode -eq 0'):
             self.assertIn(piece, source)
         self.assertNotRegex(source, r'Stop-Process\s+-Name|taskkill|\bpkill\b|\bkillall\b')
 
