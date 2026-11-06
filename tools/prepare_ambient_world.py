@@ -183,13 +183,18 @@ def attachment_transforms(kind, bones):
     while the imported skeleton is the Y mirror C of the md5 one (the ref pose equals C W C^-1, checked). A piece at UE3 world position
     W t3 p is therefore at C W flip t3 p in the imported frame, and relative to the imported bone frame T: T^-1 C W flip t3. This is a
     reflection when t3 is a rotation (the mirror image of the piece), so the result can need one negative scale."""
+    md5 = next((ROOT / 'local/external/umodel/slice-npc' / f'Amb_{kind}').rglob('*.md5mesh'))
+    return attachment_frames(md5, ROOT / f'local/slice/ambient/ref_pose_{kind}.json', bones)
+
+
+def attachment_frames(md5, ref_pose, bones):
+    """attachment_transforms from an md5mesh file and a ref_pose file (shared with tools/prepare_phaselock_target.py)."""
     import numpy as np
     from prepare_character_anims import MIRROR, matrix, ue_matrix
     from prepare_character_pose import read_joints
     from prepare_sanctuary_pillar import numbers  # noqa: F401  (imported for read_joints' dependencies)
-    md5 = next((ROOT / 'local/external/umodel/slice-npc' / f'Amb_{kind}').rglob('*.md5mesh'))
-    joints = {j[0]: j for j in read_joints(md5.read_text(encoding='utf-8'))}
-    ref = {b['name']: b for b in json.loads((ROOT / f'local/slice/ambient/ref_pose_{kind}.json').read_text(encoding='utf-8'))}
+    joints = {j[0]: j for j in read_joints(Path(md5).read_text(encoding='utf-8'))}
+    ref = {b['name']: b for b in json.loads(Path(ref_pose).read_text(encoding='utf-8'))}
     flip = np.diag([1.0, -1.0, -1.0, 1.0])
     out = {}
     for bone in bones:

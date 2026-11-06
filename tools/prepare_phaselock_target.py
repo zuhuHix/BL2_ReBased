@@ -20,6 +20,7 @@ Steps (``all`` runs identity, extract, editor-job; ``anims`` needs the editor's 
 * ``editor-job`` the job file for ``tools/slice_npc_editor.py`` (modes ``npcs`` then ``anims``), plus
                  ``host_target.json``: the UE asset paths and the pawn numbers the host reads.
 * ``anims``      convert the chosen MD5 clips to UE bone tracks (needs ``ref_pose_<Id>.json`` from the editor).
+* ``attachments`` add the worn static meshes to ``host_target.json`` (needs the editor's ``attach`` report and the ref pose).
 
 Run the whole thing with ``tools/import_phaselock_target.ps1``.
 """
@@ -80,6 +81,41 @@ def group_of(anim_set):
     return group, name
 
 
+def worn_attachments(composition, read_component):
+    """The static meshes a body composition wears by default: rows of its Attachments with switch 0, a StaticMeshComponent and a
+    named bone. A switched row (the rocks a bullymong picks up) is off until its switch is set. read_component dumps a component."""
+    worn = []
+    for row in composition.get('Attachments', []):
+        data = row.get('Data') or {}
+        part = data.get('ComponentData') or {}
+        component = part.get('Component')
+        bone = part.get('MeshSocketName')
+        if row.get('SwitchIdentifier') != 0 or not component or not bone or bone == 'None' or 'StaticMeshComponent' not in component:
+            continue
+        props = read_component(component)
+        if not props.get('staticmesh'):
+            sys.exit(f'{component}: an attached component without a static mesh')
+        rotation, translation, scale3d = props.get('rotation', {}), props.get('translation', {}), props.get('scale3d', {})
+        worn.append({'component': component, 'bone': bone, 'static_mesh': props['staticmesh'], 'materials': props.get('materials', []),
+                     'comp_translation': [float(translation.get(k, 0.0)) for k in 'XYZ'],
+                     'comp_rotation': [int(rotation.get(k, 0)) for k in ('Pitch', 'Yaw', 'Roll')],
+                     'comp_scale': float(props.get('scale', 1.0)),
+                     'comp_scale3d': [float(scale3d.get(k, 1.0)) for k in 'XYZ']})
+    return worn
+
+
+def attachment_meshes(worn):
+    """Each static mesh once, with the one material its components give it. Two materials on one mesh stop the tool: the import
+    sets the material on the asset, so it could not show both."""
+    meshes = {}
+    for att in worn:
+        mesh = npc.leaf(att['static_mesh'])
+        material = npc.leaf(att['materials'][0]) if att['materials'] else None
+        if meshes.setdefault(mesh, material) != material:
+            sys.exit(f'{mesh}: its components name two materials, {meshes[mesh]} and {material}')
+    return meshes
+
+
 def identity_step(args):
     _, cooked, reader_path = npc.settings(args)
     reader = npc.Reader(reader_path, cooked)
@@ -99,11 +135,14 @@ def identity_step(args):
                  'anim_sets': [reader.identity(p, package) for p in component.get('animsets', [])],
                  'materials_from_component': [reader.identity(p, package) for p in component.get('materials', [])],
                  'observed': spec['observed']}
+        body = reader.dump(pawn['bodyclass'], package)
+        entry['attachments'] = worn_attachments(body.get('bodycomposition') or {}, lambda path: reader.dump(path, package))
         if len(entry['anim_sets']) != 1:
             sys.exit(f'{name}: expected one AnimSet on the mesh component, got {component.get("animsets")}')
         result['targets'][name] = entry
         print(f'identity: {name}: mesh {component["skeletalmesh"]}, set {component["animsets"][0]}, '
-              f'translation {component.get("translation")}, scale {component.get("scale")}, cylinder {entry["archetype_cylinder"]}')
+              f'translation {component.get("translation")}, scale {component.get("scale")}, cylinder {entry["archetype_cylinder"]}, '
+              f'{len(entry["attachments"])} attachments')
     npc.write_json(OUT / 'identity.json', result)
     return result
 
@@ -142,6 +181,8 @@ def extract_step(args):
             slots.append({'name': default_mic, 'material': mic, 'package': mic_package, 'props': str(props) if props else None,
                           **info, 'export_record': record['id']})
         target['mesh_material_slots'] = slots
+        for mesh_name in attachment_meshes(target['attachments']):
+            go(f'{name}.attachment.{mesh_name}', name, package, mesh_name, 'StaticMesh', ['gltf'])
         anim_set = target['anim_sets'][0]
         group, set_name = group_of(anim_set['path'])
         go(f'{name}.animset', name, anim_set['package'], set_name, 'AnimSet', ['md5'], want_group=group)
@@ -204,6 +245,8 @@ def editor_job_step(args):
                           'scalars': slot.get('scalars', {}), 'vectors': slot.get('vectors', {})})
         job['npcs'].append({'id': name, 'dest': target['dest'], 'mesh_name': mesh,
                             'gltf': str(npc.find_output(name, mesh, ['gltf'])), 'slots': slots,
+                            'attachment_meshes': [{'id': m, 'gltf': str(npc.find_output(name, m, ['gltf'])), 'material': material}
+                                                   for m, material in attachment_meshes(target['attachments']).items()],
                             'tracks': str(OUT / f'anim_tracks_{name}.json'), 'roles': [r for r, _ in TARGETS[name]['roles']],
                             'reference_out': str(OUT / f'ref_pose_{name}.json')})
         hosts[name] = host_target(name, target)
@@ -229,16 +272,41 @@ def anims_step(args):
     npc.write_json(OUT / 'anims.json', report)
 
 
+def host_attachments(worn, assets, frames):
+    """What the host attaches: the asset, the bone and the placement relative to the imported bone. The placement uses the citizens'
+    rule (prepare_ambient_world.component_transform), read from a live citizen and not checked on this pawn: UNVERIFIED here."""
+    from prepare_ambient_world import component_transform
+    out = []
+    for att in worn:
+        location, quat, scale = component_transform(frames[att['bone']], att)
+        out.append({'mesh': assets[npc.leaf(att['static_mesh'])], 'bone': att['bone'], 'location': location, 'quat': quat, 'scale': scale})
+    return out
+
+
+def attachments_step(args):
+    from prepare_ambient_world import attachment_frames
+    identity = npc.read_json(OUT / 'identity.json')
+    report = npc.read_json(OUT / 'editor_report_attach.json')
+    hosts = npc.read_json(OUT / 'host_target.json')
+    for name, target in identity['targets'].items():
+        worn = target['attachments']
+        md5 = npc.find_output(name, npc.leaf(target['skeletal_mesh']['path']), ['md5mesh'])
+        frames = attachment_frames(md5, OUT / f'ref_pose_{name}.json', sorted({a['bone'] for a in worn}))
+        hosts[name]['attachments'] = host_attachments(worn, report[name], frames)
+        print(f'attachments: {name}: {len(worn)} pieces')
+    npc.write_json(OUT / 'host_target.json', hosts)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('step', choices=['identity', 'extract', 'editor-job', 'anims', 'all'])
+    parser.add_argument('step', choices=['identity', 'extract', 'editor-job', 'anims', 'attachments', 'all'])
     parser.add_argument('--game', help='Borderlands 2 folder (or OPENWILLOW_BL2)')
     parser.add_argument('--umodel', help='umodel.exe, build 1590 (or OPENWILLOW_UMODEL)')
     parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
     args = parser.parse_args()
     use_own_folders()
     steps = {'identity': [identity_step], 'extract': [extract_step], 'editor-job': [editor_job_step],
-             'anims': [anims_step], 'all': [identity_step, extract_step, editor_job_step]}[args.step]
+             'anims': [anims_step], 'attachments': [attachments_step], 'all': [identity_step, extract_step, editor_job_step]}[args.step]
     for step in steps:
         step(args)
 
