@@ -11,7 +11,7 @@ import sys
 
 EXPECTED = ('start_closed', 'm_opens_map', 'map_closed', 'l_opens_missions', 'closed_at_end')
 ROW = re.compile(r'OWCONTROLS (\S+) (PASS|FAIL)\b(.*)')
-SUMMARY = re.compile(r'OWCONTROLS SUMMARY passed=(\d+) failed=(\d+)')
+SUMMARY = re.compile(r'OWCONTROLS SUMMARY passed=(\d+) failed=(\d+)[ \t\r]*$', re.M)
 
 
 def grade(text):
