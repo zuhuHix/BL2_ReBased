@@ -16,6 +16,7 @@
 //   setlevel <n>                   spend <branch> <tier> <cell>        hurt <amount>
 //   equiplast <slot>               (equips and draws the newest backpack item)
 //   tpmarker [index]               (stands at the quest's index-th minimap marker)
+//   pagekey <page key name>        (a keydown dispatched inside the open status page)
 //   list                           (logs the backpack)                 quit
 UCLASS()
 class OPENWILLOW_API UOpenWillowPlaytest : public UActorComponent

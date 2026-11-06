@@ -319,6 +319,11 @@ void UOpenWillowPlaytest::RunCommand(const FString& Line)
         W->SetActorLocation(Markers[Index].Value + FVector(0, 0, 100.f), false, nullptr, ETeleportType::TeleportPhysics);
         W->NotifyTeleported();
     }
+    else if (C == TEXT("pagekey") && N > 1)
+    {
+        // A keydown dispatched inside the open status page: tells a dead key from one lost between Slate and the browser.
+        if (AOpenWillowMayaHUD* Hud = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) Hud->SendPageKey(T[1]);
+    }
     else if (C == TEXT("setlevel") && N > 1)
     {
         if (UOpenWillowSkills* Skills = W->GetSkills()) { Skills->SetLevel(FCString::Atoi(*T[1])); W->RefreshHealthForLevel(); }
