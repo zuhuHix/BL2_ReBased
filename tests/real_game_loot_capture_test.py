@@ -52,16 +52,6 @@ class CaptureScriptTest(unittest.TestCase):
     def setUp(self):
         self.text = CAPTURE.read_text(encoding='utf-8')
 
-    def test_it_keeps_the_safety_pattern(self):
-        for required in ('Backup-Saves', '-BlockSavesAtStart', 'block_saves()', 'Restore-Tree', 'Stop-OwnGame $proc $started $marker',
-                         'Enter-RunLock', 'Exit-RunLock', 'Remove-Driver', 'Get-GameProcess'):
-            self.assertIn(required, self.text)
-
-    def test_cleanup_is_in_the_finally_block(self):
-        cleanup = self.text[self.text.index('} finally {\n    if ($proc'):]
-        for required in ('Stop-OwnGame', 'Remove-Driver', 'Restore-Tree', 'Exit-RunLock', 'Remove-Item $HubLock'):
-            self.assertIn(required, cleanup)
-
     def test_a_failed_game_script_stops_the_step(self):
         # The command channel prints an exception as the reply instead of raising it.
         self.assertIn("-match 'Traceback (most recent call last)'".replace('(', r'\(').replace(')', r'\)'), self.text)
@@ -92,8 +82,8 @@ class NoPlacedDataTest(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertNotIn('OpportunityPoint', text)
                 self.assertNotIn('Sanctuary_Dynamic', text)
-                # A world coordinate is a number of four or more digits; the window size, rotator units and date are named here.
-                numbers = [n for n in re.findall(r'-?\b\d{4,}(?:\.\d+)?\b', text) if n not in ('1280', '65536', '65536.0', '2026')]
+                # A world coordinate is a number of four or more digits; the window size, timeouts, rotator units and date are named here.
+                numbers = [n for n in re.findall(r'-?\b\d{4,}(?:\.\d+)?\b', text) if n not in ('1280', '1800', '15000', '65536', '65536.0', '2026')]
                 self.assertEqual(numbers, [])
 
 

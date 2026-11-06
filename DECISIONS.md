@@ -3394,6 +3394,13 @@ calls `UOpenWillowSkills::PurchaseReset` (#73) and charges the money. The menu i
 its dialog (host choice, UNVERIFIED). The cost formula is the skills lane's, UNVERIFIED in game. Checked by
 `OpenWillow.Interactive.Loot` and check_interactives' `quick_change`; not yet run in-engine.
 
+## 2026-11-06: vendors' real-game captures use the verified backup
+
+AI-assisted (Claude). `tools/real_game/vendors_capture.ps1` restored saves from a backup it had not checked, released its locks on every exit and always wrote `finished`, and the new `loot_capture.ps1` copied that. Both now use the `realgame.ps1` helpers and, word for word, the cleanup of `phaselock_integrity_capture.ps1`: SaveData, Config, the SDK's settings and Sanity Saver's store are backed up and verified; a game exit not confirmed restores nothing and keeps the locks; a restore that does not compare clean keeps the locks and the backup and prints `Restore-VerifiedBackup`; exit 0 only for `completed`.
+
+- **Verified:** each script run whole with the game stubbed, over temporary folders of invented text (`tests/real_game_capture_safety_test.py`).
+- **`UNVERIFIED`:** neither script has run in the game in this form; `loot_capture.ps1` has never run in the game at all.
+
 ## 2026-11-03: elemental impact explosions from the firing mode, the cooked muzzle flash and casing (Weapons parity 2)
 
 AI-assisted (Claude). Records: `docs/verification/WEAPON_PROJECTILES.md` section 8, `WEAPON_VISUALS.md` section 18,
