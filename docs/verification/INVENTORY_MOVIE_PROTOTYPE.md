@@ -1462,7 +1462,7 @@ Skills, as in the real frames; Missions and Map get no Maya, because the game's 
 when the compare starts from the Equipped panel) and the Skills side trees fitted to D20.
 
 **Changed after round 2 (not yet scored).** The compare cards' height corrections never reached the frame: the measured right card did not change when its correction did. The likely reason, inferred and
-not traced, is that the movie's TweenCards rewrites the card's scales after the page's correction, which the page then believed was still applied; the page now re-applies it when the Y scale is not the one it left.
+not traced, is that the movie's TweenCards rewrites the card's scales after the page's correction, which the page then believed was still applied; the page now re-applies it when the Y scale is not the one it left. With it really applied, the right card's first compensation overshot the frame, so its correction went back to the 6% it had in round 23.
 The focus view's rows are spaced slightly wider, so the last empty cell lands where it does in D2g. Inspect card fit. All UNVERIFIED beyond D20.
 
 **PR review.** Nothing fires while a status page hides the weapon, whatever opened the page: the page's opening lets go of the trigger and ends a burst (UI-only input never delivers the key-up), and the firing paths check it too.
