@@ -472,6 +472,27 @@ class LidCaptureTest(unittest.TestCase):
             self.assertEqual(row[1], 'FAIL')
             self.assertIn('Synth_mid', row[2])
 
+    def test_two_balances_with_one_frame_name_fail(self):
+        balances = ('Pkg_A.Obj', 'Pkg.A_Obj')
+        self.assertEqual(ci.lid_frame_name(balances[0], 'mid'), ci.lid_frame_name(balances[1], 'mid'))
+        text = 'OWLOOTLID queue=2\n'
+        for balance in balances:
+            text += f'OWLOOTLID view balance={balance} clear=1 yaw=0\n'
+            text += ''.join(f'OWLOOTLID shot balance={balance} phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        with tempfile.TemporaryDirectory() as folder:
+            for balance in balances:
+                write_frames(folder, balance)
+            row = self.grade(text, balances, folder)
+        self.assertEqual(row[1], 'FAIL')
+        self.assertIn('share one frame name', row[2])
+
+    def test_each_run_has_its_own_log_and_frames_folder(self):
+        script = (Path(__file__).resolve().parents[1] / 'tools/test_interactives.ps1').read_text(encoding='utf-8')
+        stamp = next(row for row in script.splitlines() if row.startswith('$stamp = '))
+        self.assertIn('$PID', stamp)
+        self.assertIn('NewGuid', stamp)
+        self.assertIn('"shots-$stamp"', script)
+
     def test_a_frame_name_is_unique_per_full_balance(self):
         self.assertNotEqual(ci.lid_frame_name('One.Leaf', 'mid'), ci.lid_frame_name('Two.Leaf', 'mid'))
         self.assertEqual(ci.lid_frame_name('Pkg.Grades.Leaf', 'mid'), 'OWLootLid_Pkg_Grades_Leaf_mid.png')
