@@ -275,19 +275,44 @@ def finite(line, key):
     return value if math.isfinite(value) else None
 
 
+def pool_near(a, b):
+    """One rule for "the same pool value": OpenWillowWeaponGen.cpp PoolNear, which picks the gun, uses it too."""
+    return abs(a - b) <= 1e-3 * max(abs(a), abs(b), 1.0)
+
+
+def rolled_damage_fails(name, line):
+    """The row's damage against what its shots should deal to the one dummy, when that can be said from the numbers. A dummy that died
+    must have been sent at least its health, and no more than expected; one that was sent its health must have died."""
+    damage, expected, maximum = finite(line, 'damage'), finite(line, 'expected_damage'), finite(line, 'dummy_max')
+    if damage is None or expected is None or maximum is None or line.get('dummy_died') not in ('0', '1'):
+        return [f"{name}: no damage numbers (damage={line.get('damage')}, expected_damage={line.get('expected_damage')}, dummy_max={line.get('dummy_max')}, dummy_died={line.get('dummy_died')})"]
+    if expected < 0:
+        return []    # damage over time or falloff: not said from these numbers
+    close = abs(damage - expected) <= 0.01 * max(expected, 1.0)
+    if line['dummy_died'] == '1':
+        if damage < maximum * 0.99:
+            return [f'{name}: the dummy died with only {damage} sent of its {maximum}: it did not start this row at full health']
+        if damage > expected * 1.01:
+            return [f'{name}: damage {damage} is more than its shots should deal ({expected})']
+        return []
+    if not close:
+        return [f'{name}: damage {damage}, its shots should deal {expected}: a shot missed the live dummy, or the dummy was down']
+    return []
+
+
 def rolled_pool_fails(name, line, must_differ):
     """The held gun's accuracy pool against its card's. With must_differ the card must also be off the template's base, or this
     gun could not show a skipped merge."""
     triples = {which: [finite(line, f'{which}_{key}') for key in ('min', 'max', 'rate')] for which in ('pool', 'card', 'base')}
+    near = pool_near
     if None in triples['pool']:
         return [f'{name}: no accuracy pool on the held gun']
     if None in triples['card']:
         return [f'{name}: no accuracy pool on its card, {MANIFEST_HINT}']
-
-    def near(a, b):
-        return abs(a - b) <= 1e-3 * max(abs(a), abs(b), 1.0)
-
     fails = []
+    # The idle rate's sign says whether the cone shrinks or grows: a small wrong-signed rate would still be within the tolerance.
+    if (triples['pool'][2] < 0) != (triples['card'][2] < 0):
+        fails.append(f"{name}: held pool's idle rate {triples['pool'][2]} has another sign than its card's {triples['card'][2]}")
     if not all(near(held, card) for held, card in zip(triples['pool'], triples['card'])):
         fails.append(f"{name}: held pool {triples['pool']} is not its card's {triples['card']} (base {triples['base']})")
     if must_differ and (None in triples['base'] or all(near(card, base) for card, base in zip(triples['card'], triples['base']))):
@@ -326,6 +351,7 @@ def check_rolled(lines):
         if line.get('firing_loaded') != '1':
             fails.append(f'{name}: no firing block from its template, {TEMPLATE_HINT}')
         fails += rolled_pool_fails(name, line, want == '-2')
+        fails += rolled_damage_fails(name, line)
         if want == '-2':
             continue
         if want == '-1':
@@ -347,6 +373,15 @@ def check_rolled(lines):
             continue
         if (shots != 1) if want == '1' else (shots <= 1):
             fails.append(f'{name}: {shots} shots from one hold, expected {rule}')
+    # The same gun, on a dummy reset for each row, deals the same damage: a timing regression (a dummy still down) shows here.
+    by_id = {}
+    for line in lines:
+        if 'damage' in line and line.get('id'):
+            by_id.setdefault(line['id'], []).append(line)
+    for gun, rows in by_id.items():
+        numbers = [finite(row, 'damage') for row in rows if row.get('dummy_died') == '0' and row.get('shots') == rows[0].get('shots')]
+        if len(numbers) > 1 and None not in numbers and max(numbers) - min(numbers) > 0.01 * max(max(numbers), 1.0):
+            fails.append(f'rolled gun {gun}: the same gun and shots dealt {numbers} in different rows')
     return fails
 
 

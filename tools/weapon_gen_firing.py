@@ -9,7 +9,7 @@ ROLL_FIELDS come from the card, not the template. Three other values vary inside
 - a splash's evaluated damage becomes a scale of the card's damage (it follows the weapon's damage);
 - bullet and projectile speeds are stored before the WeaponProjectileSpeedMultiplier, which the host applies;
 - the accuracy pool keeps the type's base values; the host overrides them with the roll's from the card (src/weapon_gen, compared
-  with the resolver by tools/weapon_gen_parity.py). The base only remains for a manifest from before the pool rows.
+  with the resolver by tools/weapon_gen_parity.py). A manifest without the pool rows is refused here and by the host.
 
 Structural oracle: every roll is merged back (apply_roll) and compared with the resolver's own block. Any difference stops the
 tool before it writes. It covers the template's fields, speeds and splash damage in Python only. It does NOT cover the card
@@ -49,7 +49,7 @@ ROLL_FIELDS = ('damage', 'pellets', 'spread', 'burst_count', 'burst_interval', '
 STAGES = (8, 30)
 SEEDS = (1, 2, 3)
 RATIO_TOLERANCE = 1e-3
-FILE_SCHEMA = 2   # the host's OpenWillowWeaponGen.cpp FiringTemplatesSchema
+FILE_SCHEMA = 3   # the host's FiringTemplatesUsable. 3: the manifest must have the accuracy pool rows
 COMPARED = ('compared: every field but the roll fields and the accuracy pool, with speeds and splash damage merged in Python; '
             'NOT compared: the card overrides and the C++ merge (automation test OpenWillow.Vendor.RolledGunFiringTemplate)')
 
@@ -71,11 +71,15 @@ def output_paths(output, repo=ROOT):
 
 
 def fingerprint(manifest):
-    """The MD5 of the manifest's bytes, or a stop naming the tool that makes it. The host hashes the same bytes."""
+    """The MD5 of the manifest's bytes, or a stop naming the tool that makes it. The host hashes the same bytes. A manifest without the
+    accuracy pool rows stops here too: every rolled gun would silently keep the type's base pool."""
     try:
-        return hashlib.md5(Path(manifest).read_bytes()).hexdigest()
+        data = Path(manifest).read_bytes()
     except OSError as error:
         raise SystemExit(f'no manifest at {manifest} ({error}): run python tools/weapon_gen_manifest.py --game <BL2 folder> first')
+    if b'\nG\taccuracy_pool\t' not in data:
+        raise SystemExit(f'{manifest} has no accuracy pool rows: rerun python tools/weapon_gen_manifest.py --game <BL2 folder> first')
+    return hashlib.md5(data).hexdigest()
 
 
 def positive(value):

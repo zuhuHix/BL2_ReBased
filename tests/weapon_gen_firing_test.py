@@ -127,8 +127,17 @@ class FingerprintTest(unittest.TestCase):
     def test_it_is_the_md5_of_the_bytes(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'manifest.txt'
-            path.write_bytes(b'invented\r\nmanifest')
-            self.assertEqual(tool.fingerprint(path), hashlib.md5(b'invented\r\nmanifest').hexdigest())
+            data = b'V\tinvented\r\nG\taccuracy_pool\tmin\tFake.Attr\t1\n'
+            path.write_bytes(data)
+            self.assertEqual(tool.fingerprint(path), hashlib.md5(data).hexdigest())
+
+    def test_a_manifest_without_pool_rows_names_its_tool(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'manifest.txt'
+            path.write_bytes(b'V\tinvented\nG\trarity\t1\n')
+            with self.assertRaises(SystemExit) as stop:
+                tool.fingerprint(path)
+        self.assertIn('weapon_gen_manifest.py', str(stop.exception.code))
 
     def test_a_missing_manifest_names_its_tool(self):
         with tempfile.TemporaryDirectory() as folder:

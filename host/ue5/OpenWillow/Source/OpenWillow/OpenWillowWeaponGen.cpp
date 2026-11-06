@@ -59,6 +59,14 @@ bool IsWeaponBalanceUtf8(const weapongen::WeaponGenManifest& Manifest, const std
     return Object != Manifest.objectByPath.end() && Manifest.balanceByObject.count(std::to_string(Object->second)) > 0;
 }
 
+const weapongen::WeaponGenManifest* Manifest();
+
+// One rule for "the same pool value", here and in tools/check_weapon_firing.py pool_near: within 0.1 %, of at least 1.
+bool PoolNear(float A, float B)
+{
+    return FMath::Abs(A - B) <= 1e-3f * FMath::Max3(FMath::Abs(A), FMath::Abs(B), 1.f);
+}
+
 // tools/weapon_gen_firing.py's templates, next to the manifest, parsed once. Null when the file is missing or unreadable, older than
 // this code, or made with another manifest: a matching key alone would silently supply old values.
 const FJsonObject* FiringTemplates()
@@ -76,7 +84,9 @@ const FJsonObject* FiringTemplates()
         return nullptr;
     }
     FString Why;
-    if (!FOpenWillowWeaponGen::FiringTemplatesUsable(*Root, LexToString(FMD5Hash::HashFile(*FOpenWillowWeaponGen::ManifestPath())), Why))
+    const weapongen::WeaponGenManifest* Loaded = Manifest();
+    if (!FOpenWillowWeaponGen::FiringTemplatesUsable(*Root, LexToString(FMD5Hash::HashFile(*FOpenWillowWeaponGen::ManifestPath())),
+        Loaded && !Loaded->accuracyPool.empty(), Why))
     {
         UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN firing templates at %s refused (%s): rolled guns fire a plain trace (rerun python tools/weapon_gen_firing.py --game <BL2 folder>)"), *Path, *Why);
         Root.Reset();
@@ -375,15 +385,16 @@ FAutoConsoleCommand GRollGunCommand(TEXT("ow.RollGun"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&RollGunCommand));
 }
 
-bool FOpenWillowWeaponGen::FiringTemplatesUsable(const FJsonObject& Root, const FString& ManifestMd5, FString& OutWhy)
+bool FOpenWillowWeaponGen::FiringTemplatesUsable(const FJsonObject& Root, const FString& ManifestMd5, bool bManifestHasPool, FString& OutWhy)
 {
-    constexpr int32 FiringTemplatesSchema = 2;   // tools/weapon_gen_firing.py FILE_SCHEMA
+    constexpr int32 FiringTemplatesSchema = 3;   // tools/weapon_gen_firing.py FILE_SCHEMA
     double Schema = 0;
     FString Stored;
     Root.TryGetNumberField(TEXT("schema"), Schema);
     Root.TryGetStringField(TEXT("manifest_md5"), Stored);
     const TSharedPtr<FJsonObject>* Templates = nullptr;
-    if (int32(Schema) != FiringTemplatesSchema) OutWhy = FString::Printf(TEXT("schema %d, want %d"), int32(Schema), FiringTemplatesSchema);
+    if (!bManifestHasPool) OutWhy = TEXT("the manifest has no accuracy pool rows: rerun python tools/weapon_gen_manifest.py --game <BL2 folder>, then this tool");
+    else if (int32(Schema) != FiringTemplatesSchema) OutWhy = FString::Printf(TEXT("schema %d, want %d"), int32(Schema), FiringTemplatesSchema);
     else if (Stored.IsEmpty() || !Stored.Equals(ManifestMd5, ESearchCase::IgnoreCase)) OutWhy = FString::Printf(TEXT("manifest %s, made with %s"), *ManifestMd5, *Stored);
     else if (!Root.TryGetObjectField(TEXT("templates"), Templates) || !Templates->IsValid()) OutWhy = TEXT("no templates object");
     else return true;
@@ -401,7 +412,8 @@ bool FOpenWillowWeaponGen::MergeFiringTemplate(const FJsonObject& Template, cons
     Block->SetNumberField(TEXT("burst_count"), Item.Firing.BurstCount);
     Block->SetNumberField(TEXT("burst_interval"), Item.Firing.BurstInterval);
     Block->SetNumberField(TEXT("spin_up"), Item.SpinUp);
-    // The roll's accuracy pool, with the template's delay and start rule; a manifest without the pool rows leaves the type's base.
+    // The roll's accuracy pool, with the template's delay and start rule. A manifest without the pool rows is refused before this
+    // (FiringTemplatesUsable); a card without values here keeps the template's.
     const TSharedPtr<FJsonObject>* TemplatePool = nullptr;
     // -owrolledskippoolmerge: for showing once that the firing test fails without this merge (tools/check_weapon_firing.py check_rolled).
     static const bool bSkipPoolMerge = FParse::Param(FCommandLine::Get(), TEXT("owrolledskippoolmerge"));
@@ -546,7 +558,9 @@ bool FOpenWillowWeaponGen::FindGunForBurstTest(int32 WantedBurst, int32 Stage, F
         {
             float Card[3], Base[3];
             bWanted = RolledPoolValues(Path, Stage, 1u, Card, Base)
-                && (!FMath::IsNearlyEqual(Card[0], Base[0], 0.01f) || !FMath::IsNearlyEqual(Card[1], Base[1], 0.01f) || !FMath::IsNearlyEqual(Card[2], Base[2], 0.01f));
+                && FMath::IsFinite(Card[0]) && FMath::IsFinite(Card[1]) && FMath::IsFinite(Card[2])
+                && FMath::IsFinite(Base[0]) && FMath::IsFinite(Base[1]) && FMath::IsFinite(Base[2])
+                && (!PoolNear(Card[0], Base[0]) || !PoolNear(Card[1], Base[1]) || !PoolNear(Card[2], Base[2]));
         }
         // Three shots in the magazine, so that it is not what stops the shots, and a level Maya can equip.
         if (bWanted && Item.Magazine >= 3.f * FMath::Max(1.f, Item.ShotCost) && Item.Level <= Stage && Item.FireRate > 0.f)
