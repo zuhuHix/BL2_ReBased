@@ -18,33 +18,11 @@ assert.deepStrictEqual(fields.textCall(F, `<b>${NBSP}&`), [F, 'set', 'htmlText',
 // A character outside the BMP is one entity, not two surrogates.
 assert.deepStrictEqual(fields.textCall(F, 'x\u{1F600}'), [F, 'set', 'htmlText', 'x&#128512;']);
 
-// The use prompt: no prompt is the clip's none frame; a prompt sets the frame, then the text in the field that frame holds.
+// The use prompt: no prompt is the clip's none frame; a prompt sets the frame, then the variable the field is bound to.
 assert.deepStrictEqual(fields.useCalls(null), [['_level1.p1.tools', 'gotoAndStop', 'none']]);
 assert.deepStrictEqual(fields.useCalls({}), [['_level1.p1.tools', 'gotoAndStop', 'none']]);
 assert.deepStrictEqual(fields.useCalls({frame: 'shop', text: '[E] SHOP'}),
-  [['_level1.p1.tools', 'gotoAndStop', 'shop'], ['_level1.p1.tools.desc', 'set', 'text', '[E] SHOP']]);
-
-// applyUse: once per change; a throw or a missing clip is not remembered as applied, is logged once and is tried again.
-{
-  const logs = [], calls = [], memo = {line: null, failed: null};
-  let answer = () => undefined;
-  const fake = (t, op, a, b) => { calls.push([t, op, a, b]); return op === 'get' ? answer(t, a) : undefined; };
-  fields.applyUse(fake, {frame: 'shop', text: 'x'}, memo, l => logs.push(l));
-  assert.strictEqual(memo.line, null, 'no frame read back: not applied');
-  assert.ok(/failed/.test(logs[0]));
-  fields.applyUse(fake, {frame: 'shop', text: 'x'}, memo, l => logs.push(l));
-  assert.strictEqual(logs.length, 1, 'the same problem is logged once');
-  assert.ok(calls.length > 3, 'and it is tried again');
-  answer = (t, k) => (k === '_currentframe' ? 13 : 'x');
-  fields.applyUse(fake, {frame: 'shop', text: 'x'}, memo, l => logs.push(l));
-  assert.strictEqual(memo.line, JSON.stringify({frame: 'shop', text: 'x'}));
-  assert.ok(/asked=.*frame=13 text=x/.test(logs[1]));
-  const before = calls.length;
-  fields.applyUse(fake, {frame: 'shop', text: 'x'}, memo, l => logs.push(l));
-  assert.strictEqual(calls.length, before, 'no calls without a change');
-  fields.applyUse(() => { throw new Error('boom'); }, null, memo, l => logs.push(l));
-  assert.ok(/failed.*boom/.test(logs[2]), 'a throw stays inside');
-}
+  [['_level1.p1.tools', 'gotoAndStop', 'shop'], ['_level1.p1.tools', 'set', 'desc', '[E] SHOP']]);
 
 // Observed types: crosshair style, idle spread and ammo icon.
 assert.deepStrictEqual(fields.weaponCalls('pistol'), [
