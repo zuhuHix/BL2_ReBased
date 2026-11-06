@@ -144,6 +144,7 @@ def pj_fields():
 #                          ThrowGrenade / ClientThrowGrenade / GrenadeThrowComplete call with the game clock, and the
 #                          view (location, rotation) at each call: spawn point, launch velocity, release delay, fuse.
 #   pj_grenade_stop()      remove the hooks and write <RG_OUT>/projectiles/<tag>.json.
+#   pj_throw(definition)   throw a named grenade through ThrowGrenade (the stock frag with another mod equipped).
 #   pj_status_mods()       the controller's instigated status-chance modifiers (general and per element), read
 #                          before a status run; with fp3_no_skills() first, the skills-off values.
 
@@ -263,3 +264,14 @@ def pj_status_mods():
         except Exception as error:
             out[name] = "<%s>" % type(error).__name__
     return out
+
+
+def pj_throw(definition):
+    """Throw a named grenade: WillowPlayerController.ThrowGrenade with that ProjectileDefinition (the same call the G key's
+    throw logged), so the frag can be measured with another mod equipped. The equipped mod's own attributes (fuse slot,
+    damage, radius) may still apply: compare with the projectile's timers before reading its fuse as the frag's."""
+    grenade = unrealsdk.find_object("ProjectileDefinition", definition)
+    if grenade is None:
+        return {"error": "no such definition: " + definition}
+    get_pc().ThrowGrenade(grenade)
+    return {"thrown": grenade._path_name(), "t": _game_t()}

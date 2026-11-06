@@ -18,7 +18,10 @@ param(
     [switch]$NoSkills,
     # After the status run: throw this many grenades at the target (equipped mod, spawn, velocity, fuse, hits).
     [switch]$Grenades,
-    [int]$GrenadeThrows = 4
+    [int]$GrenadeThrows = 4,
+    # The throws pass this ProjectileDefinition to ThrowGrenade instead of pressing G (the equipped mod's own grenade), and
+    # the status series is skipped. For the stock frag: -GrenadeDefinition GD_GrenadeMods.Projectiles.Grenade_DefaultFrag.
+    [string]$GrenadeDefinition = ''
 )
 $ErrorActionPreference = 'Stop'
 if (!$HubLock) {
@@ -198,7 +201,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     }
     "target $target maya $mayaLevel level set $($log.level_set | ConvertTo-Json -Compress)"
     $s = [ordered]@{}; $log.status = $s
-    try {
+    if (!$GrenadeDefinition) { try {
         $s.spawn = PyJson "fp_spawn($(Q $StatusGun))" 60
         $s.ready = PyJson "fp_ready($(Q $StatusGun), 1)" 60
         Focus-Game | Out-Null; Send-Key '1'; Start-Sleep 2   # draw quick slot 1 (fp_ready only fills it)
@@ -215,7 +218,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         # Read-only: the target's level after the series.
         $s.level_after = PyJson "fp3_levels($(Q $target))" 60
         PyJson 'wp2_infinite_ammo(False)' | Out-Null
-    } catch { $s.error = "$_"; "status run failed: $_"; try { Py 'wp2_stop_autofire(); fp3_run_end(); print("ok")' | Out-Null } catch {} }
+    } catch { $s.error = "$_"; "status run failed: $_"; try { Py 'wp2_stop_autofire(); fp3_run_end(); print("ok")' | Out-Null } catch {} } }
     $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
     if ($Grenades) {
         # A few grenades at the held bullymong: the equipped mod, spawn point, launch velocity, release delay, fuse, hits.
@@ -226,7 +229,11 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             PyJson 'fp3_aim_target(0.0, True)' | Out-Null
             $gr.start = PyJson 'pj_grenade_start("grenades")'
             PyJson "fp3_run_begin($(Q 'grenades'), {'throws': $GrenadeThrows})" | Out-Null
-            for ($k = 0; $k -lt $GrenadeThrows; $k++) { Focus-Game | Out-Null; Send-Key G; Start-Sleep 5 }
+            for ($k = 0; $k -lt $GrenadeThrows; $k++) {
+                if ($GrenadeDefinition) { $gr["throw$k"] = PyJson "pj_throw($(Q $GrenadeDefinition))" }
+                else { Focus-Game | Out-Null; Send-Key G }
+                Start-Sleep 8   # long enough for a fuse and its bounces
+            }
             Start-Sleep 3
             $gr.run_end = PyJson 'fp3_run_end()'
             $gr.stop = PyJson 'pj_grenade_stop()' 60
