@@ -82,6 +82,16 @@ outranks it) and sends the `usePrompt` field; the page moves `p1.tools` to that 
 use key does is unchanged. Nothing shows while Maya is down, when the key does nothing, or under a menu. The placement is the movie's own,
 since the host only drives the clip.
 
+**The prompt and the key agree by construction, with one exception.** The prompt asks `NearestUseTarget`, which applies the same order as
+`PickupNearby`: Marcus, then an aimed pickup, then the nearest target. The exception: when the named target refuses a press (a full ammo
+pool, say) the press passes to the next target, which the prompt did not name.
+
+**Which target should win stays open.** `NATIVE_USE_INTERACTION.md` (read from native code, not confirmed in play) says the game casts one
+ray along the view and takes the first usable thing it hits, with no distance rule and no priority between kinds, and that a current
+pickupable wins the key. The host's nearest-target rule is a stand-in that also reaches things Maya is not looking at. This work does not
+change it; the capture reads the prompt with the view turned off a target. Aiming at a pickup with an interactive in reach is not in the
+capture, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
+
 **Read from data:** the clip's frame labels and `desc` field (the HUD movie), and the words of the default icons (`GD_InteractionIcons`).
 
 **Open, UNVERIFIED until the real-game read:** which icon the game gives each target (a host choice per target), how the stock prompt
