@@ -45,19 +45,39 @@ namespace
         FJsonSerializer::Serialize(Object, Writer);
         return Text;
     }
+
+    // The sight test: true when something is on the line from the view to the pickup (OutHit says what).
+    bool SightBlocked(const AOpenWillowWalker& Maya, const APlayerController& Player, const AOpenWillowInventoryPickup& Pickup, FHitResult& OutHit)
+    {
+        const UWorld* World = Maya.GetWorld();
+        if (!World) return true;
+        FVector ViewLocation;
+        FRotator ViewRotation;
+        Player.GetPlayerViewPoint(ViewLocation, ViewRotation);
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPickupCardSight), false, &Maya);
+        Query.AddIgnoredActor(&Pickup);
+        return World->LineTraceSingleByChannel(OutHit, ViewLocation, Pickup.GetActorLocation(), ECC_Visibility, Query);
+    }
+
+    // Diagnostic only, nothing reads it: what blocked a pickup that was in reach and in the cone. The search runs 10 times a second
+    // and on every E, so this logs at most twice a second.
+    void LogSightBlocked(const AOpenWillowInventoryPickup& Pickup, const FHitResult& Hit)
+    {
+        static double NextLogAt = 0.;
+        const double Now = FPlatformTime::Seconds();
+        if (Now < NextLogAt) return;
+        NextLogAt = Now + .5;
+        const AActor* Actor = Hit.GetActor();
+        const UPrimitiveComponent* Component = Hit.GetComponent();
+        UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARD blocked by %s (%s) pickup=%s at %.0f uu along the sight line"), Actor ? *Actor->GetName() : TEXT("none"),
+            Component ? *Component->GetName() : TEXT("none"), *Pickup.GetName(), Hit.Distance);
+    }
 }
 
 bool OpenWillowPickupCard::InSight(const AOpenWillowWalker& Maya, const APlayerController& Player, const AOpenWillowInventoryPickup& Pickup)
 {
-    const UWorld* World = Maya.GetWorld();
-    if (!World) return false;
-    FVector ViewLocation;
-    FRotator ViewRotation;
-    Player.GetPlayerViewPoint(ViewLocation, ViewRotation);
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPickupCardSight), false, &Maya);
-    Query.AddIgnoredActor(&Pickup);
     FHitResult Hit;
-    return !World->LineTraceSingleByChannel(Hit, ViewLocation, Pickup.GetActorLocation(), ECC_Visibility, Query);
+    return !SightBlocked(Maya, Player, Pickup, Hit);
 }
 
 AOpenWillowInventoryPickup* OpenWillowPickupCard::FindAimedPickup(const AOpenWillowWalker& Maya, const APlayerController& Player)
@@ -89,7 +109,11 @@ AOpenWillowInventoryPickup* OpenWillowPickupCard::FindAimedPickup(const AOpenWil
         return A.Name < B.Name;
     });
     for (const FCandidate& Candidate : Candidates)
-        if (InSight(Maya, Player, *Candidate.Pickup)) return Candidate.Pickup; // no card through walls
+    {
+        FHitResult Hit;
+        if (!SightBlocked(Maya, Player, *Candidate.Pickup, Hit)) return Candidate.Pickup; // no card through walls
+        LogSightBlocked(*Candidate.Pickup, Hit);
+    }
     return nullptr;
 }
 
