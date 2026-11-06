@@ -146,6 +146,7 @@ public:
     TArray<FOpenWillowDamagePopup> Popups;
 protected:   // was private: the range enemy (OpenWillowEnemy.cpp) builds on these; no name changed
     UPROPERTY() TObjectPtr<class USkeletalMeshComponent> StockMesh;
+    void AttachWornMeshes(const class FJsonObject& Pawn);
     UPROPERTY() TObjectPtr<class UAnimSequence> StockDeath;
     UPROPERTY() TObjectPtr<class UCapsuleComponent> HitVolume;
     UPROPERTY() TObjectPtr<class USceneComponent> Base;

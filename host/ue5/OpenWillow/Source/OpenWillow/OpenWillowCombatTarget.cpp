@@ -162,6 +162,49 @@ void AOpenWillowCombatTarget::PlayStock(UAnimSequence* Clip, bool bLoop, float R
         Anim->Play(Clip, bLoop, Rate, BlendIn);
 }
 
+void AOpenWillowCombatTarget::AttachWornMeshes(const FJsonObject& Pawn)
+{
+    // The static meshes the stock body composition wears on its bones (spikes on the head, back and arms). The tool writes them
+    // only after their import; a file without them leaves the bare body. They add nothing to StockMesh->Bounds, which the bubble's size
+    // rule reads. Their placement uses the citizens' rule (tools/prepare_ambient_world.py), UNVERIFIED on this pawn.
+    const TArray<TSharedPtr<FJsonValue>>* Pieces = nullptr;
+    if (!Pawn.TryGetArrayField(TEXT("attachments"), Pieces) || !Pieces) return;
+    int32 Attached = 0;
+    for (const TSharedPtr<FJsonValue>& Value : *Pieces)
+    {
+        const TSharedPtr<FJsonObject> A = Value->AsObject();
+        const TArray<TSharedPtr<FJsonValue>>* L = nullptr;
+        const TArray<TSharedPtr<FJsonValue>>* Q = nullptr;
+        const TArray<TSharedPtr<FJsonValue>>* S = nullptr;
+        FString MeshPath, BoneName;
+        if (!A || !A->TryGetStringField(TEXT("mesh"), MeshPath) || !A->TryGetStringField(TEXT("bone"), BoneName)
+            || !A->TryGetArrayField(TEXT("location"), L) || L->Num() != 3 || !A->TryGetArrayField(TEXT("quat"), Q) || Q->Num() != 4
+            || !A->TryGetArrayField(TEXT("scale"), S) || S->Num() != 3)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow target: malformed attachment entry skipped"));
+            continue;
+        }
+        UStaticMesh* Piece = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+        const FName Bone(*BoneName);
+        if (!Piece || StockMesh->GetBoneIndex(Bone) == INDEX_NONE)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow target: attachment %s on %s skipped (asset or bone missing)"), *MeshPath, *BoneName);
+            continue;
+        }
+        UStaticMeshComponent* Component = NewObject<UStaticMeshComponent>(this);
+        Component->SetStaticMesh(Piece);
+        Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Component->SetupAttachment(StockMesh, Bone);
+        Component->SetRelativeLocationAndRotation(
+            FVector((*L)[0]->AsNumber(), (*L)[1]->AsNumber(), (*L)[2]->AsNumber()),
+            FQuat((*Q)[0]->AsNumber(), (*Q)[1]->AsNumber(), (*Q)[2]->AsNumber(), (*Q)[3]->AsNumber()).GetNormalized());
+        Component->SetRelativeScale3D(FVector((*S)[0]->AsNumber(), (*S)[1]->AsNumber(), (*S)[2]->AsNumber()));
+        Component->RegisterComponent();
+        ++Attached;
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow target: %d of %d attachments on the stock pawn"), Attached, Pieces->Num());
+}
+
 bool AOpenWillowCombatTarget::UseCommandLinePawn()
 {
     FString Id;
@@ -187,6 +230,7 @@ bool AOpenWillowCombatTarget::UseCommandLinePawn()
         return false;
     }
     StockMesh->SetRelativeScale3D(FVector(P->GetNumberField(TEXT("mesh_scale"))));
+    AttachWornMeshes(*P);
     const UMaterialInterface* SkinMaterial = StockMesh->GetMaterial(0);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow target: stock pawn %s skin material %s"), *Id,
         SkinMaterial ? *SkinMaterial->GetPathName() : TEXT("<none>"));
