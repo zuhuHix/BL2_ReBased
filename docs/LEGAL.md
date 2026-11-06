@@ -44,16 +44,24 @@ descriptively.
   movies (`.gfx`, `.swf`), shader caches, or configuration files.
 - Any decompressed, extracted, converted or derived copy of the above:
   no texture dumps, mesh exports, level manifests, property dumps or
-  screenshots of loaded game content. All such outputs are written to
+  screenshots of loaded game content. Such outputs are written to
   git-ignored directories (`local/`, UE `Saved/`) on the contributor's
-  machine only.
+  machine, and are never committed to the git tree.
 
-The README's progress gallery is the one exception that shows game content, and
-it is not in the repository. Its screenshots are release assets on a
-`progress-gallery` GitHub prerelease, uploaded by the maintainer. No such image
-is ever committed to git. Any gallery asset will be removed at the rights
-holder's request, the same as the banner (see
-[Contact for rights holders](#contact-for-rights-holders)).
+### Screenshots and the progress gallery
+
+The scope, in plain words:
+
+- The git tree never holds screenshots of loaded game content.
+- A small set of comparison screenshots is published as assets on the
+  `progress-gallery` GitHub prerelease. The maintainer reviews each one before
+  upload. Those assets live outside the git tree.
+- No game files and no extracted assets are ever published, in the tree or in
+  the gallery.
+- Any gallery asset is removed at the rights holder's request, the same as the
+  banner (see [Contact for rights holders](#contact-for-rights-holders)).
+
+This section states what the project does. It is not a legal conclusion.
 
 The README banner is official Borderlands 2 promotional artwork. It is not a
 game file and is used solely to identify the game the engine is built for. It
