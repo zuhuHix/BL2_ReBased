@@ -26,6 +26,8 @@
 #include "OpenWillowShotFx.h"
 #include "OpenWillowProjectile.h"
 #include "OpenWillowStatusEffect.h"
+#include "OpenWillowSkillEffects.h"
+#include "OpenWillowWeaponGen.h"
 #include "OpenWillowGunLook.h"
 #include "OpenWillowInventoryPreviewActor.h"
 #include "HAL/FileManager.h"
@@ -316,6 +318,31 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             GrenadeStep = 5;
         }
         return;
+    }
+    // After the last gun: a rolled gun's damage stack (tools/check_weapon_firing.py check_rolled_damage). Its terms must rebuild its
+    // damage, and AOpenWillowWalker::ShotDamage must use them with no Scale, a running one and an expired one. The Scale lasts
+    // 0.01 s, read within this tick, so it cannot reach anything fired after this.
+    static bool bRolledDamageChecked = false;
+    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && !bRolledDamageChecked && CombatTarget.IsValid())
+    {
+        bRolledDamageChecked = true;
+        const float TestScale = 1.f;
+        FOpenWillowWeaponItem Rolled;
+        FString Reason;
+        if (!FOpenWillowWeaponGen::FindGunWithDamageStack(FMath::Max(1, Skills->GetLevel()), TestScale, Rolled, Reason))
+            UE_LOG(LogTemp, Error, TEXT("OWFIRING rolled_damage unavailable=%s"), *Reason);
+        else
+        {
+            const float Zero = ShotDamage(Rolled, Now);
+            AddWeaponDamageScale(TestScale, 0.01f);
+            const float Active = ShotDamage(Rolled, Now);
+            const float Expired = ShotDamage(Rolled, Now + 0.02f);
+            const float Rebuilt = (Rolled.DamageBase + Rolled.DamagePreAdd) * (1.f + Rolled.DamageScaleUp) / (1.f + Rolled.DamageScaleDown) + Rolled.DamagePostAdd;
+            const float Expected = (Rolled.DamageBase + Rolled.DamagePreAdd) * (1.f + Rolled.DamageScaleUp + TestScale) / (1.f + Rolled.DamageScaleDown) + Rolled.DamagePostAdd;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled_damage id=%s has_stack=%d skills_empty=%d damage=%.4f rebuilt=%.4f zero=%.4f active=%.4f expired=%.4f expected=%.4f stand_in=%.4f"),
+                *Rolled.Id, Rolled.bHasDamageStack ? 1 : 0, OpenWillowSkillEffects::Stack(this, OpenWillowSkillEffects::Attr::WeaponDamage).IsEmpty() ? 1 : 0,
+                Rolled.Damage, Rebuilt, Zero, Active, Expired, Expected, Rolled.Damage * (1.f + TestScale));
+        }
     }
     if (Ids[0] == TEXT("none") || Gun >= Ids.Num())
     {

@@ -332,6 +332,31 @@ bool FOpenWillowWeaponGen::IsWeaponBalance(const FString& Path)
     return M && IsWeaponBalanceUtf8(*M, ToUtf8(Path));
 }
 
+bool FOpenWillowWeaponGen::FindGunWithDamageStack(int32 Stage, float Scale, FOpenWillowWeaponItem& OutItem, FString& OutReason)
+{
+    const weapongen::WeaponGenManifest* M = Manifest();
+    if (!M)
+    {
+        OutReason = TEXT("no_manifest");
+        return false;
+    }
+    bool bAnyStack = false;
+    for (const weapongen::GenBalance& Balance : M->balances)
+    {
+        FOpenWillowWeaponItem Item;
+        if (!RollBalance(FromUtf8(M->objects[size_t(Balance.object)].path), Stage, 1u, Item) || !Item.bHasDamageStack || Item.Damage <= 0.f) continue;
+        bAnyStack = true;
+        const float Stack = (Item.DamageBase + Item.DamagePreAdd) * (1.f + Item.DamageScaleUp + Scale) / (1.f + Item.DamageScaleDown) + Item.DamagePostAdd;
+        if (!FMath::IsNearlyEqual(Stack, Item.Damage * (1.f + Scale), 0.01f * Item.Damage))
+        {
+            OutItem = MoveTemp(Item);
+            return true;
+        }
+    }
+    OutReason = bAnyStack ? TEXT("no_gun") : TEXT("no_stack");
+    return false;
+}
+
 bool FOpenWillowWeaponGen::RollBalance(const FString& Balance, int32 Stage, uint32 Seed, FOpenWillowWeaponItem& OutItem)
 {
     const weapongen::WeaponGenManifest* M = Manifest();
