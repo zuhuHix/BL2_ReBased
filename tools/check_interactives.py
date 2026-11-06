@@ -275,8 +275,13 @@ def expected_lid_types(doc, content_root):
     earlier import's record can stand in for them. None without a content folder: nothing can be said."""
     if content_root is None:
         return None
+    return sorted(lid_type_meshes(doc, content_root))
+
+
+def lid_type_meshes(doc, content_root):
+    """{full balance: mesh name} for the balances expected_lid_types describes."""
     root = Path(content_root) / 'OpenWillow/Lootables'
-    expected = []
+    expected = {}
     for balance in sorted({o.get('balance') for o in supported_objects(doc)}):
         components = ((doc.get('balances') or {}).get(balance) or {}).get('visual', {}).get('components') or [{}]
         mesh, anim_sets = components[0].get('skeletal_mesh'), components[0].get('anim_sets') or []
@@ -284,8 +289,26 @@ def expected_lid_types(doc, content_root):
             continue
         mesh, anim_set = mesh.rsplit('.', 1)[-1], anim_sets[0].rsplit('.', 1)[-1]
         if (root / mesh / mesh / 'SkeletalMeshes' / f'{mesh}.uasset').is_file() and (root / 'Anims' / f'{anim_set}_Open.uasset').is_file():
-            expected.append(balance.rsplit('.', 1)[-1])
+            expected[balance] = mesh
     return expected
+
+
+def expected_lid_materials(doc, content_root, material_plan):
+    """{full balance: the exact material path the host must report} for those balances, from materials_plan.json. A mesh the plan
+    has no instance for maps to None, which nothing matches. None when a source is missing: nothing can be said."""
+    if content_root is None:
+        return None
+    meshes = lid_type_meshes(doc, content_root)
+    if not meshes:
+        return {}
+    if material_plan is None:
+        return None
+    instances = {row.get('mesh'): row.get('instance') for row in material_plan.get('meshes') or []}
+    paths = {}
+    for balance, mesh in meshes.items():
+        name = instances.get(mesh)
+        paths[balance] = f'{BOUND_MATERIALS}{name}/{name}.{name}' if name else None
+    return paths
 
 
 def grade_lid_capture(log_text, out, expected=None):
@@ -311,6 +334,8 @@ def grade_lid_capture(log_text, out, expected=None):
     bad = [f'{balance}: {sorted(got)}' for balance, got in sorted(phases.items()) if sorted(got) != sorted(LID_PHASES)]
     if len(phases) != int(queue.group(1)):
         out.add('lid_capture', 'FAIL', f'frames of {len(phases)} lootable types, the queue had {queue.group(1)}')
+    elif expected is not None and set(phases) != set(expected):
+        out.add('lid_capture', 'FAIL', f'the frames are of other types than the content on disk gives: {sorted(set(phases) ^ set(expected))[:3]}')
     elif bad:
         out.add('lid_capture', 'FAIL', f'{len(bad)} type(s) without exactly one each of {LID_PHASES}; first: {bad[0]}')
     else:
@@ -321,30 +346,31 @@ def grade_lid_capture(log_text, out, expected=None):
             out.add('lid_capture', 'FAIL', f'{len(unreported)} type(s) with frames but no view line; first: {unreported[0]}')
         elif blocked:
             out.add('lid_capture', 'INCOMPLETE', f'no clear view of {len(blocked)} type(s), their frames judge nothing: {", ".join(blocked)}')
+        elif expected is None:
+            out.add('lid_capture', 'MISSING', 'no content folder was given, so nothing says which types had to be captured')
         else:
             out.add('lid_capture', 'PASS', f'{len(shots)} frames of {len(phases)} lootable types; lid direction UNVERIFIED until judged')
 
 
 def grade_lootable_materials(log_text, out, expected=None):
-    """Each type at the lid capture renders a material the materials step bound, read from what the host reports. An importer's
-    default slot does not count. PASS says nothing about how it looks. expected: as for grade_lid_capture."""
-    rendered = {balance: path for balance, _, path in LID_MATERIAL.findall(log_text)}
-    types = sorted(rendered) if expected is None else sorted(expected)
-    if not types:
-        if expected is None:
-            out.add('lootable_materials', 'MISSING', 'no "OWLOOTLID material" line, and no content folder was given to compare with')
-        else:
-            out.add('lootable_materials', 'SKIPPED', 'this checkout has no imported lootable to render a material')
+    """Each type at the lid capture renders exactly the instance the materials step planned for it, by what the host reports. PASS
+    says nothing about how it looks. expected: expected_lid_materials; None means a source is missing, which cannot PASS."""
+    if expected is None:
+        out.add('lootable_materials', 'MISSING', 'no content folder or materials plan was given to compare with')
         return
-    silent = [t for t in types if t not in rendered]
+    if not expected:
+        out.add('lootable_materials', 'SKIPPED', 'this checkout has no imported lootable to render a material')
+        return
+    rendered = {balance: path for balance, _, path in LID_MATERIAL.findall(log_text)}
+    silent = sorted(t for t in expected if t not in rendered)
     if silent:
         out.add('lootable_materials', 'MISSING', f'{len(silent)} type(s) with no "OWLOOTLID material" line; first: {silent[0]}')
         return
-    unbound = [t for t in types if not rendered[t].startswith(BOUND_MATERIALS)]
-    if unbound:
-        out.add('lootable_materials', 'INCOMPLETE', f'{len(unbound)} type(s) render no bound material (tools/import_lootables.ps1 -Steps materials): {", ".join(unbound)}')
+    wrong = sorted(t for t, path in expected.items() if path is None or rendered[t] != path)
+    if wrong:
+        out.add('lootable_materials', 'INCOMPLETE', f'{len(wrong)} type(s) do not render the planned material (tools/import_lootables.ps1 -Steps materials): {", ".join(wrong)}')
     else:
-        out.add('lootable_materials', 'PASS', f'{len(types)} lootable types render a bound material; how they look is UNVERIFIED')
+        out.add('lootable_materials', 'PASS', f'{len(expected)} lootable types render their planned material; how they look is UNVERIFIED')
 
 
 def grade_test_sequence(log_text, supported, out):
@@ -389,7 +415,7 @@ def grade_automation(automation_text, out, skip=False):
         out.add('automation', 'PASS' if status in ('Success', 'Passed') else 'FAIL', f'{AUTOMATION_TEST} Result={status}')
 
 
-def grade(log_text, automation_text, doc, skip_automation=False, content_root=None):
+def grade(log_text, automation_text, doc, skip_automation=False, content_root=None, material_plan=None):
     """Return a Results object with one row per check. doc is the parsed interactives.json."""
     out = Results()
     objects = supported_objects(doc)
@@ -399,9 +425,8 @@ def grade(log_text, automation_text, doc, skip_automation=False, content_root=No
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
     grade_pickups(log_text, out)
     grade_quick_change(log_text, out)
-    expected = expected_lid_types(doc, content_root)
-    grade_lid_capture(log_text, out, expected)
-    grade_lootable_materials(log_text, out, expected)
+    grade_lid_capture(log_text, out, expected_lid_types(doc, content_root))
+    grade_lootable_materials(log_text, out, expected_lid_materials(doc, content_root, material_plan))
     grade_test_sequence(log_text, objects, out)
     grade_automation(automation_text, out, skip_automation)
     return out
@@ -413,17 +438,20 @@ def main(argv):
     parser.add_argument('--interactives', required=True, help='the interactives.json the run was given')
     parser.add_argument('--automation-log', help='the log of the UE automation run (OpenWillow.Interactive.Loot)')
     parser.add_argument('--content-root', help="this checkout's UE Content folder: which lootables must reach the lid capture")
+    parser.add_argument('--materials-plan', help="tools/lootables_editor.py's materials_plan.json: which instance each lootable type must render")
     parser.add_argument('--skip-automation', action='store_true', help='report the automation test as skipped, not missing')
     args = parser.parse_args(argv)
     try:
         log_text = Path(args.log).read_text(encoding='utf-8', errors='replace')
         doc = json.loads(Path(args.interactives).read_text(encoding='utf-8'))
+        plan_path = Path(args.materials_plan) if args.materials_plan else None
+        material_plan = json.loads(plan_path.read_text(encoding='utf-8')) if plan_path and plan_path.is_file() else None
         automation_text = (Path(args.automation_log).read_text(encoding='utf-8', errors='replace')
                            if args.automation_log else None)
     except (OSError, json.JSONDecodeError) as error:
         print(f'cannot read the inputs: {error}', file=sys.stderr)
         return 2
-    return 1 if grade(log_text, automation_text, doc, args.skip_automation, args.content_root).print() else 0
+    return 1 if grade(log_text, automation_text, doc, args.skip_automation, args.content_root, material_plan).print() else 0
 
 
 if __name__ == '__main__':

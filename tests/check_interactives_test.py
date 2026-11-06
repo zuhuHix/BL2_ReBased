@@ -17,6 +17,24 @@ import check_interactives as ci  # noqa: E402
 CASH_CONSTANTS = {'multiplier': 10.0, 'level': 2.0, 'base': 1.0, 'per_grade': 0.5, 'grade_max': 4}
 
 
+PLANNED_PATH = '/Game/OpenWillow/Lootables/Materials/Mat_1/Mat_1.Mat_1'
+MATERIAL_PLAN = {'meshes': [{'mesh': 'Skel_Synth', 'instance': 'Mat_1'}], 'pickups': []}
+
+
+def document_with_visual():
+    """document(), with one balance that shows an imported mesh and clip."""
+    doc = document()
+    doc['balances']['Balance.0'] = {'visual': {'components': [{'skeletal_mesh': 'Pkg.Meshes.Skel_Synth', 'anim_sets': ['Pkg.Anims.Anim_Synth']}]}}
+    return doc
+
+
+def write_content(folder):
+    root = Path(folder) / 'OpenWillow/Lootables'
+    for path in (root / 'Skel_Synth/Skel_Synth/SkeletalMeshes/Skel_Synth.uasset', root / 'Anims/Anim_Synth_Open.uasset'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'')
+
+
 def document(supported=3, unsupported=1):
     objects = []
     for i in range(supported):
@@ -63,10 +81,10 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWPICKUP kind=health amount=0.25 before=50.00 after=75.00 cap=100.00 ok=1 reason=')
     text += line('OWPICKUP kind=eridium amount=4.00 before=1.00 after=5.00 cap=2147483647.00 ok=1 reason=')
     text += line('OWLOOTLID queue=1')
-    text += line('OWLOOTLID view balance=Synth clear=1 yaw=45')
-    text += line('OWLOOTLID material balance=Synth id=Map:Point_2 path=/Game/OpenWillow/Lootables/Materials/Mat/Mat.Mat')
+    text += line('OWLOOTLID view balance=Balance.0 clear=1 yaw=45')
+    text += line(f'OWLOOTLID material balance=Balance.0 id=Map:Point_2 path={PLANNED_PATH}')
     for phase in ('closed', 'mid', 'opened'):
-        text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
+        text += line(f'OWLOOTLID shot balance=Balance.0 phase={phase}')
     text += ''.join(line(row) for row in QUICK_RUN)
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
@@ -95,6 +113,37 @@ class GoodRunTest(unittest.TestCase):
         self.assertEqual(status_of(results, 'pickups'), 'PASS')
         self.assertEqual(status_of(results, 'test_sequence'), 'PASS')
         self.assertEqual(status_of(results, 'automation'), 'PASS')
+
+
+class FullRunTest(unittest.TestCase):
+    def test_a_good_run_with_both_sources_passes_every_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            write_content(folder)
+            results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual(), False, folder, MATERIAL_PLAN)
+        self.assertEqual([(n, s) for n, s, _ in results.rows if s != 'PASS'], [])
+
+    def test_the_same_run_from_the_command_line(self):
+        with tempfile.TemporaryDirectory() as folder:
+            write_content(folder)
+            base = Path(folder)
+            (base / 'run.log').write_text(good_log(), encoding='utf-8')
+            (base / 'i.json').write_text(json.dumps(document_with_visual()), encoding='utf-8')
+            (base / 'plan.json').write_text(json.dumps(MATERIAL_PLAN), encoding='utf-8')
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = ci.main(['--log', str(base / 'run.log'), '--interactives', str(base / 'i.json'), '--content-root', folder,
+                                '--materials-plan', str(base / 'plan.json'), '--skip-automation'])
+            self.assertEqual(code, 0)
+
+    def test_no_content_folder_or_no_plan_cannot_pass(self):
+        # A direct run that names no source grades only what the log says, so it must not read as a pass.
+        results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual())
+        self.assertEqual(status_of(results, 'lid_capture'), 'MISSING')
+        self.assertEqual(status_of(results, 'lootable_materials'), 'MISSING')
+        with tempfile.TemporaryDirectory() as folder:
+            write_content(folder)
+            results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual(), False, folder, None)
+            self.assertEqual(status_of(results, 'lootable_materials'), 'MISSING')
+            self.assertEqual(status_of(results, 'lid_capture'), 'PASS')
 
 
 class SpawnTest(unittest.TestCase):
@@ -315,55 +364,71 @@ class QuickChangeTest(unittest.TestCase):
 
 
 class LootableMaterialsTest(unittest.TestCase):
-    BOUND = '/Game/OpenWillow/Lootables/Materials/Mat/Mat.Mat'
+    A = '/Game/OpenWillow/Lootables/Materials/Mat_a/Mat_a.Mat_a'
+    B = '/Game/OpenWillow/Lootables/Materials/Mat_b/Mat_b.Mat_b'
 
-    def grade(self, text, expected=None):
+    def grade(self, text, expected):
         out = ci.Results()
         ci.grade_lootable_materials(text, out, expected)
         return out.rows[0]
 
     def row(self, balance, path):
-        return f'OWLOOTLID material balance={balance} id=Map:{balance} path={path}\n'
+        return f'OWLOOTLID material balance={balance} id=Map:x path={path}\n'
 
-    def test_every_type_with_a_bound_material_passes(self):
-        row = self.grade(self.row('A', self.BOUND) + self.row('B', self.BOUND), ['A', 'B'])
+    def test_every_type_with_its_planned_instance_passes(self):
+        row = self.grade(self.row('G.A', self.A) + self.row('G.B', self.B), {'G.A': self.A, 'G.B': self.B})
         self.assertEqual(row[1], 'PASS')
         self.assertIn('UNVERIFIED', row[2])
 
+    def test_another_bound_instance_is_not_enough(self):
+        # Under the materials folder, but not the instance planned for this type.
+        row = self.grade(self.row('G.A', self.B) + self.row('G.B', self.B), {'G.A': self.A, 'G.B': self.B})
+        self.assertEqual(row[1], 'INCOMPLETE')
+        self.assertIn('G.A', row[2])
+        self.assertNotIn('G.B', row[2])
+
     def test_the_importers_default_slot_fails_the_run(self):
         # The false pass this replaces: the bind failed, and the suite was green with grey lootables.
-        default = '/Game/OpenWillow/Lootables/Skel_A/Skel_A/Materials/Mat.Mat'
-        row = self.grade(self.row('A', default) + self.row('B', self.BOUND), ['A', 'B'])
+        row = self.grade(self.row('G.A', '/Game/OpenWillow/Lootables/Skel_A/Skel_A/Materials/Mat.Mat'), {'G.A': self.A})
         self.assertEqual(row[1], 'INCOMPLETE')
-        self.assertIn('A', row[2])
-        self.assertNotIn(', B', row[2])
         results = ci.Results()
         results.add(*row)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(results.print(), 1)
 
     def test_no_material_at_all_is_incomplete(self):
-        self.assertEqual(self.grade(self.row('A', ''), ['A'])[1], 'INCOMPLETE')
+        self.assertEqual(self.grade(self.row('G.A', ''), {'G.A': self.A})[1], 'INCOMPLETE')
+
+    def test_a_type_the_plan_has_no_instance_for_is_incomplete(self):
+        self.assertEqual(self.grade(self.row('G.A', self.A), {'G.A': None})[1], 'INCOMPLETE')
 
     def test_a_type_without_a_line_is_missing(self):
-        self.assertEqual(self.grade(self.row('A', self.BOUND), ['A', 'B'])[1], 'MISSING')
+        self.assertEqual(self.grade(self.row('G.A', self.A), {'G.A': self.A, 'G.B': self.B})[1], 'MISSING')
+
+    def test_balances_sharing_a_short_name_are_not_one_line(self):
+        self.assertEqual(self.grade(self.row('One.Leaf', self.A), {'One.Leaf': self.A, 'Two.Leaf': self.A})[1], 'MISSING')
 
     def test_a_checkout_without_lootable_content_is_skipped(self):
-        self.assertEqual(self.grade('', [])[1], 'SKIPPED')
+        self.assertEqual(self.grade('', {})[1], 'SKIPPED')
 
-    def test_no_content_folder_and_no_line_cannot_pass(self):
-        self.assertEqual(self.grade('', None)[1], 'MISSING')
+    def test_a_missing_source_cannot_pass(self):
+        self.assertEqual(self.grade(self.row('G.A', self.A), None)[1], 'MISSING')
 
-    def test_it_is_part_of_the_graded_run(self):
-        self.assertEqual(status_of(grade(good_log()), 'lootable_materials'), 'PASS')
-        text = good_log().replace(self.BOUND, '/Game/Other/Mat.Mat')
-        self.assertEqual(status_of(grade(text), 'lootable_materials'), 'INCOMPLETE')
+    def test_expected_paths_come_from_the_plan_and_the_content(self):
+        with tempfile.TemporaryDirectory() as folder:
+            write_content(folder)
+            doc = document_with_visual()
+            self.assertEqual(ci.expected_lid_materials(doc, folder, MATERIAL_PLAN), {'Balance.0': PLANNED_PATH})
+            self.assertEqual(ci.expected_lid_materials(doc, folder, {'meshes': []}), {'Balance.0': None})
+            self.assertIsNone(ci.expected_lid_materials(doc, folder, None))
+            self.assertIsNone(ci.expected_lid_materials(doc, None, MATERIAL_PLAN))
+            self.assertEqual(ci.expected_lid_materials(document(), folder, None), {})   # no content for its balances
 
 
 class LidCaptureTest(unittest.TestCase):
-    def grade(self, text):
+    def grade(self, text, expected=('Synth',)):
         out = ci.Results()
-        ci.grade_lid_capture(text, out)
+        ci.grade_lid_capture(text, out, expected)
         return out.rows[0]
 
     def test_all_three_frames_of_each_type_pass(self):
@@ -371,6 +436,12 @@ class LidCaptureTest(unittest.TestCase):
         row = self.grade(text)
         self.assertEqual(row[1], 'PASS')
         self.assertIn('UNVERIFIED', row[2])
+        self.assertEqual(self.grade(text, None)[1], 'MISSING')   # no source says which types had to be captured
+
+    def test_frames_of_another_balance_with_the_same_short_name_fail(self):
+        frames = ''.join(f'OWLOOTLID shot balance=Other.Leaf phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        row = self.grade('OWLOOTLID queue=1\nOWLOOTLID view balance=Other.Leaf clear=1 yaw=0\n' + frames, ['Grades.Leaf'])
+        self.assertEqual(row[1], 'FAIL')
 
     FRAMES = ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
 
@@ -408,7 +479,7 @@ class LidCaptureTest(unittest.TestCase):
     def test_expected_types_are_read_from_the_content_on_disk(self):
         with tempfile.TemporaryDirectory() as folder:
             doc = self.with_content(folder, ['A', 'B'])
-            self.assertEqual(ci.expected_lid_types(doc, folder), ['A', 'B'])
+            self.assertEqual(ci.expected_lid_types(doc, folder), ['Grades.A', 'Grades.B'])
             self.assertIsNone(ci.expected_lid_types(doc, None))
 
     def test_a_mesh_without_its_clip_is_not_expected(self):
